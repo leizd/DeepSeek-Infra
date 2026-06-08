@@ -130,6 +130,12 @@ class LocalRAGSettings:
     embedding_dimensions: int = 64
     embedding_max_tokens: int = 256
     search_limit: int = 24
+    # BM25 lexical scoring blended with vector similarity (hybrid retriever).
+    bm25_k1: float = 1.5
+    bm25_b: float = 0.75
+    # Incremental indexing: skip re-embedding a document whose chunk content
+    # hashes are unchanged, and reuse stored embeddings for unchanged chunks.
+    incremental: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +154,17 @@ class SemanticCacheSettings:
     max_items: int = 1_000
     max_prompt_chars: int = 80_000
     max_response_chars: int = 80_000
+    # Logic/schema version stamped into every entry; combined with the embedding
+    # provider+dimensions it forms the cache namespace, so changing the embedding
+    # model or bumping this invalidates incompatible entries instead of serving them.
+    version: str = "1"
+    # Heuristic answer quality below which a response is not cached (refusals,
+    # fallbacks and near-empty answers score low). 0 disables quality gating.
+    min_quality_score: float = 0.3
+    # When true, requests carrying file/attachment context are cacheable too, but
+    # only via exact-prompt match within their project scope (never fuzzy, to avoid
+    # false hits from file-text-dominated embeddings). When false they are skipped.
+    cache_attachments: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +178,100 @@ class GatewaySettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextEngineSettings:
+    """Prompt-cache-aware context engineering knobs.
+
+    The engine never rewrites the cache-anchored stable prefix; it only *plans*
+    a per-request token budget (for diagnostics) and, on the summary-gated
+    sliding-window path, drops extra oldest history when the estimate overflows
+    the per-model context window. ``token_aware_trim`` gates that extra drop.
+    """
+
+    enabled: bool = True
+    token_aware_trim: bool = True
+    reserve_output_tokens: int = 8_192
+    safety_margin_ratio: float = 0.05
+    compress_threshold_pct: float = 75.0
+    default_context_window: int = 65_536
+    min_keep_messages: int = 2
+    model_context_windows: Mapping[str, int] = field(
+        default_factory=lambda: MappingProxyType(
+            {
+                "deepseek-v4-pro": 131_072,
+                "deepseek-v4-flash": 131_072,
+            }
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRouterSettings:
+    """Policy-driven model routing + cascade inference.
+
+    The router only *auto-selects* the cloud model tier (flash vs pro) when a
+    request opts in (``autoRoute`` / ``model="auto"``); an explicit model choice
+    is always respected. Cascade runs a cheap draft, applies a quality gate, and
+    escalates to the expensive model only when the draft is insufficient.
+    """
+
+    enabled: bool = True
+    cascade_enabled: bool = True
+    judge_enabled: bool = False
+    judge_model: str = "deepseek-v4-flash"
+    judge_threshold: float = 0.6
+    draft_model: str = "deepseek-v4-flash"
+    refine_model: str = "deepseek-v4-pro"
+    cascade_min_chars: int = 80
+    # Soft cost cap (prompt tokens); 0 disables. When the estimated prompt
+    # exceeds it, the cost router prefers the cheaper draft model.
+    cost_budget_tokens: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetSettings:
+    """Cost & token budget governance.
+
+    ``pricing`` is USD per 1M tokens ``(input, output)`` per model; local / unknown
+    models cost nothing. Default policy limits of 0 mean *unlimited*; a request can
+    override them via a ``budget`` block. ``policy`` =
+    ``downgrade_to_flash_when_exceeded`` makes the router fall back to the cheap
+    model once a scope is over its daily budget.
+    """
+
+    tracking_enabled: bool = True
+    max_total_tokens: int = 0
+    max_agent_tokens: int = 0
+    max_search_calls: int = 0
+    max_tool_calls: int = 0
+    max_estimated_cost_usd: float = 0.0
+    policy: str = "none"
+    pricing: Mapping[str, tuple[float, float]] = field(
+        default_factory=lambda: MappingProxyType(
+            {
+                "deepseek-v4-pro": (0.55, 2.19),
+                "deepseek-v4-flash": (0.27, 1.10),
+            }
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AgentRuntimeSettings:
+    """Durable Agent Runtime knobs.
+
+    ``auto_resume`` decides what happens to runs left mid-flight by a crash or
+    restart. Default ``False`` keeps the conservative behavior (mark them
+    ``orphaned``; the user resumes manually via ``/api/agent-runs/{id}/resume``),
+    so a restart never silently spends upstream tokens. Set
+    ``AGENT_RUNTIME_AUTO_RESUME=1`` to resume orphaned runs from their last
+    checkpoint on startup (requires a server-side ``DEEPSEEK_API_KEY`` because
+    persisted runs never store credentials).
+    """
+
+    auto_resume: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class OllamaSettings:
     enabled: bool = False
     base_url: str = "http://127.0.0.1:11434"
@@ -170,7 +281,7 @@ class OllamaSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "2.0.2"
+    app_version: str = "2.0.9"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -229,6 +340,10 @@ class Settings:
     tracing: TracingSettings = field(default_factory=TracingSettings)
     semantic_cache: SemanticCacheSettings = field(default_factory=SemanticCacheSettings)
     gateway: GatewaySettings = field(default_factory=GatewaySettings)
+    context_engine: ContextEngineSettings = field(default_factory=ContextEngineSettings)
+    model_router: ModelRouterSettings = field(default_factory=ModelRouterSettings)
+    budget: BudgetSettings = field(default_factory=BudgetSettings)
+    agent_runtime: AgentRuntimeSettings = field(default_factory=AgentRuntimeSettings)
     ollama: OllamaSettings = field(default_factory=OllamaSettings)
 
     @property
@@ -294,6 +409,14 @@ class Settings:
     @property
     def semantic_cache_db(self) -> Path:
         return self.semantic_cache_dir / "cache.sqlite3"
+
+    @property
+    def budget_dir(self) -> Path:
+        return self.root / ".budget"
+
+    @property
+    def budget_db(self) -> Path:
+        return self.budget_dir / "budget.sqlite3"
 
     @property
     def request_queue_dir(self) -> Path:
@@ -370,6 +493,9 @@ class Settings:
                 embedding_dimensions=_env_int_clamped("LOCAL_RAG_EMBEDDING_DIMENSIONS", 64, 8, 4096),
                 embedding_max_tokens=_env_int_clamped("LOCAL_RAG_EMBEDDING_MAX_TOKENS", 256, 16, 8192),
                 search_limit=_env_int_clamped("LOCAL_RAG_SEARCH_LIMIT", 24, 1, 200),
+                bm25_k1=_env_float_clamped("LOCAL_RAG_BM25_K1", 1.5, 0.0, 5.0),
+                bm25_b=_env_float_clamped("LOCAL_RAG_BM25_B", 0.75, 0.0, 1.0),
+                incremental=_env_bool("LOCAL_RAG_INCREMENTAL", True),
             ),
             tracing=TracingSettings(
                 enabled=_env_bool("TRACE_ENABLED", True),
@@ -384,6 +510,9 @@ class Settings:
                 max_items=_env_int_clamped("SEMANTIC_CACHE_MAX_ITEMS", 1_000, 10, 50_000),
                 max_prompt_chars=_env_int_clamped("SEMANTIC_CACHE_MAX_PROMPT_CHARS", 80_000, 1_000, 500_000),
                 max_response_chars=_env_int_clamped("SEMANTIC_CACHE_MAX_RESPONSE_CHARS", 80_000, 1_000, 500_000),
+                version=os.environ.get("SEMANTIC_CACHE_VERSION", "1").strip() or "1",
+                min_quality_score=_env_float_clamped("SEMANTIC_CACHE_MIN_QUALITY", 0.3, 0.0, 1.0),
+                cache_attachments=_env_bool("SEMANTIC_CACHE_ATTACHMENTS", True),
             ),
             gateway=GatewaySettings(
                 context_manager_enabled=_env_bool("GATEWAY_CONTEXT_MANAGER_ENABLED", True),
@@ -392,6 +521,37 @@ class Settings:
                 request_queue_max_attempts=_env_int_clamped("GATEWAY_REQUEST_QUEUE_MAX_ATTEMPTS", 6, 1, 20),
                 request_queue_initial_backoff_seconds=_env_float_clamped("GATEWAY_REQUEST_QUEUE_INITIAL_BACKOFF_SECONDS", 2.0, 0.0, 60.0),
                 request_queue_max_backoff_seconds=_env_float_clamped("GATEWAY_REQUEST_QUEUE_MAX_BACKOFF_SECONDS", 120.0, 0.0, 600.0),
+            ),
+            context_engine=ContextEngineSettings(
+                enabled=_env_bool("CONTEXT_ENGINE_ENABLED", True),
+                token_aware_trim=_env_bool("CONTEXT_ENGINE_TOKEN_AWARE_TRIM", True),
+                reserve_output_tokens=_env_int_clamped("CONTEXT_ENGINE_RESERVE_OUTPUT_TOKENS", 8_192, 256, 131_072),
+                safety_margin_ratio=_env_float_clamped("CONTEXT_ENGINE_SAFETY_MARGIN_RATIO", 0.05, 0.0, 0.5),
+                compress_threshold_pct=_env_float_clamped("CONTEXT_ENGINE_COMPRESS_THRESHOLD_PCT", 75.0, 1.0, 100.0),
+                default_context_window=_env_int_clamped("CONTEXT_ENGINE_DEFAULT_WINDOW", 65_536, 1_024, 2_000_000),
+                min_keep_messages=_env_int_clamped("CONTEXT_ENGINE_MIN_KEEP_MESSAGES", 2, 1, 40),
+                model_context_windows=_context_engine_windows_from_env(),
+            ),
+            budget=BudgetSettings(
+                tracking_enabled=_env_bool("BUDGET_TRACKING_ENABLED", True),
+                max_total_tokens=_env_int_min("BUDGET_MAX_TOTAL_TOKENS", 0, 0),
+                max_agent_tokens=_env_int_min("BUDGET_MAX_AGENT_TOKENS", 0, 0),
+                max_search_calls=_env_int_min("BUDGET_MAX_SEARCH_CALLS", 0, 0),
+                max_tool_calls=_env_int_min("BUDGET_MAX_TOOL_CALLS", 0, 0),
+                max_estimated_cost_usd=_env_float_clamped("BUDGET_MAX_ESTIMATED_COST_USD", 0.0, 0.0, 1_000_000.0),
+                policy=_env_choice("BUDGET_POLICY", {"none", "downgrade_to_flash_when_exceeded"}, "none"),
+                pricing=_budget_pricing_from_env(),
+            ),
+            model_router=ModelRouterSettings(
+                enabled=_env_bool("MODEL_ROUTER_ENABLED", True),
+                cascade_enabled=_env_bool("MODEL_ROUTER_CASCADE_ENABLED", True),
+                judge_enabled=_env_bool("MODEL_ROUTER_JUDGE_ENABLED", False),
+                judge_threshold=_env_float_clamped("MODEL_ROUTER_JUDGE_THRESHOLD", 0.6, 0.0, 1.0),
+                cascade_min_chars=_env_int_clamped("MODEL_ROUTER_CASCADE_MIN_CHARS", 80, 1, 5_000),
+                cost_budget_tokens=_env_int_min("MODEL_ROUTER_COST_BUDGET_TOKENS", 0, 0),
+            ),
+            agent_runtime=AgentRuntimeSettings(
+                auto_resume=_env_bool("AGENT_RUNTIME_AUTO_RESUME", False),
             ),
             ollama=OllamaSettings(
                 enabled=_env_bool("OLLAMA_ENABLED", False),
@@ -496,6 +656,46 @@ def _agent_models_from_env() -> Mapping[str, str]:
     return MappingProxyType({role: _env_agent_model(env) for role, env in _AGENT_MODEL_ENV.items()})
 
 
+_CONTEXT_ENGINE_WINDOW_ENV = {
+    "deepseek-v4-pro": "CONTEXT_ENGINE_PRO_WINDOW",
+    "deepseek-v4-flash": "CONTEXT_ENGINE_FLASH_WINDOW",
+}
+_CONTEXT_ENGINE_WINDOW_DEFAULTS = {
+    "deepseek-v4-pro": 131_072,
+    "deepseek-v4-flash": 131_072,
+}
+
+
+_BUDGET_PRICING_DEFAULTS = {
+    "deepseek-v4-pro": (0.55, 2.19),
+    "deepseek-v4-flash": (0.27, 1.10),
+}
+_BUDGET_PRICING_ENV = {
+    "deepseek-v4-pro": ("BUDGET_PRICE_PRO_INPUT", "BUDGET_PRICE_PRO_OUTPUT"),
+    "deepseek-v4-flash": ("BUDGET_PRICE_FLASH_INPUT", "BUDGET_PRICE_FLASH_OUTPUT"),
+}
+
+
+def _budget_pricing_from_env() -> Mapping[str, tuple[float, float]]:
+    pricing: dict[str, tuple[float, float]] = {}
+    for model, (input_env, output_env) in _BUDGET_PRICING_ENV.items():
+        default_input, default_output = _BUDGET_PRICING_DEFAULTS[model]
+        pricing[model] = (
+            _env_float_clamped(input_env, default_input, 0.0, 10_000.0),
+            _env_float_clamped(output_env, default_output, 0.0, 10_000.0),
+        )
+    return MappingProxyType(pricing)
+
+
+def _context_engine_windows_from_env() -> Mapping[str, int]:
+    return MappingProxyType(
+        {
+            model: _env_int_clamped(env, _CONTEXT_ENGINE_WINDOW_DEFAULTS[model], 1_024, 2_000_000)
+            for model, env in _CONTEXT_ENGINE_WINDOW_ENV.items()
+        }
+    )
+
+
 settings = Settings.from_env()
 
 STATIC_DIR = settings.static_dir
@@ -534,6 +734,9 @@ LOCAL_RAG_TOKENIZER_PATH = settings.local_rag.tokenizer_path
 LOCAL_RAG_EMBEDDING_DIMENSIONS = settings.local_rag.embedding_dimensions
 LOCAL_RAG_EMBEDDING_MAX_TOKENS = settings.local_rag.embedding_max_tokens
 LOCAL_RAG_SEARCH_LIMIT = settings.local_rag.search_limit
+LOCAL_RAG_BM25_K1 = settings.local_rag.bm25_k1
+LOCAL_RAG_BM25_B = settings.local_rag.bm25_b
+LOCAL_RAG_INCREMENTAL = settings.local_rag.incremental
 
 SEARCH_RESULT_LIMIT = settings.search.result_limit
 SEARCH_ROUND_LIMIT = settings.search.round_limit
@@ -588,6 +791,9 @@ SEMANTIC_CACHE_TTL_SECONDS = settings.semantic_cache.ttl_seconds
 SEMANTIC_CACHE_MAX_ITEMS = settings.semantic_cache.max_items
 SEMANTIC_CACHE_MAX_PROMPT_CHARS = settings.semantic_cache.max_prompt_chars
 SEMANTIC_CACHE_MAX_RESPONSE_CHARS = settings.semantic_cache.max_response_chars
+SEMANTIC_CACHE_VERSION = settings.semantic_cache.version
+SEMANTIC_CACHE_MIN_QUALITY = settings.semantic_cache.min_quality_score
+SEMANTIC_CACHE_ATTACHMENTS = settings.semantic_cache.cache_attachments
 GATEWAY_CONTEXT_MANAGER_ENABLED = settings.gateway.context_manager_enabled
 GATEWAY_CONTEXT_WINDOW_MESSAGES = settings.gateway.context_sliding_window_messages
 GATEWAY_REQUEST_QUEUE_ENABLED = settings.gateway.request_queue_enabled
@@ -596,6 +802,34 @@ GATEWAY_REQUEST_QUEUE_DB = settings.request_queue_db
 GATEWAY_REQUEST_QUEUE_MAX_ATTEMPTS = settings.gateway.request_queue_max_attempts
 GATEWAY_REQUEST_QUEUE_INITIAL_BACKOFF_SECONDS = settings.gateway.request_queue_initial_backoff_seconds
 GATEWAY_REQUEST_QUEUE_MAX_BACKOFF_SECONDS = settings.gateway.request_queue_max_backoff_seconds
+CONTEXT_ENGINE_ENABLED = settings.context_engine.enabled
+CONTEXT_ENGINE_TOKEN_AWARE_TRIM = settings.context_engine.token_aware_trim
+CONTEXT_ENGINE_RESERVE_OUTPUT_TOKENS = settings.context_engine.reserve_output_tokens
+CONTEXT_ENGINE_SAFETY_MARGIN_RATIO = settings.context_engine.safety_margin_ratio
+CONTEXT_ENGINE_COMPRESS_THRESHOLD_PCT = settings.context_engine.compress_threshold_pct
+CONTEXT_ENGINE_DEFAULT_CONTEXT_WINDOW = settings.context_engine.default_context_window
+CONTEXT_ENGINE_MIN_KEEP_MESSAGES = settings.context_engine.min_keep_messages
+CONTEXT_ENGINE_MODEL_CONTEXT_WINDOWS = settings.context_engine.model_context_windows
+AGENT_RUNTIME_AUTO_RESUME = settings.agent_runtime.auto_resume
+MODEL_ROUTER_ENABLED = settings.model_router.enabled
+MODEL_ROUTER_CASCADE_ENABLED = settings.model_router.cascade_enabled
+MODEL_ROUTER_JUDGE_ENABLED = settings.model_router.judge_enabled
+MODEL_ROUTER_JUDGE_MODEL = settings.model_router.judge_model
+MODEL_ROUTER_JUDGE_THRESHOLD = settings.model_router.judge_threshold
+MODEL_ROUTER_DRAFT_MODEL = settings.model_router.draft_model
+MODEL_ROUTER_REFINE_MODEL = settings.model_router.refine_model
+MODEL_ROUTER_CASCADE_MIN_CHARS = settings.model_router.cascade_min_chars
+MODEL_ROUTER_COST_BUDGET_TOKENS = settings.model_router.cost_budget_tokens
+BUDGET_TRACKING_ENABLED = settings.budget.tracking_enabled
+BUDGET_MAX_TOTAL_TOKENS = settings.budget.max_total_tokens
+BUDGET_MAX_AGENT_TOKENS = settings.budget.max_agent_tokens
+BUDGET_MAX_SEARCH_CALLS = settings.budget.max_search_calls
+BUDGET_MAX_TOOL_CALLS = settings.budget.max_tool_calls
+BUDGET_MAX_ESTIMATED_COST_USD = settings.budget.max_estimated_cost_usd
+BUDGET_POLICY = settings.budget.policy
+BUDGET_PRICING = settings.budget.pricing
+BUDGET_DIR = settings.budget_dir
+BUDGET_DB = settings.budget_db
 AUTH_TOKEN_FILE = settings.auth_token_file
 
 TEXT_EXTENSIONS = {

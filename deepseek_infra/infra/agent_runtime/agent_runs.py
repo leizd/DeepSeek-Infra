@@ -10,10 +10,15 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from deepseek_infra.core.config import AGENT_RUNS_DIR, DEFAULT_MODEL
+from deepseek_infra.core.config import AGENT_RUNS_DIR, AGENT_RUNTIME_AUTO_RESUME, DEFAULT_MODEL
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import latest_user_query, normalize_model_name
 from deepseek_infra.infra.gateway.deepseek_client import RequestCancelled, SearchBudget, validate_deepseek_payload
+from deepseek_infra.infra.agent_runtime.agent_state import (
+    completed_node_ids,
+    incomplete_plan_nodes,
+    reduce_node_states,
+)
 from deepseek_infra.infra.agent_runtime.multi_agent import (
     AGENT_PROFILES,
     leader_done_text,
@@ -236,6 +241,9 @@ def append_event(run_id: str, event: dict[str, Any]) -> dict[str, Any]:
         run.setdefault("events", []).append(stamped)
         run["nextIndex"] = index + 1
         apply_event_snapshot(run, stamped)
+        # Durable Agent Runtime: rebuild the node state machine purely from the
+        # plan + event log so the persisted snapshot always matches a replay.
+        run["nodes"] = reduce_node_states(run.get("plan") or [], run.get("events") or [])
         run["updatedAt"] = stamped["createdAt"]
         write_run(run)
     registry.notify_event(run_id)
@@ -479,6 +487,67 @@ def execute_plan(
     )
 
 
+RESUMABLE_STATUSES = {"orphaned", "failed", "cancelled", "done"}
+
+
+def resumable_completed_outputs(run: dict[str, Any], plan: list[dict[str, Any]], node_states: dict[str, Any]) -> list[dict[str, Any]]:
+    """Durable outputs of nodes that already succeeded, in plan order, for resume."""
+    raw_outputs = run.get("agentOutputs")
+    outputs = raw_outputs if isinstance(raw_outputs, dict) else {}
+    result: list[dict[str, Any]] = []
+    for node_id in completed_node_ids(plan, node_states):
+        output = outputs.get(node_id)
+        if isinstance(output, dict):
+            result.append(output)
+    return result
+
+
+def resume_run(run_id: str, runtime_payload: dict[str, Any]) -> None:
+    """Resume an interrupted run from its last checkpoint (断点续跑).
+
+    Succeeded nodes are re-derived from the event log and skipped (idempotent);
+    only the incomplete DAG nodes re-run, then synthesis runs once. If every
+    planned node already succeeded, only the final synthesis is (re)done.
+    """
+    try:
+        validate_deepseek_payload(runtime_payload)
+        run = load_run(run_id)
+        selected_model = normalize_model_name(runtime_payload.get("model") or DEFAULT_MODEL)
+        user_query = latest_user_query(runtime_payload)
+        plan = safe_agent_plan({"agents": run.get("plan") or default_agent_plan()})
+        node_states = reduce_node_states(plan, run.get("events") or [])
+        incomplete = incomplete_plan_nodes(plan, node_states)
+        append_status(run_id, "running", reason="resume")
+        if not incomplete:
+            if str(run.get("finalAnswer") or "").strip():
+                append_status(run_id, "done")
+                return
+            reset_final_answer(run_id, "resume")
+            resynthesize_outputs(run_id, runtime_payload, selected_model=selected_model, user_query=user_query)
+            return
+        completed_outputs = resumable_completed_outputs(run, plan, node_states)
+        # Re-open incomplete nodes so a replay shows them retrying, then re-run only those.
+        for item in incomplete:
+            append_event(run_id, {"type": "agent_reset", "phase": item["id"], "reason": "resume"})
+        reset_final_answer(run_id, "resume")
+        search_budget = new_agent_search_budget()
+        token_budget = new_agent_token_budget()
+        stream_agent_plan(
+            runtime_payload,
+            plan,
+            selected_model=selected_model,
+            user_query=user_query,
+            search_budget=search_budget,
+            emit_event=_event_emitter(run_id),
+            token_budget=token_budget,
+            completed_outputs=completed_outputs,
+        )
+    except RequestCancelled:
+        append_status(run_id, "cancelled")
+    except Exception as exc:
+        append_event(run_id, {"type": "error", "error": str(exc), "code": ErrorCode.INTERNAL.value})
+
+
 def rerun_agent(run_id: str, runtime_payload: dict[str, Any], *, agent_id: str, resynthesize: bool = True) -> None:
     try:
         validate_deepseek_payload(runtime_payload)
@@ -628,6 +697,34 @@ def mark_orphan_runs_on_startup() -> int:
             count += 1
         except Exception:
             continue
+    return count
+
+
+def resume_orphaned_runs() -> int:
+    """Opt-in auto-resume of orphaned runs on startup (AGENT_RUNTIME_AUTO_RESUME).
+
+    Default OFF: returns 0 without touching anything, so a restart never silently
+    spends upstream tokens. When enabled, each orphaned run is resumed from its
+    last checkpoint using its (credential-free) stored payload — which requires a
+    server-side ``DEEPSEEK_API_KEY``; runs missing one surface an error event.
+    """
+    if not AGENT_RUNTIME_AUTO_RESUME:
+        return 0
+    count = 0
+    if not AGENT_RUNS_DIR.exists():
+        return count
+    for path in AGENT_RUNS_DIR.glob("run_*.json"):
+        try:
+            run = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(run, dict) or run.get("status") != "orphaned":
+            continue
+        run_id = str(run.get("runId") or path.stem)
+        stored_payload = run.get("requestPayload")
+        runtime_payload = stored_payload if isinstance(stored_payload, dict) else {}
+        if registry.ensure_started(run_id, resume_run, run_id, runtime_payload):
+            count += 1
     return count
 
 

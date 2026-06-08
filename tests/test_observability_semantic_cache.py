@@ -112,3 +112,68 @@ def test_semantic_cache_skips_tool_enabled_body(tmp_settings: Any) -> None:
     assert result.hit is False
     assert result.diagnostics["checked"] is False
     assert result.diagnostics["skippedReason"] == "tools_enabled"
+
+
+def test_semantic_cache_version_isolation(tmp_settings: Any, monkeypatch: Any) -> None:
+    payload = {"messages": [{"role": "user", "content": "version test"}]}
+    body = {"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "version test"}]}
+    assert semantic_cache.store(payload, body, {"model": "deepseek-v4-pro", "content": "versioned answer"})["stored"] is True
+    assert semantic_cache.lookup(payload, body).hit is True
+
+    # Bumping the cache version (or switching embedding model) re-namespaces lookups,
+    # so old entries are never served instead of being wrongly reused.
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_VERSION", "99")
+    miss = semantic_cache.lookup(payload, body)
+    assert miss.hit is False
+    assert miss.diagnostics["cacheVersion"].startswith("99:")
+
+
+def test_semantic_cache_scope_isolation(tmp_settings: Any) -> None:
+    body = {"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "scoped q"}]}
+    project_a = {"memoryScope": "project:a", "messages": [{"role": "user", "content": "scoped q"}]}
+    project_b = {"memoryScope": "project:b", "messages": [{"role": "user", "content": "scoped q"}]}
+
+    semantic_cache.store(project_a, body, {"model": "deepseek-v4-pro", "content": "answer for project A"})
+
+    assert semantic_cache.lookup(project_a, body).hit is True
+    miss = semantic_cache.lookup(project_b, body)
+    assert miss.hit is False  # answer does not leak across project scopes
+    assert miss.diagnostics["scope"] == "project:b"
+
+
+def test_semantic_cache_skips_low_quality_answer(tmp_settings: Any) -> None:
+    payload = {"messages": [{"role": "user", "content": "low quality test"}]}
+    body = {"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "low quality test"}]}
+
+    refusal = semantic_cache.store(payload, body, {"model": "deepseek-v4-pro", "content": "综合阶段没有返回正文，请重试"})
+    assert refusal["stored"] is False
+    assert refusal["storeSkippedReason"] == "low_quality"
+    assert semantic_cache.lookup(payload, body).hit is False
+
+
+def test_semantic_cache_attachments_use_exact_match_only(tmp_settings: Any, monkeypatch: Any) -> None:
+    # Force cosine similarity to 1.0 so only the exact-match guard can prevent a hit.
+    monkeypatch.setattr(semantic_cache, "cosine_similarity", lambda _a, _b: 1.0)
+
+    att_payload_1 = {"messages": [{"role": "user", "content": "Q1", "attachments": [{"kind": "file", "name": "a.txt", "text": "file body"}]}]}
+    body_1 = {"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "Q1 with file body"}]}
+    assert semantic_cache.store(att_payload_1, body_1, {"model": "deepseek-v4-pro", "content": "answer one"})["stored"] is True
+
+    # A different question over the same file: fuzzy cosine is 1.0 but exact-match
+    # only -> miss (no false reuse from file-text-dominated embeddings).
+    att_payload_2 = {"messages": [{"role": "user", "content": "Q2", "attachments": [{"kind": "file", "name": "a.txt", "text": "file body"}]}]}
+    body_2 = {"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "Q2 with file body"}]}
+    miss = semantic_cache.lookup(att_payload_2, body_2)
+    assert miss.hit is False
+    assert miss.diagnostics["exactMatchOnly"] is True
+
+    # The exact same file + question reuses the cached answer.
+    hit = semantic_cache.lookup(att_payload_1, body_1)
+    assert hit.hit is True
+    assert hit.result is not None
+    assert hit.result["content"] == "answer one"
+
+    # Without attachments, fuzzy matching is allowed (cosine 1.0 -> cross-prompt hit).
+    plain_hit = semantic_cache.lookup({"messages": [{"role": "user", "content": "Q2"}]}, body_2)
+    assert plain_hit.hit is True
+    assert plain_hit.diagnostics["exactMatchOnly"] is False

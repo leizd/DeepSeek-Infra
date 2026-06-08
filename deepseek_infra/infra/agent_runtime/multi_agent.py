@@ -12,10 +12,12 @@ from typing import Any, Callable
 
 from deepseek_infra.core.config import (
     AGENT_MODELS,
+    BUDGET_MAX_AGENT_TOKENS,
     DEFAULT_MODEL,
     MULTI_AGENT_TIMEOUT_SECONDS,
     MULTI_AGENT_TOKEN_BUDGET,
 )
+from deepseek_infra.infra.gateway import budget_manager
 from deepseek_infra.core.errors import ErrorCode
 from deepseek_infra.core.utils import latest_user_query, normalize_model_name
 from deepseek_infra.infra.gateway.deepseek_client import (
@@ -29,7 +31,7 @@ from deepseek_infra.infra.gateway.deepseek_client import (
     usage_int,
     validate_deepseek_payload,
 )
-from deepseek_infra.infra.observability.observability import ensure_trace, finish_trace, with_trace_diagnostics
+from deepseek_infra.infra.observability.observability import ensure_trace, finish_trace, start_span, with_trace_diagnostics
 
 MAX_AGENTS = 4
 # v1.3.1: long-running multi-Agent middle tiers use the shared config timeout.
@@ -319,8 +321,10 @@ def stream_multi_agent(
         search_budget = new_agent_search_budget()
 
         leader_plan_started = time.monotonic()
+        planner_span = start_span(trace_context.trace_id, name="agent.planner", kind="agent")
         emit_agent_event(safe_emit, phase="leader", status="running", name="Leader", text="正在拆解问题并分配 Agent...")
-        plan = plan_agents(payload, safe_emit, cancel_event=cancel_event)
+        plan = plan_agents(payload, safe_emit, cancel_event=cancel_event, parent_span_id=planner_span.span_id)
+        planner_span.finish(status="ok", output_data={"agents": [item.get("id") for item in plan]})
         emit_agent_event(
             safe_emit,
             phase="leader",
@@ -387,11 +391,13 @@ def execute_agent_tier(
             cancel_event=cancel_event,
         )
 
+    trace_id = str(payload.get("traceId") or "")
     outputs: list[dict[str, Any]] = []
     for item in tier:
         raise_if_cancelled(cancel_event)
         profile = AGENT_PROFILES[item["id"]]
         started = time.monotonic()
+        agent_span = start_span(trace_id, name=f"agent.{item['id']}", kind="agent", input_data={"task": item["task"]})
         emit_agent_event(
             emit_event,
             phase=item["id"],
@@ -408,10 +414,12 @@ def execute_agent_tier(
                 prior_outputs=prior_outputs + outputs,
                 emit_event=emit_event,
                 cancel_event=cancel_event,
+                parent_span_id=agent_span.span_id,
             )
             duration_ms = _elapsed_ms(started)
             output["duration_ms"] = duration_ms
             outputs.append(output)
+            agent_span.finish(status="ok", usage=_agent_span_usage(output), output_data={"summary": output.get("summary", "")})
             emit_agent_event(
                 emit_event,
                 phase=item["id"],
@@ -425,6 +433,7 @@ def execute_agent_tier(
             output = failed_agent_output(item["id"], item["task"], exc)
             output["duration_ms"] = duration_ms
             outputs.append(output)
+            agent_span.finish(status="error", error=str(exc))
             emit_agent_event(
                 emit_event,
                 phase=item["id"],
@@ -434,6 +443,11 @@ def execute_agent_tier(
                 duration_ms=duration_ms,
             )
     return outputs
+
+
+def _agent_span_usage(output: dict[str, Any]) -> dict[str, Any]:
+    usage = output.get("usage")
+    return usage if isinstance(usage, dict) else {}
 
 
 MIDDLE_PARALLEL_AGENT_IDS = {"coder", "reasoner"}
@@ -474,16 +488,33 @@ def _execute_agent_tier_parallel(
     cancel_event: threading.Event | None = None,
 ) -> list[dict[str, Any]]:
     """并行执行 coder / reasoner；返回顺序仍按 Planner 原顺序，便于诊断和综合稳定。"""
+    trace_id = str(payload.get("traceId") or "")
     outputs_by_index: dict[int, dict[str, Any]] = {}
     futures: dict[Future[dict[str, Any]], tuple[int, dict[str, Any]]] = {}
     emit_gates: dict[int, threading.Event] = {}
     started_at: dict[int, float] = {}
+    agent_spans: dict[int, Any] = {}
+
+    def finish_agent_span(index: int) -> None:
+        span = agent_spans.get(index)
+        if span is None:
+            return
+        output = outputs_by_index.get(index) or {}
+        failed = bool(output.get("failed"))
+        span.finish(
+            status="error" if failed else "ok",
+            usage=_agent_span_usage(output),
+            error=str(output.get("content") or "") if failed else "",
+            output_data={"summary": output.get("summary", "")},
+        )
+
     pool = ThreadPoolExecutor(max_workers=min(len(tier), MAX_AGENTS))
     try:
         for index, item in enumerate(tier):
             raise_if_cancelled(cancel_event)
             profile = AGENT_PROFILES[item["id"]]
             started_at[index] = time.monotonic()
+            agent_spans[index] = start_span(trace_id, name=f"agent.{item['id']}", kind="agent", input_data={"task": item["task"]})
             emit_agent_event(
                 emit_event,
                 phase=item["id"],
@@ -509,6 +540,7 @@ def _execute_agent_tier_parallel(
                 prior_outputs=prior_outputs,
                 emit_event=gated_emit,
                 cancel_event=cancel_event,
+                parent_span_id=agent_spans[index].span_id,
             )
             futures[future] = (index, item)
 
@@ -543,6 +575,7 @@ def _execute_agent_tier_parallel(
                     duration_ms=duration_ms,
                 )
             outputs_by_index[index] = output
+            finish_agent_span(index)
     except RequestCancelled:
         for gate in emit_gates.values():
             gate.clear()
@@ -600,6 +633,7 @@ def _execute_agent_tier_parallel(
                     duration_ms=duration_ms,
                 )
             outputs_by_index[index] = output
+            finish_agent_span(index)
     finally:
         # 不能用 ThreadPoolExecutor 的 with；超时 worker 可能仍在跑，wait=False 才不会拖住主请求。
         pool.shutdown(wait=False, cancel_futures=True)
@@ -614,7 +648,7 @@ def new_agent_search_budget() -> SearchBudget:
 
 def new_agent_token_budget() -> TokenBudget:
     """Create the shared per-run token budget (runaway safety net, default very high)."""
-    return TokenBudget(total_limit=MULTI_AGENT_TOKEN_BUDGET)
+    return TokenBudget(total_limit=MULTI_AGENT_TOKEN_BUDGET, per_agent_limit=BUDGET_MAX_AGENT_TOKENS)
 
 
 def _token_total_for_usage(usage: Any) -> int:
@@ -647,6 +681,8 @@ def diagnostics_for_agent_run(
     synthesizer_usage: dict[str, Any] | None,
     search_budget: SearchBudget,
     token_budget: TokenBudget | None = None,
+    *,
+    selected_model: str = "",
 ) -> dict[str, Any]:
     return {
         "agentMode": True,
@@ -658,7 +694,25 @@ def diagnostics_for_agent_run(
         "agentSearchBudgetLimit": MULTI_AGENT_TOTAL_SEARCH_LIMIT,
         "agentTokenBudgetUsed": token_budget.used if token_budget is not None else 0,
         "agentTokenBudgetLimit": token_budget.total_limit if token_budget is not None else MULTI_AGENT_TOKEN_BUDGET,
+        "agentTokenByAgent": dict(token_budget.used_by_key) if token_budget is not None else {},
+        "agentCostUsd": agent_cost_for_diagnostics(agent_outputs, synthesizer_usage, selected_model),
     }
+
+
+def agent_cost_for_diagnostics(
+    agent_outputs: list[dict[str, Any]],
+    synthesizer_usage: dict[str, Any] | None,
+    selected_model: str,
+) -> float:
+    """Estimated USD cost of a multi-agent run (workers at their model + synthesizer)."""
+    total = 0.0
+    for output in agent_outputs:
+        agent_id = str(output.get("id") or "")
+        if not agent_id or agent_id == "leader":
+            continue
+        total += budget_manager.cost_from_usage(output.get("usage"), agent_model_for(agent_id))
+    total += budget_manager.cost_from_usage(synthesizer_usage or {}, selected_model or DEFAULT_MODEL)
+    return round(total, 6)
 
 
 def stream_agent_plan(
@@ -671,8 +725,17 @@ def stream_agent_plan(
     emit_event: Callable[[dict[str, Any]], None],
     cancel_event: threading.Event | None = None,
     token_budget: TokenBudget | None = None,
+    completed_outputs: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Execute an already-approved Agent plan and stream worker + synthesis events."""
+    """Execute an already-approved Agent plan and stream worker + synthesis events.
+
+    Durable Agent Runtime / 断点续跑：``completed_outputs`` carries the durable
+    outputs of nodes that already succeeded in a prior (interrupted) run. Those
+    nodes are *not* re-executed — they seed downstream ``prior_outputs`` so the
+    DAG continues from the checkpoint idempotently. When ``completed_outputs`` is
+    ``None``/empty (the normal first-run path), nothing is skipped and behavior
+    is identical to before.
+    """
     # v1.2.5 起按 DAG 分层执行：Researcher / Critic 仍按层串行；
     # Coder + Reasoner 中间层由 execute_agent_tier 内部并行。
     if token_budget is None:
@@ -681,10 +744,13 @@ def stream_agent_plan(
     # 计划显式声明 depends_on 时走拓扑分层：同层一律并行（包含 >2 个 agent 的层）。
     # 无依赖的旧计划继续用 execute_agent_tier 的默认（parallel=None），行为零变化。
     dag_mode = plan_has_dependencies(plan)
-    agent_outputs: list[dict[str, Any]] = []
+    resumed = [item for item in (completed_outputs or []) if isinstance(item, dict) and item.get("id")]
+    completed_ids = {str(item["id"]) for item in resumed}
+    agent_outputs: list[dict[str, Any]] = list(resumed)
     for tier in tiers:
         raise_if_cancelled(cancel_event)
-        if not tier:
+        pending_tier = [item for item in tier if str(item.get("id") or "") not in completed_ids]
+        if not pending_tier:
             continue
         # token 只能事后记账，所以这里只能按层软门控：已超预算就不再启动后续层，
         # 但综合阶段永远会跑（见下方），保证用户始终拿到一个最终答案。
@@ -700,7 +766,7 @@ def stream_agent_plan(
             break
         tier_outputs = execute_agent_tier(
             payload,
-            tier,
+            pending_tier,
             prior_outputs=list(agent_outputs),
             search_budget=search_budget,
             emit_event=emit_event,
@@ -709,11 +775,15 @@ def stream_agent_plan(
         )
         agent_outputs.extend(tier_outputs)
         for output in tier_outputs:
-            token_budget.record(_token_total_for_usage(output.get("usage")))
+            token_budget.record(_token_total_for_usage(output.get("usage")), str(output.get("id") or ""))
             emit_event({"type": "agent_output", "phase": output.get("id"), "output": output})
 
     if not agent_outputs:
         agent_outputs = fallback_agent_outputs()
+    elif completed_ids:
+        # On resume the seeded + freshly-run outputs may interleave; restore plan
+        # order so synthesis and diagnostics stay stable.
+        agent_outputs = _outputs_in_plan_order(plan, agent_outputs)
 
     # Phase 3：Critic 复核后可点名一个 worker 重跑一次，再综合（综合始终只跑一次）。
     agent_outputs = run_critic_revision(
@@ -798,6 +868,12 @@ def run_critic_revision(
     prior = [item for item in agent_outputs if item.get("id") not in {target_id, "critic"}]
 
     emit_event({"type": "agent_reset", "phase": target_id, "reason": "critic_revision"})
+    revision_span = start_span(
+        str(payload.get("traceId") or ""),
+        name=f"agent.{target_id}",
+        kind="agent",
+        input_data={"task": original_task, "revision": True},
+    )
     emit_agent_event(
         emit_event,
         phase=target_id,
@@ -815,10 +891,12 @@ def run_critic_revision(
             prior_outputs=prior,
             emit_event=emit_event,
             cancel_event=cancel_event,
+            parent_span_id=revision_span.span_id,
         )
     except RequestCancelled:
         raise
     except Exception as exc:
+        revision_span.finish(status="error", error=str(exc))
         emit_agent_event(
             emit_event,
             phase=target_id,
@@ -830,9 +908,10 @@ def run_critic_revision(
         return agent_outputs
 
     revised["duration_ms"] = _elapsed_ms(started)
+    revision_span.finish(status="ok", usage=_agent_span_usage(revised), output_data={"summary": revised.get("summary", "")})
     # 保留计划里的原始子任务文案，避免卡片标题被注入的长 critique 撑大。
     revised["task"] = original_task
-    token_budget.record(_token_total_for_usage(revised.get("usage")))
+    token_budget.record(_token_total_for_usage(revised.get("usage")), target_id)
     emit_agent_event(
         emit_event,
         phase=target_id,
@@ -870,6 +949,7 @@ def stream_synthesis_for_outputs(
     if token_budget is None:
         token_budget = new_agent_token_budget()
     leader_synth_started = time.monotonic()
+    synth_span = start_span(str(payload.get("traceId") or ""), name="agent.synthesizer", kind="agent")
     emit_agent_event(emit_event, phase="leader", status="running", name="Leader", text="正在综合多个 Agent 的结论...")
     synthesizer_usage: dict[str, Any] = {}
     content_seen = False
@@ -880,15 +960,21 @@ def stream_synthesis_for_outputs(
             content_seen = True
         emit_event(event)
 
-    final_answer = synthesize_answer(
-        payload,
-        selected_model,
-        user_query,
-        agent_outputs,
-        synthesis_emit,
-        cancel_event=cancel_event,
-        usage_callback=synthesizer_usage.update,
-    )
+    try:
+        final_answer = synthesize_answer(
+            payload,
+            selected_model,
+            user_query,
+            agent_outputs,
+            synthesis_emit,
+            cancel_event=cancel_event,
+            usage_callback=synthesizer_usage.update,
+            parent_span_id=synth_span.span_id,
+        )
+    except Exception as exc:
+        synth_span.finish(status="error", error=str(exc))
+        raise
+    synth_span.finish(status="ok", usage=synthesizer_usage, output_data={"contentChars": len(final_answer or "")})
     if not content_seen:
         # DeepSeek thinking 模式偶尔可能只返回 reasoning 而没有最终 content。
         # 这里仍写入一个可见正文，避免前端结束在“已思考”但主回复空白，像是卡死。
@@ -901,8 +987,8 @@ def stream_synthesis_for_outputs(
         text="已完成综合。",
         duration_ms=_elapsed_ms(leader_synth_started),
     )
-    token_budget.record(_token_total_for_usage(synthesizer_usage))
-    diagnostics = diagnostics_for_agent_run(agent_outputs, synthesizer_usage, search_budget, token_budget)
+    token_budget.record(_token_total_for_usage(synthesizer_usage), "synthesizer")
+    diagnostics = diagnostics_for_agent_run(agent_outputs, synthesizer_usage, search_budget, token_budget, selected_model=selected_model)
     diagnostics = with_trace_diagnostics(diagnostics, str(payload.get("traceId") or ""))
     emit_event({"type": "done", "model": selected_model, "usage": {}, "diagnostics": diagnostics})
     return diagnostics
@@ -913,6 +999,7 @@ def plan_agents(
     emit_event: Callable[[dict[str, Any]], None] | None = None,
     *,
     cancel_event: threading.Event | None = None,
+    parent_span_id: str = "",
 ) -> list[dict[str, Any]]:
     """让 Leader/Planner 决定要哪几个 worker。
 
@@ -938,7 +1025,7 @@ def plan_agents(
 
     if emit_event is None:
         try:
-            result = call_deepseek(planner_payload, max_tool_rounds=0)
+            result = call_deepseek(planner_payload, max_tool_rounds=0, parent_span_id=parent_span_id)
             parsed = extract_json_object(str(result.get("content") or ""))
         except Exception:
             parsed = {}
@@ -960,7 +1047,7 @@ def plan_agents(
         # done/error 由外层 stream_multi_agent 统一管，这里不转发
 
     try:
-        stream_deepseek(planner_payload, planner_relay, max_tool_rounds=0, cancel_event=cancel_event)
+        stream_deepseek(planner_payload, planner_relay, max_tool_rounds=0, cancel_event=cancel_event, parent_span_id=parent_span_id)
         parsed = extract_json_object("".join(accumulated))
     except Exception:
         parsed = {}
@@ -1028,6 +1115,28 @@ AGENT_TIER_CRITIC = "critic"
 def plan_has_dependencies(plan: list[dict[str, Any]]) -> bool:
     """plan 里是否有任何 agent 显式声明了 depends_on（决定走 DAG 还是旧的角色分层）。"""
     return any(isinstance(item, dict) and item.get("depends_on") for item in plan)
+
+
+def _outputs_in_plan_order(plan: list[dict[str, Any]], outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order agent outputs by their position in the plan; unknown ids keep arrival order at the end."""
+    by_id: dict[str, dict[str, Any]] = {}
+    for output in outputs:
+        oid = str(output.get("id") or "")
+        if oid:
+            by_id[oid] = output
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in plan:
+        oid = str(item.get("id") or "")
+        if oid in by_id and oid not in seen:
+            ordered.append(by_id[oid])
+            seen.add(oid)
+    for output in outputs:
+        oid = str(output.get("id") or "")
+        if oid not in seen:
+            ordered.append(output)
+            seen.add(oid)
+    return ordered
 
 
 def layered_plan(plan: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -1141,6 +1250,7 @@ def run_agent(
     emit_event: Callable[[dict[str, Any]], None] | None = None,
     max_retries: int = 1,
     cancel_event: threading.Event | None = None,
+    parent_span_id: str = "",
 ) -> dict[str, Any]:
     last_error: Exception | None = None
     for _attempt in range(max_retries + 1):
@@ -1154,6 +1264,7 @@ def run_agent(
                 prior_outputs=prior_outputs,
                 emit_event=emit_event,
                 cancel_event=cancel_event,
+                parent_span_id=parent_span_id,
             )
         except Exception as exc:
             last_error = exc
@@ -1244,6 +1355,7 @@ def _run_agent_once(
     prior_outputs: list[dict[str, Any]] | None,
     emit_event: Callable[[dict[str, Any]], None] | None = None,
     cancel_event: threading.Event | None = None,
+    parent_span_id: str = "",
 ) -> dict[str, Any]:
     raise_if_cancelled(cancel_event)
     profile = AGENT_PROFILES[agent_id]
@@ -1257,6 +1369,7 @@ def _run_agent_once(
             web_search_turn_limit=MULTI_AGENT_PER_AGENT_SEARCH_LIMIT,
             max_tool_rounds=MULTI_AGENT_TOOL_ROUNDS,
             budget_key=agent_id,
+            parent_span_id=parent_span_id,
         )
         return _build_agent_result(
             agent_id,
@@ -1359,6 +1472,7 @@ def _run_agent_once(
         max_tool_rounds=MULTI_AGENT_TOOL_ROUNDS,
         budget_key=agent_id,
         cancel_event=cancel_event,
+        parent_span_id=parent_span_id,
     )
 
     raise_if_cancelled(cancel_event)
@@ -1398,6 +1512,7 @@ def synthesize_answer(
     *,
     cancel_event: threading.Event | None = None,
     usage_callback: Callable[[dict[str, Any]], None] | None = None,
+    parent_span_id: str = "",
 ) -> str:
     synthesis_payload = agent_base_payload(payload)
     synthesis_payload.update(
@@ -1411,7 +1526,7 @@ def synthesize_answer(
         }
     )
     if emit_event is None:
-        result = call_deepseek(synthesis_payload, max_tool_rounds=0)
+        result = call_deepseek(synthesis_payload, max_tool_rounds=0, parent_span_id=parent_span_id)
         if usage_callback is not None and isinstance(result.get("usage"), dict):
             usage_callback(dict(result["usage"]))
         return str(result.get("content") or "").strip() or EMPTY_SYNTHESIS_FALLBACK
@@ -1431,7 +1546,7 @@ def synthesize_answer(
             usage_callback(dict(event["usage"]))
         # 忽略 done/error；done 由外层 stream_multi_agent 统一发送
 
-    stream_deepseek(synthesis_payload, relay, cancel_event=cancel_event)
+    stream_deepseek(synthesis_payload, relay, cancel_event=cancel_event, parent_span_id=parent_span_id)
     return ("".join(collected)).strip() or EMPTY_SYNTHESIS_FALLBACK
 
 

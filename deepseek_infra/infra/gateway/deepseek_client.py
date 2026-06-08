@@ -23,6 +23,7 @@ from deepseek_infra.core.config import (
 from deepseek_infra.infra.gateway.chat_payload import count_payload_attachments, expanded_message_content
 from deepseek_infra.infra.rag.context_compressor import format_context_summary_context
 from deepseek_infra.infra.gateway.context_manager import manage_request_body, merge_context_manager_diagnostics, stable_json_dumps
+from deepseek_infra.infra.gateway import budget_manager, model_router
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.gateway.edge_inference import (
     EdgeRouteDecision,
@@ -149,14 +150,19 @@ class TokenBudget:
     an in-flight call. ``total_limit <= 0`` means unlimited (never exhausted).
     """
 
-    def __init__(self, *, total_limit: int) -> None:
+    def __init__(self, *, total_limit: int, per_agent_limit: int = 0) -> None:
         self.total_limit = max(0, int(total_limit))
+        self.per_agent_limit = max(0, int(per_agent_limit))
         self.used = 0
+        self.used_by_key: dict[str, int] = {}
         self._lock = threading.Lock()
 
-    def record(self, tokens: int) -> int:
+    def record(self, tokens: int, key: str = "") -> int:
         with self._lock:
-            self.used += max(0, int(tokens))
+            amount = max(0, int(tokens))
+            self.used += amount
+            if key:
+                self.used_by_key[str(key)] = self.used_by_key.get(str(key), 0) + amount
             return self.used
 
     def exhausted(self) -> bool:
@@ -164,6 +170,13 @@ class TokenBudget:
             return False
         with self._lock:
             return self.used >= self.total_limit
+
+    def agent_exhausted(self, key: str) -> bool:
+        """True when a single agent has overspent its per-agent token budget."""
+        if self.per_agent_limit <= 0:
+            return False
+        with self._lock:
+            return self.used_by_key.get(str(key), 0) >= self.per_agent_limit
 
 
 @dataclass(frozen=True)
@@ -185,6 +198,10 @@ def validate_deepseek_payload(payload: dict[str, Any]) -> tuple[str, str, list[A
         raise AppError("Missing DeepSeek API Key. Set DEEPSEEK_API_KEY or enter a key in settings.", code=ErrorCode.MISSING_API_KEY)
 
     model = normalize_model_name(payload.get("model") or DEFAULT_MODEL)
+    # Resolve the "auto" routing sentinel (and autoRoute) to a concrete model so
+    # the rest of validation/assembly sees a real supported model.
+    if model_router.is_auto_request(payload):
+        model = model_router.route_request(payload).model
     if model not in SUPPORTED_MODELS:
         raise AppError("Unsupported model", code=ErrorCode.INVALID_PAYLOAD)
 
@@ -225,6 +242,19 @@ def build_deepseek_request(
     validated: ValidatedPayload | None = None,
 ) -> PreparedDeepSeekRequest:
     api_key, model, messages = validated or validate_deepseek_payload(payload)
+    # Model Router: when a request opts into auto routing, pick the cloud model
+    # tier (flash/pro) by capability/cost/latency. Explicit model picks are left
+    # untouched; the image→vision override below still applies as a safety net.
+    route_decision = model_router.route_request(payload) if model_router.is_auto_request(payload) else None
+    if route_decision is not None:
+        model = route_decision.model
+    # Budget governance: a downgrade policy forces the cheap model once a scope is
+    # over its daily budget. Only reads the ledger when such a policy is active.
+    budget_policy = budget_manager.budget_policy_from_payload(payload)
+    budget_downgraded = False
+    if budget_policy.downgrade and model == "deepseek-v4-pro" and budget_manager.should_downgrade(budget_manager.budget_scope(payload), budget_policy):
+        model = "deepseek-v4-flash"
+        budget_downgraded = True
     tools_enabled = payload.get("toolsEnabled") is not False
 
     # DeepSeek prompt cache 按 message 字面 prefix 严格匹配。任何让 system message
@@ -310,6 +340,11 @@ def build_deepseek_request(
         "toolCallCount": 0,
         "toolNames": [],
     }
+    if route_decision is not None:
+        diagnostics["modelRouter"] = route_decision.to_dict()
+    if budget_policy.policy != "none":
+        diagnostics["budgetPolicy"] = budget_policy.to_dict()
+        diagnostics["budgetDowngraded"] = budget_downgraded
 
     request_body, context_manager_diag = manage_request_body(request_body, allow_sliding_window=bool(context_summary))
     diagnostics = merge_context_manager_diagnostics(diagnostics, context_manager_diag)
@@ -566,17 +601,35 @@ def prepare_deepseek_call(
     stream: bool,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     system_note_callback: Callable[[str], None] | None = None,
+    validated: ValidatedPayload | None = None,
+    trace_id: str = "",
+    parent_span_id: str = "",
 ) -> PreparedDeepSeekCall:
-    validated = preflight_deepseek_payload(payload)
+    if validated is None:
+        validated = preflight_deepseek_payload(payload)
+    # OpenTelemetry-style context-assembly subtree: context.build wraps the
+    # memory + retrieval + prompt-assembly steps. start_span is a no-op when
+    # trace_id is empty, so the untraced path is unaffected.
+    context_span = start_span(trace_id, name="context.build", kind="context", parent_span_id=parent_span_id)
+    memory_span = start_span(trace_id, name="memory.retrieve", kind="memory", parent_span_id=context_span.span_id)
     memory_state = prepare_memory_state(payload)
+    memory_span.finish(
+        status="ok",
+        output_data={"enabled": bool(memory_state.get("enabled")), "hitCount": int(memory_state.get("hitCount") or 0)},
+    )
     search_data = None
     if forced_search_mode(payload):
+        rag_span = start_span(trace_id, name="rag.retrieve", kind="rag", parent_span_id=context_span.span_id)
         search_data = search_if_needed(payload, progress_callback=progress_callback, system_note_callback=system_note_callback)
+        results = (search_data or {}).get("results") or []
+        rag_status = "ok" if results else "error" if (search_data or {}).get("status") == "error" else "skipped"
+        rag_span.finish(status=rag_status, output_data={"resultCount": len(results)})
     if search_data and search_data.get("results"):
         payload = {**payload, "searchContext": format_search_context(search_data)}
     elif search_data and search_data.get("status") == "error":
         payload = {**payload, "searchContext": format_search_failure_context(search_data)}
     prepared = build_deepseek_request(payload, stream=stream, memory_state=memory_state, validated=validated)
+    context_span.finish(status="ok", output_data={"messageCount": len(prepared.body.get("messages") or [])})
     return PreparedDeepSeekCall(request=prepared, search_data=search_data)
 
 
@@ -817,6 +870,8 @@ def web_search_callback_for_turn(
     turn_limit: int = WEB_SEARCH_TURN_LIMIT,
     search_budget: SearchBudget | None = None,
     budget_key: str = "default",
+    trace_id: str = "",
+    parent_span_id: str = "",
 ) -> tuple[Callable[[str, str], dict[str, Any]], Callable[[], dict[str, Any] | None]]:
     base_query = latest_user_query(payload)
     tavily_api_key = str(payload.get("tavilyApiKey") or "").strip()
@@ -877,7 +932,7 @@ def web_search_callback_for_turn(
         record_progress(round_data)
         return compact_search_tool_result(round_data, intent=str(intent or "general"), citation_offset=citation_counter)
 
-    def perform_web_search(query: str, intent: str) -> dict[str, Any]:
+    def _perform_web_search(query: str, intent: str) -> dict[str, Any]:
         nonlocal counter, citation_counter
         cleaned = normalize_search_query_text(query)
         key = cleaned.lower()
@@ -900,6 +955,25 @@ def web_search_callback_for_turn(
         citation_counter += len(result.get("results") or [])
         if key:
             cached_tool_results[key] = result
+        return result
+
+    def perform_web_search(query: str, intent: str) -> dict[str, Any]:
+        # OpenTelemetry-style tool span: each model-driven web_search is a child
+        # of the LLM/agent span (parent_span_id). No-op when tracing is off.
+        span = start_span(
+            trace_id,
+            name="tool.web_search",
+            kind="tool",
+            parent_span_id=parent_span_id,
+            input_data={"query": query, "intent": intent},
+        )
+        result = _perform_web_search(query, intent)
+        status = "error" if result.get("status") == "error" else "hit" if result.get("cached") else "ok"
+        span.finish(
+            status=status,
+            output_data={"resultCount": len(result.get("results") or []), "cached": bool(result.get("cached"))},
+            error=str(result.get("error") or ""),
+        )
         return result
 
     return perform_web_search, lambda: latest_search_data
@@ -927,6 +1001,13 @@ def diagnostics_with_usage(diagnostics: dict[str, Any], usage: dict[str, Any]) -
     total_cache_tokens = hit_tokens + miss_tokens
     result["cacheHitRate"] = round((hit_tokens / total_cache_tokens) * 100, 1) if total_cache_tokens else 0.0
     return result
+
+
+def _search_round_count(search_data: Any) -> int:
+    if not isinstance(search_data, dict):
+        return 0
+    rounds = search_data.get("rounds")
+    return len(rounds) if isinstance(rounds, list) else 0
 
 
 def diagnostics_with_semantic_cache(diagnostics: dict[str, Any], semantic_cache: dict[str, Any]) -> dict[str, Any]:
@@ -1284,27 +1365,40 @@ def call_deepseek(
     web_search_turn_limit: int = WEB_SEARCH_TURN_LIMIT,
     max_tool_rounds: int = MAX_TOOL_ROUNDS,
     budget_key: str = "default",
+    parent_span_id: str = "",
 ) -> dict[str, Any]:
     edge_route = edge_route_for_payload(payload)
     if edge_route.use_edge:
         return call_edge_inference(payload, edge_route)
 
-    prepared_call = prepare_deepseek_call(payload, stream=False)
-    prepared = prepared_call.request
-    body = prepared.body
+    # Validate before creating the trace so a bad payload never leaves a dangling
+    # run; then assemble context under spans parented at span_parent (the agent
+    # span for worker calls, or the run root for plain chat).
+    validated = preflight_deepseek_payload(payload)
     gateway_attempts: list[dict[str, Any]] = []
     trace_context = ensure_trace(
         payload,
         kind="agent" if payload.get("agentMode") is True else "chat",
         title=latest_user_query(payload),
-        metadata={"stream": False, "budgetKey": budget_key, "model": body.get("model")},
+        metadata={"stream": False, "budgetKey": budget_key, "model": normalize_model_name(payload.get("model") or DEFAULT_MODEL)},
     )
+    span_parent = parent_span_id
+    prepared_call = prepare_deepseek_call(
+        payload,
+        stream=False,
+        validated=validated,
+        trace_id=trace_context.trace_id,
+        parent_span_id=span_parent,
+    )
+    prepared = prepared_call.request
+    body = prepared.body
     cache_body = body
     semantic_span = start_span(
         trace_context.trace_id,
         name=f"{budget_key}:semantic_cache",
         kind="semantic_cache",
         input_data={"model": body.get("model"), "messageCount": len(body.get("messages") or [])},
+        parent_span_id=span_parent,
     )
     semantic_lookup = semantic_cache_lookup(payload, body)
     semantic_diag = semantic_lookup.diagnostics
@@ -1338,6 +1432,8 @@ def call_deepseek(
         turn_limit=web_search_turn_limit,
         search_budget=search_budget,
         budget_key=budget_key,
+        trace_id=trace_context.trace_id,
+        parent_span_id=span_parent,
     )
     response_json: dict[str, Any] = {}
     answer: dict[str, Any] = {}
@@ -1350,6 +1446,7 @@ def call_deepseek(
             name=f"{budget_key}:deepseek:{tool_round + 1}",
             kind="deepseek_api",
             input_data=upstream_trace_input(body, budget_key=budget_key, tool_round=tool_round, stream=False),
+            parent_span_id=span_parent,
         )
         try:
             with open_with_resiliency(
@@ -1446,11 +1543,22 @@ def call_deepseek(
         result["memorySuggestions"] = memory_suggestions
     semantic_diag = merge_semantic_cache_diagnostics(semantic_diag, semantic_cache_store(payload, cache_body, result))
     result["diagnostics"] = with_trace_diagnostics(
-        diagnostics_with_usage(
-            diagnostics_with_semantic_cache(diagnostics_with_search(diagnostics, search_data), semantic_diag),
+        budget_manager.diagnostics_with_cost(
+            diagnostics_with_usage(
+                diagnostics_with_semantic_cache(diagnostics_with_search(diagnostics, search_data), semantic_diag),
+                usage,
+            ),
             usage,
+            result.get("model"),
         ),
         trace_context.trace_id,
+    )
+    budget_manager.record_request_spend(
+        payload,
+        result.get("model"),
+        usage,
+        tool_calls=tool_call_count,
+        search_calls=_search_round_count(search_data),
     )
     if trace_context.created:
         finish_trace(
@@ -1458,6 +1566,120 @@ def call_deepseek(
             metadata={"model": result.get("model"), "toolCallCount": tool_call_count, "semanticCacheHit": False},
         )
     return result
+
+
+JUDGE_SYSTEM_PROMPT = (
+    "你是答案质量评审。只根据候选回答是否充分、准确、直接解决用户问题来打分，"
+    "输出一个 0 到 1 之间的小数（1 表示完全充分），不要任何解释或多余文字。"
+)
+
+
+def call_deepseek_cascade(
+    payload: dict[str, Any],
+    *,
+    search_budget: SearchBudget | None = None,
+    web_search_turn_limit: int = WEB_SEARCH_TURN_LIMIT,
+    max_tool_rounds: int = MAX_TOOL_ROUNDS,
+    budget_key: str = "default",
+    parent_span_id: str = "",
+) -> dict[str, Any]:
+    """Cascade inference: cheap draft → quality gate → escalate to refine model.
+
+    Falls back to a plain :func:`call_deepseek` when cascade is not requested. The
+    draft and refine calls reuse the full tool/search/cache pipeline; only the
+    model differs. Diagnostics carry a ``modelCascade`` block.
+    """
+    plan = model_router.cascade_plan(payload)
+    call_kwargs: dict[str, Any] = {
+        "search_budget": search_budget,
+        "web_search_turn_limit": web_search_turn_limit,
+        "max_tool_rounds": max_tool_rounds,
+        "budget_key": budget_key,
+        "parent_span_id": parent_span_id,
+    }
+    if not plan.enabled:
+        return call_deepseek(payload, **call_kwargs)
+
+    draft = call_deepseek({**payload, "model": plan.draft_model, "cascade": False, "autoRoute": False}, **call_kwargs)
+    require_citations = payload.get("searchEnabled") is True
+    gate = model_router.quality_gate(str(draft.get("content") or ""), min_chars=plan.min_chars, require_citations=require_citations)
+    judge_score: float | None = None
+    passed = gate.passed
+    if plan.judge:
+        judge_score = judge_draft(payload, str(draft.get("content") or ""), plan)
+        passed = passed and judge_score >= plan.judge_threshold
+    if passed:
+        draft["diagnostics"] = _with_cascade_diagnostics(draft.get("diagnostics"), plan, escalated=False, gate=gate, judge_score=judge_score, draft_content="")
+        return draft
+
+    refined = call_deepseek({**payload, "model": plan.refine_model, "cascade": False, "autoRoute": False}, **call_kwargs)
+    refined["diagnostics"] = _with_cascade_diagnostics(
+        refined.get("diagnostics"), plan, escalated=True, gate=gate, judge_score=judge_score, draft_content=str(draft.get("content") or "")
+    )
+    return refined
+
+
+def _with_cascade_diagnostics(
+    diagnostics: Any,
+    plan: "model_router.CascadePlan",
+    *,
+    escalated: bool,
+    gate: "model_router.GateResult",
+    judge_score: float | None,
+    draft_content: str,
+) -> dict[str, Any]:
+    result = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+    block: dict[str, Any] = {
+        "enabled": True,
+        "escalated": escalated,
+        "draftModel": plan.draft_model,
+        "refineModel": plan.refine_model,
+        "judge": plan.judge,
+        "gate": gate.to_dict(),
+    }
+    if judge_score is not None:
+        block["judgeScore"] = round(float(judge_score), 3)
+    if escalated:
+        block["draftContentChars"] = len(draft_content)
+    result["modelCascade"] = block
+    return result
+
+
+def judge_draft(payload: dict[str, Any], draft_content: str, plan: "model_router.CascadePlan") -> float:
+    """Score a draft 0..1 with a cheap Judge model. Returns 1.0 on any failure so
+    an infra error never forces an unnecessary (costly) escalation."""
+    query = latest_user_query(payload)
+    judge_payload = {
+        "apiKey": payload.get("apiKey"),
+        "tavilyApiKey": payload.get("tavilyApiKey"),
+        "model": plan.judge_model,
+        "toolsEnabled": False,
+        "searchEnabled": False,
+        "thinkingEnabled": False,
+        "systemPrompt": JUDGE_SYSTEM_PROMPT,
+        "messages": [
+            {
+                "role": "user",
+                "content": f"用户问题：\n{query}\n\n候选回答：\n{draft_content}\n\n只输出一个 0 到 1 之间的小数表示该回答的充分性。",
+            }
+        ],
+    }
+    try:
+        result = call_deepseek(judge_payload, max_tool_rounds=0)
+        return _parse_judge_score(str(result.get("content") or ""))
+    except Exception:
+        return 1.0
+
+
+def _parse_judge_score(text: str) -> float:
+    match = re.search(r"\d?\.\d+|[01](?:\.0+)?", str(text or ""))
+    if not match:
+        return 1.0
+    try:
+        value = float(match.group(0))
+    except ValueError:
+        return 1.0
+    return max(0.0, min(1.0, value))
 
 
 def stream_deepseek(
@@ -1469,6 +1691,7 @@ def stream_deepseek(
     max_tool_rounds: int = MAX_TOOL_ROUNDS,
     budget_key: str = "default",
     cancel_event: threading.Event | None = None,
+    parent_span_id: str = "",
 ) -> None:
     content = ""
     reasoning = ""
@@ -1509,25 +1732,36 @@ def stream_deepseek(
             stream_edge_inference(payload, emit_checked, edge_route, cancel_event=cancel_event)
             return
         raise_if_cancelled(cancel_event)
-        prepared_call = prepare_deepseek_call(payload, stream=True, progress_callback=emit_search_progress, system_note_callback=emit_system_note)
+        validated = preflight_deepseek_payload(payload)
+        trace_context = ensure_trace(
+            payload,
+            kind="agent" if payload.get("agentMode") is True else "chat",
+            title=latest_user_query(payload),
+            metadata={"stream": True, "budgetKey": budget_key, "model": normalize_model_name(payload.get("model") or DEFAULT_MODEL)},
+        )
+        span_parent = parent_span_id
+        prepared_call = prepare_deepseek_call(
+            payload,
+            stream=True,
+            validated=validated,
+            trace_id=trace_context.trace_id,
+            parent_span_id=span_parent,
+            progress_callback=emit_search_progress,
+            system_note_callback=emit_system_note,
+        )
         prepared = prepared_call.request
         search_data = prepared_call.search_data
         diagnostics = prepared.diagnostics
         response_model = prepared.body["model"]
         search_for_response = search_for_client(search_data) if search_data else search_for_response
         body = prepared.body
-        trace_context = ensure_trace(
-            payload,
-            kind="agent" if payload.get("agentMode") is True else "chat",
-            title=latest_user_query(payload),
-            metadata={"stream": True, "budgetKey": budget_key, "model": body.get("model")},
-        )
         cache_body = body
         semantic_span = start_span(
             trace_context.trace_id,
             name=f"{budget_key}:semantic_cache",
             kind="semantic_cache",
             input_data={"model": body.get("model"), "messageCount": len(body.get("messages") or [])},
+            parent_span_id=span_parent,
         )
         semantic_lookup = semantic_cache_lookup(payload, body)
         semantic_diag = semantic_lookup.diagnostics
@@ -1591,6 +1825,8 @@ def stream_deepseek(
             turn_limit=web_search_turn_limit,
             search_budget=search_budget,
             budget_key=budget_key,
+            trace_id=trace_context.trace_id,
+            parent_span_id=span_parent,
         )
 
         def emit_memory_suggestion(suggestion: dict[str, Any]) -> None:
@@ -1609,6 +1845,7 @@ def stream_deepseek(
                 name=f"{budget_key}:deepseek:{tool_round + 1}",
                 kind="deepseek_api",
                 input_data=upstream_trace_input(body, budget_key=budget_key, tool_round=tool_round, stream=True),
+                parent_span_id=span_parent,
             )
             try:
                 with open_with_resiliency(
@@ -1751,23 +1988,34 @@ def stream_deepseek(
         }
         semantic_diag = merge_semantic_cache_diagnostics(semantic_diag, semantic_cache_store(payload, cache_body, result_for_cache))
         result_diagnostics = with_trace_diagnostics(
-            diagnostics_with_usage(
-                diagnostics_with_semantic_cache(
-                    diagnostics_with_search(
-                        diagnostics_with_gateway(
-                            edge_diagnostics(
-                                diagnostics_with_tools(diagnostics, count=tool_call_count, names=seen_tool_names),
-                                edge_route,
+            budget_manager.diagnostics_with_cost(
+                diagnostics_with_usage(
+                    diagnostics_with_semantic_cache(
+                        diagnostics_with_search(
+                            diagnostics_with_gateway(
+                                edge_diagnostics(
+                                    diagnostics_with_tools(diagnostics, count=tool_call_count, names=seen_tool_names),
+                                    edge_route,
+                                ),
+                                gateway_attempts,
                             ),
-                            gateway_attempts,
+                            search_data,
                         ),
-                        search_data,
+                        semantic_diag,
                     ),
-                    semantic_diag,
+                    usage,
                 ),
                 usage,
+                response_model,
             ),
             trace_context.trace_id,
+        )
+        budget_manager.record_request_spend(
+            payload,
+            response_model,
+            usage,
+            tool_calls=tool_call_count,
+            search_calls=_search_round_count(search_data),
         )
         if trace_context.created:
             finish_trace(

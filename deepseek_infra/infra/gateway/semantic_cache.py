@@ -13,17 +13,28 @@ from dataclasses import dataclass
 from typing import Any
 
 from deepseek_infra.core.config import (
+    SEMANTIC_CACHE_ATTACHMENTS,
     SEMANTIC_CACHE_DB,
     SEMANTIC_CACHE_DIR,
     SEMANTIC_CACHE_ENABLED,
     SEMANTIC_CACHE_MAX_ITEMS,
     SEMANTIC_CACHE_MAX_PROMPT_CHARS,
     SEMANTIC_CACHE_MAX_RESPONSE_CHARS,
+    SEMANTIC_CACHE_MIN_QUALITY,
     SEMANTIC_CACHE_THRESHOLD,
     SEMANTIC_CACHE_TTL_SECONDS,
+    SEMANTIC_CACHE_VERSION,
 )
+from deepseek_infra.core.utils import latest_user_query
 from deepseek_infra.infra.gateway.chat_payload import count_payload_attachments
 from deepseek_infra.infra.rag.local_rag import cosine_similarity, embed_text, embedding_pipeline
+
+# Answers matching these markers are non-answers (fallbacks / refusals) and must not be cached.
+LOW_QUALITY_MARKERS = (
+    "综合阶段没有返回正文",
+    "重新综合最终回答",
+    "本轮搜索次数已达上限",
+)
 
 logger = logging.getLogger("deepseek_infra.semantic_cache")
 
@@ -62,9 +73,18 @@ def lookup(payload: dict[str, Any], body: dict[str, Any]) -> CacheLookup:
     diagnostics["checked"] = True
     diagnostics["promptChars"] = len(prompt_text)
     prompt_hash = stable_hash(prompt_text)
+    version = cache_version()
+    scope = scope_for(payload)
+    # File/attachment context: exact-prompt match only. The expanded file text
+    # dominates the embedding, so fuzzy similarity would falsely match different
+    # questions about the same file — exact match keeps reuse correct.
+    exact_only = has_attachments(payload)
+    diagnostics["cacheVersion"] = version
+    diagnostics["scope"] = scope
+    diagnostics["exactMatchOnly"] = exact_only
     try:
         query_embedding = embed_text(prompt_text)
-        rows = candidate_rows(str(body.get("model") or ""))
+        rows = candidate_rows(str(body.get("model") or ""), version, scope)
     except Exception as exc:
         set_last_error(f"semantic cache lookup failed: {exc}")
         diagnostics["skippedReason"] = "lookup_error"
@@ -77,10 +97,10 @@ def lookup(payload: dict[str, Any], body: dict[str, Any]) -> CacheLookup:
     for row in rows:
         if cache_expired(row, now):
             continue
-        row_embedding = decode_embedding(row["embedding"])
-        similarity = cosine_similarity(query_embedding, row_embedding)
-        if row["prompt_hash"] == prompt_hash:
-            similarity = 1.0
+        exact = row["prompt_hash"] == prompt_hash
+        if exact_only and not exact:
+            continue
+        similarity = 1.0 if exact else cosine_similarity(query_embedding, decode_embedding(row["embedding"]))
         if similarity > best_similarity:
             best_similarity = similarity
             best_row = row
@@ -102,6 +122,8 @@ def lookup(payload: dict[str, Any], body: dict[str, Any]) -> CacheLookup:
             "cacheId": cache_id,
             "similarity": round(best_similarity, 4),
             "promptHash": prompt_hash,
+            "qualityScore": float(best_row["quality_score"] or 0.0),
+            "hitCount": int(best_row["hit_count"] or 0) + 1,
             "savedUsage": decode_json(best_row["usage_json"]) if best_row["usage_json"] else {},
         }
     )
@@ -130,6 +152,12 @@ def store(payload: dict[str, Any], body: dict[str, Any], result: dict[str, Any])
         diagnostics["storeSkippedReason"] = "side_effect_response"
         return diagnostics
 
+    score = quality_score(content)
+    diagnostics["qualityScore"] = score
+    if SEMANTIC_CACHE_MIN_QUALITY > 0 and score < SEMANTIC_CACHE_MIN_QUALITY:
+        diagnostics["storeSkippedReason"] = "low_quality"
+        return diagnostics
+
     response = {
         "model": str(result.get("model") or body.get("model") or ""),
         "content": content,
@@ -137,10 +165,13 @@ def store(payload: dict[str, Any], body: dict[str, Any], result: dict[str, Any])
     }
     usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
     prompt_hash = stable_hash(prompt_text)
+    version = cache_version()
+    scope = scope_for(payload)
+    query_text = query_text_for(payload)
     now = int(time.time())
     try:
         embedding = embed_text(prompt_text)
-        cache_id = existing_cache_id(prompt_hash, str(body.get("model") or "")) or uuid.uuid4().hex
+        cache_id = existing_cache_id(prompt_hash, str(body.get("model") or ""), version, scope) or uuid.uuid4().hex
         with _db_lock, connect_db() as conn:
             initialize_schema(conn)
             conn.execute(
@@ -148,15 +179,18 @@ def store(payload: dict[str, Any], body: dict[str, Any], result: dict[str, Any])
                 INSERT INTO {CACHE_TABLE}
                     (
                         cache_id, prompt_hash, model, prompt_text, embedding, response_json, usage_json,
-                        created_at, updated_at, last_hit_at, hit_count
+                        created_at, updated_at, last_hit_at, hit_count,
+                        cache_version, scope, quality_score, query_text
                     )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
                 ON CONFLICT(cache_id) DO UPDATE SET
                     prompt_text = excluded.prompt_text,
                     embedding = excluded.embedding,
                     response_json = excluded.response_json,
                     usage_json = excluded.usage_json,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    quality_score = excluded.quality_score,
+                    query_text = excluded.query_text
                 """,
                 (
                     cache_id,
@@ -168,10 +202,14 @@ def store(payload: dict[str, Any], body: dict[str, Any], result: dict[str, Any])
                     json.dumps(usage, ensure_ascii=False),
                     now,
                     now,
+                    version,
+                    scope,
+                    score,
+                    query_text,
                 ),
             )
             trim_cache(conn)
-        diagnostics.update({"stored": True, "cacheId": cache_id, "promptHash": prompt_hash})
+        diagnostics.update({"stored": True, "cacheId": cache_id, "promptHash": prompt_hash, "scope": scope, "cacheVersion": version})
     except Exception as exc:
         set_last_error(f"semantic cache store failed: {exc}")
         diagnostics["storeSkippedReason"] = "store_error"
@@ -202,6 +240,9 @@ def status() -> dict[str, Any]:
         "hits": hit_count,
         "embeddingProvider": pipeline.active_provider,
         "embeddingDimensions": pipeline.dimensions,
+        "cacheVersion": cache_version(),
+        "minQualityScore": SEMANTIC_CACHE_MIN_QUALITY,
+        "cacheAttachments": SEMANTIC_CACHE_ATTACHMENTS,
         "lastError": _last_error or pipeline.error,
     }
 
@@ -234,7 +275,9 @@ def skip_reason(payload: dict[str, Any], body: dict[str, Any]) -> str:
         return "disabled"
     if payload.get("semanticCacheEnabled") is False:
         return "request_disabled"
-    if count_payload_attachments(payload.get("messages")):
+    # File/attachment context is cacheable (v2.0.6) but only via exact-prompt match
+    # within its project scope (see lookup/store); when disabled, skip it entirely.
+    if not SEMANTIC_CACHE_ATTACHMENTS and count_payload_attachments(payload.get("messages")):
         return "attachments"
     if payload.get("searchEnabled") is True:
         return "search_enabled"
@@ -260,6 +303,48 @@ def prompt_text_for_body(body: dict[str, Any]) -> str:
     return json.dumps(prompt, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def cache_version() -> str:
+    """Namespace stamp: logic version + embedding provider + dimensions.
+
+    Changing the embedding model/dimensions or bumping ``SEMANTIC_CACHE_VERSION``
+    yields a new namespace, so incompatible old entries are simply never matched
+    (and age out via TTL / trim) rather than served with the wrong embedding space.
+    """
+    pipeline = embedding_pipeline()
+    return f"{SEMANTIC_CACHE_VERSION}:{pipeline.active_provider}:{pipeline.dimensions}"
+
+
+def scope_for(payload: dict[str, Any]) -> str:
+    """Privacy / project isolation namespace for an entry (memory scope or project)."""
+    raw = str(payload.get("memoryScope") or "").strip()
+    if raw:
+        return raw[:120]
+    project_id = str(payload.get("projectId") or payload.get("activeProjectId") or "").strip()
+    if project_id:
+        return f"project:{project_id}"[:120]
+    return "global"
+
+
+def has_attachments(payload: dict[str, Any]) -> bool:
+    return count_payload_attachments(payload.get("messages")) > 0
+
+
+def query_text_for(payload: dict[str, Any]) -> str:
+    return latest_user_query(payload)[:500]
+
+
+def quality_score(content: str) -> float:
+    """Cheap 0..1 answer-quality heuristic; refusals/fallbacks/near-empty score low."""
+    text = str(content or "").strip()
+    if not text:
+        return 0.0
+    if any(marker in text for marker in LOW_QUALITY_MARKERS):
+        return 0.1
+    if len(text) < 4:
+        return 0.1
+    return round(0.4 + min(1.0, len(text) / 400.0) * 0.6, 3)
+
+
 def cached_result(cache_id: str, response: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": f"semantic-cache-{cache_id[:12]}",
@@ -270,27 +355,28 @@ def cached_result(cache_id: str, response: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def candidate_rows(model: str) -> list[sqlite3.Row]:
+def candidate_rows(model: str, version: str, scope: str) -> list[sqlite3.Row]:
     with _db_lock, connect_db() as conn:
         initialize_schema(conn)
         rows = conn.execute(
             f"""
             SELECT * FROM {CACHE_TABLE}
-            WHERE model = ?
+            WHERE model = ? AND cache_version = ? AND scope = ?
             ORDER BY updated_at DESC
             LIMIT ?
             """,
-            (model, SEMANTIC_CACHE_MAX_ITEMS),
+            (model, version, scope, SEMANTIC_CACHE_MAX_ITEMS),
         ).fetchall()
     return list(rows)
 
 
-def existing_cache_id(prompt_hash: str, model: str) -> str:
+def existing_cache_id(prompt_hash: str, model: str, version: str, scope: str) -> str:
     with _db_lock, connect_db() as conn:
         initialize_schema(conn)
         row = conn.execute(
-            f"SELECT cache_id FROM {CACHE_TABLE} WHERE prompt_hash = ? AND model = ? ORDER BY updated_at DESC LIMIT 1",
-            (prompt_hash, model),
+            f"SELECT cache_id FROM {CACHE_TABLE} WHERE prompt_hash = ? AND model = ? AND cache_version = ? AND scope = ? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (prompt_hash, model, version, scope),
         ).fetchone()
     return str(row["cache_id"]) if row else ""
 
@@ -336,6 +422,14 @@ def connect_db() -> sqlite3.Connection:
     return conn
 
 
+_MIGRATION_COLUMNS = (
+    ("cache_version", "TEXT NOT NULL DEFAULT ''"),
+    ("scope", "TEXT NOT NULL DEFAULT 'global'"),
+    ("quality_score", "REAL NOT NULL DEFAULT 0"),
+    ("query_text", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
 def initialize_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         f"""
@@ -350,12 +444,26 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             last_hit_at INTEGER NOT NULL,
-            hit_count INTEGER NOT NULL
+            hit_count INTEGER NOT NULL,
+            cache_version TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL DEFAULT 'global',
+            quality_score REAL NOT NULL DEFAULT 0,
+            query_text TEXT NOT NULL DEFAULT ''
         )
         """
     )
+    _ensure_columns(conn)
     conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{CACHE_TABLE}_model ON {CACHE_TABLE}(model, updated_at)")
+    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{CACHE_TABLE}_ns ON {CACHE_TABLE}(model, cache_version, scope, updated_at)")
     conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{CACHE_TABLE}_hash ON {CACHE_TABLE}(prompt_hash, model)")
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Add v2.0.6 columns to caches created by older versions (idempotent)."""
+    existing = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({CACHE_TABLE})").fetchall()}
+    for name, definition in _MIGRATION_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {CACHE_TABLE} ADD COLUMN {name} {definition}")
 
 
 def stable_hash(text: str) -> str:

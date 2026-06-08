@@ -185,7 +185,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn('id="historySearchInput"', html)
         self.assertIn(".history-menu-button", css)
         self.assertIn('data.type !== "show_reminder"', sw)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
 
     def test_v071_project_library_and_citations_are_present(self) -> None:
         app = Path("static/modules/chat.js").read_text(encoding="utf-8")
@@ -376,7 +376,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("openCitationForMessage", app)
         self.assertIn('data-citation="${escapeAttribute(id)}"', markdown)
         self.assertIn(".citation-pin", css)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
 
     def test_v073_memory_suggestions_and_scopes_are_present(self) -> None:
         app = Path("static/modules/chat.js").read_text(encoding="utf-8")
@@ -390,7 +390,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn('"memory_suggestion"', client)
         self.assertIn('"name": "suggest_memory"', tools)
         self.assertIn("def detect_memory_conflicts", memory)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
 
     def test_v074_ui_ux_enhancements_are_present(self) -> None:
         app = Path("static/modules/chat.js").read_text(encoding="utf-8")
@@ -450,7 +450,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("data-chart-action=\"bar\"", markdown)
         self.assertIn("function hydrateMermaidDiagrams", markdown)
         self.assertIn(".command-palette", css)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
 
     def test_v080_voice_and_share_target_are_present(self) -> None:
         app = Path("static/modules/chat.js").read_text(encoding="utf-8")
@@ -594,7 +594,7 @@ class EncodingRegressionTests(unittest.TestCase):
         ]:
             with self.subTest(token=token):
                 self.assertIn(token, app)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
 
     def test_v085_selection_quote_reasoning_and_composer_focus_fixes_are_present(self) -> None:
         app = Path("static/modules/chat.js").read_text(encoding="utf-8")
@@ -640,7 +640,7 @@ class EncodingRegressionTests(unittest.TestCase):
                 self.assertIn(token, css)
         self.assertNotIn("button:focus-visible,\ntextarea:focus-visible", css)
 
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
         self.assertIn("## [0.8.5]", changelog)
 
     def test_v086_reasoning_timer_and_busy_interactions_are_present(self) -> None:
@@ -677,10 +677,10 @@ class EncodingRegressionTests(unittest.TestCase):
             with self.subTest(removed=removed):
                 self.assertNotIn(removed, app)
 
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [0.8.6]", changelog)
-        self.assertIn("适用版本：v2.0.2。", api)
+        self.assertIn("适用版本：v2.0.9。", api)
 
     def test_v170_streaming_phase_labels_and_timer_are_present(self) -> None:
         app = Path("static/modules/chat.js").read_text(encoding="utf-8")
@@ -708,9 +708,9 @@ class EncodingRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, app)
 
-        self.assertIn('app_version: str = "2.0.2"', config)
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn('app_version: str = "2.0.9"', config)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("图片视觉理解", readme)
         self.assertIn("## [1.7.0]", changelog)
 
@@ -762,7 +762,7 @@ class EncodingRegressionTests(unittest.TestCase):
                 self.assertIn(token, css)
         self.assertNotIn(".history-footer {\n  position: sticky", css)
         self.assertNotIn("background: rgba(255, 255, 255, 0.96)", css)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
         self.assertIn("## [0.9.0]", changelog)
 
     def test_v091_tool_calling_improvements_are_present(self) -> None:
@@ -808,10 +808,10 @@ class EncodingRegressionTests(unittest.TestCase):
                 self.assertIn(token, app)
 
         self.assertIn('id="reasoningEffortSelect"', html)
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [0.9.1]", changelog)
-        self.assertIn("适用版本：v2.0.2。", api)
+        self.assertIn("适用版本：v2.0.9。", api)
 
     def test_v092_upload_limits_and_frontend_interactions_are_present(self) -> None:
         app = Path("static/modules/chat.js").read_text(encoding="utf-8")
@@ -891,8 +891,8 @@ class EncodingRegressionTests(unittest.TestCase):
 
         self.assertIn("thumbnail: String(value.thumbnail || \"\")", normalize)
         self.assertIn("imagePreview: String(value.imagePreview || \"\")", normalize)
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [0.9.4]", changelog)
         self.assertIn("uploadLimits", api)
 
@@ -961,8 +961,8 @@ class EncodingRegressionTests(unittest.TestCase):
 
         self.assertIn(".selection-popover", css)
         self.assertIn(".search-round-count", css)
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("version-2.0.9-blue", readme)
 
     def test_v094_citations_titles_peek_and_timeline_are_present(self) -> None:
         app = Path("static/modules/chat.js").read_text(encoding="utf-8")
@@ -1022,8 +1022,8 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("citation-web", markdown)
         self.assertIn(".reasoning-search-round", css)
         self.assertIn(".history-title.is-pending-title", css)
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [0.9.4]", changelog)
 
     def test_v096_search_hotfix_and_tool_expansion_are_present(self) -> None:
@@ -1087,11 +1087,11 @@ class EncodingRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, tools)
 
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [0.9.6]", changelog)
-        self.assertIn("适用版本：v2.0.2。", api)
-        self.assertIn("适用版本：v2.0.2。", security)
+        self.assertIn("适用版本：v2.0.9。", api)
+        self.assertIn("适用版本：v2.0.9。", security)
 
     def test_v111_visual_theme_system_is_present(self) -> None:
         app = Path("static/modules/chat.js").read_text(encoding="utf-8")
@@ -1182,8 +1182,8 @@ class EncodingRegressionTests(unittest.TestCase):
                 self.assertIn(token, css)
         self.assertNotIn(':root[data-theme="dark"]', css)
 
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [1.2.2]", changelog)
         self.assertIn("normalizeThemeStyle", frontend_docs)
         self.assertIn("Google Fonts", security)
@@ -1211,8 +1211,8 @@ class EncodingRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, search)
 
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [1.2.2]", changelog)
 
     def test_v115_agent_mode_and_search_limits_are_present(self) -> None:
@@ -1522,7 +1522,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("## [1.4.0]", changelog)
         self.assertIn("## Agent Run API", api)
         self.assertIn("deepseek_infra/infra/agent_runtime/agent_runs.py", architecture)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
 
     def test_v160_mobile_launcher_is_present(self) -> None:
         launch_py = Path("launch.py").read_text(encoding="utf-8")
@@ -1540,7 +1540,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("prepare_and_start(host=host, port=port, serve=False)", mobile_launcher)
         self.assertIn("手机本机直接运行", readme)
         self.assertIn("## [1.6.0]", changelog)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
 
     def test_v160_web_interaction_fixes_are_present(self) -> None:
         app = Path("static/modules/chat.js").read_text(encoding="utf-8")
@@ -1565,9 +1565,9 @@ class EncodingRegressionTests(unittest.TestCase):
                 self.assertIn(token, app)
 
         self.assertNotIn('copyReport.addEventListener("click"', app)
-        self.assertIn('app_version: str = "2.0.2"', config)
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn('app_version: str = "2.0.9"', config)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [1.6.0]", changelog)
         self.assertIn("v1.6.0", architecture)
 
@@ -1607,10 +1607,10 @@ class EncodingRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, tools)
 
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [1.6.1]", changelog)
-        self.assertIn("适用版本：v2.0.2。", api)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("适用版本：v2.0.9。", api)
+        self.assertIn("deepseek-mobile-v185", sw)
 
 
     def test_v162_android_ocr_bridge_is_present(self) -> None:
@@ -1647,10 +1647,10 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("PowerShell is required for Windows OCR.", ocr)
         self.assertIn('jclass("com.deepseek.mobile.AndroidOcrBridge")', ocr)
         self.assertIn("DEEPSEEK_ANDROID_APP", ocr)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [1.6.2]", changelog)
         self.assertIn("ML Kit", apk_docs)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
 
     def test_v163_desktop_local_app_shell_is_present(self) -> None:
         desktop_app = Path("deepseek_infra/desktop_app.py").read_text(encoding="utf-8")
@@ -1698,15 +1698,15 @@ class EncodingRegressionTests(unittest.TestCase):
                 self.assertIn(token, build_exe)
 
         self.assertIn("pywebview>=5,<6", requirements)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("内嵌 WebView", readme)
         self.assertIn("## [1.6.3]", changelog)
-        self.assertIn("适用版本：v2.0.2。", api)
+        self.assertIn("适用版本：v2.0.9。", api)
         self.assertIn("deepseek_infra/desktop_app.py", architecture)
         self.assertIn("pywebview", architecture)
         self.assertIn("pywebview", frontend_docs)
         self.assertIn("内嵌 WebView", security)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("deepseek-mobile-v185", sw)
 
     def test_v165_multi_agent_budget_revision_and_dynamic_dag_are_present(self) -> None:
         multi_agent = Path("deepseek_infra/infra/agent_runtime/multi_agent.py").read_text(encoding="utf-8")
@@ -1738,10 +1738,10 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("class TokenBudget", client)
         self.assertIn("normalizeEditableAgentDependsOn", chat)
         self.assertIn('depends_on: ["researcher", "coder", "reasoner"]', chat)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [1.6.5]", changelog)
-        self.assertIn("适用版本：v2.0.2。", api)
-        self.assertIn("deepseek-mobile-v182", sw)
+        self.assertIn("适用版本：v2.0.9。", api)
+        self.assertIn("deepseek-mobile-v185", sw)
 
     def test_v166_gemini_skin_and_frontend_fixes_are_present(self) -> None:
         index_html = Path("static/index.html").read_text(encoding="utf-8")
@@ -1767,11 +1767,11 @@ class EncodingRegressionTests(unittest.TestCase):
 
         # SW 棰勭紦瀛樼毊鑲?+ 鐗堟湰鍚屾鍒?1.6.6
         self.assertIn("/gemini.css", sw)
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn('app_version: str = "2.0.2"', config)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn('app_version: str = "2.0.9"', config)
         self.assertIn('versionName "1.7.0"', build_gradle)
         self.assertIn("versionCode 170", build_gradle)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("create_pptx", readme)
         self.assertIn("## [1.6.6]", changelog)
 
@@ -1786,7 +1786,7 @@ class EncodingRegressionTests(unittest.TestCase):
         api = Path("docs/API.md").read_text(encoding="utf-8")
         security = Path("docs/SECURITY.md").read_text(encoding="utf-8")
 
-        self.assertIn('app_version: str = "2.0.2"', config)
+        self.assertIn('app_version: str = "2.0.9"', config)
         self.assertIn("class LocalRAGSettings", config)
         self.assertIn("LOCAL_RAG_BACKEND", config)
         self.assertIn("sqlite_vec.load", local_rag)
@@ -1796,10 +1796,10 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("search_files_index", tools)
         self.assertIn("/api/rag/status", server)
         self.assertIn("/api/rag/reindex", server)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn(".local-rag", readme)
         self.assertIn("## [1.7.6]", changelog)
-        self.assertIn("适用版本：v2.0.2。", api)
+        self.assertIn("适用版本：v2.0.9。", api)
         self.assertIn(".local-rag/rag.sqlite3", security)
 
 
@@ -1819,7 +1819,7 @@ class EncodingRegressionTests(unittest.TestCase):
         api = Path("docs/API.md").read_text(encoding="utf-8")
         security = Path("docs/SECURITY.md").read_text(encoding="utf-8")
 
-        self.assertIn('app_version: str = "2.0.2"', config)
+        self.assertIn('app_version: str = "2.0.9"', config)
         self.assertIn("class TracingSettings", config)
         self.assertIn("class SemanticCacheSettings", config)
         self.assertIn("class GatewaySettings", config)
@@ -1848,7 +1848,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("data-trace-message", chat_js)
         self.assertIn("renderTracePanel", chat_js)
         self.assertIn(".trace-waterfall", styles)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn(".request-queue", readme)
         self.assertIn("## [1.8.0]", changelog)
         self.assertIn("GET `/api/gateway/status`", api)
@@ -1883,9 +1883,9 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn(".message.error.content-filtered .bubble", styles)
 
         # 版本戳 + 前端资源缓存版本
-        self.assertIn("deepseek-mobile-v182", sw)
-        self.assertIn('app_version: str = "2.0.2"', config)
-        self.assertIn("version-2.0.2-blue", readme)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn('app_version: str = "2.0.9"', config)
+        self.assertIn("version-2.0.9-blue", readme)
         self.assertIn("## [1.9.1]", changelog)
 
     def test_v200_infra_platform_reposition_is_present(self) -> None:
@@ -1966,6 +1966,344 @@ class EncodingRegressionTests(unittest.TestCase):
             self.assertIn(symbol, presentations)
         self.assertIn("test_outline_text_accepts_markdown_and_chinese_slide_variants", test_presentations)
         self.assertIn("## [2.0.2]", changelog)
+
+    def test_v203_context_engine_is_present(self) -> None:
+        context_engine = Path("deepseek_infra/infra/gateway/context_engine.py").read_text(encoding="utf-8")
+        context_manager = Path("deepseek_infra/infra/gateway/context_manager.py").read_text(encoding="utf-8")
+        config = Path("deepseek_infra/core/config.py").read_text(encoding="utf-8")
+        test_context_engine = Path("tests/test_context_engine.py").read_text(encoding="utf-8")
+        readme = Path("README.md").read_text(encoding="utf-8")
+        changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+        api = Path("docs/API.md").read_text(encoding="utf-8")
+        architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+
+        for symbol in (
+            "def estimate_tokens",
+            "def estimate_body_breakdown",
+            "def context_window_for_model",
+            "def available_input_tokens",
+            "class TokenBudgetPlan",
+            "def plan_token_budget",
+            "def token_trim",
+            "def base_context_id",
+            "def build_context_diff",
+            "def build_engine_diagnostics",
+        ):
+            with self.subTest(symbol=symbol):
+                self.assertIn(symbol, context_engine)
+
+        for token in (
+            "from deepseek_infra.infra.gateway import context_engine",
+            "context_engine.token_trim",
+            "context_engine.build_engine_diagnostics",
+            "tokenAwareTrimApplied",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, context_manager)
+
+        self.assertIn("class ContextEngineSettings", config)
+        self.assertIn("CONTEXT_ENGINE_ENABLED = settings.context_engine.enabled", config)
+        self.assertIn("CONTEXT_ENGINE_MODEL_CONTEXT_WINDOWS", config)
+        self.assertIn('app_version: str = "2.0.9"', config)
+        self.assertIn("def test_token_trim_drops_oldest_and_preserves_system_anchors", test_context_engine)
+
+        self.assertIn("version-2.0.9-blue", readme)
+        self.assertIn("## [2.0.3]", changelog)
+        self.assertIn("tokenBudget", api)
+        self.assertIn("context_engine.py", architecture)
+
+    def test_v204_durable_agent_runtime_is_present(self) -> None:
+        agent_state = Path("deepseek_infra/infra/agent_runtime/agent_state.py").read_text(encoding="utf-8")
+        agent_runs = Path("deepseek_infra/infra/agent_runtime/agent_runs.py").read_text(encoding="utf-8")
+        multi_agent = Path("deepseek_infra/infra/agent_runtime/multi_agent.py").read_text(encoding="utf-8")
+        config = Path("deepseek_infra/core/config.py").read_text(encoding="utf-8")
+        server = Path("deepseek_infra/web/server.py").read_text(encoding="utf-8")
+        app = Path("deepseek_infra/app.py").read_text(encoding="utf-8")
+        test_agent_state = Path("tests/test_agent_state.py").read_text(encoding="utf-8")
+        test_agent_runs = Path("tests/test_agent_runs.py").read_text(encoding="utf-8")
+        readme = Path("README.md").read_text(encoding="utf-8")
+        changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+        api = Path("docs/API.md").read_text(encoding="utf-8")
+        architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+
+        for symbol in (
+            "NODE_STATES",
+            "NODE_TRANSITIONS",
+            "def can_transition",
+            "def reduce_node_states",
+            "def incomplete_plan_nodes",
+            "def completed_node_ids",
+        ):
+            with self.subTest(symbol=symbol):
+                self.assertIn(symbol, agent_state)
+
+        for token in (
+            "from deepseek_infra.infra.agent_runtime.agent_state import",
+            "def resume_run",
+            "def resume_orphaned_runs",
+            'run["nodes"] = reduce_node_states',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, agent_runs)
+
+        self.assertIn("completed_outputs", multi_agent)
+        self.assertIn("def _outputs_in_plan_order", multi_agent)
+        self.assertIn("class AgentRuntimeSettings", config)
+        self.assertIn("AGENT_RUNTIME_AUTO_RESUME = settings.agent_runtime.auto_resume", config)
+        self.assertIn('app_version: str = "2.0.9"', config)
+        self.assertIn('action == "resume"', server)
+        self.assertIn("resume_run", server)
+        self.assertIn("resume_orphaned_runs()", app)
+        self.assertIn("def test_reduce_tracks_running_success_and_metrics", test_agent_state)
+        self.assertIn("def test_resume_run_skips_completed_and_reruns_incomplete", test_agent_runs)
+
+        self.assertIn("version-2.0.9-blue", readme)
+        self.assertIn("## [2.0.4]", changelog)
+        self.assertIn("/api/agent-runs/{run_id}/resume", api)
+        self.assertIn("agent_state.py", architecture)
+
+    def test_v205_agent_trace_span_tree_is_present(self) -> None:
+        deepseek_client = Path("deepseek_infra/infra/gateway/deepseek_client.py").read_text(encoding="utf-8")
+        multi_agent = Path("deepseek_infra/infra/agent_runtime/multi_agent.py").read_text(encoding="utf-8")
+        agent_timeline = Path("static/modules/agent_timeline.js").read_text(encoding="utf-8")
+        chat = Path("static/modules/chat.js").read_text(encoding="utf-8")
+        css = Path("static/styles.css").read_text(encoding="utf-8")
+        sw = Path("static/sw.js").read_text(encoding="utf-8")
+        config = Path("deepseek_infra/core/config.py").read_text(encoding="utf-8")
+        test_frontend = Path("tests/test_frontend_utils.py").read_text(encoding="utf-8")
+        test_trace_tree = Path("tests/test_observability_trace_tree.py").read_text(encoding="utf-8")
+        readme = Path("README.md").read_text(encoding="utf-8")
+        changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+        api = Path("docs/API.md").read_text(encoding="utf-8")
+        architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+
+        for token in (
+            'name="context.build"',
+            'name="memory.retrieve"',
+            'name="rag.retrieve"',
+            'name="tool.web_search"',
+            "parent_span_id: str = \"\"",
+            "parent_span_id=span_parent",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, deepseek_client)
+
+        for token in (
+            "import ensure_trace, finish_trace, start_span, with_trace_diagnostics",
+            "name=f\"agent.{item['id']}\"",
+            'name="agent.planner"',
+            'name="agent.synthesizer"',
+            "parent_span_id=agent_span.span_id",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, multi_agent)
+
+        self.assertIn("export function buildTraceSpanTree", agent_timeline)
+        self.assertIn("buildTraceSpanTree,", chat)
+        self.assertIn("buildTraceSpanTree(spans)", chat)
+        self.assertIn("renderTraceSpan(span, maxEnd, depth)", chat)
+        self.assertIn(".trace-span.is-child", css)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn('app_version: str = "2.0.9"', config)
+        self.assertIn("def test_build_trace_span_tree_nests_children_and_keeps_orphans", test_frontend)
+        self.assertIn("def test_execute_agent_tier_nests_llm_span_under_agent_span", test_trace_tree)
+
+        self.assertIn("version-2.0.9-blue", readme)
+        self.assertIn("## [2.0.5]", changelog)
+        self.assertIn("tool.web_search", api)
+        self.assertIn("OpenTelemetry", architecture)
+
+    def test_v206_semantic_cache_advanced_mechanisms_are_present(self) -> None:
+        semantic_cache = Path("deepseek_infra/infra/gateway/semantic_cache.py").read_text(encoding="utf-8")
+        config = Path("deepseek_infra/core/config.py").read_text(encoding="utf-8")
+        test_cache = Path("tests/test_observability_semantic_cache.py").read_text(encoding="utf-8")
+        readme = Path("README.md").read_text(encoding="utf-8")
+        changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+        api = Path("docs/API.md").read_text(encoding="utf-8")
+        architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+
+        for symbol in (
+            "def cache_version(",
+            "def scope_for(",
+            "def quality_score(",
+            "def has_attachments(",
+            "def _ensure_columns(",
+            "LOW_QUALITY_MARKERS",
+            "exact_only = has_attachments(payload)",
+            '"low_quality"',
+        ):
+            with self.subTest(symbol=symbol):
+                self.assertIn(symbol, semantic_cache)
+
+        for token in (
+            "SEMANTIC_CACHE_VERSION = settings.semantic_cache.version",
+            "SEMANTIC_CACHE_MIN_QUALITY = settings.semantic_cache.min_quality_score",
+            "SEMANTIC_CACHE_ATTACHMENTS = settings.semantic_cache.cache_attachments",
+            'app_version: str = "2.0.9"',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, config)
+
+        self.assertIn("def test_semantic_cache_version_isolation", test_cache)
+        self.assertIn("def test_semantic_cache_attachments_use_exact_match_only", test_cache)
+
+        self.assertIn("version-2.0.9-blue", readme)
+        self.assertIn("## [2.0.6]", changelog)
+        self.assertIn("qualityScore", api)
+        self.assertIn("semantic_cache.py", architecture)
+
+    def test_v207_local_rag_data_plane_is_present(self) -> None:
+        local_rag = Path("deepseek_infra/infra/rag/local_rag.py").read_text(encoding="utf-8")
+        config = Path("deepseek_infra/core/config.py").read_text(encoding="utf-8")
+        server = Path("deepseek_infra/web/server.py").read_text(encoding="utf-8")
+        tools = Path("deepseek_infra/infra/tool_runtime/tools.py").read_text(encoding="utf-8")
+        test_rag = Path("tests/test_local_rag.py").read_text(encoding="utf-8")
+        readme = Path("README.md").read_text(encoding="utf-8")
+        changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+        api = Path("docs/API.md").read_text(encoding="utf-8")
+        architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+
+        for symbol in (
+            "def bm25_scores(",
+            "def chunk_hash(",
+            "def doc_version(",
+            "def existing_doc_chunks(",
+            "def chunk_lineage(",
+            "def verify_citation(",
+            "def evaluate_recall(",
+            '"docVersion": new_version',
+            "lexical_scores = bm25_scores(tokens, docs_terms)",
+        ):
+            with self.subTest(symbol=symbol):
+                self.assertIn(symbol, local_rag)
+
+        for token in (
+            "LOCAL_RAG_BM25_K1 = settings.local_rag.bm25_k1",
+            "LOCAL_RAG_INCREMENTAL = settings.local_rag.incremental",
+            'app_version: str = "2.0.9"',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, config)
+
+        self.assertIn("/api/rag/verify-citation", server)
+        self.assertIn("/api/rag/eval", server)
+        self.assertIn("local_rag.chunk_lineage(result)", tools)
+        self.assertIn("def test_verify_citation_grounding", test_rag)
+        self.assertIn("def test_incremental_index_skips_unchanged_document", test_rag)
+
+        self.assertIn("version-2.0.9-blue", readme)
+        self.assertIn("## [2.0.7]", changelog)
+        self.assertIn("chunk lineage", api.lower())
+        self.assertIn("local_rag.py", architecture)
+
+    def test_v208_model_router_and_cascade_are_present(self) -> None:
+        model_router = Path("deepseek_infra/infra/gateway/model_router.py").read_text(encoding="utf-8")
+        deepseek_client = Path("deepseek_infra/infra/gateway/deepseek_client.py").read_text(encoding="utf-8")
+        config = Path("deepseek_infra/core/config.py").read_text(encoding="utf-8")
+        server = Path("deepseek_infra/web/server.py").read_text(encoding="utf-8")
+        chat = Path("static/modules/chat.js").read_text(encoding="utf-8")
+        html = Path("static/index.html").read_text(encoding="utf-8")
+        sw = Path("static/sw.js").read_text(encoding="utf-8")
+        test_router = Path("tests/test_model_router.py").read_text(encoding="utf-8")
+        readme = Path("README.md").read_text(encoding="utf-8")
+        changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+        api = Path("docs/API.md").read_text(encoding="utf-8")
+        architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+
+        for symbol in (
+            "def route_request(",
+            "def cascade_plan(",
+            "def quality_gate(",
+            "def is_auto_request(",
+            "class RouteDecision",
+            "class CascadePlan",
+            "def router_status(",
+        ):
+            with self.subTest(symbol=symbol):
+                self.assertIn(symbol, model_router)
+
+        for token in (
+            "def call_deepseek_cascade(",
+            "def judge_draft(",
+            "model_router.route_request(payload)",
+            '"modelCascade"',
+            '"modelRouter"',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, deepseek_client)
+
+        self.assertIn("class ModelRouterSettings", config)
+        self.assertIn("MODEL_ROUTER_ENABLED = settings.model_router.enabled", config)
+        self.assertIn('app_version: str = "2.0.9"', config)
+        self.assertIn("emit_cascade_as_stream", server)
+        self.assertIn("model_router_cascade_requested", server)
+
+        self.assertIn('id="modelRouteSelect"', html)
+        self.assertIn('id="cascadeEnabledInput"', html)
+        self.assertIn("autoRoute: Boolean(state.autoRoute)", chat)
+        self.assertIn('autoRoute: "deepseek-mobile.auto-route"', chat)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("def test_cascade_escalates_when_gate_fails", test_router)
+
+        self.assertIn("version-2.0.9-blue", readme)
+        self.assertIn("## [2.0.8]", changelog)
+        self.assertIn("modelCascade", api)
+        self.assertIn("model_router.py", architecture)
+
+    def test_v209_cost_and_token_budget_manager_is_present(self) -> None:
+        budget_manager = Path("deepseek_infra/infra/gateway/budget_manager.py").read_text(encoding="utf-8")
+        deepseek_client = Path("deepseek_infra/infra/gateway/deepseek_client.py").read_text(encoding="utf-8")
+        multi_agent = Path("deepseek_infra/infra/agent_runtime/multi_agent.py").read_text(encoding="utf-8")
+        config = Path("deepseek_infra/core/config.py").read_text(encoding="utf-8")
+        server = Path("deepseek_infra/web/server.py").read_text(encoding="utf-8")
+        chat = Path("static/modules/chat.js").read_text(encoding="utf-8")
+        sw = Path("static/sw.js").read_text(encoding="utf-8")
+        test_budget = Path("tests/test_budget_manager.py").read_text(encoding="utf-8")
+        readme = Path("README.md").read_text(encoding="utf-8")
+        changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+        api = Path("docs/API.md").read_text(encoding="utf-8")
+        architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+
+        for symbol in (
+            "def estimate_cost(",
+            "def cost_from_usage(",
+            "class BudgetPolicy",
+            "class ToolBudget",
+            "def record_spend(",
+            "def daily_spend(",
+            "def over_daily_budget(",
+            "def should_downgrade(",
+            "def record_request_spend(",
+            "def budget_status(",
+        ):
+            with self.subTest(symbol=symbol):
+                self.assertIn(symbol, budget_manager)
+
+        for token in (
+            "from deepseek_infra.infra.gateway import budget_manager",
+            "budget_manager.record_request_spend(",
+            "budget_manager.should_downgrade(",
+            '"budgetDowngraded"',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, deepseek_client)
+
+        self.assertIn("def agent_cost_for_diagnostics(", multi_agent)
+        self.assertIn('"agentCostUsd"', multi_agent)
+        self.assertIn("class BudgetSettings", config)
+        self.assertIn("BUDGET_PRICING = settings.budget.pricing", config)
+        self.assertIn('app_version: str = "2.0.9"', config)
+        self.assertIn('"/api/budget"', server)
+        self.assertIn("def agent_exhausted(", deepseek_client)
+        self.assertIn("function formatCostUsd(", chat)
+        self.assertIn("state.budget = config.budget", chat)
+        self.assertIn("deepseek-mobile-v185", sw)
+        self.assertIn("def test_build_request_downgrades_model_when_over_budget", test_budget)
+
+        self.assertIn("version-2.0.9-blue", readme)
+        self.assertIn("## [2.0.9]", changelog)
+        self.assertIn("costUsd", api)
+        self.assertIn("budget_manager.py", architecture)
 
 
 if __name__ == "__main__":

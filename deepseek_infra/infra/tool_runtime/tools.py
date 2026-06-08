@@ -1280,6 +1280,7 @@ def search_files(query: str, *, limit: int = 5) -> dict[str, Any]:
             "lineStart": int(result.metadata.get("lineStart") or 0),
             "lineEnd": int(result.metadata.get("lineEnd") or 0),
             "snippet": compact_snippet(result.text, query),
+            "lineage": local_rag.chunk_lineage(result),
             "retrieval": {
                 "source": "local_rag",
                 "vectorScore": round(result.vector_score, 4),

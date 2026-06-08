@@ -443,3 +443,43 @@ class FrontendUtilsTests(unittest.TestCase):
             assert.deepStrictEqual(agentRunSummary(message).items.map((item) => item.phase), ["reasoner"]);
             """
         )
+
+    def test_build_trace_span_tree_nests_children_and_keeps_orphans(self) -> None:
+        # v2.0.5: 瀑布图把扁平 span 列表按 parentSpanId 展开成 DFS 树，
+        # 同层按 offsetMs 排序，dangling parent / 环都兜底成根、不丢 span 不死循环。
+        run_frontend_utils(
+            r"""
+            const { agentTimeline } = this;
+            const { buildTraceSpanTree } = agentTimeline;
+
+            const spans = [
+              { spanId: "a", parentSpanId: "", name: "agent.researcher", offsetMs: 0 },
+              { spanId: "b", parentSpanId: "a", name: "researcher:deepseek:1", offsetMs: 100 },
+              { spanId: "t", parentSpanId: "a", name: "tool.web_search", offsetMs: 50 },
+              { spanId: "c", parentSpanId: "", name: "agent.coder", offsetMs: 200 },
+              { spanId: "orphan", parentSpanId: "missing", name: "stray", offsetMs: 300 },
+            ];
+            const tree = buildTraceSpanTree(spans);
+            assert.deepStrictEqual(
+              tree.map((node) => [node.span.name, node.depth]),
+              [
+                ["agent.researcher", 0],
+                ["tool.web_search", 1],
+                ["researcher:deepseek:1", 1],
+                ["agent.coder", 0],
+                ["stray", 0],
+              ],
+            );
+
+            // 互相依赖（环）不能死循环，两个 span 都兜底成根、各出现一次。
+            const cyclic = [
+              { spanId: "x", parentSpanId: "y", name: "x" },
+              { spanId: "y", parentSpanId: "x", name: "y" },
+            ];
+            const cyclicTree = buildTraceSpanTree(cyclic);
+            assert.strictEqual(cyclicTree.length, 2);
+            assert.deepStrictEqual(cyclicTree.map((node) => node.span.name).sort(), ["x", "y"]);
+
+            assert.deepStrictEqual(buildTraceSpanTree(null), []);
+            """
+        )

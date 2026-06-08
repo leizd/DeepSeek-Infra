@@ -6463,6 +6463,12 @@ body.file-reader-side-open.file-reader-pdf-open .file-original-region-toolbar .f
   border-color: var(--danger);
 }
 
+/* v2.0.5: span tree nesting — indent children by depth and mark them with an accent rail. */
+.trace-span.is-child {
+  margin-left: calc(var(--trace-depth, 1) * 16px);
+  border-left: 2px solid var(--accent-soft, var(--border-default));
+}
+
 .trace-span-header {
   display: flex;
   align-items: center;

@@ -174,7 +174,9 @@ class ServerIntegrationTests(unittest.TestCase):
         save_file.assert_called_once_with("a" * 32, filename="deck.pptx")
 
     def test_chat_injects_local_base_url_for_download_links(self) -> None:
-        with patch.object(server_module, "call_deepseek", return_value={"content": "ok"}) as mocked:
+        # Non-stream chat dispatches through the cascade entry (which runs plain
+        # call_deepseek unless cascade is requested).
+        with patch.object(server_module, "call_deepseek_cascade", return_value={"content": "ok"}) as mocked:
             status, payload = self.request_json("POST", "/api/chat", body={"apiKey": "k", "messages": [{"role": "user", "content": "hi"}]})
 
         self.assertEqual(status, 200)

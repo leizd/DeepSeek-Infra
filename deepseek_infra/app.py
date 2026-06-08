@@ -11,7 +11,7 @@ from typing import Callable, Protocol
 
 from deepseek_infra.core.config import DEFAULT_HOST, DEFAULT_PORT, STATIC_DIR, configure_logging, settings
 from deepseek_infra.infra.rag.files import cleanup_file_cache
-from deepseek_infra.infra.agent_runtime.agent_runs import mark_orphan_runs_on_startup
+from deepseek_infra.infra.agent_runtime.agent_runs import mark_orphan_runs_on_startup, resume_orphaned_runs
 from deepseek_infra.web.server import MULTIPART_IMPORT_ERROR, create_server, multipart_module, supported_multipart_module
 from deepseek_infra.core.utils import local_ip, url_with_token
 from deepseek_infra.infra.tool_runtime.search import cleanup_search_cache
@@ -68,6 +68,12 @@ def prepare_and_start(
     ensure_startup_dependencies()
     register_mimetypes()
     cleanup_runtime_caches()
+    # One-time at startup (not in the periodic loop): opt-in resume of orphaned
+    # Agent runs. No-op unless AGENT_RUNTIME_AUTO_RESUME is set.
+    try:
+        resume_orphaned_runs()
+    except Exception:
+        logger.exception("agent_run_auto_resume_failed")
     stop_event = start_periodic_cache_cleanup()
 
     bind_host = host or settings.default_host or DEFAULT_HOST

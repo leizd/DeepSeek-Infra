@@ -442,6 +442,19 @@
       </label>
 
       <label class="field">
+        <span>模型路由</span>
+        <select id="modelRouteSelect">
+          <option value="manual">手动选择</option>
+          <option value="auto">自动（按能力/成本/延迟）</option>
+        </select>
+      </label>
+
+      <label class="check-row">
+        <input id="cascadeEnabledInput" type="checkbox" />
+        <span>级联推理（先用便宜模型，质量不足再升级）</span>
+      </label>
+
+      <label class="field">
         <span>Agent 执行方式</span>
         <select id="agentPresetSelect">
           <option value="full">完整直跑</option>

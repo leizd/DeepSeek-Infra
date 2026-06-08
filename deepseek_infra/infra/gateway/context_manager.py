@@ -6,7 +6,13 @@ import copy
 import json
 from typing import Any
 
-from deepseek_infra.core.config import GATEWAY_CONTEXT_MANAGER_ENABLED, GATEWAY_CONTEXT_WINDOW_MESSAGES
+from deepseek_infra.core.config import (
+    CONTEXT_ENGINE_ENABLED,
+    CONTEXT_ENGINE_TOKEN_AWARE_TRIM,
+    GATEWAY_CONTEXT_MANAGER_ENABLED,
+    GATEWAY_CONTEXT_WINDOW_MESSAGES,
+)
+from deepseek_infra.infra.gateway import context_engine
 
 
 def stable_json_dumps(value: Any) -> str:
@@ -40,7 +46,22 @@ def manage_request_body(body: dict[str, Any], *, allow_sliding_window: bool = Fa
 
     messages = managed.get("messages")
     if isinstance(messages, list):
-        trimmed_messages, dropped = sliding_window_messages(messages) if allow_sliding_window else ([copy.deepcopy(item) for item in messages], 0)
+        if allow_sliding_window:
+            trimmed_messages, dropped = sliding_window_messages(messages)
+            # Token-aware second pass: drop *extra* oldest history only when the
+            # per-model estimate still overflows the budget. A no-op for normal
+            # turns, so the message-count window's behavior is unchanged.
+            if CONTEXT_ENGINE_ENABLED and CONTEXT_ENGINE_TOKEN_AWARE_TRIM:
+                trimmed_messages, extra_dropped = context_engine.token_trim(
+                    trimmed_messages,
+                    model=managed.get("model"),
+                    fixed_overhead_tokens=context_engine.estimate_tools_tokens(managed.get("tools")),
+                )
+                dropped += extra_dropped
+                if extra_dropped:
+                    diagnostics["tokenAwareTrimApplied"] = True
+        else:
+            trimmed_messages, dropped = [copy.deepcopy(item) for item in messages], 0
         if dropped:
             managed["messages"] = trimmed_messages
             diagnostics["slidingWindowApplied"] = True
@@ -54,6 +75,13 @@ def manage_request_body(body: dict[str, Any], *, allow_sliding_window: bool = Fa
             len(managed["messages"]) > 1
             and isinstance(managed["messages"][-1], dict)
             and managed["messages"][-1].get("role") == "system"
+        )
+
+    if CONTEXT_ENGINE_ENABLED:
+        diagnostics["contextEngine"] = context_engine.build_engine_diagnostics(
+            managed,
+            model=managed.get("model"),
+            dropped=int(diagnostics.get("droppedMessages") or 0),
         )
 
     return managed, diagnostics
@@ -98,7 +126,12 @@ def sliding_window_messages(messages: list[Any]) -> tuple[list[Any], int]:
 
 def merge_context_manager_diagnostics(diagnostics: dict[str, Any], context_manager: dict[str, Any]) -> dict[str, Any]:
     result = dict(diagnostics)
+    # Hoist the Context Engine block to the top level so callers / traces can
+    # read ``diagnostics["contextEngine"]`` without reaching into contextManager.
+    context_engine_block = context_manager.pop("contextEngine", None)
     result["contextManager"] = context_manager
+    if context_engine_block is not None:
+        result["contextEngine"] = context_engine_block
     if context_manager.get("requestMessageCount") is not None:
         result["requestMessageCount"] = context_manager["requestMessageCount"]
     return result
