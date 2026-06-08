@@ -1,7 +1,7 @@
 """Prompt-cache-aware Context Engine.
 
 This module is the formal home for the context-engineering primitives the
-gateway already relies on, plus the genuinely new pieces for 2.0.3:
+gateway already relies on, plus the genuinely new pieces for 2.0.4:
 
 - **Token Budget Planner** — a deterministic, tokenizer-free estimate of how
   many prompt tokens a request body will cost, broken down by stable system

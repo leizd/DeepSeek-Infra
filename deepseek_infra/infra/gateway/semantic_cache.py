@@ -275,7 +275,7 @@ def skip_reason(payload: dict[str, Any], body: dict[str, Any]) -> str:
         return "disabled"
     if payload.get("semanticCacheEnabled") is False:
         return "request_disabled"
-    # File/attachment context is cacheable (v2.0.6) but only via exact-prompt match
+    # File/attachment context is cacheable (v2.0.7) but only via exact-prompt match
     # within its project scope (see lookup/store); when disabled, skip it entirely.
     if not SEMANTIC_CACHE_ATTACHMENTS and count_payload_attachments(payload.get("messages")):
         return "attachments"
@@ -459,7 +459,7 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_columns(conn: sqlite3.Connection) -> None:
-    """Add v2.0.6 columns to caches created by older versions (idempotent)."""
+    """Add v2.0.7 columns to caches created by older versions (idempotent)."""
     existing = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({CACHE_TABLE})").fetchall()}
     for name, definition in _MIGRATION_COLUMNS:
         if name not in existing:
