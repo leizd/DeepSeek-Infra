@@ -2,6 +2,20 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.0.3]
+
+### 改进
+
+- **slides skill 质量基线重写**：`deepseek_infra/infra/tool_runtime/slides_skill.py` 的 `SLIDES_SKILL_REFERENCE` / `SLIDES_RUNTIME_GUIDANCE` / `SLIDES_SKILL_DESCRIPTION` 从「可选 pptxgenjs / artifact tool / container_tools / slide_templates」这类与本应用能力不符的参考文本，改写为围绕本地 `create_pptx` 工具的高完成度指导：North Star「赢得 contact-sheet test」、每页一个 claim 标题（noun-swap test）+ 单一证据对象、blocking 反模式清单、发射前自评 rubric，并收敛到渲染器真正能兑现的范围（不再要求模型控制字体/配色/图表/logo）。
+- 质量标准映射到模型真正能控制的字段：`title`（写成结论）、`bullets`（`lead：detail` 拆成粗体 lead + 次级灰 detail）、`layout`（cards / process / comparison / quote / summary 的取舍），并显式声明运行时只有 `create_pptx`（python-pptx）这一条边界、不存在 artifact-tool / imagegen / 脚本 / profiles 基建，降低模型去调用不存在工具的概率。
+- **渲染器视觉系统升级**（`presentations.py`）：去掉「圆角卡片 + 描边」堆叠的模板感，改为开放式 hairline 编排——新增统一的 `_rule` 细条/分隔线/标记 helper；**默认 `bullets` 版式也按 `lead：detail` 拆分**（之前只有 cards/process/comparison/quote/summary 生效）；标题改用近黑（`_TITLE_INK`）加强层级、用 accent 短线作 eyebrow 取代写死的英文 kicker（`Key Points` / `Process` / `Wrap Up` …）；cards / summary 改为开放信息块、comparison 用中线分栏取代填充面板、agenda 用 accent 序号 + 细线。让 skill 的「claim 标题 + lead:detail + 版式变化」真正落到输出。
+
+### 测试
+
+- `tests/test_deepseek_request.py`：PPT 注入上下文断言由 `pptxgenjs` 改为 `contact-sheet`，对齐新参考文本。
+- `tests/test_encoding_regression.py` 新增 `test_v203_slides_skill_quality_upgrade_is_present`，钉住 skill 核心措辞（`contact-sheet` / `noun-swap`）、`pptxgenjs` 不再出现、渲染器升级痕迹（保留 `_rule` helper、去掉 `Key Points` / `F8FAFC` 模板痕迹）、`tests/test_deepseek_request.py` 的新断言，以及 `## [2.0.3]` changelog 段。
+- 版本号 2.0.2 → 2.0.3（config / README badge / 5 docs / test_config / test_encoding_regression）。纯后端改动，`static/sw.js` 保持 `deepseek-mobile-v182` 不变。
+
 ## [2.0.2]
 
 ### 改进

@@ -64,7 +64,7 @@ class DeepSeekRequestTests(unittest.TestCase):
         self.assertIn("create_pptx", [tool["function"]["name"] for tool in req.body["tools"]])
         dynamic_context = req.body["messages"][-1]["content"]
         self.assertIn("[Skill: slides]", dynamic_context)
-        self.assertIn("pptxgenjs", dynamic_context)
+        self.assertIn("contact-sheet", dynamic_context)
         self.assertIn("create_pptx", dynamic_context)
 
     def test_mindmap_request_forces_create_mindmap_tool(self) -> None:

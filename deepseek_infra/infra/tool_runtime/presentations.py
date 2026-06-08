@@ -254,8 +254,11 @@ _DECK_THEMES = (
     {"cover_bg": "0F172A", "accent": "0EA5E9", "band": "BAE6FD"},  # 深空蓝
     {"cover_bg": "581C87", "accent": "A855F7", "band": "E9D5FF"},  # 紫
 )
+_TITLE_INK = "111827"   # 标题近黑
 _BODY_INK = "334155"    # 正文深灰
+_DETAIL_INK = "64748B"  # 次级说明文字
 _MUTED_INK = "94A3B8"   # 页码 / 次要
+_HAIRLINE = "E2E8F0"    # 细分隔线
 _CN_FONT = "微软雅黑"
 
 
@@ -277,100 +280,66 @@ def _set_slide_bg(slide: Any, color: str) -> None:
     slide.background.fill.fore_color.rgb = _hex(color)
 
 
-def _add_cover_slide(prs: Any, theme: dict[str, str], title: str, subtitle: str) -> None:
+def _rule(slide: Any, x: float, y: float, w: float, h: float, color: str) -> None:
+    """画一条无边框、无阴影的实心细条/方块，用于强调线、分隔线和小标记。"""
     from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+
+    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+    bar.fill.solid()
+    bar.fill.fore_color.rgb = _hex(color)
+    bar.line.fill.background()
+    bar.shadow.inherit = False
+
+
+def _add_cover_slide(prs: Any, theme: dict[str, str], title: str, subtitle: str) -> None:
     from pptx.util import Inches, Pt
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, theme["cover_bg"])
 
-    # 左侧强调竖条
-    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(0.4), prs.slide_height)
-    bar.fill.solid()
-    bar.fill.fore_color.rgb = _hex(theme["accent"])
-    bar.line.fill.background()
-    bar.shadow.inherit = False
+    # 左侧细强调竖条 + 标题上方 eyebrow 短线
+    _rule(slide, 0.0, 0.0, 0.3, 7.5, theme["accent"])
+    _rule(slide, 1.2, 2.35, 0.7, 0.06, theme["accent"])
 
-    box = slide.shapes.add_textbox(Inches(1.2), Inches(2.5), Inches(10.8), Inches(2.4))
+    box = slide.shapes.add_textbox(Inches(1.2), Inches(2.55), Inches(10.9), Inches(2.6))
     tf = box.text_frame
     tf.word_wrap = True
-    p = tf.paragraphs[0]
-    p.text = title[:120]
-    p.font.size = Pt(40 if len(title) > 18 else 46)
-    p.font.bold = True
-    p.font.name = _CN_FONT
-    p.font.color.rgb = _hex("FFFFFF")
+    _style_paragraph(tf.paragraphs[0], title[:120], size=(44 if len(title) > 18 else 52), color="FFFFFF", bold=True)
     if subtitle:
         sp = tf.add_paragraph()
-        sp.text = subtitle[:160]
-        sp.font.size = Pt(18)
-        sp.font.name = _CN_FONT
-        sp.font.color.rgb = _hex(theme["band"])
-        sp.space_before = Pt(16)
-
-    # 标题下方一条短强调线
-    underline = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1.25), Inches(4.55), Inches(2.6), Inches(0.08))
-    underline.fill.solid()
-    underline.fill.fore_color.rgb = _hex(theme["accent"])
-    underline.line.fill.background()
-    underline.shadow.inherit = False
+        _style_paragraph(sp, subtitle[:160], size=18, color=theme["band"])
+        sp.space_before = Pt(18)
 
 
 def _add_content_slide(prs: Any, theme: dict[str, str], title: str, bullets: list[str], page_no: int) -> None:
-    from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Inches, Pt
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, "FFFFFF")
+    _add_header(slide, theme, title)
 
-    # 标题
-    title_box = slide.shapes.add_textbox(Inches(0.8), Inches(0.45), Inches(11.7), Inches(1.0))
-    tp = title_box.text_frame.paragraphs[0]
-    tp.text = title[:120]
-    tp.font.size = Pt(28)
-    tp.font.bold = True
-    tp.font.name = _CN_FONT
-    tp.font.color.rgb = _hex(theme["accent"])
-
-    # 标题下强调细线
-    line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.85), Inches(1.45), Inches(2.2), Inches(0.06))
-    line.fill.solid()
-    line.fill.fore_color.rgb = _hex(theme["accent"])
-    line.line.fill.background()
-    line.shadow.inherit = False
-
-    # 正文 bullet：数量越多字号越小，避免溢出
+    # 开放式要点列表：每条 lead 加粗、detail 次级灰，行间细线分隔，无项目符号方块
     count = max(1, len(bullets))
-    size = 22 if count <= 4 else 20 if count <= 6 else 18 if count <= 9 else 16
-    body_box = slide.shapes.add_textbox(Inches(0.95), Inches(1.85), Inches(11.4), Inches(5.0))
-    btf = body_box.text_frame
-    btf.word_wrap = True
+    lead_size = 19 if count <= 4 else 17 if count <= 6 else 15
+    detail_size = max(11, lead_size - 5)
+    top, avail = 2.0, 4.9
+    step = avail / count
     for index, bullet in enumerate(bullets):
-        para = btf.paragraphs[0] if index == 0 else btf.add_paragraph()
-        marker = para.add_run()
-        marker.text = "▸  "
-        marker.font.size = Pt(size)
-        marker.font.bold = True
-        marker.font.name = _CN_FONT
-        marker.font.color.rgb = _hex(theme["accent"])
-        text_run = para.add_run()
-        text_run.text = str(bullet)[:500]
-        text_run.font.size = Pt(size)
-        text_run.font.name = _CN_FONT
-        text_run.font.color.rgb = _hex(_BODY_INK)
-        para.space_after = Pt(12)
-        try:
-            para.line_spacing = 1.15
-        except (TypeError, ValueError):
-            pass
-
-    # 右下页码
-    pn = slide.shapes.add_textbox(Inches(12.2), Inches(6.95), Inches(0.9), Inches(0.4))
-    pp = pn.text_frame.paragraphs[0]
-    pp.text = str(page_no)
-    pp.font.size = Pt(11)
-    pp.font.name = _CN_FONT
-    pp.font.color.rgb = _hex(_MUTED_INK)
+        y = top + index * step
+        lead, detail = _split_lead_detail(bullet)
+        _rule(slide, 0.9, y + 0.07, 0.1, 0.1, theme["accent"])
+        box = slide.shapes.add_textbox(Inches(1.2), Inches(y), Inches(11.2), Inches(step))
+        tf = box.text_frame
+        tf.word_wrap = True
+        _style_paragraph(tf.paragraphs[0], lead[:240], size=lead_size, color=_TITLE_INK, bold=True)
+        if detail:
+            dp = tf.add_paragraph()
+            _style_paragraph(dp, detail[:300], size=detail_size, color=_DETAIL_INK)
+            dp.space_before = Pt(3)
+        if index < count - 1:
+            _rule(slide, 1.2, y + step - 0.12, 11.0, 0.01, _HAIRLINE)
+    _add_footer(slide, theme, page_no)
 
 
 def _layout_for_slide(item: dict[str, Any], title: str, bullets: list[str], index: int, total: int) -> str:
@@ -422,26 +391,14 @@ def _style_paragraph(
         paragraph.alignment = align
 
 
-def _add_header(slide: Any, theme: dict[str, str], title: str, *, kicker: str = "") -> None:
-    from pptx.enum.shapes import MSO_SHAPE
+def _add_header(slide: Any, theme: dict[str, str], title: str) -> None:
     from pptx.util import Inches
 
-    if kicker:
-        label = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.82), Inches(0.36), Inches(1.35), Inches(0.34))
-        label.fill.solid()
-        label.fill.fore_color.rgb = _hex(theme["band"])
-        label.line.fill.background()
-        p = label.text_frame.paragraphs[0]
-        _style_paragraph(p, kicker.upper(), size=8, color=theme["cover_bg"], bold=True)
-
-    title_box = slide.shapes.add_textbox(Inches(0.82), Inches(0.68), Inches(11.7), Inches(0.72))
+    # eyebrow 强调短线（取代写死的英文 kicker chip）；claim 标题用近黑加强层级
+    _rule(slide, 0.82, 0.6, 0.62, 0.06, theme["accent"])
+    title_box = slide.shapes.add_textbox(Inches(0.82), Inches(0.78), Inches(11.7), Inches(0.92))
     tp = title_box.text_frame.paragraphs[0]
-    _style_paragraph(tp, title[:120], size=_fit_font_size(title, base=27, small=21), color=theme["cover_bg"], bold=True)
-
-    line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.86), Inches(1.43), Inches(1.65), Inches(0.055))
-    line.fill.solid()
-    line.fill.fore_color.rgb = _hex(theme["accent"])
-    line.line.fill.background()
+    _style_paragraph(tp, title[:120], size=_fit_font_size(title, base=28, small=22), color=_TITLE_INK, bold=True)
 
 
 def _add_footer(slide: Any, theme: dict[str, str], page_no: int) -> None:
@@ -465,37 +422,34 @@ def _card(
     *,
     number: int | None = None,
 ) -> None:
-    from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Inches, Pt
 
-    shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
-    shape.fill.solid()
-    shape.fill.fore_color.rgb = _hex("F8FAFC")
-    shape.line.color.rgb = _hex("E2E8F0")
-    shape.line.width = Pt(1)
-
-    if number is not None:
-        chip = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x + 0.22), Inches(y + 0.18), Inches(0.46), Inches(0.32))
-        chip.fill.solid()
-        chip.fill.fore_color.rgb = _hex(theme["accent"])
-        chip.line.fill.background()
-        cp = chip.text_frame.paragraphs[0]
-        _style_paragraph(cp, str(number), size=9, color="FFFFFF", bold=True)
-        text_x = x + 0.78
-        text_w = w - 1.0
-    else:
-        text_x = x + 0.25
-        text_w = w - 0.5
-
-    box = slide.shapes.add_textbox(Inches(text_x), Inches(y + 0.16), Inches(text_w), Inches(h - 0.28))
+    # 开放式信息块：顶部 accent 短线 +（序号）+ 加粗 lead + 次级 detail，无填充无边框
+    _rule(slide, x, y, 0.34, 0.04, theme["accent"])
+    box = slide.shapes.add_textbox(Inches(x), Inches(y + 0.16), Inches(w), Inches(h - 0.16))
     tf = box.text_frame
     tf.word_wrap = True
     hp = tf.paragraphs[0]
-    _style_paragraph(hp, title[:160], size=_fit_font_size(title, base=15, small=11), color=_BODY_INK, bold=True)
+    lead_size = _fit_font_size(title, base=15, small=12)
+    if number is not None:
+        nr = hp.add_run()
+        nr.text = f"{number:02d}  "
+        nr.font.size = Pt(lead_size)
+        nr.font.bold = True
+        nr.font.name = _CN_FONT
+        nr.font.color.rgb = _hex(theme["accent"])
+        tr = hp.add_run()
+        tr.text = title[:160]
+        tr.font.size = Pt(lead_size)
+        tr.font.bold = True
+        tr.font.name = _CN_FONT
+        tr.font.color.rgb = _hex(_TITLE_INK)
+    else:
+        _style_paragraph(hp, title[:160], size=lead_size, color=_TITLE_INK, bold=True)
     if body:
         bp = tf.add_paragraph()
-        _style_paragraph(bp, body[:220], size=_fit_font_size(body, base=11, small=9), color="64748B")
-        bp.space_before = Pt(6)
+        _style_paragraph(bp, body[:220], size=_fit_font_size(body, base=11, small=10), color=_DETAIL_INK)
+        bp.space_before = Pt(5)
 
 
 def _split_lead_detail(value: str) -> tuple[str, str]:
@@ -509,46 +463,36 @@ def _split_lead_detail(value: str) -> tuple[str, str]:
 
 
 def _add_agenda_slide(prs: Any, theme: dict[str, str], titles: list[str], page_no: int) -> None:
-    from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Inches
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, "FFFFFF")
-    _add_header(slide, theme, "内容导航", kicker="Agenda")
+    _add_header(slide, theme, "内容导航")
 
     items = titles[:6]
-    y = 1.92
+    y0 = 1.95
     for index, item in enumerate(items, start=1):
-        y_pos = y + (index - 1) * 0.72
-        badge = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.95), Inches(y_pos), Inches(0.54), Inches(0.38))
-        badge.fill.solid()
-        badge.fill.fore_color.rgb = _hex(theme["accent"])
-        badge.line.fill.background()
-        _style_paragraph(badge.text_frame.paragraphs[0], f"{index:02d}", size=9, color="FFFFFF", bold=True)
-
-        box = slide.shapes.add_textbox(Inches(1.72), Inches(y_pos - 0.02), Inches(9.8), Inches(0.5))
-        _style_paragraph(box.text_frame.paragraphs[0], item[:96], size=18, color=_BODY_INK, bold=True)
-
-        line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1.73), Inches(y_pos + 0.5), Inches(9.5), Inches(0.012))
-        line.fill.solid()
-        line.fill.fore_color.rgb = _hex("E2E8F0")
-        line.line.fill.background()
+        y = y0 + (index - 1) * 0.74
+        num = slide.shapes.add_textbox(Inches(0.9), Inches(y - 0.04), Inches(0.8), Inches(0.5))
+        _style_paragraph(num.text_frame.paragraphs[0], f"{index:02d}", size=18, color=theme["accent"], bold=True)
+        box = slide.shapes.add_textbox(Inches(1.75), Inches(y), Inches(9.8), Inches(0.5))
+        _style_paragraph(box.text_frame.paragraphs[0], item[:96], size=17, color=_TITLE_INK, bold=True)
+        _rule(slide, 1.75, y + 0.54, 9.6, 0.012, _HAIRLINE)
 
     _add_footer(slide, theme, page_no)
 
 
 def _add_cards_slide(prs: Any, theme: dict[str, str], title: str, bullets: list[str], page_no: int) -> None:
-
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, "FFFFFF")
-    _add_header(slide, theme, title, kicker="Key Points")
+    _add_header(slide, theme, title)
     positions = [
-        (0.9, 1.78, 5.8, 1.15),
-        (6.85, 1.78, 5.6, 1.15),
-        (0.9, 3.08, 5.8, 1.15),
-        (6.85, 3.08, 5.6, 1.15),
-        (0.9, 4.38, 5.8, 1.15),
-        (6.85, 4.38, 5.6, 1.15),
+        (0.9, 1.95, 5.5, 1.25),
+        (6.95, 1.95, 5.4, 1.25),
+        (0.9, 3.35, 5.5, 1.25),
+        (6.95, 3.35, 5.4, 1.25),
+        (0.9, 4.75, 5.5, 1.25),
+        (6.95, 4.75, 5.4, 1.25),
     ]
     for index, bullet in enumerate(bullets[:6]):
         lead, detail = _split_lead_detail(bullet)
@@ -563,7 +507,7 @@ def _add_process_slide(prs: Any, theme: dict[str, str], title: str, bullets: lis
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, "FFFFFF")
-    _add_header(slide, theme, title, kicker="Process")
+    _add_header(slide, theme, title)
 
     steps = bullets[:5] or ["明确目标", "拆解任务", "执行推进", "验证结果"]
     width = 10.8 / max(1, len(steps))
@@ -574,79 +518,68 @@ def _add_process_slide(prs: Any, theme: dict[str, str], title: str, bullets: lis
         circle.fill.solid()
         circle.fill.fore_color.rgb = _hex(theme["accent"])
         circle.line.fill.background()
+        circle.shadow.inherit = False
         cp = circle.text_frame.paragraphs[0]
         _style_paragraph(cp, str(index), size=13, color="FFFFFF", bold=True, align=PP_ALIGN.CENTER)
 
         if index < len(steps):
-            connector = slide.shapes.add_shape(
-                MSO_SHAPE.RECTANGLE,
-                Inches(x + width / 2 + 0.36),
-                Inches(y - 0.02),
-                Inches(max(0.2, width - 0.72)),
-                Inches(0.035),
-            )
-            connector.fill.solid()
-            connector.fill.fore_color.rgb = _hex(theme["band"])
-            connector.line.fill.background()
+            _rule(slide, x + width / 2 + 0.36, y, max(0.2, width - 0.72), 0.03, _HAIRLINE)
 
         lead, detail = _split_lead_detail(step)
         box = slide.shapes.add_textbox(Inches(x + 0.08), Inches(y + 0.62), Inches(width - 0.16), Inches(1.25))
         tf = box.text_frame
         tf.word_wrap = True
-        _style_paragraph(tf.paragraphs[0], lead[:80], size=_fit_font_size(lead, base=13, small=9), color=_BODY_INK, bold=True, align=PP_ALIGN.CENTER)
+        _style_paragraph(tf.paragraphs[0], lead[:80], size=_fit_font_size(lead, base=13, small=9), color=_TITLE_INK, bold=True, align=PP_ALIGN.CENTER)
         if detail:
             dp = tf.add_paragraph()
-            _style_paragraph(dp, detail[:120], size=9, color="64748B", align=PP_ALIGN.CENTER)
+            _style_paragraph(dp, detail[:120], size=9, color=_DETAIL_INK, align=PP_ALIGN.CENTER)
             dp.space_before = Pt(4)
     _add_footer(slide, theme, page_no)
 
 
 def _add_comparison_slide(prs: Any, theme: dict[str, str], title: str, bullets: list[str], page_no: int) -> None:
-    from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Inches
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, "FFFFFF")
-    _add_header(slide, theme, title, kicker="Compare")
+    _add_header(slide, theme, title)
 
+    # 中线分隔两栏，去掉填充面板，靠对齐与细线建立结构
+    _rule(slide, 6.62, 1.95, 0.02, 4.45, _HAIRLINE)
     midpoint = max(1, (len(bullets) + 1) // 2)
     columns = [bullets[:midpoint], bullets[midpoint:] or bullets[:midpoint]]
     headers = ("方案 / 维度 A", "方案 / 维度 B")
+    xs = (0.9, 6.95)
     for col, items in enumerate(columns):
-        x = 0.95 + col * 5.95
-        panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(1.82), Inches(5.45), Inches(4.65))
-        panel.fill.solid()
-        panel.fill.fore_color.rgb = _hex("F8FAFC")
-        panel.line.color.rgb = _hex("E2E8F0")
-        hp = slide.shapes.add_textbox(Inches(x + 0.32), Inches(2.08), Inches(4.8), Inches(0.36))
-        _style_paragraph(hp.text_frame.paragraphs[0], headers[col], size=14, color=theme["accent"], bold=True)
+        x = xs[col]
+        hb = slide.shapes.add_textbox(Inches(x), Inches(1.95), Inches(5.2), Inches(0.4))
+        _style_paragraph(hb.text_frame.paragraphs[0], headers[col], size=14, color=theme["accent"], bold=True)
+        _rule(slide, x, 2.4, 0.32, 0.04, theme["accent"])
         y = 2.7
         for item in items[:5]:
             lead, detail = _split_lead_detail(item)
-            box = slide.shapes.add_textbox(Inches(x + 0.38), Inches(y), Inches(4.65), Inches(0.55))
-            _style_paragraph(box.text_frame.paragraphs[0], f"• {lead[:100]}", size=12, color=_BODY_INK, bold=not detail)
+            box = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(5.3), Inches(0.5))
+            box.text_frame.word_wrap = True
+            _style_paragraph(box.text_frame.paragraphs[0], lead[:100], size=13, color=_TITLE_INK, bold=True)
             if detail:
-                db = slide.shapes.add_textbox(Inches(x + 0.62), Inches(y + 0.32), Inches(4.35), Inches(0.34))
-                _style_paragraph(db.text_frame.paragraphs[0], detail[:150], size=9, color="64748B")
-                y += 0.8
+                db = slide.shapes.add_textbox(Inches(x), Inches(y + 0.32), Inches(5.3), Inches(0.4))
+                db.text_frame.word_wrap = True
+                _style_paragraph(db.text_frame.paragraphs[0], detail[:150], size=10, color=_DETAIL_INK)
+                y += 0.86
             else:
-                y += 0.55
+                y += 0.56
     _add_footer(slide, theme, page_no)
 
 
 def _add_quote_slide(prs: Any, theme: dict[str, str], title: str, bullets: list[str], page_no: int) -> None:
-    from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Inches, Pt
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, theme["cover_bg"])
-    accent = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.84), Inches(1.46), Inches(0.12), Inches(4.28))
-    accent.fill.solid()
-    accent.fill.fore_color.rgb = _hex(theme["accent"])
-    accent.line.fill.background()
+    _rule(slide, 0.84, 1.5, 0.1, 4.2, theme["accent"])
 
     quote = bullets[0] if bullets else title
-    box = slide.shapes.add_textbox(Inches(1.25), Inches(1.62), Inches(10.6), Inches(2.55))
+    box = slide.shapes.add_textbox(Inches(1.25), Inches(1.62), Inches(10.8), Inches(2.6))
     tf = box.text_frame
     tf.word_wrap = True
     _style_paragraph(tf.paragraphs[0], title[:120], size=_fit_font_size(title, base=34, small=26), color="FFFFFF", bold=True)
@@ -654,31 +587,40 @@ def _add_quote_slide(prs: Any, theme: dict[str, str], title: str, bullets: list[
     _style_paragraph(qp, quote[:220], size=_fit_font_size(quote, base=18, small=13), color=theme["band"])
     qp.space_before = Pt(18)
 
-    for index, bullet in enumerate(bullets[1:4], start=1):
+    # 子点：accent 短线 + 浅色 lead + 更浅 detail（深底上直接用浅色文字，不用 _card）
+    for index, bullet in enumerate(bullets[1:4]):
+        x = 1.26 + index * 3.7
         lead, detail = _split_lead_detail(bullet)
-        _card(slide, theme, 1.26 + (index - 1) * 3.55, 5.18, 3.22, 0.88, lead, detail)
+        _rule(slide, x, 5.18, 0.3, 0.04, theme["accent"])
+        b = slide.shapes.add_textbox(Inches(x), Inches(5.32), Inches(3.4), Inches(1.05))
+        b.text_frame.word_wrap = True
+        _style_paragraph(b.text_frame.paragraphs[0], lead[:80], size=13, color="FFFFFF", bold=True)
+        if detail:
+            dp = b.text_frame.add_paragraph()
+            _style_paragraph(dp, detail[:120], size=10, color=theme["band"])
+            dp.space_before = Pt(3)
     _add_footer(slide, theme, page_no)
 
 
 def _add_summary_slide(prs: Any, theme: dict[str, str], title: str, bullets: list[str], page_no: int) -> None:
-    from pptx.enum.shapes import MSO_SHAPE
-    from pptx.enum.text import PP_ALIGN
     from pptx.util import Inches
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, "FFFFFF")
-    _add_header(slide, theme, title, kicker="Wrap Up")
+    _add_header(slide, theme, title)
 
-    big = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.95), Inches(1.85), Inches(11.35), Inches(1.2))
-    big.fill.solid()
-    big.fill.fore_color.rgb = _hex(theme["cover_bg"])
-    big.line.fill.background()
+    # 强调条（直角实心）+ 白色 headline，左对齐更显编排感
+    _rule(slide, 0.9, 1.9, 11.5, 1.15, theme["cover_bg"])
     headline = bullets[0] if bullets else "回顾重点，明确下一步行动。"
-    _style_paragraph(big.text_frame.paragraphs[0], headline[:160], size=_fit_font_size(headline, base=19, small=14), color="FFFFFF", bold=True, align=PP_ALIGN.CENTER)
+    hb = slide.shapes.add_textbox(Inches(1.25), Inches(2.12), Inches(10.8), Inches(0.75))
+    hb.text_frame.word_wrap = True
+    _style_paragraph(hb.text_frame.paragraphs[0], headline[:160], size=_fit_font_size(headline, base=19, small=14), color="FFFFFF", bold=True)
 
     for index, bullet in enumerate((bullets[1:] or bullets)[:4], start=1):
         lead, detail = _split_lead_detail(bullet)
-        _card(slide, theme, 1.03 + ((index - 1) % 2) * 5.55, 3.55 + ((index - 1) // 2) * 1.18, 5.0, 0.95, lead, detail, number=index)
+        x = 1.0 + ((index - 1) % 2) * 5.75
+        y = 3.6 + ((index - 1) // 2) * 1.45
+        _card(slide, theme, x, y, 5.3, 1.25, lead, detail, number=index)
     _add_footer(slide, theme, page_no)
 
 
