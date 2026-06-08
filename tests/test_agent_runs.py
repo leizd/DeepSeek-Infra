@@ -308,6 +308,148 @@ def test_rerun_agent_prior_outputs_follow_dag_layers_not_plan_order(tmp_settings
     assert [item["id"] for item in prior] == ["reasoner"]
 
 
+def test_append_event_persists_node_state_snapshot(tmp_settings) -> None:
+    run_id = agent_runs.create_run(valid_payload())["runId"]
+    plan = [
+        {"id": "researcher", "task": "find"},
+        {"id": "coder", "task": "code", "depends_on": ["researcher"]},
+    ]
+    agent_runs.append_event(run_id, {"type": "agent_plan", "plan": plan})
+    agent_runs.append_event(
+        run_id,
+        {"type": "agent_output", "phase": "researcher", "output": {"id": "researcher", "name": "R", "content": "ok"}},
+    )
+
+    nodes = agent_runs.load_run(run_id)["nodes"]
+    assert nodes["researcher"]["state"] == "succeeded"
+    # coder's dependency is now satisfied -> queued (but not yet running).
+    assert nodes["coder"]["state"] == "queued"
+
+
+def _seed_run_with_outputs(run_id: str, *, coder_failed: bool) -> None:
+    plan = [
+        {"id": "researcher", "task": "find"},
+        {"id": "coder", "task": "code", "depends_on": ["researcher"]},
+        {"id": "critic", "task": "review", "depends_on": ["researcher", "coder"]},
+    ]
+    agent_runs.append_event(run_id, {"type": "agent_plan", "plan": plan})
+    agent_runs.append_event(
+        run_id,
+        {"type": "agent_output", "phase": "researcher", "output": {"id": "researcher", "name": "R", "content": "facts"}},
+    )
+    if coder_failed:
+        agent_runs.append_event(run_id, {"type": "agent", "phase": "coder", "status": "error"})
+        agent_runs.append_event(
+            run_id,
+            {"type": "agent_output", "phase": "coder", "output": {"id": "coder", "name": "C", "content": "boom", "failed": True}},
+        )
+
+
+def test_resume_run_skips_completed_and_reruns_incomplete(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = agent_runs.create_run(valid_payload())["runId"]
+    _seed_run_with_outputs(run_id, coder_failed=True)
+    agent_runs.append_status(run_id, "orphaned", reason="server_restart")
+
+    captured: dict[str, object] = {}
+
+    def fake_stream_agent_plan(payload, plan, *, emit_event, completed_outputs=None, **kwargs):
+        captured["completed"] = [item.get("id") for item in (completed_outputs or [])]
+        captured["plan"] = [item.get("id") for item in plan]
+        emit_event({"type": "content", "text": "resumed final"})
+        emit_event({"type": "done", "content": "resumed final", "diagnostics": {"agentCount": 3}})
+
+    monkeypatch.setattr(agent_runs, "stream_agent_plan", fake_stream_agent_plan)
+
+    agent_runs.resume_run(run_id, valid_payload())
+    stored = agent_runs.load_run(run_id)
+
+    # Only the already-succeeded node is fed back as completed; failed/never-run re-run.
+    assert captured["completed"] == ["researcher"]
+    event_types = [event["type"] for event in stored["events"]]
+    assert event_types.count("agent_reset") == 2  # coder + critic reopened
+    reset_phases = sorted(event.get("phase") for event in stored["events"] if event.get("type") == "agent_reset")
+    assert reset_phases == ["coder", "critic"]
+    assert stored["finalAnswer"] == "resumed final"
+    assert stored["status"] == "done"
+    assert any(event.get("reason") == "resume" for event in stored["events"] if event.get("type") == "run_status")
+
+
+def test_resume_run_resynthesizes_when_all_nodes_done_but_no_final_answer(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = agent_runs.create_run(valid_payload())["runId"]
+    plan = [{"id": "researcher", "task": "find"}, {"id": "critic", "task": "review", "depends_on": ["researcher"]}]
+    agent_runs.append_event(run_id, {"type": "agent_plan", "plan": plan})
+    for agent_id in ("researcher", "critic"):
+        agent_runs.append_event(
+            run_id,
+            {"type": "agent_output", "phase": agent_id, "output": {"id": agent_id, "name": agent_id, "content": "done"}},
+        )
+    agent_runs.append_status(run_id, "orphaned")
+
+    calls: list[str] = []
+
+    def fake_resynth(rid, payload, *, selected_model, user_query):
+        calls.append("resynth")
+        agent_runs.append_event(rid, {"type": "content", "text": "synth final"})
+        agent_runs.append_event(rid, {"type": "done", "content": "synth final", "diagnostics": {}})
+
+    def fail_stream(*args, **kwargs):  # pragma: no cover - asserted not called
+        raise AssertionError("stream_agent_plan must not run when all nodes already succeeded")
+
+    monkeypatch.setattr(agent_runs, "resynthesize_outputs", fake_resynth)
+    monkeypatch.setattr(agent_runs, "stream_agent_plan", fail_stream)
+
+    agent_runs.resume_run(run_id, valid_payload())
+    stored = agent_runs.load_run(run_id)
+
+    assert calls == ["resynth"]
+    assert stored["finalAnswer"] == "synth final"
+    assert stored["status"] == "done"
+
+
+def test_resume_run_marks_done_when_already_complete(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = agent_runs.create_run(valid_payload())["runId"]
+    plan = [{"id": "researcher", "task": "find"}]
+    agent_runs.append_event(run_id, {"type": "agent_plan", "plan": plan})
+    agent_runs.append_event(
+        run_id, {"type": "agent_output", "phase": "researcher", "output": {"id": "researcher", "name": "R", "content": "x"}}
+    )
+    agent_runs.append_event(run_id, {"type": "content", "text": "existing answer"})
+    agent_runs.append_status(run_id, "orphaned")
+
+    def fail_stream(*args, **kwargs):  # pragma: no cover - asserted not called
+        raise AssertionError("nothing should re-run")
+
+    monkeypatch.setattr(agent_runs, "stream_agent_plan", fail_stream)
+    monkeypatch.setattr(agent_runs, "resynthesize_outputs", fail_stream)
+
+    agent_runs.resume_run(run_id, valid_payload())
+    stored = agent_runs.load_run(run_id)
+
+    assert stored["status"] == "done"
+    assert stored["finalAnswer"] == "existing answer"
+
+
+def test_resume_orphaned_runs_is_opt_in(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = agent_runs.create_run(valid_payload())["runId"]
+    agent_runs.append_status(run_id, "orphaned", reason="server_restart")
+
+    started: list[str] = []
+
+    def fake_ensure_started(rid: str, *args: object, **kwargs: object) -> bool:
+        started.append(rid)
+        return True
+
+    monkeypatch.setattr(agent_runs.registry, "ensure_started", fake_ensure_started)
+
+    monkeypatch.setattr(agent_runs, "AGENT_RUNTIME_AUTO_RESUME", False)
+    assert agent_runs.resume_orphaned_runs() == 0
+    assert started == []
+
+    monkeypatch.setattr(agent_runs, "AGENT_RUNTIME_AUTO_RESUME", True)
+    assert agent_runs.resume_orphaned_runs() == 1
+    assert started == [run_id]
+
+
 def test_run_files_are_valid_json_snapshots(tmp_settings) -> None:
     run_id = agent_runs.create_run(valid_payload())["runId"]
     agent_runs.append_event(run_id, {"type": "agent_plan", "plan": [{"id": "critic", "task": "复核"}]})

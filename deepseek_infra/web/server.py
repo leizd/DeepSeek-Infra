@@ -12,7 +12,7 @@ import secrets
 import socket
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from inspect import signature
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -47,10 +47,20 @@ from deepseek_infra.infra.agent_runtime.agent_runs import (
     public_run as public_agent_run,
     registry as agent_run_registry,
     rerun_agent,
+    resume_run,
     start_planned_run,
 )
 from deepseek_infra.infra.rag.context_compressor import compress_context_payload
-from deepseek_infra.infra.gateway.deepseek_client import RequestCancelled, call_deepseek, preflight_chat_payload, preflight_deepseek_payload, stream_deepseek
+from deepseek_infra.infra.gateway.deepseek_client import (
+    RequestCancelled,
+    call_deepseek_cascade,
+    preflight_chat_payload,
+    preflight_deepseek_payload,
+    stream_deepseek,
+)
+from deepseek_infra.infra.gateway.budget_manager import budget_status as budget_status_for_scope
+from deepseek_infra.infra.gateway.model_router import cascade_requested as model_router_cascade_requested
+from deepseek_infra.infra.gateway.model_router import router_status as model_router_status
 from deepseek_infra.infra.gateway.openai_api import (
     openai_chat_completion,
     openai_chat_stream,
@@ -73,8 +83,10 @@ from deepseek_infra.infra.rag.files import (
     load_cached_file,
 )
 from deepseek_infra.infra.tool_runtime.generated_files import download_descriptor, resolve_generated_file, save_generated_file_to_downloads
+from deepseek_infra.infra.rag.local_rag import evaluate_recall as evaluate_local_rag_recall
 from deepseek_infra.infra.rag.local_rag import rebuild_index as rebuild_local_rag_index
 from deepseek_infra.infra.rag.local_rag import status as local_rag_status
+from deepseek_infra.infra.rag.local_rag import verify_citation as verify_local_rag_citation
 from deepseek_infra.infra.data.memory import (
     clear_memories,
     delete_memories_by_query,
@@ -222,6 +234,8 @@ def create_app() -> FastAPI:
                 "semanticCache": semantic_cache_status(),
                 "gateway": gateway_status(),
                 "providers": providers_status(),
+                "modelRouter": model_router_status(),
+                "budget": budget_status_for_scope("global"),
                 "computerUrl": computer_url,
                 "phoneUrl": phone_url,
             }
@@ -232,6 +246,12 @@ def create_app() -> FastAPI:
         require_api_auth(request)
         return json_response({"ok": True, "localRag": local_rag_status()})
 
+    @api.get("/api/budget")
+    async def api_budget(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        scope = str(request.query_params.get("scope") or "global").strip() or "global"
+        return json_response({"ok": True, "budget": budget_status_for_scope(scope)})
+
     @api.post("/api/rag/reindex")
     async def api_rag_reindex(request: Request) -> JSONResponse:
         require_api_auth(request)
@@ -240,6 +260,27 @@ def create_app() -> FastAPI:
         if action not in {"reindex", "rebuild"}:
             raise AppError("Unsupported RAG action", code=ErrorCode.INVALID_PAYLOAD)
         return json_response(rebuild_local_rag_index())
+
+    @api.post("/api/rag/verify-citation")
+    async def api_rag_verify_citation(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request)
+        item_id = str(payload.get("itemId") or "").strip()
+        snippet = str(payload.get("snippet") or "")
+        if not item_id:
+            raise AppError("itemId is required", code=ErrorCode.INVALID_PAYLOAD)
+        return json_response({"ok": True, "citation": verify_local_rag_citation(item_id, snippet)})
+
+    @api.post("/api/rag/eval")
+    async def api_rag_eval(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request)
+        cases = payload.get("cases")
+        if not isinstance(cases, list):
+            raise AppError("cases must be a list", code=ErrorCode.INVALID_PAYLOAD)
+        k = payload.get("k")
+        k_value = int(k) if isinstance(k, int) and k > 0 else 5
+        return json_response({"ok": True, "eval": evaluate_local_rag_recall(cases, k=k_value)})
 
     @api.get("/api/traces")
     async def api_traces(request: Request) -> JSONResponse:
@@ -534,7 +575,9 @@ def create_app() -> FastAPI:
                 media_type=STREAM_MEDIA_TYPE,
                 headers={"X-Accel-Buffering": "no"},
             )
-        return json_response(call_deepseek(payload))
+        # Non-stream chat goes through the cascade entry, which transparently runs
+        # plain call_deepseek unless the request opted into cascade inference.
+        return json_response(call_deepseek_cascade(payload))
 
     @api.post("/v1/chat/completions")
     async def v1_chat_completions(request: Request) -> Response:
@@ -632,6 +675,14 @@ def create_app() -> FastAPI:
                 agent_id=agent_id,
                 resynthesize=body.get("resynthesize") is not False,
             )
+            return json_response({"ok": True, "started": started, "run": public_agent_run(load_agent_run(run_id))})
+        if action == "resume":
+            status = str(stored.get("status") or "")
+            if status in {"created", "planning", "running"}:
+                raise AppError("Agent run is still running", code=ErrorCode.INVALID_PAYLOAD, status=409)
+            if status == "awaiting_plan":
+                raise AppError("Confirm the plan before resuming", code=ErrorCode.INVALID_PAYLOAD, status=409)
+            started = agent_run_registry.ensure_started(run_id, resume_run, run_id, runtime_payload)
             return json_response({"ok": True, "started": started, "run": public_agent_run(load_agent_run(run_id))})
         raise AppError("Unsupported Agent run action", code=ErrorCode.NOT_FOUND, status=404)
 
@@ -955,6 +1006,29 @@ def encode_stream_event(data: dict[str, Any]) -> bytes:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
 
 
+def emit_cascade_as_stream(payload: dict[str, Any], write_event: Callable[[dict[str, Any]], None]) -> None:
+    result = call_deepseek_cascade(payload)
+    content = str(result.get("content") or "")
+    reasoning = str(result.get("reasoning") or "")
+    if reasoning:
+        write_event({"type": "reasoning", "text": reasoning})
+    if content:
+        write_event({"type": "content", "text": content})
+    write_event(
+        {
+            "type": "done",
+            "id": result.get("id"),
+            "model": result.get("model"),
+            "content": content,
+            "reasoning": reasoning,
+            "usage": result.get("usage") or {},
+            "search": result.get("search"),
+            "memorySuggestions": result.get("memorySuggestions") or [],
+            "diagnostics": result.get("diagnostics") or {},
+        }
+    )
+
+
 def chat_event_stream(payload: dict[str, Any]) -> Generator[bytes, None, None]:
     cancel_event = threading.Event()
     events: queue.Queue[bytes | None] = queue.Queue()
@@ -968,6 +1042,10 @@ def chat_event_stream(payload: dict[str, Any]) -> Generator[bytes, None, None]:
         try:
             if payload.get("agentMode") is True:
                 stream_multi_agent(payload, write_event, cancel_event=cancel_event)
+            elif model_router_cascade_requested(payload):
+                # Cascade is non-stream (draft → gate → refine); replay its final
+                # result as stream events so the streaming UI works unchanged.
+                emit_cascade_as_stream(payload, write_event)
             else:
                 stream_deepseek(payload, write_event, cancel_event=cancel_event)
         except RequestCancelled:

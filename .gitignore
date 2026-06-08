@@ -8,6 +8,7 @@
 .semantic-cache/
 .traces/
 .request-queue/
+.budget/
 .memory/
 .projects/
 .reminders/

@@ -432,3 +432,47 @@ export function normalizeTimeline(value) {
   }
   return result;
 }
+
+// v2.0.5：把扁平的 trace span 列表（每个带 parentSpanId）按父子关系展开成
+// 深度优先的有序列表，供瀑布图按 depth 缩进渲染成树。同层按 offsetMs 排序，
+// 父不存在的当作根；环/自引用兜底为根，保证不丢 span 也不死循环。
+function traceSpanOffset(span) {
+  const value = Number(span && span.offsetMs);
+  return Number.isFinite(value) ? value : 0;
+}
+
+export function buildTraceSpanTree(spans) {
+  const list = Array.isArray(spans) ? spans.filter((span) => span && typeof span === "object") : [];
+  const byId = new Map();
+  for (const span of list) {
+    if (span.spanId) byId.set(span.spanId, span);
+  }
+  const childrenByParent = new Map();
+  const roots = [];
+  for (const span of list) {
+    const parentId = span.parentSpanId && byId.has(span.parentSpanId) && span.parentSpanId !== span.spanId ? span.parentSpanId : "";
+    if (parentId) {
+      if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+      childrenByParent.get(parentId).push(span);
+    } else {
+      roots.push(span);
+    }
+  }
+  const ordered = [];
+  const visited = new Set();
+  const walk = (span, depth) => {
+    if (!span || visited.has(span.spanId)) return;
+    visited.add(span.spanId);
+    ordered.push({ span, depth });
+    const children = (childrenByParent.get(span.spanId) || []).slice().sort((a, b) => traceSpanOffset(a) - traceSpanOffset(b));
+    for (const child of children) walk(child, depth + 1);
+  };
+  for (const root of roots.slice().sort((a, b) => traceSpanOffset(a) - traceSpanOffset(b))) {
+    walk(root, 0);
+  }
+  // Any span left unvisited (dangling parent / cycle) is surfaced as a root so nothing is dropped.
+  for (const span of list) {
+    if (!visited.has(span.spanId)) ordered.push({ span, depth: 0 });
+  }
+  return ordered;
+}

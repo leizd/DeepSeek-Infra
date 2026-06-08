@@ -18,19 +18,22 @@ from typing import Any
 from deepseek_infra.core.config import (
     FILE_CACHE_DIR,
     LOCAL_RAG_BACKEND,
+    LOCAL_RAG_BM25_B,
+    LOCAL_RAG_BM25_K1,
     LOCAL_RAG_DB,
     LOCAL_RAG_DIR,
     LOCAL_RAG_EMBEDDING_DIMENSIONS,
     LOCAL_RAG_EMBEDDING_MAX_TOKENS,
     LOCAL_RAG_EMBEDDING_PROVIDER,
     LOCAL_RAG_ENABLED,
+    LOCAL_RAG_INCREMENTAL,
     LOCAL_RAG_ONNX_MODEL_PATH,
     LOCAL_RAG_SEARCH_LIMIT,
     LOCAL_RAG_TOKENIZER_PATH,
     MEMORY_FILE,
     PROJECTS_DIR,
 )
-from deepseek_infra.core.utils import query_tokens, score_chunk
+from deepseek_infra.core.utils import query_tokens
 
 logger = logging.getLogger("deepseek_infra.local_rag")
 
@@ -204,6 +207,55 @@ def vector_blob(vector: list[float]) -> bytes:
 def stable_vector_id(item_id: str) -> int:
     digest = hashlib.blake2b(item_id.encode("utf-8", errors="ignore"), digest_size=8).digest()
     return int.from_bytes(digest, "big") & 0x7FFF_FFFF_FFFF_FFFF
+
+
+def chunk_hash(text: str) -> str:
+    """Content hash of a chunk; drives lineage + incremental change detection."""
+    return hashlib.blake2b(str(text or "").strip().encode("utf-8", errors="ignore"), digest_size=12).hexdigest()
+
+
+def doc_version(chunk_hash_by_index: dict[int, str]) -> str:
+    """Content-addressed document version: hash of its chunk-index → chunk-hash map."""
+    digest = hashlib.blake2b(digest_size=12)
+    for index in sorted(chunk_hash_by_index):
+        digest.update(f"{index}:{chunk_hash_by_index[index]}\0".encode("utf-8", errors="ignore"))
+    return digest.hexdigest()
+
+
+def bm25_scores(
+    query_terms: list[str],
+    docs_terms: list[list[str]],
+    *,
+    k1: float = LOCAL_RAG_BM25_K1,
+    b: float = LOCAL_RAG_BM25_B,
+) -> list[float]:
+    """Okapi BM25 lexical scores for each candidate doc over the candidate corpus."""
+    total = len(docs_terms)
+    if total == 0 or not query_terms:
+        return [0.0] * total
+    unique_query = set(query_terms)
+    lengths = [len(terms) for terms in docs_terms]
+    avgdl = (sum(lengths) / total) or 1.0
+    doc_freq: dict[str, int] = {}
+    for terms in docs_terms:
+        for term in unique_query.intersection(terms):
+            doc_freq[term] = doc_freq.get(term, 0) + 1
+    scores: list[float] = []
+    for index, terms in enumerate(docs_terms):
+        length = lengths[index] or 1
+        term_freq: dict[str, int] = {}
+        for term in terms:
+            if term in unique_query:
+                term_freq[term] = term_freq.get(term, 0) + 1
+        score = 0.0
+        for term, freq in term_freq.items():
+            df = doc_freq.get(term, 0)
+            idf = math.log(1 + (total - df + 0.5) / (df + 0.5))
+            denom = freq + k1 * (1 - b + b * (length / avgdl))
+            if denom:
+                score += idf * (freq * (k1 + 1)) / denom
+        scores.append(score)
+    return scores
 
 
 def sqlite_vec_available() -> bool:
@@ -440,14 +492,45 @@ def memory_item_id(memory_id: str) -> str:
     return f"memory:{memory_id}"
 
 
+def existing_doc_chunks(collection: str, source_id: str, project_id: str) -> dict[int, dict[str, Any]]:
+    """Return ``{chunk_index: {"hash", "embedding"}}`` already indexed for a document."""
+    if not LOCAL_RAG_ENABLED or not source_id:
+        return {}
+    result: dict[int, dict[str, Any]] = {}
+    with _db_lock:
+        try:
+            conn, _ = db_ready()
+            try:
+                rows = conn.execute(
+                    f"SELECT chunk_index, embedding, metadata FROM {ITEM_TABLE} "
+                    "WHERE collection = ? AND source_id = ? AND project_id = ?",
+                    (collection, source_id, project_id),
+                ).fetchall()
+            finally:
+                conn.close()
+        except Exception as exc:
+            set_last_error(f"existing chunk read failed: {exc}")
+            return {}
+    for row in rows:
+        try:
+            meta = json.loads(str(row["metadata"] or "{}"))
+        except json.JSONDecodeError:
+            meta = {}
+        chunk_hash_value = str(meta.get("hash") or "") if isinstance(meta, dict) else ""
+        result[int(row["chunk_index"] or 0)] = {"hash": chunk_hash_value, "embedding": parse_embedding(row["embedding"])}
+    return result
+
+
 def index_file_payload(cached: dict[str, Any], *, project_id: str = "") -> int:
     file_id = str(cached.get("id") or "").strip()
     if not file_id:
         return 0
-    delete_items(collection=COLLECTION_FILES, source_id=file_id, project_id=project_id or "")
+    project = project_id or ""
     raw_chunks = cached.get("chunks")
     chunks = raw_chunks if isinstance(raw_chunks, list) else []
-    items: list[dict[str, Any]] = []
+
+    prepared: list[dict[str, Any]] = []
+    hash_by_index: dict[int, str] = {}
     for fallback_index, chunk in enumerate(chunks):
         if not isinstance(chunk, dict):
             continue
@@ -456,26 +539,55 @@ def index_file_payload(cached: dict[str, Any], *, project_id: str = "") -> int:
             continue
         raw_index = chunk.get("index")
         chunk_index = int(raw_index) if raw_index is not None else fallback_index
+        content_hash = chunk_hash(text)
+        hash_by_index[chunk_index] = content_hash
+        prepared.append({"chunk_index": chunk_index, "text": text, "chunk": chunk, "hash": content_hash})
+
+    if not prepared:
+        delete_items(collection=COLLECTION_FILES, source_id=file_id, project_id=project)
+        return 0
+
+    new_version = doc_version(hash_by_index)
+    existing = existing_doc_chunks(COLLECTION_FILES, file_id, project) if LOCAL_RAG_INCREMENTAL else {}
+    if LOCAL_RAG_INCREMENTAL and existing:
+        existing_version = doc_version({index: data["hash"] for index, data in existing.items() if data.get("hash")})
+        if existing_version and existing_version == new_version:
+            # 增量索引：文档内容哈希未变，跳过重嵌入与重写。
+            return len(prepared)
+
+    items: list[dict[str, Any]] = []
+    for record in prepared:
+        chunk = record["chunk"]
+        chunk_index = record["chunk_index"]
+        prior = existing.get(chunk_index)
+        if prior and prior.get("hash") == record["hash"] and prior.get("embedding"):
+            embedding = prior["embedding"]  # reuse stored vector for an unchanged chunk
+        else:
+            embedding = embed_text(record["text"])
         items.append(
             {
-                "item_id": file_item_id(file_id, project_id or "", chunk_index),
+                "item_id": file_item_id(file_id, project, chunk_index),
                 "collection": COLLECTION_FILES,
                 "source_id": file_id,
-                "project_id": project_id or "",
+                "project_id": project,
                 "chunk_index": chunk_index,
                 "name": str(cached.get("name") or file_id),
                 "kind": str(cached.get("kind") or "text"),
                 "scope": "",
-                "text": text,
-                "embedding": embed_text(text),
+                "text": record["text"],
+                "embedding": embedding,
                 "metadata": {
                     "lineStart": int(chunk.get("lineStart") or 0),
                     "lineEnd": int(chunk.get("lineEnd") or 0),
                     "start": int(chunk.get("start") or 0),
                     "end": int(chunk.get("end") or 0),
+                    "page": int(chunk.get("page") or 0),
+                    "hash": record["hash"],
+                    "docVersion": new_version,
                 },
             }
         )
+    delete_items(collection=COLLECTION_FILES, source_id=file_id, project_id=project)
     return upsert_items(items)
 
 
@@ -584,8 +696,12 @@ def _search_db(
 
     rows = load_candidate_rows(conn, collection=collection, source_id=source_id, project_id=project_id, scopes=scopes, item_ids=vector_distances)
     tokens = query_tokens(query)
+    # Hybrid retriever: blend dense vector similarity with sparse BM25 lexical scores
+    # computed over the candidate corpus.
+    docs_terms = [query_tokens(str(row["text"] or "")) for row in rows]
+    lexical_scores = bm25_scores(tokens, docs_terms)
     results: list[RAGSearchResult] = []
-    for row in rows:
+    for index, row in enumerate(rows):
         embedding = parse_embedding(row["embedding"])
         cosine = cosine_similarity(query_vector, embedding)
         if row["item_id"] in vector_distances:
@@ -593,11 +709,11 @@ def _search_db(
             vector_score = max(cosine, 1.0 / (1.0 + distance))
         else:
             vector_score = cosine
-        keyword_score = score_chunk(str(row["text"] or ""), tokens)
-        score = int(vector_score * 100) + keyword_score * 10
+        keyword_score = lexical_scores[index]
+        score = int(round(vector_score * 100 + keyword_score * 10))
         if score <= 0:
             continue
-        results.append(row_to_result(row, score=score, vector_score=vector_score, keyword_score=keyword_score))
+        results.append(row_to_result(row, score=score, vector_score=vector_score, keyword_score=int(round(keyword_score))))
     results.sort(key=lambda item: (-item.score, item.name, item.chunk_index))
     return results[:limit]
 
@@ -676,6 +792,107 @@ def search_memories_index(query: str, *, scopes: list[str], limit: int = 12) -> 
     return search(query, collection=COLLECTION_MEMORY, scopes=scopes, limit=limit)
 
 
+def chunk_lineage(result: RAGSearchResult) -> dict[str, Any]:
+    """Trace a retrieved chunk back to its document/page/offset/hash (lineage)."""
+    meta = result.metadata if isinstance(result.metadata, dict) else {}
+    return {
+        "chunkId": result.item_id,
+        "docId": result.source_id,
+        "projectId": result.project_id,
+        "page": int(meta.get("page") or 0),
+        "startChar": int(meta.get("start") or 0),
+        "endChar": int(meta.get("end") or 0),
+        "hash": str(meta.get("hash") or ""),
+        "docVersion": str(meta.get("docVersion") or ""),
+    }
+
+
+def get_chunk(item_id: str) -> sqlite3.Row | None:
+    if not LOCAL_RAG_ENABLED or not item_id:
+        return None
+    with _db_lock:
+        try:
+            conn, _ = db_ready()
+            try:
+                return conn.execute(f"SELECT * FROM {ITEM_TABLE} WHERE item_id = ?", (item_id,)).fetchone()
+            finally:
+                conn.close()
+        except Exception as exc:
+            set_last_error(f"chunk read failed: {exc}")
+            return None
+
+
+def _normalize_grounding_text(text: str) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def verify_citation(item_id: str, snippet: str, *, min_coverage: float = 0.8) -> dict[str, Any]:
+    """Verify a cited snippet is actually grounded in the indexed chunk (引用真实性校验).
+
+    Exact (whitespace-normalized) substring match is fully grounded; otherwise we
+    fall back to query-token coverage so lightly reworded quotes still validate.
+    """
+    row = get_chunk(item_id)
+    if row is None:
+        return {"grounded": False, "itemId": item_id, "coverage": 0.0, "reason": "chunk_not_found"}
+    lineage = chunk_lineage(row_to_result(row, score=0, vector_score=0.0, keyword_score=0))
+    snippet_norm = _normalize_grounding_text(snippet)
+    if not snippet_norm:
+        return {"grounded": False, "itemId": item_id, "coverage": 0.0, "reason": "empty_snippet", "lineage": lineage}
+    chunk_norm = _normalize_grounding_text(str(row["text"] or ""))
+    if snippet_norm in chunk_norm:
+        return {"grounded": True, "itemId": item_id, "coverage": 1.0, "reason": "", "lineage": lineage}
+    snippet_terms = query_tokens(snippet)
+    chunk_terms = set(query_tokens(str(row["text"] or "")))
+    coverage = (sum(1 for term in snippet_terms if term in chunk_terms) / len(snippet_terms)) if snippet_terms else 0.0
+    grounded = coverage >= min_coverage
+    return {
+        "grounded": grounded,
+        "itemId": item_id,
+        "coverage": round(coverage, 3),
+        "reason": "" if grounded else "snippet_not_grounded",
+        "lineage": lineage,
+    }
+
+
+def evaluate_recall(cases: list[dict[str, Any]], *, k: int = 5, collection: str = COLLECTION_FILES) -> dict[str, Any]:
+    """Compute Recall@K and MRR for labeled ``{query, relevant:[...]}`` cases.
+
+    ``relevant`` ids match either a chunk ``item_id`` or a document ``source_id``.
+    """
+    safe_k = max(1, int(k))
+    details: list[dict[str, Any]] = []
+    hits = 0
+    reciprocal = 0.0
+    evaluated = 0
+    for case in cases if isinstance(cases, list) else []:
+        if not isinstance(case, dict):
+            continue
+        query = str(case.get("query") or "").strip()
+        raw_relevant = case.get("relevant") or case.get("relevantSourceIds") or []
+        relevant = {str(item) for item in raw_relevant if str(item)} if isinstance(raw_relevant, list) else set()
+        if not query or not relevant:
+            continue
+        evaluated += 1
+        results = search(query, collection=collection, limit=safe_k)
+        rank_hit = 0
+        for rank, result in enumerate(results[:safe_k], start=1):
+            if result.source_id in relevant or result.item_id in relevant:
+                rank_hit = rank
+                break
+        if rank_hit:
+            hits += 1
+            reciprocal += 1.0 / rank_hit
+        details.append({"query": query, "hit": rank_hit > 0, "rank": rank_hit, "topSourceIds": [r.source_id for r in results[:safe_k]]})
+    return {
+        "k": safe_k,
+        "cases": evaluated,
+        "recallAtK": round(hits / evaluated, 4) if evaluated else 0.0,
+        "mrr": round(reciprocal / evaluated, 4) if evaluated else 0.0,
+        "details": details,
+    }
+
+
 def status() -> dict[str, Any]:
     pipeline = embedding_pipeline()
     payload: dict[str, Any] = {
@@ -688,6 +905,10 @@ def status() -> dict[str, Any]:
         "embeddingDimensions": pipeline.dimensions,
         "embeddingModelPathConfigured": bool(LOCAL_RAG_ONNX_MODEL_PATH),
         "tokenizerPathConfigured": bool(LOCAL_RAG_TOKENIZER_PATH),
+        "hybridSearch": "bm25+vector",
+        "bm25K1": LOCAL_RAG_BM25_K1,
+        "bm25B": LOCAL_RAG_BM25_B,
+        "incremental": LOCAL_RAG_INCREMENTAL,
         "lastError": _last_error or pipeline.error,
         "indexedItems": 0,
         "indexedFiles": 0,

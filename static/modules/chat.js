@@ -36,6 +36,7 @@ import {
   appendTimelineAgentDelta,
   appendTimelineAgentNote,
   appendTimelineAgentReasoning,
+  buildTraceSpanTree,
   formatAgentDuration,
   normalizeAgentNotes,
   normalizeTimeline,
@@ -54,6 +55,8 @@ const storageKeys = {
   model: "deepseek-mobile.model",
   thinkingEnabled: "deepseek-mobile.thinking-enabled",
   reasoningEffort: "deepseek-mobile.reasoning-effort",
+  autoRoute: "deepseek-mobile.auto-route",
+  cascade: "deepseek-mobile.cascade",
   role: "deepseek-mobile.role",
   temperature: "deepseek-mobile.temperature",
   searchEnabled: "deepseek-mobile.search-enabled",
@@ -186,6 +189,8 @@ const state = {
   model: normalizeModel(localStorage.getItem(storageKeys.model)),
   thinkingEnabled: loadThinkingEnabled(),
   reasoningEffort: normalizeReasoningEffort(localStorage.getItem(storageKeys.reasoningEffort)),
+  autoRoute: localStorage.getItem(storageKeys.autoRoute) === "true",
+  cascade: localStorage.getItem(storageKeys.cascade) === "true",
   role: localStorage.getItem(storageKeys.role) || "general",
   temperature: Number(localStorage.getItem(storageKeys.temperature) || "0.7"),
   hasServerKey: false,
@@ -193,6 +198,7 @@ const state = {
   edgeInference: null,
   tracing: null,
   semanticCache: null,
+  budget: null,
   uploadLimits: { ...defaultUploadLimits },
   hasSearch: true,
   searchMode: loadSearchMode(),
@@ -392,6 +398,8 @@ const clearMemoryButton = document.querySelector("#clearMemoryButton");
 const attachmentConfirmInput = document.querySelector("#attachmentConfirmInput");
 const roleSelect = document.querySelector("#roleSelect");
 const reasoningEffortSelect = document.querySelector("#reasoningEffortSelect");
+const modelRouteSelect = document.querySelector("#modelRouteSelect");
+const cascadeEnabledInput = document.querySelector("#cascadeEnabledInput");
 const agentPresetSelect = document.querySelector("#agentPresetSelect");
 const agentDisplayModeSelect = document.querySelector("#agentDisplayModeSelect");
 const temperatureInput = document.querySelector("#temperatureInput");
@@ -902,6 +910,20 @@ function setupEvents() {
     });
   }
 
+  if (modelRouteSelect) {
+    modelRouteSelect.addEventListener("change", () => {
+      state.autoRoute = modelRouteSelect.value === "auto";
+      localStorage.setItem(storageKeys.autoRoute, String(state.autoRoute));
+    });
+  }
+
+  if (cascadeEnabledInput) {
+    cascadeEnabledInput.addEventListener("change", () => {
+      state.cascade = Boolean(cascadeEnabledInput.checked);
+      localStorage.setItem(storageKeys.cascade, String(state.cascade));
+    });
+  }
+
   if (agentPresetSelect) {
     agentPresetSelect.addEventListener("change", () => {
       state.agentPreset = normalizeAgentPreset(agentPresetSelect.value);
@@ -1009,6 +1031,8 @@ function setupSettings() {
   }
   roleSelect.value = state.role;
   if (reasoningEffortSelect) reasoningEffortSelect.value = state.reasoningEffort;
+  if (modelRouteSelect) modelRouteSelect.value = state.autoRoute ? "auto" : "manual";
+  if (cascadeEnabledInput) cascadeEnabledInput.checked = Boolean(state.cascade);
   if (agentPresetSelect) agentPresetSelect.value = state.agentPreset;
   if (agentDisplayModeSelect) agentDisplayModeSelect.value = state.agentDisplayMode;
   temperatureInput.value = String(state.temperature);
@@ -1335,6 +1359,7 @@ async function loadConfig() {
     state.edgeInference = config.edgeInference || null;
     state.tracing = config.tracing || null;
     state.semanticCache = config.semanticCache || null;
+    state.budget = config.budget || null;
     state.uploadLimits = normalizeUploadLimits(config.uploadLimits);
     updateSearchAvailability({ render: false });
     renderAccessUrls(config);
@@ -3537,6 +3562,13 @@ function renderDiagnosticsPanel(message) {
     ["Prompt tokens", usage.prompt_tokens ?? usage.promptTokens],
     ["Completion tokens", usage.completion_tokens ?? usage.completionTokens],
     ["Total tokens", usage.total_tokens ?? usage.totalTokens],
+    ["本轮成本", formatCostUsd(diagnostics.costUsd)],
+    ["Agent 估算成本", formatCostUsd(diagnostics.agentCostUsd)],
+    ["路由模型", diagnostics.modelRouter?.model],
+    ["级联推理", diagnostics.modelCascade ? (diagnostics.modelCascade.escalated ? `已升级 · ${diagnostics.modelCascade.refineModel}` : `草稿通过 · ${diagnostics.modelCascade.draftModel}`) : undefined],
+    ["预算降级", diagnostics.budgetDowngraded === true ? "是（已降级到 flash）" : undefined],
+    ["今日成本", formatDailyBudgetCost()],
+    ["今日 tokens", state.budget?.today ? numberOrZero(state.budget.today.totalTokens) : undefined],
     ["Cache hit tokens", diagnostics.cacheHitTokens ?? usage.prompt_cache_hit_tokens ?? usage.promptCacheHitTokens],
     ["Cache miss tokens", diagnostics.cacheMissTokens ?? usage.prompt_cache_miss_tokens ?? usage.promptCacheMissTokens],
     ["Cache hit rate", diagnostics.cacheHitRate === undefined ? undefined : `${diagnostics.cacheHitRate}%`],
@@ -3648,16 +3680,23 @@ function renderTracePanel(trace, message) {
   const maxEnd = spans.reduce((max, span) => Math.max(max, numberOrZero(span.offsetMs) + numberOrZero(span.durationMs)), 1);
   const waterfall = document.createElement("div");
   waterfall.className = "trace-waterfall";
-  spans.forEach((span) => {
-    waterfall.append(renderTraceSpan(span, maxEnd));
+  // v2.0.5: render the OpenTelemetry-style span tree — parents then children,
+  // indented by depth, so agent.<id> → llm/tool nesting is visible.
+  buildTraceSpanTree(spans).forEach(({ span, depth }) => {
+    waterfall.append(renderTraceSpan(span, maxEnd, depth));
   });
   diagnosticsPanelList.append(waterfall);
 }
 
-function renderTraceSpan(span, maxEnd) {
+function renderTraceSpan(span, maxEnd, depth = 0) {
   const node = document.createElement("article");
   node.className = "trace-span";
   node.classList.toggle("is-error", span.status && !["ok", "hit", "miss", "skipped"].includes(span.status));
+  const safeDepth = Math.max(0, Math.min(6, Number(depth) || 0));
+  if (safeDepth) {
+    node.classList.add("is-child");
+    node.style.setProperty("--trace-depth", String(safeDepth));
+  }
 
   const header = document.createElement("div");
   header.className = "trace-span-header";
@@ -3720,6 +3759,24 @@ function formatSemanticCache(cache) {
   if (cache.hit) return `hit · ${Math.round(numberOrZero(cache.similarity) * 100)}%`;
   if (cache.checked) return `miss · ${Math.round(numberOrZero(cache.similarity) * 100)}%`;
   return cache.skippedReason ? `skipped · ${cache.skippedReason}` : undefined;
+}
+
+function formatCostUsd(value) {
+  const cost = Number(value);
+  if (!Number.isFinite(cost) || cost <= 0) return undefined;
+  return `$${cost.toFixed(cost < 0.01 ? 6 : 4)}`;
+}
+
+function formatDailyBudgetCost() {
+  const today = state.budget?.today;
+  if (!today) return undefined;
+  const cost = Number(today.costUsd);
+  const base = Number.isFinite(cost) && cost > 0 ? `$${cost.toFixed(cost < 0.01 ? 6 : 4)}` : "$0";
+  const cap = Number(state.budget?.policy?.maxEstimatedCostUsd);
+  if (Number.isFinite(cap) && cap > 0) {
+    return `${base} / $${cap.toFixed(cap < 0.01 ? 6 : 4)}`;
+  }
+  return base;
 }
 
 function formatContextManager(contextManager) {
@@ -3909,6 +3966,8 @@ function requestPayloadFromParts(apiKey, assistantMessage, compressedParts, over
     temperature: state.temperature,
     stream: true,
     agentMode: Boolean(assistantMessage.agentMode || state.agentMode),
+    autoRoute: Boolean(state.autoRoute),
+    cascade: Boolean(state.cascade) && !Boolean(assistantMessage.agentMode || state.agentMode),
     searchEnabled,
     searchMode: state.searchMode,
     tavilyApiKey: tavilyApiKeyForSearch(searchEnabled),

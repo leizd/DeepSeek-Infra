@@ -16,6 +16,7 @@ import deepseek_infra.infra.observability.observability as observability
 import deepseek_infra.infra.data.projects as projects
 import deepseek_infra.infra.data.reminders as reminders
 import deepseek_infra.infra.tool_runtime.search as search
+import deepseek_infra.infra.gateway.budget_manager as budget_manager
 import deepseek_infra.infra.gateway.resiliency as resiliency
 import deepseek_infra.infra.gateway.semantic_cache as semantic_cache
 import deepseek_infra.infra.tool_runtime.tools as tools
@@ -34,6 +35,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     traces_dir = tmp_path / ".traces"
     semantic_cache_dir = tmp_path / ".semantic-cache"
     request_queue_dir = tmp_path / ".request-queue"
+    budget_dir = tmp_path / ".budget"
 
     monkeypatch.setattr(config, "FILE_CACHE_DIR", file_cache_dir)
     monkeypatch.setattr(config, "AGENT_RUNS_DIR", agent_runs_dir)
@@ -51,6 +53,8 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(config, "SEMANTIC_CACHE_DB", semantic_cache_dir / "cache.sqlite3")
     monkeypatch.setattr(config, "GATEWAY_REQUEST_QUEUE_DIR", request_queue_dir)
     monkeypatch.setattr(config, "GATEWAY_REQUEST_QUEUE_DB", request_queue_dir / "queue.sqlite3")
+    monkeypatch.setattr(config, "BUDGET_DIR", budget_dir)
+    monkeypatch.setattr(config, "BUDGET_DB", budget_dir / "budget.sqlite3")
 
     monkeypatch.setattr(files, "FILE_CACHE_DIR", file_cache_dir)
     monkeypatch.setattr(agent_runs, "AGENT_RUNS_DIR", agent_runs_dir)
@@ -72,6 +76,8 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_DB", semantic_cache_dir / "cache.sqlite3")
     monkeypatch.setattr(resiliency, "GATEWAY_REQUEST_QUEUE_DIR", request_queue_dir)
     monkeypatch.setattr(resiliency, "GATEWAY_REQUEST_QUEUE_DB", request_queue_dir / "queue.sqlite3")
+    monkeypatch.setattr(budget_manager, "BUDGET_DIR", budget_dir)
+    monkeypatch.setattr(budget_manager, "BUDGET_DB", budget_dir / "budget.sqlite3")
     monkeypatch.setattr(tools, "FILE_CACHE_DIR", file_cache_dir)
     monkeypatch.setattr(tools, "SEARCH_CACHE_DIR", search_cache_dir)
     monkeypatch.setattr(tools, "PROJECTS_DIR", projects_dir)

@@ -22,6 +22,7 @@ EXCLUDED_DIRS = {
     ".projects",
     ".reminders",
     ".search-cache",
+    ".budget",
     ".mypy_cache",
     ".npm-cache",
     ".pytest_cache",

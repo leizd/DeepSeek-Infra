@@ -2,6 +2,151 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.0.10]
+
+### 新增
+
+- **Cost & Token Budget Manager（成本治理）**：把原先分散的预算（SearchBudget、TokenBudget 仅总量、多 Agent token/搜索软门控）升级为统一的成本治理层：
+  - **USD 费用估算**：新增 `deepseek_infra/infra/gateway/budget_manager.py`，按模型定价表（输入/输出 $/Mtok，可经 `BUDGET_PRICE_*` 配置）从 token usage 估算美元成本（`estimate_cost` / `cost_from_usage`）；每轮诊断带 `costUsd`，多 Agent 带 `agentCostUsd`。
+  - **统一 BudgetPolicy**：解析请求 `budget` 块（`max_total_tokens` / `max_agent_tokens` / `max_search_calls` / `max_tool_calls` / `max_estimated_cost_usd`）+ `budgetPolicy`，缺省回退服务端 `BUDGET_*` 默认。
+  - **ToolBudget**：工具调用预算（镜像 `SearchBudget`）。`TokenBudget` 扩展为 per-agent 跟踪（`record(tokens, key)` / `agent_exhausted` / `per_agent_limit`），诊断新增 `agentTokenByAgent`。
+  - **每项目每日预算**：本地 SQLite 账本 `.budget/budget.sqlite3` 按 scope（项目/记忆 scope）累计**当日** tokens/cost/model/search/tool 调用（按日期自动重置）；`over_daily_budget` / `should_downgrade` 给出超预算判定。
+  - **超预算降级**：`budgetPolicy=downgrade_to_flash_when_exceeded` 时，所属 scope 当日超预算会在 `build_deepseek_request` 自动把 pro 降级到 flash（诊断 `budgetDowngraded`）。
+- **端点 / 前端**：新增 `GET /api/budget?scope=`（定价、策略、当日花费、是否超预算）与 `/api/config.budget`；前端诊断面板展示本轮成本、Agent 估算成本、路由模型、级联、今日成本/预算进度。
+
+### 改进
+
+- 每次实际上游模型调用（含 Agent worker、Judge、cascade 草稿）在 `call_deepseek` / `stream_deepseek` 完成点记账（语义缓存命中不计费，零真实成本）；记账受 `BUDGET_TRACKING_ENABLED` 门控。
+
+### 测试
+
+- 新增 `tests/test_budget_manager.py`（9 项）：按模型定价的费用估算、BudgetPolicy 解析、ToolBudget 限额、TokenBudget per-agent、每日账本累计与 scope 隔离、超预算/降级判定、`build_deepseek_request` 超预算降级、`call_deepseek` 记账与 `costUsd`、budget status。
+- 版本号 2.0.9 → 2.0.10（config / README badge / 5 docs / test_config / test_encoding_regression 新增 `test_v210_cost_and_token_budget_manager_is_present`）。前端有改动，Service Worker 缓存版本 `deepseek-mobile-v184` → `deepseek-mobile-v185`。
+
+## [2.0.9]
+
+### 新增
+
+- **策略驱动 Model Router + 级联推理**：把原先分散的路由雏形（fast/expert 别名、图片→pro、端云/隐私/离线路由、云败→edge fallback、多 provider registry）统一成显式的模型路由器与 cascade：
+  - **统一路由器**：新增 `deepseek_infra/infra/gateway/model_router.py`，`route_request` 按**能力**（图片→vision/pro）、**任务复杂度**、**成本预算**、**延迟**（短问题→flash）在 flash/pro 间选模，并给出 `fallbackModel` 与逐维度 `reasons`。仅当请求 `autoRoute:true` 或 `model:"auto"` 时接管，显式选模不变。
+  - **级联推理（cascade）**：`call_deepseek_cascade` 先用便宜模型出草稿 → `quality_gate`（长度/拒答/不确定表达/引用不足）→ 不达标才升级到贵模型精算，降低平均成本。流式请求由服务端把级联结果回放成流事件，前端无需改流式管线。
+  - **Judge 评分（可选）**：`judge_draft` 用一次廉价 Judge 模型对草稿打 0–1 分，与启发式门控共同决定是否升级（`MODEL_ROUTER_JUDGE_ENABLED` 或请求 `judge:true`）。
+- **配置 / 诊断 / 端点**：新增 `ModelRouterSettings` 与 `MODEL_ROUTER_*` 环境变量；`diagnostics` 增补 `modelRouter`（路由决策）与 `modelCascade`（草稿/升级/门控/Judge 分）；`/api/config` 增补 `modelRouter` 状态块。
+- **前端开关**：设置面板新增「模型路由（手动/自动）」下拉与「级联推理」勾选，持久化并随请求发送 `autoRoute` / `cascade`。
+
+### 改进
+
+- `validate_deepseek_payload` 解析 `model="auto"` / `autoRoute` 路由 sentinel 为具体支持的模型；`/api/chat` 非流式经 `call_deepseek_cascade` 分发（未请求 cascade 时等价于原 `call_deepseek`）。
+
+### 测试
+
+- 新增 `tests/test_model_router.py`（8 项）：显式选模、auto 的延迟/能力/成本路由、质量门控（过短/拒答/不确定/引用不足）、`build_deepseek_request` auto 选模 + `modelRouter` 诊断、cascade 草稿通过/升级/未请求回退。
+- 版本号 2.0.8 → 2.0.9（config / README badge / 5 docs / test_config / test_encoding_regression 新增 `test_v209_model_router_and_cascade_are_present`）。前端有改动，Service Worker 缓存版本 `deepseek-mobile-v183` → `deepseek-mobile-v184`（保留前缀）。
+
+## [2.0.8]
+
+### 新增
+
+- **Local RAG Data Plane**：把已有的「文件分块检索」升级为完整的本地 RAG 数据层（基于 sqlite-vec），补齐高级 RAG Infra 该有的几块：
+  - **BM25 + 向量 Hybrid 检索**：`local_rag.bm25_scores` 在候选集上算 Okapi BM25 词法分，与稠密向量相似度融合排序（`score = vector*100 + bm25*10`），替换原先的朴素 token 重叠。`LOCAL_RAG_BM25_K1` / `LOCAL_RAG_BM25_B` 可调。
+  - **增量索引 + 文档版本**：每个 chunk 带内容 `hash`，文档有内容寻址的 `docVersion`（`chunk_hash` / `doc_version`）。重新索引时哈希未变的文档整篇跳过、未变的 chunk 复用已存向量（`existing_doc_chunks` + `LOCAL_RAG_INCREMENTAL`），避免无谓重嵌入。
+  - **Chunk lineage（引用追溯）**：`chunk_lineage(result)` 把检索结果追溯到 `chunkId` / `docId` / `projectId` / `page` / `startChar` / `endChar` / `hash` / `docVersion`；`search_files` 工具结果新增 `lineage` 字段，让每条引用都能定位回原文。
+  - **引用真实性校验**：`verify_citation(item_id, snippet)` 校验引用片段是否真实存在于该 chunk（精确匹配优先，回退 token 覆盖率），返回 `{grounded, coverage, lineage}`。
+  - **RAG Recall@K 评估**：`evaluate_recall(cases, k)` 对带标注的 `{query, relevant}` 用例算 Recall@K 与 MRR。
+- **配置 / 端点**：`LocalRAGSettings` 新增 `bm25_k1` / `bm25_b` / `incremental`（环境变量 `LOCAL_RAG_BM25_K1` / `LOCAL_RAG_BM25_B` / `LOCAL_RAG_INCREMENTAL`）；`status()` 增补 `hybridSearch` / `bm25K1` / `bm25B` / `incremental`。新增 `POST /api/rag/verify-citation` 与 `POST /api/rag/eval`。
+
+### 边界
+
+- 删除项目仍级联清理其全部文件 chunk（向量表同步）；BM25 在候选集上计算（本地近似），不引入额外的全库倒排表。
+
+### 测试
+
+- `tests/test_local_rag.py` 新增 6 项：BM25 词法排序、chunk lineage（hash/page/offset/docVersion）、增量索引跳过未变文档、未变 chunk 复用向量、引用真实性校验（命中/未命中/缺失）、Recall@K 评估。
+- 版本号 2.0.7 → 2.0.8（config / README badge / 5 docs / test_config / test_encoding_regression 新增 `test_v208_local_rag_data_plane_is_present`）。纯后端改动，`static/sw.js` 保持 `deepseek-mobile-v183` 不变。
+
+## [2.0.7]
+
+### 新增
+
+- **Semantic Cache 进阶机制**：语义缓存后端（相似度阈值/TTL/按模型隔离/hit_count/本地 embedding）此前已存在，本版补齐高级 AI Infra 该有的几块：
+  - **缓存版本命名空间**：每条记录带 `cache_version = <SEMANTIC_CACHE_VERSION>:<embedding provider>:<dimensions>`，查询按它过滤。切换 embedding 模型/维度或调高 `SEMANTIC_CACHE_VERSION` 会换命名空间，不兼容的旧条目不再被命中（按 TTL/容量淘汰），杜绝用错向量空间误命中。
+  - **质量门控**：启发式 `quality_score`（0–1），拒答 / 空综合回退 / 过短答案打低分；低于 `SEMANTIC_CACHE_MIN_QUALITY`（默认 0.3）的回答不写入缓存（`storeSkippedReason="low_quality"`），分数随记录存储并进诊断。
+  - **scope 隔离**：每条记录带 `scope`（来自 `memoryScope` / `projectId`，默认 `global`），查询按 scope 过滤，答案不跨用户/项目 scope 复用。
+  - **文件上下文缓存（项目隔离 + 精确命中）**：带附件/文件上下文的请求不再一律跳过——展开后的文件文本已在 prompt 里，故不同文件天然不同 key；但为避免「文件文本主导 embedding 导致同文件不同问题被模糊误命中」，这类请求只走**精确 prompt 命中**（exact-match）并按项目 scope 隔离。`SEMANTIC_CACHE_ATTACHMENTS=0` 可改回完全跳过。
+- **配置**：`SemanticCacheSettings` 新增 `version` / `min_quality_score` / `cache_attachments`，对应环境变量 `SEMANTIC_CACHE_VERSION` / `SEMANTIC_CACHE_MIN_QUALITY` / `SEMANTIC_CACHE_ATTACHMENTS`。`/api/config.semanticCache` 与 `/api/semantic-cache/status` 新增 `cacheVersion` / `minQualityScore` / `cacheAttachments`。
+
+### 改进
+
+- `semantic_cache_items` 表新增 `cache_version` / `scope` / `quality_score` / `query_text` 列，并对老缓存做幂等 `ALTER TABLE` 迁移（`_ensure_columns`）；新增 `(model, cache_version, scope, updated_at)` 命名空间索引。
+- `diagnostics.semanticCache` 增补 `cacheVersion` / `scope` / `qualityScore` / `exactMatchOnly` / `hitCount`，便于观察每轮缓存决策。
+
+### 测试
+
+- `tests/test_observability_semantic_cache.py` 新增 4 项：缓存版本隔离、scope 隔离、低质量答案不缓存、文件上下文「精确命中 + 非附件仍走模糊」对照（mock cosine=1.0 验证 exact-only 守卫）。
+- 版本号 2.0.6 → 2.0.7（config / README badge / 5 docs / test_config / test_encoding_regression 新增 `test_v207_semantic_cache_advanced_mechanisms_are_present`）。纯后端改动，`static/sw.js` 保持 `deepseek-mobile-v183` 不变。
+
+## [2.0.6]
+
+### 新增
+
+- **OpenTelemetry 风格 Agent Trace 层级链路**：trace 后端（SQLite `trace_runs`/`trace_spans`、`/api/traces`、前端瀑布图）此前已存在但 span 是**扁平**的——`parent_span_id` 字段从没人写、`multi_agent` 也不产任何 per-agent span。本版把它升级成端到端调用树：
+  - **span 层级（`parent_span_id` 串联）**：`call_deepseek` / `stream_deepseek` / `prepare_deepseek_call` / `web_search_callback_for_turn` 新增 `parent_span_id` 形参（默认空 → 挂在 run 根下，单聊路径行为不变）。`multi_agent` 给 planner / 各 worker / synthesizer 包一层 `agent.<id>` span，其内部的 LLM/工具 span 作为子节点。
+  - **上下文子树**：`prepare_deepseek_call` 现在产 `context.build` span，并把 `memory.retrieve`、`rag.retrieve`（强制搜索预取）作为其子 span。
+  - **工具 span**：模型驱动的每次 `web_search` 产 `tool.web_search` span，挂在当前 LLM/agent span 之下。
+  - 典型多 Agent trace 形成 `run → agent.planner/researcher/coder/critic/synthesizer → {context.build→memory/rag, tool.web_search, deepseek}` 的树。
+- **前端瀑布图渲染为树**：`static/modules/agent_timeline.js` 新增纯函数 `buildTraceSpanTree(spans)`（按 `parentSpanId` 深度优先展开、同层按 `offsetMs` 排序、dangling/环兜底成根不丢 span），`renderTracePanel` 按 depth 缩进渲染、`.trace-span.is-child` 加层级缩进与 accent 轨。
+
+### 改进
+
+- `call_deepseek` / `stream_deepseek` 把请求校验提前到建 trace 之前（校验失败不再留下悬挂的 running trace），再在 span 下组装上下文。span 创建在 `trace_id` 为空时是 no-op，未追踪路径零开销。
+- 不引入任何新的实时 SSE 事件类型；span 树纯由既有 trace 写入推导，前端流式协议不变。
+
+### 测试 / 构建
+
+- 新增 `tests/test_observability_trace_tree.py`（4 项）：`prepare_deepseek_call` 产 `context.build`+`memory.retrieve` 子树、`execute_agent_tier` 把 `llm` span 嵌在 `agent.<id>` 下、`call_deepseek(parent_span_id=...)` 把 deepseek/semantic/context span 挂到指定父 span、单聊路径 span 仍为 run 根直挂。
+- `tests/test_frontend_utils.py` 新增 `buildTraceSpanTree` 用例（嵌套 + dangling/环兜底）。
+- 版本号 2.0.5 → 2.0.6（config / README badge / 5 docs / test_config / test_encoding_regression 新增 `test_v206_agent_trace_span_tree_is_present`）。前端静态资源有改动，Service Worker 缓存版本 `deepseek-mobile-v182` → `deepseek-mobile-v183`（保留 `deepseek-mobile-` 前缀）。
+
+## [2.0.5]
+
+### 新增
+
+- **Durable Agent Runtime（可恢复 Agent 工作流）**：在已有 `.agent-runs` 事件源持久化 + DAG 拓扑分层之上补齐「小型 Temporal / LangGraph」缺的两块：
+  - **节点级状态机（事件源）**：新增 `deepseek_infra/infra/agent_runtime/agent_state.py`，纯函数 `reduce_node_states(plan, events)` 从「计划 + 事件日志」重放每个 worker 节点的生命周期 `created → queued → running → succeeded`，失败分支 `running → failed → retrying → running`，取消分支 `→ cancelled`（`created` = 依赖未满足、`queued` = 依赖已满足待执行），并带 `attempts` / `latencyMs` / `promptTokens` / `completionTokens` 指标。`can_transition` + `NODE_TRANSITIONS` 描述合法迁移。`agent_runs.append_event` 每次把 `run["nodes"]` 重算为该重放结果，快照永远等于事件重放、可丢弃重建。
+  - **断点续跑 / 失败恢复**：新增 `resume_run(run_id, payload)` 与 `POST /api/agent-runs/{run_id}/resume`。从事件日志重放节点状态，**跳过已成功节点**（其持久化输出作为下游 `prior_outputs` 幂等复用、不重跑），只对未完成 / 失败节点重跑（先发 `agent_reset(reason="resume")`），最后只综合一次；若所有节点已成功则有正文直接 `done`、无正文只重新综合。`stream_agent_plan` 新增可选 `completed_outputs` 形参驱动跳过——不传时（首跑默认路径）行为与之前完全一致。
+- **配置**：新增 `AgentRuntimeSettings` 与 `AGENT_RUNTIME_AUTO_RESUME`（默认关）。默认重启仍把中断 run 标记为 `orphaned`、用户手动续跑，绝不在重启时静默消耗上游 token；开启后启动时自动从检查点续跑所有 `orphaned` run（需服务端 `DEEPSEEK_API_KEY`，因为持久化 run 不存凭证）。
+
+### 改进
+
+- 续跑时按 plan 顺序稳定排列「已恢复 + 新跑」的 worker 输出（新增 `multi_agent._outputs_in_plan_order`），保证综合与诊断稳定；首跑路径不受影响。
+- 节点状态机不引入任何新的实时 SSE 事件类型，完全复用既有 `agent` / `agent_output` / `agent_reset` / `run_status` 事件推导，前端流式协议与既有测试不变。
+
+### 测试
+
+- 新增 `tests/test_agent_state.py`（9 项）：状态机迁移表、created/queued 依赖推导、running→succeeded 指标、失败节点保持未完成、`agent_reset` 重开节点、取消时非终态节点置 cancelled、忽略 leader/synthesizer 编排相、无 plan 快照时纯按事件推导。
+- `tests/test_agent_runs.py` 新增 5 项：`append_event` 持久化 `nodes` 快照、`resume_run` 跳过已成功 / 重跑未完成 + 发 `agent_reset`、全成功无正文时只重新综合、全成功有正文直接 `done`、`resume_orphaned_runs` 受 `AGENT_RUNTIME_AUTO_RESUME` 门控。
+- 版本号 2.0.4 → 2.0.5（config / README badge / 5 docs / test_config / test_encoding_regression 新增 `test_v205_durable_agent_runtime_is_present`）。纯后端改动，`static/sw.js` 保持 `deepseek-mobile-v182` 不变。
+
+## [2.0.4]
+
+### 新增
+
+- **Prompt-cache-aware Context Engine**：新增 `deepseek_infra/infra/gateway/context_engine.py`，把网关已有的上下文工程能力正式收拢为一个纯函数模块，并补齐此前缺失的部分：
+  - **Token Budget Planner**：无 tokenizer 的确定性 token 预估（CJK 与拉丁字符分别加权、向上取整偏保守），按 `system` / `tools` / `history` / `dynamic` 分项给出 `breakdown`，并对比按模型查表的上下文窗口算出 `availableInputTokens` / `headroomTokens` / `utilizationPct` / `withinBudget` / `recommendation`（`ok` / `compress` / `trim`）。
+  - **按模型上下文窗口适配**：`context_window_for_model()` 从注册表取窗口（`deepseek-v4-pro` / `deepseek-v4-flash` 默认 131072），端侧 / Ollama / 未知模型回落到默认窗口。
+  - **Token 感知裁剪**：`token_trim()` 叠加在原有「消息条数」滑动窗口之上——仅当已存在压缩摘要、触发滑动窗口、且估算仍溢出预算时，才在条数窗口之外**额外**丢弃最旧历史，并始终保留首条 system 稳定前缀与尾部 dynamic context。对常规体量请求是 no-op，不改变既有条数窗口行为。
+  - **Context Diff**：`build_context_diff()` 输出稳定的 `baseContextId`（角色提示 + 模型名 + 工具名序列的哈希，跨轮稳定，漂移即提示缓存前缀失效）加本轮 `delta`（history 条数 / dynamic 字符数 / 工具数 / 裁剪丢弃条数）。
+- **配置**：新增 `ContextEngineSettings` 与 `CONTEXT_ENGINE_*` 环境变量（`CONTEXT_ENGINE_ENABLED`、`CONTEXT_ENGINE_TOKEN_AWARE_TRIM`、`CONTEXT_ENGINE_RESERVE_OUTPUT_TOKENS`、`CONTEXT_ENGINE_SAFETY_MARGIN_RATIO`、`CONTEXT_ENGINE_COMPRESS_THRESHOLD_PCT`、`CONTEXT_ENGINE_DEFAULT_WINDOW`、`CONTEXT_ENGINE_MIN_KEEP_MESSAGES`、`CONTEXT_ENGINE_PRO_WINDOW` / `CONTEXT_ENGINE_FLASH_WINDOW`）。
+
+### 改进
+
+- `context_manager.manage_request_body` 在唯一组装入口接入引擎：先跑原条数滑动窗口，再做 token 感知二次裁剪（`tokenAwareTrimApplied`），并把 `contextEngine`（`tokenBudget` + `contextDiff`）挂到诊断；`merge_context_manager_diagnostics` 把该块上提到 `diagnostics.contextEngine` 顶层，`contextManager` 既有字段与形状保持不变。
+- 引擎只做观测与裁剪决策，**不**改写 DeepSeek prompt cache 严格匹配的 prompt 前缀字节；稳定前缀 / 工具固定序 / 动态上下文后置注入等既有缓存语义原样保留。
+
+### 测试
+
+- 新增 `tests/test_context_engine.py`（15 项）：token 估算与 CJK 加权、分项预算求和、按模型窗口与默认回落、预算阈值（`ok` / `compress` / `trim`）、token 裁剪保留首尾 system 锚点与 `min_keep`、`fixed_overhead` 计入预算、`baseContextId` 跨轮稳定、Context Diff 构成、`manage_request_body` 接入与禁用短路、`build_deepseek_request` 端到端透出 `tokenBudget`。
+- 版本号 2.0.3 → 2.0.4（config / README badge / 5 docs / test_config / test_encoding_regression 新增 `test_v204_context_engine_is_present`）。纯后端改动，`static/sw.js` 保持 `deepseek-mobile-v182` 不变。
 ## [2.0.3]
 
 ### 改进

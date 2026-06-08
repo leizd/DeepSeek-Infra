@@ -1,6 +1,6 @@
 # 架构说明
 
-适用版本：v2.0.3。
+适用版本：v2.0.10。
 
 DeepSeek Infra 是一个本地优先的 **AI Runtime / Agent 基础设施平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统。
 
@@ -21,11 +21,11 @@ Local Data & Observability   Vector RAG · Memory · Trace · Semantic Cache · 
 
 后端代码按基础设施分层组织在 `deepseek_infra/` 下：
 
-- `infra/gateway/` — **LLM Gateway**：模型路由、Prompt Cache 上下文管理（`context_manager`）、网关韧性请求队列（`resiliency`）、端云路由（`edge_inference`）、语义缓存（`semantic_cache`）、OpenAI 兼容门面（`openai_api`，`/v1/chat/completions` + `/v1/models`）、多 Provider 抽象（`providers/`：`BaseLLMProvider` + `DeepSeekProvider` / `OllamaProvider` + `registry` 路由）。
-- `infra/agent_runtime/` — **Agent DAG Runtime**：`multi_agent` 编排 + `agent_runs` 持久化 / 断线重放。
-- `infra/rag/` — **Local RAG Data Layer**：`local_rag` 向量索引、`files` 解析分块、`context_compressor`。
+- `infra/gateway/` — **LLM Gateway**：策略驱动的模型路由器与级联推理（`model_router`：能力/成本/延迟/回退/cascade，质量门控 + 可选 Judge 评分）、成本与 token 预算治理（`budget_manager`：按模型定价的 USD 费用估算、统一 BudgetPolicy、ToolBudget、每项目每日账本与超预算降级）、Prompt Cache 上下文管理（`context_manager`）、Prompt-cache-aware 上下文工程引擎（`context_engine`：token 预算预估、按模型上下文窗口适配、token 感知裁剪、Context Diff）、网关韧性请求队列（`resiliency`）、端云路由（`edge_inference`）、语义缓存（`semantic_cache`）、OpenAI 兼容门面（`openai_api`，`/v1/chat/completions` + `/v1/models`）、多 Provider 抽象（`providers/`：`BaseLLMProvider` + `DeepSeekProvider` / `OllamaProvider` + `registry` 路由）。
+- `infra/agent_runtime/` — **Durable Agent DAG Runtime**：`multi_agent` 编排 + `agent_runs` 事件源持久化 / 断线重放 + `agent_state` 节点级状态机与断点续跑。
+- `infra/rag/` — **Local RAG Data Plane**：`local_rag`（sqlite-vec 向量库 + BM25 词法的 hybrid 检索、增量索引、文档版本、chunk lineage、引用真实性校验、Recall@K 评估）、`files` 解析分块、`context_compressor`。
 - `infra/tool_runtime/` — **Tool Calling Runtime**：`tools` 注册执行 + `search` / `ocr` / `documents` / `presentations` / `mindmaps` / `generated_files` / `slides_skill`。
-- `infra/observability/` — **Observability**：`observability`（trace/span）+ `metrics`（Prometheus `/metrics`）+ `health`（`/healthz`·`/readyz`）。
+- `infra/observability/` — **Observability**：`observability`（OpenTelemetry 风格的 trace/span 层级链路，run 为根，`agent.<id>` 包裹其 `context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek` 子 span）+ `metrics`（Prometheus `/metrics`）+ `health`（`/healthz`·`/readyz`）。
 - `infra/data/` — **本地存储**：`memory` / `projects` / `reminders`。
 - `core/`、`web/`、`launcher/`、`android_entry.py`、`desktop_app.py` — 配置 / 错误 / 工具、HTTP 运行时、跨端打包入口。
 
@@ -41,15 +41,19 @@ Local Data & Observability   Vector RAG · Memory · Trace · Semantic Cache · 
 | `deepseek_infra/infra/gateway/deepseek_client.py` | 请求校验、记忆/搜索编排、Prompt 组装、DeepSeek 同步和流式调用。 |
 | `deepseek_infra/infra/gateway/edge_inference.py` | 端侧推理基础设施：可选加载 llama.cpp / MLC-LLM 后端，管理 GGUF / MLC 模型路径、上下文窗口、量化诊断、懒加载卸载和简单任务端云路由判定。 |
 | `deepseek_infra/infra/agent_runtime/multi_agent.py` | Leader + 多 Agent 编排：任务拆解、worker 并行调用、搜索预算共享和最终综合。 |
-| `deepseek_infra/infra/agent_runtime/agent_runs.py` | 持久化 Agent Run、indexed event log、派生快照、断线重连游标、后台 run registry、计划确认和重跑。 |
-| `deepseek_infra/infra/observability/observability.py` | 本地可观测性：SQLite trace run/span 存储、输入/输出摘要脱敏、耗时、usage、prompt cache 命中率和 trace 查询 API。 |
-| `deepseek_infra/infra/gateway/semantic_cache.py` | 本地语义缓存：复用 Local RAG embedding 管线，把可缓存 prompt/response 写入 `.semantic-cache/cache.sqlite3`，在 DeepSeek API 前做相似度命中。 |
+| `deepseek_infra/infra/agent_runtime/agent_runs.py` | 持久化 Agent Run、indexed event log、派生快照（含 `nodes` 节点状态机）、断线重连游标、后台 run registry、计划确认、重跑与断点续跑（`resume_run` / `resume_orphaned_runs`）。 |
+| `deepseek_infra/infra/agent_runtime/agent_state.py` | Durable Agent Runtime 的事件源节点状态机：纯函数 `reduce_node_states(plan, events)` 从计划 + 事件日志重放每个 worker 节点的生命周期（created→queued→running→succeeded/failed→retrying→cancelled）与指标（latency / token），并给出 `incomplete_plan_nodes` / `completed_node_ids` 供断点续跑跳过已成功节点。零 I/O，不引入新的实时事件类型。 |
+| `deepseek_infra/infra/observability/observability.py` | 本地可观测性：SQLite trace run/span 存储、`parent_span_id` 层级链路（OpenTelemetry 风格调用树）、输入/输出摘要脱敏、耗时、usage、prompt cache 命中率和 trace 查询 API。span 由 `deepseek_client`（`context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek`）与 `multi_agent`（`agent.planner`/`agent.<id>`/`agent.synthesizer`）通过 `parent_span_id` 串成树，前端 `buildTraceSpanTree` 渲染瀑布图。 |
+| `deepseek_infra/infra/gateway/semantic_cache.py` | 本地语义缓存：复用 Local RAG embedding 管线，把可缓存 prompt/response 写入 `.semantic-cache/cache.sqlite3`，在 DeepSeek API 前做相似度命中。v2.0.7 加入缓存版本命名空间（`cache_version` = 版本+embedding 签名）、按 memory/项目 scope 隔离、低质量答案不缓存（`quality_score` 门控）、以及文件上下文的精确命中（exact-match，按项目隔离）。 |
+| `deepseek_infra/infra/gateway/budget_manager.py` | 成本与 Token 预算治理（v2.0.10）：按模型定价的 USD 费用估算（`estimate_cost`/`cost_from_usage`）、统一 `BudgetPolicy`（max total/agent tokens、search/tool calls、cost）、`ToolBudget`、每 scope **每日**账本（`.budget/budget.sqlite3`：tokens/cost/model/search/tool calls）、超预算判定与降级（`over_daily_budget`/`should_downgrade`）。`TokenBudget` 扩展为 per-agent 跟踪。 |
+| `deepseek_infra/infra/gateway/model_router.py` | 策略驱动 Model Router（v2.0.9）：`route_request` 按能力（图片→vision/pro）、复杂度、成本预算、延迟在 flash/pro 间路由（仅 `autoRoute`/`model="auto"` 时接管，显式选模不变）；`cascade_plan` + `quality_gate`（长度/拒答/不确定/引用不足）驱动级联推理；纯决策与打分，实际调用与 Judge 评分在 `deepseek_client`（`call_deepseek_cascade` / `judge_draft`）。 |
 | `deepseek_infra/infra/gateway/context_manager.py` | API 网关 Context Manager：稳定 JSON 序列化、固定工具定义顺序、在已有摘要时执行滑动窗口裁剪，并输出 prompt cache 友好的请求诊断。 |
+| `deepseek_infra/infra/gateway/context_engine.py` | Prompt-cache-aware Context Engine：无 tokenizer 的 token 预算预估（按 system/tools/history/dynamic 分项）、按模型上下文窗口适配（`context_window_for_model`，端侧/Ollama/未知模型回落默认窗口）、叠加在条数窗口之上的 token 感知裁剪（`token_trim`，仅在压缩摘要+溢出预算时多丢最旧历史，保留首尾 system 锚点）、以及 Context Diff（稳定 `baseContextId` + 本轮 `delta`）。纯函数、零 I/O，只观测与决策，不改写缓存锚定的 prompt 前缀。 |
 | `deepseek_infra/infra/gateway/resiliency.py` | API 网关韧性层：用 `.request-queue/queue.sqlite3` 记录上游请求队列项，对断网、超时、429 和网关类 5xx 做退避重试，并汇总 `gatewayResiliency` 诊断。 |
 | `deepseek_infra/infra/gateway/chat_payload.py` | 前端消息展开和附件计数。 |
 | `deepseek_infra/infra/rag/context_compressor.py` | 长对话的增量上下文摘要生成。 |
 | `deepseek_infra/infra/data/memory.py` | 本地长期记忆 CRUD、作用域过滤、检索排序、显式“记住/忘记”命令解析、记忆建议和冲突检测。 |
-| `deepseek_infra/infra/rag/local_rag.py` | 本地 RAG 数据层：SQLite / 可选 sqlite-vec 索引、哈希或 ONNX embedding、文件 chunk 与长期记忆同步、状态诊断和重建索引。 |
+| `deepseek_infra/infra/rag/local_rag.py` | 本地 RAG 数据层：SQLite / 可选 sqlite-vec 索引、哈希或 ONNX embedding、文件 chunk 与长期记忆同步、状态诊断和重建索引。v2.0.8 升级为 Data Plane：BM25+向量 hybrid（`bm25_scores`）、内容哈希增量索引与文档版本（`chunk_hash`/`doc_version`/`existing_doc_chunks`）、chunk lineage（`chunk_lineage`：doc/page/offset/hash）、引用真实性校验（`verify_citation`）、RAG Recall@K 评估（`evaluate_recall`）。 |
 | `deepseek_infra/infra/data/reminders.py` | 本地提醒队列、到期查询和轻量中文提醒解析。 |
 | `deepseek_infra/infra/data/projects.py` | 持久项目空间、项目元数据、项目文档库写入和删除。 |
 | `deepseek_infra/infra/tool_runtime/search.py` | 搜索触发、多轮 Tavily 查询、结果聚合、缓存和 Prompt 格式化。 |
