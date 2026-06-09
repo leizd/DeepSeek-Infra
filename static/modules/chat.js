@@ -199,6 +199,7 @@ const state = {
   tracing: null,
   semanticCache: null,
   budget: null,
+  toolPolicy: null,
   uploadLimits: { ...defaultUploadLimits },
   hasSearch: true,
   searchMode: loadSearchMode(),
@@ -1360,6 +1361,7 @@ async function loadConfig() {
     state.tracing = config.tracing || null;
     state.semanticCache = config.semanticCache || null;
     state.budget = config.budget || null;
+    state.toolPolicy = config.toolPolicy || null;
     state.uploadLimits = normalizeUploadLimits(config.uploadLimits);
     updateSearchAvailability({ render: false });
     renderAccessUrls(config);
@@ -3567,6 +3569,8 @@ function renderDiagnosticsPanel(message) {
     ["路由模型", diagnostics.modelRouter?.model],
     ["级联推理", diagnostics.modelCascade ? (diagnostics.modelCascade.escalated ? `已升级 · ${diagnostics.modelCascade.refineModel}` : `草稿通过 · ${diagnostics.modelCascade.draftModel}`) : undefined],
     ["预算降级", diagnostics.budgetDowngraded === true ? "是（已降级到 flash）" : undefined],
+    ["工具策略", formatToolPolicy(diagnostics.toolPolicy)],
+    ["注入清洗", diagnostics.toolPolicy?.sanitizedInjections ? `${diagnostics.toolPolicy.sanitizedInjections} 处` : undefined],
     ["今日成本", formatDailyBudgetCost()],
     ["今日 tokens", state.budget?.today ? numberOrZero(state.budget.today.totalTokens) : undefined],
     ["Cache hit tokens", diagnostics.cacheHitTokens ?? usage.prompt_cache_hit_tokens ?? usage.promptCacheHitTokens],
@@ -3765,6 +3769,16 @@ function formatCostUsd(value) {
   const cost = Number(value);
   if (!Number.isFinite(cost) || cost <= 0) return undefined;
   return `$${cost.toFixed(cost < 0.01 ? 6 : 4)}`;
+}
+
+function formatToolPolicy(policy) {
+  if (!policy || typeof policy !== "object" || !policy.evaluated) return undefined;
+  const parts = [`画像 ${policy.capability || "full"}`, `放行 ${numberOrZero(policy.allowed)}`];
+  if (policy.denied) parts.push(`拦截 ${policy.denied}`);
+  if (policy.confirmations) parts.push(`待确认 ${policy.confirmations}`);
+  const blocked = Array.isArray(policy.blockedTools) ? policy.blockedTools.filter(Boolean) : [];
+  if (blocked.length) parts.push(`(${blocked.join(", ")})`);
+  return parts.join(" · ");
 }
 
 function formatDailyBudgetCost() {

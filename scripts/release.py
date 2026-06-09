@@ -23,6 +23,7 @@ EXCLUDED_DIRS = {
     ".reminders",
     ".search-cache",
     ".budget",
+    ".tool-audit",
     ".mypy_cache",
     ".npm-cache",
     ".pytest_cache",

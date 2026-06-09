@@ -32,6 +32,7 @@ from deepseek_infra.infra.gateway.deepseek_client import (
     validate_deepseek_payload,
 )
 from deepseek_infra.infra.observability.observability import ensure_trace, finish_trace, start_span, with_trace_diagnostics
+from deepseek_infra.infra.tool_runtime.tool_policy import capability_tools
 
 MAX_AGENTS = 4
 # v1.3.1: long-running multi-Agent middle tiers use the shared config timeout.
@@ -61,17 +62,16 @@ SEARCH_TOOL_NAMES = {"web_search", "compare_search_results"}
 
 
 def agent_tools_for(agent_id: str) -> list[str]:
-    """v1.2.4 收窄角色权限：
+    """v1.2.4 收窄角色权限（v2.1.0 起以 Tool Policy Engine 的能力画像为单一事实源）：
 
     - researcher：联网 + 抓取，专注事实和来源
     - coder：本地代码工具（搜文件、读片段、跑 Python），不联网
     - reasoner / critic：默认不用工具，纯推理 / 复核前序输出
+
+    这里返回的列表既驱动「给模型 offer 哪些工具」（tools_for_payload 过滤），也作为
+    Tool Policy Engine 在执行期的 capability 白名单，两层一致、互为纵深防御。
     """
-    if agent_id == "researcher":
-        return ["web_search", "compare_search_results", "fetch_url"]
-    if agent_id == "coder":
-        return ["search_files", "read_file_chunk", "python_eval"]
-    return []
+    return capability_tools(agent_id)
 
 
 AGENT_PROFILES: dict[str, dict[str, str]] = {
@@ -1306,6 +1306,9 @@ def _agent_payload_for(
             "systemPrompt": agent_system,
             "toolsEnabled": tools_enabled,
             "allowedTools": allowed_tools,
+            # Capability label drives the Tool Policy Engine's per-agent grant so the
+            # executor enforces the same slice the worker was offered (defense in depth).
+            "capability": agent_id,
             "searchEnabled": search_enabled,
             "searchMode": "auto",
             "thinkingEnabled": model_supports_thinking(worker_model),

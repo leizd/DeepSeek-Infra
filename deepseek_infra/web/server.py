@@ -59,6 +59,7 @@ from deepseek_infra.infra.gateway.deepseek_client import (
     stream_deepseek,
 )
 from deepseek_infra.infra.gateway.budget_manager import budget_status as budget_status_for_scope
+from deepseek_infra.infra.tool_runtime.tool_policy import read_recent_audit, tool_policy_status
 from deepseek_infra.infra.gateway.model_router import cascade_requested as model_router_cascade_requested
 from deepseek_infra.infra.gateway.model_router import router_status as model_router_status
 from deepseek_infra.infra.gateway.openai_api import (
@@ -236,6 +237,7 @@ def create_app() -> FastAPI:
                 "providers": providers_status(),
                 "modelRouter": model_router_status(),
                 "budget": budget_status_for_scope("global"),
+                "toolPolicy": tool_policy_status(),
                 "computerUrl": computer_url,
                 "phoneUrl": phone_url,
             }
@@ -251,6 +253,15 @@ def create_app() -> FastAPI:
         require_api_auth(request)
         scope = str(request.query_params.get("scope") or "global").strip() or "global"
         return json_response({"ok": True, "budget": budget_status_for_scope(scope)})
+
+    @api.get("/api/tool-policy")
+    async def api_tool_policy(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        try:
+            limit = int(request.query_params.get("limit", "50"))
+        except ValueError:
+            limit = 50
+        return json_response({"ok": True, "toolPolicy": tool_policy_status(), "audit": read_recent_audit(limit)})
 
     @api.post("/api/rag/reindex")
     async def api_rag_reindex(request: Request) -> JSONResponse:

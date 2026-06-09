@@ -2,6 +2,33 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.1.0]
+
+### 新增
+
+- **Capability-based Tool Policy Engine（工具调用安全策略）**：模型不再直接命中工具执行器，所有 LLM 工具调用先经过一个统一的策略闸门：`LLM tool call → schema 校验 → 权限/能力检查 → 风险分级 → 人工确认（如需要）→ Tool Executor`，再加结果注入清洗与审计日志两层横切。
+  - **工具元数据（risk card）**：新增 `deepseek_infra/infra/tool_runtime/tool_policy.py`，为 17 个工具各登记一张 `ToolMetadata`（`risk` / `network` / `filesystem` / `requires_confirm` / `timeout_seconds` / `max_output_chars` / `capability` 等）。未登记的工具一律拒绝。
+  - **Capability 能力画像**：`CAPABILITY_PROFILES` 把工具面按角色切片，每个 Agent 拿到不同权限——`researcher`：`web_search`/`compare_search_results`/`fetch_url`；`coder`：`search_files`/`read_file_chunk`/`python_eval`；`reasoner`/`critic`：无工具；主聊天用 `full`（全部）。`multi_agent.agent_tools_for` 改为以此为单一事实源，「给模型 offer 的工具」与「执行期放行的工具」两层一致、互为纵深防御。
+  - **Schema 校验**：`validate_arguments` 按声明的 JSON schema 校验参数容器类型、required 字段、标量类型与 enum/pattern（无 `jsonschema` 依赖）。默认软告警（记录不拦截），`TOOL_POLICY_ENFORCE_SCHEMA=1` 时违例硬拒绝。
+  - **高风险检测**：`fetch_url` 静态 **SSRF 防护**（`evaluate_url_safety`：拦 localhost/`.local`/`.internal`、字面私网/环回/链路本地/云元数据 `169.254.169.254`、URL 凭证、非 http(s) 协议）；文件工具 **路径越界检测**（`evaluate_path_safety`：拒 `..`、分隔符、非法 `fileId`/`projectId`）；`suggest_memory` **敏感信息写入 memory 拦截**（复用 `is_sensitive_memory`）。
+  - **人工确认**：`requires_confirm` 工具（如 `forget_memory`）在 `TOOL_POLICY_REQUIRE_CONFIRM=1` 时返回 `needs_confirmation` 而非执行，除非请求 `approvedTools` 已预批。
+  - **工具结果 prompt injection 清洗**：`sanitize_tool_result` 只对 `external_output` 工具（搜索/抓取）的外部文本字段（`snippet`/`text`/`title`/...）做注入指令红action（中英常见「忽略上述指令 / ignore previous instructions / 输出 system prompt」等），保留 URL、id、score 等非文本字段不变。
+  - **审计日志**：每条决策追加写入 `.tool-audit/audit.jsonl`（append-only JSONL，best-effort 不阻断工具调用），`TOOL_POLICY_AUDIT_ENABLED` 门控。
+- **端点 / 诊断 / 前端**：新增 `GET /api/tool-policy`（策略状态、能力画像、工具卡片、最近审计），`/api/config.toolPolicy` 给全局视图；每轮诊断在发生工具调用时带 `toolPolicy`（画像、放行/拦截/待确认计数、注入清洗数、被拦工具）；前端诊断面板展示「工具策略 / 注入清洗」两行。
+
+### 改进
+
+- `execute_tool_call` / `execute_tool_calls` 新增可选 `policy` 形参：不传时行为与之前完全一致（裸调用与既有测试不受影响），传入时在分发前评估、拒绝则直接返回拒绝输出、成功后清洗结果。聊天两条工具循环（流式 / 非流式）按请求 `payload` 的 `capability` / `allowedTools` / `approvedTools` 构建该轮策略并贯穿。
+
+### 安全
+
+- SSRF 形成纵深防御：策略层做无需 DNS 的静态预判并尽早拒绝，`fetch_url` 内部解析 DNS 后的权威校验仍是第二道关；私网/元数据地址在两层都被拦。
+
+### 测试
+
+- 新增 `tests/test_tool_policy.py`（15 项）：能力画像切片与越权拒绝、未知工具拒绝、schema 软/硬校验、SSRF/路径/敏感内容拦截、人工确认与预批放行、注入清洗（红action 且保结构）、`execute_tool_call` 拒绝不执行、裸路径行为不变、诊断聚合、JSONL 审计、策略状态。
+- 版本号 2.0.10 → 2.1.0（config / README badge / 5 docs / test_config / test_encoding_regression 新增 `test_v211_tool_policy_engine_is_present`）。前端有改动，Service Worker 缓存版本 `deepseek-mobile-v185` → `deepseek-mobile-v186`（保留 `deepseek-mobile-` 前缀）。
+
 ## [2.0.10]
 
 ### 新增

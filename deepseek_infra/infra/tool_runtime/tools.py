@@ -31,6 +31,7 @@ from deepseek_infra.infra.rag import local_rag
 from deepseek_infra.infra.data.memory import build_memory_suggestion, delete_memories_by_query, normalize_memory_scope, retrieve_memories
 from deepseek_infra.infra.tool_runtime.mindmaps import create_mindmap
 from deepseek_infra.infra.tool_runtime.presentations import create_presentation
+from deepseek_infra.infra.tool_runtime.tool_policy import ToolPolicy
 from deepseek_infra.infra.data.projects import list_projects, read_project
 from deepseek_infra.infra.data.reminders import create_reminder as create_local_reminder, load_reminders
 from deepseek_infra.infra.tool_runtime.slides_skill import SLIDES_SKILL_DESCRIPTION, SLIDES_SKILL_NAME
@@ -632,17 +633,45 @@ def additional_tool_definitions() -> list[dict[str, Any]]:
     ]
 
 
+_TOOL_PARAMETER_SCHEMAS: dict[str, dict[str, Any]] | None = None
+
+
+def tool_parameter_schemas() -> dict[str, dict[str, Any]]:
+    """Map tool name -> declared JSON ``parameters`` schema (cached).
+
+    Fed to the Tool Policy Engine for schema validation so the policy stays
+    decoupled from this module (it never imports ``tools``).
+    """
+    global _TOOL_PARAMETER_SCHEMAS
+    if _TOOL_PARAMETER_SCHEMAS is None:
+        index: dict[str, dict[str, Any]] = {}
+        for definition in available_tool_definitions():
+            function = definition.get("function")
+            if isinstance(function, dict):
+                name = str(function.get("name") or "")
+                parameters = function.get("parameters")
+                if name and isinstance(parameters, dict):
+                    index[name] = parameters
+        _TOOL_PARAMETER_SCHEMAS = index
+    return _TOOL_PARAMETER_SCHEMAS
+
+
 def execute_tool_call(
     tool_call: dict[str, Any],
     *,
     memory_suggestion_callback: Callable[[dict[str, Any]], None] | None = None,
     default_memory_scope: str = "global",
     web_search_callback: Callable[[str, str], dict[str, Any]] | None = None,
+    policy: ToolPolicy | None = None,
 ) -> dict[str, Any]:
     raw_function = tool_call.get("function")
     function: dict[str, Any] = raw_function if isinstance(raw_function, dict) else {}
     name = str(function.get("name") or tool_call.get("name") or "").strip()
     arguments = parse_tool_arguments(function.get("arguments"))
+    if policy is not None:
+        decision = policy.evaluate(name, arguments, schema=tool_parameter_schemas().get(name))
+        if not decision.allowed:
+            return ToolPolicy.denial_output(decision)
     try:
         if name == "python_eval":
             result = python_eval(str(arguments.get("expression") or ""))
@@ -713,7 +742,10 @@ def execute_tool_call(
             )
         else:
             raise AppError(f"Unsupported tool: {name}", code=ErrorCode.INVALID_PAYLOAD)
-        return {"ok": True, "tool": name, "result": result}
+        output = {"ok": True, "tool": name, "result": result}
+        if policy is not None:
+            output = policy.sanitize_result(name, output)
+        return output
     except AppError as exc:
         return {"ok": False, "tool": name or "unknown", "error": str(exc), "code": exc.code.value}
     except Exception as exc:  # pragma: no cover - defensive boundary
@@ -727,6 +759,7 @@ def execute_tool_calls(
     default_memory_scope: str = "global",
     web_search_callback: Callable[[str, str], dict[str, Any]] | None = None,
     cancel_event: threading.Event | None = None,
+    policy: ToolPolicy | None = None,
 ) -> list[dict[str, Any]]:
     selected = tool_calls[:MAX_TOOL_CALLS_PER_RESPONSE]
     outputs: list[dict[str, Any] | None] = [None] * len(selected)
@@ -751,6 +784,7 @@ def execute_tool_calls(
             memory_suggestion_callback=memory_suggestion_callback,
             default_memory_scope=default_memory_scope,
             web_search_callback=web_search_callback,
+            policy=policy,
         )
 
     def flush_parallel_batch() -> None:

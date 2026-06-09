@@ -51,6 +51,7 @@ from deepseek_infra.infra.tool_runtime.search import (
     search_single_round,
 )
 from deepseek_infra.infra.tool_runtime.tools import MAX_TOOL_ROUNDS, available_tool_definitions, execute_tool_calls
+from deepseek_infra.infra.tool_runtime.tool_policy import ToolPolicy
 from deepseek_infra.core.utils import (
     format_upstream_error,
     humanize_upstream_error,
@@ -1123,6 +1124,37 @@ def diagnostics_with_tools(diagnostics: dict[str, Any], *, count: int, names: li
     return result
 
 
+def build_tool_policy(payload: dict[str, Any]) -> ToolPolicy | None:
+    """Capability-scoped Tool Policy for this turn (None when globally disabled).
+
+    Capability comes from the payload: a worker sets ``capability`` (its agent id)
+    and/or ``allowedTools``; the main chat sets neither and gets the full profile.
+    An explicit ``allowedTools`` list further narrows the grant. ``approvedTools``
+    carries any tools the user pre-confirmed this turn.
+    """
+    if not settings.tool_policy.enabled:
+        return None
+    capability = str(payload.get("capability") or "full").strip() or "full"
+    allowed = payload.get("allowedTools")
+    allowed_tools = [str(item) for item in allowed] if isinstance(allowed, list) else None
+    approvals_raw = payload.get("approvedTools")
+    approvals = {str(item) for item in approvals_raw} if isinstance(approvals_raw, list) else set()
+    return ToolPolicy(
+        capability=capability,
+        allowed_tools=allowed_tools,
+        approvals=approvals,
+        scope=budget_manager.budget_scope(payload),
+    )
+
+
+def diagnostics_with_tool_policy(diagnostics: dict[str, Any], policy: ToolPolicy | None) -> dict[str, Any]:
+    if policy is None or policy.evaluated == 0:
+        return diagnostics
+    result = dict(diagnostics)
+    result["toolPolicy"] = policy.diagnostics()
+    return result
+
+
 def pptx_result_from_messages(body: dict[str, Any]) -> dict[str, Any] | None:
     artifact = terminal_artifact_result_from_messages(body)
     if artifact and artifact[0] == "create_pptx":
@@ -1286,6 +1318,7 @@ def append_tool_exchange(
     default_memory_scope: str = "global",
     web_search_callback: Callable[[str, str], dict[str, Any]] | None = None,
     cancel_event: threading.Event | None = None,
+    policy: ToolPolicy | None = None,
 ) -> dict[str, Any]:
     raise_if_cancelled(cancel_event)
     messages = list(body.get("messages") or [])
@@ -1313,6 +1346,7 @@ def append_tool_exchange(
             default_memory_scope=default_memory_scope,
             web_search_callback=web_search_callback,
             cancel_event=cancel_event,
+            policy=policy,
         )
     )
     raise_if_cancelled(cancel_event)
@@ -1425,6 +1459,7 @@ def call_deepseek(
     default_memory_scope = memory_scope_from_payload(payload)
     tool_call_count = 0
     seen_tool_names: list[str] = []
+    tool_policy = build_tool_policy(payload)
     memory_suggestions: list[dict[str, Any]] = []
     perform_web_search, current_search_data = web_search_callback_for_turn(
         payload,
@@ -1506,6 +1541,7 @@ def call_deepseek(
             memory_suggestion_callback=memory_suggestions.append,
             default_memory_scope=default_memory_scope,
             web_search_callback=perform_web_search if search_tool_enabled(payload) else None,
+            policy=tool_policy,
         )
         artifact = terminal_artifact_result_from_messages(body)
         if artifact:
@@ -1522,7 +1558,10 @@ def call_deepseek(
         tool_call_count += 1
         seen_tool_names.append("create_pptx")
     diagnostics = diagnostics_with_gateway(
-        edge_diagnostics(diagnostics_with_tools(prepared.diagnostics, count=tool_call_count, names=seen_tool_names), edge_route),
+        diagnostics_with_tool_policy(
+            edge_diagnostics(diagnostics_with_tools(prepared.diagnostics, count=tool_call_count, names=seen_tool_names), edge_route),
+            tool_policy,
+        ),
         gateway_attempts,
     )
     final_diagnostics = diagnostics_with_usage(
@@ -1816,6 +1855,7 @@ def stream_deepseek(
         default_memory_scope = memory_scope_from_payload(payload)
         tool_call_count = 0
         seen_tool_names: list[str] = []
+        tool_policy = build_tool_policy(payload)
         memory_suggestions: list[dict[str, Any]] = []
         local_final_content = ""
         perform_web_search, current_search_data = web_search_callback_for_turn(
@@ -1953,6 +1993,7 @@ def stream_deepseek(
                 default_memory_scope=default_memory_scope,
                 web_search_callback=perform_web_search if search_tool_enabled(payload) else None,
                 cancel_event=cancel_event,
+                policy=tool_policy,
             )
             artifact = terminal_artifact_result_from_messages(body)
             if artifact:
@@ -1993,9 +2034,12 @@ def stream_deepseek(
                     diagnostics_with_semantic_cache(
                         diagnostics_with_search(
                             diagnostics_with_gateway(
-                                edge_diagnostics(
-                                    diagnostics_with_tools(diagnostics, count=tool_call_count, names=seen_tool_names),
-                                    edge_route,
+                                diagnostics_with_tool_policy(
+                                    edge_diagnostics(
+                                        diagnostics_with_tools(diagnostics, count=tool_call_count, names=seen_tool_names),
+                                        edge_route,
+                                    ),
+                                    tool_policy,
                                 ),
                                 gateway_attempts,
                             ),

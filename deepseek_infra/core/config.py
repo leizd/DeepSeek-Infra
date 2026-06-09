@@ -272,6 +272,25 @@ class AgentRuntimeSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolPolicySettings:
+    """Capability-based Tool Policy Engine knobs.
+
+    The engine always validates schemas, classifies risk, runs the SSRF / path /
+    sensitive-memory guards and scrubs tool results for prompt injection once a
+    policy is attached to a request. The two *stricter* gates are opt-in so default
+    behavior is unchanged: ``enforce_schema`` turns schema violations from warnings
+    into hard denials, and ``require_confirm`` makes high-risk tools (e.g.
+    ``forget_memory``) wait for an explicit approval instead of running.
+    """
+
+    enabled: bool = True
+    enforce_schema: bool = False
+    require_confirm: bool = False
+    sanitize_results: bool = True
+    audit_enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class OllamaSettings:
     enabled: bool = False
     base_url: str = "http://127.0.0.1:11434"
@@ -281,7 +300,7 @@ class OllamaSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "2.0.10"
+    app_version: str = "2.1.0"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -344,6 +363,7 @@ class Settings:
     model_router: ModelRouterSettings = field(default_factory=ModelRouterSettings)
     budget: BudgetSettings = field(default_factory=BudgetSettings)
     agent_runtime: AgentRuntimeSettings = field(default_factory=AgentRuntimeSettings)
+    tool_policy: ToolPolicySettings = field(default_factory=ToolPolicySettings)
     ollama: OllamaSettings = field(default_factory=OllamaSettings)
 
     @property
@@ -417,6 +437,14 @@ class Settings:
     @property
     def budget_db(self) -> Path:
         return self.budget_dir / "budget.sqlite3"
+
+    @property
+    def tool_audit_dir(self) -> Path:
+        return self.root / ".tool-audit"
+
+    @property
+    def tool_audit_log(self) -> Path:
+        return self.tool_audit_dir / "audit.jsonl"
 
     @property
     def request_queue_dir(self) -> Path:
@@ -552,6 +580,13 @@ class Settings:
             ),
             agent_runtime=AgentRuntimeSettings(
                 auto_resume=_env_bool("AGENT_RUNTIME_AUTO_RESUME", False),
+            ),
+            tool_policy=ToolPolicySettings(
+                enabled=_env_bool("TOOL_POLICY_ENABLED", True),
+                enforce_schema=_env_bool("TOOL_POLICY_ENFORCE_SCHEMA", False),
+                require_confirm=_env_bool("TOOL_POLICY_REQUIRE_CONFIRM", False),
+                sanitize_results=_env_bool("TOOL_POLICY_SANITIZE_RESULTS", True),
+                audit_enabled=_env_bool("TOOL_POLICY_AUDIT_ENABLED", True),
             ),
             ollama=OllamaSettings(
                 enabled=_env_bool("OLLAMA_ENABLED", False),
@@ -830,6 +865,13 @@ BUDGET_POLICY = settings.budget.policy
 BUDGET_PRICING = settings.budget.pricing
 BUDGET_DIR = settings.budget_dir
 BUDGET_DB = settings.budget_db
+TOOL_POLICY_ENABLED = settings.tool_policy.enabled
+TOOL_POLICY_ENFORCE_SCHEMA = settings.tool_policy.enforce_schema
+TOOL_POLICY_REQUIRE_CONFIRM = settings.tool_policy.require_confirm
+TOOL_POLICY_SANITIZE_RESULTS = settings.tool_policy.sanitize_results
+TOOL_POLICY_AUDIT_ENABLED = settings.tool_policy.audit_enabled
+TOOL_POLICY_AUDIT_DIR = settings.tool_audit_dir
+TOOL_POLICY_AUDIT_LOG = settings.tool_audit_log
 AUTH_TOKEN_FILE = settings.auth_token_file
 
 TEXT_EXTENSIONS = {

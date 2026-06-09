@@ -9,6 +9,7 @@
 .traces/
 .request-queue/
 .budget/
+.tool-audit/
 .memory/
 .projects/
 .reminders/
