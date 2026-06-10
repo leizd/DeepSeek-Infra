@@ -2,6 +2,23 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [Unreleased]
+
+### 修复
+
+- **多 Agent 流式可靠性一揽子修复**（针对实测 52 分钟长跑后多个 worker 以 "Stream error" 收场、失败卡片里出现两段「## 摘要」、Reasoner 摘要无声截断的问题）：
+  - **错误不再吞详情**：`stream_deepseek` 的兜底异常此前一律上报笼统的 "Stream error"（internal）。现在按异常分类——socket 读超时报 `上游流式响应超时（180 秒内无新数据）`（`upstream_timeout`）、网络 / HTTP 类异常报 `流式响应中断（异常类型: 信息）`（`upstream_failure`），其余才标 `internal`，失败卡片和 trace 都能看到真实原因。
+  - **上游断流不再被当成完整输出**：`emit_checked` 把客户端 SSE 写失败（浏览器断开）就地转成 `RequestCancelled`，外层 `ConnectionResetError` 等分支因此能确定表示"上游读流中断"，从静默 return（半截输出被当成功，worker 卡片"已完成但摘要戛然而止"）改为显式 error 事件。
+  - **finish_reason=length 显式标注**：流式循环跟踪 `finish_reason`；上游按长度截断时发 system_note 提示、done 事件携带 `finishReason`，worker 在 risks 里标注"输出被截断"；截断回答不再写入语义缓存（避免同类问题永远命中残缺答案）。
+  - **worker 重试先清卡片**：`run_agent` 重试前发 `agent_reset`（reason=`stream_retry`）并重新挂 running 卡片（事件链与单 Agent 重跑 / critic 修订一致），第二次流式输出不再直接拼在上次半成品后面。
+  - **部分产出降级保留**：流式中途断开但已累计 ≥200 字符公开产出时（内容安全拦截除外），不再丢弃整段产出去重跑——降级返回并在 risks 标注"部分产出"、卡片挂提示、输出带 `degraded: true`，跑了十几分钟的长流式不再因最后一秒断流而整体作废。
+  - **重试策略修正**：内容安全拦截（`upstream_content_risk`）是确定性失败，不再浪费一整轮长流式重试；`RequestCancelled` 不再被裸 `except` 吞掉后再烧一轮重试。
+  - 测试：`tests/test_multi_agent.py` 新增 5 项（重试前 agent_reset、部分产出降级、内容风险不重试、length 截断标注、取消直接上抛）。
+
+### 安全
+
+- **发布脚本补齐运行时隐私目录排除**：`scripts/release.py` 的 `EXCLUDED_DIRS` 此前缺少 `.local-rag`（用户文件向量索引）、`.traces`（请求追踪，含 prompt / 输出摘要）、`.semantic-cache`（语义缓存，含 prompt 与模型回答原文）、`.request-queue`（请求队列指纹）、`.generated`（生成的文档产物），`python scripts/release.py` 打出的发布 zip 会把这些本地隐私数据一并带入。现已补入排除清单（`--clean-workspace` 同步覆盖），README「本地数据与隐私」清单补 `.generated` / `.budget` / `.agent-runs` 并新增 `.generated` 数据位置说明，与 `.gitignore` 三处对齐；`tests/test_release.py` 排除清单回归同步覆盖全部运行时数据目录。
+
 ## [2.1.2]
 
 ### 新增

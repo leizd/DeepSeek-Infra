@@ -54,6 +54,21 @@ def model_supports_thinking(model: str) -> bool:
 MULTI_AGENT_TOTAL_SEARCH_LIMIT = 36
 MULTI_AGENT_PER_AGENT_SEARCH_LIMIT = 15
 MULTI_AGENT_TOOL_ROUNDS = 4
+# v2.1.3：worker 流式中断时，已累计的公开产出达到该长度就降级保留（带风险标注），
+# 不再整体作废重跑——跑了十几分钟的长流式因为最后一秒断流而全部丢弃太浪费。
+AGENT_PARTIAL_SALVAGE_MIN_CHARS = 200
+
+
+class AgentStreamError(RuntimeError):
+    """Worker 上游流式失败；携带错误码供 run_agent 的重试策略分类。
+
+    内容安全拦截（upstream_content_risk）是确定性失败，重试只会再烧一轮
+    长流式和搜索预算，所以 run_agent 看到该 code 直接放弃。
+    """
+
+    def __init__(self, message: str, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
 # v1.2.3 起取消单 Agent / 总预算两层硬截断，v1.2.4 进一步改成 worker 结构化输出，
 # Leader 综合只吃 summary + evidence + risks，full_output 走 Activity 面板，
 # 既保留所见即所得又把综合 prompt 控制在合理体积。
@@ -1252,9 +1267,22 @@ def run_agent(
     cancel_event: threading.Event | None = None,
     parent_span_id: str = "",
 ) -> dict[str, Any]:
+    profile = AGENT_PROFILES[agent_id]
     last_error: Exception | None = None
-    for _attempt in range(max_retries + 1):
+    for attempt in range(max_retries + 1):
         raise_if_cancelled(cancel_event)
+        if attempt and emit_event is not None:
+            # v2.1.3：重试前先清空该 worker 卡片，否则第二次流式输出会直接拼在
+            # 上一次的半成品后面（用户会看到两段「## 摘要」连在一起）。事件链与
+            # 单 Agent 重跑 / critic 修订一致：agent_reset → agent(running) → agent_delta…
+            emit_event({"type": "agent_reset", "phase": agent_id, "reason": "stream_retry"})
+            emit_agent_event(
+                emit_event,
+                phase=agent_id,
+                status="running",
+                name=profile["name"],
+                text=f"上次尝试中断（{last_error}），正在重试：{task}",
+            )
         try:
             return _run_agent_once(
                 payload,
@@ -1266,6 +1294,13 @@ def run_agent(
                 cancel_event=cancel_event,
                 parent_span_id=parent_span_id,
             )
+        except RequestCancelled:
+            # 取消不是可重试错误；旧实现的裸 except 会让取消再烧一轮重试。
+            raise
+        except AgentStreamError as exc:
+            last_error = exc
+            if exc.code == ErrorCode.UPSTREAM_CONTENT_RISK.value:
+                break
         except Exception as exc:
             last_error = exc
     raise last_error if last_error else RuntimeError("Agent failed without error detail")
@@ -1349,6 +1384,11 @@ def _build_agent_result(
     }
 
 
+def _appended_risk_note(existing: str, note: str) -> str:
+    existing = (existing or "").strip()
+    return f"{existing}\n{note}".strip()
+
+
 def _run_agent_once(
     payload: dict[str, Any],
     *,
@@ -1389,9 +1429,11 @@ def _run_agent_once(
     captured_search: Any = None
     captured_usage: dict[str, Any] = {}
     captured_error = ""
+    captured_error_code = ""
+    captured_finish = ""
 
     def agent_relay(event: dict[str, Any]) -> None:
-        nonlocal captured_search, captured_usage, captured_error
+        nonlocal captured_search, captured_usage, captured_error, captured_error_code, captured_finish
         et = event.get("type")
         if et == "content":
             text = str(event.get("text") or "")
@@ -1445,6 +1487,7 @@ def _run_agent_once(
         elif et == "done":
             if isinstance(event.get("usage"), dict):
                 captured_usage = dict(event["usage"])
+            captured_finish = str(event.get("finishReason") or "")
             search_data = event.get("search")
             if search_data:
                 captured_search = search_data
@@ -1458,6 +1501,7 @@ def _run_agent_once(
                 )
         elif et == "error":
             captured_error = str(event.get("error") or "Agent upstream request failed")
+            captured_error_code = str(event.get("code") or "")
             emit_event(
                 {
                     "type": "agent_note",
@@ -1479,9 +1523,47 @@ def _run_agent_once(
     )
 
     raise_if_cancelled(cancel_event)
+    raw_content = "".join(accumulated_content)
     if captured_error:
-        raise RuntimeError(captured_error)
-    return _build_agent_result(agent_id, task, "".join(accumulated_content), captured_search, captured_usage)
+        salvageable = (
+            captured_error_code != ErrorCode.UPSTREAM_CONTENT_RISK.value
+            and len(raw_content.strip()) >= AGENT_PARTIAL_SALVAGE_MIN_CHARS
+        )
+        if not salvageable:
+            raise AgentStreamError(captured_error, code=captured_error_code)
+        # v2.1.3：流式在产出中途断开时保留已有内容降级返回，而不是丢弃十几分钟的
+        # 产出再整轮重跑。风险段显式标注"部分产出"，Critic / Synthesizer 据此降权。
+        emit_event(
+            {
+                "type": "agent_note",
+                "phase": agent_id,
+                "name": profile["name"],
+                "text": "流式连接在输出中途断开，已保留中断前的部分产出参与综合。",
+            }
+        )
+        result = _build_agent_result(agent_id, task, raw_content, captured_search, captured_usage)
+        result["risks"] = _appended_risk_note(
+            result.get("risks", ""),
+            f"注意：该 Agent 的流式输出中途中断（{captured_error}），以上为中断前的部分产出，结论可能不完整。",
+        )
+        result["degraded"] = True
+        return result
+    result = _build_agent_result(agent_id, task, raw_content, captured_search, captured_usage)
+    if captured_finish == "length":
+        emit_event(
+            {
+                "type": "agent_note",
+                "phase": agent_id,
+                "name": profile["name"],
+                "text": "输出达到上游长度上限被截断，结论可能不完整。",
+            }
+        )
+        result["risks"] = _appended_risk_note(
+            result.get("risks", ""),
+            "注意：该 Agent 输出达到上游长度上限被截断，结论可能不完整。",
+        )
+        result["degraded"] = True
+    return result
 
 
 def search_source_note(result: dict[str, Any], limit: int = 5) -> str:

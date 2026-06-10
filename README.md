@@ -268,11 +268,12 @@ gradle :app:assembleDebug
 - 网关请求队列：`.request-queue/queue.sqlite3`；工具策略审计日志：`.tool-audit/audit.jsonl`；请求调度死信队列：`.scheduler/scheduler.sqlite3`。
 - 本地提醒队列：`.reminders/reminders.json`；长期记忆：`.memory/memories.json`。
 - 可恢复 Agent Run：`.agent-runs/`。
+- 生成的文档产物（PPT / Word / PDF / 思维导图）：`.generated/`。
 - API Key：DeepSeek / Tavily Key 可选择保存在浏览器，也可以只用服务端环境变量。
 
 文件分块缓存会自动清理：默认保留 14 天内缓存并把 `.file-cache` 总量控制在约 500 MB；`.projects/` 是持久文档库，只在删除项目时移除。服务启动时清理一次，运行期间约每 6 小时后台清理一次。
 
-`.gitignore` 默认排除运行期缓存、长期记忆、项目文档库、本地 RAG / Trace / 语义缓存 / 请求队列、提醒队列、覆盖率、IDE 配置和本地 `server*.log`。发布或提交前，请不要把 `.file-cache`、`.projects`、`.local-rag`、`.traces`、`.semantic-cache`、`.request-queue`、`.tool-audit`、`.scheduler`、`.memory`、`.reminders`、`.search-cache` 等本地数据打包进去。发布压缩包建议使用：
+`.gitignore` 默认排除运行期缓存、长期记忆、项目文档库、本地 RAG / Trace / 语义缓存 / 请求队列、生成文档产物、提醒队列、覆盖率、IDE 配置和本地 `server*.log`。发布或提交前，请不要把 `.file-cache`、`.projects`、`.local-rag`、`.traces`、`.semantic-cache`、`.request-queue`、`.generated`、`.tool-audit`、`.scheduler`、`.budget`、`.memory`、`.reminders`、`.agent-runs`、`.search-cache` 等本地数据打包进去。发布压缩包建议使用：
 
 ```powershell
 python scripts/release.py --clean-workspace

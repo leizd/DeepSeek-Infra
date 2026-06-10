@@ -1203,6 +1203,154 @@ def test_run_agent_raises_after_exhausting_retries() -> None:
             assert "persistent failure" in str(exc)
 
 
+def test_run_agent_resets_agent_card_before_stream_retry() -> None:
+    """v2.1.3：重试前必须发 agent_reset 清掉上次的半成品，否则第二次流式输出会拼在
+    旧内容后面，用户看到同一张卡片里出现两段「## 摘要」。"""
+    calls = {"n": 0}
+
+    def fake_stream(payload: dict[str, Any], emit_event, **_: object) -> None:
+        calls["n"] += 1
+        emit_event({"type": "content", "text": "短"})
+        emit_event({"type": "error", "error": "上游流式响应超时（180 秒内无新数据）", "code": "upstream_timeout"})
+
+    events: list[dict[str, Any]] = []
+    budget = SearchBudget(total_limit=8, per_key_limit=2)
+    with patch.object(multi_agent, "stream_deepseek", side_effect=fake_stream):
+        try:
+            multi_agent.run_agent(
+                {"apiKey": "k", "model": "m", "messages": [{"role": "user", "content": "q"}]},
+                agent_id="coder",
+                task="t",
+                search_budget=budget,
+                emit_event=events.append,
+            )
+            assert False, "should have raised"
+        except multi_agent.AgentStreamError as exc:
+            assert "上游流式响应超时" in str(exc)
+
+    assert calls["n"] == 2
+    resets = [event for event in events if event.get("type") == "agent_reset"]
+    assert len(resets) == 1
+    assert resets[0]["phase"] == "coder"
+    assert resets[0]["reason"] == "stream_retry"
+    # reset 之后要重新挂 running 卡片，事件链与单 Agent 重跑 / critic 修订一致
+    reset_index = events.index(resets[0])
+    running_after = [
+        event
+        for event in events[reset_index + 1 :]
+        if event.get("type") == "agent" and event.get("status") == "running"
+    ]
+    assert running_after, "agent_reset 之后必须重新 emit running 状态卡片"
+
+
+def test_run_agent_salvages_partial_output_when_stream_breaks_mid_output() -> None:
+    """v2.1.3：流式中断但已有可观产出时降级保留（带风险标注），不丢弃后整轮重跑。"""
+    calls = {"n": 0}
+    partial = "## 摘要\n" + "核心结论：方案可行。" * 30 + "\n\n## 风险/不确定\n- 原有风险"
+
+    def fake_stream(payload: dict[str, Any], emit_event, **_: object) -> None:
+        calls["n"] += 1
+        emit_event({"type": "content", "text": partial})
+        emit_event({"type": "error", "error": "流式响应中断（IncompleteRead）", "code": "upstream_failure"})
+
+    events: list[dict[str, Any]] = []
+    budget = SearchBudget(total_limit=8, per_key_limit=2)
+    with patch.object(multi_agent, "stream_deepseek", side_effect=fake_stream):
+        result = multi_agent.run_agent(
+            {"apiKey": "k", "model": "m", "messages": [{"role": "user", "content": "q"}]},
+            agent_id="coder",
+            task="t",
+            search_budget=budget,
+            emit_event=events.append,
+        )
+
+    assert calls["n"] == 1, "已保留部分产出时不应再烧一轮重试"
+    assert result["degraded"] is True
+    assert "核心结论" in result["summary"]
+    assert "中断" in result["risks"]
+    assert "原有风险" in result["risks"]
+    assert not [event for event in events if event.get("type") == "agent_reset"]
+    notes = [event for event in events if event.get("type") == "agent_note"]
+    assert any("部分产出" in str(event.get("text") or "") for event in notes)
+
+
+def test_run_agent_does_not_retry_content_risk_failures() -> None:
+    """v2.1.3：内容安全拦截是确定性失败，重试只会再烧一轮长流式；部分产出也不保留。"""
+    calls = {"n": 0}
+
+    def fake_stream(payload: dict[str, Any], emit_event, **_: object) -> None:
+        calls["n"] += 1
+        emit_event({"type": "content", "text": "x" * 500})
+        emit_event({"type": "error", "error": "内容安全审查拦截（Content Exists Risk）", "code": "upstream_content_risk"})
+
+    events: list[dict[str, Any]] = []
+    budget = SearchBudget(total_limit=8, per_key_limit=2)
+    with patch.object(multi_agent, "stream_deepseek", side_effect=fake_stream):
+        try:
+            multi_agent.run_agent(
+                {"apiKey": "k", "model": "m", "messages": [{"role": "user", "content": "q"}]},
+                agent_id="researcher",
+                task="t",
+                search_budget=budget,
+                emit_event=events.append,
+            )
+            assert False, "should have raised"
+        except multi_agent.AgentStreamError as exc:
+            assert exc.code == "upstream_content_risk"
+
+    assert calls["n"] == 1
+    assert not [event for event in events if event.get("type") == "agent_reset"]
+
+
+def test_run_agent_marks_upstream_length_truncation_as_degraded() -> None:
+    """v2.1.3：上游按 max_tokens 截断（finish_reason=length）不能再被静默当成完整输出。"""
+
+    def fake_stream(payload: dict[str, Any], emit_event, **_: object) -> None:
+        emit_event({"type": "content", "text": "## 摘要\n主流实现路径有两条：一是"})
+        emit_event({"type": "done", "finishReason": "length"})
+
+    events: list[dict[str, Any]] = []
+    budget = SearchBudget(total_limit=8, per_key_limit=2)
+    with patch.object(multi_agent, "stream_deepseek", side_effect=fake_stream):
+        result = multi_agent.run_agent(
+            {"apiKey": "k", "model": "m", "messages": [{"role": "user", "content": "q"}]},
+            agent_id="reasoner",
+            task="t",
+            search_budget=budget,
+            emit_event=events.append,
+        )
+
+    assert result["degraded"] is True
+    assert "截断" in result["risks"]
+    notes = [event for event in events if event.get("type") == "agent_note"]
+    assert any("截断" in str(event.get("text") or "") for event in notes)
+
+
+def test_run_agent_reraises_cancellation_without_retry() -> None:
+    """取消不是可重试错误：旧实现的裸 except 会让取消请求再烧一轮重试。"""
+    calls = {"n": 0}
+
+    def fake_stream(payload: dict[str, Any], emit_event, **_: object) -> None:
+        calls["n"] += 1
+        raise multi_agent.RequestCancelled()
+
+    budget = SearchBudget(total_limit=8, per_key_limit=2)
+    with patch.object(multi_agent, "stream_deepseek", side_effect=fake_stream):
+        try:
+            multi_agent.run_agent(
+                {"apiKey": "k", "model": "m", "messages": [{"role": "user", "content": "q"}]},
+                agent_id="coder",
+                task="t",
+                search_budget=budget,
+                emit_event=lambda event: None,
+            )
+            assert False, "should have raised"
+        except multi_agent.RequestCancelled:
+            pass
+
+    assert calls["n"] == 1
+
+
 def test_run_agent_puts_prior_outputs_after_history_for_cache_friendliness() -> None:
     captured: dict[str, Any] = {}
 

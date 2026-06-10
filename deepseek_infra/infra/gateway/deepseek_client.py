@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import re
@@ -1750,7 +1751,15 @@ def stream_deepseek(
 
     def emit_checked(event: dict[str, Any]) -> None:
         raise_if_cancelled(cancel_event)
-        emit_event(event)
+        try:
+            emit_event(event)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # v2.1.3：客户端 SSE 写失败（浏览器断开）按取消语义中止。只有把它在这里
+            # 转成 RequestCancelled，外层的连接异常分支才能确定地表示"上游读流中断"，
+            # 不再把上游半截输出静默当成成功。
+            if cancel_event is not None:
+                cancel_event.set()
+            raise RequestCancelled() from None
         raise_if_cancelled(cancel_event)
 
     def emit_system_note(text: str) -> None:
@@ -1877,11 +1886,13 @@ def stream_deepseek(
             memory_suggestions.append(suggestion)
             emit_checked({"type": "memory_suggestion", **suggestion})
 
+        last_finish_reason = ""
         for tool_round in range(max_tool_rounds + 2):
             raise_if_cancelled(cancel_event)
             stream_tool_calls: dict[int, dict[str, Any]] = {}
             round_content = ""
             round_reasoning = ""
+            round_finish = ""
             round_usage: dict[str, Any] = {}
             request = request_with_body(prepared, body, accept="text/event-stream")
             span = start_span(
@@ -1949,6 +1960,8 @@ def stream_deepseek(
                         if not choices:
                             continue
                         delta = choices[0].get("delta") or {}
+                        if choices[0].get("finish_reason"):
+                            round_finish = str(choices[0]["finish_reason"])
                         if isinstance(chunk.get("usage"), dict):
                             round_usage = chunk["usage"]
                         merge_stream_tool_call_deltas(stream_tool_calls, delta.get("tool_calls"))
@@ -1977,6 +1990,7 @@ def stream_deepseek(
                 raise
 
             tool_calls = finalized_stream_tool_calls(stream_tool_calls)
+            last_finish_reason = round_finish or last_finish_reason
             usage = merge_usage_totals(usage, round_usage)
             span.finish(
                 output_data=stream_trace_output(round_content, round_reasoning, tool_calls, response_id, response_model),
@@ -2028,6 +2042,10 @@ def stream_deepseek(
         if fallback_created:
             tool_call_count += 1
             seen_tool_names.append("create_pptx")
+        if last_finish_reason == "length":
+            # v2.1.3：上游按 max_tokens 截断时不再静默——前端能看到提示，多 Agent 的
+            # worker 也据此在 risks 里标注"部分产出"。
+            emit_checked({"type": "system_note", "text": "回答已达到上游输出长度上限，内容可能被截断。\n\n"})
         result_for_cache = {
             "model": response_model,
             "content": content,
@@ -2036,7 +2054,9 @@ def stream_deepseek(
             "search": search_for_response,
             "memorySuggestions": memory_suggestions,
         }
-        semantic_diag = merge_semantic_cache_diagnostics(semantic_diag, semantic_cache_store(payload, cache_body, result_for_cache))
+        if last_finish_reason != "length":
+            # 截断的回答不进语义缓存，否则同类问题会一直命中这份残缺答案。
+            semantic_diag = merge_semantic_cache_diagnostics(semantic_diag, semantic_cache_store(payload, cache_body, result_for_cache))
         result_diagnostics = with_trace_diagnostics(
             budget_manager.diagnostics_with_cost(
                 diagnostics_with_usage(
@@ -2084,18 +2104,21 @@ def stream_deepseek(
             "usage": usage,
             "search": search_for_response,
             "memorySuggestions": memory_suggestions,
+            "finishReason": last_finish_reason,
             "diagnostics": result_diagnostics,
         })
     except RequestCancelled:
         if trace_context is not None and trace_context.created:
             finish_trace(trace_context.trace_id, status="cancelled")
         return
-    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-        if cancel_event is not None:
-            cancel_event.set()
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as exc:
+        # v2.1.3：客户端断开已在 emit_checked 转成 RequestCancelled；走到这里的是
+        # 上游读流的连接被重置/提前关闭。旧实现按"客户端断开"静默 return，半截
+        # 输出会被当成完整结果（多 Agent 卡片"已完成但摘要戛然而止"的根因之一）。
+        message = f"上游流式连接中断（{type(exc).__name__}）"
         if trace_context is not None and trace_context.created:
-            finish_trace(trace_context.trace_id, status="cancelled")
-        return
+            finish_trace(trace_context.trace_id, status="error", error=message)
+        emit_checked({"type": "error", "error": message, "code": ErrorCode.UPSTREAM_FAILURE.value})
     except AppError as exc:
         if trace_context is not None and trace_context.created:
             finish_trace(trace_context.trace_id, status="error", error=str(exc))
@@ -2119,11 +2142,23 @@ def stream_deepseek(
         if trace_context is not None and trace_context.created:
             finish_trace(trace_context.trace_id, status="error", error=f"Cannot reach DeepSeek API: {exc.reason}")
         emit_checked({"type": "error", "error": f"Cannot reach DeepSeek API: {exc.reason}", "code": code.value})
-    except Exception:
-        logger.exception("stream_error")
+    except TimeoutError:
+        # urllib 的 socket read 超时：SSE 在 DEEPSEEK_TIMEOUT_SECONDS 内没有任何新数据。
+        message = f"上游流式响应超时（{DEEPSEEK_TIMEOUT_SECONDS} 秒内无新数据）"
         if trace_context is not None and trace_context.created:
-            finish_trace(trace_context.trace_id, status="error", error="Stream error")
-        emit_checked({"type": "error", "error": "Stream error", "code": ErrorCode.INTERNAL.value})
+            finish_trace(trace_context.trace_id, status="error", error=message)
+        emit_checked({"type": "error", "error": message, "code": ErrorCode.UPSTREAM_TIMEOUT.value})
+    except Exception as exc:
+        logger.exception("stream_error")
+        # v2.1.3：不再吞成笼统的 "Stream error"——带上异常类型/信息，读流阶段的
+        # 网络类异常按上游失败归类，真正的内部 bug 才标 internal。
+        detail = f"{type(exc).__name__}: {exc}".rstrip(": ").strip()
+        message = f"流式响应中断（{detail}）"
+        upstream_kind = isinstance(exc, (OSError, http.client.HTTPException))
+        error_code = ErrorCode.UPSTREAM_FAILURE if upstream_kind else ErrorCode.INTERNAL
+        if trace_context is not None and trace_context.created:
+            finish_trace(trace_context.trace_id, status="error", error=message)
+        emit_checked({"type": "error", "error": message, "code": error_code.value})
 
 
 def sse_error_message(event_data: str) -> str:
