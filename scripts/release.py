@@ -25,6 +25,7 @@ EXCLUDED_DIRS = {
     ".budget",
     ".tool-audit",
     ".scheduler",
+    ".a2a",
     ".mypy_cache",
     ".npm-cache",
     ".pytest_cache",

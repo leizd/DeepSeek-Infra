@@ -1,8 +1,8 @@
 # 架构说明
 
-适用版本：v2.1.2。
+适用版本：v2.1.5。
 
-DeepSeek Infra 是一个本地优先的 **AI Runtime / Agent 基础设施平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统。
+DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：本地工具面经 **MCP**（`POST /mcp`）暴露给任意 MCP 客户端，本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 
 ## 分层架构
 
@@ -22,9 +22,10 @@ Local Data & Observability   Vector RAG · Memory · Trace · Semantic Cache · 
 后端代码按基础设施分层组织在 `deepseek_infra/` 下：
 
 - `infra/gateway/` — **LLM Gateway**：策略驱动的模型路由器与级联推理（`model_router`：能力/成本/延迟/回退/cascade，质量门控 + 可选 Judge 评分）、成本与 token 预算治理（`budget_manager`：按模型定价的 USD 费用估算、统一 BudgetPolicy、ToolBudget、每项目每日账本与超预算降级）、Prompt Cache 上下文管理（`context_manager`）、Prompt-cache-aware 上下文工程引擎（`context_engine`：token 预算预估、按模型上下文窗口适配、token 感知裁剪、Context Diff）、网关韧性请求队列（`resiliency`）、端云路由（`edge_inference`）、语义缓存（`semantic_cache`）、OpenAI 兼容门面（`openai_api`，`/v1/chat/completions` + `/v1/models`）、多 Provider 抽象（`providers/`：`BaseLLMProvider` + `DeepSeekProvider` / `OllamaProvider` + `registry` 路由）。
-- `infra/agent_runtime/` — **Durable Agent DAG Runtime**：`multi_agent` 编排 + `agent_runs` 事件源持久化 / 断线重放 + `agent_state` 节点级状态机与断点续跑。
+- `infra/agent_runtime/` — **Durable Agent DAG Runtime + A2A Mesh**：`multi_agent` 编排 + `agent_runs` 事件源持久化 / 断线重放 + `agent_state` 节点级状态机与断点续跑 + `a2a`（Agent Card、A2A 任务生命周期、`.a2a/` 持久化与外部委派 client）。
 - `infra/rag/` — **Local RAG Data Plane**：`local_rag`（sqlite-vec 向量库 + BM25 词法的 hybrid 检索、增量索引、文档版本、chunk lineage、引用真实性校验、Recall@K 评估）、`files` 解析分块、`context_compressor`。
 - `infra/tool_runtime/` — **Tool Calling Runtime**：`tools` 注册执行 + `search` / `ocr` / `documents` / `presentations` / `mindmaps` / `generated_files` / `slides_skill`。
+- `infra/mcp/` — **MCP-native Tool Hub**：`server`（JSON-RPC 2.0 分发）+ `registry`（tools / resources / prompts 目录）+ `adapters`（执行桥，复用 Tool Policy 闸门）+ `permissions`（能力切片与预批）+ `client`（出方向 MCP client）。
 - `infra/observability/` — **Observability**：`observability`（OpenTelemetry 风格的 trace/span 层级链路，run 为根，`agent.<id>` 包裹其 `context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek` 子 span）+ `metrics`（Prometheus `/metrics`）+ `health`（`/healthz`·`/readyz`）。
 - `infra/data/` — **本地存储**：`memory` / `projects` / `reminders`。
 - `core/`、`web/`、`launcher/`、`android_entry.py`、`desktop_app.py` — 配置 / 错误 / 工具、HTTP 运行时、跨端打包入口。
@@ -59,13 +60,20 @@ Local Data & Observability   Vector RAG · Memory · Trace · Semantic Cache · 
 | `deepseek_infra/infra/data/projects.py` | 持久项目空间、项目元数据、项目文档库写入和删除。 |
 | `deepseek_infra/infra/tool_runtime/search.py` | 搜索触发、多轮 Tavily 查询、结果聚合、缓存和 Prompt 格式化。 |
 | `deepseek_infra/infra/tool_runtime/tools.py` | DeepSeek function calling 本地工具：受限数学计算、缓存文件搜索、公共网页二次精读、提醒、记忆、项目文件、数据转换、图表规格、PPT 生成、Word/PDF 文档生成、SVG 思维导图生成、多查询搜索对比和长期记忆建议。`execute_tool_call` / `execute_tool_calls` 接受可选 `policy`，在分发前过 Tool Policy Engine、成功后清洗结果。 |
-| `deepseek_infra/infra/tool_runtime/tool_policy.py` | Capability-based Tool Policy Engine（v2.1.0）：工具元数据 risk card（`ToolMetadata` / `TOOL_METADATA`）、按角色切片的能力画像（`CAPABILITY_PROFILES` / `capability_tools`，`multi_agent.agent_tools_for` 的单一事实源）、轻量 schema 校验（`validate_arguments`）、静态 SSRF 防护（`evaluate_url_safety`）、路径越界检测（`evaluate_path_safety`）、敏感写入拦截、人工确认、`PolicyDecision` / `ToolPolicy` 闸门、工具结果 prompt injection 清洗（`sanitize_tool_result`）、`.tool-audit/audit.jsonl` 审计日志与 `tool_policy_status`。纯函数 + 唯一 best-effort 审计 I/O，不 import `tools`，无循环依赖。 |
+| `deepseek_infra/infra/tool_runtime/tool_policy.py` | Capability-based Tool Policy Engine（v2.1.0）：工具元数据 risk card（`ToolMetadata` / `TOOL_METADATA`）、按角色切片的能力画像（`CAPABILITY_PROFILES` / `capability_tools`，`multi_agent.agent_tools_for` 的单一事实源）、轻量 schema 校验（`validate_arguments`）、静态 SSRF 防护（`evaluate_url_safety`）、路径越界检测（`evaluate_path_safety`）、敏感写入拦截、人工确认、`PolicyDecision` / `ToolPolicy` 闸门、工具结果 prompt injection 清洗（`sanitize_tool_result`）、`.tool-audit/audit.jsonl` 审计日志与 `tool_policy_status`。v2.1.5 接入 Context Taint 防火墙：`arguments_contain_secret` 把运行时自身凭证出现在工具参数里的调用一律硬拒绝（`secret_exfiltration_blocked`），污染轮（上下文或中途工具结果检出注入指令）的高风险 / 敏感写入工具升级为待人工确认（`taint_escalated_confirmation`）。纯函数 + 唯一 best-effort 审计 I/O，不 import `tools`，无循环依赖。 |
 | `deepseek_infra/infra/evaluation/harness.py` | AI Runtime Evaluation Harness（v2.1.1）：把预测 + golden 标注打成回归指标族——`keyword_coverage`、`recall_at_k`（Recall@K + MRR）、`citation_case`（Citation Accuracy）、`tool_call_score` / `tool_call_accuracy`（工具调用 P/R/F1）、`agent_success`（Agent Success Rate）、`latency_benchmark`、`cost_benchmark`（复用 `budget_manager` 定价）、`keyword_regression`，以及自描述的 `EvalReport`（机器 dict + 人读报告文本）。纯函数、零 I/O、不 import sqlite RAG 层。CLI 编排在 `evals/runners/`，golden 数据在 `evals/golden/`。 |
 | `deepseek_infra/infra/tool_runtime/presentations.py` | 本地 `.pptx` 生成：`create_pptx` 工具用 `python-pptx` 生成真实 PowerPoint 文件，普通模型漏调工具时可从文本大纲兜底生成；渲染器会自动加入目录页并选择卡片、流程、对比、观点、总结等版式。 |
 | `deepseek_infra/infra/tool_runtime/documents.py` | 本地 `.docx` / `.pdf` 生成：`create_document` 工具用 `python-docx` / `reportlab`（内置中文 CID 字体，无需附带字体文件）把结构化章节渲染成排版精美的 Word 或 PDF，支持标题块、分章节编号、正文段落、要点、表格、页码与按标题哈希确定的配色主题。 |
 | `deepseek_infra/infra/tool_runtime/mindmaps.py` | 本地 `.svg` 思维导图生成：`create_mindmap` 工具把模型给出的树状节点渲染成「分组流程图」式 SVG——顶层节点作为带标题的彩色容器（类似 Mermaid subgraph），容器内后代自上而下、用实心箭头连接的圆角卡片，并复用统一下载链路。 |
 | `deepseek_infra/infra/tool_runtime/generated_files.py` | 跨格式生成文件的统一生命周期：随机 id 落盘、按后缀解析下载路径（防目录遍历）、MIME 映射、过期清理与“另存到下载目录”，被 `presentations`、`documents` 与 `mindmaps` 共用。 |
 | `deepseek_infra/infra/tool_runtime/slides_skill.py` | 用户提供的 `slides` skill 参考文本与运行时路由提示，只在 PPT/幻灯片意图命中时注入本轮上下文。 |
+| `deepseek_infra/infra/mcp/server.py` | MCP-native Tool Hub（v2.1.3）的 JSON-RPC 2.0 协议层：`initialize` / `ping` / `tools/list` / `tools/call` / `resources/list`·`read` / `prompts/list`·`get` 分发、标准 JSON-RPC 错误码、通知处理与 `mcp_status()`；经 `POST /mcp` 暴露（本地 token 鉴权，协议版本 `2025-06-18`）。 |
+| `deepseek_infra/infra/mcp/registry.py` | MCP 目录：把 `available_tool_definitions()` 映射成带 `inputSchema` 与风险注解（read-only / destructive / open-world，来自 Tool Policy risk card）的 MCP tools；生成产物（`generated://<fileId>`，svg 文本 / 其余 base64 blob）与 `runtime://capabilities` 映射成 resources；`slides-outline` / `research-brief` 两个参数化 prompts。 |
+| `deepseek_infra/infra/mcp/adapters.py` | MCP `tools/call` → `execute_tool_call` 执行桥：每次调用构造能力切片的 `ToolPolicy`（schema / SSRF / 路径 / 敏感写入防护与结果清洗全部生效），结果转成 MCP `content`（稳定 JSON text part）+ `structuredContent`，策略拒绝与失败是 `isError` 工具级错误；配置了 Tavily Key 时提供真实 `web_search` 回调。 |
+| `deepseek_infra/infra/mcp/permissions.py` | MCP 连接的能力域：`MCP_CAPABILITY` → Tool Policy capability profile（未知回落 `full`）、按连接的工具白名单、`params._meta.approvedTools` 预批解析。 |
+| `deepseek_infra/infra/mcp/client.py` | 出方向 MCP client（Streamable HTTP，JSON 响应模式）：`initialize`（含 `notifications/initialized`）/ `tools/list` / `tools/call`、`Mcp-Session-Id` 会话头管理、超时与错误翻译。默认关闭，只连 `MCP_CLIENT_SERVERS` 显式配置的外部 server。 |
+| `deepseek_infra/infra/agent_runtime/a2a.py` | A2A Agent Mesh（v2.1.4）：每个本地 Agent 角色（orchestrator / researcher / coder / reasoner / critic）的 Agent Card（`/.well-known/agent-card.json` 发现 + `GET /a2a/agents` 列表）、JSON-RPC 任务生命周期（`message/send`、`message/stream` SSE 状态/产物推送、`tasks/get`、`tasks/cancel`、`tasks/list`）、任务状态机（submitted→working→completed/failed/canceled）、`.a2a/` 任务快照持久化与重启对账（磁盘上残留的非终态任务标记 failed）、外部委派 `A2AClient`（`A2A_PEERS`）。任务在角色 capability 切片内经 `call_deepseek` 执行，绝不超出该角色的工具面。 |
+| `deepseek_infra/infra/gateway/context_taint.py` | Context Taint Tracking + Prompt Injection Firewall（v2.1.5）：把组装后的请求按来源分段打信任标签（trusted_system / trusted_user / trusted_memory / trusted_tool 可信；untrusted_web / untrusted_file / untrusted_tool_result 不可信），对不可信段扫描注入、密钥外泄与工具调用指令三类 pattern，产出 `diagnostics.contextTaint` 报告；`harden_search_context`（隔离声明 + 注入红action）与 `file_context_guard_line`（文件上下文确定性 guard 行）做主动加固，字节确定性保证 prompt cache 前缀跨轮稳定。污染判定回流 `ToolPolicy`（taint 升级确认 + 凭证外泄硬拒绝），形成检测→隔离→拦截的闭环。 |
 | `deepseek_infra/infra/rag/files.py` | 文件文本抽取、分块、缓存和附件上下文检索；并为豆包式文档阅读工作台提供原文件原样返回、PDF 逐页 PNG 渲染（PyMuPDF，回退 pdf2image）、按页文字坐标层、分页文本和跨页关键字搜索。 |
 | `deepseek_infra/infra/tool_runtime/ocr.py` | 可选 OCR：优先用 DeepSeek API 直接转写图片；API 不可用时再回退到 Android ML Kit、Windows OCR、Tesseract 或本地公式 OCR；支持扫描 PDF 转图识别和图片文字识别。 |
 | `deepseek_infra/core/config.py` | 不可变设置、环境变量解析、兼容常量和 JSON 日志。 |

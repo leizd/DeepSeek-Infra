@@ -60,8 +60,18 @@ from deepseek_infra.infra.gateway.deepseek_client import (
 )
 from deepseek_infra.infra.gateway.budget_manager import budget_status as budget_status_for_scope
 from deepseek_infra.infra.tool_runtime.tool_policy import read_recent_audit, tool_policy_status
+from deepseek_infra.infra.gateway.context_taint import taint_status
 from deepseek_infra.infra.gateway.scheduler import dead_letters as scheduler_dead_letters
 from deepseek_infra.infra.gateway.scheduler import scheduler_status
+from deepseek_infra.infra.mcp.server import handle_mcp_message, mcp_status
+from deepseek_infra.infra.agent_runtime.a2a import (
+    agent_card,
+    agent_cards,
+    handle_a2a_message,
+    is_stream_request,
+    stream_message_events,
+)
+from deepseek_infra.infra.agent_runtime.a2a import a2a_status as a2a_mesh_status
 from deepseek_infra.infra.gateway.model_router import cascade_requested as model_router_cascade_requested
 from deepseek_infra.infra.gateway.model_router import router_status as model_router_status
 from deepseek_infra.infra.gateway.openai_api import (
@@ -240,6 +250,9 @@ def create_app() -> FastAPI:
                 "modelRouter": model_router_status(),
                 "budget": budget_status_for_scope("global"),
                 "toolPolicy": tool_policy_status(),
+                "mcp": mcp_status(),
+                "a2a": a2a_mesh_status(),
+                "contextTaint": taint_status(),
                 "computerUrl": computer_url,
                 "phoneUrl": phone_url,
             }
@@ -273,6 +286,66 @@ def create_app() -> FastAPI:
         except ValueError:
             limit = 50
         return json_response({"ok": True, "scheduler": scheduler_status(), "deadLetters": scheduler_dead_letters(limit)})
+
+    @api.get("/api/mcp")
+    async def api_mcp_status(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        return json_response({"ok": True, "mcp": mcp_status()})
+
+    @api.get("/api/taint")
+    async def api_taint_status(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        return json_response({"ok": True, "contextTaint": taint_status()})
+
+    @api.post("/mcp")
+    async def mcp_endpoint(request: Request) -> Response:
+        """MCP Tool Hub: one JSON-RPC message per POST (Streamable HTTP, JSON mode)."""
+        require_api_auth(request)
+        if not settings.mcp.enabled:
+            raise AppError("MCP server is disabled", code=ErrorCode.FORBIDDEN, status=403)
+        body = await read_json_body(request)
+        response = handle_mcp_message(body)
+        if response is None:  # notification: no body, per Streamable HTTP
+            return Response(status_code=202)
+        return json_response(response)
+
+    @api.get("/.well-known/agent-card.json")
+    async def well_known_agent_card(request: Request) -> JSONResponse:
+        """A2A discovery: the orchestrator Agent Card (metadata only, unauthenticated)."""
+        if not settings.a2a.enabled:
+            raise AppError("A2A mesh is disabled", code=ErrorCode.FORBIDDEN, status=403)
+        return json_response(agent_card("orchestrator", base_url=request_base_url(request)))
+
+    @api.get("/a2a/agents")
+    async def a2a_agents(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        if not settings.a2a.enabled:
+            raise AppError("A2A mesh is disabled", code=ErrorCode.FORBIDDEN, status=403)
+        return json_response({"ok": True, "agents": agent_cards(base_url=request_base_url(request))})
+
+    async def _a2a_rpc(request: Request, agent_id: str) -> Response:
+        require_api_auth(request)
+        if not settings.a2a.enabled:
+            raise AppError("A2A mesh is disabled", code=ErrorCode.FORBIDDEN, status=403)
+        body = await read_json_body(request)
+        if is_stream_request(body):
+            return StreamingResponse(
+                stream_message_events(body, agent_id=agent_id),
+                media_type="text/event-stream",
+                headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+            )
+        response = handle_a2a_message(body, agent_id=agent_id, base_url=request_base_url(request))
+        return json_response(response if response is not None else {})
+
+    @api.post("/a2a")
+    async def a2a_endpoint(request: Request) -> Response:
+        """A2A task lifecycle against the default orchestrator agent."""
+        return await _a2a_rpc(request, "orchestrator")
+
+    @api.post("/a2a/agents/{agent_id}")
+    async def a2a_agent_endpoint(request: Request, agent_id: str) -> Response:
+        """A2A task lifecycle against one named local agent."""
+        return await _a2a_rpc(request, agent_id)
 
     @api.post("/api/rag/reindex")
     async def api_rag_reindex(request: Request) -> JSONResponse:

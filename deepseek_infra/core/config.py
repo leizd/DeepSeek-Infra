@@ -323,9 +323,71 @@ class OllamaSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class MCPSettings:
+    """MCP-native Tool Hub knobs.
+
+    The hub speaks MCP JSON-RPC 2.0 over a single Streamable-HTTP style endpoint
+    (``POST /mcp``, local-auth gated) and re-exposes the local tool runtime as
+    standard MCP ``tools`` plus optional ``resources`` (generated artifacts) and
+    ``prompts``. ``capability`` picks the Tool Policy capability profile granted to
+    MCP clients — every ``tools/call`` still goes through the full policy gate
+    (schema / SSRF / path / sensitive guards), so an external MCP client never gets
+    more than that slice. The outbound MCP *client* (connecting external MCP
+    servers) is opt-in and off by default.
+    """
+
+    enabled: bool = True
+    capability: str = "full"
+    expose_resources: bool = True
+    expose_prompts: bool = True
+    client_enabled: bool = False
+    client_servers: tuple[tuple[str, str], ...] = ()  # (name, base_url)
+    client_timeout_seconds: int = 30
+
+
+@dataclass(frozen=True, slots=True)
+class A2ASettings:
+    """A2A-style Agent Mesh knobs.
+
+    Exposes each local Seek/agent role as an A2A agent: an Agent Card for
+    discovery plus a JSON-RPC task lifecycle (``message/send`` / ``message/stream``
+    / ``tasks/get`` / ``tasks/cancel``). Task execution spends upstream tokens, so
+    it requires a server-side ``DEEPSEEK_API_KEY``; without one tasks fail cleanly.
+    ``peers`` lists external A2A agent base URLs the local mesh may delegate to.
+    """
+
+    enabled: bool = True
+    default_agent: str = "reasoner"
+    max_tasks: int = 200
+    history_limit: int = 20
+    peers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ContextTaintSettings:
+    """Context Taint Tracking + Prompt Injection Firewall knobs.
+
+    Every assembled request is classified into trusted (system / user / memory)
+    and untrusted (web search context, uploaded-file context, external tool
+    results) segments, and untrusted segments are scanned for injection,
+    secret-exfiltration and tool-invocation directives. ``harden_*`` prepend an
+    isolation guard to untrusted blocks (deterministic text, so prompt-cache
+    prefix stability across turns is preserved). ``escalate_confirm`` makes
+    high-risk / sensitive-sink tools require explicit user approval for the rest
+    of a turn whose context carried injection directives.
+    """
+
+    enabled: bool = True
+    harden_search_context: bool = True
+    harden_file_context: bool = True
+    escalate_confirm: bool = True
+    max_segments: int = 24
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "2.1.2"
+    app_version: str = "2.1.5"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -391,6 +453,9 @@ class Settings:
     tool_policy: ToolPolicySettings = field(default_factory=ToolPolicySettings)
     scheduler: SchedulerSettings = field(default_factory=SchedulerSettings)
     ollama: OllamaSettings = field(default_factory=OllamaSettings)
+    mcp: MCPSettings = field(default_factory=MCPSettings)
+    a2a: A2ASettings = field(default_factory=A2ASettings)
+    context_taint: ContextTaintSettings = field(default_factory=ContextTaintSettings)
 
     @property
     def static_dir(self) -> Path:
@@ -479,6 +544,10 @@ class Settings:
     @property
     def tool_audit_log(self) -> Path:
         return self.tool_audit_dir / "audit.jsonl"
+
+    @property
+    def a2a_tasks_dir(self) -> Path:
+        return self.root / ".a2a"
 
     @property
     def request_queue_dir(self) -> Path:
@@ -638,6 +707,29 @@ class Settings:
                 base_url=os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip() or "http://127.0.0.1:11434",
                 timeout_seconds=_env_int_clamped("OLLAMA_TIMEOUT_SECONDS", 120, 5, 1800),
             ),
+            mcp=MCPSettings(
+                enabled=_env_bool("MCP_ENABLED", True),
+                capability=os.environ.get("MCP_CAPABILITY", "full").strip() or "full",
+                expose_resources=_env_bool("MCP_EXPOSE_RESOURCES", True),
+                expose_prompts=_env_bool("MCP_EXPOSE_PROMPTS", True),
+                client_enabled=_env_bool("MCP_CLIENT_ENABLED", False),
+                client_servers=_mcp_client_servers_from_env(),
+                client_timeout_seconds=_env_int_clamped("MCP_CLIENT_TIMEOUT_SECONDS", 30, 1, 600),
+            ),
+            a2a=A2ASettings(
+                enabled=_env_bool("A2A_ENABLED", True),
+                default_agent=os.environ.get("A2A_DEFAULT_AGENT", "reasoner").strip() or "reasoner",
+                max_tasks=_env_int_clamped("A2A_MAX_TASKS", 200, 10, 10_000),
+                history_limit=_env_int_clamped("A2A_HISTORY_LIMIT", 20, 2, 200),
+                peers=_env_tuple("A2A_PEERS"),
+            ),
+            context_taint=ContextTaintSettings(
+                enabled=_env_bool("TAINT_ENABLED", True),
+                harden_search_context=_env_bool("TAINT_HARDEN_SEARCH_CONTEXT", True),
+                harden_file_context=_env_bool("TAINT_HARDEN_FILE_CONTEXT", True),
+                escalate_confirm=_env_bool("TAINT_ESCALATE_CONFIRM", True),
+                max_segments=_env_int_clamped("TAINT_MAX_SEGMENTS", 24, 4, 200),
+            ),
         )
 
 
@@ -774,6 +866,27 @@ def _context_engine_windows_from_env() -> Mapping[str, int]:
             for model, env in _CONTEXT_ENGINE_WINDOW_ENV.items()
         }
     )
+
+
+def _mcp_client_servers_from_env() -> tuple[tuple[str, str], ...]:
+    """Parse MCP_CLIENT_SERVERS: a JSON list of ``{"name": ..., "url": ...}``."""
+    raw = os.environ.get("MCP_CLIENT_SERVERS", "").strip()
+    if not raw:
+        return ()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return ()
+    servers: list[tuple[str, str]] = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            url = str(item.get("url") or "").strip()
+            if name and url.startswith(("http://", "https://")):
+                servers.append((name, url))
+    return tuple(servers)
 
 
 settings = Settings.from_env()
@@ -928,6 +1041,24 @@ SCHEDULER_DLQ_MAX_ROWS = settings.scheduler.dlq_max_rows
 SCHEDULER_ORPHAN_SECONDS = settings.scheduler.orphan_seconds
 SCHEDULER_DIR = settings.scheduler_dir
 SCHEDULER_DB = settings.scheduler_db
+MCP_ENABLED = settings.mcp.enabled
+MCP_CAPABILITY = settings.mcp.capability
+MCP_EXPOSE_RESOURCES = settings.mcp.expose_resources
+MCP_EXPOSE_PROMPTS = settings.mcp.expose_prompts
+MCP_CLIENT_ENABLED = settings.mcp.client_enabled
+MCP_CLIENT_SERVERS = settings.mcp.client_servers
+MCP_CLIENT_TIMEOUT_SECONDS = settings.mcp.client_timeout_seconds
+A2A_ENABLED = settings.a2a.enabled
+A2A_DEFAULT_AGENT = settings.a2a.default_agent
+A2A_MAX_TASKS = settings.a2a.max_tasks
+A2A_HISTORY_LIMIT = settings.a2a.history_limit
+A2A_PEERS = settings.a2a.peers
+A2A_TASKS_DIR = settings.a2a_tasks_dir
+TAINT_ENABLED = settings.context_taint.enabled
+TAINT_HARDEN_SEARCH_CONTEXT = settings.context_taint.harden_search_context
+TAINT_HARDEN_FILE_CONTEXT = settings.context_taint.harden_file_context
+TAINT_ESCALATE_CONFIRM = settings.context_taint.escalate_confirm
+TAINT_MAX_SEGMENTS = settings.context_taint.max_segments
 AUTH_TOKEN_FILE = settings.auth_token_file
 
 TEXT_EXTENSIONS = {

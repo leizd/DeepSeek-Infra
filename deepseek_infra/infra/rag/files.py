@@ -36,6 +36,7 @@ from deepseek_infra.core.config import (
 )
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import query_tokens, score_chunk
+from deepseek_infra.infra.gateway.context_taint import file_context_guard_line as context_taint_file_guard_line
 from deepseek_infra.infra.rag import local_rag
 from deepseek_infra.infra.tool_runtime.ocr import extract_image_ocr, extract_pdf_ocr
 
@@ -96,9 +97,14 @@ def build_attachment_context(attachments: list[Any], query: str) -> str:
     if not sections:
         return ""
 
+    # Context Taint firewall: a deterministic isolation guard right under the
+    # header. Same bytes every turn for the same conversation, so the prompt
+    # cache prefix keeps matching; only inserted when the firewall is enabled.
+    guard_line = context_taint_file_guard_line()
+    header = ["[用户上传文件上下文]", guard_line] if guard_line else ["[用户上传文件上下文]"]
     return "\n\n".join(
         [
-            "[用户上传文件上下文]",
+            *header,
             "说明：文件全文已在本地后端分块索引中保存；本轮会按用户问题选取相关片段送入模型。回答时优先依据这些片段，若片段不足以支持结论，请明确指出需要更具体的问题或更多上下文。引用文件片段时请使用形如 [^F1-2] 的引用标记。",
             *sections,
         ]

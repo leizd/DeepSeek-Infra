@@ -9,6 +9,7 @@ import pytest
 
 import deepseek_infra.core.config as config
 import deepseek_infra.infra.rag.files as files
+import deepseek_infra.infra.agent_runtime.a2a as a2a
 import deepseek_infra.infra.agent_runtime.agent_runs as agent_runs
 import deepseek_infra.infra.data.memory as memory
 import deepseek_infra.infra.rag.local_rag as local_rag
@@ -84,6 +85,9 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(config, "SCHEDULER_DB", scheduler_dir / "scheduler.sqlite3")
     monkeypatch.setattr(scheduler, "SCHEDULER_DIR", scheduler_dir)
     monkeypatch.setattr(scheduler, "SCHEDULER_DB", scheduler_dir / "scheduler.sqlite3")
+    a2a_tasks_dir = tmp_path / ".a2a"
+    monkeypatch.setattr(config, "A2A_TASKS_DIR", a2a_tasks_dir)
+    monkeypatch.setattr(a2a, "A2A_TASKS_DIR", a2a_tasks_dir)
     monkeypatch.setattr(tools, "FILE_CACHE_DIR", file_cache_dir)
     monkeypatch.setattr(tools, "SEARCH_CACHE_DIR", search_cache_dir)
     monkeypatch.setattr(tools, "PROJECTS_DIR", projects_dir)

@@ -23,7 +23,7 @@ from deepseek_infra.core.config import (
 from deepseek_infra.infra.gateway.chat_payload import count_payload_attachments, expanded_message_content
 from deepseek_infra.infra.rag.context_compressor import format_context_summary_context
 from deepseek_infra.infra.gateway.context_manager import manage_request_body, merge_context_manager_diagnostics, stable_json_dumps
-from deepseek_infra.infra.gateway import budget_manager, model_router, scheduler
+from deepseek_infra.infra.gateway import budget_manager, context_taint, model_router, scheduler
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.gateway.edge_inference import (
     EdgeRouteDecision,
@@ -349,6 +349,12 @@ def build_deepseek_request(
 
     request_body, context_manager_diag = manage_request_body(request_body, allow_sliding_window=bool(context_summary))
     diagnostics = merge_context_manager_diagnostics(diagnostics, context_manager_diag)
+    # Context Taint Tracking: classify the final assembled prompt into trusted /
+    # untrusted segments and scan untrusted ones for directives (report only here;
+    # the per-turn ToolPolicy consumes the verdict for escalation).
+    taint_report = context_taint.build_taint_report(request_body)
+    if taint_report is not None:
+        diagnostics["contextTaint"] = taint_report
     return PreparedDeepSeekRequest(api_key=api_key, body=request_body, diagnostics=diagnostics)
 
 
@@ -626,7 +632,9 @@ def prepare_deepseek_call(
         rag_status = "ok" if results else "error" if (search_data or {}).get("status") == "error" else "skipped"
         rag_span.finish(status=rag_status, output_data={"resultCount": len(results)})
     if search_data and search_data.get("results"):
-        payload = {**payload, "searchContext": format_search_context(search_data)}
+        # Context Taint firewall: web content is untrusted — isolation-wrap and
+        # scrub the per-turn search context before it joins the prompt.
+        payload = {**payload, "searchContext": context_taint.harden_search_context(format_search_context(search_data))}
     elif search_data and search_data.get("status") == "error":
         payload = {**payload, "searchContext": format_search_failure_context(search_data)}
     prepared = build_deepseek_request(payload, stream=stream, memory_state=memory_state, validated=validated)
@@ -1124,13 +1132,17 @@ def diagnostics_with_tools(diagnostics: dict[str, Any], *, count: int, names: li
     return result
 
 
-def build_tool_policy(payload: dict[str, Any]) -> ToolPolicy | None:
+def build_tool_policy(payload: dict[str, Any], *, taint_report: dict[str, Any] | None = None) -> ToolPolicy | None:
     """Capability-scoped Tool Policy for this turn (None when globally disabled).
 
     Capability comes from the payload: a worker sets ``capability`` (its agent id)
     and/or ``allowedTools``; the main chat sets neither and gets the full profile.
     An explicit ``allowedTools`` list further narrows the grant. ``approvedTools``
     carries any tools the user pre-confirmed this turn.
+
+    The Context Taint firewall feeds in too: the runtime's credentials become the
+    secret-exfiltration blocklist, and a tainted context (injection directives in
+    untrusted segments) escalates dangerous tools to explicit confirmation.
     """
     if not settings.tool_policy.enabled:
         return None
@@ -1139,11 +1151,25 @@ def build_tool_policy(payload: dict[str, Any]) -> ToolPolicy | None:
     allowed_tools = [str(item) for item in allowed] if isinstance(allowed, list) else None
     approvals_raw = payload.get("approvedTools")
     approvals = {str(item) for item in approvals_raw} if isinstance(approvals_raw, list) else set()
+    secrets = tuple(
+        value
+        for value in (
+            str(payload.get("apiKey") or ""),
+            str(payload.get("tavilyApiKey") or ""),
+            settings.deepseek_api_key,
+            settings.tavily_api_key,
+            settings.auth.token,
+        )
+        if value
+    )
     return ToolPolicy(
         capability=capability,
         allowed_tools=allowed_tools,
         approvals=approvals,
         scope=budget_manager.budget_scope(payload),
+        secrets=secrets,
+        tainted=context_taint.report_is_tainted(taint_report),
+        taint_escalation=context_taint.escalation_enabled(),
     )
 
 
@@ -1459,7 +1485,7 @@ def call_deepseek(
     default_memory_scope = memory_scope_from_payload(payload)
     tool_call_count = 0
     seen_tool_names: list[str] = []
-    tool_policy = build_tool_policy(payload)
+    tool_policy = build_tool_policy(payload, taint_report=prepared.diagnostics.get("contextTaint"))
     memory_suggestions: list[dict[str, Any]] = []
     perform_web_search, current_search_data = web_search_callback_for_turn(
         payload,
@@ -1859,7 +1885,7 @@ def stream_deepseek(
         default_memory_scope = memory_scope_from_payload(payload)
         tool_call_count = 0
         seen_tool_names: list[str] = []
-        tool_policy = build_tool_policy(payload)
+        tool_policy = build_tool_policy(payload, taint_report=prepared.diagnostics.get("contextTaint"))
         memory_suggestions: list[dict[str, Any]] = []
         local_final_content = ""
         perform_web_search, current_search_data = web_search_callback_for_turn(

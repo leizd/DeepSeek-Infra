@@ -11,6 +11,7 @@
 .budget/
 .tool-audit/
 .scheduler/
+.a2a/
 .memory/
 .projects/
 .reminders/

