@@ -130,6 +130,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-dir", default=str(REPO_ROOT / "evals" / "reports"))
     parser.add_argument("--no-report", action="store_true", help="Skip writing the JSON report.")
     parser.add_argument("--json", action="store_true", help="Print the machine-readable report dict instead of text.")
+    parser.add_argument(
+        "--fail-under-recall",
+        type=float,
+        default=0.0,
+        help="CI 门禁：Recall@K 低于该值时退出码 1（默认 0 = 只报告不拦截）。",
+    )
     args = parser.parse_args(argv)
 
     golden = harness.load_jsonl(args.golden)
@@ -152,6 +158,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_report:
         path = report.write(args.report_dir)
         print(f"\nReport written to {path}", file=sys.stderr)
+    recall = float(report.metrics.get("ragRecallAtK") or 0.0)
+    if args.fail_under_recall > 0 and recall < args.fail_under_recall:
+        print(f"FAIL: RAG Recall@{report.k} {recall:.3f} < gate {args.fail_under_recall:.3f}", file=sys.stderr)
+        return 1
     return 0
 
 

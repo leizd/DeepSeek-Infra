@@ -46,6 +46,10 @@ android/local.properties
 android/app/build/
 android/build/
 server*.log
+# one-off local screenshot capture helpers (see docs/assets/screenshots/ for committed PNGs)
+.shot-*.py
+.shot-*.log
+.shot-*.md
 pytest-cache-files-*/
 audit-cleanup-*/
 .test-*/

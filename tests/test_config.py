@@ -34,7 +34,7 @@ from deepseek_infra.core.config import (
 
 class ConfigTests(unittest.TestCase):
     def test_nested_settings_back_compat_constants_match(self) -> None:
-        self.assertEqual(settings.app_version, "2.1.6")
+        self.assertEqual(settings.app_version, "2.1.7")
         self.assertEqual(settings.default_host, "127.0.0.1")
         self.assertEqual(DEFAULT_HOST, settings.default_host)
         self.assertEqual(MULTI_AGENT_TIMEOUT_SECONDS, settings.multi_agent_timeout_seconds)
@@ -56,6 +56,33 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(AUTH_TOKEN_FILE, settings.auth_token_file)
         self.assertEqual(MAX_UPLOAD_FILE_BYTES, 200_000_000)
         self.assertEqual(MAX_UPLOAD_BYTES, 220_000_000)
+
+    def test_security_mode_strict_flips_tool_policy_gate_defaults(self) -> None:
+        with patch.dict("os.environ", {"SECURITY_MODE": "strict"}, clear=False):
+            strict = Settings.from_env(root=Path(tempfile.gettempdir()))
+        self.assertEqual(strict.security_mode, "strict")
+        self.assertTrue(strict.tool_policy.enforce_schema)
+        self.assertTrue(strict.tool_policy.require_confirm)
+        # 其余闸门不受影响
+        self.assertTrue(strict.tool_policy.sanitize_results)
+        self.assertTrue(strict.tool_policy.audit_enabled)
+
+    def test_security_mode_explicit_tool_policy_env_overrides_strict(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"SECURITY_MODE": "strict", "TOOL_POLICY_REQUIRE_CONFIRM": "0"},
+            clear=False,
+        ):
+            mixed = Settings.from_env(root=Path(tempfile.gettempdir()))
+        self.assertTrue(mixed.tool_policy.enforce_schema)
+        self.assertFalse(mixed.tool_policy.require_confirm)
+
+    def test_security_mode_defaults_to_dev_and_rejects_unknown(self) -> None:
+        with patch.dict("os.environ", {"SECURITY_MODE": "paranoid"}, clear=False):
+            fallback = Settings.from_env(root=Path(tempfile.gettempdir()))
+        self.assertEqual(fallback.security_mode, "dev")
+        self.assertFalse(fallback.tool_policy.enforce_schema)
+        self.assertFalse(fallback.tool_policy.require_confirm)
 
     def test_model_aliases_are_read_only(self) -> None:
         self.assertEqual(MODEL_ALIASES.get("fast"), "deepseek-v4-flash")

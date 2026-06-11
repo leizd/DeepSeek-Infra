@@ -1,6 +1,6 @@
 # 部署指南（Docker / Compose / 裸机）
 
-适用版本：v2.1.6。
+适用版本：v2.1.7。
 
 DeepSeek Infra 的服务形态是一个单进程 FastAPI / ASGI 运行时：`/v1` OpenAI 兼容网关、`/mcp`、`/a2a`、`/api/*` 业务端点，加 `/healthz`·`/readyz`·`/metrics` 运维三件套。所有可写状态（鉴权 token、文件缓存、向量索引、trace、语义缓存、记忆、任务快照）都集中在**一个数据目录**下，由 `DEEPSEEK_MOBILE_ROOT` 指定——这也是容器化只需要一个卷的原因。
 
@@ -35,15 +35,26 @@ curl http://127.0.0.1:8000/metrics | head
 ## 2. 纯 Docker
 
 ```bash
-docker build -t deepseek-infra:2.1.6 .
+docker build -t deepseek-infra:2.1.7 .
 docker run -d --name deepseek-infra \
   -p 127.0.0.1:8000:8000 \
   --env-file .env \
   -v deepseek-data:/data \
-  deepseek-infra:2.1.6
+  deepseek-infra:2.1.7
 ```
 
-镜像要点（见 [Dockerfile](../Dockerfile)）：`python:3.12-slim`、非 root 用户运行、`HEALTHCHECK` 打 `/healthz`、数据卷 `/data`、静态资源固定在镜像内（`DEEPSEEK_MOBILE_STATIC_DIR`）。
+镜像要点（见 [Dockerfile](../Dockerfile)）：`python:3.12-slim` **多阶段构建**（builder 装依赖进独立 venv，运行层不带 pip 缓存与编译垃圾）、非 root 用户运行、`HEALTHCHECK` 打 `/healthz`、数据卷 `/data`、静态资源固定在镜像内（`DEEPSEEK_MOBILE_STATIC_DIR`）。
+
+多架构构建（amd64 + arm64，需要 Docker buildx）：
+
+```bash
+docker buildx create --use --name deepseek-builder   # 一次性
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t <registry>/deepseek-infra:2.1.7 --push .
+# 只构建本机架构验证时：docker buildx build --platform linux/arm64 -t deepseek-infra:2.1.7-arm64 --load .
+```
+
+依赖均为纯 Python 或带 arm64 wheel（PyMuPDF / reportlab 等在 PyPI 提供 manylinux aarch64 轮子），无需交叉编译工具链。
 
 ## 3. 裸机 / systemd
 

@@ -2,6 +2,32 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.1.7]
+
+**主题：从「宣传型」走向「可验证型」+ 工程化收尾。** 2.1.6 把能力落到了代码与评测；本版把项目的「第一印象」与「可复现性」补齐：README 改成先讲「是什么 / 怎么跑 / 真实截图」、真实运行截图入库、依赖锁定、一键体检、安全模式开关、Docker 多阶段、评测进 CI 门禁。
+
+### 新增
+
+- **真实运行截图（最大性价比项）**：用 Playwright 驱动真实前端 + 真实 DeepSeek 调用录制 4 张 `docs/assets/screenshots/`——对话 + 流式思考、文件上传 + RAG `[F1-1]` 引用回链、多 Agent DAG 执行、Trace 调用链瀑布图（4 span / 5113 tokens 的真实 trace），README 第一屏嵌入。
+- **README 改「可验证型」第一屏**：开头从一段「宏大 Infra 叙事」改为「本地优先的 AI Agent 应用 + 5 条能力要点 + 30 秒 venv 启动 + 截图」；完整架构叙事下沉到 `docs/ARCHITECTURE.md`（其首屏也挂上架构总览图）。模块表、能力详解、协议/运维端点等细节保留在下方。
+- **一键体检 `scripts/doctor.py`**：离线检查 Python 版本、核心 / 可选依赖、static 目录、数据目录可写、DeepSeek / Tavily Key、端口占用、`HOST` 与 `SECURITY_MODE` 一致性，输出 `[OK]` / `[WARN]` / `[FAIL]` 与退出码（`tests/test_doctor.py`）。
+- **安全模式开关 `SECURITY_MODE`**：`strict` 一档把 Tool Policy 的两道严格闸门默认值翻成开启（`enforce_schema` + `require_confirm`），显式 `TOOL_POLICY_*` 仍可逐项覆盖；`dev`（默认）保持本机开发体验。README / SECURITY / `.env.example` 写明局域网 / 多人 / 对外暴露必须 `strict`（`tests/test_config.py` 三项覆盖：strict 翻默认、显式覆盖、未知值回退 dev）。
+- **依赖规范化 + 锁定**：`pyproject.toml` 补 `[project]` 元数据（name / version / requires-python / dependencies + `dev` / `rag` / `edge` / `ocr` / `build` optional-deps），用 `uv pip compile` 生成 `requirements.lock`（pin 全部传递依赖，可复现安装）。
+- **RAG embedding 两档文档化**：README 写清「默认 hash embedding（零依赖，适合 Demo / CI）vs 推荐 ONNX embedding（真实语义检索）」的取舍与启用命令，纠正「hash 档即检索质量上限」的误读。
+
+### 改进
+
+- **Docker 多阶段构建**：`Dockerfile` 改为 builder（依赖装进独立 venv）+ runtime 两段，运行层不带 pip 缓存与编译垃圾；`docs/DEPLOYMENT.md` 补 `docker buildx` 多架构（amd64 + arm64）构建命令。
+- **CI 提门槛**：覆盖率门禁 `--cov-fail-under` 60 → **75**（实测 78%，留余量）；新增 `evals` job 把 `run_tool_eval.py`（26 攻防用例）与 `run_rag_eval.py --fail-under-recall 0.99` 接入 PR 必过项——证明 RAG 召回与工具安全不是只靠单测。`run_rag_eval.py` 新增 `--fail-under-recall` 门禁参数。
+
+### 安全
+
+- `bandit` 高危基线维持清零；`SECURITY_MODE=strict` 为局域网 / 多人部署提供一键收紧入口（详见 `docs/SECURITY.md` 与 `docs/THREAT_MODEL.md`）。
+
+### 说明
+
+- server.py 路由按 `routes/` 子包拆分（建议 #8）评估后**不并入本次 release**：它是 1400 行级、高回归风险的内部重构，更适合独立 PR；已建 GitHub Issue 跟踪，按 APIRouter + 共享 http_utils 的方式后续推进。
+
 ## [2.1.6]
 
 **主题：可信度与可验证性。** README 已经把「local-first agentic AI infrastructure platform」的叙事立起来了，本版不再加新概念，而是把已写出的 Infra 能力落到**可点击的代码路径、可一键复现的 Demo、可部署的资产、可复跑的基准与评测**上，防止「README 画饼」的观感。

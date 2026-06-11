@@ -13,7 +13,7 @@
   <text x="48" y="58" font-size="26" font-weight="700" fill="#0f172a">DeepSeek Infra</text>
   <text x="48" y="84" font-size="14" fill="#64748b">Local-first Agentic AI Infrastructure Platform — LLM Gateway · Agent DAG · MCP · A2A · Local RAG · Observability</text>
   <rect x="1078" y="38" width="74" height="28" rx="14" fill="#2563eb"/>
-  <text x="1115" y="57" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v2.1.6</text>
+  <text x="1115" y="57" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v2.1.7</text>
 
   <!-- clients layer -->
   <rect x="48" y="106" width="1104" height="72" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>

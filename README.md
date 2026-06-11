@@ -1,16 +1,41 @@
 # DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-2.1.6-blue)
+![版本](https://img.shields.io/badge/version-2.1.7-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
 **DeepSeek Infra is a local-first agentic AI infrastructure platform: an agent runtime with an MCP-native tool hub, an A2A-style agent mesh, an LLM gateway, local RAG and end-to-end observability.**
 
-DeepSeek Infra 是一个**本地优先的 Agentic AI Infra 平台**：一套本机 FastAPI 后端把 LLM 网关、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议对外互操作——本地工具面经 **MCP**（Model Context Protocol）暴露给任意 MCP 客户端，本地 Agent 经 **A2A** 风格的 Agent Card + 任务生命周期与外部 Agent 互通。桌面端双击打开内嵌 WebView 的本地应用窗口，Android 端打包成 APK，任何 OpenAI 兼容客户端也能把 `base_url` 指向本机 `/v1`。除了你主动发往 DeepSeek / Tavily 的请求，数据都留在本机。
+DeepSeek Infra 是一个**本地优先的 AI Agent 桌面 / 网页应用**——一套本机 FastAPI 后端，除了你主动发往 DeepSeek / Tavily 的请求，数据都留在本机：
+
+- **DeepSeek 对话**：流式思考 + 回复，快速 / 专家模式，支持暂停 / 中断 / 重新生成 / 分支，图片视觉理解。
+- **文件上传 + 本地 RAG 检索**：多格式解析、分块、本地向量检索，回答带可点击的引用回链。
+- **MCP 工具调用**：本地工具面经 MCP 协议暴露给任意客户端，也能用 `create_pptx` 等本地工具直接产出 PPT / Word / PDF / 思维导图。
+- **多 Agent DAG 执行**：Planner 拆解 → 同层并行 → Critic 修订 → 综合，全过程可观测、可恢复。
+- **Trace / Metrics / Healthcheck**：每轮请求生成调用链 trace，`/metrics` 暴露 Prometheus 指标，`/healthz`·`/readyz` 提供探针。
+
+> 这是一个真实可跑的应用，不是「README 项目」：[实现状态矩阵](docs/IMPLEMENTATION_STATUS.md) 标了 9 个模块各自的代码 / 测试 / Demo 落地程度，[2 分钟 Demo](docs/DEMO.md) 与下方 [Benchmarks](#benchmarks基准与评测) 给了可复现的命令与实测数字。完整架构叙事在 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+## 30 秒启动
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate          # macOS / Linux: source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
+打开 **http://127.0.0.1:8000** （终端会打印带本地访问 token 的地址，直接点开即可）。启动前可先 `python scripts/doctor.py` 体检环境。在页面右上角设置里填入 DeepSeek API Key（或用 `DEEPSEEK_API_KEY` 环境变量）后即可对话。其它形态（桌面应用窗口 / 手机本机直接运行 / 单文件 exe / Android APK / Docker）见下方[快速开始](#快速开始)。
+
+## 截图
+
+| 对话 + 流式思考 | 文件上传 + RAG 引用回链 |
+| --- | --- |
+| ![对话界面](docs/assets/screenshots/01-chat.png) | ![RAG 引用回链](docs/assets/screenshots/02-rag-citation.png) |
+| **多 Agent DAG 执行** | **Trace 调用链瀑布图** |
+| ![多 Agent DAG](docs/assets/screenshots/03-agent-dag.png) | ![Trace 瀑布图](docs/assets/screenshots/04-trace.png) |
 
 > 想看逐版本变更记录，请见 [CHANGELOG.md](CHANGELOG.md)。本文档描述**当前版本**的架构与用法。
-
-**先验证，再相信**：[实现状态矩阵](docs/IMPLEMENTATION_STATUS.md)（9 个模块各自的代码 / 测试 / Demo 落地程度）· [2 分钟 Demo](docs/DEMO.md) · [Benchmarks](#benchmarks基准与评测) · [部署](docs/DEPLOYMENT.md) · [威胁模型](docs/THREAT_MODEL.md)
 
 ![DeepSeek Infra 架构总览](docs/assets/architecture.svg)
 
@@ -283,6 +308,25 @@ curl http://127.0.0.1:8000/healthz
 
 可选依赖按需安装：`requirements-ocr.txt`（本地 OCR）、`requirements-rag.txt`（`sqlite-vec` / ONNX 本地 embedding）、`requirements-edge.txt`（`llama-cpp-python` 端侧推理）、`requirements-build.txt`（PyInstaller 打包）。
 
+### RAG embedding：默认 hash（零依赖）vs 推荐 ONNX（真实文档问答）
+
+本地 RAG 有两档 embedding，按需取舍——别误以为零依赖的 hash 档就是检索质量上限：
+
+- **默认：hash embedding（零依赖）。** 不装任何额外依赖即可跑，纯 SQLite + 哈希向量 + BM25 词法混合检索。适合 Demo、CI、快速试用；语义相似（同义改写）能力有限。
+- **推荐：ONNX embedding（真实语义检索）。** 装 `requirements-rag.txt` 后启用本地 ONNX Runtime 句向量 + `sqlite-vec` 向量表，跨同义 / 改写召回明显更好，仍全程在本机、不调用任何第三方 embedding 服务。适合真实文档问答 / 知识库。
+
+启用 ONNX 档（PowerShell）：
+
+```powershell
+pip install -r requirements.txt -r requirements-rag.txt
+$env:LOCAL_RAG_EMBEDDING_PROVIDER="onnx"
+$env:LOCAL_RAG_ONNX_MODEL_PATH="models/embed.onnx"        # 本地句向量 ONNX 模型
+$env:LOCAL_RAG_TOKENIZER_PATH="models/tokenizer.json"     # 对应 tokenizer
+python app.py
+```
+
+`GET /api/rag/status` 会回显当前 `embeddingProvider`（`hash` / `onnx`）与维度，`python scripts/doctor.py` 也会标出 `sqlite_vec` / `onnxruntime` 是否就位。模型文件缺失或加载失败时自动回退 hash 档（不会让服务起不来）。
+
 图片 OCR 优先用 `DEEPSEEK_API_KEY` 调 DeepSeek API 转写；API Key 缺失或识别不可用时，桌面端才回退本地 Tesseract / Windows OCR。扫描 PDF 需要 Poppler / `pdftoppm` 在 `PATH` 中；Android APK 用 ML Kit 作为本机兜底。
 
 ## 本地数据与隐私
@@ -312,21 +356,23 @@ python scripts/release.py --clean-workspace
 
 ## Roadmap
 
-已完成的能力以 [实现状态矩阵](docs/IMPLEMENTATION_STATUS.md) 为准（含各模块成熟度与明确缺口）；下面是接下来的计划，完成一项勾一项：
+已完成的能力以 [实现状态矩阵](docs/IMPLEMENTATION_STATUS.md) 为准（含各模块成熟度与明确缺口）；下一步计划拆成了可跟踪的 [GitHub Issues](https://github.com/leizd/deepseek/issues)：
 
-### v2.2
-- [ ] Trace 瀑布图 UI 增强（独立只读页面 + 截图 / GIF 进 `docs/assets/`）
-- [ ] RAG / 工具安全评测进 CI 门禁（`run_rag_eval` + `run_tool_eval` 作为 PR 必过项）
-- [ ] Docker 镜像瘦身与多架构构建（arm64）
+### 已在 v2.1.7 完成
+- [x] RAG / 工具安全评测进 CI 门禁（`run_rag_eval` + `run_tool_eval` 作为 PR 必过项）
+- [x] Docker 多阶段构建 + buildx 多架构（amd64 / arm64）
+- [x] 真实运行截图入库、README 改可验证型、一键体检 `doctor.py`、`SECURITY_MODE` 安全模式、依赖锁定
 
-### v2.3
-- [ ] MCP 外部 server 桥接：把 `MCP_CLIENT_SERVERS` 的外部工具目录合并进本地 Agent 工具面（过同一 Tool Policy 闸门）
-- [ ] A2A 任务产物流式增量（artifact streaming chunks）与第三方 A2A 实现互测
-- [ ] 语义缓存质量门禁升级：ONNX 本地 embedding 默认档评估 + 改写命中率基准
+### v2.2 / v2.3
+- [ ] [#13](https://github.com/leizd/deepseek/issues/13) Trace 瀑布图独立只读页面 + 截图 / GIF
+- [ ] [#14](https://github.com/leizd/deepseek/issues/14) server.py 路由拆分为 `routes/` 子包（APIRouter + 共享 http_utils）
+- [ ] [#15](https://github.com/leizd/deepseek/issues/15) MCP 外部 server 桥接：外部工具目录合并进本地 Agent 工具面
+- [ ] [#16](https://github.com/leizd/deepseek/issues/16) A2A 任务产物流式增量（artifact streaming chunks）
+- [ ] [#17](https://github.com/leizd/deepseek/issues/17) 语义缓存质量门禁：ONNX 本地 embedding 默认档评估
 
 ### v2.4
-- [ ] Edge-cloud 路由与 Ollama 深化：本地模型参与 cascade 草稿层
-- [ ] Prompt injection 防火墙对抗性基准（注入语料库 + 绕过率量化，接入 `run_tool_eval`）
+- [ ] [#18](https://github.com/leizd/deepseek/issues/18) Prompt injection 对抗性基准（注入语料库 + 绕过率量化，接入 `run_tool_eval`）
+- [ ] [#19](https://github.com/leizd/deepseek/issues/19) Edge-cloud 路由与 Ollama 进 cascade 草稿层 + 覆盖率门槛升到 80
 
 ## 文档
 

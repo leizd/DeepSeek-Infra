@@ -387,7 +387,11 @@ class ContextTaintSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "2.1.6"
+    app_version: str = "2.1.7"
+    # SECURITY_MODE=strict 把 Tool Policy 的两道严格闸门（schema 硬拒绝、高风险工具
+    # 人工确认）的默认值翻成开启；显式 TOOL_POLICY_* 环境变量仍可逐项覆盖。
+    # 本机单人开发用 dev（默认）；局域网 / 多人 / 对外暴露必须 strict。
+    security_mode: str = "dev"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -565,6 +569,10 @@ class Settings:
     def from_env(cls, root: Path | None = None) -> "Settings":
         runtime_root = _runtime_root() if root is None else root
         auth_token = os.environ.get("AUTH_TOKEN", "").strip()
+        # SECURITY_MODE=strict flips the *defaults* of the stricter tool-policy
+        # gates; explicit TOOL_POLICY_* env vars still win per knob.
+        security_mode = _env_choice("SECURITY_MODE", {"dev", "strict"}, "dev")
+        strict_security = security_mode == "strict"
         file_defaults = FileSettings()
         ocr_defaults = OCRSettings()
         return cls(
@@ -684,10 +692,11 @@ class Settings:
             agent_runtime=AgentRuntimeSettings(
                 auto_resume=_env_bool("AGENT_RUNTIME_AUTO_RESUME", False),
             ),
+            security_mode=security_mode,
             tool_policy=ToolPolicySettings(
                 enabled=_env_bool("TOOL_POLICY_ENABLED", True),
-                enforce_schema=_env_bool("TOOL_POLICY_ENFORCE_SCHEMA", False),
-                require_confirm=_env_bool("TOOL_POLICY_REQUIRE_CONFIRM", False),
+                enforce_schema=_env_bool("TOOL_POLICY_ENFORCE_SCHEMA", strict_security),
+                require_confirm=_env_bool("TOOL_POLICY_REQUIRE_CONFIRM", strict_security),
                 sanitize_results=_env_bool("TOOL_POLICY_SANITIZE_RESULTS", True),
                 audit_enabled=_env_bool("TOOL_POLICY_AUDIT_ENABLED", True),
             ),
@@ -1023,6 +1032,7 @@ BUDGET_POLICY = settings.budget.policy
 BUDGET_PRICING = settings.budget.pricing
 BUDGET_DIR = settings.budget_dir
 BUDGET_DB = settings.budget_db
+SECURITY_MODE = settings.security_mode
 TOOL_POLICY_ENABLED = settings.tool_policy.enabled
 TOOL_POLICY_ENFORCE_SCHEMA = settings.tool_policy.enforce_schema
 TOOL_POLICY_REQUIRE_CONFIRM = settings.tool_policy.require_confirm

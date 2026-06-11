@@ -1,0 +1,104 @@
+# Locked resolution of pyproject [project].dependencies (runtime deps only).
+# Generated on Windows / CPython 3.13 with: uv pip compile pyproject.toml -o requirements.lock --no-header
+# Regenerate after editing dependencies; install with: pip install -r requirements.lock
+annotated-doc==0.0.4
+    # via fastapi
+annotated-types==0.7.0
+    # via pydantic
+anyio==4.13.0
+    # via
+    #   starlette
+    #   watchfiles
+bottle==0.13.4
+    # via pywebview
+cffi==2.0.0
+    # via clr-loader
+charset-normalizer==3.4.7
+    # via reportlab
+click==8.4.1
+    # via uvicorn
+clr-loader==0.3.1
+    # via pythonnet
+colorama==0.4.6
+    # via
+    #   click
+    #   uvicorn
+customtkinter==5.2.2
+    # via deepseek-infra (pyproject.toml)
+darkdetect==0.8.0
+    # via customtkinter
+defusedxml==0.7.1
+    # via deepseek-infra (pyproject.toml)
+et-xmlfile==2.0.0
+    # via openpyxl
+fastapi==0.136.3
+    # via deepseek-infra (pyproject.toml)
+h11==0.16.0
+    # via uvicorn
+httptools==0.8.0
+    # via uvicorn
+idna==3.18
+    # via anyio
+lxml==6.1.1
+    # via
+    #   python-docx
+    #   python-pptx
+multipart==1.3.1
+    # via deepseek-infra (pyproject.toml)
+openpyxl==3.1.5
+    # via deepseek-infra (pyproject.toml)
+packaging==26.2
+    # via customtkinter
+pillow==12.2.0
+    # via
+    #   python-pptx
+    #   reportlab
+proxy-tools==0.1.0
+    # via pywebview
+pycparser==3.0
+    # via cffi
+pydantic==2.13.4
+    # via fastapi
+pydantic-core==2.46.4
+    # via pydantic
+pymupdf==1.27.2.3
+    # via deepseek-infra (pyproject.toml)
+pypdf==6.13.2
+    # via deepseek-infra (pyproject.toml)
+python-docx==1.2.0
+    # via deepseek-infra (pyproject.toml)
+python-dotenv==1.2.2
+    # via uvicorn
+python-pptx==1.0.2
+    # via deepseek-infra (pyproject.toml)
+pythonnet==3.1.0
+    # via pywebview
+pywebview==5.4
+    # via deepseek-infra (pyproject.toml)
+pyyaml==6.0.3
+    # via uvicorn
+reportlab==4.5.1
+    # via deepseek-infra (pyproject.toml)
+starlette==1.2.1
+    # via fastapi
+typing-extensions==4.15.0
+    # via
+    #   fastapi
+    #   pydantic
+    #   pydantic-core
+    #   python-docx
+    #   python-pptx
+    #   pywebview
+    #   typing-inspection
+typing-inspection==0.4.2
+    # via
+    #   fastapi
+    #   pydantic
+uvicorn==0.49.0
+    # via deepseek-infra (pyproject.toml)
+watchfiles==1.2.0
+    # via uvicorn
+websockets==16.0
+    # via uvicorn
+xlsxwriter==3.2.9
+    # via python-pptx

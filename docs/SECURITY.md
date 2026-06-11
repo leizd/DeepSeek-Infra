@@ -1,6 +1,6 @@
 # 安全说明
 
-适用版本：v2.1.6。
+适用版本：v2.1.7。
 
 ## 威胁模型
 
@@ -119,6 +119,11 @@ v2.1.0 起，上面这些零散的工具安全约束被收敛进一个统一的 
 - **审计日志**：每条决策（放行 / 拒绝 / 待确认）追加写入本地 `.tool-audit/audit.jsonl`（append-only，best-effort，不阻断工具调用），可经 `TOOL_POLICY_AUDIT_ENABLED` 关闭；发布脚本与 `.gitignore` 排除该目录。
 
 默认配置（`TOOL_POLICY_ENABLED=1`，`enforce_schema` / `require_confirm` 关闭，结果清洗与审计开启）下，主聊天用 full 画像、不强制确认，行为与 v2.0.x 一致；能力收窄、强制 schema 与强制确认是按需开启的更严格档位。被策略拦截的工具调用返回 `{"ok": false, "code": "forbidden"|"requires_confirmation", "policy": {...}}`，不会真正执行。
+
+**安全模式（v2.1.7）**：`SECURITY_MODE=strict` 一个开关把上面两道严格闸门的**默认值**翻成开启（`TOOL_POLICY_ENFORCE_SCHEMA=1` + `TOOL_POLICY_REQUIRE_CONFIRM=1`），显式的 `TOOL_POLICY_*` 环境变量仍可逐项覆盖。两档的适用边界：
+
+- `SECURITY_MODE=dev`（默认）：本机单人开发，schema 违例软告警、高风险工具直接执行，体验优先；
+- `SECURITY_MODE=strict`：**局域网（`HOST=0.0.0.0`）、多人共用或任何对外暴露的部署必须开启**——本项目带本地工具、文件、RAG、MCP、A2A 对外面，能力越强默认权限越要保守。
 
 ## 请求调度与 backpressure
 

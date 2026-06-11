@@ -1,6 +1,6 @@
 # AI Runtime Evaluation Harness
 
-适用版本：v2.1.6。
+适用版本：v2.1.7。
 
 这套 harness 对 DeepSeek Infra 的三条核心能力线做**自动化回归评测**（全部可离线执行，无需 API Key）：
 
