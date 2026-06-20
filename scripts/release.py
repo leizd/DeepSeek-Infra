@@ -117,8 +117,9 @@ def build_release_zip(root: Path, output_dir: Path, version: str) -> Path:
             archive.write(path, path.relative_to(root).as_posix())
 
     # Keep legacy-name zip as copy (backward compatibility)
-    if not legacy_path.exists():
-        shutil.copy2(archive_path, legacy_path)
+    if legacy_path.exists():
+        legacy_path.unlink()
+    shutil.copy2(archive_path, legacy_path)
 
     return archive_path
 

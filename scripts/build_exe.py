@@ -102,12 +102,15 @@ def main() -> int:
     result = subprocess.call(cmd, cwd=str(PROJECT_ROOT))
 
     # Create legacy-name alias for backward compatibility if default name used
-    if result == 0 and not args.name or args.name == APP_NAME:
+    if result == 0 and (not args.name or args.name == APP_NAME):
         for ext in ("", ".exe"):
             new_path = (PROJECT_ROOT / "dist" / (APP_NAME + ext))
             legacy_path = (PROJECT_ROOT / "dist" / (LEGACY_NAME + ext))
             if new_path.exists() and not legacy_path.exists():
-                shutil.copy2(new_path, legacy_path)
+                if new_path.is_dir():
+                    shutil.copytree(new_path, legacy_path)
+                else:
+                    shutil.copy2(new_path, legacy_path)
                 print(f"Legacy alias created: {legacy_path}")
 
     return result

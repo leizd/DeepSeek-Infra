@@ -62,13 +62,16 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
+  const OLD_PREFIXES = ["deepseek-mobile-", "deepseek-infra-"];
   event.waitUntil(
     caches
       .keys()
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
+            .filter((key) =>
+              OLD_PREFIXES.some((pfx) => key.startsWith(pfx) && key !== CACHE_NAME)
+            )
             .map((key) => caches.delete(key))
         )
       )

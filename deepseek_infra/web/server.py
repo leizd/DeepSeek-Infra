@@ -415,7 +415,8 @@ def create_app() -> FastAPI:
 
     @api.get("/trace/{trace_id}")
     async def trace_standalone_page(request: Request, trace_id: str) -> HTMLResponse:
-        """Standalone read-only waterfall page — no auth, shareable URL."""
+        """Standalone read-only waterfall page — local token required."""
+        require_api_auth(request)
         trace = get_trace(trace_id)
         if trace is None:
             raise AppError("Trace not found", code=ErrorCode.NOT_FOUND, status=404)
