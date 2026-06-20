@@ -2,6 +2,29 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.1.7]
+
+**主题：可信度打磨——从「看起来厉害」到「拿得出手」。** 补截图、30 秒概览、保守成熟度标签、CI eval/docker/docs 门禁、兼容性矩阵、生产边界声明、命名一致性收口，并把 Trace 独立只读页面 + export 端点做上线。
+
+### 新增
+- **Trace 独立只读页面**：`GET /trace/{trace_id}`（不鉴权，可分享 URL，自包含暗色瀑布 UI）；`GET /api/traces/{trace_id}/export.json`（machine-readable 导出）
+- **UI 截图入库**：`docs/assets/` 新增 01-chat.png / 02-rag-citation.png / 03-agent-dag.png / 04-trace.png
+- **`docs/COMPATIBILITY.md`**：MCP / A2A / OpenAI 客户端兼容性矩阵，诚实标注测试状态
+- **30 秒概览**：README 顶部中文概览（8 点 bullet + docker 一键三连）
+- **CI 门禁扩展**：新增 eval / docker / docs 三个 job
+- **`scripts/check_doc_links.py`**：文档断链离线检查
+
+### 更改
+- **实现状态矩阵标签从宽泛改保守**：LLM Gateway / Agent DAG / Local RAG / Tool Runtime → Working；Observability → Working；Edge-Cloud Router / MCP / A2A / Taint → Experimental
+- **命名收口**：`DeepSeekMobile.exe` → `DeepSeekInfra.exe`（旧名保留副本）；`deepseek-mobile-*.zip` → `deepseek-infra-*.zip`（旧名保留副本）；SW cache + localStorage key 前缀从 `deepseek-mobile` 迁移到 `deepseek-infra`，含自动迁移 shim
+- **环境变量**：`DEEPSEEK_INFRA_ROOT` / `DEEPSEEK_INFRA_STATIC_DIR` 优先，`DEEPSEEK_MOBILE_ROOT` 保留兼容
+- **部署文档新增 §6 Production Readiness**：声明本地优先定位与公网前的 7 项必做加固
+- **Benchmark 环境参数**：补充 CPU / RAM / SSD / runs / warmup 等专业声明
+- **Roadmap 重聚焦** 3 条线：可视化与体验 / 协议兼容 / 评测与安全
+
+### 修复
+- CI docker job 先 `cp .env.example .env` 再跑 `compose config`
+
 ## [2.1.6]
 
 **主题：可信度与可验证性。** README 已经把「local-first agentic AI infrastructure platform」的叙事立起来了，本版不再加新概念，而是把已写出的 Infra 能力落到**可点击的代码路径、可一键复现的 Demo、可部署的资产、可复跑的基准与评测**上，防止「README 画饼」的观感。

@@ -1204,7 +1204,7 @@ def test_run_agent_raises_after_exhausting_retries() -> None:
 
 
 def test_run_agent_resets_agent_card_before_stream_retry() -> None:
-    """v2.1.6：重试前必须发 agent_reset 清掉上次的半成品，否则第二次流式输出会拼在
+    """v2.1.7：重试前必须发 agent_reset 清掉上次的半成品，否则第二次流式输出会拼在
     旧内容后面，用户看到同一张卡片里出现两段「## 摘要」。"""
     calls = {"n": 0}
 
@@ -1244,7 +1244,7 @@ def test_run_agent_resets_agent_card_before_stream_retry() -> None:
 
 
 def test_run_agent_salvages_partial_output_when_stream_breaks_mid_output() -> None:
-    """v2.1.6：流式中断但已有可观产出时降级保留（带风险标注），不丢弃后整轮重跑。"""
+    """v2.1.7：流式中断但已有可观产出时降级保留（带风险标注），不丢弃后整轮重跑。"""
     calls = {"n": 0}
     partial = "## 摘要\n" + "核心结论：方案可行。" * 30 + "\n\n## 风险/不确定\n- 原有风险"
 
@@ -1275,7 +1275,7 @@ def test_run_agent_salvages_partial_output_when_stream_breaks_mid_output() -> No
 
 
 def test_run_agent_does_not_retry_content_risk_failures() -> None:
-    """v2.1.6：内容安全拦截是确定性失败，重试只会再烧一轮长流式；部分产出也不保留。"""
+    """v2.1.7：内容安全拦截是确定性失败，重试只会再烧一轮长流式；部分产出也不保留。"""
     calls = {"n": 0}
 
     def fake_stream(payload: dict[str, Any], emit_event, **_: object) -> None:
@@ -1303,7 +1303,7 @@ def test_run_agent_does_not_retry_content_risk_failures() -> None:
 
 
 def test_run_agent_marks_upstream_length_truncation_as_degraded() -> None:
-    """v2.1.6：上游按 max_tokens 截断（finish_reason=length）不能再被静默当成完整输出。"""
+    """v2.1.7：上游按 max_tokens 截断（finish_reason=length）不能再被静默当成完整输出。"""
 
     def fake_stream(payload: dict[str, Any], emit_event, **_: object) -> None:
         emit_event({"type": "content", "text": "## 摘要\n主流实现路径有两条：一是"})

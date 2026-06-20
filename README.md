@@ -1,6 +1,6 @@
 # DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-2.1.6-blue)
+![版本](https://img.shields.io/badge/version-2.1.7-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
