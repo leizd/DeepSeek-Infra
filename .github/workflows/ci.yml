@@ -72,7 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build .
-      - run: docker compose config
+      - run: cp .env.example .env && docker compose config
 
   docs:
     runs-on: ubuntu-latest
