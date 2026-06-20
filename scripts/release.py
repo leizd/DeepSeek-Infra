@@ -105,7 +105,8 @@ def build_release_zip(root: Path, output_dir: Path, version: str) -> Path:
     root = root.resolve()
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    archive_path = output_dir / f"deepseek-mobile-{version}.zip"
+    archive_path = output_dir / f"deepseek-infra-{version}.zip"
+    legacy_path = output_dir / f"deepseek-mobile-{version}.zip"
     if archive_path.exists():
         archive_path.unlink()
 
@@ -114,6 +115,10 @@ def build_release_zip(root: Path, output_dir: Path, version: str) -> Path:
             if not path.is_file() or not should_include(path, root):
                 continue
             archive.write(path, path.relative_to(root).as_posix())
+
+    # Keep legacy-name zip as copy (backward compatibility)
+    if not legacy_path.exists():
+        shutil.copy2(archive_path, legacy_path)
 
     return archive_path
 

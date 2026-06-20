@@ -11,10 +11,10 @@
     <script>
       (function () {
         try {
-          var style = localStorage.getItem("deepseek-mobile.theme-style") || "chatgpt";
-          var mode = localStorage.getItem("deepseek-mobile.theme-mode");
+          var style = localStorage.getItem("deepseek-infra.theme-style") || localStorage.getItem("deepseek-mobile.theme-style") || "chatgpt";
+          var mode = localStorage.getItem("deepseek-infra.theme-mode") || localStorage.getItem("deepseek-mobile.theme-mode");
           if (!mode) {
-            var legacy = localStorage.getItem("deepseek-mobile.theme");
+            var legacy = localStorage.getItem("deepseek-infra.theme") || localStorage.getItem("deepseek-mobile.theme");
             mode = legacy === "light" || legacy === "dark" || legacy === "system" ? legacy : "system";
           }
           var styles = { chatgpt: true, linear: true, notion: true, arc: true };

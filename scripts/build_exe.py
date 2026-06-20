@@ -6,11 +6,14 @@ Usage:
     python -m pip install -r requirements-build.txt
     python scripts/build_exe.py
 
-The resulting ``dist/DeepSeekMobile.exe`` (or ``DeepSeekMobile`` on macOS /
+The resulting ``dist/DeepSeekInfra.exe`` (or ``DeepSeekInfra`` on macOS /
 Linux) bundles ``launch.py``, the entire ``deepseek_infra`` package, the
 ``static`` web assets, and KaTeX fonts. The same exe opens the local desktop
 app window by default, can launch the legacy GUI with ``--gui``, or run as the
 HTTP server with ``--server``.
+
+(The legacy name ``DeepSeekMobile.exe`` is kept as an alias for backward
+compatibility; pass ``--name DeepSeekMobile`` to produce it explicitly.)
 """
 
 from __future__ import annotations
@@ -24,7 +27,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENTRY = PROJECT_ROOT / "launch.py"
-APP_NAME = "DeepSeekMobile"
+APP_NAME = "DeepSeekInfra"
+LEGACY_NAME = "DeepSeekMobile"
 STATIC_DIR = PROJECT_ROOT / "static"
 ICON_PATH = PROJECT_ROOT / "static" / "icons" / "favicon.ico"
 
@@ -95,7 +99,18 @@ def main() -> int:
     cmd.append(str(ENTRY))
 
     print("Running:", " ".join(cmd))
-    return subprocess.call(cmd, cwd=str(PROJECT_ROOT))
+    result = subprocess.call(cmd, cwd=str(PROJECT_ROOT))
+
+    # Create legacy-name alias for backward compatibility if default name used
+    if result == 0 and not args.name or args.name == APP_NAME:
+        for ext in ("", ".exe"):
+            new_path = (PROJECT_ROOT / "dist" / (APP_NAME + ext))
+            legacy_path = (PROJECT_ROOT / "dist" / (LEGACY_NAME + ext))
+            if new_path.exists() and not legacy_path.exists():
+                shutil.copy2(new_path, legacy_path)
+                print(f"Legacy alias created: {legacy_path}")
+
+    return result
 
 
 if __name__ == "__main__":

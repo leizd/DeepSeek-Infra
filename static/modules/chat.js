@@ -45,41 +45,69 @@ import {
 } from "./agent_timeline.js";
 
 const storageKeys = {
-  messages: "deepseek-mobile.messages",
-  conversations: "deepseek-mobile.conversations",
-  currentConversation: "deepseek-mobile.current-conversation",
-  apiKey: "deepseek-mobile.api-key",
-  rememberKey: "deepseek-mobile.remember-key",
-  tavilyKey: "deepseek-mobile.tavily-key",
-  rememberTavilyKey: "deepseek-mobile.remember-tavily-key",
-  model: "deepseek-mobile.model",
-  thinkingEnabled: "deepseek-mobile.thinking-enabled",
-  reasoningEffort: "deepseek-mobile.reasoning-effort",
-  autoRoute: "deepseek-mobile.auto-route",
-  cascade: "deepseek-mobile.cascade",
-  role: "deepseek-mobile.role",
-  temperature: "deepseek-mobile.temperature",
-  searchEnabled: "deepseek-mobile.search-enabled",
-  searchMode: "deepseek-mobile.search-mode",
-  agentMode: "deepseek-mobile.agent-mode",
-  agentPreset: "deepseek-mobile.agent-preset",
-  agentDisplayMode: "deepseek-mobile.agent-display-mode",
-  attachmentPrivacySeen: "deepseek-mobile.attachment-privacy-seen",
-  attachmentConfirmEachSend: "deepseek-mobile.attachment-confirm-each-send",
-  memoryEnabled: "deepseek-mobile.memory-enabled",
-  authToken: "deepseek-mobile.auth-token",
-  seeks: "deepseek-mobile.seeks",
-  activeSeek: "deepseek-mobile.active-seek",
-  draft: "deepseek-mobile.draft",
-  activeProject: "deepseek-mobile.active-project",
-  theme: "deepseek-mobile.theme",
-  themeStyle: "deepseek-mobile.theme-style",
-  themeMode: "deepseek-mobile.theme-mode",
-  readingFontSize: "deepseek-mobile.reading-font-size",
-  codeFontSize: "deepseek-mobile.code-font-size",
-  voiceLanguage: "deepseek-mobile.voice-language",
-  historySideClosed: "deepseek-mobile.history-side-closed",
+  messages: "deepseek-infra.messages",
+  conversations: "deepseek-infra.conversations",
+  currentConversation: "deepseek-infra.current-conversation",
+  apiKey: "deepseek-infra.api-key",
+  rememberKey: "deepseek-infra.remember-key",
+  tavilyKey: "deepseek-infra.tavily-key",
+  rememberTavilyKey: "deepseek-infra.remember-tavily-key",
+  model: "deepseek-infra.model",
+  thinkingEnabled: "deepseek-infra.thinking-enabled",
+  reasoningEffort: "deepseek-infra.reasoning-effort",
+  autoRoute: "deepseek-infra.auto-route",
+  cascade: "deepseek-infra.cascade",
+  role: "deepseek-infra.role",
+  temperature: "deepseek-infra.temperature",
+  searchEnabled: "deepseek-infra.search-enabled",
+  searchMode: "deepseek-infra.search-mode",
+  agentMode: "deepseek-infra.agent-mode",
+  agentPreset: "deepseek-infra.agent-preset",
+  agentDisplayMode: "deepseek-infra.agent-display-mode",
+  attachmentPrivacySeen: "deepseek-infra.attachment-privacy-seen",
+  attachmentConfirmEachSend: "deepseek-infra.attachment-confirm-each-send",
+  memoryEnabled: "deepseek-infra.memory-enabled",
+  authToken: "deepseek-infra.auth-token",
+  seeks: "deepseek-infra.seeks",
+  activeSeek: "deepseek-infra.active-seek",
+  draft: "deepseek-infra.draft",
+  activeProject: "deepseek-infra.active-project",
+  theme: "deepseek-infra.theme",
+  themeStyle: "deepseek-infra.theme-style",
+  themeMode: "deepseek-infra.theme-mode",
+  readingFontSize: "deepseek-infra.reading-font-size",
+  codeFontSize: "deepseek-infra.code-font-size",
+  voiceLanguage: "deepseek-infra.voice-language",
+  historySideClosed: "deepseek-infra.history-side-closed",
 };
+
+// ---------------------------------------------------------------------------
+// v2.1.7 branding migration: deepseek-mobile.* → deepseek-infra.*
+// One-time: copies any existing values from the old key prefix to the new one.
+// Runs once per browser; safe to leave in place until the next major version.
+// ---------------------------------------------------------------------------
+(function _migrateStoragePrefix() {
+  if (localStorage.getItem("deepseek-infra._migrated")) return;
+  for (const k in storageKeys) {
+    const oldKey = storageKeys[k].replace("deepseek-infra.", "deepseek-mobile.");
+    if (oldKey !== storageKeys[k]) {
+      const oldVal = localStorage.getItem(oldKey);
+      if (oldVal !== null && !localStorage.getItem(storageKeys[k])) {
+        localStorage.setItem(storageKeys[k], oldVal);
+      }
+    }
+  }
+  // Also migrate conversation messages/conversations which use the raw prefix
+  for (const suffix of [".messages", ".conversations", ".current-conversation"]) {
+    const oldKey = "deepseek-mobile" + suffix;
+    const newKey = "deepseek-infra" + suffix;
+    const oldVal = localStorage.getItem(oldKey);
+    if (oldVal !== null && !localStorage.getItem(newKey)) {
+      localStorage.setItem(newKey, oldVal);
+    }
+  }
+  localStorage.setItem("deepseek-infra._migrated", "1");
+})();
 
 const seekCore = window.DeepSeekSeekCore;
 const mathCore = window.DeepSeekMathCore;

@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit, urlunspl
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
 from deepseek_infra.core.config import (
     APP_VERSION,
@@ -393,6 +393,33 @@ def create_app() -> FastAPI:
         if trace is None:
             raise AppError("Trace not found", code=ErrorCode.NOT_FOUND, status=404)
         return json_response({"ok": True, "trace": trace})
+
+    @api.get("/api/traces/{trace_id}/export.json")
+    async def api_trace_export(request: Request, trace_id: str) -> JSONResponse:
+        """Machine-readable trace export: run metadata + full span tree.
+
+        No auth required when AUTH_DISABLED=1, else needs local token.
+        Served with ``Content-Disposition: attachment`` so browsers download it.
+        """
+        require_api_auth(request)
+        trace = get_trace(trace_id)
+        if trace is None:
+            raise AppError("Trace not found", code=ErrorCode.NOT_FOUND, status=404)
+        return JSONResponse(
+            trace,
+            headers={
+                "Content-Disposition": f'attachment; filename="trace-{trace_id[:12]}.json"',
+                "Content-Type": "application/json; charset=utf-8",
+            },
+        )
+
+    @api.get("/trace/{trace_id}")
+    async def trace_standalone_page(request: Request, trace_id: str) -> HTMLResponse:
+        """Standalone read-only waterfall page — no auth, shareable URL."""
+        trace = get_trace(trace_id)
+        if trace is None:
+            raise AppError("Trace not found", code=ErrorCode.NOT_FOUND, status=404)
+        return HTMLResponse(_trace_waterfall_html(trace))
 
     @api.get("/api/semantic-cache/status")
     async def api_semantic_cache_status(request: Request) -> JSONResponse:
@@ -1578,3 +1605,215 @@ def redact_sensitive_query(value: str) -> str:
     for placeholder, redacted in placeholders:
         value = value.replace(placeholder, redacted)
     return value
+
+
+# ---------------------------------------------------------------------------
+# Standalone Trace Waterfall HTML page
+# ---------------------------------------------------------------------------
+
+def _trace_waterfall_html(trace: dict[str, Any]) -> str:
+    """Render a self-contained, read-only waterfall page for a single trace.
+
+    No external CSS/JS dependencies — inline styles and a minimal script
+    to toggle span details.  Safe to share as a file or URL.
+    """
+    import html as _html_module
+
+    title = _html_module.escape(str(trace.get("title") or "Trace"))
+    kind = _html_module.escape(str(trace.get("kind") or ""))
+    status = _html_module.escape(str(trace.get("status") or ""))
+    started = _html_module.escape(str(trace.get("startedAt") or ""))
+    completed = _html_module.escape(str(trace.get("completedAt") or ""))
+    duration_ms = int(trace.get("durationMs") or 0)
+    error_text = _html_module.escape(str(trace.get("error") or ""))
+    trace_id = _html_module.escape(str(trace.get("traceId") or ""))
+    spans = trace.get("spans") or []
+    summary = trace.get("summary") or {}
+    metadata = trace.get("metadata") or {}
+    meta_lines = (
+        "\n".join(f"<tr><td class='m-key'>{_html_module.escape(str(k))}</td><td>{_html_module.escape(str(v))}</td></tr>"
+                  for k, v in metadata.items())
+        if isinstance(metadata, dict) else ""
+    )
+
+    # Build span rows
+    span_rows: list[str] = []
+    for span_entry in spans:
+        s_name = _html_module.escape(str(span_entry.get("name") or ""))
+        s_kind = _html_module.escape(str(span_entry.get("kind") or ""))
+        s_status = _html_module.escape(str(span_entry.get("status") or "ok"))
+        s_offset = int(span_entry.get("offsetMs") or 0)
+        s_dur = int(span_entry.get("durationMs") or 0)
+        s_tokens = int(span_entry.get("totalTokens") or 0)
+        s_cache = float(span_entry.get("cacheHitRate") or 0)
+        s_error = _html_module.escape(str(span_entry.get("error") or ""))
+        s_span_id = _html_module.escape(str(span_entry.get("spanId") or ""))
+        s_parent = _html_module.escape(str(span_entry.get("parentSpanId") or ""))
+        depth = _span_depth(span_entry, spans)
+
+        input_data = span_entry.get("input")
+        output_data = span_entry.get("output")
+        usage = span_entry.get("usage")
+        diagnostics = span_entry.get("diagnostics")
+
+        status_cls = "s-ok" if s_status == "ok" else ("s-err" if s_status == "error" else "s-warn")
+        bar_color = "#3b82f6" if s_status == "ok" else ("#ef4444" if s_status == "error" else "#f59e0b")
+        max_bar_ms = max(int(s.get("durationMs") or 0) for s in spans) if spans else 1
+        bar_pct = max(1, int(s_dur / max(max_bar_ms, 1) * 100))
+
+        detail_html = _render_span_detail(s_name, s_kind, s_status, s_error, s_tokens, s_cache,
+                                          input_data, output_data, usage, diagnostics)
+        span_rows.append(f"""
+        <div class="span-row" style="padding-left:{depth * 24}px">
+          <div class="span-bar-row">
+            <span class="span-kind-badge">{s_kind}</span>
+            <span class="span-name">{s_name}</span>
+            <span class="span-status {status_cls}">{s_status}</span>
+            <span class="span-time">{s_offset}ms + {s_dur}ms</span>
+            <div class="span-bar-track">
+              <div class="span-bar-fill" style="width:{bar_pct}%; background:{bar_color}"></div>
+            </div>
+          </div>
+          {detail_html}
+        </div>""")
+
+    export_url = f"/api/traces/{trace_id}/export.json"
+    spans_html = "\n".join(span_rows[:200])
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{title} – DeepSeek Infra Trace</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  *, *::before, *::after {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:#0f172a; color:#e2e8f0; min-height:100vh; }}
+  .container {{ max-width:960px; margin:0 auto; padding:24px 16px; }}
+  header {{ margin-bottom:24px; }}
+  header h1 {{ font-size:20px; font-weight:600; color:#f1f5f9; }}
+  header .meta {{ font-size:13px; color:#94a3b8; margin-top:4px; }}
+  .export-btn {{ display:inline-block; margin-top:8px; padding:6px 14px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; text-decoration:none; font-size:13px; }}
+  .export-btn:hover {{ background:#334155; }}
+  .summary {{ display:flex; gap:16px; flex-wrap:wrap; margin-bottom:20px; }}
+  .summary-card {{ background:#1e293b; border:1px solid #334155; border-radius:8px; padding:12px 16px; min-width:120px; }}
+  .summary-card .label {{ font-size:11px; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px; }}
+  .summary-card .value {{ font-size:18px; font-weight:600; color:#f1f5f9; }}
+  .meta-table {{ width:100%; border-collapse:collapse; margin-bottom:20px; font-size:13px; }}
+  .meta-table td {{ padding:4px 8px; border-bottom:1px solid #1e293b; }}
+  .meta-table .m-key {{ color:#94a3b8; width:140px; white-space:nowrap; }}
+  .spans {{ margin-top:20px; }}
+  .spans h2 {{ font-size:15px; font-weight:600; color:#94a3b8; margin-bottom:12px; }}
+  .span-row {{ margin-bottom:4px; border-radius:6px; background:#1e293b; border:1px solid #1e293b; overflow:hidden; }}
+  .span-bar-row {{ display:flex; align-items:center; gap:10px; padding:6px 10px; font-size:13px; }}
+  .span-kind-badge {{ background:#334155; color:#cbd5e1; padding:1px 6px; border-radius:4px; font-size:10px; text-transform:uppercase; white-space:nowrap; }}
+  .span-name {{ flex:1; color:#e2e8f0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+  .span-status {{ font-size:10px; text-transform:uppercase; padding:1px 5px; border-radius:4px; white-space:nowrap; }}
+  .s-ok {{ color:#22c55e; }}
+  .s-err {{ color:#ef4444; }}
+  .s-warn {{ color:#f59e0b; }}
+  .span-time {{ color:#64748b; font-size:11px; white-space:nowrap; min-width:110px; text-align:right; }}
+  .span-bar-track {{ width:160px; height:8px; background:#0f172a; border-radius:4px; overflow:hidden; flex-shrink:0; }}
+  .span-bar-fill {{ height:100%; border-radius:4px; min-width:2px; }}
+  .span-toggle {{ font-size:11px; color:#64748b; cursor:pointer; user-select:none; }}
+  .span-detail {{ display:none; padding:8px 10px 10px; border-top:1px solid #0f172a; font-size:12px; }}
+  .span-detail.open {{ display:block; }}
+  .detail-section {{ margin-bottom:8px; }}
+  .detail-section .ds-title {{ font-weight:600; color:#94a3b8; margin-bottom:2px; }}
+  .detail-section pre {{ background:#0f172a; color:#cbd5e1; padding:8px; border-radius:4px; overflow-x:auto; max-height:240px; font-size:11px; line-height:1.4; }}
+  .error-banner {{ background:#7f1d1d; color:#fca5a5; padding:8px 12px; border-radius:6px; margin-bottom:16px; font-size:13px; }}
+  footer {{ margin-top:32px; padding-top:16px; border-top:1px solid #1e293b; font-size:11px; color:#475569; }}
+  .empty {{ color:#475569; font-style:italic; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>{title}</h1>
+    <div class="meta">{kind} · {status} · {started}{" → " + completed if completed else ""} · {duration_ms}ms</div>
+    <a class="export-btn" href="{export_url}" download>⬇ Export JSON</a>
+  </header>
+  {('<div class="error-banner">' + error_text + '</div>') if error_text else ''}
+  <div class="summary">
+    <div class="summary-card"><div class="label">Spans</div><div class="value">{summary.get("spanCount", len(spans))}</div></div>
+    <div class="summary-card"><div class="label">Span Time</div><div class="value">{summary.get("totalSpanDurationMs", 0)}ms</div></div>
+    <div class="summary-card"><div class="label">Tokens</div><div class="value">{summary.get("totalTokens", 0)}</div></div>
+    <div class="summary-card"><div class="label">Slowest</div><div class="value" style="font-size:13px">{_html_module.escape(str(summary.get("slowestSpan") or "—"))}</div></div>
+  </div>
+  {(('<table class="meta-table">' + meta_lines + '</table>') if meta_lines else '')}
+  <div class="spans">
+    <h2>Span Waterfall</h2>
+    {spans_html if spans_html else '<p class="empty">No spans recorded.</p>'}
+  </div>
+  <footer>DeepSeek Infra · trace {trace_id} · <a href="/api/traces/{trace_id}/export.json" style="color:#64748b">raw JSON</a></footer>
+</div>
+<script>
+  document.querySelectorAll('.span-toggle').forEach(el => {{
+    el.addEventListener('click', () => {{
+      const detail = el.closest('.span-row').querySelector('.span-detail');
+      if (detail) {{
+        detail.classList.toggle('open');
+        el.textContent = detail.classList.contains('open') ? '▲' : '▼';
+      }}
+    }});
+  }});
+</script>
+</body>
+</html>"""
+
+
+def _span_depth(span: dict[str, Any], all_spans: list[dict[str, Any]]) -> int:
+    """Compute nesting depth of a span within the span tree."""
+    depth = 0
+    parent_id = str(span.get("parentSpanId") or "")
+    seen: set[str] = set()
+    while parent_id and depth < 20:
+        if parent_id in seen:
+            break
+        seen.add(parent_id)
+        parent = next((s for s in all_spans if str(s.get("spanId") or "") == parent_id), None)
+        if parent is None:
+            break
+        depth += 1
+        parent_id = str(parent.get("parentSpanId") or "")
+    return depth
+
+
+def _render_span_detail(
+    name: str, kind: str, status: str, error: str,
+    tokens: int, cache_rate: float,
+    input_data: Any, output_data: Any, usage: Any, diagnostics: Any,
+) -> str:
+    import html as _h
+    sections: list[str] = []
+    sections.append(f"""<span class="span-toggle" style="cursor:pointer;margin-left:8px">▼</span>
+    <div class="span-detail open">""")
+
+    meta_parts = []
+    if tokens:
+        meta_parts.append(f"tokens={tokens}")
+    if cache_rate:
+        meta_parts.append(f"cache_hit={cache_rate:.0f}%")
+    if error:
+        meta_parts.append(f'<span style="color:#ef4444">error={_h.escape(error)}</span>')
+    if meta_parts:
+        sections.append(f'<div class="detail-section"><span class="ds-title">Info</span> {", ".join(meta_parts)}</div>')
+
+    if input_data not in (None, "", "{}", {}):
+        sections.append(f'<div class="detail-section"><div class="ds-title">Input</div><pre>{_h.escape(_json_compact(input_data))}</pre></div>')
+    if output_data not in (None, "", "{}", {}):
+        sections.append(f'<div class="detail-section"><div class="ds-title">Output</div><pre>{_h.escape(_json_compact(output_data))}</pre></div>')
+    if usage and isinstance(usage, dict) and usage:
+        sections.append(f'<div class="detail-section"><div class="ds-title">Usage</div><pre>{_h.escape(_json_compact(usage))}</pre></div>')
+    if diagnostics and isinstance(diagnostics, dict) and diagnostics:
+        sections.append(f'<div class="detail-section"><div class="ds-title">Diagnostics</div><pre>{_h.escape(_json_compact(diagnostics))}</pre></div>')
+
+    sections.append("</div>")
+    return "\n".join(sections)
+
+
+def _json_compact(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        return str(value)
