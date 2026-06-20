@@ -3,5 +3,5 @@
     <string name="app_name">DeepSeek Infra</string>
     <string name="external_browser_unavailable">No browser can open this link.</string>
     <string name="file_picker_unavailable">No file picker is available on this phone.</string>
-    <string name="startup_failed">DeepSeek Infra failed to start: %1$s</string>
+    <string name="startup_failed">DeepSeek Infra v%1$s failed to start:\n%2$s\n\nDependency probe: %3$s</string>
 </resources>

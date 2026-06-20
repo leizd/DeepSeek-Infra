@@ -3,9 +3,13 @@ package com.deepseek.mobile;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.webkit.ValueCallback;
@@ -26,6 +30,7 @@ import com.chaquo.python.android.AndroidPlatform;
 import org.json.JSONObject;
 
 public class MainActivity extends Activity {
+    private static final String TAG = "DeepSeekMobile";
     private static final int FILE_CHOOSER_REQUEST = 5010;
     private static final int SERVER_PORT = 8000;
 
@@ -113,12 +118,15 @@ public class MainActivity extends Activity {
 
     private void startPythonServer() {
         new Thread(() -> {
+            String dependencyProbe = "not run";
             try {
                 if (!Python.isStarted()) {
                     Python.start(new AndroidPlatform(this));
                 }
                 AndroidOcrBridge.initialize(getApplicationContext());
                 PyObject module = Python.getInstance().getModule("deepseek_infra.android_entry");
+                dependencyProbe = module.callAttr("dependency_versions").toString();
+                Log.i(TAG, "Python dependency probe: " + dependencyProbe);
                 PyObject result = module.callAttr("start_json", getFilesDir().getAbsolutePath(), SERVER_PORT, "", "", false);
                 JSONObject payload = new JSONObject(result.toString());
                 String url = payload.getString("url");
@@ -127,7 +135,9 @@ public class MainActivity extends Activity {
                     webView.loadUrl(url);
                 });
             } catch (Exception exc) {
-                runOnUiThread(() -> showStartupError(exc));
+                String finalDependencyProbe = dependencyProbe;
+                Log.e(TAG, "Startup failed after dependency probe: " + finalDependencyProbe, exc);
+                runOnUiThread(() -> showStartupError(exc, finalDependencyProbe));
             }
         }, "deepseek-python-start").start();
     }
@@ -147,10 +157,17 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void showStartupError(Exception exc) {
+    private void showStartupError(Exception exc, String dependencyProbe) {
         progressBar.setVisibility(ProgressBar.GONE);
         TextView errorView = new TextView(this);
-        errorView.setText(getString(R.string.startup_failed, exc.getMessage()));
+        errorView.setText(
+            getString(
+                R.string.startup_failed,
+                getVersionLabel(),
+                formatException(exc),
+                dependencyProbe
+            )
+        );
         errorView.setTextColor(Color.rgb(180, 30, 30));
         errorView.setTextSize(15);
         errorView.setPadding(32, 32, 32, 32);
@@ -162,6 +179,37 @@ public class MainActivity extends Activity {
                 Gravity.CENTER
             )
         );
+    }
+
+    private String getVersionLabel() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            long versionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? info.getLongVersionCode()
+                : info.versionCode;
+            return info.versionName + " (" + versionCode + ")";
+        } catch (PackageManager.NameNotFoundException exc) {
+            return "unknown";
+        }
+    }
+
+    private String formatException(Throwable throwable) {
+        StringBuilder result = new StringBuilder();
+        Throwable current = throwable;
+        int depth = 0;
+        while (current != null && depth < 6) {
+            if (depth > 0) {
+                result.append("\nCaused by: ");
+            }
+            result.append(current.getClass().getSimpleName());
+            String message = current.getMessage();
+            if (message != null && !message.isEmpty()) {
+                result.append(": ").append(message);
+            }
+            current = current.getCause();
+            depth++;
+        }
+        return result.toString();
     }
 
     @Override

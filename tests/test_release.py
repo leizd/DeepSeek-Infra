@@ -31,6 +31,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 ".semantic-cache",
                 ".request-queue",
                 ".generated",
+                ".gradle",
                 ".mypy_cache",
                 ".pytest_cache",
                 ".ruff_cache",
@@ -50,6 +51,10 @@ class ReleaseScriptTests(unittest.TestCase):
             # Deployment secrets must never ship; the committed template must.
             (workspace / ".env").write_text("DEEPSEEK_API_KEY=secret", encoding="utf-8")
             (workspace / ".env.example").write_text("DEEPSEEK_API_KEY=", encoding="utf-8")
+            (workspace / "release.jks").write_text("secret", encoding="utf-8")
+            (workspace / "release.keystore").write_text("secret", encoding="utf-8")
+            (workspace / "signing.properties").write_text("secret", encoding="utf-8")
+            (workspace / "keystore.properties").write_text("secret", encoding="utf-8")
             # VCS / tooling metadata and the encrypted launcher credential store must never ship.
             (workspace / ".git").mkdir()
             (workspace / ".git" / "config").write_text("secret", encoding="utf-8")
@@ -80,6 +85,10 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotIn(".auth-token", names)
             self.assertNotIn(".env", names)
             self.assertIn(".env.example", names)
+            self.assertNotIn("release.jks", names)
+            self.assertNotIn("release.keystore", names)
+            self.assertNotIn("signing.properties", names)
+            self.assertNotIn("keystore.properties", names)
             self.assertFalse(any(name.startswith((".git/", ".claude/")) for name in names))
             self.assertNotIn(".launcher-config.json", names)
 

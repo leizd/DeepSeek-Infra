@@ -25,6 +25,10 @@ class ErrorCode(str, Enum):
     MEMORY_CONFLICT = "memory_conflict"
     RATE_LIMITED = "rate_limited"
     NOT_FOUND = "not_found"
+    TOOL_POLICY_DENIED = "tool_policy_denied"
+    TOOL_SCHEMA_INVALID = "tool_schema_invalid"
+    TOOL_RISK_BLOCKED = "tool_risk_blocked"
+    TOOL_SENSITIVE_CONTENT = "tool_sensitive_content"
     INTERNAL = "internal"
 
 

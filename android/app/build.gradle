@@ -4,6 +4,11 @@ plugins {
 }
 
 def syncedPythonDir = layout.buildDirectory.dir("generated/python")
+def releaseStoreFilePath = findProperty("DEEPSEEK_RELEASE_STORE_FILE") ?: System.getenv("DEEPSEEK_RELEASE_STORE_FILE")
+def releaseStorePassword = findProperty("DEEPSEEK_RELEASE_STORE_PASSWORD") ?: System.getenv("DEEPSEEK_RELEASE_STORE_PASSWORD")
+def releaseKeyAlias = findProperty("DEEPSEEK_RELEASE_KEY_ALIAS") ?: System.getenv("DEEPSEEK_RELEASE_KEY_ALIAS")
+def releaseKeyPassword = findProperty("DEEPSEEK_RELEASE_KEY_PASSWORD") ?: System.getenv("DEEPSEEK_RELEASE_KEY_PASSWORD")
+def hasReleaseSigning = releaseStoreFilePath && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
 
 tasks.register("syncPythonSources", Sync) {
     into syncedPythonDir
@@ -24,11 +29,30 @@ android {
         applicationId "com.deepseek.mobile"
         minSdk 24
         targetSdk 34
-        versionCode 170
-        versionName "1.7.0"
+        versionCode 217
+        versionName "2.1.5"
 
         ndk {
             abiFilters "arm64-v8a", "x86_64"
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseStoreFilePath)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

@@ -41,6 +41,10 @@ __pycache__/
 dist/
 build/
 *.spec
+*.jks
+*.keystore
+signing.properties
+keystore.properties
 android/.gradle/
 android/local.properties
 android/app/build/

@@ -13,6 +13,18 @@ _LOCK = threading.RLock()
 _HANDLE: Any | None = None
 
 
+def dependency_versions() -> dict[str, str]:
+    import fastapi
+    import pydantic
+    import uvicorn
+
+    return {
+        "fastapi": fastapi.__version__,
+        "pydantic": pydantic.VERSION,
+        "uvicorn": uvicorn.__version__,
+    }
+
+
 def configure_android_environment(
     root_dir: str,
     port: int = DEFAULT_ANDROID_PORT,

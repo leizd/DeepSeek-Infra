@@ -9,6 +9,13 @@ from unittest.mock import patch
 import deepseek_infra.android_entry as android_entry
 
 
+def test_dependency_versions_reports_android_server_runtime() -> None:
+    versions = android_entry.dependency_versions()
+
+    assert set(versions) == {"fastapi", "pydantic", "uvicorn"}
+    assert all(versions.values())
+
+
 def test_configure_android_environment_sets_private_runtime_paths(tmp_path: Path) -> None:
     with patch.dict(os.environ, {}, clear=True):
         payload = android_entry.configure_android_environment(
