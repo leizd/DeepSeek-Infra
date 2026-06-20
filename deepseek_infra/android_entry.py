@@ -14,6 +14,7 @@ _HANDLE: Any | None = None
 
 
 def dependency_versions() -> dict[str, str]:
+    # Deferred imports: Chaquopy only makes these available after Python.start().
     import fastapi
     import pydantic
     import uvicorn

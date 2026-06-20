@@ -188,7 +188,8 @@ public class MainActivity extends Activity {
                 ? info.getLongVersionCode()
                 : info.versionCode;
             return info.versionName + " (" + versionCode + ")";
-        } catch (PackageManager.NameNotFoundException exc) {
+        } catch (Exception exc) {
+            Log.w(TAG, "Failed to read version label", exc);
             return "unknown";
         }
     }

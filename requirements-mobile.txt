@@ -1,3 +1,5 @@
+# Android (Chaquopy) needs pinned versions because the APK build ships a single
+# pre-built Python environment where patch-level drift can cause ABI mismatches.
 openpyxl>=3.1.0
 pypdf>=4.0.0
 fastapi==0.115.14
