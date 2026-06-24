@@ -55,6 +55,27 @@ def mcp_tools() -> list[dict[str, Any]]:
                 "openWorldHint": bool(meta.network),
             }
         tools.append(tool)
+    # Append external MCP bridged tools (when capability is "full").
+    if hub_capability() == "full":
+        try:
+            from deepseek_infra.infra.mcp.bridge import external_mcp_registry
+            for profile in external_mcp_registry.list_profiles():
+                raw_schema = profile.input_schema if isinstance(profile.input_schema, dict) else {}
+                parameters = raw_schema if raw_schema.get("type") == "object" else {"type": "object", "properties": raw_schema}
+                schema_desc = str(raw_schema.get("description") or profile.tool)
+                tools.append({
+                    "name": profile.bridged_name,
+                    "description": f"[External MCP: {profile.server}] {schema_desc}",
+                    "inputSchema": parameters,
+                    "annotations": {
+                        "title": f"{profile.server}/{profile.tool}",
+                        "readOnlyHint": not profile.requires_approval,
+                        "destructiveHint": profile.requires_approval,
+                        "openWorldHint": profile.network,
+                    },
+                })
+        except Exception:
+            pass  # external tools are best-effort
     return tools
 
 

@@ -26,7 +26,14 @@ def allowed_tool_names() -> list[str]:
     """Tool names exposed by the hub under the configured capability."""
     capability = hub_capability()
     if capability == "full":
-        return list(all_tool_names())
+        names = list(all_tool_names())
+        # Include external MCP bridged tools when capability is full.
+        try:
+            from deepseek_infra.infra.mcp.bridge import external_mcp_registry
+            names.extend(p.bridged_name for p in external_mcp_registry.list_profiles())
+        except Exception:
+            pass
+        return names
     return list(CAPABILITY_PROFILES.get(capability, ()))
 
 

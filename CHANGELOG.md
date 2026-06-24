@@ -2,7 +2,7 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
-## [2.2.0] - Visualization & Verification
+## [2.2.1] - Visualization & Verification
 
 **主题：Visualization & Verification——让 Agent Trace、Eval、Docker 部署从「已有能力」变成「可展示、可验证、可交付」。** 本版补齐独立 Trace Viewer、脱敏导出、截图资产、Eval CI、Docker build gate 与镜像基础瘦身，并把 README / API / Demo / 部署 / 安全文档全部对齐到可验收状态。
 

@@ -17,6 +17,7 @@ hub is never exposed beyond the device unless the user shares the URL+token.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Callable
 
@@ -82,6 +83,21 @@ def _tools_call(params: dict[str, Any]) -> dict[str, Any]:
     arguments = params.get("arguments")
     if arguments is not None and not isinstance(arguments, dict):
         raise _InvalidParams("arguments must be an object")
+    # External MCP bridged tools: dispatch via the policy-gated executor.
+    if name.startswith("mcp__"):
+        from deepseek_infra.infra.mcp.executor import call_external_mcp_tool as exec_external
+        from deepseek_infra.infra.tool_runtime.tools import stable_tool_output_for_model
+        result = exec_external(
+            name, arguments,
+            policy=connection_policy(approvals_from_meta(params.get("_meta"))),
+        )
+        stable = stable_tool_output_for_model(result)
+        text = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))[:call_hub_tool.__globals__.get("MAX_MCP_RESULT_CHARS", 24000)]
+        return {
+            "content": [{"type": "text", "text": text}],
+            "structuredContent": stable,
+            "isError": result.get("ok") is not True,
+        }
     return call_hub_tool(name, arguments, meta=params.get("_meta"))
 
 

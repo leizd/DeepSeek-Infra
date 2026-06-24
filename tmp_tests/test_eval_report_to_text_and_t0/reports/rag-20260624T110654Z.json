@@ -1,0 +1,22 @@
+{
+  "suite": "rag",
+  "cases": 6,
+  "k": 5,
+  "metrics": {
+    "ragRecallAtK": 0.86,
+    "citationAccuracy": 0.78,
+    "avgLatencyMs": 3200.0,
+    "avgTokens": 4800.0
+  },
+  "benchmarks": {
+    "latency": {
+      "avgMs": 3200.0
+    }
+  },
+  "generatedAt": "2026-06-24T11:06:54Z",
+  "details": [
+    {
+      "id": "rag_001"
+    }
+  ]
+}

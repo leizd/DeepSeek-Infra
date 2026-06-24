@@ -51,7 +51,7 @@ from deepseek_infra.infra.tool_runtime.search import (
     search_queries_for,
     search_single_round,
 )
-from deepseek_infra.infra.tool_runtime.tools import MAX_TOOL_ROUNDS, available_tool_definitions, execute_tool_calls
+from deepseek_infra.infra.tool_runtime.tools import MAX_TOOL_ROUNDS, agent_tool_definitions, execute_tool_calls
 from deepseek_infra.infra.tool_runtime.tool_policy import ToolPolicy
 from deepseek_infra.core.utils import (
     format_upstream_error,
@@ -374,7 +374,7 @@ def search_tool_enabled(payload: dict[str, Any]) -> bool:
 
 
 def tools_for_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    tools = available_tool_definitions()
+    tools = agent_tool_definitions()
     allowed = payload.get("allowedTools")
     if isinstance(allowed, list):
         allowed_names = {str(item) for item in allowed}
@@ -1171,7 +1171,22 @@ def build_tool_policy(payload: dict[str, Any], *, taint_report: dict[str, Any] |
         secrets=secrets,
         tainted=context_taint.report_is_tainted(taint_report),
         taint_escalation=context_taint.escalation_enabled(),
+        metadata_provider=_policy_metadata_provider(),
     )
+
+
+def _policy_metadata_provider() -> Any:
+    """Return a ``metadata_provider`` callable for ``ToolPolicy``.
+
+    Resolves bridged external MCP tool names through the registry singleton,
+    falling back to the local ``tool_metadata`` table for everything else.
+    """
+    try:
+        from deepseek_infra.infra.mcp.bridge import external_mcp_registry
+        return external_mcp_registry.metadata_provider
+    except Exception:
+        from deepseek_infra.infra.tool_runtime.tool_policy import tool_metadata
+        return tool_metadata
 
 
 def diagnostics_with_tool_policy(diagnostics: dict[str, Any], policy: ToolPolicy | None) -> dict[str, Any]:

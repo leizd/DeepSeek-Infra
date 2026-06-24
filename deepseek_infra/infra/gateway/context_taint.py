@@ -148,6 +148,9 @@ _FILE_READ_TOOLS = {"search_files", "read_file_chunk", "list_project_files"}
 def _tool_message_source(content: str) -> str:
     match = _TOOL_NAME_IN_RESULT_RE.search(str(content or ""))
     name = match.group(1) if match else ""
+    # External MCP bridged tools are always untrusted.
+    if name.startswith("mcp__"):
+        return UNTRUSTED_WEB
     meta = TOOL_METADATA.get(name)
     if meta is not None and meta.external_output:
         return UNTRUSTED_WEB

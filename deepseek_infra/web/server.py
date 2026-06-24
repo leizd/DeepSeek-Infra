@@ -294,6 +294,38 @@ def create_app() -> FastAPI:
         require_api_auth(request)
         return json_response({"ok": True, "mcp": mcp_status()})
 
+    @api.get("/api/mcp/external/tools")
+    async def api_external_mcp_tools(request: Request) -> JSONResponse:
+        """List cached external MCP tools (triggers a refresh)."""
+        require_api_auth(request)
+        try:
+            from deepseek_infra.infra.mcp.bridge import external_mcp_registry
+        except Exception:
+            return json_response({"ok": True, "servers": [], "tools": []})
+        external_mcp_registry.refresh()
+        return json_response({
+            "ok": True,
+            "servers": [
+                {
+                    "name": name,
+                    "available": name not in external_mcp_registry._unavailable,
+                }
+                for name, _ in settings.mcp.client_servers
+            ],
+            "tools": [
+                {
+                    "server": p.server,
+                    "tool": p.tool,
+                    "bridgedName": p.bridged_name,
+                    "risk": p.risk,
+                    "network": p.network,
+                    "filesystem": p.filesystem,
+                    "requiresApproval": p.requires_approval,
+                }
+                for p in external_mcp_registry.list_profiles()
+            ],
+        })
+
     @api.get("/api/taint")
     async def api_taint_status(request: Request) -> JSONResponse:
         require_api_auth(request)

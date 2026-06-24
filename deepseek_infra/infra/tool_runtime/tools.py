@@ -633,6 +633,39 @@ def additional_tool_definitions() -> list[dict[str, Any]]:
     ]
 
 
+def agent_tool_definitions() -> list[dict[str, Any]]:
+    """Merged tool list for the LLM agent — local tools + external MCP bridged tools.
+
+    External tools are appended with ``[External MCP: <server>]`` in the
+    description so the model can distinguish local from remote capabilities.
+    This function is used by the gateway when assembling the LLM request body;
+    :func:`available_tool_definitions` remains the local-only catalog for
+    internal use (tests, MCP hub tool listing, etc.).
+    """
+    tools = list(available_tool_definitions())
+    try:
+        from deepseek_infra.infra.mcp.bridge import external_mcp_registry
+        for profile in external_mcp_registry.list_profiles():
+            # Build a params schema that is valid JSON Schema even when the
+            # external server sends a free-form inputSchema.
+            raw_schema = profile.input_schema if isinstance(profile.input_schema, dict) else {}
+            parameters = raw_schema if raw_schema.get("type") == "object" else {"type": "object", "properties": raw_schema}
+            # Extract a human-readable description from the raw schema.
+            schema_desc = str(raw_schema.get("description") or profile.tool)
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": profile.bridged_name,
+                    "strict": True,
+                    "description": f"[External MCP: {profile.server}] {schema_desc}",
+                    "parameters": parameters,
+                },
+            })
+    except Exception:
+        pass  # external tools are best-effort — never break local tools
+    return tools
+
+
 _TOOL_PARAMETER_SCHEMAS: dict[str, dict[str, Any]] | None = None
 
 
@@ -645,7 +678,7 @@ def tool_parameter_schemas() -> dict[str, dict[str, Any]]:
     global _TOOL_PARAMETER_SCHEMAS
     if _TOOL_PARAMETER_SCHEMAS is None:
         index: dict[str, dict[str, Any]] = {}
-        for definition in available_tool_definitions():
+        for definition in agent_tool_definitions():
             function = definition.get("function")
             if isinstance(function, dict):
                 name = str(function.get("name") or "")
@@ -672,6 +705,10 @@ def execute_tool_call(
         decision = policy.evaluate(name, arguments, schema=tool_parameter_schemas().get(name))
         if not decision.allowed:
             return ToolPolicy.denial_output(decision)
+    # External MCP bridged tools — dispatch via the policy-gated executor.
+    if name.startswith("mcp__"):
+        from deepseek_infra.infra.mcp.executor import call_external_mcp_tool
+        return call_external_mcp_tool(name, arguments, policy)
     try:
         if name == "python_eval":
             result = python_eval(str(arguments.get("expression") or ""))

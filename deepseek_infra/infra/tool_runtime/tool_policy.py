@@ -30,6 +30,7 @@ Design constraints:
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import logging
@@ -37,7 +38,7 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from deepseek_infra.core.config import (
@@ -380,6 +381,17 @@ def sanitize_tool_result(name: str, output: dict[str, Any]) -> tuple[dict[str, A
     return output, _scrub_node(output.get("result"))
 
 
+def sanitize_tool_result_for_external(output: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Same as :func:`sanitize_tool_result` but scrubs unconditionally.
+
+    External MCP tools are always treated as ``external_output``, so no metadata
+    lookup is needed. Mutates ``output`` in place.
+    """
+    if not isinstance(output, dict):
+        return output, 0
+    return output, _scrub_node(output.get("result"))
+
+
 def _scrub_node(node: Any) -> int:
     """Recursively redact injection text under known text keys; returns total hits."""
     hits = 0
@@ -417,10 +429,20 @@ class PolicyDecision:
     def needs_confirmation(self) -> bool:
         return self.action == NEEDS_CONFIRMATION
 
+    @property
+    def policy_verdict(self) -> str:
+        """Standardised external-facing verdict: ``allowed | denied | requires_approval``."""
+        if self.action == ALLOW:
+            return "allowed"
+        if self.action == NEEDS_CONFIRMATION:
+            return "requires_approval"
+        return "denied"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "tool": self.tool,
             "action": self.action,
+            "policyVerdict": self.policy_verdict,
             "risk": self.risk,
             "reasons": list(self.reasons),
             "violations": list(self.violations),
@@ -461,6 +483,7 @@ class ToolPolicy:
         secrets: tuple[str, ...] = (),
         tainted: bool = False,
         taint_escalation: bool = False,
+        metadata_provider: Callable[[str], ToolMetadata | None] | None = None,
     ) -> None:
         self.capability = str(capability or "full")
         if allowed_tools is not None:
@@ -481,6 +504,11 @@ class ToolPolicy:
         # carried injection directives. A tainted turn puts high-risk /
         # sensitive-sink tools behind explicit confirmation when escalation is on.
         self.secrets = tuple(str(item) for item in secrets if str(item or ""))
+        self.taint_escalation = bool(taint_escalation)
+        # Dynamic metadata provider — resolves tool names to ToolMetadata.
+        # Defaults to the local TOOL_METADATA table; external MCP bridge injects
+        # a provider that also resolves bridged names.
+        self.metadata_provider: Callable[[str], ToolMetadata | None] = metadata_provider or tool_metadata
         self.taint_escalation = bool(taint_escalation)
         self._lock = threading.Lock()
         self.tainted = bool(tainted)
@@ -507,7 +535,7 @@ class ToolPolicy:
 
     def evaluate(self, name: str, arguments: Any, *, schema: dict[str, Any] | None = None) -> PolicyDecision:
         tool = str(name or "").strip()
-        meta = tool_metadata(tool)
+        meta = self.metadata_provider(tool)
         reasons: list[str] = []
         violations: list[str] = []
 
@@ -515,9 +543,16 @@ class ToolPolicy:
             return self._record(PolicyDecision(tool or "unknown", DENY, "high", ("unknown_tool",), (), self.capability))
 
         # 1. Capability / permission check.
+        # Bridged external tools (capability "external") are implicitly allowed
+        # when the policy's capability is "full" — they were vetted at profile
+        # creation time and are resolved by metadata_provider.
         if tool not in self.allowed_tools:
-            reasons.append(f"capability_denied:{self.capability}")
-            return self._record(PolicyDecision(tool, DENY, _max_risk(meta.risk, "high"), tuple(reasons), (), self.capability))
+            if meta.capability == "external" and self.capability == "full":
+                # Pass: external tools are permitted under the full profile.
+                pass
+            else:
+                reasons.append(f"capability_denied:{self.capability}")
+                return self._record(PolicyDecision(tool, DENY, _max_risk(meta.risk, "high"), tuple(reasons), (), self.capability))
 
         # 2. Schema validation (soft unless enforce_schema).
         args = arguments if isinstance(arguments, dict) else {}
@@ -602,7 +637,13 @@ class ToolPolicy:
     def sanitize_result(self, name: str, output: dict[str, Any]) -> dict[str, Any]:
         if not self.sanitize:
             return output
-        cleaned, hits = sanitize_tool_result(name, output)
+        meta = self.metadata_provider(str(name or "").strip())
+        if meta is None:
+            return output
+        if meta.external_output:
+            cleaned, hits = sanitize_tool_result_for_external(output)
+        else:
+            cleaned, hits = sanitize_tool_result(name, output)
         if hits:
             with self._lock:
                 self.sanitized_hits += hits
@@ -669,6 +710,60 @@ def write_audit_entry(decision: PolicyDecision, *, scope: str = "global") -> Non
                 handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
     except Exception as exc:  # pragma: no cover - audit must never break a tool call
         logger.warning("tool_policy audit write failed: %s", exc)
+
+
+def _normalized_args_hash(arguments: dict[str, Any]) -> str:
+    """sha256 of sorted JSON args — avoids logging plaintext secrets."""
+    try:
+        canonical = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return "sha256:invalid"
+
+
+def write_external_audit_entry(
+    *,
+    scope: str = "mcp_external",
+    server: str,
+    tool: str,
+    bridged_tool: str,
+    args_hash: str,
+    policy_verdict: str,
+    risk: str,
+    latency_ms: int,
+    error_type: str | None = None,
+    protocol: str = "mcp",
+    direction: str = "outbound",
+) -> None:
+    """Write an extended audit entry for an external MCP tool call.
+
+    Captures the full chain: which server, which tool, a normalized argument hash
+    (never plain-text secrets), the policy verdict, wall-clock latency, and an
+    error classification when things go wrong. Best-effort; never raises.
+    """
+    if not TOOL_POLICY_AUDIT_ENABLED:
+        return
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "scope": str(scope or "mcp_external"),
+        "server": server,
+        "tool": tool,
+        "bridgedTool": bridged_tool,
+        "argsHash": args_hash,
+        "policyVerdict": policy_verdict,
+        "risk": risk,
+        "latencyMs": latency_ms,
+        "errorType": error_type,
+        "protocol": protocol,
+        "direction": direction,
+    }
+    try:
+        with _audit_lock:
+            TOOL_POLICY_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+            with TOOL_POLICY_AUDIT_LOG.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception:  # pragma: no cover - audit must never break a tool call
+        logger.warning("external_mcp_audit write failed", exc_info=True)
 
 
 def read_recent_audit(limit: int = 50) -> list[dict[str, Any]]:
