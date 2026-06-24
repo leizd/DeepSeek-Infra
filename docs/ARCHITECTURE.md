@@ -1,6 +1,6 @@
 # 架构说明
 
-适用版本：v2.1.7。
+适用版本：v2.2.0。
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：本地工具面经 **MCP**（`POST /mcp`）暴露给任意 MCP 客户端，本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 
@@ -28,7 +28,7 @@ Local Data & Observability   Vector RAG · Memory · Trace · Semantic Cache · 
 - `infra/rag/` — **Local RAG Data Plane**：`local_rag`（sqlite-vec 向量库 + BM25 词法的 hybrid 检索、增量索引、文档版本、chunk lineage、引用真实性校验、Recall@K 评估）、`files` 解析分块、`context_compressor`。
 - `infra/tool_runtime/` — **Tool Calling Runtime**：`tools` 注册执行 + `search` / `ocr` / `documents` / `presentations` / `mindmaps` / `generated_files` / `slides_skill`。
 - `infra/mcp/` — **MCP-native Tool Hub**：`server`（JSON-RPC 2.0 分发）+ `registry`（tools / resources / prompts 目录）+ `adapters`（执行桥，复用 Tool Policy 闸门）+ `permissions`（能力切片与预批）+ `client`（出方向 MCP client）。
-- `infra/observability/` — **Observability**：`observability`（OpenTelemetry 风格的 trace/span 层级链路，run 为根，`agent.<id>` 包裹其 `context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek` 子 span）+ `metrics`（Prometheus `/metrics`）+ `health`（`/healthz`·`/readyz`）。
+- `infra/observability/` — **Observability**：`observability`（OpenTelemetry 风格的 trace/span 层级链路，run 为根，`agent.<id>` 包裹其 `context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek` 子 span）+ `trace_api`（`/api/traces`、`/trace/{id}`）+ `export`（trace JSON 脱敏导出）+ `metrics`（Prometheus `/metrics`）+ `health`（`/healthz`·`/readyz`）。
 - `infra/data/` — **本地存储**：`memory` / `projects` / `reminders`。
 - `core/`、`web/`、`launcher/`、`android_entry.py`、`desktop_app.py` — 配置 / 错误 / 工具、HTTP 运行时、跨端打包入口。
 
@@ -46,7 +46,9 @@ Local Data & Observability   Vector RAG · Memory · Trace · Semantic Cache · 
 | `deepseek_infra/infra/agent_runtime/multi_agent.py` | Leader + 多 Agent 编排：任务拆解、worker 并行调用、搜索预算共享和最终综合。 |
 | `deepseek_infra/infra/agent_runtime/agent_runs.py` | 持久化 Agent Run、indexed event log、派生快照（含 `nodes` 节点状态机）、断线重连游标、后台 run registry、计划确认、重跑与断点续跑（`resume_run` / `resume_orphaned_runs`）。 |
 | `deepseek_infra/infra/agent_runtime/agent_state.py` | Durable Agent Runtime 的事件源节点状态机：纯函数 `reduce_node_states(plan, events)` 从计划 + 事件日志重放每个 worker 节点的生命周期（created→queued→running→succeeded/failed→retrying→cancelled）与指标（latency / token），并给出 `incomplete_plan_nodes` / `completed_node_ids` 供断点续跑跳过已成功节点。零 I/O，不引入新的实时事件类型。 |
-| `deepseek_infra/infra/observability/observability.py` | 本地可观测性：SQLite trace run/span 存储、`parent_span_id` 层级链路（OpenTelemetry 风格调用树）、输入/输出摘要脱敏、耗时、usage、prompt cache 命中率和 trace 查询 API。span 由 `deepseek_client`（`context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek`）与 `multi_agent`（`agent.planner`/`agent.<id>`/`agent.synthesizer`）通过 `parent_span_id` 串成树，前端 `buildTraceSpanTree` 渲染瀑布图。 |
+| `deepseek_infra/infra/observability/observability.py` | 本地可观测性存储：SQLite trace run/span、`parent_span_id` 层级链路（OpenTelemetry 风格调用树）、输入/输出摘要脱敏、耗时、usage、prompt cache 命中率和查询函数。span 由 `deepseek_client`（`context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek`）与 `multi_agent`（`agent.planner`/`agent.<id>`/`agent.synthesizer`）通过 `parent_span_id` 串成树。 |
+| `deepseek_infra/infra/observability/trace_api.py` | Trace HTTP API：注册 `GET /api/traces`、`GET /api/traces/{trace_id}`、`GET /api/traces/{trace_id}/export.json` 与 `GET /trace/{trace_id}`；独立页面走本地 token 鉴权并由静态 Trace Viewer 渲染。 |
+| `deepseek_infra/infra/observability/export.py` | Trace 导出层：递归脱敏 API Key、Authorization、auth token、cookie、password、secret、敏感 URL query，并截断大段 `content` / `text` / `prompt` / `rawContent` 等私有文本，同时保留 token usage、cache hit、span 层级和错误摘要。 |
 | `deepseek_infra/infra/gateway/semantic_cache.py` | 本地语义缓存：复用 Local RAG embedding 管线，把可缓存 prompt/response 写入 `.semantic-cache/cache.sqlite3`，在 DeepSeek API 前做相似度命中。v2.0.7 加入缓存版本命名空间（`cache_version` = 版本+embedding 签名）、按 memory/项目 scope 隔离、低质量答案不缓存（`quality_score` 门控）、以及文件上下文的精确命中（exact-match，按项目隔离）。 |
 | `deepseek_infra/infra/gateway/budget_manager.py` | 成本与 Token 预算治理（v2.0.10）：按模型定价的 USD 费用估算（`estimate_cost`/`cost_from_usage`）、统一 `BudgetPolicy`（max total/agent tokens、search/tool calls、cost）、`ToolBudget`、每 scope **每日**账本（`.budget/budget.sqlite3`：tokens/cost/model/search/tool calls）、超预算判定与降级（`over_daily_budget`/`should_downgrade`）。`TokenBudget` 扩展为 per-agent 跟踪。 |
 | `deepseek_infra/infra/gateway/model_router.py` | 策略驱动 Model Router（v2.0.9）：`route_request` 按能力（图片→vision/pro）、复杂度、成本预算、延迟在 flash/pro 间路由（仅 `autoRoute`/`model="auto"` 时接管，显式选模不变）；`cascade_plan` + `quality_gate`（长度/拒答/不确定/引用不足）驱动级联推理；纯决策与打分，实际调用与 Judge 评分在 `deepseek_client`（`call_deepseek_cascade` / `judge_draft`）。 |
@@ -85,7 +87,7 @@ Local Data & Observability   Vector RAG · Memory · Trace · Semantic Cache · 
 | `deepseek_infra/android_entry.py` | Android APK 的 Chaquopy 桥接层：设置应用私有数据目录，启动/停止本机 Python HTTP 服务，并把带 token 的 WebView URL 返回给原生 Activity。 |
 | `android/` | Android Studio / Gradle 工程：原生 WebView 壳、Chaquopy 打包配置、Android 权限和 APK 资源。 |
 
-前端使用原生 ES modules，不引入打包工具。`static/app.js` 只负责启动 `static/modules/chat.js`；`network.js` 处理 token、认证头、API 请求和上传；`markdown.js` 处理 Markdown、代码块和公式 glue；`settings.js` 放 PWA 注册等设置侧辅助；`panels.js` 放跨面板纯工具。v0.8.2 起，图表、朗读文本、流式解析、格式化、规范化和提醒短语解析等纯函数拆到独立模块，索引见 `docs/FRONTEND_MODULES.md`。`math_core.js` 和 `seek_core.js` 仍以全局 IIFE 方式加载，避免扩大迁移面。
+前端使用原生 ES modules，不引入打包工具。`static/app.js` 只负责启动 `static/modules/chat.js`；`network.js` 处理 token、认证头、API 请求和上传；`markdown.js` 处理 Markdown、代码块和公式 glue；`settings.js` 放 PWA 注册等设置侧辅助；`panels.js` 放跨面板纯工具。v0.8.2 起，图表、朗读文本、流式解析、格式化、规范化和提醒短语解析等纯函数拆到独立模块；v2.2.0 新增 `static/trace_viewer.html`、`trace_viewer.js` 与 `trace_waterfall.js`，把 trace span 树、瀑布图和类型耗时汇总抽成独立只读页面。索引见 `docs/FRONTEND_MODULES.md`。`math_core.js` 和 `seek_core.js` 仍以全局 IIFE 方式加载，避免扩大迁移面。
 
 v0.7.4 的 UI/UX 能力都保留在前端：命令面板和全局快捷键由 `chat.js` 统一处理；主题与字号通过 CSS 变量写入 `document.documentElement`；离线壳在 `/api/config` 失败时切换 `offlineMode`，只允许查看本地历史；代码块、公式复制、Mermaid 轻量 flowchart 和表格 SVG 图表由 `markdown.js` 输出结构，`chat.js` 负责点击行为。
 v0.8.2 的手机输入能力仍保持前端优先：语音输入使用浏览器 `SpeechRecognition` / `webkitSpeechRecognition`，语音语言保存在 `localStorage`；回复朗读使用 `speechSynthesis`，播放前会清理公式、引用 pin、表格分隔符和代码块，再按短句排队播放。“引用所选”监听浏览器 selection，只在选区实际命中单条聊天消息气泡时启用输入区按钮；用户消息和助手消息都可作为引用来源。点击后把片段写入 `state.quoteDraft`，下一轮请求由 `quoteAwareContent()` 注入“关于上文中的这一段”提示。PWA Share Target 是唯一新增的入口流：`POST /share-target` 只做 Host 白名单校验并把分享内容写入内存缓存，随后通过 `303 /?share=<id>` 回到 SPA；真正读取缓存的 `GET /api/share-target` 仍走本地 token 鉴权，前端确认后才写入草稿和附件列表。v0.8.3 的图标链路保持纯静态：`static/icons/` 放 SVG、favicon PNG、Apple touch icon、PWA any/maskable PNG 和通知 badge，`manifest.webmanifest` 只引用这些本地资源，`static/sw.js` 预缓存整套图标并在 Web Notification 中使用真实 icon/badge。

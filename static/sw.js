@@ -1,8 +1,9 @@
 const CACHE_PREFIX = "deepseek-infra-";
-const CACHE_NAME = "deepseek-infra-v186";
+const CACHE_NAME = "deepseek-infra-v187";
 const APP_SHELL = [
   "/",
   "/index.html",
+  "/trace_viewer.html",
   "/styles.css",
   "/gemini.css",
   "/favicon.ico",
@@ -51,6 +52,8 @@ const APP_SHELL = [
   "/modules/speech_text.js",
   "/modules/stream.js",
   "/modules/agent_timeline.js",
+  "/modules/trace_waterfall.js",
+  "/modules/trace_viewer.js",
   "/modules/chat.js",
   "/app.js",
   "/manifest.webmanifest",

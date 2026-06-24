@@ -1,6 +1,6 @@
 # DeepSeek Infra — local-first agentic AI runtime
-# 构建:  docker build -t deepseek-infra:2.1.7 .
-# 运行:  docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:2.1.7
+# 构建:  docker build -t deepseek-infra:2.2.0 .
+# 运行:  docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:2.2.0
 # 说明见 docs/DEPLOYMENT.md
 FROM python:3.12-slim
 
@@ -23,6 +23,7 @@ RUN find /app -type d -name __pycache__ -prune -exec rm -rf {} +
 # 一个卷即可持久化；静态资源固定在镜像内。
 ENV DEEPSEEK_INFRA_ROOT=/data \
     DEEPSEEK_MOBILE_ROOT=/data \
+    DEEPSEEK_INFRA_STATIC_DIR=/app/static \
     DEEPSEEK_MOBILE_STATIC_DIR=/app/static \
     HOST=0.0.0.0 \
     PORT=8000 \
