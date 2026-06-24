@@ -1,6 +1,6 @@
 # Implementation Status（实现状态矩阵）
 
-适用版本：v2.1.7。
+适用版本：v2.2.0。
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
@@ -15,7 +15,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 | 2 | Agent DAG Runtime | Working | ✅ [infra/agent_runtime/](../deepseek_infra/infra/agent_runtime/) | ✅ | ✅ |
 | 3 | Local RAG Data Layer | Working | ✅ [infra/rag/](../deepseek_infra/infra/rag/) | ✅ | ✅ |
 | 4 | Tool Calling Runtime + Policy Engine | Working | ✅ [infra/tool_runtime/](../deepseek_infra/infra/tool_runtime/) | ✅ | ✅ |
-| 5 | Observability & Trace | Working | ✅ [infra/observability/](../deepseek_infra/infra/observability/) | ✅ | 🟡 |
+| 5 | Observability & Trace | Working | ✅ [infra/observability/](../deepseek_infra/infra/observability/) | ✅ | ✅ |
 | 6 | Edge-Cloud Model Router | Experimental | ✅ [infra/gateway/edge_inference.py](../deepseek_infra/infra/gateway/edge_inference.py) | 🟡 | 🟡 |
 | 7 | MCP Tool Hub | Experimental | ✅ [infra/mcp/](../deepseek_infra/infra/mcp/) | ✅ | ✅ |
 | 8 | A2A Agent Mesh | Experimental | ✅ [infra/agent_runtime/a2a.py](../deepseek_infra/infra/agent_runtime/a2a.py) | ✅ | 🟡 |
@@ -25,10 +25,10 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 
 | 资产 | 位置 | 状态 |
 | --- | --- | --- |
-| Evaluation Harness（RAG / Agent / Tool 三条评测线） | [evals/](../evals/) · 评分核心 [infra/evaluation/harness.py](../deepseek_infra/infra/evaluation/harness.py) | ✅ 全部离线可跑 |
+| Evaluation Harness（RAG / Agent / Tool 三条评测线） | [evals/](../evals/) · 评分核心 [infra/evaluation/harness.py](../deepseek_infra/infra/evaluation/harness.py) | ✅ 全部离线可跑；CI 必跑 RAG + Tool Policy / Injection，Agent 录制评测暂为可选 |
 | Benchmarks（延迟 / 缓存 / 检索 / DAG） | [benchmarks/](../benchmarks/) | ✅ 离线两项可直接复跑；在线两项需本地服务 + Key |
 | 一键 Demo | [examples/](../examples/) · [docs/DEMO.md](DEMO.md) | ✅ |
-| 部署资产（Docker / Compose / .env） | [Dockerfile](../Dockerfile) · [docker-compose.yml](../docker-compose.yml) · [docs/DEPLOYMENT.md](DEPLOYMENT.md) | ✅ |
+| 部署资产（Docker / Compose / .env） | [Dockerfile](../Dockerfile) · [docker-compose.yml](../docker-compose.yml) · [docs/DEPLOYMENT.md](DEPLOYMENT.md) | ✅ CI 覆盖 `docker build` + `docker compose config` |
 | 安全工程（威胁模型 / CI 扫描） | [docs/THREAT_MODEL.md](THREAT_MODEL.md) · [ci.yml security job](../.github/workflows/ci.yml) | ✅ |
 | UI 截图 / Trace 瀑布图 | docs/assets/ | ✅ `trace-waterfall.png` / `agent-dag-run.png` / `rag-citation.png` / `mcp-tool-call.png` 入库；独立 `/trace/{id}` 只读页面已上线 |
 
@@ -61,12 +61,12 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 - **测试**：[test_tool_policy.py](../tests/test_tool_policy.py) · [test_tools.py](../tests/test_tools.py) · [test_search.py](../tests/test_search.py) · [test_documents.py](../tests/test_documents.py) · [test_presentations.py](../tests/test_presentations.py) · [test_mindmaps.py](../tests/test_mindmaps.py)。
 - **亲手验证**：[evals/runners/run_tool_eval.py](../evals/runners/run_tool_eval.py)（离线重放策略闸门：Tool Policy Pass Rate + Injection Defense Pass Rate）；[examples/mcp_tool_demo.py](../examples/mcp_tool_demo.py)（经 MCP 真实调用工具）。
 
-### 5. Observability & Trace — Working（Demo 🟡）
+### 5. Observability & Trace — Working
 
 - **代码**：[observability.py](../deepseek_infra/infra/observability/observability.py)（trace run / span 树、SQLite 持久化）、[trace_api.py](../deepseek_infra/infra/observability/trace_api.py)（`/api/traces` / `/trace/{id}` 路由）、[export.py](../deepseek_infra/infra/observability/export.py)（导出脱敏）、[metrics.py](../deepseek_infra/infra/observability/metrics.py)（Prometheus 文本）、[health.py](../deepseek_infra/infra/observability/health.py)（`/healthz` `/readyz`）、[trace_viewer.html](../static/trace_viewer.html) / [trace_viewer.js](../static/modules/trace_viewer.js) / [trace_waterfall.js](../static/modules/trace_waterfall.js)（独立只读页面）。
 - **测试**：[test_observability_trace_tree.py](../tests/test_observability_trace_tree.py) · [test_observability_metrics.py](../tests/test_observability_metrics.py) · [test_server_integration.py](../tests/test_server_integration.py)。
 - **亲手验证**：`curl http://127.0.0.1:8000/metrics`；前端每条助手消息的 Trace 按钮打开瀑布图（span 树按 parent 缩进）；`GET /trace/{trace_id}` 独立只读页面（本地 token 鉴权）；`GET /api/traces/{trace_id}/export.json` 导出脱敏 JSON。
-- **缺口（🟡 的原因）**：trace 截图已入库，Demo GIF 尚未录制。
+- **展示资产**：[trace-waterfall.png](assets/trace-waterfall.png)、[agent-dag-run.png](assets/agent-dag-run.png)、[rag-citation.png](assets/rag-citation.png)、[mcp-tool-call.png](assets/mcp-tool-call.png) 已入库并由 README 首屏截图表引用。
 
 ### 6. Edge-Cloud Model Router — Experimental
 

@@ -1,8 +1,8 @@
 # AI Runtime Evaluation Harness
 
-适用版本：v2.1.6。
+适用版本：v2.2.0。
 
-这套 harness 对 DeepSeek Infra 的三条核心能力线做**自动化回归评测**（全部可离线执行，无需 API Key）：
+这套 harness 对 DeepSeek Infra 的三条核心能力线做**自动化回归评测**（全部可离线执行，无需 API Key）。v2.2.0 CI 必过项只包含稳定、无需录制输入的 `run_rag_eval.py` 与 `run_tool_eval.py`；`run_agent_eval.py` 继续提供离线样例打分，等录制数据完全稳定后再加入必过门禁。
 
 | 指标族 | 含义 | 由谁产出 |
 | --- | --- | --- |
@@ -53,6 +53,12 @@ python evals/runners/run_tool_eval.py
 
 常用参数：`--golden`、`--k`（RAG）、`--predictions`（agent）、`--json`（机器可读）、
 `--no-report`（不落盘）。
+
+CI 口径：
+
+- PR 必跑 `python evals/runners/run_rag_eval.py`，失败时 CI 红。
+- PR 必跑 `python evals/runners/run_tool_eval.py`，覆盖 Tool Policy Pass Rate 与 Prompt Injection Defense Pass Rate，失败时 CI 红。
+- `python evals/runners/run_agent_eval.py` 目前作为离线样例回归，不属于 v2.2.0 必过项。
 
 ## 输出示例
 

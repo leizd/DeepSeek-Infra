@@ -1,6 +1,6 @@
 # 前端模块索引
 
-适用版本：v2.1.7；模块拆分自 v0.8.2 起。
+适用版本：v2.2.0；模块拆分自 v0.8.2 起。
 
 `static/modules/chat.js` 仍然是聊天主流程和渲染入口，但第一轮拆分已经把不依赖 `state`、不直接操作 DOM 的纯函数移出。后续新增工具函数时，优先放到下面对应模块，避免继续扩大 `chat.js`。
 
@@ -25,6 +25,8 @@ v1.5.1 继续把交互状态留在 `chat.js`：`hasClosablePanelOpen()` 让 Esca
 
 v1.8.0 仍不新增前端模块；Gateway & Resiliency 完全在后端完成。`chat.js` 只在诊断侧栏展示 `diagnostics.contextManager`、滑动窗口丢弃数、`diagnostics.gatewayResiliency` 的 attempt/retry 统计，并在流式重试等待时显示后端发来的 `system_note`。`loadConfig()` 可读取 `/api/config.gateway`，但聊天请求协议不需要新增字段；Service Worker 缓存版本同步到 `deepseek-mobile-v180`。v1.7.7 的 Trace 入口继续留在 `chat.js`：`loadConfig()` 读取 `/api/config.tracing` 和 `/api/config.semanticCache`，助手消息更多菜单在存在 `diagnostics.traceId` 时显示 `Trace`，点击后复用诊断侧栏读取 `/api/traces/{traceId}` 并渲染 waterfall。语义缓存完全在后端完成，前端只展示 `diagnostics.semanticCache` 的命中/跳过状态；Service Worker 缓存版本同步到 `deepseek-mobile-v177`。v1.7.6 的 Local Data Infra 也在后端完成，前端只通过 `/api/config.localRag` 获取本地 RAG 状态，聊天请求和附件协议不变。v1.7.5 的端侧推理入口继续留在 `chat.js`：`loadConfig()` 读取 `/api/config` 的 `edgeInference`，普通聊天发送前会把“云端 API Key 可用”与“本地端侧模型可用”合并判断，Agent Run、联网搜索、图片理解和标题生成仍走原有云端能力要求。v1.7.0 的流式 Activity 阶段状态继续留在 `chat.js`，用 `message.streamPhase` 区分 `thinking` / `tool` / `searching` / `agent` / `answering`。`startReasoningTick()` 会在请求启动时刷新运行中标题，工具调用、搜索和正文输出阶段不会再停在旧的“思考中”秒数。v1.6.6 的选区引用继续留在 `chat.js`。`scheduleSelectionRefresh()` 在 `mouseup`、`keyup` 和 `touchend` 后刷新浏览器 selection，`chatBubbleForSelection()` 改为按实际 range 命中单条 `.message[data-message-id] .bubble` 判断来源，因此用户消息和助手消息都能引用；触屏 `touchstart` 不再阻断引用操作按钮的后续 click。桌面 WebView 启动鉴权和当前时间 dynamic context 均在后端完成，前端只按既有 `/api/*` 路由工作。v1.6.3 不改变前端模块边界；Windows 本地桌面应用壳只把既有前端装进 pywebview 窗口，仍通过同一套 `/api/*` 路由工作。v1.6.2 的 APK 内 OCR 修复在 Android 原生桥接和后端 OCR 选择层完成。v1.6.1 的联网搜索工具 cache 友好修复在后端工具交换和搜索缓存层完成。v1.6.0 手机本机运行由 Python 启动器完成。
 
+v2.2.0 把 Trace 从应用内侧栏补成独立只读页面：`chat.js` 仍负责在诊断区提供 `Open page` 和 `Export JSON` 入口；`static/trace_viewer.html` 负责页面骨架；`static/modules/trace_viewer.js` 负责加载 `/api/traces/{traceId}`、渲染基本信息、错误表和导出链接；`static/modules/trace_waterfall.js` 提供 span 树、瀑布图和 Agent / Tool / RAG / LLM 耗时汇总。Service Worker 缓存版本同步到 `deepseek-infra-v187`，`APP_SHELL` 必须包含 `trace_viewer.html`、`trace_viewer.js` 和 `trace_waterfall.js`。
+
 ## 已拆出的纯函数
 
 | 模块 | 函数 | 说明 |
@@ -36,6 +38,7 @@ v1.8.0 仍不新增前端模块；Gateway & Resiliency 完全在后端完成。`
 | `static/modules/normalize.js` | `normalizeTheme`、`normalizeThemeStyle`、`normalizeThemeMode`、`normalizeFontSize`、`normalizeVoiceLanguage`、`normalizeModel`、`normalizeSeekId`、`normalizeStoredAttachment` | 轻量字段规范化；`normalizeModel` 由 `chat.js` 传入当前支持模型集合。 |
 | `static/modules/reminder_parse.js` | `parseReminderTime`、`detectReminderFromText` | 客户端提醒短语解析；网络请求和通知轮询仍保留在 `chat.js`。 |
 | `static/modules/agent_timeline.js` | `agentStepId`、`createAgentStepId`、`appendTimelineAgent`、`appendTimelineAgentReasoning`、`appendTimelineAgentNote`、`appendTimelineAgentDelta`、`normalizeTimeline`、`timelineStepKey`、`shouldCollapseAgentStep`、`agentStepHasDetails`、`normalizeAgentNotes`、`agentNotesSnapshot`、`agentRunSummary`、`agentRunSummarySignature`、`formatAgentDuration`、`agentExecutionReport` | 多 Agent timeline 的 id 生成、增量合并、折叠规则、刷新后还原、执行摘要条聚合 + 签名、耗时格式化和执行报告导出；脱 DOM 由 `tests/test_frontend_utils.py` 单测。 |
+| `static/modules/trace_waterfall.js` | `buildTraceSpanTree`、`spanCategory`、`summarizeByCategory`、`renderCategoryTable`、`renderSpanTree`、`renderTraceWaterfall`、`errorSpans` | 独立 Trace Viewer 的 span 树构建、瀑布条定位、按 Agent / Tool / RAG / LLM 聚合耗时、token、cache hit 和错误数；DOM 写入使用 `textContent`。 |
 
 ## 保留在 chat.js 的边界
 

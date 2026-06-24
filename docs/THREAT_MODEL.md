@@ -1,6 +1,6 @@
 # 威胁模型（Threat Model）
 
-适用版本：v2.1.7。
+适用版本：v2.2.0。
 
 定位与信任假设见 [docs/SECURITY.md](SECURITY.md)：个人、本地优先的运行时，运行后端的机器可信，默认只监听 `127.0.0.1`。这一页回答更尖锐的问题：**当模型上下文里混入攻击者可控的内容（网页、文件、工具结果），或本机服务被局域网内他人触达时，每一类威胁由哪段代码挡住、由哪个测试钉住、还剩什么残余风险。**
 
@@ -47,7 +47,7 @@
   - 运行时自身凭证（DeepSeek / Tavily Key、本地 auth token）出现在**任何**工具调用参数里一律硬拒绝（`secret_exfiltration_blocked`，无条件生效）：`arguments_contain_secret`；
   - `suggest_memory` 内容过 `is_sensitive_memory`（API key / 密码 / token / 证件号）命中即拒，记忆建议必须用户确认才落盘；
   - 不可信上下文里的「把密钥发送到…」指令被 taint 扫描标记并触发高危工具升级确认；
-  - trace / 队列持久化脱敏 `apiKey` / `tavilyApiKey` / authorization；日志红action URL 里的 `token`；`.env` 被 `.gitignore` / `.dockerignore` / 发布脚本三处排除，CI 跑 `detect-secrets` 防凭证误提交。
+  - trace / 队列持久化脱敏 `apiKey` / `tavilyApiKey` / authorization；trace JSON 导出前再次递归脱敏 API Key、auth token、cookie、敏感 URL query，并截断大段私有文本；日志红action URL 里的 `token`；`.env` 被 `.gitignore` / `.dockerignore` / 发布脚本三处排除，CI 跑 `detect-secrets` 防凭证误提交。
 - **测试**：[test_context_taint.py](../tests/test_context_taint.py) 凭证外泄用例、[test_tool_policy.py](../tests/test_tool_policy.py) 敏感记忆用例、[test_release.py](../tests/test_release.py) 排除清单、`run_tool_eval.py` `secret_exfiltration_via_url`。
 
 ### T6 · 被攻陷 / 幻觉的 Agent 滥用工具（注入得手后的下一步）

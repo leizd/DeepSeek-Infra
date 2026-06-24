@@ -1,6 +1,6 @@
 # 2 分钟 Demo 路径
 
-适用版本：v2.1.7。
+适用版本：v2.2.0。
 
 这一页的目标：**不读任何源码，2 分钟内亲眼看到 README 里的核心能力在跑**。四个脚本都在 [examples/](../examples/)，按「零门槛 → 需要服务 → 需要 Key」排序：
 
@@ -57,7 +57,7 @@ python examples/mcp_tool_demo.py
 用仓库内置的 `MCPClient` 对本机 `POST /mcp` 做 `initialize → tools/list → tools/call` 回环：
 
 ```
-[initialize] protocol=2025-06-18 server=deepseek-infra v2.1.7
+[initialize] protocol=2025-06-18 server=deepseek-infra v2.2.0
 
 [tools/list] 17 tools:
    - web_search  [read-only, open-world]
@@ -115,7 +115,14 @@ agent durations:
 traceId: tr-…
 ```
 
-跑完拿着 `traceId` 在应用里点开 Trace 瀑布图，能看到 `run → agent.<id> → {context.build, deepseek}` 的 span 树；延迟基准见 `python benchmarks/bench_agent_dag.py`。
+跑完拿着 `traceId` 在应用里点开 Trace 瀑布图，或者直接打开独立只读页面：
+
+```bash
+# 在浏览器打开：http://127.0.0.1:8000/trace/<traceId>
+curl -OJ http://127.0.0.1:8000/api/traces/<traceId>/export.json
+```
+
+页面能看到 `run → agent.<id> → {context.build, deepseek}` 的 span 树、瀑布图、Agent / Tool / RAG / LLM 耗时、token 用量、cache hit 和错误信息；导出的 `trace-<traceId>.json` 会保留排障字段，但会脱敏 API Key、auth token、敏感 URL query，并截断大段私有文本。延迟基准见 `python benchmarks/bench_agent_dag.py`。
 
 ---
 
