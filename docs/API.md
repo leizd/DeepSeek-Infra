@@ -1,6 +1,6 @@
 # HTTP API
 
-适用版本：v2.2.4。
+适用版本：v2.2.5。
 
 默认情况下，所有 `/api/*` 路由都需要本地 token 鉴权。客户端可以发送 `Authorization: Bearer <token>`，也可以使用打开 `/?token=<token>` 后写入的 `auth_token` Cookie。未设置 `AUTH_TOKEN` 时，服务端会把自动生成的 token 保存到本地 `.auth-token`，重启后继续复用。
 
@@ -208,6 +208,8 @@ MCP（Model Context Protocol）JSON-RPC 2.0 端点：一次 POST 一条 JSON-RPC
 
 v2.2.1 起，外接方向不只做 client 回环：`MCP_CLIENT_ENABLED=1` + `MCP_CLIENT_SERVERS` 配置后，外部 MCP server 的 `tools/list` 会被桥接进本地 Agent 工具面，工具名统一为 `mcp__<server>__<tool>`。这些 bridged tools 继续走 Tool Policy、审批、结果清洗和审计；高风险或 destructive / sensitive schema 的外部工具会触发确认。`GET /api/mcp/external/tools` 返回外部 server 可用性、bridged name、risk、network/filesystem 标记和 requiresApproval，便于上线前核对工具面。v2.2.2 起，`/mcp tools/call` 调外部 bridged tool 与 Agent 调用链共享 executor 内部的防御式 `ToolPolicy.evaluate()`，远端 `isError: true` 会映射为本地 `ok: false` / `upstream_tool_error`，`network` / `filesystem` 外部工具也会扫描通用 URL/path 参数。
 
+v2.2.5 起，兼容性冒烟入口为 `python scripts/smoke_mcp_compat.py --token <local-token>`；它会验证 `initialize`、`tools/list`、`tools/call`、policy gate 和 `/api/mcp/external/tools`。真实第三方 Streamable HTTP MCP server 可用 `--external-server-url <url>` 做单独握手和 `tools/list` smoke。
+
 ### GET `/api/mcp/external/tools`
 
 触发外部 MCP catalog refresh（受 TTL 限制）并返回桥接工具和 server 健康态：
@@ -252,7 +254,7 @@ v2.2.1 起，外接方向不只做 client 回环：`MCP_CLIENT_ENABLED=1` + `MCP
 
 `status` 可为 `unknown`、`ok`、`unavailable`、`circuit_open` 或 `disabled`。外部工具调用会写入 `mcp_external` trace span，diagnostics 包含 `latencyMs`、`transportLatencyMs`、`attempts`、`retryCount`、`timeout`、`errorType`。
 
-## A2A Agent Mesh（v2.2.4）
+## A2A Agent Mesh（v2.2.5）
 
 - `GET /.well-known/agent-card.json`：A2A 发现端点（不鉴权，仅元数据），返回 orchestrator 的 Agent Card。
 - `GET /a2a/agents`：全部本地 Agent 的 Card（orchestrator / researcher / coder / reasoner / critic）。
@@ -262,6 +264,7 @@ v2.2.1 起，外接方向不只做 client 回环：`MCP_CLIENT_ENABLED=1` + `MCP
   - `tasks/resubscribe`：用已有 `id` 重新接入 SSE；可带 `afterChunkIndex`，只补发该游标之后的 artifact chunks，并继续推送状态直到终态。
   - `tasks/get`（可带 `historyLength`）/ `tasks/cancel` / `tasks/list`：任务查询、取消（云端请求可能无法硬中断，但结果会被丢弃并记录 `discardedResult`）与最近任务列表。
 - 任务状态机：`submitted -> working -> completed | failed | canceling -> canceled`；快照持久化在 `.a2a/`，重启后磁盘上残留的非终态任务读取时标记 `failed`。错误码：`-32001` 任务不存在、`-32002` 任务不可取消，其余同 JSON-RPC 标准。
+- 兼容性冒烟：`python scripts/smoke_a2a_compat.py --token <local-token>` 会按 Agent Card、`message/send`、`message/stream`、`tasks/resubscribe`、`tasks/cancel` 走一遍 live contract；离线回归见 `tests/test_a2a_compat_contract.py`。
 
 ## GET `/api/taint`（Context Taint 防火墙，v2.1.5）
 
@@ -807,5 +810,3 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 ```
 
 用户确认替换后，前端可把冲突项 id 放入 `replaceIds` 重新提交。
-
-

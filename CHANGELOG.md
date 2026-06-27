@@ -2,6 +2,28 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.2.5] - Compatibility Smoke & Release Polish
+
+**主题：协议兼容冒烟验证与发布收口。** 本版不继续堆新模块，而是把 v2.2.4 已完成的 MCP / A2A 能力整理成可复跑、可排障、可写入兼容矩阵的验证路径，为 v2.3 的真实第三方互操作做准备。
+
+### 新增
+
+- **MCP compatibility smoke runner**：新增 `scripts/smoke_mcp_compat.py`，验证本地 MCP `initialize` / `tools/list` / `tools/call` / policy gate / external health API，并提供 `--external-server-url` 入口给真实第三方 Streamable HTTP MCP server 做冒烟。
+- **A2A contract smoke runner**：新增 `scripts/smoke_a2a_compat.py` 与 `examples/a2a_compat_smoke.py`，验证 Agent Card、`message/send`、`message/stream`、`tasks/resubscribe` 和 `tasks/cancel` 的最小互操作路径。
+- **A2A contract regression**：新增 `tests/test_a2a_compat_contract.py`，离线固定 Agent Card、artifact chunks、SSE final status、resubscribe cursor 和 cancel lifecycle 的标准 contract。
+- **Edge Router runbook**：新增 `docs/EDGE_ROUTER_RUNBOOK.md` 与 `examples/edge_router_smoke.py`，补充 Ollama / GGUF 场景下的本地模型路由验证步骤。
+
+### 更改
+
+- **Compatibility Matrix 收口**：把 Claude Desktop / Cursor / real external MCP server / third-party A2A 的状态拆成“配置已补、smoke 可跑、实机待测”，不把未安装客户端写成通过。
+- **README / Implementation Status / API 文档同步到 v2.2.5**：版本徽章、适用版本、Roadmap、兼容矩阵与 Edge Router 验收入口对齐。
+- **Release polish**：更新版本号、发布说明和验收 checklist，明确 Edge-Cloud Model Router 仍为 Experimental，真实端侧模型不进 CI。
+
+### 测试
+
+- 新增 A2A compatibility contract tests，覆盖协议 contract、断线重订阅、错误响应和取消生命周期。
+- 新增 MCP / A2A smoke scripts，可在本地服务启动后手动验证协议端点与基础 health check。
+
 ## [2.2.4] - A2A Artifact Streaming & Agent Interop
 
 **主题：A2A 任务产物流式增量与 Agent 互操作补强。** 本版把 A2A Agent Mesh 从 Experimental 推到 MVP，重点补“长任务能边跑边交付、断线能恢复、peer loopback 能复现、观测能落库”的可信路径。

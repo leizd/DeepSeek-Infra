@@ -1,8 +1,8 @@
 # AI Runtime Evaluation Harness
 
-适用版本：v2.2.4。
+适用版本：v2.2.5。
 
-这套 harness 对 DeepSeek Infra 的核心能力线做**自动化回归评测**（全部可离线执行，无需 API Key）。v2.2.4 CI 必过项包含稳定、无需录制输入的 `run_rag_eval.py` 与 `run_tool_eval.py`；`run_injection_adversarial.py` 先 report-only 输出对抗注入指标；`run_agent_eval.py` 继续提供离线样例打分，等录制数据完全稳定后再加入必过门禁。
+这套 harness 对 DeepSeek Infra 的核心能力线做**自动化回归评测**（全部可离线执行，无需 API Key）。v2.2.5 CI 必过项包含稳定、无需录制输入的 `run_rag_eval.py` 与 `run_tool_eval.py`；`run_injection_adversarial.py` 先 report-only 输出对抗注入指标；`run_agent_eval.py` 继续提供离线样例打分，等录制数据完全稳定后再加入必过门禁。
 
 | 指标族 | 含义 | 由谁产出 |
 | --- | --- | --- |
@@ -54,7 +54,7 @@ python evals/runners/run_agent_eval.py
 python evals/runners/run_tool_eval.py
 
 # 对抗注入小语料：输出 block_rate / false_positive_rate / bypass_rate。
-# v2.2.4 先 report-only，不因绕过或误伤让 CI 失败。
+# v2.2.5 先 report-only，不因绕过或误伤让 CI 失败。
 python evals/runners/run_injection_adversarial.py
 ```
 
@@ -65,8 +65,8 @@ CI 口径：
 
 - PR 必跑 `python evals/runners/run_rag_eval.py`，失败时 CI 红。
 - PR 必跑 `python evals/runners/run_tool_eval.py`，覆盖 Tool Policy Pass Rate 与 Prompt Injection Defense Pass Rate，失败时 CI 红。
-- PR 跑 `python evals/runners/run_injection_adversarial.py --no-report`，但 v2.2.4 只 report-only，不设硬门槛。
-- `python evals/runners/run_agent_eval.py` 目前作为离线样例回归，不属于 v2.2.4 必过项。
+- PR 跑 `python evals/runners/run_injection_adversarial.py --no-report`，但 v2.2.5 只 report-only，不设硬门槛。
+- `python evals/runners/run_agent_eval.py` 目前作为离线样例回归，不属于 v2.2.5 必过项。
 
 ## 输出示例
 
