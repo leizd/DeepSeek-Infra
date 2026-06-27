@@ -2,6 +2,29 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.2.6] - Eval Gate & Security Hardening
+
+**主题：安全评测门禁与策略可解释性。** 本版不继续扩大协议面，而是把 Context Taint、Tool Policy 和 Injection Eval 从“已有能力”推进到“可量化、可解释、可在 CI 中持续守住”的安全工程闭环。
+
+### 新增
+
+- **Prompt Injection soft gate**：`evals/runners/run_injection_adversarial.py` 增加版本化阈值（`blockRate>=0.85`、`falsePositiveRate<=0.10`、`bypassRate<=0.15`），输出每项指标的 `PASS/FAIL` 与整体 `SOFT GATE: PASS/WARNING`。未达标只 warning、仍 `exit 0`；新增 `--strict` 把未达标升级为硬失败（`exit 1`），是 v2.3 的毕业路径。
+- **Tool Policy deny reason**：`PolicyDecision` 新增 `reason` / `suggestion` 字段，高危拒绝（SSRF / 路径越界 / 密钥外泄 / 敏感记忆 / capability / 确认 / taint escalation）都返回人读原因与修复建议；`denial_output()` 输出结构化 `reason` / `risk` / `suggestion`，审计日志（`.tool-audit/audit.jsonl`）自动落盘这两个字段。
+- **Security smoke checklist**：新增 `docs/SECURITY_SMOKE.md`，提供本地复现 Tool Policy、Context Taint、Injection Eval 与运行时 `/api/taint` / `/api/tool-policy` 的最小命令集。
+
+### 更改
+
+- **Exfiltration 误伤修复**：Context Taint 的中文密钥外泄 pattern 从动词表移除「提交」——「不要提交到仓库」是良性建议，原来会让 `benign_03` 误伤；修正后对抗语料的 `falsePositiveRate` 从 0.200 降到 0.000，所有 25 个攻击样本仍全部命中。
+- **CI 安全评测增强**：`.github/workflows/ci.yml` 的 injection 对抗步骤从“report-only”改为“soft gate（不阻断主线）”，并标注 `--strict` 为 v2.3 路径。
+- **Coverage gate 提升**：`pyproject.toml` 与 CI 的 `--cov-fail-under` 从 70 提到 75，README 徽章同步；补齐 Context Taint / Tool Policy 边界测试为 75% gate 留出余量。
+- **实现状态矩阵同步**：Context Taint Firewall 仍保持 Experimental，但补充“soft gate 已接入、指标全绿”的可验证证据。
+
+### 测试
+
+- 新增 Tool Policy 拒绝理由回归：覆盖 unknown_tool / capability_denied / ssrf / path / sensitive_memory / secret_exfiltration / requires_confirmation / taint_escalation 八类拒绝的 `reason` + `suggestion`，以及 `denial_output` 结构化字段与审计日志落盘断言。
+- 新增 Context Taint `scan_text` 参数化矩阵：override / exfiltration / tool_directive 三类正例 + 五条良性 prose 反例（含「提交」误伤回归）。
+- 新增 injection soft gate 单元测试：阈值通过、blockRate 过低、falsePositive 过高三条路径，以及 `main()` 在 soft / `--strict` 下的退出码与 banner 文本。
+
 ## [2.2.5] - Compatibility Smoke & Release Polish
 
 **主题：协议兼容冒烟验证与发布收口。** 本版不继续堆新模块，而是把 v2.2.4 已完成的 MCP / A2A 能力整理成可复跑、可排障、可写入兼容矩阵的验证路径，为 v2.3 的真实第三方互操作做准备。

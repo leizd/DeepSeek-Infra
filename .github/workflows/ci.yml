@@ -20,7 +20,7 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: ruff check .
       - run: mypy .
-      - run: pytest --cov --cov-fail-under=70
+      - run: pytest --cov --cov-fail-under=75
       - run: node --check static/vendor/katex/katex.min.js
       - run: node --check static/math_core.js
       - run: node --check static/seek_core.js
@@ -61,7 +61,7 @@ jobs:
       # 离线质量评测（无需 API Key）：RAG Recall/Citation + Tool Policy/Injection Defense
       - run: PYTHONHASHSEED=0 python evals/runners/run_rag_eval.py
       - run: python evals/runners/run_tool_eval.py
-      # 对抗性 prompt injection 小型语料库：v2.2.4 先 report-only，不设硬门槛
+      # 对抗性 prompt injection 小型语料库：v2.2.6 起 soft gate（未达标只 warning 不 fail）
       - run: python evals/runners/run_injection_adversarial.py --no-report
 
   docker:

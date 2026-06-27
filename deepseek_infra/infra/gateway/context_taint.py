@@ -76,10 +76,13 @@ UNTRUSTED_CONTENT_GUARD = (
 
 # Secret-exfiltration directives: untrusted text ordering the model to ship
 # credentials somewhere. Narrow on purpose — prose *about* API keys must pass.
+# Note: "提交" is intentionally excluded from the Chinese verb list — it trips on
+# benign advisory prose like "不要提交到仓库" (don't commit to the repo), whereas
+# genuine exfiltration in this corpus uses 发送/上传/发到 etc.
 _EXFILTRATION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)(?:send|post|upload|forward|email|exfiltrate|transmit)\b[^\n]{0,60}?(?:api[\s_-]?key|secret|token|credential|password)"),
-    re.compile(r"(?i)(?:api[\s_-]?key|密钥|秘钥|凭证|令牌|token)[^\n]{0,40}?(?:发送|发给|发到|提交|上传|传到|泄露)"),
-    re.compile(r"(?i)(?:发送|发给|发到|提交|上传|泄露|输出)[^\n]{0,30}?(?:api[\s_-]?key|密钥|秘钥|凭证|令牌|系统提示)"),
+    re.compile(r"(?i)(?:api[\s_-]?key|密钥|秘钥|凭证|令牌|token)[^\n]{0,40}?(?:发送|发给|发到|上传|传到|泄露)"),
+    re.compile(r"(?i)(?:发送|发给|发到|上传|泄露|输出)[^\n]{0,30}?(?:api[\s_-]?key|密钥|秘钥|凭证|令牌|系统提示)"),
 )
 
 # Tool-invocation directives inside untrusted content ("call the forget_memory

@@ -18,7 +18,7 @@ Executable config (CI, `pyproject.toml`, requirements) is the source of truth; t
 python -m pip install -r requirements.txt -r requirements-dev.txt
 ruff check .
 mypy .
-pytest --cov --cov-fail-under=70
+pytest --cov --cov-fail-under=75
 # JS syntax (only these files are checked):
 node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_core.js static/app.js \
       static/modules/network.js static/modules/markdown.js static/modules/settings.js static/modules/panels.js \
@@ -33,7 +33,7 @@ node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_co
 
 - **`ruff` config is intentionally minimal**: `line-length=140`, rules `E4,E7,E9,F` only (in `pyproject.toml`). Don't assume broader lint rules are enforced; don't add style rules without checking.
 - **`mypy .`** runs on the whole repo; `ignore_missing_imports=true` is set, so third-party stub misses are not errors. `warn_unused_ignores=true` — don't leave stale `# type: ignore`.
-- **Coverage gate is 70%**, `source = ["deepseek_infra"]`. `--cov-fail-under=70` fails the run; lower locally with `pytest --no-cov` when iterating.
+- **Coverage gate is 75%** (raised from 70% in v2.2.6), `source = ["deepseek_infra"]`. `--cov-fail-under=75` fails the run; lower locally with `pytest --no-cov` when iterating.
 - **`pytest` uses `--strict-markers`** (from `pyproject.toml`). Registered markers: `integration` (spins up a real HTTP server on an ephemeral `127.0.0.1` port) and `slow` (>1s). Both run in CI's default `pytest` invocation.
 
 ### Offline eval gates (no API key)
@@ -41,10 +41,11 @@ node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_co
 ```bash
 PYTHONHASHSEED=0 python evals/runners/run_rag_eval.py   # hash seed is REQUIRED for reproducible BM25 ties
 python evals/runners/run_tool_eval.py                    # exits 1 on any policy misjudgment — hard CI gate
-python evals/runners/run_injection_adversarial.py --no-report  # report-only, always exits 0
+python evals/runners/run_injection_adversarial.py --no-report  # v2.2.6: soft gate (warns on unmet thresholds, exits 0; --strict exits 1)
 ```
 - Scoring core is the pure, I/O-free `deepseek_infra/infra/evaluation/harness.py` (unit-tested in `tests/test_eval_harness.py`). Runners only orchestrate.
 - `run_agent_eval.py` is offline but **not** a CI gate yet.
+- **Injection soft gate (v2.2.6)**: `run_injection_adversarial.py` enforces versioned thresholds (`blockRate>=0.85`, `falsePositiveRate<=0.10`, `bypassRate<=0.15`) as a *soft* gate — unmet thresholds print `SOFT GATE: WARNING` but still exit 0 so CI keeps flowing. `--strict` turns it into a hard failure (the v2.3 graduation path). `run_tool_eval.py` remains the hard gate (exits 1 on any policy misjudgment).
 
 ### Security scan (CI `security` job)
 

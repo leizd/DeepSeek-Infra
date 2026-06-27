@@ -1,6 +1,6 @@
 # 2 分钟 Demo 路径
 
-适用版本：v2.2.5。
+适用版本：v2.2.6。
 
 这一页的目标：**不读任何源码，2 分钟内亲眼看到 README 里的核心能力在跑**。四个脚本都在 [examples/](../examples/)，按「零门槛 → 需要服务 → 需要 Key」排序：
 
@@ -57,7 +57,7 @@ python examples/mcp_tool_demo.py
 用仓库内置的 `MCPClient` 对本机 `POST /mcp` 做 `initialize → tools/list → tools/call` 回环：
 
 ```
-[initialize] protocol=2025-06-18 server=deepseek-infra v2.2.5
+[initialize] protocol=2025-06-18 server=deepseek-infra v2.2.6
 
 [tools/list] 17 tools:
    - web_search  [read-only, open-world]

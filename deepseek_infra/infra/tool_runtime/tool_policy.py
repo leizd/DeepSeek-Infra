@@ -484,6 +484,11 @@ class PolicyDecision:
     reasons: tuple[str, ...] = ()
     violations: tuple[str, ...] = ()
     capability: str = "full"
+    # v2.2.6: human-readable denial reason + remediation suggestion for the
+    # high-risk deny / needs-confirmation paths. Empty for plain allows. These
+    # flow into denial_output() and the audit log via to_dict().
+    reason: str = ""
+    suggestion: str = ""
 
     @property
     def allowed(self) -> bool:
@@ -511,6 +516,8 @@ class PolicyDecision:
             "reasons": list(self.reasons),
             "violations": list(self.violations),
             "capability": self.capability,
+            "reason": self.reason,
+            "suggestion": self.suggestion,
         }
 
 
@@ -604,7 +611,18 @@ class ToolPolicy:
         violations: list[str] = []
 
         if meta is None:
-            return self._record(PolicyDecision(tool or "unknown", DENY, "high", ("unknown_tool",), (), self.capability))
+            return self._record(
+                PolicyDecision(
+                    tool or "unknown",
+                    DENY,
+                    "high",
+                    ("unknown_tool",),
+                    (),
+                    self.capability,
+                    reason="Unknown tool is not registered in the tool catalog",
+                    suggestion="Use a tool listed by GET /api/tools or /mcp tools/list",
+                )
+            )
 
         # 1. Capability / permission check.
         # Bridged external tools (capability "external") are implicitly allowed
@@ -616,14 +634,36 @@ class ToolPolicy:
                 pass
             else:
                 reasons.append(f"capability_denied:{self.capability}")
-                return self._record(PolicyDecision(tool, DENY, _max_risk(meta.risk, "high"), tuple(reasons), (), self.capability))
+                return self._record(
+                    PolicyDecision(
+                        tool,
+                        DENY,
+                        _max_risk(meta.risk, "high"),
+                        tuple(reasons),
+                        (),
+                        self.capability,
+                        reason=f"Tool is out of scope for the '{self.capability}' capability profile",
+                        suggestion=f"Switch capability or add the tool to CAPABILITY_PROFILES['{self.capability}']",
+                    )
+                )
 
         # 2. Schema validation (soft unless enforce_schema).
         args = arguments if isinstance(arguments, dict) else {}
         violations = validate_arguments(tool, args, schema)
         if violations and self.enforce_schema:
             reasons.append("schema_invalid")
-            return self._record(PolicyDecision(tool, DENY, meta.risk, tuple(reasons), tuple(violations), self.capability))
+            return self._record(
+                PolicyDecision(
+                    tool,
+                    DENY,
+                    meta.risk,
+                    tuple(reasons),
+                    tuple(violations),
+                    self.capability,
+                    reason="Tool arguments failed schema validation",
+                    suggestion="Correct the argument types/required fields and retry",
+                )
+            )
 
         # 3. Risk classification + dynamic security guards.
         risk = meta.risk
@@ -634,28 +674,83 @@ class ToolPolicy:
                 safe, why = evaluate_network_argument_safety(args)
             if not safe:
                 reasons.append(f"ssrf_blocked:{why}")
-                return self._record(PolicyDecision(tool, DENY, "critical", tuple(reasons), tuple(violations), self.capability))
+                return self._record(
+                    PolicyDecision(
+                        tool,
+                        DENY,
+                        "critical",
+                        tuple(reasons),
+                        tuple(violations),
+                        self.capability,
+                        reason=f"Blocked SSRF target ({why})",
+                        suggestion="Use a public http(s) URL; internal/private/metadata hosts are denied",
+                    )
+                )
         if meta.filesystem:
             safe, why = evaluate_path_safety(args)
             if not safe:
                 reasons.append(f"path_blocked:{why}")
-                return self._record(PolicyDecision(tool, DENY, "critical", tuple(reasons), tuple(violations), self.capability))
+                return self._record(
+                    PolicyDecision(
+                        tool,
+                        DENY,
+                        "critical",
+                        tuple(reasons),
+                        tuple(violations),
+                        self.capability,
+                        reason=f"Blocked unsafe filesystem path ({why})",
+                        suggestion="Use a relative path under the workspace; absolute paths and traversal are denied",
+                    )
+                )
         if meta.sensitive_sink and tool == "suggest_memory":
             if is_sensitive_memory(str(args.get("content") or "")):
                 reasons.append("sensitive_memory_blocked")
-                return self._record(PolicyDecision(tool, DENY, "high", tuple(reasons), tuple(violations), self.capability))
+                return self._record(
+                    PolicyDecision(
+                        tool,
+                        DENY,
+                        "high",
+                        tuple(reasons),
+                        tuple(violations),
+                        self.capability,
+                        reason="Sensitive content (credentials/keys) cannot be written to memory",
+                        suggestion="Omit secrets from the memory content before saving",
+                    )
+                )
         # Secret exfiltration (Context Taint firewall): the runtime's own
         # credentials never belong in tool arguments — an unconditional block.
         if self.secrets and arguments_contain_secret(args, self.secrets):
             reasons.append("secret_exfiltration_blocked")
             with self._lock:
                 self.secret_blocks += 1
-            return self._record(PolicyDecision(tool, DENY, "critical", tuple(reasons), tuple(violations), self.capability))
+            return self._record(
+                PolicyDecision(
+                    tool,
+                    DENY,
+                    "critical",
+                    tuple(reasons),
+                    tuple(violations),
+                    self.capability,
+                    reason="Runtime credential detected in tool arguments (exfiltration attempt)",
+                    suggestion="Remove API keys/tokens from tool arguments before calling",
+                )
+            )
 
         # 4. Human confirmation for high-risk tools.
         if self.require_confirm and meta.requires_confirm and tool not in self.approvals:
             reasons.append("requires_confirmation")
-            return self._record(PolicyDecision(tool, NEEDS_CONFIRMATION, _max_risk(risk, "high"), tuple(reasons), tuple(violations), self.capability))
+            return self._record(
+                PolicyDecision(
+                    tool,
+                    NEEDS_CONFIRMATION,
+                    _max_risk(risk, "high"),
+                    tuple(reasons),
+                    tuple(violations),
+                    self.capability,
+                    reason="High-risk tool requires explicit user confirmation",
+                    suggestion="Approve the tool call in the UI and retry, or add it to approvals",
+                )
+            )
 
         # 5. Taint escalation: when this turn's context carried injection /
         # exfiltration / tool directives from untrusted sources, dangerous tools
@@ -667,7 +762,18 @@ class ToolPolicy:
             and (meta.requires_confirm or meta.sensitive_sink or RISK_ORDER.get(meta.risk, 0) >= RISK_ORDER["high"])
         ):
             reasons.append("taint_escalated_confirmation")
-            return self._record(PolicyDecision(tool, NEEDS_CONFIRMATION, _max_risk(risk, "high"), tuple(reasons), tuple(violations), self.capability))
+            return self._record(
+                PolicyDecision(
+                    tool,
+                    NEEDS_CONFIRMATION,
+                    _max_risk(risk, "high"),
+                    tuple(reasons),
+                    tuple(violations),
+                    self.capability,
+                    reason="Context is tainted with injection/exfiltration directives; dangerous tool escalated to confirmation",
+                    suggestion="Review the untrusted context, then approve the call explicitly",
+                )
+            )
 
         if violations:
             reasons.append("schema_warning")
@@ -735,6 +841,11 @@ class ToolPolicy:
             "tool": decision.tool,
             "error": message,
             "code": code,
+            # v2.2.6: structured, explainable denial — the human-readable reason,
+            # the risk band, and a concrete remediation suggestion.
+            "reason": decision.reason,
+            "risk": decision.risk,
+            "suggestion": decision.suggestion,
             "policy": decision.to_dict(),
         }
 

@@ -1,6 +1,6 @@
 # Compatibility Matrix（兼容性矩阵）
 
-适用版本：v2.2.5。
+适用版本：v2.2.6。
 
 这页只记录已经可复现的互操作结果，不把“协议上应该兼容”写成“实机已验证”。v2.2.5 的重点是把 v2.2.3/v2.2.4 已完成的 MCP / A2A 能力整理成一键 smoke 入口：本地服务可跑、失败能排查、日志可贴回兼容矩阵。Claude Desktop / Cursor 的配置片段已补齐，但本机未安装这两个 GUI 客户端；真实第三方 Streamable HTTP MCP server 与第三方 A2A 实现也仍标为待实机。
 

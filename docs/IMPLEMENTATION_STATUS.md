@@ -1,6 +1,6 @@
 # Implementation Status（实现状态矩阵）
 
-适用版本：v2.2.5。
+适用版本：v2.2.6。
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
@@ -91,7 +91,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 
 ### 9. Context Taint Firewall — Experimental
 
-- **代码**：[context_taint.py](../deepseek_infra/infra/gateway/context_taint.py)（逐段信任打标 / 三类指令扫描 / 隔离加固）+ [tool_policy.py](../deepseek_infra/infra/tool_runtime/tool_policy.py)（密钥外泄硬拦截、污染轮升级确认）。
-- **测试**：[test_context_taint.py](../tests/test_context_taint.py)（13 项）。
-- **亲手验证**：[evals/runners/run_tool_eval.py](../evals/runners/run_tool_eval.py) 输出 Prompt Injection Defense Pass Rate；[evals/runners/run_injection_adversarial.py](../evals/runners/run_injection_adversarial.py) 输出对抗小语料 block / false-positive / bypass rate（report-only）；运行中 `GET /api/taint` 看防火墙状态。
-- **Experimental 的原因**：检测基于确定性 pattern 族（中英 + runner 侧 Base64 解码），对抗性变体已有小型 report-only 基准，但尚未设版本化硬门槛。
+- **代码**：[context_taint.py](../deepseek_infra/infra/gateway/context_taint.py)（逐段信任打标 / 三类指令扫描 / 隔离加固）+ [tool_policy.py](../deepseek_infra/infra/tool_runtime/tool_policy.py)（密钥外泄硬拦截、污染轮升级确认、v2.2.6 可解释 deny `reason`/`suggestion`）。
+- **测试**：[test_context_taint.py](../tests/test_context_taint.py)（含 v2.2.6 per-category `scan_text` 矩阵与「提交」误伤回归）+ [test_tool_policy.py](../tests/test_tool_policy.py)（含 deny reason/suggestion 与审计落盘断言）。
+- **亲手验证**：[evals/runners/run_tool_eval.py](../evals/runners/run_tool_eval.py) 输出 Prompt Injection Defense Pass Rate；[evals/runners/run_injection_adversarial.py](../evals/runners/run_injection_adversarial.py) 输出对抗小语料 block / false-positive / bypass rate 并对照版本化阈值做 soft gate（`SOFT GATE: PASS`）；运行中 `GET /api/taint` 看防火墙状态、`GET /api/tool-policy` 看最近 deny 审计（含 `reason`/`suggestion`）。最小复现命令集见 [SECURITY_SMOKE.md](SECURITY_SMOKE.md)。
+- **Experimental 的原因**：检测基于确定性 pattern 族（中英 + runner 侧 Base64 解码），对抗性变体已有 soft gate 基准（阈值全绿），但仍未设版本化**硬**门槛；v2.3 计划把 `--strict` 接入 CI 必过项后毕业。
