@@ -1,6 +1,6 @@
 # Agent Eval Replay
 
-适用版本：v2.3.2。
+适用版本：v2.3.3。
 
 Agent Eval 仍然是离线回放：真实多 Agent 运行可以在线生成 prediction，但 CI 只读取已经录制好的 JSONL，与 `evals/golden/agent_tasks.jsonl` 按 `id` join 后评分。v2.2.8 的目标是先稳定录制格式和报告，不把 Agent Success 或 latency 退化升级为 hard gate。
 

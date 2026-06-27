@@ -5,10 +5,11 @@ Checks that the version string is consistent across the README badge,
 CHANGELOG, Dockerfile tag, Implementation Status / evals README headers, that
 the eval / agent reports are current, that the smoke / eval docs exist, that
 ``scripts/release.py`` still excludes runtime caches and logs, that headless MCP
-bridge evidence is present, and (since v2.3.1) that GUI interop evidence for
-Claude Desktop / Cursor has been recorded in ``docs/COMPATIBILITY.md``.
+bridge and A2A external peer evidence are present, and (since v2.3.1) that GUI
+interop evidence for Claude Desktop / Cursor has been recorded in
+``docs/COMPATIBILITY.md``.
 
-    python scripts/preflight_release.py --version 2.3.2
+    python scripts/preflight_release.py --version 2.3.3
 
 Exits 1 on any FAIL; WARNINGs do not fail. Version defaults to
 ``settings.app_version``.
@@ -75,12 +76,18 @@ def check_doc_version(root: Path, doc_rel: str, version: str) -> CheckResult:
 
 def check_doc_links_exist(root: Path) -> CheckResult:
     missing: list[str] = []
-    for rel in ("docs/AGENT_EVAL.md", "docs/EVAL_REPORTS.md", "docs/SECURITY_SMOKE.md", "docs/integrations/headless-mcp-client.md"):
+    for rel in (
+        "docs/AGENT_EVAL.md",
+        "docs/EVAL_REPORTS.md",
+        "docs/SECURITY_SMOKE.md",
+        "docs/integrations/headless-mcp-client.md",
+        "docs/integrations/a2a-external-peer.md",
+    ):
         if not (root / rel).is_file():
             missing.append(rel)
     if missing:
         return CheckResult("doc_links", STATUS_FAIL, f"missing docs: {', '.join(missing)}", {"missing": missing})
-    return CheckResult("doc_links", STATUS_PASS, "AGENT_EVAL / EVAL_REPORTS / SECURITY_SMOKE / headless MCP docs present", {})
+    return CheckResult("doc_links", STATUS_PASS, "AGENT_EVAL / EVAL_REPORTS / SECURITY_SMOKE / headless MCP / A2A external docs present", {})
 
 
 def check_eval_report_version(root: Path, version: str) -> CheckResult:
@@ -167,6 +174,88 @@ def check_headless_mcp_bridge_evidence(root: Path, version: str) -> CheckResult:
     )
 
 
+def check_a2a_external_peer_evidence(root: Path, version: str) -> CheckResult:
+    path = root / "docs" / "evidence" / "a2a-external-peer.json"
+    if not path.is_file():
+        return CheckResult(
+            "a2a_external_peer_evidence",
+            STATUS_FAIL,
+            "A2A external peer evidence missing; run scripts/smoke_a2a_external_peer.py",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("a2a_external_peer_evidence", STATUS_FAIL, f"cannot parse A2A external peer evidence: {exc}", {"path": str(path)})
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "a2a_external_peer_evidence",
+            STATUS_FAIL,
+            f"A2A external peer evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS":
+        return CheckResult(
+            "a2a_external_peer_evidence",
+            STATUS_FAIL,
+            f"A2A external peer evidence status is {data.get('status')!r}, expected PASS",
+            {"status": data.get("status")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v) for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = ("agentCard", "messageSend", "messageStream", "tasksGet", "tasksCancel", "tasksList", "artifactChunks", "sseFinalEvent")
+    missing_or_failed = [name for name in required if check_status.get(name) != "pass"]
+    if missing_or_failed:
+        return CheckResult(
+            "a2a_external_peer_evidence",
+            STATUS_FAIL,
+            f"A2A external peer evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    peer = data.get("peer")
+    peer_data = peer if isinstance(peer, dict) else {}
+    return CheckResult(
+        "a2a_external_peer_evidence",
+        STATUS_PASS,
+        "A2A external peer evidence recorded",
+        {"path": str(path), "peer": peer_data.get("name"), "checks": list(required)},
+    )
+
+
+def check_a2a_third_party_evidence(root: Path) -> CheckResult:
+    path = root / "docs" / "evidence" / "a2a-third-party-peer.json"
+    if not path.is_file():
+        return CheckResult(
+            "a2a_third_party_evidence",
+            STATUS_WARN,
+            "third-party A2A ecosystem evidence still pending; adapter path is documented",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("a2a_third_party_evidence", STATUS_WARN, f"third-party A2A evidence is present but unparsable: {exc}", {"path": str(path)})
+    peer = data.get("peer")
+    peer_data = peer if isinstance(peer, dict) else {}
+    checks = data.get("checks")
+    check_status = {str(k): str(v) for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = ("agentCard", "messageSend", "messageStream", "tasksGet", "tasksCancel", "tasksList", "artifactChunks", "sseFinalEvent")
+    if data.get("status") == "PASS" and peer_data.get("type") in {"third-party", "adapter"} and all(check_status.get(name) == "pass" for name in required):
+        return CheckResult(
+            "a2a_third_party_evidence",
+            STATUS_PASS,
+            "third-party / adapter A2A ecosystem evidence recorded",
+            {"path": str(path), "peer": peer_data.get("name"), "type": peer_data.get("type")},
+        )
+    return CheckResult(
+        "a2a_third_party_evidence",
+        STATUS_WARN,
+        "third-party A2A ecosystem evidence is not PASS yet",
+        {"path": str(path), "status": data.get("status"), "type": peer_data.get("type")},
+    )
+
+
 def check_gui_interop_evidence(root: Path) -> CheckResult:
     """Verify Claude Desktop / Cursor GUI evidence is recorded in COMPATIBILITY.md.
 
@@ -214,6 +303,8 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_agent_report(root, version),
         check_release_exclusions(root),
         check_headless_mcp_bridge_evidence(root, version),
+        check_a2a_external_peer_evidence(root, version),
+        check_a2a_third_party_evidence(root),
         check_gui_interop_evidence(root),
     ]
 

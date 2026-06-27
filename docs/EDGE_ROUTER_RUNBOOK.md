@@ -1,6 +1,6 @@
 # Edge Router Runbook
 
-适用版本：v2.3.2。
+适用版本：v2.3.3。
 
 Edge-Cloud Model Router 仍是 **Experimental**：CI 覆盖路由决策、配置面和云失败回退，但不下载模型、不安装本地推理后端，也不跑真实 GGUF/MLC 推理。本页只把“怎么在自己的机器上验收”写清楚。
 

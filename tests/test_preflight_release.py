@@ -28,9 +28,12 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     (root / "docs" / "SECURITY_SMOKE.md").write_text("security smoke\n", encoding="utf-8")
     (root / "docs" / "integrations").mkdir()
     (root / "docs" / "integrations" / "headless-mcp-client.md").write_text("headless mcp\n", encoding="utf-8")
+    (root / "docs" / "integrations" / "a2a-external-peer.md").write_text("a2a external peer\n", encoding="utf-8")
     evidence_dir = root / "docs" / "evidence"
     evidence_dir.mkdir()
     _write_headless_evidence(evidence_dir / "headless-mcp-bridge.json", version)
+    _write_a2a_evidence(evidence_dir / "a2a-external-peer.json", version)
+    _write_a2a_evidence(evidence_dir / "a2a-third-party-peer.json", version, peer_type="third-party")
     (root / "evals").mkdir()
     (root / "evals" / "README.md").write_text(f"适用版本：v{version}。\n", encoding="utf-8")
     reports = root / "evals" / "reports"
@@ -57,6 +60,32 @@ def _write_headless_evidence(path: Path, version: str, *, status: str = "PASS", 
     if omit_step:
         steps = [step for step in steps if step["name"] != omit_step]
     path.write_text(json.dumps({"version": version, "status": status, "steps": steps}), encoding="utf-8")
+
+
+def _write_a2a_evidence(path: Path, version: str, *, status: str = "PASS", omit_check: str = "", peer_type: str = "independent-process") -> None:
+    checks = {
+        "agentCard": "pass",
+        "messageSend": "pass",
+        "messageStream": "pass",
+        "tasksGet": "pass",
+        "tasksCancel": "pass",
+        "tasksList": "pass",
+        "artifactChunks": "pass",
+        "sseFinalEvent": "pass",
+    }
+    if omit_check:
+        checks.pop(omit_check, None)
+    path.write_text(
+        json.dumps(
+            {
+                "version": version,
+                "status": status,
+                "peer": {"name": "peer", "type": peer_type},
+                "checks": checks,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_preflight_all_pass(tmp_path: Path) -> None:
@@ -163,6 +192,33 @@ def test_preflight_fails_on_incomplete_headless_mcp_evidence(tmp_path: Path) -> 
     result = next(r for r in preflight.run_preflight(root, "2.3.2") if r.name == "headless_mcp_bridge_evidence")
     assert result.status == "fail"
     assert "mcp.policy_denial" in result.detail
+
+
+def test_preflight_fails_on_missing_a2a_external_peer_evidence(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.3.3")
+    (root / "docs" / "evidence" / "a2a-external-peer.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.3.3") if r.name == "a2a_external_peer_evidence")
+    assert result.status == "fail"
+    assert preflight.main(["--root", str(root), "--version", "2.3.3"]) == 1
+
+
+def test_preflight_fails_on_incomplete_a2a_external_peer_evidence(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.3.3")
+    _write_a2a_evidence(root / "docs" / "evidence" / "a2a-external-peer.json", "2.3.3", omit_check="artifactChunks")
+    result = next(r for r in preflight.run_preflight(root, "2.3.3") if r.name == "a2a_external_peer_evidence")
+    assert result.status == "fail"
+    assert "artifactChunks" in result.detail
+
+
+def test_preflight_warns_on_missing_a2a_third_party_evidence(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.3.3")
+    (root / "docs" / "evidence" / "a2a-third-party-peer.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.3.3") if r.name == "a2a_third_party_evidence")
+    assert result.status == "warn"
+    assert preflight.main(["--root", str(root), "--version", "2.3.3"]) == 0
 
 
 def _skeleton_with_compat(tmp_path: Path, version: str, *, claude_status: str, cursor_status: str) -> Path:

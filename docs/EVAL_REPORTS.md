@@ -1,6 +1,6 @@
 # Eval Reports
 
-适用版本：v2.3.2。
+适用版本：v2.3.3。
 
 v2.2.7 把 RAG、Tool Policy 和 Prompt Injection adversarial eval 从分散 CLI 输出升级为一份可归档、可比较、可上传到 CI artifact 的离线评测报告。v2.2.8 在这个证据链旁边补齐 Agent Eval 的稳定录制回放：`agent-latest.json` / `agent-latest.md` 作为 report-only artifact 输出，和 `agent-v2.2.8` baseline 做 warning 级对比。目标仍然不是扩大硬门禁面，而是让每次 PR 都能看到当前分数、版本信息、数据集规模、阈值和退化判断。
 

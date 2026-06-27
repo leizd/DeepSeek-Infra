@@ -40,7 +40,7 @@ import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, cast
 
 _PROTOCOL_VERSION = "0.3.0"
 _AGENT_ID = "interop-peer"
@@ -323,7 +323,11 @@ class _PeerHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        base = f"http://{self.server.server_name}:{self.server.server_port}"  # type: ignore[attr-defined]
+        server_address = cast(tuple[str, int], self.server.server_address)
+        host = str(server_address[0])
+        if host in {"0.0.0.0", "::"}:
+            host = "127.0.0.1"
+        base = f"http://{host}:{server_address[1]}"
         if self.path == "/.well-known/agent-card.json":
             self._send_json(200, json.dumps(_agent_card(base), ensure_ascii=False, indent=2).encode("utf-8"))
             return

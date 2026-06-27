@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepseek-infra.local/schemas/a2a_external_peer_evidence.schema.json",
+  "title": "A2A External Peer Evidence",
+  "type": "object",
+  "required": ["schemaVersion", "version", "generatedAt", "gitSha", "gitDirty", "peer", "checks", "status", "steps"],
+  "properties": {
+    "schemaVersion": {
+      "const": "a2a-external-peer-evidence.v1"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "generatedAt": {
+      "type": "string"
+    },
+    "gitSha": {
+      "type": "string"
+    },
+    "gitDirty": {
+      "type": "boolean"
+    },
+    "peer": {
+      "type": "object",
+      "required": ["name", "url", "endpoint", "type"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "type": {
+          "enum": ["independent-process", "third-party", "adapter"]
+        },
+        "protocolVersion": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "checks": {
+      "type": "object",
+      "required": ["agentCard", "messageSend", "messageStream", "tasksGet", "tasksCancel", "tasksList", "artifactChunks", "sseFinalEvent"],
+      "properties": {
+        "agentCard": {
+          "enum": ["pass", "fail"]
+        },
+        "messageSend": {
+          "enum": ["pass", "fail"]
+        },
+        "messageStream": {
+          "enum": ["pass", "fail"]
+        },
+        "tasksGet": {
+          "enum": ["pass", "fail"]
+        },
+        "tasksCancel": {
+          "enum": ["pass", "fail"]
+        },
+        "tasksList": {
+          "enum": ["pass", "fail"]
+        },
+        "artifactChunks": {
+          "enum": ["pass", "fail"]
+        },
+        "sseFinalEvent": {
+          "enum": ["pass", "fail"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "enum": ["PASS", "FAIL"]
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "detail"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["pass", "fail", "warn"]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

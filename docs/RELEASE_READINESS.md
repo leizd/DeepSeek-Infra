@@ -1,6 +1,6 @@
 # Release Readiness
 
-适用版本：v2.3.2。
+适用版本：v2.3.3。
 
 v2.2.9 是 v2.2.x 的收官版，主题是**发布前体检、运行时诊断、版本一致性与产物可验证**——不再扩大协议面或评测面，而是为 v2.3 的真实互操作验证提供一个稳定、可自证交付的底座。本页把三件事串起来：发版前体检（preflight）、一键 smoke 编排、发布产物证明（manifest + checksum）。
 
@@ -9,19 +9,20 @@ v2.2.9 是 v2.2.x 的收官版，主题是**发布前体检、运行时诊断、
 发版前确认版本号在所有该出现的地方都同步，eval 报告是当前版本，且发布脚本仍排除本地缓存 / 日志 / 密钥：
 
 ```bash
-python scripts/preflight_release.py --version 2.3.2
+python scripts/preflight_release.py --version 2.3.3
 ```
 
 检查项：
 
-- README 版本徽章是 `2.3.2`。
-- `CHANGELOG.md` 顶部有 `## [2.3.2]` 条目。
-- `Dockerfile` 示例 tag 是 `deepseek-infra:2.3.2`。
-- `docs/IMPLEMENTATION_STATUS.md` 与 `evals/README.md` 的「适用版本」是 `v2.3.2`。
-- `docs/AGENT_EVAL.md` / `docs/EVAL_REPORTS.md` / `docs/SECURITY_SMOKE.md` / `docs/integrations/headless-mcp-client.md` 存在。
-- `evals/reports/latest.json` 的 `version` 是 `2.3.2`。
-- `evals/reports/agent-latest.json` 可解析且 `version` 是 `2.3.2`。
-- `docs/evidence/headless-mcp-bridge.json` 可解析、版本为 `2.3.2`，且关键 MCP bridge 步骤全为 PASS。
+- README 版本徽章是 `2.3.3`。
+- `CHANGELOG.md` 顶部有 `## [2.3.3]` 条目。
+- `Dockerfile` 示例 tag 是 `deepseek-infra:2.3.3`。
+- `docs/IMPLEMENTATION_STATUS.md` 与 `evals/README.md` 的「适用版本」是 `v2.3.3`。
+- `docs/AGENT_EVAL.md` / `docs/EVAL_REPORTS.md` / `docs/SECURITY_SMOKE.md` / `docs/integrations/headless-mcp-client.md` / `docs/integrations/a2a-external-peer.md` 存在。
+- `evals/reports/latest.json` 的 `version` 是 `2.3.3`。
+- `evals/reports/agent-latest.json` 可解析且 `version` 是 `2.3.3`。
+- `docs/evidence/headless-mcp-bridge.json` 可解析、版本为 `2.3.3`，且关键 MCP bridge 步骤全为 PASS。
+- `docs/evidence/a2a-external-peer.json` 可解析、版本为 `2.3.3`，且关键 A2A external peer checks 全为 PASS。
 - `scripts/release.py` 仍排除 `.traces` / `.local-rag` / `.auth-token` / `.env` / `server*.log`。
 
 退出码：`1` 表示有 `FAIL`；`WARNING`（如 eval 报告缺失）不失败。`--json` 输出机器可读摘要。
@@ -57,9 +58,9 @@ python scripts/smoke_release.py --with-server --base-url http://127.0.0.1:8000 -
 每次跑 [`scripts/release.py`](../scripts/release.py) 不再只产出一个 zip，还会在 `dist/` 下产出三件套：
 
 ```
-dist/deepseek-infra-2.3.2.zip
-dist/deepseek-infra-2.3.2.zip.sha256
-dist/deepseek-infra-2.3.2.manifest.json
+dist/deepseek-infra-2.3.3.zip
+dist/deepseek-infra-2.3.3.zip.sha256
+dist/deepseek-infra-2.3.3.manifest.json
 ```
 
 `manifest.json` 记录发布的关键事实，可独立校验：
@@ -67,14 +68,14 @@ dist/deepseek-infra-2.3.2.manifest.json
 ```json
 {
   "schemaVersion": "release-manifest.v1",
-  "version": "2.3.2",
+  "version": "2.3.3",
   "commit": "abc1234",
   "builtAt": "2026-06-27T00:00:00Z",
   "python": "3.12",
   "coverageGate": "75%",
   "evalReport": "evals/reports/latest.json",
   "agentReport": "evals/reports/agent-latest.json",
-  "artifact": "deepseek-infra-2.3.2.zip",
+  "artifact": "deepseek-infra-2.3.3.zip",
   "sha256": "...",
   "bytes": 1234567
 }
@@ -92,7 +93,8 @@ dist/deepseek-infra-2.3.2.manifest.json
 
 ```yaml
 - run: python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
-- run: python scripts/preflight_release.py --version 2.3.2
+- run: python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
+- run: python scripts/preflight_release.py --version 2.3.3
 - run: python scripts/doctor.py --offline
 - run: python scripts/release.py --clean-workspace --dry-run
 ```
@@ -115,7 +117,26 @@ dist/deepseek-infra-2.3.2.manifest.json
 python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
 ```
 
-## 6. GUI Interop Evidence Checklist（v2.3.1）
+## 6. A2A External Peer Evidence（v2.3.3）
+
+`preflight_release.py` 自 v2.3.3 起增加 `a2a_external_peer_evidence` 硬检查。它读取 `docs/evidence/a2a-external-peer.json`，确认一个无 GUI、无 API key 的外部 A2A peer 路径已经自动跑通：
+
+- `agentCard`
+- `messageSend`
+- `messageStream`
+- `tasksGet`
+- `tasksCancel`
+- `tasksList`
+- `artifactChunks`
+- `sseFinalEvent`
+
+本项是最低交付标准，缺失或失败会让 preflight 返回 `FAIL`。真实第三方生态 evidence 使用 `docs/evidence/a2a-third-party-peer.json`，缺失时只返回 `WARNING`。刷新命令：
+
+```bash
+python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
+```
+
+## 7. GUI Interop Evidence Checklist（v2.3.1）
 
 `preflight_release.py` 自 v2.3.1 起增加 `gui_interop_evidence` 检查，扫描 `docs/COMPATIBILITY.md` 中 Claude Desktop / Cursor 行的状态标记：
 
@@ -141,17 +162,20 @@ python scripts/update_eval_report.py
 # 2. 刷新 headless MCP bridge evidence
 python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
 
-# 3. 版本一致性体检
-python scripts/preflight_release.py --version 2.3.2
+# 3. 刷新 A2A external peer evidence
+python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
 
-# 4. 运行时体检
+# 4. 版本一致性体检
+python scripts/preflight_release.py --version 2.3.3
+
+# 5. 运行时体检
 python scripts/doctor.py --offline
 
-# 5. 一键 smoke（离线）
+# 6. 一键 smoke（离线）
 python scripts/smoke_release.py --offline
 
-# 6. 打包并生成 manifest + checksum
-python scripts/release.py --clean-workspace --version 2.3.2
+# 7. 打包并生成 manifest + checksum
+python scripts/release.py --clean-workspace --version 2.3.3
 ```
 
 或直接用 `python scripts/smoke_release.py --offline`（已包含 doctor + evals + agent）。

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "agent-eval-report.v1",
-  "version": "2.3.2",
-  "generatedAt": "2026-06-27T10:05:43Z",
+  "version": "2.3.3",
+  "generatedAt": "2026-06-27T10:51:29Z",
   "status": "PASS",
   "warnings": [],
   "agent": {

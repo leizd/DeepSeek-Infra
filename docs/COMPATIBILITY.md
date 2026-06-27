@@ -1,6 +1,6 @@
 # Compatibility Matrix（兼容性矩阵）
 
-适用版本：v2.3.2。
+适用版本：v2.3.3。
 
 这页只记录已经可复现的互操作结果，不把“协议上应该兼容”写成“实机已验证”。v2.3.0 的重点是把 v2.2.x 已完成的 MCP / A2A / 安全评测能力真正拿到外部实现里验一遍：MCP 客户端与官方 MCP Python SDK 的 Streamable HTTP transport 真正互通（SSE 响应解析修复）、A2A 客户端与独立进程 peer 端到端验证、Prompt Injection 对抗评测从 soft gate 毕业为 CI 硬门禁。Claude Desktop / Cursor 的 GUI 实机验证 runbook 已落地，待人工完成 GUI 测试后填入证据。
 
@@ -36,6 +36,7 @@ python scripts/smoke_mcp_compat.py --token <local-token> --external-server-url h
 | MCP local smoke | ✅ Runner added | `python scripts/smoke_mcp_compat.py` | `/healthz`、`initialize`、`tools/list`、`tools/call`、policy gate、`/api/mcp/external/tools` |
 | MCP real external server smoke | 🟡 Entry ready | `python scripts/smoke_mcp_compat.py --external-server-url <url>` | 第三方 server 的 `initialize` / `tools/list`；本仓库未记录实机通过 |
 | A2A live smoke | ✅ Runner added | `python scripts/smoke_a2a_compat.py` | Agent Card、agents list、`message/send`、`message/stream`、`tasks/resubscribe`、`tasks/cancel` |
+| A2A external peer smoke | ✅ Tested | `python scripts/smoke_a2a_external_peer.py` + [integrations/a2a-external-peer.md](integrations/a2a-external-peer.md) | 独立进程 external peer：Agent Card + send + stream + get + cancel + list + artifact chunks + SSE final event。 |
 | A2A contract regression | ✅ Tested | `pytest tests/test_a2a_compat_contract.py` | artifact chunks、SSE final status、resubscribe cursor、cancel lifecycle |
 | Edge Router smoke | 🟡 Runbook added | `python examples/edge_router_smoke.py` | `/api/edge/status`、`/v1/models`、Ollama model exposure check |
 
@@ -114,9 +115,10 @@ v2.2.1 起，外部 MCP server 的工具会以 `mcp__<server>__<tool>` 桥接进
 | Local A2A test suite (`tests/test_a2a.py`) | ✅ Tested | 14 cases: artifact chunks, `tasks/resubscribe`, canceling, loopback client, metrics |
 | A2A compatibility contract (`tests/test_a2a_compat_contract.py`) | ✅ Tested | Agent Card, `message/send`, `message/stream`, artifact chunks, `tasks/resubscribe`, `tasks/cancel` |
 | A2A live smoke runner | ✅ Runner added | `python scripts/smoke_a2a_compat.py` | Endpoint-level smoke against a running local server; artifact chunks can be strict with `--strict-artifacts` |
+| A2A external peer smoke runner | ✅ Tested | `python scripts/smoke_a2a_external_peer.py` + `docs/evidence/a2a-external-peer.json` | Agent Card / `message/send` / `message/stream` / `tasks/get` / `tasks/cancel` / `tasks/list` / artifact chunks / SSE final event。 |
 | Local Agent Card discovery | ✅ Tested | `GET /.well-known/agent-card.json` |
 | Local external A2A peer loopback | ✅ Tested | `examples/a2a_peer_demo.py` against `http://127.0.0.1:8001/a2a/agents/reasoner` |
-| Third-party A2A implementation | 🟡 Independent-process peer tested (not third-party ecosystem) | [integrations/a2a-interop.md](integrations/a2a-interop.md) + [integrations/a2a-third-party-plan.md](integrations/a2a-third-party-plan.md) + `examples/a2a_interop_peer.py` | 独立进程 A2A peer（Python stdlib `http.server`）验证 Agent Card / `message/send` / `message/stream` / `tasks/get` / `tasks/cancel` / `tasks/list`，commit `6edcda5`，2026-06-27。诚实标注：独立进程 interop，非第三方生态实现；第三方生态实现验证计划见 [a2a-third-party-plan.md](integrations/a2a-third-party-plan.md)，仍待实机。 |
+| Third-party A2A ecosystem peer | 🟡 Adapter path documented | [integrations/a2a-third-party-plan.md](integrations/a2a-third-party-plan.md) + `examples/a2a_adapters/` | External peer smoke runner 已可验证任意候选 peer；真实第三方生态实现（Google A2A reference / CrewAI / LangGraph 等）仍待实机 evidence，不强行标 ✅。 |
 
 ## A2A MVP Acceptance
 
