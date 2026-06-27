@@ -166,7 +166,7 @@ def tool_call_accuracy(cases: list[dict[str, Any]]) -> dict[str, Any]:
 def agent_success(prediction: dict[str, Any], expected_keywords: list[str], *, min_coverage: float = 0.6) -> dict[str, Any]:
     """One agent task succeeds when it did not fail and its answer covers the goal keywords."""
     failed = bool(prediction.get("failed"))
-    answer = str(prediction.get("answer") or prediction.get("content") or "")
+    answer = str(prediction.get("final") or prediction.get("answer") or prediction.get("content") or "")
     coverage, missing = keyword_coverage(answer, expected_keywords)
     succeeded = (not failed) and coverage >= min_coverage
     return {"succeeded": succeeded, "failed": failed, "keywordCoverage": coverage, "missingKeywords": missing}
@@ -208,11 +208,20 @@ def cost_benchmark(usages: list[tuple[dict[str, Any], str]]) -> dict[str, Any]:
     costs: list[float] = []
     for usage, model in usages:
         data = usage if isinstance(usage, dict) else {}
-        prompt = int(data.get("prompt_tokens") or data.get("promptTokens") or 0)
-        completion = int(data.get("completion_tokens") or data.get("completionTokens") or 0)
+        prompt = int(data.get("prompt_tokens") or data.get("promptTokens") or data.get("inputTokens") or data.get("input_tokens") or 0)
+        completion = int(
+            data.get("completion_tokens") or data.get("completionTokens") or data.get("outputTokens") or data.get("output_tokens") or 0
+        )
         prompt_tokens.append(prompt)
         completion_tokens.append(completion)
-        costs.append(cost_from_usage(data, model))
+        recorded_cost = data.get("estimatedCostUsd") or data.get("estimated_cost_usd") or data.get("costUsd")
+        if recorded_cost in (None, ""):
+            costs.append(cost_from_usage(data, model))
+        else:
+            try:
+                costs.append(round(float(str(recorded_cost)), 6))
+            except (TypeError, ValueError):
+                costs.append(cost_from_usage(data, model))
     avg_prompt = fmean(prompt_tokens)
     avg_completion = fmean(completion_tokens)
     return {

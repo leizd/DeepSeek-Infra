@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 if str(RUNNERS_DIR) not in sys.path:
     sys.path.insert(0, str(RUNNERS_DIR))
 
+import run_agent_eval  # noqa: E402
 import run_injection_adversarial  # noqa: E402
 import run_rag_eval  # noqa: E402
 import run_tool_eval  # noqa: E402
@@ -72,11 +73,20 @@ def run_rag_report(golden_path: Path, docs_root: Path, k: int) -> harness.EvalRe
         shutil.rmtree(index_dir, ignore_errors=True)
 
 
-def run_all(args: argparse.Namespace) -> tuple[harness.EvalReport, harness.EvalReport, harness.EvalReport]:
+def run_agent_report(args: argparse.Namespace) -> dict[str, Any] | None:
+    if not bool(args.include_agent):
+        return None
+    eval_report = run_agent_eval.evaluate(harness.load_jsonl(args.agent_golden), harness.load_jsonl(args.agent_predictions))
+    baseline = None if bool(args.no_agent_baseline) else run_agent_eval.load_optional_baseline(args.agent_baseline)
+    return run_agent_eval.build_agent_report(eval_report, baseline=baseline)
+
+
+def run_all(args: argparse.Namespace) -> tuple[harness.EvalReport, harness.EvalReport, harness.EvalReport, dict[str, Any] | None]:
     rag = run_rag_report(Path(args.rag_golden), Path(args.docs_root), int(args.k))
     tool_policy = run_tool_eval.evaluate(harness.load_jsonl(args.tool_golden))
     injection = run_injection_adversarial.evaluate(harness.load_jsonl(args.injection_golden))
-    return rag, tool_policy, injection
+    agent = run_agent_report(args)
+    return rag, tool_policy, injection, agent
 
 
 def _round_metric(value: Any) -> float:
@@ -94,6 +104,7 @@ def build_suite_report(
     rag: harness.EvalReport,
     tool_policy: harness.EvalReport,
     injection: harness.EvalReport,
+    agent: dict[str, Any] | None = None,
     *,
     version: str = APP_VERSION,
     sha: str = "unknown",
@@ -108,7 +119,7 @@ def build_suite_report(
     hard_fail = not (policy_passed and defense_passed)
     status = "FAIL" if hard_fail else ("PASS" if gate_passed else "WARNING")
 
-    return {
+    payload: dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
         "version": version,
         "gitSha": sha,
@@ -144,6 +155,24 @@ def build_suite_report(
             "latency": _latency_metrics(injection),
         },
     }
+    if agent is not None:
+        agent_metrics = agent.get("agent", {})
+        payload["agent"] = {
+            "status": str(agent.get("status") or "WARNING"),
+            "reportOnly": True,
+            "cases": int(agent_metrics.get("cases") or 0),
+            "toolCallAccuracy": _round_metric(agent_metrics.get("toolCallAccuracy")),
+            "toolCallF1": _round_metric(agent_metrics.get("toolCallF1")),
+            "agentSuccessRate": _round_metric(agent_metrics.get("agentSuccessRate")),
+            "promptRegressionPassRate": _round_metric(agent_metrics.get("promptRegressionPassRate")),
+            "avgLatencyMs": _round_metric(agent_metrics.get("avgLatencyMs")),
+            "p95LatencyMs": _round_metric(agent_metrics.get("p95LatencyMs")),
+            "avgTokens": _round_metric(agent_metrics.get("avgTokens")),
+            "avgCostUsd": _round_metric(agent_metrics.get("avgCostUsd")),
+            "warnings": agent.get("warnings", []),
+            "baselineCompare": agent.get("baselineCompare", {}),
+        }
+    return payload
 
 
 def write_json(path: str | Path, payload: dict[str, Any]) -> Path:
@@ -157,6 +186,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     rag = report["rag"]
     tool_policy = report["toolPolicy"]
     injection = report["injection"]
+    agent = report.get("agent")
     lines = [
         "# Offline Eval Report",
         "",
@@ -175,20 +205,38 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"| Injection | Block Rate | {injection['blockRate']:.4f} | {injection['softGate']} |",
         f"| Injection | False Positive Rate | {injection['falsePositiveRate']:.4f} | {injection['softGate']} |",
         f"| Injection | Bypass Rate | {injection['bypassRate']:.4f} | {injection['softGate']} |",
-        "",
-        "## Dataset Sizes",
-        "",
-        f"- RAG: {rag['cases']} cases",
-        f"- Tool Policy: {tool_policy['cases']} cases",
-        f"- Injection adversarial: {injection['cases']} cases",
-        "",
-        "## Regression Compare",
-        "",
-        "```bash",
-        "python evals/runners/compare_eval_baseline.py --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json",
-        "```",
-        "",
     ]
+    if isinstance(agent, dict):
+        lines.extend(
+            [
+                f"| Agent | Tool Call Accuracy | {float(agent['toolCallAccuracy']):.4f} | {agent['status']} |",
+                f"| Agent | Agent Success Rate | {float(agent['agentSuccessRate']):.4f} | {agent['status']} |",
+                f"| Agent | Prompt Regression Pass | {float(agent['promptRegressionPassRate']):.4f} | {agent['status']} |",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Dataset Sizes",
+            "",
+            f"- RAG: {rag['cases']} cases",
+            f"- Tool Policy: {tool_policy['cases']} cases",
+            f"- Injection adversarial: {injection['cases']} cases",
+        ]
+    )
+    if isinstance(agent, dict):
+        lines.append(f"- Agent replay: {agent['cases']} cases")
+    lines.extend(
+        [
+            "",
+            "## Regression Compare",
+            "",
+            "```bash",
+            "python evals/runners/compare_eval_baseline.py --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json",
+            "```",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -211,6 +259,8 @@ def default_paths(args: argparse.Namespace) -> dict[str, str]:
         "ragGolden": repo_relative(args.rag_golden),
         "toolPolicyGolden": repo_relative(args.tool_golden),
         "injectionGolden": repo_relative(args.injection_golden),
+        "agentGolden": repo_relative(args.agent_golden),
+        "agentPredictions": repo_relative(args.agent_predictions),
         "docsRoot": repo_relative(args.docs_root),
     }
 
@@ -224,6 +274,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--out", default=str(REPO_ROOT / "evals" / "reports" / "latest.json"))
     parser.add_argument("--markdown", default=str(REPO_ROOT / "evals" / "reports" / "latest.md"))
+    parser.add_argument("--include-agent", action="store_true", help="Include Agent replay eval as report-only metrics.")
+    parser.add_argument("--agent-golden", default=str(REPO_ROOT / "evals" / "golden" / "agent_tasks.jsonl"))
+    parser.add_argument("--agent-predictions", default=str(REPO_ROOT / "evals" / "golden" / "agent_predictions.v2.2.8.sample.jsonl"))
+    parser.add_argument("--agent-baseline", default=str(REPO_ROOT / "evals" / "baselines" / "agent-v2.2.8.json"))
+    parser.add_argument("--no-agent-baseline", action="store_true")
     parser.add_argument("--json", action="store_true", help="Print the JSON report instead of the Markdown summary")
     parser.add_argument("--no-write", action="store_true", help="Do not write report files")
     return parser
@@ -236,11 +291,12 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
-    rag, tool_policy, injection = run_all(args)
+    rag, tool_policy, injection, agent = run_all(args)
     report = build_suite_report(
         rag,
         tool_policy,
         injection,
+        agent,
         version=APP_VERSION,
         sha=git_sha(),
         dirty=git_dirty(),

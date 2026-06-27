@@ -1,0 +1,345 @@
+{
+  "schemaVersion": "agent-eval-report.v1",
+  "version": "2.2.8",
+  "generatedAt": "2026-06-27T05:51:27Z",
+  "status": "PASS",
+  "warnings": [],
+  "agent": {
+    "cases": 6,
+    "toolCallAccuracy": 1.0,
+    "toolCallF1": 1.0,
+    "agentSuccessRate": 1.0,
+    "promptRegressionPassRate": 1.0,
+    "avgLatencyMs": 4050.0,
+    "p95LatencyMs": 6775.0,
+    "avgTokens": 4610.0,
+    "avgCostUsd": 0.002683
+  },
+  "benchmarks": {
+    "latency": {
+      "count": 6,
+      "avgMs": 4050.0,
+      "p50Ms": 3950.0,
+      "p95Ms": 6775.0,
+      "maxMs": 7300.0
+    },
+    "cost": {
+      "count": 6,
+      "avgPromptTokens": 4050.0,
+      "avgCompletionTokens": 560.0,
+      "avgTokens": 4610.0,
+      "avgCostUsd": 0.002683,
+      "totalCostUsd": 0.0161
+    },
+    "toolCalls": {
+      "accuracy": 1.0,
+      "avgF1": 1.0,
+      "cases": 6
+    },
+    "regression": {
+      "passRate": 1.0,
+      "passed": 6,
+      "cases": 6,
+      "threshold": 0.6
+    }
+  },
+  "details": [
+    {
+      "id": "agent_001",
+      "task": "查一下最新的 OnePlus 旗舰参数并给出来源",
+      "tool": {
+        "expected": [
+          "web_search"
+        ],
+        "actual": [
+          "web_search"
+        ],
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "exact": true,
+        "unexpected": [],
+        "missing": []
+      },
+      "success": {
+        "succeeded": true,
+        "failed": false,
+        "keywordCoverage": 1.0,
+        "missingKeywords": []
+      },
+      "latencyMs": 3100.0,
+      "usage": {
+        "inputTokens": 4200,
+        "outputTokens": 600,
+        "prompt_tokens": 4200,
+        "completion_tokens": 600,
+        "estimatedCostUsd": 0.0031
+      },
+      "model": "deepseek-v4-pro",
+      "status": "succeeded",
+      "trace": {
+        "agentCount": 4,
+        "retryCount": 0,
+        "toolErrorCount": 0
+      },
+      "hasPrediction": true
+    },
+    {
+      "id": "agent_002",
+      "task": "分析这段代码里的 bug，并用数值验证一个表达式",
+      "tool": {
+        "expected": [
+          "python_eval",
+          "search_files"
+        ],
+        "actual": [
+          "python_eval",
+          "search_files"
+        ],
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "exact": true,
+        "unexpected": [],
+        "missing": []
+      },
+      "success": {
+        "succeeded": true,
+        "failed": false,
+        "keywordCoverage": 1.0,
+        "missingKeywords": []
+      },
+      "latencyMs": 4800.0,
+      "usage": {
+        "inputTokens": 5100,
+        "outputTokens": 720,
+        "prompt_tokens": 5100,
+        "completion_tokens": 720,
+        "estimatedCostUsd": 0.0038
+      },
+      "model": "deepseek-v4-pro",
+      "status": "succeeded",
+      "trace": {
+        "agentCount": 4,
+        "retryCount": 1,
+        "toolErrorCount": 0
+      },
+      "hasPrediction": true
+    },
+    {
+      "id": "agent_003",
+      "task": "把这份调研做成一个可下载的对比 PPT",
+      "tool": {
+        "expected": [
+          "create_pptx"
+        ],
+        "actual": [
+          "create_pptx"
+        ],
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "exact": true,
+        "unexpected": [],
+        "missing": []
+      },
+      "success": {
+        "succeeded": true,
+        "failed": false,
+        "keywordCoverage": 1.0,
+        "missingKeywords": []
+      },
+      "latencyMs": 5200.0,
+      "usage": {
+        "inputTokens": 3800,
+        "outputTokens": 540,
+        "prompt_tokens": 3800,
+        "completion_tokens": 540,
+        "estimatedCostUsd": 0.0027
+      },
+      "model": "deepseek-v4-pro",
+      "status": "succeeded",
+      "trace": {
+        "agentCount": 4,
+        "retryCount": 0,
+        "toolErrorCount": 0
+      },
+      "hasPrediction": true
+    },
+    {
+      "id": "agent_004",
+      "task": "抓取这个公开网页并总结要点",
+      "tool": {
+        "expected": [
+          "fetch_url"
+        ],
+        "actual": [
+          "fetch_url"
+        ],
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "exact": true,
+        "unexpected": [],
+        "missing": []
+      },
+      "success": {
+        "succeeded": true,
+        "failed": false,
+        "keywordCoverage": 1.0,
+        "missingKeywords": []
+      },
+      "latencyMs": 2100.0,
+      "usage": {
+        "inputTokens": 2600,
+        "outputTokens": 480,
+        "prompt_tokens": 2600,
+        "completion_tokens": 480,
+        "estimatedCostUsd": 0.0011
+      },
+      "model": "deepseek-v4-flash",
+      "status": "succeeded",
+      "trace": {
+        "agentCount": 3,
+        "retryCount": 0,
+        "toolErrorCount": 0
+      },
+      "hasPrediction": true
+    },
+    {
+      "id": "agent_005",
+      "task": "先联网搜索再抓取来源页，最后综合回答",
+      "tool": {
+        "expected": [
+          "fetch_url",
+          "web_search"
+        ],
+        "actual": [
+          "fetch_url",
+          "web_search"
+        ],
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "exact": true,
+        "unexpected": [],
+        "missing": []
+      },
+      "success": {
+        "succeeded": true,
+        "failed": false,
+        "keywordCoverage": 1.0,
+        "missingKeywords": []
+      },
+      "latencyMs": 7300.0,
+      "usage": {
+        "inputTokens": 6400,
+        "outputTokens": 900,
+        "prompt_tokens": 6400,
+        "completion_tokens": 900,
+        "estimatedCostUsd": 0.0049
+      },
+      "model": "deepseek-v4-pro",
+      "status": "succeeded",
+      "trace": {
+        "agentCount": 4,
+        "retryCount": 0,
+        "toolErrorCount": 0
+      },
+      "hasPrediction": true
+    },
+    {
+      "id": "agent_006",
+      "task": "在项目文档里检索 APK 打包步骤并总结",
+      "tool": {
+        "expected": [
+          "search_files"
+        ],
+        "actual": [
+          "search_files"
+        ],
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "exact": true,
+        "unexpected": [],
+        "missing": []
+      },
+      "success": {
+        "succeeded": true,
+        "failed": false,
+        "keywordCoverage": 1.0,
+        "missingKeywords": []
+      },
+      "latencyMs": 1800.0,
+      "usage": {
+        "inputTokens": 2200,
+        "outputTokens": 120,
+        "prompt_tokens": 2200,
+        "completion_tokens": 120,
+        "estimatedCostUsd": 0.0005
+      },
+      "model": "deepseek-v4-flash",
+      "status": "succeeded",
+      "trace": {
+        "agentCount": 2,
+        "retryCount": 0,
+        "toolErrorCount": 0
+      },
+      "hasPrediction": true
+    }
+  ],
+  "baselineCompare": {
+    "status": "PASS",
+    "checks": [
+      {
+        "metric": "toolCallAccuracy",
+        "baseline": 1.0,
+        "current": 1.0,
+        "status": "PASS"
+      },
+      {
+        "metric": "toolCallF1",
+        "baseline": 1.0,
+        "current": 1.0,
+        "status": "PASS"
+      },
+      {
+        "metric": "agentSuccessRate",
+        "baseline": 1.0,
+        "current": 1.0,
+        "status": "PASS"
+      },
+      {
+        "metric": "promptRegressionPassRate",
+        "baseline": 1.0,
+        "current": 1.0,
+        "status": "PASS"
+      },
+      {
+        "metric": "avgLatencyMs",
+        "baseline": 4050.0,
+        "current": 4050.0,
+        "status": "PASS"
+      },
+      {
+        "metric": "p95LatencyMs",
+        "baseline": 6775.0,
+        "current": 6775.0,
+        "status": "PASS"
+      },
+      {
+        "metric": "avgTokens",
+        "baseline": 4610.0,
+        "current": 4610.0,
+        "status": "PASS"
+      },
+      {
+        "metric": "avgCostUsd",
+        "baseline": 0.0027,
+        "current": 0.0027,
+        "status": "PASS"
+      }
+    ]
+  }
+}

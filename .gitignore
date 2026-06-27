@@ -26,6 +26,8 @@ evals/reports/*
 !evals/reports/.gitkeep
 !evals/reports/latest.json
 !evals/reports/latest.md
+!evals/reports/agent-latest.json
+!evals/reports/agent-latest.md
 
 .coverage
 .mypy_cache/

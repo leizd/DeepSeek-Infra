@@ -1,6 +1,6 @@
 # 部署指南（Docker / Compose / 裸机）
 
-适用版本：v2.2.7。
+适用版本：v2.2.8。
 
 DeepSeek Infra 的服务形态是一个单进程 FastAPI / ASGI 运行时：`/v1` OpenAI 兼容网关、`/mcp`、`/a2a`、`/api/*` 业务端点，加 `/healthz`·`/readyz`·`/metrics` 运维三件套。所有可写状态（鉴权 token、文件缓存、向量索引、trace、语义缓存、记忆、任务快照）都集中在**一个数据目录**下，由 `DEEPSEEK_INFRA_ROOT`（优先）或 `DEEPSEEK_MOBILE_ROOT`（向后兼容）指定——这也是容器化只需要一个卷的原因。
 
@@ -16,7 +16,7 @@ docker compose logs -f deepseek-infra
 
 ```bash
 curl http://127.0.0.1:8000/healthz
-# {"status":"ok","version":"2.2.7",...}
+# {"status":"ok","version":"2.2.8",...}
 curl http://127.0.0.1:8000/readyz
 curl http://127.0.0.1:8000/metrics | head
 ```
@@ -35,12 +35,12 @@ curl http://127.0.0.1:8000/metrics | head
 ## 2. 纯 Docker
 
 ```bash
-docker build -t deepseek-infra:2.2.7 .
+docker build -t deepseek-infra:2.2.8 .
 docker run -d --name deepseek-infra \
   -p 127.0.0.1:8000:8000 \
   --env-file .env \
   -v deepseek-data:/data \
-  deepseek-infra:2.2.7
+  deepseek-infra:2.2.8
 ```
 
 镜像要点（见 [Dockerfile](../Dockerfile)）：`python:3.12-slim`、`pip --no-cache-dir`、非 root 用户运行、`HEALTHCHECK` 打 `/healthz`、数据卷 `/data`、静态资源固定在镜像内（`DEEPSEEK_INFRA_STATIC_DIR`，旧变量 `DEEPSEEK_MOBILE_STATIC_DIR` 继续兼容），并在构建后清理 `__pycache__`。CI 的 docker job 会同时跑 `docker build -t deepseek-infra:test .` 和 `docker compose config`，确保镜像可构建、Compose 语法有效。

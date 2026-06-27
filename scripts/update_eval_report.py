@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh the committed offline eval report and compare it with the baseline."""
+"""Refresh committed eval reports and compare the stable offline suite baseline."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", default=str(REPO_ROOT / "evals" / "reports" / "latest.json"))
     parser.add_argument("--markdown", default=str(REPO_ROOT / "evals" / "reports" / "latest.md"))
     parser.add_argument("--baseline", default=str(REPO_ROOT / "evals" / "baselines" / "v2.2.6.json"))
+    parser.add_argument("--agent-report-dir", default=str(REPO_ROOT / "evals" / "reports"))
+    parser.add_argument("--skip-agent", action="store_true")
     parser.add_argument("--skip-compare", action="store_true")
     return parser
 
@@ -33,6 +35,18 @@ def main(argv: list[str] | None = None) -> int:
     suite = subprocess.run(suite_cmd, cwd=REPO_ROOT, check=False)
     if suite.returncode != 0:
         return suite.returncode
+
+    if not args.skip_agent:
+        agent_cmd = [
+            sys.executable,
+            str(REPO_ROOT / "evals" / "runners" / "run_agent_eval.py"),
+            "--report-dir",
+            args.agent_report_dir,
+            "--report-only",
+        ]
+        agent = subprocess.run(agent_cmd, cwd=REPO_ROOT, check=False)
+        if agent.returncode != 0:
+            return agent.returncode
 
     if args.skip_compare:
         return 0

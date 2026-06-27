@@ -113,6 +113,9 @@ def test_cost_benchmark_uses_model_pricing() -> None:
     assert bench["avgCostUsd"] > 0.0
     # local / unknown models are free.
     assert harness.cost_benchmark([({"prompt_tokens": 10, "completion_tokens": 10}, "local")])["avgCostUsd"] == 0.0
+    recorded = harness.cost_benchmark([({"inputTokens": 1000, "outputTokens": 250, "estimatedCostUsd": 0.0042}, "local")])
+    assert recorded["avgTokens"] == 1250.0
+    assert recorded["avgCostUsd"] == 0.0042
 
 
 def test_keyword_regression_pass_rate() -> None:
@@ -221,7 +224,7 @@ def test_offline_eval_suite_builds_json_schema_and_markdown() -> None:
 
 def test_offline_eval_suite_main_writes_latest_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runner = _load_offline_suite_runner()
-    monkeypatch.setattr(runner, "run_all", lambda args: _suite_reports())
+    monkeypatch.setattr(runner, "run_all", lambda args: (*_suite_reports(), None))
     monkeypatch.setattr(runner, "git_sha", lambda: "abc1234")
     monkeypatch.setattr(runner, "git_dirty", lambda: False)
 

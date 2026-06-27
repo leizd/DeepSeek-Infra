@@ -1,6 +1,6 @@
 # Implementation Status（实现状态矩阵）
 
-适用版本：v2.2.7。
+适用版本：v2.2.8。
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
@@ -25,7 +25,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 
 | 资产 | 位置 | 状态 |
 | --- | --- | --- |
-| Evaluation Harness（RAG / Agent / Tool 三条评测线） | [evals/](../evals/) · 评分核心 [infra/evaluation/harness.py](../deepseek_infra/infra/evaluation/harness.py) | ✅ 全部离线可跑；CI 生成统一报告与 baseline compare artifact，Agent 录制评测暂为可选 |
+| Evaluation Harness（RAG / Agent / Tool 三条评测线） | [evals/](../evals/) · 评分核心 [infra/evaluation/harness.py](../deepseek_infra/infra/evaluation/harness.py) | ✅ 全部离线可跑；CI 生成统一报告与 baseline compare artifact，Agent replay 已生成 report-only artifact，硬门禁留到 v2.4 |
 | Benchmarks（延迟 / 缓存 / 检索 / DAG） | [benchmarks/](../benchmarks/) | ✅ 离线两项可直接复跑；在线两项需本地服务 + Key |
 | 一键 Demo | [examples/](../examples/) · [docs/DEMO.md](DEMO.md) | ✅ |
 | 部署资产（Docker / Compose / .env） | [Dockerfile](../Dockerfile) · [docker-compose.yml](../docker-compose.yml) · [docs/DEPLOYMENT.md](DEPLOYMENT.md) | ✅ CI 覆盖 `docker build` + `docker compose config` |
@@ -47,7 +47,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 
 - **代码**：[multi_agent.py](../deepseek_infra/infra/agent_runtime/multi_agent.py)（planner → DAG 拓扑分层 → 同层并行 → critic 修订 → synthesizer）、[agent_runs.py](../deepseek_infra/infra/agent_runtime/agent_runs.py)（事件源持久化 / 断线重放 / 断点续跑）、[agent_state.py](../deepseek_infra/infra/agent_runtime/agent_state.py)（节点级状态机）。
 - **测试**：[test_multi_agent.py](../tests/test_multi_agent.py) · [test_agent_runs.py](../tests/test_agent_runs.py) · [test_agent_state.py](../tests/test_agent_state.py)。
-- **亲手验证**：[examples/run_agent_dag_demo.py](../examples/run_agent_dag_demo.py)（实时打印 DAG 事件流）；[benchmarks/bench_agent_dag.py](../benchmarks/bench_agent_dag.py)；[evals/runners/run_agent_eval.py](../evals/runners/run_agent_eval.py)（录制 predictions 离线打分）。
+- **亲手验证**：[examples/run_agent_dag_demo.py](../examples/run_agent_dag_demo.py)（实时打印 DAG 事件流）；[benchmarks/bench_agent_dag.py](../benchmarks/bench_agent_dag.py)；[evals/runners/run_agent_eval.py](../evals/runners/run_agent_eval.py)（录制 predictions 离线打分并输出 report-only 报告）；[docs/AGENT_EVAL.md](AGENT_EVAL.md)（录制格式与回放说明）。
 
 ### 3. Local RAG Data Layer — Working
 

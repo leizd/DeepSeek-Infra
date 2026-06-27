@@ -2,6 +2,30 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.2.8] - Agent Eval Replay & Stability
+
+**主题：Agent Eval 录制回放稳定化。** 本版不把 Agent Eval 直接升级为 CI 硬门禁，而是先补齐稳定录制格式、非确定字段归一化、report-only 报告和 baseline 对比，为 v2.4 的 Agent Eval CI 固化做准备。
+
+### 新增
+
+- **Agent recording schema**：新增 `evals/schemas/agent_prediction.schema.json` 与 `evals/golden/agent_predictions.v2.2.8.sample.jsonl`，固定 `id`、`tools`、`final`、`status`、`latencyMs`、`usage` 与 trace 摘要字段。
+- **Agent recording normalizer**：新增 `deepseek_infra/infra/evaluation/agent_recording.py`，剔除 `runId` / `traceId` / timestamp 等非确定字段，稳定 tool call、usage、latency 与 final answer 的评分输入。
+- **Agent eval report**：`run_agent_eval.py` 输出 `agent-latest.json` / `agent-latest.md`，记录 Tool Call Accuracy、Agent Success Rate、Prompt Regression、latency 与 token / USD cost。
+- **Agent baseline**：新增 `evals/baselines/agent-v2.2.8.json`，支持 current vs baseline 的 report-only 对比。
+- **Agent Eval 文档**：新增 `docs/AGENT_EVAL.md`，说明录制格式、回放命令、normalizer 忽略字段和 baseline 更新流程。
+
+### 更改
+
+- **Offline eval suite 可选包含 Agent Eval**：`run_offline_eval_suite.py` 新增 `--include-agent`，默认仍保持稳定离线三件套，避免 Agent 指标抖动影响主线。
+- **CI 上传 Agent Eval 报告**：CI 生成 Agent Eval report artifact，但指标退化先只 warning，不作为 hard gate。
+- **Harness 字段兼容**：Agent scoring 接受 `final` 答案字段，并支持 `inputTokens` / `outputTokens` / `estimatedCostUsd` 录制格式。
+
+### 测试
+
+- 新增 Agent recording normalizer 测试，覆盖 timestamp / runId / traceId / spanId 去噪。
+- 新增 Agent eval replay 测试，覆盖 golden / predictions join、缺失 prediction、工具调用评分、关键词成功率与 Markdown 报告输出。
+- 新增 offline suite `--include-agent` 聚合测试，确保 Agent report-only 状态不会误伤 RAG / Tool Policy / Injection 的硬门禁。
+
 ## [2.2.7] - Eval Reports & Regression Evidence
 
 **主题：评测报告沉淀与回归证据链。** 本版不继续扩大协议面，也不直接把 injection soft gate 升级为 hard gate，而是把 v2.2.6 已接入的 RAG / Tool Policy / Prompt Injection 离线评测整理成统一报告、版本基线和 CI artifact，为 v2.3 的严格门禁与真实互操作验收提供可追踪证据。

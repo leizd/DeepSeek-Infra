@@ -42,11 +42,8 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install pip-audit bandit detect-secrets
-      # 依赖 CVE 审计：运行 + 开发依赖的解析结果
       - run: pip-audit -r requirements.txt -r requirements-dev.txt
-      # 静态安全分析：高危基线保持清零（medium 为已审阅类别，见 docs/THREAT_MODEL.md）
       - run: bandit -r deepseek_infra --severity-level high -q
-      # 凭证扫描：只允许 .secrets.baseline 里已审阅的测试夹具假密钥
       - run: detect-secrets scan --baseline .secrets.baseline
 
   eval:
@@ -58,16 +55,17 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
-      # 离线质量评测（无需 API Key）：RAG Recall/Citation + Tool Policy/Injection Defense
       - run: python evals/runners/run_offline_eval_suite.py --out evals/reports/latest.json --markdown evals/reports/latest.md
       - run: python evals/runners/compare_eval_baseline.py --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json
-      # 上传统一评测报告，便于 PR 审查和版本回溯
+      - run: python evals/runners/run_agent_eval.py --report-dir evals/reports --report-only
       - uses: actions/upload-artifact@v4
         with:
           name: offline-eval-report
           path: |
             evals/reports/latest.json
             evals/reports/latest.md
+            evals/reports/agent-latest.json
+            evals/reports/agent-latest.md
 
   docker:
     runs-on: ubuntu-latest
@@ -80,5 +78,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # 检查 README 与 docs/ 里的相对链接是否指向存在的文件
       - run: python scripts/check_doc_links.py
