@@ -9,7 +9,7 @@ bridge and A2A external peer evidence are present, that key docs do not contain
 encoding corruption (since v2.3.4), and (since v2.3.1) that GUI interop evidence
 for Claude Desktop / Cursor has been recorded in ``docs/COMPATIBILITY.md``.
 
-    python scripts/preflight_release.py --version 2.4.2
+    python scripts/preflight_release.py --version 2.4.3
 
 Exits 1 on any FAIL; WARNINGs do not fail. Version defaults to
 ``settings.app_version``.
@@ -419,6 +419,56 @@ def check_a2a_third_party_evidence(root: Path) -> CheckResult:
     )
 
 
+def check_edge_router_smoke_evidence(root: Path, version: str) -> CheckResult:
+    path = root / "docs" / "evidence" / "edge-router-smoke.json"
+    if not path.is_file():
+        return CheckResult(
+            "edge_router_smoke_evidence",
+            STATUS_WARN,
+            "Edge Router smoke evidence missing; run examples/edge_router_smoke.py --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("edge_router_smoke_evidence", STATUS_FAIL, f"cannot parse Edge Router smoke evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("edge_router_smoke", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "edge_router_smoke_evidence",
+            STATUS_FAIL,
+            f"Edge Router smoke evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS":
+        return CheckResult(
+            "edge_router_smoke_evidence",
+            STATUS_FAIL,
+            f"Edge Router smoke evidence status is {data.get('status')!r}, expected PASS",
+            {"status": data.get("status")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = ("ollamaModelsListed", "openaiCompatibleLocalCall", "edgeStatusEndpoint", "fallbackReady")
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult(
+            "edge_router_smoke_evidence",
+            STATUS_FAIL,
+            f"Edge Router smoke evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    return CheckResult(
+        "edge_router_smoke_evidence",
+        STATUS_PASS,
+        "Edge Router smoke evidence recorded",
+        {"path": str(path), "checks": list(required)},
+    )
+
+
 def check_gui_interop_evidence(root: Path) -> CheckResult:
     """Verify Claude Desktop / Cursor GUI evidence is recorded in COMPATIBILITY.md.
 
@@ -497,6 +547,7 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_headless_mcp_bridge_evidence(root, version),
         check_a2a_external_peer_evidence(root, version),
         check_a2a_third_party_evidence(root),
+        check_edge_router_smoke_evidence(root, version),
         check_gui_interop_evidence(root),
     ]
 

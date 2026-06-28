@@ -1,6 +1,6 @@
-﻿# Implementation Status（实现状态矩阵）
+# Implementation Status（实现状态矩阵）
 
-适用版本：v2.4.2。
+适用版本：v2.4.3。
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
@@ -16,7 +16,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 | 3 | Local RAG Data Layer | Working | ✅ [infra/rag/](../deepseek_infra/infra/rag/) | ✅ | ✅ |
 | 4 | Tool Calling Runtime + Policy Engine | Working | ✅ [infra/tool_runtime/](../deepseek_infra/infra/tool_runtime/) | ✅ | ✅ |
 | 5 | Observability & Trace | Working | ✅ [infra/observability/](../deepseek_infra/infra/observability/) | ✅ | ✅ |
-| 6 | Edge-Cloud Model Router | Experimental | ✅ [infra/gateway/edge_inference.py](../deepseek_infra/infra/gateway/edge_inference.py) | 🟡 | 🟡 |
+| 6 | Edge-Cloud Model Router | Experimental, with structured smoke evidence | ✅ [infra/gateway/edge_inference.py](../deepseek_infra/infra/gateway/edge_inference.py) | ✅/🟡 | ✅ |
 | 7 | MCP Tool Hub | MVP | ✅ [infra/mcp/](../deepseek_infra/infra/mcp/) | ✅ | ✅ |
 | 8 | A2A Agent Mesh | MVP | ✅ [infra/agent_runtime/a2a.py](../deepseek_infra/infra/agent_runtime/a2a.py) | ✅ | ✅ |
 | 9 | Context Taint Firewall | Experimental | ✅ [infra/gateway/context_taint.py](../deepseek_infra/infra/gateway/context_taint.py) | ✅ | ✅ |
@@ -30,7 +30,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 | 一键 Demo | [examples/](../examples/) · [docs/DEMO.md](DEMO.md) | ✅ |
 | 部署资产（Docker / Compose / .env） | [Dockerfile](../Dockerfile) · [docker-compose.yml](../docker-compose.yml) · [docs/DEPLOYMENT.md](DEPLOYMENT.md) | ✅ CI 覆盖 `docker build` + `docker compose config` |
 | 安全工程（威胁模型 / CI 扫描） | [docs/THREAT_MODEL.md](THREAT_MODEL.md) · [ci.yml security job](../.github/workflows/ci.yml) | ✅ |
-| Compatibility Smoke Pack | [scripts/smoke_mcp_compat.py](../scripts/smoke_mcp_compat.py) · [scripts/smoke_a2a_compat.py](../scripts/smoke_a2a_compat.py) · [scripts/smoke_a2a_external_peer.py](../scripts/smoke_a2a_external_peer.py) · [examples/edge_router_smoke.py](../examples/edge_router_smoke.py) · [examples/external_mcp_server_partner.py](../examples/external_mcp_server_partner.py) · [examples/a2a_interop_peer.py](../examples/a2a_interop_peer.py) | ✅ 本地服务启动后可复跑；v2.3.0 新增官方 MCP SDK partner + A2A 独立进程 peer 实测；v2.3.3 新增 A2A external peer evidence；GUI / 第三方生态实机仍按矩阵诚实标注 |
+| Compatibility Smoke Pack | [scripts/smoke_mcp_compat.py](../scripts/smoke_mcp_compat.py) · [scripts/smoke_a2a_compat.py](../scripts/smoke_a2a_compat.py) · [scripts/smoke_a2a_external_peer.py](../scripts/smoke_a2a_external_peer.py) · [examples/edge_router_smoke.py](../examples/edge_router_smoke.py) · [examples/external_mcp_server_partner.py](../examples/external_mcp_server_partner.py) · [examples/a2a_interop_peer.py](../examples/a2a_interop_peer.py) | ✅ 本地服务启动后可复跑；v2.3.0 新增官方 MCP SDK partner + A2A 独立进程 peer 实测；v2.3.3 新增 A2A external peer evidence；v2.4.3 新增 Edge Router structured smoke evidence；第三方生态实机仍按矩阵诚实标注 |
 | Release Readiness（发版体检 / 产物证明） | [scripts/doctor.py](../scripts/doctor.py) · [scripts/preflight_release.py](../scripts/preflight_release.py) · [scripts/smoke_release.py](../scripts/smoke_release.py) · [docs/RUNTIME_DOCTOR.md](RUNTIME_DOCTOR.md) · [docs/RELEASE_READINESS.md](RELEASE_READINESS.md) | ✅ Runtime Doctor + Release Preflight + 一键 smoke 编排 + release manifest/sha256/qualityGates；CI `release-readiness` job 生成 MCP headless / A2A external evidence 后跑 preflight + doctor offline + release dry-run |
 | UI 截图 / Trace 瀑布图 | docs/assets/ | ✅ `trace-waterfall.png` / `agent-dag-run.png` / `rag-citation.png` / `mcp-tool-call.png` 入库；独立 `/trace/{id}` 只读页面已上线 |
 
@@ -73,8 +73,8 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 ### 6. Edge-Cloud Model Router — Experimental
 
 - **代码**：[edge_inference.py](../deepseek_infra/infra/gateway/edge_inference.py)（任务分类 → 端 / 云路由，云端失败回退本地；llama-cpp / MLC 双后端）；多 provider 注册表 [providers/](../deepseek_infra/infra/gateway/providers/) 让 Ollama 模型经 `/v1` 暴露。
-- **测试（🟡 的原因）**：路由决策、配置面与云失败回退在 [test_deepseek_request.py](../tests/test_deepseek_request.py) / [test_config.py](../tests/test_config.py) / [test_server_integration.py](../tests/test_server_integration.py) 有覆盖，但**真实端侧推理**需要可选依赖 + GGUF 模型文件，CI 不跑真模型。
-- **亲手验证**：[EDGE_ROUTER_RUNBOOK.md](EDGE_ROUTER_RUNBOOK.md)；`EDGE_INFERENCE_ENABLED=1` + GGUF 后 `GET /api/edge/status`；或 `OLLAMA_ENABLED=1` 后 `GET /v1/models` 看到 `ollama/<tag>`；`python examples/edge_router_smoke.py --require-ollama` / `--require-edge` 可输出验收摘要。
+- **测试（✅/🟡 的原因）**：路由决策、配置面与云失败回退在 [test_deepseek_request.py](../tests/test_deepseek_request.py) / [test_config.py](../tests/test_config.py) / [test_server_integration.py](../tests/test_server_integration.py) 有覆盖；v2.4.3 新增 [edge-router-smoke evidence](evidence/edge-router-smoke.json) 与 preflight 检查。但**真实端侧 GGUF / MLC 推理**需要可选依赖 + 本地模型文件，默认 CI 不跑真模型。
+- **亲手验证**：[EDGE_ROUTER_RUNBOOK.md](EDGE_ROUTER_RUNBOOK.md)；`EDGE_INFERENCE_ENABLED=1` + GGUF 后 `GET /api/edge/status`；或 `OLLAMA_ENABLED=1` 后 `GET /v1/models` 看到 `ollama/<tag>`；`python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md` 可输出结构化验收证据。
 
 ### 7. MCP Tool Hub — MVP
 

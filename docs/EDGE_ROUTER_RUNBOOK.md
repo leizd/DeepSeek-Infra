@@ -1,8 +1,8 @@
-﻿# Edge Router Runbook
+# Edge Router Runbook
 
-适用版本：v2.4.2。
+适用版本：v2.4.3。
 
-Edge-Cloud Model Router 仍是 **Experimental**：CI 覆盖路由决策、配置面和云失败回退，但不下载模型、不安装本地推理后端，也不跑真实 GGUF/MLC 推理。本页只把“怎么在自己的机器上验收”写清楚。
+Edge-Cloud Model Router 仍是 **Experimental**：CI 覆盖路由决策、配置面和云失败回退，但不下载模型、不安装本地推理后端，也不跑真实 GGUF/MLC 推理。v2.4.3 把“怎么在自己的机器上验收”推进为结构化 evidence，方便把本地 Ollama / Ollama-compatible provider 的结果带进 release preflight。
 
 ## Ollama Provider Smoke
 
@@ -28,6 +28,7 @@ python app.py
 ```powershell
 curl http://127.0.0.1:8000/v1/models
 python examples/edge_router_smoke.py --require-ollama
+python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
 ```
 
 通过标准：`/v1/models` 里出现 `ollama/<tag>`，例如 `ollama/llama3.2`。
@@ -58,6 +59,7 @@ python app.py
 ```powershell
 curl http://127.0.0.1:8000/api/edge/status
 python examples/edge_router_smoke.py --require-edge
+python examples/edge_router_smoke.py --require-edge --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
 ```
 
 通过标准：`edgeInference.enabled=true`、`dependencyAvailable=true`、`modelPathExists=true`、`available=true`。
@@ -91,10 +93,30 @@ curl http://127.0.0.1:8000/v1/chat/completions `
 
 ## Evidence Template
 
+`examples/edge_router_smoke.py` 可直接生成两份可提交证据：
+
+- `docs/evidence/edge-router-smoke.json`：release preflight 读取的结构化 evidence。
+- `docs/evidence/edge-router-smoke.md`：方便在 PR / issue / release note 中人工审阅的摘要。
+
+JSON 的关键 checks 是：
+
+```json
+{
+  "version": "2.4.3",
+  "status": "PASS",
+  "checks": {
+    "ollamaModelsListed": "PASS",
+    "openaiCompatibleLocalCall": "PASS",
+    "edgeStatusEndpoint": "PASS",
+    "fallbackReady": "PASS"
+  }
+}
+```
+
 把 Edge Router 实机结果补回 issue / PR / compatibility matrix 时，建议带上：
 
 - DeepSeek Infra commit：`git rev-parse --short HEAD`
 - OS / Python：`python --version`
 - Backend：Ollama tag 或 GGUF 文件名与量化等级
-- 命令：`python examples/edge_router_smoke.py --require-ollama` 或 `--require-edge`
-- 输出摘要：`edgeInference.available`、`dependencyAvailable`、`modelPathExists`、`ollamaModels`
+- 命令：`python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md` 或 `--require-edge`
+- 输出摘要：`edgeInference.available`、`dependencyAvailable`、`modelPathExists`、`ollamaModels`、`openaiCompatibleLocalCall`

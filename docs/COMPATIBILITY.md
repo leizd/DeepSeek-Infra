@@ -1,8 +1,8 @@
-﻿# Compatibility Matrix（兼容性矩阵）
+# Compatibility Matrix（兼容性矩阵）
 
-适用版本：v2.4.2。
+适用版本：v2.4.3。
 
-这页只记录已经可复现的互操作结果，不把“协议上应该兼容”写成“实机已验证”。v2.3.0 的重点是把 v2.2.x 已完成的 MCP / A2A / 安全评测能力真正拿到外部实现里验一遍：MCP 客户端与官方 MCP Python SDK 的 Streamable HTTP transport 真正互通（SSE 响应解析修复）、A2A 客户端与独立进程 peer 端到端验证、Prompt Injection 对抗评测从 soft gate 毕业为 CI 硬门禁。v2.4.2 已完成 Claude Desktop / Cursor 的 GUI 实机验证并填入证据，兼容矩阵对应行已更新为 ✅ GUI tested。
+这页只记录已经可复现的互操作结果，不把“协议上应该兼容”写成“实机已验证”。v2.3.0 的重点是把 v2.2.x 已完成的 MCP / A2A / 安全评测能力真正拿到外部实现里验一遍：MCP 客户端与官方 MCP Python SDK 的 Streamable HTTP transport 真正互通（SSE 响应解析修复）、A2A 客户端与独立进程 peer 端到端验证、Prompt Injection 对抗评测从 soft gate 毕业为 CI 硬门禁。v2.4.2 已完成 Claude Desktop / Cursor 的 GUI 实机验证并填入证据；v2.4.3 将 Edge Router 从 runbook-only 推进为结构化 smoke evidence。
 
 ## Compatibility Smoke Pack
 
@@ -19,6 +19,7 @@ python app.py
 python scripts/smoke_mcp_compat.py --token <local-token>
 python scripts/smoke_a2a_compat.py --token <local-token>
 python examples/edge_router_smoke.py --token <local-token>
+python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
 ```
 
 真实第三方 MCP server 冒烟入口：
@@ -38,7 +39,7 @@ python scripts/smoke_mcp_compat.py --token <local-token> --external-server-url h
 | A2A live smoke | ✅ Runner added | `python scripts/smoke_a2a_compat.py` | Agent Card、agents list、`message/send`、`message/stream`、`tasks/resubscribe`、`tasks/cancel` |
 | A2A external peer smoke | ✅ Tested | `python scripts/smoke_a2a_external_peer.py` + [integrations/a2a-external-peer.md](integrations/a2a-external-peer.md) | 独立进程 external peer：Agent Card + send + stream + get + cancel + list + artifact chunks + SSE final event。 |
 | A2A contract regression | ✅ Tested | `pytest tests/test_a2a_compat_contract.py` | artifact chunks、SSE final status、resubscribe cursor、cancel lifecycle |
-| Edge Router smoke | 🟡 Runbook added | `python examples/edge_router_smoke.py` | `/api/edge/status`、`/v1/models`、Ollama model exposure check |
+| Edge Router smoke | ✅ Smoke evidence added | `python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md` | `/api/edge/status`、`/v1/models`、Ollama-compatible local call、fallback readiness |
 
 ### Failure Triage
 
@@ -105,7 +106,7 @@ v2.2.1 起，外部 MCP server 的工具会以 `mcp__<server>__<tool>` 桥接进
 | OpenAI Python SDK (`openai>=1.0`) | ✅ Tested | `examples/openai_compatible_client.py` |
 | `curl` | ✅ Tested | README examples |
 | Ollama as provider | ✅ Tested | `OLLAMA_ENABLED=1` exposes `ollama/<tag>` through `/v1/models` |
-| Edge Router runbook | 🟡 Repro path documented | [EDGE_ROUTER_RUNBOOK.md](EDGE_ROUTER_RUNBOOK.md) + `examples/edge_router_smoke.py` |
+| Edge Router smoke evidence | ✅ Tested | [EDGE_ROUTER_RUNBOOK.md](EDGE_ROUTER_RUNBOOK.md) + `examples/edge_router_smoke.py` + [evidence/edge-router-smoke.json](evidence/edge-router-smoke.json) |
 | Other OpenAI-compatible SDKs | 🔲 Not tested | Should work with standard `/v1/chat/completions` and `/v1/models`, but not claimed here. |
 
 ## A2A Interop Compatibility

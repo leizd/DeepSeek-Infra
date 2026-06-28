@@ -62,7 +62,7 @@ def test_security_corpus_report_passes_versioned_cases() -> None:
         ]
     )
 
-    report = runner.build_security_report(prompt_rows, tool_rows, benign_rows, version="2.4.2", commit="abc", generated_at="2026-06-28T00:00:00Z")
+    report = runner.build_security_report(prompt_rows, tool_rows, benign_rows, version="2.4.3", commit="abc", generated_at="2026-06-28T00:00:00Z")
 
     assert report["schemaVersion"] == "security-corpus-report.v1"
     assert report["status"] == "PASS"

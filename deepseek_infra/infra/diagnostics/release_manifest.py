@@ -40,6 +40,7 @@ def utc_now() -> str:
 DEFAULT_EVIDENCE_PATHS = (
     "docs/evidence/headless-mcp-bridge.json",
     "docs/evidence/a2a-external-peer.json",
+    "docs/evidence/edge-router-smoke.json",
     "evals/reports/latest.json",
     "evals/reports/agent-latest.json",
     "evals/reports/baseline-compare-latest.json",

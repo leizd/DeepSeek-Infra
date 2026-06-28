@@ -1,6 +1,6 @@
-﻿# A2A Third-Party Ecosystem — Verification Plan
+# A2A Third-Party Ecosystem — Verification Plan
 
-适用版本：DeepSeek Infra v2.4.2。
+适用版本：DeepSeek Infra v2.4.3。
 
 本页说明 DeepSeek Infra 验证真实第三方生态 A2A 实现的下一步计划。v2.3.0 已完成独立进程 A2A peer 互操作验证（见 [a2a-interop.md](a2a-interop.md)）；v2.3.3 新增 external peer smoke runner（见 [a2a-external-peer.md](a2a-external-peer.md)），可以对任意外部 peer 生成结构化 evidence。但这仍不等同于真实第三方生态实机验证，兼容矩阵中 "Third-party A2A ecosystem peer" 在完成实测前继续保持 🟡。
 

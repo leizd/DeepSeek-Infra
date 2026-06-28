@@ -42,6 +42,7 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     _write_headless_evidence(evidence_dir / "headless-mcp-bridge.json", version)
     _write_a2a_evidence(evidence_dir / "a2a-external-peer.json", version)
     _write_a2a_evidence(evidence_dir / "a2a-third-party-peer.json", version, peer_type="third-party")
+    _write_edge_router_evidence(evidence_dir / "edge-router-smoke.json", version)
     (root / "evals").mkdir()
     (root / "evals" / "README.md").write_text(f"适用版本：v{version}。\n", encoding="utf-8")
     reports = root / "evals" / "reports"
@@ -136,6 +137,28 @@ def _write_a2a_evidence(path: Path, version: str, *, status: str = "PASS", omit_
         "environment": {"os": "Linux", "python": "3.12", "ci": True},
         "status": status,
         "peer": {"name": "peer", "type": peer_type},
+        "checks": checks,
+    }
+    if omit_metadata:
+        payload.pop(omit_metadata, None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_edge_router_evidence(path: Path, version: str, *, status: str = "PASS", omit_check: str = "", omit_metadata: str = "") -> None:
+    checks = {
+        "ollamaModelsListed": "PASS",
+        "openaiCompatibleLocalCall": "PASS",
+        "edgeStatusEndpoint": "PASS",
+        "fallbackReady": "PASS",
+    }
+    if omit_check:
+        checks.pop(omit_check, None)
+    payload: dict[str, Any] = {
+        "version": version,
+        "commit": "abc1234",
+        "generatedAt": "2026-06-27T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": status,
         "checks": checks,
     }
     if omit_metadata:
@@ -296,6 +319,42 @@ def test_preflight_warns_on_missing_a2a_third_party_evidence(tmp_path: Path) -> 
     result = next(r for r in preflight.run_preflight(root, "2.3.3") if r.name == "a2a_third_party_evidence")
     assert result.status == "warn"
     assert preflight.main(["--root", str(root), "--version", "2.3.3"]) == 0
+
+
+def test_preflight_warns_on_missing_edge_router_smoke_evidence(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.4.3")
+    (root / "docs" / "evidence" / "edge-router-smoke.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.4.3") if r.name == "edge_router_smoke_evidence")
+    assert result.status == "warn"
+    assert preflight.main(["--root", str(root), "--version", "2.4.3"]) == 0
+
+
+def test_preflight_fails_on_edge_router_smoke_non_pass_status(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.4.3")
+    _write_edge_router_evidence(root / "docs" / "evidence" / "edge-router-smoke.json", "2.4.3", status="WARNING")
+    result = next(r for r in preflight.run_preflight(root, "2.4.3") if r.name == "edge_router_smoke_evidence")
+    assert result.status == "fail"
+    assert "expected PASS" in result.detail
+
+
+def test_preflight_fails_on_edge_router_smoke_missing_required_check(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.4.3")
+    _write_edge_router_evidence(root / "docs" / "evidence" / "edge-router-smoke.json", "2.4.3", omit_check="fallbackReady")
+    result = next(r for r in preflight.run_preflight(root, "2.4.3") if r.name == "edge_router_smoke_evidence")
+    assert result.status == "fail"
+    assert "fallbackReady" in result.detail
+
+
+def test_preflight_fails_on_edge_router_smoke_missing_metadata(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.4.3")
+    _write_edge_router_evidence(root / "docs" / "evidence" / "edge-router-smoke.json", "2.4.3", omit_metadata="environment")
+    result = next(r for r in preflight.run_preflight(root, "2.4.3") if r.name == "evidence_metadata:edge_router_smoke")
+    assert result.status == "fail"
+    assert "environment" in result.detail
 
 
 def _skeleton_with_compat(tmp_path: Path, version: str, *, claude_status: str, cursor_status: str) -> Path:

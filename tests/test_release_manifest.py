@@ -42,6 +42,7 @@ def test_build_manifest_has_required_fields(tmp_path: Path) -> None:
     assert "evidence" in manifest
     assert isinstance(manifest["evidence"], list)
     assert "docs/evidence/headless-mcp-bridge.json" in manifest["evidence"]
+    assert "docs/evidence/edge-router-smoke.json" in manifest["evidence"]
     assert "evals/reports/security-latest.json" in manifest["evidence"]
     assert "docs/EVIDENCE_INDEX.md" in manifest["evidence"]
 

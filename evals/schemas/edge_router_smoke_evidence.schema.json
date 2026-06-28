@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepseek-infra.local/schemas/edge_router_smoke_evidence.schema.json",
+  "title": "Edge Router Smoke Evidence",
+  "type": "object",
+  "required": ["schemaVersion", "version", "commit", "generatedAt", "environment", "status", "checks", "steps"],
+  "properties": {
+    "schemaVersion": {
+      "const": "edge-router-smoke-evidence.v1"
+    },
+    "version": {
+      "type": "string"
+    },
+    "commit": {
+      "type": "string"
+    },
+    "generatedAt": {
+      "type": "string"
+    },
+    "environment": {
+      "type": "object",
+      "required": ["os", "python", "ci"],
+      "properties": {
+        "os": {"type": "string"},
+        "python": {"type": "string"},
+        "ci": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "gitSha": {
+      "type": "string"
+    },
+    "gitDirty": {
+      "type": "boolean"
+    },
+    "status": {
+      "enum": ["PASS", "WARNING", "FAIL"]
+    },
+    "baseUrl": {
+      "type": "string"
+    },
+    "auth": {
+      "type": "string"
+    },
+    "checks": {
+      "type": "object",
+      "required": ["ollamaModelsListed", "openaiCompatibleLocalCall", "edgeStatusEndpoint", "fallbackReady"],
+      "properties": {
+        "ollamaModelsListed": {"enum": ["PASS", "WARNING", "FAIL"]},
+        "openaiCompatibleLocalCall": {"enum": ["PASS", "WARNING", "FAIL"]},
+        "edgeStatusEndpoint": {"enum": ["PASS", "WARNING", "FAIL"]},
+        "fallbackReady": {"enum": ["PASS", "WARNING", "FAIL"]}
+      },
+      "additionalProperties": true
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "detail", "data"],
+        "properties": {
+          "name": {"type": "string"},
+          "status": {"enum": ["pass", "warn", "fail"]},
+          "detail": {"type": "string"},
+          "data": {"type": "object"}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

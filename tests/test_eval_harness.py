@@ -304,7 +304,7 @@ def test_eval_baseline_compare_can_include_agent_success_gate() -> None:
         "injection": {"bypassRate": 0.0, "falsePositiveRate": 0.0},
     }
     current = json.loads(json.dumps(baseline))
-    current["version"] = "2.4.2"
+    current["version"] = "2.4.3"
     current["agent"] = {"agentSuccessRate": 0.94}
     agent_baseline = {"version": "2.2.8", "agent": {"agentSuccessRate": 1.0}}
 

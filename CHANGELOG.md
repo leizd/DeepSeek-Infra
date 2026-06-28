@@ -2,6 +2,29 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.4.3] - Edge Router Evidence Patch
+
+**主题：Edge Router 实机证据补丁。** 本版不新增协议或运行时功能，重点把 v2.4.x 中仍处于 🟡 的 Edge-Cloud Model Router 验收路径从 runbook 推进为结构化 evidence，补齐 Ollama provider、本地 `/v1/models` 暴露、Edge status endpoint 与 OpenAI-compatible local call 的可复现证据。
+
+### 新增
+
+- **Edge Router smoke evidence**：新增 `docs/evidence/edge-router-smoke.json` 与 `docs/evidence/edge-router-smoke.md`，记录 Ollama provider、本地模型目录、Edge status endpoint 与 OpenAI-compatible local call 的验收结果。
+- **Edge Router smoke 输出增强**：`examples/edge_router_smoke.py` 支持 `--out` 与 `--markdown`，可直接生成 release evidence；新增 OpenAI-compatible local chat call 验证与统一 metadata。
+- **Preflight Edge evidence 检查**：`scripts/preflight_release.py` 新增 `edge_router_smoke_evidence` 检查；缺失 evidence 保持 WARNING，已有 evidence 但 `status` 或必要 checks 非 PASS 时 FAIL，避免无本地模型的 CI runner 被强制阻断。
+- **Edge Router evidence schema**：新增 `evals/schemas/edge_router_smoke_evidence.schema.json`，固定 `ollamaModelsListed` / `openaiCompatibleLocalCall` / `edgeStatusEndpoint` / `fallbackReady` 四类 checks。
+
+### 更改
+
+- **版本号全仓同步**：README badge、`deepseek_infra/core/config.py` 的 `app_version`、Dockerfile tag、Android `versionName` / `versionCode`、`.github/workflows/ci.yml` 的 preflight 版本、所有文档「适用版本」与 eval / agent / baseline / security 报告版本全部更新到 2.4.3。
+- **Compatibility Matrix 更新**：Edge Router 从 “Runbook documented / Repro path documented” 更新为结构化 smoke evidence，并链接 `docs/evidence/edge-router-smoke.json`。
+- **Implementation Status 更新**：Edge-Cloud Model Router 保持 Experimental，但说明 v2.4.3 已具备结构化 smoke evidence；真实 GGUF / MLC 推理仍依赖本地模型文件与可选依赖，不纳入默认 CI。
+- **Release Readiness 更新**：Edge Router evidence 纳入 v2.4.3 发版前检查流，并同步 release manifest 默认 evidence 清单。
+
+### 测试
+
+- 新增 Edge Router evidence builder / markdown writer / schema 测试，覆盖完整 PASS、无本地模型 WARNING 与文件输出路径。
+- 新增 preflight 测试，覆盖 Edge evidence 缺失 WARNING、status 非 PASS 失败、必要 check 缺失失败、metadata 缺失失败。
+
 ## [2.4.2] - GUI Interop Evidence Patch
 
 **主题：GUI 互操作证据补丁。** 本版不新增协议或运行时功能，专门把 v2.3.x / v2.4.x 中仍处于 🟡 的 Claude Desktop / Cursor GUI 证据补齐到 ✅ GUI tested，并同步刷新所有版本号与 eval/security/baseline release evidence，使 `preflight_release.py --version 2.4.2` 的 `gui_interop_evidence` 检查由 WARNING 变为 PASS。

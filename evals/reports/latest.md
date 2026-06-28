@@ -1,8 +1,8 @@
 # Offline Eval Report
 
-- Version: 2.4.2
-- Git SHA: 54228c4 (dirty)
-- Generated: 2026-06-28T05:08:17Z
+- Version: 2.4.3
+- Git SHA: 2165ef2 (dirty)
+- Generated: 2026-06-28T06:39:11Z
 - Overall: PASS
 
 | Suite | Metric | Value | Status |

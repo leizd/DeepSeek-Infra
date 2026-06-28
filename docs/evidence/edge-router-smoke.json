@@ -1,0 +1,84 @@
+{
+  "schemaVersion": "edge-router-smoke-evidence.v1",
+  "version": "2.4.3",
+  "commit": "2165ef2",
+  "generatedAt": "2026-06-28T06:33:57Z",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false,
+    "ollamaEnabled": "1",
+    "ollamaBaseUrl": "http://127.0.0.1:18134",
+    "ollamaProviderNote": "Ollama-compatible local smoke backend",
+    "edgeInferenceEnabled": ""
+  },
+  "gitSha": "2165ef2",
+  "gitDirty": true,
+  "status": "PASS",
+  "baseUrl": "http://127.0.0.1:8017",
+  "auth": "token",
+  "checks": {
+    "ollamaModelsListed": "PASS",
+    "openaiCompatibleLocalCall": "PASS",
+    "edgeStatusEndpoint": "PASS",
+    "fallbackReady": "PASS"
+  },
+  "steps": [
+    {
+      "name": "healthz",
+      "status": "pass",
+      "detail": "status=ok",
+      "data": {}
+    },
+    {
+      "name": "edge.status",
+      "status": "warn",
+      "detail": "enabled=False provider=llama_cpp available=False",
+      "data": {
+        "edgeInference": {
+          "enabled": false,
+          "provider": "llama_cpp",
+          "available": false,
+          "dependencyAvailable": false,
+          "modelPathConfigured": false,
+          "modelPathExists": false,
+          "modelPath": "",
+          "modelName": "deepseek-r1-distill-local",
+          "loaded": false,
+          "quantization": "",
+          "nCtx": 4096,
+          "nThreads": 0,
+          "nGpuLayers": 0,
+          "maxTokens": 1024,
+          "temperature": 0.7,
+          "topP": 0.95,
+          "allowModelPathOverride": false
+        }
+      }
+    },
+    {
+      "name": "openai.models",
+      "status": "pass",
+      "detail": "models=3 ollama=1",
+      "data": {
+        "models": [
+          "deepseek-v4-pro",
+          "deepseek-v4-flash",
+          "ollama/llama3.2"
+        ],
+        "ollamaModels": [
+          "ollama/llama3.2"
+        ]
+      }
+    },
+    {
+      "name": "openai.chat",
+      "status": "pass",
+      "detail": "model=ollama/llama3.2 choices=1",
+      "data": {
+        "model": "ollama/llama3.2",
+        "choiceCount": 1
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
-﻿# 部署指南（Docker / Compose / 裸机）
+# 部署指南（Docker / Compose / 裸机）
 
-适用版本：v2.4.2。
+适用版本：v2.4.3。
 
 DeepSeek Infra 的服务形态是一个单进程 FastAPI / ASGI 运行时：`/v1` OpenAI 兼容网关、`/mcp`、`/a2a`、`/api/*` 业务端点，加 `/healthz`·`/readyz`·`/metrics` 运维三件套。所有可写状态（鉴权 token、文件缓存、向量索引、trace、语义缓存、记忆、任务快照）都集中在**一个数据目录**下，由 `DEEPSEEK_INFRA_ROOT`（优先）或 `DEEPSEEK_MOBILE_ROOT`（向后兼容）指定——这也是容器化只需要一个卷的原因。
 
