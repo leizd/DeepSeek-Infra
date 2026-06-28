@@ -2,6 +2,17 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.5.1] - Backlog Hygiene & Release Sync Patch
+
+**主题：版本同步与发布证据刷新补丁。** 本版为 v2.5.0 的发布后小修补：同步全仓版本号到 2.5.1、刷新 workspace smoke evidence、清理已完成但未关闭的 roadmap issues。
+
+### 更改
+
+- **版本号全仓同步**：README badge、`deepseek_infra/core/config.py` 的 `app_version`、Dockerfile tag、Android `versionName` / `versionCode`、`.github/workflows/ci.yml` 的 preflight 版本与 workspace evidence 路径、所有文档「适用版本」与 eval / agent / baseline / security / evidence 报告版本全部更新到 2.5.1。
+- **Workspace evidence 刷新**：`docs/evidence/workspace-v2.5.0.json` 重命名为 `workspace-v2.5.1.json`，preflight、CI release-readiness、smoke runner 默认输出路径同步更新。
+- **Release evidence 索引同步**：`docs/EVIDENCE_INDEX.md`、`docs/RELEASE_READINESS.md` 与 release manifest 中的 workspace evidence 路径与版本号全部刷新。
+- **Roadmap hygiene**：关闭已由后续版本实现的 #13（Trace 瀑布图独立只读页面）、#16（A2A artifact streaming chunks）、#18（Prompt injection 对抗基准），保持 issue backlog 与实现状态一致。
+
 ## [2.5.0] - Workspace Core
 
 **主题：Workspace Core / 本地 AI 工作台对象模型。** 本版本正式从 Infra 质量门禁线切到产品工作台地基，把项目空间、保存项、产物中心和导出能力统一成 Project 2.0。

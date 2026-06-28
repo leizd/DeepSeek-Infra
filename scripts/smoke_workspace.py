@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline Workspace Core smoke for v2.5.0.
+"""Offline Workspace Core smoke for v2.5.1.
 
 Creates an isolated local workspace, exercises projects, saved items, artifact
 registration, conversation export, project ZIP export, and secret redaction, then
@@ -80,7 +80,7 @@ def run_workspace_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     }
     details: dict[str, Any] = {"runtimeRoot": str(root)}
 
-    project = projects.create_project("Workspace Smoke", description="v2.5.0 object model")
+    project = projects.create_project("Workspace Smoke", description="v2.5.1 object model")
     checks["projectCreate"] = "PASS" if project.get("projectId") else "FAIL"
     renamed = projects.rename_project(str(project["projectId"]), "Workspace Smoke Renamed")
     checks["projectRename"] = "PASS" if renamed.get("name") == "Workspace Smoke Renamed" else "FAIL"
@@ -169,7 +169,7 @@ def build_evidence(checks: dict[str, str], details: dict[str, Any]) -> dict[str,
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run offline Workspace Core smoke")
     parser.add_argument("--offline", action="store_true", help="Kept for release-smoke symmetry; this smoke is always offline.")
-    parser.add_argument("--out", type=Path, default=REPO_ROOT / "docs" / "evidence" / "workspace-v2.5.0.json")
+    parser.add_argument("--out", type=Path, default=REPO_ROOT / "docs" / "evidence" / "workspace-v2.5.1.json")
     parser.add_argument("--json", action="store_true", help="Print evidence JSON to stdout.")
     return parser.parse_args(argv)
 

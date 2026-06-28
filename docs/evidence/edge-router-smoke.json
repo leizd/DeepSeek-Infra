@@ -1,6 +1,6 @@
 {
   "schemaVersion": "edge-router-smoke-evidence.v1",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "commit": "8a44088",
   "generatedAt": "2026-06-28T07:39:20Z",
   "environment": {

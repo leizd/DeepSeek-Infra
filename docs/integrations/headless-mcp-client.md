@@ -1,6 +1,6 @@
 # Headless MCP Client Compatibility
 
-适用版本：DeepSeek Infra v2.5.0。
+适用版本：DeepSeek Infra v2.5.1。
 
 Headless MCP verification is the no-GUI compatibility path for CI, servers, and machines that do not have Claude Desktop or Cursor installed. It proves that the MCP client path those apps commonly rely on can cross a stdio bridge into DeepSeek Infra's Streamable HTTP endpoint.
 

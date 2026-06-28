@@ -45,7 +45,7 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     _write_edge_router_evidence(evidence_dir / "edge-router-smoke.json", version)
     _write_continue_dev_evidence(evidence_dir / "continue-dev-mcp.json", version)
     _write_openai_compatible_sdk_evidence(evidence_dir / "openai-compatible-sdks.json", version)
-    _write_workspace_evidence(evidence_dir / "workspace-v2.5.0.json", version)
+    _write_workspace_evidence(evidence_dir / "workspace-v2.5.1.json", version)
     (root / "evals").mkdir()
     (root / "evals" / "README.md").write_text(f"适用版本：v{version}。\n", encoding="utf-8")
     reports = root / "evals" / "reports"
@@ -678,24 +678,24 @@ def test_preflight_passes_on_openai_compatible_sdk_evidence_complete(tmp_path: P
 
 def test_preflight_fails_on_missing_workspace_core_evidence(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.5.0")
-    (root / "docs" / "evidence" / "workspace-v2.5.0.json").unlink()
-    result = next(r for r in preflight.run_preflight(root, "2.5.0") if r.name == "workspace_core_evidence")
+    root = _skeleton(tmp_path, "2.5.1")
+    (root / "docs" / "evidence" / "workspace-v2.5.1.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.5.1") if r.name == "workspace_core_evidence")
     assert result.status == "fail"
     assert "smoke_workspace.py" in result.detail
 
 
 def test_preflight_fails_on_workspace_core_missing_required_check(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.5.0")
-    _write_workspace_evidence(root / "docs" / "evidence" / "workspace-v2.5.0.json", "2.5.0", omit_check="projectExportZip")
-    result = next(r for r in preflight.run_preflight(root, "2.5.0") if r.name == "workspace_core_evidence")
+    root = _skeleton(tmp_path, "2.5.1")
+    _write_workspace_evidence(root / "docs" / "evidence" / "workspace-v2.5.1.json", "2.5.1", omit_check="projectExportZip")
+    result = next(r for r in preflight.run_preflight(root, "2.5.1") if r.name == "workspace_core_evidence")
     assert result.status == "fail"
     assert "projectExportZip" in result.detail
 
 
 def test_preflight_passes_on_workspace_core_evidence_complete(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.5.0")
-    result = next(r for r in preflight.run_preflight(root, "2.5.0") if r.name == "workspace_core_evidence")
+    root = _skeleton(tmp_path, "2.5.1")
+    result = next(r for r in preflight.run_preflight(root, "2.5.1") if r.name == "workspace_core_evidence")
     assert result.status == "pass"

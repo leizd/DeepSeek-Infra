@@ -1,6 +1,6 @@
 # Edge Router Smoke Evidence
 
-- Version: 2.5.0
+- Version: 2.5.1
 - Generated: 2026-06-28T07:39:20Z
 - Status: PASS
 - Base URL: `http://127.0.0.1:8000`
