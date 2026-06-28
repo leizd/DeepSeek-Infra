@@ -1,6 +1,6 @@
 {
   "schemaVersion": "continue-dev-mcp-evidence.v1",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "commit": "2e2782e",
   "generatedAt": "2026-06-28T10:00:00Z",
   "environment": {
@@ -61,7 +61,7 @@
         "serverInfo": {
           "name": "deepseek-infra",
           "title": "DeepSeek Infra MCP Tool Hub",
-          "version": "2.5.1"
+          "version": "2.5.2"
         }
       }
     },

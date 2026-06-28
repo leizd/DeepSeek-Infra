@@ -1,6 +1,6 @@
 # AI Runtime Evaluation Harness
 
-适用版本：v2.5.1。
+适用版本：v2.5.2。
 
 这套 harness 对 DeepSeek Infra 的核心能力线做**自动化回归评测**（全部可离线执行，无需 API Key）。v2.4.0 把 Agent Eval、baseline compare、Prompt Injection 和版本化安全语料统一升级为 CI 硬门禁：Agent 指标低于阈值、baseline 退化、injection gate 或 security corpus 未通过都会阻断 PR。
 

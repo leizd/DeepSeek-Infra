@@ -28,6 +28,12 @@ REQUIRED_CHECKS = (
     "edgeStatusEndpoint",
     "fallbackReady",
 )
+CASCADE_CHECKS = (
+    "cascadeEnabled",
+    "draftProviderOllama",
+    "cascadeDraftCall",
+    "cascadeGateDiagnostics",
+)
 
 
 def utc_now() -> str:
@@ -83,6 +89,26 @@ def checks_from_steps(steps: list[dict[str, Any]]) -> dict[str, str]:
         "edgeStatusEndpoint": "PASS" if edge_step.get("status") in {"pass", "warn"} else "FAIL",
         "fallbackReady": "PASS" if edge_available or local_call_passed else ("FAIL" if edge_step.get("status") == "fail" else "WARNING"),
     }
+    cascade_step_raw = by_name.get("cascade.status")
+    cascade_chat_raw = by_name.get("cascade.chat")
+    cascade_step: dict[str, Any] = cascade_step_raw if isinstance(cascade_step_raw, dict) else {}
+    cascade_chat_step: dict[str, Any] = cascade_chat_raw if isinstance(cascade_chat_raw, dict) else {}
+    if cascade_step:
+        cascade_data_raw = cascade_step.get("data")
+        cascade_data: dict[str, Any] = cascade_data_raw if isinstance(cascade_data_raw, dict) else {}
+        cascade_enabled = bool(cascade_data.get("cascadeEnabled"))
+        draft_provider = str(cascade_data.get("draftProvider") or "")
+        cascade_chat_data_raw = cascade_chat_step.get("data")
+        cascade_chat_data: dict[str, Any] = cascade_chat_data_raw if isinstance(cascade_chat_data_raw, dict) else {}
+        mc_raw = cascade_chat_data.get("modelCascade")
+        model_cascade: dict[str, Any] = mc_raw if isinstance(mc_raw, dict) else {}
+        has_cascade_diag = bool(model_cascade)
+        checks.update({
+            "cascadeEnabled": "PASS" if cascade_enabled else "WARNING",
+            "draftProviderOllama": "PASS" if draft_provider == "ollama" else ("WARNING" if draft_provider else "FAIL"),
+            "cascadeDraftCall": _check_label(str(cascade_chat_step.get("status") or "fail")),
+            "cascadeGateDiagnostics": "PASS" if has_cascade_diag else ("WARNING" if cascade_chat_step.get("status") == "warn" else "FAIL"),
+        })
     return checks
 
 
@@ -163,6 +189,52 @@ def _chat_payload(model: str) -> dict[str, Any]:
     }
 
 
+def _run_cascade_smoke(args: Any, steps: list[StepResult], token: str, base_url: str) -> None:
+    try:
+        config = request_json("GET", join_url(base_url, "/api/config"), token=token, timeout_seconds=args.timeout)
+        router = config.get("modelRouter", {}) if isinstance(config.get("modelRouter"), dict) else {}
+        cascade_enabled = bool(router.get("cascadeEnabled"))
+        draft_provider = str(router.get("draftProvider") or "")
+        _record(
+            steps,
+            "cascade.status",
+            "pass" if cascade_enabled else "warn",
+            f"cascadeEnabled={cascade_enabled} draftProvider={draft_provider} draftModel={router.get('draftModel', '')}",
+            {"cascadeEnabled": cascade_enabled, "draftProvider": draft_provider, "draftModel": router.get("draftModel", "")},
+            as_json=args.json,
+        )
+    except Exception as exc:
+        _record(steps, "cascade.status", "fail", str(exc), as_json=args.json)
+        return
+
+    if not cascade_enabled or not draft_provider:
+        _record(steps, "cascade.chat", "warn", "cascade not enabled or no draft provider; set OLLAMA_ENABLED=1 MODEL_ROUTER_DRAFT_MODEL=ollama/<tag> MODEL_ROUTER_CASCADE_ENABLED=1", as_json=args.json)
+        return
+
+    try:
+        chat_payload = request_json(
+            "POST",
+            join_url(base_url, "/v1/chat/completions"),
+            token=token,
+            payload={"model": "auto", "messages": [{"role": "user", "content": "Say hello in one short sentence."}], "cascade": True, "temperature": 0.0},
+            timeout_seconds=args.timeout,
+        )
+        cascade_diag = chat_payload.get("diagnostics", {}) if isinstance(chat_payload.get("diagnostics"), dict) else {}
+        model_cascade = cascade_diag.get("modelCascade", {}) if isinstance(cascade_diag.get("modelCascade"), dict) else {}
+        choices = chat_payload.get("choices")
+        choice_count = len(choices) if isinstance(choices, list) else 0
+        _record(
+            steps,
+            "cascade.chat",
+            "pass" if choice_count else "fail",
+            f"choices={choice_count} escalated={model_cascade.get('escalated')} draftProvider={model_cascade.get('draftProvider')}",
+            {"choiceCount": choice_count, "modelCascade": model_cascade},
+            as_json=args.json,
+        )
+    except Exception as exc:
+        _record(steps, "cascade.chat", "fail", str(exc), as_json=args.json)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check Edge Router status and OpenAI-compatible local model exposure.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="Local DeepSeek Infra service root")
@@ -171,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-edge", action="store_true", help="Fail if /api/edge/status is not available=true")
     parser.add_argument("--require-ollama", action="store_true", help="Fail if /v1/models does not expose an ollama/<tag> model")
     parser.add_argument("--skip-local-call", action="store_true", help="Do not call /v1/chat/completions for the first ollama/<tag> model.")
+    parser.add_argument("--cascade", action="store_true", help="Probe cascade draft-layer status and run a cascade chat completion test.")
     parser.add_argument("--out", type=Path, default=None, help="Write structured evidence JSON.")
     parser.add_argument("--markdown", type=Path, default=None, help="Write Markdown evidence summary.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary")
@@ -255,6 +328,9 @@ def main(argv: list[str] | None = None) -> int:
             _record(steps, "openai.chat", "fail" if args.require_ollama else "warn", str(exc), as_json=args.json)
     else:
         _record(steps, "openai.chat", "fail" if args.require_ollama else "warn", "no ollama/<tag> model available for local call", as_json=args.json)
+
+    if args.cascade:
+        _run_cascade_smoke(args, steps, token, base_url)
 
     evidence = build_evidence([step.to_dict() for step in steps], base_url=base_url, token_used=bool(token))
     if args.out:

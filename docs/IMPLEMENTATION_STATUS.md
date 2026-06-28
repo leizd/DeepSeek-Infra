@@ -1,6 +1,6 @@
 # Implementation Status（实现状态矩阵）
 
-适用版本：v2.5.1。
+适用版本：v2.5.2。
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
@@ -33,7 +33,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 | 安全工程（威胁模型 / CI 扫描） | [docs/THREAT_MODEL.md](THREAT_MODEL.md) · [ci.yml security job](../.github/workflows/ci.yml) | ✅ |
 | Compatibility Smoke Pack | [scripts/smoke_mcp_compat.py](../scripts/smoke_mcp_compat.py) · [scripts/smoke_a2a_compat.py](../scripts/smoke_a2a_compat.py) · [scripts/smoke_a2a_external_peer.py](../scripts/smoke_a2a_external_peer.py) · [examples/edge_router_smoke.py](../examples/edge_router_smoke.py) · [examples/external_mcp_server_partner.py](../examples/external_mcp_server_partner.py) · [examples/a2a_interop_peer.py](../examples/a2a_interop_peer.py) | ✅ 本地服务启动后可复跑；v2.3.0 新增官方 MCP SDK partner + A2A 独立进程 peer 实测；v2.3.3 新增 A2A external peer evidence；v2.4.3 新增 Edge Router structured smoke evidence；v2.4.5 新增 A2A third-party peer structured evidence |
 | Release Readiness（发版体检 / 产物证明） | [scripts/doctor.py](../scripts/doctor.py) · [scripts/preflight_release.py](../scripts/preflight_release.py) · [scripts/smoke_release.py](../scripts/smoke_release.py) · [docs/RUNTIME_DOCTOR.md](RUNTIME_DOCTOR.md) · [docs/RELEASE_READINESS.md](RELEASE_READINESS.md) | ✅ Runtime Doctor + Release Preflight + 一键 smoke 编排 + release manifest/sha256/qualityGates；CI `release-readiness` job 生成 MCP headless / A2A external evidence 后跑 preflight + doctor offline + release dry-run；本地提交 third-party A2A / Edge evidence 后按严格 PASS checks 校验 |
-| Workspace Core Evidence | [scripts/smoke_workspace.py](../scripts/smoke_workspace.py) · [docs/evidence/workspace-v2.5.1.json](evidence/workspace-v2.5.1.json) · [docs/WORKSPACE.md](WORKSPACE.md) | ✅ 离线 smoke 覆盖项目创建/重命名、保存项、产物、对话导出、项目 ZIP、secret redaction 与删除边界 |
+| Workspace Core Evidence | [scripts/smoke_workspace.py](../scripts/smoke_workspace.py) · [docs/evidence/workspace-v2.5.2.json](evidence/workspace-v2.5.2.json) · [docs/WORKSPACE.md](WORKSPACE.md) | ✅ 离线 smoke 覆盖项目创建/重命名、保存项、产物、对话导出、项目 ZIP、secret redaction 与删除边界 |
 | UI 截图 / Trace 瀑布图 | docs/assets/ | ✅ `trace-waterfall.png` / `agent-dag-run.png` / `rag-citation.png` / `mcp-tool-call.png` 入库；独立 `/trace/{id}` 只读页面已上线 |
 
 ---
@@ -103,5 +103,5 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 
 - **代码**：[workspace/projects.py](../deepseek_infra/infra/workspace/projects.py)（Project 2.0 facade）、[saved_items.py](../deepseek_infra/infra/workspace/saved_items.py)（保存项）、[artifacts.py](../deepseek_infra/infra/workspace/artifacts.py)（Artifact Hub）、[exports.py](../deepseek_infra/infra/workspace/exports.py)（Markdown / HTML / JSON / ZIP 导出）、[schema.py](../deepseek_infra/infra/workspace/schema.py)（ID / 类型 / sourceRef / redaction）。
 - **测试**：[test_workspace.py](../tests/test_workspace.py) 覆盖项目、保存项、产物版本、预览脱敏与项目 ZIP；[test_smoke_workspace.py](../tests/test_smoke_workspace.py) 覆盖离线 evidence 生成；[test_preflight_release.py](../tests/test_preflight_release.py)、[test_smoke_release.py](../tests/test_smoke_release.py) 与 [test_release_manifest.py](../tests/test_release_manifest.py) 固定 release gate。
-- **亲手验证**：`python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.1.json`；本地服务启动后可用 `/api/workspace/projects`、`/api/workspace/projects/{projectId}/saved-items`、`/api/workspace/projects/{projectId}/artifacts` 与 `/api/workspace/exports` 走完整工作台闭环。
-- **MVP 边界**：v2.5.1 先稳定对象模型、API、导出包结构与证据链；复杂 Memory Graph、浏览器控制、自动化工作流与前端精装修留给后续版本。
+- **亲手验证**：`python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.2.json`；本地服务启动后可用 `/api/workspace/projects`、`/api/workspace/projects/{projectId}/saved-items`、`/api/workspace/projects/{projectId}/artifacts` 与 `/api/workspace/exports` 走完整工作台闭环。
+- **MVP 边界**：v2.5.2 先稳定对象模型、API、导出包结构与证据链；复杂 Memory Graph、浏览器控制、自动化工作流与前端精装修留给后续版本。

@@ -401,7 +401,7 @@ class ContextTaintSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "2.5.1"
+    app_version: str = "2.5.2"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -693,6 +693,9 @@ class Settings:
                 judge_threshold=_env_float_clamped("MODEL_ROUTER_JUDGE_THRESHOLD", 0.6, 0.0, 1.0),
                 cascade_min_chars=_env_int_clamped("MODEL_ROUTER_CASCADE_MIN_CHARS", 80, 1, 5_000),
                 cost_budget_tokens=_env_int_min("MODEL_ROUTER_COST_BUDGET_TOKENS", 0, 0),
+                draft_model=os.environ.get("MODEL_ROUTER_DRAFT_MODEL", "deepseek-v4-flash"),
+                refine_model=os.environ.get("MODEL_ROUTER_REFINE_MODEL", "deepseek-v4-pro"),
+                judge_model=os.environ.get("MODEL_ROUTER_JUDGE_MODEL", "deepseek-v4-flash"),
             ),
             agent_runtime=AgentRuntimeSettings(
                 auto_resume=_env_bool("AGENT_RUNTIME_AUTO_RESUME", False),

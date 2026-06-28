@@ -1,8 +1,8 @@
 # Workspace Core
 
-适用版本：v2.5.1。
+适用版本：v2.5.2。
 
-v2.5.1 的主题是 **Workspace Core**：把项目空间、保存项、生成产物、对话和导出统一成 DeepSeek Infra 的本地 AI 工作台对象模型。它不是新的协议门禁，也不是 Skill / 浏览器控制 / 自动化系统，而是 3.0.0 前的第一块产品地基。
+v2.5.2 的主题是 **Workspace Core**：把项目空间、保存项、生成产物、对话和导出统一成 DeepSeek Infra 的本地 AI 工作台对象模型。它不是新的协议门禁，也不是 Skill / 浏览器控制 / 自动化系统，而是 3.0.0 前的第一块产品地基。
 
 ## 对象模型
 
@@ -62,7 +62,7 @@ Project 是一级工作台对象：
 
 支持类型：`chat_snippet`、`assistant_answer`、`file_quote`、`rag_citation`、`artifact`、`webpage`、`media`、`trace`、`eval_result`。
 
-`purpose` 支持 `reference`、`memory_candidate`、`export_fragment`。v2.5.1 只做保存项，不做复杂 Memory Graph；后续记忆升级可以从保存项筛选。
+`purpose` 支持 `reference`、`memory_candidate`、`export_fragment`。v2.5.2 只做保存项，不做复杂 Memory Graph；后续记忆升级可以从保存项筛选。
 
 ### Artifact Hub
 
@@ -174,14 +174,14 @@ project-export.zip
 Workspace Core smoke 是离线的，不需要 API key 或网络：
 
 ```bash
-python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.1.json
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.2.json
 ```
 
 证据文件包含统一 metadata：
 
 ```json
 {
-  "version": "2.5.1",
+  "version": "2.5.2",
   "commit": "abc1234",
   "generatedAt": "2026-06-28T00:00:00Z",
   "environment": {"os": "Windows", "python": "3.12", "ci": false},
@@ -197,4 +197,4 @@ python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.1
 }
 ```
 
-`scripts/preflight_release.py --version 2.5.1` 会把 `workspace_core_evidence` 作为硬检查。`scripts/smoke_release.py --offline` 默认会先跑 Workspace Core smoke，再跑 eval / security / agent / baseline compare。
+`scripts/preflight_release.py --version 2.5.2` 会把 `workspace_core_evidence` 作为硬检查。`scripts/smoke_release.py --offline` 默认会先跑 Workspace Core smoke，再跑 eval / security / agent / baseline compare。

@@ -1678,7 +1678,9 @@ def call_deepseek_cascade(
 
     Falls back to a plain :func:`call_deepseek` when cascade is not requested. The
     draft and refine calls reuse the full tool/search/cache pipeline; only the
-    model differs. Diagnostics carry a ``modelCascade`` block.
+    model differs. When the draft model is an ``ollama/`` prefixed model, the
+    Ollama provider is used directly via the provider registry instead of the
+    DeepSeek API. Diagnostics carry a ``modelCascade`` block.
     """
     plan = model_router.cascade_plan(payload)
     call_kwargs: dict[str, Any] = {
@@ -1691,7 +1693,10 @@ def call_deepseek_cascade(
     if not plan.enabled:
         return call_deepseek(payload, **call_kwargs)
 
-    draft = call_deepseek({**payload, "model": plan.draft_model, "cascade": False, "autoRoute": False}, **call_kwargs)
+    if plan.draft_provider == "ollama":
+        draft = _call_ollama_draft(payload, plan)
+    else:
+        draft = call_deepseek({**payload, "model": plan.draft_model, "cascade": False, "autoRoute": False}, **call_kwargs)
     require_citations = payload.get("searchEnabled") is True
     gate = model_router.quality_gate(str(draft.get("content") or ""), min_chars=plan.min_chars, require_citations=require_citations)
     judge_score: float | None = None
@@ -1710,6 +1715,34 @@ def call_deepseek_cascade(
     return refined
 
 
+def _call_ollama_draft(payload: dict[str, Any], plan: "model_router.CascadePlan") -> dict[str, Any]:
+    from deepseek_infra.infra.gateway.providers.registry import resolve_provider
+
+    provider = resolve_provider(plan.draft_model)
+    provider_payload = {
+        "model": plan.draft_model,
+        "messages": payload.get("messages", []),
+        "max_tokens": 1024,
+        "temperature": 0.7,
+    }
+    try:
+        result = provider.chat(provider_payload)
+    except Exception as exc:
+        return {"content": "", "diagnostics": {}, "_draftError": str(exc)}
+    content = ""
+    if isinstance(result.get("choices"), list) and result["choices"]:
+        choice = result["choices"][0]
+        msg = choice.get("message") or {}
+        content = str(msg.get("content") or "")
+    usage = result.get("usage", {}) if isinstance(result.get("usage"), dict) else {}
+    return {
+        "content": content,
+        "usage": {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0), "total_tokens": usage.get("total_tokens", 0)},
+        "model": plan.draft_model,
+        "diagnostics": {},
+    }
+
+
 def _with_cascade_diagnostics(
     diagnostics: Any,
     plan: "model_router.CascadePlan",
@@ -1725,6 +1758,7 @@ def _with_cascade_diagnostics(
         "escalated": escalated,
         "draftModel": plan.draft_model,
         "refineModel": plan.refine_model,
+        "draftProvider": plan.draft_provider,
         "judge": plan.judge,
         "gate": gate.to_dict(),
     }

@@ -1,6 +1,6 @@
 # Agent Eval Report
 
-- Version: 2.5.1
+- Version: 2.5.2
 - Generated: 2026-06-28T07:44:38Z
 - Status: PASS
 

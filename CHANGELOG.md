@@ -2,6 +2,27 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.5.2] - Edge/Ollama Cascade Draft Layer
+
+**主题：Edge/Ollama Cascade 草稿层。** 本版让本地 Ollama / GGUF 模型真正进入 cascade 草稿层：便宜本地草稿 → 质量门控 → 不合格再升级 DeepSeek 云端精算。
+
+### 新增
+
+- **Cascade Ollama draft provider**：`call_deepseek_cascade()` 支持 `ollama/` 前缀的 draft model，通过 provider registry 调用 OllamaProvider.chat()，不再卡在 `validate_deepseek_payload()` 的 `SUPPORTED_MODELS` 白名单。
+- **Cascade 诊断增强**：`modelCascade` diagnostics 新增 `draftProvider` 字段，`router_status()` 同步返回 `draftProvider`，`CascadePlan` 新增 `draft_provider` 属性。
+- **Edge Router cascade smoke**：`examples/edge_router_smoke.py` 新增 `--cascade` 标志，探测 cascade 状态、draft provider 类型，并执行 cascade chat completion 验证 modelCascade diagnostics。
+- **环境变量覆盖**：新增 `MODEL_ROUTER_DRAFT_MODEL`、`MODEL_ROUTER_REFINE_MODEL`、`MODEL_ROUTER_JUDGE_MODEL` 环境变量，`.env.example` 同步说明。
+
+### 更改
+
+- **版本号全仓同步**：README badge、`app_version`、Dockerfile tag、Android `versionName` / `versionCode`、CI preflight 版本、所有文档「适用版本」与 evidence 报告版本全部更新到 2.5.2。
+- **Compatibility Matrix 更新**：Edge Router 从 Experimental 推进为 Cascade draft tested。
+- **Evidence Index 更新**：新增 cascade evidence 条目。
+
+### 测试
+
+- 新增 `test_cascade_plan_sets_ollama_provider`、`test_cascade_ollama_draft_call_uses_ollama_provider`、`test_cascade_diagnostics_includes_draft_provider`、`test_router_status_includes_draft_provider` 共 5 个 cascade ollama 路径单测。
+
 ## [2.5.1] - Backlog Hygiene & Release Sync Patch
 
 **主题：版本同步与发布证据刷新补丁。** 本版为 v2.5.0 的发布后小修补：同步全仓版本号到 2.5.1、刷新 workspace smoke evidence、清理已完成但未关闭的 roadmap issues。

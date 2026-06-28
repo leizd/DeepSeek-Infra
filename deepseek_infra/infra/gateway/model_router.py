@@ -69,11 +69,13 @@ _CITATION_RE = re.compile(r"\[\^[WF]\d", re.IGNORECASE)
 
 def router_status() -> dict[str, Any]:
     """Public Model Router capabilities for ``/api/config``."""
+    draft_model = MODEL_ROUTER_DRAFT_MODEL
     return {
         "enabled": MODEL_ROUTER_ENABLED,
         "cascadeEnabled": MODEL_ROUTER_ENABLED and MODEL_ROUTER_CASCADE_ENABLED,
         "judgeEnabled": MODEL_ROUTER_JUDGE_ENABLED,
-        "draftModel": MODEL_ROUTER_DRAFT_MODEL,
+        "draftModel": draft_model,
+        "draftProvider": "ollama" if draft_model.startswith("ollama/") else "deepseek",
         "refineModel": MODEL_ROUTER_REFINE_MODEL,
         "judgeModel": MODEL_ROUTER_JUDGE_MODEL,
         "costBudgetTokens": MODEL_ROUTER_COST_BUDGET_TOKENS,
@@ -197,6 +199,7 @@ class CascadePlan:
     enabled: bool
     draft_model: str
     refine_model: str
+    draft_provider: str
     judge: bool
     judge_model: str
     judge_threshold: float
@@ -207,6 +210,7 @@ class CascadePlan:
             "enabled": self.enabled,
             "draftModel": self.draft_model,
             "refineModel": self.refine_model,
+            "draftProvider": self.draft_provider,
             "judge": self.judge,
             "judgeModel": self.judge_model,
             "judgeThreshold": self.judge_threshold,
@@ -222,10 +226,13 @@ def cascade_plan(payload: dict[str, Any]) -> CascadePlan:
         and not has_image_attachment(payload)
     )
     judge = enabled and (MODEL_ROUTER_JUDGE_ENABLED or payload.get("judge") is True)
+    draft_model = MODEL_ROUTER_DRAFT_MODEL
+    draft_provider = "ollama" if draft_model.startswith("ollama/") else "deepseek"
     return CascadePlan(
         enabled=enabled,
-        draft_model=MODEL_ROUTER_DRAFT_MODEL,
+        draft_model=draft_model,
         refine_model=MODEL_ROUTER_REFINE_MODEL,
+        draft_provider=draft_provider,
         judge=judge,
         judge_model=MODEL_ROUTER_JUDGE_MODEL,
         judge_threshold=MODEL_ROUTER_JUDGE_THRESHOLD,

@@ -10,7 +10,7 @@ and Edge Router evidence is strict when submitted, that key docs do not contain
 encoding corruption (since v2.3.4), and (since v2.3.1) that GUI interop evidence
 for Claude Desktop / Cursor has been recorded in ``docs/COMPATIBILITY.md``.
 
-    python scripts/preflight_release.py --version 2.5.1
+    python scripts/preflight_release.py --version 2.5.2
 
 Exits 1 on any FAIL; WARNINGs do not fail. Version defaults to
 ``settings.app_version``.
@@ -614,7 +614,7 @@ def check_openai_compatible_sdk_evidence(root: Path, version: str) -> CheckResul
 
 
 def check_workspace_core_evidence(root: Path, version: str) -> CheckResult:
-    path = root / "docs" / "evidence" / "workspace-v2.5.1.json"
+    path = root / "docs" / "evidence" / "workspace-v2.5.2.json"
     if not path.is_file():
         return CheckResult(
             "workspace_core_evidence",

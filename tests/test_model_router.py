@@ -129,3 +129,67 @@ def test_cascade_disabled_falls_back_to_plain_call() -> None:
         result = call_deepseek_cascade(payload)
     assert urlopen.call_count == 1
     assert "modelCascade" not in result["diagnostics"]
+
+
+def test_cascade_plan_sets_ollama_provider_when_draft_is_ollama(monkeypatch: Any) -> None:
+    monkeypatch.setattr(model_router, "MODEL_ROUTER_DRAFT_MODEL", "ollama/qwen2.5:7b")
+    monkeypatch.setattr(model_router, "MODEL_ROUTER_CASCADE_ENABLED", True)
+    payload = _cascade_payload(cascade=True)
+    plan = model_router.cascade_plan(payload)
+    assert plan.enabled is True
+    assert plan.draft_provider == "ollama"
+    assert plan.draft_model == "ollama/qwen2.5:7b"
+
+
+def test_cascade_plan_sets_deepseek_provider_for_standard_model(monkeypatch: Any) -> None:
+    monkeypatch.setattr(model_router, "MODEL_ROUTER_DRAFT_MODEL", "deepseek-v4-flash")
+    payload = _cascade_payload(cascade=True)
+    plan = model_router.cascade_plan(payload)
+    assert plan.draft_provider == "deepseek"
+
+
+def test_cascade_ollama_draft_call_uses_ollama_provider(monkeypatch: Any) -> None:
+    monkeypatch.setattr(model_router, "MODEL_ROUTER_DRAFT_MODEL", "ollama/qwen2.5:7b")
+    monkeypatch.setattr(model_router, "MODEL_ROUTER_CASCADE_ENABLED", True)
+    payload = _cascade_payload(cascade=True)
+
+    plan = model_router.cascade_plan(payload)
+
+    def fake_provider_chat(provider_payload: dict[str, Any]) -> dict[str, Any]:
+        return {"choices": [{"message": {"content": "Hello from Ollama!"}}], "usage": {"total_tokens": 5}}
+
+    class FakeProvider:
+        name = "ollama"
+        chat = staticmethod(fake_provider_chat)
+
+    import deepseek_infra.infra.gateway.providers.registry as reg
+
+    monkeypatch.setattr(reg, "resolve_provider", lambda model: FakeProvider())
+
+    from deepseek_infra.infra.gateway.deepseek_client import _call_ollama_draft
+
+    draft = _call_ollama_draft(payload, plan)
+
+    assert draft["content"] == "Hello from Ollama!"
+    assert draft["model"] == "ollama/qwen2.5:7b"
+
+
+def test_cascade_diagnostics_includes_draft_provider() -> None:
+    payload = _cascade_payload(cascade=True)
+    good = "Caching stores computed results so repeated requests return instantly, cutting latency and cost; it works best for deterministic, frequently repeated queries."
+    with patch("urllib.request.urlopen", return_value=FakeResponse(_response_bytes(good))):
+        result = call_deepseek_cascade(payload)
+    cascade = result["diagnostics"]["modelCascade"]
+    assert cascade["draftProvider"] == "deepseek"
+    assert cascade["escalated"] is False
+
+
+def test_router_status_includes_draft_provider(monkeypatch: Any) -> None:
+    monkeypatch.setattr(model_router, "MODEL_ROUTER_DRAFT_MODEL", "ollama/llama3.2")
+    status = model_router.router_status()
+    assert status["draftProvider"] == "ollama"
+    assert status["draftModel"] == "ollama/llama3.2"
+
+    monkeypatch.setattr(model_router, "MODEL_ROUTER_DRAFT_MODEL", "deepseek-v4-flash")
+    status = model_router.router_status()
+    assert status["draftProvider"] == "deepseek"
