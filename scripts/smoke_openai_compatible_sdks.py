@@ -32,7 +32,6 @@ if str(REPO_ROOT) not in sys.path:
 from scripts._smoke_common import (  # noqa: E402
     StepResult,
     bearer_headers,
-    finish,
     join_url,
     request_json,
     resolve_token,
@@ -283,7 +282,7 @@ def write_markdown(evidence: dict[str, Any], path: str) -> None:
     lines.append(f"- Python: {env.get('python')}")
     lines.append(f"- CI: {env.get('ci')}")
     lines.append("")
-    lines.append(f"## Target")
+    lines.append("## Target")
     lines.append("")
     lines.append(f"- Base URL: {evidence.get('baseUrl')}")
     lines.append(f"- Model: {evidence.get('model')}")
