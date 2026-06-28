@@ -10,7 +10,7 @@ and Edge Router evidence is strict when submitted, that key docs do not contain
 encoding corruption (since v2.3.4), and (since v2.3.1) that GUI interop evidence
 for Claude Desktop / Cursor has been recorded in ``docs/COMPATIBILITY.md``.
 
-    python scripts/preflight_release.py --version 2.4.5
+    python scripts/preflight_release.py --version 2.4.6
 
 Exits 1 on any FAIL; WARNINGs do not fail. Version defaults to
 ``settings.app_version``.
@@ -548,6 +548,71 @@ def check_continue_dev_mcp_evidence(root: Path, version: str) -> CheckResult:
     )
 
 
+def check_openai_compatible_sdk_evidence(root: Path, version: str) -> CheckResult:
+    path = root / "docs" / "evidence" / "openai-compatible-sdks.json"
+    if not path.is_file():
+        return CheckResult(
+            "openai_compatible_sdk_evidence",
+            STATUS_WARN,
+            "OpenAI-compatible SDK evidence missing; run scripts/smoke_openai_compatible_sdks.py --out docs/evidence/openai-compatible-sdks.json --markdown docs/evidence/openai-compatible-sdks.md",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("openai_compatible_sdk_evidence", STATUS_FAIL, f"cannot parse OpenAI-compatible SDK evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("openai_compatible_sdk", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "openai_compatible_sdk_evidence",
+            STATUS_FAIL,
+            f"OpenAI-compatible SDK evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS":
+        return CheckResult(
+            "openai_compatible_sdk_evidence",
+            STATUS_FAIL,
+            f"OpenAI-compatible SDK evidence status is {data.get('status')!r}, expected PASS",
+            {"status": data.get("status")},
+        )
+    sdks = data.get("sdks")
+    if not isinstance(sdks, dict) or not sdks:
+        return CheckResult(
+            "openai_compatible_sdk_evidence",
+            STATUS_FAIL,
+            "OpenAI-compatible SDK evidence is missing the 'sdks' object",
+            {"path": str(path)},
+        )
+    required_sdks = {"langchain": ("modelsList", "chatCompletion", "streaming"), "litellm": ("modelsList", "chatCompletion", "streaming"), "llamaindex": ("chatCompletion",)}
+    failures: list[str] = []
+    for sdk_name, required_checks in required_sdks.items():
+        sdk_data = sdks.get(sdk_name)
+        if not isinstance(sdk_data, dict):
+            failures.append(f"sdks.{sdk_name} missing")
+            continue
+        for check in required_checks:
+            value = str(sdk_data.get(check, "")).upper()
+            if value != "PASS":
+                failures.append(f"sdks.{sdk_name}.{check}={value}")
+    if failures:
+        return CheckResult(
+            "openai_compatible_sdk_evidence",
+            STATUS_FAIL,
+            f"OpenAI-compatible SDK evidence missing PASS checks: {', '.join(failures)}",
+            {"missingOrFailed": failures},
+        )
+    return CheckResult(
+        "openai_compatible_sdk_evidence",
+        STATUS_PASS,
+        "OpenAI-compatible SDK evidence recorded",
+        {"path": str(path), "sdks": list(required_sdks.keys())},
+    )
+
+
 def check_gui_interop_evidence(root: Path) -> CheckResult:
     """Verify Claude Desktop / Cursor GUI evidence is recorded in COMPATIBILITY.md.
 
@@ -628,6 +693,7 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_a2a_third_party_peer_evidence(root, version),
         check_edge_router_smoke_evidence(root, version),
         check_continue_dev_mcp_evidence(root, version),
+        check_openai_compatible_sdk_evidence(root, version),
         check_gui_interop_evidence(root),
     ]
 

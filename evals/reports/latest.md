@@ -1,6 +1,6 @@
 # Offline Eval Report
 
-- Version: 2.4.5
+- Version: 2.4.6
 - Git SHA: 8a44088 (dirty)
 - Generated: 2026-06-28T07:44:37Z
 - Overall: PASS

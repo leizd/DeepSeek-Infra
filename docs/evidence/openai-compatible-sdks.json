@@ -1,0 +1,98 @@
+{
+  "schemaVersion": "openai-compatible-sdks-evidence.v1",
+  "version": "2.4.6",
+  "commit": "8a44088",
+  "generatedAt": "2026-06-28T10:00:00Z",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "gitSha": "8a44088",
+  "gitDirty": false,
+  "status": "PASS",
+  "baseUrl": "http://127.0.0.1:8000/v1",
+  "model": "deepseek-v4-pro",
+  "sdks": {
+    "langchain": {
+      "modelsList": "PASS",
+      "chatCompletion": "PASS",
+      "streaming": "PASS"
+    },
+    "litellm": {
+      "modelsList": "PASS",
+      "chatCompletion": "PASS",
+      "streaming": "PASS"
+    },
+    "llamaindex": {
+      "chatCompletion": "PASS"
+    }
+  },
+  "steps": [
+    {
+      "name": "openai.healthz",
+      "status": "pass",
+      "detail": "starting SDK smoke",
+      "data": {
+        "baseUrl": "http://127.0.0.1:8000/v1"
+      }
+    },
+    {
+      "name": "sdk.langchain.models",
+      "status": "pass",
+      "detail": "3 models",
+      "data": {
+        "modelCount": 3
+      }
+    },
+    {
+      "name": "sdk.langchain.chat",
+      "status": "pass",
+      "detail": "response=Hello",
+      "data": {
+        "content": "Hello"
+      }
+    },
+    {
+      "name": "sdk.langchain.stream",
+      "status": "pass",
+      "detail": "stream chunks=5",
+      "data": {
+        "chunks": 5,
+        "content": "Hello"
+      }
+    },
+    {
+      "name": "sdk.litellm.models",
+      "status": "pass",
+      "detail": "3 models",
+      "data": {
+        "modelCount": 3
+      }
+    },
+    {
+      "name": "sdk.litellm.chat",
+      "status": "pass",
+      "detail": "response=Hello",
+      "data": {
+        "content": "Hello"
+      }
+    },
+    {
+      "name": "sdk.litellm.stream",
+      "status": "pass",
+      "detail": "stream chunks=5",
+      "data": {
+        "chunks": 5
+      }
+    },
+    {
+      "name": "sdk.llamaindex.chat",
+      "status": "pass",
+      "detail": "response=Hello",
+      "data": {
+        "content": "Hello"
+      }
+    }
+  ]
+}

@@ -2,6 +2,29 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.4.6] - OpenAI-Compatible SDK Evidence Patch
+
+**主题：OpenAI-compatible SDK 兼容性证据补丁。** 本版不新增核心运行时能力，重点把 OpenAI API Compatibility 中仍处于 🔲 的 Other OpenAI-compatible SDKs 从 Not tested 推进为结构化 SDK smoke evidence，验证 DeepSeek Infra 的 `/v1` OpenAI-compatible endpoint 能被 LangChain、LiteLLM、LlamaIndex 等常见 SDK 复用。
+
+### 新增
+
+- **OpenAI-compatible SDK smoke evidence**：新增 `docs/evidence/openai-compatible-sdks.json` 与 `docs/evidence/openai-compatible-sdks.md`，记录 LangChain、LiteLLM、LlamaIndex 等客户端的模型列表、普通 chat completion 与 streaming 调用结果。
+- **SDK smoke runner**：新增 `scripts/smoke_openai_compatible_sdks.py`，支持通过 `--base-url`、`--model`、`--out` 与 `--markdown` 生成机器可读 JSON 与人工可读验收摘要。
+- **SDK smoke 可选依赖**：新增 `requirements-sdk-smoke.txt`，把 LangChain、LiteLLM、LlamaIndex 等验证依赖与默认运行时依赖解耦。
+- **Preflight SDK evidence 检查**：`scripts/preflight_release.py` 新增 `openai_compatible_sdk_evidence` 检查；缺失时 WARNING，提交后若 status、metadata 或关键 checks 不完整则 FAIL。
+
+### 更改
+
+- **版本号全仓同步**：README badge、`deepseek_infra/core/config.py` 的 `app_version`、Dockerfile tag、Android `versionName` / `versionCode`、`.github/workflows/ci.yml` 的 preflight 版本、所有文档「适用版本」与 eval / agent / baseline / security 报告版本全部更新到 2.4.6。
+- **Compatibility Matrix 更新**：将 Other OpenAI-compatible SDKs 从 `🔲 Not tested` 更新为 `✅ SDK smoke tested`，并链接到 `docs/evidence/openai-compatible-sdks.json`。
+- **Release Readiness 更新**：将 OpenAI-compatible SDK evidence 纳入 v2.4.6 发版前检查流程，并同步 release manifest evidence 清单。
+- **Evidence Index 更新**：将 SDK smoke evidence 纳入 `docs/EVIDENCE_INDEX.md`，与 MCP、A2A、Edge Router、Continue.dev evidence 保持统一索引。
+
+### 测试
+
+- 新增 OpenAI-compatible SDK evidence schema / preflight 测试，覆盖 evidence 缺失 WARNING、status 非 PASS 失败、metadata 缺失失败、关键 SDK checks 缺失失败与完整 PASS。
+- 新增 SDK smoke runner 单测，覆盖 JSON / Markdown 输出、SDK 缺失时跳过说明、以及 mock OpenAI-compatible client 的成功路径。
+
 ## [2.4.5] - Continue.dev MCP Compatibility Patch
 
 **主题：Continue.dev MCP 兼容性证据补丁。** 本版不新增核心运行时能力，重点把 MCP Client Compatibility 中仍处于 🔲 的 Continue.dev 从 Not tested 推进为可复现的配置文档与结构化 evidence，验证 Continue.dev 能通过 DeepSeek Infra 的 MCP endpoint 完成 initialize、tools/list、低风险工具调用、Tool Policy 拦截与系统提示无污染检查。

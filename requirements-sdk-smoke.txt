@@ -1,0 +1,9 @@
+# Optional dependencies for OpenAI-compatible SDK smoke evidence.
+# Not required for CI or core runtime; install locally to reproduce evidence.
+# pip install -r requirements-sdk-smoke.txt
+
+langchain>=0.3.0
+langchain-openai>=0.2.0
+litellm>=1.50.0
+llama-index>=0.11.0
+llama-index-llms-openai-like>=0.3.0

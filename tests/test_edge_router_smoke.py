@@ -77,7 +77,7 @@ def test_edge_router_smoke_writes_json_and_markdown(monkeypatch: Any, tmp_path: 
         raise AssertionError(url)
 
     monkeypatch.setattr(smoke, "request_json", fake_request_json)
-    monkeypatch.setattr(smoke, "app_version", lambda: "2.4.5")
+    monkeypatch.setattr(smoke, "app_version", lambda: "2.4.6")
     monkeypatch.setattr(smoke, "git_value", lambda *args: "abc1234" if args[:2] == ("rev-parse", "--short") else "")
     monkeypatch.setattr(smoke, "utc_now", lambda: "2026-06-28T00:00:00Z")
     monkeypatch.setattr(smoke, "build_environment", lambda: {"os": "Linux", "python": "3.12", "ci": True})
@@ -85,7 +85,7 @@ def test_edge_router_smoke_writes_json_and_markdown(monkeypatch: Any, tmp_path: 
     assert smoke.main(["--base-url", "http://127.0.0.1:8000", "--out", str(out), "--markdown", str(md)]) == 0
 
     evidence = json.loads(out.read_text(encoding="utf-8"))
-    assert evidence["version"] == "2.4.5"
+    assert evidence["version"] == "2.4.6"
     assert evidence["status"] == "PASS"
     assert evidence["checks"]["openaiCompatibleLocalCall"] == "PASS"
     assert "Edge Router Smoke Evidence" in md.read_text(encoding="utf-8")

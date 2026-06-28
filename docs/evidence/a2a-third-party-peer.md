@@ -1,6 +1,6 @@
 # A2A Third-Party Peer Evidence
 
-- Version: 2.4.5
+- Version: 2.4.6
 - Generated: 2026-06-28T07:38:13Z
 - Status: PASS
 - Peer: A2A Third-Party Demo Peer

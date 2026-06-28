@@ -1,6 +1,6 @@
 # Release Evidence Index
 
-适用版本：v2.4.5。
+适用版本：v2.4.6。
 
 本页汇总 DeepSeek Infra v2.3.x 以来的互操作证据、评测报告、v2.4 质量门禁证据与 release artifact，作为证据链的统一入口。所有标 ✅ 的项都有可复现的 smoke / evidence 路径；标 🟡 的项需要人工 GUI、本地模型或真实第三方生态实测。
 
@@ -16,6 +16,7 @@
 | Claude Desktop GUI | [docs/integrations/claude-desktop.md](integrations/claude-desktop.md) | ✅ GUI tested | Claude Desktop 0.9.0, commit `54228c4`, Windows 11, 2026-06-28 |
 | Cursor GUI | [docs/integrations/cursor.md](integrations/cursor.md) | ✅ GUI tested | Cursor 0.48.0, commit `54228c4`, Windows 11, 2026-06-28 |
 | Continue.dev MCP | [docs/evidence/continue-dev-mcp.json](evidence/continue-dev-mcp.json) / [continue-dev-mcp.md](evidence/continue-dev-mcp.md) | ✅ Tested | Continue.dev 1.2.0, commit `2e2782e`, Windows 11, 2026-06-28 |
+| OpenAI-compatible SDK smoke | [docs/evidence/openai-compatible-sdks.json](evidence/openai-compatible-sdks.json) / [openai-compatible-sdks.md](evidence/openai-compatible-sdks.md) | ✅ SDK smoke tested | `python scripts/smoke_openai_compatible_sdks.py --base-url http://127.0.0.1:8000/v1 --model deepseek-v4-pro --out docs/evidence/openai-compatible-sdks.json --markdown docs/evidence/openai-compatible-sdks.md` |
 | Third-party A2A ecosystem candidates | [docs/integrations/a2a-third-party-plan.md](integrations/a2a-third-party-plan.md) | ✅ Evidence path closed | 保留 LangGraph / CrewAI / Google A2A reference 等候选实现的复现流程与排障说明 |
 
 ## Eval Reports
@@ -27,7 +28,7 @@
 | Baseline compare | [evals/reports/baseline-compare-latest.json](../evals/reports/baseline-compare-latest.json) | PASS |
 | Security corpus | [evals/reports/security-latest.json](../evals/reports/security-latest.json) / [security-latest.md](../evals/reports/security-latest.md) | PASS |
 
-## Quality Gate Evidence（v2.4.5）
+## Quality Gate Evidence（v2.4.6）
 
 | Gate | Evidence | Required |
 | --- | --- | --- |
@@ -38,7 +39,7 @@
 | Injection strict | `latest.json.injection.status=PASS` + `gateMode=hard` | PASS |
 | Security corpus | `evals/reports/security-latest.json` | `status=PASS` |
 | Runtime doctor | `python scripts/doctor.py --offline` | exit 0 |
-| Release preflight | `python scripts/preflight_release.py --version 2.4.5` | exit 0 |
+| Release preflight | `python scripts/preflight_release.py --version 2.4.6` | exit 0 |
 | Smoke release | `python scripts/smoke_release.py --offline` | exit 0 |
 
 ## Release Artifacts
@@ -47,14 +48,14 @@
 
 | Artifact | Example | Purpose |
 | --- | --- | --- |
-| Release zip | `dist/deepseek-infra-2.4.5.zip` | 可分发源码包 |
-| Checksum | `dist/deepseek-infra-2.4.5.zip.sha256` | 校验 zip 完整性 |
-| Manifest | `dist/deepseek-infra-2.4.5.manifest.json` | 版本、commit、构建环境、evidence 清单与 `qualityGates` |
+| Release zip | `dist/deepseek-infra-2.4.6.zip` | 可分发源码包 |
+| Checksum | `dist/deepseek-infra-2.4.6.zip.sha256` | 校验 zip 完整性 |
+| Manifest | `dist/deepseek-infra-2.4.6.manifest.json` | 版本、commit、构建环境、evidence 清单与 `qualityGates` |
 
 构建命令：
 
 ```bash
-python scripts/release.py --clean-workspace --version 2.4.5
+python scripts/release.py --clean-workspace --version 2.4.6
 ```
 
 ## Preflight Checks
@@ -62,9 +63,8 @@ python scripts/release.py --clean-workspace --version 2.4.5
 发版前必须通过的 preflight 检查：
 
 ```bash
-python scripts/preflight_release.py --version 2.4.5
+python scripts/preflight_release.py --version 2.4.6
 ```
-
 关键检查项：
 
 - `docs_encoding_sanity`：文档无 `???`、`锟斤拷`、\ufffd 等乱码。
@@ -73,6 +73,7 @@ python scripts/preflight_release.py --version 2.4.5
 - `a2a_third_party_peer_evidence`：缺失时 WARNING；存在时必须版本匹配、`peerType=third-party`、`status=PASS` 且关键 checks PASS。
 - `edge_router_smoke_evidence`：缺失时 WARNING；存在时必须版本匹配、`status=PASS` 且四类 checks 全 PASS。
 - `continue_dev_mcp_evidence`：缺失时 WARNING；存在时必须版本匹配、`status=PASS` 且六类 checks 全 PASS。
+- `openai_compatible_sdk_evidence`：缺失时 WARNING；存在时必须版本匹配、`status=PASS` 且 LangChain/LiteLLM/LlamaIndex 关键 checks 全 PASS。
 - `gui_interop_evidence`：Claude Desktop / Cursor 已在 v2.4.2 完成 GUI 实测并改为 PASS。
 - `baseline_compare_report` / `security_corpus_report` / `quality_gate_evidence`：v2.4 质量门禁证据齐全且 PASS。
 

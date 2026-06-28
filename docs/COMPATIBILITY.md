@@ -1,8 +1,8 @@
 # Compatibility Matrix（兼容性矩阵）
 
-适用版本：v2.4.5。
+适用版本：v2.4.6。
 
-这页只记录已经可复现的互操作结果，不把“协议上应该兼容”写成“实机已验证”。v2.3.0 的重点是把 v2.2.x 已完成的 MCP / A2A / 安全评测能力真正拿到外部实现里验一遍：MCP 客户端与官方 MCP Python SDK 的 Streamable HTTP transport 真正互通（SSE 响应解析修复）、A2A 客户端与独立进程 peer 端到端验证、Prompt Injection 对抗评测从 soft gate 毕业为 CI 硬门禁。v2.4.2 已完成 Claude Desktop / Cursor 的 GUI 实机验证并填入证据；v2.4.3 将 Edge Router 从 runbook-only 推进为结构化 smoke evidence；v2.4.5 将 Third-party A2A ecosystem peer 推进为 third-party-style structured evidence；v2.4.5 将 Continue.dev 从 Not tested 推进为结构化 MCP evidence。
+这页只记录已经可复现的互操作结果，不把“协议上应该兼容”写成“实机已验证”。v2.3.0 的重点是把 v2.2.x 已完成的 MCP / A2A / 安全评测能力真正拿到外部实现里验一遍：MCP 客户端与官方 MCP Python SDK 的 Streamable HTTP transport 真正互通（SSE 响应解析修复）、A2A 客户端与独立进程 peer 端到端验证、Prompt Injection 对抗评测从 soft gate 毕业为 CI 硬门禁。v2.4.2 已完成 Claude Desktop / Cursor 的 GUI 实机验证并填入证据；v2.4.3 将 Edge Router 从 runbook-only 推进为结构化 smoke evidence；v2.4.5 将 Third-party A2A ecosystem peer 推进为 third-party-style structured evidence；v2.4.5 将 Continue.dev 从 Not tested 推进为结构化 MCP evidence；v2.4.6 将 Other OpenAI-compatible SDKs 从 Not tested 推进为结构化 SDK smoke evidence。
 
 ## Compatibility Smoke Pack
 
@@ -107,7 +107,7 @@ v2.2.1 起，外部 MCP server 的工具会以 `mcp__<server>__<tool>` 桥接进
 | `curl` | ✅ Tested | README examples |
 | Ollama as provider | ✅ Tested | `OLLAMA_ENABLED=1` exposes `ollama/<tag>` through `/v1/models` |
 | Edge Router smoke evidence | ✅ Tested | [EDGE_ROUTER_RUNBOOK.md](EDGE_ROUTER_RUNBOOK.md) + `examples/edge_router_smoke.py` + [evidence/edge-router-smoke.json](evidence/edge-router-smoke.json) |
-| Other OpenAI-compatible SDKs | 🔲 Not tested | Should work with standard `/v1/chat/completions` and `/v1/models`, but not claimed here. |
+| Other OpenAI-compatible SDKs | ✅ SDK smoke tested | [evidence/openai-compatible-sdks.json](evidence/openai-compatible-sdks.json) / [openai-compatible-sdks.md](evidence/openai-compatible-sdks.md) | LangChain (ChatOpenAI)、LiteLLM、LlamaIndex (OpenAILike) 均已通过 models list、chat completion 与 streaming 验证。 |
 
 ## A2A Interop Compatibility
 

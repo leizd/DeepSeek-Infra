@@ -1,6 +1,6 @@
 # Edge Router Runbook
 
-适用版本：v2.4.5。
+适用版本：v2.4.6。
 
 Edge-Cloud Model Router 仍是 **Experimental**：CI 覆盖路由决策、配置面和云失败回退，但不下载模型、不安装本地推理后端，也不跑真实 GGUF/MLC 推理。v2.4.3 把“怎么在自己的机器上验收”推进为结构化 evidence，方便把本地 Ollama / Ollama-compatible provider 的结果带进 release preflight。
 
@@ -102,7 +102,7 @@ JSON 的关键 checks 是：
 
 ```json
 {
-  "version": "2.4.5",
+  "version": "2.4.6",
   "status": "PASS",
   "checks": {
     "ollamaModelsListed": "PASS",

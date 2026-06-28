@@ -92,7 +92,7 @@ def test_cli_writes_third_party_json_and_markdown(monkeypatch: Any, tmp_path: Pa
     }
 
     monkeypatch.setattr(smoke, "run_smoke", lambda *args, **kwargs: (steps, peer))
-    monkeypatch.setattr(smoke, "app_version", lambda: "2.4.5")
+    monkeypatch.setattr(smoke, "app_version", lambda: "2.4.6")
     monkeypatch.setattr(smoke, "git_value", lambda *args: "abc1234" if args[:2] == ("rev-parse", "--short") else "")
     monkeypatch.setattr(smoke, "utc_now", lambda: "2026-06-28T00:00:00Z")
     monkeypatch.setattr(smoke, "build_environment", lambda: {"os": "Windows", "python": "3.13", "ci": False})
@@ -101,7 +101,7 @@ def test_cli_writes_third_party_json_and_markdown(monkeypatch: Any, tmp_path: Pa
 
     evidence = json.loads(out.read_text(encoding="utf-8"))
     assert evidence["schemaVersion"] == "a2a-third-party-peer-evidence.v1"
-    assert evidence["version"] == "2.4.5"
+    assert evidence["version"] == "2.4.6"
     assert evidence["peerType"] == "third-party"
     assert evidence["checks"]["agentCard"] == "PASS"
     assert "A2A Third-Party Peer Evidence" in markdown.read_text(encoding="utf-8")
