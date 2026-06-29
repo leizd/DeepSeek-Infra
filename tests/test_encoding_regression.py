@@ -1790,8 +1790,8 @@ class EncodingRegressionTests(unittest.TestCase):
         local_rag = Path("deepseek_infra/infra/rag/local_rag.py").read_text(encoding="utf-8")
         files = Path("deepseek_infra/infra/rag/files.py").read_text(encoding="utf-8")
         tools = Path("deepseek_infra/infra/tool_runtime/tools.py").read_text(encoding="utf-8")
+        server = Path("deepseek_infra/web/server.py").read_text(encoding="utf-8")
         status_routes = Path("deepseek_infra/web/routes/status.py").read_text(encoding="utf-8")
-        rag_routes = Path("deepseek_infra/web/routes/rag.py").read_text(encoding="utf-8")
         readme = Path("README.md").read_text(encoding="utf-8")
         changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
         api = Path("docs/API.md").read_text(encoding="utf-8")
@@ -1806,7 +1806,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("index_file_payload(payload", files)
         self.assertIn("search_files_index", tools)
         self.assertIn("/api/rag/status", status_routes)
-        self.assertIn("/api/rag/reindex", rag_routes)
+        self.assertIn("/api/rag/reindex", server)
         self.assertIn("version-2.5.5-blue", readme)
         self.assertIn(".local-rag", readme)
         self.assertIn("## [1.7.6]", changelog)
@@ -2168,7 +2168,7 @@ class EncodingRegressionTests(unittest.TestCase):
     def test_v208_local_rag_data_plane_is_present(self) -> None:
         local_rag = Path("deepseek_infra/infra/rag/local_rag.py").read_text(encoding="utf-8")
         config = Path("deepseek_infra/core/config.py").read_text(encoding="utf-8")
-        rag_routes = Path("deepseek_infra/web/routes/rag.py").read_text(encoding="utf-8")
+        server = Path("deepseek_infra/web/server.py").read_text(encoding="utf-8")
         tools = Path("deepseek_infra/infra/tool_runtime/tools.py").read_text(encoding="utf-8")
         test_rag = Path("tests/test_local_rag.py").read_text(encoding="utf-8")
         readme = Path("README.md").read_text(encoding="utf-8")
@@ -2198,8 +2198,8 @@ class EncodingRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, config)
 
-        self.assertIn("/api/rag/verify-citation", rag_routes)
-        self.assertIn("/api/rag/eval", rag_routes)
+        self.assertIn("/api/rag/verify-citation", server)
+        self.assertIn("/api/rag/eval", server)
         self.assertIn("local_rag.chunk_lineage(result)", tools)
         self.assertIn("def test_verify_citation_grounding", test_rag)
         self.assertIn("def test_incremental_index_skips_unchanged_document", test_rag)
