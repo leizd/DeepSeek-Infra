@@ -1,6 +1,6 @@
 # Semantic Cache ONNX Evidence
 
-- Version: 2.5.4
+- Version: 2.5.5
 - Status: PASS
 - Generated: 2026-06-28T10:00:00Z
 - ONNX Available: false
@@ -25,5 +25,5 @@ ONNX remains optional; hash embedding is zero-dependency default. The hash embed
 
 To enable ONNX comparison, install `requirements-rag.txt` and run:
 ```bash
-python benchmarks/bench_semantic_cache.py --compare --onnx-model /path/to/model.onnx --tokenizer /path/to/tokenizer.json --dimensions 384 --out docs/evidence/semantic-cache-onnx-v2.5.4.json --markdown docs/evidence/semantic-cache-onnx-v2.5.4.md
+python benchmarks/bench_semantic_cache.py --compare --onnx-model /path/to/model.onnx --tokenizer /path/to/tokenizer.json --dimensions 384 --out docs/evidence/semantic-cache-onnx-v2.5.5.json --markdown docs/evidence/semantic-cache-onnx-v2.5.5.md
 ```

@@ -72,3 +72,18 @@ def test_phase1_status_routes_are_not_declared_inline_in_server() -> None:
         '@api.get("/api/edge/status")',
     ]:
         assert decorator not in server_source
+
+
+def test_phase2_file_and_download_routes_are_not_declared_inline_in_server() -> None:
+    server_source = Path(server_module.__file__).read_text(encoding="utf-8")
+
+    assert "create_files_router(_files_route_deps())" in server_source
+    assert "create_downloads_router(_downloads_route_deps())" in server_source
+    for decorator in [
+        '@api.get("/api/download")',
+        '@api.get("/api/file-source")',
+        '@api.get("/api/file-page-image")',
+        '@api.get("/api/file-page-layout")',
+        '@api.get("/api/file-page-search")',
+    ]:
+        assert decorator not in server_source

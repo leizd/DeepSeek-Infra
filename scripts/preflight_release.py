@@ -10,7 +10,7 @@ and Edge Router evidence is strict when submitted, that key docs do not contain
 encoding corruption (since v2.3.4), and (since v2.3.1) that GUI interop evidence
 for Claude Desktop / Cursor has been recorded in ``docs/COMPATIBILITY.md``.
 
-    python scripts/preflight_release.py --version 2.5.4
+    python scripts/preflight_release.py --version 2.5.5
 
 Exits 1 on any FAIL; WARNINGs do not fail. Version defaults to
 ``settings.app_version``.
@@ -614,7 +614,7 @@ def check_openai_compatible_sdk_evidence(root: Path, version: str) -> CheckResul
 
 
 def check_workspace_core_evidence(root: Path, version: str) -> CheckResult:
-    path = root / "docs" / "evidence" / "workspace-v2.5.4.json"
+    path = root / "docs" / "evidence" / "workspace-v2.5.5.json"
     if not path.is_file():
         return CheckResult(
             "workspace_core_evidence",
@@ -671,12 +671,12 @@ def check_workspace_core_evidence(root: Path, version: str) -> CheckResult:
 
 
 def check_semantic_cache_onnx_evidence(root: Path, version: str) -> CheckResult:
-    path = root / "docs" / "evidence" / "semantic-cache-onnx-v2.5.4.json"
+    path = root / "docs" / "evidence" / "semantic-cache-onnx-v2.5.5.json"
     if not path.is_file():
         return CheckResult(
             "semantic_cache_onnx_evidence",
             STATUS_WARN,
-            "Semantic Cache ONNX evidence missing; run benchmarks/bench_semantic_cache.py --compare --out docs/evidence/semantic-cache-onnx-v2.5.4.json --markdown docs/evidence/semantic-cache-onnx-v2.5.4.md",
+            "Semantic Cache ONNX evidence missing; run benchmarks/bench_semantic_cache.py --compare --out docs/evidence/semantic-cache-onnx-v2.5.5.json --markdown docs/evidence/semantic-cache-onnx-v2.5.5.md",
             {"path": str(path)},
         )
     try:

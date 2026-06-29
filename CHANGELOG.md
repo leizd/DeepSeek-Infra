@@ -2,6 +2,26 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.5.5] - Web Route Split Phase 2
+
+**主题：Web Route Split Phase 2 / Files & Downloads 路由拆分。** 本版本继续处理 #14 的 `server.py` 路由拆分，只推进边界清晰的文件预览与下载路由，不触碰 chat、A2A、MCP、workspace、memory 等高耦合路径。
+
+### 新增
+
+- **Files routes 子包**：新增 `deepseek_infra/web/routes/files.py`，承载 `/api/file-source`、`/api/file-page-image`、`/api/file-page-layout` 与 `/api/file-page-search`。
+- **Downloads routes 子包**：新增 `deepseek_infra/web/routes/downloads.py`，承载 `/api/download`，保留生成文件媒体类型、inline SVG 预览与下载文件名语义。
+- **Phase 2 回归测试**：新增 `tests/test_web_file_routes.py` 与 `tests/test_web_download_routes.py`，覆盖 route registry、auth、`Cache-Control`、`X-Content-Type-Options` 与 `Content-Disposition`。
+
+### 变更
+
+- **`server.py` 装配继续收敛**：`create_app()` 现在通过 `create_status_router(...)`、`create_files_router(...)` 与 `create_downloads_router(...)` 装配低/中风险路由，继续保留 `create_app` / `create_server` / `FastAPIServer` 对外入口。
+- **兼容旧 patch/import 习惯**：files/downloads router 通过 dependency 对象调用 `server.py` 现有函数，原有 `server_module.resolve_generated_file` / `file_page_image` / `file_page_layout` / `file_page_search` patch 语义继续可用。
+- **版本号全仓同步**：README badge、`app_version`、Dockerfile tag、Android `versionName` / `versionCode`、CI preflight 版本、文档「适用版本」与 evidence 报告版本同步到 2.5.5。
+
+### 测试
+
+- 新增并验证 `tests/test_web_file_routes.py`、`tests/test_web_download_routes.py` 与 `tests/test_web_route_split.py`，确保 Files / Downloads 拆分后原 API 路径与安全响应头不回归。
+
 ## [2.5.4] - Web Route Split Phase 1
 
 **主题：Web Route Split Phase 1 / 状态路由拆分。** 本版本开始处理 #14 的 `server.py` 路由拆分，先抽公共 HTTP helper 与只读状态/诊断路由，不触碰 chat、files、RAG 写入、workspace 写入和下载路径。

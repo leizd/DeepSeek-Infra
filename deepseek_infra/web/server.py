@@ -139,6 +139,8 @@ from deepseek_infra.web.http_utils import (
     require_api_auth,
     truthy,
 )
+from deepseek_infra.web.routes.downloads import DownloadsRouteDeps, create_downloads_router
+from deepseek_infra.web.routes.files import FilesRouteDeps, create_files_router
 from deepseek_infra.web.routes.status import StatusRouteDeps, create_status_router
 
 logger = logging.getLogger("deepseek_infra.server")
@@ -237,6 +239,28 @@ def _status_route_deps() -> StatusRouteDeps:
     )
 
 
+def _files_route_deps() -> FilesRouteDeps:
+    return FilesRouteDeps(
+        cached_file_source=lambda file_id, project_id: cached_file_source(file_id, project_id=project_id),
+        file_page_image=lambda file_id, project_id, page, scale: file_page_image(
+            file_id,
+            project_id=project_id,
+            page=page,
+            scale=scale,
+        ),
+        file_page_layout=lambda file_id, project_id, page: file_page_layout(file_id, project_id=project_id, page=page),
+        file_page_search=lambda file_id, project_id, query: file_page_search(file_id, project_id=project_id, query=query),
+        original_file_media_type=lambda cached: original_file_media_type(cached),
+    )
+
+
+def _downloads_route_deps() -> DownloadsRouteDeps:
+    return DownloadsRouteDeps(
+        resolve_generated_file=lambda file_id: resolve_generated_file(file_id),
+        download_descriptor=lambda path: download_descriptor(path),
+    )
+
+
 def create_app() -> FastAPI:
     api = FastAPI(title="DeepSeek Infra", version=APP_VERSION)
 
@@ -268,6 +292,8 @@ def create_app() -> FastAPI:
         return Response(status_code=204, headers=headers)
 
     api.include_router(create_status_router(_status_route_deps()))
+    api.include_router(create_files_router(_files_route_deps()))
+    api.include_router(create_downloads_router(_downloads_route_deps()))
 
     @api.get("/api/mcp/external/tools")
     async def api_external_mcp_tools(request: Request) -> JSONResponse:
@@ -433,78 +459,6 @@ def create_app() -> FastAPI:
         if payload is None:
             raise AppError("Shared content expired", code=ErrorCode.NOT_FOUND, status=404)
         return json_response({"ok": True, "share": payload})
-
-    @api.get("/api/download")
-    async def api_download(request: Request) -> Response:
-        require_api_auth(request)
-        file_id = request.query_params.get("id", "")
-        path = resolve_generated_file(file_id)
-        if path is None:
-            raise AppError("File does not exist or has expired", code=ErrorCode.NOT_FOUND, status=404)
-        data = path.read_bytes()
-        media_type, download_name = download_descriptor(path)
-        disposition = "inline" if path.suffix.lower() == ".svg" and truthy(request.query_params.get("inline", "")) else "attachment"
-        headers = {"Content-Disposition": f'{disposition}; filename="{download_name}"', "Cache-Control": "no-store"}
-        return Response(content=data, media_type=media_type, headers=headers)
-
-    @api.get("/api/file-source")
-    async def api_file_source(request: Request) -> Response:
-        require_api_auth(request)
-        file_id = request.query_params.get("fileId", "")
-        project_id = request.query_params.get("projectId", "") or None
-        cached, path = cached_file_source(file_id, project_id=project_id)
-        data = path.read_bytes()
-        media_type = original_file_media_type(cached)
-        filename = clean_filename(str(cached.get("name") or "document"))
-        disposition = "attachment" if truthy(request.query_params.get("download", "")) else "inline"
-        headers = {
-            "X-Content-Type-Options": "nosniff",
-            "Content-Disposition": content_disposition_header(disposition, filename),
-            "Cache-Control": "no-store",
-        }
-        return Response(content=data, media_type=media_type, headers=headers)
-
-    @api.get("/api/file-page-image")
-    async def api_file_page_image(request: Request) -> Response:
-        require_api_auth(request)
-        file_id = request.query_params.get("fileId", "")
-        project_id = request.query_params.get("projectId", "") or None
-        cached, data, rendered_page, page_count = file_page_image(
-            file_id,
-            project_id=project_id,
-            page=request.query_params.get("page", "1"),
-            scale=request.query_params.get("scale", ""),
-        )
-        filename = clean_filename(str(cached.get("name") or "document"))
-        headers = {
-            "X-File-Page": str(rendered_page),
-            "X-File-Page-Count": str(page_count),
-            "Content-Disposition": content_disposition_header("inline", f"{Path(filename).stem or 'document'}-page-{rendered_page}.png"),
-            "Cache-Control": "no-store",
-        }
-        return Response(content=data, media_type="image/png", headers=headers)
-
-    @api.get("/api/file-page-layout")
-    async def api_file_page_layout(request: Request) -> JSONResponse:
-        require_api_auth(request)
-        return json_response(
-            file_page_layout(
-                request.query_params.get("fileId", ""),
-                project_id=request.query_params.get("projectId", "") or None,
-                page=request.query_params.get("page", "1"),
-            )
-        )
-
-    @api.get("/api/file-page-search")
-    async def api_file_page_search(request: Request) -> JSONResponse:
-        require_api_auth(request)
-        return json_response(
-            file_page_search(
-                request.query_params.get("fileId", ""),
-                project_id=request.query_params.get("projectId", "") or None,
-                query=request.query_params.get("query", ""),
-            )
-        )
 
     @api.post("/api/auth/logout")
     async def api_auth_logout(request: Request) -> JSONResponse:
