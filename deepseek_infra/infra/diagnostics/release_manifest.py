@@ -44,7 +44,7 @@ DEFAULT_EVIDENCE_PATHS = (
     "docs/evidence/edge-router-smoke.json",
     "docs/evidence/continue-dev-mcp.json",
     "docs/evidence/openai-compatible-sdks.json",
-    "docs/evidence/workspace-v2.5.7.json",
+    "docs/evidence/workspace-v2.5.8.json",
     "evals/reports/latest.json",
     "evals/reports/agent-latest.json",
     "evals/reports/baseline-compare-latest.json",

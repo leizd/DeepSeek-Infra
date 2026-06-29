@@ -1,6 +1,6 @@
 # Security Corpus Report
 
-- Version: 2.5.7
+- Version: 2.5.8
 - Generated: 2026-06-28T07:44:38Z
 - Status: PASS
 

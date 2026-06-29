@@ -120,3 +120,17 @@ def test_phase4_mcp_a2a_edge_routes_are_not_declared_inline_in_server() -> None:
         '@api.post("/api/edge/reload")',
     ]:
         assert decorator not in server_source
+
+
+def test_phase5_workspace_routes_are_not_declared_inline_in_server() -> None:
+    server_source = Path(server_module.__file__).read_text(encoding="utf-8")
+
+    assert "create_workspace_router(_workspace_route_deps())" in server_source
+    for decorator in [
+        '@api.post("/api/projects")',
+        '@api.get("/api/workspace/projects")',
+        '@api.post("/api/workspace/projects")',
+        '@api.post("/api/workspace/exports")',
+        '@api.post("/api/project-files")',
+    ]:
+        assert decorator not in server_source

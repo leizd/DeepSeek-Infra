@@ -1,32 +1,32 @@
 # Release Readiness
 
-适用版本：v2.5.7。
+适用版本：v2.5.8。
 
-v2.5.7 的发布主题是 **Web Route Split Phase 4**：继续处理 #14 的 `server.py` 路由拆分，把 MCP（JSON-RPC + external tools）、A2A（agent card / task lifecycle / streaming）与 Edge（reload）路由迁入 `routes/mcp.py`、`routes/a2a.py` 和 `routes/edge.py`。它仍不触碰 chat、workspace、reminders 等高耦合路径，为后续完整 routes 分层继续降风险。
+v2.5.8 的发布主题是 **Web Route Split Phase 5**：继续处理 #14，把 Workspace Core 全部 API（projects、saved items、artifacts、exports 共 22 条路由）迁入 `routes/workspace.py`。仅 chat 路由仍未拆分。
 
 ## 1. Release Preflight — 版本一致性体检
 
 发版前确认版本号在所有该出现的地方都同步，eval 报告是当前版本，且发布脚本仍排除本地缓存 / 日志 / 密钥：
 
 ```bash
-python scripts/preflight_release.py --version 2.5.7
+python scripts/preflight_release.py --version 2.5.8
 ```
 
 检查项：
 
-- README 版本徽章是 `2.5.7`。
-- `CHANGELOG.md` 顶部有 `## [2.5.7]` 条目。
-- `Dockerfile` 示例 tag 是 `deepseek-infra:2.5.7`。
-- `docs/IMPLEMENTATION_STATUS.md` 与 `evals/README.md` 的「适用版本」是 `v2.5.7`。
+- README 版本徽章是 `2.5.8`。
+- `CHANGELOG.md` 顶部有 `## [2.5.8]` 条目。
+- `Dockerfile` 示例 tag 是 `deepseek-infra:2.5.8`。
+- `docs/IMPLEMENTATION_STATUS.md` 与 `evals/README.md` 的「适用版本」是 `v2.5.8`。
 - `docs/EVIDENCE_INDEX.md` 存在且包含 Headless MCP bridge / A2A external peer / A2A third-party peer / Edge Router / Continue.dev MCP / OpenAI-compatible SDK / Workspace Core / eval reports 索引。
-- `evals/reports/latest.json`、`agent-latest.json`、`baseline-compare-latest.json` 与 `security-latest.json` 的 `version` 是 `2.5.7`，且包含统一 metadata。
-- `docs/evidence/headless-mcp-bridge.json` 可解析、版本为 `2.5.7`，且关键 MCP bridge 步骤全为 PASS。
-- `docs/evidence/a2a-external-peer.json` 可解析、版本为 `2.5.7`，且关键 A2A external peer checks 全为 PASS。
-- `docs/evidence/a2a-third-party-peer.json` 缺失时为 WARNING；存在时必须版本为 `2.5.7`、`peerType=third-party`、`status=PASS` 且八类 A2A checks 全 PASS。
-- `docs/evidence/edge-router-smoke.json` 缺失时为 WARNING；存在时必须版本为 `2.5.7`、`status=PASS` 且四类 Edge checks 全 PASS。
-- `docs/evidence/continue-dev-mcp.json` 缺失时为 WARNING；存在时必须版本为 `2.5.7`、`status=PASS` 且六类 MCP checks 全 PASS。
-- `docs/evidence/openai-compatible-sdks.json` 缺失时为 WARNING；存在时必须版本为 `2.5.7`、`status=PASS` 且 LangChain/LiteLLM/LlamaIndex 关键 SDK checks 全 PASS。
-- `docs/evidence/workspace-v2.5.7.json` 必须存在、版本为 `2.5.7`、`status=PASS`，且 Project / Saved Items / Artifact / Export / secret redaction checks 全 PASS。
+- `evals/reports/latest.json`、`agent-latest.json`、`baseline-compare-latest.json` 与 `security-latest.json` 的 `version` 是 `2.5.8`，且包含统一 metadata。
+- `docs/evidence/headless-mcp-bridge.json` 可解析、版本为 `2.5.8`，且关键 MCP bridge 步骤全为 PASS。
+- `docs/evidence/a2a-external-peer.json` 可解析、版本为 `2.5.8`，且关键 A2A external peer checks 全为 PASS。
+- `docs/evidence/a2a-third-party-peer.json` 缺失时为 WARNING；存在时必须版本为 `2.5.8`、`peerType=third-party`、`status=PASS` 且八类 A2A checks 全 PASS。
+- `docs/evidence/edge-router-smoke.json` 缺失时为 WARNING；存在时必须版本为 `2.5.8`、`status=PASS` 且四类 Edge checks 全 PASS。
+- `docs/evidence/continue-dev-mcp.json` 缺失时为 WARNING；存在时必须版本为 `2.5.8`、`status=PASS` 且六类 MCP checks 全 PASS。
+- `docs/evidence/openai-compatible-sdks.json` 缺失时为 WARNING；存在时必须版本为 `2.5.8`、`status=PASS` 且 LangChain/LiteLLM/LlamaIndex 关键 SDK checks 全 PASS。
+- `docs/evidence/workspace-v2.5.8.json` 必须存在、版本为 `2.5.8`、`status=PASS`，且 Project / Saved Items / Artifact / Export / secret redaction checks 全 PASS。
 - `quality_gate_evidence` 确认 coverage 80%、offline eval、Agent Eval、baseline compare、injection strict 与 security corpus 全部 PASS。
 - CHANGELOG / README / COMPATIBILITY / IMPLEMENTATION_STATUS / RELEASE_READINESS / EVIDENCE_INDEX / `docs/integrations/*.md` 不出现 `???`、`锟斤拷`、`\ufffd` 等乱码。
 - `scripts/release.py` 仍排除 `.traces` / `.local-rag` / `.auth-token` / `.env` / `server*.log`。
@@ -56,9 +56,9 @@ python scripts/smoke_release.py --with-server --base-url http://127.0.0.1:8000 -
 每次跑 [`scripts/release.py`](../scripts/release.py) 不再只产出一个 zip，还会在 `dist/` 下产出三件套：
 
 ```text
-dist/deepseek-infra-2.5.7.zip
-dist/deepseek-infra-2.5.7.zip.sha256
-dist/deepseek-infra-2.5.7.manifest.json
+dist/deepseek-infra-2.5.8.zip
+dist/deepseek-infra-2.5.8.zip.sha256
+dist/deepseek-infra-2.5.8.manifest.json
 ```
 
 `manifest.json` 记录发布的关键事实，可独立校验：
@@ -66,7 +66,7 @@ dist/deepseek-infra-2.5.7.manifest.json
 ```json
 {
   "schemaVersion": "release-manifest.v1",
-  "version": "2.5.7",
+  "version": "2.5.8",
   "commit": "abc1234",
   "builtAt": "2026-06-28T00:00:00Z",
   "python": "3.12",
@@ -89,14 +89,14 @@ dist/deepseek-infra-2.5.7.manifest.json
     "docs/evidence/edge-router-smoke.json",
     "docs/evidence/continue-dev-mcp.json",
     "docs/evidence/openai-compatible-sdks.json",
-    "docs/evidence/workspace-v2.5.7.json",
+    "docs/evidence/workspace-v2.5.8.json",
     "evals/reports/latest.json",
     "evals/reports/agent-latest.json",
     "evals/reports/baseline-compare-latest.json",
     "evals/reports/security-latest.json",
     "docs/EVIDENCE_INDEX.md"
   ],
-  "artifact": "deepseek-infra-2.5.7.zip",
+  "artifact": "deepseek-infra-2.5.8.zip",
   "sha256": "...",
   "bytes": 1234567
 }
@@ -113,8 +113,8 @@ dist/deepseek-infra-2.5.7.manifest.json
 ```yaml
 - run: python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
 - run: python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
-- run: python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.7.json
-- run: python scripts/preflight_release.py --version 2.5.7
+- run: python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.8.json
+- run: python scripts/preflight_release.py --version 2.5.8
 - run: python scripts/doctor.py --offline
 - run: python scripts/release.py --clean-workspace --dry-run
 ```
@@ -225,9 +225,9 @@ python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-r
 python scripts/smoke_openai_compatible_sdks.py --base-url http://127.0.0.1:8000/v1 --model deepseek-v4-pro --out docs/evidence/openai-compatible-sdks.json --markdown docs/evidence/openai-compatible-sdks.md
 ```
 
-## 11. Workspace Core Evidence（v2.5.7）
+## 11. Workspace Core Evidence（v2.5.8）
 
-`preflight_release.py` 自 v2.5.0 起增加 `workspace_core_evidence` 硬检查。它读取 `docs/evidence/workspace-v2.5.7.json`，确认 Workspace Core 已经用离线 smoke 跑通：
+`preflight_release.py` 自 v2.5.0 起增加 `workspace_core_evidence` 硬检查。它读取 `docs/evidence/workspace-v2.5.8.json`，确认 Workspace Core 已经用离线 smoke 跑通：
 
 - `projectCreate`
 - `savedItemCreate`
@@ -236,10 +236,10 @@ python scripts/smoke_openai_compatible_sdks.py --base-url http://127.0.0.1:8000/
 - `projectExportZip`
 - `secretRedaction`
 
-本项是 v2.5.7 的最低交付标准，缺失或失败会让 preflight 返回 `FAIL`。刷新命令：
+本项是 v2.5.8 的最低交付标准，缺失或失败会让 preflight 返回 `FAIL`。刷新命令：
 
 ```bash
-python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.7.json
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.8.json
 ```
 
 ## 12. Evidence Index & Metadata（v2.3.4）
@@ -258,7 +258,7 @@ python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.
 python scripts/smoke_a2a_external_peer.py --peer-url http://<third-party-host>:<port> --peer-type third-party --out docs/evidence/a2a-third-party-peer.json --markdown docs/evidence/a2a-third-party-peer.md
 python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
 python scripts/smoke_openai_compatible_sdks.py --base-url http://127.0.0.1:8000/v1 --model deepseek-v4-pro --out docs/evidence/openai-compatible-sdks.json --markdown docs/evidence/openai-compatible-sdks.md
-python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.7.json
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.8.json
 python evals/runners/run_offline_eval_suite.py --include-agent --strict --out evals/reports/latest.json --markdown evals/reports/latest.md
 python evals/runners/run_security_corpus.py --strict --out evals/reports/security-latest.json --markdown evals/reports/security-latest.md
 python evals/runners/run_agent_eval.py --report-dir evals/reports --strict
@@ -279,7 +279,7 @@ python evals/runners/compare_eval_baseline.py --strict --baseline evals/baseline
 
 识别模式：连续 `???`、`锟斤拷`、Unicode replacement character `\ufffd`。发现即 FAIL，防止 v2.3.3 的 CHANGELOG 乱码问题再次出现。
 
-## 14. Quality Gate Evidence（v2.5.7）
+## 14. Quality Gate Evidence（v2.5.8）
 
 `preflight_release.py` 自 v2.4.2 起增加 `quality_gate_evidence` 硬检查。它聚合以下证据：
 
@@ -289,14 +289,14 @@ python evals/runners/compare_eval_baseline.py --strict --baseline evals/baseline
 - baseline compare：`evals/reports/baseline-compare-latest.json` `status=PASS`。
 - injection strict：`latest.json` 的 `injection.status=PASS` 且 `gateMode=hard`。
 - security corpus：`evals/reports/security-latest.json` `status=PASS`。
-- Workspace Core：`docs/evidence/workspace-v2.5.7.json` `status=PASS`。
+- Workspace Core：`docs/evidence/workspace-v2.5.8.json` `status=PASS`。
 
 刷新命令：
 
 ```bash
 python scripts/update_eval_report.py
-python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.7.json
-python scripts/preflight_release.py --version 2.5.7
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.8.json
+python scripts/preflight_release.py --version 2.5.8
 ```
 
 ## 15. GUI Interop Evidence Checklist（v2.3.1）
@@ -327,10 +327,10 @@ python scripts/smoke_a2a_external_peer.py --peer-url http://<third-party-host>:<
 python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
 
 # 6. 刷新 Workspace Core evidence（离线）
-python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.7.json
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.8.json
 
 # 7. 版本一致性与质量证据体检
-python scripts/preflight_release.py --version 2.5.7
+python scripts/preflight_release.py --version 2.5.8
 
 # 8. 运行时体检
 python scripts/doctor.py --offline
@@ -339,7 +339,7 @@ python scripts/doctor.py --offline
 python scripts/smoke_release.py --offline
 
 # 10. 打包并生成 manifest + checksum + qualityGates
-python scripts/release.py --clean-workspace --version 2.5.7
+python scripts/release.py --clean-workspace --version 2.5.8
 ```
 
 也可以直接用 `python scripts/smoke_release.py --offline` 刷新离线质量证据；本地模型和第三方生态 evidence 需要在具备对应环境时单独补齐。

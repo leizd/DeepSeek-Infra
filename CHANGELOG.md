@@ -2,6 +2,20 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.5.8] - Web Route Split Phase 5
+
+**主题：Web Route Split Phase 5 / Workspace 路由拆分。** 提取 Workspace Core 全部 API（projects、saved items、artifacts、exports 共 22 条路由）到 `routes/workspace.py`。
+
+### 新增
+
+- **Workspace routes**：`deepseek_infra/web/routes/workspace.py`，含 legacy `POST /api/projects`、`POST /api/project-files` 与全部 `/api/workspace/*` REST 路由。
+- **Phase 5 测试**：`tests/test_web_workspace_routes.py`（9 条）。
+
+### 变更
+
+- **server.py 移除 project_action**：逻辑迁移到 workspace.py。
+- **server.py 精简 imports**：移除不再直接引用的 workspace 模块。
+
 ## [2.5.7] - Web Route Split Phase 4
 
 **主题：Web Route Split Phase 4 / MCP & A2A & Edge 路由拆分。** 本版本提取 MCP（JSON-RPC + external tools）、A2A（agent card / task lifecycle / streaming）与 Edge（reload）路由。

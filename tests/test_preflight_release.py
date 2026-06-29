@@ -45,8 +45,8 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     _write_edge_router_evidence(evidence_dir / "edge-router-smoke.json", version)
     _write_continue_dev_evidence(evidence_dir / "continue-dev-mcp.json", version)
     _write_openai_compatible_sdk_evidence(evidence_dir / "openai-compatible-sdks.json", version)
-    _write_workspace_evidence(evidence_dir / "workspace-v2.5.7.json", version)
-    _write_semantic_cache_onnx_evidence(evidence_dir / "semantic-cache-onnx-v2.5.7.json", version)
+    _write_workspace_evidence(evidence_dir / "workspace-v2.5.8.json", version)
+    _write_semantic_cache_onnx_evidence(evidence_dir / "semantic-cache-onnx-v2.5.8.json", version)
     (root / "evals").mkdir()
     (root / "evals" / "README.md").write_text(f"适用版本：v{version}。\n", encoding="utf-8")
     reports = root / "evals" / "reports"
@@ -679,26 +679,26 @@ def test_preflight_passes_on_openai_compatible_sdk_evidence_complete(tmp_path: P
 
 def test_preflight_fails_on_missing_workspace_core_evidence(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.5.7")
-    (root / "docs" / "evidence" / "workspace-v2.5.7.json").unlink()
-    result = next(r for r in preflight.run_preflight(root, "2.5.7") if r.name == "workspace_core_evidence")
+    root = _skeleton(tmp_path, "2.5.8")
+    (root / "docs" / "evidence" / "workspace-v2.5.8.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.5.8") if r.name == "workspace_core_evidence")
     assert result.status == "fail"
     assert "smoke_workspace.py" in result.detail
 
 
 def test_preflight_fails_on_workspace_core_missing_required_check(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.5.7")
-    _write_workspace_evidence(root / "docs" / "evidence" / "workspace-v2.5.7.json", "2.5.7", omit_check="projectExportZip")
-    result = next(r for r in preflight.run_preflight(root, "2.5.7") if r.name == "workspace_core_evidence")
+    root = _skeleton(tmp_path, "2.5.8")
+    _write_workspace_evidence(root / "docs" / "evidence" / "workspace-v2.5.8.json", "2.5.8", omit_check="projectExportZip")
+    result = next(r for r in preflight.run_preflight(root, "2.5.8") if r.name == "workspace_core_evidence")
     assert result.status == "fail"
     assert "projectExportZip" in result.detail
 
 
 def test_preflight_passes_on_workspace_core_evidence_complete(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.5.7")
-    result = next(r for r in preflight.run_preflight(root, "2.5.7") if r.name == "workspace_core_evidence")
+    root = _skeleton(tmp_path, "2.5.8")
+    result = next(r for r in preflight.run_preflight(root, "2.5.8") if r.name == "workspace_core_evidence")
     assert result.status == "pass"
 
 
@@ -720,33 +720,33 @@ def _write_semantic_cache_onnx_evidence(path: Path, version: str, *, status: str
 
 def test_preflight_warns_on_missing_semantic_cache_onnx_evidence(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.5.7")
-    (root / "docs" / "evidence" / "semantic-cache-onnx-v2.5.7.json").unlink()
-    result = next(r for r in preflight.run_preflight(root, "2.5.7") if r.name == "semantic_cache_onnx_evidence")
+    root = _skeleton(tmp_path, "2.5.8")
+    (root / "docs" / "evidence" / "semantic-cache-onnx-v2.5.8.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.5.8") if r.name == "semantic_cache_onnx_evidence")
     assert result.status == "warn"
-    assert preflight.main(["--root", str(root), "--version", "2.5.7"]) == 0
+    assert preflight.main(["--root", str(root), "--version", "2.5.8"]) == 0
 
 
 def test_preflight_fails_on_semantic_cache_onnx_non_pass_status(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.5.7")
-    _write_semantic_cache_onnx_evidence(root / "docs" / "evidence" / "semantic-cache-onnx-v2.5.7.json", "2.5.7", status="FAIL")
-    result = next(r for r in preflight.run_preflight(root, "2.5.7") if r.name == "semantic_cache_onnx_evidence")
+    root = _skeleton(tmp_path, "2.5.8")
+    _write_semantic_cache_onnx_evidence(root / "docs" / "evidence" / "semantic-cache-onnx-v2.5.8.json", "2.5.8", status="FAIL")
+    result = next(r for r in preflight.run_preflight(root, "2.5.8") if r.name == "semantic_cache_onnx_evidence")
     assert result.status == "fail"
     assert "expected PASS" in result.detail
 
 
 def test_preflight_fails_on_semantic_cache_onnx_missing_metadata(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.5.7")
-    _write_semantic_cache_onnx_evidence(root / "docs" / "evidence" / "semantic-cache-onnx-v2.5.7.json", "2.5.7", omit_metadata="environment")
-    result = next(r for r in preflight.run_preflight(root, "2.5.7") if r.name == "evidence_metadata:semantic_cache_onnx")
+    root = _skeleton(tmp_path, "2.5.8")
+    _write_semantic_cache_onnx_evidence(root / "docs" / "evidence" / "semantic-cache-onnx-v2.5.8.json", "2.5.8", omit_metadata="environment")
+    result = next(r for r in preflight.run_preflight(root, "2.5.8") if r.name == "evidence_metadata:semantic_cache_onnx")
     assert result.status == "fail"
     assert "environment" in result.detail
 
 
 def test_preflight_passes_on_semantic_cache_onnx_evidence_complete(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.5.7")
-    result = next(r for r in preflight.run_preflight(root, "2.5.7") if r.name == "semantic_cache_onnx_evidence")
+    root = _skeleton(tmp_path, "2.5.8")
+    result = next(r for r in preflight.run_preflight(root, "2.5.8") if r.name == "semantic_cache_onnx_evidence")
     assert result.status == "pass"

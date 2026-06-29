@@ -1,6 +1,6 @@
 # Agent Eval Replay
 
-适用版本：v2.5.7。
+适用版本：v2.5.8。
 
 Agent Eval 是离线回放硬门禁：真实多 Agent 运行可以在线生成 prediction，但 CI 只读取已经录制好的 JSONL，与 `evals/golden/agent_tasks.jsonl` 按 `id` join 后评分。v2.4.0 起 `run_agent_eval.py --strict` 进入 CI，Tool Call Accuracy、Agent Success Rate、Prompt Regression 和 baseline warning 都会阻断回归。
 
