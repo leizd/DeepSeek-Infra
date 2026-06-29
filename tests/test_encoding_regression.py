@@ -2499,8 +2499,8 @@ class EncodingRegressionTests(unittest.TestCase):
         mcp_permissions = Path("deepseek_infra/infra/mcp/permissions.py").read_text(encoding="utf-8")
         mcp_client = Path("deepseek_infra/infra/mcp/client.py").read_text(encoding="utf-8")
         config = Path("deepseek_infra/core/config.py").read_text(encoding="utf-8")
-        server = Path("deepseek_infra/web/server.py").read_text(encoding="utf-8")
         status_routes = Path("deepseek_infra/web/routes/status.py").read_text(encoding="utf-8")
+        mcp_routes = Path("deepseek_infra/web/routes/mcp.py").read_text(encoding="utf-8")
         test_mcp = Path("tests/test_mcp.py").read_text(encoding="utf-8")
         readme = Path("README.md").read_text(encoding="utf-8")
         changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
@@ -2531,7 +2531,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("class MCPSettings", config)
         self.assertIn("MCP_ENABLED = settings.mcp.enabled", config)
         self.assertIn('app_version: str = "2.5.6"', config)
-        self.assertIn('@api.post("/mcp")', server)
+        self.assertIn('@router.post("/mcp")', mcp_routes)
         self.assertIn('"/api/mcp"', status_routes)
         self.assertIn("def test_client_initialize_list_and_call_roundtrip", test_mcp)
         # Pure backend change: no frontend, Service Worker cache stays put.
@@ -2546,7 +2546,7 @@ class EncodingRegressionTests(unittest.TestCase):
     def test_v215_a2a_agent_mesh_is_present(self) -> None:
         a2a = Path("deepseek_infra/infra/agent_runtime/a2a.py").read_text(encoding="utf-8")
         config = Path("deepseek_infra/core/config.py").read_text(encoding="utf-8")
-        server = Path("deepseek_infra/web/server.py").read_text(encoding="utf-8")
+        a2a_routes = Path("deepseek_infra/web/routes/a2a.py").read_text(encoding="utf-8")
         conftest = Path("tests/conftest.py").read_text(encoding="utf-8")
         test_a2a = Path("tests/test_a2a.py").read_text(encoding="utf-8")
         gitignore = Path(".gitignore").read_text(encoding="utf-8")
@@ -2574,9 +2574,9 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("class A2ASettings", config)
         self.assertIn("A2A_ENABLED = settings.a2a.enabled", config)
         self.assertIn('app_version: str = "2.5.6"', config)
-        self.assertIn('"/.well-known/agent-card.json"', server)
-        self.assertIn('"/a2a/agents"', server)
-        self.assertIn('@api.post("/a2a")', server)
+        self.assertIn('"/.well-known/agent-card.json"', a2a_routes)
+        self.assertIn('"/a2a/agents"', a2a_routes)
+        self.assertIn('@router.post("/a2a")', a2a_routes)
         self.assertIn("A2A_TASKS_DIR", conftest)
         self.assertIn("def test_message_send_executes_task_to_completion", test_a2a)
         self.assertIn(".a2a/", gitignore)
@@ -2772,7 +2772,7 @@ class EncodingRegressionTests(unittest.TestCase):
         executor = Path("deepseek_infra/infra/mcp/executor.py").read_text(encoding="utf-8")
         tools = Path("deepseek_infra/infra/tool_runtime/tools.py").read_text(encoding="utf-8")
         registry = Path("deepseek_infra/infra/mcp/registry.py").read_text(encoding="utf-8")
-        server = Path("deepseek_infra/web/server.py").read_text(encoding="utf-8")
+        mcp_routes = Path("deepseek_infra/web/routes/mcp.py").read_text(encoding="utf-8")
         test_mcp = Path("tests/test_mcp.py").read_text(encoding="utf-8")
 
         self.assertLess(
@@ -2814,7 +2814,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("agent_tool_definitions", tools)
         self.assertIn('name.startswith("mcp__")', tools)
         self.assertIn("external_mcp_registry.list_profiles()", registry)
-        self.assertIn('/api/mcp/external/tools', server)
+        self.assertIn('/api/mcp/external/tools', mcp_routes)
 
         for test_name in (
             "test_external_mcp_tool_profile_is_generated_from_mock_server",

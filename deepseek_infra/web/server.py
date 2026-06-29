@@ -139,8 +139,11 @@ from deepseek_infra.web.http_utils import (
     require_api_auth,
     truthy,
 )
+from deepseek_infra.web.routes.a2a import A2ARouteDeps, create_a2a_router
 from deepseek_infra.web.routes.downloads import DownloadsRouteDeps, create_downloads_router
+from deepseek_infra.web.routes.edge import EdgeRouteDeps, create_edge_router
 from deepseek_infra.web.routes.files import FilesRouteDeps, create_files_router
+from deepseek_infra.web.routes.mcp import McpRouteDeps, create_mcp_router
 from deepseek_infra.web.routes.memory import MemoryRouteDeps, create_memory_router
 from deepseek_infra.web.routes.rag import RagRouteDeps, create_rag_router
 from deepseek_infra.web.routes.status import StatusRouteDeps, create_status_router
@@ -284,6 +287,55 @@ def _memory_route_deps() -> MemoryRouteDeps:
     )
 
 
+def _mcp_route_deps() -> McpRouteDeps:
+    return McpRouteDeps(
+        mcp_enabled=lambda: settings.mcp.enabled,
+        handle_mcp_message=lambda body: handle_mcp_message(body),
+        list_external_mcp_tools=lambda: _list_external_mcp_tools(),
+    )
+
+
+def _list_external_mcp_tools() -> dict[str, Any]:
+    try:
+        from deepseek_infra.infra.mcp.bridge import external_mcp_registry
+    except Exception:
+        return {"ok": True, "servers": [], "tools": []}
+    external_mcp_registry.refresh()
+    return {
+        "ok": True,
+        "servers": external_mcp_registry.server_status(),
+        "tools": [
+            {
+                "server": p.server,
+                "tool": p.tool,
+                "bridgedName": p.bridged_name,
+                "risk": p.risk,
+                "network": p.network,
+                "filesystem": p.filesystem,
+                "requiresApproval": p.requires_approval,
+            }
+            for p in external_mcp_registry.list_profiles()
+        ],
+    }
+
+
+def _a2a_route_deps() -> A2ARouteDeps:
+    return A2ARouteDeps(
+        a2a_enabled=lambda: settings.a2a.enabled,
+        agent_card=lambda agent_id, **kwargs: agent_card(agent_id, **kwargs),
+        agent_cards=lambda **kwargs: agent_cards(**kwargs),
+        handle_a2a_message=lambda body, **kwargs: handle_a2a_message(body, **kwargs),
+        is_stream_request=lambda body: is_stream_request(body),
+        stream_message_events=lambda body, **kwargs: stream_message_events(body, **kwargs),
+    )
+
+
+def _edge_route_deps() -> EdgeRouteDeps:
+    return EdgeRouteDeps(
+        edge_unload=lambda: edge_unload(),
+    )
+
+
 def create_app() -> FastAPI:
     api = FastAPI(title="DeepSeek Infra", version=APP_VERSION)
 
@@ -319,82 +371,9 @@ def create_app() -> FastAPI:
     api.include_router(create_downloads_router(_downloads_route_deps()))
     api.include_router(create_rag_router(_rag_route_deps()))
     api.include_router(create_memory_router(_memory_route_deps()))
-
-    @api.get("/api/mcp/external/tools")
-    async def api_external_mcp_tools(request: Request) -> JSONResponse:
-        """List cached external MCP tools (triggers a refresh)."""
-        require_api_auth(request)
-        try:
-            from deepseek_infra.infra.mcp.bridge import external_mcp_registry
-        except Exception:
-            return json_response({"ok": True, "servers": [], "tools": []})
-        external_mcp_registry.refresh()
-        return json_response({
-            "ok": True,
-            "servers": external_mcp_registry.server_status(),
-            "tools": [
-                {
-                    "server": p.server,
-                    "tool": p.tool,
-                    "bridgedName": p.bridged_name,
-                    "risk": p.risk,
-                    "network": p.network,
-                    "filesystem": p.filesystem,
-                    "requiresApproval": p.requires_approval,
-                }
-                for p in external_mcp_registry.list_profiles()
-            ],
-        })
-
-    @api.post("/mcp")
-    async def mcp_endpoint(request: Request) -> Response:
-        """MCP Tool Hub: one JSON-RPC message per POST (Streamable HTTP, JSON mode)."""
-        require_api_auth(request)
-        if not settings.mcp.enabled:
-            raise AppError("MCP server is disabled", code=ErrorCode.FORBIDDEN, status=403)
-        body = await read_json_body(request)
-        response = handle_mcp_message(body)
-        if response is None:  # notification: no body, per Streamable HTTP
-            return Response(status_code=202)
-        return json_response(response)
-
-    @api.get("/.well-known/agent-card.json")
-    async def well_known_agent_card(request: Request) -> JSONResponse:
-        """A2A discovery: the orchestrator Agent Card (metadata only, unauthenticated)."""
-        if not settings.a2a.enabled:
-            raise AppError("A2A mesh is disabled", code=ErrorCode.FORBIDDEN, status=403)
-        return json_response(agent_card("orchestrator", base_url=request_base_url(request)))
-
-    @api.get("/a2a/agents")
-    async def a2a_agents(request: Request) -> JSONResponse:
-        require_api_auth(request)
-        if not settings.a2a.enabled:
-            raise AppError("A2A mesh is disabled", code=ErrorCode.FORBIDDEN, status=403)
-        return json_response({"ok": True, "agents": agent_cards(base_url=request_base_url(request))})
-
-    async def _a2a_rpc(request: Request, agent_id: str) -> Response:
-        require_api_auth(request)
-        if not settings.a2a.enabled:
-            raise AppError("A2A mesh is disabled", code=ErrorCode.FORBIDDEN, status=403)
-        body = await read_json_body(request)
-        if is_stream_request(body):
-            return StreamingResponse(
-                stream_message_events(body, agent_id=agent_id),
-                media_type="text/event-stream",
-                headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
-            )
-        response = handle_a2a_message(body, agent_id=agent_id, base_url=request_base_url(request))
-        return json_response(response if response is not None else {})
-
-    @api.post("/a2a")
-    async def a2a_endpoint(request: Request) -> Response:
-        """A2A task lifecycle against the default orchestrator agent."""
-        return await _a2a_rpc(request, "orchestrator")
-
-    @api.post("/a2a/agents/{agent_id}")
-    async def a2a_agent_endpoint(request: Request, agent_id: str) -> Response:
-        """A2A task lifecycle against one named local agent."""
-        return await _a2a_rpc(request, agent_id)
+    api.include_router(create_mcp_router(_mcp_route_deps()))
+    api.include_router(create_a2a_router(_a2a_route_deps()))
+    api.include_router(create_edge_router(_edge_route_deps()))
 
     def require_trace_api_auth(request: Request) -> None:
         require_api_auth(request)
@@ -431,15 +410,6 @@ def create_app() -> FastAPI:
         if action == "status":
             return json_response({"ok": True, "semanticCache": semantic_cache_status()})
         raise AppError("Unsupported semantic cache action", code=ErrorCode.INVALID_PAYLOAD)
-
-    @api.post("/api/edge/reload")
-    async def api_edge_reload(request: Request) -> JSONResponse:
-        require_api_auth(request)
-        payload = await read_json_body(request)
-        action = str(payload.get("action") or "unload").strip().lower()
-        if action not in {"unload", "reload"}:
-            raise AppError("Unsupported edge action", code=ErrorCode.INVALID_PAYLOAD)
-        return json_response(edge_unload())
 
     @api.get("/api/share-target")
     async def api_share_target(request: Request) -> JSONResponse:

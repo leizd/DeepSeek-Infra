@@ -102,3 +102,21 @@ def test_phase3_rag_and_memory_routes_are_not_declared_inline_in_server() -> Non
         '@api.post("/api/memory")',
     ]:
         assert decorator not in server_source
+
+
+def test_phase4_mcp_a2a_edge_routes_are_not_declared_inline_in_server() -> None:
+    server_source = Path(server_module.__file__).read_text(encoding="utf-8")
+
+    assert "create_mcp_router(_mcp_route_deps())" in server_source
+    assert "create_a2a_router(_a2a_route_deps())" in server_source
+    assert "create_edge_router(_edge_route_deps())" in server_source
+    for decorator in [
+        '@api.post("/mcp")',
+        '@api.get("/api/mcp/external/tools")',
+        '@api.get("/.well-known/agent-card.json")',
+        '@api.get("/a2a/agents")',
+        '@api.post("/a2a")',
+        '@api.post("/a2a/agents/{agent_id}")',
+        '@api.post("/api/edge/reload")',
+    ]:
+        assert decorator not in server_source
