@@ -141,6 +141,8 @@ from deepseek_infra.web.http_utils import (
 )
 from deepseek_infra.web.routes.downloads import DownloadsRouteDeps, create_downloads_router
 from deepseek_infra.web.routes.files import FilesRouteDeps, create_files_router
+from deepseek_infra.web.routes.memory import MemoryRouteDeps, create_memory_router
+from deepseek_infra.web.routes.rag import RagRouteDeps, create_rag_router
 from deepseek_infra.web.routes.status import StatusRouteDeps, create_status_router
 
 logger = logging.getLogger("deepseek_infra.server")
@@ -261,6 +263,27 @@ def _downloads_route_deps() -> DownloadsRouteDeps:
     )
 
 
+def _rag_route_deps() -> RagRouteDeps:
+    return RagRouteDeps(
+        rebuild_local_rag_index=lambda: rebuild_local_rag_index(),
+        verify_local_rag_citation=lambda item_id, snippet: verify_local_rag_citation(item_id, snippet),
+        evaluate_local_rag_recall=lambda cases, k: evaluate_local_rag_recall(cases, k=k),
+    )
+
+
+def _memory_route_deps() -> MemoryRouteDeps:
+    return MemoryRouteDeps(
+        load_memories=lambda: load_memories(),
+        clear_memories=lambda: clear_memories(),
+        normalize_memory_category=lambda value, content: normalize_memory_category(value, content),
+        normalize_memory_scope=lambda value: normalize_memory_scope(value),
+        detect_memory_conflicts=lambda content, category, scope: detect_memory_conflicts(content, category=category, scope=scope),
+        upsert_memory=lambda content, **kwargs: upsert_memory(content, **kwargs),
+        delete_memories_by_query=lambda query, scopes: delete_memories_by_query(query, scopes=scopes),
+        delete_memory_by_id=lambda memory_id: delete_memory_by_id(memory_id),
+    )
+
+
 def create_app() -> FastAPI:
     api = FastAPI(title="DeepSeek Infra", version=APP_VERSION)
 
@@ -294,6 +317,8 @@ def create_app() -> FastAPI:
     api.include_router(create_status_router(_status_route_deps()))
     api.include_router(create_files_router(_files_route_deps()))
     api.include_router(create_downloads_router(_downloads_route_deps()))
+    api.include_router(create_rag_router(_rag_route_deps()))
+    api.include_router(create_memory_router(_memory_route_deps()))
 
     @api.get("/api/mcp/external/tools")
     async def api_external_mcp_tools(request: Request) -> JSONResponse:
@@ -371,36 +396,6 @@ def create_app() -> FastAPI:
         """A2A task lifecycle against one named local agent."""
         return await _a2a_rpc(request, agent_id)
 
-    @api.post("/api/rag/reindex")
-    async def api_rag_reindex(request: Request) -> JSONResponse:
-        require_api_auth(request)
-        payload = await read_json_body(request)
-        action = str(payload.get("action") or "reindex").strip().lower()
-        if action not in {"reindex", "rebuild"}:
-            raise AppError("Unsupported RAG action", code=ErrorCode.INVALID_PAYLOAD)
-        return json_response(rebuild_local_rag_index())
-
-    @api.post("/api/rag/verify-citation")
-    async def api_rag_verify_citation(request: Request) -> JSONResponse:
-        require_api_auth(request)
-        payload = await read_json_body(request)
-        item_id = str(payload.get("itemId") or "").strip()
-        snippet = str(payload.get("snippet") or "")
-        if not item_id:
-            raise AppError("itemId is required", code=ErrorCode.INVALID_PAYLOAD)
-        return json_response({"ok": True, "citation": verify_local_rag_citation(item_id, snippet)})
-
-    @api.post("/api/rag/eval")
-    async def api_rag_eval(request: Request) -> JSONResponse:
-        require_api_auth(request)
-        payload = await read_json_body(request)
-        cases = payload.get("cases")
-        if not isinstance(cases, list):
-            raise AppError("cases must be a list", code=ErrorCode.INVALID_PAYLOAD)
-        k = payload.get("k")
-        k_value = int(k) if isinstance(k, int) and k > 0 else 5
-        return json_response({"ok": True, "eval": evaluate_local_rag_recall(cases, k=k_value)})
-
     def require_trace_api_auth(request: Request) -> None:
         require_api_auth(request)
 
@@ -445,11 +440,6 @@ def create_app() -> FastAPI:
         if action not in {"unload", "reload"}:
             raise AppError("Unsupported edge action", code=ErrorCode.INVALID_PAYLOAD)
         return json_response(edge_unload())
-
-    @api.get("/api/memory")
-    async def api_memory_list(request: Request) -> JSONResponse:
-        require_api_auth(request)
-        return json_response({"memories": load_memories()})
 
     @api.get("/api/share-target")
     async def api_share_target(request: Request) -> JSONResponse:
@@ -579,13 +569,6 @@ def create_app() -> FastAPI:
     async def api_title(request: Request) -> JSONResponse:
         require_api_auth(request)
         return json_response(generate_title_payload(await read_json_body(request)))
-
-    @api.post("/api/memory")
-    async def api_memory(request: Request) -> JSONResponse:
-        require_api_auth(request)
-        result = memory_action(await read_json_body(request))
-        status = int(result.pop("_status", 200))
-        return json_response(result, status=status)
 
     @api.post("/api/projects")
     async def api_projects(request: Request) -> JSONResponse:
@@ -1205,41 +1188,6 @@ def agent_run_event_stream(run_id: str, after: int) -> Generator[bytes, None, No
             agent_run_registry.wait_for_event(run_id)
     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
         return
-
-
-def memory_action(payload: dict[str, Any]) -> dict[str, Any]:
-    action = str(payload.get("action") or "list").strip().lower()
-    if action == "list":
-        return {"memories": load_memories()}
-    if action == "clear":
-        return {"ok": True, "deleted": clear_memories()}
-    if action == "add":
-        content = str(payload.get("content") or "").strip()
-        category = normalize_memory_category(payload.get("category"), content)
-        scope = normalize_memory_scope(payload.get("scope") or "global")
-        pinned = bool(payload.get("pinned"))
-        replace_ids = payload.get("replaceIds")
-        replace_id_list = [str(item) for item in replace_ids] if isinstance(replace_ids, list) else []
-        conflicts = detect_memory_conflicts(content, category=category, scope=scope)
-        unresolved_conflicts = [item for item in conflicts if str(item.get("id") or "") not in set(replace_id_list)]
-        if unresolved_conflicts:
-            return {
-                "error": "Memory conflicts with an existing item",
-                "code": ErrorCode.MEMORY_CONFLICT.value,
-                "conflicts": unresolved_conflicts,
-                "_status": 409,
-            }
-        item = upsert_memory(content, category=category, scope=scope, source="manual", pinned=pinned, replace_ids=replace_id_list)
-        return {"ok": True, "memory": item}
-    if action == "delete":
-        query = str(payload.get("query") or "").strip()
-        scope = normalize_memory_scope(payload.get("scope") or "global")
-        scopes = ["global", scope] if scope != "global" else ["global"]
-        return {"ok": True, "deleted": delete_memories_by_query(query, scopes=scopes)}
-    if action == "deletebyid":
-        memory_id = str(payload.get("id") or "").strip()
-        return {"ok": True, "deleted": delete_memory_by_id(memory_id)}
-    raise AppError("Unsupported memory action", code=ErrorCode.INVALID_PAYLOAD)
 
 
 def project_action(payload: dict[str, Any]) -> dict[str, Any]:

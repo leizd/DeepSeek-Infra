@@ -87,3 +87,18 @@ def test_phase2_file_and_download_routes_are_not_declared_inline_in_server() -> 
         '@api.get("/api/file-page-search")',
     ]:
         assert decorator not in server_source
+
+
+def test_phase3_rag_and_memory_routes_are_not_declared_inline_in_server() -> None:
+    server_source = Path(server_module.__file__).read_text(encoding="utf-8")
+
+    assert "create_rag_router(_rag_route_deps())" in server_source
+    assert "create_memory_router(_memory_route_deps())" in server_source
+    for decorator in [
+        '@api.post("/api/rag/reindex")',
+        '@api.post("/api/rag/verify-citation")',
+        '@api.post("/api/rag/eval")',
+        '@api.get("/api/memory")',
+        '@api.post("/api/memory")',
+    ]:
+        assert decorator not in server_source
