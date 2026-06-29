@@ -32,6 +32,6 @@ def test_evidence_index_lists_gui_and_third_party_entries() -> None:
 
 def test_evidence_index_lists_workspace_core() -> None:
     index = Path("docs/EVIDENCE_INDEX.md").read_text(encoding="utf-8")
-    assert "docs/evidence/workspace-v2.5.5.json" in index
+    assert "docs/evidence/workspace-v2.5.6.json" in index
     assert "scripts/smoke_workspace.py" in index
     assert "Workspace Core" in index

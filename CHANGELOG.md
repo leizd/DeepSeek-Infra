@@ -2,6 +2,25 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.5.6] - Web Route Split Phase 3
+
+**主题：Web Route Split Phase 3 / RAG & Memory 路由拆分。** 本版本继续处理 #14 的 `server.py` 路由拆分，提取 RAG reindex/verify-citation/eval 与 Memory list/upsert/delete/conflicts 路由，继续遵循 dependency 传参模式，不触碰 chat、A2A、MCP、workspace、reminders 等高耦合路径。
+
+### 新增
+
+- **RAG routes 子包**：新增 `deepseek_infra/web/routes/rag.py`，承载 `POST /api/rag/reindex`、`POST /api/rag/verify-citation` 和 `POST /api/rag/eval`，保持 `GET /api/rag/status` 留在 `routes/status.py`。
+- **Memory routes 子包**：新增 `deepseek_infra/web/routes/memory.py`，承载 `GET /api/memory`、`POST /api/memory`（action-based upsert/delete/list/clear）、`DELETE /api/memory/{id}` 和 `POST /api/memory/conflicts`。
+- **Phase 3 回归测试**：新增 `tests/test_web_rag_routes.py`（11 条测试）与 `tests/test_web_memory_routes.py`（15 条测试），覆盖 route registry、auth、有效/无效载荷与 `server_module` patch 兼容性。
+
+### 变更
+
+- **`server.py` 移除 `memory_action`**：原 `POST /api/memory` 的 action dispatch 逻辑迁移到 `memory.py` 路由处理器内，`server.py` 不再持有该函数。
+- **编码回归测试重定向**：`test_encoding_regression.py` 中 RAG 路由断言从 `server.py` 切换到 `routes/rag.py`。
+
+### 测试
+
+- 新增并验证 `tests/test_web_rag_routes.py`、`tests/test_web_memory_routes.py` 与 `tests/test_web_route_split.py` Phase 3 检查，确保 RAG / Memory 拆分后原 API 路径、auth、AppError code 与旧 `server_module` patch 习惯不回归。
+
 ## [2.5.5] - Web Route Split Phase 2
 
 **主题：Web Route Split Phase 2 / Files & Downloads 路由拆分。** 本版本继续处理 #14 的 `server.py` 路由拆分，只推进边界清晰的文件预览与下载路由，不触碰 chat、A2A、MCP、workspace、memory 等高耦合路径。

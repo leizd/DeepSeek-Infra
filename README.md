@@ -1,6 +1,6 @@
 # DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-2.5.5-blue)
+![版本](https://img.shields.io/badge/version-2.5.6-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-80%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
@@ -198,7 +198,7 @@ curl http://127.0.0.1:8000/v1/models -H "Authorization: Bearer <本地访问 tok
 
 与之配套的**质量评测**在 [evals/](evals/)（全部离线可跑）：`python evals/runners/run_offline_eval_suite.py --include-agent --strict` 会统一留下 [latest eval report](evals/reports/latest.md)，当前 baseline 为 RAG Recall@5 1.000 / Citation Accuracy 0.8333、26 个固定攻防用例的 **Tool Policy Pass Rate 1.000 / Prompt Injection Defense Pass 1.000**，以及对抗注入小语料的 `block_rate` / `false_positive_rate` / `bypass_rate` 硬门禁；`run_agent_eval.py --strict` 额外生成 [Agent Eval report](evals/reports/agent-latest.md)，低于 Tool Call Accuracy 0.90 / Agent Success Rate 0.85 / Prompt Regression Pass Rate 0.90 会阻断 CI。`run_security_corpus.py --strict` 生成 [Security Corpus report](evals/reports/security-latest.md)，覆盖 prompt injection、tool policy attack、benign false-positive、SSRF、路径越界与密钥外泄语料。详见 [evals/README.md](evals/README.md)、[docs/EVAL_REPORTS.md](docs/EVAL_REPORTS.md) 与 [docs/AGENT_EVAL.md](docs/AGENT_EVAL.md)。本地安全能力复现最小命令集见 [docs/SECURITY_SMOKE.md](docs/SECURITY_SMOKE.md)。
 
-**发版前一键体检（v2.5.5）**：先 `python scripts/doctor.py --offline` 做运行时体检（Python / 依赖 / .env / 数据目录权限 / static / 端口 / token，PASS / WARNING / FAIL），再 `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.5.json` 生成 Workspace Core evidence；协议与生态 evidence 仍可按需刷新：`python scripts/smoke_mcp_headless_bridge.py`、`python scripts/smoke_a2a_external_peer.py`、第三方 A2A smoke、Edge Router smoke、OpenAI-compatible SDK smoke。随后 `python scripts/preflight_release.py --version 2.5.5` 校验版本徽章 / CHANGELOG / Docker tag / 文档与 eval 报告版本同步，并检查 coverage 80%、offline eval、Agent Eval、baseline compare、injection strict、security corpus、Workspace Core、A2A third-party、Edge Router smoke、Continue.dev MCP、OpenAI-compatible SDK 与 GUI interop 的质量证据，最后 `python scripts/smoke_release.py --offline` 一键编排 doctor + Workspace Core smoke + strict eval + security corpus + Agent Eval + baseline compare（`--with-server --base-url ... --token ...` 额外跑 MCP / A2A smoke）。发布产物会同时生成 `.sha256` 与带 `qualityGates.workspaceCore=PASS` 的 `.manifest.json` 作为 release evidence。详见 [docs/WORKSPACE.md](docs/WORKSPACE.md)、[docs/RUNTIME_DOCTOR.md](docs/RUNTIME_DOCTOR.md) 与 [docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md)。
+**发版前一键体检（v2.5.6）**：先 `python scripts/doctor.py --offline` 做运行时体检（Python / 依赖 / .env / 数据目录权限 / static / 端口 / token，PASS / WARNING / FAIL），再 `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.5.6.json` 生成 Workspace Core evidence；协议与生态 evidence 仍可按需刷新：`python scripts/smoke_mcp_headless_bridge.py`、`python scripts/smoke_a2a_external_peer.py`、第三方 A2A smoke、Edge Router smoke、OpenAI-compatible SDK smoke。随后 `python scripts/preflight_release.py --version 2.5.6` 校验版本徽章 / CHANGELOG / Docker tag / 文档与 eval 报告版本同步，并检查 coverage 80%、offline eval、Agent Eval、baseline compare、injection strict、security corpus、Workspace Core、A2A third-party、Edge Router smoke、Continue.dev MCP、OpenAI-compatible SDK 与 GUI interop 的质量证据，最后 `python scripts/smoke_release.py --offline` 一键编排 doctor + Workspace Core smoke + strict eval + security corpus + Agent Eval + baseline compare（`--with-server --base-url ... --token ...` 额外跑 MCP / A2A smoke）。发布产物会同时生成 `.sha256` 与带 `qualityGates.workspaceCore=PASS` 的 `.manifest.json` 作为 release evidence。详见 [docs/WORKSPACE.md](docs/WORKSPACE.md)、[docs/RUNTIME_DOCTOR.md](docs/RUNTIME_DOCTOR.md) 与 [docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md)。
 
 ## 快速开始
 
@@ -510,6 +510,13 @@ python scripts/release.py --clean-workspace
 - [x] `server.py` 继续保留 `create_app()` / `create_server()` / `FastAPIServer` 入口，并通过 `include_router(create_files_router(...))` 与 `include_router(create_downloads_router(...))` 装配 Phase 2 route module
 - [x] 新增 `tests/test_web_file_routes.py` 与 `tests/test_web_download_routes.py`，验证 route registry、auth、`Content-Disposition`、`Cache-Control` 与 `X-Content-Type-Options` 不回归
 - [x] Workspace Evidence：`python scripts/smoke_workspace.py --offline` 生成 `docs/evidence/workspace-v2.5.5.json`，preflight 与 release manifest 继续固化 `workspaceCore=PASS`
+
+### v2.5.6: Web Route Split Phase 3
+- [x] 新增 `deepseek_infra/web/routes/rag.py`，拆出 `POST /api/rag/reindex`、`/api/rag/verify-citation`、`/api/rag/eval`
+- [x] 新增 `deepseek_infra/web/routes/memory.py`，拆出 `GET/POST /api/memory`、`DELETE /api/memory/{id}`、`POST /api/memory/conflicts`
+- [x] `server.py` 移除 `memory_action`，通过 `include_router(create_rag_router(...))` 与 `include_router(create_memory_router(...))` 装配 Phase 3 route module
+- [x] 新增 `tests/test_web_rag_routes.py`（11 tests）与 `tests/test_web_memory_routes.py`（15 tests），验证 route registry、auth、invalid payload AppError code 与 `server_module` patch 兼容
+- [x] 编码回归测试 RAG 断言从 `server.py` 切换到 `routes/rag.py`
 
 ## 文档
 

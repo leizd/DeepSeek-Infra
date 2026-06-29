@@ -1,6 +1,6 @@
 # A2A External Peer Smoke
 
-适用版本：DeepSeek Infra v2.5.5。
+适用版本：DeepSeek Infra v2.5.6。
 
 本页说明如何在无 GUI、无 API key 的环境中复现 A2A external peer 兼容性证据。这里的 external peer 指独立进程或外部进程暴露的 A2A server；它不等同于真实第三方生态实现。
 

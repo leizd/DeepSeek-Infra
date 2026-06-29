@@ -1,6 +1,6 @@
 # HTTP API
 
-适用版本：v2.5.5。
+适用版本：v2.5.6。
 
 默认情况下，所有 `/api/*` 路由都需要本地 token 鉴权。客户端可以发送 `Authorization: Bearer <token>`，也可以使用打开 `/?token=<token>` 后写入的 `auth_token` Cookie。未设置 `AUTH_TOKEN` 时，服务端会把自动生成的 token 保存到本地 `.auth-token`，重启后继续复用。
 
@@ -646,7 +646,7 @@ GET /api/share-target?id=<share-id>
 
 ## POST `/api/projects`
 
-管理本地持久项目空间。项目数据保存在 `.projects/{projectId}/project.json`，项目文档索引保存在 `.projects/{projectId}/files/`，不会被临时 `.file-cache` 清理任务删除。该接口是兼容旧前端的 action API；v2.5.5 起新开发优先使用下面的 `/api/workspace/*` REST 风格接口。
+管理本地持久项目空间。项目数据保存在 `.projects/{projectId}/project.json`，项目文档索引保存在 `.projects/{projectId}/files/`，不会被临时 `.file-cache` 清理任务删除。该接口是兼容旧前端的 action API；v2.5.6 起新开发优先使用下面的 `/api/workspace/*` REST 风格接口。
 
 请求体使用 `action` 字段：
 

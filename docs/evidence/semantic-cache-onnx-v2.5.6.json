@@ -1,6 +1,6 @@
 {
   "schemaVersion": "semantic-cache-onnx-evidence.v1",
-  "version": "2.5.5",
+  "version": "2.5.6",
   "commit": "0cf4c88",
   "suite": "semantic-cache-onnx",
   "generatedAt": "2026-06-28T10:00:00Z",

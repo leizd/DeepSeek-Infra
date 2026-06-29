@@ -1,6 +1,6 @@
 # Cursor MCP Integration
 
-适用版本：DeepSeek Infra v2.5.5。
+适用版本：DeepSeek Infra v2.5.6。
 
 本页是可复现配置说明 + GUI 实机验证 runbook。DeepSeek Infra 端的 MCP endpoint 已由本地 client、CI mock server、policy gate、trace diagnostics 覆盖。v2.4.2 已完成 Cursor GUI 实机验证，证据见下方 Evidence Template。
 
