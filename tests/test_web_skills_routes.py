@@ -336,3 +336,53 @@ def test_skills_pack_actions_require_auth() -> None:
         status, payload, _ = _request(server, "POST", "/api/skills", payload={"action": "list_packs"})
     assert status == 401
     assert payload["code"] == ErrorCode.UNAUTHORIZED.value
+
+
+def test_skills_eval_report_and_case_builder_actions(tmp_settings: Path) -> None:
+    with _running_server() as server:
+        status, created, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={
+                "action": "create_eval_case",
+                "case": {
+                    "caseId": "case_web_eval",
+                    "skillId": "skill_study_tutor",
+                    "input": {"question": "Explain FCFS and RR scheduling."},
+                    "expectedKeywords": ["FCFS", "RR"],
+                    "requiredOutputPaths": ["content"],
+                    "expectedArtifactTypes": ["md"],
+                    "projectBindingRequired": True,
+                },
+            },
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert created["case"]["caseId"] == "case_web_eval"
+
+        status, cases, _ = _request(server, "POST", "/api/skills", payload={"action": "list_eval_cases"}, headers=_auth_headers())
+        assert status == 200
+        assert "case_web_eval" in {item["caseId"] for item in cases["cases"]}
+
+        status, report, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={"action": "eval_report", "scope": "skill", "skillId": "skill_study_tutor", "version": "test"},
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert report["report"]["status"] == "PASS"
+        assert report["report"]["summary"]["caseCount"] >= 1
+        assert report["report"]["checks"]["regressionCompare"] == "PASS"
+
+        status, deleted, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={"action": "delete_eval_case", "caseId": "case_web_eval"},
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert deleted["deleted"] == "case_web_eval"

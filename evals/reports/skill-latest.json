@@ -1,81 +1,428 @@
 {
-  "version": "2.6.4",
-  "commit": "c21bbeb59403",
-  "generatedAt": "2026-06-30T05:50:15+00:00",
+  "version": "2.6.5",
+  "commit": "4086c59de9ae",
+  "generatedAt": "2026-06-30T07:12:12+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
   "status": "PASS",
-  "checks": {
-    "skillApiRoutes": "PASS",
-    "builtinSkillsLoad": "PASS",
-    "customSkillCreate": "PASS",
-    "inputSchemaValidation": "PASS",
-    "toolPermissionGate": "PASS",
-    "artifactPolicy": "PASS",
-    "projectBinding": "PASS",
-    "skillExport": "PASS"
+  "summary": {
+    "scope": "all",
+    "skillCount": 6,
+    "packCount": 4,
+    "caseCount": 6,
+    "passRate": 1.0,
+    "overallScore": 100.0,
+    "failedCases": 0,
+    "regressionCount": 0
   },
-  "details": {
-    "skillApiRoutes": [
-      "/api/skills",
-      "/api/skills/{skill_id}/run"
-    ],
-    "builtinSkillIds": [
-      "skill_code_review",
-      "skill_document_reader",
-      "skill_paper_writer",
-      "skill_ppt_generator",
-      "skill_research_brief",
-      "skill_study_tutor"
-    ],
-    "toolPermissionGate": {
-      "tool": "fetch_url",
-      "action": "deny",
-      "policyVerdict": "denied",
-      "risk": "high",
-      "reasons": [
-        "capability_denied:full"
-      ],
-      "violations": [],
-      "capability": "full",
-      "reason": "Tool is out of scope for the 'full' capability profile",
-      "suggestion": "Switch capability or add the tool to CAPABILITY_PROFILES['full']"
-    },
-    "skillRun": {
-      "skillRunId": "run-5b1341c2729c6b53",
-      "projectId": "proj-923d0f27f50f",
-      "artifactIds": [
-        "art-f3c768ac450b252f"
-      ],
-      "savedItemIds": [
-        "saved-2358e3ad3ae2e9f8"
+  "checks": {
+    "skillEvalCases": "PASS",
+    "schemaScoring": "PASS",
+    "toolPolicyScoring": "PASS",
+    "artifactScoring": "PASS",
+    "projectBindingScoring": "PASS",
+    "contentScoring": "PASS",
+    "packLevelEval": "PASS",
+    "regressionCompare": "PASS"
+  },
+  "skillResults": [
+    {
+      "skillId": "skill_code_review",
+      "name": "Code Review Skill",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-06-30T07:12:10+00:00",
+      "packIds": [
+        "pack_code"
       ]
     },
-    "caseCount": 3,
-    "cases": [
-      {
-        "id": "builtin-pack",
-        "check": "builtinSkillsLoad",
-        "expectedMin": 6
+    {
+      "skillId": "skill_document_reader",
+      "name": "Document Reader Skill",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-06-30T07:12:11+00:00",
+      "packIds": [
+        "pack_code",
+        "pack_office",
+        "pack_research",
+        "pack_study"
+      ]
+    },
+    {
+      "skillId": "skill_ppt_generator",
+      "name": "PPT Generator Skill",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-06-30T07:12:11+00:00",
+      "packIds": [
+        "pack_office"
+      ]
+    },
+    {
+      "skillId": "skill_paper_writer",
+      "name": "Paper Writer Skill",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-06-30T07:12:11+00:00",
+      "packIds": [
+        "pack_office",
+        "pack_research",
+        "pack_study"
+      ]
+    },
+    {
+      "skillId": "skill_research_brief",
+      "name": "Research Brief Skill",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-06-30T07:12:11+00:00",
+      "packIds": [
+        "pack_research"
+      ]
+    },
+    {
+      "skillId": "skill_study_tutor",
+      "name": "Study Tutor Skill",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-06-30T07:12:12+00:00",
+      "packIds": [
+        "pack_study"
+      ]
+    }
+  ],
+  "packResults": [
+    {
+      "packId": "pack_code",
+      "name": "Code Pack",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 2,
+      "failedCases": [],
+      "lastRunAt": "2026-06-30T07:12:11+00:00"
+    },
+    {
+      "packId": "pack_office",
+      "name": "Office Pack",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 3,
+      "failedCases": [],
+      "lastRunAt": "2026-06-30T07:12:11+00:00"
+    },
+    {
+      "packId": "pack_research",
+      "name": "Research Pack",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 3,
+      "failedCases": [],
+      "lastRunAt": "2026-06-30T07:12:11+00:00"
+    },
+    {
+      "packId": "pack_study",
+      "name": "Study Pack",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 3,
+      "failedCases": [],
+      "lastRunAt": "2026-06-30T07:12:12+00:00"
+    }
+  ],
+  "caseResults": [
+    {
+      "caseId": "code-review-python-bug",
+      "skillId": "skill_code_review",
+      "packIds": [
+        "pack_code"
+      ],
+      "name": "Code review stays inside allowed tools",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 191.49
       },
-      {
-        "id": "permission-gate",
-        "check": "toolPermissionGate",
-        "skillId": "skill_code_review",
-        "deniedTool": "fetch_url"
+      "input": {
+        "scope": "def add(a, b): return a - b",
+        "focus": "bug and missing tests"
       },
-      {
-        "id": "project-artifact",
-        "check": "artifactPolicy",
-        "skillId": "skill_research_brief",
-        "input": {
-          "topic": "Skill eval smoke",
-          "depth": "quick"
-        }
-      }
-    ]
+      "expected": {
+        "keywords": [
+          "Code Review Skill",
+          "Offline Skill run completed"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-06-30T07:12:10+00:00"
+    },
+    {
+      "caseId": "synthetic-skill_document_reader",
+      "skillId": "skill_document_reader",
+      "packIds": [
+        "pack_code",
+        "pack_office",
+        "pack_research",
+        "pack_study"
+      ],
+      "name": "Synthetic smoke for skill_document_reader",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 206.24
+      },
+      "input": {
+        "query": "Summarize the key claims and cite supporting passages."
+      },
+      "expected": {
+        "keywords": [
+          "Offline Skill run completed",
+          "skill_document_reader"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-06-30T07:12:11+00:00"
+    },
+    {
+      "caseId": "ppt-generator-architecture",
+      "skillId": "skill_ppt_generator",
+      "packIds": [
+        "pack_office"
+      ],
+      "name": "PPT generator validates artifact policy",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 210.74
+      },
+      "input": {
+        "topic": "DeepSeek Infra Skill Quality Loop",
+        "audience": "technical interview",
+        "slideCount": 8
+      },
+      "expected": {
+        "keywords": [
+          "DeepSeek Infra Skill Quality Loop",
+          "Offline Skill run completed"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "pptx",
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-06-30T07:12:11+00:00"
+    },
+    {
+      "caseId": "synthetic-skill_paper_writer",
+      "skillId": "skill_paper_writer",
+      "packIds": [
+        "pack_office",
+        "pack_research",
+        "pack_study"
+      ],
+      "name": "Synthetic smoke for skill_paper_writer",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 237.21
+      },
+      "input": {
+        "topic": "The impact of local RAG on learning workflows",
+        "requirements": "3000 words, include references",
+        "format": "docx"
+      },
+      "expected": {
+        "keywords": [
+          "Offline Skill run completed",
+          "skill_paper_writer"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-06-30T07:12:11+00:00"
+    },
+    {
+      "caseId": "research-local-first-ai",
+      "skillId": "skill_research_brief",
+      "packIds": [
+        "pack_research"
+      ],
+      "name": "Research brief creates markdown artifact",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 229.25
+      },
+      "input": {
+        "topic": "Local-first AI workspaces",
+        "audience": "engineering review",
+        "depth": "quick"
+      },
+      "expected": {
+        "keywords": [
+          "Local-first AI workspaces",
+          "Offline Skill run completed"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-06-30T07:12:11+00:00"
+    },
+    {
+      "caseId": "study-os-scheduling",
+      "skillId": "skill_study_tutor",
+      "packIds": [
+        "pack_study"
+      ],
+      "name": "Study tutor explains OS scheduling",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 224.2
+      },
+      "input": {
+        "question": "Explain FCFS SJF RR and priority scheduling for operating systems.",
+        "subject": "Operating Systems",
+        "level": "exam prep"
+      },
+      "expected": {
+        "keywords": [
+          "FCFS",
+          "SJF",
+          "RR",
+          "Offline Skill run completed"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-06-30T07:12:12+00:00"
+    }
+  ],
+  "regression": {
+    "status": "PASS",
+    "baselineVersion": "",
+    "currentVersion": "",
+    "regressionCount": 0,
+    "newFailures": [],
+    "fixedFailures": [],
+    "scoreDrops": [],
+    "improved": [],
+    "stable": []
   }
 }

@@ -9,8 +9,10 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from deepseek_infra.core.config import APP_VERSION
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import utc_now_iso
+from deepseek_infra.infra.skills import eval as skill_eval
 from deepseek_infra.infra.skills.pack import tool_permission_summary
 from deepseek_infra.infra.skills.permissions import skill_allowed_tools
 from deepseek_infra.infra.skills.schema import SkillSchemaError, validate_instance, validate_skill_config
@@ -90,6 +92,25 @@ def create_skills_router(deps: SkillsRouteDeps) -> APIRouter:
             )
         if action == "delete_pack":
             return json_response(deps.delete_pack(_pack_id(payload)))
+        if action == "eval_report":
+            return json_response(
+                {
+                    "ok": True,
+                    "report": skill_eval.build_skill_eval_report(
+                        version=str(payload.get("version") or APP_VERSION),
+                        scope=str(payload.get("scope") or "all"),
+                        skill_id=str(payload.get("skillId") or ""),
+                        pack_id=str(payload.get("packId") or ""),
+                        baseline=payload.get("baseline") if isinstance(payload.get("baseline"), dict) else None,
+                    ),
+                }
+            )
+        if action == "list_eval_cases":
+            return json_response({"ok": True, "cases": skill_eval.load_eval_cases(include_user=True)})
+        if action == "create_eval_case":
+            return json_response({"ok": True, "case": skill_eval.save_eval_case(_eval_case(payload))})
+        if action == "delete_eval_case":
+            return json_response(skill_eval.delete_eval_case(_case_id(payload)))
         raise AppError("Unsupported Skill action", code=ErrorCode.INVALID_PAYLOAD)
 
     @router.post("/api/skills/{skill_id}/run")
@@ -139,6 +160,23 @@ def _skill_config(payload: dict[str, Any]) -> dict[str, Any]:
     if not candidate:
         raise AppError("Skill config is required", code=ErrorCode.INVALID_PAYLOAD)
     return candidate
+
+
+def _eval_case(payload: dict[str, Any]) -> dict[str, Any]:
+    value = payload.get("case")
+    if isinstance(value, dict):
+        return value
+    candidate = {key: value for key, value in payload.items() if key not in {"action"}}
+    if not candidate:
+        raise AppError("Skill eval case is required", code=ErrorCode.INVALID_PAYLOAD)
+    return candidate
+
+
+def _case_id(payload: dict[str, Any]) -> str:
+    case_id = str(payload.get("caseId") or payload.get("id") or "").strip()
+    if not case_id:
+        raise AppError("caseId is required", code=ErrorCode.INVALID_PAYLOAD)
+    return case_id
 
 
 def _skill_patch(payload: dict[str, Any]) -> dict[str, Any]:

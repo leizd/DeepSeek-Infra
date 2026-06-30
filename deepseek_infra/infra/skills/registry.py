@@ -245,7 +245,7 @@ def _read_json(path: Path) -> Any:
         return None
 
 
-# --- Skill Packs (v2.6.4) -----------------------------------------------------
+# --- Skill Packs --------------------------------------------------------------
 
 
 def list_packs(*, include_builtin: bool = True) -> list[dict[str, Any]]:

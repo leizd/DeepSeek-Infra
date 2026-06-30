@@ -33,6 +33,7 @@ def test_offline_mode_runs_doctor_evals_and_agent_only() -> None:
         "skill_workbench_ui",
         "skill_builder",
         "skill_packs",
+        "skill_eval_dashboard",
         "offline_eval_suite",
         "security_corpus",
         "agent_eval",
@@ -57,6 +58,7 @@ def test_with_server_mode_includes_protocol_smokes() -> None:
         "skill_workbench_ui",
         "skill_builder",
         "skill_packs",
+        "skill_eval_dashboard",
         "offline_eval_suite",
         "security_corpus",
         "agent_eval",
@@ -67,11 +69,11 @@ def test_with_server_mode_includes_protocol_smokes() -> None:
     doctor_cmd = stages[0][1]
     assert "--with-server" in doctor_cmd
     assert "--base-url" in doctor_cmd
-    mcp_cmd = " ".join(stages[10][1])
+    mcp_cmd = " ".join(stages[11][1])
     assert "--mcp-url" in mcp_cmd
     assert "http://127.0.0.1:9000/mcp" in mcp_cmd
     assert "tok" in mcp_cmd
-    a2a_cmd = " ".join(stages[11][1])
+    a2a_cmd = " ".join(stages[12][1])
     assert "--base-url" in a2a_cmd
     assert "http://127.0.0.1:9000" in a2a_cmd
 
@@ -88,6 +90,7 @@ def test_default_mode_is_offline() -> None:
         "skill_workbench_ui",
         "skill_builder",
         "skill_packs",
+        "skill_eval_dashboard",
         "offline_eval_suite",
         "security_corpus",
         "agent_eval",
@@ -97,14 +100,14 @@ def test_default_mode_is_offline() -> None:
 
 def test_skip_flags_drop_stages() -> None:
     mod = _load_smoke_release()
-    args = mod.parse_args(["--offline", "--skip-doctor", "--skip-agent", "--skip-skill-builder"])
+    args = mod.parse_args(["--offline", "--skip-doctor", "--skip-agent", "--skip-skill-builder", "--skip-skill-eval-dashboard"])
     assert _names(mod.build_stages(args)) == ["workspace_core", "skill_system", "skill_workbench_ui", "skill_packs", "offline_eval_suite", "security_corpus", "baseline_compare"]
 
 
 def test_with_server_skip_protocol_keeps_evals() -> None:
     mod = _load_smoke_release()
     args = mod.parse_args(["--with-server", "--skip-mcp", "--skip-a2a", "--skip-doctor"])
-    assert _names(mod.build_stages(args)) == ["workspace_core", "skill_system", "skill_workbench_ui", "skill_builder", "skill_packs", "offline_eval_suite", "security_corpus", "agent_eval", "baseline_compare"]
+    assert _names(mod.build_stages(args)) == ["workspace_core", "skill_system", "skill_workbench_ui", "skill_builder", "skill_packs", "skill_eval_dashboard", "offline_eval_suite", "security_corpus", "agent_eval", "baseline_compare"]
 
 
 def test_json_mode_emits_plan_without_running(capsys: pytest.CaptureFixture[str]) -> None:
@@ -122,6 +125,7 @@ def test_json_mode_emits_plan_without_running(capsys: pytest.CaptureFixture[str]
         "skill_workbench_ui",
         "skill_builder",
         "skill_packs",
+        "skill_eval_dashboard",
         "offline_eval_suite",
         "security_corpus",
         "agent_eval",

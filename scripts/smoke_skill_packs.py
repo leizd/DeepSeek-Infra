@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline smoke for the v2.6.4 Skill Packs / Skill Template Library."""
+"""Offline smoke for the Skill Packs / Skill Template Library."""
 
 from __future__ import annotations
 

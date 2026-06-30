@@ -7,6 +7,7 @@ import pytest
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.data import projects
 from deepseek_infra.infra.observability import observability
+from deepseek_infra.infra.skills import eval as skill_eval
 from deepseek_infra.infra.skills import evidence, permissions, registry
 from deepseek_infra.infra.skills.runner import run_skill
 
@@ -90,3 +91,48 @@ def test_skill_permission_gate_denies_tools_outside_allowed_list() -> None:
     decision = permissions.evaluate_skill_tool(skill, "fetch_url", {"url": "https://example.com"})
 
     assert decision.allowed is False
+
+
+def test_skill_eval_report_scores_skills_and_packs(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(observability, "TRACE_ENABLED", False)
+    report = skill_eval.build_skill_eval_report(
+        version="test",
+        scope="pack",
+        pack_id="pack_code",
+        cases=[
+            {
+                "caseId": "case_code_quality",
+                "skillId": "skill_code_review",
+                "input": {"scope": "def add(a, b): return a - b", "focus": "bug"},
+                "expectedKeywords": ["Code Review Skill", "Offline Skill run completed"],
+                "requiredOutputPaths": ["content"],
+                "expectedArtifactTypes": ["md"],
+                "deniedTools": ["fetch_url"],
+                "projectBindingRequired": True,
+            }
+        ],
+    )
+
+    assert report["status"] == "PASS"
+    assert report["summary"]["caseCount"] >= 1
+    assert report["checks"]["packLevelEval"] == "PASS"
+    assert any(item["packId"] == "pack_code" for item in report["packResults"])
+    assert report["caseResults"][0]["metrics"]["toolPolicyPass"] is True
+
+
+def test_skill_eval_case_crud_uses_runtime_skills_dir(tmp_settings: Path) -> None:
+    saved = skill_eval.save_eval_case(
+        {
+            "caseId": "case_user_eval",
+            "skillId": "skill_study_tutor",
+            "input": {"question": "Explain RR scheduling"},
+            "expectedKeywords": ["RR"],
+            "requiredOutputPaths": ["content"],
+        }
+    )
+    cases = skill_eval.load_eval_cases(include_user=True)
+    deleted = skill_eval.delete_eval_case("case_user_eval")
+
+    assert saved["caseId"] == "case_user_eval"
+    assert any(case["caseId"] == "case_user_eval" for case in cases)
+    assert deleted["deleted"] == "case_user_eval"

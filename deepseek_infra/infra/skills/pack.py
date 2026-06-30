@@ -1,4 +1,4 @@
-"""Skill Pack schema and helpers for v2.6.4 Skill Template Library.
+"""Skill Pack schema and helpers for Skill Template Library.
 
 A Skill Pack bundles several complete Skill units (prompt + tools + schema +
 policy + project binding) into a portable ``.skillpack.json`` so they can be

@@ -393,6 +393,7 @@
         <input id="skillSearchInput" type="search" placeholder="搜索 Skill" autocomplete="off" />
         <button class="seek-primary-button" id="skillNewButton" type="button">New Skill</button>
         <button class="secondary-button" id="skillPacksButton" type="button">Packs</button>
+        <button class="secondary-button" id="skillEvalButton" type="button">Eval</button>
         <button class="secondary-button" id="skillImportButton" type="button">导入 JSON</button>
         <button class="secondary-button" id="skillExportAllButton" type="button">导出全部</button>
         <input id="skillImportInput" type="file" accept="application/json,.json" hidden />
@@ -541,6 +542,87 @@
         <section class="skill-section">
           <h3>自定义 Packs</h3>
           <div class="skill-pack-list" id="skillCustomPackList"></div>
+        </section>
+      </section>
+
+      <section class="skill-eval-host" id="skillEvalHost" hidden>
+        <div class="skill-eval-header">
+          <div>
+            <h3>Skill Eval Dashboard</h3>
+            <p id="skillEvalSource">Local offline quality loop for Skills and Packs.</p>
+          </div>
+          <button class="icon-button panel-close-button" id="skillEvalCloseButton" type="button" aria-label="Close Skill Eval">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="skill-eval-toolbar">
+          <button class="seek-primary-button" id="skillEvalRunButton" type="button">Run Offline Eval</button>
+          <button class="secondary-button" id="skillEvalExportJsonButton" type="button">Export JSON</button>
+          <button class="secondary-button" id="skillEvalExportMarkdownButton" type="button">Export Markdown</button>
+          <button class="secondary-button" id="skillEvalCopySummaryButton" type="button">Copy Summary</button>
+        </div>
+
+        <div class="skill-eval-summary" id="skillEvalSummary"></div>
+
+        <section class="skill-eval-section">
+          <div class="skill-eval-section-header">
+            <div>
+              <h4>Eval Case Builder</h4>
+              <p>Create local rule-based cases with sample input, required keywords, JSON paths, artifacts and project binding.</p>
+            </div>
+          </div>
+          <form class="skill-eval-case-form" id="skillEvalCaseForm">
+            <div class="skill-eval-case-grid">
+              <label>
+                <span>Skill</span>
+                <select id="skillEvalCaseSkillSelect"></select>
+              </label>
+              <label>
+                <span>caseId</span>
+                <input id="skillEvalCaseIdInput" type="text" maxlength="100" placeholder="case_my_skill_quality" required />
+              </label>
+              <label>
+                <span>Expected artifacts</span>
+                <input id="skillEvalArtifactsInput" type="text" placeholder="md,pptx" />
+              </label>
+            </div>
+            <label>
+              <span>Input JSON</span>
+              <textarea id="skillEvalInputTextarea" rows="5" placeholder='{"topic":"example"}' required></textarea>
+            </label>
+            <div class="skill-eval-case-grid">
+              <label>
+                <span>Expected keywords</span>
+                <input id="skillEvalKeywordsInput" type="text" placeholder="keyword one, keyword two" />
+              </label>
+              <label>
+                <span>Required JSON paths</span>
+                <input id="skillEvalPathsInput" type="text" placeholder="content, metadata.title" />
+              </label>
+              <label>
+                <span>Forbidden content</span>
+                <input id="skillEvalForbiddenInput" type="text" placeholder="secret, cannot comply" />
+              </label>
+            </div>
+            <label class="skill-builder-check"><input id="skillEvalProjectBindingInput" type="checkbox" checked /> Require project binding history</label>
+            <div class="skill-builder-actions">
+              <button class="seek-save-button" id="skillEvalSaveCaseButton" type="submit">Save Eval Case</button>
+            </div>
+          </form>
+          <div class="skill-eval-case-list" id="skillEvalCaseList"></div>
+        </section>
+
+        <section class="skill-eval-section">
+          <h4>Skill Scores</h4>
+          <div class="skill-eval-table" id="skillEvalSkillList"></div>
+        </section>
+
+        <section class="skill-eval-section">
+          <h4>Pack Scores</h4>
+          <div class="skill-eval-table" id="skillEvalPackList"></div>
         </section>
       </section>
 

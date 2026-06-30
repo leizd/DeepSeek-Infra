@@ -1,4 +1,4 @@
-/** Skill Workbench UI, Custom Skill Builder and Skill Packs - v2.6.4 frontend integration. */
+/** Skill Workbench UI, Custom Skill Builder, Skill Packs and Eval Dashboard - v2.6.5 frontend integration. */
 
 const SKILL_API = "/api/skills";
 const PROJECT_API = "/api/workspace/projects";
@@ -37,6 +37,8 @@ const state = {
   skills: [],
   projects: [],
   packs: [],
+  evalReport: null,
+  evalCases: [],
   activeProjectId: "",
   search: "",
   runningSkillId: "",
@@ -126,6 +128,28 @@ function cacheElements() {
     "skillPackImportSummary",
     "skillBuiltinPackList",
     "skillCustomPackList",
+    "skillEvalButton",
+    "skillEvalHost",
+    "skillEvalCloseButton",
+    "skillEvalSource",
+    "skillEvalRunButton",
+    "skillEvalExportJsonButton",
+    "skillEvalExportMarkdownButton",
+    "skillEvalCopySummaryButton",
+    "skillEvalSummary",
+    "skillEvalCaseForm",
+    "skillEvalCaseSkillSelect",
+    "skillEvalCaseIdInput",
+    "skillEvalArtifactsInput",
+    "skillEvalInputTextarea",
+    "skillEvalKeywordsInput",
+    "skillEvalPathsInput",
+    "skillEvalForbiddenInput",
+    "skillEvalProjectBindingInput",
+    "skillEvalSaveCaseButton",
+    "skillEvalCaseList",
+    "skillEvalSkillList",
+    "skillEvalPackList",
     "skillBuiltinList",
     "skillCustomList",
     "skillRecentRunList",
@@ -159,6 +183,13 @@ function bindEvents() {
   });
   els.skillNewButton?.addEventListener("click", () => openSkillBuilder({ mode: "create" }));
   els.skillPacksButton?.addEventListener("click", openPacksHost);
+  els.skillEvalButton?.addEventListener("click", openEvalHost);
+  els.skillEvalCloseButton?.addEventListener("click", closeEvalHost);
+  els.skillEvalRunButton?.addEventListener("click", runSkillEval);
+  els.skillEvalExportJsonButton?.addEventListener("click", exportSkillEvalJson);
+  els.skillEvalExportMarkdownButton?.addEventListener("click", exportSkillEvalMarkdown);
+  els.skillEvalCopySummaryButton?.addEventListener("click", copySkillEvalSummary);
+  els.skillEvalCaseForm?.addEventListener("submit", saveSkillEvalCase);
   els.skillPacksCloseButton?.addEventListener("click", closePacksHost);
   els.skillPackImportButton?.addEventListener("click", () => {
     if (els.skillPackImportInput) {
@@ -210,6 +241,7 @@ function openSkillPanel() {
   beforeOpenPanel();
   closeSkillRunHost();
   closePacksHost();
+  closeEvalHost();
   loadSkills();
   loadProjects();
   loadPacks();
@@ -221,6 +253,8 @@ function openSkillPanel() {
 function closeSkillPanel() {
   if (!els.skillPanel) return;
   closeSkillBuilder();
+  closePacksHost();
+  closeEvalHost();
   els.skillPanel.classList.remove("open");
   els.skillPanel.setAttribute("aria-hidden", "true");
   onPanelStateChange();
@@ -229,6 +263,8 @@ function closeSkillPanel() {
 function openSkillRunHost(skill) {
   if (!els.skillRunHost || !skill) return;
   closeSkillBuilder();
+  closePacksHost();
+  closeEvalHost();
   els.skillRunHost.hidden = false;
   els.skillRunTitle.textContent = `运行 · ${skill.name || skill.skillId}`;
   els.skillRunTitle.dataset.skillId = skill.skillId;
@@ -445,6 +481,7 @@ function renderSkillPanel() {
   renderSkillCards(els.skillBuiltinList, state.skills.filter((skill) => skill.builtin && matches(skill)), "没有匹配的内置 Skill。");
   renderSkillCards(els.skillCustomList, state.skills.filter((skill) => !skill.builtin && matches(skill)), "还没有自定义 Skill，可从内置 Skill 导出后导入。");
   renderRecentRuns();
+  populateEvalSkillSelect();
 }
 
 function renderSkillCards(host, skills, emptyText) {
@@ -606,6 +643,7 @@ function openSkillBuilder({ mode = "create", skill = null } = {}) {
   if (!els.skillBuilderHost) return;
   closeSkillRunHost();
   closePacksHost();
+  closeEvalHost();
   state.builder.mode = mode;
   state.builder.originalSkillId = mode === "edit" ? (skill?.skillId || "") : "";
   state.builder.saveAndRun = false;
@@ -1130,7 +1168,299 @@ async function deleteSkill(skillId) {
   }
 }
 
-// --- Skill Packs (v2.6.4) -----------------------------------------------------
+// --- Skill Eval Dashboard (v2.6.5) -------------------------------------------
+
+function openEvalHost() {
+  if (!els.skillEvalHost) return;
+  closeSkillBuilder();
+  closeSkillRunHost();
+  closePacksHost();
+  els.skillEvalHost.hidden = false;
+  populateEvalSkillSelect();
+  loadEvalCases();
+  if (!state.evalReport) renderEmptyEvalDashboard();
+}
+
+function closeEvalHost() {
+  if (els.skillEvalHost) els.skillEvalHost.hidden = true;
+}
+
+function renderEmptyEvalDashboard() {
+  if (els.skillEvalSummary) {
+    els.skillEvalSummary.replaceChildren();
+    els.skillEvalSummary.append(evalMetricCard("Status", "Not run", "Run offline eval to score Skills and Packs."));
+    els.skillEvalSummary.append(evalMetricCard("Cases", String(state.evalCases.length || 0), "Golden plus local cases."));
+    els.skillEvalSummary.append(evalMetricCard("Regression", "Pending", "Compare current report with baseline."));
+  }
+  renderEvalRows(els.skillEvalSkillList, [], "No Skill eval report yet.");
+  renderEvalRows(els.skillEvalPackList, [], "No Pack eval report yet.");
+}
+
+async function runSkillEval() {
+  if (!els.skillEvalRunButton) return;
+  els.skillEvalRunButton.disabled = true;
+  els.skillEvalRunButton.textContent = "Running...";
+  try {
+    const response = await apiFetch(SKILL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "eval_report", scope: "all" }),
+    });
+    const data = await parseJsonResponse(response);
+    if (!data.ok || !data.report) throw new Error(data.error || "Skill eval failed");
+    state.evalReport = data.report;
+    renderEvalDashboard(data.report);
+    showToast(`Skill eval ${data.report.status || "completed"}: ${data.report.summary?.caseCount || 0} cases`);
+  } catch (error) {
+    showToast(`Skill eval failed: ${error.message || error}`);
+  } finally {
+    els.skillEvalRunButton.disabled = false;
+    els.skillEvalRunButton.textContent = "Run Offline Eval";
+  }
+}
+
+async function loadEvalCases() {
+  try {
+    const response = await apiFetch(SKILL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "list_eval_cases" }),
+    });
+    const data = await parseJsonResponse(response);
+    state.evalCases = Array.isArray(data.cases) ? data.cases : [];
+    renderEvalCases();
+    if (!state.evalReport) renderEmptyEvalDashboard();
+  } catch {
+    state.evalCases = [];
+    renderEvalCases();
+  }
+}
+
+async function saveSkillEvalCase(event) {
+  event.preventDefault();
+  const skillId = els.skillEvalCaseSkillSelect?.value || "";
+  const caseId = (els.skillEvalCaseIdInput?.value || "").trim();
+  let input = {};
+  try {
+    input = JSON.parse(els.skillEvalInputTextarea?.value || "{}");
+  } catch {
+    showToast("Input JSON is invalid.");
+    return;
+  }
+  const payload = {
+    action: "create_eval_case",
+    case: {
+      caseId,
+      skillId,
+      input,
+      expectedKeywords: splitList(els.skillEvalKeywordsInput?.value || ""),
+      requiredOutputPaths: splitList(els.skillEvalPathsInput?.value || ""),
+      forbidden: splitList(els.skillEvalForbiddenInput?.value || ""),
+      expectedArtifactTypes: splitList(els.skillEvalArtifactsInput?.value || ""),
+      projectBindingRequired: Boolean(els.skillEvalProjectBindingInput?.checked),
+    },
+  };
+  try {
+    const response = await apiFetch(SKILL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await parseJsonResponse(response);
+    if (!data.ok) throw new Error(data.error || "Save failed");
+    els.skillEvalCaseForm?.reset();
+    populateEvalSkillSelect();
+    await loadEvalCases();
+    showToast(`Saved eval case ${data.case?.caseId || caseId}`);
+  } catch (error) {
+    showToast(`Save eval case failed: ${error.message || error}`);
+  }
+}
+
+function renderEvalDashboard(report) {
+  const summary = report.summary || {};
+  if (els.skillEvalSummary) {
+    els.skillEvalSummary.replaceChildren();
+    els.skillEvalSummary.append(evalMetricCard("Status", report.status || "UNKNOWN", `${summary.failedCases || 0} failed cases`));
+    els.skillEvalSummary.append(evalMetricCard("Score", `${summary.overallScore ?? 0}`, `${Math.round((summary.passRate || 0) * 100)}% pass rate`));
+    els.skillEvalSummary.append(evalMetricCard("Coverage", `${summary.skillCount || 0} Skills`, `${summary.packCount || 0} Packs / ${summary.caseCount || 0} cases`));
+    els.skillEvalSummary.append(evalMetricCard("Regressions", `${summary.regressionCount || 0}`, report.regression?.status || "PASS"));
+  }
+  renderEvalRows(els.skillEvalSkillList, report.skillResults || [], "No Skill results.");
+  renderEvalRows(els.skillEvalPackList, report.packResults || [], "No Pack results.");
+}
+
+function evalMetricCard(label, value, hint) {
+  const card = document.createElement("article");
+  card.className = "skill-eval-metric";
+  const strong = document.createElement("strong");
+  strong.textContent = value;
+  const span = document.createElement("span");
+  span.textContent = label;
+  const small = document.createElement("small");
+  small.textContent = hint || "";
+  card.append(span, strong, small);
+  return card;
+}
+
+function renderEvalRows(host, rows, emptyText) {
+  if (!host) return;
+  host.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "panel-empty";
+    empty.textContent = emptyText;
+    host.append(empty);
+    return;
+  }
+  for (const row of rows) {
+    const item = document.createElement("article");
+    item.className = "skill-eval-row";
+    item.dataset.status = row.status || "UNKNOWN";
+    const title = document.createElement("div");
+    title.className = "skill-eval-row-title";
+    const strong = document.createElement("strong");
+    strong.textContent = row.name || row.skillId || row.packId || "Eval target";
+    const span = document.createElement("span");
+    span.textContent = row.skillId || row.packId || "";
+    title.append(strong, span);
+    const status = document.createElement("span");
+    status.className = "skill-eval-status";
+    status.textContent = row.status || "UNKNOWN";
+    const score = document.createElement("span");
+    score.textContent = `${row.overallScore ?? 0}`;
+    const cases = document.createElement("span");
+    cases.textContent = `${row.caseCount || 0} cases`;
+    const failed = document.createElement("span");
+    failed.textContent = `${(row.failedCases || []).length} failed`;
+    item.append(title, status, score, cases, failed);
+    host.append(item);
+  }
+}
+
+function renderEvalCases() {
+  if (!els.skillEvalCaseList) return;
+  els.skillEvalCaseList.replaceChildren();
+  if (!state.evalCases.length) {
+    const empty = document.createElement("p");
+    empty.className = "panel-empty";
+    empty.textContent = "No eval cases loaded.";
+    els.skillEvalCaseList.append(empty);
+    return;
+  }
+  for (const item of state.evalCases.slice(0, 24)) {
+    const row = document.createElement("article");
+    row.className = "skill-eval-case-row";
+    const body = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = item.name || item.caseId;
+    const meta = document.createElement("span");
+    meta.textContent = `${item.skillId || ""} · ${(item.expectedKeywords || []).length} keywords · ${(item.expectedArtifactTypes || []).join(",") || "no artifacts"}`;
+    body.append(title, meta);
+    row.append(body);
+    if (item.source === "user") {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "danger-button";
+      button.textContent = "Delete";
+      button.addEventListener("click", () => deleteSkillEvalCase(item.caseId));
+      row.append(button);
+    }
+    els.skillEvalCaseList.append(row);
+  }
+}
+
+async function deleteSkillEvalCase(caseId) {
+  try {
+    const response = await apiFetch(SKILL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete_eval_case", caseId }),
+    });
+    const data = await parseJsonResponse(response);
+    if (!data.ok) throw new Error(data.error || "Delete failed");
+    await loadEvalCases();
+  } catch (error) {
+    showToast(`Delete eval case failed: ${error.message || error}`);
+  }
+}
+
+function populateEvalSkillSelect() {
+  if (!els.skillEvalCaseSkillSelect) return;
+  const current = els.skillEvalCaseSkillSelect.value;
+  els.skillEvalCaseSkillSelect.replaceChildren();
+  for (const skill of state.skills) {
+    const option = document.createElement("option");
+    option.value = skill.skillId;
+    option.textContent = `${skill.name || skill.skillId} (${skill.skillId})`;
+    if (skill.skillId === current) option.selected = true;
+    els.skillEvalCaseSkillSelect.append(option);
+  }
+}
+
+function exportSkillEvalJson() {
+  if (!state.evalReport) {
+    showToast("Run Skill eval before exporting.");
+    return;
+  }
+  downloadTextFile(`${JSON.stringify(state.evalReport, null, 2)}\n`, `skill-eval-${new Date().toISOString().slice(0, 10)}.json`, "application/json");
+}
+
+function exportSkillEvalMarkdown() {
+  if (!state.evalReport) {
+    showToast("Run Skill eval before exporting.");
+    return;
+  }
+  downloadTextFile(skillEvalMarkdown(state.evalReport), `skill-eval-${new Date().toISOString().slice(0, 10)}.md`, "text/markdown;charset=utf-8");
+}
+
+async function copySkillEvalSummary() {
+  if (!state.evalReport) {
+    showToast("Run Skill eval before copying a summary.");
+    return;
+  }
+  const text = skillEvalSummaryText(state.evalReport);
+  try {
+    await navigator.clipboard?.writeText(text);
+    showToast("Skill eval summary copied.");
+  } catch {
+    showToast(text);
+  }
+}
+
+function skillEvalSummaryText(report) {
+  const summary = report.summary || {};
+  return `Skill Eval ${report.status || "UNKNOWN"} · score ${summary.overallScore ?? 0} · pass ${Math.round((summary.passRate || 0) * 100)}% · ${summary.caseCount || 0} cases · ${summary.regressionCount || 0} regressions`;
+}
+
+function skillEvalMarkdown(report) {
+  const lines = [
+    "# Skill Eval Report",
+    "",
+    `- Status: ${report.status || "UNKNOWN"}`,
+    `- Summary: ${skillEvalSummaryText(report)}`,
+    "",
+    "| Skill | Score | Pass Rate | Cases | Failed |",
+    "| --- | ---: | ---: | ---: | ---: |",
+  ];
+  for (const row of report.skillResults || []) {
+    lines.push(`| ${row.skillId || row.name || ""} | ${row.overallScore ?? 0} | ${Math.round((row.passRate || 0) * 100)}% | ${row.caseCount || 0} | ${(row.failedCases || []).length} |`);
+  }
+  lines.push("", "| Pack | Score | Pass Rate | Cases | Failed |", "| --- | ---: | ---: | ---: | ---: |");
+  for (const row of report.packResults || []) {
+    lines.push(`| ${row.packId || row.name || ""} | ${row.overallScore ?? 0} | ${Math.round((row.passRate || 0) * 100)}% | ${row.caseCount || 0} | ${(row.failedCases || []).length} |`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function splitList(text) {
+  return String(text || "")
+    .split(/[,;\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+// --- Skill Packs --------------------------------------------------------------
 
 async function loadPacks() {
   try {
@@ -1232,6 +1562,7 @@ function openPacksHost() {
   if (!els.skillPacksHost) return;
   closeSkillBuilder();
   closeSkillRunHost();
+  closeEvalHost();
   els.skillPacksHost.hidden = false;
   loadPacks();
 }

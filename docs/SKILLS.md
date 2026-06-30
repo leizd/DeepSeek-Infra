@@ -1,8 +1,8 @@
 # Skill System
 
-Applicable version: v2.6.4.
+Applicable version: v2.6.5.
 
-DeepSeek Infra v2.6.4 defines a Skill as:
+DeepSeek Infra v2.6.5 defines a Skill as:
 
 ```text
 Skill = Prompt + Tools + Input Schema + Output Schema + Memory Policy + Artifact Policy + Project Binding
@@ -19,6 +19,7 @@ deepseek_infra/infra/skills/
   registry.py      # built-in + custom Skill and Skill Pack registry
   permissions.py   # Skill allowedTools -> ToolPolicy
   runner.py        # Skill execution and project/artifact persistence
+  eval.py          # offline Skill / Pack scoring and regression reports
   templates.py     # prompt and offline output helpers
   evidence.py      # Skill artifact index and release evidence
 
@@ -50,7 +51,7 @@ POST /api/skills
 POST /api/skills/{skill_id}/run
 ```
 
-Common actions: `list`, `builtin`, `get`, `create`, `update`, `disable`, `enable`, `delete`, `import`, `export`, `validate`, `dry_run`, `run`, `list_packs`, `get_pack`, `export_pack`, `import_pack`, `validate_pack`, `delete_pack`.
+Common actions: `list`, `builtin`, `get`, `create`, `update`, `disable`, `enable`, `delete`, `import`, `export`, `validate`, `dry_run`, `run`, `list_packs`, `get_pack`, `export_pack`, `import_pack`, `validate_pack`, `delete_pack`, `eval_report`, `list_eval_cases`, `create_eval_case`, and `delete_eval_case`.
 
 ## Runner
 
@@ -91,7 +92,7 @@ Project export includes Skill bindings, Skill run history, saved Skill outputs, 
 
 ## Skill Workbench UI
 
-v2.6.4 adds a local Skill Workbench in the main Web UI:
+v2.6.5 adds a local Skill Workbench in the main Web UI:
 
 - Open the `Skills` entry in the sidebar to browse built-in and custom Skills.
 - Use the workbench toolbar to search, import Skill JSON, export custom Skills, and enable or disable custom Skills.
@@ -110,7 +111,7 @@ static/styles.css
 
 ## Custom Skill Builder
 
-v2.6.4 adds a Custom Skill Builder inside the Skill Workbench so users can author Skills without hand-writing JSON:
+v2.6.5 adds a Custom Skill Builder inside the Skill Workbench so users can author Skills without hand-writing JSON:
 
 - `New Skill` opens a guided builder for `skillId`, `name`, `description`, `version`, `systemPrompt`, policies, schema fields, and tools.
 - `Clone` on a built-in Skill creates a custom editable copy, preserving the source prompt, schemas, tool grants, memory policy, artifact policy, and project binding.
@@ -129,7 +130,7 @@ The authoring API actions are intentionally local-only and do not download third
 
 ## Skill Packs
 
-v2.6.4 introduces local Skill Packs so a set of Skills can be imported, exported, installed, and bound to projects together. A Skill Pack is a `.skillpack.json` manifest:
+v2.6.5 introduces local Skill Packs so a set of Skills can be imported, exported, installed, and bound to projects together. A Skill Pack is a `.skillpack.json` manifest:
 
 ```json
 {
@@ -181,6 +182,53 @@ Importing a Pack never silently overwrites existing Skills. The `onConflict` str
 
 The import summary returns an `allowedTools` permission diff with risk labels (`read-only`, `filesystem`, `network`, `sensitive`, `requires approval`, or the raw risk level) and flags high-risk / requires-approval tools so reviewers can confirm them before running. Skill Packs are **local-only**: there is no remote Skill Marketplace, and the authoring API never downloads third-party Skills.
 
+## Skill Eval Dashboard
+
+v2.6.5 adds a local Skill quality loop. The Workbench `Eval` tab runs offline Skill / Pack evals, shows pass/fail status, average score, case counts, failed cases, and latest run metadata, and exports JSON / Markdown summaries. The Eval Case Builder creates local rule-based cases without hand-editing JSONL.
+
+Eval cases can be defined in `evals/golden/skills/skill_eval_cases.jsonl` or created from the Workbench. A case can include:
+
+```json
+{
+  "caseId": "study-os-scheduling",
+  "skillId": "skill_study_tutor",
+  "packId": "pack_study",
+  "input": {"topic": "OS process scheduling"},
+  "expectedKeywords": ["FCFS", "SJF", "RR"],
+  "requiredOutputPaths": ["content"],
+  "forbidden": ["ignore previous instructions"],
+  "expectedArtifactTypes": ["md"],
+  "projectBindingRequired": true
+}
+```
+
+Scoring is rule-based and offline by default:
+
+- `schemaPass`: input / output schema validation succeeds.
+- `toolPolicyPass`: required tools are allowed and denied tools stay blocked by Tool Policy.
+- `artifactPass`: generated artifacts match the Skill artifact policy and expected artifact types.
+- `projectBindingPass`: project-bound runs write Skill run history and exported metadata.
+- `contentPass`: expected keywords, forbidden regex, and required JSON paths match.
+- `latencyMs`: elapsed runtime is recorded for report comparison.
+
+The eval runner supports all Skills, one Skill, one Pack, and baseline comparison:
+
+```bash
+python evals/runners/run_skill_eval.py --strict --out evals/reports/skills-v2.6.5.json
+python evals/runners/run_skill_eval.py --scope skill --skill-id skill_study_tutor --out evals/reports/skills-v2.6.5.json
+python evals/runners/run_skill_eval.py --scope pack --pack-id pack_study --out evals/reports/skills-v2.6.5.json
+python evals/runners/run_skill_eval.py --baseline evals/reports/skills-v2.6.4.json --out evals/reports/skills-v2.6.5.json
+```
+
+Workbench API actions:
+
+```json
+{ "action": "eval_report", "scope": "all" }
+{ "action": "create_eval_case", "case": { "...": "..." } }
+{ "action": "list_eval_cases" }
+{ "action": "delete_eval_case", "caseId": "case_id" }
+```
+
 ## Evidence
 
 Run the local offline checks:
@@ -190,12 +238,15 @@ python scripts/smoke_skills.py --offline
 python scripts/smoke_skills_ui.py --offline
 python scripts/smoke_skill_builder.py --offline
 python scripts/smoke_skill_packs.py --offline
+python scripts/smoke_skill_eval_dashboard.py --offline
 python evals/runners/run_skill_eval.py --strict
 ```
 
-The release evidence file is `docs/evidence/skills-v2.6.4.json`.
-The Skill Workbench UI evidence file is `docs/evidence/skills-ui-v2.6.4.json`.
-The Custom Skill Builder evidence file is `docs/evidence/skill-builder-v2.6.4.json`.
-The Skill Packs evidence file is `docs/evidence/skill-packs-v2.6.4.json`.
+The release evidence file is `docs/evidence/skills-v2.6.5.json`.
+The Skill Workbench UI evidence file is `docs/evidence/skills-ui-v2.6.5.json`.
+The Custom Skill Builder evidence file is `docs/evidence/skill-builder-v2.6.5.json`.
+The Skill Packs evidence file is `docs/evidence/skill-packs-v2.6.5.json`.
+The Skill Eval Dashboard evidence file is `docs/evidence/skill-eval-dashboard-v2.6.5.json`.
+The Skill eval report is `evals/reports/skills-v2.6.5.json`.
 
 Required checks: `skillApiRoutes`, `builtinSkillsLoad`, `customSkillCreate`, `inputSchemaValidation`, `toolPermissionGate`, `artifactPolicy`, `projectBinding`, and `skillExport`.

@@ -2,6 +2,25 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.6.5] - Skill Eval Dashboard
+
+**Theme: Skill quality and regression loop.** After v2.6.4 added local Skill Packs, this release adds offline Skill / Pack evaluation, a Workbench quality dashboard, eval case authoring, report export, and release-gate evidence.
+
+### Added
+
+- **Skill Eval Dashboard**: Skill Workbench adds an Eval tab showing Skill / Pack pass status, score, case counts, failed cases, and latest run metadata.
+- **Eval Case Builder**: local test cases can define input samples, expected keywords, required JSON paths, forbidden patterns, expected artifact types, and project binding requirements.
+- **Pack-level Eval**: `run_skill_eval.py` can evaluate one Skill, one Pack, all built-in Packs, or the full Skill registry.
+- **Regression Compare**: Skill eval reports compare current output to a baseline and mark new failures, fixed failures, and score regressions.
+- **Eval Reports**: adds `evals/reports/skills-v2.6.5.json` and `docs/evidence/skill-eval-dashboard-v2.6.5.json`.
+- **Release Gate**: release readiness, preflight, CI, and release manifest include `skillEvalDashboard` and versioned Skill eval report evidence.
+
+### Changed
+
+- `run_skill_eval.py` now emits scored Skill / Pack reports with schema, tool policy, artifact, project binding, content, latency, and regression dimensions.
+- docs/SKILLS.md documents the Eval Dashboard, eval case format, API actions, and report export flow.
+- README roadmap and screenshots include Skill Quality & Regression.
+
 ## [2.6.4] - Skill Packs
 
 **主题：Skill Pack 与模板库。** 继 v2.6.3 支持可视化创建单个 Skill 后，本版本把 Skills 扩展为可成套导入、导出、安装和项目绑定的本地 Skill Packs。

@@ -10,7 +10,7 @@ and Edge Router evidence is strict when submitted, that key docs do not contain
 encoding corruption (since v2.3.4), and (since v2.3.1) that GUI interop evidence
 for Claude Desktop / Cursor has been recorded in ``docs/COMPATIBILITY.md``.
 
-    python scripts/preflight_release.py --version 2.6.4
+    python scripts/preflight_release.py --version 2.6.5
 
 Exits 1 on any FAIL; WARNINGs do not fail. Version defaults to
 ``settings.app_version``.
@@ -250,6 +250,7 @@ def check_quality_gate_evidence(root: Path, version: str) -> CheckResult:
         ("evals/reports/agent-latest.json", "agentEval"),
         ("evals/reports/baseline-compare-latest.json", "baselineCompare"),
         ("evals/reports/security-latest.json", "securityCorpus"),
+        (f"evals/reports/skills-v{version}.json", "skillEval"),
     )
     for rel, label in report_specs:
         data, error = _load_json_report(root, rel)
@@ -952,6 +953,80 @@ def check_skill_packs_evidence(root: Path, version: str) -> CheckResult:
     )
 
 
+def check_skill_eval_dashboard_evidence(root: Path, version: str) -> CheckResult:
+    path = root / "docs" / "evidence" / f"skill-eval-dashboard-v{version}.json"
+    report_path = root / "evals" / "reports" / f"skills-v{version}.json"
+    if not path.is_file():
+        return CheckResult(
+            "skill_eval_dashboard_evidence",
+            STATUS_FAIL,
+            "Skill Eval Dashboard evidence missing; run scripts/smoke_skill_eval_dashboard.py --offline",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("skill_eval_dashboard_evidence", STATUS_FAIL, f"cannot parse Skill Eval Dashboard evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("skill_eval_dashboard", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "skill_eval_dashboard_evidence",
+            STATUS_FAIL,
+            f"Skill Eval Dashboard evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS":
+        return CheckResult(
+            "skill_eval_dashboard_evidence",
+            STATUS_FAIL,
+            f"Skill Eval Dashboard evidence status is {data.get('status')!r}, expected PASS",
+            {"status": data.get("status")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = (
+        "evalDashboardEntrypoint",
+        "evalCaseBuilder",
+        "skillEvalApiActions",
+        "skillEvalReport",
+        "packLevelEval",
+        "regressionCompare",
+        "evalExportActions",
+        "skillEvalStyles",
+        "skillEvalAssets",
+        "skillEvalRunner",
+        "skillEvalJsSyntax",
+        "ciReleaseGate",
+    )
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult(
+            "skill_eval_dashboard_evidence",
+            STATUS_FAIL,
+            f"Skill Eval Dashboard evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    report, error = _load_json_report(root, f"evals/reports/skills-v{version}.json")
+    if report is None:
+        return CheckResult("skill_eval_dashboard_evidence", STATUS_FAIL, error, {"path": str(report_path)})
+    if report.get("status") != "PASS":
+        return CheckResult(
+            "skill_eval_dashboard_evidence",
+            STATUS_FAIL,
+            f"Skill eval report status is {report.get('status')!r}, expected PASS",
+            {"path": str(report_path), "status": report.get("status")},
+        )
+    return CheckResult(
+        "skill_eval_dashboard_evidence",
+        STATUS_PASS,
+        "Skill Eval Dashboard evidence recorded",
+        {"path": str(path), "report": str(report_path), "checks": list(required)},
+    )
+
+
 def check_gui_interop_evidence(root: Path) -> CheckResult:
     """Verify Claude Desktop / Cursor GUI evidence is recorded in COMPATIBILITY.md.
 
@@ -1039,6 +1114,7 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_skill_ui_evidence(root, version),
         check_skill_builder_evidence(root, version),
         check_skill_packs_evidence(root, version),
+        check_skill_eval_dashboard_evidence(root, version),
         check_gui_interop_evidence(root),
     ]
 
