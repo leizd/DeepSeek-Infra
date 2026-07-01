@@ -1,6 +1,6 @@
-# Release Evidence Index
+﻿# Release Evidence Index
 
-适用版本：v2.6.6。
+适用版本：v2.6.7。
 
 本页汇总 DeepSeek Infra v2.3.x 以来的互操作证据、评测报告、v2.4 质量门禁证据、v2.5 Workspace Core 证据与 release artifact，作为证据链的统一入口。所有标 ✅ 的项都有可复现的 smoke / evidence 路径；标 🟡 的项需要人工 GUI、本地模型或真实第三方生态实测。
 
@@ -17,13 +17,14 @@
 | Cursor GUI | [docs/integrations/cursor.md](integrations/cursor.md) | ✅ GUI tested | Cursor 0.48.0, commit `54228c4`, Windows 11, 2026-06-28 |
 | Continue.dev MCP | [docs/evidence/continue-dev-mcp.json](evidence/continue-dev-mcp.json) / [continue-dev-mcp.md](evidence/continue-dev-mcp.md) | ✅ Tested | Continue.dev 1.2.0, commit `2e2782e`, Windows 11, 2026-06-28 |
 | OpenAI-compatible SDK smoke | [docs/evidence/openai-compatible-sdks.json](evidence/openai-compatible-sdks.json) / [openai-compatible-sdks.md](evidence/openai-compatible-sdks.md) | ✅ SDK smoke tested | `python scripts/smoke_openai_compatible_sdks.py --base-url http://127.0.0.1:8000/v1 --model deepseek-v4-pro --out docs/evidence/openai-compatible-sdks.json --markdown docs/evidence/openai-compatible-sdks.md` |
-| Workspace Core smoke | [docs/evidence/workspace-v2.6.6.json](evidence/workspace-v2.6.6.json) / [WORKSPACE.md](WORKSPACE.md) | ✅ Offline smoke tested | `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.6.6.json` |
-| Skill System smoke | [docs/evidence/skills-v2.6.6.json](evidence/skills-v2.6.6.json) / [SKILLS.md](SKILLS.md) | ✅ Offline smoke tested | `python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.6.6.json` |
-| Skill Workbench UI smoke | [docs/evidence/skills-ui-v2.6.6.json](evidence/skills-ui-v2.6.6.json) / [SKILLS.md](SKILLS.md) | ✅ Offline UI smoke tested | `python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.6.6.json` |
-| Skill Builder smoke | [docs/evidence/skill-builder-v2.6.6.json](evidence/skill-builder-v2.6.6.json) / [SKILLS.md](SKILLS.md) | PASS Offline authoring smoke tested | `python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.6.6.json` |
-| Skill Packs smoke | [docs/evidence/skill-packs-v2.6.6.json](evidence/skill-packs-v2.6.6.json) / [SKILLS.md](SKILLS.md) | PASS Offline Skill Pack smoke tested | `python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.6.6.json` |
-| Skill Eval Dashboard smoke | [docs/evidence/skill-eval-dashboard-v2.6.6.json](evidence/skill-eval-dashboard-v2.6.6.json) / [SKILLS.md](SKILLS.md) | PASS Offline Skill quality smoke tested | `python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.6.6.json --report-out evals/reports/skills-v2.6.6.json` |
-| Skill Versioning smoke | [docs/evidence/skill-versioning-v2.6.6.json](evidence/skill-versioning-v2.6.6.json) / [SKILLS.md](SKILLS.md) | PASS Offline lifecycle smoke tested | `python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.6.6.json` |
+| Workspace Core smoke | [docs/evidence/workspace-v2.6.7.json](evidence/workspace-v2.6.7.json) / [WORKSPACE.md](WORKSPACE.md) | ✅ Offline smoke tested | `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.6.7.json` |
+| Skill System smoke | [docs/evidence/skills-v2.6.7.json](evidence/skills-v2.6.7.json) / [SKILLS.md](SKILLS.md) | ✅ Offline smoke tested | `python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.6.7.json` |
+| Skill Workbench UI smoke | [docs/evidence/skills-ui-v2.6.7.json](evidence/skills-ui-v2.6.7.json) / [SKILLS.md](SKILLS.md) | ✅ Offline UI smoke tested | `python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.6.7.json` |
+| Skill Builder smoke | [docs/evidence/skill-builder-v2.6.7.json](evidence/skill-builder-v2.6.7.json) / [SKILLS.md](SKILLS.md) | PASS Offline authoring smoke tested | `python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.6.7.json` |
+| Skill Packs smoke | [docs/evidence/skill-packs-v2.6.7.json](evidence/skill-packs-v2.6.7.json) / [SKILLS.md](SKILLS.md) | PASS Offline Skill Pack smoke tested | `python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.6.7.json` |
+| Skill Eval Dashboard smoke | [docs/evidence/skill-eval-dashboard-v2.6.7.json](evidence/skill-eval-dashboard-v2.6.7.json) / [SKILLS.md](SKILLS.md) | PASS Offline Skill quality smoke tested | `python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.6.7.json --report-out evals/reports/skills-v2.6.7.json` |
+| Skill Versioning smoke | [docs/evidence/skill-versioning-v2.6.7.json](evidence/skill-versioning-v2.6.7.json) / [SKILLS.md](SKILLS.md) | PASS Offline lifecycle smoke tested | `python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.6.7.json` |
+| Skill Analytics smoke | [docs/evidence/skill-analytics-v2.6.7.json](evidence/skill-analytics-v2.6.7.json) / [SKILLS.md](SKILLS.md) | PASS Offline usage analytics smoke tested | `python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v2.6.7.json` |
 | Third-party A2A ecosystem candidates | [docs/integrations/a2a-third-party-plan.md](integrations/a2a-third-party-plan.md) | ✅ Evidence path closed | 保留 LangGraph / CrewAI / Google A2A reference 等候选实现的复现流程与排障说明 |
 
 ## Eval Reports
@@ -34,9 +35,9 @@
 | Agent eval | [evals/reports/agent-latest.json](../evals/reports/agent-latest.json) / [agent-latest.md](../evals/reports/agent-latest.md) | PASS |
 | Baseline compare | [evals/reports/baseline-compare-latest.json](../evals/reports/baseline-compare-latest.json) | PASS |
 | Security corpus | [evals/reports/security-latest.json](../evals/reports/security-latest.json) / [security-latest.md](../evals/reports/security-latest.md) | PASS |
-| Skill eval | [evals/reports/skills-v2.6.6.json](../evals/reports/skills-v2.6.6.json) | PASS |
+| Skill eval | [evals/reports/skills-v2.6.7.json](../evals/reports/skills-v2.6.7.json) | PASS |
 
-## Quality Gate Evidence（v2.6.6）
+## Quality Gate Evidence（v2.6.7）
 
 | Gate | Evidence | Required |
 | --- | --- | --- |
@@ -46,15 +47,16 @@
 | Baseline compare | `evals/reports/baseline-compare-latest.json` | `status=PASS` |
 | Injection strict | `latest.json.injection.status=PASS` + `gateMode=hard` | PASS |
 | Security corpus | `evals/reports/security-latest.json` | `status=PASS` |
-| Workspace Core | `docs/evidence/workspace-v2.6.6.json` | `status=PASS` 且关键 checks 全 PASS |
-| Skill System | `docs/evidence/skills-v2.6.6.json` | `status=PASS` 且关键 checks 全 PASS |
-| Skill Workbench UI | `docs/evidence/skills-ui-v2.6.6.json` | `status=PASS` 且关键 checks 全 PASS |
-| Skill Builder | `docs/evidence/skill-builder-v2.6.6.json` | `status=PASS` and key checks PASS |
-| Skill Packs | `docs/evidence/skill-packs-v2.6.6.json` | `status=PASS` and key checks PASS |
-| Skill Eval Dashboard | `docs/evidence/skill-eval-dashboard-v2.6.6.json` + `evals/reports/skills-v2.6.6.json` | `status=PASS` and Skill / Pack eval checks PASS |
-| Skill Versioning | `docs/evidence/skill-versioning-v2.6.6.json` | `status=PASS` and Skill / Pack lifecycle checks PASS |
+| Workspace Core | `docs/evidence/workspace-v2.6.7.json` | `status=PASS` 且关键 checks 全 PASS |
+| Skill System | `docs/evidence/skills-v2.6.7.json` | `status=PASS` 且关键 checks 全 PASS |
+| Skill Workbench UI | `docs/evidence/skills-ui-v2.6.7.json` | `status=PASS` 且关键 checks 全 PASS |
+| Skill Builder | `docs/evidence/skill-builder-v2.6.7.json` | `status=PASS` and key checks PASS |
+| Skill Packs | `docs/evidence/skill-packs-v2.6.7.json` | `status=PASS` and key checks PASS |
+| Skill Eval Dashboard | `docs/evidence/skill-eval-dashboard-v2.6.7.json` + `evals/reports/skills-v2.6.7.json` | `status=PASS` and Skill / Pack eval checks PASS |
+| Skill Versioning | `docs/evidence/skill-versioning-v2.6.7.json` | `status=PASS` and Skill / Pack lifecycle checks PASS |
+| Skill Analytics | `docs/evidence/skill-analytics-v2.6.7.json` | `status=PASS` and run history / diagnostics / privacy checks PASS |
 | Runtime doctor | `python scripts/doctor.py --offline` | exit 0 |
-| Release preflight | `python scripts/preflight_release.py --version 2.6.6` | exit 0 |
+| Release preflight | `python scripts/preflight_release.py --version 2.6.7` | exit 0 |
 | Smoke release | `python scripts/smoke_release.py --offline` | exit 0 |
 
 ## Release Artifacts
@@ -63,14 +65,14 @@
 
 | Artifact | Example | Purpose |
 | --- | --- | --- |
-| Release zip | `dist/deepseek-infra-2.6.6.zip` | 可分发源码包 |
-| Checksum | `dist/deepseek-infra-2.6.6.zip.sha256` | 校验 zip 完整性 |
-| Manifest | `dist/deepseek-infra-2.6.6.manifest.json` | 版本、commit、构建环境、evidence 清单与 `qualityGates` |
+| Release zip | `dist/deepseek-infra-2.6.7.zip` | 可分发源码包 |
+| Checksum | `dist/deepseek-infra-2.6.7.zip.sha256` | 校验 zip 完整性 |
+| Manifest | `dist/deepseek-infra-2.6.7.manifest.json` | 版本、commit、构建环境、evidence 清单与 `qualityGates` |
 
 构建命令：
 
 ```bash
-python scripts/release.py --clean-workspace --version 2.6.6
+python scripts/release.py --clean-workspace --version 2.6.7
 ```
 
 ## Preflight Checks
@@ -78,7 +80,7 @@ python scripts/release.py --clean-workspace --version 2.6.6
 发版前必须通过的 preflight 检查：
 
 ```bash
-python scripts/preflight_release.py --version 2.6.6
+python scripts/preflight_release.py --version 2.6.7
 ```
 关键检查项：
 
@@ -89,13 +91,14 @@ python scripts/preflight_release.py --version 2.6.6
 - `edge_router_smoke_evidence`：缺失或版本陈旧时 WARNING；同版本 evidence 存在时必须 `status=PASS` 且四类 checks 全 PASS。
 - `continue_dev_mcp_evidence`：缺失或版本陈旧时 WARNING；同版本 evidence 存在时必须 `status=PASS` 且六类 checks 全 PASS。
 - `openai_compatible_sdk_evidence`：缺失或版本陈旧时 WARNING；同版本 evidence 存在时必须 `status=PASS` 且 LangChain/LiteLLM/LlamaIndex 关键 checks 全 PASS。
-- `workspace_core_evidence`：必须存在 `docs/evidence/workspace-v2.6.6.json`，版本匹配、`status=PASS`，且项目 / 保存项 / 产物 / 对话导出 / 项目 ZIP / 脱敏 checks 全 PASS。
-- `skill_system_evidence`：必须存在 `docs/evidence/skills-v2.6.6.json`，版本匹配、`status=PASS`，且 Skill API route / registry / runner / artifact / project binding checks 全 PASS。
-- `skill_ui_evidence`：必须存在 `docs/evidence/skills-ui-v2.6.6.json`，版本匹配、`status=PASS`，且 Skill Workbench 入口、schema 表单、项目绑定、结果回链、样式、JS syntax 与 CI syntax gate 全 PASS。
-- `skill_builder_evidence`: requires `docs/evidence/skill-builder-v2.6.6.json` with `status=PASS`; verifies Builder entrypoint, clone, visual schema editing, tool picker, validation, offline dry-run, save/export, screenshots, style, JS syntax, and CI syntax gate.
-- `skill_packs_evidence`: requires `docs/evidence/skill-packs-v2.6.6.json` with `status=PASS`; verifies pack schema validation, built-in template packs, import/export, skillId conflict handling, tool permission diff, project pack binding, install dry-run, Packs UI tab, JS syntax, CI syntax gate, and pack assets.
-- `skill_eval_dashboard_evidence`: requires `docs/evidence/skill-eval-dashboard-v2.6.6.json` and `evals/reports/skills-v2.6.6.json` with `status=PASS`; verifies Eval tab, Eval Case Builder, API actions, Skill / Pack scoring, regression compare, export actions, screenshots, style, JS syntax, and CI gate.
-- `skill_versioning_evidence`: requires `docs/evidence/skill-versioning-v2.6.6.json` with `status=PASS`; verifies Skill snapshots, diffs, schema migration plans, rollback, Pack version install / rollback, eval-aware upgrade gate, project binding migration, UI assets, JS syntax, and CI gate.
+- `workspace_core_evidence`：必须存在 `docs/evidence/workspace-v2.6.7.json`，版本匹配、`status=PASS`，且项目 / 保存项 / 产物 / 对话导出 / 项目 ZIP / 脱敏 checks 全 PASS。
+- `skill_system_evidence`：必须存在 `docs/evidence/skills-v2.6.7.json`，版本匹配、`status=PASS`，且 Skill API route / registry / runner / artifact / project binding checks 全 PASS。
+- `skill_ui_evidence`：必须存在 `docs/evidence/skills-ui-v2.6.7.json`，版本匹配、`status=PASS`，且 Skill Workbench 入口、schema 表单、项目绑定、结果回链、样式、JS syntax 与 CI syntax gate 全 PASS。
+- `skill_builder_evidence`: requires `docs/evidence/skill-builder-v2.6.7.json` with `status=PASS`; verifies Builder entrypoint, clone, visual schema editing, tool picker, validation, offline dry-run, save/export, screenshots, style, JS syntax, and CI syntax gate.
+- `skill_packs_evidence`: requires `docs/evidence/skill-packs-v2.6.7.json` with `status=PASS`; verifies pack schema validation, built-in template packs, import/export, skillId conflict handling, tool permission diff, project pack binding, install dry-run, Packs UI tab, JS syntax, CI syntax gate, and pack assets.
+- `skill_eval_dashboard_evidence`: requires `docs/evidence/skill-eval-dashboard-v2.6.7.json` and `evals/reports/skills-v2.6.7.json` with `status=PASS`; verifies Eval tab, Eval Case Builder, API actions, Skill / Pack scoring, regression compare, export actions, screenshots, style, JS syntax, and CI gate.
+- `skill_versioning_evidence`: requires `docs/evidence/skill-versioning-v2.6.7.json` with `status=PASS`; verifies Skill snapshots, diffs, schema migration plans, rollback, Pack version install / rollback, eval-aware upgrade gate, project binding migration, UI assets, JS syntax, and CI gate.
+- `skill_analytics_evidence`: requires `docs/evidence/skill-analytics-v2.6.7.json` with `status=PASS`; verifies run history, metadata persistence, usage summary, failure diagnostics, project history, trace/artifact links, retention cleanup, privacy redaction, Runs UI, JS syntax, and CI gate.
 - `gui_interop_evidence`：Claude Desktop / Cursor 已在 v2.4.2 完成 GUI 实测并改为 PASS。
 - `baseline_compare_report` / `security_corpus_report` / `quality_gate_evidence`：v2.4 质量门禁证据齐全且 PASS。
 
@@ -108,16 +111,17 @@ python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bri
 python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
 python scripts/smoke_a2a_external_peer.py --peer-url <third-party-url> --peer-type third-party --out docs/evidence/a2a-third-party-peer.json --markdown docs/evidence/a2a-third-party-peer.md
 python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
-python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.6.6.json
-python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.6.6.json
-python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.6.6.json
-python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.6.6.json
-python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.6.6.json
-python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.6.6.json --report-out evals/reports/skills-v2.6.6.json
-python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.6.6.json
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.6.7.json
+python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.6.7.json
+python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.6.7.json
+python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.6.7.json
+python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.6.7.json
+python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.6.7.json --report-out evals/reports/skills-v2.6.7.json
+python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.6.7.json
+python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v2.6.7.json
 python evals/runners/run_offline_eval_suite.py --include-agent --strict --out evals/reports/latest.json --markdown evals/reports/latest.md
 python evals/runners/run_agent_eval.py --report-dir evals/reports --strict
 python evals/runners/run_security_corpus.py --strict --out evals/reports/security-latest.json --markdown evals/reports/security-latest.md
 python evals/runners/compare_eval_baseline.py --strict --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json --agent-baseline evals/baselines/agent-v2.2.8.json --out evals/reports/baseline-compare-latest.json
-python scripts/preflight_release.py --version 2.6.6
+python scripts/preflight_release.py --version 2.6.7
 ```

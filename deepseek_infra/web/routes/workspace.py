@@ -21,6 +21,7 @@ from deepseek_infra.infra.data.projects import (
     project_skill_binding,
     set_project_skill_binding,
 )
+from deepseek_infra.infra.skills import analytics as skill_analytics
 from deepseek_infra.infra.workspace import artifacts as workspace_artifacts
 from deepseek_infra.infra.workspace import exports as workspace_exports
 from deepseek_infra.infra.workspace import projects as workspace_projects
@@ -134,6 +135,12 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
         require_api_auth(request)
         limit = int(request.query_params.get("limit") or 50)
         return json_response({"ok": True, "skillRuns": list_project_skill_runs(project_id, limit=limit)})
+
+    @router.get("/api/workspace/projects/{project_id}/skill-analytics")
+    async def api_workspace_project_skill_analytics(request: Request, project_id: str) -> JSONResponse:
+        require_api_auth(request)
+        days = int(request.query_params.get("days") or 7)
+        return json_response({"ok": True, "summary": skill_analytics.analytics_summary(scope="project", project_id=project_id, days=days)})
 
     @router.patch("/api/workspace/projects/{project_id}")
     async def api_workspace_project_update(request: Request, project_id: str) -> JSONResponse:

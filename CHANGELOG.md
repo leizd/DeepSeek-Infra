@@ -2,6 +2,24 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.6.7] - Skill Run Analytics
+
+**Theme: Skill usage and run history.** After v2.6.6 added Skill / Pack lifecycle management, this release adds local Skill run history, usage analytics, failure diagnostics, trace/artifact links, retention cleanup, and privacy redaction.
+
+### Added
+
+- **Skill Run History**: records completed and failed Skill runs with skillRunId, skillId, skillVersion, packId, projectId, status, timestamps, latency, offline/model metadata, summaries, artifact/saved item counts, and traceId.
+- **Skill Usage Analytics**: adds local summaries for success/failure rate, average/P50/P90 latency, top Skills/Packs, artifact volume, project binding usage, and 7-day trend.
+- **Failure Diagnostics**: classifies failures such as schema validation, tool policy denial, artifact policy, project binding, LLM/API, timeout, user cancellation, and unknown errors with repair suggestions.
+- **Analytics API Actions**: adds `list_runs`, `get_run`, `delete_run`, `analytics_summary`, `cleanup_runs`, `redact_run`, and `export_runs` to `POST /api/skills`, plus project-level `GET /api/workspace/projects/{projectId}/skill-analytics`.
+- **Runs UI**: adds a Skill Workbench `Runs` tab with summary cards, run list, run detail, trace/artifact/saved item links, export, failed-run cleanup, and privacy redaction controls.
+- **Analytics Evidence**: adds `scripts/smoke_skill_analytics.py`, `docs/evidence/skill-analytics-v2.6.7.json`, screenshots, and release gate `skillAnalytics`.
+
+### Changed
+
+- Skill Runner now persists analytics metadata for successful and failed runs while keeping analytics logs summary-first for local privacy.
+- Release readiness, CI, smoke release, and release manifest include Skill Analytics evidence.
+
 ## [2.6.6] - Skill Versioning & Migration
 
 **Theme: Skill lifecycle management.** After v2.6.5 added Skill / Pack quality evaluation, this release adds local version history, diff, migration plans, rollback, versioned Pack installs, and eval-aware upgrade gates.

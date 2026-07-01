@@ -11,7 +11,7 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import utc_now_iso
 from deepseek_infra.infra.data import projects
 from deepseek_infra.infra.observability.observability import finish_trace, start_span, start_trace
-from deepseek_infra.infra.skills import evidence, registry
+from deepseek_infra.infra.skills import analytics, evidence, registry
 from deepseek_infra.infra.skills.permissions import skill_allowed_tools
 from deepseek_infra.infra.skills.schema import validate_instance
 from deepseek_infra.infra.skills.templates import format_project_context, offline_skill_content, skill_system_prompt, skill_user_message
@@ -32,21 +32,62 @@ def run_skill(
     persist: bool = True,
 ) -> dict[str, Any]:
     skill = registry.get_skill(skill_id)
-    if not isinstance(input_data, dict):
-        raise AppError("Skill input must be an object", code=ErrorCode.INVALID_PAYLOAD)
-    input_violations = validate_instance(input_data, skill.get("inputSchema") or {}, label="input")
-    if input_violations:
-        raise AppError("Skill input failed schema validation: " + "; ".join(input_violations), code=ErrorCode.INVALID_PAYLOAD)
-
-    binding_enabled = bool((skill.get("projectBinding") or {}).get("enabled"))
-    project = projects.require_project(project_id) if project_id and binding_enabled else None
-    project_context = format_project_context(project)
     run_id = f"run-{secrets.token_hex(8)}"
     started_at = utc_now_iso()
+    if not isinstance(input_data, dict):
+        exc = AppError("Skill input must be an object", code=ErrorCode.INVALID_PAYLOAD)
+        if persist:
+            analytics.record_failure(
+                skill=skill,
+                run_id=run_id,
+                input_data=input_data,
+                project_id=project_id,
+                started_at=started_at,
+                error=exc,
+                offline=offline,
+                model=model,
+                category="schema_validation_failed",
+            )
+        raise exc
+    input_violations = validate_instance(input_data, skill.get("inputSchema") or {}, label="input")
+    if input_violations:
+        exc = AppError("Skill input failed schema validation: " + "; ".join(input_violations), code=ErrorCode.INVALID_PAYLOAD)
+        if persist:
+            analytics.record_failure(
+                skill=skill,
+                run_id=run_id,
+                input_data=input_data,
+                project_id=project_id,
+                started_at=started_at,
+                error=exc,
+                offline=offline,
+                model=model,
+                category="schema_validation_failed",
+            )
+        raise exc
+
+    binding_enabled = bool((skill.get("projectBinding") or {}).get("enabled"))
+    try:
+        project = projects.require_project(project_id) if project_id and binding_enabled else None
+    except Exception as exc:
+        if persist:
+            analytics.record_failure(
+                skill=skill,
+                run_id=run_id,
+                input_data=input_data,
+                project_id=project_id,
+                started_at=started_at,
+                error=exc,
+                offline=offline,
+                model=model,
+                category="project_binding_failed",
+            )
+        raise
+    project_context = format_project_context(project)
     trace_id = start_trace(
         kind="skill",
         title=str(skill.get("name") or skill_id),
-        metadata={"skillId": skill["skillId"], "skillRunId": run_id, "projectId": project_id, "offline": offline},
+        metadata={"skillId": skill["skillId"], "skillRunId": run_id, "skillVersion": skill.get("version"), "projectId": project_id, "offline": offline},
     )
     run_span = start_span(
         trace_id,
@@ -75,6 +116,7 @@ def run_skill(
             "ok": True,
             "skillRunId": run_id,
             "skillId": skill["skillId"],
+            "skillVersion": skill.get("version") or "",
             "projectId": project_id if binding_enabled else "",
             "status": "completed",
             "input": input_data,
@@ -86,12 +128,36 @@ def run_skill(
             "completedAt": completed_at,
             "policy": {"allowedTools": skill_allowed_tools(skill)},
         }
+        if persist:
+            run_record = analytics.record_success(skill=skill, result=result, offline=offline, model=model)
+            result["packId"] = run_record.get("packId")
+            result["latencyMs"] = run_record.get("latencyMs")
+            result["analytics"] = run_record
+        else:
+            run_record = {}
         if persist and project_id and binding_enabled:
-            projects.append_project_skill_run(project_id, _project_run_record(result))
+            projects.append_project_skill_run(project_id, analytics.project_run_record(run_record or _project_run_record(result), input_data=input_data))
         run_span.finish(status="ok", output_data={"artifactCount": len(artifacts), "savedItemCount": len(saved_items)})
         finish_trace(trace_id, metadata={"skillId": skill["skillId"], "skillRunId": run_id, "projectId": project_id})
         return result
     except Exception as exc:
+        if persist:
+            failed_record = analytics.record_failure(
+                skill=skill,
+                run_id=run_id,
+                input_data=input_data,
+                project_id=project_id if binding_enabled else "",
+                started_at=started_at,
+                trace_id=trace_id,
+                error=exc,
+                offline=offline,
+                model=model,
+            )
+            if project_id and binding_enabled:
+                try:
+                    projects.append_project_skill_run(project_id, analytics.project_run_record(failed_record, input_data=input_data))
+                except Exception:
+                    pass
         run_span.finish(status="error", error=str(exc))
         finish_trace(trace_id, status="error", error=str(exc))
         raise
@@ -246,13 +312,21 @@ def _project_run_record(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "skillRunId": result.get("skillRunId"),
         "skillId": result.get("skillId"),
+        "skillVersion": result.get("skillVersion"),
+        "packId": result.get("packId"),
         "status": result.get("status"),
         "projectId": result.get("projectId"),
         "input": result.get("input") if isinstance(result.get("input"), dict) else {},
+        "inputSummary": analytics.summarize_payload(result.get("input")),
         "outputSummary": str(output.get("content") or "")[:1200],
         "artifactIds": [str(item.get("artifactId") or "") for item in result.get("artifacts") or [] if isinstance(item, dict)],
         "savedItemIds": [str(item.get("id") or "") for item in result.get("savedItems") or [] if isinstance(item, dict)],
+        "artifactCount": len([item for item in result.get("artifacts") or [] if isinstance(item, dict)]),
+        "savedItemCount": len([item for item in result.get("savedItems") or [] if isinstance(item, dict)]),
         "traceId": result.get("traceId"),
         "startedAt": result.get("startedAt"),
         "completedAt": result.get("completedAt"),
+        "latencyMs": result.get("latencyMs"),
+        "offline": (output.get("mode") == "offline") if output else None,
+        "model": output.get("model") if output else "",
     }

@@ -6243,7 +6243,7 @@ body.file-reader-side-open.file-reader-pdf-open .file-original-region-toolbar .f
 
 .skill-panel-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto auto auto;
   gap: 10px;
   margin-bottom: 16px;
 }
@@ -6304,6 +6304,16 @@ body.file-reader-side-open.file-reader-pdf-open .file-original-region-toolbar .f
   display: none;
 }
 
+.skill-runs-host {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 20px;
+}
+
+.skill-runs-host[hidden] {
+  display: none;
+}
+
 .skill-packs-header {
   display: flex;
   align-items: flex-start;
@@ -6320,7 +6330,8 @@ body.file-reader-side-open.file-reader-pdf-open .file-original-region-toolbar .f
 
 .skill-eval-header,
 .skill-eval-section-header,
-.skill-version-header {
+.skill-version-header,
+.skill-runs-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -6330,7 +6341,8 @@ body.file-reader-side-open.file-reader-pdf-open .file-original-region-toolbar .f
 .skill-eval-header h3,
 .skill-eval-section h4,
 .skill-version-header h3,
-.skill-version-section h4 {
+.skill-version-section h4,
+.skill-runs-header h3 {
   margin: 0;
   color: var(--text-primary);
   font-size: 16px;
@@ -6346,7 +6358,8 @@ body.file-reader-side-open.file-reader-pdf-open .file-original-region-toolbar .f
 
 .skill-eval-header p,
 .skill-eval-section-header p,
-.skill-version-header p {
+.skill-version-header p,
+.skill-runs-header p {
   margin: 4px 0 0;
   color: var(--text-tertiary);
   font-size: 12px;
@@ -6375,19 +6388,29 @@ body.file-reader-side-open.file-reader-pdf-open .file-original-region-toolbar .f
   gap: 8px;
 }
 
-.skill-version-toolbar label {
+.skill-runs-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.skill-version-toolbar label,
+.skill-runs-toolbar label {
   display: grid;
   min-width: 0;
   gap: 6px;
 }
 
-.skill-version-toolbar span {
+.skill-version-toolbar span,
+.skill-runs-toolbar span {
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 650;
 }
 
-.skill-version-toolbar select {
+.skill-version-toolbar select,
+.skill-runs-toolbar select {
   min-width: 0;
   min-height: 40px;
   border: 1px solid var(--border-default);
@@ -6612,6 +6635,135 @@ body.file-reader-side-open.file-reader-pdf-open .file-original-region-toolbar .f
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.skill-runs-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.skill-run-metric,
+.skill-run-analytics-row,
+.skill-run-detail {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-sunken);
+}
+
+.skill-run-metric {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.skill-run-metric span,
+.skill-run-metric small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-run-metric strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-runs-list {
+  display: grid;
+  gap: 10px;
+}
+
+.skill-run-analytics-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+}
+
+.skill-run-analytics-row[data-status="failed"] {
+  border-color: rgba(220, 38, 38, 0.38);
+}
+
+.skill-run-analytics-body {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.skill-run-analytics-body strong,
+.skill-run-analytics-body span,
+.skill-run-analytics-body p {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-run-analytics-body strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.skill-run-analytics-body span,
+.skill-run-analytics-body p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.skill-run-analytics-actions,
+.skill-run-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.skill-run-detail {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.skill-run-detail[hidden] {
+  display: none;
+}
+
+.skill-run-detail h4,
+.skill-run-detail p {
+  margin: 0;
+}
+
+.skill-run-detail h4 {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.skill-run-detail p {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.skill-run-detail pre {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -9377,6 +9529,9 @@ body.file-reader-side-open.file-reader-pdf-open .file-original-region-toolbar .f
   .skill-builder-field-grid.compact,
   .skill-tool-picker,
   .skill-version-toolbar,
+  .skill-runs-toolbar,
+  .skill-runs-summary,
+  .skill-run-analytics-row,
   .skill-eval-summary,
   .skill-eval-case-grid,
   .skill-eval-row,
@@ -9384,7 +9539,9 @@ body.file-reader-side-open.file-reader-pdf-open .file-original-region-toolbar .f
     grid-template-columns: 1fr;
   }
 
-  .skill-card-actions {
+  .skill-card-actions,
+  .skill-run-analytics-actions,
+  .skill-run-detail-actions {
     justify-content: flex-start;
   }
 

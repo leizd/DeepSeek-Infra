@@ -1,6 +1,6 @@
-# Android APK 打包说明
+﻿# Android APK 打包说明
 
-适用版本：v2.6.6。
+适用版本：v2.6.7。
 
 本仓库现在包含 `android/` Android Studio 工程，可把 DeepSeek Infra 打包成手机上直接运行的 APK。APK 的结构是：
 

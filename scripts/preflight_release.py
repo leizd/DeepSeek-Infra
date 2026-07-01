@@ -10,7 +10,7 @@ and Edge Router evidence is strict when submitted, that key docs do not contain
 encoding corruption (since v2.3.4), and (since v2.3.1) that GUI interop evidence
 for Claude Desktop / Cursor has been recorded in ``docs/COMPATIBILITY.md``.
 
-    python scripts/preflight_release.py --version 2.6.6
+    python scripts/preflight_release.py --version 2.6.7
 
 Exits 1 on any FAIL; WARNINGs do not fail. Version defaults to
 ``settings.app_version``.
@@ -1091,6 +1091,71 @@ def check_skill_versioning_evidence(root: Path, version: str) -> CheckResult:
     )
 
 
+def check_skill_analytics_evidence(root: Path, version: str) -> CheckResult:
+    path = root / "docs" / "evidence" / f"skill-analytics-v{version}.json"
+    if not path.is_file():
+        return CheckResult(
+            "skill_analytics_evidence",
+            STATUS_FAIL,
+            "Skill Analytics evidence missing; run scripts/smoke_skill_analytics.py --offline",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("skill_analytics_evidence", STATUS_FAIL, f"cannot parse Skill Analytics evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("skill_analytics", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "skill_analytics_evidence",
+            STATUS_FAIL,
+            f"Skill Analytics evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS":
+        return CheckResult(
+            "skill_analytics_evidence",
+            STATUS_FAIL,
+            f"Skill Analytics evidence status is {data.get('status')!r}, expected PASS",
+            {"status": data.get("status")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = (
+        "skillRunHistory",
+        "runMetadataPersist",
+        "analyticsSummary",
+        "failureDiagnostics",
+        "projectRunHistory",
+        "traceLink",
+        "artifactLink",
+        "retentionCleanup",
+        "privacyRedaction",
+        "analyticsApiActions",
+        "analyticsUi",
+        "analyticsAssets",
+        "analyticsJsSyntax",
+        "ciReleaseGate",
+    )
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult(
+            "skill_analytics_evidence",
+            STATUS_FAIL,
+            f"Skill Analytics evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    return CheckResult(
+        "skill_analytics_evidence",
+        STATUS_PASS,
+        "Skill Analytics evidence recorded",
+        {"path": str(path), "checks": list(required)},
+    )
+
+
 def check_gui_interop_evidence(root: Path) -> CheckResult:
     """Verify Claude Desktop / Cursor GUI evidence is recorded in COMPATIBILITY.md.
 
@@ -1180,6 +1245,7 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_skill_packs_evidence(root, version),
         check_skill_eval_dashboard_evidence(root, version),
         check_skill_versioning_evidence(root, version),
+        check_skill_analytics_evidence(root, version),
         check_gui_interop_evidence(root),
     ]
 

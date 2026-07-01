@@ -1,6 +1,6 @@
-# Runtime Doctor
+﻿# Runtime Doctor
 
-适用版本：v2.6.6。
+适用版本：v2.6.7。
 
 Runtime Doctor 回答一个最常见的问题：**到底为什么起不来？** 它把一个全新 DeepSeek Infra 安装需要的环境逐项体检，每项输出 `PASS` / `WARNING` / `FAIL`，让你快速区分到底是 Python 版本、依赖缺失、`.env` / API Key、数据目录权限、static 路径、端口占用还是服务没起来。
 

@@ -1,8 +1,8 @@
-# Skill System
+﻿# Skill System
 
-Applicable version: v2.6.6.
+Applicable version: v2.6.7.
 
-DeepSeek Infra v2.6.6 defines a Skill as:
+DeepSeek Infra v2.6.7 defines a Skill as:
 
 ```text
 Skill = Prompt + Tools + Input Schema + Output Schema + Memory Policy + Artifact Policy + Project Binding
@@ -19,6 +19,7 @@ deepseek_infra/infra/skills/
   registry.py      # built-in + custom Skill and Skill Pack registry
   permissions.py   # Skill allowedTools -> ToolPolicy
   runner.py        # Skill execution and project/artifact persistence
+  analytics.py     # Skill run history, usage analytics, diagnostics, retention
   eval.py          # offline Skill / Pack scoring and regression reports
   versioning.py    # Skill / Pack revision history, diff, migration, rollback
   templates.py     # prompt and offline output helpers
@@ -52,7 +53,7 @@ POST /api/skills
 POST /api/skills/{skill_id}/run
 ```
 
-Common actions: `list`, `builtin`, `get`, `create`, `update`, `disable`, `enable`, `delete`, `import`, `export`, `validate`, `dry_run`, `run`, `list_packs`, `get_pack`, `export_pack`, `import_pack`, `validate_pack`, `delete_pack`, `eval_report`, `list_eval_cases`, `create_eval_case`, `delete_eval_case`, `list_versions`, `diff_versions`, `rollback_skill`, `migration_plan`, `list_pack_versions`, `diff_pack_versions`, `upgrade_pack`, `rollback_pack`, and `eval_upgrade_gate`.
+Common actions: `list`, `builtin`, `get`, `create`, `update`, `disable`, `enable`, `delete`, `import`, `export`, `validate`, `dry_run`, `run`, `list_packs`, `get_pack`, `export_pack`, `import_pack`, `validate_pack`, `delete_pack`, `eval_report`, `list_eval_cases`, `create_eval_case`, `delete_eval_case`, `list_runs`, `get_run`, `delete_run`, `analytics_summary`, `cleanup_runs`, `redact_run`, `export_runs`, `list_versions`, `diff_versions`, `rollback_skill`, `migration_plan`, `list_pack_versions`, `diff_pack_versions`, `upgrade_pack`, `rollback_pack`, and `eval_upgrade_gate`.
 
 ## Runner
 
@@ -66,7 +67,7 @@ select Skill
   -> pass allowedTools into the existing Tool Policy path
   -> run LLM/tool loop or offline smoke path
   -> validate outputSchema
-  -> save Skill output, artifacts, project history, and evidence metadata
+  -> save Skill output, artifacts, project history, run analytics, and evidence metadata
 ```
 
 The runner never bypasses Tool Policy. `allowedTools` narrows the tools included in the DeepSeek payload and also narrows the `ToolPolicy` grant used by execution.
@@ -96,7 +97,7 @@ Project export includes Skill bindings, Skill run history, saved Skill outputs, 
 
 ## Skill Workbench UI
 
-v2.6.6 adds a local Skill Workbench in the main Web UI:
+v2.6.7 adds a local Skill Workbench in the main Web UI:
 
 - Open the `Skills` entry in the sidebar to browse built-in and custom Skills.
 - Use the workbench toolbar to search, import Skill JSON, export custom Skills, and enable or disable custom Skills.
@@ -115,7 +116,7 @@ static/styles.css
 
 ## Custom Skill Builder
 
-v2.6.6 adds a Custom Skill Builder inside the Skill Workbench so users can author Skills without hand-writing JSON:
+v2.6.7 adds a Custom Skill Builder inside the Skill Workbench so users can author Skills without hand-writing JSON:
 
 - `New Skill` opens a guided builder for `skillId`, `name`, `description`, `version`, `systemPrompt`, policies, schema fields, and tools.
 - `Clone` on a built-in Skill creates a custom editable copy, preserving the source prompt, schemas, tool grants, memory policy, artifact policy, and project binding.
@@ -134,7 +135,7 @@ The authoring API actions are intentionally local-only and do not download third
 
 ## Skill Packs
 
-v2.6.6 introduces local Skill Packs so a set of Skills can be imported, exported, installed, and bound to projects together. A Skill Pack is a `.skillpack.json` manifest:
+v2.6.7 introduces local Skill Packs so a set of Skills can be imported, exported, installed, and bound to projects together. A Skill Pack is a `.skillpack.json` manifest:
 
 ```json
 {
@@ -188,7 +189,7 @@ The import summary returns an `allowedTools` permission diff with risk labels (`
 
 ## Skill Eval Dashboard
 
-v2.6.6 adds a local Skill quality loop. The Workbench `Eval` tab runs offline Skill / Pack evals, shows pass/fail status, average score, case counts, failed cases, and latest run metadata, and exports JSON / Markdown summaries. The Eval Case Builder creates local rule-based cases without hand-editing JSONL.
+v2.6.7 adds a local Skill quality loop. The Workbench `Eval` tab runs offline Skill / Pack evals, shows pass/fail status, average score, case counts, failed cases, and latest run metadata, and exports JSON / Markdown summaries. The Eval Case Builder creates local rule-based cases without hand-editing JSONL.
 
 Eval cases can be defined in `evals/golden/skills/skill_eval_cases.jsonl` or created from the Workbench. A case can include:
 
@@ -218,10 +219,10 @@ Scoring is rule-based and offline by default:
 The eval runner supports all Skills, one Skill, one Pack, and baseline comparison:
 
 ```bash
-python evals/runners/run_skill_eval.py --strict --out evals/reports/skills-v2.6.6.json
-python evals/runners/run_skill_eval.py --scope skill --skill-id skill_study_tutor --out evals/reports/skills-v2.6.6.json
-python evals/runners/run_skill_eval.py --scope pack --pack-id pack_study --out evals/reports/skills-v2.6.6.json
-python evals/runners/run_skill_eval.py --baseline evals/reports/skills-v2.6.4.json --out evals/reports/skills-v2.6.6.json
+python evals/runners/run_skill_eval.py --strict --out evals/reports/skills-v2.6.7.json
+python evals/runners/run_skill_eval.py --scope skill --skill-id skill_study_tutor --out evals/reports/skills-v2.6.7.json
+python evals/runners/run_skill_eval.py --scope pack --pack-id pack_study --out evals/reports/skills-v2.6.7.json
+python evals/runners/run_skill_eval.py --baseline evals/reports/skills-v2.6.4.json --out evals/reports/skills-v2.6.7.json
 ```
 
 Workbench API actions:
@@ -260,6 +261,38 @@ Versioning API actions:
 
 Migration plans are rule-based and offline. They flag removed fields, newly required fields without defaults, type changes, possible field renames, and the number of project bindings / eval cases / saved metadata entries that reference the Skill. Eval-aware upgrades reuse the Skill Eval report path so Pack changes can show score, pass rate, regression count, and a `low` or `review` recommendation before install.
 
+## Skill Run Analytics
+
+v2.6.7 adds local run history and usage analytics for Skill runs. The Runner records both completed and failed runs under `.skills/runs/runs.jsonl` with metadata only: `skillRunId`, `skillId`, `skillVersion`, `packId`, `projectId`, status, timestamps, latency, offline/model flags, input/output summaries, artifact and saved-item counts, `traceId`, and diagnostic fields.
+
+The Workbench `Runs` tab shows:
+
+- Run history filtered by Skill.
+- Success/failure rate, average/P50/P90 latency, top Skills/Packs, artifact count, saved item count, and recent trend.
+- Failure diagnostics for schema validation, tool policy denial, artifact policy, project binding, LLM/API, timeout, cancellation, and unknown errors.
+- Links back to traces, project run history, Saved Items, and Artifacts.
+- Local retention controls: delete one run, clear failed runs, export history, and redact summaries while keeping metadata.
+
+Analytics API actions:
+
+```json
+{ "action": "list_runs", "skillId": "skill_research_brief", "limit": 50 }
+{ "action": "get_run", "skillRunId": "run_xxx" }
+{ "action": "delete_run", "skillRunId": "run_xxx" }
+{ "action": "analytics_summary", "scope": "all" }
+{ "action": "analytics_summary", "scope": "skill", "skillId": "skill_research_brief" }
+{ "action": "analytics_summary", "scope": "pack", "packId": "pack_study" }
+{ "action": "cleanup_runs", "status": "failed" }
+{ "action": "redact_run", "skillRunId": "run_xxx" }
+{ "action": "export_runs" }
+```
+
+Project analytics endpoint:
+
+```text
+GET /api/workspace/projects/{projectId}/skill-analytics
+```
+
 ## Evidence
 
 Run the local offline checks:
@@ -271,16 +304,19 @@ python scripts/smoke_skill_builder.py --offline
 python scripts/smoke_skill_packs.py --offline
 python scripts/smoke_skill_eval_dashboard.py --offline
 python scripts/smoke_skill_versioning.py --offline
+python scripts/smoke_skill_analytics.py --offline
 python evals/runners/run_skill_eval.py --strict
 ```
 
-The release evidence file is `docs/evidence/skills-v2.6.6.json`.
-The Skill Workbench UI evidence file is `docs/evidence/skills-ui-v2.6.6.json`.
-The Custom Skill Builder evidence file is `docs/evidence/skill-builder-v2.6.6.json`.
-The Skill Packs evidence file is `docs/evidence/skill-packs-v2.6.6.json`.
-The Skill Eval Dashboard evidence file is `docs/evidence/skill-eval-dashboard-v2.6.6.json`.
-The Skill Versioning evidence file is `docs/evidence/skill-versioning-v2.6.6.json`.
-The Skill eval report is `evals/reports/skills-v2.6.6.json`.
+The release evidence file is `docs/evidence/skills-v2.6.7.json`.
+The Skill Workbench UI evidence file is `docs/evidence/skills-ui-v2.6.7.json`.
+The Custom Skill Builder evidence file is `docs/evidence/skill-builder-v2.6.7.json`.
+The Skill Packs evidence file is `docs/evidence/skill-packs-v2.6.7.json`.
+The Skill Eval Dashboard evidence file is `docs/evidence/skill-eval-dashboard-v2.6.7.json`.
+The Skill Versioning evidence file is `docs/evidence/skill-versioning-v2.6.7.json`.
+The Skill Analytics evidence file is `docs/evidence/skill-analytics-v2.6.7.json`.
+The Skill eval report is `evals/reports/skills-v2.6.7.json`.
 
 Required checks: `skillApiRoutes`, `builtinSkillsLoad`, `customSkillCreate`, `inputSchemaValidation`, `toolPermissionGate`, `artifactPolicy`, `projectBinding`, and `skillExport`.
 Versioning checks: `skillVersionSnapshot`, `skillDiff`, `schemaMigrationPlan`, `skillRollback`, `packVersionInstall`, `packRollback`, `evalAwareUpgradeGate`, and `projectBindingMigration`.
+Analytics checks: `skillRunHistory`, `runMetadataPersist`, `analyticsSummary`, `failureDiagnostics`, `projectRunHistory`, `traceLink`, `artifactLink`, `retentionCleanup`, and `privacyRedaction`.

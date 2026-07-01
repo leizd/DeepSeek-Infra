@@ -41,6 +41,8 @@ const state = {
   evalCases: [],
   skillVersions: [],
   packVersions: [],
+  skillRuns: [],
+  runsSummary: null,
   versionTarget: { kind: "skill", id: "" },
   activeProjectId: "",
   search: "",
@@ -149,6 +151,16 @@ function cacheElements() {
     "skillVersionList",
     "skillVersionDiff",
     "skillPackVersionList",
+    "skillRunsButton",
+    "skillRunsHost",
+    "skillRunsCloseButton",
+    "skillRunsSkillSelect",
+    "skillRunsRefreshButton",
+    "skillRunsExportButton",
+    "skillRunsCleanupButton",
+    "skillRunsSummary",
+    "skillRunsList",
+    "skillRunDetail",
     "skillEvalSummary",
     "skillEvalCaseForm",
     "skillEvalCaseSkillSelect",
@@ -198,6 +210,14 @@ function bindEvents() {
   els.skillPacksButton?.addEventListener("click", openPacksHost);
   els.skillEvalButton?.addEventListener("click", openEvalHost);
   els.skillVersionsButton?.addEventListener("click", openVersionHost);
+  els.skillRunsButton?.addEventListener("click", openRunsHost);
+  els.skillRunsCloseButton?.addEventListener("click", closeRunsHost);
+  els.skillRunsRefreshButton?.addEventListener("click", loadRunsDashboard);
+  els.skillRunsExportButton?.addEventListener("click", exportSkillRuns);
+  els.skillRunsCleanupButton?.addEventListener("click", cleanupFailedRuns);
+  els.skillRunsSkillSelect?.addEventListener("change", loadRunsDashboard);
+  els.skillRunsList?.addEventListener("click", onRunsListClick);
+  els.skillRunDetail?.addEventListener("click", onRunDetailClick);
   els.skillVersionsCloseButton?.addEventListener("click", closeVersionHost);
   els.skillVersionSkillSelect?.addEventListener("change", () => loadSkillVersions(els.skillVersionSkillSelect.value || ""));
   els.skillVersionCompareButton?.addEventListener("click", compareSkillVersions);
@@ -262,6 +282,7 @@ function openSkillPanel() {
   closePacksHost();
   closeEvalHost();
   closeVersionHost();
+  closeRunsHost();
   loadSkills();
   loadProjects();
   loadPacks();
@@ -276,6 +297,7 @@ function closeSkillPanel() {
   closePacksHost();
   closeEvalHost();
   closeVersionHost();
+  closeRunsHost();
   els.skillPanel.classList.remove("open");
   els.skillPanel.setAttribute("aria-hidden", "true");
   onPanelStateChange();
@@ -287,6 +309,7 @@ function openSkillRunHost(skill) {
   closePacksHost();
   closeEvalHost();
   closeVersionHost();
+  closeRunsHost();
   els.skillRunHost.hidden = false;
   els.skillRunTitle.textContent = `运行 · ${skill.name || skill.skillId}`;
   els.skillRunTitle.dataset.skillId = skill.skillId;
@@ -422,6 +445,12 @@ function renderRunResult(result, projectId) {
   meta.className = "skill-run-meta-text";
   meta.textContent = `runId: ${result.skillRunId || ""}${projectId ? ` · project: ${projectId}` : ""}`;
   els.skillRunResultBody.append(meta);
+  if (result.traceId) {
+    const traceMeta = document.createElement("p");
+    traceMeta.className = "skill-run-meta-text";
+    traceMeta.textContent = `trace: ${result.traceId}`;
+    els.skillRunResultBody.append(traceMeta);
+  }
 
   const linked = [];
   for (const item of result.savedItems || []) {
@@ -442,9 +471,21 @@ function renderRunResult(result, projectId) {
   }
 
   if (els.skillRunResultActions) {
-    const hasLinks = Boolean(projectId) && ((result.savedItems?.length) || (result.artifacts?.length));
+    els.skillRunResultActions.querySelector("[data-run-trace]")?.remove();
+    if (result.traceId) {
+      const trace = document.createElement("a");
+      trace.className = "secondary-button";
+      trace.dataset.runTrace = result.traceId;
+      trace.href = `/api/traces/${encodeURIComponent(result.traceId)}`;
+      trace.target = "_blank";
+      trace.rel = "noopener noreferrer";
+      trace.textContent = "Trace";
+      els.skillRunResultActions.append(trace);
+    }
+    const hasLinks = Boolean(result.traceId) || (Boolean(projectId) && ((result.savedItems?.length) || (result.artifacts?.length)));
     els.skillRunResultActions.hidden = !hasLinks;
   }
+  if (!els.skillRunsHost?.hidden) loadRunsDashboard();
 }
 
 async function loadSkills() {
@@ -504,6 +545,7 @@ function renderSkillPanel() {
   renderSkillCards(els.skillCustomList, state.skills.filter((skill) => !skill.builtin && matches(skill)), "还没有自定义 Skill，可从内置 Skill 导出后导入。");
   renderRecentRuns();
   populateEvalSkillSelect();
+  populateRunsSkillSelect();
 }
 
 function renderSkillCards(host, skills, emptyText) {
@@ -679,6 +721,7 @@ function openSkillBuilder({ mode = "create", skill = null } = {}) {
   closePacksHost();
   closeEvalHost();
   closeVersionHost();
+  closeRunsHost();
   state.builder.mode = mode;
   state.builder.originalSkillId = mode === "edit" ? (skill?.skillId || "") : "";
   state.builder.saveAndRun = false;
@@ -1211,6 +1254,7 @@ function openVersionHost(target = {}) {
   closeSkillRunHost();
   closePacksHost();
   closeEvalHost();
+  closeRunsHost();
   els.skillVersionsHost.hidden = false;
   populateVersionSkillSelect(target.skillId || "");
   const selectedSkill = els.skillVersionSkillSelect?.value || "";
@@ -1442,6 +1486,284 @@ async function runPackUpgradeGate(packId) {
   }
 }
 
+// --- Skill Run Analytics (v2.6.7) -------------------------------------------
+
+function openRunsHost() {
+  if (!els.skillRunsHost) return;
+  closeSkillBuilder();
+  closeSkillRunHost();
+  closePacksHost();
+  closeEvalHost();
+  closeVersionHost();
+  els.skillRunsHost.hidden = false;
+  populateRunsSkillSelect();
+  loadRunsDashboard();
+}
+
+function closeRunsHost() {
+  if (els.skillRunsHost) els.skillRunsHost.hidden = true;
+  if (els.skillRunDetail) els.skillRunDetail.hidden = true;
+}
+
+function populateRunsSkillSelect() {
+  if (!els.skillRunsSkillSelect) return;
+  const current = els.skillRunsSkillSelect.value;
+  els.skillRunsSkillSelect.replaceChildren();
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "All Skills";
+  els.skillRunsSkillSelect.append(all);
+  for (const skill of state.skills) {
+    const option = document.createElement("option");
+    option.value = skill.skillId;
+    option.textContent = `${skill.name || skill.skillId} (${skill.skillId})`;
+    if (skill.skillId === current) option.selected = true;
+    els.skillRunsSkillSelect.append(option);
+  }
+}
+
+async function loadRunsDashboard() {
+  if (!els.skillRunsHost || els.skillRunsHost.hidden) return;
+  const skillId = els.skillRunsSkillSelect?.value || "";
+  const summaryPayload = skillId ? { action: "analytics_summary", scope: "skill", skillId, days: 7 } : { action: "analytics_summary", scope: "all", days: 7 };
+  const runsPayload = { action: "list_runs", skillId, limit: 50 };
+  try {
+    const [summaryResponse, runsResponse] = await Promise.all([
+      apiFetch(SKILL_API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(summaryPayload) }),
+      apiFetch(SKILL_API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(runsPayload) }),
+    ]);
+    const summaryData = await parseJsonResponse(summaryResponse);
+    const runsData = await parseJsonResponse(runsResponse);
+    state.runsSummary = summaryData.summary || null;
+    state.skillRuns = Array.isArray(runsData.skillRuns) ? runsData.skillRuns : [];
+    renderRunsSummary();
+    renderRunsList();
+  } catch (error) {
+    renderRunsError(`Run analytics failed: ${error.message || error}`);
+  }
+}
+
+function renderRunsSummary() {
+  if (!els.skillRunsSummary) return;
+  els.skillRunsSummary.replaceChildren();
+  const summary = state.runsSummary || {};
+  els.skillRunsSummary.append(runMetricCard("Runs", String(summary.totalRuns || 0), `${summary.failedRuns || 0} failed`));
+  els.skillRunsSummary.append(runMetricCard("Success", `${Math.round((summary.successRate || 0) * 100)}%`, "completed / total"));
+  els.skillRunsSummary.append(runMetricCard("P90", `${summary.p90LatencyMs || 0} ms`, `avg ${summary.averageLatencyMs || 0} ms`));
+  els.skillRunsSummary.append(runMetricCard("Artifacts", String(summary.artifactCount || 0), `${summary.savedItemCount || 0} saved items`));
+  const topSkill = Array.isArray(summary.topSkills) && summary.topSkills[0] ? summary.topSkills[0] : null;
+  els.skillRunsSummary.append(runMetricCard("Top Skill", topSkill?.id || "none", topSkill ? `${topSkill.count} runs` : "no usage yet"));
+}
+
+function runMetricCard(label, value, detail) {
+  const card = document.createElement("article");
+  card.className = "skill-run-metric";
+  const span = document.createElement("span");
+  span.textContent = label;
+  const strong = document.createElement("strong");
+  strong.textContent = value;
+  const small = document.createElement("small");
+  small.textContent = detail;
+  card.append(span, strong, small);
+  return card;
+}
+
+function renderRunsList() {
+  if (!els.skillRunsList) return;
+  els.skillRunsList.replaceChildren();
+  if (!state.skillRuns.length) {
+    const empty = document.createElement("p");
+    empty.className = "panel-empty";
+    empty.textContent = "No Skill runs recorded yet.";
+    els.skillRunsList.append(empty);
+    return;
+  }
+  for (const run of state.skillRuns) {
+    els.skillRunsList.append(runRow(run));
+  }
+}
+
+function runRow(run) {
+  const row = document.createElement("article");
+  row.className = "skill-run-analytics-row";
+  row.dataset.status = run.status || "";
+  row.dataset.runId = run.skillRunId || "";
+  const body = document.createElement("div");
+  body.className = "skill-run-analytics-body";
+  const title = document.createElement("strong");
+  title.textContent = `${run.skillId || "skill"} ${run.skillVersion ? `@ ${run.skillVersion}` : ""}`;
+  const meta = document.createElement("span");
+  meta.textContent = `${run.status || "completed"} | ${run.latencyMs || 0} ms | ${run.projectId || "no project"} | ${run.packId || "no pack"}`;
+  const summary = document.createElement("p");
+  summary.textContent = run.status === "failed" ? `${run.failureCategory || "unknown_error"}: ${run.errorReason || ""}` : run.outputSummary || run.inputSummary || "";
+  body.append(title, meta, summary);
+
+  const actions = document.createElement("div");
+  actions.className = "skill-run-analytics-actions";
+  const view = document.createElement("button");
+  view.type = "button";
+  view.className = "secondary-button";
+  view.dataset.runView = run.skillRunId || "";
+  view.textContent = "View";
+  const redact = document.createElement("button");
+  redact.type = "button";
+  redact.className = "secondary-button";
+  redact.dataset.runRedact = run.skillRunId || "";
+  redact.textContent = "Redact";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "danger-button";
+  remove.dataset.runDelete = run.skillRunId || "";
+  remove.textContent = "Delete";
+  actions.append(view, redact, remove);
+  row.append(body, actions);
+  return row;
+}
+
+function renderRunsError(message) {
+  if (!els.skillRunsList) return;
+  els.skillRunsList.replaceChildren();
+  const error = document.createElement("p");
+  error.className = "panel-empty";
+  error.textContent = message;
+  els.skillRunsList.append(error);
+}
+
+async function onRunsListClick(event) {
+  const target = event.target instanceof Element ? event.target : event.target?.parentElement;
+  const view = target?.closest("button[data-run-view]");
+  const redact = target?.closest("button[data-run-redact]");
+  const remove = target?.closest("button[data-run-delete]");
+  if (view) {
+    await showRunDetail(view.dataset.runView || "");
+    return;
+  }
+  if (redact) {
+    await redactSkillRun(redact.dataset.runRedact || "");
+    return;
+  }
+  if (remove) {
+    await deleteSkillRun(remove.dataset.runDelete || "");
+  }
+}
+
+async function showRunDetail(skillRunId) {
+  if (!skillRunId || !els.skillRunDetail) return;
+  try {
+    const response = await apiFetch(SKILL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "get_run", skillRunId }),
+    });
+    const data = await parseJsonResponse(response);
+    const run = data.skillRun || {};
+    els.skillRunDetail.replaceChildren();
+    els.skillRunDetail.hidden = false;
+    const title = document.createElement("h4");
+    title.textContent = `${run.skillId || "Skill"} run`;
+    const meta = document.createElement("p");
+    meta.textContent = `${run.skillRunId || ""} | ${run.status || ""} | ${run.completedAt || ""}`;
+    const actions = document.createElement("div");
+    actions.className = "skill-run-detail-actions";
+    appendRunLink(actions, "Trace", run.links?.trace);
+    appendRunLink(actions, "Saved Items", run.links?.savedItems);
+    appendRunLink(actions, "Artifacts", run.links?.artifacts);
+    appendRunLink(actions, "Project Runs", run.links?.projectRuns);
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify(run, null, 2);
+    els.skillRunDetail.append(title, meta, actions, pre);
+    els.skillRunDetail.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  } catch (error) {
+    showToast(`Load run failed: ${error.message || error}`);
+  }
+}
+
+function appendRunLink(host, label, href) {
+  if (!href) return;
+  const link = document.createElement("a");
+  link.className = "secondary-button";
+  link.href = href;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = label;
+  host.append(link);
+}
+
+async function onRunDetailClick(event) {
+  const target = event.target instanceof Element ? event.target : event.target?.parentElement;
+  const tab = target?.closest("[data-open-project-tab]");
+  if (!tab) return;
+  event.preventDefault();
+  openProjectPath(tab.dataset.openProjectTab || "", tab.dataset.projectId || "");
+}
+
+async function deleteSkillRun(skillRunId) {
+  if (!skillRunId) return;
+  if (!window.confirm(`Delete Skill run ${skillRunId}?`)) return;
+  try {
+    const response = await apiFetch(SKILL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete_run", skillRunId }),
+    });
+    const data = await parseJsonResponse(response);
+    if (!data.ok) throw new Error(data.error || "Delete failed");
+    await loadRunsDashboard();
+  } catch (error) {
+    showToast(`Delete run failed: ${error.message || error}`);
+  }
+}
+
+async function redactSkillRun(skillRunId) {
+  if (!skillRunId) return;
+  try {
+    const response = await apiFetch(SKILL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "redact_run", skillRunId }),
+    });
+    const data = await parseJsonResponse(response);
+    if (!data.ok) throw new Error(data.error || "Redact failed");
+    await loadRunsDashboard();
+    await showRunDetail(skillRunId);
+  } catch (error) {
+    showToast(`Redact run failed: ${error.message || error}`);
+  }
+}
+
+async function cleanupFailedRuns() {
+  if (!window.confirm("Clear failed Skill runs from local analytics history?")) return;
+  try {
+    const response = await apiFetch(SKILL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "cleanup_runs", status: "failed" }),
+    });
+    const data = await parseJsonResponse(response);
+    if (!data.ok) throw new Error(data.error || "Cleanup failed");
+    await loadRunsDashboard();
+    showToast(`Deleted ${data.deleted || 0} failed runs.`);
+  } catch (error) {
+    showToast(`Cleanup failed: ${error.message || error}`);
+  }
+}
+
+async function exportSkillRuns() {
+  const skillId = els.skillRunsSkillSelect?.value || "";
+  try {
+    const response = await apiFetch(SKILL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "export_runs", skillId }),
+    });
+    const data = await parseJsonResponse(response);
+    if (!data.ok) throw new Error(data.error || "Export failed");
+    downloadTextFile(`${JSON.stringify({ exportedAt: new Date().toISOString(), ...data }, null, 2)}\n`, "skill-runs.json", "application/json;charset=utf-8");
+  } catch (error) {
+    showToast(`Export runs failed: ${error.message || error}`);
+  }
+}
+
 // --- Skill Eval Dashboard (v2.6.6) -------------------------------------------
 
 function openEvalHost() {
@@ -1450,6 +1772,7 @@ function openEvalHost() {
   closeSkillRunHost();
   closePacksHost();
   closeVersionHost();
+  closeRunsHost();
   els.skillEvalHost.hidden = false;
   populateEvalSkillSelect();
   loadEvalCases();
@@ -1845,6 +2168,7 @@ function openPacksHost() {
   closeSkillRunHost();
   closeEvalHost();
   closeVersionHost();
+  closeRunsHost();
   els.skillPacksHost.hidden = false;
   loadPacks();
 }

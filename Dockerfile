@@ -1,6 +1,6 @@
 ﻿# DeepSeek Infra 鈥?local-first agentic AI runtime
-# 鏋勫缓:  docker build -t deepseek-infra:2.6.6 .
-# 杩愯:  docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:2.6.6
+# 鏋勫缓:  docker build -t deepseek-infra:2.6.7 .
+# 杩愯:  docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:2.6.7
 # 璇存槑瑙?docs/DEPLOYMENT.md
 FROM python:3.12-slim
 

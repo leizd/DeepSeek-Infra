@@ -1,7 +1,7 @@
 {
   "version": "2.6.7",
   "commit": "dd0031094ea7",
-  "generatedAt": "2026-07-01T02:02:38+00:00",
+  "generatedAt": "2026-07-01T01:51:32+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -37,7 +37,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T02:02:34+00:00",
+      "lastRunAt": "2026-07-01T01:51:31+00:00",
       "packIds": [
         "pack_code"
       ]
@@ -50,7 +50,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T02:02:35+00:00",
+      "lastRunAt": "2026-07-01T01:51:31+00:00",
       "packIds": [
         "pack_code",
         "pack_office",
@@ -66,7 +66,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T02:02:35+00:00",
+      "lastRunAt": "2026-07-01T01:51:31+00:00",
       "packIds": [
         "pack_office"
       ]
@@ -79,7 +79,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T02:02:36+00:00",
+      "lastRunAt": "2026-07-01T01:51:31+00:00",
       "packIds": [
         "pack_office",
         "pack_research",
@@ -94,7 +94,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T02:02:37+00:00",
+      "lastRunAt": "2026-07-01T01:51:32+00:00",
       "packIds": [
         "pack_research"
       ]
@@ -107,7 +107,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T02:02:37+00:00",
+      "lastRunAt": "2026-07-01T01:51:32+00:00",
       "packIds": [
         "pack_study"
       ]
@@ -122,7 +122,7 @@
       "passRate": 1.0,
       "caseCount": 2,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T02:02:35+00:00"
+      "lastRunAt": "2026-07-01T01:51:31+00:00"
     },
     {
       "packId": "pack_office",
@@ -132,7 +132,7 @@
       "passRate": 1.0,
       "caseCount": 3,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T02:02:36+00:00"
+      "lastRunAt": "2026-07-01T01:51:31+00:00"
     },
     {
       "packId": "pack_research",
@@ -142,7 +142,7 @@
       "passRate": 1.0,
       "caseCount": 3,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T02:02:37+00:00"
+      "lastRunAt": "2026-07-01T01:51:32+00:00"
     },
     {
       "packId": "pack_study",
@@ -152,7 +152,7 @@
       "passRate": 1.0,
       "caseCount": 3,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T02:02:37+00:00"
+      "lastRunAt": "2026-07-01T01:51:32+00:00"
     }
   ],
   "caseResults": [
@@ -171,7 +171,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 459.33
+        "latencyMs": 187.93
       },
       "input": {
         "scope": "def add(a, b): return a - b",
@@ -195,7 +195,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T02:02:34+00:00"
+      "lastRunAt": "2026-07-01T01:51:31+00:00"
     },
     {
       "caseId": "synthetic-skill_document_reader",
@@ -215,7 +215,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 570.97
+        "latencyMs": 209.02
       },
       "input": {
         "query": "Summarize the key claims and cite supporting passages."
@@ -238,7 +238,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T02:02:35+00:00"
+      "lastRunAt": "2026-07-01T01:51:31+00:00"
     },
     {
       "caseId": "ppt-generator-architecture",
@@ -255,7 +255,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 562.02
+        "latencyMs": 187.07
       },
       "input": {
         "topic": "DeepSeek Infra Skill Quality Loop",
@@ -281,7 +281,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T02:02:35+00:00"
+      "lastRunAt": "2026-07-01T01:51:31+00:00"
     },
     {
       "caseId": "synthetic-skill_paper_writer",
@@ -300,7 +300,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 585.16
+        "latencyMs": 164.29
       },
       "input": {
         "topic": "The impact of local RAG on learning workflows",
@@ -325,7 +325,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T02:02:36+00:00"
+      "lastRunAt": "2026-07-01T01:51:31+00:00"
     },
     {
       "caseId": "research-local-first-ai",
@@ -342,7 +342,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 638.45
+        "latencyMs": 182.74
       },
       "input": {
         "topic": "Local-first AI workspaces",
@@ -367,7 +367,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T02:02:37+00:00"
+      "lastRunAt": "2026-07-01T01:51:32+00:00"
     },
     {
       "caseId": "study-os-scheduling",
@@ -384,7 +384,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 681.44
+        "latencyMs": 202.11
       },
       "input": {
         "question": "Explain FCFS SJF RR and priority scheduling for operating systems.",
@@ -411,7 +411,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T02:02:37+00:00"
+      "lastRunAt": "2026-07-01T01:51:32+00:00"
     }
   ],
   "regression": {

@@ -381,19 +381,41 @@ def normalize_skill_runs(value: Any) -> list[dict[str, Any]]:
 
 
 def normalize_skill_run(item: dict[str, Any]) -> dict[str, Any]:
+    artifact_ids = unique_strings(str(value or "") for value in item.get("artifactIds") or [])[:40]
+    saved_item_ids = unique_strings(str(value or "") for value in item.get("savedItemIds") or [])[:40]
     return {
         "skillRunId": str(item.get("skillRunId") or item.get("runId") or f"run-{secrets.token_hex(8)}")[:80],
         "skillId": normalize_skill_id_for_project(item.get("skillId")),
+        "skillVersion": str(item.get("skillVersion") or "")[:40],
+        "packId": normalize_pack_id_for_project(item.get("packId")),
         "status": str(item.get("status") or "completed")[:40],
         "projectId": str(item.get("projectId") or "")[:80],
         "input": item.get("input") if isinstance(item.get("input"), dict) else {},
+        "inputSummary": str(item.get("inputSummary") or "")[:600],
         "outputSummary": str(item.get("outputSummary") or "")[:1200],
-        "artifactIds": unique_strings(str(value or "") for value in item.get("artifactIds") or [])[:40],
-        "savedItemIds": unique_strings(str(value or "") for value in item.get("savedItemIds") or [])[:40],
+        "artifactIds": artifact_ids,
+        "savedItemIds": saved_item_ids,
+        "artifactCount": _safe_int(item.get("artifactCount"), default=len(artifact_ids)),
+        "savedItemCount": _safe_int(item.get("savedItemCount"), default=len(saved_item_ids)),
         "traceId": str(item.get("traceId") or "")[:80],
         "startedAt": str(item.get("startedAt") or ""),
         "completedAt": str(item.get("completedAt") or ""),
+        "latencyMs": max(0, int(item.get("latencyMs") or 0)),
+        "offline": bool(item.get("offline")),
+        "model": str(item.get("model") or "")[:120],
+        "errorReason": str(item.get("errorReason") or "")[:1200],
+        "failureCategory": str(item.get("failureCategory") or "")[:80],
+        "diagnosticSuggestion": str(item.get("diagnosticSuggestion") or "")[:240],
     }
+
+
+def _safe_int(value: Any, *, default: int = 0) -> int:
+    if value is None:
+        return max(0, default)
+    try:
+        return max(0, int(str(value)))
+    except (TypeError, ValueError):
+        return max(0, default)
 
 
 def normalize_saved_items(value: Any) -> list[dict[str, Any]]:

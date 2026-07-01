@@ -1,8 +1,8 @@
-# Workspace Core
+﻿# Workspace Core
 
-适用版本：v2.6.6。
+适用版本：v2.6.7。
 
-v2.5.0 引入 **Workspace Core**；本文适用于 v2.6.6：把项目空间、保存项、生成产物、对话和导出统一成 DeepSeek Infra 的本地 AI 工作台对象模型。它不是新的协议门禁，也不是 Skill / 浏览器控制 / 自动化系统，而是 3.0.0 前的第一块产品地基。
+v2.5.0 引入 **Workspace Core**；本文适用于 v2.6.7：把项目空间、保存项、生成产物、对话和导出统一成 DeepSeek Infra 的本地 AI 工作台对象模型。它不是新的协议门禁，也不是 Skill / 浏览器控制 / 自动化系统，而是 3.0.0 前的第一块产品地基。
 
 ## 对象模型
 
@@ -174,14 +174,14 @@ project-export.zip
 Workspace Core smoke 是离线的，不需要 API key 或网络：
 
 ```bash
-python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.6.6.json
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.6.7.json
 ```
 
 证据文件包含统一 metadata：
 
 ```json
 {
-  "version": "2.6.6",
+  "version": "2.6.7",
   "commit": "abc1234",
   "generatedAt": "2026-06-28T00:00:00Z",
   "environment": {"os": "Windows", "python": "3.12", "ci": false},
@@ -197,4 +197,4 @@ python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.6.6
 }
 ```
 
-`scripts/preflight_release.py --version 2.6.6` 会把 `workspace_core_evidence` 作为硬检查。`scripts/smoke_release.py --offline` 默认会先跑 Workspace Core smoke 与 Skill System smoke，再跑 eval / security / agent / baseline compare。
+`scripts/preflight_release.py --version 2.6.7` 会把 `workspace_core_evidence` 作为硬检查。`scripts/smoke_release.py --offline` 默认会先跑 Workspace Core smoke 与 Skill System smoke，再跑 eval / security / agent / baseline compare。

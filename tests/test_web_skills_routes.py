@@ -180,6 +180,123 @@ def test_skill_run_path_executes_offline(tmp_settings: Path) -> None:
     assert payload["skillId"] == "skill_research_brief"
 
 
+def test_skills_run_analytics_actions_and_project_endpoint(tmp_settings: Path) -> None:
+    project = projects.create_project("Skill Analytics API Project")
+
+    with _running_server() as server:
+        status, run, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={
+                "action": "run",
+                "skillId": "skill_research_brief",
+                "input": {"topic": "Skill analytics", "depth": "quick"},
+                "projectId": project["id"],
+                "offline": True,
+            },
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        run_id = run["skillRunId"]
+
+        status, listed, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={"action": "list_runs", "skillId": "skill_research_brief", "limit": 10},
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert run_id in {item["skillRunId"] for item in listed["skillRuns"]}
+        first = listed["skillRuns"][0]
+        assert first["skillVersion"]
+        assert first["latencyMs"] >= 0
+        assert first["artifactCount"] >= 1
+        assert first["links"]["trace"]
+
+        status, fetched, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={"action": "get_run", "skillRunId": run_id},
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert fetched["skillRun"]["skillRunId"] == run_id
+
+        status, summary, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={"action": "analytics_summary", "scope": "skill", "skillId": "skill_research_brief"},
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert summary["summary"]["totalRuns"] >= 1
+        assert summary["summary"]["successRate"] > 0
+
+        status, project_summary, _ = _request(
+            server,
+            "GET",
+            f"/api/workspace/projects/{project['id']}/skill-analytics",
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert project_summary["summary"]["projectId"] == project["id"]
+        assert project_summary["summary"]["projectBindingRuns"] >= 1
+
+        status, redacted, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={"action": "redact_run", "skillRunId": run_id},
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert redacted["run"]["redacted"] is True
+        assert redacted["run"]["inputSummary"] == "[redacted]"
+
+        status, _, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={"action": "run", "skillId": "skill_research_brief", "input": {}, "offline": True},
+            headers=_auth_headers(),
+        )
+        assert status == 400
+
+        status, failed, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={"action": "list_runs", "status": "failed", "limit": 10},
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert any(item["failureCategory"] == "schema_validation_failed" for item in failed["skillRuns"])
+
+        status, cleaned, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={"action": "cleanup_runs", "status": "failed"},
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert cleaned["deleted"] >= 1
+
+        status, deleted, _ = _request(
+            server,
+            "POST",
+            "/api/skills",
+            payload={"action": "delete_run", "skillRunId": run_id},
+            headers=_auth_headers(),
+        )
+        assert status == 200
+        assert deleted["deleted"] == 1
+
+
 def test_skills_validate_and_dry_run_authoring_actions(tmp_settings: Path) -> None:
     skill = _custom_skill()
 

@@ -1,6 +1,6 @@
-# DeepSeek Infra
+﻿# DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-2.6.6-blue)
+![版本](https://img.shields.io/badge/version-2.6.7-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-80%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
@@ -206,7 +206,7 @@ curl http://127.0.0.1:8000/v1/models -H "Authorization: Bearer <本地访问 tok
 
 与之配套的**质量评测**在 [evals/](evals/)（全部离线可跑）：`python evals/runners/run_offline_eval_suite.py --include-agent --strict` 会统一留下 [latest eval report](evals/reports/latest.md)，当前 baseline 为 RAG Recall@5 1.000 / Citation Accuracy 0.8333、26 个固定攻防用例的 **Tool Policy Pass Rate 1.000 / Prompt Injection Defense Pass 1.000**，以及对抗注入小语料的 `block_rate` / `false_positive_rate` / `bypass_rate` 硬门禁；`run_agent_eval.py --strict` 额外生成 [Agent Eval report](evals/reports/agent-latest.md)，低于 Tool Call Accuracy 0.90 / Agent Success Rate 0.85 / Prompt Regression Pass Rate 0.90 会阻断 CI。`run_security_corpus.py --strict` 生成 [Security Corpus report](evals/reports/security-latest.md)，覆盖 prompt injection、tool policy attack、benign false-positive、SSRF、路径越界与密钥外泄语料。详见 [evals/README.md](evals/README.md)、[docs/EVAL_REPORTS.md](docs/EVAL_REPORTS.md) 与 [docs/AGENT_EVAL.md](docs/AGENT_EVAL.md)。本地安全能力复现最小命令集见 [docs/SECURITY_SMOKE.md](docs/SECURITY_SMOKE.md)。
 
-**Release preflight (v2.6.6)**: Run `python scripts/doctor.py --offline`, `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.6.6.json`, `python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.6.6.json`, `python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.6.6.json`, `python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.6.6.json`, `python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.6.6.json`, `python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.6.6.json --report-out evals/reports/skills-v2.6.6.json`, and `python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.6.6.json`; then run `python scripts/preflight_release.py --version 2.6.6` and `python scripts/smoke_release.py --offline`. Release manifest quality gates include `workspaceCore`, `skillSystem`, `skillWorkbench`, `skillBuilder`, `skillPacks`, `skillEvalDashboard`, and `skillVersioning`.
+**Release preflight (v2.6.7)**: Run `python scripts/doctor.py --offline`, `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.6.7.json`, `python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.6.7.json`, `python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.6.7.json`, `python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.6.7.json`, `python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.6.7.json`, `python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.6.7.json --report-out evals/reports/skills-v2.6.7.json`, `python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.6.7.json`, and `python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v2.6.7.json`; then run `python scripts/preflight_release.py --version 2.6.7` and `python scripts/smoke_release.py --offline`. Release manifest quality gates include `workspaceCore`, `skillSystem`, `skillWorkbench`, `skillBuilder`, `skillPacks`, `skillEvalDashboard`, `skillVersioning`, and `skillAnalytics`.
 
 ## 快速开始
 
@@ -565,6 +565,14 @@ python scripts/release.py --clean-workspace
 - [x] Skill 运行结果预览回链 Saved Items / Artifact Hub，产物 metadata 保留 `skillRunId`
 - [x] 新增 `scripts/smoke_skills_ui.py --offline` 与 `docs/evidence/skills-ui-v2.6.2.json`，CI / preflight / release manifest 纳入 `skillWorkbench` gate
 
+### v2.6.7: Skill Run Analytics
+- [x] Add Skill Run History with skillRunId, skillId, skillVersion, packId, projectId, status, latency, model, summaries, linked artifacts, saved items, and trace metadata.
+- [x] Add local usage analytics for total runs, success/failure rate, average/P50/P90 latency, top Skills/Packs, artifact counts, project binding usage, and 7-day trend.
+- [x] Add failure diagnostics for schema validation, tool policy, artifact policy, project binding, LLM/API, timeout, cancellation, and unknown errors.
+- [x] Add `POST /api/skills` analytics actions: `list_runs`, `get_run`, `delete_run`, `analytics_summary`, `cleanup_runs`, `redact_run`, and `export_runs`.
+- [x] Add Skill Workbench Runs tab with summary cards, run detail, trace/artifact links, export, cleanup, and redaction controls.
+- [x] Add `scripts/smoke_skill_analytics.py --offline` and `docs/evidence/skill-analytics-v2.6.7.json`, with release readiness / preflight / CI gate `skillAnalytics`.
+
 ### v2.6.6: Skill Versioning & Migration
 - [x] Add Skill version history snapshots with revision metadata, hashes, and change summaries.
 - [x] Add Skill version diff and migration-plan APIs for schema, prompt, tool grants, memory, artifacts, and project binding.
@@ -579,7 +587,7 @@ python scripts/release.py --clean-workspace
 - [x] Add Eval Case Builder for expected keywords, JSON paths, forbidden regex, expected artifacts, and project binding requirements.
 - [x] Extend `evals/runners/run_skill_eval.py` with Skill / Pack scoring, baseline regression compare, JSON export, and Markdown summary.
 - [x] Add `POST /api/skills` eval actions for `eval_report`, `list_eval_cases`, `create_eval_case`, and `delete_eval_case`.
-- [x] Add `scripts/smoke_skill_eval_dashboard.py --offline`, `evals/reports/skills-v2.6.6.json`, and `docs/evidence/skill-eval-dashboard-v2.6.6.json`.
+- [x] Add `scripts/smoke_skill_eval_dashboard.py --offline`, `evals/reports/skills-v2.6.7.json`, and `docs/evidence/skill-eval-dashboard-v2.6.7.json`.
 - [x] Add release readiness / preflight / CI gates for `skillEvalDashboard` and Skill eval report evidence.
 
 ### v2.6.4: Skill Packs

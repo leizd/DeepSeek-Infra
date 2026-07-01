@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from deepseek_infra.core.config import APP_VERSION
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import utc_now_iso
+from deepseek_infra.infra.skills import analytics as skill_analytics
 from deepseek_infra.infra.skills import eval as skill_eval
 from deepseek_infra.infra.skills import versioning as skill_versioning
 from deepseek_infra.infra.skills.pack import tool_permission_summary
@@ -112,6 +113,46 @@ def create_skills_router(deps: SkillsRouteDeps) -> APIRouter:
             return json_response({"ok": True, "case": skill_eval.save_eval_case(_eval_case(payload))})
         if action == "delete_eval_case":
             return json_response(skill_eval.delete_eval_case(_case_id(payload)))
+        if action == "list_runs":
+            return json_response(
+                {
+                    "ok": True,
+                    "skillRuns": skill_analytics.list_runs(
+                        skill_id=str(payload.get("skillId") or ""),
+                        pack_id=str(payload.get("packId") or ""),
+                        project_id=str(payload.get("projectId") or ""),
+                        status=str(payload.get("status") or ""),
+                        limit=_limit(payload),
+                    ),
+                }
+            )
+        if action == "get_run":
+            return json_response({"ok": True, "skillRun": skill_analytics.get_run(_skill_run_id(payload))})
+        if action == "delete_run":
+            return json_response(skill_analytics.delete_run(_skill_run_id(payload)))
+        if action == "cleanup_runs":
+            return json_response(
+                skill_analytics.cleanup_runs(
+                    status=str(payload.get("status") or ""),
+                    skill_id=str(payload.get("skillId") or ""),
+                    pack_id=str(payload.get("packId") or ""),
+                    project_id=str(payload.get("projectId") or ""),
+                    keep_recent=_limit(payload, key="keepRecent", default=0),
+                )
+            )
+        if action == "redact_run":
+            return json_response(skill_analytics.redact_run(_skill_run_id(payload)))
+        if action == "export_runs":
+            runs = skill_analytics.list_runs(
+                skill_id=str(payload.get("skillId") or ""),
+                pack_id=str(payload.get("packId") or ""),
+                project_id=str(payload.get("projectId") or ""),
+                status=str(payload.get("status") or ""),
+                limit=0,
+            )
+            return json_response({"ok": True, "skillRuns": runs, "summary": _analytics_summary(payload)})
+        if action == "analytics_summary":
+            return json_response({"ok": True, "summary": _analytics_summary(payload)})
         if action == "list_versions":
             return json_response({"ok": True, "versions": skill_versioning.list_skill_versions(_skill_id(payload))})
         if action == "diff_versions":
@@ -212,6 +253,32 @@ def _case_id(payload: dict[str, Any]) -> str:
     if not case_id:
         raise AppError("caseId is required", code=ErrorCode.INVALID_PAYLOAD)
     return case_id
+
+
+def _skill_run_id(payload: dict[str, Any]) -> str:
+    run_id = str(payload.get("skillRunId") or payload.get("runId") or "").strip()
+    if not run_id:
+        raise AppError("skillRunId is required", code=ErrorCode.INVALID_PAYLOAD)
+    return run_id
+
+
+def _limit(payload: dict[str, Any], *, key: str = "limit", default: int = 50) -> int:
+    raw = payload.get(key)
+    try:
+        value = int(str(raw if raw is not None else default))
+    except (TypeError, ValueError):
+        value = default
+    return max(0, min(value, 1000))
+
+
+def _analytics_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    return skill_analytics.analytics_summary(
+        scope=str(payload.get("scope") or "all"),
+        skill_id=str(payload.get("skillId") or ""),
+        pack_id=str(payload.get("packId") or ""),
+        project_id=str(payload.get("projectId") or ""),
+        days=_limit(payload, key="days", default=7) or 7,
+    )
 
 
 def _version(payload: dict[str, Any]) -> str:

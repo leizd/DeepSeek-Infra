@@ -44,18 +44,19 @@ DEFAULT_EVIDENCE_PATHS = (
     "docs/evidence/edge-router-smoke.json",
     "docs/evidence/continue-dev-mcp.json",
     "docs/evidence/openai-compatible-sdks.json",
-    "docs/evidence/workspace-v2.6.6.json",
-    "docs/evidence/skills-v2.6.6.json",
-    "docs/evidence/skills-ui-v2.6.6.json",
-    "docs/evidence/skill-builder-v2.6.6.json",
-    "docs/evidence/skill-packs-v2.6.6.json",
-    "docs/evidence/skill-eval-dashboard-v2.6.6.json",
-    "docs/evidence/skill-versioning-v2.6.6.json",
+    "docs/evidence/workspace-v2.6.7.json",
+    "docs/evidence/skills-v2.6.7.json",
+    "docs/evidence/skills-ui-v2.6.7.json",
+    "docs/evidence/skill-builder-v2.6.7.json",
+    "docs/evidence/skill-packs-v2.6.7.json",
+    "docs/evidence/skill-eval-dashboard-v2.6.7.json",
+    "docs/evidence/skill-versioning-v2.6.7.json",
+    "docs/evidence/skill-analytics-v2.6.7.json",
     "evals/reports/latest.json",
     "evals/reports/agent-latest.json",
     "evals/reports/baseline-compare-latest.json",
     "evals/reports/security-latest.json",
-    "evals/reports/skills-v2.6.6.json",
+    "evals/reports/skills-v2.6.7.json",
     "docs/EVIDENCE_INDEX.md",
 )
 
@@ -73,6 +74,7 @@ DEFAULT_QUALITY_GATES = {
     "skillPacks": "PASS",
     "skillEvalDashboard": "PASS",
     "skillVersioning": "PASS",
+    "skillAnalytics": "PASS",
 }
 
 
