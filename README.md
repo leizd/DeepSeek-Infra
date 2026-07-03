@@ -1,6 +1,6 @@
 # DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-2.7.1-blue)
+![版本](https://img.shields.io/badge/version-2.7.2-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-80%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
@@ -216,7 +216,7 @@ curl http://127.0.0.1:8000/v1/models -H "Authorization: Bearer <本地访问 tok
 
 与之配套的**质量评测**在 [evals/](evals/)（全部离线可跑）：`python evals/runners/run_offline_eval_suite.py --include-agent --strict` 会统一留下 [latest eval report](evals/reports/latest.md)，当前 baseline 为 RAG Recall@5 1.000 / Citation Accuracy 0.8333、26 个固定攻防用例的 **Tool Policy Pass Rate 1.000 / Prompt Injection Defense Pass 1.000**，以及对抗注入小语料的 `block_rate` / `false_positive_rate` / `bypass_rate` 硬门禁；`run_agent_eval.py --strict` 额外生成 [Agent Eval report](evals/reports/agent-latest.md)，低于 Tool Call Accuracy 0.90 / Agent Success Rate 0.85 / Prompt Regression Pass Rate 0.90 会阻断 CI。`run_security_corpus.py --strict` 生成 [Security Corpus report](evals/reports/security-latest.md)，覆盖 prompt injection、tool policy attack、benign false-positive、SSRF、路径越界与密钥外泄语料。详见 [evals/README.md](evals/README.md)、[docs/EVAL_REPORTS.md](docs/EVAL_REPORTS.md) 与 [docs/AGENT_EVAL.md](docs/AGENT_EVAL.md)。本地安全能力复现最小命令集见 [docs/SECURITY_SMOKE.md](docs/SECURITY_SMOKE.md)。
 
-**Release preflight (v2.7.1)**: Run `python scripts/doctor.py --offline`, `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.7.1.json`, `python scripts/smoke_media.py --offline --out docs/evidence/media-v2.7.1.json`, `python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.7.1.json`, `python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.7.1.json`, `python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.7.1.json`, `python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.7.1.json`, `python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.7.1.json --report-out evals/reports/skills-v2.7.1.json`, `python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.7.1.json`, `python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v2.7.1.json`, `python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v2.7.1.json`, `python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v2.7.1.json`, and `python evals/runners/run_media_eval.py --strict --out evals/reports/media-v2.7.1.json`; then run `python scripts/preflight_release.py --version 2.7.1` and `python scripts/smoke_release.py --offline`. Release manifest quality gates include `workspaceCore`, `mediaLayer`, `skillSystem`, `skillWorkbench`, `skillBuilder`, `skillPacks`, `skillEvalDashboard`, `skillVersioning`, `skillAnalytics`, `skillSecurity`, and `skillCatalog`.
+**Release preflight (v2.7.2)**: Run `python scripts/doctor.py --offline`, `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.7.2.json`, `python scripts/smoke_media.py --offline --out docs/evidence/media-v2.7.2.json`, `python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.7.2.json`, `python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.7.2.json`, `python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.7.2.json`, `python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.7.2.json`, `python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.7.2.json --report-out evals/reports/skills-v2.7.2.json`, `python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.7.2.json`, `python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v2.7.2.json`, `python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v2.7.2.json`, `python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v2.7.2.json`, and `python evals/runners/run_media_eval.py --strict --out evals/reports/media-v2.7.2.json`; then run `python scripts/preflight_release.py --version 2.7.2` and `python scripts/smoke_release.py --offline`. Release manifest quality gates include `workspaceCore`, `mediaLayer`, `skillSystem`, `skillWorkbench`, `skillBuilder`, `skillPacks`, `skillEvalDashboard`, `skillVersioning`, `skillAnalytics`, `skillSecurity`, and `skillCatalog`.
 
 ## 快速开始
 
@@ -575,6 +575,12 @@ python scripts/release.py --clean-workspace
 - [x] Skill 运行结果预览回链 Saved Items / Artifact Hub，产物 metadata 保留 `skillRunId`
 - [x] 新增 `scripts/smoke_skills_ui.py --offline` 与 `docs/evidence/skills-ui-v2.6.2.json`，CI / preflight / release manifest 纳入 `skillWorkbench` gate
 
+### v2.7.2: Release Hygiene & Encoding Gates
+- [x] Fix Dockerfile comments and Docker image examples so release-facing text is clean ASCII/UTF-8 and uses the v2.7.2 tag.
+- [x] Expand release preflight encoding checks across Dockerfile, GitHub workflows, scripts, README, CHANGELOG, and docs markdown.
+- [x] Make CI trigger rules explicit for `main` push, `main` pull requests, and manual `workflow_dispatch` runs.
+- [x] Add `docs/RELEASE_CHECKLIST.md` with version bump, smoke, preflight, encoding, CI, Docker, and release artifact steps.
+
 ### v2.7.1: Media Layer Hardening
 - [x] Harden media source paths so records can only point at `.media/objects/{mediaId}/...`; absolute paths and traversal are rejected.
 - [x] Add Media upload gates: 50 MB per source, 20 files per media request, and an allowlist for image/audio/video/PDF/HTML MIME types.
@@ -664,7 +670,7 @@ python scripts/release.py --clean-workspace
 - [docs/EDGE_ROUTER_RUNBOOK.md](docs/EDGE_ROUTER_RUNBOOK.md) — Edge Router / Ollama / GGUF 本地验收步骤。
 - [docs/integrations/claude-desktop.md](docs/integrations/claude-desktop.md) / [docs/integrations/cursor.md](docs/integrations/cursor.md) — MCP 客户端配置片段与排障步骤。
 - [evals/README.md](evals/README.md) — 评测 harness；[docs/EVAL_REPORTS.md](docs/EVAL_REPORTS.md) — 离线评测报告与回归基线；[docs/AGENT_EVAL.md](docs/AGENT_EVAL.md) — Agent 录制回放规范；[benchmarks/README.md](benchmarks/README.md) — 基准说明。
-- [docs/RUNTIME_DOCTOR.md](docs/RUNTIME_DOCTOR.md) — 运行时体检（`scripts/doctor.py`）；[docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md) — 发版前体检与发布产物证明（`scripts/preflight_release.py` / `scripts/smoke_release.py` / release manifest）。
+- [docs/RUNTIME_DOCTOR.md](docs/RUNTIME_DOCTOR.md) — 运行时体检（`scripts/doctor.py`）；[docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md) — 发版前体检与发布产物证明（`scripts/preflight_release.py` / `scripts/smoke_release.py` / release manifest）；[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) — 发版 checklist。
 
 ## 注意事项
 

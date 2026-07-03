@@ -1,8 +1,8 @@
 # Multimodal Media Layer
 
-Applicable version: v2.7.1.
+Applicable version: v2.7.2.
 
-DeepSeek Infra v2.7.1 makes media a first-class workspace object. A media item can belong to a project, keep source metadata, move through a processing lifecycle, emit citable segments, enter Local RAG, and travel with Project Export.
+DeepSeek Infra v2.7.2 makes media a first-class workspace object. A media item can belong to a project, keep source metadata, move through a processing lifecycle, emit citable segments, enter Local RAG, and travel with Project Export.
 
 ## Object Model
 
@@ -49,7 +49,7 @@ Segments are the searchable/citable unit:
 - `GET /api/media/{mediaId}/segments`: list extracted segments.
 - `DELETE /api/media/{mediaId}`: delete metadata, segments, source files, and Local RAG media index rows.
 
-The JSON path supports webpage snapshots and transcript imports without requiring heavy local ASR/video dependencies. Audio/video built-ins are intentionally MVP in v2.7.1: metadata plus transcript/frame-caption imports.
+The JSON path supports webpage snapshots and transcript imports without requiring heavy local ASR/video dependencies. Audio/video built-ins are intentionally MVP in v2.7.2: metadata plus transcript/frame-caption imports.
 
 ## Processing
 
@@ -93,7 +93,7 @@ Secrets in text media sources and segment payloads are redacted during export.
 
 ## Media Skills
 
-v2.7.1 adds built-in Skills that accept `mediaIds`:
+v2.7.2 adds built-in Skills that accept `mediaIds`:
 
 - `image_explainer`
 - `pdf_reader`
@@ -107,6 +107,6 @@ The Skill runner expands media IDs into segment/citation context before invoking
 ## Evidence
 
 ```bash
-python scripts/smoke_media.py --offline --out docs/evidence/media-v2.7.1.json
-python evals/runners/run_media_eval.py --strict --out evals/reports/media-v2.7.1.json
+python scripts/smoke_media.py --offline --out docs/evidence/media-v2.7.2.json
+python evals/runners/run_media_eval.py --strict --out evals/reports/media-v2.7.2.json
 ```

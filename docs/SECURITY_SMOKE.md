@@ -1,6 +1,6 @@
 # 安全冒烟检查清单
 
-适用版本：v2.7.1。
+适用版本：v2.7.2。
 
 这页是 DeepSeek Infra 安全能力的**最小可复现命令集**：任何人克隆仓库后，无需 API Key、无需联网，都能在本地验证 Tool Policy、Context Taint 防火墙与 Prompt Injection 评测门禁是否工作。先跑通这套冒烟，再去看 [THREAT_MODEL.md](THREAT_MODEL.md) 的威胁分类与 [SECURITY.md](SECURITY.md) 的数据驻留口径。
 

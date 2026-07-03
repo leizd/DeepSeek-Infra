@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release Preflight — verify version sync and release evidence before tagging.
+"""Release Preflight - verify version sync and release evidence before tagging.
 
 Checks that the version string is consistent across the README badge,
 CHANGELOG, Dockerfile tag, Implementation Status / evals README headers, that
@@ -7,10 +7,10 @@ the eval / agent reports are current, that the smoke / eval docs exist, that
 ``scripts/release.py`` still excludes runtime caches and logs, that headless MCP
 bridge and A2A external peer evidence are present, that optional third-party A2A
 and Edge Router evidence is strict when submitted, that key docs do not contain
-encoding corruption (since v2.3.4), and (since v2.3.1) that GUI interop evidence
+encoding corruption (expanded in v2.7.2), and (since v2.3.1) that GUI interop evidence
 for Claude Desktop / Cursor has been recorded in ``docs/COMPATIBILITY.md``.
 
-    python scripts/preflight_release.py --version 2.6.7
+    python scripts/preflight_release.py --version 2.7.2
 
 Exits 1 on any FAIL; WARNINGs do not fail. Version defaults to
 ``settings.app_version``.
@@ -30,16 +30,21 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # Common mojibake / encoding-corruption signatures that should never ship.
 GARBLED_PATTERNS = (
     re.compile(r"\?{3,}"),  # three or more question marks (encoding fallback)
-    re.compile(r"锟斤拷"),  # classic GBK/UTF-8 mojibake
+    re.compile("\u951f\u65a4\u62f7"),  # classic GBK/UTF-8 mojibake
+    re.compile("\u9225"),  # mojibake fragment often seen for smart quotes
+    re.compile("\u93cb"),  # mojibake fragment often seen in corrupted Chinese text
+    re.compile("\u6769"),  # mojibake fragment often seen in corrupted Chinese text
     re.compile(r"\ufffd"),  # Unicode replacement character
 )
-GARBLED_DOC_PATHS = (
+GARBLED_EXACT_PATHS = (
     "CHANGELOG.md",
+    "Dockerfile",
     "README.md",
-    "docs/COMPATIBILITY.md",
-    "docs/IMPLEMENTATION_STATUS.md",
-    "docs/RELEASE_READINESS.md",
-    "docs/EVIDENCE_INDEX.md",
+)
+GARBLED_GLOBS = (
+    ".github/workflows/*.yml",
+    "scripts/*.py",
+    "docs/**/*.md",
 )
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -97,40 +102,52 @@ _FENCE_RE = re.compile(r"(```|~~~)[^\n]*\n.*?\n\1", re.DOTALL)
 
 def _strip_code_spans(text: str) -> str:
     """Remove inline code and fenced code blocks so literal examples of
-    garbled patterns (e.g. `` `???` ``) inside documentation do not trigger
-    the sanity check.
+    garbled patterns inside documentation do not trigger the sanity check.
     """
     text = _FENCE_RE.sub("", text)
     return _INLINE_CODE_RE.sub("", text)
 
 
+def _encoding_scan_paths(root: Path) -> list[tuple[str, Path]]:
+    """Return release-facing files covered by the encoding sanity gate."""
+    seen: set[str] = set()
+    paths: list[tuple[str, Path]] = []
+
+    def add(rel: str, path: Path) -> None:
+        if rel in seen or not path.is_file():
+            return
+        seen.add(rel)
+        paths.append((rel, path))
+
+    for rel in GARBLED_EXACT_PATHS:
+        add(rel, root / rel)
+
+    for pattern in GARBLED_GLOBS:
+        for path in sorted(root.glob(pattern)):
+            if path.is_file():
+                add(path.relative_to(root).as_posix(), path)
+
+    return paths
+
+
 def check_docs_encoding_sanity(root: Path) -> CheckResult:
-    """Detect encoding corruption in key human-readable docs.
+    """Detect encoding corruption in release-facing files.
 
     Catches the kind of mojibake that appeared in CHANGELOG.md for v2.3.3
     before it was polished in v2.3.4. Inline code spans and fenced blocks are
-    ignored because they may intentionally document the checked patterns.
+    ignored for Markdown because they may intentionally document the checked
+    patterns.
     """
     findings: list[dict[str, Any]] = []
     checked_paths: list[str] = []
-    for rel in GARBLED_DOC_PATHS:
-        path = root / rel
-        if not path.is_file():
-            continue
+    for rel, path in _encoding_scan_paths(root):
         checked_paths.append(rel)
-        text = _strip_code_spans(_read(path))
+        text = _read(path)
+        if path.suffix.lower() == ".md":
+            text = _strip_code_spans(text)
         for pattern in GARBLED_PATTERNS:
             for match in pattern.finditer(text):
                 findings.append({"path": rel, "pattern": pattern.pattern, "snippet": text[max(0, match.start() - 20):match.end() + 20]})
-    # Also scan docs/integrations/*.md which are the primary interoperability runbooks.
-    integrations_dir = root / "docs" / "integrations"
-    if integrations_dir.is_dir():
-        checked_paths.append("docs/integrations/*.md")
-        for path in integrations_dir.glob("*.md"):
-            text = _strip_code_spans(_read(path))
-            for pattern in GARBLED_PATTERNS:
-                for match in pattern.finditer(text):
-                    findings.append({"path": f"docs/integrations/{path.name}", "pattern": pattern.pattern, "snippet": text[max(0, match.start() - 20):match.end() + 20]})
     if findings:
         paths = sorted({f["path"] for f in findings})
         return CheckResult(
@@ -139,7 +156,7 @@ def check_docs_encoding_sanity(root: Path) -> CheckResult:
             f"encoding corruption detected in {', '.join(paths)}; fix mojibake before release",
             {"findings": findings[:10]},
         )
-    return CheckResult("docs_encoding_sanity", STATUS_PASS, "no encoding corruption in key docs", {"checked": checked_paths})
+    return CheckResult("docs_encoding_sanity", STATUS_PASS, "no encoding corruption in release-facing files", {"checked": checked_paths})
 
 
 def check_doc_links_exist(root: Path) -> CheckResult:

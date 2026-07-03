@@ -1038,26 +1038,26 @@ def test_preflight_passes_on_workspace_core_evidence_complete(tmp_path: Path) ->
 
 def test_preflight_fails_on_missing_media_layer_evidence(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.7.1")
-    (root / "docs" / "evidence" / "media-v2.7.1.json").unlink()
-    result = next(r for r in preflight.run_preflight(root, "2.7.1") if r.name == "media_layer_evidence")
+    root = _skeleton(tmp_path, "2.7.2")
+    (root / "docs" / "evidence" / "media-v2.7.2.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.7.2") if r.name == "media_layer_evidence")
     assert result.status == "fail"
     assert "smoke_media.py" in result.detail
 
 
 def test_preflight_fails_on_media_layer_missing_required_check(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.7.1")
-    _write_media_evidence(root / "docs" / "evidence" / "media-v2.7.1.json", "2.7.1", omit_check="mediaToRag")
-    result = next(r for r in preflight.run_preflight(root, "2.7.1") if r.name == "media_layer_evidence")
+    root = _skeleton(tmp_path, "2.7.2")
+    _write_media_evidence(root / "docs" / "evidence" / "media-v2.7.2.json", "2.7.2", omit_check="mediaToRag")
+    result = next(r for r in preflight.run_preflight(root, "2.7.2") if r.name == "media_layer_evidence")
     assert result.status == "fail"
     assert "mediaToRag" in result.detail
 
 
 def test_preflight_passes_on_media_layer_evidence_complete(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.7.1")
-    result = next(r for r in preflight.run_preflight(root, "2.7.1") if r.name == "media_layer_evidence")
+    root = _skeleton(tmp_path, "2.7.2")
+    result = next(r for r in preflight.run_preflight(root, "2.7.2") if r.name == "media_layer_evidence")
     assert result.status == "pass"
 
 

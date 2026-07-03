@@ -2,6 +2,20 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.7.2] - Release Hygiene & Encoding Gates
+
+**Theme: release-facing polish and encoding guardrails.** This patch cleans up residual mojibake in release-visible files and expands preflight coverage so encoding regressions are caught before tagging.
+
+### Added
+
+- **Expanded encoding gate**: `preflight_release.py` now scans Dockerfile, GitHub workflows, scripts, README, CHANGELOG and docs markdown for common mojibake signatures including `???`, replacement characters and UTF-8/GBK corruption fragments.
+- **Workflow trigger clarity**: CI now explicitly runs on `main` pushes, `main` pull requests and manual `workflow_dispatch` runs.
+- **Release checklist**: added `docs/RELEASE_CHECKLIST.md` for version bump, smoke, preflight, encoding sanity, CI trigger verification, Docker build and release artifact steps.
+
+### Fixed
+
+- Dockerfile comments are now clean English and the sample Docker tag is synced to 2.7.2.
+
 ## [2.7.1] - Media Layer Hardening
 
 **Theme: Media Layer security, stability and release polish.** This patch hardens v2.7.0 media ingestion while keeping the Multimodal Media Layer API shape stable.
