@@ -34,7 +34,7 @@ from deepseek_infra.core.config import (
 
 class ConfigTests(unittest.TestCase):
     def test_nested_settings_back_compat_constants_match(self) -> None:
-        self.assertEqual(settings.app_version, "2.7.2")
+        self.assertEqual(settings.app_version, "2.7.3")
         self.assertEqual(settings.default_host, "127.0.0.1")
         self.assertEqual(DEFAULT_HOST, settings.default_host)
         self.assertEqual(MULTI_AGENT_TIMEOUT_SECONDS, settings.multi_agent_timeout_seconds)
@@ -84,6 +84,7 @@ class ConfigTests(unittest.TestCase):
                 "UPLOAD_MAX_BYTES": "234567",
                 "EDGE_INFERENCE_ENABLED": "1",
                 "EDGE_INFERENCE_PROVIDER": "llama_cpp",
+                "EDGE_MODE": "local",
                 "EDGE_MODEL_PATH": "C:\\models\\DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
                 "EDGE_MODEL_NAME": "DeepSeek-R1-Distill-Qwen-1.5B",
                 "EDGE_ALLOW_MODEL_PATH_OVERRIDE": "1",
@@ -150,6 +151,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.files.upload_max_bytes, 234567)
         self.assertTrue(loaded.edge.enabled)
         self.assertEqual(loaded.edge.provider, "llama_cpp")
+        self.assertEqual(loaded.edge.mode, "local")
         self.assertTrue(loaded.edge.model_path.endswith("Q4_K_M.gguf"))
         self.assertEqual(loaded.edge.model_name, "DeepSeek-R1-Distill-Qwen-1.5B")
         self.assertTrue(loaded.edge.allow_model_path_override)
@@ -192,6 +194,21 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.mcp.client_retry_backoff_seconds, 0.75)
         self.assertEqual(loaded.mcp.client_circuit_breaker_failures, 4)
         self.assertEqual(loaded.mcp.client_circuit_breaker_reset_seconds, 90)
+
+    def test_edge_provider_short_alias_is_supported(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "EDGE_INFERENCE_ENABLED": "1",
+                "EDGE_PROVIDER": "fake",
+                "EDGE_MODE": "cloud",
+            },
+            clear=True,
+        ):
+            loaded = Settings.from_env()
+
+        self.assertEqual(loaded.edge.provider, "fake")
+        self.assertEqual(loaded.edge.mode, "cloud")
 
     def test_ocr_env_values_default_and_clamp(self) -> None:
         with patch.dict(

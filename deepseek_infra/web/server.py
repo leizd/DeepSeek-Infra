@@ -53,6 +53,7 @@ from deepseek_infra.infra.rag.context_compressor import compress_context_payload
 from deepseek_infra.infra.gateway.deepseek_client import (
     RequestCancelled,
     call_deepseek_cascade,
+    edge_route_for_payload,
     preflight_deepseek_payload,
     stream_deepseek,
 )
@@ -75,7 +76,7 @@ from deepseek_infra.infra.gateway.model_router import router_status as model_rou
 from deepseek_infra.infra.gateway.providers.registry import providers_status
 from deepseek_infra.infra.observability.health import healthz, readyz
 from deepseek_infra.infra.observability.metrics import render_prometheus
-from deepseek_infra.infra.gateway.edge_inference import edge_inference_status, edge_unload
+from deepseek_infra.infra.gateway.edge_inference import edge_inference_status, edge_route_decision_payload, edge_unload
 from deepseek_infra.infra.rag.files import (
     cached_file_source,
     cleanup_file_cache,
@@ -324,6 +325,7 @@ def _a2a_route_deps() -> A2ARouteDeps:
 def _edge_route_deps() -> EdgeRouteDeps:
     return EdgeRouteDeps(
         edge_unload=lambda: edge_unload(),
+        edge_route_preview=lambda payload: edge_route_decision_payload(edge_route_for_payload(payload)),
     )
 
 

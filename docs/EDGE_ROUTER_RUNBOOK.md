@@ -1,8 +1,49 @@
 # 边缘路由运维手册
 
-适用版本：v2.7.2。
+适用版本：v2.7.3。
 
-Edge-Cloud Model Router 仍是 **Experimental**：CI 覆盖路由决策、配置面和云失败回退，但不下载模型、不安装本地推理后端，也不跑真实 GGUF/MLC 推理。v2.4.3 把“怎么在自己的机器上验收”推进为结构化 evidence，方便把本地 Ollama / Ollama-compatible provider 的结果带进 release preflight。
+Edge-Cloud Model Router 在 v2.7.3 进入 **MVP stabilization**：CI 会离线覆盖 doctor、状态字段、route-preview、fake provider、路由策略、云不可用回退和 forced-local 409，不下载模型、不安装本地推理后端，也不跑真实 GGUF/MLC 推理。真实 Ollama / GGUF / MLC 仍作为可选实机 evidence 补充。
+
+## 最小配置
+
+```powershell
+$env:EDGE_INFERENCE_ENABLED="1"
+$env:EDGE_PROVIDER="llama_cpp"
+$env:EDGE_MODEL_PATH="/models/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+$env:EDGE_MODE="auto"
+```
+
+兼容旧变量名 `EDGE_INFERENCE_PROVIDER`。`EDGE_MODE=auto` 时，简单总结/改写/翻译类请求可走端侧；联网、新闻、搜索、图片、多 Agent、代码/数学/产物生成等请求会走云端。
+
+## 离线 dry-run 验证（CI 默认）
+
+不需要真实模型：
+
+```powershell
+python scripts/doctor.py --offline
+python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v2.7.3.json
+```
+
+启动服务后可直接解释一轮请求为什么会走端侧或云端：
+
+```powershell
+curl http://127.0.0.1:8000/api/edge/route-preview `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer <local-token>" `
+  -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Summarize this note.\"}],\"edgeMode\":\"auto\"}"
+```
+
+典型响应：
+
+```json
+{
+  "useEdge": true,
+  "reason": "simple_task_local",
+  "mode": "auto",
+  "provider": "llama_cpp",
+  "status": {"available": true, "providerSupported": true, "suggestions": []}
+}
+```
 
 ## Ollama Provider 冒烟测试
 
@@ -47,9 +88,10 @@ python -m pip install -r requirements-edge.txt
 
 ```powershell
 $env:EDGE_INFERENCE_ENABLED="1"
-$env:EDGE_INFERENCE_PROVIDER="llama_cpp"
+$env:EDGE_PROVIDER="llama_cpp"
 $env:EDGE_MODEL_PATH="C:\models\your-model.Q4_K_M.gguf"
 $env:EDGE_MODEL_NAME="edge-local"
+$env:EDGE_MODE="auto"
 $env:AUTH_DISABLED="1"
 python app.py
 ```
@@ -58,6 +100,7 @@ python app.py
 
 ```powershell
 curl http://127.0.0.1:8000/api/edge/status
+curl http://127.0.0.1:8000/api/edge/route-preview -H "Content-Type: application/json" -d "{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
 python examples/edge_router_smoke.py --require-edge
 python examples/edge_router_smoke.py --require-edge --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
 ```
@@ -85,15 +128,23 @@ curl http://127.0.0.1:8000/v1/chat/completions `
 | 症状 | 含义 | 修复方法 |
 | --- | --- | --- |
 | `enabled=false` | Edge router 没打开 | 设置 `EDGE_INFERENCE_ENABLED=1` 并重启服务 |
+| `providerSupported=false` | 配置了不支持的 provider | 使用 `EDGE_PROVIDER=llama_cpp` / `mlc` / `fake` |
 | `dependencyAvailable=false` | 本地推理依赖未安装 | `llama_cpp` 用 `requirements-edge.txt`；MLC 需本地安装 `mlc-llm` |
 | `modelPathConfigured=false` | 没有配置模型路径 | 设置 `EDGE_MODEL_PATH` |
+| `modelPathSuffixSupported=false` | llama_cpp 模型不是 `.gguf` | 换成 GGUF 文件或切 provider |
 | `modelPathExists=false` | 路径不存在或不是 `.gguf` | 检查文件路径、扩展名和权限 |
+| `route-preview` 返回 `reason=complex_task_cloud` | 请求需要联网/代码/数学/产物能力或超出简单任务范围 | 这是预期路由；如确要本地，传 `edgeMode=local` 并确认端侧 available |
+| `route-preview` 返回 409 | 强制本地但端侧不可用 | 看 `suggestions`，修依赖、provider、模型路径或后缀 |
 | `/v1/models` 没有 `ollama/` | Ollama provider 没启用或 Ollama 不可达 | 设置 `OLLAMA_ENABLED=1`，确认 `OLLAMA_BASE_URL` 和 `ollama list` |
 | `401 / unauthorized` | 本地 token 鉴权开启 | 传 `Authorization: Bearer <local-token>`，或仅在可信开发机用 `AUTH_DISABLED=1` |
 
 ## 证据模板
 
-`examples/edge_router_smoke.py` 可直接生成两份可提交证据：
+v2.7.3 默认发版证据由 `scripts/smoke_edge_router.py` 生成：
+
+- `docs/evidence/edge-router-v2.7.3.json`：release preflight 的硬门禁证据，覆盖 doctor、dry-run route-preview、fake provider、路由策略、fallback 和 forced-local 409。
+
+`examples/edge_router_smoke.py` 可直接生成两份可选实机证据：
 
 - `docs/evidence/edge-router-smoke.json`：release preflight 读取的结构化 evidence。
 - `docs/evidence/edge-router-smoke.md`：方便在 PR / issue / release note 中人工审阅的摘要。

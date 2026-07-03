@@ -20,6 +20,7 @@ EDGE_LOCAL_MODES = {"local", "edge", "on"}
 EDGE_CLOUD_MODES = {"cloud", "remote", "off", "none", "disabled"}
 EDGE_DEFAULT_MODE = "auto"
 LOCAL_MODEL_ID = "edge-local"
+SUPPORTED_EDGE_PROVIDERS = {"llama_cpp", "mlc", "fake"}
 COMPLEX_QUERY_RE = re.compile(
     r"```|\b(code|debug|bug|traceback|exception|leetcode|algorithm|proof|integral|derivative|matrix|equation|sql|regex|api|fastapi|flask)\b|"
     "\u4ee3\u7801|\u7f16\u7a0b|\u8c03\u8bd5|\u62a5\u9519|\u7b97\u6cd5|\u8bc1\u660e|\u6570\u5b66|\u79ef\u5206|\u5fae\u5206|\u65b9\u7a0b",
@@ -81,19 +82,23 @@ class EdgeInferenceManager:
 
     def status(self, options: EdgeOptions | None = None) -> dict[str, Any]:
         options = options or edge_options_from_payload({})
+        provider_supported = options.provider in SUPPORTED_EDGE_PROVIDERS
         dependency_available = provider_dependency_available(options.provider)
-        model_path_configured = bool(options.model_path)
+        model_path_configured = bool(options.model_path) or options.provider == "fake"
+        model_path_suffix_supported = model_path_suffix_supported_for(options)
         model_path_exists = model_path_available(options)
-        available = bool(options.enabled and dependency_available and model_path_configured and model_path_exists)
+        available = bool(options.enabled and provider_supported and dependency_available and model_path_configured and model_path_exists)
         loaded_key = self._loaded_key
         loaded = bool(loaded_key and loaded_key[0] == options.provider and loaded_key[1] == options.model_path)
-        return {
+        status = {
             "enabled": options.enabled,
             "provider": options.provider,
+            "providerSupported": provider_supported,
             "available": available,
             "dependencyAvailable": dependency_available,
             "modelPathConfigured": model_path_configured,
             "modelPathExists": model_path_exists,
+            "modelPathSuffixSupported": model_path_suffix_supported,
             "modelPath": options.model_path,
             "modelName": options.model_name,
             "loaded": loaded,
@@ -106,8 +111,12 @@ class EdgeInferenceManager:
             "topP": options.top_p,
             "allowModelPathOverride": settings.edge.allow_model_path_override,
         }
+        status["suggestions"] = edge_status_suggestions(status)
+        return status
 
     def complete(self, messages: list[dict[str, Any]], options: EdgeOptions) -> EdgeCompletion:
+        if options.provider == "fake":
+            return fake_completion(messages, options)
         backend = self._load_backend(options)
         if options.provider == "llama_cpp":
             result = backend.create_chat_completion(
@@ -131,6 +140,11 @@ class EdgeInferenceManager:
         raise AppError(f"Unsupported edge inference provider: {options.provider}", code=ErrorCode.INVALID_PAYLOAD)
 
     def stream(self, messages: list[dict[str, Any]], options: EdgeOptions) -> Any:
+        if options.provider == "fake":
+            completion = fake_completion(messages, options)
+            if completion.content:
+                yield completion.content
+            return
         backend = self._load_backend(options)
         if options.provider == "llama_cpp":
             chunks = backend.create_chat_completion(
@@ -227,6 +241,10 @@ def edge_unload() -> dict[str, Any]:
 def select_edge_route(payload: dict[str, Any], *, cloud_available: bool) -> EdgeRouteDecision:
     options = edge_options_from_payload(payload)
     status = edge_manager.status(options)
+    return decide_edge_route(payload, options=options, status=status, cloud_available=cloud_available)
+
+
+def decide_edge_route(payload: dict[str, Any], *, options: EdgeOptions, status: dict[str, Any], cloud_available: bool) -> EdgeRouteDecision:
     mode = edge_mode(payload)
     provider = options.provider
     if mode in EDGE_CLOUD_MODES:
@@ -246,8 +264,23 @@ def select_edge_route(payload: dict[str, Any], *, cloud_available: bool) -> Edge
     return EdgeRouteDecision(False, "complex_task_cloud", mode, provider, status)
 
 
+def edge_route_preview(payload: dict[str, Any], *, cloud_available: bool) -> dict[str, Any]:
+    route = select_edge_route(payload, cloud_available=cloud_available)
+    return edge_route_decision_payload(route)
+
+
+def edge_route_decision_payload(route: EdgeRouteDecision) -> dict[str, Any]:
+    return {
+        "useEdge": route.use_edge,
+        "reason": route.reason,
+        "mode": route.mode,
+        "provider": route.provider,
+        "status": route.status,
+    }
+
+
 def edge_mode(payload: dict[str, Any]) -> str:
-    raw = str(payload.get("edgeMode") or payload.get("localMode") or EDGE_DEFAULT_MODE).strip().lower()
+    raw = str(payload.get("edgeMode") or payload.get("localMode") or settings.edge.mode or EDGE_DEFAULT_MODE).strip().lower()
     return raw or EDGE_DEFAULT_MODE
 
 
@@ -299,10 +332,14 @@ def provider_dependency_available(provider: str) -> bool:
         return importlib.util.find_spec("llama_cpp") is not None
     if provider == "mlc":
         return importlib.util.find_spec("mlc_llm") is not None
+    if provider == "fake":
+        return True
     return False
 
 
 def model_path_available(options: EdgeOptions) -> bool:
+    if options.provider == "fake":
+        return True
     if not options.model_path:
         return False
     if options.provider == "llama_cpp":
@@ -310,6 +347,12 @@ def model_path_available(options: EdgeOptions) -> bool:
     if options.provider == "mlc":
         return True
     return False
+
+
+def model_path_suffix_supported_for(options: EdgeOptions) -> bool:
+    if options.provider == "llama_cpp" and options.model_path:
+        return Path(options.model_path).suffix.lower() == ".gguf"
+    return True
 
 
 def load_llama_cpp_model(options: EdgeOptions) -> Any:
@@ -332,6 +375,22 @@ def load_mlc_engine(options: EdgeOptions) -> Any:
     from mlc_llm import MLCEngine
 
     return MLCEngine(model=options.model_path)
+
+
+def fake_completion(messages: list[dict[str, Any]], options: EdgeOptions) -> EdgeCompletion:
+    query = ""
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            query = str(message.get("content") or "")
+            break
+    content = f"[edge fake] {query[:120].strip() or 'ok'}"
+    return EdgeCompletion(
+        content=content,
+        reasoning="",
+        model=options.model_name or "edge-fake",
+        usage=estimated_usage(messages, content),
+        provider=options.provider,
+    )
 
 
 def completion_from_openai_result(result: Any, *, provider: str, fallback_model: str, messages: list[dict[str, Any]]) -> EdgeCompletion:
@@ -397,15 +456,40 @@ def estimated_usage(messages: list[dict[str, Any]], content: str) -> dict[str, i
 def edge_unavailable_message(status: dict[str, Any]) -> str:
     if not status.get("enabled"):
         return "Edge inference is disabled. Set EDGE_INFERENCE_ENABLED=1 to enable local model routing."
+    if not status.get("providerSupported", True):
+        provider = status.get("provider") or "unknown"
+        return f"Unsupported edge inference provider: {provider}. Use llama_cpp, mlc, or fake."
     if not status.get("dependencyAvailable"):
         provider = status.get("provider") or "llama_cpp"
         requirement = "llama-cpp-python" if provider == "llama_cpp" else "mlc-llm"
         return f"Edge inference dependency is not installed. Install {requirement} for provider {provider}."
     if not status.get("modelPathConfigured"):
         return "Edge model path is not configured. Set EDGE_MODEL_PATH to a local model path."
+    if not status.get("modelPathSuffixSupported", True):
+        return "Edge model path must point to a .gguf file for the llama_cpp provider."
     if not status.get("modelPathExists"):
         return "Edge model path does not exist or is not a supported GGUF file."
     return "Edge inference is unavailable."
+
+
+def edge_status_suggestions(status: dict[str, Any]) -> list[str]:
+    suggestions: list[str] = []
+    provider_supported = bool(status.get("providerSupported", True))
+    if not status.get("enabled"):
+        suggestions.append("Set EDGE_INFERENCE_ENABLED=1 to enable local model routing.")
+    if not provider_supported:
+        suggestions.append("Set EDGE_PROVIDER or EDGE_INFERENCE_PROVIDER to llama_cpp, mlc, or fake.")
+    if status.get("enabled") and provider_supported and not status.get("dependencyAvailable"):
+        provider = str(status.get("provider") or "llama_cpp")
+        requirement = "llama-cpp-python" if provider == "llama_cpp" else "mlc-llm"
+        suggestions.append(f"Install {requirement} or choose another edge provider.")
+    if status.get("enabled") and not status.get("modelPathConfigured"):
+        suggestions.append("Set EDGE_MODEL_PATH to a local model file.")
+    if status.get("enabled") and not status.get("modelPathSuffixSupported", True):
+        suggestions.append("Use a .gguf model file with the llama_cpp provider.")
+    if status.get("enabled") and status.get("modelPathConfigured") and not status.get("modelPathExists"):
+        suggestions.append("Check EDGE_MODEL_PATH exists and is readable.")
+    return suggestions
 
 
 def infer_quantization(model_path: str) -> str:
@@ -419,6 +503,8 @@ def normalize_provider(value: object) -> str:
         return "llama_cpp"
     if raw in {"mlc", "mlc_llm", "mlcllm"}:
         return "mlc"
+    if raw in {"fake", "test", "dry_run", "dryrun"}:
+        return "fake"
     return raw
 
 

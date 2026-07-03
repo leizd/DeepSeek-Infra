@@ -1,8 +1,8 @@
 # Offline Eval Report
 
-- Version: 2.7.2
-- Git SHA: fedbcbf (dirty)
-- Generated: 2026-07-03T02:35:37Z
+- Version: 2.7.3
+- Git SHA: 5e6474a (dirty)
+- Generated: 2026-07-03T03:45:48Z
 - Overall: PASS
 
 | Suite | Metric | Value | Status |

@@ -1,6 +1,6 @@
 # HTTP API
 
-适用版本：v2.7.2。
+适用版本：v2.7.3。
 
 默认情况下，所有 `/api/*` 路由都需要本地 token 鉴权。客户端可以发送 `Authorization: Bearer <token>`，也可以使用打开 `/?token=<token>` 后写入的 `auth_token` Cookie。未设置 `AUTH_TOKEN` 时，服务端会把自动生成的 token 保存到本地 `.auth-token`，重启后继续复用。
 
@@ -371,7 +371,40 @@ v1.8.0 新增 Gateway & Resiliency 诊断。DeepSeek 云端请求在发送前会
 
 返回端侧推理能力摘要，不会主动加载模型。
 
-响应字段与 `/api/config.edgeInference` 一致，包含 `enabled`、`provider`、`available`、`dependencyAvailable`、`modelPathConfigured`、`modelPathExists`、`modelName`、`loaded`、`quantization`、`nCtx`、`nThreads`、`nGpuLayers`、`maxTokens` 和 `allowModelPathOverride`。
+响应字段与 `/api/config.edgeInference` 一致，包含 `enabled`、`provider`、`providerSupported`、`available`、`dependencyAvailable`、`modelPathConfigured`、`modelPathExists`、`modelPathSuffixSupported`、`modelName`、`loaded`、`quantization`、`nCtx`、`nThreads`、`nGpuLayers`、`maxTokens`、`allowModelPathOverride` 和 `suggestions`。该接口只做状态检查，不会加载 GGUF / MLC 模型。
+
+## POST `/api/edge/route-preview`
+
+v2.7.3 新增的 Edge dry-run 路由解释接口。请求体使用与 `/api/chat` 相同的核心字段，例如 `messages`、`edgeMode`、`searchMode`、`agentMode` 和附件元数据。接口会返回本轮是否会走端侧、为什么走端侧或云端，以及当前 Edge 状态；不会调用云端 API，也不会加载本地模型。
+
+请求示例：
+
+```json
+{
+  "edgeMode": "auto",
+  "messages": [{"role": "user", "content": "Summarize this note."}]
+}
+```
+
+响应示例：
+
+```json
+{
+  "useEdge": true,
+  "reason": "simple_task_local",
+  "mode": "auto",
+  "provider": "llama_cpp",
+  "status": {
+    "enabled": true,
+    "available": true,
+    "providerSupported": true,
+    "quantization": "Q4_K_M",
+    "suggestions": []
+  }
+}
+```
+
+常见 `reason`：`simple_task_local`、`complex_task_cloud`、`unsupported_payload`、`edge_unavailable`、`cloud_forced`、`local_forced`、`cloud_unavailable_simple_local`。当 `edgeMode=local` 但端侧不可用时返回 HTTP 409，并在错误信息中给出缺依赖、模型路径、后缀或 provider 配置建议。
 
 ## POST `/api/edge/reload`
 

@@ -44,6 +44,43 @@ def test_optional_requirements_warns_when_missing(monkeypatch: pytest.MonkeyPatc
     assert "pywebview" in result.detail
 
 
+def test_edge_router_doctor_passes_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.gateway import edge_inference
+
+    monkeypatch.setattr(
+        edge_inference,
+        "edge_inference_status",
+        lambda: {"enabled": False, "provider": "llama_cpp", "available": False, "suggestions": ["enable it"]},
+    )
+
+    result = doctor.check_edge_router()
+
+    assert result.status == doctor.STATUS_PASS
+    assert "disabled" in result.detail
+
+
+def test_edge_router_doctor_warns_with_suggestions(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.gateway import edge_inference
+
+    monkeypatch.setattr(
+        edge_inference,
+        "edge_inference_status",
+        lambda: {
+            "enabled": True,
+            "provider": "llama_cpp",
+            "available": False,
+            "dependencyAvailable": False,
+            "suggestions": ["Install llama-cpp-python.", "Check EDGE_MODEL_PATH exists."],
+        },
+    )
+
+    result = doctor.check_edge_router()
+
+    assert result.status == doctor.STATUS_WARN
+    assert "llama-cpp-python" in result.detail
+    assert "EDGE_MODEL_PATH" in result.detail
+
+
 def test_env_file_states(tmp_path: Path) -> None:
     assert doctor.check_env_file(tmp_path).status == doctor.STATUS_WARN
     (tmp_path / ".env.example").write_text("DEEPSEEK_API_KEY=", encoding="utf-8")

@@ -17,7 +17,7 @@ def _load_preflight() -> Any:
 def _skeleton(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
-    (root / "CHANGELOG.md").write_text("## [2.7.2] - clean\n", encoding="utf-8")
+    (root / "CHANGELOG.md").write_text("## [2.7.3] - clean\n", encoding="utf-8")
     (root / "Dockerfile").write_text("# clean dockerfile\n", encoding="utf-8")
     (root / "README.md").write_text("clean\n", encoding="utf-8")
     (root / ".github" / "workflows").mkdir(parents=True)

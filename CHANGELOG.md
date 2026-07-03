@@ -2,6 +2,22 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.7.3] - Edge Router Stabilization
+
+**Theme: make the Edge-Cloud Model Router diagnosable, explainable and release-gated without requiring a real local model in CI.** This patch moves the router from demo-grade experimental behavior toward a daily-use MVP surface while keeping real GGUF / MLC inference optional.
+
+### Added
+
+- **Edge Router Doctor**: `doctor.py --offline` now reports Edge provider support, optional dependency availability, model path readiness, GGUF suffix checks, quantization hints and actionable setup suggestions.
+- **Route preview API**: add `POST /api/edge/route-preview` so clients can dry-run a chat payload and see `useEdge`, `reason`, `provider`, `mode` and current Edge status without loading a model.
+- **Fake Edge provider**: add a zero-dependency provider for routing, fallback and API tests; simple requests route local, current/news/search/image/multi-agent requests route cloud, and forced-local unavailable returns HTTP 409.
+- **Edge release evidence**: add `scripts/smoke_edge_router.py --offline` and `docs/evidence/edge-router-v2.7.3.json`, then make `edge_router_evidence` a hard preflight gate and `edgeRouter` a release manifest quality gate.
+
+### Changed
+
+- README, Dockerfile, Android version, CI, release readiness docs, evidence index and eval/report paths are synced to v2.7.3.
+- Edge Router documentation now includes the minimal `EDGE_INFERENCE_ENABLED` / `EDGE_PROVIDER` / `EDGE_MODEL_PATH` / `EDGE_MODE` configuration and the route-preview verification path.
+
 ## [2.7.2] - Release Hygiene & Encoding Gates
 
 **Theme: release-facing polish and encoding guardrails.** This patch cleans up residual mojibake in release-visible files and expands preflight coverage so encoding regressions are caught before tagging.

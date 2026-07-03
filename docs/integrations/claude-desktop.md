@@ -1,6 +1,6 @@
 # Claude Desktop MCP 集成
 
-适用版本：DeepSeek Infra v2.7.2。
+适用版本：DeepSeek Infra v2.7.3。
 
 本页是可复现配置说明 + GUI 实机验证操作手册。DeepSeek Infra 端已验证的 MCP endpoint 是 `POST /mcp`（Streamable HTTP / JSON-RPC 2.0），本地鉴权默认需要 Bearer token。v2.4.2 已完成 Claude Desktop GUI 实机验证，证据见下方证据模板。
 

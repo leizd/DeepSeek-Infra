@@ -116,6 +116,7 @@ class OCRSettings:
 class EdgeInferenceSettings:
     enabled: bool = False
     provider: str = "llama_cpp"
+    mode: str = "auto"
     model_path: str = ""
     model_name: str = "deepseek-r1-distill-local"
     chat_format: str = ""
@@ -417,7 +418,7 @@ class SkillsSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "2.7.2"
+    app_version: str = "2.7.3"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -636,7 +637,8 @@ class Settings:
             ),
             edge=EdgeInferenceSettings(
                 enabled=_env_bool("EDGE_INFERENCE_ENABLED", False),
-                provider=_env_choice("EDGE_INFERENCE_PROVIDER", {"llama_cpp", "mlc"}, "llama_cpp"),
+                provider=_env_choice_value(os.environ.get("EDGE_INFERENCE_PROVIDER") or os.environ.get("EDGE_PROVIDER"), {"llama_cpp", "mlc", "fake"}, "llama_cpp"),
+                mode=_env_choice_value(os.environ.get("EDGE_MODE"), {"auto", "local", "cloud", "edge", "off"}, "auto"),
                 model_path=os.environ.get("EDGE_MODEL_PATH", "").strip(),
                 model_name=os.environ.get("EDGE_MODEL_NAME", "deepseek-r1-distill-local").strip() or "deepseek-r1-distill-local",
                 chat_format=os.environ.get("EDGE_CHAT_FORMAT", "").strip(),
@@ -844,6 +846,11 @@ def _env_choice(name: str, choices: set[str], default: str) -> str:
     return raw if raw in choices else default
 
 
+def _env_choice_value(value: str | None, choices: set[str], default: str) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw in choices else default
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -1009,6 +1016,7 @@ OCR_FORMULA_CMD = settings.ocr.formula_cmd
 OCR_FORMULA_TIMEOUT_SECONDS = settings.ocr.formula_timeout_seconds
 EDGE_INFERENCE_ENABLED = settings.edge.enabled
 EDGE_INFERENCE_PROVIDER = settings.edge.provider
+EDGE_MODE = settings.edge.mode
 EDGE_MODEL_PATH = settings.edge.model_path
 EDGE_MODEL_NAME = settings.edge.model_name
 OLLAMA_ENABLED = settings.ollama.enabled

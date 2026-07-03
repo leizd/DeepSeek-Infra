@@ -1,6 +1,6 @@
 # Runtime Doctor
 
-适用版本：v2.7.2。
+适用版本：v2.7.3。
 
 Runtime Doctor 回答一个最常见的问题：**到底为什么起不来？** 它把一个全新 DeepSeek Infra 安装需要的环境逐项体检，每项输出 `PASS` / `WARNING` / `FAIL`，让你快速区分到底是 Python 版本、依赖缺失、`.env` / API Key、数据目录权限、static 路径、端口占用还是服务没起来。
 
@@ -38,6 +38,7 @@ python scripts/doctor.py --offline --json
 | `python` | 当前 Python 是否 ≥ 3.10。低于则 `FAIL`。 |
 | `requirements` | 核心运行时依赖（fastapi / uvicorn / multipart / defusedxml / openpyxl / pypdf / PyMuPDF / python-pptx / python-docx / reportlab）是否可导入。缺失 `FAIL`。 |
 | `optional_requirements` | GUI 依赖（customtkinter / pywebview）是否可导入。缺失只 `WARNING`（无头环境正常）。 |
+| `edge_router` | Edge Router provider、可选依赖、模型路径、GGUF 后缀和量化标记是否可解释。未启用时 `PASS`；启用但缺依赖/路径时 `WARNING` 并给出修复建议。 |
 | `env_file` | `.env` 是否存在。缺失 `WARNING`（并提示复制 `.env.example`）。 |
 | `api_key` | `DEEPSEEK_API_KEY` 是否设置。未设置 `WARNING`；设置时只输出脱敏片段，绝不打印明文。 |
 | `root_writable` | `DEEPSEEK_INFRA_ROOT`（或仓库根）是否可写、可创建。不可写 `FAIL`。 |
@@ -59,6 +60,7 @@ python scripts/doctor.py --offline --json
 | --- | --- | --- |
 | `python` FAIL | Python < 3.10 | 升级 Python。 |
 | `requirements` FAIL | 依赖没装全 | `python -m pip install -r requirements.txt`。注意 multipart 是 `multipart`，不是 `python-multipart`。 |
+| `edge_router` WARNING | Edge Router 已启用但 provider、依赖、模型路径或 GGUF 后缀不满足 | 检查 `EDGE_PROVIDER` / `EDGE_INFERENCE_PROVIDER`、`EDGE_MODEL_PATH`、`EDGE_MODE`；`llama_cpp` 安装 `requirements-edge.txt` 并使用 `.gguf` 文件。 |
 | `env_file` WARNING | 没有 `.env` | `cp .env.example .env` 并填写 `DEEPSEEK_API_KEY`。 |
 | `api_key` WARNING | 没配 Key | 云端对话 / 多 Agent / A2A 任务会失败；在 `.env` 或页面设置里填。 |
 | `root_writable` FAIL | 数据目录不可写 | 检查 `DEEPSEEK_INFRA_ROOT` 权限；Docker 下确认 `/data` 卷挂载且属主是运行用户。 |

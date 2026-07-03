@@ -7,10 +7,11 @@ the eval / agent reports are current, that the smoke / eval docs exist, that
 ``scripts/release.py`` still excludes runtime caches and logs, that headless MCP
 bridge and A2A external peer evidence are present, that optional third-party A2A
 and Edge Router evidence is strict when submitted, that key docs do not contain
-encoding corruption (expanded in v2.7.2), and (since v2.3.1) that GUI interop evidence
-for Claude Desktop / Cursor has been recorded in ``docs/COMPATIBILITY.md``.
+encoding corruption (expanded in v2.7.2), that Edge Router dry-run evidence is
+present for v2.7.3, and (since v2.3.1) that GUI interop evidence for Claude
+Desktop / Cursor has been recorded in ``docs/COMPATIBILITY.md``.
 
-    python scripts/preflight_release.py --version 2.7.2
+    python scripts/preflight_release.py --version 2.7.3
 
 Exits 1 on any FAIL; WARNINGs do not fail. Version defaults to
 ``settings.app_version``.
@@ -512,6 +513,59 @@ def check_edge_router_smoke_evidence(root: Path, version: str) -> CheckResult:
         "Edge Router smoke evidence recorded",
         {"path": str(path), "checks": list(required)},
     )
+
+
+def check_edge_router_evidence(root: Path, version: str) -> CheckResult:
+    path = root / "docs" / "evidence" / f"edge-router-v{version}.json"
+    if not path.is_file():
+        return CheckResult(
+            "edge_router_evidence",
+            STATUS_FAIL,
+            "Edge Router evidence missing; run scripts/smoke_edge_router.py --offline",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("edge_router_evidence", STATUS_FAIL, f"cannot parse Edge Router evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("edge_router", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "edge_router_evidence",
+            STATUS_FAIL,
+            f"Edge Router evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS":
+        return CheckResult(
+            "edge_router_evidence",
+            STATUS_FAIL,
+            f"Edge Router evidence status is {data.get('status')!r}, expected PASS",
+            {"status": data.get("status")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = (
+        "edgeDoctor",
+        "statusShape",
+        "routePreviewApi",
+        "fakeProvider",
+        "routingPolicy",
+        "fallbackPolicy",
+        "forcedLocalUnavailable",
+    )
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult(
+            "edge_router_evidence",
+            STATUS_FAIL,
+            f"Edge Router evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    return CheckResult("edge_router_evidence", STATUS_PASS, "Edge Router evidence recorded", {"path": str(path), "checks": list(required)})
 
 
 def check_continue_dev_mcp_evidence(root: Path, version: str) -> CheckResult:
@@ -1443,6 +1497,7 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_a2a_external_peer_evidence(root, version),
         check_a2a_third_party_peer_evidence(root, version),
         check_edge_router_smoke_evidence(root, version),
+        check_edge_router_evidence(root, version),
         check_continue_dev_mcp_evidence(root, version),
         check_openai_compatible_sdk_evidence(root, version),
         check_semantic_cache_onnx_evidence(root, version),

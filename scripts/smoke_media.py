@@ -89,7 +89,7 @@ def run_media_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
             "type": "image",
             "title": "Roadmap Screenshot",
             "mimeType": "image/png",
-            "text": "2.7.2 Multimodal Media Layer with OCR and citations.",
+            "text": "2.7.3 Multimodal Media Layer with OCR and citations.",
             "metadata": {"caption": "Roadmap screenshot"},
             "process": True,
         }

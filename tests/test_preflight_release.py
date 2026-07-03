@@ -43,6 +43,7 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     _write_a2a_evidence(evidence_dir / "a2a-external-peer.json", version)
     _write_a2a_evidence(evidence_dir / "a2a-third-party-peer.json", version, peer_type="third-party")
     _write_edge_router_evidence(evidence_dir / "edge-router-smoke.json", version)
+    _write_edge_router_stabilization_evidence(evidence_dir / f"edge-router-v{version}.json", version)
     _write_continue_dev_evidence(evidence_dir / "continue-dev-mcp.json", version)
     _write_openai_compatible_sdk_evidence(evidence_dir / "openai-compatible-sdks.json", version)
     _write_workspace_evidence(evidence_dir / f"workspace-v{version}.json", version)
@@ -185,6 +186,31 @@ def _write_edge_router_evidence(path: Path, version: str, *, status: str = "PASS
         "version": version,
         "commit": "abc1234",
         "generatedAt": "2026-06-27T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": status,
+        "checks": checks,
+    }
+    if omit_metadata:
+        payload.pop(omit_metadata, None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_edge_router_stabilization_evidence(path: Path, version: str, *, status: str = "PASS", omit_check: str = "", omit_metadata: str = "") -> None:
+    checks = {
+        "edgeDoctor": "PASS",
+        "statusShape": "PASS",
+        "routePreviewApi": "PASS",
+        "fakeProvider": "PASS",
+        "routingPolicy": "PASS",
+        "fallbackPolicy": "PASS",
+        "forcedLocalUnavailable": "PASS",
+    }
+    if omit_check:
+        checks.pop(omit_check, None)
+    payload: dict[str, Any] = {
+        "version": version,
+        "commit": "abc1234",
+        "generatedAt": "2026-07-03T00:00:00Z",
         "environment": {"os": "Linux", "python": "3.12", "ci": True},
         "status": status,
         "checks": checks,
@@ -809,6 +835,31 @@ def test_preflight_warns_on_stale_optional_evidence_version(tmp_path: Path) -> N
     assert preflight.main(["--root", str(root), "--version", "2.6.3"]) == 0
 
 
+def test_preflight_fails_on_missing_edge_router_evidence(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.7.3")
+    (root / "docs" / "evidence" / "edge-router-v2.7.3.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.7.3") if r.name == "edge_router_evidence")
+    assert result.status == "fail"
+    assert "smoke_edge_router.py" in result.detail
+
+
+def test_preflight_fails_on_edge_router_evidence_missing_required_check(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.7.3")
+    _write_edge_router_stabilization_evidence(root / "docs" / "evidence" / "edge-router-v2.7.3.json", "2.7.3", omit_check="routingPolicy")
+    result = next(r for r in preflight.run_preflight(root, "2.7.3") if r.name == "edge_router_evidence")
+    assert result.status == "fail"
+    assert "routingPolicy" in result.detail
+
+
+def test_preflight_passes_on_edge_router_evidence_complete(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.7.3")
+    result = next(r for r in preflight.run_preflight(root, "2.7.3") if r.name == "edge_router_evidence")
+    assert result.status == "pass"
+
+
 def _skeleton_with_compat(tmp_path: Path, version: str, *, claude_status: str, cursor_status: str) -> Path:
     root = _skeleton(tmp_path, version)
     compat_lines = [
@@ -1038,26 +1089,26 @@ def test_preflight_passes_on_workspace_core_evidence_complete(tmp_path: Path) ->
 
 def test_preflight_fails_on_missing_media_layer_evidence(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.7.2")
-    (root / "docs" / "evidence" / "media-v2.7.2.json").unlink()
-    result = next(r for r in preflight.run_preflight(root, "2.7.2") if r.name == "media_layer_evidence")
+    root = _skeleton(tmp_path, "2.7.3")
+    (root / "docs" / "evidence" / "media-v2.7.3.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.7.3") if r.name == "media_layer_evidence")
     assert result.status == "fail"
     assert "smoke_media.py" in result.detail
 
 
 def test_preflight_fails_on_media_layer_missing_required_check(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.7.2")
-    _write_media_evidence(root / "docs" / "evidence" / "media-v2.7.2.json", "2.7.2", omit_check="mediaToRag")
-    result = next(r for r in preflight.run_preflight(root, "2.7.2") if r.name == "media_layer_evidence")
+    root = _skeleton(tmp_path, "2.7.3")
+    _write_media_evidence(root / "docs" / "evidence" / "media-v2.7.3.json", "2.7.3", omit_check="mediaToRag")
+    result = next(r for r in preflight.run_preflight(root, "2.7.3") if r.name == "media_layer_evidence")
     assert result.status == "fail"
     assert "mediaToRag" in result.detail
 
 
 def test_preflight_passes_on_media_layer_evidence_complete(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.7.2")
-    result = next(r for r in preflight.run_preflight(root, "2.7.2") if r.name == "media_layer_evidence")
+    root = _skeleton(tmp_path, "2.7.3")
+    result = next(r for r in preflight.run_preflight(root, "2.7.3") if r.name == "media_layer_evidence")
     assert result.status == "pass"
 
 

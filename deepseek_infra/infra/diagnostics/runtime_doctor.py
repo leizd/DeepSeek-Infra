@@ -130,6 +130,31 @@ def check_optional_requirements(specs: tuple[tuple[str, str], ...]) -> CheckResu
     return CheckResult("optional_requirements", STATUS_PASS, f"{len(specs)} optional packages importable", {"count": len(specs)})
 
 
+def check_edge_router() -> CheckResult:
+    from deepseek_infra.infra.gateway.edge_inference import edge_inference_status
+
+    status = edge_inference_status()
+    provider = str(status.get("provider") or "llama_cpp")
+    suggestions = [str(item) for item in status.get("suggestions") or [] if str(item).strip()]
+    if not status.get("enabled"):
+        return CheckResult(
+            "edge_router",
+            STATUS_PASS,
+            "Edge Router disabled (optional); set EDGE_INFERENCE_ENABLED=1 to enable local routing",
+            status,
+        )
+    if status.get("available"):
+        quantization = str(status.get("quantization") or "unknown")
+        return CheckResult(
+            "edge_router",
+            STATUS_PASS,
+            f"Edge Router available via {provider} (quantization={quantization})",
+            status,
+        )
+    detail = "; ".join(suggestions) if suggestions else "Edge Router enabled but unavailable; inspect edgeInference status"
+    return CheckResult("edge_router", STATUS_WARN, detail, status)
+
+
 def check_env_file(root: Path) -> CheckResult:
     env_path = root / ".env"
     if env_path.exists():
@@ -243,6 +268,7 @@ def run_doctor(options: DoctorOptions) -> list[CheckResult]:
         check_python_version(options.min_python),
         check_requirements(options.required_imports),
         check_optional_requirements(options.optional_imports),
+        check_edge_router(),
         check_env_file(options.root),
         check_api_key(),
         check_root_writable(options.root),
