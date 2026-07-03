@@ -106,6 +106,18 @@ def test_media_json_register_list_segments_and_delete(tmp_settings: Path) -> Non
         segments = json.loads(segments_raw.decode("utf-8"))
         assert segments["segments"][0]["citation"]["uri"].startswith(f"media://{media_id}")
 
+        patch_body = json.dumps({"title": "Updated Route Snapshot", "metadata": {"reviewed": True}}).encode("utf-8")
+        status, patch_raw, _ = _request(server, "PATCH", f"/api/media/{media_id}", body=patch_body, headers=_auth_headers())
+        assert status == 200
+        patched = json.loads(patch_raw.decode("utf-8"))
+        assert patched["media"]["title"] == "Updated Route Snapshot"
+        assert patched["media"]["metadata"]["reviewed"] is True
+
+        reprocess_body = json.dumps({"force": True}).encode("utf-8")
+        status, process_raw, _ = _request(server, "POST", f"/api/media/{media_id}/process?force=true", body=reprocess_body, headers=_auth_headers())
+        assert status == 200
+        assert json.loads(process_raw.decode("utf-8"))["media"]["status"] == "ready"
+
         status, deleted_raw, _ = _request(server, "DELETE", f"/api/media/{media_id}", headers=_auth_headers())
         assert status == 200
         assert json.loads(deleted_raw.decode("utf-8"))["deleted"] == 1

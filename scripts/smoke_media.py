@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline Multimodal Media Layer smoke for v2.7.0."""
+"""Offline Multimodal Media Layer smoke."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def configure_runtime_root(root: Path) -> None:
 
 
 def run_media_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
-    from deepseek_infra.infra.media import ingestion, library
+    from deepseek_infra.infra.media import ingestion, library, schema
     from deepseek_infra.infra.rag import local_rag
     from deepseek_infra.infra.workspace import exports, projects
 
@@ -75,6 +75,7 @@ def run_media_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
         "mediaSegments": "FAIL",
         "mediaToRag": "FAIL",
         "mediaCitations": "FAIL",
+        "mediaUploadLimits": "FAIL",
         "projectExportIncludesMedia": "FAIL",
         "secretRedaction": "FAIL",
     }
@@ -88,7 +89,7 @@ def run_media_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
             "type": "image",
             "title": "Roadmap Screenshot",
             "mimeType": "image/png",
-            "text": "2.7.0 Multimodal Media Layer with OCR and citations.",
+            "text": "2.7.1 Multimodal Media Layer with OCR and citations.",
             "metadata": {"caption": "Roadmap screenshot"},
             "process": True,
         }
@@ -129,6 +130,24 @@ def run_media_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     checks["mediaCitations"] = "PASS" if all(isinstance(segment.get("citation"), dict) and segment["citation"].get("uri") for segment in all_segments) else "FAIL"
     hits = local_rag.search_media_index("Local RAG citations", project_id=project_id, limit=5)
     checks["mediaToRag"] = "PASS" if hits and any(hit.source_id == pdf["mediaId"] for hit in hits) else "FAIL"
+    try:
+        ingestion.ingest_upload({"filename": "payload.exe", "content_type": "application/x-msdownload", "data": b"not media"})
+    except Exception:
+        upload_mime_rejected = True
+    else:
+        upload_mime_rejected = False
+    original_media_upload_limit = schema.MAX_MEDIA_UPLOAD_BYTES
+    try:
+        schema.MAX_MEDIA_UPLOAD_BYTES = 8
+        try:
+            ingestion.ingest_upload({"filename": "large.png", "content_type": "image/png", "data": b"x" * 9})
+        except Exception:
+            upload_size_rejected = True
+        else:
+            upload_size_rejected = False
+    finally:
+        schema.MAX_MEDIA_UPLOAD_BYTES = original_media_upload_limit
+    checks["mediaUploadLimits"] = "PASS" if upload_mime_rejected and upload_size_rejected else "FAIL"
 
     export = exports.export_project(project_id, export_format="zip")["export"]
     zip_path = Path(str(export["path"]))

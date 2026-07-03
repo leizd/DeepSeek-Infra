@@ -10,7 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.media import ingestion, library
+from deepseek_infra.infra.media import ingestion, library, schema
 from deepseek_infra.web.http_utils import json_response, read_json_body, require_api_auth, truthy
 
 
@@ -30,12 +30,17 @@ def create_media_router(deps: MediaRouteDeps) -> APIRouter:
             fields, uploads = await deps.read_multipart_form(request)
             if not uploads:
                 raise AppError("No media uploaded", code=ErrorCode.INVALID_PAYLOAD)
+            if len(uploads) > schema.MAX_MEDIA_UPLOADS_PER_REQUEST:
+                raise AppError("Too many media uploads in one request", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
             project_id = request.query_params.get("projectId", "") or _first(fields, "projectId")
             process = truthy(request.query_params.get("process", "")) or _truthy_field(fields, "process")
             ocr_enabled = _truthy_field(fields, "ocrEnabled")
             ocr_api_key = _first(fields, "apiKey")
             media_items = []
             for upload in uploads:
+                data = upload.get("data")
+                schema.validate_media_upload_size(len(data) if isinstance(data, bytes) else 0)
+                schema.validate_media_mime_type(upload.get("content_type"), filename=str(upload.get("filename") or ""))
                 title = _first(fields, "title") if len(uploads) == 1 else ""
                 media_items.append(
                     ingestion.ingest_upload(
@@ -73,6 +78,17 @@ def create_media_router(deps: MediaRouteDeps) -> APIRouter:
         require_api_auth(request)
         return json_response({"ok": True, "media": library.get_media(media_id)})
 
+    @router.patch("/api/media/{media_id}")
+    async def api_media_patch(request: Request, media_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=1_000_000)
+        if not isinstance(payload, dict):
+            raise AppError("Media patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
+        patch = {key: payload[key] for key in ("title", "projectId", "metadata") if key in payload}
+        if not patch:
+            raise AppError("Media patch did not include any supported fields", code=ErrorCode.INVALID_PAYLOAD)
+        return json_response({"ok": True, "media": library.update_media(media_id, patch)})
+
     @router.post("/api/media/{media_id}/process")
     async def api_media_process(request: Request, media_id: str) -> JSONResponse:
         require_api_auth(request)
@@ -82,6 +98,7 @@ def create_media_router(deps: MediaRouteDeps) -> APIRouter:
                 media_id,
                 ocr_enabled=truthy(payload.get("ocrEnabled")) if "ocrEnabled" in payload else None,
                 ocr_api_key=str(payload.get("apiKey") or ""),
+                force=truthy(request.query_params.get("force", "")) or truthy(payload.get("force")),
             )
         )
 

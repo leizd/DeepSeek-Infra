@@ -35,13 +35,15 @@ def segments_path(media_id: str) -> Path:
 
 
 def media_file_path(media: dict[str, Any]) -> Path:
-    raw = str(media.get("path") or "").replace("\\", "/").strip()
+    raw = schema.normalize_media_path(media.get("path"))
     if not raw:
         return object_dir(str(media.get("mediaId") or ""))
-    path = Path(raw)
-    if path.is_absolute():
-        return path.resolve()
-    return (media_dir() / raw).resolve()
+    path = (media_dir() / raw).resolve()
+    try:
+        path.relative_to(media_dir().resolve())
+    except ValueError as exc:
+        raise AppError("Media file must stay inside the media library", code=ErrorCode.INVALID_PAYLOAD, status=400) from exc
+    return path
 
 
 def relative_media_path(path: Path) -> str:
@@ -50,6 +52,20 @@ def relative_media_path(path: Path) -> str:
         return resolved.relative_to(media_dir().resolve()).as_posix()
     except ValueError as exc:
         raise AppError("Media file must stay inside the media library", code=ErrorCode.INVALID_PAYLOAD, status=400) from exc
+
+
+def validate_object_media_path(path: str, *, media_id: str = "") -> str:
+    safe_path = schema.normalize_media_path(path)
+    if not safe_path:
+        return ""
+    parts = safe_path.split("/")
+    expected_prefix = ["objects"]
+    if media_id:
+        expected_prefix.append(schema.validate_media_id(media_id))
+    if parts[: len(expected_prefix)] != expected_prefix:
+        raise AppError("Media source path must point to an object stored in the media library", code=ErrorCode.INVALID_PAYLOAD, status=400)
+    media_file_path({"mediaId": media_id or "media_path_check", "path": safe_path})
+    return safe_path
 
 
 def list_media(*, project_id: str = "", media_type: str = "", status: str = "") -> list[dict[str, Any]]:
@@ -105,6 +121,8 @@ def register_media(
             "metadata": metadata or {},
         }
     )
+    if record.get("path"):
+        record["path"] = validate_object_media_path(str(record["path"]), media_id=str(record["mediaId"]))
     items = [item for item in _load_store() if item.get("mediaId") != record["mediaId"]]
     items.append(record)
     _write_store(items)
@@ -118,15 +136,23 @@ def update_media(media_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         if item.get("mediaId") != safe_id:
             continue
         merged = dict(item)
-        for key in ("title", "path", "source", "metadata", "status"):
+        for key in ("title", "path", "source", "status", "projectId"):
             if key in patch:
                 merged[key] = patch[key]
+        if "metadata" in patch:
+            raw_existing = merged.get("metadata")
+            existing_metadata: dict[str, Any] = dict(raw_existing) if isinstance(raw_existing, dict) else {}
+            raw_patch = patch.get("metadata")
+            patch_metadata = raw_patch if isinstance(raw_patch, dict) else {}
+            merged["metadata"] = {**existing_metadata, **patch_metadata}
         if "type" in patch:
             merged["type"] = patch["type"]
         if "mimeType" in patch:
             merged["mimeType"] = patch["mimeType"]
         merged["updatedAt"] = utc_now()
         normalized = schema.normalize_media_record(merged)
+        if normalized.get("path"):
+            normalized["path"] = validate_object_media_path(str(normalized["path"]), media_id=str(normalized["mediaId"]))
         items[index] = normalized
         _write_store(items)
         return public_media(normalized)
@@ -167,8 +193,7 @@ def delete_media(media_id: str) -> int:
 
 
 def save_source_bytes(media_id: str, filename: str, data: bytes) -> str:
-    if not data:
-        raise AppError("Media source is empty", code=ErrorCode.INVALID_PAYLOAD, status=400)
+    schema.validate_media_upload_size(len(data))
     directory = object_dir(media_id)
     directory.mkdir(parents=True, exist_ok=True)
     suffix = Path(filename or "source.bin").suffix.lower()

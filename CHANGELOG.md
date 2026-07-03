@@ -2,6 +2,22 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.7.1] - Media Layer Hardening
+
+**Theme: Media Layer security, stability and release polish.** This patch hardens v2.7.0 media ingestion while keeping the Multimodal Media Layer API shape stable.
+
+### Added
+
+- **Media upload gates**: enforce a 50 MB per-media upload limit, a 20-item media upload request limit and a media MIME allowlist for images, audio, video, PDF and HTML snapshots.
+- **Media PATCH / reprocess**: add `PATCH /api/media/{mediaId}` for title, project binding and metadata updates; `POST /api/media/{mediaId}/process` now accepts `force=true` to rebuild segments and Local RAG index.
+- **Media evidence gate**: add `mediaUploadLimits` to Media Layer smoke/preflight evidence and refresh release paths to v2.7.1.
+
+### Changed
+
+- Media source paths must remain under `.media/objects/{mediaId}/...`; absolute paths and traversal are rejected before processing or export.
+- Audio/video transcript imports now split long transcripts into smaller searchable segments; video frame captions are sorted by time and validate `framePath`.
+- Skill media context now tolerates missing media IDs, applies a total context budget and prioritizes query/citation-relevant segments.
+
 ## [2.7.0] - Multimodal Media Layer
 
 **主题：媒体成为 Workspace 一级对象。** 继 v2.6.x 把工具、Prompt、Schema、产物策略和项目绑定封装成 Skill 后，本版本新增 Multimodal Media Layer，让 Project、Skill 与 Local RAG 可以统一接收、解析、索引、引用和导出图片、PDF、网页快照以及 transcript/frame import 形式的音视频媒体。

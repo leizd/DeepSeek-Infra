@@ -17,6 +17,10 @@ from deepseek_infra.infra.skills.schema import validate_instance
 from deepseek_infra.infra.skills.templates import format_project_context, offline_skill_content, skill_system_prompt, skill_user_message
 
 LLMCallable = Callable[..., dict[str, Any]]
+MEDIA_CONTEXT_MAX_CHARS = 24_000
+MEDIA_SEGMENT_MAX_CHARS = 1_600
+MEDIA_CONTEXT_MAX_MEDIA = 12
+MEDIA_CONTEXT_MAX_SEGMENTS_PER_MEDIA = 12
 
 
 def run_skill(
@@ -203,30 +207,85 @@ def _media_context(input_data: dict[str, Any], *, project_id: str = "") -> str:
     if not isinstance(raw_ids, list):
         raw_single = input_data.get("mediaId")
         raw_ids = [raw_single] if raw_single else []
-    media_ids = [str(item or "").strip() for item in raw_ids if str(item or "").strip()][:12]
+    media_ids = [str(item or "").strip() for item in raw_ids if str(item or "").strip()][:MEDIA_CONTEXT_MAX_MEDIA]
     if not media_ids:
         return ""
     try:
         from deepseek_infra.infra.media import library as media_library
     except Exception:
         return ""
+    query_terms = _media_context_terms(input_data)
     lines = ["[Media context]"]
+    used_chars = len(lines[0])
     for position, media_id in enumerate(media_ids, start=1):
-        media = media_library.get_media(media_id)
+        try:
+            media = media_library.get_media(media_id)
+        except Exception:
+            line = f"- M{position}: warning: mediaId={media_id} was not found"
+            if not _append_context_line(lines, line, used_chars):
+                break
+            used_chars += len(line) + 1
+            continue
         media_project = str(media.get("projectId") or "")
         if project_id and media_project and media_project != project_id:
+            line = f"- M{position}: warning: mediaId={media_id} belongs to a different project"
+            if not _append_context_line(lines, line, used_chars):
+                break
+            used_chars += len(line) + 1
             continue
-        lines.append(f"- M{position}: {media.get('title')} ({media.get('type')}, mediaId={media.get('mediaId')}, status={media.get('status')})")
-        for segment in media_library.list_segments(media_id)[:12]:
+        header = f"- M{position}: {media.get('title')} ({media.get('type')}, mediaId={media.get('mediaId')}, status={media.get('status')})"
+        if not _append_context_line(lines, header, used_chars):
+            break
+        used_chars += len(header) + 1
+        ranked_segments = sorted(media_library.list_segments(media_id), key=lambda segment: _media_segment_rank(segment, query_terms))
+        for segment in ranked_segments[:MEDIA_CONTEXT_MAX_SEGMENTS_PER_MEDIA]:
             raw_citation = segment.get("citation")
             citation: dict[str, Any] = raw_citation if isinstance(raw_citation, dict) else {}
             locator = str(citation.get("markdown") or citation.get("uri") or segment.get("segmentId") or "")
             text = str(segment.get("text") or "").strip()
-            if len(text) > 1800:
-                text = text[:1800].rstrip() + "\n[truncated]"
-            lines.append(f"  segment {segment.get('type')} {locator}:")
-            lines.append(text)
+            if len(text) > MEDIA_SEGMENT_MAX_CHARS:
+                text = text[:MEDIA_SEGMENT_MAX_CHARS].rstrip() + "\n[truncated]"
+            block = f"  segment {segment.get('type')} {locator}:\n{text}"
+            if used_chars + len(block) + 1 > MEDIA_CONTEXT_MAX_CHARS:
+                if not _append_context_line(lines, "  [media context truncated]", used_chars):
+                    pass
+                return "\n".join(lines)
+            lines.append(block)
+            used_chars += len(block) + 1
     return "\n".join(lines)
+
+
+def _append_context_line(lines: list[str], line: str, used_chars: int) -> bool:
+    if used_chars + len(line) + 1 > MEDIA_CONTEXT_MAX_CHARS:
+        return False
+    lines.append(line)
+    return True
+
+
+def _media_context_terms(input_data: dict[str, Any]) -> set[str]:
+    values = []
+    for key in ("task", "query", "question", "prompt", "goal"):
+        value = input_data.get(key)
+        if isinstance(value, str):
+            values.append(value)
+    text = " ".join(values).lower()
+    return {word for word in re.findall(r"[a-z0-9_\u4e00-\u9fff]{2,}", text) if len(word) >= 2}
+
+
+def _media_segment_rank(segment: dict[str, Any], query_terms: set[str]) -> tuple[int, int, int]:
+    raw_citation = segment.get("citation")
+    citation: dict[str, Any] = raw_citation if isinstance(raw_citation, dict) else {}
+    haystack = " ".join(
+        [
+            str(segment.get("text") or ""),
+            str(citation.get("label") or ""),
+            str(citation.get("markdown") or ""),
+            str(citation.get("uri") or ""),
+        ]
+    ).lower()
+    score = sum(1 for term in query_terms if term and term in haystack)
+    citation_bonus = 1 if citation else 0
+    return (-score, -citation_bonus, int(segment.get("index") or 0))
 
 
 def _llm_output(

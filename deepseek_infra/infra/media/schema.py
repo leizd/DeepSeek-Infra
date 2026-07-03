@@ -23,6 +23,10 @@ MEDIA_STATUSES = {"pending", "processing", "ready", "failed"}
 SEGMENT_TYPES = {"ocr_text", "caption", "transcript", "frame", "page_text", "webpage_text"}
 MAX_SEGMENT_TEXT_CHARS = 120_000
 MAX_TITLE_CHARS = 160
+MAX_MEDIA_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_MEDIA_UPLOADS_PER_REQUEST = 20
+ALLOWED_MEDIA_MIME_PREFIXES = ("image/", "audio/", "video/")
+ALLOWED_MEDIA_MIME_TYPES = {"application/pdf", "text/html", "application/xhtml+xml"}
 
 
 def new_media_id() -> str:
@@ -71,6 +75,26 @@ def guess_mime_type(filename: str, default: str = "application/octet-stream") ->
     return mimetypes.guess_type(str(filename or ""))[0] or default
 
 
+def normalize_mime_type(value: Any) -> str:
+    return str(value or "").split(";", 1)[0].strip().lower()
+
+
+def validate_media_mime_type(value: Any, *, filename: str = "") -> str:
+    mime_type = normalize_mime_type(value) or guess_mime_type(filename)
+    if mime_type in ALLOWED_MEDIA_MIME_TYPES or any(mime_type.startswith(prefix) for prefix in ALLOWED_MEDIA_MIME_PREFIXES):
+        return mime_type
+    raise AppError("Unsupported media MIME type", code=ErrorCode.INVALID_PAYLOAD, status=400)
+
+
+def validate_media_upload_size(size: int) -> int:
+    safe_size = max(0, int(size))
+    if safe_size <= 0:
+        raise AppError("Media source is empty", code=ErrorCode.INVALID_PAYLOAD, status=400)
+    if safe_size > MAX_MEDIA_UPLOAD_BYTES:
+        raise AppError("Media upload exceeds the 50 MB limit", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
+    return safe_size
+
+
 def normalize_status(value: Any, default: str = "pending") -> str:
     status = str(value or default).strip().lower()
     if status not in MEDIA_STATUSES:
@@ -108,7 +132,7 @@ def normalize_media_record(value: dict[str, Any]) -> dict[str, Any]:
     project_id = str(value.get("projectId") or "").strip()
     if project_id:
         project_id = validate_project_id(project_id)
-    mime_type = str(value.get("mimeType") or "").split(";", 1)[0].strip().lower()
+    mime_type = normalize_mime_type(value.get("mimeType"))
     media_type = normalize_media_type(value.get("type"), mime_type=mime_type, filename=str(value.get("title") or ""))
     created_at = str(value.get("createdAt") or utc_now())
     updated_at = str(value.get("updatedAt") or created_at)
@@ -131,6 +155,8 @@ def normalize_media_path(value: Any) -> str:
     raw = str(value or "").replace("\\", "/").strip()
     if not raw:
         return ""
+    if raw.startswith("/") or raw.startswith("//") or re.match(r"^[A-Za-z]:/", raw):
+        raise AppError("Media path must be relative to the media library", code=ErrorCode.INVALID_PAYLOAD, status=400)
     parts = [part for part in PurePosixPath(raw).parts if part not in {"", "."}]
     if any(part == ".." for part in parts):
         raise AppError("Media path must not escape the media library", code=ErrorCode.INVALID_PAYLOAD, status=400)

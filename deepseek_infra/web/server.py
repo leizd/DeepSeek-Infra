@@ -142,7 +142,7 @@ from deepseek_infra.web.routes.workspace import WorkspaceRouteDeps, create_works
 logger = logging.getLogger("deepseek_infra.server")
 
 MAX_MULTIPART_FIELD_BYTES = 4_096
-MAX_MULTIPART_FILES = 8
+MAX_MULTIPART_FILES = 20
 MAX_MULTIPART_PARTS = MAX_MULTIPART_FILES + 4
 MULTIPART_MEMORY_LIMIT = 4 * 1024 * 1024
 MULTIPART_SPOOL_LIMIT = 1024 * 1024

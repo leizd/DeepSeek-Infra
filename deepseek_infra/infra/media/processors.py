@@ -6,8 +6,10 @@ import json
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.media import library
+from deepseek_infra.infra.media import library, schema
 from deepseek_infra.infra.rag import files as rag_files
+
+TRANSCRIPT_CHUNK_CHARS = 1_200
 
 
 def extract_segments(media: dict[str, Any], *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None) -> list[dict[str, Any]]:
@@ -78,39 +80,143 @@ def webpage_segments(media: dict[str, Any]) -> list[dict[str, Any]]:
 
 def audio_segments(media: dict[str, Any]) -> list[dict[str, Any]]:
     metadata = _metadata(media)
+    imported = imported_transcript_segments(metadata.get("transcriptSegments") or metadata.get("segments"))
+    if imported:
+        return imported
     transcript = str(metadata.get("transcript") or metadata.get("transcriptText") or "").strip()
-    return transcript_segments(transcript, media_type="audio")
+    return transcript_segments(transcript, media_type="audio", duration_sec=metadata_float(metadata, "durationSec"))
 
 
 def video_segments(media: dict[str, Any]) -> list[dict[str, Any]]:
     metadata = _metadata(media)
-    segments = transcript_segments(str(metadata.get("transcript") or metadata.get("transcriptText") or "").strip(), media_type="video")
+    segments = imported_transcript_segments(metadata.get("transcriptSegments") or metadata.get("segments"))
+    if not segments:
+        segments = transcript_segments(str(metadata.get("transcript") or metadata.get("transcriptText") or "").strip(), media_type="video", duration_sec=metadata_float(metadata, "durationSec"))
     raw_frames = metadata.get("frames") or metadata.get("frameCaptions")
     frames = raw_frames if isinstance(raw_frames, list) else []
+    frame_segments: list[dict[str, Any]] = []
     for index, item in enumerate(frames):
         if isinstance(item, dict):
             text = str(item.get("text") or item.get("caption") or "").strip()
-            frame_path = str(item.get("framePath") or "").strip()
-            time_range = item.get("timeRange") if isinstance(item.get("timeRange"), list) else []
+            frame_path = schema.normalize_media_path(item.get("framePath"))
+            time_range = schema.normalize_time_range(item.get("timeRange") if isinstance(item.get("timeRange"), list) else [item.get("startSec"), item.get("endSec")])
         else:
             text = str(item or "").strip()
             frame_path = ""
             time_range = []
         if text:
-            segment: dict[str, Any] = {"type": "frame", "text": text, "confidence": 1.0, "index": index}
+            segment: dict[str, Any] = {"type": "frame", "text": text, "confidence": 1.0, "_sourceIndex": index}
             if time_range:
                 segment["timeRange"] = time_range
             if frame_path:
                 segment["framePath"] = frame_path
-            segments.append(segment)
+            frame_segments.append(segment)
+    frame_segments.sort(key=_segment_sort_key)
+    for index, segment in enumerate(frame_segments):
+        segment.pop("_sourceIndex", None)
+        segment["index"] = len(segments) + index
+        segments.append(segment)
     return segments
 
 
-def transcript_segments(transcript: str, *, media_type: str) -> list[dict[str, Any]]:
+def transcript_segments(transcript: str, *, media_type: str, duration_sec: float = 0.0) -> list[dict[str, Any]]:
     if not transcript:
         return []
-    segment_type = "transcript"
-    return [{"type": segment_type, "text": transcript, "confidence": 1.0}]
+    chunks = chunk_transcript_text(transcript)
+    if not chunks:
+        return []
+    result = []
+    seconds_per_chunk = duration_sec / len(chunks) if duration_sec > 0 else 0
+    for index, chunk in enumerate(chunks):
+        segment: dict[str, Any] = {"type": "transcript", "text": chunk, "confidence": 1.0, "index": index}
+        if seconds_per_chunk > 0:
+            start = round(index * seconds_per_chunk, 3)
+            segment["timeRange"] = [start, round(start + seconds_per_chunk, 3)]
+        result.append(segment)
+    return result
+
+
+def imported_transcript_segments(raw: Any) -> list[dict[str, Any]]:
+    items = raw if isinstance(raw, list) else []
+    result: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if isinstance(item, dict):
+            text = str(item.get("text") or item.get("transcript") or "").strip()
+            time_range = schema.normalize_time_range(item.get("timeRange") if isinstance(item.get("timeRange"), list) else [item.get("startSec"), item.get("endSec")])
+            confidence = item.get("confidence", 1.0)
+        else:
+            text = str(item or "").strip()
+            time_range = []
+            confidence = 1.0
+        if not text:
+            continue
+        segment: dict[str, Any] = {"type": "transcript", "text": text, "confidence": confidence, "_sourceIndex": index}
+        if time_range:
+            segment["timeRange"] = time_range
+        result.append(segment)
+    result.sort(key=_segment_sort_key)
+    for index, segment in enumerate(result):
+        segment.pop("_sourceIndex", None)
+        segment["index"] = index
+    return result
+
+
+def chunk_transcript_text(text: str, *, max_chars: int = TRANSCRIPT_CHUNK_CHARS) -> list[str]:
+    normalized = "\n".join(line.strip() for line in str(text or "").replace("\r\n", "\n").splitlines()).strip()
+    if not normalized:
+        return []
+    chunks: list[str] = []
+    current = ""
+    for piece in _transcript_pieces(normalized):
+        candidate = f"{current}\n{piece}".strip() if current else piece
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        current = piece
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _transcript_pieces(text: str) -> list[str]:
+    pieces: list[str] = []
+    for paragraph in [part.strip() for part in text.split("\n") if part.strip()]:
+        if len(paragraph) <= TRANSCRIPT_CHUNK_CHARS:
+            pieces.append(paragraph)
+            continue
+        words = paragraph.split()
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip() if current else word
+            if len(candidate) <= TRANSCRIPT_CHUNK_CHARS:
+                current = candidate
+            else:
+                if current:
+                    pieces.append(current)
+                current = word
+        if current:
+            pieces.append(current)
+    return pieces
+
+
+def _segment_sort_key(segment: dict[str, Any]) -> tuple[float, int]:
+    raw_range = segment.get("timeRange")
+    time_range = raw_range if isinstance(raw_range, list) else []
+    if time_range:
+        try:
+            return (float(time_range[0]), int(segment.get("_sourceIndex") or 0))
+        except (TypeError, ValueError):
+            pass
+    return (float("inf"), int(segment.get("_sourceIndex") or 0))
+
+
+def metadata_float(metadata: dict[str, Any], key: str) -> float:
+    try:
+        return max(0.0, float(metadata.get(key) or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _metadata(media: dict[str, Any]) -> dict[str, Any]:

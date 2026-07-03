@@ -1,7 +1,7 @@
 {
   "version": "2.7.1",
   "commit": "3d9527f2dc04",
-  "generatedAt": "2026-07-03T01:59:29+00:00",
+  "generatedAt": "2026-07-03T01:58:47+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -37,7 +37,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:22+00:00",
+      "lastRunAt": "2026-07-03T01:58:42+00:00",
       "packIds": [
         "pack_code"
       ]
@@ -50,7 +50,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:22+00:00",
+      "lastRunAt": "2026-07-03T01:58:42+00:00",
       "packIds": [
         "pack_code",
         "pack_office",
@@ -66,7 +66,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:23+00:00",
+      "lastRunAt": "2026-07-03T01:58:42+00:00",
       "packIds": [
         "pack_office"
       ]
@@ -79,7 +79,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:23+00:00",
+      "lastRunAt": "2026-07-03T01:58:43+00:00",
       "packIds": [
         "pack_office",
         "pack_research",
@@ -94,7 +94,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:23+00:00",
+      "lastRunAt": "2026-07-03T01:58:43+00:00",
       "packIds": [
         "pack_research"
       ]
@@ -107,7 +107,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:24+00:00",
+      "lastRunAt": "2026-07-03T01:58:43+00:00",
       "packIds": [
         "pack_study"
       ]
@@ -120,7 +120,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:25+00:00",
+      "lastRunAt": "2026-07-03T01:58:44+00:00",
       "packIds": []
     },
     {
@@ -131,7 +131,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:25+00:00",
+      "lastRunAt": "2026-07-03T01:58:44+00:00",
       "packIds": []
     },
     {
@@ -142,7 +142,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:26+00:00",
+      "lastRunAt": "2026-07-03T01:58:45+00:00",
       "packIds": []
     },
     {
@@ -153,7 +153,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:27+00:00",
+      "lastRunAt": "2026-07-03T01:58:45+00:00",
       "packIds": []
     },
     {
@@ -164,7 +164,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:27+00:00",
+      "lastRunAt": "2026-07-03T01:58:46+00:00",
       "packIds": []
     },
     {
@@ -175,7 +175,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:28+00:00",
+      "lastRunAt": "2026-07-03T01:58:47+00:00",
       "packIds": []
     }
   ],
@@ -188,7 +188,7 @@
       "passRate": 1.0,
       "caseCount": 2,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:22+00:00"
+      "lastRunAt": "2026-07-03T01:58:42+00:00"
     },
     {
       "packId": "pack_office",
@@ -198,7 +198,7 @@
       "passRate": 1.0,
       "caseCount": 3,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:23+00:00"
+      "lastRunAt": "2026-07-03T01:58:43+00:00"
     },
     {
       "packId": "pack_research",
@@ -208,7 +208,7 @@
       "passRate": 1.0,
       "caseCount": 3,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:23+00:00"
+      "lastRunAt": "2026-07-03T01:58:43+00:00"
     },
     {
       "packId": "pack_study",
@@ -218,7 +218,7 @@
       "passRate": 1.0,
       "caseCount": 3,
       "failedCases": [],
-      "lastRunAt": "2026-07-03T01:59:24+00:00"
+      "lastRunAt": "2026-07-03T01:58:43+00:00"
     }
   ],
   "caseResults": [
@@ -237,7 +237,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 225.58
+        "latencyMs": 188.75
       },
       "input": {
         "scope": "def add(a, b): return a - b",
@@ -261,7 +261,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:22+00:00"
+      "lastRunAt": "2026-07-03T01:58:42+00:00"
     },
     {
       "caseId": "synthetic-skill_document_reader",
@@ -281,7 +281,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 254.23
+        "latencyMs": 235.22
       },
       "input": {
         "query": "Summarize the key claims and cite supporting passages."
@@ -304,7 +304,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:22+00:00"
+      "lastRunAt": "2026-07-03T01:58:42+00:00"
     },
     {
       "caseId": "ppt-generator-architecture",
@@ -321,7 +321,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 255.12
+        "latencyMs": 239.36
       },
       "input": {
         "topic": "DeepSeek Infra Skill Quality Loop",
@@ -347,7 +347,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:23+00:00"
+      "lastRunAt": "2026-07-03T01:58:42+00:00"
     },
     {
       "caseId": "synthetic-skill_paper_writer",
@@ -366,7 +366,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 258.28
+        "latencyMs": 259.27
       },
       "input": {
         "topic": "The impact of local RAG on learning workflows",
@@ -391,7 +391,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:23+00:00"
+      "lastRunAt": "2026-07-03T01:58:43+00:00"
     },
     {
       "caseId": "research-local-first-ai",
@@ -408,7 +408,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 271.63
+        "latencyMs": 204.78
       },
       "input": {
         "topic": "Local-first AI workspaces",
@@ -433,7 +433,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:23+00:00"
+      "lastRunAt": "2026-07-03T01:58:43+00:00"
     },
     {
       "caseId": "study-os-scheduling",
@@ -450,7 +450,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 342.02
+        "latencyMs": 259.1
       },
       "input": {
         "question": "Explain FCFS SJF RR and priority scheduling for operating systems.",
@@ -477,7 +477,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:24+00:00"
+      "lastRunAt": "2026-07-03T01:58:43+00:00"
     },
     {
       "caseId": "synthetic-audio_transcript_summarizer",
@@ -492,11 +492,11 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 1003.03
+        "latencyMs": 530.3
       },
       "input": {
         "mediaIds": [
-          "media_f80753492cb655c0"
+          "media_3e036fb756d7874d"
         ],
         "task": "Summarize the transcript into decisions and follow-ups."
       },
@@ -518,7 +518,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:25+00:00"
+      "lastRunAt": "2026-07-03T01:58:44+00:00"
     },
     {
       "caseId": "synthetic-image_explainer",
@@ -533,11 +533,11 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 553.79
+        "latencyMs": 505.06
       },
       "input": {
         "mediaIds": [
-          "media_e5fba7ff1ef2a2ae"
+          "media_012a7105944e4276"
         ],
         "task": "Explain the image and cite any OCR text."
       },
@@ -559,7 +559,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:25+00:00"
+      "lastRunAt": "2026-07-03T01:58:44+00:00"
     },
     {
       "caseId": "synthetic-media_to_report",
@@ -574,11 +574,11 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 592.61
+        "latencyMs": 557.64
       },
       "input": {
         "mediaIds": [
-          "media_77b6938ba1489ceb"
+          "media_f092e9f4ae6cb57e"
         ],
         "task": "Write a cited briefing report."
       },
@@ -600,7 +600,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:26+00:00"
+      "lastRunAt": "2026-07-03T01:58:45+00:00"
     },
     {
       "caseId": "synthetic-pdf_reader",
@@ -615,11 +615,11 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 620.4
+        "latencyMs": 532.82
       },
       "input": {
         "mediaIds": [
-          "media_73ccdce53efb6c7b"
+          "media_624d87ffb0689eb8"
         ],
         "task": "Summarize the document with page citations."
       },
@@ -641,7 +641,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:27+00:00"
+      "lastRunAt": "2026-07-03T01:58:45+00:00"
     },
     {
       "caseId": "synthetic-video_brief_generator",
@@ -656,11 +656,11 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 630.63
+        "latencyMs": 550.67
       },
       "input": {
         "mediaIds": [
-          "media_d5634fbe4f3e1659"
+          "media_b0a84e7f33771c88"
         ],
         "task": "Create an executive brief from this video."
       },
@@ -682,7 +682,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:27+00:00"
+      "lastRunAt": "2026-07-03T01:58:46+00:00"
     },
     {
       "caseId": "synthetic-webpage_summarizer",
@@ -697,11 +697,11 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 657.2
+        "latencyMs": 601.21
       },
       "input": {
         "mediaIds": [
-          "media_f3d36c6e32eb4ca5"
+          "media_92db3b0dd07e1c23"
         ],
         "task": "Summarize the webpage and extract action items."
       },
@@ -723,7 +723,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-03T01:59:28+00:00"
+      "lastRunAt": "2026-07-03T01:58:47+00:00"
     }
   ],
   "regression": {

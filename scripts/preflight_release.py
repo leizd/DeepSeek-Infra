@@ -700,6 +700,7 @@ def check_media_layer_evidence(root: Path, version: str) -> CheckResult:
         "mediaSegments",
         "mediaToRag",
         "mediaCitations",
+        "mediaUploadLimits",
         "projectExportIncludesMedia",
         "secretRedaction",
     )

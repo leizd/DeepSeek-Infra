@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline media retrieval and citation eval for v2.7.0."""
+"""Offline media retrieval and citation eval for v2.7.1."""
 
 from __future__ import annotations
 

@@ -23,7 +23,8 @@ def ingest_upload(
     filename = str(file_info.get("filename") or "media.bin")
     data = file_info.get("data")
     raw_data = data if isinstance(data, bytes) else b""
-    mime_type = str(file_info.get("content_type") or schema.guess_mime_type(filename))
+    schema.validate_media_upload_size(len(raw_data))
+    mime_type = schema.validate_media_mime_type(file_info.get("content_type"), filename=filename)
     media_type = schema.normalize_media_type("", mime_type=mime_type, filename=filename)
     media_id = schema.new_media_id()
     path = library.save_source_bytes(media_id, filename, raw_data)
@@ -47,13 +48,17 @@ def register_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise AppError("Media payload must be an object", code=ErrorCode.INVALID_PAYLOAD)
     project_id = str(payload.get("projectId") or "").strip()
     title = str(payload.get("title") or payload.get("name") or "Media").strip()
-    mime_type = str(payload.get("mimeType") or payload.get("contentType") or "").strip()
+    mime_type = schema.normalize_mime_type(payload.get("mimeType") or payload.get("contentType"))
     filename = str(payload.get("filename") or title or "media").strip()
+    if mime_type:
+        mime_type = schema.validate_media_mime_type(mime_type, filename=filename)
     media_type = schema.normalize_media_type(payload.get("type"), mime_type=mime_type, filename=filename)
     media_id = schema.new_media_id()
     metadata = schema.normalize_metadata(payload.get("metadata"))
     source = normalize_source_ref(payload.get("source") if isinstance(payload.get("source"), dict) else {"kind": "upload", "refId": ""})
     path = str(payload.get("path") or "").strip()
+    if path:
+        path = library.validate_object_media_path(path, media_id=media_id)
 
     if media_type == "webpage":
         source = normalize_source_ref({**source, "kind": source.get("kind") or "browser", "url": payload.get("url") or payload.get("sourceUrl") or metadata.get("sourceUrl") or ""})
@@ -93,9 +98,12 @@ def register_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return media
 
 
-def process_media(media_id: str, *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None) -> dict[str, Any]:
+def process_media(media_id: str, *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None, force: bool = False) -> dict[str, Any]:
     media = library.set_status(media_id, "processing")
     try:
+        if force:
+            indexer.delete_media_index(str(media["mediaId"]), project_id=str(media.get("projectId") or ""))
+            library.save_segments(str(media["mediaId"]), [])
         raw_segments = processors.extract_segments(media, ocr_enabled=ocr_enabled, ocr_api_key=ocr_api_key)
         segments = []
         for index, segment in enumerate(raw_segments):
