@@ -15,6 +15,9 @@
 .request-queue/
 .budget/
 .tool-audit/
+.browser-audit/
+.browser-downloads/
+.browser-profiles/
 .scheduler/
 .a2a/
 .skills/
@@ -37,6 +40,7 @@ evals/reports/*
 !evals/reports/skill-latest.json
 !evals/reports/skills-v*.json
 !evals/reports/media-v*.json
+!evals/reports/browser-v*.json
 
 .coverage
 .mypy_cache/

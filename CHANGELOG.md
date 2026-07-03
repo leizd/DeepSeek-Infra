@@ -2,6 +2,25 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.8.0] - Browser Control Runtime
+
+**Theme: make browser control a governed runtime, not a raw automation escape hatch.** This release adds controlled browser sessions, safety-gated actions, Browser-to-Media snapshots, Local RAG indexing and offline evidence for the browser workspace ingress path.
+
+### Added
+
+- **Browser runtime**: add `deepseek_infra/infra/browser/` with session lifecycle, optional Playwright Chromium control, static HTML fallback, isolated profiles and isolated download directories.
+- **Controlled browser actions**: add `browser.open_url`, `browser.read_page`, `browser.screenshot`, `browser.extract_links`, `browser.extract_dom`, `browser.scroll`, `browser.click`, `browser.type_text`, `browser.select`, `browser.download` and `browser.close_session` through Tool Runtime policy.
+- **Browser Safety**: gate the runtime behind `BROWSER_CONTROL_ENABLED`, block private hosts by default, require confirmation for write actions, password fields and submit/delete/payment flows, cap downloads and append decisions to `.browser-audit/audit.jsonl`.
+- **Workspace ingress**: save webpage snapshots, screenshots and downloads through Media Library, emit `browser://` citations and index webpage text into Local RAG as untrusted context.
+- **Browser skills**: add `web_researcher`, `webpage_reader`, `website_summarizer`, `form_assistant`, `download_and_summarize` and `browser_to_report` with explicit `browserPolicy` permissions.
+- **Offline evidence**: add `docs/BROWSER_CONTROL.md`, `scripts/smoke_browser.py --offline`, `evals/runners/run_browser_eval.py`, `evals/golden/browser/`, browser fixtures and `docs/evidence/browser-v2.8.0.json` / `evals/reports/browser-v2.8.0.json`.
+
+### Changed
+
+- Context Taint now treats `browser.*` tool output as `untrusted_browser`.
+- Release preflight requires Browser Control evidence starting at v2.8.0 and keeps older release trains as WARN-only for that gate.
+- Release manifest, smoke orchestration, CI evidence upload and runtime doctor know about Browser Control runtime artifacts.
+
 ## [2.7.4] - Context Taint Firewall Hardening
 
 **Theme: promote Context Taint Firewall from experimental defense to MVP / release-gated protection.** This patch adds dedicated media and RAG taint sources, ships an offline smoke suite, makes context-taint evidence a hard preflight gate and exposes clearer risk diagnostics.

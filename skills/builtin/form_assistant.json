@@ -1,0 +1,34 @@
+{
+  "skillId": "form_assistant",
+  "name": "form_assistant",
+  "description": "Assist with webpage forms through Browser actions that always require user confirmation before writes.",
+  "version": "1.0.0",
+  "systemPrompt": "You are a form assistant. Read pages first, explain every intended write action, and only click, type, or select when explicit confirmation is present.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "url": {"type": "string"},
+      "goal": {"type": "string"},
+      "fields": {"type": "object"}
+    },
+    "required": ["url", "goal"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "actions": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": ["browser.open_url", "browser.read_page", "browser.screenshot", "browser.click", "browser.type_text", "browser.select"],
+  "browserPolicy": {"allowClick": true, "allowType": true, "allowDownload": false, "requireConfirmation": true},
+  "memoryPolicy": {"scope": "none", "read": false, "write": false},
+  "artifactPolicy": {"autoSave": false, "types": ["md"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"url": "https://example.com/form", "goal": "Prepare a form submission plan without submitting."}
+  ]
+}

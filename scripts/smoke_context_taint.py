@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline Context Taint Firewall smoke for v2.7.4.
+"""Offline Context Taint Firewall smoke for v2.8.0.
 
 Covers web injection, file injection, media transcript injection, tool directive
 detection and tainted-turn high-risk tool escalation.

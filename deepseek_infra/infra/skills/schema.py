@@ -60,6 +60,7 @@ def validate_skill_config(config: dict[str, Any]) -> dict[str, Any]:
     data["memoryPolicy"] = validate_memory_policy(data.get("memoryPolicy"))
     data["artifactPolicy"] = validate_artifact_policy(data.get("artifactPolicy"))
     data["projectBinding"] = validate_project_binding(data.get("projectBinding"))
+    data["browserPolicy"] = validate_browser_policy(data.get("browserPolicy"))
 
     examples = data.get("exampleInputs")
     data["exampleInputs"] = examples if isinstance(examples, list) else []
@@ -114,6 +115,19 @@ def validate_project_binding(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise SkillSchemaError("projectBinding must be an object")
     return {"enabled": bool(value.get("enabled"))}
+
+
+def validate_browser_policy(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise SkillSchemaError("browserPolicy must be an object")
+    return {
+        "allowClick": bool(value.get("allowClick")),
+        "allowType": bool(value.get("allowType")),
+        "allowDownload": bool(value.get("allowDownload")),
+        "requireConfirmation": bool(value.get("requireConfirmation", True)),
+    }
 
 
 def validate_json_schema(schema: Any, *, label: str) -> dict[str, Any]:

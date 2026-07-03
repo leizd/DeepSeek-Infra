@@ -1,0 +1,35 @@
+{
+  "skillId": "browser_to_report",
+  "name": "browser_to_report",
+  "description": "Turn Browser snapshots, screenshots, and downloaded media into a project report.",
+  "version": "1.0.0",
+  "systemPrompt": "You produce reports from controlled Browser evidence. Save page snapshots and screenshots, cite Browser/Media segments, and clearly separate evidence from recommendations.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "urls": {"type": "array", "items": {"type": "string"}},
+      "reportTitle": {"type": "string"},
+      "brief": {"type": "string"}
+    },
+    "required": ["urls", "reportTitle"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "artifactId": {"type": "string"},
+      "mediaIds": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": ["browser.open_url", "browser.read_page", "browser.screenshot", "browser.extract_links", "browser.download", "search_files", "create_document"],
+  "browserPolicy": {"allowClick": false, "allowType": false, "allowDownload": true, "requireConfirmation": true},
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md", "docx", "pdf"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"urls": ["https://example.com"], "reportTitle": "Browser Evidence Report", "brief": "Summarize and cite the saved snapshots."}
+  ]
+}

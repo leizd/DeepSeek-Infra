@@ -297,7 +297,7 @@ def check_quality_gate_evidence(root: Path, version: str) -> CheckResult:
 
 def check_release_exclusions(root: Path) -> CheckResult:
     text = _read(root / "scripts" / "release.py")
-    required = (".traces", ".local-rag", ".media", ".auth-token", ".env", "server*.log")
+    required = (".traces", ".local-rag", ".media", ".browser-audit", ".browser-downloads", ".browser-profiles", ".auth-token", ".env", "server*.log")
     missing = [token for token in required if token not in text]
     if missing:
         return CheckResult("release_exclusions", STATUS_FAIL, f"release.py no longer excludes: {', '.join(missing)}", {"missing": missing})
@@ -844,6 +844,79 @@ def check_media_layer_evidence(root: Path, version: str) -> CheckResult:
         "media_layer_evidence",
         STATUS_PASS,
         "Media Layer evidence recorded",
+        {"path": str(path), "checks": list(required)},
+    )
+
+
+def _version_tuple(version: str) -> tuple[int, int, int]:
+    parts = [int(part) if part.isdigit() else 0 for part in version.split(".")]
+    major, minor, patch = (parts + [0, 0, 0])[:3]
+    return major, minor, patch
+
+
+def check_browser_control_evidence(root: Path, version: str) -> CheckResult:
+    if _version_tuple(version) < (2, 8, 0):
+        return CheckResult(
+            "browser_control_evidence",
+            STATUS_PASS,
+            "Browser Control evidence not required before v2.8.0",
+            {"version": version, "requiredFrom": "2.8.0"},
+        )
+    path = root / "docs" / "evidence" / f"browser-v{version}.json"
+    if not path.is_file():
+        return CheckResult(
+            "browser_control_evidence",
+            STATUS_FAIL,
+            "Browser Control evidence missing; run scripts/smoke_browser.py --offline",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("browser_control_evidence", STATUS_FAIL, f"cannot parse Browser Control evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("browser_control", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "browser_control_evidence",
+            STATUS_FAIL,
+            f"Browser Control evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS":
+        return CheckResult(
+            "browser_control_evidence",
+            STATUS_FAIL,
+            f"Browser Control evidence status is {data.get('status')!r}, expected PASS",
+            {"status": data.get("status")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = (
+        "browserSessionCreate",
+        "readPage",
+        "screenshot",
+        "extractLinks",
+        "unsafeActionBlocked",
+        "confirmationRequired",
+        "snapshotToMedia",
+        "snapshotToRag",
+        "auditLog",
+    )
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult(
+            "browser_control_evidence",
+            STATUS_FAIL,
+            f"Browser Control evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    return CheckResult(
+        "browser_control_evidence",
+        STATUS_PASS,
+        "Browser Control evidence recorded",
         {"path": str(path), "checks": list(required)},
     )
 
@@ -1561,6 +1634,7 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_workspace_core_evidence(root, version),
         check_context_taint_evidence(root, version),
         check_media_layer_evidence(root, version),
+        check_browser_control_evidence(root, version),
         check_skill_system_evidence(root, version),
         check_skill_ui_evidence(root, version),
         check_skill_builder_evidence(root, version),

@@ -18,6 +18,7 @@ from deepseek_infra.infra.mcp.server import (
     MCP_PROTOCOL_VERSION,
     METHOD_NOT_FOUND,
     handle_mcp_message,
+    mcp_tools,
     mcp_status,
 )
 
@@ -51,7 +52,7 @@ def test_initialize_handshake_reports_protocol_and_capabilities() -> None:
 def test_tools_list_exposes_runtime_tools_with_schemas_and_annotations() -> None:
     tools = result_of(handle_mcp_message(rpc("tools/list")))["tools"]
     names = {tool["name"] for tool in tools}
-    assert len(tools) == 17
+    assert len(tools) == len(mcp_tools())
     assert {"web_search", "create_pptx", "python_eval", "forget_memory"} <= names
     by_name = {tool["name"]: tool for tool in tools}
     # OpenAI parameter schemas pass through as MCP inputSchema.
@@ -147,7 +148,7 @@ def test_mcp_status_shape() -> None:
     assert status["enabled"] is True
     assert status["protocolVersion"] == MCP_PROTOCOL_VERSION
     assert status["endpoint"] == "/mcp"
-    assert status["toolCount"] == 17
+    assert status["toolCount"] == len(mcp_tools())
     assert status["client"]["enabled"] is False
 
 
@@ -190,7 +191,7 @@ def test_client_initialize_list_and_call_roundtrip() -> None:
         assert info["protocolVersion"] == MCP_PROTOCOL_VERSION
         assert client.session_id == "session-1"
         tools = client.list_tools()
-        assert len(tools) == 17
+        assert len(tools) == len(mcp_tools())
         result = client.call_tool("data_transform", {"operation": "number_summary", "input": "5 5"})
         assert result["isError"] is False
 

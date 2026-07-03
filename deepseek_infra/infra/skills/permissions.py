@@ -9,7 +9,22 @@ from deepseek_infra.infra.tool_runtime.tool_policy import PolicyDecision, ToolPo
 
 
 def skill_allowed_tools(skill: dict[str, Any]) -> list[str]:
-    return validate_allowed_tools(skill.get("allowedTools") if isinstance(skill, dict) else [])
+    tools = validate_allowed_tools(skill.get("allowedTools") if isinstance(skill, dict) else [])
+    policy = skill.get("browserPolicy") if isinstance(skill.get("browserPolicy"), dict) else {}
+    if not policy:
+        return tools
+    filtered = []
+    for tool in tools:
+        if tool == "browser.click" and not bool(policy.get("allowClick")):
+            continue
+        if tool == "browser.type_text" and not bool(policy.get("allowType")):
+            continue
+        if tool == "browser.select" and not bool(policy.get("allowType")):
+            continue
+        if tool == "browser.download" and not bool(policy.get("allowDownload")):
+            continue
+        filtered.append(tool)
+    return filtered
 
 
 def build_skill_tool_policy(

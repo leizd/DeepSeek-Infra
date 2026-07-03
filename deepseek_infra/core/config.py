@@ -301,6 +301,18 @@ class ToolPolicySettings:
 
 
 @dataclass(frozen=True, slots=True)
+class BrowserSettings:
+    """Controlled Browser runtime knobs."""
+
+    enabled: bool = False
+    headless: bool = True
+    allow_private_hosts: bool = False
+    require_confirm: bool = True
+    download_max_bytes: int = 50_000_000
+    session_ttl_seconds: int = 1_800
+
+
+@dataclass(frozen=True, slots=True)
 class SchedulerSettings:
     """Local request scheduler / backpressure / rate-limit knobs.
 
@@ -418,7 +430,7 @@ class SkillsSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "2.7.4"
+    app_version: str = "2.8.0"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -482,6 +494,7 @@ class Settings:
     budget: BudgetSettings = field(default_factory=BudgetSettings)
     agent_runtime: AgentRuntimeSettings = field(default_factory=AgentRuntimeSettings)
     tool_policy: ToolPolicySettings = field(default_factory=ToolPolicySettings)
+    browser: BrowserSettings = field(default_factory=BrowserSettings)
     scheduler: SchedulerSettings = field(default_factory=SchedulerSettings)
     ollama: OllamaSettings = field(default_factory=OllamaSettings)
     mcp: MCPSettings = field(default_factory=MCPSettings)
@@ -579,6 +592,22 @@ class Settings:
     @property
     def tool_audit_log(self) -> Path:
         return self.tool_audit_dir / "audit.jsonl"
+
+    @property
+    def browser_audit_dir(self) -> Path:
+        return self.root / ".browser-audit"
+
+    @property
+    def browser_audit_log(self) -> Path:
+        return self.browser_audit_dir / "audit.jsonl"
+
+    @property
+    def browser_downloads_dir(self) -> Path:
+        return self.root / ".browser-downloads"
+
+    @property
+    def browser_profiles_dir(self) -> Path:
+        return self.root / ".browser-profiles"
 
     @property
     def a2a_tasks_dir(self) -> Path:
@@ -729,6 +758,14 @@ class Settings:
                 require_confirm=_env_bool("TOOL_POLICY_REQUIRE_CONFIRM", False),
                 sanitize_results=_env_bool("TOOL_POLICY_SANITIZE_RESULTS", True),
                 audit_enabled=_env_bool("TOOL_POLICY_AUDIT_ENABLED", True),
+            ),
+            browser=BrowserSettings(
+                enabled=_env_bool("BROWSER_CONTROL_ENABLED", False),
+                headless=_env_bool("BROWSER_HEADLESS", True),
+                allow_private_hosts=_env_bool("BROWSER_ALLOW_PRIVATE_HOSTS", False),
+                require_confirm=_env_bool("BROWSER_REQUIRE_CONFIRM", True),
+                download_max_bytes=_env_int_clamped("BROWSER_DOWNLOAD_MAX_BYTES", 50_000_000, 1, 1_000_000_000),
+                session_ttl_seconds=_env_int_clamped("BROWSER_SESSION_TTL_SECONDS", 1_800, 30, 86_400),
             ),
             scheduler=SchedulerSettings(
                 enabled=_env_bool("SCHEDULER_ENABLED", True),
@@ -1134,6 +1171,16 @@ TOOL_POLICY_SANITIZE_RESULTS = settings.tool_policy.sanitize_results
 TOOL_POLICY_AUDIT_ENABLED = settings.tool_policy.audit_enabled
 TOOL_POLICY_AUDIT_DIR = settings.tool_audit_dir
 TOOL_POLICY_AUDIT_LOG = settings.tool_audit_log
+BROWSER_CONTROL_ENABLED = settings.browser.enabled
+BROWSER_HEADLESS = settings.browser.headless
+BROWSER_ALLOW_PRIVATE_HOSTS = settings.browser.allow_private_hosts
+BROWSER_REQUIRE_CONFIRM = settings.browser.require_confirm
+BROWSER_DOWNLOAD_MAX_BYTES = settings.browser.download_max_bytes
+BROWSER_SESSION_TTL_SECONDS = settings.browser.session_ttl_seconds
+BROWSER_AUDIT_DIR = settings.browser_audit_dir
+BROWSER_AUDIT_LOG = settings.browser_audit_log
+BROWSER_DOWNLOADS_DIR = settings.browser_downloads_dir
+BROWSER_PROFILES_DIR = settings.browser_profiles_dir
 SCHEDULER_ENABLED = settings.scheduler.enabled
 SCHEDULER_MAX_CONCURRENCY = settings.scheduler.max_concurrency
 SCHEDULER_MAX_QUEUE_DEPTH = settings.scheduler.max_queue_depth

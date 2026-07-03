@@ -1,6 +1,6 @@
 # 安全说明
 
-适用版本：v2.7.4。
+适用版本：v2.8.0。
 
 ## 威胁模型
 
@@ -169,7 +169,7 @@ PDF 会优先读取可复制文字。OCR 是可选能力，默认关闭，以避
 
 这些目录应视为用户本地数据。如果要清理本地痕迹，可以关闭服务后删除上述目录，并使用设置面板的“清空本地数据”清理浏览器侧会话、Key、对话历史和 Seek。
 
-`.gitignore` 已默认排除 `.auth-token`、`.launcher-config.json`、`.file-cache/`、`.projects/`、`.local-rag/`、`.semantic-cache/`、`.traces/`、`.request-queue/`、`.tool-audit/`、`.scheduler/`、`.generated/`、`.budget/`、`.a2a/`、`.memory/`、`.reminders/`、`.search-cache/`、`.agent-runs/`、`.coverage`、`.mypy_cache/`、`.ruff_cache/`、`__pycache__/`、`.idea/`、`server*.log` 和 `pytest-cache-files-*/`。发布或分享压缩包时仍应二次检查，避免把用户附件片段、项目文档库、本地 RAG 索引、语义缓存、trace、请求队列、审计日志、生成产物、长期记忆、提醒、日志、Agent Run 过程或本地 API Key 痕迹打包出去。
+`.gitignore` 已默认排除 `.auth-token`、`.launcher-config.json`、`.file-cache/`、`.projects/`、`.local-rag/`、`.semantic-cache/`、`.traces/`、`.request-queue/`、`.tool-audit/`、`.browser-audit/`、`.browser-downloads/`、`.browser-profiles/`、`.scheduler/`、`.generated/`、`.budget/`、`.a2a/`、`.memory/`、`.reminders/`、`.search-cache/`、`.agent-runs/`、`.coverage`、`.mypy_cache/`、`.ruff_cache/`、`__pycache__/`、`.idea/`、`server*.log` 和 `pytest-cache-files-*/`。发布或分享压缩包时仍应二次检查，避免把用户附件片段、项目文档库、本地 RAG 索引、语义缓存、trace、请求队列、浏览器审计日志、下载隔离目录、临时浏览器 profile、生成产物、长期记忆、提醒、日志、Agent Run 过程或本地 API Key 痕迹打包出去。
 
 ## 已知边界
 

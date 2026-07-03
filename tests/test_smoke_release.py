@@ -32,6 +32,8 @@ def test_offline_mode_runs_doctor_evals_and_agent_only() -> None:
         "edge_router",
         "media_layer",
         "media_eval",
+        "browser_control",
+        "browser_eval",
         "skill_system",
         "skill_workbench_ui",
         "skill_builder",
@@ -49,6 +51,9 @@ def test_offline_mode_runs_doctor_evals_and_agent_only() -> None:
     doctor_cmd = stages[0][1]
     assert "--offline" in doctor_cmd
     assert "--with-server" not in doctor_cmd
+    stage_commands = {name: cmd for name, cmd in stages}
+    assert stage_commands["browser_control"][-2:] == ["--version", "2.8.0"]
+    assert stage_commands["browser_eval"][-2:] == ["--version", "2.8.0"]
     assert not any("smoke_mcp_compat" in " ".join(cmd) for _, cmd in stages)
     assert not any("smoke_a2a_compat" in " ".join(cmd) for _, cmd in stages)
 
@@ -64,6 +69,8 @@ def test_with_server_mode_includes_protocol_smokes() -> None:
         "edge_router",
         "media_layer",
         "media_eval",
+        "browser_control",
+        "browser_eval",
         "skill_system",
         "skill_workbench_ui",
         "skill_builder",
@@ -104,6 +111,8 @@ def test_default_mode_is_offline() -> None:
         "edge_router",
         "media_layer",
         "media_eval",
+        "browser_control",
+        "browser_eval",
         "skill_system",
         "skill_workbench_ui",
         "skill_builder",
@@ -135,7 +144,20 @@ def test_skip_flags_drop_stages() -> None:
             "--skip-skill-catalog",
         ]
     )
-    assert _names(mod.build_stages(args)) == ["workspace_core", "edge_router", "media_layer", "media_eval", "skill_system", "skill_workbench_ui", "skill_packs", "offline_eval_suite", "security_corpus", "baseline_compare"]
+    assert _names(mod.build_stages(args)) == [
+        "workspace_core",
+        "edge_router",
+        "media_layer",
+        "media_eval",
+        "browser_control",
+        "browser_eval",
+        "skill_system",
+        "skill_workbench_ui",
+        "skill_packs",
+        "offline_eval_suite",
+        "security_corpus",
+        "baseline_compare",
+    ]
 
 
 def test_with_server_skip_protocol_keeps_evals() -> None:
@@ -146,6 +168,8 @@ def test_with_server_skip_protocol_keeps_evals() -> None:
         "edge_router",
         "media_layer",
         "media_eval",
+        "browser_control",
+        "browser_eval",
         "skill_system",
         "skill_workbench_ui",
         "skill_builder",
@@ -176,6 +200,8 @@ def test_json_mode_emits_plan_without_running(capsys: pytest.CaptureFixture[str]
         "edge_router",
         "media_layer",
         "media_eval",
+        "browser_control",
+        "browser_eval",
         "skill_system",
         "skill_workbench_ui",
         "skill_builder",

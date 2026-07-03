@@ -62,6 +62,7 @@ TRUSTED_MEMORY = "trusted_memory"
 TRUSTED_TOOL = "trusted_tool"
 TRUSTED_ASSISTANT = "trusted_assistant"
 UNTRUSTED_WEB = "untrusted_web"
+UNTRUSTED_BROWSER = "untrusted_browser"
 UNTRUSTED_FILE = "untrusted_file"
 UNTRUSTED_MEDIA = "untrusted_media"
 UNTRUSTED_RAG = "untrusted_rag"
@@ -149,7 +150,7 @@ def scan_text(text: str) -> TaintScan:
 # --- Segment classification --------------------------------------------------------
 
 # Tool results carry the executing tool's name in their stable JSON encoding.
-_TOOL_NAME_IN_RESULT_RE = re.compile(r'"tool"\s*:\s*"([A-Za-z0-9_]+)"')
+_TOOL_NAME_IN_RESULT_RE = re.compile(r'"tool"\s*:\s*"([A-Za-z0-9_.-]+)"')
 _FILE_READ_TOOLS = {"search_files", "read_file_chunk", "list_project_files"}
 _RAG_RETRIEVAL_TOOLS = {"search_project_documents", "search_files"}
 
@@ -157,6 +158,8 @@ _RAG_RETRIEVAL_TOOLS = {"search_project_documents", "search_files"}
 def _tool_message_source(content: str) -> str:
     match = _TOOL_NAME_IN_RESULT_RE.search(str(content or ""))
     name = match.group(1) if match else ""
+    if name.startswith("browser."):
+        return UNTRUSTED_BROWSER
     # External MCP bridged tools are always untrusted.
     if name.startswith("mcp__"):
         return UNTRUSTED_WEB
@@ -368,6 +371,7 @@ def taint_status() -> dict[str, Any]:
             TRUSTED_MEMORY,
             TRUSTED_TOOL,
             UNTRUSTED_WEB,
+            UNTRUSTED_BROWSER,
             UNTRUSTED_FILE,
             UNTRUSTED_MEDIA,
             UNTRUSTED_RAG,

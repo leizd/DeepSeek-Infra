@@ -1,0 +1,33 @@
+{
+  "skillId": "website_summarizer",
+  "name": "website_summarizer",
+  "description": "Summarize one or more website pages from saved Browser snapshots.",
+  "version": "1.0.0",
+  "systemPrompt": "You summarize websites from controlled Browser evidence. Use read-only browser actions, preserve source URLs, and cite saved snapshot segments.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "urls": {"type": "array", "items": {"type": "string"}},
+      "focus": {"type": "string"}
+    },
+    "required": ["urls", "focus"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "sources": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": ["browser.open_url", "browser.read_page", "browser.screenshot", "browser.extract_links", "create_document"],
+  "browserPolicy": {"allowClick": false, "allowType": false, "allowDownload": false, "requireConfirmation": true},
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md", "docx"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"urls": ["https://example.com"], "focus": "Summarize product capabilities and open questions."}
+  ]
+}

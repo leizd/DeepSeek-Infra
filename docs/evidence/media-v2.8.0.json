@@ -1,0 +1,66 @@
+{
+  "version": "2.8.0",
+  "commit": "f8469fd",
+  "generatedAt": "2026-07-03T07:46:01Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "imageImport": "PASS",
+    "pdfPageIndex": "PASS",
+    "webpageSnapshot": "PASS",
+    "mediaSegments": "PASS",
+    "mediaToRag": "PASS",
+    "mediaCitations": "PASS",
+    "mediaUploadLimits": "PASS",
+    "projectExportIncludesMedia": "PASS",
+    "secretRedaction": "PASS"
+  },
+  "details": {
+    "runtimeRoot": "D:\\deepseek\\.test-tmp\\deepseek-media-smoke-yt3y0ris",
+    "projectId": "proj-628b7e487fff",
+    "mediaIds": [
+      "media_48458e847a14a4b2",
+      "media_7984d9362a390742",
+      "media_a6bafe28ef20e00e"
+    ],
+    "projectExport": {
+      "path": "D:\\deepseek\\.test-tmp\\deepseek-media-smoke-yt3y0ris\\.projects\\proj-628b7e487fff\\exports\\export_77af06949b92acae-Media-Smoke-project-export.zip",
+      "entries": [
+        "media/media.json",
+        "media/segments/media_48458e847a14a4b2.json",
+        "media/segments/media_7984d9362a390742.json",
+        "media/segments/media_a6bafe28ef20e00e.json",
+        "media/source/Roadmap-Screenshot.txt",
+        "media/source/Snapshot.html",
+        "metadata.json",
+        "project.md",
+        "saved-items/saved-items.json"
+      ]
+    },
+    "localRag": {
+      "enabled": true,
+      "backend": "sqlite_vec",
+      "databasePath": "D:\\deepseek\\.test-tmp\\deepseek-media-smoke-yt3y0ris\\.local-rag\\rag.sqlite3",
+      "sqliteVecAvailable": false,
+      "embeddingProvider": "hash",
+      "embeddingProviderRequested": "hash",
+      "embeddingDimensions": 64,
+      "embeddingModelPathConfigured": false,
+      "tokenizerPathConfigured": false,
+      "hybridSearch": "bm25+vector",
+      "bm25K1": 1.5,
+      "bm25B": 0.75,
+      "incremental": true,
+      "lastError": "sqlite-vec unavailable: No module named 'sqlite_vec'",
+      "indexedItems": 5,
+      "indexedFiles": 0,
+      "indexedMedia": 3,
+      "indexedMemories": 0,
+      "vectorTableAvailable": false
+    }
+  }
+}

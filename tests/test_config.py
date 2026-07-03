@@ -27,6 +27,8 @@ from deepseek_infra.core.config import (
     Settings,
     AGENT_RUNS_DIR,
     AUTH_TOKEN_FILE,
+    BROWSER_CONTROL_ENABLED,
+    BROWSER_SESSION_TTL_SECONDS,
     load_or_create_auth_token,
     settings,
 )
@@ -34,7 +36,7 @@ from deepseek_infra.core.config import (
 
 class ConfigTests(unittest.TestCase):
     def test_nested_settings_back_compat_constants_match(self) -> None:
-        self.assertEqual(settings.app_version, "2.7.4")
+        self.assertEqual(settings.app_version, "2.8.0")
         self.assertEqual(settings.default_host, "127.0.0.1")
         self.assertEqual(DEFAULT_HOST, settings.default_host)
         self.assertEqual(MULTI_AGENT_TIMEOUT_SECONDS, settings.multi_agent_timeout_seconds)
@@ -47,6 +49,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(LOCAL_RAG_DB, settings.local_rag_db)
         self.assertEqual(LOCAL_RAG_ENABLED, settings.local_rag.enabled)
         self.assertEqual(TRACE_DB, settings.traces_db)
+        self.assertEqual(BROWSER_CONTROL_ENABLED, settings.browser.enabled)
+        self.assertEqual(BROWSER_SESSION_TTL_SECONDS, settings.browser.session_ttl_seconds)
         self.assertEqual(SEMANTIC_CACHE_DB, settings.semantic_cache_db)
         self.assertEqual(GATEWAY_REQUEST_QUEUE_DB, settings.request_queue_db)
         self.assertEqual(GATEWAY_CONTEXT_MANAGER_ENABLED, settings.gateway.context_manager_enabled)
@@ -128,6 +132,12 @@ class ConfigTests(unittest.TestCase):
                 "MCP_CLIENT_RETRY_BACKOFF_SECONDS": "0.75",
                 "MCP_CLIENT_CIRCUIT_BREAKER_FAILURES": "4",
                 "MCP_CLIENT_CIRCUIT_BREAKER_RESET_SECONDS": "90",
+                "BROWSER_CONTROL_ENABLED": "1",
+                "BROWSER_HEADLESS": "0",
+                "BROWSER_ALLOW_PRIVATE_HOSTS": "1",
+                "BROWSER_REQUIRE_CONFIRM": "0",
+                "BROWSER_DOWNLOAD_MAX_BYTES": "123456",
+                "BROWSER_SESSION_TTL_SECONDS": "600",
             },
             clear=True,
         ):
@@ -194,6 +204,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.mcp.client_retry_backoff_seconds, 0.75)
         self.assertEqual(loaded.mcp.client_circuit_breaker_failures, 4)
         self.assertEqual(loaded.mcp.client_circuit_breaker_reset_seconds, 90)
+        self.assertTrue(loaded.browser.enabled)
+        self.assertFalse(loaded.browser.headless)
+        self.assertTrue(loaded.browser.allow_private_hosts)
+        self.assertFalse(loaded.browser.require_confirm)
+        self.assertEqual(loaded.browser.download_max_bytes, 123456)
+        self.assertEqual(loaded.browser.session_ttl_seconds, 600)
 
     def test_edge_provider_short_alias_is_supported(self) -> None:
         with patch.dict(

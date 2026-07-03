@@ -1,8 +1,8 @@
 # Multimodal Media Layer
 
-Applicable version: v2.7.4.
+Applicable version: v2.8.0.
 
-DeepSeek Infra v2.7.4 makes media a first-class workspace object. A media item can belong to a project, keep source metadata, move through a processing lifecycle, emit citable segments, enter Local RAG, and travel with Project Export.
+DeepSeek Infra v2.8.0 makes media a first-class workspace object. A media item can belong to a project, keep source metadata, move through a processing lifecycle, emit citable segments, enter Local RAG, and travel with Project Export.
 
 ## Object Model
 
@@ -107,6 +107,6 @@ The Skill runner expands media IDs into segment/citation context before invoking
 ## Evidence
 
 ```bash
-python scripts/smoke_media.py --offline --out docs/evidence/media-v2.7.4.json
-python evals/runners/run_media_eval.py --strict --out evals/reports/media-v2.7.4.json
+python scripts/smoke_media.py --offline --out docs/evidence/media-v2.8.0.json
+python evals/runners/run_media_eval.py --strict --out evals/reports/media-v2.8.0.json
 ```

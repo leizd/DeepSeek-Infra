@@ -49,6 +49,7 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     _write_workspace_evidence(evidence_dir / f"workspace-v{version}.json", version)
     _write_context_taint_evidence(evidence_dir / f"context-taint-v{version}.json", version)
     _write_media_evidence(evidence_dir / f"media-v{version}.json", version)
+    _write_browser_evidence(evidence_dir / f"browser-v{version}.json", version)
     _write_semantic_cache_onnx_evidence(evidence_dir / f"semantic-cache-onnx-v{version}.json", version)
     _write_skill_system_evidence(evidence_dir / f"skills-v{version}.json", version)
     _write_skill_ui_evidence(evidence_dir / f"skills-ui-v{version}.json", version)
@@ -118,7 +119,11 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     scripts = root / "scripts"
     scripts.mkdir()
     if release_exclusions:
-        (scripts / "release.py").write_text('EXCLUDED = [".traces", ".local-rag", ".media"]\nSECRET = [".auth-token", ".env"]\nLOGS = ["server*.log"]\n', encoding="utf-8")
+        (scripts / "release.py").write_text(
+            'EXCLUDED = [".traces", ".local-rag", ".media", ".browser-audit", ".browser-downloads", ".browser-profiles"]\n'
+            'SECRET = [".auth-token", ".env"]\nLOGS = ["server*.log"]\n',
+            encoding="utf-8",
+        )
     else:
         (scripts / "release.py").write_text("print('no exclusions here')\n", encoding="utf-8")
     return root
@@ -396,6 +401,34 @@ def _write_media_evidence(path: Path, version: str, *, status: str = "PASS", omi
         "version": version,
         "commit": "abc1234",
         "generatedAt": "2026-07-01T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": status,
+        "checks": checks,
+    }
+    if omit_metadata:
+        payload.pop(omit_metadata, None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_browser_evidence(path: Path, version: str, *, status: str = "PASS", omit_check: str = "", omit_metadata: str = "") -> None:
+    checks = {
+        "browserSessionCreate": "PASS",
+        "readPage": "PASS",
+        "screenshot": "PASS",
+        "extractLinks": "PASS",
+        "unsafeActionBlocked": "PASS",
+        "confirmationRequired": "PASS",
+        "snapshotToMedia": "PASS",
+        "snapshotToRag": "PASS",
+        "auditLog": "PASS",
+        "redactSecrets": "PASS",
+    }
+    if omit_check:
+        checks.pop(omit_check, None)
+    payload: dict[str, Any] = {
+        "version": version,
+        "commit": "abc1234",
+        "generatedAt": "2026-07-03T00:00:00Z",
         "environment": {"os": "Linux", "python": "3.12", "ci": True},
         "status": status,
         "checks": checks,
@@ -1114,26 +1147,26 @@ def test_preflight_passes_on_workspace_core_evidence_complete(tmp_path: Path) ->
 
 def test_preflight_fails_on_missing_context_taint_evidence(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.7.4")
-    (root / "docs" / "evidence" / "context-taint-v2.7.4.json").unlink()
-    result = next(r for r in preflight.run_preflight(root, "2.7.4") if r.name == "context_taint_evidence")
+    root = _skeleton(tmp_path, "2.8.0")
+    (root / "docs" / "evidence" / "context-taint-v2.8.0.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.8.0") if r.name == "context_taint_evidence")
     assert result.status == "fail"
     assert "smoke_context_taint.py" in result.detail
 
 
 def test_preflight_fails_on_context_taint_missing_required_check(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.7.4")
-    _write_context_taint_evidence(root / "docs" / "evidence" / "context-taint-v2.7.4.json", "2.7.4", omit_check="mediaTranscriptInjectionScanned")
-    result = next(r for r in preflight.run_preflight(root, "2.7.4") if r.name == "context_taint_evidence")
+    root = _skeleton(tmp_path, "2.8.0")
+    _write_context_taint_evidence(root / "docs" / "evidence" / "context-taint-v2.8.0.json", "2.8.0", omit_check="mediaTranscriptInjectionScanned")
+    result = next(r for r in preflight.run_preflight(root, "2.8.0") if r.name == "context_taint_evidence")
     assert result.status == "fail"
     assert "mediaTranscriptInjectionScanned" in result.detail
 
 
 def test_preflight_passes_on_context_taint_evidence_complete(tmp_path: Path) -> None:
     preflight = _load_preflight()
-    root = _skeleton(tmp_path, "2.7.4")
-    result = next(r for r in preflight.run_preflight(root, "2.7.4") if r.name == "context_taint_evidence")
+    root = _skeleton(tmp_path, "2.8.0")
+    result = next(r for r in preflight.run_preflight(root, "2.8.0") if r.name == "context_taint_evidence")
     assert result.status == "pass"
 
 
@@ -1159,6 +1192,31 @@ def test_preflight_passes_on_media_layer_evidence_complete(tmp_path: Path) -> No
     preflight = _load_preflight()
     root = _skeleton(tmp_path, "2.7.3")
     result = next(r for r in preflight.run_preflight(root, "2.7.3") if r.name == "media_layer_evidence")
+    assert result.status == "pass"
+
+
+def test_preflight_fails_on_missing_browser_control_evidence(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.8.0")
+    (root / "docs" / "evidence" / "browser-v2.8.0.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.8.0") if r.name == "browser_control_evidence")
+    assert result.status == "fail"
+    assert "smoke_browser.py" in result.detail
+
+
+def test_preflight_fails_on_browser_control_missing_required_check(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.8.0")
+    _write_browser_evidence(root / "docs" / "evidence" / "browser-v2.8.0.json", "2.8.0", omit_check="snapshotToRag")
+    result = next(r for r in preflight.run_preflight(root, "2.8.0") if r.name == "browser_control_evidence")
+    assert result.status == "fail"
+    assert "snapshotToRag" in result.detail
+
+
+def test_preflight_passes_on_browser_control_evidence_complete(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.8.0")
+    result = next(r for r in preflight.run_preflight(root, "2.8.0") if r.name == "browser_control_evidence")
     assert result.status == "pass"
 
 

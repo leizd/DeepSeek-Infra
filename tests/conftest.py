@@ -29,6 +29,7 @@ import deepseek_infra.infra.workspace.saved_items as workspace_saved_items
 import deepseek_infra.infra.skills.evidence as skill_evidence
 import deepseek_infra.infra.skills.registry as skill_registry
 import deepseek_infra.infra.media.library as media_library
+import deepseek_infra.infra.browser.session as browser_session
 
 
 @pytest.fixture
@@ -48,6 +49,9 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     request_queue_dir = tmp_path / ".request-queue"
     budget_dir = tmp_path / ".budget"
     scheduler_dir = tmp_path / ".scheduler"
+    browser_audit_dir = tmp_path / ".browser-audit"
+    browser_downloads_dir = tmp_path / ".browser-downloads"
+    browser_profiles_dir = tmp_path / ".browser-profiles"
 
     monkeypatch.setattr(config, "FILE_CACHE_DIR", file_cache_dir)
     monkeypatch.setattr(config, "AGENT_RUNS_DIR", agent_runs_dir)
@@ -69,6 +73,10 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(config, "GATEWAY_REQUEST_QUEUE_DB", request_queue_dir / "queue.sqlite3")
     monkeypatch.setattr(config, "BUDGET_DIR", budget_dir)
     monkeypatch.setattr(config, "BUDGET_DB", budget_dir / "budget.sqlite3")
+    monkeypatch.setattr(config, "BROWSER_AUDIT_DIR", browser_audit_dir)
+    monkeypatch.setattr(config, "BROWSER_AUDIT_LOG", browser_audit_dir / "audit.jsonl")
+    monkeypatch.setattr(config, "BROWSER_DOWNLOADS_DIR", browser_downloads_dir)
+    monkeypatch.setattr(config, "BROWSER_PROFILES_DIR", browser_profiles_dir)
 
     monkeypatch.setattr(files, "FILE_CACHE_DIR", file_cache_dir)
     monkeypatch.setattr(agent_runs, "AGENT_RUNS_DIR", agent_runs_dir)
@@ -112,8 +120,10 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(skill_registry, "SKILLS_DIR", skills_dir)
     monkeypatch.setattr(skill_evidence, "GENERATED_DIR", generated_dir)
 
+    browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()
     yield tmp_path
+    browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()
 
 

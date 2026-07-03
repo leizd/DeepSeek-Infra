@@ -308,7 +308,64 @@ def available_tool_definitions() -> list[dict[str, Any]]:
                 },
             },
         },
+        *browser_tool_definitions(),
         *additional_tool_definitions(),
+    ]
+
+
+def browser_tool_definitions() -> list[dict[str, Any]]:
+    base_properties: dict[str, Any] = {
+        "sessionId": {"type": "string", "description": "Browser session id. Omit only for browser.open_url."},
+        "projectId": {"type": "string", "description": "Optional workspace project id for saved media/artifacts."},
+        "selector": {"type": "string", "description": "Optional CSS selector scoped to the page."},
+        "reason": {"type": "string", "description": "Why this browser action is needed."},
+        "confirmed": {"type": "boolean", "description": "True only after explicit user confirmation."},
+        "requiresConfirmation": {"type": "boolean", "description": "Set true to request confirmation instead of executing."},
+    }
+
+    def tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": name,
+                "strict": True,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {**base_properties, **properties},
+                    "required": required,
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+    return [
+        tool(
+            "browser.open_url",
+            "Create or reuse an isolated browser session and open one URL through Browser Safety.",
+            {"url": {"type": "string", "description": "URL to open."}, "headless": {"type": "boolean"}},
+            ["url"],
+        ),
+        tool("browser.read_page", "Read visible page text and save a webpage snapshot to Media/RAG.", {}, ["sessionId"]),
+        tool("browser.screenshot", "Capture a screenshot and save it to Media Library.", {"title": {"type": "string"}}, ["sessionId"]),
+        tool("browser.extract_links", "Extract links from the current page.", {}, ["sessionId"]),
+        tool("browser.extract_dom", "Extract HTML from the current page or selector.", {}, ["sessionId"]),
+        tool("browser.scroll", "Scroll the current page.", {"x": {"type": "integer"}, "y": {"type": "integer"}}, ["sessionId"]),
+        tool("browser.click", "Click an element. Form submit/delete/pay/confirm clicks require explicit confirmation.", {}, ["sessionId", "selector"]),
+        tool(
+            "browser.type_text",
+            "Type or fill text into an element. Password fields and write actions require explicit confirmation.",
+            {"text": {"type": "string"}, "fieldType": {"type": "string"}},
+            ["sessionId", "selector", "text"],
+        ),
+        tool("browser.select", "Select an option in a form control.", {"value": {"type": "string"}}, ["sessionId", "selector", "value"]),
+        tool(
+            "browser.download",
+            "Download a URL or link selector into the isolated Browser download directory.",
+            {"url": {"type": "string"}, "downloadUrl": {"type": "string"}, "filename": {"type": "string"}},
+            ["sessionId"],
+        ),
+        tool("browser.close_session", "Close a Browser session and discard its isolated temporary profile.", {}, ["sessionId"]),
     ]
 
 
@@ -728,7 +785,11 @@ def execute_tool_call(
         if not decision.allowed:
             return ToolPolicy.denial_output(decision)
     try:
-        if name == "python_eval":
+        if name.startswith("browser."):
+            result = browser_action_tool(name, arguments)
+            if isinstance(result, dict) and result.get("ok") is False:
+                return {"tool": name, **result}
+        elif name == "python_eval":
             result = python_eval(str(arguments.get("expression") or ""))
         elif name == "search_files":
             result = search_files(str(arguments.get("query") or ""), limit=safe_limit(arguments.get("limit"), default=5, maximum=10))
@@ -805,6 +866,13 @@ def execute_tool_call(
         return {"ok": False, "tool": name or "unknown", "error": str(exc), "code": exc.code.value}
     except Exception as exc:  # pragma: no cover - defensive boundary
         return {"ok": False, "tool": name or "unknown", "error": str(exc), "code": ErrorCode.INTERNAL.value}
+
+
+def browser_action_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    from deepseek_infra.infra.browser.actions import execute_browser_action
+
+    action = str(name or "").removeprefix("browser.")
+    return execute_browser_action({**(arguments if isinstance(arguments, dict) else {}), "action": action})
 
 
 def execute_tool_calls(

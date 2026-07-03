@@ -50,7 +50,16 @@ OPTIONAL_IMPORTS: tuple[tuple[str, str], ...] = (
     ("customtkinter", "customtkinter"),
     ("pywebview", "webview"),
 )
-DEFAULT_DATA_DIRS: tuple[str, ...] = (".traces", ".agent-runs", ".a2a", ".local-rag", ".semantic-cache")
+DEFAULT_DATA_DIRS: tuple[str, ...] = (
+    ".traces",
+    ".agent-runs",
+    ".a2a",
+    ".local-rag",
+    ".semantic-cache",
+    ".browser-audit",
+    ".browser-downloads",
+    ".browser-profiles",
+)
 MIN_PYTHON: tuple[int, int] = (3, 10)
 
 
