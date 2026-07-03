@@ -1,6 +1,6 @@
 # A2A 第三方生态验证
 
-适用版本：DeepSeek Infra v2.7.3。
+适用版本：DeepSeek Infra v2.7.4。
 
 本页从 v2.4.5 起不再只是验证计划，而是 **验证记录 + 复现流程**。v2.3.0 已完成独立进程 A2A peer 互操作验证；v2.3.3 新增 external peer smoke runner；v2.4.5 进一步把 Third-party A2A ecosystem peer 收口为结构化 evidence：`docs/evidence/a2a-third-party-peer.json` 与 `docs/evidence/a2a-third-party-peer.md`。
 

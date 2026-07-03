@@ -674,6 +674,63 @@ def check_openai_compatible_sdk_evidence(root: Path, version: str) -> CheckResul
     )
 
 
+def check_context_taint_evidence(root: Path, version: str) -> CheckResult:
+    path = root / "docs" / "evidence" / f"context-taint-v{version}.json"
+    if not path.is_file():
+        return CheckResult(
+            "context_taint_evidence",
+            STATUS_FAIL,
+            "Context Taint evidence missing; run scripts/smoke_context_taint.py --offline",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("context_taint_evidence", STATUS_FAIL, f"cannot parse Context Taint evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("context_taint", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "context_taint_evidence",
+            STATUS_FAIL,
+            f"Context Taint evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS":
+        return CheckResult(
+            "context_taint_evidence",
+            STATUS_FAIL,
+            f"Context Taint evidence status is {data.get('status')!r}, expected PASS",
+            {"status": data.get("status")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = (
+        "webInjectionScanned",
+        "fileInjectionScanned",
+        "mediaTranscriptInjectionScanned",
+        "toolDirectiveRecognized",
+        "taintedTurnEscalation",
+        "riskDiagnosticsPresent",
+    )
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult(
+            "context_taint_evidence",
+            STATUS_FAIL,
+            f"Context Taint evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    return CheckResult(
+        "context_taint_evidence",
+        STATUS_PASS,
+        "Context Taint evidence recorded",
+        {"path": str(path), "checks": list(required)},
+    )
+
+
 def check_workspace_core_evidence(root: Path, version: str) -> CheckResult:
     path = root / "docs" / "evidence" / f"workspace-v{version}.json"
     if not path.is_file():
@@ -1502,6 +1559,7 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_openai_compatible_sdk_evidence(root, version),
         check_semantic_cache_onnx_evidence(root, version),
         check_workspace_core_evidence(root, version),
+        check_context_taint_evidence(root, version),
         check_media_layer_evidence(root, version),
         check_skill_system_evidence(root, version),
         check_skill_ui_evidence(root, version),

@@ -1,6 +1,6 @@
 # Continue.dev MCP 集成
 
-适用版本：DeepSeek Infra v2.7.3。
+适用版本：DeepSeek Infra v2.7.4。
 
 本页是可复现配置说明 + GUI 实机验证操作手册。DeepSeek Infra 端的 MCP endpoint 已由本地 client、CI mock server、policy gate、trace diagnostics 覆盖。v2.4.5 已完成 Continue.dev MCP 实机验证，证据见下方证据模板。
 

@@ -2,6 +2,23 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.7.4] - Context Taint Firewall Hardening
+
+**Theme: promote Context Taint Firewall from experimental defense to MVP / release-gated protection.** This patch adds dedicated media and RAG taint sources, ships an offline smoke suite, makes context-taint evidence a hard preflight gate and exposes clearer risk diagnostics.
+
+### Added
+
+- **Media / RAG taint sources**: `context_taint.py` now classifies `[Media context]` blocks as `untrusted_media` and local RAG retrieval results as `untrusted_rag`, keeping them distinct from generic files and web search.
+- **Context Taint Smoke**: added `scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v2.7.4.json` covering web injection, file injection, media transcript injection, tool directive detection and tainted-turn high-risk tool escalation.
+- **Preflight gate**: `preflight_release.py --version 2.7.4` checks `docs/evidence/context-taint-v2.7.4.json` with `status = PASS`.
+- **Release manifest gate**: `contextTaint` added to release manifest quality gates and evidence list.
+- **Clearer diagnostics**: `diagnostics.contextTaint` now includes `riskLevel`, `escalatedTools` and `recommendedAction`.
+
+### Changed
+
+- Implementation status matrix: `Context Taint Firewall` moves from `Experimental` to `MVP, release gated`.
+- README, Dockerfile, Android version, CI, release readiness docs, evidence index and eval/report paths are synced to v2.7.4.
+
 ## [2.7.3] - Edge Router Stabilization
 
 **Theme: make the Edge-Cloud Model Router diagnosable, explainable and release-gated without requiring a real local model in CI.** This patch moves the router from demo-grade experimental behavior toward a daily-use MVP surface while keeping real GGUF / MLC inference optional.

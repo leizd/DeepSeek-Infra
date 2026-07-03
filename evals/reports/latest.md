@@ -1,6 +1,6 @@
 # Offline Eval Report
 
-- Version: 2.7.3
+- Version: 2.7.4
 - Git SHA: 5e6474a (dirty)
 - Generated: 2026-07-03T03:45:48Z
 - Overall: PASS
