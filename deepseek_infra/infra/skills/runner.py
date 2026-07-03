@@ -105,7 +105,7 @@ def run_skill(
                 security_metadata=security_metadata,
             )
         raise
-    project_context = format_project_context(project)
+    project_context = _combined_context(format_project_context(project), _media_context(input_data, project_id=project_id))
     trace_id = start_trace(
         kind="skill",
         title=str(skill.get("name") or skill_id),
@@ -192,6 +192,41 @@ def _offline_output(skill: dict[str, Any], input_data: dict[str, Any], *, projec
         "content": offline_skill_content(skill, input_data, project_context=project_context),
         "mode": "offline",
     }
+
+
+def _combined_context(*parts: str) -> str:
+    return "\n\n".join(part for part in parts if str(part or "").strip())
+
+
+def _media_context(input_data: dict[str, Any], *, project_id: str = "") -> str:
+    raw_ids = input_data.get("mediaIds")
+    if not isinstance(raw_ids, list):
+        raw_single = input_data.get("mediaId")
+        raw_ids = [raw_single] if raw_single else []
+    media_ids = [str(item or "").strip() for item in raw_ids if str(item or "").strip()][:12]
+    if not media_ids:
+        return ""
+    try:
+        from deepseek_infra.infra.media import library as media_library
+    except Exception:
+        return ""
+    lines = ["[Media context]"]
+    for position, media_id in enumerate(media_ids, start=1):
+        media = media_library.get_media(media_id)
+        media_project = str(media.get("projectId") or "")
+        if project_id and media_project and media_project != project_id:
+            continue
+        lines.append(f"- M{position}: {media.get('title')} ({media.get('type')}, mediaId={media.get('mediaId')}, status={media.get('status')})")
+        for segment in media_library.list_segments(media_id)[:12]:
+            raw_citation = segment.get("citation")
+            citation: dict[str, Any] = raw_citation if isinstance(raw_citation, dict) else {}
+            locator = str(citation.get("markdown") or citation.get("uri") or segment.get("segmentId") or "")
+            text = str(segment.get("text") or "").strip()
+            if len(text) > 1800:
+                text = text[:1800].rstrip() + "\n[truncated]"
+            lines.append(f"  segment {segment.get('type')} {locator}:")
+            lines.append(text)
+    return "\n".join(lines)
 
 
 def _llm_output(

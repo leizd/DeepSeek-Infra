@@ -48,6 +48,12 @@ def build_stages(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
         workspace_cmd = [_py(), str(REPO_ROOT / "scripts" / "smoke_workspace.py"), "--offline", "--out", args.workspace_out]
         stages.append(("workspace_core", workspace_cmd))
 
+    if not args.skip_media:
+        media_cmd = [_py(), str(REPO_ROOT / "scripts" / "smoke_media.py"), "--offline", "--out", args.media_out]
+        stages.append(("media_layer", media_cmd))
+        media_eval_cmd = [_py(), str(REPO_ROOT / "evals" / "runners" / "run_media_eval.py"), "--strict", "--out", args.media_eval_out]
+        stages.append(("media_eval", media_eval_cmd))
+
     if not args.skip_skills:
         skills_cmd = [_py(), str(REPO_ROOT / "scripts" / "smoke_skills.py"), "--offline", "--out", args.skills_out]
         stages.append(("skill_system", skills_cmd))
@@ -220,6 +226,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--security-out", default=str(REPO_ROOT / "evals" / "reports" / "security-latest.json"))
     parser.add_argument("--security-markdown", default=str(REPO_ROOT / "evals" / "reports" / "security-latest.md"))
     parser.add_argument("--workspace-out", default=str(REPO_ROOT / "docs" / "evidence" / f"workspace-v{APP_VERSION}.json"))
+    parser.add_argument("--media-out", default=str(REPO_ROOT / "docs" / "evidence" / f"media-v{APP_VERSION}.json"))
+    parser.add_argument("--media-eval-out", default=str(REPO_ROOT / "evals" / "reports" / f"media-v{APP_VERSION}.json"))
     parser.add_argument("--skills-out", default=str(REPO_ROOT / "docs" / "evidence" / f"skills-v{APP_VERSION}.json"))
     parser.add_argument("--skills-ui-out", default=str(REPO_ROOT / "docs" / "evidence" / f"skills-ui-v{APP_VERSION}.json"))
     parser.add_argument("--skill-builder-out", default=str(REPO_ROOT / "docs" / "evidence" / f"skill-builder-v{APP_VERSION}.json"))
@@ -232,6 +240,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skill-catalog-out", default=str(REPO_ROOT / "docs" / "evidence" / f"skill-catalog-v{APP_VERSION}.json"))
     parser.add_argument("--skip-doctor", action="store_true")
     parser.add_argument("--skip-workspace", action="store_true")
+    parser.add_argument("--skip-media", action="store_true")
     parser.add_argument("--skip-evals", action="store_true")
     parser.add_argument("--skip-security", action="store_true")
     parser.add_argument("--skip-agent", action="store_true")

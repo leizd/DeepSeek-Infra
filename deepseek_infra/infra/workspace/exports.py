@@ -14,6 +14,7 @@ from typing import Any
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.data import projects as legacy_projects
+from deepseek_infra.infra.media import library as media_store
 from deepseek_infra.infra.rag.files import load_cached_file
 from deepseek_infra.infra.workspace import artifacts as artifact_store
 from deepseek_infra.infra.workspace import projects as project_store
@@ -193,6 +194,7 @@ def project_bundle(project_id: str) -> dict[str, Any]:
     project = project_store.get_project(safe_project_id)
     saved_items = saved_item_store.list_saved_items(safe_project_id)
     artifacts = artifact_store.list_artifacts(safe_project_id)
+    media_items = media_store.list_media(project_id=safe_project_id)
     return {
         "schemaVersion": EXPORT_SCHEMA_VERSION,
         "kind": "project",
@@ -200,6 +202,7 @@ def project_bundle(project_id: str) -> dict[str, Any]:
         "conversations": project.get("conversations", []),
         "savedItems": saved_items,
         "artifacts": artifacts,
+        "media": media_items,
         "exportedAt": utc_now(),
     }
 
@@ -250,6 +253,9 @@ def project_markdown(bundle: dict[str, Any]) -> str:
     artifacts = bundle.get("artifacts")
     if isinstance(artifacts, list) and artifacts:
         lines += ["## Artifacts", "", artifacts_markdown(artifacts), ""]
+    media_items = bundle.get("media")
+    if isinstance(media_items, list) and media_items:
+        lines += ["## Media", "", media_markdown(media_items), ""]
     return "\n".join(lines).strip() + "\n"
 
 
@@ -299,6 +305,24 @@ def artifacts_markdown(artifacts: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+def media_markdown(media_items: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for media in media_items:
+        citation_hint = ""
+        segments = media_store.list_segments(str(media.get("mediaId") or ""))
+        for segment in segments:
+            raw_citation = segment.get("citation")
+            citation: dict[str, Any] = raw_citation if isinstance(raw_citation, dict) else {}
+            if citation.get("markdown"):
+                citation_hint = f" citation=`{citation.get('markdown')}`"
+                break
+        lines.append(
+            f"- {redact_sensitive_text(str(media.get('title') or 'Media'))} "
+            f"`{media.get('type') or ''}` id=`{media.get('mediaId') or ''}` status=`{media.get('status') or ''}`{citation_hint}"
+        )
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 def markdown_to_html(markdown: str) -> str:
     escaped = html.escape(redact_sensitive_text(markdown))
     return "<!doctype html><meta charset=\"utf-8\"><title>Workspace Export</title><pre>" + escaped + "</pre>\n"
@@ -312,6 +336,8 @@ def _write_project_zip(path: Path, project_id: str) -> bytes:
     conversations = raw_conversations if isinstance(raw_conversations, list) else []
     raw_artifacts = bundle.get("artifacts")
     artifacts = raw_artifacts if isinstance(raw_artifacts, list) else []
+    raw_media = bundle.get("media")
+    media_items = raw_media if isinstance(raw_media, list) else []
     raw_saved_items = bundle.get("savedItems")
     saved_items = raw_saved_items if isinstance(raw_saved_items, list) else []
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -324,6 +350,7 @@ def _write_project_zip(path: Path, project_id: str) -> bytes:
                 archive.writestr(f"conversations/conversation-{filename}.md", conversation_markdown(conversation))
         write_project_files_to_zip(archive, project_id, metadata)
         write_artifacts_to_zip(archive, artifacts)
+        write_media_to_zip(archive, media_items)
         write_trace_items_to_zip(archive, saved_items)
     return b""
 
@@ -367,6 +394,37 @@ def write_artifacts_to_zip(archive: zipfile.ZipFile, artifacts: list[Any]) -> No
             archive.writestr(f"artifacts/{filename}", redact_sensitive_text(data.decode("utf-8", errors="replace")))
         else:
             archive.writestr(f"artifacts/{filename}", data)
+
+
+def write_media_to_zip(archive: zipfile.ZipFile, media_items: list[Any]) -> None:
+    normalized = [media_store.redacted_media_payload(item) for item in media_items if isinstance(item, dict)]
+    archive.writestr("media/media.json", json.dumps(redact_value({"items": normalized}), ensure_ascii=False, indent=2))
+    for media in media_items:
+        if not isinstance(media, dict):
+            continue
+        media_id = str(media.get("mediaId") or "")
+        if not media_id:
+            continue
+        segments = media_store.list_segments(media_id)
+        archive.writestr(
+            f"media/segments/{safe_filename(media_id, 'media')}.json",
+            json.dumps(redact_value({"segments": segments}), ensure_ascii=False, indent=2),
+        )
+        try:
+            path = media_store.media_file_path(media)
+        except AppError:
+            continue
+        if not path.is_file():
+            continue
+        filename = safe_filename(str(media.get("title") or path.name), "media")
+        suffix = path.suffix.lower()
+        if suffix and not filename.lower().endswith(suffix):
+            filename += suffix
+        data = path.read_bytes()
+        if contains_secret(data) or suffix in {".txt", ".md", ".html", ".htm", ".json", ".csv", ".xml"}:
+            archive.writestr(f"media/source/{filename}", redact_sensitive_text(data.decode("utf-8", errors="replace")))
+        else:
+            archive.writestr(f"media/source/{filename}", data)
 
 
 def write_trace_items_to_zip(archive: zipfile.ZipFile, items: list[Any]) -> None:

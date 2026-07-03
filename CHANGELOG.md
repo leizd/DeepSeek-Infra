@@ -2,6 +2,25 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.7.0] - Multimodal Media Layer
+
+**主题：媒体成为 Workspace 一级对象。** 继 v2.6.x 把工具、Prompt、Schema、产物策略和项目绑定封装成 Skill 后，本版本新增 Multimodal Media Layer，让 Project、Skill 与 Local RAG 可以统一接收、解析、索引、引用和导出图片、PDF、网页快照以及 transcript/frame import 形式的音视频媒体。
+
+### Added
+
+- **Media Library**：新增 `deepseek_infra/infra/media/`，包含 schema、library、ingestion、processors、indexer、citations 和 evidence，媒体 metadata 持久化在 `.media/library.json`。
+- **Media API**：新增 `deepseek_infra/web/routes/media.py`，提供 `POST /api/media`、`GET /api/media`、`GET /api/media/{mediaId}`、`POST /api/media/{mediaId}/process`、`GET /api/media/{mediaId}/segments` 与删除接口。
+- **Media Processing**：图片/screenshot 支持 OCR text 与 caption，PDF 支持 page text 与 page citation，网页支持 HTML/text snapshot，音频/视频支持 transcript import 与 frame caption import MVP。
+- **Media-to-RAG**：新增 Local RAG `media` collection，媒体片段以 `sourceType=media`、`mediaId`、`segmentId`、`page`、`timeRange` 和 `media://...` citation metadata 写入项目知识库。
+- **Media Skills**：新增内置 `image_explainer`、`pdf_reader`、`webpage_summarizer`、`audio_transcript_summarizer`、`video_brief_generator` 与 `media_to_report`，Skill Runner 会把 `mediaIds` 对应片段注入项目上下文。
+- **Media Evidence**：新增 `docs/MEDIA.md`、`scripts/smoke_media.py --offline`、`docs/evidence/media-v2.7.0.json`、`evals/golden/media/` 与 `evals/runners/run_media_eval.py`，release manifest / preflight / CI 纳入 `mediaLayer` gate。
+
+### Changed
+
+- Project export 现在包含 media metadata、segments 和经过 secret redaction 的可导出 source。
+- 项目删除会同步清理关联 media metadata、segment 文件与 Local RAG media index。
+- README、docs/EVIDENCE_INDEX.md、docs/RELEASE_READINESS.md 和实现状态矩阵同步到 v2.7.0。
+
 ## [2.6.9] - Local Skill Catalog
 
 **主题：本地 Skill Marketplace-lite。** 继 v2.6.8 增加安全审查、信任状态和 hash manifest 后，本版本新增本地 Skill Catalog，用于发现、搜索、预检、安装、卸载和导出本机 Skills / Packs，不引入远程市场或第三方下载。

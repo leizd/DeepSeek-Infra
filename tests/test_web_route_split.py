@@ -151,6 +151,25 @@ def test_phase6_skill_routes_are_not_declared_inline_in_server() -> None:
         assert decorator not in server_source
 
 
+def test_phase7_media_routes_are_not_declared_inline_in_server() -> None:
+    app = server_module.create_app()
+    paths = _collect_route_paths(app.routes)
+    server_source = Path(server_module.__file__).read_text(encoding="utf-8")
+
+    assert "/api/media" in paths
+    assert "/api/media/{media_id}" in paths
+    assert "/api/media/{media_id}/process" in paths
+    assert "/api/media/{media_id}/segments" in paths
+    assert "create_media_router(_media_route_deps())" in server_source
+    for decorator in [
+        '@api.post("/api/media")',
+        '@api.get("/api/media")',
+        '@api.get("/api/media/{media_id}")',
+        '@api.post("/api/media/{media_id}/process")',
+    ]:
+        assert decorator not in server_source
+
+
 def test_phase_final_chat_routes_split_and_api_surface_intact() -> None:
     server_source = Path(server_module.__file__).read_text(encoding="utf-8")
 

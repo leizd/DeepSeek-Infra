@@ -1,0 +1,32 @@
+{
+  "skillId": "audio_transcript_summarizer",
+  "name": "audio_transcript_summarizer",
+  "description": "Summarize imported audio transcripts with time-based citations when available.",
+  "version": "1.0.0",
+  "systemPrompt": "You are an audio transcript summarizer. Use transcript media segments, preserve time citations when present, and flag missing transcript coverage.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "mediaIds": {"type": "array", "items": {"type": "string"}},
+      "task": {"type": "string"}
+    },
+    "required": ["mediaIds", "task"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": [],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"mediaIds": ["media_example"], "task": "Summarize the transcript into decisions and follow-ups."}
+  ]
+}

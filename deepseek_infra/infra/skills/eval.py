@@ -250,7 +250,7 @@ def _run_case(case: dict[str, Any], *, pack_map: dict[str, list[str]]) -> dict[s
     error = ""
     schema_pass = False
     project_binding_pass = not bool(case.get("projectBindingRequired"))
-    case_input = _as_dict(case.get("input"))
+    case_input = _prepare_media_fixture(_as_dict(case.get("input")), project_id=project_id)
     try:
         result = run_skill(skill_id, case_input, project_id=project_id, offline=True, persist=True)
         output = _as_dict(result.get("output"))
@@ -305,6 +305,37 @@ def _tool_policy_pass(skill: dict[str, Any], case: dict[str, Any]) -> bool:
         if decision.allowed:
             return False
     return True
+
+
+def _prepare_media_fixture(case_input: dict[str, Any], *, project_id: str) -> dict[str, Any]:
+    media_ids = case_input.get("mediaIds")
+    if not isinstance(media_ids, list):
+        media_ids = [case_input.get("mediaId")] if case_input.get("mediaId") else []
+    if not project_id or "media_example" not in {str(item) for item in media_ids}:
+        return case_input
+    from deepseek_infra.infra.media import ingestion
+
+    media = ingestion.register_from_payload(
+        {
+            "projectId": project_id,
+            "type": "webpage",
+            "title": "Skill Eval Media Fixture",
+            "url": "https://example.invalid/skill-eval-media",
+            "text": (
+                "Skill eval media fixture with OCR text, PDF page text, transcript notes, "
+                "video frame captions, citations, and project export context."
+            ),
+            "source": {"kind": "generated", "refId": "skill-eval"},
+            "process": True,
+        }
+    )
+    actual_id = str(media.get("mediaId") or "")
+    updated = dict(case_input)
+    if isinstance(case_input.get("mediaIds"), list):
+        updated["mediaIds"] = [actual_id if str(item) == "media_example" else item for item in case_input["mediaIds"]]
+    if str(case_input.get("mediaId") or "") == "media_example":
+        updated["mediaId"] = actual_id
+    return updated
 
 
 def _artifact_pass(skill: dict[str, Any], case: dict[str, Any], artifacts: list[dict[str, Any]], saved_items: list[dict[str, Any]]) -> bool:

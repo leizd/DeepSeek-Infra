@@ -1,0 +1,58 @@
+{
+  "version": "2.7.0",
+  "commit": "759a7cf9d916",
+  "generatedAt": "2026-07-01T13:17:45+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "evalDashboardEntrypoint": "PASS",
+    "evalCaseBuilder": "PASS",
+    "skillEvalApiActions": "PASS",
+    "skillEvalReport": "PASS",
+    "packLevelEval": "PASS",
+    "regressionCompare": "PASS",
+    "evalExportActions": "PASS",
+    "skillEvalStyles": "PASS",
+    "skillEvalAssets": "PASS",
+    "skillEvalRunner": "PASS",
+    "skillEvalJsSyntax": "PASS",
+    "ciReleaseGate": "PASS"
+  },
+  "details": {
+    "report": {
+      "path": "D:\\deepseek\\evals\\reports\\skills-v2.7.0.json",
+      "summary": {
+        "scope": "all",
+        "skillCount": 12,
+        "packCount": 4,
+        "caseCount": 12,
+        "passRate": 1.0,
+        "overallScore": 100.0,
+        "failedCases": 0,
+        "regressionCount": 0
+      },
+      "checks": {
+        "skillEvalCases": "PASS",
+        "schemaScoring": "PASS",
+        "toolPolicyScoring": "PASS",
+        "artifactScoring": "PASS",
+        "projectBindingScoring": "PASS",
+        "contentScoring": "PASS",
+        "packLevelEval": "PASS",
+        "regressionCompare": "PASS"
+      }
+    },
+    "assets": [
+      "docs/assets/skill-eval-dashboard.png",
+      "docs/assets/skill-eval-case-builder.png"
+    ],
+    "skillEvalJsSyntax": {
+      "returnCode": 0,
+      "stderr": ""
+    }
+  }
+}

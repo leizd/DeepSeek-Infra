@@ -1,0 +1,32 @@
+{
+  "skillId": "media_to_report",
+  "name": "media_to_report",
+  "description": "Turn one or more processed media items into a cited report artifact.",
+  "version": "1.0.0",
+  "systemPrompt": "You are a media-to-report Skill. Synthesize across the provided media context, preserve citations, and produce a concise report with evidence notes.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "mediaIds": {"type": "array", "items": {"type": "string"}},
+      "task": {"type": "string"}
+    },
+    "required": ["mediaIds", "task"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": ["create_document"],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md", "docx", "pdf"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"mediaIds": ["media_example"], "task": "Write a cited briefing report."}
+  ]
+}

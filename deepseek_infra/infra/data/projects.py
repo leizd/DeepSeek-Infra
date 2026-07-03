@@ -62,6 +62,14 @@ def delete_project(project_id: str) -> int:
         from deepseek_infra.infra.rag import local_rag
 
         local_rag.delete_items(collection=local_rag.COLLECTION_FILES, project_id=safe_id)
+        local_rag.delete_items(collection=getattr(local_rag, "COLLECTION_MEDIA", "media"), project_id=safe_id)
+    except Exception:
+        pass
+    try:
+        from deepseek_infra.infra.media import library as media_library
+
+        for media in media_library.list_media(project_id=safe_id):
+            media_library.delete_media(str(media.get("mediaId") or ""))
     except Exception:
         pass
     shutil.rmtree(path)

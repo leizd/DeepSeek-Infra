@@ -18,7 +18,9 @@ if str(REPO_ROOT) not in sys.path:
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
 from deepseek_infra.core.errors import AppError  # noqa: E402
 from deepseek_infra.infra.data import projects  # noqa: E402
+from deepseek_infra.infra.media import library as media_library  # noqa: E402
 from deepseek_infra.infra.observability import observability  # noqa: E402
+from deepseek_infra.infra.rag import local_rag  # noqa: E402
 from deepseek_infra.infra.skills import evidence, permissions, registry  # noqa: E402
 from deepseek_infra.infra.skills.runner import run_skill  # noqa: E402
 from deepseek_infra.infra.tool_runtime import generated_files  # noqa: E402
@@ -28,9 +30,15 @@ def patch_runtime(root: Path) -> None:
     generated_dir = root / ".generated"
     skills_dir = root / ".skills"
     projects_dir = root / ".projects"
+    media_dir = root / ".media"
+    local_rag_dir = root / ".local-rag"
     traces_dir = root / ".traces"
     projects.PROJECTS_DIR = projects_dir
     registry.SKILLS_DIR = skills_dir
+    media_library.MEDIA_DIR = media_dir
+    local_rag.LOCAL_RAG_DIR = local_rag_dir
+    local_rag.LOCAL_RAG_DB = local_rag_dir / "rag.sqlite3"
+    local_rag.PROJECTS_DIR = projects_dir
     evidence.GENERATED_DIR = generated_dir
     generated_files.GENERATED_DIR = generated_dir
     observability.TRACE_DIR = traces_dir

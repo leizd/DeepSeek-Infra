@@ -23,6 +23,7 @@ EXCLUDED_DIRS = {
     ".file-cache",
     ".agent-runs",
     ".memory",
+    ".media",
     ".projects",
     ".reminders",
     ".search-cache",

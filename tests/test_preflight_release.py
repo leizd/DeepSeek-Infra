@@ -46,6 +46,7 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     _write_continue_dev_evidence(evidence_dir / "continue-dev-mcp.json", version)
     _write_openai_compatible_sdk_evidence(evidence_dir / "openai-compatible-sdks.json", version)
     _write_workspace_evidence(evidence_dir / f"workspace-v{version}.json", version)
+    _write_media_evidence(evidence_dir / f"media-v{version}.json", version)
     _write_semantic_cache_onnx_evidence(evidence_dir / f"semantic-cache-onnx-v{version}.json", version)
     _write_skill_system_evidence(evidence_dir / f"skills-v{version}.json", version)
     _write_skill_ui_evidence(evidence_dir / f"skills-ui-v{version}.json", version)
@@ -115,7 +116,7 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     scripts = root / "scripts"
     scripts.mkdir()
     if release_exclusions:
-        (scripts / "release.py").write_text('EXCLUDED = [".traces", ".local-rag"]\nSECRET = [".auth-token", ".env"]\nLOGS = ["server*.log"]\n', encoding="utf-8")
+        (scripts / "release.py").write_text('EXCLUDED = [".traces", ".local-rag", ".media"]\nSECRET = [".auth-token", ".env"]\nLOGS = ["server*.log"]\n', encoding="utf-8")
     else:
         (scripts / "release.py").write_text("print('no exclusions here')\n", encoding="utf-8")
     return root
@@ -317,6 +318,32 @@ def _write_skill_ui_evidence(path: Path, version: str, *, status: str = "PASS", 
         "version": version,
         "commit": "abc1234",
         "generatedAt": "2026-06-30T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": status,
+        "checks": checks,
+    }
+    if omit_metadata:
+        payload.pop(omit_metadata, None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_media_evidence(path: Path, version: str, *, status: str = "PASS", omit_check: str = "", omit_metadata: str = "") -> None:
+    checks = {
+        "imageImport": "PASS",
+        "pdfPageIndex": "PASS",
+        "webpageSnapshot": "PASS",
+        "mediaSegments": "PASS",
+        "mediaToRag": "PASS",
+        "mediaCitations": "PASS",
+        "projectExportIncludesMedia": "PASS",
+        "secretRedaction": "PASS",
+    }
+    if omit_check:
+        checks.pop(omit_check, None)
+    payload: dict[str, Any] = {
+        "version": version,
+        "commit": "abc1234",
+        "generatedAt": "2026-07-01T00:00:00Z",
         "environment": {"os": "Linux", "python": "3.12", "ci": True},
         "status": status,
         "checks": checks,
@@ -1005,6 +1032,31 @@ def test_preflight_passes_on_workspace_core_evidence_complete(tmp_path: Path) ->
     preflight = _load_preflight()
     root = _skeleton(tmp_path, "2.6.3")
     result = next(r for r in preflight.run_preflight(root, "2.6.3") if r.name == "workspace_core_evidence")
+    assert result.status == "pass"
+
+
+def test_preflight_fails_on_missing_media_layer_evidence(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.7.0")
+    (root / "docs" / "evidence" / "media-v2.7.0.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.7.0") if r.name == "media_layer_evidence")
+    assert result.status == "fail"
+    assert "smoke_media.py" in result.detail
+
+
+def test_preflight_fails_on_media_layer_missing_required_check(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.7.0")
+    _write_media_evidence(root / "docs" / "evidence" / "media-v2.7.0.json", "2.7.0", omit_check="mediaToRag")
+    result = next(r for r in preflight.run_preflight(root, "2.7.0") if r.name == "media_layer_evidence")
+    assert result.status == "fail"
+    assert "mediaToRag" in result.detail
+
+
+def test_preflight_passes_on_media_layer_evidence_complete(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.7.0")
+    result = next(r for r in preflight.run_preflight(root, "2.7.0") if r.name == "media_layer_evidence")
     assert result.status == "pass"
 
 

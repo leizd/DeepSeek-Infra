@@ -1,6 +1,6 @@
 # DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-2.6.9-blue)
+![版本](https://img.shields.io/badge/version-2.7.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-80%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
@@ -216,7 +216,7 @@ curl http://127.0.0.1:8000/v1/models -H "Authorization: Bearer <本地访问 tok
 
 与之配套的**质量评测**在 [evals/](evals/)（全部离线可跑）：`python evals/runners/run_offline_eval_suite.py --include-agent --strict` 会统一留下 [latest eval report](evals/reports/latest.md)，当前 baseline 为 RAG Recall@5 1.000 / Citation Accuracy 0.8333、26 个固定攻防用例的 **Tool Policy Pass Rate 1.000 / Prompt Injection Defense Pass 1.000**，以及对抗注入小语料的 `block_rate` / `false_positive_rate` / `bypass_rate` 硬门禁；`run_agent_eval.py --strict` 额外生成 [Agent Eval report](evals/reports/agent-latest.md)，低于 Tool Call Accuracy 0.90 / Agent Success Rate 0.85 / Prompt Regression Pass Rate 0.90 会阻断 CI。`run_security_corpus.py --strict` 生成 [Security Corpus report](evals/reports/security-latest.md)，覆盖 prompt injection、tool policy attack、benign false-positive、SSRF、路径越界与密钥外泄语料。详见 [evals/README.md](evals/README.md)、[docs/EVAL_REPORTS.md](docs/EVAL_REPORTS.md) 与 [docs/AGENT_EVAL.md](docs/AGENT_EVAL.md)。本地安全能力复现最小命令集见 [docs/SECURITY_SMOKE.md](docs/SECURITY_SMOKE.md)。
 
-**Release preflight (v2.6.9)**: Run `python scripts/doctor.py --offline`, `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.6.9.json`, `python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.6.9.json`, `python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.6.9.json`, `python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.6.9.json`, `python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.6.9.json`, `python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.6.9.json --report-out evals/reports/skills-v2.6.9.json`, `python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.6.9.json`, `python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v2.6.9.json`, `python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v2.6.9.json`, and `python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v2.6.9.json`; then run `python scripts/preflight_release.py --version 2.6.9` and `python scripts/smoke_release.py --offline`. Release manifest quality gates include `workspaceCore`, `skillSystem`, `skillWorkbench`, `skillBuilder`, `skillPacks`, `skillEvalDashboard`, `skillVersioning`, `skillAnalytics`, `skillSecurity`, and `skillCatalog`.
+**Release preflight (v2.7.0)**: Run `python scripts/doctor.py --offline`, `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.7.0.json`, `python scripts/smoke_media.py --offline --out docs/evidence/media-v2.7.0.json`, `python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.7.0.json`, `python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.7.0.json`, `python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.7.0.json`, `python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.7.0.json`, `python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.7.0.json --report-out evals/reports/skills-v2.7.0.json`, `python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.7.0.json`, `python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v2.7.0.json`, `python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v2.7.0.json`, `python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v2.7.0.json`, and `python evals/runners/run_media_eval.py --strict --out evals/reports/media-v2.7.0.json`; then run `python scripts/preflight_release.py --version 2.7.0` and `python scripts/smoke_release.py --offline`. Release manifest quality gates include `workspaceCore`, `mediaLayer`, `skillSystem`, `skillWorkbench`, `skillBuilder`, `skillPacks`, `skillEvalDashboard`, `skillVersioning`, `skillAnalytics`, `skillSecurity`, and `skillCatalog`.
 
 ## 快速开始
 
@@ -574,6 +574,14 @@ python scripts/release.py --clean-workspace
 - [x] Project 面板展示 enabledSkills、defaultSkill、recentSkills，并通过 Workspace API 保存绑定
 - [x] Skill 运行结果预览回链 Saved Items / Artifact Hub，产物 metadata 保留 `skillRunId`
 - [x] 新增 `scripts/smoke_skills_ui.py --offline` 与 `docs/evidence/skills-ui-v2.6.2.json`，CI / preflight / release manifest 纳入 `skillWorkbench` gate
+
+### v2.7.0: Multimodal Media Layer
+- [x] 新增 `deepseek_infra/infra/media/`，把 image / PDF / webpage / audio / video / screenshot 注册为一级 workspace object。
+- [x] 新增统一媒体 API：`POST /api/media`、`GET /api/media`、`GET /api/media/{mediaId}`、`POST /api/media/{mediaId}/process`、`GET /api/media/{mediaId}/segments` 与删除路径。
+- [x] 图片支持 OCR/caption 片段，PDF 支持 page text/page citation，网页支持 HTML/text snapshot 导入；音频/视频提供 transcript 与 frame caption import MVP。
+- [x] 媒体片段统一写入 Local RAG `media` collection，并生成 `media://...` citation，项目导出会包含 media metadata、segments 与 source。
+- [x] 新增内置 Media Skills：`image_explainer`、`pdf_reader`、`webpage_summarizer`、`audio_transcript_summarizer`、`video_brief_generator`、`media_to_report`。
+- [x] 新增 `docs/MEDIA.md`、`scripts/smoke_media.py --offline`、`evals/runners/run_media_eval.py`、`docs/evidence/media-v2.7.0.json` 与 `evals/reports/media-v2.7.0.json`。
 
 ### v2.6.9: Local Skill Catalog
 - [x] 新增本地 Skill Catalog / Marketplace-lite：索引内置 Skill、自定义 Skill、内置 Pack、自定义 Pack 和已导入 Pack，不联网下载。

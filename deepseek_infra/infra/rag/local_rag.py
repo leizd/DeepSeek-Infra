@@ -39,6 +39,7 @@ logger = logging.getLogger("deepseek_infra.local_rag")
 
 COLLECTION_FILES = "files"
 COLLECTION_MEMORY = "memory"
+COLLECTION_MEDIA = "media"
 VECTOR_TABLE = "rag_vec"
 ITEM_TABLE = "rag_items"
 META_TABLE = "rag_meta"
@@ -492,6 +493,10 @@ def memory_item_id(memory_id: str) -> str:
     return f"memory:{memory_id}"
 
 
+def media_item_id(media_id: str, segment_id: str, chunk_index: int) -> str:
+    return f"media:{media_id}:{segment_id}:{int(chunk_index)}"
+
+
 def existing_doc_chunks(collection: str, source_id: str, project_id: str) -> dict[int, dict[str, Any]]:
     """Return ``{chunk_index: {"hash", "embedding"}}`` already indexed for a document."""
     if not LOCAL_RAG_ENABLED or not source_id:
@@ -788,6 +793,10 @@ def search_files_index(query: str, *, limit: int = 5) -> list[RAGSearchResult]:
     return search(query, collection=COLLECTION_FILES, limit=limit)
 
 
+def search_media_index(query: str, *, project_id: str | None = None, media_id: str = "", limit: int = 8) -> list[RAGSearchResult]:
+    return search(query, collection=COLLECTION_MEDIA, source_id=media_id, project_id=project_id, limit=limit)
+
+
 def search_memories_index(query: str, *, scopes: list[str], limit: int = 12) -> list[RAGSearchResult]:
     return search(query, collection=COLLECTION_MEMORY, scopes=scopes, limit=limit)
 
@@ -912,6 +921,7 @@ def status() -> dict[str, Any]:
         "lastError": _last_error or pipeline.error,
         "indexedItems": 0,
         "indexedFiles": 0,
+        "indexedMedia": 0,
         "indexedMemories": 0,
         "vectorTableAvailable": False,
     }
@@ -926,6 +936,9 @@ def status() -> dict[str, Any]:
                 payload["indexedFiles"] = int(
                     conn.execute(f"SELECT COUNT(DISTINCT source_id) FROM {ITEM_TABLE} WHERE collection = ?", (COLLECTION_FILES,)).fetchone()[0]
                 )
+                payload["indexedMedia"] = int(
+                    conn.execute(f"SELECT COUNT(DISTINCT source_id) FROM {ITEM_TABLE} WHERE collection = ?", (COLLECTION_MEDIA,)).fetchone()[0]
+                )
                 payload["indexedMemories"] = int(
                     conn.execute(f"SELECT COUNT(*) FROM {ITEM_TABLE} WHERE collection = ?", (COLLECTION_MEMORY,)).fetchone()[0]
                 )
@@ -938,6 +951,7 @@ def status() -> dict[str, Any]:
 
 def rebuild_index() -> dict[str, Any]:
     delete_items(collection=COLLECTION_FILES)
+    delete_items(collection=COLLECTION_MEDIA)
     delete_items(collection=COLLECTION_MEMORY)
     files_count = 0
     chunks_count = 0
@@ -949,13 +963,35 @@ def rebuild_index() -> dict[str, Any]:
         chunks_count += index_file_payload(cached, project_id=project_id)
     memories = read_json_list(MEMORY_FILE)
     memories_count = sync_memories(memories)
+    media_count, media_chunks = rebuild_media_index()
     return {
         "ok": True,
         "files": files_count,
         "chunks": chunks_count,
+        "media": media_count,
+        "mediaChunks": media_chunks,
         "memories": memories_count,
         "localRag": status(),
     }
+
+
+def rebuild_media_index() -> tuple[int, int]:
+    try:
+        from deepseek_infra.infra.media import indexer as media_indexer
+        from deepseek_infra.infra.media import library as media_library
+    except Exception:
+        return 0, 0
+    media_count = 0
+    chunk_count = 0
+    for media in media_library.list_media():
+        if media.get("status") != "ready":
+            continue
+        segments = media_library.list_segments(str(media.get("mediaId") or ""))
+        if not segments:
+            continue
+        media_count += 1
+        chunk_count += media_indexer.index_media_segments(media, segments)
+    return media_count, chunk_count
 
 
 def iter_cached_file_paths() -> list[tuple[Path, str]]:

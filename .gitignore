@@ -19,6 +19,7 @@
 .a2a/
 .skills/
 .memory/
+.media/
 .projects/
 .reminders/
 
@@ -35,6 +36,7 @@ evals/reports/*
 !evals/reports/security-latest.md
 !evals/reports/skill-latest.json
 !evals/reports/skills-v*.json
+!evals/reports/media-v*.json
 
 .coverage
 .mypy_cache/

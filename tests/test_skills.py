@@ -121,6 +121,19 @@ def test_skill_eval_report_scores_skills_and_packs(tmp_settings: Path, monkeypat
     assert report["caseResults"][0]["metrics"]["toolPolicyPass"] is True
 
 
+def test_skill_eval_synthetic_media_skill_gets_temp_media_fixture(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(observability, "TRACE_ENABLED", False)
+    report = skill_eval.build_skill_eval_report(version="test", scope="skill", skill_id="image_explainer", cases=[])
+
+    assert report["status"] == "PASS"
+    assert report["summary"]["caseCount"] == 1
+    case = report["caseResults"][0]
+    assert case["metrics"]["schemaPass"] is True
+    assert case["metrics"]["projectBindingPass"] is True
+    assert case["metrics"]["contentPass"] is True
+    assert case["input"]["mediaIds"][0].startswith("media_")
+
+
 def test_skill_eval_case_crud_uses_runtime_skills_dir(tmp_settings: Path) -> None:
     saved = skill_eval.save_eval_case(
         {

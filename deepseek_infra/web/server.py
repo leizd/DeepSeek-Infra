@@ -133,6 +133,7 @@ from deepseek_infra.web.routes.edge import EdgeRouteDeps, create_edge_router
 from deepseek_infra.web.routes.files import FilesRouteDeps, create_files_router
 from deepseek_infra.web.routes.mcp import McpRouteDeps, create_mcp_router
 from deepseek_infra.web.routes.memory import MemoryRouteDeps, create_memory_router
+from deepseek_infra.web.routes.media import MediaRouteDeps, create_media_router
 from deepseek_infra.web.routes.rag import RagRouteDeps, create_rag_router
 from deepseek_infra.web.routes.skills import SkillsRouteDeps, create_skills_router
 from deepseek_infra.web.routes.status import StatusRouteDeps, create_status_router
@@ -355,6 +356,12 @@ def _workspace_route_deps() -> WorkspaceRouteDeps:
     )
 
 
+def _media_route_deps() -> MediaRouteDeps:
+    return MediaRouteDeps(
+        read_multipart_form=lambda request: read_multipart_form(request),
+    )
+
+
 def _chat_route_deps() -> ChatRouteDeps:
     return ChatRouteDeps(
         chat_event_stream=lambda payload: chat_event_stream(payload),
@@ -401,6 +408,7 @@ def create_app() -> FastAPI:
     api.include_router(create_a2a_router(_a2a_route_deps()))
     api.include_router(create_edge_router(_edge_route_deps()))
     api.include_router(create_skills_router(_skills_route_deps()))
+    api.include_router(create_media_router(_media_route_deps()))
     api.include_router(create_workspace_router(_workspace_route_deps()))
     api.include_router(create_chat_router(_chat_route_deps()))
 

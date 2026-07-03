@@ -28,6 +28,7 @@ import deepseek_infra.infra.workspace.exports as workspace_exports
 import deepseek_infra.infra.workspace.saved_items as workspace_saved_items
 import deepseek_infra.infra.skills.evidence as skill_evidence
 import deepseek_infra.infra.skills.registry as skill_registry
+import deepseek_infra.infra.media.library as media_library
 
 
 @pytest.fixture
@@ -40,6 +41,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     generated_dir = tmp_path / ".generated"
     reminders_dir = tmp_path / ".reminders"
     projects_dir = tmp_path / ".projects"
+    media_dir = tmp_path / ".media"
     local_rag_dir = tmp_path / ".local-rag"
     traces_dir = tmp_path / ".traces"
     semantic_cache_dir = tmp_path / ".semantic-cache"
@@ -56,6 +58,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(config, "REMINDERS_DIR", reminders_dir)
     monkeypatch.setattr(config, "REMINDERS_FILE", reminders_dir / "reminders.json")
     monkeypatch.setattr(config, "PROJECTS_DIR", projects_dir)
+    monkeypatch.setattr(config, "MEDIA_DIR", media_dir)
     monkeypatch.setattr(config, "LOCAL_RAG_DIR", local_rag_dir)
     monkeypatch.setattr(config, "LOCAL_RAG_DB", local_rag_dir / "rag.sqlite3")
     monkeypatch.setattr(config, "TRACE_DIR", traces_dir)
@@ -76,6 +79,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(reminders, "REMINDERS_DIR", reminders_dir)
     monkeypatch.setattr(reminders, "REMINDERS_FILE", reminders_dir / "reminders.json")
     monkeypatch.setattr(projects, "PROJECTS_DIR", projects_dir)
+    monkeypatch.setattr(media_library, "MEDIA_DIR", media_dir)
     monkeypatch.setattr(files, "PROJECTS_DIR", projects_dir)
     monkeypatch.setattr(local_rag, "FILE_CACHE_DIR", file_cache_dir)
     monkeypatch.setattr(local_rag, "MEMORY_FILE", memory_dir / "memories.json")

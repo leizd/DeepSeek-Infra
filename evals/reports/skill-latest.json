@@ -1,7 +1,7 @@
 {
-  "version": "2.6.9",
-  "commit": "0c18f0d5f2b8",
-  "generatedAt": "2026-07-01T12:23:50+00:00",
+  "version": "2.7.0",
+  "commit": "759a7cf9d916",
+  "generatedAt": "2026-07-01T13:21:39+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -10,9 +10,9 @@
   "status": "PASS",
   "summary": {
     "scope": "all",
-    "skillCount": 6,
+    "skillCount": 12,
     "packCount": 4,
-    "caseCount": 6,
+    "caseCount": 12,
     "passRate": 1.0,
     "overallScore": 100.0,
     "failedCases": 0,
@@ -37,7 +37,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T12:23:49+00:00",
+      "lastRunAt": "2026-07-01T13:21:34+00:00",
       "packIds": [
         "pack_code"
       ]
@@ -50,7 +50,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T12:23:49+00:00",
+      "lastRunAt": "2026-07-01T13:21:35+00:00",
       "packIds": [
         "pack_code",
         "pack_office",
@@ -66,7 +66,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T12:23:49+00:00",
+      "lastRunAt": "2026-07-01T13:21:35+00:00",
       "packIds": [
         "pack_office"
       ]
@@ -79,7 +79,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T12:23:49+00:00",
+      "lastRunAt": "2026-07-01T13:21:35+00:00",
       "packIds": [
         "pack_office",
         "pack_research",
@@ -94,7 +94,7 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T12:23:49+00:00",
+      "lastRunAt": "2026-07-01T13:21:35+00:00",
       "packIds": [
         "pack_research"
       ]
@@ -107,10 +107,76 @@
       "passRate": 1.0,
       "caseCount": 1,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T12:23:50+00:00",
+      "lastRunAt": "2026-07-01T13:21:36+00:00",
       "packIds": [
         "pack_study"
       ]
+    },
+    {
+      "skillId": "audio_transcript_summarizer",
+      "name": "audio_transcript_summarizer",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-07-01T13:21:36+00:00",
+      "packIds": []
+    },
+    {
+      "skillId": "image_explainer",
+      "name": "image_explainer",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-07-01T13:21:37+00:00",
+      "packIds": []
+    },
+    {
+      "skillId": "media_to_report",
+      "name": "media_to_report",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-07-01T13:21:37+00:00",
+      "packIds": []
+    },
+    {
+      "skillId": "pdf_reader",
+      "name": "pdf_reader",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-07-01T13:21:38+00:00",
+      "packIds": []
+    },
+    {
+      "skillId": "video_brief_generator",
+      "name": "video_brief_generator",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-07-01T13:21:38+00:00",
+      "packIds": []
+    },
+    {
+      "skillId": "webpage_summarizer",
+      "name": "webpage_summarizer",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "passRate": 1.0,
+      "caseCount": 1,
+      "failedCases": [],
+      "lastRunAt": "2026-07-01T13:21:39+00:00",
+      "packIds": []
     }
   ],
   "packResults": [
@@ -122,7 +188,7 @@
       "passRate": 1.0,
       "caseCount": 2,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T12:23:49+00:00"
+      "lastRunAt": "2026-07-01T13:21:35+00:00"
     },
     {
       "packId": "pack_office",
@@ -132,7 +198,7 @@
       "passRate": 1.0,
       "caseCount": 3,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T12:23:49+00:00"
+      "lastRunAt": "2026-07-01T13:21:35+00:00"
     },
     {
       "packId": "pack_research",
@@ -142,7 +208,7 @@
       "passRate": 1.0,
       "caseCount": 3,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T12:23:49+00:00"
+      "lastRunAt": "2026-07-01T13:21:35+00:00"
     },
     {
       "packId": "pack_study",
@@ -152,7 +218,7 @@
       "passRate": 1.0,
       "caseCount": 3,
       "failedCases": [],
-      "lastRunAt": "2026-07-01T12:23:50+00:00"
+      "lastRunAt": "2026-07-01T13:21:36+00:00"
     }
   ],
   "caseResults": [
@@ -171,7 +237,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 175.79
+        "latencyMs": 164.63
       },
       "input": {
         "scope": "def add(a, b): return a - b",
@@ -195,7 +261,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T12:23:49+00:00"
+      "lastRunAt": "2026-07-01T13:21:34+00:00"
     },
     {
       "caseId": "synthetic-skill_document_reader",
@@ -215,7 +281,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 212.01
+        "latencyMs": 255.21
       },
       "input": {
         "query": "Summarize the key claims and cite supporting passages."
@@ -238,7 +304,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T12:23:49+00:00"
+      "lastRunAt": "2026-07-01T13:21:35+00:00"
     },
     {
       "caseId": "ppt-generator-architecture",
@@ -255,7 +321,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 233.17
+        "latencyMs": 251.14
       },
       "input": {
         "topic": "DeepSeek Infra Skill Quality Loop",
@@ -281,7 +347,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T12:23:49+00:00"
+      "lastRunAt": "2026-07-01T13:21:35+00:00"
     },
     {
       "caseId": "synthetic-skill_paper_writer",
@@ -300,7 +366,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 229.17
+        "latencyMs": 247.59
       },
       "input": {
         "topic": "The impact of local RAG on learning workflows",
@@ -325,7 +391,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T12:23:49+00:00"
+      "lastRunAt": "2026-07-01T13:21:35+00:00"
     },
     {
       "caseId": "research-local-first-ai",
@@ -342,7 +408,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 212.39
+        "latencyMs": 238.64
       },
       "input": {
         "topic": "Local-first AI workspaces",
@@ -367,7 +433,7 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T12:23:49+00:00"
+      "lastRunAt": "2026-07-01T13:21:35+00:00"
     },
     {
       "caseId": "study-os-scheduling",
@@ -384,7 +450,7 @@
         "artifactPass": true,
         "projectBindingPass": true,
         "contentPass": true,
-        "latencyMs": 224.92
+        "latencyMs": 221.57
       },
       "input": {
         "question": "Explain FCFS SJF RR and priority scheduling for operating systems.",
@@ -411,7 +477,253 @@
       ],
       "savedItemCount": 1,
       "error": "",
-      "lastRunAt": "2026-07-01T12:23:50+00:00"
+      "lastRunAt": "2026-07-01T13:21:36+00:00"
+    },
+    {
+      "caseId": "synthetic-audio_transcript_summarizer",
+      "skillId": "audio_transcript_summarizer",
+      "packIds": [],
+      "name": "Synthetic smoke for audio_transcript_summarizer",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 429.33
+      },
+      "input": {
+        "mediaIds": [
+          "media_7485795d270f0596"
+        ],
+        "task": "Summarize the transcript into decisions and follow-ups."
+      },
+      "expected": {
+        "keywords": [
+          "Offline Skill run completed",
+          "audio_transcript_summarizer"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-07-01T13:21:36+00:00"
+    },
+    {
+      "caseId": "synthetic-image_explainer",
+      "skillId": "image_explainer",
+      "packIds": [],
+      "name": "Synthetic smoke for image_explainer",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 450.38
+      },
+      "input": {
+        "mediaIds": [
+          "media_53f255c6b86abcda"
+        ],
+        "task": "Explain the image and cite any OCR text."
+      },
+      "expected": {
+        "keywords": [
+          "Offline Skill run completed",
+          "image_explainer"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-07-01T13:21:37+00:00"
+    },
+    {
+      "caseId": "synthetic-media_to_report",
+      "skillId": "media_to_report",
+      "packIds": [],
+      "name": "Synthetic smoke for media_to_report",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 515.42
+      },
+      "input": {
+        "mediaIds": [
+          "media_a35bc03c41b558e9"
+        ],
+        "task": "Write a cited briefing report."
+      },
+      "expected": {
+        "keywords": [
+          "Offline Skill run completed",
+          "media_to_report"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-07-01T13:21:37+00:00"
+    },
+    {
+      "caseId": "synthetic-pdf_reader",
+      "skillId": "pdf_reader",
+      "packIds": [],
+      "name": "Synthetic smoke for pdf_reader",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 586.97
+      },
+      "input": {
+        "mediaIds": [
+          "media_4e67aa28017607e9"
+        ],
+        "task": "Summarize the document with page citations."
+      },
+      "expected": {
+        "keywords": [
+          "Offline Skill run completed",
+          "pdf_reader"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-07-01T13:21:38+00:00"
+    },
+    {
+      "caseId": "synthetic-video_brief_generator",
+      "skillId": "video_brief_generator",
+      "packIds": [],
+      "name": "Synthetic smoke for video_brief_generator",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 395.8
+      },
+      "input": {
+        "mediaIds": [
+          "media_51988767b8f6faf4"
+        ],
+        "task": "Create an executive brief from this video."
+      },
+      "expected": {
+        "keywords": [
+          "Offline Skill run completed",
+          "video_brief_generator"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-07-01T13:21:38+00:00"
+    },
+    {
+      "caseId": "synthetic-webpage_summarizer",
+      "skillId": "webpage_summarizer",
+      "packIds": [],
+      "name": "Synthetic smoke for webpage_summarizer",
+      "status": "PASS",
+      "overallScore": 100.0,
+      "metrics": {
+        "schemaPass": true,
+        "toolPolicyPass": true,
+        "artifactPass": true,
+        "projectBindingPass": true,
+        "contentPass": true,
+        "latencyMs": 415.02
+      },
+      "input": {
+        "mediaIds": [
+          "media_5869400f475b0ce7"
+        ],
+        "task": "Summarize the webpage and extract action items."
+      },
+      "expected": {
+        "keywords": [
+          "Offline Skill run completed",
+          "webpage_summarizer"
+        ],
+        "requiredOutputPaths": [
+          "content"
+        ],
+        "artifactTypes": [
+          "md"
+        ],
+        "projectBindingRequired": true
+      },
+      "artifactTypes": [
+        "md"
+      ],
+      "savedItemCount": 1,
+      "error": "",
+      "lastRunAt": "2026-07-01T13:21:39+00:00"
     }
   ],
   "regression": {

@@ -417,7 +417,7 @@ class SkillsSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "2.6.9"
+    app_version: str = "2.7.0"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -522,6 +522,10 @@ class Settings:
     @property
     def projects_dir(self) -> Path:
         return self.root / ".projects"
+
+    @property
+    def media_dir(self) -> Path:
+        return self.root / ".media"
 
     @property
     def agent_runs_dir(self) -> Path:
@@ -1058,6 +1062,7 @@ MEMORY_MAX_ITEMS = settings.memory.max_items
 REMINDERS_DIR = settings.reminders_dir
 REMINDERS_FILE = settings.reminders_file
 PROJECTS_DIR = settings.projects_dir
+MEDIA_DIR = settings.media_dir
 AGENT_RUNS_DIR = settings.agent_runs_dir
 LOCAL_RAG_DIR = settings.local_rag_dir
 LOCAL_RAG_DB = settings.local_rag_db

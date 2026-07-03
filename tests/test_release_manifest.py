@@ -37,6 +37,7 @@ def test_build_manifest_has_required_fields(tmp_path: Path) -> None:
     assert manifest["qualityGates"]["coverage"] == "80%"
     assert manifest["qualityGates"]["agentEval"] == "PASS"
     assert manifest["qualityGates"]["workspaceCore"] == "PASS"
+    assert manifest["qualityGates"]["mediaLayer"] == "PASS"
     assert manifest["qualityGates"]["skillSystem"] == "PASS"
     assert manifest["qualityGates"]["skillWorkbench"] == "PASS"
     assert manifest["qualityGates"]["skillBuilder"] == "PASS"
@@ -54,17 +55,19 @@ def test_build_manifest_has_required_fields(tmp_path: Path) -> None:
     assert "docs/evidence/headless-mcp-bridge.json" in manifest["evidence"]
     assert "docs/evidence/a2a-third-party-peer.json" in manifest["evidence"]
     assert "docs/evidence/edge-router-smoke.json" in manifest["evidence"]
-    assert "docs/evidence/workspace-v2.6.9.json" in manifest["evidence"]
-    assert "docs/evidence/skills-v2.6.9.json" in manifest["evidence"]
-    assert "docs/evidence/skills-ui-v2.6.9.json" in manifest["evidence"]
-    assert "docs/evidence/skill-builder-v2.6.9.json" in manifest["evidence"]
-    assert "docs/evidence/skill-packs-v2.6.9.json" in manifest["evidence"]
-    assert "docs/evidence/skill-eval-dashboard-v2.6.9.json" in manifest["evidence"]
-    assert "docs/evidence/skill-versioning-v2.6.9.json" in manifest["evidence"]
-    assert "docs/evidence/skill-analytics-v2.6.9.json" in manifest["evidence"]
-    assert "docs/evidence/skill-security-v2.6.9.json" in manifest["evidence"]
-    assert "docs/evidence/skill-catalog-v2.6.9.json" in manifest["evidence"]
-    assert "evals/reports/skills-v2.6.9.json" in manifest["evidence"]
+    assert "docs/evidence/workspace-v2.7.0.json" in manifest["evidence"]
+    assert "docs/evidence/media-v2.7.0.json" in manifest["evidence"]
+    assert "docs/evidence/skills-v2.7.0.json" in manifest["evidence"]
+    assert "docs/evidence/skills-ui-v2.7.0.json" in manifest["evidence"]
+    assert "docs/evidence/skill-builder-v2.7.0.json" in manifest["evidence"]
+    assert "docs/evidence/skill-packs-v2.7.0.json" in manifest["evidence"]
+    assert "docs/evidence/skill-eval-dashboard-v2.7.0.json" in manifest["evidence"]
+    assert "docs/evidence/skill-versioning-v2.7.0.json" in manifest["evidence"]
+    assert "docs/evidence/skill-analytics-v2.7.0.json" in manifest["evidence"]
+    assert "docs/evidence/skill-security-v2.7.0.json" in manifest["evidence"]
+    assert "docs/evidence/skill-catalog-v2.7.0.json" in manifest["evidence"]
+    assert "evals/reports/skills-v2.7.0.json" in manifest["evidence"]
+    assert "evals/reports/media-v2.7.0.json" in manifest["evidence"]
     assert "evals/reports/security-latest.json" in manifest["evidence"]
     assert "docs/EVIDENCE_INDEX.md" in manifest["evidence"]
 

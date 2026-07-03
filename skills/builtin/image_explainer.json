@@ -1,0 +1,32 @@
+{
+  "skillId": "image_explainer",
+  "name": "image_explainer",
+  "description": "Explain images or screenshots using extracted OCR text, captions, and media citations.",
+  "version": "1.0.0",
+  "systemPrompt": "You are an image explanation Skill. Ground the answer in the provided media context, call out visible text from OCR, and cite media segments when possible.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "mediaIds": {"type": "array", "items": {"type": "string"}},
+      "task": {"type": "string"}
+    },
+    "required": ["mediaIds", "task"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": [],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"mediaIds": ["media_example"], "task": "Explain the image and cite any OCR text."}
+  ]
+}

@@ -29,6 +29,8 @@ def test_offline_mode_runs_doctor_evals_and_agent_only() -> None:
     assert names == [
         "doctor",
         "workspace_core",
+        "media_layer",
+        "media_eval",
         "skill_system",
         "skill_workbench_ui",
         "skill_builder",
@@ -58,6 +60,8 @@ def test_with_server_mode_includes_protocol_smokes() -> None:
     assert names == [
         "doctor",
         "workspace_core",
+        "media_layer",
+        "media_eval",
         "skill_system",
         "skill_workbench_ui",
         "skill_builder",
@@ -95,6 +99,8 @@ def test_default_mode_is_offline() -> None:
     assert _names(mod.build_stages(args)) == [
         "doctor",
         "workspace_core",
+        "media_layer",
+        "media_eval",
         "skill_system",
         "skill_workbench_ui",
         "skill_builder",
@@ -126,7 +132,7 @@ def test_skip_flags_drop_stages() -> None:
             "--skip-skill-catalog",
         ]
     )
-    assert _names(mod.build_stages(args)) == ["workspace_core", "skill_system", "skill_workbench_ui", "skill_packs", "offline_eval_suite", "security_corpus", "baseline_compare"]
+    assert _names(mod.build_stages(args)) == ["workspace_core", "media_layer", "media_eval", "skill_system", "skill_workbench_ui", "skill_packs", "offline_eval_suite", "security_corpus", "baseline_compare"]
 
 
 def test_with_server_skip_protocol_keeps_evals() -> None:
@@ -134,6 +140,8 @@ def test_with_server_skip_protocol_keeps_evals() -> None:
     args = mod.parse_args(["--with-server", "--skip-mcp", "--skip-a2a", "--skip-doctor"])
     assert _names(mod.build_stages(args)) == [
         "workspace_core",
+        "media_layer",
+        "media_eval",
         "skill_system",
         "skill_workbench_ui",
         "skill_builder",
@@ -161,6 +169,8 @@ def test_json_mode_emits_plan_without_running(capsys: pytest.CaptureFixture[str]
     assert stage_names == [
         "doctor",
         "workspace_core",
+        "media_layer",
+        "media_eval",
         "skill_system",
         "skill_workbench_ui",
         "skill_builder",

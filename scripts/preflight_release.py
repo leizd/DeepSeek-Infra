@@ -279,7 +279,7 @@ def check_quality_gate_evidence(root: Path, version: str) -> CheckResult:
 
 def check_release_exclusions(root: Path) -> CheckResult:
     text = _read(root / "scripts" / "release.py")
-    required = (".traces", ".local-rag", ".auth-token", ".env", "server*.log")
+    required = (".traces", ".local-rag", ".media", ".auth-token", ".env", "server*.log")
     missing = [token for token in required if token not in text]
     if missing:
         return CheckResult("release_exclusions", STATUS_FAIL, f"release.py no longer excludes: {', '.join(missing)}", {"missing": missing})
@@ -656,6 +656,65 @@ def check_workspace_core_evidence(root: Path, version: str) -> CheckResult:
         "workspace_core_evidence",
         STATUS_PASS,
         "Workspace Core evidence recorded",
+        {"path": str(path), "checks": list(required)},
+    )
+
+
+def check_media_layer_evidence(root: Path, version: str) -> CheckResult:
+    path = root / "docs" / "evidence" / f"media-v{version}.json"
+    if not path.is_file():
+        return CheckResult(
+            "media_layer_evidence",
+            STATUS_FAIL,
+            "Media Layer evidence missing; run scripts/smoke_media.py --offline",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("media_layer_evidence", STATUS_FAIL, f"cannot parse Media Layer evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("media_layer", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "media_layer_evidence",
+            STATUS_FAIL,
+            f"Media Layer evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS":
+        return CheckResult(
+            "media_layer_evidence",
+            STATUS_FAIL,
+            f"Media Layer evidence status is {data.get('status')!r}, expected PASS",
+            {"status": data.get("status")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = (
+        "imageImport",
+        "pdfPageIndex",
+        "webpageSnapshot",
+        "mediaSegments",
+        "mediaToRag",
+        "mediaCitations",
+        "projectExportIncludesMedia",
+        "secretRedaction",
+    )
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult(
+            "media_layer_evidence",
+            STATUS_FAIL,
+            f"Media Layer evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    return CheckResult(
+        "media_layer_evidence",
+        STATUS_PASS,
+        "Media Layer evidence recorded",
         {"path": str(path), "checks": list(required)},
     )
 
@@ -1370,6 +1429,7 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_openai_compatible_sdk_evidence(root, version),
         check_semantic_cache_onnx_evidence(root, version),
         check_workspace_core_evidence(root, version),
+        check_media_layer_evidence(root, version),
         check_skill_system_evidence(root, version),
         check_skill_ui_evidence(root, version),
         check_skill_builder_evidence(root, version),
