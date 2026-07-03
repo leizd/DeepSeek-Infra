@@ -97,7 +97,10 @@ def close_session(session_id: str, *, remove_profile: bool = True) -> BrowserSes
     with _lock:
         session = _sessions.get(safe_id)
     if session is None:
-        raise AppError("Browser session not found", code=ErrorCode.NOT_FOUND, status=404)
+        # Idempotent: session already expired / closed / never existed.
+        return BrowserSession(browser_session_id=safe_id, status="closed")
+    if session.status == "closed":
+        return session
     try:
         from deepseek_infra.infra.browser.controller import close_controller
 

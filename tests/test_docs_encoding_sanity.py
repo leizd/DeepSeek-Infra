@@ -26,6 +26,8 @@ def _skeleton(tmp_path: Path) -> Path:
     (root / "docs" / "EVIDENCE_INDEX.md").write_text("ok\n", encoding="utf-8")
     (root / "docs" / "integrations").mkdir()
     (root / "docs" / "integrations" / "headless-mcp-client.md").write_text("ok\n", encoding="utf-8")
+    (root / "deepseek_infra" / "core").mkdir(parents=True)
+    (root / "deepseek_infra" / "core" / "config.py").write_text("# clean\n", encoding="utf-8")
     return root
 
 

@@ -1,7 +1,7 @@
 {
-  "version": "2.8.0",
+  "version": "2.8.1",
   "commit": "f8469fd",
-  "generatedAt": "2026-07-03T07:46:07Z",
+  "generatedAt": "2026-07-03T07:46:03Z",
   "environment": {
     "os": "Windows-11-10.0.26200-SP0",
     "python": "3.13.5",
@@ -9,9 +9,8 @@
   },
   "status": "PASS",
   "checks": {
-    "browserRecall": "PASS",
-    "privateHostBlocked": "PASS",
-    "confirmationGate": "PASS",
+    "mediaRecall": "PASS",
+    "mediaCitations": "PASS",
     "mediaRagCollection": "PASS"
   },
   "details": {
@@ -22,30 +21,26 @@
       "mrr": 1.0,
       "details": [
         {
-          "query": "Browser snapshots Local RAG chunks",
+          "query": "first-class media objects",
           "hit": true,
           "rank": 1,
           "topSourceIds": [
-            "media_77b08ee328b55be7",
-            "media_0a98d6fd245dabc5"
+            "media_b02cea37a995c669",
+            "media_9fdbb2782df72bc7"
           ]
         },
         {
-          "query": "untrusted browser content system prompt",
+          "query": "webpage citable media",
           "hit": true,
           "rank": 1,
           "topSourceIds": [
-            "media_0a98d6fd245dabc5",
-            "media_77b08ee328b55be7"
+            "media_9fdbb2782df72bc7",
+            "media_b02cea37a995c669"
           ]
         }
       ]
     },
-    "projectId": "proj-a68eedc6ec11",
-    "mediaIds": [
-      "media_77b08ee328b55be7",
-      "media_0a98d6fd245dabc5"
-    ]
+    "projectId": "proj-8383827e8c2a"
   },
   "summary": {
     "caseCount": 2,

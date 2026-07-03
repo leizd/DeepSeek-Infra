@@ -26,6 +26,8 @@ def _skeleton(tmp_path: Path) -> Path:
     (root / "scripts" / "ok.py").write_text("# clean script\n", encoding="utf-8")
     (root / "docs" / "nested").mkdir(parents=True)
     (root / "docs" / "nested" / "guide.md").write_text("clean\n", encoding="utf-8")
+    (root / "deepseek_infra" / "core").mkdir(parents=True)
+    (root / "deepseek_infra" / "core" / "config.py").write_text("# clean config\n", encoding="utf-8")
     return root
 
 
@@ -57,6 +59,13 @@ def test_encoding_scope_includes_scripts(tmp_path: Path) -> None:
     _assert_fails_on(root, "scripts/ok.py")
 
 
+def test_encoding_scope_includes_deepseek_infra_py_files(tmp_path: Path) -> None:
+    root = _skeleton(tmp_path)
+    (root / "deepseek_infra" / "core" / "config.py").write_text("# bad \u93cb\n", encoding="utf-8")
+
+    _assert_fails_on(root, "deepseek_infra/core/config.py")
+
+
 def test_encoding_scope_includes_recursive_docs(tmp_path: Path) -> None:
     root = _skeleton(tmp_path)
     (root / "docs" / "nested" / "guide.md").write_text("bad \ufffd\n", encoding="utf-8")
@@ -77,3 +86,4 @@ def test_encoding_scope_ignores_markdown_code_examples(tmp_path: Path) -> None:
     assert ".github/workflows/ci.yml" in checked
     assert "scripts/ok.py" in checked
     assert "docs/nested/guide.md" in checked
+    assert "deepseek_infra/core/config.py" in checked

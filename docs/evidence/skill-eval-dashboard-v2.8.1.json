@@ -1,5 +1,5 @@
 {
-  "version": "2.8.0",
+  "version": "2.8.1",
   "commit": "f8469fd11bc3",
   "generatedAt": "2026-07-03T07:46:27+00:00",
   "environment": {
@@ -24,7 +24,7 @@
   },
   "details": {
     "report": {
-      "path": "D:\\deepseek\\evals\\reports\\skills-v2.8.0.json",
+      "path": "D:\\deepseek\\evals\\reports\\skills-v2.8.1.json",
       "summary": {
         "scope": "all",
         "skillCount": 18,

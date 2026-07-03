@@ -2,6 +2,28 @@
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
+## [2.8.1] - Browser Control Runtime Polish & Release Hygiene
+
+**Theme: fix release-facing doc drift, extend encoding hygiene to source code, and harden Browser Control operability.** This patch aligns README / RELEASE_READINESS / IMPLEMENTATION_STATUS narratives, closes a preflight encoding-gap that allowed mojibake in `deepseek_infra/**/*.py`, and adds small but observable Browser runtime hardening.
+
+### Fixed
+
+- **Release doc theme mismatch**: `docs/RELEASE_READINESS.md` now correctly describes v2.8.1 as *Browser Control Runtime Polish & Release Hygiene* instead of the stale 2.7.x *Context Taint Firewall Hardening* copy.
+- **Source-code mojibake**: fix garbled smart-quote characters in `deepseek_infra/core/config.py` Scheduler and MCP docstrings.
+- **Encoding gate coverage**: `scripts/preflight_release.py` `docs_encoding_sanity` now scans `deepseek_infra/**/*.py` in addition to docs / scripts / workflows / Dockerfile / README / CHANGELOG.
+
+### Changed
+
+- **README core modules table**: extend the "核心基础设施模块" table from 10 to 12 modules, adding Multimodal Media Layer (`infra/media/`) and Browser Control Runtime (`infra/browser/`).
+- **Version sync**: bump README badge, `settings.app_version`, Dockerfile tag, Android `versionName` / `versionCode`, docs "适用版本" headers, CI evidence / eval paths and eval report versions to `2.8.1`.
+
+### Browser Control Hardening
+
+- **Audit log enrichment**: browser audit entries now include `requestId`, `sessionId` and `riskLevel` fields for better traceability.
+- **Stricter download filename sanitize**: collapse path separators, multiple dots/dashes and leading/trailing separators; reject empty names.
+- **Idempotent session close**: `browser.close_session` no longer raises when the session is already closed or expired; repeated close returns the closed session state.
+- **Edge-case evidence**: `scripts/smoke_browser.py` and `tests/test_browser_runtime.py` now cover repeated close, session TTL expiration and download byte-limit enforcement.
+
 ## [2.8.0] - Browser Control Runtime
 
 **Theme: make browser control a governed runtime, not a raw automation escape hatch.** This release adds controlled browser sessions, safety-gated actions, Browser-to-Media snapshots, Local RAG indexing and offline evidence for the browser workspace ingress path.

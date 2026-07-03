@@ -57,6 +57,9 @@ def run_browser_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
         "snapshotToRag": "FAIL",
         "auditLog": "FAIL",
         "redactSecrets": "FAIL",
+        "repeatedClose": "FAIL",
+        "sessionExpired": "FAIL",
+        "downloadLimit": "FAIL",
     }
     details: dict[str, Any] = {"runtimeRoot": str(root), "fixtures": str(FIXTURES)}
     project = projects.create_project("Browser Smoke")
@@ -97,8 +100,40 @@ def run_browser_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     segments = library.list_segments(str(injected_snapshot.get("mediaId") or "")) if isinstance(injected_snapshot, dict) else []
     checks["redactSecrets"] = "PASS" if "sk-browser-secret-value" not in json.dumps(segments, ensure_ascii=False) else "FAIL"
 
-    audit_ok = config.BROWSER_AUDIT_LOG.is_file() and any('"action": "read_page"' in line for line in config.BROWSER_AUDIT_LOG.read_text(encoding="utf-8").splitlines())
-    checks["auditLog"] = "PASS" if audit_ok else "FAIL"
+    audit_lines = config.BROWSER_AUDIT_LOG.read_text(encoding="utf-8").splitlines() if config.BROWSER_AUDIT_LOG.is_file() else []
+    audit_entries = [json.loads(line) for line in audit_lines if line.strip()]
+    audit_ok = any(entry.get("action") == "read_page" for entry in audit_entries)
+    audit_fields_ok = all("requestId" in entry and "riskLevel" in entry for entry in audit_entries)
+    checks["auditLog"] = "PASS" if (audit_ok and audit_fields_ok) else "FAIL"
+
+    close1 = execute_browser_action({"action": "close_session", "sessionId": session_id})
+    close2 = execute_browser_action({"action": "close_session", "sessionId": session_id})
+    checks["repeatedClose"] = "PASS" if close1.get("ok") and close2.get("ok") and close2.get("result", {}).get("closed") else "FAIL"
+
+    expired = execute_browser_action({"action": "open_url", "url": (FIXTURES / "basic.html").as_uri()})
+    expired_session_id = str(expired.get("session", {}).get("browserSessionId") or "")
+    if expired_session_id:
+        from deepseek_infra.infra.browser import session as browser_session_module
+
+        expired_session = browser_session_module.get_session(expired_session_id)
+        expired_session.last_access = 0.0
+        expired_count = browser_session_module.close_expired_sessions()
+        checks["sessionExpired"] = "PASS" if expired_count >= 1 else "FAIL"
+    else:
+        checks["sessionExpired"] = "FAIL"
+
+    config.BROWSER_DOWNLOAD_MAX_BYTES = 16
+    config.BROWSER_REQUIRE_CONFIRM = False
+    oversized_path = root / "oversized.bin"
+    oversized_path.write_bytes(b"x" * 32)
+    limit_opened = execute_browser_action({"action": "open_url", "url": oversized_path.as_uri()})
+    limit_session_id = str(limit_opened.get("session", {}).get("browserSessionId") or "")
+    try:
+        limit_result = execute_browser_action({"action": "download", "sessionId": limit_session_id, "downloadUrl": oversized_path.as_uri()})
+        checks["downloadLimit"] = "PASS" if limit_result.get("ok") is False else "FAIL"
+    except Exception:
+        checks["downloadLimit"] = "PASS"
+
     details.update(
         {
             "projectId": project_id,

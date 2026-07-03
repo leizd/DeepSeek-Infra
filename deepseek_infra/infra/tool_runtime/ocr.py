@@ -531,7 +531,7 @@ def _ocr_text_score(text: str) -> int:
     math_symbols = _math_symbol_count(cleaned)
     formula_lines = sum(1 for line in cleaned.splitlines() if _looks_like_formula_line(line))
     separators = sum(1 for char in cleaned if char in "\n\t:：,，.;；()（）[]【】")
-    noise = cleaned.count("�") * 8 + len(re.findall(r"[_~^`|]{3,}", cleaned)) * 5
+    noise = cleaned.count("\ufffd") * 8 + len(re.findall(r"[_~^`|]{3,}", cleaned)) * 5
     return readable * 4 + math_symbols * 3 + formula_lines * 16 + separators - noise
 
 

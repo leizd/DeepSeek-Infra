@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
+import re
 import shutil
 import urllib.request
 from pathlib import Path
@@ -27,10 +28,28 @@ def is_executable_filename(value: str) -> bool:
     return Path(str(value or "")).suffix.lower() in EXECUTABLE_SUFFIXES
 
 
+def sanitize_filename(value: str, default: str = "download.bin") -> str:
+    """Strict filename sanitize for browser downloads.
+
+    Collapses path separators, multiple dots/dashes and leading/trailing
+    separators; rejects empty or traversal-looking names.
+    """
+    name = str(value or "").strip()
+    name = re.sub(r"[\\/]+", "-", name)
+    name = re.sub(r"[^\w.-]+", "-", name, flags=re.UNICODE)
+    name = re.sub(r"\.{2,}", ".", name)
+    name = re.sub(r"-{2,}", "-", name)
+    name = name.strip(".-")
+    if not name or name in {".", ".."} or ".." in name:
+        return default
+    base = Path(name).name
+    return base[:80] or default
+
+
 def filename_from_url(url: str) -> str:
     path = unquote(urlsplit(str(url or "")).path)
     name = Path(path).name
-    return safe_filename(name, default="download.bin")
+    return sanitize_filename(name, default="download.bin")
 
 
 def fetch_download(session_id: str, url: str) -> dict[str, Any]:
@@ -50,7 +69,7 @@ def fetch_download(session_id: str, url: str) -> dict[str, Any]:
         filename = filename_from_url(url)
         disposition = response.headers.get("Content-Disposition", "")
         if "filename=" in disposition:
-            filename = safe_filename(disposition.rsplit("filename=", 1)[-1].strip("\"' "), default=filename)
+            filename = sanitize_filename(disposition.rsplit("filename=", 1)[-1].strip("\"' "), default=filename)
     return save_download_bytes(session_id, filename, data, source_url=url)
 
 
@@ -58,7 +77,7 @@ def save_download_bytes(session_id: str, filename: str, data: bytes, *, source_u
     raw = data if isinstance(data, bytes) else b""
     if len(raw) > config.BROWSER_DOWNLOAD_MAX_BYTES:
         raise AppError("Browser download exceeds the configured byte limit", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
-    safe_name = safe_filename(filename, default="download.bin")
+    safe_name = sanitize_filename(filename, default="download.bin")
     directory = isolated_download_dir(session_id)
     target = unique_download_path(directory, safe_name)
     target.write_bytes(raw)

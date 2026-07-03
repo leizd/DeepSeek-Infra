@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import secrets
+
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.browser import safety, snapshot
 from deepseek_infra.infra.browser.controller import controller_for
@@ -14,22 +16,28 @@ def execute_browser_action(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AppError("Browser action payload must be an object", code=ErrorCode.INVALID_PAYLOAD, status=400)
     action = safety.normalize_action(payload.get("action"))
-    if action == "open_url" and not str(payload.get("sessionId") or "").strip():
+    session_id = str(payload.get("sessionId") or "").strip()
+    if action == "close_session":
+        closed = close_session(session_id)
+        return {"ok": True, "session": closed.to_dict(), "result": {"closed": True}}
+    if action == "open_url" and not session_id:
         session = create_session(project_id=str(payload.get("projectId") or ""), headless=_optional_bool(payload.get("headless")))
     elif action:
-        session = get_session(str(payload.get("sessionId") or ""))
+        session = get_session(session_id)
     else:
         session = create_session(project_id=str(payload.get("projectId") or ""), headless=_optional_bool(payload.get("headless")))
+    request_id = secrets.token_hex(8)
     request = {
         **payload,
         "action": action,
         "sessionId": session.browser_session_id,
         "projectId": session.project_id or str(payload.get("projectId") or ""),
         "currentUrl": session.current_url,
+        "requestId": request_id,
     }
     decision = safety.evaluate_action(request)
     if not decision.allowed:
-        safety.audit_decision(decision, request, session_id=session.browser_session_id, project_id=session.project_id, outcome=decision.verdict)
+        safety.audit_decision(decision, request, session_id=session.browser_session_id, project_id=session.project_id, request_id=request_id, outcome=decision.verdict)
         return {
             "ok": False,
             "code": "requires_confirmation" if decision.needs_confirmation else "forbidden",
@@ -50,11 +58,11 @@ def execute_browser_action(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(download_media, dict) and isinstance(download_media.get("media"), dict):
             media_ids.append(str(download_media["media"].get("mediaId") or ""))
         session.touch(status="idle", current_url=str(result.get("url") or session.current_url))
-        safety.audit_decision(decision, request, session_id=session.browser_session_id, project_id=session.project_id, outcome="pass", media_ids=media_ids)
+        safety.audit_decision(decision, request, session_id=session.browser_session_id, project_id=session.project_id, request_id=request_id, outcome="pass", media_ids=media_ids)
         return {"ok": True, "session": session.to_dict(), "safety": decision.to_dict(), "result": result}
     except Exception as exc:
         mark_failed(session, str(exc))
-        safety.audit_decision(decision, request, session_id=session.browser_session_id, project_id=session.project_id, outcome="failed")
+        safety.audit_decision(decision, request, session_id=session.browser_session_id, project_id=session.project_id, request_id=request_id, outcome="failed")
         raise
 
 

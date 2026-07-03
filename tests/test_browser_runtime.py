@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 from deepseek_infra.core import config
+from deepseek_infra.infra.browser import session as browser_session
 from deepseek_infra.infra.browser.actions import execute_browser_action
+from deepseek_infra.infra.browser.downloads import sanitize_filename
 from deepseek_infra.infra.media import library
 from deepseek_infra.infra.rag import local_rag
 from deepseek_infra.infra.workspace import projects
@@ -113,3 +115,58 @@ def test_browser_snapshot_redacts_secrets_and_audit_is_written(tmp_settings: Pat
 
     assert "sk-browser-secret-value" not in json.dumps(segments, ensure_ascii=False)
     assert any(entry["action"] == "read_page" and entry["taint"] == "untrusted_browser" for entry in audit)
+    assert all("requestId" in entry and "riskLevel" in entry for entry in audit)
+
+
+def test_browser_close_session_is_idempotent(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_browser(monkeypatch)
+    opened = execute_browser_action({"action": "open_url", "url": (FIXTURES / "basic.html").as_uri()})
+    session_id = opened["session"]["browserSessionId"]
+
+    first = execute_browser_action({"action": "close_session", "sessionId": session_id})
+    second = execute_browser_action({"action": "close_session", "sessionId": session_id})
+    missing = execute_browser_action({"action": "close_session", "sessionId": "browser_missing0000000"})
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert missing["ok"] is True
+    assert first["result"]["closed"] is True
+    assert second["result"]["closed"] is True
+
+
+def test_browser_expired_session_is_cleaned_up(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_browser(monkeypatch)
+    opened = execute_browser_action({"action": "open_url", "url": (FIXTURES / "basic.html").as_uri()})
+    session_id = opened["session"]["browserSessionId"]
+
+    session = browser_session.get_session(session_id)
+    session.last_access = 0.0
+    expired_count = browser_session.close_expired_sessions()
+
+    assert expired_count >= 1
+    with pytest.raises(Exception):
+        browser_session.get_session(session_id)
+
+
+def test_browser_download_filename_is_strictly_sanitized() -> None:
+    assert sanitize_filename("../../../etc/passwd") == "etc-passwd"
+    assert sanitize_filename("file..name..txt") == "file.name.txt"
+    assert sanitize_filename("--leading-trailing--") == "leading-trailing"
+    assert sanitize_filename("") == "download.bin"
+    assert sanitize_filename("a" * 200).endswith(".bin") is False
+    assert len(sanitize_filename("a" * 200)) <= 80
+
+
+def test_browser_download_respects_byte_limit(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_browser(monkeypatch)
+    monkeypatch.setattr(config, "BROWSER_REQUIRE_CONFIRM", False)
+    monkeypatch.setattr(config, "BROWSER_DOWNLOAD_MAX_BYTES", 16)
+    oversized = tmp_settings / "oversized.bin"
+    oversized.write_bytes(b"x" * 32)
+
+    opened = execute_browser_action({"action": "open_url", "url": oversized.as_uri()})
+    session_id = opened["session"]["browserSessionId"]
+    result = execute_browser_action({"action": "download", "sessionId": session_id, "downloadUrl": oversized.as_uri()})
+
+    assert result["ok"] is False
+    assert result["code"] in {"forbidden", "upload_too_large", "internal"}

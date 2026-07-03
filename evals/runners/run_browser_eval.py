@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline Browser Control Runtime eval for v2.8.0."""
+"""Offline Browser Control Runtime eval for v2.8.1."""
 
 from __future__ import annotations
 

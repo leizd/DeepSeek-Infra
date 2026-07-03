@@ -1,7 +1,7 @@
 {
-  "version": "2.8.0",
-  "commit": "f8469fd",
-  "generatedAt": "2026-07-03T07:46:05Z",
+  "version": "2.8.1",
+  "commit": "b6c327e",
+  "generatedAt": "2026-07-03T10:21:26Z",
   "environment": {
     "os": "Windows-11-10.0.26200-SP0",
     "python": "3.13.5",
@@ -18,21 +18,24 @@
     "snapshotToMedia": "PASS",
     "snapshotToRag": "PASS",
     "auditLog": "PASS",
-    "redactSecrets": "PASS"
+    "redactSecrets": "PASS",
+    "repeatedClose": "PASS",
+    "sessionExpired": "PASS",
+    "downloadLimit": "PASS"
   },
   "details": {
-    "runtimeRoot": "D:\\deepseek\\.test-tmp\\deepseek-browser-smoke-rzidgbry",
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-g77b2zfa",
     "fixtures": "D:\\deepseek\\tests\\fixtures\\browser",
-    "projectId": "proj-7a9d8b026f84",
-    "browserSessionId": "browser_b1deeb7848667f67",
+    "projectId": "proj-fa9e8e598f31",
+    "browserSessionId": "browser_003cff04f8bd4797",
     "mediaIds": [
-      "media_e66c3f8c8a852dff",
-      "media_a8536eb89c11b3b8"
+      "media_00920324b8487626",
+      "media_e3a6203b04f6a83b"
     ],
     "localRag": {
       "enabled": true,
       "backend": "sqlite_vec",
-      "databasePath": "D:\\deepseek\\.test-tmp\\deepseek-browser-smoke-rzidgbry\\.local-rag\\rag.sqlite3",
+      "databasePath": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-g77b2zfa\\.local-rag\\rag.sqlite3",
       "sqliteVecAvailable": false,
       "embeddingProvider": "hash",
       "embeddingProviderRequested": "hash",
@@ -50,6 +53,6 @@
       "indexedMemories": 0,
       "vectorTableAvailable": false
     },
-    "auditLog": "D:\\deepseek\\.test-tmp\\deepseek-browser-smoke-rzidgbry\\.browser-audit\\audit.jsonl"
+    "auditLog": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-g77b2zfa\\.browser-audit\\audit.jsonl"
   }
 }
