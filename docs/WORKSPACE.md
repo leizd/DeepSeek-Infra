@@ -1,8 +1,8 @@
 # Workspace Core
 
-适用版本：v2.8.1。
+适用版本：v2.8.2。
 
-v2.5.0 引入 **Workspace Core**；本文适用于 v2.8.1：把项目空间、保存项、生成产物、对话和导出统一成 DeepSeek Infra 的本地 AI 工作台对象模型。它不是新的协议门禁，也不是 Skill / 浏览器控制 / 自动化系统，而是 3.0.0 前的第一块产品地基。
+v2.5.0 引入 **Workspace Core**；本文适用于 v2.8.2：把项目空间、保存项、生成产物、对话和导出统一成 DeepSeek Infra 的本地 AI 工作台对象模型。它不是新的协议门禁，也不是 Skill / 浏览器控制 / 自动化系统，而是 3.0.0 前的第一块产品地基。
 
 ## 对象模型
 
@@ -174,7 +174,7 @@ project-export.zip
 Workspace Core smoke 是离线的，不需要 API key 或网络：
 
 ```bash
-python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.8.1.json
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.8.2.json
 ```
 
 证据文件包含统一 metadata：

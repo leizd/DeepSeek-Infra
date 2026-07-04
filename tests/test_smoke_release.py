@@ -52,8 +52,8 @@ def test_offline_mode_runs_doctor_evals_and_agent_only() -> None:
     assert "--offline" in doctor_cmd
     assert "--with-server" not in doctor_cmd
     stage_commands = {name: cmd for name, cmd in stages}
-    assert stage_commands["browser_control"][-2:] == ["--version", "2.8.1"]
-    assert stage_commands["browser_eval"][-2:] == ["--version", "2.8.1"]
+    assert stage_commands["browser_control"][-2:] == ["--version", "2.8.2"]
+    assert stage_commands["browser_eval"][-2:] == ["--version", "2.8.2"]
     assert not any("smoke_mcp_compat" in " ".join(cmd) for _, cmd in stages)
     assert not any("smoke_a2a_compat" in " ".join(cmd) for _, cmd in stages)
 

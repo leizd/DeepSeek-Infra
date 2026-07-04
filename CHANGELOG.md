@@ -1,5 +1,14 @@
 # 更新日志
 
+## [2.8.2] - Evidence Index & Manifest Example Sync
+
+### Fixed
+- **Evidence index consistency**: `docs/EVIDENCE_INDEX.md` preflight command now uses `--version 2.8.2`.
+- **Manifest example sync**: `docs/RELEASE_READINESS.md` manifest example now includes `mediaLayer` / `browserControl` quality gates and Browser Control evidence / eval reports.
+- **Encoding gate scope**: `docs/RELEASE_READINESS.md` and `docs/EVIDENCE_INDEX.md` now document that `deepseek_infra/**/*.py` is included in the encoding sanity scan.
+- **Version sync**: bump README badge, `settings.app_version`, Dockerfile tag, Android `versionName` / `versionCode`, docs "适用版本" headers, CI evidence / eval paths, eval report versions and evidence filenames to `2.8.2`.
+
+
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
 ## [2.8.1] - Browser Control Runtime Polish & Release Hygiene

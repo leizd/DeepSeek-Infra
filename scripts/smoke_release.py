@@ -29,7 +29,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
 
-BROWSER_CONTROL_VERSION = "2.8.1"
+BROWSER_CONTROL_VERSION = "2.8.2"
 
 
 def _py() -> str:

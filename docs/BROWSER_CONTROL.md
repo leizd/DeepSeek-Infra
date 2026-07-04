@@ -1,6 +1,6 @@
 # Browser Control Runtime
 
-Applicable version: v2.8.1.
+Applicable version: v2.8.2.
 
 Browser Control Runtime lets Agents and Skills read pages, capture screenshots,
 click, type, download, and persist browser evidence into Workspace Media.
@@ -104,13 +104,13 @@ type is supported.
 Offline smoke:
 
 ```bash
-python scripts/smoke_browser.py --offline --out docs/evidence/browser-v2.8.1.json --version 2.8.1
+python scripts/smoke_browser.py --offline --out docs/evidence/browser-v2.8.2.json --version 2.8.2
 ```
 
 Offline eval:
 
 ```bash
-python evals/runners/run_browser_eval.py --strict --out evals/reports/browser-v2.8.1.json --version 2.8.1
+python evals/runners/run_browser_eval.py --strict --out evals/reports/browser-v2.8.2.json --version 2.8.2
 ```
 
 Preflight checks `docs/evidence/browser-v<version>.json` for:
