@@ -34,7 +34,7 @@ python scripts/preflight_release.py --version 2.8.1
 - `docs/evidence/skill-builder-v2.8.1.json`、`docs/evidence/skill-packs-v2.8.1.json`、`docs/evidence/skill-eval-dashboard-v2.8.1.json`、`docs/evidence/skill-versioning-v2.8.1.json`、`docs/evidence/skill-analytics-v2.8.1.json`、`docs/evidence/skill-security-v2.8.1.json`、`docs/evidence/skill-catalog-v2.8.1.json` 与 `evals/reports/skills-v2.8.1.json` 必须存在、版本匹配、`status=PASS`，且 Skill authoring / Pack / Eval / Versioning / Analytics / Security / Catalog checks 全 PASS。
 - `docs/evidence/context-taint-v2.8.1.json` 必须存在、版本为 `2.8.1`、`status=PASS`，且 web / file / media injection、tool directive、tainted-turn escalation、risk diagnostics checks 全 PASS。
 - `quality_gate_evidence` 确认 coverage 80%、offline eval、Agent Eval、baseline compare、injection strict 与 security corpus 全部 PASS。
-- Dockerfile / GitHub workflows / scripts / README / CHANGELOG / docs markdown 不出现 `???`、`锟斤拷`、`鈥`、`鏋`、`杩`、`\ufffd` 等乱码。
+- Dockerfile / GitHub workflows / scripts / `deepseek_infra/**/*.py` / README / CHANGELOG / docs markdown 不出现 `???`、`锟斤拷`、`鈥`、`鏋`、`杩`、`\ufffd` 等乱码。
 - `scripts/release.py` 仍排除 `.traces` / `.local-rag` / `.auth-token` / `.env` / `server*.log`。
 
 退出码：`1` 表示有 `FAIL`；GUI、本地模型、第三方生态这类 `WARNING` 不阻断 CI。`--json` 输出机器可读摘要。
@@ -86,6 +86,8 @@ dist/deepseek-infra-2.8.1.manifest.json
     "securityCorpus": "PASS",
     "workspaceCore": "PASS",
     "contextTaint": "PASS",
+    "mediaLayer": "PASS",
+    "browserControl": "PASS",
     "skillSystem": "PASS",
     "skillWorkbench": "PASS",
     "skillBuilder": "PASS",
@@ -125,6 +127,8 @@ dist/deepseek-infra-2.8.1.manifest.json
     "evals/reports/security-latest.json",
     "evals/reports/skills-v2.8.1.json",
     "evals/reports/media-v2.8.1.json",
+    "docs/evidence/browser-v2.8.1.json",
+    "evals/reports/browser-v2.8.1.json",
     "docs/EVIDENCE_INDEX.md"
   ],
   "artifact": "deepseek-infra-2.8.1.zip",
@@ -534,6 +538,7 @@ python evals/runners/compare_eval_baseline.py --strict --baseline evals/baseline
 - `README.md`
 - `.github/workflows/*.yml`
 - `scripts/*.py`
+- `deepseek_infra/**/*.py`
 - `docs/**/*.md`
 
 识别模式：连续 `???`、`锟斤拷`、`鈥`、`鏋`、`杩`、Unicode replacement character `\ufffd`。Markdown 的 inline code 与 fenced code blocks 会被忽略，方便文档保留检查示例；命中正文、Dockerfile、workflow 或脚本即 FAIL。

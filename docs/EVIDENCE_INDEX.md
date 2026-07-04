@@ -94,11 +94,11 @@ python scripts/release.py --clean-workspace --version 2.8.1
 发版前必须通过的 preflight 检查：
 
 ```bash
-python scripts/preflight_release.py --version 2.7.3
+python scripts/preflight_release.py --version 2.8.1
 ```
 关键检查项：
 
-- `docs_encoding_sanity`：Dockerfile / workflows / scripts / README / CHANGELOG / docs 无 `???`、`锟斤拷`、`鈥`、`鏋`、`杩`、`\ufffd` 等乱码。
+- `docs_encoding_sanity`：Dockerfile / workflows / scripts / `deepseek_infra/**/*.py` / README / CHANGELOG / docs 无 `???`、`锟斤拷`、`鈥`、`鏋`、`杩`、`\ufffd` 等乱码。
 - `headless_mcp_bridge_evidence`：`docs/evidence/headless-mcp-bridge.json` 存在、版本匹配、关键步骤 PASS。
 - `a2a_external_peer_evidence`：`docs/evidence/a2a-external-peer.json` 存在、版本匹配、关键 checks PASS。
 - `a2a_third_party_peer_evidence`：缺失或版本陈旧时 WARNING；同版本 evidence 存在时必须 `peerType=third-party`、`status=PASS` 且关键 checks PASS。
@@ -148,5 +148,5 @@ python evals/runners/run_offline_eval_suite.py --include-agent --strict --out ev
 python evals/runners/run_agent_eval.py --report-dir evals/reports --strict
 python evals/runners/run_security_corpus.py --strict --out evals/reports/security-latest.json --markdown evals/reports/security-latest.md
 python evals/runners/compare_eval_baseline.py --strict --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json --agent-baseline evals/baselines/agent-v2.2.8.json --out evals/reports/baseline-compare-latest.json
-python scripts/preflight_release.py --version 2.7.3
+python scripts/preflight_release.py --version 2.8.1
 ```
