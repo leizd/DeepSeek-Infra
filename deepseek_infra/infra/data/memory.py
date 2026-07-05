@@ -92,18 +92,32 @@ def _save_memories_unlocked(memories: list[dict[str, Any]]) -> None:
         if not content:
             continue
         scope = normalize_memory_scope(item.get("scope") or "global")
-        cleaned.append(
-            {
-                "id": str(item.get("id") or memory_fingerprint(content, scope)),
-                "content": content,
-                "category": str(item.get("category") or "fact"),
-                "scope": scope,
-                "source": str(item.get("source") or "manual"),
-                "pinned": bool(item.get("pinned")),
-                "createdAt": str(item.get("createdAt") or utc_now_iso()),
-                "updatedAt": str(item.get("updatedAt") or utc_now_iso()),
-            }
-        )
+        memory_id = str(item.get("memoryId") or item.get("id") or memory_fingerprint(content, scope))
+        raw_source = item.get("source") or "manual"
+        source = raw_source if isinstance(raw_source, dict) else str(raw_source or "manual")
+        raw_confidence = item.get("confidence")
+        try:
+            confidence = float(raw_confidence) if isinstance(raw_confidence, (int, float, str)) else 0.9
+        except ValueError:
+            confidence = 0.9
+        memory_type = str(item.get("type") or item.get("category") or "fact").strip().lower() or "fact"
+        cleaned_item = {
+            "id": memory_id,
+            "memoryId": memory_id,
+            "content": content,
+            "category": str(item.get("category") or memory_type),
+            "type": memory_type,
+            "scope": scope,
+            "source": source,
+            "confidence": max(0.0, min(confidence, 1.0)),
+            "pinned": bool(item.get("pinned")),
+            "createdAt": str(item.get("createdAt") or utc_now_iso()),
+            "updatedAt": str(item.get("updatedAt") or utc_now_iso()),
+        }
+        expires_at = str(item.get("expiresAt") or "").strip()
+        if expires_at:
+            cleaned_item["expiresAt"] = expires_at
+        cleaned.append(cleaned_item)
 
     cleaned = cleaned[:MEMORY_MAX_ITEMS]
     temp_path = MEMORY_FILE.with_suffix(".tmp")
@@ -164,7 +178,7 @@ def normalize_memory_scope(value: Any) -> str:
     scope = str(value or "global").strip()
     if scope == "global":
         return "global"
-    if re.fullmatch(r"(project|seek):[A-Za-z0-9_.:-]{1,80}", scope):
+    if re.fullmatch(r"(project|seek|skill|automation):[A-Za-z0-9_.:-]{1,80}", scope):
         return scope
     return "global"
 
@@ -498,7 +512,7 @@ def apply_explicit_memory_command(query: str, *, scope: str = "global", scopes: 
         return ""
 
     forget_match = re.search(
-        r"(?:忘记|删除记忆|不要再记得|不再记住|取消记住|forget|delete memory)[:：]?\s*(.+)",
+        r"(:忘记|删除记忆|不要再记得|不再记住|取消记住|forget|delete memory)[:：]\s*(.+)",
         text,
         flags=re.IGNORECASE | re.DOTALL,
     )
@@ -508,7 +522,7 @@ def apply_explicit_memory_command(query: str, *, scope: str = "global", scopes: 
         return f"已根据用户要求删除 {deleted} 条相关长期记忆。"
 
     remember_match = re.search(
-        r"(?:请)?(?:帮我)?(?:记住|以后记得|remember)[:：]?\s*(.+)",
+        r"(:请)(:帮我)(:记住|以后记得|remember)[:：]\s*(.+)",
         text,
         flags=re.IGNORECASE | re.DOTALL,
     )

@@ -32,9 +32,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 GARBLED_PATTERNS = (
     re.compile(r"\?{3,}"),  # three or more question marks (encoding fallback)
     re.compile("\u951f\u65a4\u62f7"),  # classic GBK/UTF-8 mojibake
-    re.compile("\u9225"),  # mojibake fragment often seen for smart quotes
-    re.compile("\u93cb"),  # mojibake fragment often seen in corrupted Chinese text
-    re.compile("\u6769"),  # mojibake fragment often seen in corrupted Chinese text
     re.compile(r"\ufffd"),  # Unicode replacement character
 )
 GARBLED_EXACT_PATHS = (
@@ -316,6 +313,131 @@ def check_release_exclusions(root: Path) -> CheckResult:
     if missing:
         return CheckResult("release_exclusions", STATUS_FAIL, f"release.py no longer excludes: {', '.join(missing)}", {"missing": missing})
     return CheckResult("release_exclusions", STATUS_PASS, "release.py excludes runtime caches, secrets and logs", {"checked": list(required)})
+
+
+def check_ga_evidence(root: Path, version: str) -> CheckResult:
+    path = root / "docs" / "evidence" / f"ga-v{version}.json"
+    if not path.is_file():
+        return CheckResult("ga_evidence", STATUS_FAIL, "GA evidence missing; run scripts/smoke_ga.py --offline", {"path": str(path)})
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("ga_evidence", STATUS_FAIL, f"cannot parse GA evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("ga", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult("ga_evidence", STATUS_FAIL, f"GA evidence version is {reported!r}, expected {version!r}", {"version": reported, "expected": version})
+    if data.get("status") != "PASS":
+        return CheckResult("ga_evidence", STATUS_FAIL, f"GA evidence status is {data.get('status')!r}, expected PASS", {"status": data.get("status")})
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = (
+        "workspaceHome",
+        "project",
+        "memory",
+        "skill",
+        "media",
+        "browserSnapshot",
+        "savedItem",
+        "artifact",
+        "automation",
+        "export",
+        "provenance",
+        "exportRedaction",
+    )
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult("ga_evidence", STATUS_FAIL, f"GA evidence missing PASS checks: {', '.join(missing_or_failed)}", {"missingOrFailed": missing_or_failed})
+    return CheckResult("ga_evidence", STATUS_PASS, "GA evidence recorded", {"path": str(path), "checks": list(required)})
+
+
+def check_ga_demo_assets(root: Path) -> CheckResult:
+    required = (
+        "docs/DEMO_3_0.md",
+        "docs/assets/3.0-workspace-overview.png",
+        "docs/assets/3.0-skill-run.png",
+        "docs/assets/3.0-automation-run.png",
+        "docs/assets/3.0-project-export.png",
+    )
+    missing = [rel for rel in required if not (root / rel).is_file()]
+    empty = [rel for rel in required if (root / rel).is_file() and (root / rel).stat().st_size == 0]
+    if missing or empty:
+        return CheckResult("ga_demo_assets", STATUS_FAIL, "GA demo doc/assets incomplete", {"missing": missing, "empty": empty})
+    return CheckResult("ga_demo_assets", STATUS_PASS, "GA demo doc and screenshots present", {"checked": list(required)})
+
+
+def check_ga_docs_roster(root: Path) -> CheckResult:
+    required = (
+        "docs/GETTING_STARTED.md",
+        "docs/WORKSPACE.md",
+        "docs/MEMORY.md",
+        "docs/SKILLS.md",
+        "docs/MEDIA.md",
+        "docs/BROWSER_CONTROL.md",
+        "docs/AUTOMATION.md",
+        "docs/EXPORTS.md",
+        "docs/SECURITY.md",
+        "docs/DEPLOYMENT.md",
+        "docs/DEMO_3_0.md",
+        "docs/EVIDENCE_INDEX.md",
+    )
+    missing = [rel for rel in required if not (root / rel).is_file()]
+    if missing:
+        return CheckResult("ga_docs_roster", STATUS_FAIL, f"GA docs roster missing: {', '.join(missing)}", {"missing": missing})
+    return CheckResult("ga_docs_roster", STATUS_PASS, "GA docs roster present", {"checked": list(required)})
+
+
+def check_ga_evidence_index(root: Path, version: str) -> CheckResult:
+    text = _read(root / "docs" / "EVIDENCE_INDEX.md")
+    needle = f"ga-v{version}.json"
+    if needle in text:
+        return CheckResult("ga_evidence_index", STATUS_PASS, f"EVIDENCE_INDEX lists {needle}", {"needle": needle})
+    return CheckResult("ga_evidence_index", STATUS_FAIL, f"EVIDENCE_INDEX missing {needle}", {"needle": needle})
+
+
+def check_ga_release_manifest(root: Path, version: str) -> CheckResult:
+    text = _read(root / "deepseek_infra" / "infra" / "diagnostics" / "release_manifest.py")
+    needles = ("gaEvidence", f"docs/evidence/ga-v{version}.json")
+    missing = [needle for needle in needles if needle not in text]
+    if missing:
+        return CheckResult("ga_release_manifest", STATUS_FAIL, "release manifest missing GA evidence fields", {"missing": missing})
+    return CheckResult("ga_release_manifest", STATUS_PASS, "release manifest includes gaEvidence", {"checked": list(needles)})
+
+
+def check_ga_release_exclusions(root: Path) -> CheckResult:
+    text = _read(root / "scripts" / "release.py")
+    required = (
+        ".file-cache",
+        ".projects",
+        ".local-rag",
+        ".traces",
+        ".semantic-cache",
+        ".request-queue",
+        ".generated",
+        ".tool-audit",
+        ".scheduler",
+        ".a2a",
+        ".budget",
+        ".memory",
+        ".reminders",
+        ".agent-runs",
+        ".search-cache",
+        ".auth-token",
+        ".media",
+        ".browser-audit",
+        ".browser-downloads",
+        ".browser-profiles",
+        ".automation",
+        ".skills",
+        ".env",
+        "server*.log",
+    )
+    missing = [token for token in required if token not in text]
+    if missing:
+        return CheckResult("ga_release_exclusions", STATUS_FAIL, f"release.py missing GA runtime exclusions: {', '.join(missing)}", {"missing": missing})
+    return CheckResult("ga_release_exclusions", STATUS_PASS, "release.py excludes all GA runtime data dirs", {"checked": list(required)})
 
 
 def check_headless_mcp_bridge_evidence(root: Path, version: str) -> CheckResult:
@@ -1706,8 +1828,8 @@ def _check_evidence_metadata(name: str, data: dict[str, Any], path: Path) -> Che
     return None
 
 
-def run_preflight(root: Path, version: str) -> list[CheckResult]:
-    return [
+def run_preflight(root: Path, version: str, *, ga: bool = False) -> list[CheckResult]:
+    results = [
         check_readme_badge(root, version),
         check_changelog_entry(root, version),
         check_dockerfile_tag(root, version),
@@ -1745,6 +1867,18 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_skill_catalog_evidence(root, version),
         check_gui_interop_evidence(root),
     ]
+    if ga:
+        results.extend(
+            [
+                check_ga_evidence(root, version),
+                check_ga_demo_assets(root),
+                check_ga_docs_roster(root),
+                check_ga_evidence_index(root, version),
+                check_ga_release_manifest(root, version),
+                check_ga_release_exclusions(root),
+            ]
+        )
+    return results
 
 
 def render_text(results: list[CheckResult]) -> str:
@@ -1770,6 +1904,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Release preflight version-sync checks")
     parser.add_argument("--version", default="", help="Expected version. Defaults to settings.app_version.")
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help="Project root to check.")
+    parser.add_argument("--ga", action="store_true", help="Run GA release gates for v3.0 Personal AI Runtime.")
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable JSON summary.")
     return parser.parse_args(argv)
 
@@ -1781,7 +1916,7 @@ def main(argv: list[str] | None = None) -> int:
         from deepseek_infra.core.config import settings
 
         version = settings.app_version
-    results = run_preflight(args.root.resolve(), version)
+    results = run_preflight(args.root.resolve(), version, ga=bool(args.ga))
     if args.json:
         print(dump_json(results, version))
     else:

@@ -144,6 +144,70 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     return root
 
 
+def _write_ga_support(root: Path, version: str) -> None:
+    docs = root / "docs"
+    for name in (
+        "GETTING_STARTED.md",
+        "WORKSPACE.md",
+        "MEMORY.md",
+        "SKILLS.md",
+        "MEDIA.md",
+        "BROWSER_CONTROL.md",
+        "AUTOMATION.md",
+        "EXPORTS.md",
+        "SECURITY.md",
+        "DEPLOYMENT.md",
+        "DEMO_3_0.md",
+        "EVIDENCE_INDEX.md",
+    ):
+        (docs / name).write_text(f"# {name}\n\nSee docs/evidence/ga-v{version}.json\n", encoding="utf-8")
+    assets = docs / "assets"
+    assets.mkdir(exist_ok=True)
+    png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    for name in ("3.0-workspace-overview.png", "3.0-skill-run.png", "3.0-automation-run.png", "3.0-project-export.png"):
+        (assets / name).write_bytes(png)
+    _write_ga_evidence(root / "docs" / "evidence" / f"ga-v{version}.json", version)
+    manifest = root / "deepseek_infra" / "infra" / "diagnostics"
+    manifest.mkdir(parents=True)
+    (manifest / "release_manifest.py").write_text(f'GA = {{"gaEvidence": "docs/evidence/ga-v{version}.json"}}\n', encoding="utf-8")
+    (root / "scripts" / "release.py").write_text(
+        'EXCLUDED = [".file-cache", ".projects", ".local-rag", ".traces", ".semantic-cache", ".request-queue", ".generated", ".tool-audit", ".scheduler", ".a2a", ".budget", ".memory", ".reminders", ".agent-runs", ".search-cache", ".auth-token", ".media", ".browser-audit", ".browser-downloads", ".browser-profiles", ".automation", ".skills"]\n'
+        'SECRET = [".env"]\nLOGS = ["server*.log"]\n',
+        encoding="utf-8",
+    )
+
+
+def _write_ga_evidence(path: Path, version: str, *, status: str = "PASS", omit_check: str = "", omit_metadata: str = "") -> None:
+    checks = {
+        "workspaceHome": "PASS",
+        "project": "PASS",
+        "memory": "PASS",
+        "skill": "PASS",
+        "media": "PASS",
+        "browserSnapshot": "PASS",
+        "savedItem": "PASS",
+        "artifact": "PASS",
+        "automation": "PASS",
+        "export": "PASS",
+        "provenance": "PASS",
+        "exportRedaction": "PASS",
+    }
+    if omit_check:
+        checks.pop(omit_check, None)
+    payload: dict[str, Any] = {
+        "schemaVersion": "ga-smoke.v1",
+        "version": version,
+        "commit": "abc1234",
+        "generatedAt": "2026-07-05T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": status,
+        "checks": checks,
+    }
+    if omit_metadata:
+        payload.pop(omit_metadata, None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _write_headless_evidence(path: Path, version: str, *, status: str = "PASS", omit_step: str = "", omit_metadata: str = "") -> None:
     steps = [
         {"name": "bridge.start", "status": "pass"},
@@ -722,6 +786,50 @@ def test_preflight_all_pass(tmp_path: Path) -> None:
     results = preflight.run_preflight(root, "2.2.9")
     assert all(r.status == "pass" for r in results), [r.to_dict() for r in results if r.status != "pass"]
     assert preflight.main(["--root", str(root), "--version", "2.2.9", "--json"]) == 0
+
+
+def test_preflight_ga_checks_pass(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "3.0.0")
+    _write_ga_support(root, "3.0.0")
+
+    results = preflight.run_preflight(root, "3.0.0", ga=True)
+    ga_results = {r.name: r for r in results if r.name.startswith("ga_")}
+
+    assert set(ga_results) == {
+        "ga_evidence",
+        "ga_demo_assets",
+        "ga_docs_roster",
+        "ga_evidence_index",
+        "ga_release_manifest",
+        "ga_release_exclusions",
+    }
+    assert all(r.status == "pass" for r in ga_results.values()), [r.to_dict() for r in ga_results.values() if r.status != "pass"]
+    assert preflight.main(["--root", str(root), "--version", "3.0.0", "--ga", "--json"]) == 0
+
+
+def test_preflight_ga_fails_on_missing_evidence(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "3.0.0")
+    _write_ga_support(root, "3.0.0")
+    (root / "docs" / "evidence" / "ga-v3.0.0.json").unlink()
+
+    result = next(r for r in preflight.run_preflight(root, "3.0.0", ga=True) if r.name == "ga_evidence")
+
+    assert result.status == "fail"
+    assert "smoke_ga.py" in result.detail
+
+
+def test_preflight_ga_fails_on_missing_demo_asset(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "3.0.0")
+    _write_ga_support(root, "3.0.0")
+    (root / "docs" / "assets" / "3.0-project-export.png").unlink()
+
+    result = next(r for r in preflight.run_preflight(root, "3.0.0", ga=True) if r.name == "ga_demo_assets")
+
+    assert result.status == "fail"
+    assert any("3.0-project-export.png" in item for item in result.data["missing"])
 
 
 def test_preflight_fails_on_badge_mismatch(tmp_path: Path) -> None:

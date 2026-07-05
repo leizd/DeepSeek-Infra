@@ -217,6 +217,19 @@ def resolve_export(export_id: str, *, project_id: str = "") -> dict[str, Any]:
     raise AppError("Export not found", code=ErrorCode.NOT_FOUND, status=404)
 
 
+def list_exports(project_id: str = "") -> list[dict[str, Any]]:
+    if project_id:
+        safe_project_id = validate_project_id(project_id)
+        return sorted(_load_exports(safe_project_id), key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+    items: list[dict[str, Any]] = []
+    items.extend(_load_exports(""))
+    for project in legacy_projects.list_projects():
+        candidate_project_id = str(project.get("id") or "")
+        if candidate_project_id:
+            items.extend(_load_exports(candidate_project_id))
+    return sorted(items, key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+
+
 def export_path(export: dict[str, Any]) -> Path:
     raw_path = str(export.get("path") or "")
     path = Path(raw_path)
@@ -452,8 +465,9 @@ def _write_export(project_id: str, kind: str, export_format: str, filename: str,
         "filename": filename,
         "path": str(target),
         "size": target.stat().st_size,
+        "includes": _export_includes(safe_project_id, kind),
         "createdAt": timestamp_ms_to_iso(now_ms()),
-        "downloadUrl": f"/api/workspace/exports/{export_id}/download" + (f"?projectId={safe_project_id}" if safe_project_id else ""),
+        "downloadUrl": f"/api/workspace/exports/{export_id}/download" + (f"projectId={safe_project_id}" if safe_project_id else ""),
     }
     _record_export(safe_project_id, export)
     return {"ok": True, "export": export}
@@ -479,6 +493,30 @@ def _record_export(project_id: str, export: dict[str, Any]) -> None:
     exports = _load_exports(project_id)
     exports.append(export)
     write_json_atomic(_export_store_path(project_id), {"exports": exports[-100:]})
+
+
+def _export_includes(project_id: str, kind: str) -> dict[str, Any]:
+    includes: dict[str, Any] = {"projectId": project_id} if project_id else {}
+    if not project_id:
+        return includes
+    try:
+        bundle = project_bundle(project_id)
+    except Exception:
+        return includes
+    if kind == "project":
+        includes.update(
+            {
+                "conversationIds": [str(item.get("conversationId") or item.get("id") or "") for item in bundle.get("conversations", []) if isinstance(item, dict)],
+                "savedItemIds": [str(item.get("savedId") or "") for item in bundle.get("savedItems", []) if isinstance(item, dict)],
+                "artifactIds": [str(item.get("artifactId") or "") for item in bundle.get("artifacts", []) if isinstance(item, dict)],
+                "mediaIds": [str(item.get("mediaId") or "") for item in bundle.get("media", []) if isinstance(item, dict)],
+            }
+        )
+    elif kind == "saved_items":
+        includes["savedItemIds"] = [str(item.get("savedId") or "") for item in bundle.get("savedItems", []) if isinstance(item, dict)]
+    elif kind == "artifacts":
+        includes["artifactIds"] = [str(item.get("artifactId") or "") for item in bundle.get("artifacts", []) if isinstance(item, dict)]
+    return includes
 
 
 def evidence_metadata(version: str, *, status: str, checks: dict[str, str]) -> dict[str, Any]:

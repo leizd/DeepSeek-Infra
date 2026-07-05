@@ -10,6 +10,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.memory import search as memory_search
+from deepseek_infra.infra.memory import store as memory_store
 from deepseek_infra.web.http_utils import json_response, read_json_body, require_api_auth
 
 
@@ -76,6 +78,29 @@ def create_memory_router(deps: MemoryRouteDeps) -> APIRouter:
     async def api_memory_delete_by_id(request: Request, memory_id: str) -> JSONResponse:
         require_api_auth(request)
         return json_response({"ok": True, "deleted": deps.delete_memory_by_id(memory_id)})
+
+    @router.patch("/api/memory/{memory_id}")
+    async def api_memory_edit(request: Request, memory_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response({"ok": True, "memory": memory_store.edit_memory(memory_id, await read_json_body(request))})
+
+    @router.get("/api/memory/search")
+    async def api_memory_search(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        query = str(request.query_params.get("q") or request.query_params.get("query") or "")
+        limit = int(request.query_params.get("limit") or 10)
+        return json_response(
+            {
+                "ok": True,
+                "memories": memory_search.search_memories(
+                    query,
+                    project_id=str(request.query_params.get("projectId") or ""),
+                    skill_id=str(request.query_params.get("skillId") or ""),
+                    automation_id=str(request.query_params.get("automationId") or ""),
+                    limit=limit,
+                ),
+            }
+        )
 
     @router.post("/api/memory/conflicts")
     async def api_memory_conflicts(request: Request) -> JSONResponse:

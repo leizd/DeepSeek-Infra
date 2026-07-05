@@ -198,3 +198,7 @@ python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.9.1
 ```
 
 `scripts/preflight_release.py --version 2.6.8` 会把 `workspace_core_evidence` 作为硬检查。`scripts/smoke_release.py --offline` 默认会先跑 Workspace Core smoke 与 Skill System smoke，再跑 eval / security / agent / baseline compare。
+
+## 3.0 Workspace Home and Provenance
+
+`GET /api/workspace/home` lists Projects, Memory, Skills, Media, Browser snapshots, Automations, Artifacts, Saved Items, Exports and Settings with recent objects and status counts. `GET /api/workspace/projects/{project_id}/provenance` returns the project provenance graph linking conversations, messages, memory, media, saved items, artifacts, automations, runs and exports. Project export metadata now includes an `includes` map for downstream evidence checks.

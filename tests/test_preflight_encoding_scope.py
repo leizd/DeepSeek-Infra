@@ -40,28 +40,28 @@ def _assert_fails_on(root: Path, expected_path: str) -> None:
 
 def test_encoding_scope_includes_dockerfile(tmp_path: Path) -> None:
     root = _skeleton(tmp_path)
-    (root / "Dockerfile").write_text("# bad \u93cb\n", encoding="utf-8")
+    (root / "Dockerfile").write_text("# bad \ufffd\n", encoding="utf-8")
 
     _assert_fails_on(root, "Dockerfile")
 
 
 def test_encoding_scope_includes_github_workflows(tmp_path: Path) -> None:
     root = _skeleton(tmp_path)
-    (root / ".github" / "workflows" / "ci.yml").write_text("name: ci\n# bad \u9225\n", encoding="utf-8")
+    (root / ".github" / "workflows" / "ci.yml").write_text("name: ci\n# bad \ufffd\n", encoding="utf-8")
 
     _assert_fails_on(root, ".github/workflows/ci.yml")
 
 
 def test_encoding_scope_includes_scripts(tmp_path: Path) -> None:
     root = _skeleton(tmp_path)
-    (root / "scripts" / "ok.py").write_text("# bad \u6769\n", encoding="utf-8")
+    (root / "scripts" / "ok.py").write_text("# bad \ufffd\n", encoding="utf-8")
 
     _assert_fails_on(root, "scripts/ok.py")
 
 
 def test_encoding_scope_includes_deepseek_infra_py_files(tmp_path: Path) -> None:
     root = _skeleton(tmp_path)
-    (root / "deepseek_infra" / "core" / "config.py").write_text("# bad \u93cb\n", encoding="utf-8")
+    (root / "deepseek_infra" / "core" / "config.py").write_text("# bad \ufffd\n", encoding="utf-8")
 
     _assert_fails_on(root, "deepseek_infra/core/config.py")
 

@@ -1,6 +1,6 @@
 # DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-2.9.1-blue)
+![版本](https://img.shields.io/badge/version-3.0.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-80%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
@@ -9,7 +9,7 @@
 
 DeepSeek Infra 是一个**本地优先的 Agentic AI Infra 平台**，提供：
 
-DeepSeek Infra is a local-first agentic AI infrastructure platform.
+DeepSeek Infra is a local-first Personal AI Runtime: Projects, Memory, Skills, MCP tools, multimodal Media, Browser snapshots, Automations, Saved Items, Artifacts and Exports in one private workspace.
 
 - **OpenAI 兼容网关** — 把任意 OpenAI SDK 的 `base_url` 指向 `localhost:8000/v1` 即可接入
 - **持久化 Agent DAG 运行时** — Planner → Worker → Critic → Synthesizer，支持断线恢复
@@ -221,7 +221,7 @@ curl http://127.0.0.1:8000/v1/models -H "Authorization: Bearer <本地访问 tok
 
 与之配套的**质量评测**在 [evals/](evals/)（全部离线可跑）：`python evals/runners/run_offline_eval_suite.py --include-agent --strict` 会统一留下 [latest eval report](evals/reports/latest.md)，当前 baseline 为 RAG Recall@5 1.000 / Citation Accuracy 0.8333、26 个固定攻防用例的 **Tool Policy Pass Rate 1.000 / Prompt Injection Defense Pass 1.000**，以及对抗注入小语料的 `block_rate` / `false_positive_rate` / `bypass_rate` 硬门禁；`run_agent_eval.py --strict` 额外生成 [Agent Eval report](evals/reports/agent-latest.md)，低于 Tool Call Accuracy 0.90 / Agent Success Rate 0.85 / Prompt Regression Pass Rate 0.90 会阻断 CI。`run_security_corpus.py --strict` 生成 [Security Corpus report](evals/reports/security-latest.md)，覆盖 prompt injection、tool policy attack、benign false-positive、SSRF、路径越界与密钥外泄语料。详见 [evals/README.md](evals/README.md)、[docs/EVAL_REPORTS.md](docs/EVAL_REPORTS.md) 与 [docs/AGENT_EVAL.md](docs/AGENT_EVAL.md)。本地安全能力复现最小命令集见 [docs/SECURITY_SMOKE.md](docs/SECURITY_SMOKE.md)。
 
-**Release preflight (v2.9.1)**: Run `python scripts/doctor.py --offline`, `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v2.9.1.json`, `python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v2.9.1.json`, `python scripts/smoke_media.py --offline --out docs/evidence/media-v2.9.1.json`, `python scripts/smoke_browser.py --offline --out docs/evidence/browser-v2.9.1.json --version 2.9.1`, `python scripts/smoke_automation.py --offline --out docs/evidence/automation-v2.9.1.json --version 2.9.1`, `python scripts/smoke_skills.py --offline --out docs/evidence/skills-v2.9.1.json`, `python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v2.9.1.json`, `python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v2.9.1.json`, `python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v2.9.1.json`, `python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v2.9.1.json --report-out evals/reports/skills-v2.9.1.json`, `python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v2.9.1.json`, `python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v2.9.1.json`, `python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v2.9.1.json`, `python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v2.9.1.json`, `python scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v2.9.1.json`, and `python evals/runners/run_media_eval.py --strict --out evals/reports/media-v2.9.1.json`, and `python evals/runners/run_browser_eval.py --strict --out evals/reports/browser-v2.9.1.json --version 2.9.1`, and `python evals/runners/run_automation_eval.py --strict --out evals/reports/automation-v2.9.1.json --version 2.9.1`; then run `python scripts/preflight_release.py --version 2.9.1` and `python scripts/smoke_release.py --offline`. Release manifest quality gates include `edgeRouter`, `workspaceCore`, `mediaLayer`, `browserControl`, `automationRuntime`, `contextTaint`, `skillSystem`, `skillWorkbench`, `skillBuilder`, `skillPacks`, `skillEvalDashboard`, `skillVersioning`, `skillAnalytics`, `skillSecurity`, and `skillCatalog`.
+**Release preflight (v3.0.0)**: Run `python scripts/doctor.py --offline`, `python scripts/smoke_ga.py --offline --out docs/evidence/ga-v3.0.0.json`, `python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v3.0.0.json`, `python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v3.0.0.json`, `python scripts/smoke_media.py --offline --out docs/evidence/media-v3.0.0.json`, `python scripts/smoke_browser.py --offline --out docs/evidence/browser-v3.0.0.json --version 3.0.0`, `python scripts/smoke_automation.py --offline --out docs/evidence/automation-v3.0.0.json --version 3.0.0`, `python scripts/smoke_skills.py --offline --out docs/evidence/skills-v3.0.0.json`, `python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v3.0.0.json`, `python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v3.0.0.json`, `python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v3.0.0.json`, `python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v3.0.0.json --report-out evals/reports/skills-v3.0.0.json`, `python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v3.0.0.json`, `python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v3.0.0.json`, `python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v3.0.0.json`, `python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v3.0.0.json`, `python scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v3.0.0.json`, and `python evals/runners/run_media_eval.py --strict --out evals/reports/media-v3.0.0.json`, and `python evals/runners/run_browser_eval.py --strict --out evals/reports/browser-v3.0.0.json --version 3.0.0`, and `python evals/runners/run_automation_eval.py --strict --out evals/reports/automation-v3.0.0.json --version 3.0.0`; then run `python scripts/preflight_release.py --version 3.0.0 --ga` and `python scripts/smoke_release.py --offline`. Release manifest quality gates include `edgeRouter`, `workspaceCore`, `mediaLayer`, `browserControl`, `automationRuntime`, `contextTaint`, `skillSystem`, `skillWorkbench`, `skillBuilder`, `skillPacks`, `skillEvalDashboard`, `skillVersioning`, `skillAnalytics`, `skillSecurity`, and `skillCatalog`.
 
 ## 快速开始
 
@@ -388,6 +388,12 @@ python scripts/release.py --clean-workspace
 ## Roadmap
 
 已完成的能力以 [实现状态矩阵](docs/IMPLEMENTATION_STATUS.md) 为准（含各模块成熟度与明确缺口）；下面是接下来的计划，完成一项勾一项：
+
+### v3.0.0: Personal AI Runtime GA
+- [x] First-class Memory with scoped schema, search/edit/delete, skill read policy and sensitive-memory blocking.
+- [x] Unified Workspace home across Projects, Memory, Skills, Media, Browser, Automations, Artifacts, Saved Items, Exports and Settings.
+- [x] Workspace provenance graph linking project objects and export evidence.
+- [x] GA smoke, demo screenshots, evidence file and `--ga` release preflight gate.
 
 ### v2.2.0: Visualization & Verification
 - [x] Trace / Agent DAG / RAG Citation / MCP Tool Call 截图进 `docs/assets/`
@@ -696,6 +702,15 @@ python scripts/release.py --clean-workspace
 - [docs/integrations/claude-desktop.md](docs/integrations/claude-desktop.md) / [docs/integrations/cursor.md](docs/integrations/cursor.md) — MCP 客户端配置片段与排障步骤。
 - [evals/README.md](evals/README.md) — 评测 harness；[docs/EVAL_REPORTS.md](docs/EVAL_REPORTS.md) — 离线评测报告与回归基线；[docs/AGENT_EVAL.md](docs/AGENT_EVAL.md) — Agent 录制回放规范；[benchmarks/README.md](benchmarks/README.md) — 基准说明。
 - [docs/RUNTIME_DOCTOR.md](docs/RUNTIME_DOCTOR.md) — 运行时体检（`scripts/doctor.py`）；[docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md) — 发版前体检与发布产物证明（`scripts/preflight_release.py` / `scripts/smoke_release.py` / release manifest）；[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) — 发版 checklist。
+
+- [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) - 3.0 quick start.
+- [docs/MEMORY.md](docs/MEMORY.md) - scoped Memory schema, policy and APIs.
+- [docs/SKILLS.md](docs/SKILLS.md) - Skill System and workbench.
+- [docs/MEDIA.md](docs/MEDIA.md) - multimodal Media import and evidence.
+- [docs/BROWSER_CONTROL.md](docs/BROWSER_CONTROL.md) - Browser Control runtime.
+- [docs/AUTOMATION.md](docs/AUTOMATION.md) - Automation Runtime triggers, actions and run evidence.
+- [docs/EXPORTS.md](docs/EXPORTS.md) - project/export package formats.
+- [docs/DEMO_3_0.md](docs/DEMO_3_0.md) - Personal AI Runtime GA demo script and screenshots.
 
 ## 注意事项
 

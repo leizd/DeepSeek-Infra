@@ -1,5 +1,16 @@
 # 更新日志
 
+## [3.0.0] - Personal AI Runtime GA
+
+### Added
+- **First-class Memory**: add structured memory schema, scoped storage, search/edit/delete APIs, sensitive-memory blocking and skill-readable policy helpers.
+- **Workspace Home and Provenance**: add unified workspace home status plus project provenance graph APIs that link Projects, Memory, Skills, Media, Browser snapshots, Automations, Artifacts, Saved Items and Exports.
+- **GA evidence**: add `scripts/smoke_ga.py --offline`, `docs/evidence/ga-v3.0.0.json`, `docs/DEMO_3_0.md` and v3.0.0 demo screenshots.
+
+### Changed
+- **Release readiness**: bump app/runtime/docs evidence paths to 3.0.0 and add `python scripts/preflight_release.py --version 3.0.0 --ga`.
+- **Automation summaries**: successful automation runs now write project-scoped memory summaries for workspace continuity.
+
 ## [2.9.1] - Automation Runtime Hardening & Release Hygiene
 
 ### Fixed

@@ -133,7 +133,8 @@ def _execute_allowed(
             if span.trace_id:
                 span.finish(status="ok" if status == "success" else "skipped", output_data={"outputs": outputs, "skippedReason": skipped_reason})
             finish_trace(trace_id, status="completed" if status == "success" else "skipped", metadata={"automationId": automation.get("automationId"), "runId": run_id})
-            return history.record_run(
+            return _record_run_with_memory_summary(
+                automation,
                 {
                     "runId": run_id,
                     "automationId": automation.get("automationId"),
@@ -159,7 +160,7 @@ def _execute_allowed(
                             attempt_errors=attempt_errors,
                         ),
                     },
-                }
+                },
             )
         except Exception as exc:
             last_error = str(exc)
@@ -178,7 +179,8 @@ def _execute_allowed(
     if span.trace_id:
         span.finish(status="error", output_data={"outputs": outputs}, error=last_error)
     finish_trace(trace_id, status="error", metadata={"automationId": automation.get("automationId"), "runId": run_id}, error=last_error)
-    return history.record_run(
+    return _record_run_with_memory_summary(
+        automation,
         {
             "runId": run_id,
             "automationId": automation.get("automationId"),
@@ -204,7 +206,7 @@ def _execute_allowed(
                     attempt_errors=attempt_errors,
                 ),
             },
-        }
+        },
     )
 
 
@@ -225,7 +227,8 @@ def _record_terminal_run(
         metadata={"automationId": automation.get("automationId"), "projectId": automation.get("projectId"), "trigger": trigger},
     )
     finish_trace(trace_id, status=status, metadata={"automationId": automation.get("automationId"), "terminal": True})
-    return history.record_run(
+    return _record_run_with_memory_summary(
+        automation,
         {
             "runId": schema.new_run_id(),
             "automationId": automation.get("automationId"),
@@ -243,7 +246,7 @@ def _record_terminal_run(
             "skippedReason": skipped_reason,
             "logs": logs or [],
             "evidence": evidence or {},
-        }
+        },
     )
 
 
@@ -255,6 +258,48 @@ def _merge_outputs(left: dict[str, list[str]], right: dict[str, Any]) -> dict[st
             if text and text not in merged[key]:
                 merged[key].append(text)
     return merged
+
+
+def _record_run_with_memory_summary(automation: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    run = history.record_run(record)
+    _write_memory_summary(automation, run)
+    return run
+
+
+def _write_memory_summary(automation: dict[str, Any], run: dict[str, Any]) -> None:
+    if run.get("status") != "success":
+        return
+    project_id = str(run.get("projectId") or automation.get("projectId") or "")
+    automation_id = str(run.get("automationId") or automation.get("automationId") or "")
+    if not project_id and not automation_id:
+        return
+    try:
+        from deepseek_infra.infra.memory import store as memory_store
+
+        raw_outputs = run.get("outputs")
+        outputs: dict[str, Any] = raw_outputs if isinstance(raw_outputs, dict) else {}
+        counts = []
+        for key, label in (
+            ("artifactIds", "artifacts"),
+            ("savedItemIds", "saved items"),
+            ("mediaIds", "media items"),
+            ("exportIds", "exports"),
+        ):
+            output_ids = outputs.get(key)
+            if isinstance(output_ids, list) and output_ids:
+                counts.append(f"{len(output_ids)} {label}")
+        output_summary = ", ".join(counts) if counts else "no persisted outputs"
+        memory_store.add_memory(
+            f"Automation {automation.get('name') or automation_id} completed successfully with {output_summary}.",
+            scope="project" if project_id else "automation",
+            memory_type="summary",
+            project_id=project_id,
+            automation_id=automation_id,
+            source={"kind": "automation", "refId": str(run.get("runId") or ""), "automationId": automation_id, "runId": str(run.get("runId") or "")},
+            confidence=0.8,
+        )
+    except Exception:
+        return
 
 
 def _runtime_evidence(

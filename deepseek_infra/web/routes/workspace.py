@@ -24,7 +24,9 @@ from deepseek_infra.infra.data.projects import (
 from deepseek_infra.infra.skills import analytics as skill_analytics
 from deepseek_infra.infra.workspace import artifacts as workspace_artifacts
 from deepseek_infra.infra.workspace import exports as workspace_exports
+from deepseek_infra.infra.workspace import home as workspace_home
 from deepseek_infra.infra.workspace import projects as workspace_projects
+from deepseek_infra.infra.workspace import provenance as workspace_provenance
 from deepseek_infra.infra.workspace import saved_items as workspace_saved_items
 from deepseek_infra.web.http_utils import content_disposition_header, json_response, read_json_body, require_api_auth
 
@@ -77,6 +79,12 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
         return json_response({"ok": True, "documents": documents})
 
     # ── Workspace projects ─────────────────────────────────────────────────
+
+    @router.get("/api/workspace/home")
+    async def api_workspace_home(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        limit = int(request.query_params.get("limit") or 8)
+        return json_response(workspace_home.workspace_home(limit=limit))
 
     @router.get("/api/workspace/projects")
     async def api_workspace_projects_list(request: Request) -> JSONResponse:
@@ -141,6 +149,11 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
         require_api_auth(request)
         days = int(request.query_params.get("days") or 7)
         return json_response({"ok": True, "summary": skill_analytics.analytics_summary(scope="project", project_id=project_id, days=days)})
+
+    @router.get("/api/workspace/projects/{project_id}/provenance")
+    async def api_workspace_project_provenance(request: Request, project_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_provenance.project_provenance(project_id))
 
     @router.patch("/api/workspace/projects/{project_id}")
     async def api_workspace_project_update(request: Request, project_id: str) -> JSONResponse:
