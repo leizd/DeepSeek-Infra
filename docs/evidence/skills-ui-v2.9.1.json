@@ -1,0 +1,47 @@
+{
+  "version": "2.9.1",
+  "commit": "b5d8a4af4050",
+  "generatedAt": "2026-07-05T02:21:14+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "skillWorkbenchEntrypoint": "PASS",
+    "skillRunSchemaForm": "PASS",
+    "skillApiActions": "PASS",
+    "projectSkillBindingUi": "PASS",
+    "skillRunResultLinks": "PASS",
+    "skillPanelLifecycle": "PASS",
+    "skillPanelStyles": "PASS",
+    "skillAppShellCache": "PASS",
+    "skillJsSyntax": "PASS",
+    "ciSyntaxGate": "PASS",
+    "skillUiAssets": "PASS"
+  },
+  "details": {
+    "skillJsSyntax": {
+      "returnCode": 0,
+      "stderr": ""
+    },
+    "skillUiAssets": {
+      "assets": [
+        "docs/assets/skill-workbench.png",
+        "docs/assets/skill-run-result.png"
+      ],
+      "missingOrEmpty": []
+    },
+    "uiEntrypoints": [
+      "#skillButton",
+      "#skillPanel",
+      "#skillRunForm",
+      "#projectSkills"
+    ],
+    "assets": [
+      "docs/assets/skill-workbench.png",
+      "docs/assets/skill-run-result.png"
+    ]
+  }
+}

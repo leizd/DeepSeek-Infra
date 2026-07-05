@@ -39,10 +39,16 @@ def run_due(*, now: datetime | None = None, event: dict[str, Any] | None = None,
     }
 
 
-def simulate_trigger(automation_id: str, *, trigger: dict[str, Any] | None = None, event: dict[str, Any] | None = None) -> dict[str, Any]:
+def simulate_trigger(
+    automation_id: str,
+    *,
+    trigger: dict[str, Any] | None = None,
+    event: dict[str, Any] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     automation = registry.get_automation(automation_id)
     trigger_data = trigger if isinstance(trigger, dict) else automation.get("trigger")
-    matched, reason = triggers.trigger_matches(automation, trigger=trigger_data if isinstance(trigger_data, dict) else {}, event=event)
+    matched, reason = triggers.trigger_matches(automation, trigger=trigger_data if isinstance(trigger_data, dict) else {}, event=event, now=now)
     condition, condition_reason = triggers.condition_matches(automation, event=event)
     return {
         "ok": True,

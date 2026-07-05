@@ -61,7 +61,8 @@ def configure_automation_runtime(root: Path) -> None:
 
 
 def run_automation_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
-    from deepseek_infra.infra.automation import evidence, history, registry, runner, scheduler
+    from deepseek_infra.infra.automation import actions as automation_actions
+    from deepseek_infra.infra.automation import evidence, history, registry, runner, scheduler, triggers
     from deepseek_infra.infra.workspace import artifacts, projects, saved_items
 
     checks = {
@@ -78,6 +79,15 @@ def run_automation_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
         "artifactOutput": "FAIL",
         "templates": "FAIL",
         "evidenceGenerated": "FAIL",
+        "browserCheckChanged": "FAIL",
+        "browserCheckUnchanged": "FAIL",
+        "fixturePathBlocked": "FAIL",
+        "cronStepRange": "FAIL",
+        "maxRunsPerDay": "FAIL",
+        "retryBackoff": "FAIL",
+        "timeoutEvidence": "FAIL",
+        "rerun": "FAIL",
+        "templateCreate": "FAIL",
     }
     details: dict[str, Any] = {"runtimeRoot": str(root), "fixtures": str(FIXTURES)}
     project = projects.create_project("Automation Smoke", description="Automation Runtime")
@@ -147,7 +157,120 @@ def run_automation_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
         }
     )
     browser_run = runner.run_once(browser_auto["automationId"])
-    checks["browserReadOnlyAction"] = "PASS" if browser_run["status"] == "success" and browser_run["outputs"]["mediaIds"] else "FAIL"
+    checks["browserReadOnlyAction"] = (
+        "PASS" if browser_run["status"] == "success" and browser_run["outputs"]["mediaIds"] and "browserSessionClosed" in browser_run["logs"] else "FAIL"
+    )
+
+    browser_check = registry.create_automation(
+        {
+            "projectId": project_id,
+            "name": "Browser check fixture",
+            "trigger": {"type": "manual"},
+            "action": {"type": "browser_check", "fixturePath": str(FIXTURES / "webpage_v1.html")},
+            "policy": {"maxRunsPerDay": 10, "allowBrowser": True, "browserMode": "read_only", "allowNetwork": False},
+        }
+    )
+    check_first = runner.run_once(browser_check["automationId"])
+    check_second = runner.run_once(browser_check["automationId"])
+    registry.update_automation(browser_check["automationId"], {"action": {"type": "browser_check", "fixturePath": str(FIXTURES / "webpage_v2.html")}})
+    check_third = runner.run_once(browser_check["automationId"])
+    checks["browserCheckChanged"] = "PASS" if check_first["status"] == "success" and check_third["status"] == "success" else "FAIL"
+    checks["browserCheckUnchanged"] = "PASS" if check_second["status"] == "skipped" and check_second["skippedReason"] == "url_unchanged" else "FAIL"
+
+    blocked_fixture = registry.create_automation(
+        {
+            "projectId": project_id,
+            "name": "Blocked fixture path",
+            "trigger": {"type": "manual"},
+            "action": {"type": "browser_check", "fixturePath": str(REPO_ROOT / "README.md")},
+            "policy": {"maxRunsPerDay": 10, "allowBrowser": True, "browserMode": "read_only", "allowNetwork": False},
+        }
+    )
+    blocked_fixture_run = runner.run_once(blocked_fixture["automationId"])
+    checks["fixturePathBlocked"] = "PASS" if blocked_fixture_run["status"] == "failed" and "fixturePath is outside allowed" in blocked_fixture_run["error"] else "FAIL"
+
+    monday = datetime(2026, 7, 6, 9, 10, tzinfo=timezone.utc)
+    checks["cronStepRange"] = "PASS" if triggers.cron_matches("*/5 9-17 * * 1-5", monday) and not triggers.cron_matches("*/5 9-17 * * 1-5", monday.replace(minute=11)) else "FAIL"
+
+    limited = registry.create_automation(
+        {
+            "projectId": project_id,
+            "name": "Daily limited",
+            "trigger": {"type": "manual"},
+            "action": {"type": "save_item", "title": "Limited", "content": "limited"},
+            "policy": {"maxRunsPerDay": 1, "allowBrowser": False, "allowNetwork": False},
+        }
+    )
+    limit_now = datetime(2026, 7, 7, 8, 0, tzinfo=timezone.utc)
+    limit_first = runner.run_once(limited["automationId"], now=limit_now)
+    limit_second = runner.run_once(limited["automationId"], now=limit_now)
+    checks["maxRunsPerDay"] = "PASS" if limit_first["status"] == "success" and limit_second["status"] == "skipped" and "max_runs_per_day_exceeded" in limit_second["skippedReason"] else "FAIL"
+
+    retry_auto = registry.create_automation(
+        {
+            "projectId": project_id,
+            "name": "Retry action",
+            "trigger": {"type": "manual"},
+            "action": {"type": "save_item", "title": "Retry", "content": "retry"},
+            "policy": {"maxRunsPerDay": 10, "allowBrowser": False, "allowNetwork": False, "retry": {"maxAttempts": 2, "backoffSeconds": 2}},
+        }
+    )
+    original_run_action = automation_actions.run_action
+    original_sleep = runner.time.sleep
+    retry_calls = 0
+    slept: list[int] = []
+
+    def flaky_action(automation: dict[str, Any], *, run_id: str, trigger: dict[str, Any], event: dict[str, Any] | None = None) -> dict[str, Any]:
+        nonlocal retry_calls
+        retry_calls += 1
+        if retry_calls == 1:
+            raise RuntimeError("transient failure")
+        return original_run_action(automation, run_id=run_id, trigger=trigger, event=event)
+
+    try:
+        automation_actions.run_action = flaky_action
+        runner.time.sleep = lambda seconds: slept.append(int(seconds))
+        retry_run = runner.run_once(retry_auto["automationId"])
+    finally:
+        automation_actions.run_action = original_run_action
+        runner.time.sleep = original_sleep
+    checks["retryBackoff"] = (
+        "PASS"
+        if retry_run["status"] == "success"
+        and retry_run["attempts"] == 2
+        and slept == [2]
+        and retry_run["evidence"]["runtime"]["attemptErrors"]
+        else "FAIL"
+    )
+    rerun_result = runner.rerun(retry_run["runId"])
+    checks["rerun"] = "PASS" if rerun_result["status"] == "success" and rerun_result["trigger"].get("rerunOf") == retry_run["runId"] else "FAIL"
+
+    timeout_auto = registry.create_automation(
+        {
+            "projectId": project_id,
+            "name": "Timeout action",
+            "trigger": {"type": "manual"},
+            "action": {"type": "save_item", "title": "Timeout", "content": "timeout"},
+            "policy": {"maxRunsPerDay": 10, "allowBrowser": False, "allowNetwork": False, "timeoutSeconds": 1, "retry": {"maxAttempts": 1}},
+        }
+    )
+    original_monotonic = runner.time.monotonic
+    monotonic_values = iter([0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 2.0])
+    try:
+        runner.time.monotonic = lambda: next(monotonic_values)
+        timeout_run = runner.run_once(timeout_auto["automationId"])
+    finally:
+        runner.time.monotonic = original_monotonic
+    checks["timeoutEvidence"] = (
+        "PASS"
+        if timeout_run["status"] == "failed"
+        and "exceeded timeout" in timeout_run["error"]
+        and timeout_run["evidence"]["runtime"]["timeoutCheckedAtMs"] > 0
+        else "FAIL"
+    )
+
+    template_auto = registry.create_from_template("daily_project_summary", project_id=project_id, overrides={"name": "Smoke template", "trigger": {"type": "manual"}})
+    checks["templateCreate"] = "PASS" if template_auto["name"] == "Smoke template" and template_auto["action"]["type"] == "project_summary" else "FAIL"
 
     export_auto = registry.create_automation(
         {
@@ -206,7 +329,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    with tempfile.TemporaryDirectory(prefix="deepseek-automation-smoke-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="deepseek-automation-smoke-", ignore_cleanup_errors=True) as tmp:
         os.environ["DEEPSEEK_INFRA_ROOT"] = tmp
         runtime_root = Path(tmp)
         configure_automation_runtime(runtime_root)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline Automation Runtime eval for v2.9.0."""
+"""Offline Automation Runtime eval for v2.9.1."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def load_cases() -> list[dict[str, Any]]:
 
 
 def build_report(version: str) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="deepseek-automation-eval-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="deepseek-automation-eval-", ignore_cleanup_errors=True) as tmp:
         root = Path(tmp)
         configure_automation_runtime(root)
         checks, details = run_automation_smoke(root)

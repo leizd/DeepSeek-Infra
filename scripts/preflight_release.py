@@ -300,7 +300,7 @@ def check_quality_gate_evidence(root: Path, version: str) -> CheckResult:
 
 def check_release_exclusions(root: Path) -> CheckResult:
     text = _read(root / "scripts" / "release.py")
-    required = (
+    required: tuple[str, ...] = (
         ".traces",
         ".local-rag",
         ".media",
@@ -908,7 +908,7 @@ def check_browser_control_evidence(root: Path, version: str) -> CheckResult:
         )
     checks = data.get("checks")
     check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
-    required = (
+    required: tuple[str, ...] = (
         "browserSessionCreate",
         "readPage",
         "screenshot",
@@ -975,7 +975,7 @@ def check_automation_runtime_evidence(root: Path, version: str) -> CheckResult:
         )
     checks = data.get("checks")
     check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
-    required = (
+    required: tuple[str, ...] = (
         "automationCreate",
         "manualRun",
         "scheduleTrigger",
@@ -990,6 +990,19 @@ def check_automation_runtime_evidence(root: Path, version: str) -> CheckResult:
         "templates",
         "evidenceGenerated",
     )
+    if _version_tuple(version) >= (2, 9, 1):
+        required = (
+            *required,
+            "browserCheckChanged",
+            "browserCheckUnchanged",
+            "fixturePathBlocked",
+            "cronStepRange",
+            "maxRunsPerDay",
+            "retryBackoff",
+            "timeoutEvidence",
+            "rerun",
+            "templateCreate",
+        )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(

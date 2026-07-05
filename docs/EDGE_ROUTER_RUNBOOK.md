@@ -1,6 +1,6 @@
 # 边缘路由运维手册
 
-适用版本：v2.9.0。
+适用版本：v2.9.1。
 
 Edge-Cloud Model Router 在 v2.7.3 进入 **MVP stabilization**：CI 会离线覆盖 doctor、状态字段、route-preview、fake provider、路由策略、云不可用回退和 forced-local 409，不下载模型、不安装本地推理后端，也不跑真实 GGUF/MLC 推理。真实 Ollama / GGUF / MLC 仍作为可选实机 evidence 补充。
 
@@ -21,7 +21,7 @@ $env:EDGE_MODE="auto"
 
 ```powershell
 python scripts/doctor.py --offline
-python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v2.9.0.json
+python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v2.9.1.json
 ```
 
 启动服务后可直接解释一轮请求为什么会走端侧或云端：
@@ -142,7 +142,7 @@ curl http://127.0.0.1:8000/v1/chat/completions `
 
 v2.7.3 默认发版证据由 `scripts/smoke_edge_router.py` 生成：
 
-- `docs/evidence/edge-router-v2.9.0.json`：release preflight 的硬门禁证据，覆盖 doctor、dry-run route-preview、fake provider、路由策略、fallback 和 forced-local 409。
+- `docs/evidence/edge-router-v2.9.1.json`：release preflight 的硬门禁证据，覆盖 doctor、dry-run route-preview、fake provider、路由策略、fallback 和 forced-local 409。
 
 `examples/edge_router_smoke.py` 可直接生成两份可选实机证据：
 

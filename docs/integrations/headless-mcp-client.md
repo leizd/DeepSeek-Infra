@@ -1,6 +1,6 @@
 # Headless MCP Client 兼容性
 
-适用版本：DeepSeek Infra v2.9.0。
+适用版本：DeepSeek Infra v2.9.1。
 
 Headless MCP 验证是面向 CI、服务器以及未安装 Claude Desktop 或 Cursor 的机器的无 GUI 兼容性路径。它证明这些应用通常依赖的 MCP client 路径可以通过 stdio bridge 接入 DeepSeek Infra 的 Streamable HTTP endpoint。
 

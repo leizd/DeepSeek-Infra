@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from deepseek_infra.core.errors import AppError
@@ -30,15 +30,16 @@ def run_once(
             status="skipped",
             skipped_reason="automation_disabled",
             logs=["automation disabled"],
+            now=now,
         )
     if not force:
         matched, reason = triggers.trigger_matches(automation, trigger=trigger_data, event=event, now=now)
         if not matched:
-            return _record_terminal_run(automation, trigger=trigger_data, status="skipped", skipped_reason=reason, logs=[reason])
+            return _record_terminal_run(automation, trigger=trigger_data, status="skipped", skipped_reason=reason, logs=[reason], now=now)
         condition_ok, condition_reason = triggers.condition_matches(automation, event=event)
         if not condition_ok:
-            return _record_terminal_run(automation, trigger=trigger_data, status="skipped", skipped_reason=condition_reason, logs=[condition_reason])
-    decision = policy.evaluate(automation, trigger=trigger_data, confirmed=confirmed)
+            return _record_terminal_run(automation, trigger=trigger_data, status="skipped", skipped_reason=condition_reason, logs=[condition_reason], now=now)
+    decision = policy.evaluate(automation, trigger=trigger_data, now=now, confirmed=confirmed)
     if decision.needs_confirmation:
         return _record_terminal_run(
             automation,
@@ -47,6 +48,7 @@ def run_once(
             skipped_reason="policy_requires_confirmation",
             logs=decision.to_dict()["reasons"],
             evidence={"policy": decision.to_dict()},
+            now=now,
         )
     if not decision.allowed:
         return _record_terminal_run(
@@ -56,8 +58,9 @@ def run_once(
             skipped_reason="policy_denied:" + ",".join(decision.reasons),
             logs=decision.to_dict()["reasons"],
             evidence={"policy": decision.to_dict()},
+            now=now,
         )
-    return _execute_allowed(automation, trigger=trigger_data, event=event, decision=decision)
+    return _execute_allowed(automation, trigger=trigger_data, event=event, decision=decision, now=now)
 
 
 def rerun(run_id: str, *, confirmed: bool = False) -> dict[str, Any]:
@@ -71,9 +74,10 @@ def _execute_allowed(
     trigger: dict[str, Any],
     event: dict[str, Any] | None,
     decision: policy.AutomationPolicyDecision,
+    now: datetime | None,
 ) -> dict[str, Any]:
     run_id = schema.new_run_id()
-    started_ms = now_ms()
+    started_ms = _timestamp_ms(now)
     trace_id = start_trace(
         kind="automation",
         title=str(automation.get("name") or automation.get("automationId") or "Automation"),
@@ -94,6 +98,7 @@ def _execute_allowed(
     raw_retry = policy_data.get("retry")
     retry: dict[str, Any] = raw_retry if isinstance(raw_retry, dict) else {}
     max_attempts = max(1, int(retry.get("maxAttempts") or 1))
+    backoff_seconds = max(0, int(retry.get("backoffSeconds") or 0))
     timeout_seconds = max(1, int(policy_data.get("timeoutSeconds") or 1_800))
     attempts = 0
     logs: list[str] = []
@@ -102,8 +107,16 @@ def _execute_allowed(
     raw_result: dict[str, Any] = {}
     skipped_reason = ""
     started_monotonic = time.monotonic()
+    timeout_checked_at_ms = started_ms
+    attempt_errors: list[dict[str, Any]] = []
     for attempt in range(1, max_attempts + 1):
         attempts = attempt
+        timeout_checked_at_ms = _timestamp_ms(now, elapsed_monotonic_ms=int((time.monotonic() - started_monotonic) * 1000))
+        if time.monotonic() - started_monotonic > timeout_seconds:
+            last_error = "Automation run exceeded timeout before attempt"
+            logs.append(last_error)
+            attempt_errors.append({"attempt": attempt, "error": last_error, "timeoutCheckedAtMs": timeout_checked_at_ms})
+            break
         try:
             action_result = actions.run_action(automation, run_id=run_id, trigger=trigger, event=event)
             raw_outputs = action_result.get("outputs")
@@ -112,10 +125,11 @@ def _execute_allowed(
             raw_action_result = action_result.get("raw")
             raw_result = raw_action_result if isinstance(raw_action_result, dict) else {}
             skipped_reason = str(action_result.get("skippedReason") or "")
+            timeout_checked_at_ms = _timestamp_ms(now, elapsed_monotonic_ms=int((time.monotonic() - started_monotonic) * 1000))
             if time.monotonic() - started_monotonic > timeout_seconds:
                 raise AppError("Automation run exceeded timeout")
             status = "skipped" if skipped_reason else "success"
-            finished_ms = now_ms()
+            finished_ms = _timestamp_ms(now, elapsed_monotonic_ms=int((time.monotonic() - started_monotonic) * 1000))
             if span.trace_id:
                 span.finish(status="ok" if status == "success" else "skipped", output_data={"outputs": outputs, "skippedReason": skipped_reason})
             finish_trace(trace_id, status="completed" if status == "success" else "skipped", metadata={"automationId": automation.get("automationId"), "runId": run_id})
@@ -134,15 +148,33 @@ def _execute_allowed(
                     "attempts": attempts,
                     "skippedReason": skipped_reason,
                     "logs": logs,
-                    "evidence": {"policy": decision.to_dict(), "action": raw_result},
+                    "evidence": {
+                        "policy": decision.to_dict(),
+                        "action": raw_result,
+                        "runtime": _runtime_evidence(
+                            max_attempts=max_attempts,
+                            backoff_seconds=backoff_seconds,
+                            timeout_seconds=timeout_seconds,
+                            timeout_checked_at_ms=timeout_checked_at_ms,
+                            attempt_errors=attempt_errors,
+                        ),
+                    },
                 }
             )
         except Exception as exc:
             last_error = str(exc)
+            timeout_checked_at_ms = _timestamp_ms(now, elapsed_monotonic_ms=int((time.monotonic() - started_monotonic) * 1000))
             logs.append(f"attempt {attempt} failed: {last_error}")
+            attempt_errors.append({"attempt": attempt, "error": last_error, "timeoutCheckedAtMs": timeout_checked_at_ms})
             if attempt >= max_attempts:
                 break
-    finished_ms = now_ms()
+            if backoff_seconds:
+                if time.monotonic() - started_monotonic + backoff_seconds > timeout_seconds:
+                    logs.append("retry backoff skipped: timeout budget exhausted")
+                    break
+                logs.append(f"retry backoff: {backoff_seconds}s")
+                time.sleep(backoff_seconds)
+    finished_ms = _timestamp_ms(now, elapsed_monotonic_ms=int((time.monotonic() - started_monotonic) * 1000))
     if span.trace_id:
         span.finish(status="error", output_data={"outputs": outputs}, error=last_error)
     finish_trace(trace_id, status="error", metadata={"automationId": automation.get("automationId"), "runId": run_id}, error=last_error)
@@ -161,7 +193,17 @@ def _execute_allowed(
             "attempts": attempts,
             "error": last_error,
             "logs": logs,
-            "evidence": {"policy": decision.to_dict()},
+            "evidence": {
+                "policy": decision.to_dict(),
+                "action": raw_result,
+                "runtime": _runtime_evidence(
+                    max_attempts=max_attempts,
+                    backoff_seconds=backoff_seconds,
+                    timeout_seconds=timeout_seconds,
+                    timeout_checked_at_ms=timeout_checked_at_ms,
+                    attempt_errors=attempt_errors,
+                ),
+            },
         }
     )
 
@@ -174,8 +216,9 @@ def _record_terminal_run(
     skipped_reason: str = "",
     logs: list[str] | None = None,
     evidence: dict[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
-    current_ms = now_ms()
+    current_ms = _timestamp_ms(now)
     trace_id = start_trace(
         kind="automation",
         title=str(automation.get("name") or automation.get("automationId") or "Automation"),
@@ -212,3 +255,31 @@ def _merge_outputs(left: dict[str, list[str]], right: dict[str, Any]) -> dict[st
             if text and text not in merged[key]:
                 merged[key].append(text)
     return merged
+
+
+def _runtime_evidence(
+    *,
+    max_attempts: int,
+    backoff_seconds: int,
+    timeout_seconds: int,
+    timeout_checked_at_ms: int,
+    attempt_errors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "maxAttempts": max_attempts,
+        "backoffSeconds": backoff_seconds,
+        "timeoutSeconds": timeout_seconds,
+        "timeoutCheckedAtMs": timeout_checked_at_ms,
+        "attemptErrors": attempt_errors,
+    }
+
+
+def _timestamp_ms(value: datetime | None, *, elapsed_monotonic_ms: int = 0) -> int:
+    if value is None:
+        return now_ms()
+    current = value
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    else:
+        current = current.astimezone(timezone.utc)
+    return int(current.timestamp() * 1000) + max(0, elapsed_monotonic_ms)

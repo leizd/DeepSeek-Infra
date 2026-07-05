@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -45,6 +46,7 @@ def evaluate(
     automation: dict[str, Any],
     *,
     trigger: dict[str, Any] | None = None,
+    now: datetime | None = None,
     confirmed: bool = False,
 ) -> AutomationPolicyDecision:
     reasons: list[str] = []
@@ -58,7 +60,7 @@ def evaluate(
     if policy.get("requiresConfirmation") and not confirmed:
         return AutomationPolicyDecision(NEEDS_CONFIRMATION, ("automation_requires_confirmation",), "medium", policy)
     max_runs = max(1, int(policy.get("maxRunsPerDay") or config.AUTOMATION_MAX_RUNS_PER_DAY))
-    today = history.runs_today(str(automation.get("automationId") or ""))
+    today = history.runs_today(str(automation.get("automationId") or ""), now=now)
     if today >= max_runs:
         return AutomationPolicyDecision(DENY, ("max_runs_per_day_exceeded",), "medium", policy)
     if action_type in BROWSER_ACTIONS:

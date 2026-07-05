@@ -94,24 +94,42 @@ def browser_snapshot_action(automation: dict[str, Any]) -> dict[str, Any]:
     from deepseek_infra.infra.browser.actions import execute_browser_action
 
     project_id = str(action.get("projectId") or automation.get("projectId") or "")
-    opened = execute_browser_action({"action": "open_url", "projectId": project_id, "url": url})
-    if not opened.get("ok"):
-        raise AppError(str(opened.get("error") or "Browser action blocked"), code=ErrorCode.FORBIDDEN, status=403)
-    session_id = str(opened.get("session", {}).get("browserSessionId") or "")
-    read = execute_browser_action({"action": "read_page", "sessionId": session_id, "selector": str(action.get("selector") or "")})
-    if not read.get("ok"):
-        raise AppError(str(read.get("error") or "Browser read failed"), code=ErrorCode.FORBIDDEN, status=403)
-    media_ids = _media_ids_from_browser_result(read)
-    if _bool(action.get("screenshot"), default=False):
-        shot = execute_browser_action({"action": "screenshot", "sessionId": session_id, "title": str(action.get("title") or "Automation screenshot")})
-        media_ids.extend(_media_ids_from_browser_result(shot))
-    raw_read_result = read.get("result")
-    read_result: dict[str, Any] = raw_read_result if isinstance(raw_read_result, dict) else {}
-    return {
-        "outputs": {"artifactIds": [], "savedItemIds": [], "mediaIds": _unique(media_ids), "exportIds": []},
-        "logs": [f"browserSnapshot:{url}", f"browserSession:{session_id}"],
-        "raw": {"url": url, "sessionId": session_id, "text": str(read_result.get("text") or "")},
-    }
+    session_id = ""
+    result_payload: dict[str, Any] | None = None
+    try:
+        opened = execute_browser_action({"action": "open_url", "projectId": project_id, "url": url})
+        if not opened.get("ok"):
+            raise AppError(str(opened.get("error") or "Browser action blocked"), code=ErrorCode.FORBIDDEN, status=403)
+        raw_session = opened.get("session")
+        session = raw_session if isinstance(raw_session, dict) else {}
+        session_id = str(session.get("browserSessionId") or "")
+        read = execute_browser_action({"action": "read_page", "sessionId": session_id, "selector": str(action.get("selector") or "")})
+        if not read.get("ok"):
+            raise AppError(str(read.get("error") or "Browser read failed"), code=ErrorCode.FORBIDDEN, status=403)
+        media_ids = _media_ids_from_browser_result(read)
+        if _bool(action.get("screenshot"), default=False):
+            shot = execute_browser_action({"action": "screenshot", "sessionId": session_id, "title": str(action.get("title") or "Automation screenshot")})
+            media_ids.extend(_media_ids_from_browser_result(shot))
+        raw_read_result = read.get("result")
+        read_result: dict[str, Any] = raw_read_result if isinstance(raw_read_result, dict) else {}
+        result_payload = {
+            "outputs": {"artifactIds": [], "savedItemIds": [], "mediaIds": _unique(media_ids), "exportIds": []},
+            "logs": [f"browserSnapshot:{url}", f"browserSession:{session_id}"],
+            "raw": {"url": url, "sessionId": session_id, "text": str(read_result.get("text") or "")},
+        }
+        return result_payload
+    finally:
+        if session_id:
+            try:
+                closed = execute_browser_action({"action": "close_session", "sessionId": session_id})
+                if result_payload is not None:
+                    if closed.get("ok"):
+                        result_payload.setdefault("logs", []).append("browserSessionClosed")
+                    else:
+                        result_payload.setdefault("logs", []).append(f"browserSessionCloseFailed:{closed.get('error') or 'unknown'}")
+            except Exception as exc:
+                if result_payload is not None:
+                    result_payload.setdefault("logs", []).append(f"browserSessionCloseFailed:{exc}")
 
 
 def browser_check_action(automation: dict[str, Any], *, run_id: str) -> dict[str, Any]:
@@ -157,9 +175,7 @@ def browser_check_text(automation: dict[str, Any]) -> str:
             return normalize_content(value)
     fixture = str(action.get("fixturePath") or "").strip()
     if fixture:
-        path = Path(fixture)
-        if not path.is_absolute():
-            path = Path.cwd() / path
+        path = _resolve_fixture_path(fixture)
         return normalize_content(path.read_text(encoding="utf-8", errors="replace"))
     result = browser_snapshot_action(automation)
     raw_result = result.get("raw")
@@ -341,6 +357,30 @@ def _write_state(automation_id: str, state: dict[str, Any]) -> None:
 
 def _state_path(automation_id: str) -> Path:
     return config.AUTOMATION_DIR / "state" / f"{schema.validate_automation_id(automation_id)}.json"
+
+
+def _resolve_fixture_path(fixture: str) -> Path:
+    raw = Path(fixture).expanduser()
+    candidate = raw if raw.is_absolute() else config.AUTOMATION_DIR / "fixtures" / raw
+    resolved = candidate.resolve(strict=False)
+    allowed_roots = [
+        config.AUTOMATION_DIR.resolve(strict=False),
+        config.AUTOMATION_DIR.parent.resolve(strict=False),
+        (Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "automation").resolve(strict=False),
+    ]
+    if not any(_is_relative_to(resolved, root) for root in allowed_roots):
+        raise AppError("Automation fixturePath is outside allowed runtime fixture roots", code=ErrorCode.FORBIDDEN, status=403)
+    if not resolved.is_file():
+        raise AppError("Automation fixturePath was not found", code=ErrorCode.NOT_FOUND, status=404)
+    return resolved
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _action(automation: dict[str, Any]) -> dict[str, Any]:

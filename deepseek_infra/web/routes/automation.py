@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -63,6 +64,7 @@ def create_automation_router() -> APIRouter:
                         _automation_id(payload),
                         trigger=_trigger_payload(payload),
                         event=payload.get("event") if isinstance(payload.get("event"), dict) else None,
+                        now=_now_payload(payload),
                         confirmed=_bool(payload, "confirmed"),
                         force=_bool(payload, "force"),
                     ),
@@ -101,11 +103,13 @@ def create_automation_router() -> APIRouter:
                     _automation_id(payload),
                     trigger=_trigger_payload(payload),
                     event=payload.get("event") if isinstance(payload.get("event"), dict) else None,
+                    now=_now_payload(payload),
                 )
             )
         if action == "run_due":
             return json_response(
                 scheduler.run_due(
+                    now=_now_payload(payload),
                     event=payload.get("event") if isinstance(payload.get("event"), dict) else None,
                     confirmed=_bool(payload, "confirmed"),
                 )
@@ -154,6 +158,7 @@ def create_automation_router() -> APIRouter:
                     automation_id,
                     trigger=_trigger_payload(payload),
                     event=payload.get("event") if isinstance(payload.get("event"), dict) else None,
+                    now=_now_payload(payload),
                     confirmed=_bool(payload, "confirmed"),
                     force=_bool(payload, "force"),
                 ),
@@ -208,6 +213,24 @@ def _patch_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _trigger_payload(payload: dict[str, Any]) -> dict[str, Any]:
     value = payload.get("trigger")
     return value if isinstance(value, dict) else {"type": "manual"}
+
+
+def _now_payload(payload: dict[str, Any]) -> datetime | None:
+    value = payload.get("now")
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise AppError("now must be an ISO timestamp or epoch milliseconds", code=ErrorCode.INVALID_PAYLOAD) from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _limit(payload: dict[str, Any]) -> int:

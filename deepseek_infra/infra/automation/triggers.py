@@ -102,26 +102,61 @@ def cron_matches(cron: str, now: datetime | None = None) -> bool:
     if len(parts) != 5:
         return False
     current = _utc(now)
-    values = (current.minute, current.hour, current.day, current.month, current.weekday())
     # Cron uses 0/7 for Sunday; Python weekday uses 0 for Monday.
     cron_weekday = (current.weekday() + 1) % 7
-    values = (current.minute, current.hour, current.day, current.month, cron_weekday)
-    return all(_cron_field_matches(part, value) for part, value in zip(parts, values, strict=True))
+    fields = (
+        (parts[0], current.minute, 0, 59),
+        (parts[1], current.hour, 0, 23),
+        (parts[2], current.day, 1, 31),
+        (parts[3], current.month, 1, 12),
+        (parts[4], cron_weekday, 0, 7),
+    )
+    return all(_cron_field_matches(part, value, minimum, maximum) for part, value, minimum, maximum in fields)
 
 
-def _cron_field_matches(field: str, value: int) -> bool:
+def _cron_field_matches(field: str, value: int, minimum: int, maximum: int) -> bool:
     raw = str(field or "").strip()
     if raw == "*":
         return True
     for part in raw.split(","):
-        if part == "*":
+        if _cron_part_matches(part.strip(), value, minimum, maximum):
             return True
-        try:
-            if int(part) == value:
-                return True
-        except ValueError:
-            continue
     return False
+
+
+def _cron_part_matches(part: str, value: int, minimum: int, maximum: int) -> bool:
+    if not part:
+        return False
+    base = part
+    step = 1
+    if "/" in part:
+        base, raw_step = part.split("/", 1)
+        try:
+            step = int(raw_step)
+        except ValueError:
+            return False
+        if step <= 0:
+            return False
+    if base == "*":
+        start, end = minimum, maximum
+    elif "-" in base:
+        raw_start, raw_end = base.split("-", 1)
+        try:
+            start, end = int(raw_start), int(raw_end)
+        except ValueError:
+            return False
+        if start > end:
+            return False
+    else:
+        try:
+            start = end = int(base)
+        except ValueError:
+            return False
+    if start < minimum or end > maximum:
+        return False
+    if value == 0 and maximum == 7 and start <= 7 <= end and (7 - start) % step == 0:
+        return True
+    return start <= value <= end and (value - start) % step == 0
 
 
 def _same_cron_minute(first: datetime, second: datetime) -> bool:

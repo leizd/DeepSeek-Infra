@@ -469,6 +469,20 @@ def _write_automation_evidence(path: Path, version: str, *, status: str = "PASS"
         "templates": "PASS",
         "evidenceGenerated": "PASS",
     }
+    if tuple(int(part) for part in version.split(".")[:3]) >= (2, 9, 1):
+        checks.update(
+            {
+                "browserCheckChanged": "PASS",
+                "browserCheckUnchanged": "PASS",
+                "fixturePathBlocked": "PASS",
+                "cronStepRange": "PASS",
+                "maxRunsPerDay": "PASS",
+                "retryBackoff": "PASS",
+                "timeoutEvidence": "PASS",
+                "rerun": "PASS",
+                "templateCreate": "PASS",
+            }
+        )
     if omit_check:
         checks.pop(omit_check, None)
     payload: dict[str, Any] = {
@@ -1289,6 +1303,15 @@ def test_preflight_passes_on_automation_runtime_evidence_complete(tmp_path: Path
     root = _skeleton(tmp_path, "2.9.0")
     result = next(r for r in preflight.run_preflight(root, "2.9.0") if r.name == "automation_runtime_evidence")
     assert result.status == "pass"
+
+
+def test_preflight_requires_automation_hardening_evidence_for_2_9_1(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.9.1")
+    _write_automation_evidence(root / "docs" / "evidence" / "automation-v2.9.1.json", "2.9.1", omit_check="fixturePathBlocked")
+    result = next(r for r in preflight.run_preflight(root, "2.9.1") if r.name == "automation_runtime_evidence")
+    assert result.status == "fail"
+    assert "fixturePathBlocked" in result.detail
 
 
 def test_preflight_fails_on_missing_skill_system_evidence(tmp_path: Path) -> None:

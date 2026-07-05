@@ -1,6 +1,6 @@
 # Automation Runtime
 
-Applicable version: v2.9.0.
+Applicable version: v2.9.1.
 
 Automation Runtime is the local workflow layer that connects Workspace Core, Skills, Browser Control, Media and export artifacts. It is intentionally small and policy-first: definitions are local JSON records, runs are auditable, and every release gate can be reproduced offline.
 
@@ -25,7 +25,7 @@ Supported action types:
 
 - `run_skill`: run a built-in or custom Skill with explicit input and offline defaults.
 - `browser_snapshot`: read-only browser snapshot through Browser Safety.
-- `browser_check`: read-only URL change check with stored content hash.
+- `browser_check`: read-only URL or fixture change check with stored content hash.
 - `project_summary`: create a markdown summary for a project.
 - `media_process`: run a media-oriented Skill.
 - `create_artifact`: register generated text or markdown as a project artifact.
@@ -34,6 +34,14 @@ Supported action types:
 - `export_project`: export a project bundle.
 
 Browser actions are denied unless both the global runtime and the automation policy allow them. Private hosts are still blocked by Browser Safety unless the browser runtime explicitly allows them.
+
+`browser_check.fixturePath` is intentionally bounded. Relative paths resolve under `.automation/fixtures`, and absolute paths must stay inside the runtime root, `.automation`, or the repository's automation test fixture tree. Out-of-range fixture reads are rejected before file content is loaded.
+
+Schedule triggers use five cron fields. Automation Runtime supports `*`, numeric values, comma lists, ranges such as `9-17`, steps such as `*/5`, and stepped ranges such as `9-17/2`.
+
+Manual runs, `run_due`, and trigger simulation can receive an optional `now` timestamp so schedule checks, daily run limits and run history use the same deterministic clock.
+
+Retry policy supports `retry.maxAttempts` and `retry.backoffSeconds`. Run evidence records timeout checks, backoff settings and per-attempt failure details.
 
 ## API
 
@@ -73,13 +81,13 @@ Runtime data in `.automation` is gitignored and excluded from release archives.
 Offline smoke:
 
 ```bash
-python scripts/smoke_automation.py --offline --out docs/evidence/automation-v2.9.0.json --version 2.9.0
+python scripts/smoke_automation.py --offline --out docs/evidence/automation-v2.9.1.json --version 2.9.1
 ```
 
 Strict eval:
 
 ```bash
-python evals/runners/run_automation_eval.py --strict --out evals/reports/automation-v2.9.0.json --version 2.9.0
+python evals/runners/run_automation_eval.py --strict --out evals/reports/automation-v2.9.1.json --version 2.9.1
 ```
 
-Release preflight requires `docs/evidence/automation-v2.9.0.json` starting in v2.9.0 and checks creation, manual/schedule/event triggers, Skill action, Browser read-only action, project export, unsafe URL blocking, run history, trace linkage, artifact output, templates and evidence generation.
+Release preflight has required Automation Runtime evidence since v2.9.0. For v2.9.1, `docs/evidence/automation-v2.9.1.json` must also prove browser check change detection, fixture path blocking, cron step/range matching, daily run limits, retry backoff, timeout evidence, rerun and template creation.

@@ -1,5 +1,17 @@
 # 更新日志
 
+## [2.9.1] - Automation Runtime Hardening & Release Hygiene
+
+### Fixed
+- **Automation fixture safety**: constrain `browser_check` `fixturePath` reads to runtime fixture roots and the automation test fixture tree.
+- **Browser session cleanup**: close Automation Browser sessions after read-only snapshot actions and record close failures in run logs without masking the action result.
+- **Deterministic scheduling**: thread simulated `now` through policy daily limits, run records, `run_due` and trigger simulation.
+
+### Changed
+- **Cron matching**: support common `*/n`, `a-b` and `a-b/n` cron field forms in addition to `*`, numeric values and comma lists.
+- **Retry / timeout evidence**: record retry backoff, timeout checks and per-attempt failures in Automation run evidence.
+- **Release hygiene**: refresh 2.9.1 docs, CI evidence paths, release manifest defaults and Automation hardening tests.
+
 ## [2.9.0] - Automation Runtime
 
 ### Added
