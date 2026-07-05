@@ -32,6 +32,7 @@ EXCLUDED_DIRS = {
     ".browser-audit",
     ".browser-downloads",
     ".browser-profiles",
+    ".automation",
     ".scheduler",
     ".a2a",
     ".skills",

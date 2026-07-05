@@ -146,7 +146,12 @@ def evaluate_file_url_safety(path_value: str) -> tuple[bool, str]:
     except (OSError, ValueError):
         return False, "invalid file url"
     root = Path(__file__).resolve().parents[3]
-    allowed_roots = [root / "tests" / "fixtures" / "browser", root / "evals" / "golden" / "browser"]
+    allowed_roots = [
+        root / "tests" / "fixtures" / "browser",
+        root / "tests" / "fixtures" / "automation",
+        root / "evals" / "golden" / "browser",
+        root / "evals" / "golden" / "automation",
+    ]
     for allowed in allowed_roots:
         try:
             path.relative_to(allowed.resolve())

@@ -50,6 +50,7 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     _write_context_taint_evidence(evidence_dir / f"context-taint-v{version}.json", version)
     _write_media_evidence(evidence_dir / f"media-v{version}.json", version)
     _write_browser_evidence(evidence_dir / f"browser-v{version}.json", version)
+    _write_automation_evidence(evidence_dir / f"automation-v{version}.json", version)
     _write_semantic_cache_onnx_evidence(evidence_dir / f"semantic-cache-onnx-v{version}.json", version)
     _write_skill_system_evidence(evidence_dir / f"skills-v{version}.json", version)
     _write_skill_ui_evidence(evidence_dir / f"skills-ui-v{version}.json", version)
@@ -116,11 +117,25 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
         ),
         encoding="utf-8",
     )
+    (reports / f"automation-v{version}.json").write_text(
+        json.dumps(
+            {
+                "version": version,
+                "commit": "abc1234",
+                "generatedAt": "2026-07-04T00:00:00Z",
+                "environment": {"os": "Linux", "python": "3.12", "ci": True},
+                "status": "PASS",
+                "summary": {"caseCount": 3, "checksPassed": 13},
+                "checks": {"goldenCasesLoaded": "PASS", "coreActionsCovered": "PASS"},
+            }
+        ),
+        encoding="utf-8",
+    )
     scripts = root / "scripts"
     scripts.mkdir()
     if release_exclusions:
         (scripts / "release.py").write_text(
-            'EXCLUDED = [".traces", ".local-rag", ".media", ".browser-audit", ".browser-downloads", ".browser-profiles"]\n'
+            'EXCLUDED = [".traces", ".local-rag", ".media", ".browser-audit", ".browser-downloads", ".browser-profiles", ".automation"]\n'
             'SECRET = [".auth-token", ".env"]\nLOGS = ["server*.log"]\n',
             encoding="utf-8",
         )
@@ -429,6 +444,37 @@ def _write_browser_evidence(path: Path, version: str, *, status: str = "PASS", o
         "version": version,
         "commit": "abc1234",
         "generatedAt": "2026-07-03T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": status,
+        "checks": checks,
+    }
+    if omit_metadata:
+        payload.pop(omit_metadata, None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_automation_evidence(path: Path, version: str, *, status: str = "PASS", omit_check: str = "", omit_metadata: str = "") -> None:
+    checks = {
+        "automationCreate": "PASS",
+        "manualRun": "PASS",
+        "scheduleTrigger": "PASS",
+        "eventTrigger": "PASS",
+        "runSkillAction": "PASS",
+        "browserReadOnlyAction": "PASS",
+        "projectExportAction": "PASS",
+        "unsafeActionBlocked": "PASS",
+        "runHistory": "PASS",
+        "traceLinked": "PASS",
+        "artifactOutput": "PASS",
+        "templates": "PASS",
+        "evidenceGenerated": "PASS",
+    }
+    if omit_check:
+        checks.pop(omit_check, None)
+    payload: dict[str, Any] = {
+        "version": version,
+        "commit": "abc1234",
+        "generatedAt": "2026-07-04T00:00:00Z",
         "environment": {"os": "Linux", "python": "3.12", "ci": True},
         "status": status,
         "checks": checks,
@@ -1217,6 +1263,31 @@ def test_preflight_passes_on_browser_control_evidence_complete(tmp_path: Path) -
     preflight = _load_preflight()
     root = _skeleton(tmp_path, "2.8.0")
     result = next(r for r in preflight.run_preflight(root, "2.8.0") if r.name == "browser_control_evidence")
+    assert result.status == "pass"
+
+
+def test_preflight_fails_on_missing_automation_runtime_evidence(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.9.0")
+    (root / "docs" / "evidence" / "automation-v2.9.0.json").unlink()
+    result = next(r for r in preflight.run_preflight(root, "2.9.0") if r.name == "automation_runtime_evidence")
+    assert result.status == "fail"
+    assert "smoke_automation.py" in result.detail
+
+
+def test_preflight_fails_on_automation_runtime_missing_required_check(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.9.0")
+    _write_automation_evidence(root / "docs" / "evidence" / "automation-v2.9.0.json", "2.9.0", omit_check="unsafeActionBlocked")
+    result = next(r for r in preflight.run_preflight(root, "2.9.0") if r.name == "automation_runtime_evidence")
+    assert result.status == "fail"
+    assert "unsafeActionBlocked" in result.detail
+
+
+def test_preflight_passes_on_automation_runtime_evidence_complete(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.9.0")
+    result = next(r for r in preflight.run_preflight(root, "2.9.0") if r.name == "automation_runtime_evidence")
     assert result.status == "pass"
 
 

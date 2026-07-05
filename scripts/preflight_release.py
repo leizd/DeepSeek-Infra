@@ -264,13 +264,15 @@ def check_quality_gate_evidence(root: Path, version: str) -> CheckResult:
     ci_text = _read(root / ".github" / "workflows" / "ci.yml")
     if "pytest --cov --cov-fail-under=80" not in ci_text:
         failures.append("CI pytest coverage gate is not --cov-fail-under=80")
-    report_specs = (
+    report_specs = [
         ("evals/reports/latest.json", "offlineEval"),
         ("evals/reports/agent-latest.json", "agentEval"),
         ("evals/reports/baseline-compare-latest.json", "baselineCompare"),
         ("evals/reports/security-latest.json", "securityCorpus"),
         (f"evals/reports/skills-v{version}.json", "skillEval"),
-    )
+    ]
+    if _version_tuple(version) >= (2, 9, 0):
+        report_specs.append((f"evals/reports/automation-v{version}.json", "automationEval"))
     for rel, label in report_specs:
         data, error = _load_json_report(root, rel)
         if data is None:
@@ -298,7 +300,18 @@ def check_quality_gate_evidence(root: Path, version: str) -> CheckResult:
 
 def check_release_exclusions(root: Path) -> CheckResult:
     text = _read(root / "scripts" / "release.py")
-    required = (".traces", ".local-rag", ".media", ".browser-audit", ".browser-downloads", ".browser-profiles", ".auth-token", ".env", "server*.log")
+    required = (
+        ".traces",
+        ".local-rag",
+        ".media",
+        ".browser-audit",
+        ".browser-downloads",
+        ".browser-profiles",
+        ".automation",
+        ".auth-token",
+        ".env",
+        "server*.log",
+    )
     missing = [token for token in required if token not in text]
     if missing:
         return CheckResult("release_exclusions", STATUS_FAIL, f"release.py no longer excludes: {', '.join(missing)}", {"missing": missing})
@@ -918,6 +931,77 @@ def check_browser_control_evidence(root: Path, version: str) -> CheckResult:
         "browser_control_evidence",
         STATUS_PASS,
         "Browser Control evidence recorded",
+        {"path": str(path), "checks": list(required)},
+    )
+
+
+def check_automation_runtime_evidence(root: Path, version: str) -> CheckResult:
+    if _version_tuple(version) < (2, 9, 0):
+        return CheckResult(
+            "automation_runtime_evidence",
+            STATUS_PASS,
+            "Automation Runtime evidence not required before v2.9.0",
+            {"version": version, "requiredFrom": "2.9.0"},
+        )
+    path = root / "docs" / "evidence" / f"automation-v{version}.json"
+    if not path.is_file():
+        return CheckResult(
+            "automation_runtime_evidence",
+            STATUS_FAIL,
+            "Automation Runtime evidence missing; run scripts/smoke_automation.py --offline",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("automation_runtime_evidence", STATUS_FAIL, f"cannot parse Automation Runtime evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("automation_runtime", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "automation_runtime_evidence",
+            STATUS_FAIL,
+            f"Automation Runtime evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS":
+        return CheckResult(
+            "automation_runtime_evidence",
+            STATUS_FAIL,
+            f"Automation Runtime evidence status is {data.get('status')!r}, expected PASS",
+            {"status": data.get("status")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = (
+        "automationCreate",
+        "manualRun",
+        "scheduleTrigger",
+        "eventTrigger",
+        "runSkillAction",
+        "browserReadOnlyAction",
+        "projectExportAction",
+        "unsafeActionBlocked",
+        "runHistory",
+        "traceLinked",
+        "artifactOutput",
+        "templates",
+        "evidenceGenerated",
+    )
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult(
+            "automation_runtime_evidence",
+            STATUS_FAIL,
+            f"Automation Runtime evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    return CheckResult(
+        "automation_runtime_evidence",
+        STATUS_PASS,
+        "Automation Runtime evidence recorded",
         {"path": str(path), "checks": list(required)},
     )
 
@@ -1636,6 +1720,7 @@ def run_preflight(root: Path, version: str) -> list[CheckResult]:
         check_context_taint_evidence(root, version),
         check_media_layer_evidence(root, version),
         check_browser_control_evidence(root, version),
+        check_automation_runtime_evidence(root, version),
         check_skill_system_evidence(root, version),
         check_skill_ui_evidence(root, version),
         check_skill_builder_evidence(root, version),

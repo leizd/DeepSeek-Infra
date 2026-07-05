@@ -1,5 +1,17 @@
 # 更新日志
 
+## [2.9.0] - Automation Runtime
+
+### Added
+- **Automation Runtime**: add `deepseek_infra/infra/automation/` with local automation schema, registry, scheduler, runner, triggers, actions, policy, history and release evidence helpers.
+- **Automation API**: add authenticated `/api/automation` routes for CRUD, templates, manual runs, reruns, due-run simulation and run history.
+- **Governed actions**: support `run_skill`, `browser_snapshot`, `browser_check`, `project_summary`, `media_process`, `create_artifact`, `save_item`, `export_conversation` and `export_project` with policy-gated browser/network defaults.
+- **Offline evidence**: add `scripts/smoke_automation.py`, `evals/runners/run_automation_eval.py`, golden automation cases, fixtures, `docs/AUTOMATION.md`, and v2.9.0 smoke/eval evidence paths.
+
+### Changed
+- **Release gates**: add `automation_runtime_evidence` to preflight, add `automationRuntime` to the release manifest quality gates, and exclude `.automation` from release archives and clean workspaces.
+- **Version sync**: bump README badge, `settings.app_version`, Dockerfile tag, Android `versionName` / `versionCode`, docs "适用版本" headers, CI evidence / eval paths and current release docs to `2.9.0`.
+
 ## [2.8.2] - Evidence Index & Manifest Example Sync
 
 ### Fixed

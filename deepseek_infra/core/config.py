@@ -313,6 +313,23 @@ class BrowserSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class AutomationSettings:
+    """Local Automation Runtime knobs.
+
+    Automations are project-bound, local-first tasks. Browser access remains
+    opt-in and still flows through Browser Safety; these settings only provide
+    conservative defaults for per-automation policy objects.
+    """
+
+    enabled: bool = True
+    max_runs_per_day: int = 50
+    min_interval_seconds: int = 300
+    allow_browser: bool = False
+    require_confirm_for_browser_write: bool = True
+    run_timeout_seconds: int = 1_800
+
+
+@dataclass(frozen=True, slots=True)
 class SchedulerSettings:
     """Local request scheduler / backpressure / rate-limit knobs.
 
@@ -430,7 +447,7 @@ class SkillsSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "2.8.2"
+    app_version: str = "2.9.0"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -495,6 +512,7 @@ class Settings:
     agent_runtime: AgentRuntimeSettings = field(default_factory=AgentRuntimeSettings)
     tool_policy: ToolPolicySettings = field(default_factory=ToolPolicySettings)
     browser: BrowserSettings = field(default_factory=BrowserSettings)
+    automation: AutomationSettings = field(default_factory=AutomationSettings)
     scheduler: SchedulerSettings = field(default_factory=SchedulerSettings)
     ollama: OllamaSettings = field(default_factory=OllamaSettings)
     mcp: MCPSettings = field(default_factory=MCPSettings)
@@ -608,6 +626,10 @@ class Settings:
     @property
     def browser_profiles_dir(self) -> Path:
         return self.root / ".browser-profiles"
+
+    @property
+    def automation_dir(self) -> Path:
+        return self.root / ".automation"
 
     @property
     def a2a_tasks_dir(self) -> Path:
@@ -766,6 +788,14 @@ class Settings:
                 require_confirm=_env_bool("BROWSER_REQUIRE_CONFIRM", True),
                 download_max_bytes=_env_int_clamped("BROWSER_DOWNLOAD_MAX_BYTES", 50_000_000, 1, 1_000_000_000),
                 session_ttl_seconds=_env_int_clamped("BROWSER_SESSION_TTL_SECONDS", 1_800, 30, 86_400),
+            ),
+            automation=AutomationSettings(
+                enabled=_env_bool("AUTOMATION_ENABLED", True),
+                max_runs_per_day=_env_int_clamped("AUTOMATION_MAX_RUNS_PER_DAY", 50, 1, 10_000),
+                min_interval_seconds=_env_int_clamped("AUTOMATION_MIN_INTERVAL_SECONDS", 300, 1, 86_400),
+                allow_browser=_env_bool("AUTOMATION_ALLOW_BROWSER", False),
+                require_confirm_for_browser_write=_env_bool("AUTOMATION_REQUIRE_CONFIRM_FOR_BROWSER_WRITE", True),
+                run_timeout_seconds=_env_int_clamped("AUTOMATION_RUN_TIMEOUT_SECONDS", 1_800, 1, 86_400),
             ),
             scheduler=SchedulerSettings(
                 enabled=_env_bool("SCHEDULER_ENABLED", True),
@@ -1181,6 +1211,13 @@ BROWSER_AUDIT_DIR = settings.browser_audit_dir
 BROWSER_AUDIT_LOG = settings.browser_audit_log
 BROWSER_DOWNLOADS_DIR = settings.browser_downloads_dir
 BROWSER_PROFILES_DIR = settings.browser_profiles_dir
+AUTOMATION_ENABLED = settings.automation.enabled
+AUTOMATION_MAX_RUNS_PER_DAY = settings.automation.max_runs_per_day
+AUTOMATION_MIN_INTERVAL_SECONDS = settings.automation.min_interval_seconds
+AUTOMATION_ALLOW_BROWSER = settings.automation.allow_browser
+AUTOMATION_REQUIRE_CONFIRM_FOR_BROWSER_WRITE = settings.automation.require_confirm_for_browser_write
+AUTOMATION_RUN_TIMEOUT_SECONDS = settings.automation.run_timeout_seconds
+AUTOMATION_DIR = settings.automation_dir
 SCHEDULER_ENABLED = settings.scheduler.enabled
 SCHEDULER_MAX_CONCURRENCY = settings.scheduler.max_concurrency
 SCHEDULER_MAX_QUEUE_DEPTH = settings.scheduler.max_queue_depth

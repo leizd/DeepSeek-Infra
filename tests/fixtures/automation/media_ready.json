@@ -1,0 +1,6 @@
+{
+  "event": "media.ready",
+  "projectId": "proj_fixture",
+  "mediaId": "media_fixture",
+  "status": "ready"
+}

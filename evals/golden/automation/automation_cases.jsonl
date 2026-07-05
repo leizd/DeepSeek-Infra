@@ -1,0 +1,3 @@
+{"caseId":"manual_project_summary","trigger":"manual","action":"project_summary","expectedStatus":"success"}
+{"caseId":"event_saved_item_digest","trigger":"event","event":"saved_item.created","action":"save_item","expectedStatus":"success"}
+{"caseId":"policy_browser_private_host","trigger":"manual","action":"browser_snapshot","expectedStatus":"skipped","expectedReason":"unsafe_url"}

@@ -28,6 +28,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 ".browser-audit",
                 ".browser-downloads",
                 ".browser-profiles",
+                ".automation",
                 ".scheduler",
                 ".skills",
                 ".local-rag",

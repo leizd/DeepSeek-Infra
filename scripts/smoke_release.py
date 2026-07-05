@@ -29,7 +29,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
 
-BROWSER_CONTROL_VERSION = "2.8.2"
+BROWSER_CONTROL_VERSION = APP_VERSION
+AUTOMATION_RUNTIME_VERSION = APP_VERSION
 
 
 def _py() -> str:
@@ -81,6 +82,28 @@ def build_stages(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
             BROWSER_CONTROL_VERSION,
         ]
         stages.append(("browser_eval", browser_eval_cmd))
+
+    if not args.skip_automation:
+        automation_cmd = [
+            _py(),
+            str(REPO_ROOT / "scripts" / "smoke_automation.py"),
+            "--offline",
+            "--out",
+            args.automation_out,
+            "--version",
+            AUTOMATION_RUNTIME_VERSION,
+        ]
+        stages.append(("automation_runtime", automation_cmd))
+        automation_eval_cmd = [
+            _py(),
+            str(REPO_ROOT / "evals" / "runners" / "run_automation_eval.py"),
+            "--strict",
+            "--out",
+            args.automation_eval_out,
+            "--version",
+            AUTOMATION_RUNTIME_VERSION,
+        ]
+        stages.append(("automation_eval", automation_eval_cmd))
 
     if not args.skip_skills:
         skills_cmd = [_py(), str(REPO_ROOT / "scripts" / "smoke_skills.py"), "--offline", "--out", args.skills_out]
@@ -259,6 +282,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--media-eval-out", default=str(REPO_ROOT / "evals" / "reports" / f"media-v{APP_VERSION}.json"))
     parser.add_argument("--browser-out", default=str(REPO_ROOT / "docs" / "evidence" / f"browser-v{BROWSER_CONTROL_VERSION}.json"))
     parser.add_argument("--browser-eval-out", default=str(REPO_ROOT / "evals" / "reports" / f"browser-v{BROWSER_CONTROL_VERSION}.json"))
+    parser.add_argument("--automation-out", default=str(REPO_ROOT / "docs" / "evidence" / f"automation-v{AUTOMATION_RUNTIME_VERSION}.json"))
+    parser.add_argument("--automation-eval-out", default=str(REPO_ROOT / "evals" / "reports" / f"automation-v{AUTOMATION_RUNTIME_VERSION}.json"))
     parser.add_argument("--skills-out", default=str(REPO_ROOT / "docs" / "evidence" / f"skills-v{APP_VERSION}.json"))
     parser.add_argument("--skills-ui-out", default=str(REPO_ROOT / "docs" / "evidence" / f"skills-ui-v{APP_VERSION}.json"))
     parser.add_argument("--skill-builder-out", default=str(REPO_ROOT / "docs" / "evidence" / f"skill-builder-v{APP_VERSION}.json"))
@@ -274,6 +299,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-edge", action="store_true")
     parser.add_argument("--skip-media", action="store_true")
     parser.add_argument("--skip-browser", action="store_true")
+    parser.add_argument("--skip-automation", action="store_true")
     parser.add_argument("--skip-evals", action="store_true")
     parser.add_argument("--skip-security", action="store_true")
     parser.add_argument("--skip-agent", action="store_true")

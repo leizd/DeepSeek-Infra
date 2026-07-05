@@ -30,6 +30,8 @@ import deepseek_infra.infra.skills.evidence as skill_evidence
 import deepseek_infra.infra.skills.registry as skill_registry
 import deepseek_infra.infra.media.library as media_library
 import deepseek_infra.infra.browser.session as browser_session
+import deepseek_infra.infra.automation.registry as automation_registry
+import deepseek_infra.infra.automation.history as automation_history
 
 
 @pytest.fixture
@@ -52,6 +54,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     browser_audit_dir = tmp_path / ".browser-audit"
     browser_downloads_dir = tmp_path / ".browser-downloads"
     browser_profiles_dir = tmp_path / ".browser-profiles"
+    automation_dir = tmp_path / ".automation"
 
     monkeypatch.setattr(config, "FILE_CACHE_DIR", file_cache_dir)
     monkeypatch.setattr(config, "AGENT_RUNS_DIR", agent_runs_dir)
@@ -77,6 +80,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(config, "BROWSER_AUDIT_LOG", browser_audit_dir / "audit.jsonl")
     monkeypatch.setattr(config, "BROWSER_DOWNLOADS_DIR", browser_downloads_dir)
     monkeypatch.setattr(config, "BROWSER_PROFILES_DIR", browser_profiles_dir)
+    monkeypatch.setattr(config, "AUTOMATION_DIR", automation_dir)
 
     monkeypatch.setattr(files, "FILE_CACHE_DIR", file_cache_dir)
     monkeypatch.setattr(agent_runs, "AGENT_RUNS_DIR", agent_runs_dir)
@@ -119,6 +123,8 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(config, "SKILLS_DIR", skills_dir)
     monkeypatch.setattr(skill_registry, "SKILLS_DIR", skills_dir)
     monkeypatch.setattr(skill_evidence, "GENERATED_DIR", generated_dir)
+    monkeypatch.setattr(automation_registry, "AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(automation_history, "AUTOMATION_DIR", automation_dir)
 
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()

@@ -18,6 +18,7 @@
 .browser-audit/
 .browser-downloads/
 .browser-profiles/
+.automation/
 .scheduler/
 .a2a/
 .skills/
@@ -38,6 +39,7 @@ evals/reports/*
 !evals/reports/security-latest.json
 !evals/reports/security-latest.md
 !evals/reports/skill-latest.json
+!evals/reports/automation-v*.json
 !evals/reports/skills-v*.json
 !evals/reports/media-v*.json
 !evals/reports/browser-v*.json

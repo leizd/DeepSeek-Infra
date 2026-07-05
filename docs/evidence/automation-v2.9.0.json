@@ -1,0 +1,51 @@
+{
+  "version": "2.9.0",
+  "commit": "43261d6a7671",
+  "generatedAt": "2026-07-04T07:45:27+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "automationCreate": "PASS",
+    "manualRun": "PASS",
+    "scheduleTrigger": "PASS",
+    "eventTrigger": "PASS",
+    "runSkillAction": "PASS",
+    "browserReadOnlyAction": "PASS",
+    "projectExportAction": "PASS",
+    "unsafeActionBlocked": "PASS",
+    "runHistory": "PASS",
+    "traceLinked": "PASS",
+    "artifactOutput": "PASS",
+    "templates": "PASS",
+    "evidenceGenerated": "PASS"
+  },
+  "details": {
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-automation-smoke-xp_tmugd",
+    "fixtures": "D:\\deepseek\\tests\\fixtures\\automation",
+    "projectId": "proj-ac9cb33936c3",
+    "automationIds": [
+      "auto_6ae09f393f49b398",
+      "auto_8acca8841883455f",
+      "auto_cb1698c3b3774bb3",
+      "auto_a68c8f80a3234bfa",
+      "auto_00c73f75304a2b56",
+      "auto_0b39953bb2440a29",
+      "auto_120a87f103a535ef"
+    ],
+    "runIds": [
+      "auto_run_e4daf30d029ffa06",
+      "auto_run_2c751b55cafe8547",
+      "auto_run_2b292ce1b290ed03",
+      "auto_run_3362d86c4219fcea",
+      "auto_run_f2a7443de8023e6e",
+      "auto_run_147acc930a2c0600",
+      "auto_run_dfd3770c639cd5d8"
+    ],
+    "savedItemCount": 3,
+    "artifactCount": 1
+  }
+}

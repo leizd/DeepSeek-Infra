@@ -1,8 +1,8 @@
 {
   "schemaVersion": "agent-eval-report.v1",
-  "version": "2.8.2",
-  "commit": "f8469fd",
-  "generatedAt": "2026-07-03T07:46:45Z",
+  "version": "2.9.0",
+  "commit": "43261d6",
+  "generatedAt": "2026-07-04T07:26:11Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -52,7 +52,7 @@
   "details": [
     {
       "id": "agent_001",
-      "task": "\u67e5\u4e00\u4e0b\u6700\u65b0\u7684 OnePlus \u65d7\u8230\u53c2\u6570\u5e76\u7ed9\u51fa\u6765\u6e90",
+      "task": "查一下最新的 OnePlus 旗舰参数并给出来源",
       "tool": {
         "expected": [
           "web_search"
@@ -92,7 +92,7 @@
     },
     {
       "id": "agent_002",
-      "task": "\u5206\u6790\u8fd9\u6bb5\u4ee3\u7801\u91cc\u7684 bug\uff0c\u5e76\u7528\u6570\u503c\u9a8c\u8bc1\u4e00\u4e2a\u8868\u8fbe\u5f0f",
+      "task": "分析这段代码里的 bug，并用数值验证一个表达式",
       "tool": {
         "expected": [
           "python_eval",
@@ -134,7 +134,7 @@
     },
     {
       "id": "agent_003",
-      "task": "\u628a\u8fd9\u4efd\u8c03\u7814\u505a\u6210\u4e00\u4e2a\u53ef\u4e0b\u8f7d\u7684\u5bf9\u6bd4 PPT",
+      "task": "把这份调研做成一个可下载的对比 PPT",
       "tool": {
         "expected": [
           "create_pptx"
@@ -174,7 +174,7 @@
     },
     {
       "id": "agent_004",
-      "task": "\u6293\u53d6\u8fd9\u4e2a\u516c\u5f00\u7f51\u9875\u5e76\u603b\u7ed3\u8981\u70b9",
+      "task": "抓取这个公开网页并总结要点",
       "tool": {
         "expected": [
           "fetch_url"
@@ -214,7 +214,7 @@
     },
     {
       "id": "agent_005",
-      "task": "\u5148\u8054\u7f51\u641c\u7d22\u518d\u6293\u53d6\u6765\u6e90\u9875\uff0c\u6700\u540e\u7efc\u5408\u56de\u7b54",
+      "task": "先联网搜索再抓取来源页，最后综合回答",
       "tool": {
         "expected": [
           "fetch_url",
@@ -256,7 +256,7 @@
     },
     {
       "id": "agent_006",
-      "task": "\u5728\u9879\u76ee\u6587\u6863\u91cc\u68c0\u7d22 APK \u6253\u5305\u6b65\u9aa4\u5e76\u603b\u7ed3",
+      "task": "在项目文档里检索 APK 打包步骤并总结",
       "tool": {
         "expected": [
           "search_files"

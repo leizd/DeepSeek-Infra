@@ -170,6 +170,23 @@ def test_phase7_media_routes_are_not_declared_inline_in_server() -> None:
         assert decorator not in server_source
 
 
+def test_phase8_automation_routes_are_not_declared_inline_in_server() -> None:
+    app = server_module.create_app()
+    paths = _collect_route_paths(app.routes)
+    server_source = Path(server_module.__file__).read_text(encoding="utf-8")
+
+    assert "/api/automation" in paths
+    assert "/api/automation/{automation_id}/run" in paths
+    assert "/api/automation/{automation_id}/runs" in paths
+    assert "create_automation_router()" in server_source
+    for decorator in [
+        '@api.get("/api/automation")',
+        '@api.post("/api/automation")',
+        '@api.post("/api/automation/{automation_id}/run")',
+    ]:
+        assert decorator not in server_source
+
+
 def test_phase_final_chat_routes_split_and_api_surface_intact() -> None:
     server_source = Path(server_module.__file__).read_text(encoding="utf-8")
 

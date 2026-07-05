@@ -128,6 +128,7 @@ from deepseek_infra.web.http_utils import (
     truthy,
 )
 from deepseek_infra.web.routes.a2a import A2ARouteDeps, create_a2a_router
+from deepseek_infra.web.routes.automation import create_automation_router
 from deepseek_infra.web.routes.chat import ChatRouteDeps, create_chat_router
 from deepseek_infra.web.routes.downloads import DownloadsRouteDeps, create_downloads_router
 from deepseek_infra.web.routes.edge import EdgeRouteDeps, create_edge_router
@@ -412,6 +413,7 @@ def create_app() -> FastAPI:
     api.include_router(create_skills_router(_skills_route_deps()))
     api.include_router(create_media_router(_media_route_deps()))
     api.include_router(create_workspace_router(_workspace_route_deps()))
+    api.include_router(create_automation_router())
     api.include_router(create_chat_router(_chat_route_deps()))
 
     def require_trace_api_auth(request: Request) -> None:
