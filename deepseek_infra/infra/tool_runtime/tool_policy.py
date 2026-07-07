@@ -143,39 +143,39 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
     "forget_memory": ToolMetadata(
         "forget_memory", risk="high", requires_confirm=True, capability="assistant",
     ),
-    "browser.open_url": ToolMetadata(
-        "browser.open_url", risk="medium", filesystem=True, timeout_seconds=45,
+    "browser_open_url": ToolMetadata(
+        "browser_open_url", risk="medium", filesystem=True, timeout_seconds=45,
         external_output=True, capability="browser",
     ),
-    "browser.read_page": ToolMetadata(
-        "browser.read_page", risk="medium", filesystem=True, timeout_seconds=30,
+    "browser_read_page": ToolMetadata(
+        "browser_read_page", risk="medium", filesystem=True, timeout_seconds=30,
         external_output=True, capability="browser",
     ),
-    "browser.screenshot": ToolMetadata(
-        "browser.screenshot", risk="medium", filesystem=True, timeout_seconds=30,
+    "browser_screenshot": ToolMetadata(
+        "browser_screenshot", risk="medium", filesystem=True, timeout_seconds=30,
         external_output=True, capability="browser",
     ),
-    "browser.extract_links": ToolMetadata(
-        "browser.extract_links", risk="medium", external_output=True, capability="browser",
+    "browser_extract_links": ToolMetadata(
+        "browser_extract_links", risk="medium", external_output=True, capability="browser",
     ),
-    "browser.extract_dom": ToolMetadata(
-        "browser.extract_dom", risk="medium", external_output=True, capability="browser",
+    "browser_extract_dom": ToolMetadata(
+        "browser_extract_dom", risk="medium", external_output=True, capability="browser",
     ),
-    "browser.scroll": ToolMetadata("browser.scroll", risk="low", capability="browser"),
-    "browser.click": ToolMetadata(
-        "browser.click", risk="high", requires_confirm=True, timeout_seconds=30, capability="browser",
+    "browser_scroll": ToolMetadata("browser_scroll", risk="low", capability="browser"),
+    "browser_click": ToolMetadata(
+        "browser_click", risk="high", requires_confirm=True, timeout_seconds=30, capability="browser",
     ),
-    "browser.type_text": ToolMetadata(
-        "browser.type_text", risk="high", requires_confirm=True, timeout_seconds=30, capability="browser",
+    "browser_type_text": ToolMetadata(
+        "browser_type_text", risk="high", requires_confirm=True, timeout_seconds=30, capability="browser",
     ),
-    "browser.select": ToolMetadata(
-        "browser.select", risk="high", requires_confirm=True, timeout_seconds=30, capability="browser",
+    "browser_select": ToolMetadata(
+        "browser_select", risk="high", requires_confirm=True, timeout_seconds=30, capability="browser",
     ),
-    "browser.download": ToolMetadata(
-        "browser.download", risk="high", filesystem=True, requires_confirm=True,
+    "browser_download": ToolMetadata(
+        "browser_download", risk="high", filesystem=True, requires_confirm=True,
         timeout_seconds=60, external_output=True, capability="browser",
     ),
-    "browser.close_session": ToolMetadata("browser.close_session", risk="low", capability="browser"),
+    "browser_close_session": ToolMetadata("browser_close_session", risk="low", capability="browser"),
 }
 
 
@@ -196,7 +196,7 @@ def all_tool_names() -> tuple[str, ...]:
 CAPABILITY_PROFILES: dict[str, tuple[str, ...]] = {
     "full": all_tool_names(),
     "researcher": ("web_search", "compare_search_results", "fetch_url"),
-    "browser_reader": ("browser.open_url", "browser.read_page", "browser.screenshot", "browser.extract_links"),
+    "browser_reader": ("browser_open_url", "browser_read_page", "browser_screenshot", "browser_extract_links"),
     "coder": ("search_files", "read_file_chunk", "python_eval"),
     "reasoner": (),
     "critic": (),

@@ -15,13 +15,13 @@ def skill_allowed_tools(skill: dict[str, Any]) -> list[str]:
         return tools
     filtered = []
     for tool in tools:
-        if tool == "browser.click" and not bool(policy.get("allowClick")):
+        if tool == "browser_click" and not bool(policy.get("allowClick")):
             continue
-        if tool == "browser.type_text" and not bool(policy.get("allowType")):
+        if tool == "browser_type_text" and not bool(policy.get("allowType")):
             continue
-        if tool == "browser.select" and not bool(policy.get("allowType")):
+        if tool == "browser_select" and not bool(policy.get("allowType")):
             continue
-        if tool == "browser.download" and not bool(policy.get("allowDownload")):
+        if tool == "browser_download" and not bool(policy.get("allowDownload")):
             continue
         filtered.append(tool)
     return filtered

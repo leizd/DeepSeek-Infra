@@ -1,9 +1,9 @@
 export function createNetworkClient(storageKeys) {
-  initAuthToken(storageKeys);
-  const apiAuthToken = "";
+  const apiAuthToken = initAuthToken(storageKeys);
 
   function authHeaders(headers = {}) {
-    return { ...headers };
+    if (!apiAuthToken) return { ...headers };
+    return { ...headers, "Authorization": "Bearer " + apiAuthToken };
   }
 
   function apiFetch(url, options = {}) {
@@ -25,6 +25,9 @@ export function createNetworkClient(storageKeys) {
       }
 
       xhr.open("POST", "/api/file-text");
+      if (apiAuthToken) {
+        xhr.setRequestHeader("Authorization", "Bearer " + apiAuthToken);
+      }
 
       xhr.upload.onprogress = (event) => {
         if (!event.lengthComputable) return;
@@ -71,15 +74,18 @@ export function createNetworkClient(storageKeys) {
 
 function initAuthToken(storageKeys) {
   const params = new URLSearchParams(window.location.search);
+  var token = "";
   try {
     sessionStorage.removeItem(storageKeys.authToken);
   } catch {
     // Some privacy modes disable sessionStorage; cookie auth still works.
   }
   if (params.has("token")) {
+    token = params.get("token") || "";
     params.delete("token");
-    const query = params.toString();
-    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+    var query = params.toString();
+    var nextUrl = window.location.pathname + (query ? "?" + query : "") + window.location.hash;
     window.history.replaceState(null, "", nextUrl);
   }
+  return token;
 }

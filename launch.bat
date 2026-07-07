@@ -13,13 +13,6 @@ if not defined PYTHON_EXE (
     exit /b
 )
 
-REM Try to find pythonw.exe in the same directory as python.exe
-set PYTHONW_EXE=!PYTHON_EXE:python.exe=pythonw.exe!
-
-if exist "!PYTHONW_EXE!" (
-    REM Launch without a console window using pythonw
-    start "" "!PYTHONW_EXE!" "%~dp0launch.py"
-) else (
-    REM Fallback to python.exe with a minimized window
-    start "" /min "!PYTHON_EXE!" "%~dp0launch.py"
-)
+REM Launch using python.exe
+REM The console window will be automatically hidden by the app itself.
+start "" "!PYTHON_EXE!" "%~dp0launch.py"

@@ -315,7 +315,7 @@ def available_tool_definitions() -> list[dict[str, Any]]:
 
 def browser_tool_definitions() -> list[dict[str, Any]]:
     base_properties: dict[str, Any] = {
-        "sessionId": {"type": "string", "description": "Browser session id. Omit only for browser.open_url."},
+        "sessionId": {"type": "string", "description": "Browser session id. Omit only for browser_open_url."},
         "projectId": {"type": "string", "description": "Optional workspace project id for saved media/artifacts."},
         "selector": {"type": "string", "description": "Optional CSS selector scoped to the page."},
         "reason": {"type": "string", "description": "Why this browser action is needed."},
@@ -341,31 +341,31 @@ def browser_tool_definitions() -> list[dict[str, Any]]:
 
     return [
         tool(
-            "browser.open_url",
+            "browser_open_url",
             "Create or reuse an isolated browser session and open one URL through Browser Safety.",
             {"url": {"type": "string", "description": "URL to open."}, "headless": {"type": "boolean"}},
             ["url"],
         ),
-        tool("browser.read_page", "Read visible page text and save a webpage snapshot to Media/RAG.", {}, ["sessionId"]),
-        tool("browser.screenshot", "Capture a screenshot and save it to Media Library.", {"title": {"type": "string"}}, ["sessionId"]),
-        tool("browser.extract_links", "Extract links from the current page.", {}, ["sessionId"]),
-        tool("browser.extract_dom", "Extract HTML from the current page or selector.", {}, ["sessionId"]),
-        tool("browser.scroll", "Scroll the current page.", {"x": {"type": "integer"}, "y": {"type": "integer"}}, ["sessionId"]),
-        tool("browser.click", "Click an element. Form submit/delete/pay/confirm clicks require explicit confirmation.", {}, ["sessionId", "selector"]),
+        tool("browser_read_page", "Read visible page text and save a webpage snapshot to Media/RAG.", {}, ["sessionId"]),
+        tool("browser_screenshot", "Capture a screenshot and save it to Media Library.", {"title": {"type": "string"}}, ["sessionId"]),
+        tool("browser_extract_links", "Extract links from the current page.", {}, ["sessionId"]),
+        tool("browser_extract_dom", "Extract HTML from the current page or selector.", {}, ["sessionId"]),
+        tool("browser_scroll", "Scroll the current page.", {"x": {"type": "integer"}, "y": {"type": "integer"}}, ["sessionId"]),
+        tool("browser_click", "Click an element. Form submit/delete/pay/confirm clicks require explicit confirmation.", {}, ["sessionId", "selector"]),
         tool(
-            "browser.type_text",
+            "browser_type_text",
             "Type or fill text into an element. Password fields and write actions require explicit confirmation.",
             {"text": {"type": "string"}, "fieldType": {"type": "string"}},
             ["sessionId", "selector", "text"],
         ),
-        tool("browser.select", "Select an option in a form control.", {"value": {"type": "string"}}, ["sessionId", "selector", "value"]),
+        tool("browser_select", "Select an option in a form control.", {"value": {"type": "string"}}, ["sessionId", "selector", "value"]),
         tool(
-            "browser.download",
+            "browser_download",
             "Download a URL or link selector into the isolated Browser download directory.",
             {"url": {"type": "string"}, "downloadUrl": {"type": "string"}, "filename": {"type": "string"}},
             ["sessionId"],
         ),
-        tool("browser.close_session", "Close a Browser session and discard its isolated temporary profile.", {}, ["sessionId"]),
+        tool("browser_close_session", "Close a Browser session and discard its isolated temporary profile.", {}, ["sessionId"]),
     ]
 
 
@@ -785,7 +785,7 @@ def execute_tool_call(
         if not decision.allowed:
             return ToolPolicy.denial_output(decision)
     try:
-        if name.startswith("browser."):
+        if name.startswith("browser_"):
             result = browser_action_tool(name, arguments)
             if isinstance(result, dict) and result.get("ok") is False:
                 return {"tool": name, **result}
@@ -871,7 +871,7 @@ def execute_tool_call(
 def browser_action_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     from deepseek_infra.infra.browser.actions import execute_browser_action
 
-    action = str(name or "").removeprefix("browser.")
+    action = str(name or "").removeprefix("browser_")
     return execute_browser_action({**(arguments if isinstance(arguments, dict) else {}), "action": action})
 
 

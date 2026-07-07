@@ -23,7 +23,7 @@
     "required": ["content"],
     "additionalProperties": true
   },
-  "allowedTools": ["browser.open_url", "browser.read_page", "browser.screenshot", "browser.click", "browser.type_text", "browser.select"],
+  "allowedTools": ["browser_open_url", "browser_read_page", "browser_screenshot", "browser_click", "browser_type_text", "browser_select"],
   "browserPolicy": {"allowClick": true, "allowType": true, "allowDownload": false, "requireConfirmation": true},
   "memoryPolicy": {"scope": "none", "read": false, "write": false},
   "artifactPolicy": {"autoSave": false, "types": ["md"]},

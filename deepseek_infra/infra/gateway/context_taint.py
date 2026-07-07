@@ -158,7 +158,7 @@ _RAG_RETRIEVAL_TOOLS = {"search_project_documents", "search_files"}
 def _tool_message_source(content: str) -> str:
     match = _TOOL_NAME_IN_RESULT_RE.search(str(content or ""))
     name = match.group(1) if match else ""
-    if name.startswith("browser."):
+    if name.startswith("browser_"):
         return UNTRUSTED_BROWSER
     # External MCP bridged tools are always untrusted.
     if name.startswith("mcp__"):

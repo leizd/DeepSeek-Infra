@@ -227,6 +227,13 @@
   max-width: 1200px;
   margin: 0 auto;
   width: 100%;
+  pointer-events: none;
+}
+.vaultr-ui .vaultr-hero-actions,
+.vaultr-ui .vaultr-tabs,
+.vaultr-ui .vaultr-grid,
+.vaultr-ui .vaultr-module-grid {
+  pointer-events: auto;
 }
 
 .vaultr-ui .vaultr-hero {
@@ -245,6 +252,7 @@
   gap: 20px;
   overflow: hidden;
   margin-bottom: 26px;
+  pointer-events: auto;
 }
 .vaultr-ui .vaultr-hero::after {
   content: "";
@@ -257,6 +265,7 @@
   background: linear-gradient(180deg, #9fc9ff 0 44%, #415e92 45% 58%, #f6d88c 59% 100%);
   box-shadow: var(--shadow-sm);
   transform: rotate(3deg);
+  pointer-events: none;
 }
 .vaultr-ui .vaultr-hero-kicker {
   display: inline-block;

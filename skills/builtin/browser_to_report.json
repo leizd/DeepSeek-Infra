@@ -24,7 +24,7 @@
     "required": ["content"],
     "additionalProperties": true
   },
-  "allowedTools": ["browser.open_url", "browser.read_page", "browser.screenshot", "browser.extract_links", "browser.download", "search_files", "create_document"],
+  "allowedTools": ["browser_open_url", "browser_read_page", "browser_screenshot", "browser_extract_links", "browser_download", "search_files", "create_document"],
   "browserPolicy": {"allowClick": false, "allowType": false, "allowDownload": true, "requireConfirmation": true},
   "memoryPolicy": {"scope": "project", "read": true, "write": false},
   "artifactPolicy": {"autoSave": true, "types": ["md", "docx", "pdf"]},
