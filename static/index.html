@@ -40,8 +40,9 @@
     <link rel="stylesheet" href="/vendor/katex/katex.min.css" />
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/gemini.css" />
+    <link rel="stylesheet" href="/vaultr-brutalist.css" />
   </head>
-  <body class="gemini-ui">
+  <body class="vaultr-ui">
     <div class="app-shell is-empty">
       <div class="offline-banner" id="offlineBanner" hidden>
         <strong>离线模式</strong>
@@ -63,24 +64,100 @@
       </nav>
 
       <section class="empty-state" id="emptyState">
-        <div class="empty-welcome">
-          <h1>你好，今天能帮你点什么？</h1>
+        <div class="vaultr-hero">
+          <div>
+            <span class="vaultr-hero-kicker">LOCAL-FIRST / AGENTIC AI INFRA</span>
+            <h1>PERSONAL INFRA</h1>
+          </div>
+          <div class="vaultr-hero-actions">
+            <div class="segmented" id="modelTabs" aria-label="模型选择">
+              <button type="button" data-mode="fast">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m13 2-8 12h6l-1 8 8-12h-6l1-8Z" />
+                </svg>
+                <span>快速模式</span>
+              </button>
+              <button type="button" data-mode="expert" class="active">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 4 4 12l8 8 8-8-8-8Z" />
+                  <path d="M8.5 12h7" />
+                </svg>
+                <span>专家模式</span>
+              </button>
+            </div>
+          </div>
         </div>
 
-        <div class="segmented" id="modelTabs" aria-label="模型选择">
-          <button type="button" data-mode="fast">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m13 2-8 12h6l-1 8 8-12h-6l1-8Z" />
-            </svg>
-            <span>快速模式</span>
-          </button>
-          <button type="button" data-mode="expert" class="active">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 4 4 12l8 8 8-8-8-8Z" />
-              <path d="M8.5 12h7" />
-            </svg>
-            <span>专家模式</span>
-          </button>
+        <div class="vaultr-tabs" role="tablist" aria-label="Workspace Tabs">
+          <button class="vaultr-tab active">Library</button>
+          <button class="vaultr-tab">Agents</button>
+          <button class="vaultr-tab">Memory</button>
+          <button class="vaultr-tab">Skills</button>
+          <button class="vaultr-tab">Trace</button>
+        </div>
+
+        <div>
+          <section>
+            <h2 class="vaultr-section-title">📌 Pinned Cards</h2>
+            <div class="vaultr-grid">
+              <article class="vaultr-card">
+                <small>CACHE</small>
+                <h3>Prompt Cache</h3>
+                <p>Stable context first, changing task last. Cache hits should feel visible, not hidden.</p>
+              </article>
+              <article class="vaultr-card">
+                <small>AGENT</small>
+                <h3>Agent DAG</h3>
+                <p>Planner → Worker → Critic → Synthesizer. The graph is the product.</p>
+              </article>
+              <article class="vaultr-card">
+                <small>TOOLS</small>
+                <h3>MCP Tools</h3>
+                <p>Local tools exposed through a controlled tool hub with policy gates.</p>
+              </article>
+              <article class="vaultr-card">
+                <small>RAG</small>
+                <h3>Local RAG</h3>
+                <p>Documents, chunks, citations, and retrieval traces as first-class workspace objects.</p>
+              </article>
+            </div>
+          </section>
+
+          <section>
+            <h2 class="vaultr-section-title">▣ Modules</h2>
+            <div class="vaultr-module-grid">
+              <article class="vaultr-module">
+                <span class="vaultr-ghost">G</span>
+                <h3>Gateway</h3>
+                <p>OpenAI-compatible /v1 endpoint, routing, retries, fallback.</p>
+              </article>
+              <article class="vaultr-module">
+                <span class="vaultr-ghost">M</span>
+                <h3>Memory</h3>
+                <p>Personal facts, preferences, goals, conflicts, and scoped recall.</p>
+              </article>
+              <article class="vaultr-module">
+                <span class="vaultr-ghost">S</span>
+                <h3>Skills</h3>
+                <p>Reusable workflows with trust review and version history.</p>
+              </article>
+              <article class="vaultr-module">
+                <span class="vaultr-ghost">A</span>
+                <h3>Automation</h3>
+                <p>Manual, scheduled, interval, and event-triggered local runs.</p>
+              </article>
+              <article class="vaultr-module">
+                <span class="vaultr-ghost">T</span>
+                <h3>Trace</h3>
+                <p>Waterfall spans, health probes, metrics, exportable evidence.</p>
+              </article>
+              <article class="vaultr-module">
+                <span class="vaultr-ghost">W</span>
+                <h3>Workspace</h3>
+                <p>Projects, saved items, artifacts, and export bundles.</p>
+              </article>
+            </div>
+          </section>
         </div>
       </section>
 

@@ -1,566 +1,472 @@
 /* =====================================================================
- * vaultr-brutalist.css — New Brutalist / Vaultr-inspired skin for
- * DeepSeek Infra.
- *
- * This is the canonical stylesheet for the yellow/black brutalist UI.
- * Keep selectors scoped to body.vaultr-ui and body.gemini-ui so older
- * index.html files that still load gemini.css continue to work through the
- * compatibility shim.
+ * vaultr-brutalist.css — Neo-Brutalist skin for DeepSeek Infra.
  * ===================================================================== */
 
-body.vaultr-ui,
-body.gemini-ui {
-  --brutal-ink: #0a0a0a;
-  --brutal-paper: #f7f3df;
-  --brutal-paper-solid: #f7f3df;
-  --brutal-card: #fffbed;
-  --brutal-sunken: #ebe3c2;
-  --brutal-yellow: #ffd400;
-  --brutal-yellow-strong: #e7b900;
-  --brutal-blue: #1e66ff;
-  --brutal-green: #25bd62;
-  --brutal-red: #ff4d4d;
-  --brutal-muted: #5f5b4b;
-  --brutal-shadow: 6px 6px 0 var(--brutal-ink);
-  --brutal-shadow-sm: 3px 3px 0 var(--brutal-ink);
+.vaultr-ui {
+  --ink: #0a0a0a;
+  --paper: #f7f3df;
+  --paper-2: #fffbed;
+  --yellow: #ffd400;
+  --yellow-2: #e7b900;
+  --red: #ff4d4d;
+  --blue: #1e66ff;
+  --green: #33c46a;
+  --muted: #686868;
+  --shadow: 6px 6px 0 var(--ink);
+  --shadow-sm: 3px 3px 0 var(--ink);
 
-  --accent: var(--brutal-yellow);
-  --accent-hover: var(--brutal-yellow-strong);
-  --accent-soft: #fff3a0;
-  --brand: var(--brutal-yellow);
-  --brand-strong: var(--brutal-yellow-strong);
-  --brand-soft: #fff3a0;
-
-  --bg-base: var(--brutal-paper);
-  --bg-base-solid: var(--brutal-paper-solid);
-  --bg-elevated: var(--brutal-card);
-  --bg-sunken: var(--brutal-sunken);
-  --bg-hover: #fff2a8;
-  --surface-user: var(--brutal-yellow);
-  --surface-assistant: var(--brutal-card);
-  --surface-search: var(--brutal-sunken);
-
-  --text-primary: var(--brutal-ink);
-  --text-secondary: #27230f;
-  --text-tertiary: var(--brutal-muted);
-  --text-on-accent: var(--brutal-ink);
-
-  --border-subtle: var(--brutal-ink);
-  --border-default: var(--brutal-ink);
-  --border-strong: var(--brutal-ink);
-
-  --radius-sm: 0px;
-  --radius-md: 0px;
-  --radius-lg: 0px;
-  --radius-full: 0px;
-
-  --shadow-sm: var(--brutal-shadow-sm);
-  --shadow-md: var(--brutal-shadow);
-  --shadow-lg: 8px 8px 0 var(--brutal-ink);
-  --shadow-popover: 10px 10px 0 var(--brutal-ink);
-
-  --bg: var(--bg-base);
-  --surface: var(--bg-elevated);
-  --surface-soft: var(--bg-sunken);
-  --surface-blue: var(--accent-soft);
-  --text: var(--text-primary);
-  --muted: var(--text-tertiary);
-  --muted-strong: var(--text-secondary);
-  --line: var(--border-default);
-  --line-strong: var(--border-strong);
-  --shadow-soft: var(--shadow-md);
-  --shadow-card: var(--shadow-lg);
-
-  font-family:
-    "Courier New",
-    "JetBrains Mono",
-    "SF Mono",
-    Menlo,
-    Consolas,
-    "PingFang SC",
-    "Microsoft YaHei",
-    monospace;
-  background: var(--brutal-paper);
-}
-
-body.vaultr-ui *,
-body.gemini-ui * {
-  scrollbar-color: var(--brutal-ink) var(--brutal-paper);
-}
-
-body.vaultr-ui .app-shell,
-body.gemini-ui .app-shell {
+  --font-body: "Courier New", "JetBrains Mono", "SF Mono", "Microsoft YaHei", monospace;
+  --bg-base: var(--paper);
+  --bg-elevated: var(--paper-2);
+  --bg-sunken: #fff7bd;
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink);
+  --text-tertiary: var(--muted);
+  --border-subtle: var(--ink);
+  --border-default: var(--ink);
+  --border-strong: var(--ink);
+  
+  --radius-md: 0;
+  --radius-lg: 0;
+  
   background:
-    linear-gradient(90deg, rgba(10, 10, 10, 0.04) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(10, 10, 10, 0.04) 1px, transparent 1px),
-    radial-gradient(70% 50% at 50% 10%, rgba(255, 212, 0, 0.28), transparent 62%),
-    var(--brutal-paper);
-  background-size: 24px 24px, 24px 24px, auto, auto;
+    linear-gradient(90deg, rgba(10,10,10,.035) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(10,10,10,.035) 1px, transparent 1px),
+    var(--paper);
+  background-size: 24px 24px;
+  color: var(--ink);
+  font-family: var(--font-body);
 }
 
-/* Left rail: product identity should feel like a hard machine edge. */
-body.vaultr-ui .official-rail,
-body.gemini-ui .official-rail {
-  background: var(--brutal-yellow);
-  border-right: 4px solid var(--brutal-ink);
-  box-shadow: none;
+.vaultr-ui .app-shell {
+  background: transparent !important;
 }
 
-body.vaultr-ui .brand-mark,
-body.gemini-ui .brand-mark {
-  width: 46px;
-  height: 46px;
-  border: 4px solid var(--brutal-ink);
-  background: var(--brutal-ink);
-  color: var(--brutal-yellow);
-  box-shadow: var(--brutal-shadow-sm);
+/* Base resets for structural borders */
+.vaultr-ui * {
+  border-radius: 0 !important;
+}
+
+/* Left Rail (nav.official-rail) */
+.vaultr-ui .official-rail {
+  border-right: 4px solid var(--ink);
+  background: var(--yellow);
+}
+
+.vaultr-ui .brand-mark {
+  border: 4px solid var(--ink);
+  background: var(--ink);
+  color: var(--yellow);
+  font-weight: 950;
+  letter-spacing: -2px;
+  box-shadow: var(--shadow-sm);
   transform: rotate(-2deg);
-  font-weight: 950;
-  letter-spacing: -1px;
-  text-transform: uppercase;
+  display: grid;
+  place-items: center;
+  text-decoration: none;
+  margin: 14px;
 }
-
-body.vaultr-ui .brand-mark span,
-body.gemini-ui .brand-mark span {
-  max-width: 42px;
-  overflow: hidden;
-  text-overflow: clip;
-  white-space: nowrap;
-  color: transparent;
-  font-size: 10px;
-  line-height: 1;
-}
-
-body.vaultr-ui .brand-mark span::before,
-body.gemini-ui .brand-mark span::before {
-  content: "DS";
+.vaultr-ui .brand-mark span {
   display: block;
-  color: var(--brutal-yellow);
-  font-size: 18px;
 }
 
-/* Home: turn the empty state into a brutalist infra poster. */
-body.vaultr-ui .empty-state,
-body.gemini-ui .empty-state {
-  width: min(1080px, calc(100vw - 112px));
-  align-items: stretch;
-  gap: 18px;
+.vaultr-ui .official-rail .icon-button {
+  border: 3px solid var(--ink);
+  background: var(--paper-2);
+  box-shadow: var(--shadow-sm);
+  color: var(--ink);
+  margin: 10px;
 }
 
-body.vaultr-ui .empty-welcome,
-body.gemini-ui .empty-welcome {
-  position: relative;
-  min-height: 220px;
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-start;
-  border: 4px solid var(--brutal-ink);
-  background:
-    radial-gradient(circle at 86% 14%, rgba(255, 255, 255, 0.95) 0 8%, transparent 9%),
-    linear-gradient(135deg, rgba(255, 212, 0, 0.94), rgba(255, 212, 0, 0.55) 36%, rgba(30, 102, 255, 0.20) 37%, transparent 64%),
-    repeating-linear-gradient(-8deg, #d7d0b3 0 8px, #c7bfa1 8px 16px);
-  box-shadow: var(--brutal-shadow);
-  padding: 24px;
-  overflow: hidden;
+.vaultr-ui .official-rail .icon-button:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--ink);
+  background: var(--paper-2);
 }
 
-body.vaultr-ui .empty-welcome::before,
-body.gemini-ui .empty-welcome::before {
-  content: "LOCAL-FIRST / AGENTIC AI INFRA";
-  position: absolute;
-  top: 20px;
-  left: 22px;
-  width: auto;
-  height: auto;
-  border: 3px solid var(--brutal-ink);
-  background: var(--brutal-card);
-  color: var(--brutal-ink);
-  padding: 6px 9px;
-  font-size: 12px;
-  font-weight: 950;
-  box-shadow: var(--brutal-shadow-sm);
-  opacity: 1;
-  transform: rotate(-1deg);
-}
-
-body.vaultr-ui .empty-welcome::after,
-body.gemini-ui .empty-welcome::after {
-  content: "";
-  position: absolute;
-  right: 26px;
-  top: 28px;
-  width: 130px;
-  height: 82px;
-  border: 4px solid var(--brutal-ink);
-  background: linear-gradient(180deg, #9fc9ff 0 44%, #415e92 45% 58%, #f6d88c 59% 100%);
-  box-shadow: var(--brutal-shadow-sm);
-  transform: rotate(3deg);
-}
-
-body.vaultr-ui .empty-welcome h1,
-body.gemini-ui .empty-welcome h1 {
-  max-width: 800px;
-  margin: 0;
-  color: var(--brutal-ink);
-  font-size: 0;
-  line-height: 0.84;
-  letter-spacing: -4px;
-  font-weight: 950;
-  text-transform: uppercase;
-  text-shadow: 5px 5px 0 var(--brutal-yellow);
-}
-
-body.vaultr-ui .empty-welcome h1::before,
-body.gemini-ui .empty-welcome h1::before {
-  content: "PERSONAL INFRA";
-  display: block;
-  font-size: clamp(42px, 8vw, 92px);
-}
-
-/* Model tabs become workspace tabs instead of soft pills. */
-body.vaultr-ui .segmented,
-body.gemini-ui .segmented {
-  align-self: flex-start;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  padding: 0;
-}
-
-body.vaultr-ui .segmented::before,
-body.gemini-ui .segmented::before {
-  content: "LIBRARY";
-}
-
-body.vaultr-ui .segmented::after,
-body.gemini-ui .segmented::after {
-  content: "MEMORY";
-}
-
-body.vaultr-ui .segmented::before,
-body.vaultr-ui .segmented::after,
-body.vaultr-ui .segmented button,
-body.gemini-ui .segmented::before,
-body.gemini-ui .segmented::after,
-body.gemini-ui .segmented button {
-  border: 3px solid var(--brutal-ink);
-  border-radius: 0;
-  background: var(--brutal-card);
-  color: var(--brutal-ink);
-  box-shadow: var(--brutal-shadow-sm);
-  padding: 10px 14px;
-  font-size: 13px;
-  font-weight: 950;
-  text-transform: uppercase;
-}
-
-body.vaultr-ui .segmented button.active,
-body.gemini-ui .segmented button.active {
-  background: var(--brutal-ink);
-  color: var(--brutal-yellow);
-}
-
-body.vaultr-ui .segmented button span,
-body.gemini-ui .segmented button span {
-  font-size: 0;
-}
-
-body.vaultr-ui .segmented button[data-mode="fast"] span::before,
-body.gemini-ui .segmented button[data-mode="fast"] span::before {
-  content: "AGENTS";
-  font-size: 13px;
-}
-
-body.vaultr-ui .segmented button[data-mode="expert"] span::before,
-body.gemini-ui .segmented button[data-mode="expert"] span::before {
-  content: "TRACE";
-  font-size: 13px;
-}
-
-/* Composer: a visible command block, not a floating glass input. */
-body.vaultr-ui .composer,
-body.gemini-ui .composer {
-  border: 4px solid var(--brutal-ink);
-  border-radius: 0;
-  background: var(--brutal-card);
-  box-shadow: var(--brutal-shadow);
+/* Composer Input */
+.vaultr-ui .composer {
+  border: 4px solid var(--ink);
+  box-shadow: var(--shadow);
+  background: var(--paper-2);
   padding: 12px;
+  margin: 0 24px 24px 24px;
 }
 
-body.vaultr-ui .composer:focus-within,
-body.gemini-ui .composer:focus-within {
-  border-color: var(--brutal-ink);
-  box-shadow: 8px 8px 0 var(--brutal-yellow-strong);
-}
-
-body.vaultr-ui #promptInput,
-body.gemini-ui #promptInput {
-  color: var(--brutal-ink);
+.vaultr-ui .composer textarea {
   font-family: inherit;
   font-size: 16px;
+  color: var(--ink);
 }
 
-body.vaultr-ui #promptInput::placeholder,
-body.gemini-ui #promptInput::placeholder {
-  color: var(--brutal-muted);
-}
-
-body.vaultr-ui .composer-footer,
-body.gemini-ui .composer-footer {
-  border-top: 3px solid var(--brutal-ink);
+.vaultr-ui .composer-footer {
+  border-top: 3px solid var(--ink);
   padding-top: 10px;
 }
 
-/* Tooling controls: hard physical switches. */
-body.vaultr-ui .tool-chip,
-body.vaultr-ui .icon-button,
-body.vaultr-ui .send-button,
-body.vaultr-ui .pause-button,
-body.vaultr-ui .stop-button,
-body.vaultr-ui .secondary-button,
-body.vaultr-ui .danger-button,
-body.vaultr-ui .seek-save-button,
-body.vaultr-ui .seek-primary-button,
-body.gemini-ui .tool-chip,
-body.gemini-ui .icon-button,
-body.gemini-ui .send-button,
-body.gemini-ui .pause-button,
-body.gemini-ui .stop-button,
-body.gemini-ui .secondary-button,
-body.gemini-ui .danger-button,
-body.gemini-ui .seek-save-button,
-body.gemini-ui .seek-primary-button {
-  border: 3px solid var(--brutal-ink);
-  border-radius: 0;
-  background: var(--brutal-card);
-  color: var(--brutal-ink);
-  box-shadow: var(--brutal-shadow-sm);
-  font-weight: 950;
+.vaultr-ui .tool-chip {
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--ink);
+  text-transform: uppercase;
+  box-shadow: none;
 }
 
-body.vaultr-ui .tool-chip[aria-pressed="true"],
-body.vaultr-ui .send-button,
-body.vaultr-ui .history-row-button--primary,
-body.vaultr-ui .seek-save-button,
-body.vaultr-ui .seek-primary-button,
-body.gemini-ui .tool-chip[aria-pressed="true"],
-body.gemini-ui .send-button,
-body.gemini-ui .history-row-button--primary,
-body.gemini-ui .seek-save-button,
-body.gemini-ui .seek-primary-button {
-  background: var(--brutal-yellow);
-  color: var(--brutal-ink);
+.vaultr-ui .tool-chip[aria-pressed="true"] {
+  background: var(--yellow);
+  color: var(--ink);
 }
 
-body.vaultr-ui .danger-button,
-body.gemini-ui .danger-button {
-  background: var(--brutal-red);
-  color: var(--brutal-ink);
+.vaultr-ui .send-button {
+  border: 3px solid var(--ink);
+  background: var(--yellow);
+  color: var(--ink);
+  padding: 10px 13px;
+  box-shadow: var(--shadow-sm);
 }
 
-body.vaultr-ui .tool-chip:hover,
-body.vaultr-ui .icon-button:hover,
-body.vaultr-ui .send-button:hover,
-body.vaultr-ui .secondary-button:hover,
-body.vaultr-ui .danger-button:hover,
-body.vaultr-ui .seek-save-button:hover,
-body.vaultr-ui .seek-primary-button:hover,
-body.gemini-ui .tool-chip:hover,
-body.gemini-ui .icon-button:hover,
-body.gemini-ui .send-button:hover,
-body.gemini-ui .secondary-button:hover,
-body.gemini-ui .danger-button:hover,
-body.gemini-ui .seek-save-button:hover,
-body.gemini-ui .seek-primary-button:hover {
+.vaultr-ui .send-button:hover {
   transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0 var(--brutal-ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  background: var(--yellow);
 }
 
-/* Chat messages: note cards with visible material boundaries. */
-body.vaultr-ui .message,
-body.gemini-ui .message,
-body.vaultr-ui .message-content,
-body.vaultr-ui .message-bubble,
-body.vaultr-ui .assistant-message,
-body.vaultr-ui .user-message,
-body.gemini-ui .message-content,
-body.gemini-ui .message-bubble,
-body.gemini-ui .assistant-message,
-body.gemini-ui .user-message {
-  border-radius: 0;
+/* Message Bubbles */
+.vaultr-ui .chat-message {
+  border: 4px solid var(--ink);
+  background: var(--paper-2);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 24px;
+  padding: 16px;
 }
 
-body.vaultr-ui .message-content,
-body.gemini-ui .message-content {
-  border: 3px solid var(--brutal-ink);
-  background: var(--brutal-card);
-  box-shadow: var(--brutal-shadow-sm);
-  padding: 14px;
+.vaultr-ui .chat-message.is-user,
+.vaultr-ui .chat-message[data-role="user"] {
+  background: var(--yellow);
 }
 
-body.vaultr-ui .message.user .message-content,
-body.gemini-ui .message.user .message-content {
-  background: var(--brutal-yellow);
+.vaultr-ui .chat-message.is-assistant,
+.vaultr-ui .chat-message[data-role="assistant"] {
+  background: #fff;
 }
 
-/* Panels and popovers: no polite glass drawers. */
-body.vaultr-ui .history-panel,
-body.vaultr-ui .settings-panel,
-body.vaultr-ui .seek-panel,
-body.vaultr-ui .project-panel,
-body.vaultr-ui .activity-panel,
-body.vaultr-ui .search-panel,
-body.vaultr-ui .memory-panel,
-body.vaultr-ui .diagnostics-panel,
-body.vaultr-ui .file-preview-panel,
-body.vaultr-ui .skill-panel,
-body.vaultr-ui .command-palette-box,
-body.vaultr-ui .shortcut-panel-box,
-body.vaultr-ui .confirm-dialog-box,
-body.vaultr-ui .image-lightbox-box,
-body.gemini-ui .history-panel,
-body.gemini-ui .settings-panel,
-body.gemini-ui .seek-panel,
-body.gemini-ui .project-panel,
-body.gemini-ui .activity-panel,
-body.gemini-ui .search-panel,
-body.gemini-ui .memory-panel,
-body.gemini-ui .diagnostics-panel,
-body.gemini-ui .file-preview-panel,
-body.gemini-ui .skill-panel,
-body.gemini-ui .command-palette-box,
-body.gemini-ui .shortcut-panel-box,
-body.gemini-ui .confirm-dialog-box,
-body.gemini-ui .image-lightbox-box {
-  border: 4px solid var(--brutal-ink);
-  border-radius: 0;
-  background: var(--brutal-paper);
-  box-shadow: var(--brutal-shadow);
+/* Side Panels */
+.vaultr-ui .history-panel,
+.vaultr-ui .settings-panel,
+.vaultr-ui .seek-panel,
+.vaultr-ui .project-panel,
+.vaultr-ui .activity-panel,
+.vaultr-ui .search-panel,
+.vaultr-ui .memory-panel,
+.vaultr-ui .diagnostics-panel,
+.vaultr-ui .file-preview-panel,
+.vaultr-ui .skill-panel {
+  border-left: 4px solid var(--ink);
+  background: var(--paper);
+  padding: 18px;
 }
 
-body.vaultr-ui .history-header,
-body.vaultr-ui .project-panel-header,
-body.vaultr-ui .skill-panel-header,
-body.vaultr-ui .settings-header,
-body.vaultr-ui .seek-panel-header,
-body.vaultr-ui .memory-panel-header,
-body.gemini-ui .history-header,
-body.gemini-ui .project-panel-header,
-body.gemini-ui .skill-panel-header,
-body.gemini-ui .settings-header,
-body.gemini-ui .seek-panel-header,
-body.gemini-ui .memory-panel-header {
-  border-bottom: 4px solid var(--brutal-ink);
-  background: var(--brutal-yellow);
+.vaultr-ui .history-row-button,
+.vaultr-ui .secondary-button,
+.vaultr-ui .danger-button,
+.vaultr-ui .seek-primary-button,
+.vaultr-ui .seek-save-button {
+  border: 3px solid var(--ink);
+  background: var(--paper-2);
+  font-weight: 950;
+  text-transform: uppercase;
+  box-shadow: var(--shadow-sm);
+  color: var(--ink);
+  cursor: pointer;
 }
 
-body.vaultr-ui input,
-body.vaultr-ui textarea,
-body.vaultr-ui select,
-body.gemini-ui input,
-body.gemini-ui textarea,
-body.gemini-ui select {
-  border-radius: 0 !important;
-  border-color: var(--brutal-ink) !important;
-  background: var(--brutal-card) !important;
-  color: var(--brutal-ink) !important;
+.vaultr-ui .history-row-button:hover,
+.vaultr-ui .secondary-button:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+
+.vaultr-ui .history-row-button--primary {
+  background: var(--yellow);
+}
+
+.vaultr-ui .history-header {
+  border-bottom: 3px solid var(--ink);
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+/* Inputs in panels */
+.vaultr-ui input[type="text"],
+.vaultr-ui input[type="search"],
+.vaultr-ui textarea,
+.vaultr-ui select {
+  border: 3px solid var(--ink);
+  background: var(--paper-2);
+  padding: 8px 12px;
+  color: var(--ink);
   font-family: inherit;
 }
 
-body.vaultr-ui input:focus,
-body.vaultr-ui textarea:focus,
-body.vaultr-ui select:focus,
-body.gemini-ui input:focus,
-body.gemini-ui textarea:focus,
-body.gemini-ui select:focus {
-  outline: 3px solid var(--brutal-yellow);
+.vaultr-ui input:focus,
+.vaultr-ui textarea:focus {
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 
-body.vaultr-ui .history-item,
-body.vaultr-ui .project-card,
-body.vaultr-ui .project-document-card,
-body.vaultr-ui .skill-card,
-body.vaultr-ui .skill-run-card,
-body.vaultr-ui .memory-item,
-body.vaultr-ui .search-result,
-body.vaultr-ui .file-preview-card,
-body.vaultr-ui .diagnostic-card,
-body.gemini-ui .history-item,
-body.gemini-ui .project-card,
-body.gemini-ui .project-document-card,
-body.gemini-ui .skill-card,
-body.gemini-ui .skill-run-card,
-body.gemini-ui .memory-item,
-body.gemini-ui .search-result,
-body.gemini-ui .file-preview-card,
-body.gemini-ui .diagnostic-card {
-  border: 3px solid var(--brutal-ink);
-  border-radius: 0;
-  background: var(--brutal-card);
-  box-shadow: var(--brutal-shadow-sm);
+/* Dashboard / Empty State styles */
+.vaultr-ui .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
 }
 
-body.vaultr-ui code,
-body.vaultr-ui pre,
-body.gemini-ui code,
-body.gemini-ui pre {
-  border-radius: 0;
-  border-color: var(--brutal-ink);
-  font-family: "JetBrains Mono", "Courier New", monospace;
+.vaultr-ui .vaultr-hero {
+  position: relative;
+  min-height: 210px;
+  border: 4px solid var(--ink);
+  box-shadow: var(--shadow);
+  background:
+    radial-gradient(circle at 80% 10%, rgba(255,255,255,.9) 0 9%, transparent 10%),
+    linear-gradient(135deg, rgba(255,212,0,.94), rgba(255,212,0,.52) 38%, rgba(30,102,255,.25) 39%, transparent 62%),
+    repeating-linear-gradient(-8deg, #d7d0b3 0 8px, #c7bfa1 8px 16px);
+  padding: 22px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  overflow: hidden;
+  margin-bottom: 26px;
+}
+.vaultr-ui .vaultr-hero::after {
+  content: "";
+  position: absolute;
+  right: 26px;
+  top: 24px;
+  width: 128px;
+  height: 82px;
+  border: 4px solid var(--ink);
+  background: linear-gradient(180deg, #9fc9ff 0 44%, #415e92 45% 58%, #f6d88c 59% 100%);
+  box-shadow: var(--shadow-sm);
+  transform: rotate(3deg);
+}
+.vaultr-ui .vaultr-hero-kicker {
+  display: inline-block;
+  margin-bottom: 12px;
+  border: 3px solid var(--ink);
+  background: var(--paper-2);
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  box-shadow: var(--shadow-sm);
+}
+.vaultr-ui .vaultr-hero h1 {
+  margin: 0;
+  max-width: 840px;
+  font-size: clamp(42px, 8vw, 90px);
+  line-height: .85;
+  letter-spacing: -4px;
+  text-transform: uppercase;
+  text-shadow: 5px 5px 0 var(--yellow);
+  color: var(--ink);
+  font-family: inherit;
+}
+.vaultr-ui .vaultr-hero-actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.vaultr-ui .brutal-btn {
+  border: 3px solid var(--ink);
+  background: var(--paper-2);
+  color: var(--ink);
+  padding: 10px 13px;
+  font-weight: 950;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  text-transform: uppercase;
+}
+.vaultr-ui .brutal-btn.primary { background: var(--yellow); }
+.vaultr-ui .brutal-btn:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.vaultr-ui .vaultr-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 22px;
+}
+.vaultr-ui .vaultr-tab {
+  border: 3px solid var(--ink);
+  background: var(--paper-2);
+  padding: 10px 14px;
+  font-weight: 950;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  color: var(--ink);
+  font-family: inherit;
+}
+.vaultr-ui .vaultr-tab.active {
+  background: var(--ink);
+  color: var(--yellow);
+}
+.vaultr-ui .vaultr-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 14px;
+  border: 3px solid var(--ink);
+  background: var(--yellow);
+  box-shadow: var(--shadow-sm);
+  padding: 8px 12px;
+  font-size: 15px;
+  font-weight: 950;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.vaultr-ui .vaultr-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 30px;
+}
+.vaultr-ui .vaultr-card {
+  position: relative;
+  min-height: 132px;
+  border: 4px solid var(--ink);
+  background: var(--paper-2);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  overflow: hidden;
+}
+.vaultr-ui .vaultr-card:nth-child(2n) { transform: rotate(.5deg); }
+.vaultr-ui .vaultr-card:nth-child(3n) { transform: rotate(-.6deg); }
+.vaultr-ui .vaultr-card::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  right: 18px;
+  width: 16px;
+  height: 28px;
+  background: var(--yellow);
+  border: 3px solid var(--ink);
+}
+.vaultr-ui .vaultr-card small {
+  display: inline-block;
+  margin-bottom: 12px;
+  border: 2px solid var(--ink);
+  background: var(--yellow);
+  padding: 3px 6px;
+  font-weight: 900;
+  color: var(--ink);
+}
+.vaultr-ui .vaultr-card h3 {
+  margin: 0 0 10px;
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: -1px;
+  color: var(--ink);
+  font-weight: bold;
+}
+.vaultr-ui .vaultr-card p {
+  margin: 0;
+  color: #333;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.vaultr-ui .vaultr-module-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.vaultr-ui .vaultr-module {
+  position: relative;
+  min-height: 112px;
+  border: 4px solid var(--ink);
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  padding: 14px;
+  overflow: hidden;
+}
+.vaultr-ui .vaultr-module .vaultr-ghost {
+  position: absolute;
+  right: 10px;
+  top: -16px;
+  font-size: 78px;
+  font-weight: 950;
+  color: rgba(0,0,0,.08);
+  pointer-events: none;
+}
+.vaultr-ui .vaultr-module h3 {
+  position: relative;
+  margin: 0 0 8px;
+  font-size: 21px;
+  z-index: 1;
+  color: var(--ink);
+  font-weight: bold;
+}
+.vaultr-ui .vaultr-module p {
+  position: relative;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  z-index: 1;
 }
 
-body.vaultr-ui .offline-banner,
-body.gemini-ui .offline-banner {
-  border: 3px solid var(--brutal-ink);
-  border-radius: 0;
-  background: var(--brutal-red);
-  color: var(--brutal-ink);
-  box-shadow: var(--brutal-shadow-sm);
+@media (max-width: 1120px) {
+  .vaultr-ui .vaultr-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .vaultr-ui .vaultr-hero { min-height: 220px; align-items: flex-start; flex-direction: column; }
+  .vaultr-ui .vaultr-hero::after { display: none; }
+  .vaultr-ui .vaultr-hero h1 { font-size: clamp(42px, 16vw, 68px); }
+  .vaultr-ui .vaultr-grid, .vaultr-ui .vaultr-module-grid { grid-template-columns: 1fr; }
 }
 
-body.vaultr-ui .jump-latest-button,
-body.gemini-ui .jump-latest-button {
-  border: 3px solid var(--brutal-ink);
-  border-radius: 0;
-  background: var(--brutal-yellow);
-  color: var(--brutal-ink);
-  box-shadow: var(--brutal-shadow-sm);
+/* Segmented tabs overrides for dashboard */
+.vaultr-ui .segmented {
+  background: transparent;
+  border: 3px solid var(--ink);
+  box-shadow: var(--shadow-sm);
+  padding: 0;
+  display: inline-flex;
+  gap: 0;
+  margin: 0;
 }
-
-@media (max-width: 820px) {
-  body.vaultr-ui .official-rail,
-  body.gemini-ui .official-rail {
-    border-right: 0;
-    border-bottom: 4px solid var(--brutal-ink);
-  }
-
-  body.vaultr-ui .empty-state,
-  body.gemini-ui .empty-state {
-    width: calc(100vw - 28px);
-  }
-
-  body.vaultr-ui .empty-welcome,
-  body.gemini-ui .empty-welcome {
-    min-height: 210px;
-    padding: 18px;
-  }
-
-  body.vaultr-ui .empty-welcome::after,
-  body.gemini-ui .empty-welcome::after {
-    display: none;
-  }
-
-  body.vaultr-ui .empty-welcome h1::before,
-  body.gemini-ui .empty-welcome h1::before {
-    font-size: clamp(40px, 15vw, 68px);
-  }
-
-  body.vaultr-ui .composer,
-  body.gemini-ui .composer {
-    box-shadow: 4px 4px 0 var(--brutal-ink);
-  }
+.vaultr-ui .segmented button {
+  border: none;
+  border-right: 3px solid var(--ink);
+  background: var(--paper-2);
+  color: var(--ink);
+  font-weight: 950;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.vaultr-ui .segmented button svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+.vaultr-ui .segmented button:last-child {
+  border-right: none;
+}
+.vaultr-ui .segmented button.active {
+  background: var(--yellow);
+  color: var(--ink);
 }
