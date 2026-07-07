@@ -13,6 +13,5 @@ if not defined PYTHON_EXE (
     exit /b
 )
 
-REM Launch using python.exe
-REM The console window will be automatically hidden by the app itself.
-start "" "!PYTHON_EXE!" "%~dp0launch.py"
+REM Launch using python.exe minimized
+start "" /min "!PYTHON_EXE!" "%~dp0launch.py"

@@ -20,24 +20,10 @@ SERVER_READY_TIMEOUT_SECONDS = 8.0
 SERVER_READY_POLL_SECONDS = 0.2
 SERVER_READY_REQUEST_TIMEOUT_SECONDS = 0.75
 
-import ctypes
-
 logger = logging.getLogger("deepseek_infra.desktop_app")
 
 
-def hide_console_window() -> None:
-    try:
-        kernel32 = ctypes.WinDLL('kernel32')
-        user32 = ctypes.WinDLL('user32')
-        hwnd = kernel32.GetConsoleWindow()
-        if hwnd:
-            user32.ShowWindow(hwnd, 0)
-    except Exception:
-        pass
-
-
 def main() -> int:
-    hide_console_window()
     handle: ServerHandle | None = None
     try:
         handle = prepare_and_start(host="127.0.0.1", serve=True)
