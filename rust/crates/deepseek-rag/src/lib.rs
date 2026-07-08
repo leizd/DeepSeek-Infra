@@ -1,5 +1,11 @@
 use deepseek_core::version_info;
 
+pub mod chunk;
+pub mod citation;
+pub mod index;
+pub mod query;
+pub mod score;
+
 pub fn rag_version() -> &'static str {
     version_info().version
 }

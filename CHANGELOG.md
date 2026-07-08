@@ -1,5 +1,23 @@
 # 更新日志
 
+## [3.0.6] - Rust RAG Hot-path MVP
+
+### Added
+- Added pure, testable RAG primitives in `deepseek-rag`:
+  - `chunk`: `RagChunk` and `ChunkMetadata` with normalization and validation (empty id rejection, line-range validation, empty title normalization).
+  - `query`: query normalization (ASCII lowercasing, CJK preservation, whitespace collapse) and simple token split; empty query rejection.
+  - `score`: deterministic lexical scoring with exact-match, token-overlap, title/source-match, and short-chunk bonuses; empty chunks score zero.
+  - `citation`: source + line-range locator formatting with source-only fallback and invalid-range rejection.
+  - `index`: `IndexMetadata` validation (unique chunk ids, valid chunks) and JSON round-trip.
+- Added unit tests for CJK query handling, chunk validation, lexical scoring, citation formatting, and index metadata round-trip.
+
+### Unchanged
+- Does not replace the Python RAG runtime.
+- Does not parse PDF, Word, or PPT documents.
+- Does not use embeddings or vector databases (sqlite-vec, etc.).
+- Does not modify Python FastAPI routes, Docker, or runtime entrypoints.
+- Remains a standalone Rust crate; no Python/Rust bridge introduced.
+
 ## [3.0.3] - Rust Gateway Sidecar MVP
 
 ### Added
