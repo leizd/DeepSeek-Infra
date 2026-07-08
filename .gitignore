@@ -76,3 +76,7 @@ tests/tmp/
 tmp_tests/
 /design-qa.md
 .codex-remote-attachments/
+
+# Rust build artifacts
+rust/target/
+

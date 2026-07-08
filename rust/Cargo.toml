@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "crates/deepseek-core",
+    "crates/deepseek-gateway",
+    "crates/deepseek-mcp",
+    "crates/deepseek-policy",
+    "crates/deepseek-rag",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/anomalyco/deepseek"
+rust-version = "1.85"
+
+[workspace.dependencies]
+
+[profile.release]
+lto = true
