@@ -1,18 +1,16 @@
 # 更新日志
 
-## [3.0.1]
+## [3.0.1] - Rust Core Migration Foundation
 
 ### Added
-
-- Added initial Rust workspace under `rust/`.
-- Added placeholder crates for gateway, MCP, policy, RAG, and shared core code.
-- Added Rust CI checks for formatting, linting, and tests.
+- Added Rust core migration roadmap ([docs/RUST_MIGRATION_ROADMAP.md](docs/RUST_MIGRATION_ROADMAP.md)).
+- Added initial Rust workspace skeleton under `rust/`.
+- Added Rust CI gates for formatting, clippy, and tests.
 
 ### Unchanged
-
 - No runtime behavior changes.
-- Python FastAPI remains the default app entrypoint.
-- Python coverage gate remains unchanged.
+- Python FastAPI remains the default application entrypoint.
+- Existing Python coverage gate remains unchanged.
 
 ## [3.0.0] - Personal AI Runtime GA
 
