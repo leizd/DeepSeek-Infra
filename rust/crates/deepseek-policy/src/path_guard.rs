@@ -5,12 +5,6 @@ use crate::PolicyDecision;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathPolicy;
 
-impl Default for PathPolicy {
-    fn default() -> Self {
-        PathPolicy
-    }
-}
-
 const FORBIDDEN_PATH_COMPONENTS: &[&str] = &[
     ".git", "Windows", "System32", "System", "etc", "bin", "sbin", "boot", "dev", "proc", "sys",
     "usr",
@@ -67,35 +61,35 @@ mod tests {
 
     #[test]
     fn path_guard_allows_workspace_relative_file() {
-        let policy = PathPolicy::default();
+        let policy = PathPolicy;
         let decision = validate_workspace_path(&root(), Path::new("project/file.txt"), &policy);
         assert!(decision.is_allowed());
     }
 
     #[test]
     fn path_guard_denies_parent_traversal() {
-        let policy = PathPolicy::default();
+        let policy = PathPolicy;
         let decision = validate_workspace_path(&root(), Path::new("../secret.txt"), &policy);
         assert!(!decision.is_allowed());
     }
 
     #[test]
     fn path_guard_denies_multi_parent_traversal() {
-        let policy = PathPolicy::default();
+        let policy = PathPolicy;
         let decision = validate_workspace_path(&root(), Path::new("../../etc/passwd"), &policy);
         assert!(!decision.is_allowed());
     }
 
     #[test]
     fn path_guard_denies_git_directory() {
-        let policy = PathPolicy::default();
+        let policy = PathPolicy;
         let decision = validate_workspace_path(&root(), Path::new("project/.git/config"), &policy);
         assert!(!decision.is_allowed());
     }
 
     #[test]
     fn path_guard_denies_windows_system32() {
-        let policy = PathPolicy::default();
+        let policy = PathPolicy;
         let decision =
             validate_workspace_path(&root(), Path::new("C:\\Windows\\System32"), &policy);
         assert!(!decision.is_allowed());
@@ -103,7 +97,7 @@ mod tests {
 
     #[test]
     fn path_guard_allows_nested_normal_directory() {
-        let policy = PathPolicy::default();
+        let policy = PathPolicy;
         let decision = validate_workspace_path(&root(), Path::new("a/b/c/d/file.txt"), &policy);
         assert!(decision.is_allowed());
     }
