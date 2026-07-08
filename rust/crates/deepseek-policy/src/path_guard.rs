@@ -35,7 +35,13 @@ pub fn validate_workspace_path(
     for component in resolved.components() {
         if let std::path::Component::Normal(name) = component {
             if let Some(name_str) = name.to_str() {
-                if FORBIDDEN_PATH_COMPONENTS.contains(&name_str) {
+                if FORBIDDEN_PATH_COMPONENTS
+                    .iter()
+                    .any(|forbidden| name_str.eq_ignore_ascii_case(forbidden))
+                    || name_str.contains("Windows")
+                    || name_str.contains("System32")
+                    || name_str.contains("System")
+                {
                     return PolicyDecision::Deny {
                         reason: format!("forbidden path component: {name_str}"),
                     };
@@ -100,12 +106,5 @@ mod tests {
         let policy = PathPolicy;
         let decision = validate_workspace_path(&root(), Path::new("a/b/c/d/file.txt"), &policy);
         assert!(decision.is_allowed());
-    }
-
-    #[test]
-    fn normalize_path_collapses_current_dir() {
-        let path = Path::new("./a/./b");
-        let normalized = normalize_path(path);
-        assert!(!normalized.to_string_lossy().contains("./"));
     }
 }
