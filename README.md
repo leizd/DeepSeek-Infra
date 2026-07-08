@@ -5,7 +5,7 @@
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-80%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> Rust core migration has started in the 3.0.x line. See [docs/RUST_MIGRATION_ROADMAP.md](docs/RUST_MIGRATION_ROADMAP.md).
+> Rust core migration starts in the 3.0.x line. See `docs/RUST_MIGRATION_ROADMAP.md`.
 
 ## 30 秒概览
 
