@@ -31,7 +31,14 @@ from deepseek_infra.infra.rag import local_rag
 from deepseek_infra.infra.data.memory import build_memory_suggestion, delete_memories_by_query, normalize_memory_scope, retrieve_memories
 from deepseek_infra.infra.tool_runtime.mindmaps import create_mindmap
 from deepseek_infra.infra.tool_runtime.presentations import create_presentation
-from deepseek_infra.infra.tool_runtime.tool_policy import ToolPolicy
+from deepseek_infra.infra.rust_core.policy_client import (
+    check_capability as rust_check_capability,
+    check_path as rust_check_path,
+    check_url as rust_check_url,
+    fallback_to_python_enabled as rust_policy_fallback_enabled,
+    rust_policy_enabled,
+)
+from deepseek_infra.infra.tool_runtime.tool_policy import ToolPolicy, DENY, PolicyDecision, tool_metadata
 from deepseek_infra.infra.data.projects import list_projects, read_project
 from deepseek_infra.infra.data.reminders import create_reminder as create_local_reminder, load_reminders
 from deepseek_infra.infra.tool_runtime.slides_skill import SLIDES_SKILL_DESCRIPTION, SLIDES_SKILL_NAME
@@ -760,6 +767,67 @@ def schema_for_tool(name: str) -> dict[str, Any] | None:
     return tool_parameter_schemas().get(tool_name)
 
 
+def _make_rust_policy_denial(name: str, reason: str, risk: str = "high") -> dict[str, Any]:
+    decision = PolicyDecision(
+        tool=name,
+        action=DENY,
+        risk=risk,
+        reasons=("rust_policy",),
+        violations=(),
+        capability="full",
+        reason=reason,
+        suggestion="Review the Rust Policy decision or disable DEEPSEEK_RUST_POLICY",
+    )
+    return ToolPolicy.denial_output(decision)
+
+
+def _evaluate_rust_policy(name: str, arguments: dict[str, Any], policy: ToolPolicy | None) -> dict[str, Any] | None:
+    if not rust_policy_enabled():
+        return None
+    meta = tool_metadata(name)
+    if meta is None:
+        return None
+
+    # URL guard for network tools.
+    url = str(arguments.get("url") or "").strip()
+    if url and meta.network:
+        result = rust_check_url(url)
+        if result.ok and not result.allowed:
+            return _make_rust_policy_denial(name, f"URL blocked by Rust Policy: {result.reason}", "critical")
+        if not result.ok and not rust_policy_fallback_enabled():
+            return _make_rust_policy_denial(name, f"Rust Policy unreachable: {result.reason}", "critical")
+
+    # Path guard for filesystem tools.
+    requested_path = str(arguments.get("path") or arguments.get("fileId") or "").strip()
+    if requested_path and meta.filesystem:
+        root = str(Path.cwd())
+        result = rust_check_path(root, requested_path)
+        if result.ok and not result.allowed:
+            return _make_rust_policy_denial(name, f"Path blocked by Rust Policy: {result.reason}", "critical")
+        if not result.ok and not rust_policy_fallback_enabled():
+            return _make_rust_policy_denial(name, f"Rust Policy unreachable: {result.reason}", "critical")
+
+    # Capability/risk guard.
+    cap_map = {
+        "research": "NetworkFetch",
+        "browser": "BrowserControl",
+        "code": "ShellExec",
+        "general": "ReadFile",
+        "assistant": "ReadFile",
+    }
+    rust_capability = cap_map.get(meta.capability, "ReadFile")
+    risk_map = {"low": "Low", "medium": "Medium", "high": "High", "critical": "Critical"}
+    max_risk = risk_map.get(meta.risk, "Medium")
+    granted_capabilities = [cap_map.get(c, "ReadFile") for c in (policy.allowed_tools if policy is not None else set())]
+    result = rust_check_capability(rust_capability, granted_capabilities, max_risk)
+    if result.ok and not result.allowed:
+        return _make_rust_policy_denial(name, f"Capability blocked by Rust Policy: {result.reason}", meta.risk)
+    if not result.ok and not rust_policy_fallback_enabled():
+        return _make_rust_policy_denial(name, f"Rust Policy unreachable: {result.reason}", meta.risk)
+
+    return None
+
+
 def execute_tool_call(
     tool_call: dict[str, Any],
     *,
@@ -780,6 +848,9 @@ def execute_tool_call(
         from deepseek_infra.infra.mcp.executor import call_external_mcp_tool
 
         return call_external_mcp_tool(name, arguments, policy, trace_id=trace_id, parent_span_id=parent_span_id)
+    rust_decision = _evaluate_rust_policy(name, arguments, policy)
+    if rust_decision is not None:
+        return rust_decision
     if policy is not None:
         decision = policy.evaluate(name, arguments, schema=schema_for_tool(name))
         if not decision.allowed:

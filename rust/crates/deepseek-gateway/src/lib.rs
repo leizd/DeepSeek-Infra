@@ -70,7 +70,72 @@ pub fn create_app() -> Router {
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/mcp", post(mcp))
+        .route("/policy/url", post(policy_url))
+        .route("/policy/path", post(policy_path))
+        .route("/policy/capability", post(policy_capability))
         .layer(tower_http::trace::TraceLayer::new_for_http())
+}
+
+async fn policy_url(Json(req): Json<serde_json::Value>) -> Json<deepseek_policy::PolicyDecision> {
+    let url = req.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let policy = deepseek_policy::url_guard::UrlPolicy::default();
+    Json(deepseek_policy::url_guard::validate_url_access(
+        url, &policy,
+    ))
+}
+
+async fn policy_path(Json(req): Json<serde_json::Value>) -> Json<deepseek_policy::PolicyDecision> {
+    let root = req.get("root").and_then(|v| v.as_str()).unwrap_or(".");
+    let requested = req.get("requested").and_then(|v| v.as_str()).unwrap_or("");
+    let policy = deepseek_policy::path_guard::PathPolicy;
+    Json(deepseek_policy::path_guard::validate_workspace_path(
+        std::path::Path::new(root),
+        std::path::Path::new(requested),
+        &policy,
+    ))
+}
+
+async fn policy_capability(
+    Json(req): Json<serde_json::Value>,
+) -> Json<deepseek_policy::PolicyDecision> {
+    let requested = req
+        .get("requested")
+        .and_then(|v| v.as_str())
+        .and_then(|s| {
+            serde_json::from_str::<deepseek_policy::capability::Capability>(
+                format!("\"{}\"", s).as_str(),
+            )
+            .ok()
+        })
+        .unwrap_or(deepseek_policy::capability::Capability::ReadFile);
+    let granted: Vec<deepseek_policy::capability::Capability> = req
+        .get("granted")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .filter_map(|s| {
+                    serde_json::from_str::<deepseek_policy::capability::Capability>(
+                        format!("\"{}\"", s).as_str(),
+                    )
+                    .ok()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let max_risk = req
+        .get("max_risk")
+        .and_then(|v| v.as_str())
+        .and_then(|s| {
+            serde_json::from_str::<deepseek_policy::capability::RiskLevel>(
+                format!("\"{}\"", s).as_str(),
+            )
+            .ok()
+        })
+        .unwrap_or(deepseek_policy::capability::RiskLevel::Low);
+    Json(deepseek_policy::capability::is_capability_allowed(
+        requested, &granted, max_risk,
+    ))
 }
 
 async fn mcp(Json(req): Json<serde_json::Value>) -> Json<serde_json::Value> {
@@ -253,5 +318,51 @@ mod tests {
         let (status, _body) =
             send_request(app, "POST", "/v1/chat/completions", Some(body.to_string())).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn policy_url_endpoint_denies_localhost() {
+        let app = create_app();
+        let body = serde_json::json!({"url": "http://localhost:8080/admin"}).to_string();
+        let (status, body) = send_request(app, "POST", "/policy/url", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let decision: deepseek_policy::PolicyDecision = serde_json::from_str(&body).unwrap();
+        assert!(!decision.is_allowed());
+    }
+
+    #[tokio::test]
+    async fn policy_path_endpoint_denies_parent_traversal() {
+        let app = create_app();
+        let body =
+            serde_json::json!({"root": "/workspace", "requested": "../secret.txt"}).to_string();
+        let (status, body) = send_request(app, "POST", "/policy/path", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let decision: deepseek_policy::PolicyDecision = serde_json::from_str(&body).unwrap();
+        assert!(!decision.is_allowed());
+    }
+
+    #[tokio::test]
+    async fn policy_capability_endpoint_denies_missing_capability() {
+        let app = create_app();
+        let body = serde_json::json!({
+            "requested": "ShellExec",
+            "granted": ["ReadFile"],
+            "max_risk": "Critical"
+        })
+        .to_string();
+        let (status, body) = send_request(app, "POST", "/policy/capability", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let decision: deepseek_policy::PolicyDecision = serde_json::from_str(&body).unwrap();
+        assert!(!decision.is_allowed());
+    }
+
+    #[tokio::test]
+    async fn policy_endpoint_returns_structured_decision() {
+        let app = create_app();
+        let body = serde_json::json!({"url": "https://example.com"}).to_string();
+        let (status, body) = send_request(app, "POST", "/policy/url", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let decision: deepseek_policy::PolicyDecision = serde_json::from_str(&body).unwrap();
+        assert!(decision.is_allowed());
     }
 }
