@@ -2,6 +2,9 @@ use deepseek_core::RequestId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod handler;
+pub mod registry;
+
 pub fn mcp_version() -> &'static str {
     deepseek_core::version_info().version
 }
