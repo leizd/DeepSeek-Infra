@@ -16,6 +16,7 @@ repository = "https://github.com/anomalyco/deepseek"
 rust-version = "1.85"
 
 [workspace.dependencies]
-
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 [profile.release]
 lto = true
