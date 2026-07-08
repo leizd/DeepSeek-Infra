@@ -5,6 +5,8 @@ use serde_json::Value;
 pub mod handler;
 pub mod registry;
 
+pub use handler::handle_mcp_message;
+
 pub fn mcp_version() -> &'static str {
     deepseek_core::version_info().version
 }

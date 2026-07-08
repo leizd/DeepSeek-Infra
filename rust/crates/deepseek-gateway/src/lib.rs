@@ -69,7 +69,12 @@ pub fn create_app() -> Router {
         .route("/healthz", get(healthz))
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/mcp", post(mcp))
         .layer(tower_http::trace::TraceLayer::new_for_http())
+}
+
+async fn mcp(Json(req): Json<serde_json::Value>) -> Json<serde_json::Value> {
+    Json(deepseek_mcp::handle_mcp_message(req))
 }
 
 async fn healthz() -> Json<HealthzResponse> {
