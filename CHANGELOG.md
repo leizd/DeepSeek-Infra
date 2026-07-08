@@ -1,5 +1,35 @@
 # 更新日志
 
+## [3.0.3] - Rust Gateway Sidecar MVP
+
+### Added
+- Added independently runnable `deepseek-gateway` Rust crate with `GET /healthz`, `GET /v1/models`, and `POST /v1/chat/completions`.
+- Added OpenAI-compatible request/response types: `ChatCompletionRequest`, `ChatMessage`, `ChatCompletionResponse`, `ChatChoice`, `ModelListResponse`, `ModelDescriptor`.
+- Added deterministic local stub response for `/v1/chat/completions` with payload validation.
+- Added explicit rejection of streaming (`stream: true`) with a structured error in the MVP.
+- Added `tokio`, `axum`, `tower`, `tower-http`, `tracing`, and `tracing-subscriber` to the Rust workspace.
+- Added unit tests for health check, model list, chat validation, minimal non-stream chat, and streaming rejection.
+
+### Unchanged
+- Does not replace the Python FastAPI gateway.
+- Does not change Docker or the default application entrypoint.
+- Does not require API keys or network access.
+
+## [3.0.2] - Rust Protocol Model Foundation
+
+### Added
+- Added shared Rust protocol types in `deepseek-core`: `RequestId`, `TraceId`, `UnixTimestampMillis`, `DeepseekError`, `DeepseekResult<T>`.
+- Added MCP / JSON-RPC 2.0 base types in `deepseek-mcp`: `JsonRpcRequest`, `JsonRpcResponse`, `JsonRpcError`, `JsonRpcNotification`, `ToolDescriptor`, `ToolCallParams`, `ToolCallResult`.
+- Added fixture JSON files under `rust/fixtures/mcp/`.
+- Added round-trip and validation tests for protocol payloads, including invalid JSON-RPC version, missing method, and `id` shape coverage.
+- Added `JsonRpcResponse::is_valid_shape()` to enforce result/error exclusivity.
+
+### Unchanged
+- No Python modules modified.
+- Python FastAPI remains the default entrypoint.
+- Coverage gate remains at 80%.
+- Dockerfile not touched.
+
 ## [3.0.1] - Rust Core Migration Foundation
 
 ### Added

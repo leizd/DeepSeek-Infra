@@ -116,14 +116,17 @@ Rust stack suggestion:
 
 - `tokio`
 - `axum`
-- `reqwest`
 - `serde`
+- `tower`
+- `tower-http`
 - `tracing`
+
+Note: `reqwest` is intentionally deferred until the sidecar needs real upstream proxying (3.0.4 or later).
 
 Quality gates:
 
 - Unit tests for routing and payload validation.
-- Integration tests for streaming behavior.
+- Streaming requests are explicitly rejected with a structured error in the MVP.
 - Compatibility smoke test against the existing Python gateway contract.
 
 ### 3.0.4 — Rust MCP handler MVP
