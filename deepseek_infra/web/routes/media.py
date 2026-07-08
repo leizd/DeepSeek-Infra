@@ -84,7 +84,7 @@ def create_media_router(deps: MediaRouteDeps) -> APIRouter:
         payload = await read_json_body(request, max_bytes=1_000_000)
         if not isinstance(payload, dict):
             raise AppError("Media patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
-        patch = {key: payload[key] for key in ("title", "projectId", "metadata") if key in payload}
+        patch: dict[str, Any] = {key: payload[key] for key in ("title", "projectId", "metadata") if key in payload}
         if not patch:
             raise AppError("Media patch did not include any supported fields", code=ErrorCode.INVALID_PAYLOAD)
         return json_response({"ok": True, "media": library.update_media(media_id, patch)})
