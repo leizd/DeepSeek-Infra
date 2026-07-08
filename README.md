@@ -5,7 +5,7 @@
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-80%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> Rust core migration starts in the 3.0.x line. See `docs/RUST_MIGRATION_ROADMAP.md`.
+> Rust core migration is now in the 3.1.x hybrid integration phase. Python FastAPI remains the default runtime; Rust Gateway / MCP / Policy / RAG components are feature-flagged and discoverable via `GET /api/rust/status`. See `docs/RUST_MIGRATION_ROADMAP.md`.
 
 ## 30 秒概览
 

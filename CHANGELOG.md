@@ -1,5 +1,20 @@
 # 更新日志
 
+## [3.1.0] - Rust Hybrid Runtime Integration Foundation
+
+### Added
+- Added Python-side Rust component discovery module `deepseek_infra/infra/rust_core/` with:
+  - `config.py`: feature flags (`DEEPSEEK_RUST_GATEWAY`, `DEEPSEEK_RUST_MCP`, `DEEPSEEK_RUST_POLICY`, `DEEPSEEK_RUST_RAG`) and configurable `DEEPSEEK_RUST_GATEWAY_URL`.
+  - `registry.py`: `RustRegistry` and `rust_status()` for reporting enabled components and Gateway health.
+  - `health.py`: lightweight HTTP health probe for the Rust Gateway sidecar.
+- Added read-only status endpoint `GET /api/rust/status` behind existing API auth.
+
+### Unchanged
+- All Rust components remain default-disabled; existing Python runtime is unaffected.
+- No Python routes are forwarded to Rust.
+- Docker and release entrypoints are not modified.
+- Coverage gate remains at 80%.
+
 ## [3.0.6] - Rust RAG Hot-path MVP
 
 ### Added

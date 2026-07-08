@@ -189,20 +189,41 @@ Quality gates:
 
 ## 3.1.x Milestones
 
-### 3.1.0 — Hybrid runtime integration
+### 3.1.0 — Hybrid runtime integration foundation
 
 Scope:
 
-- Make Rust services or extensions available from the Python app behind feature flags.
-- Add runtime health status for Rust-backed components.
-- Document fallback behavior.
+- Make Rust services discoverable from the Python app behind feature flags.
+- Add runtime health status for Rust-backed components (`/api/rust/status`).
+- Document fallback behavior and non-goals.
 
-Recommended feature flags:
+Feature flags (default disabled):
 
-- `DEEPSEEK_RUST_GATEWAY=1`
-- `DEEPSEEK_RUST_MCP=1`
-- `DEEPSEEK_RUST_POLICY=1`
-- `DEEPSEEK_RUST_RAG=1`
+- `DEEPSEEK_RUST_GATEWAY=0` (configurable via `DEEPSEEK_RUST_GATEWAY_URL`)
+- `DEEPSEEK_RUST_MCP=0`
+- `DEEPSEEK_RUST_POLICY=0`
+- `DEEPSEEK_RUST_RAG=0`
+
+Implementation:
+
+- `deepseek_infra/infra/rust_core/config.py`: flag parsing and Gateway URL.
+- `deepseek_infra/infra/rust_core/registry.py`: component registry and status aggregation.
+- `deepseek_infra/infra/rust_core/health.py`: HTTP health probe for the Rust Gateway sidecar.
+- `deepseek_infra/web/routes/status.py`: `GET /api/rust/status` (read-only, auth-gated).
+
+Quality gates:
+
+- Default-disabled flag tests.
+- Mocked Gateway health success / failure tests.
+- Route registration and auth tests.
+- No coverage gate increase; no breaking changes to existing Python routes.
+
+Non-goals:
+
+- Does not enable Rust components by default.
+- Does not forward Python `/v1/chat/completions` to Rust.
+- Does not Dockerize or auto-start Rust sidecars.
+- Does not expose Python-to-Rust policy or RAG calls yet.
 
 ### 3.1.1 — Coverage uplift phase 1
 

@@ -39,6 +39,7 @@ class StatusRouteDeps:
     mcp_status: Callable[[], dict[str, Any]]
     a2a_status: Callable[[], dict[str, Any]]
     taint_status: Callable[[], dict[str, Any]]
+    rust_status: Callable[[], dict[str, Any]]
 
 
 def create_status_router(deps: StatusRouteDeps) -> APIRouter:
@@ -138,5 +139,10 @@ def create_status_router(deps: StatusRouteDeps) -> APIRouter:
     async def api_edge_status(request: Request) -> JSONResponse:
         require_api_auth(request)
         return json_response({"ok": True, "edgeInference": deps.edge_inference_status()})
+
+    @router.get("/api/rust/status")
+    async def api_rust_status(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        return json_response({"ok": True, "rust": deps.rust_status()})
 
     return router

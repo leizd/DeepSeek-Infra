@@ -4,7 +4,7 @@
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
-> Rust core migration has started in the 3.0.x line. See [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md). v3.0.1 is a foundation-only release: no modules are Rust-backed yet; the workspace is introduced for CI integration.
+> Rust core migration is now in the 3.1.x hybrid integration phase. The Rust workspace (`rust/`) provides protocol, gateway, policy, and RAG primitives; Python FastAPI remains the default runtime with feature-flagged discovery and health status via `GET /api/rust/status`. See [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
 图例：
 
@@ -27,6 +27,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 | 11 | Multimodal Media Layer | MVP | ✅ [infra/media/](../deepseek_infra/infra/media/) | ✅ | ✅ |
 | 12 | Browser Control Runtime | MVP, release gated | ✅ [infra/browser/](../deepseek_infra/infra/browser/) | ✅ | ✅ |
 | 13 | Automation Runtime | MVP, release gated | ✅ [infra/automation/](../deepseek_infra/infra/automation/) | ✅ | ✅ |
+| 14 | Rust Core Hybrid Runtime | MVP | ✅ [infra/rust_core/](../deepseek_infra/infra/rust_core/) · [rust/](../rust/) | ✅ | ✅ |
 
 横切资产（不算独立模块，但支撑「可验证性」）：
 
