@@ -225,12 +225,43 @@ Non-goals:
 - Does not Dockerize or auto-start Rust sidecars.
 - Does not expose Python-to-Rust policy or RAG calls yet.
 
-### 3.1.1 — Coverage uplift phase 1
+### 3.1.1 — Rust Gateway opt-in proxy integration
 
 Scope:
 
-- Raise Python coverage gate from 80% to an intermediate threshold.
-- Add tests for high-risk existing Python modules before replacing them.
+- Route `/v1/chat/completions` and `/v1/models` to the Rust Gateway sidecar when `DEEPSEEK_RUST_GATEWAY=1`.
+- Keep the existing Python path as the default and as a fallback.
+- Preserve auth headers when forwarding.
+
+Feature flags:
+
+- `DEEPSEEK_RUST_GATEWAY=0` (default)
+- `DEEPSEEK_RUST_GATEWAY_URL=http://127.0.0.1:8787`
+- `DEEPSEEK_RUST_GATEWAY_FALLBACK=1` (default)
+- `DEEPSEEK_RUST_GATEWAY_TIMEOUT_MS=3000` (default)
+
+Implementation:
+
+- `deepseek_infra/infra/rust_core/gateway_client.py`: HTTP proxy client for Rust Gateway.
+- `deepseek_infra/web/routes/chat.py`: opt-in routing for `/v1/chat/completions` and `/v1/models` with Python fallback.
+
+Quality gates:
+
+- Disabled-path test: still uses Python implementation.
+- Enabled-path test: forwards to Rust Gateway.
+- Failure-path tests: fallback to Python when enabled, structured error when disabled.
+- Timeout test: short timeout triggers fallback.
+- Streaming stays on Python path.
+- Auth header preservation test.
+
+Non-goals:
+
+- Does not enable Rust Gateway by default.
+- Does not route MCP, Policy, or RAG to Rust.
+- Does not Dockerize or auto-start the sidecar.
+- Does not raise coverage gate.
+
+### 3.1.2 — Coverage uplift phase 1
 
 Suggested gate:
 

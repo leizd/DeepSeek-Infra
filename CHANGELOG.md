@@ -1,5 +1,19 @@
 # 更新日志
 
+## [3.1.1] - Rust Gateway Opt-in Proxy Integration
+
+### Added
+- Added `deepseek_infra/infra/rust_core/gateway_client.py` to proxy `/v1/chat/completions` and `/v1/models` to the Rust Gateway sidecar when `DEEPSEEK_RUST_GATEWAY=1`.
+- Added `DEEPSEEK_RUST_GATEWAY_FALLBACK` (default `1`) and `DEEPSEEK_RUST_GATEWAY_TIMEOUT_MS` (default `3000`) configuration knobs.
+- Updated `deepseek_infra/web/routes/chat.py` to route OpenAI-compatible chat and model requests to Rust Gateway under the feature flag, with fallback to the existing Python implementation when the sidecar is unreachable or fallback is explicitly enabled.
+- Streaming chat requests continue to use the Python path to avoid breaking existing behavior.
+- Added `tests/test_rust_gateway_proxy.py` covering disabled, enabled, fallback, timeout, and auth-preservation paths.
+
+### Unchanged
+- Rust Gateway remains default-disabled (`DEEPSEEK_RUST_GATEWAY=0`).
+- MCP, Policy, and RAG routes are not proxied to Rust yet.
+- Docker and coverage gates are untouched.
+
 ## [3.1.0] - Rust Hybrid Runtime Integration Foundation
 
 ### Added

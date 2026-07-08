@@ -20,9 +20,23 @@ from deepseek_infra.infra.gateway.openai_api import (
     openai_to_internal_payload,
 )
 from deepseek_infra.infra.gateway.title_generator import generate_title_payload
+from deepseek_infra.infra.rust_core.gateway_client import (
+    fallback_to_python_enabled,
+    proxy_chat_to_rust,
+    proxy_models_to_rust,
+    rust_gateway_enabled,
+)
 from deepseek_infra.web.http_utils import json_response, read_json_body, request_base_url, require_api_auth
 
 STREAM_MEDIA_TYPE = "application/x-ndjson; charset=utf-8"
+
+
+def _authorization_headers(request: Request) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    auth = request.headers.get("Authorization")
+    if auth:
+        headers["Authorization"] = auth
+    return headers
 
 
 @dataclass(frozen=True)
@@ -63,18 +77,41 @@ def create_chat_router(deps: ChatRouteDeps) -> APIRouter:
         require_api_auth(request)
         body = await read_json_body(request, max_bytes=16_000_000)
         payload = openai_to_internal_payload(body, local_base_url=request_base_url(request))
-        model = str(payload["model"])
         if payload.get("stream"):
             return StreamingResponse(
-                openai_chat_stream(payload, model),
+                openai_chat_stream(payload, str(payload["model"])),
                 media_type="text/event-stream",
                 headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
             )
-        return json_response(openai_chat_completion(payload, model))
+        if rust_gateway_enabled():
+            result = proxy_chat_to_rust(payload, headers=_authorization_headers(request))
+            if result.ok:
+                return json_response(result.body)
+            if not fallback_to_python_enabled():
+                from deepseek_infra.core.errors import AppError, ErrorCode
+
+                raise AppError(
+                    f"Rust Gateway unavailable: {result.body}",
+                    code=ErrorCode.UPSTREAM_FAILURE,
+                    status=502,
+                )
+        return json_response(openai_chat_completion(payload, str(payload["model"])))
 
     @router.get("/v1/models")
     async def v1_models(request: Request) -> JSONResponse:
         require_api_auth(request)
+        if rust_gateway_enabled():
+            result = proxy_models_to_rust(headers=_authorization_headers(request))
+            if result.ok:
+                return json_response(result.body)
+            if not fallback_to_python_enabled():
+                from deepseek_infra.core.errors import AppError, ErrorCode
+
+                raise AppError(
+                    f"Rust Gateway unavailable: {result.body}",
+                    code=ErrorCode.UPSTREAM_FAILURE,
+                    status=502,
+                )
         return json_response(openai_models_list())
 
     return router
