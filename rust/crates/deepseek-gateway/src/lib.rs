@@ -73,6 +73,10 @@ pub fn create_app() -> Router {
         .route("/policy/url", post(policy_url))
         .route("/policy/path", post(policy_path))
         .route("/policy/capability", post(policy_capability))
+        .route("/rag/query/normalize", post(rag_query_normalize))
+        .route("/rag/chunks/score", post(rag_chunks_score))
+        .route("/rag/citation/format", post(rag_citation_format))
+        .route("/rag/index/validate", post(rag_index_validate))
         .layer(tower_http::trace::TraceLayer::new_for_http())
 }
 
@@ -140,6 +144,124 @@ async fn policy_capability(
 
 async fn mcp(Json(req): Json<serde_json::Value>) -> Json<serde_json::Value> {
     Json(deepseek_mcp::handle_mcp_message(req))
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagQueryNormalizeRequest {
+    pub query: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagQueryNormalizeResponse {
+    pub normalized: String,
+    pub tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagChunkScoreRequest {
+    pub query: String,
+    pub chunks: Vec<deepseek_rag::chunk::RagChunk>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagChunkScoreResponse {
+    pub ranked: Vec<RagChunkScoreEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagChunkScoreEntry {
+    pub id: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagCitationFormatRequest {
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagCitationFormatResponse {
+    pub citation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagIndexValidateRequest {
+    pub chunks: Vec<deepseek_rag::chunk::RagChunk>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagIndexValidateResponse {
+    pub valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+async fn rag_query_normalize(
+    Json(req): Json<RagQueryNormalizeRequest>,
+) -> Result<Json<RagQueryNormalizeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    match deepseek_rag::query::parse_query(&req.query) {
+        Ok(query) => Ok(Json(RagQueryNormalizeResponse {
+            normalized: query.normalized,
+            tokens: query.tokens,
+        })),
+        Err(err) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": err.to_string()})),
+        )),
+    }
+}
+
+async fn rag_chunks_score(
+    Json(req): Json<RagChunkScoreRequest>,
+) -> Result<Json<RagChunkScoreResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let query = match deepseek_rag::query::parse_query(&req.query) {
+        Ok(q) => q,
+        Err(err) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": err.to_string()})),
+            ));
+        }
+    };
+    let ranked = deepseek_rag::score::rank_chunks(&query, &req.chunks);
+    Ok(Json(RagChunkScoreResponse {
+        ranked: ranked
+            .into_iter()
+            .map(|(id, score)| RagChunkScoreEntry { id, score })
+            .collect(),
+    }))
+}
+
+async fn rag_citation_format(
+    Json(req): Json<RagCitationFormatRequest>,
+) -> Result<Json<RagCitationFormatResponse>, (StatusCode, Json<serde_json::Value>)> {
+    match deepseek_rag::citation::format_citation(&req.source, req.start_line, req.end_line) {
+        Ok(citation) => Ok(Json(RagCitationFormatResponse { citation })),
+        Err(err) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": err.to_string()})),
+        )),
+    }
+}
+
+async fn rag_index_validate(
+    Json(req): Json<RagIndexValidateRequest>,
+) -> Result<Json<RagIndexValidateResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let index = deepseek_rag::index::IndexMetadata { chunks: req.chunks };
+    match deepseek_rag::index::validate_index_metadata(&index) {
+        Ok(()) => Ok(Json(RagIndexValidateResponse {
+            valid: true,
+            error: None,
+        })),
+        Err(err) => Ok(Json(RagIndexValidateResponse {
+            valid: false,
+            error: Some(err.to_string()),
+        })),
+    }
 }
 
 async fn healthz() -> Json<HealthzResponse> {
@@ -364,5 +486,86 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let decision: deepseek_policy::PolicyDecision = serde_json::from_str(&body).unwrap();
         assert!(decision.is_allowed());
+    }
+
+    #[tokio::test]
+    async fn rag_query_normalize_endpoint_preserves_cjk() {
+        let app = create_app();
+        let body = serde_json::json!({"query": "  Rust 语言  "}).to_string();
+        let (status, body) = send_request(app, "POST", "/rag/query/normalize", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: RagQueryNormalizeResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(response.normalized, "rust 语言");
+        assert_eq!(response.tokens, vec!["rust", "语言"]);
+    }
+
+    #[tokio::test]
+    async fn rag_chunk_score_endpoint_ranks_exact_match() {
+        let app = create_app();
+        let chunks = vec![
+            deepseek_rag::chunk::RagChunk {
+                id: "partial".to_string(),
+                source: "docs/example.md".to_string(),
+                text: "deepseek is a company".to_string(),
+                start_line: None,
+                end_line: None,
+                metadata: deepseek_rag::chunk::ChunkMetadata::default(),
+            },
+            deepseek_rag::chunk::RagChunk {
+                id: "exact".to_string(),
+                source: "docs/example.md".to_string(),
+                text: "deepseek infra is a project".to_string(),
+                start_line: None,
+                end_line: None,
+                metadata: deepseek_rag::chunk::ChunkMetadata::default(),
+            },
+        ];
+        let body = serde_json::json!({"query": "deepseek infra", "chunks": chunks}).to_string();
+        let (status, body) = send_request(app, "POST", "/rag/chunks/score", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: RagChunkScoreResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(response.ranked[0].id, "exact");
+        assert!(response.ranked[0].score > response.ranked[1].score);
+    }
+
+    #[tokio::test]
+    async fn rag_citation_endpoint_formats_line_range() {
+        let app = create_app();
+        let body =
+            serde_json::json!({"source": "docs/example.md", "start_line": 10, "end_line": 20})
+                .to_string();
+        let (status, body) = send_request(app, "POST", "/rag/citation/format", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: RagCitationFormatResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(response.citation, "docs/example.md:L10-L20");
+    }
+
+    #[tokio::test]
+    async fn rag_index_validate_endpoint_rejects_duplicate_ids() {
+        let app = create_app();
+        let chunks = vec![
+            deepseek_rag::chunk::RagChunk {
+                id: "a".to_string(),
+                source: "docs/example.md".to_string(),
+                text: "first".to_string(),
+                start_line: None,
+                end_line: None,
+                metadata: deepseek_rag::chunk::ChunkMetadata::default(),
+            },
+            deepseek_rag::chunk::RagChunk {
+                id: "a".to_string(),
+                source: "docs/other.md".to_string(),
+                text: "second".to_string(),
+                start_line: None,
+                end_line: None,
+                metadata: deepseek_rag::chunk::ChunkMetadata::default(),
+            },
+        ];
+        let body = serde_json::json!({"chunks": chunks}).to_string();
+        let (status, body) = send_request(app, "POST", "/rag/index/validate", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: RagIndexValidateResponse = serde_json::from_str(&body).unwrap();
+        assert!(!response.valid);
+        assert!(response.error.unwrap().contains("duplicate"));
     }
 }

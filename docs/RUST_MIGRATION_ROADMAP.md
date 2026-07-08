@@ -331,13 +331,53 @@ Non-goals:
 - Does not Dockerize or auto-start the sidecar.
 - Does not raise coverage gate.
 
-### 3.1.4 — Coverage uplift phase 1
+### 3.1.4 — Rust RAG opt-in integration
 
 Scope:
 
-- Add Rust-backed evidence to release readiness.
-- Add smoke scripts for Rust sidecars/components.
-- Ensure Docker build can include Rust artifacts where needed.
+- Expose RAG hot-path endpoints on the Rust Gateway sidecar backed by `deepseek-rag`.
+- Delegate compatible query normalization, chunk scoring, and citation formatting from Python RAG retrieval to Rust when `DEEPSEEK_RUST_RAG=1`.
+- Keep Python RAG as the default and as a fallback.
+
+Feature flags:
+
+- `DEEPSEEK_RUST_RAG=0` (default)
+- `DEEPSEEK_RUST_RAG_FALLBACK=1` (default)
+- `DEEPSEEK_RUST_RAG_TIMEOUT_MS=3000` (default)
+
+Implementation:
+
+- `rust/crates/deepseek-gateway/src/lib.rs`: add `POST /rag/query/normalize`, `/rag/chunks/score`, `/rag/citation/format`, `/rag/index/validate`.
+- `deepseek_infra/infra/rust_core/rag_client.py`: HTTP proxy client.
+- `deepseek_infra/infra/rag/local_rag.py`: `_search_db` query normalization / chunk scoring boundary and `chunk_lineage` citation formatting.
+
+Quality gates:
+
+- Disabled-path test: still uses Python RAG.
+- Enabled-path tests: query normalization, chunk scoring, and citation formatting delegated to Rust.
+- Failure-path tests: fallback to Python when Rust RAG is enabled but unreachable.
+- CJK query preservation test.
+- Rust sidecar endpoint tests for each RAG hot path.
+
+Non-goals:
+
+- Does not enable Rust RAG by default.
+- Does not replace Python document parsing.
+- Does not call embeddings from Rust.
+- Does not use vector databases from Rust.
+- Does not modify Docker.
+- Does not raise coverage gate.
+
+### 3.1.5 — Coverage uplift phase 1
+
+Scope:
+
+- Raise Python coverage gate from 80% to an intermediate threshold.
+- Add tests for high-risk existing Python modules before replacing them.
+
+Suggested gate:
+
+- 85% first, then 90% after unstable modules are covered.
 
 ## 4.0.0 Release Criteria
 
