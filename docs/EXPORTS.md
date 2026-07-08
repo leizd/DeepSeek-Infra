@@ -1,6 +1,6 @@
-# Exports
+﻿# Exports
 
-Applicable version: v3.0.0.
+Applicable version: v3.0.1.
 
 Workspace exports turn local project objects into portable Markdown, HTML, JSON or ZIP bundles. Export builders live in `deepseek_infra/infra/workspace/exports.py`.
 
