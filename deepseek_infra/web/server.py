@@ -114,6 +114,7 @@ from deepseek_infra.infra.gateway.semantic_cache import status as semantic_cache
 from deepseek_infra.infra.skills import registry as skill_registry
 from deepseek_infra.infra.skills.runner import run_skill
 from deepseek_infra.infra.tool_runtime.tools import fetch_url
+from deepseek_infra.infra.rust_core.registry import rust_status
 from deepseek_infra.web.http_utils import (
     allowed_cors_origin,
     apply_common_headers,
@@ -234,6 +235,7 @@ def _status_route_deps() -> StatusRouteDeps:
         mcp_status=lambda: mcp_status(),
         a2a_status=lambda: a2a_mesh_status(),
         taint_status=lambda: taint_status(),
+        rust_status=lambda: rust_status(),
     )
 
 
