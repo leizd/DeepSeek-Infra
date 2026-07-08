@@ -1,6 +1,6 @@
 ﻿# DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-3.0.1-blue)
+![版本](https://img.shields.io/badge/version-3.0.3-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-80%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
@@ -194,6 +194,33 @@ curl http://127.0.0.1:8000/v1/models -H "Authorization: Bearer <本地访问 tok
 - `GET /v1/models`：列出可用模型（`deepseek-v4-pro` / `deepseek-v4-flash`）。
 - **多 Provider**：启用 Ollama（`OLLAMA_ENABLED=1`）后，`/v1/models` 会额外列出 `ollama/<本地模型>`，请求该模型即走本地 Ollama；DeepSeek 专属的工具 / 搜索 / 多 Agent 仍只在 DeepSeek 模型上可用。
 - 完整字段见 [docs/API.md](docs/API.md)。
+
+## Rust Gateway Sidecar（3.0.3 MVP）
+
+从 3.0.3 起，仓库内新增一个可独立运行的 Rust Gateway sidecar：
+
+```text
+cd rust
+cargo run -p deepseek-gateway
+```
+
+默认监听 `127.0.0.1:8787`，提供：
+
+- `GET /healthz` — 健康探针
+- `GET /v1/models` — OpenAI-compatible 模型列表
+- `POST /v1/chat/completions` — 请求校验 + 确定性本地 stub 响应
+
+```bash
+curl http://127.0.0.1:8787/healthz
+
+curl http://127.0.0.1:8787/v1/models
+
+curl -X POST http://127.0.0.1:8787/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}]}'
+```
+
+3.0.3 设计原则：**先让 Rust Gateway 能独立站起来**，暂时不替换 Python FastAPI 网关、不转发真实 DeepSeek API、不实现流式（`stream: true` 会返回结构化错误）。后续小版本会逐步接入 upstream proxy、MCP 处理、Tool Policy 等能力。详见 `docs/RUST_MIGRATION_ROADMAP.md`。
 
 ## 协议端点（MCP / A2A）
 
