@@ -63,6 +63,12 @@ pub struct JsonRpcResponse {
     pub id: RequestId,
 }
 
+impl JsonRpcResponse {
+    pub fn is_valid_shape(&self) -> bool {
+        self.result.is_some() ^ self.error.is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcError {
     pub code: i64,
@@ -207,6 +213,58 @@ mod tests {
         let serialized = serde_json::to_string(&resp).unwrap();
         let roundtripped: Value = serde_json::from_str(&serialized).unwrap();
         assert_eq!(original, roundtripped);
+    }
+
+    #[test]
+    fn response_with_result_is_valid() {
+        let resp = JsonRpcResponse {
+            jsonrpc: JsonRpcVersion::V2_0,
+            result: Some(serde_json::json!(42)),
+            error: None,
+            id: RequestId::String("r1".to_string()),
+        };
+        assert!(resp.is_valid_shape());
+    }
+
+    #[test]
+    fn response_with_error_is_valid() {
+        let resp = JsonRpcResponse {
+            jsonrpc: JsonRpcVersion::V2_0,
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32601,
+                message: "Method not found".to_string(),
+                data: None,
+            }),
+            id: RequestId::String("r2".to_string()),
+        };
+        assert!(resp.is_valid_shape());
+    }
+
+    #[test]
+    fn response_with_both_result_and_error_is_invalid() {
+        let resp = JsonRpcResponse {
+            jsonrpc: JsonRpcVersion::V2_0,
+            result: Some(serde_json::json!(42)),
+            error: Some(JsonRpcError {
+                code: -32601,
+                message: "Method not found".to_string(),
+                data: None,
+            }),
+            id: RequestId::String("r3".to_string()),
+        };
+        assert!(!resp.is_valid_shape());
+    }
+
+    #[test]
+    fn response_with_neither_result_nor_error_is_invalid() {
+        let resp = JsonRpcResponse {
+            jsonrpc: JsonRpcVersion::V2_0,
+            result: None,
+            error: None,
+            id: RequestId::String("r4".to_string()),
+        };
+        assert!(!resp.is_valid_shape());
     }
 
     #[test]
