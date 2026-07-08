@@ -1,5 +1,19 @@
 # 更新日志
 
+## [3.0.1]
+
+### Added
+
+- Added initial Rust workspace under `rust/`.
+- Added placeholder crates for gateway, MCP, policy, RAG, and shared core code.
+- Added Rust CI checks for formatting, linting, and tests.
+
+### Unchanged
+
+- No runtime behavior changes.
+- Python FastAPI remains the default app entrypoint.
+- Python coverage gate remains unchanged.
+
 ## [3.0.0] - Personal AI Runtime GA
 
 ### Added
