@@ -34,6 +34,7 @@ from deepseek_infra.core.config import (
     PROJECTS_DIR,
 )
 from deepseek_infra.core.utils import query_tokens
+from deepseek_infra.infra.rust_core import rag_client as _rust_rag
 
 logger = logging.getLogger("deepseek_infra.local_rag")
 
@@ -257,6 +258,55 @@ def bm25_scores(
                 score += idf * (freq * (k1 + 1)) / denom
         scores.append(score)
     return scores
+
+
+def _python_normalize_query(query: str) -> str:
+    """Whitespace-collapsed lowercase normalization used as Python fallback."""
+    return " ".join(str(query or "").lower().split())
+
+
+def normalize_search_query(query: str) -> str:
+    """Normalize a search query, preferring Rust when enabled."""
+    normalized, used_rust = _rust_rag.normalize_query(query)
+    if used_rust and normalized is not None:
+        return normalized
+    return _python_normalize_query(query)
+
+
+def _score_chunks_with_rust(query: str, rows: list[sqlite3.Row]) -> tuple[list[float] | None, bool]:
+    """Score candidate chunks via Rust, returning Python-list aligned scores or None."""
+    if not _rust_rag.rust_rag_enabled():
+        return None, False
+    chunks: list[dict[str, Any]] = []
+    for row in rows:
+        meta: dict[str, Any] = {}
+        try:
+            parsed = json.loads(str(row["metadata"] or "{}"))
+            if isinstance(parsed, dict):
+                meta = parsed
+        except json.JSONDecodeError:
+            pass
+        line_start = meta.get("lineStart") if isinstance(meta.get("lineStart"), int) else None
+        line_end = meta.get("lineEnd") if isinstance(meta.get("lineEnd"), int) else None
+        title = meta.get("title") if isinstance(meta.get("title"), str) else None
+        extra: dict[str, str] = {}
+        if isinstance(meta, dict):
+            for key, value in meta.items():
+                if isinstance(key, str) and isinstance(value, str):
+                    extra[key] = value
+        chunks.append({
+            "id": str(row["item_id"]),
+            "source": str(row["source_id"]),
+            "text": str(row["text"] or ""),
+            "start_line": line_start,
+            "end_line": line_end,
+            "metadata": {"title": title, "extra": extra},
+        })
+    ranked, used_rust = _rust_rag.score_chunks(query, chunks)
+    if not used_rust or ranked is None:
+        return None, False
+    score_by_id = {item_id: score for item_id, score in ranked}
+    return [score_by_id.get(str(row["item_id"]), 0.0) for row in rows], True
 
 
 def sqlite_vec_available() -> bool:
@@ -700,11 +750,16 @@ def _search_db(
             set_last_error(f"sqlite-vec search failed: {exc}")
 
     rows = load_candidate_rows(conn, collection=collection, source_id=source_id, project_id=project_id, scopes=scopes, item_ids=vector_distances)
-    tokens = query_tokens(query)
-    # Hybrid retriever: blend dense vector similarity with sparse BM25 lexical scores
-    # computed over the candidate corpus.
-    docs_terms = [query_tokens(str(row["text"] or "")) for row in rows]
-    lexical_scores = bm25_scores(tokens, docs_terms)
+    rust_scores, used_rust = _score_chunks_with_rust(query, rows)
+    if used_rust and rust_scores is not None:
+        lexical_scores = rust_scores
+    else:
+        normalized_query = normalize_search_query(query)
+        # Hybrid retriever: blend dense vector similarity with sparse BM25 lexical scores
+        # computed over the candidate corpus.
+        tokens = query_tokens(normalized_query)
+        docs_terms = [query_tokens(str(row["text"] or "")) for row in rows]
+        lexical_scores = bm25_scores(tokens, docs_terms)
     results: list[RAGSearchResult] = []
     for index, row in enumerate(rows):
         embedding = parse_embedding(row["embedding"])
@@ -804,6 +859,17 @@ def search_memories_index(query: str, *, scopes: list[str], limit: int = 12) -> 
 def chunk_lineage(result: RAGSearchResult) -> dict[str, Any]:
     """Trace a retrieved chunk back to its document/page/offset/hash (lineage)."""
     meta = result.metadata if isinstance(result.metadata, dict) else {}
+    line_start = meta.get("lineStart") if isinstance(meta.get("lineStart"), int) else None
+    line_end = meta.get("lineEnd") if isinstance(meta.get("lineEnd"), int) else None
+    source = str(result.source_id) or str(result.name) or ""
+    citation, used_rust = _rust_rag.format_citation(source, line_start, line_end)
+    if not used_rust or citation is None:
+        parts: list[str] = [source]
+        if line_start is not None and line_end is not None and line_end >= line_start:
+            parts.append(f"L{line_start}-L{line_end}")
+        elif line_start is not None:
+            parts.append(f"L{line_start}")
+        citation = ":".join(parts)
     return {
         "chunkId": result.item_id,
         "docId": result.source_id,
@@ -813,6 +879,7 @@ def chunk_lineage(result: RAGSearchResult) -> dict[str, Any]:
         "endChar": int(meta.get("end") or 0),
         "hash": str(meta.get("hash") or ""),
         "docVersion": str(meta.get("docVersion") or ""),
+        "citation": citation,
     }
 
 

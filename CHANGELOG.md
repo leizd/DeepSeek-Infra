@@ -1,5 +1,21 @@
 # 更新日志
 
+## [3.1.4] - Rust RAG Opt-in Integration
+
+### Added
+- Added Rust sidecar RAG hot-path endpoints: `POST /rag/query/normalize`, `POST /rag/chunks/score`, `POST /rag/citation/format`, `POST /rag/index/validate` backed by `deepseek-rag`.
+- Added `deepseek_infra/infra/rust_core/rag_client.py` to delegate query normalization, chunk scoring, citation formatting, and index validation to the Rust sidecar when `DEEPSEEK_RUST_RAG=1`.
+- Added `DEEPSEEK_RUST_RAG_FALLBACK` (default `1`) and `DEEPSEEK_RUST_RAG_TIMEOUT_MS` (default `3000`) configuration knobs.
+- Integrated Rust RAG into `deepseek_infra/infra/rag/local_rag.py` for query normalization and chunk scoring in `_search_db`, plus citation formatting in `chunk_lineage`.
+- Added `tests/test_rust_rag_integration.py` covering disabled, enabled, CJK, score delegation, fallback, and citation paths.
+- Added Rust sidecar tests for each RAG endpoint.
+
+### Unchanged
+- Rust RAG remains default-disabled (`DEEPSEEK_RUST_RAG=0`).
+- Python document parsing, embedding, and vector database access are unchanged.
+- Python RAG remains the fallback.
+- Docker and coverage gates are untouched.
+
 ## [3.1.3] - Rust Policy Opt-in Integration
 
 ### Added
