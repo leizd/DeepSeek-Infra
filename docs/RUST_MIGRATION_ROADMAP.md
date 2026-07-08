@@ -297,18 +297,41 @@ Non-goals:
 - Does not Dockerize or auto-start the sidecar.
 - Does not raise coverage gate.
 
-### 3.1.3 — Coverage uplift phase 1
+### 3.1.3 — Rust Policy opt-in integration
 
 Scope:
 
-- Raise Python coverage gate from 80% to an intermediate threshold.
-- Add tests for high-risk existing Python modules before replacing them.
+- Expose policy decision endpoints on the Rust Gateway sidecar backed by `deepseek-policy`.
+- Delegate compatible URL, path, and capability checks from Python tool execution to Rust when `DEEPSEEK_RUST_POLICY=1`.
+- Keep Python Tool Policy as the default and as a fallback.
 
-Suggested gate:
+Feature flags:
 
-- 85% first, then 90% after unstable modules are covered.
+- `DEEPSEEK_RUST_POLICY=0` (default)
+- `DEEPSEEK_RUST_POLICY_FALLBACK=1` (default)
+- `DEEPSEEK_RUST_POLICY_TIMEOUT_MS=3000` (default)
 
-### 3.1.4 — Release-readiness integration
+Implementation:
+
+- `rust/crates/deepseek-gateway/src/lib.rs`: add `POST /policy/url`, `/policy/path`, `/policy/capability`.
+- `deepseek_infra/infra/rust_core/policy_client.py`: HTTP proxy client.
+- `deepseek_infra/infra/tool_runtime/tools.py`: `execute_tool_call` Rust Policy boundary.
+
+Quality gates:
+
+- Disabled-path test: still uses Python policy.
+- Enabled-path tests: safe URL allowed, private URL denied, path traversal denied, missing capability denied.
+- Failure-path tests: fallback to Python when enabled, structured error when disabled.
+- Rust sidecar endpoint tests for each policy guard.
+
+Non-goals:
+
+- Does not enable Rust Policy by default.
+- Does not replace Python Tool Runtime or execute tools through Rust.
+- Does not Dockerize or auto-start the sidecar.
+- Does not raise coverage gate.
+
+### 3.1.4 — Coverage uplift phase 1
 
 Scope:
 

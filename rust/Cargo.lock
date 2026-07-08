@@ -116,6 +116,7 @@ dependencies = [
  "axum",
  "deepseek-core",
  "deepseek-mcp",
+ "deepseek-policy",
  "serde",
  "serde_json",
  "tokio",

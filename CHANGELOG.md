@@ -1,5 +1,22 @@
 # 更新日志
 
+## [3.1.3] - Rust Policy Opt-in Integration
+
+### Added
+- Added Rust sidecar policy decision endpoints: `POST /policy/url`, `POST /policy/path`, `POST /policy/capability` backed by `deepseek-policy`.
+- Added `deepseek_infra/infra/rust_core/policy_client.py` to delegate URL, path, and capability checks to the Rust sidecar when `DEEPSEEK_RUST_POLICY=1`.
+- Added `DEEPSEEK_RUST_POLICY_FALLBACK` (default `1`) and `DEEPSEEK_RUST_POLICY_TIMEOUT_MS` (default `3000`) configuration knobs.
+- Integrated Rust Policy checks into `deepseek_infra/infra/tool_runtime/tools.py` `execute_tool_call` for network tools (URL guard), filesystem tools (path guard), and capability/risk checks.
+- Re-exported `PolicyDecision` from `deepseek-policy` is already available via the public crate API; the sidecar endpoints return structured decisions.
+- Added `tests/test_rust_policy_integration.py` covering disabled, enabled, allow, deny, fallback, and unreachable paths.
+- Added Rust sidecar tests for each policy endpoint.
+
+### Unchanged
+- Rust Policy remains default-disabled (`DEEPSEEK_RUST_POLICY=0`).
+- Python Tool Policy is not removed; it is used as fallback.
+- No real tool execution is changed beyond the decision boundary.
+- Docker and coverage gates are untouched.
+
 ## [3.1.2] - Rust MCP Opt-in Proxy Integration
 
 ### Added
