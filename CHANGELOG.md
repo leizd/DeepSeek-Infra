@@ -1,5 +1,20 @@
 # 更新日志
 
+## [3.1.2] - Rust MCP Opt-in Proxy Integration
+
+### Added
+- Added `POST /mcp` route to the Rust Gateway sidecar, backed by `deepseek_mcp::handle_mcp_message`.
+- Added `deepseek_infra/infra/rust_core/mcp_client.py` to proxy MCP JSON-RPC messages to the Rust sidecar when `DEEPSEEK_RUST_MCP=1`.
+- Added `DEEPSEEK_RUST_MCP_FALLBACK` (default `1`) and `DEEPSEEK_RUST_MCP_TIMEOUT_MS` (default `3000`) configuration knobs.
+- Updated `deepseek_infra/web/routes/mcp.py` so that `/mcp` delegates to the Rust MCP handler under the feature flag, with fallback to the existing Python MCP implementation when the sidecar is unavailable or fallback is enabled.
+- Re-exported `handle_mcp_message` from `deepseek_mcp` crate root for easier integration.
+- Added `tests/test_rust_mcp_proxy.py` covering disabled, enabled, fallback, error, and auth-preservation paths.
+
+### Unchanged
+- Rust MCP remains default-disabled (`DEEPSEEK_RUST_MCP=0`).
+- Rust Policy / RAG are not routed through Python yet.
+- Docker and coverage gates are untouched.
+
 ## [3.1.1] - Rust Gateway Opt-in Proxy Integration
 
 ### Added

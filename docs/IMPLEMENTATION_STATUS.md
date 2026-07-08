@@ -27,7 +27,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 | 11 | Multimodal Media Layer | MVP | ✅ [infra/media/](../deepseek_infra/infra/media/) | ✅ | ✅ |
 | 12 | Browser Control Runtime | MVP, release gated | ✅ [infra/browser/](../deepseek_infra/infra/browser/) | ✅ | ✅ |
 | 13 | Automation Runtime | MVP, release gated | ✅ [infra/automation/](../deepseek_infra/infra/automation/) | ✅ | ✅ |
-| 14 | Rust Core Hybrid Runtime | MVP, 3.1.0 status + 3.1.1 opt-in Gateway proxy | ✅ [infra/rust_core/](../deepseek_infra/infra/rust_core/) · [rust/](../rust/) | ✅ | ✅ |
+| 14 | Rust Core Hybrid Runtime | MVP, 3.1.0 status + 3.1.1 Gateway proxy + 3.1.2 MCP proxy | ✅ [infra/rust_core/](../deepseek_infra/infra/rust_core/) · [rust/](../rust/) | ✅ | ✅ |
 
 横切资产（不算独立模块，但支撑「可验证性」）：
 

@@ -261,13 +261,54 @@ Non-goals:
 - Does not Dockerize or auto-start the sidecar.
 - Does not raise coverage gate.
 
-### 3.1.2 — Coverage uplift phase 1
+### 3.1.2 — Rust MCP opt-in route integration
+
+Scope:
+
+- Expose `POST /mcp` on the Rust Gateway sidecar backed by `deepseek-mcp`.
+- Route Python `/mcp` JSON-RPC requests to the Rust sidecar when `DEEPSEEK_RUST_MCP=1`.
+- Keep Python MCP as the default and as a fallback.
+
+Feature flags:
+
+- `DEEPSEEK_RUST_MCP=0` (default)
+- `DEEPSEEK_RUST_MCP_FALLBACK=1` (default)
+- `DEEPSEEK_RUST_MCP_TIMEOUT_MS=3000` (default)
+
+Implementation:
+
+- `rust/crates/deepseek-gateway/src/lib.rs`: add `POST /mcp` route.
+- `rust/crates/deepseek-mcp/src/lib.rs`: re-export `handle_mcp_message`.
+- `deepseek_infra/infra/rust_core/mcp_client.py`: HTTP proxy client.
+- `deepseek_infra/web/routes/mcp.py`: opt-in delegation with fallback.
+
+Quality gates:
+
+- Disabled-path test: still uses Python MCP.
+- Enabled-path tests: initialize, tools/list, tools/call forwarded to Rust.
+- Failure-path tests: fallback to Python when enabled, structured error when disabled.
+- Invalid payload returns structured error.
+- Auth header preservation test.
+
+Non-goals:
+
+- Does not enable Rust MCP by default.
+- Does not bridge Python tool execution into Rust yet.
+- Does not Dockerize or auto-start the sidecar.
+- Does not raise coverage gate.
+
+### 3.1.3 — Coverage uplift phase 1
+
+Scope:
+
+- Raise Python coverage gate from 80% to an intermediate threshold.
+- Add tests for high-risk existing Python modules before replacing them.
 
 Suggested gate:
 
 - 85% first, then 90% after unstable modules are covered.
 
-### 3.1.2 — Release-readiness integration
+### 3.1.4 — Release-readiness integration
 
 Scope:
 
