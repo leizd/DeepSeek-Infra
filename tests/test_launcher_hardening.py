@@ -149,7 +149,9 @@ def test_server_command_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_project_root() -> None:
-    assert project_root().name == "deepseek"
+    root = project_root()
+    assert (root / "pyproject.toml").exists()
+    assert root.name in ("deepseek", "DeepSeek-Infra")
 
 
 def test_build_env_sets_keys() -> None:
