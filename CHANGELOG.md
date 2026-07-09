@@ -1,5 +1,24 @@
 # 更新日志
 
+## [3.1.5] - Hybrid Runtime Hardening + Coverage Uplift
+
+### Added
+- Added comprehensive failure-path tests for Rust Gateway, MCP, Policy, and RAG clients: timeout, connection error, invalid JSON, unexpected status code, and missing expected fields.
+- Added feature-flag parsing tests covering `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` for all Rust component flags.
+- Added fallback behavior tests for unreachable sidecar, non-2xx responses, malformed policy decisions, and invalid timeout values falling back to defaults.
+- Added hybrid runtime combination tests: all Rust flags enabled and all disabled.
+
+### Changed
+- Raised Python coverage gate from 80% to 82% in `pyproject.toml`, CI workflow, release preflight, and README badge.
+- Updated `AGENTS.md`, `docs/EVIDENCE_INDEX.md`, and `scripts/preflight_release.py` to reflect the new 82% coverage gate.
+
+### Non-goals
+- No new Rust runtime features added.
+- No Rust components enabled by default.
+- No Docker changes.
+- No Python runtime paths replaced.
+- Coverage gate not raised to 85% yet.
+
 ## [3.1.4] - Rust RAG Opt-in Integration
 
 ### Added
