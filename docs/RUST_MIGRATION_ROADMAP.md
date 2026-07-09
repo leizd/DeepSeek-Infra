@@ -370,16 +370,36 @@ Non-goals:
 
 ### 3.1.5 — Coverage uplift phase 1
 
+Status: **in progress** (3.1.5). Raised coverage gate from 80% to 82%.
+
 Scope:
 
-- Raise Python coverage gate from 80% to an intermediate threshold.
-- Add tests for high-risk existing Python modules before replacing them.
+- Harden the 3.1.x hybrid Rust runtime integration with fallback, timeout, malformed-response, and configuration-combination tests.
+- Raise Python coverage gate from 80% to 82%.
 
-Suggested gate:
+Quality gates:
 
-- 85% first, then 90% after unstable modules are covered.
+- All Rust feature flags have parsing tests for enabled/disabled variants.
+- Gateway / MCP / Policy / RAG clients have tests for timeout, connection error, invalid JSON, unexpected status code, and missing expected fields.
+- Fallback behavior tests cover unreachable sidecar, non-2xx responses, malformed policy decisions, and invalid timeout values.
+- Hybrid combination tests cover all flags enabled and all flags disabled.
+- Full test suite passes at or above the new 82% coverage gate with margin.
 
-## 4.0.0 Release Criteria
+Non-goals:
+
+- Does not add new Rust runtime features.
+- Does not enable Rust components by default.
+- Does not modify Docker.
+- Does not replace Python runtime paths.
+- Does not raise coverage gate to 85% yet.
+
+### 3.1.6 — Release-readiness integration
+
+Scope:
+
+- Add Rust-backed evidence to release readiness.
+- Add smoke scripts for Rust sidecars/components.
+- Ensure Docker build can include Rust artifacts where needed.
 
 4.0.0 should not ship until all conditions below are true:
 
