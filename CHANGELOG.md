@@ -1,5 +1,17 @@
 # 更新日志
 
+## [3.1.7] - Pre-4.0 Quality Baseline
+
+### Added
+- Added `docs/PRE_4_0_QUALITY_BASELINE.md`: a pre-4.0 quality baseline audit for the hybrid Rust runtime.
+- Includes Rust core and Python integration status matrices, coverage status, CI/release gate status, known gaps before 4.0.0, and recommended 3.2.x milestones.
+
+### Non-goals
+- No new runtime features.
+- No Rust components enabled by default.
+- No coverage gate raised.
+- No 4.0.0 readiness declared.
+
 ## [3.1.6] - Hybrid Runtime Release Readiness
 
 ### Added
