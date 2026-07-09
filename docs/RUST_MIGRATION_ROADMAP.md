@@ -407,7 +407,7 @@ Deliverables:
 
 - `docs/RUST_HYBRID_RUNTIME_RUNBOOK.md`: operational runbook for Gateway / MCP / Policy / RAG feature flags, fallback behavior, common errors, rollback, and verification commands.
 - `docs/RELEASE_READINESS_3_1_X.md`: CI gates, runtime gates, release evidence, rollback checklist, and sign-off criteria for 3.1.x.
-- `docs/IMPLEMENTATION_STATUS.md`: version bump to v3.1.6 and link to runbook/checklist.
+- `docs/IMPLEMENTATION_STATUS.md`: link to runbook/checklist (release version header remains v3.0.1).
 - `README.md`: link to the runbook from the Rust Gateway section.
 - `CHANGELOG.md`: 3.1.6 release entry.
 
@@ -428,13 +428,49 @@ Non-goals:
 - Does not enable Rust components by default.
 - Does not modify Docker or packaging.
 - Does not raise the Python coverage gate above 82%.
-- Does not add 4.0.0 breaking changes or 3.1.7 features.
+- Does not add 4.0.0 breaking changes.
 
-### 3.1.7+ — Future work
+### 3.1.7 — Pre-4.0 quality baseline
 
-- Rust sidecar packaging and Docker integration.
-- Rust core coverage measurement and gating.
-- Further Python coverage uplift toward 95% (on the path to 4.0.0).
+Status: **in progress** (3.1.7).
+
+Scope:
+
+- Audit the current state of the hybrid Rust runtime and document the gap to 4.0.0.
+- Provide status matrices for Rust core, Python integration, coverage, and CI/release gates.
+- List known gaps and propose a conservative 3.2.x milestone sequence.
+
+Deliverables:
+
+- `docs/PRE_4_0_QUALITY_BASELINE.md`: baseline audit with matrices, coverage status, gaps, and recommended 3.2.x milestones.
+- `docs/RUST_MIGRATION_ROADMAP.md`: updated 3.1.7 section and 3.2.x placeholder.
+- `CHANGELOG.md`: 3.1.7 entry.
+
+Quality gates:
+
+- All CI and release gates continue to pass unchanged.
+- No coverage or eval regressions.
+- Docs link check passes.
+
+Non-goals:
+
+- Does not add runtime features.
+- Does not enable Rust components by default.
+- Does not raise coverage gates.
+- Does not declare 4.0.0 ready.
+
+### 3.2.x — Coverage and parity work
+
+Planned themes (prioritized at 3.1.7, not committed):
+
+- 3.2.0: Python coverage uplift toward 85%.
+- 3.2.1: Rust sidecar Docker profile (still opt-in).
+- 3.2.2: End-to-end hybrid runtime smoke tests.
+- 3.2.3: Policy deny/audit hardening and parity tests.
+- 3.2.4: RAG parity tests against Python path.
+- 3.2.5: 4.0.0 release candidate checklist.
+
+See [PRE_4_0_QUALITY_BASELINE.md](PRE_4_0_QUALITY_BASELINE.md) for details.
 
 ## Testing Priorities
 
