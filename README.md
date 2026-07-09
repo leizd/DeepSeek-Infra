@@ -220,7 +220,11 @@ curl -X POST http://127.0.0.1:8787/v1/chat/completions \
   -d '{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-3.0.3 设计原则：**先让 Rust Gateway 能独立站起来**，暂时不替换 Python FastAPI 网关、不转发真实 DeepSeek API、不实现流式（`stream: true` 会返回结构化错误）。后续小版本会逐步接入 upstream proxy、MCP 处理、Tool Policy 等能力。详见 `docs/RUST_MIGRATION_ROADMAP.md`。
+3.0.3 设计原则：**先让 Rust Gateway 能独立站起来**，暂时不替换 Python FastAPI 网关、不转发真实 DeepSeek API、不实现流式（`stream: true` 会返回结构化错误）。后续小版本会逐步接入 upstream proxy、MCP 处理、Tool Policy 等能力。
+
+> 完整运维说明（启动 sidecar、feature flags、fallback、排错、回滚、验证命令）见 [docs/RUST_HYBRID_RUNTIME_RUNBOOK.md](docs/RUST_HYBRID_RUNTIME_RUNBOOK.md)；发版门禁见 [docs/RELEASE_READINESS_3_1_X.md](docs/RELEASE_READINESS_3_1_X.md)。
+
+详见 `docs/RUST_MIGRATION_ROADMAP.md`。
 
 ## 协议端点（MCP / A2A）
 

@@ -393,25 +393,48 @@ Non-goals:
 - Does not replace Python runtime paths.
 - Does not raise coverage gate to 85% yet.
 
-### 3.1.6 — Release-readiness integration
+### 3.1.6 — Release readiness documentation
+
+Status: **in progress** (3.1.6).
 
 Scope:
 
-- Add Rust-backed evidence to release readiness.
-- Add smoke scripts for Rust sidecars/components.
-- Ensure Docker build can include Rust artifacts where needed.
+- Document how to operate the 3.1.x hybrid Rust runtime: sidecar startup, feature flags, fallback behavior, troubleshooting, rollback, and verification commands.
+- Add a release-readiness checklist that gates the 3.1.x line without enabling Rust components by default.
+- Update the implementation status matrix and README to point to the new runbook and checklist.
 
-4.0.0 should not ship until all conditions below are true:
+Deliverables:
 
-- Rust workspace is stable and documented.
-- Gateway, MCP, and at least one of Policy/RAG are Rust-backed or hybrid with feature-flagged fallback.
-- Python backend coverage gate is at or near 95%.
-- Rust core coverage gate is at or near 95%.
-- CI includes Rust formatting, linting, testing, and coverage.
-- Security corpus includes Rust policy checks.
-- Release readiness includes Rust component smoke evidence.
-- `docs/IMPLEMENTATION_STATUS.md` reflects the 4.0.0 state.
-- The Docker image builds and runs with the selected Rust-backed components.
+- `docs/RUST_HYBRID_RUNTIME_RUNBOOK.md`: operational runbook for Gateway / MCP / Policy / RAG feature flags, fallback behavior, common errors, rollback, and verification commands.
+- `docs/RELEASE_READINESS_3_1_X.md`: CI gates, runtime gates, release evidence, rollback checklist, and sign-off criteria for 3.1.x.
+- `docs/IMPLEMENTATION_STATUS.md`: version bump to v3.1.6 and link to runbook/checklist.
+- `README.md`: link to the runbook from the Rust Gateway section.
+- `CHANGELOG.md`: 3.1.6 release entry.
+
+Quality gates:
+
+- All CI gates continue to pass (ruff, mypy, pytest --cov --cov-fail-under=82, cargo fmt, cargo clippy, cargo test, node --check, docs link check, security scans).
+- All offline eval gates continue to pass with `--strict`.
+- Runtime gates documented in `RELEASE_READINESS_3_1_X.md` have been executed manually or via the release-readiness job:
+  - All Rust flags disabled.
+  - Each Rust flag enabled individually.
+  - All Rust flags enabled together.
+  - Sidecar unavailable fallback.
+  - Rust policy deny blocks unsafe tool call.
+  - RAG CJK query preserved.
+
+Non-goals:
+
+- Does not enable Rust components by default.
+- Does not modify Docker or packaging.
+- Does not raise the Python coverage gate above 82%.
+- Does not add 4.0.0 breaking changes or 3.1.7 features.
+
+### 3.1.7+ — Future work
+
+- Rust sidecar packaging and Docker integration.
+- Rust core coverage measurement and gating.
+- Further Python coverage uplift toward 95% (on the path to 4.0.0).
 
 ## Testing Priorities
 

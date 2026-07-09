@@ -1,5 +1,23 @@
 # 更新日志
 
+## [3.1.6] - Hybrid Runtime Release Readiness
+
+### Added
+- Added `docs/RUST_HYBRID_RUNTIME_RUNBOOK.md`: operational guide for the 3.1.x hybrid Rust runtime, covering default-disabled behavior, sidecar startup, feature flags, fallback matrix, troubleshooting, rollback, and verification commands.
+- Added `docs/RELEASE_READINESS_3_1_X.md`: release checklist with CI gates, offline eval gates, runtime gates, release evidence, rollback steps, and sign-off criteria for the 3.1.x line.
+
+### Changed
+- Updated `docs/IMPLEMENTATION_STATUS.md` to v3.1.6 and linked the new runbook and release-readiness checklist from the Rust Core Hybrid Runtime row.
+- Updated `docs/RUST_MIGRATION_ROADMAP.md` to describe 3.1.6 as the release-readiness documentation milestone.
+- Updated `README.md` Rust Gateway section to link to the runbook and release checklist.
+
+### Non-goals
+- No new Rust runtime features.
+- No Rust components enabled by default.
+- No Docker or packaging changes.
+- Python coverage gate remains at 82%.
+- No 4.0.0 breaking changes.
+
 ## [3.1.5] - Hybrid Runtime Hardening + Coverage Uplift
 
 ### Added
