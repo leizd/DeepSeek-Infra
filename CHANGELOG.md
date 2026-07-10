@@ -1,5 +1,21 @@
 # 更新日志
 
+## [3.2.0] - Python Coverage Uplift to 85%
+
+### Added
+- Added failure-path and boundary tests for Rust core clients, Local RAG, tool execution and policy, MCP execution, browser downloads, web routes, core config, and launcher paths.
+- Added coverage for invalid JSON, missing fields, timeout/connection failures, non-2xx and malformed sidecar responses, fallback modes, empty queries, duplicate chunk IDs, path traversal, and policy denial.
+
+### Changed
+- Raised the Python coverage gate from 82% to 85% in `pyproject.toml`, CI, release preflight, release manifest defaults, README, AGENTS, and release-readiness documentation.
+- Recorded 85.559% measured full-suite coverage before enabling the new gate.
+
+### Non-goals
+- No runtime features added.
+- No Rust components enabled by default.
+- No Docker sidecar changes.
+- No 4.0.0 release candidate declared.
+
 ## [3.1.7] - Pre-4.0 Quality Baseline
 
 ### Added

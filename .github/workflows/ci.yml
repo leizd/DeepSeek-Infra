@@ -23,7 +23,7 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: ruff check .
       - run: mypy .
-      - run: pytest --cov --cov-fail-under=82
+      - run: pytest --cov --cov-fail-under=85
       - run: node --check static/vendor/katex/katex.min.js
       - run: node --check static/math_core.js
       - run: node --check static/seek_core.js

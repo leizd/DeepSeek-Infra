@@ -2,10 +2,10 @@
 
 ![版本](https://img.shields.io/badge/version-3.0.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
-![Coverage Gate](https://img.shields.io/badge/coverage%20gate-82%25-brightgreen)
+![Coverage Gate](https://img.shields.io/badge/coverage%20gate-85%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> Rust core migration is now in the 3.1.x hybrid integration phase. Python FastAPI remains the default runtime; Rust Gateway / MCP / Policy / RAG components are feature-flagged and discoverable via `GET /api/rust/status`. When `DEEPSEEK_RUST_GATEWAY=1`, `/v1/chat/completions` and `/v1/models` are proxied to the Rust Gateway sidecar; when `DEEPSEEK_RUST_MCP=1`, `/mcp` JSON-RPC messages are delegated to the Rust MCP handler; when `DEEPSEEK_RUST_POLICY=1`, tool-call security decisions are delegated to the Rust Policy sidecar; when `DEEPSEEK_RUST_RAG=1`, selected RAG hot paths (query normalization, chunk scoring, citation formatting) are delegated to the Rust RAG sidecar. All fall back to the Python implementation by default. See `docs/RUST_MIGRATION_ROADMAP.md`.
+> Rust core migration is now in the 3.2.0 pre-4.0 quality track. Python FastAPI remains the default runtime; Rust Gateway / MCP / Policy / RAG components are feature-flagged and discoverable via `GET /api/rust/status`. When `DEEPSEEK_RUST_GATEWAY=1`, `/v1/chat/completions` and `/v1/models` are proxied to the Rust Gateway sidecar; when `DEEPSEEK_RUST_MCP=1`, `/mcp` JSON-RPC messages are delegated to the Rust MCP handler; when `DEEPSEEK_RUST_POLICY=1`, tool-call security decisions are delegated to the Rust Policy sidecar; when `DEEPSEEK_RUST_RAG=1`, selected RAG hot paths (query normalization, chunk scoring, citation formatting) are delegated to the Rust RAG sidecar. All remain default-disabled and fall back to the Python implementation. See `docs/RUST_MIGRATION_ROADMAP.md`.
 
 ## 30 秒概览
 

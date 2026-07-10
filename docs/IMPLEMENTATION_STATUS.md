@@ -27,7 +27,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 | 11 | Multimodal Media Layer | MVP | ✅ [infra/media/](../deepseek_infra/infra/media/) | ✅ | ✅ |
 | 12 | Browser Control Runtime | MVP, release gated | ✅ [infra/browser/](../deepseek_infra/infra/browser/) | ✅ | ✅ |
 | 13 | Automation Runtime | MVP, release gated | ✅ [infra/automation/](../deepseek_infra/infra/automation/) | ✅ | ✅ |
-| 14 | Rust Core Hybrid Runtime | MVP, release-ready docs (runbook + release checklist) for 3.1.6 | ✅ [infra/rust_core/](../deepseek_infra/infra/rust_core/) · [rust/](../rust/) | ✅ | ✅ [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md) · [RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md) |
+| 14 | Rust Core Hybrid Runtime | MVP, default-disabled, 3.2.0 Python coverage baseline at 85% | ✅ [infra/rust_core/](../deepseek_infra/infra/rust_core/) · [rust/](../rust/) | ✅ | ✅ [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md) · [RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md) |
 
 横切资产（不算独立模块，但支撑「可验证性」）：
 

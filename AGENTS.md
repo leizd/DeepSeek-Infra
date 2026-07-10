@@ -18,7 +18,7 @@ Executable config (CI, `pyproject.toml`, requirements) is the source of truth; t
 python -m pip install -r requirements.txt -r requirements-dev.txt
 ruff check .
 mypy .
-pytest --cov --cov-fail-under=82
+pytest --cov --cov-fail-under=85
 # JS syntax (only these files are checked):
 node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_core.js static/app.js \
       static/modules/network.js static/modules/markdown.js static/modules/settings.js static/modules/panels.js \
@@ -33,7 +33,7 @@ node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_co
 
 - **`ruff` config is intentionally minimal**: `line-length=140`, rules `E4,E7,E9,F` only (in `pyproject.toml`). Don't assume broader lint rules are enforced; don't add style rules without checking.
 - **`mypy .`** runs on the whole repo; `ignore_missing_imports=true` is set, so third-party stub misses are not errors. `warn_unused_ignores=true` — don't leave stale `# type: ignore`.
-- **Coverage gate is 82%** (raised from 80% in v3.1.5), `source = ["deepseek_infra"]`. `--cov-fail-under=82` fails the run; lower locally with `pytest --no-cov` when iterating.
+- **Coverage gate is 85%** (raised from 82% in v3.2.0), `source = ["deepseek_infra"]`. `--cov-fail-under=85` fails the run; lower locally with `pytest --no-cov` when iterating.
 - **`pytest` uses `--strict-markers`** (from `pyproject.toml`). Registered markers: `integration` (spins up a real HTTP server on an ephemeral `127.0.0.1` port) and `slow` (>1s). Both run in CI's default `pytest` invocation.
 
 ### Offline eval gates (no API key)

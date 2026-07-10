@@ -461,9 +461,9 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Planned themes (prioritized at 3.1.7, not committed):
+Current themes (3.2.0 coverage milestone completed):
 
-- 3.2.0: Python coverage uplift toward 85%.
+- 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Rust sidecar Docker profile (still opt-in).
 - 3.2.2: End-to-end hybrid runtime smoke tests.
 - 3.2.3: Policy deny/audit hardening and parity tests.
