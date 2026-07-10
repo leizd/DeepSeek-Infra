@@ -1,18 +1,18 @@
 # Pre-4.0 Quality Baseline
 
-This document is an audit of where the project stands after the 3.1.6 release-readiness milestone and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+This document tracks where the project stands after the 3.2.0 coverage uplift and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
-> **Purpose**: know the gap, not to declare 4.0.0 ready. No new runtime features are added in 3.1.7; this is a planning and transparency document.
+> **Purpose**: know the gap, not to declare 4.0.0 ready. No new runtime features are added in 3.2.0; this milestone only strengthens tests and the Python coverage gate.
 
 ---
 
-## Current version status: 3.1.6
+## Current quality milestone: 3.2.0
 
-At the end of 3.1.6:
+At the end of 3.2.0:
 
 - All Rust components remain **default-disabled**.
 - The hybrid runtime has a complete operational runbook ([RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)) and a release-readiness checklist ([RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md)).
-- Python CI gates pass at the 82% coverage gate.
+- Python CI gates pass at the 85% coverage gate with 85.559% measured full-suite coverage.
 - Rust CI gates pass (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`).
 - Offline eval gates pass with `--strict`.
 - The Rust sidecar is **not** packaged or Dockerized.
@@ -56,10 +56,10 @@ Legend:
 
 | Metric | Current | 4.0.0 target | Gap |
 | --- | --- | --- | --- |
-| Coverage gate | **82%** | ~95% | **+13 percentage points** |
-| Measured coverage (full suite) | ~82.4% | ~95% | ~+12.6 percentage points |
+| Coverage gate | **85%** | ~95% | **+10 percentage points** |
+| Measured coverage (full suite) | **85.559%** | ~95% | ~+9.44 percentage points |
 
-The 82% gate was raised from 80% in 3.1.5. The measured full-suite coverage is currently slightly above the gate, but a large portion of the codebase (document/media parsing, browser control, OCR, edge inference, skills UI, etc.) still has meaningful misses. Closing the gap to 95% will require dedicated tests for the largest remaining modules rather than chasing easy one-liners.
+The gate was raised from 82% to 85% in 3.2.0 after the measured full-suite coverage reached 85.559%. The uplift emphasizes Rust client failures, RAG and tool-policy edges, route/config/launcher paths, MCP execution, and isolated browser downloads. OCR, browser controller, edge inference, media processing, and several skills paths still have meaningful misses, so the next climb should remain test-led and incremental.
 
 ### Rust
 
@@ -78,7 +78,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | --- | --- | --- |
 | `ruff check .` | ✅ Green | Minimal rule set by design. |
 | `mypy .` | ✅ Green | `ignore_missing_imports=true`. |
-| `pytest --cov --cov-fail-under=82` | ✅ Green | Measured ~82.4%. |
+| `pytest --cov --cov-fail-under=85` | ✅ Green | Measured 85.559%. |
 | `cargo fmt --check` | ✅ Green | Rust workspace. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ Green | No warnings. |
 | `cargo test --all` | ✅ Green | Rust crate tests. |
@@ -92,7 +92,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 
 ## Known gaps before 4.0.0
 
-1. **Python coverage**: 82% → ~95% is a significant climb. The biggest remaining misses are in OCR, browser control, media processing, edge inference, and skill UI/UX paths.
+1. **Python coverage**: 85% → ~95% remains a significant climb. The biggest remaining misses are in OCR, browser control, media processing, edge inference, and skill UI/UX paths.
 2. **Rust coverage**: Not measured or gated.
 3. **Rust default-on**: No component is enabled by default. 4.0.0 requires a decision on which components become the primary path.
 4. **Docker / packaging**: The Rust sidecar is not included in the Docker image or single-file exe build.
@@ -108,11 +108,11 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 
 These are proposed, not committed. They keep the project on the conservative path toward 4.0.0 without jumping the gun.
 
-### 3.2.0 — Coverage uplift to 85%
+### 3.2.0 — Coverage uplift to 85% (completed)
 
-- Target: raise Python coverage gate from 82% to 85%.
-- Focus: largest remaining misses (OCR, browser, media, edge inference, skills UI).
-- Non-goal: no Rust default-on changes.
+- Achieved: raised the Python coverage gate from 82% to 85% with 85.559% measured coverage.
+- Added failure and boundary coverage for Rust clients, Local RAG, tool execution/policy, web routes, core config, MCP, browser downloads, and launcher paths.
+- Non-goals preserved: no runtime features, Rust default-on changes, Docker sidecar packaging, or 4.0.0 release candidate work.
 
 ### 3.2.1 — Rust sidecar Docker profile
 

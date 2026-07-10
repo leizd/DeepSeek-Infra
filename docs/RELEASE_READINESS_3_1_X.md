@@ -1,8 +1,8 @@
-# Release Readiness Checklist — 3.1.x
+# Release Readiness Checklist — 3.1.x / 3.2.0 Quality Track
 
-This checklist is the go/no-go gate for the 3.1.x hybrid Rust runtime line. It is intentionally conservative: it verifies that the Rust integration is stable, documented, and can be safely disabled, but it does not require Rust components to be enabled by default.
+This checklist is the go/no-go gate for the hybrid Rust runtime line through the 3.2.0 coverage milestone. It is intentionally conservative: it verifies that the Rust integration is stable, documented, and safely disabled by default while the Python test baseline grows.
 
-> **Non-goals for 3.1.x**: enable Rust by default, Dockerize the Rust sidecar, raise the Python coverage gate above 82%, or introduce 4.0.0 breaking changes. Those are tracked in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+> **Non-goals for 3.2.0**: enable Rust by default, Dockerize the Rust sidecar, add runtime features, or introduce 4.0.0 breaking changes. Those remain tracked in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
 ---
 
@@ -14,7 +14,7 @@ The following jobs must pass on every PR and on `main`:
 | --- | --- | --- |
 | Python lint | `ruff check .` | ci / test |
 | Python type check | `mypy .` | ci / test |
-| Python test coverage | `pytest --cov --cov-fail-under=82` | ci / test |
+| Python test coverage | `pytest --cov --cov-fail-under=85` | ci / test |
 | Rust formatting | `cargo fmt --manifest-path rust/Cargo.toml --all -- --check` | ci / rust |
 | Rust lint | `cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings` | ci / rust |
 | Rust tests | `cargo test --manifest-path rust/Cargo.toml --all` | ci / rust |
@@ -49,7 +49,7 @@ These enforce the v2.4.0 thresholds:
 
 ## Runtime gates
 
-Before declaring a 3.1.x release ready, verify the following runtime configurations manually or through the release-readiness CI job:
+Before declaring the current hybrid release ready, verify the following runtime configurations manually or through the release-readiness CI job:
 
 ### 1. All Rust flags disabled (default)
 
@@ -181,15 +181,15 @@ No state migration is needed because Rust components are stateless delegates.
 
 ## Sign-off
 
-Before tagging a 3.1.x release, confirm:
+Before tagging 3.2.0, confirm:
 
 - [ ] All CI gates above are green on the release commit.
 - [ ] All offline eval gates above pass with `--strict`.
 - [ ] Runtime gates 1–6 above have been executed and recorded.
 - [ ] The hybrid runtime runbook is up to date: [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md).
-- [ ] `docs/IMPLEMENTATION_STATUS.md` and `docs/RUST_MIGRATION_ROADMAP.md` reflect the 3.1.x state.
-- [ ] `CHANGELOG.md` has a release entry for the new 3.1.x version.
-- [ ] No Docker, coverage gate, or 4.0.0 breaking changes are included in the release.
+- [ ] `docs/IMPLEMENTATION_STATUS.md` and `docs/RUST_MIGRATION_ROADMAP.md` reflect the 3.2.0 quality state.
+- [ ] `CHANGELOG.md` has a 3.2.0 release entry.
+- [ ] No Docker, Rust default-on, runtime feature, or 4.0.0 breaking changes are included in the release.
 
 ---
 

@@ -7,7 +7,11 @@
 <body>
   <main>
     <h1>Download Fixture</h1>
-    <a id="download-report" href="sample-report.html" download>Download report</a>
+    <a id="download-report" href="#" download="sample-report.html">Download report</a>
   </main>
+  <script>
+    const report = new Blob(["<!doctype html><title>Sample report</title><p>Download fixture</p>"], { type: "text/html" });
+    document.querySelector("#download-report").href = URL.createObjectURL(report);
+  </script>
 </body>
 </html>

@@ -117,3 +117,13 @@ def test_launcher_runtime_starts_server_without_console_window(monkeypatch: pyte
 
     assert launched["creationflags"] == 123
     assert launched["startupinfo"] is startupinfo
+
+
+def test_build_env_without_auth_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    original = runtime_module.settings
+    monkeypatch.setattr(runtime_module, "settings", SimpleNamespace(auth=SimpleNamespace(enabled=True, token="")))
+    env = build_env(LauncherCredentials())
+    assert "AUTH_TOKEN" not in env
+    monkeypatch.setattr(runtime_module, "settings", original)
