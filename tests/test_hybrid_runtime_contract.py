@@ -27,6 +27,7 @@ def test_hybrid_compose_enables_rust_only_in_test_overlay() -> None:
         assert f'DEEPSEEK_RUST_{component}: "1"' in hybrid
         assert f'DEEPSEEK_RUST_{component}_FALLBACK: "1"' in hybrid
     assert 'DEEPSEEK_RUST_GATEWAY_URL: "http://rust-gateway:8787"' in hybrid
+    assert 'DEEPSEEK_RUST_POLICY_FAILURE_MODE: "fallback"' in hybrid
     assert 'AUTH_DISABLED: "1"' in hybrid
     assert "condition: service_healthy" in hybrid
     assert "dockerfile: rust/Dockerfile" in hybrid
@@ -68,8 +69,19 @@ def test_parse_json_output_uses_last_nonempty_line() -> None:
 
 def test_policy_probe_requires_rust_then_python_fallback() -> None:
     rust_payload = {
-        "client": {"ok": True, "status": 200, "allowed": False},
-        "output": {"ok": False, "policy": {"reasons": ["rust_policy"]}},
+        "client": {
+            "ok": True,
+            "status": 200,
+            "allowed": False,
+            "code": "localhost_blocked",
+            "decision_id": "pd_hybrid",
+        },
+        "output": {
+            "ok": False,
+            "code": "localhost_blocked",
+            "decision_id": "pd_hybrid",
+            "policy": {"reasons": ["rust_policy"]},
+        },
     }
     fallback_payload = {
         "client": {"ok": False, "status": 0, "allowed": False},

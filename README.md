@@ -5,7 +5,7 @@
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-85%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> Rust core migration is now in the 3.2.1 pre-4.0 quality track. Python FastAPI remains the default runtime; Rust Gateway / MCP / Policy / RAG components are feature-flagged and discoverable via `GET /api/rust/status`. The Rust sidecar now has an optional standalone Docker image and Compose file, but it is never started by the default Compose deployment and all Rust flags remain disabled. See `docs/RUST_MIGRATION_ROADMAP.md`.
+> Rust core migration is now in the 3.2.3 pre-4.0 quality track. Python FastAPI remains the default runtime; Rust Gateway / MCP / Policy / RAG components are feature-flagged and discoverable via `GET /api/rust/status`. The optional sidecar and hybrid smoke do not change the default Python deployment, and Rust Policy now has stable deny codes, traceable decisions, redacted audit logs, and explicit backend failure modes. See `docs/RUST_MIGRATION_ROADMAP.md`.
 
 ## 30 秒概览
 
@@ -216,6 +216,8 @@ python scripts/smoke_rust_sidecar.py
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.rust.yml up --build -d
 ```
+
+Rust Policy 仍默认关闭。显式启用时，`DEEPSEEK_RUST_POLICY_FAILURE_MODE` 支持 `fallback`（默认，回到 Python Policy）、`deny`（后端异常时拒绝）和 `error`（返回结构化 503）；策略拒绝会携带稳定 `code`、`decision_id` 和 `trace_id`，审计日志不会记录凭据、查询参数或完整工作区路径。
 
 默认监听 `127.0.0.1:8787`，提供：
 

@@ -38,9 +38,17 @@ from deepseek_infra.infra.tool_runtime.tool_policy import ToolPolicy
 trace = {}
 original = tools.rust_check_url
 
-def tracked(url):
-    result = original(url)
-    trace.update(ok=result.ok, status=result.status, allowed=result.allowed, reason=result.reason)
+def tracked(url, **kwargs):
+    result = original(url, **kwargs)
+    trace.update(
+        ok=result.ok,
+        status=result.status,
+        allowed=result.allowed,
+        reason=result.reason,
+        code=result.code,
+        decision_id=result.decision_id,
+        trace_id=result.trace_id,
+    )
     return result
 
 tools.rust_check_url = tracked
@@ -294,6 +302,10 @@ def _assert_policy_probe(payload: dict[str, Any], *, expect_rust: bool) -> None:
     if expect_rust:
         _require(client.get("ok") is True and client.get("allowed") is False, "Rust Policy client did not return a deny decision")
         _require("rust_policy" in serialized.lower(), "tool denial did not identify Rust Policy")
+        _require(client.get("code") == "localhost_blocked", "Rust Policy deny did not include the stable localhost code")
+        _require(str(client.get("decision_id") or "").startswith("pd_"), "Rust Policy deny did not include a decision id")
+        _require(output.get("code") == client.get("code"), "tool denial did not preserve the Rust Policy code")
+        _require(output.get("decision_id") == client.get("decision_id"), "tool denial did not preserve the Rust decision id")
     else:
         _require(client.get("ok") is False, "stopped Rust Policy unexpectedly returned a response")
         _require("ssrf_blocked" in serialized.lower(), "Python Tool Policy fallback did not enforce SSRF denial")

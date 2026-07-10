@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::PolicyDecision;
+use crate::{PolicyDecision, codes};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Capability {
@@ -36,20 +36,26 @@ pub fn is_capability_allowed(
     granted: &[Capability],
     max_risk: RiskLevel,
 ) -> PolicyDecision {
-    if !granted.contains(&requested) {
-        return PolicyDecision::Deny {
-            reason: "capability not granted".to_string(),
-        };
-    }
-
     let required = capability_baseline_risk(&requested);
-    if required > max_risk {
-        return PolicyDecision::Deny {
-            reason: format!("risk level {required:?} exceeds max allowed {max_risk:?}"),
-        };
+    if !granted.contains(&requested) {
+        return PolicyDecision::deny(
+            codes::MISSING_CAPABILITY,
+            "required capability was not granted",
+            requested,
+            required,
+        );
     }
 
-    PolicyDecision::Allow
+    if required > max_risk {
+        return PolicyDecision::deny(
+            codes::RISK_LIMIT_EXCEEDED,
+            "capability risk exceeds the configured limit",
+            requested,
+            required,
+        );
+    }
+
+    PolicyDecision::allow(requested, required)
 }
 
 #[cfg(test)]
@@ -74,6 +80,7 @@ mod tests {
             RiskLevel::Critical,
         );
         assert!(!decision.is_allowed());
+        assert_eq!(decision.code, codes::MISSING_CAPABILITY);
     }
 
     #[test]
@@ -84,6 +91,7 @@ mod tests {
             RiskLevel::High,
         );
         assert!(!decision.is_allowed());
+        assert_eq!(decision.code, codes::RISK_LIMIT_EXCEEDED);
     }
 
     #[test]

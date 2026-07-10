@@ -20,6 +20,7 @@ from deepseek_infra.infra.tool_runtime.tools import execute_tool_call
 def _clear_rust_policy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DEEPSEEK_RUST_POLICY", raising=False)
     monkeypatch.delenv("DEEPSEEK_RUST_POLICY_FALLBACK", raising=False)
+    monkeypatch.delenv("DEEPSEEK_RUST_POLICY_FAILURE_MODE", raising=False)
     monkeypatch.delenv("DEEPSEEK_RUST_POLICY_TIMEOUT_MS", raising=False)
 
 
@@ -162,7 +163,7 @@ def test_rust_policy_no_fallback_blocks_on_unreachable(
             policy=ToolPolicy.permissive(),
         )
     assert result["ok"] is False
-    assert "Rust Policy unreachable" in result["reason"]
+    assert "Rust Policy backend unavailable" in result["reason"]
 
 
 def test_rust_policy_deny_blocks_tool_execution(

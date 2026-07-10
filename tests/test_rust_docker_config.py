@@ -119,7 +119,16 @@ class _SidecarHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/policy/url":
             assert request["url"].startswith("http://localhost")
-            self._send({"decision": "Deny", "reason": "localhost is blocked"})
+            self._send(
+                {
+                    "allowed": False,
+                    "code": "localhost_blocked",
+                    "reason": "localhost is blocked",
+                    "decision_id": "pd_test_001",
+                    "capability": "NetworkFetch",
+                    "risk_level": "High",
+                }
+            )
             return
         if self.path == "/rag/query/normalize":
             assert "语言" in request["query"]

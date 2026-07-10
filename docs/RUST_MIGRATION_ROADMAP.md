@@ -461,12 +461,12 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Current themes (3.2.2 hybrid runtime E2E milestone completed):
+Current themes (3.2.3 Rust Policy hardening milestone completed):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.
 - 3.2.2: Test-only hybrid Compose stack and offline E2E smoke covering all four Python-to-Rust delegates plus sidecar-loss fallback; defaults remain unchanged.
-- 3.2.3: Policy deny/audit hardening and parity tests.
+- 3.2.3: Stable Policy decision codes and identifiers, trace-preserving redacted audits, explicit backend failure modes, and execution-blocking tests; Rust remains opt-in.
 - 3.2.4: RAG parity tests against Python path.
 - 3.2.5: 4.0.0 release candidate checklist.
 

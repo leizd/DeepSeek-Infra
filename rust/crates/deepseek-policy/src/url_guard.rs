@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
-use crate::PolicyDecision;
+use crate::capability::{Capability, RiskLevel};
+use crate::{PolicyDecision, codes};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UrlPolicy {
@@ -18,9 +19,10 @@ impl Default for UrlPolicy {
 
 pub fn validate_url_access(url: &str, policy: &UrlPolicy) -> PolicyDecision {
     let Some((scheme, rest)) = url.split_once("://") else {
-        return PolicyDecision::Deny {
-            reason: "missing URL scheme".to_string(),
-        };
+        return deny(
+            codes::UNSUPPORTED_SCHEME,
+            "URL scheme is missing or unsupported",
+        );
     };
 
     if !policy
@@ -28,28 +30,32 @@ pub fn validate_url_access(url: &str, policy: &UrlPolicy) -> PolicyDecision {
         .iter()
         .any(|s| s.eq_ignore_ascii_case(scheme))
     {
-        return PolicyDecision::Deny {
-            reason: format!("scheme not allowed: {scheme}"),
-        };
+        return deny(codes::UNSUPPORTED_SCHEME, "URL scheme is not allowed");
     }
 
     let host = extract_host(rest);
+    if host.is_empty() {
+        return deny(codes::INVALID_POLICY_REQUEST, "URL host is required");
+    }
 
     if host.eq_ignore_ascii_case("localhost") {
-        return PolicyDecision::Deny {
-            reason: "localhost is blocked".to_string(),
-        };
+        return deny(
+            codes::LOCALHOST_BLOCKED,
+            "localhost addresses are not allowed",
+        );
     }
 
     if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_blocked_ip(&ip) {
-            return PolicyDecision::Deny {
-                reason: "private or local IP address".to_string(),
-            };
+        if let Some((code, reason)) = blocked_ip_reason(&ip) {
+            return deny(code, reason);
         }
     }
 
-    PolicyDecision::Allow
+    PolicyDecision::allow(Capability::NetworkFetch, RiskLevel::High)
+}
+
+fn deny(code: &str, reason: &str) -> PolicyDecision {
+    PolicyDecision::deny(code, reason, Capability::NetworkFetch, RiskLevel::High)
 }
 
 fn extract_host(rest: &str) -> String {
@@ -70,14 +76,36 @@ fn extract_host(rest: &str) -> String {
     without_port.to_string()
 }
 
-fn is_blocked_ip(ip: &IpAddr) -> bool {
+fn blocked_ip_reason(ip: &IpAddr) -> Option<(&'static str, &'static str)> {
     match ip {
-        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V4(v4) if v4.is_loopback() => Some((
+            codes::LOCALHOST_BLOCKED,
+            "loopback addresses are not allowed",
+        )),
+        IpAddr::V4(v4) if v4.is_link_local() => Some((
+            codes::LINK_LOCAL_BLOCKED,
+            "link-local addresses are not allowed",
+        )),
+        IpAddr::V4(v4) if v4.is_private() || v4.is_unspecified() => Some((
+            codes::PRIVATE_NETWORK_BLOCKED,
+            "private network addresses are not allowed",
+        )),
+        IpAddr::V4(_) => None,
+        IpAddr::V6(v6) if v6.is_loopback() => Some((
+            codes::LOCALHOST_BLOCKED,
+            "loopback addresses are not allowed",
+        )),
+        IpAddr::V6(v6) if v6.is_unicast_link_local() => Some((
+            codes::LINK_LOCAL_BLOCKED,
+            "link-local addresses are not allowed",
+        )),
+        IpAddr::V6(v6) if v6.is_unique_local() || v6.is_unspecified() => Some((
+            codes::PRIVATE_NETWORK_BLOCKED,
+            "private network addresses are not allowed",
+        )),
         IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local()
-                || v6.is_unspecified()
+            let _ = v6;
+            None
         }
     }
 }
@@ -98,6 +126,7 @@ mod tests {
         let policy = UrlPolicy::default();
         let decision = validate_url_access("file:///etc/passwd", &policy);
         assert!(!decision.is_allowed());
+        assert_eq!(decision.code, codes::UNSUPPORTED_SCHEME);
     }
 
     #[test]
@@ -105,6 +134,7 @@ mod tests {
         let policy = UrlPolicy::default();
         let decision = validate_url_access("http://localhost:8080/", &policy);
         assert!(!decision.is_allowed());
+        assert_eq!(decision.code, codes::LOCALHOST_BLOCKED);
     }
 
     #[test]
@@ -142,6 +172,7 @@ mod tests {
         let policy = UrlPolicy::default();
         let decision = validate_url_access("http://[fe80::1]/", &policy);
         assert!(!decision.is_allowed());
+        assert_eq!(decision.code, codes::LINK_LOCAL_BLOCKED);
     }
 
     #[test]

@@ -1,5 +1,24 @@
 # 更新日志
 
+## [3.2.3] - Rust Policy Deny and Audit Hardening
+
+### Added
+- Added stable Rust Policy decision codes, unique decision identifiers, trace propagation, capability/risk context, and structured redacted audit events.
+- Added explicit `fallback`, `deny`, and `error` backend failure modes through `DEEPSEEK_RUST_POLICY_FAILURE_MODE`.
+- Added regression tests proving Rust Policy denial prevents network, filesystem, and execution helpers from running.
+- Extended the offline hybrid smoke to require the Rust deny code and decision identifier through the Python tool boundary.
+
+### Changed
+- Malformed, empty, or incomplete Rust Policy responses are now backend failures instead of implicit allow decisions.
+- The default `fallback` mode always re-evaluates the call with Python Tool Policy, including bare tool calls without an explicitly supplied policy.
+- Rust URL and path audit targets omit credentials, query values, and workspace roots; transport errors redact authorization values.
+
+### Unchanged
+- Rust Policy remains disabled by default and Python Tool Policy remains available.
+- Audit output remains structured logging only; no persistent audit database was added.
+- The Python coverage gate remains 85%; the 3.2.3 full suite measures 85.60%.
+- Default Docker behavior is unchanged and no 4.0.0 release candidate is declared.
+
 ## [3.2.2] - End-to-End Hybrid Runtime Smoke Tests
 
 ### Added

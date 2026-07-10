@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::PolicyDecision;
+use crate::capability::{Capability, RiskLevel};
+use crate::{PolicyDecision, codes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathPolicy;
@@ -19,15 +20,17 @@ pub fn validate_workspace_path(
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
     {
-        return PolicyDecision::Deny {
-            reason: "parent directory traversal".to_string(),
-        };
+        return deny(
+            codes::PATH_TRAVERSAL,
+            "parent directory traversal is not allowed",
+        );
     }
 
     if requested.is_absolute() && !requested.starts_with(root) {
-        return PolicyDecision::Deny {
-            reason: "absolute path outside workspace root".to_string(),
-        };
+        return deny(
+            codes::PROTECTED_PATH,
+            "path is outside the allowed workspace",
+        );
     }
 
     let resolved = root.join(requested);
@@ -42,15 +45,17 @@ pub fn validate_workspace_path(
                     || name_str.contains("System32")
                     || name_str.contains("System")
                 {
-                    return PolicyDecision::Deny {
-                        reason: format!("forbidden path component: {name_str}"),
-                    };
+                    return deny(codes::PROTECTED_PATH, "path targets a protected location");
                 }
             }
         }
     }
 
-    PolicyDecision::Allow
+    PolicyDecision::allow(Capability::ReadFile, RiskLevel::Low)
+}
+
+fn deny(code: &str, reason: &str) -> PolicyDecision {
+    PolicyDecision::deny(code, reason, Capability::ReadFile, RiskLevel::High)
 }
 
 pub fn normalize_path(path: &Path) -> PathBuf {
@@ -77,6 +82,7 @@ mod tests {
         let policy = PathPolicy;
         let decision = validate_workspace_path(&root(), Path::new("../secret.txt"), &policy);
         assert!(!decision.is_allowed());
+        assert_eq!(decision.code, codes::PATH_TRAVERSAL);
     }
 
     #[test]
@@ -91,6 +97,7 @@ mod tests {
         let policy = PathPolicy;
         let decision = validate_workspace_path(&root(), Path::new("project/.git/config"), &policy);
         assert!(!decision.is_allowed());
+        assert_eq!(decision.code, codes::PROTECTED_PATH);
     }
 
     #[test]
@@ -99,6 +106,8 @@ mod tests {
         let decision =
             validate_workspace_path(&root(), Path::new("C:\\Windows\\System32"), &policy);
         assert!(!decision.is_allowed());
+        assert_eq!(decision.code, codes::PROTECTED_PATH);
+        assert!(!decision.reason.contains("Windows"));
     }
 
     #[test]
