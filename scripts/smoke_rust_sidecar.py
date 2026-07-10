@@ -137,8 +137,10 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
         payload={"url": "http://localhost:8080/admin"},
         timeout=timeout,
     )
-    _require(policy.get("decision") == "Deny", "policy did not deny localhost")
+    _require(policy.get("allowed") is False, "policy did not deny localhost")
+    _require(policy.get("code") == "localhost_blocked", "policy did not return localhost_blocked code")
     _require(isinstance(policy.get("reason"), str) and bool(policy["reason"]), "policy deny response has no reason")
+    _require(isinstance(policy.get("decision_id"), str) and bool(policy["decision_id"]), "policy deny response has no decision_id")
     checks.append(CheckResult("policy", "POST /policy/url"))
 
     rag = _request_json(
