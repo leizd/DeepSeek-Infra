@@ -1,8 +1,8 @@
 # Hybrid Rust Runtime Runbook
 
-This runbook covers day-to-day operation of the DeepSeek Infra 3.1.x hybrid Rust runtime: how to start the Rust sidecar, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
+This runbook covers day-to-day operation of the DeepSeek Infra 3.1.x / 3.2.1 hybrid Rust runtime: how to start or containerize the Rust sidecar, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
 
-> **Scope**: 3.1.x only. The default behavior of 3.1.x is intentionally conservative: every Rust component is opt-in and falls back to the existing Python implementation by default. No Docker or packaging changes are required to use this runbook.
+> **Scope**: every Rust component remains opt-in and falls back to the existing Python implementation by default. 3.2.1 adds an optional sidecar image and Compose file; the default Python image and `docker compose up` behavior are unchanged.
 
 ---
 
@@ -10,11 +10,12 @@ This runbook covers day-to-day operation of the DeepSeek Infra 3.1.x hybrid Rust
 
 1. [Default behavior](#default-behavior)
 2. [Starting the Rust Gateway sidecar](#starting-the-rust-gateway-sidecar)
-3. [Feature flags](#feature-flags)
-4. [Fallback behavior](#fallback-behavior)
-5. [Common errors and troubleshooting](#common-errors-and-troubleshooting)
-6. [Rollback](#rollback)
-7. [Verification commands](#verification-commands)
+3. [Optional Docker deployment](#optional-docker-deployment)
+4. [Feature flags](#feature-flags)
+5. [Fallback behavior](#fallback-behavior)
+6. [Common errors and troubleshooting](#common-errors-and-troubleshooting)
+7. [Rollback](#rollback)
+8. [Verification commands](#verification-commands)
 
 ---
 
@@ -67,6 +68,38 @@ The sidecar exposes the following endpoints used by the Python app:
 | `POST /rag/index/validate` | `DEEPSEEK_RUST_RAG=1` | Index metadata validation |
 
 > **Note**: Streaming chat requests (`stream: true`) always stay on the Python path, even when `DEEPSEEK_RUST_GATEWAY=1`.
+
+---
+
+## Optional Docker deployment
+
+3.2.1 adds a multi-stage, non-root Rust image. It contains only the compiled `deepseek-gateway` binary and its runtime health-check dependency; it does not install or copy the Python application.
+
+Build and start only the sidecar:
+
+```bash
+docker compose -f docker-compose.rust.yml up --build -d
+python scripts/smoke_rust_sidecar.py --base-url http://127.0.0.1:8787
+```
+
+Start the normal Python service plus the optional sidecar:
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.rust.yml up --build -d
+```
+
+This starts both containers but still leaves Python on every request path because `.env.example` sets all Rust flags to `0`. To opt in, set the required flags in `.env` and use the Compose service URL:
+
+```bash
+DEEPSEEK_RUST_GATEWAY=1
+DEEPSEEK_RUST_MCP=1
+DEEPSEEK_RUST_POLICY=1
+DEEPSEEK_RUST_RAG=1
+DEEPSEEK_RUST_GATEWAY_URL=http://rust-gateway:8787
+```
+
+These settings are deployment choices, not defaults. A plain `docker compose up -d` continues to build and run only the Python service.
 
 ---
 
@@ -261,9 +294,23 @@ To immediately return to the pure Python 3.0.x runtime:
 
 No data migration is required: Rust components are stateless proxies and delegates; all persistent state lives in the Python runtime directories.
 
+For Docker deployments, disable the flags first and then remove the optional sidecar:
+
+```bash
+docker compose -f docker-compose.rust.yml down
+```
+
 ---
 
 ## Verification commands
+
+### Standalone sidecar smoke
+
+```bash
+python scripts/smoke_rust_sidecar.py --base-url http://127.0.0.1:8787
+```
+
+The smoke is offline and requires no model or API key. It checks `/healthz`, `/v1/models`, non-streaming chat shape, MCP initialize, localhost policy denial, and CJK RAG normalization.
 
 ### Hybrid runtime status
 

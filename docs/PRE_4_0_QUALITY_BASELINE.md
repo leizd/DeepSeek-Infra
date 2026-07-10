@@ -1,21 +1,22 @@
 # Pre-4.0 Quality Baseline
 
-This document tracks where the project stands after the 3.2.0 coverage uplift and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+This document tracks where the project stands after the 3.2.1 optional Rust sidecar Docker milestone and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
-> **Purpose**: know the gap, not to declare 4.0.0 ready. No new runtime features are added in 3.2.0; this milestone only strengthens tests and the Python coverage gate.
+> **Purpose**: know the gap, not to declare 4.0.0 ready. 3.2.1 makes the existing Rust sidecar deployable as an optional container; it does not enable Rust by default, replace the Python image, or raise the coverage gate.
 
 ---
 
-## Current quality milestone: 3.2.0
+## Current quality milestone: 3.2.1
 
-At the end of 3.2.0:
+At the end of 3.2.1:
 
 - All Rust components remain **default-disabled**.
 - The hybrid runtime has a complete operational runbook ([RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)) and a release-readiness checklist ([RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md)).
 - Python CI gates pass at the 85% coverage gate with 85.559% measured full-suite coverage.
 - Rust CI gates pass (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`).
 - Offline eval gates pass with `--strict`.
-- The Rust sidecar is **not** packaged or Dockerized.
+- The Rust sidecar has a standalone multi-stage Docker image, optional Compose file, container health check, and offline smoke test.
+- The default Docker deployment still builds and runs only the Python service.
 - Python coverage is **not** near the 4.0.0 target of ~95%.
 
 ---
@@ -82,6 +83,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | `cargo fmt --check` | ✅ Green | Rust workspace. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ Green | No warnings. |
 | `cargo test --all` | ✅ Green | Rust crate tests. |
+| Rust sidecar Docker build + smoke | ✅ CI gate | Independent job; does not alter the Python image. |
 | `node --check ...` | ✅ Green | Listed JS files. |
 | `python scripts/check_doc_links.py` | ✅ Green | Internal doc links. |
 | `pip-audit`, `bandit`, `detect-secrets` | ✅ Green | Security scan. |
@@ -95,7 +97,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 1. **Python coverage**: 85% → ~95% remains a significant climb. The biggest remaining misses are in OCR, browser control, media processing, edge inference, and skill UI/UX paths.
 2. **Rust coverage**: Not measured or gated.
 3. **Rust default-on**: No component is enabled by default. 4.0.0 requires a decision on which components become the primary path.
-4. **Docker / packaging**: The Rust sidecar is not included in the Docker image or single-file exe build.
+4. **Default packaging**: The Rust sidecar has an optional standalone image, but it is not bundled into the default Python image or single-file exe build.
 5. **End-to-end hybrid smoke tests**: The release-readiness job does not yet exercise all Rust flags together against a live sidecar.
 6. **Policy parity**: Rust Policy deny reasons and audit logs should be compared against Python Tool Policy output.
 7. **RAG parity**: Query normalization, chunk scoring, and citation formatting results need a structured comparison against the Python path.
@@ -114,11 +116,11 @@ These are proposed, not committed. They keep the project on the conservative pat
 - Added failure and boundary coverage for Rust clients, Local RAG, tool execution/policy, web routes, core config, MCP, browser downloads, and launcher paths.
 - Non-goals preserved: no runtime features, Rust default-on changes, Docker sidecar packaging, or 4.0.0 release candidate work.
 
-### 3.2.1 — Rust sidecar Docker profile
+### 3.2.1 — Rust sidecar Docker profile (completed)
 
-- Add a Docker profile or service that can run the Rust sidecar alongside the Python app.
-- Keep Rust components default-disabled; the profile is opt-in.
-- Non-goal: do not make Rust the default Docker runtime.
+- Added a multi-stage, non-root image containing only the Rust Gateway binary and health-check dependency.
+- Added an independent Compose file, offline six-endpoint smoke test, static deployment contract tests, and a dedicated CI job.
+- Preserved the default Python Compose deployment, default-disabled Rust flags, 85% Python coverage gate, and pre-4.0 status.
 
 ### 3.2.2 — End-to-end hybrid runtime smoke tests
 
@@ -153,7 +155,7 @@ Before scheduling 4.0.0, the following should be answered with evidence:
 - [ ] Which Rust components are default-on, and which remain opt-in?
 - [ ] Is Python coverage at or near 95%?
 - [ ] Is Rust coverage measured and at or near 95%?
-- [ ] Does the Docker image include and run the Rust sidecar?
+- [ ] Does the default release deployment include and coordinate the Rust sidecar by design?
 - [ ] Are there end-to-end hybrid smoke tests with all flags enabled?
 - [ ] Is Rust Policy parity proven against Python Tool Policy?
 - [ ] Is Rust RAG parity proven against Python RAG?

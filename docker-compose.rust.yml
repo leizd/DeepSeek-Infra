@@ -1,0 +1,25 @@
+services:
+  rust-gateway:
+    image: deepseek-rust-gateway:3.2.1
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+    environment:
+      GATEWAY_BIND_ADDR: 0.0.0.0:8787
+    ports:
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "--fail",
+          "--silent",
+          "--show-error",
+          "http://127.0.0.1:8787/healthz",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped

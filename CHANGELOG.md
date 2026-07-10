@@ -1,5 +1,20 @@
 # 更新日志
 
+## [3.2.1] - Optional Rust Sidecar Docker Profile
+
+### Added
+- Added a multi-stage, non-root Rust Gateway sidecar image that contains only the compiled Rust binary and its health-check dependency.
+- Added `docker-compose.rust.yml` for standalone or explicitly combined deployment without changing the default Python Compose service.
+- Added an offline six-endpoint Rust sidecar smoke script and Docker deployment contract tests.
+- Added an independent CI job that builds, runs, health-checks, and smoke-tests the Rust sidecar image.
+
+### Unchanged
+- Rust Gateway, MCP, Policy, and RAG delegation remain disabled by default.
+- The default Docker deployment and runtime remain Python-only.
+- The Python coverage gate remains 85%.
+- No API key, model call, or external service is required by the sidecar smoke test.
+- No 4.0.0 release candidate is declared.
+
 ## [3.2.0] - Python Coverage Uplift to 85%
 
 ### Added

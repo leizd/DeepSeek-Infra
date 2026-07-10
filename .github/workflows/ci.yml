@@ -91,6 +91,26 @@ jobs:
       - run: docker build -t deepseek-infra:test .
       - run: cp .env.example .env && docker compose config
 
+  rust-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Rust sidecar image
+        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:test .
+      - name: Run Rust sidecar
+        run: docker run --detach --name deepseek-rust-gateway --publish 127.0.0.1:8787:8787 deepseek-rust-gateway:test
+      - name: Smoke test Rust sidecar
+        run: python scripts/smoke_rust_sidecar.py --base-url http://127.0.0.1:8787
+      - name: Show Rust sidecar logs
+        if: failure()
+        run: docker logs deepseek-rust-gateway || true
+      - name: Stop Rust sidecar
+        if: always()
+        run: docker rm --force deepseek-rust-gateway || true
+
   release-readiness:
     runs-on: ubuntu-latest
     steps:

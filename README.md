@@ -5,7 +5,7 @@
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-85%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> Rust core migration is now in the 3.2.0 pre-4.0 quality track. Python FastAPI remains the default runtime; Rust Gateway / MCP / Policy / RAG components are feature-flagged and discoverable via `GET /api/rust/status`. When `DEEPSEEK_RUST_GATEWAY=1`, `/v1/chat/completions` and `/v1/models` are proxied to the Rust Gateway sidecar; when `DEEPSEEK_RUST_MCP=1`, `/mcp` JSON-RPC messages are delegated to the Rust MCP handler; when `DEEPSEEK_RUST_POLICY=1`, tool-call security decisions are delegated to the Rust Policy sidecar; when `DEEPSEEK_RUST_RAG=1`, selected RAG hot paths (query normalization, chunk scoring, citation formatting) are delegated to the Rust RAG sidecar. All remain default-disabled and fall back to the Python implementation. See `docs/RUST_MIGRATION_ROADMAP.md`.
+> Rust core migration is now in the 3.2.1 pre-4.0 quality track. Python FastAPI remains the default runtime; Rust Gateway / MCP / Policy / RAG components are feature-flagged and discoverable via `GET /api/rust/status`. The Rust sidecar now has an optional standalone Docker image and Compose file, but it is never started by the default Compose deployment and all Rust flags remain disabled. See `docs/RUST_MIGRATION_ROADMAP.md`.
 
 ## 30 秒概览
 
@@ -204,6 +204,19 @@ cd rust
 cargo run -p deepseek-gateway
 ```
 
+3.2.1 也提供独立、可选的 Docker 部署，不会改变默认 Python Compose：
+
+```bash
+docker compose -f docker-compose.rust.yml up --build -d
+python scripts/smoke_rust_sidecar.py
+```
+
+若要与 Python 服务同时启动，显式叠加两个 Compose 文件；只有在 `.env` 中把对应 `DEEPSEEK_RUST_*` flag 设为 `1`，Python 才会连接 sidecar：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.rust.yml up --build -d
+```
+
 默认监听 `127.0.0.1:8787`，提供：
 
 - `GET /healthz` — 健康探针
@@ -344,6 +357,8 @@ curl http://127.0.0.1:8000/healthz
 ```
 
 镜像为 python:3.12-slim、非 root 运行、内置 `/healthz` HEALTHCHECK；全部运行时数据持久化在一个 `/data` 卷。详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)（含裸机 / systemd / 反向代理与安全边界）。
+
+默认命令仍然只启动 Python。可选 Rust sidecar 使用 `docker-compose.rust.yml`，详见 [Rust Hybrid Runtime Runbook](docs/RUST_HYBRID_RUNTIME_RUNBOOK.md)。
 
 ## 环境变量
 
