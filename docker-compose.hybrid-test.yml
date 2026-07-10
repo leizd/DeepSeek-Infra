@@ -1,0 +1,46 @@
+services:
+  deepseek-infra:
+    environment:
+      AUTH_DISABLED: "1"
+      MCP_ENABLED: "1"
+      LOCAL_RAG_ENABLED: "1"
+      LOCAL_RAG_EMBEDDING_PROVIDER: "hash"
+      DEEPSEEK_RUST_GATEWAY: "1"
+      DEEPSEEK_RUST_MCP: "1"
+      DEEPSEEK_RUST_POLICY: "1"
+      DEEPSEEK_RUST_RAG: "1"
+      DEEPSEEK_RUST_GATEWAY_URL: "http://rust-gateway:8787"
+      DEEPSEEK_RUST_GATEWAY_FALLBACK: "1"
+      DEEPSEEK_RUST_MCP_FALLBACK: "1"
+      DEEPSEEK_RUST_POLICY_FALLBACK: "1"
+      DEEPSEEK_RUST_RAG_FALLBACK: "1"
+      DEEPSEEK_RUST_GATEWAY_TIMEOUT_MS: "500"
+      DEEPSEEK_RUST_MCP_TIMEOUT_MS: "500"
+      DEEPSEEK_RUST_POLICY_TIMEOUT_MS: "500"
+      DEEPSEEK_RUST_RAG_TIMEOUT_MS: "500"
+    depends_on:
+      rust-gateway:
+        condition: service_healthy
+    restart: "no"
+
+  rust-gateway:
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+    environment:
+      GATEWAY_BIND_ADDR: 0.0.0.0:8787
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "--fail",
+          "--silent",
+          "--show-error",
+          "http://127.0.0.1:8787/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: "no"

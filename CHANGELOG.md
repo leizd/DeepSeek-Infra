@@ -1,5 +1,19 @@
 # 更新日志
 
+## [3.2.2] - End-to-End Hybrid Runtime Smoke Tests
+
+### Added
+- Added `docker-compose.hybrid-test.yml` to run the Python app and Rust sidecar together with all four Rust delegates enabled only for testing.
+- Added an offline hybrid smoke that verifies Rust status, Gateway proxying, MCP initialize/list/echo, Rust Policy denial, and Rust RAG normalization/ranking/citation through Python boundaries.
+- Added sidecar-loss checks that stop the Rust container and verify Gateway, MCP, Policy, and RAG fall back to Python without an application crash.
+- Added deployment contract tests and an independent `hybrid-runtime-e2e` CI job with failure logs and unconditional cleanup.
+
+### Unchanged
+- The default Compose deployment remains Python-only and all Rust flags remain disabled by default.
+- The Python coverage gate remains 85%.
+- No API key, external model call, or external service is required.
+- No Rust component is made default-on and no 4.0.0 release candidate is declared.
+
 ## [3.2.1] - Optional Rust Sidecar Docker Profile
 
 ### Added
