@@ -1,8 +1,8 @@
 # Hybrid Rust Runtime Runbook
 
-This runbook covers day-to-day operation of the DeepSeek Infra 3.1.x / 3.2.1 hybrid Rust runtime: how to start or containerize the Rust sidecar, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
+This runbook covers day-to-day operation of the DeepSeek Infra 3.1.x / 3.2.2 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
 
-> **Scope**: every Rust component remains opt-in and falls back to the existing Python implementation by default. 3.2.1 adds an optional sidecar image and Compose file; the default Python image and `docker compose up` behavior are unchanged.
+> **Scope**: every Rust component remains opt-in and falls back to the existing Python implementation by default. 3.2.2 adds only a test overlay and E2E smoke; the default Python image and `docker compose up` behavior are unchanged.
 
 ---
 
@@ -11,11 +11,12 @@ This runbook covers day-to-day operation of the DeepSeek Infra 3.1.x / 3.2.1 hyb
 1. [Default behavior](#default-behavior)
 2. [Starting the Rust Gateway sidecar](#starting-the-rust-gateway-sidecar)
 3. [Optional Docker deployment](#optional-docker-deployment)
-4. [Feature flags](#feature-flags)
-5. [Fallback behavior](#fallback-behavior)
-6. [Common errors and troubleshooting](#common-errors-and-troubleshooting)
-7. [Rollback](#rollback)
-8. [Verification commands](#verification-commands)
+4. [Hybrid runtime E2E smoke](#hybrid-runtime-e2e-smoke)
+5. [Feature flags](#feature-flags)
+6. [Fallback behavior](#fallback-behavior)
+7. [Common errors and troubleshooting](#common-errors-and-troubleshooting)
+8. [Rollback](#rollback)
+9. [Verification commands](#verification-commands)
 
 ---
 
@@ -100,6 +101,31 @@ DEEPSEEK_RUST_GATEWAY_URL=http://rust-gateway:8787
 ```
 
 These settings are deployment choices, not defaults. A plain `docker compose up -d` continues to build and run only the Python service.
+
+---
+
+## Hybrid runtime E2E smoke
+
+The 3.2.2 test overlay is for CI and local verification only. It enables all Rust delegates, keeps all Python fallbacks enabled, and disables local token auth inside the loopback-only test deployment.
+
+```bash
+cp .env.example .env
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.hybrid-test.yml \
+  up --detach --build
+
+python scripts/smoke_hybrid_runtime.py
+
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.hybrid-test.yml \
+  down --volumes --remove-orphans
+```
+
+The smoke first checks the healthy system through Python boundaries: Rust status, Gateway models/chat, MCP initialize/list/echo, Tool Policy private-URL denial, and RAG CJK normalization/exact ranking/citation. It then stops `rust-gateway` and proves all four paths fall back to Python. The script is intentionally destructive to the test sidecar, so do not run it against a shared deployment.
+
+No API key, external model call, or external network service is required. The Rust chat response is the deterministic local stub; the Python chat fallback is accepted only as a structured `missing_api_key` response rather than a traceback.
 
 ---
 
@@ -311,6 +337,14 @@ python scripts/smoke_rust_sidecar.py --base-url http://127.0.0.1:8787
 ```
 
 The smoke is offline and requires no model or API key. It checks `/healthz`, `/v1/models`, non-streaming chat shape, MCP initialize, localhost policy denial, and CJK RAG normalization.
+
+### Full hybrid runtime smoke
+
+```bash
+python scripts/smoke_hybrid_runtime.py
+```
+
+This command expects the Compose stack from [Hybrid runtime E2E smoke](#hybrid-runtime-e2e-smoke) and stops the Rust sidecar while testing fallback. Use `--keep-sidecar` to run only the healthy-path checks.
 
 ### Hybrid runtime status
 

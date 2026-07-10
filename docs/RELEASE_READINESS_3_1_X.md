@@ -1,8 +1,8 @@
-# Release Readiness Checklist — 3.1.x / 3.2.0 Quality Track
+# Release Readiness Checklist — 3.1.x / 3.2.2 Quality Track
 
-This checklist is the go/no-go gate for the hybrid Rust runtime line through the 3.2.0 coverage milestone. It is intentionally conservative: it verifies that the Rust integration is stable, documented, and safely disabled by default while the Python test baseline grows.
+This checklist is the go/no-go gate for the hybrid Rust runtime line through the 3.2.2 end-to-end smoke milestone. It is intentionally conservative: it verifies that the Rust integration is stable, documented, safely disabled by default, and able to fall back to Python after a live sidecar failure.
 
-> **Non-goals for 3.2.0**: enable Rust by default, Dockerize the Rust sidecar, add runtime features, or introduce 4.0.0 breaking changes. Those remain tracked in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+> **Non-goals for 3.2.2**: enable Rust by default, replace the Python image, raise the 85% coverage gate, require API keys or external services, or introduce 4.0.0 breaking changes. Those remain tracked in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
 ---
 
@@ -18,6 +18,8 @@ The following jobs must pass on every PR and on `main`:
 | Rust formatting | `cargo fmt --manifest-path rust/Cargo.toml --all -- --check` | ci / rust |
 | Rust lint | `cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings` | ci / rust |
 | Rust tests | `cargo test --manifest-path rust/Cargo.toml --all` | ci / rust |
+| Rust sidecar image | `ci / rust-docker` | ci / rust-docker |
+| Hybrid runtime E2E | `ci / hybrid-runtime-e2e` | ci / hybrid-runtime-e2e |
 | JS syntax | `node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_core.js static/app.js static/modules/network.js static/modules/markdown.js static/modules/settings.js static/modules/panels.js static/modules/chat.js static/modules/trace_waterfall.js static/modules/trace_viewer.js` | ci / test |
 | Docs link check | `python scripts/check_doc_links.py` | ci / docs |
 | Dependency audit | `pip-audit -r requirements.txt -r requirements-dev.txt` | ci / security |
@@ -100,6 +102,17 @@ python -m deepseek_infra.app
 - Tool URL/path/capability checks route through Rust Policy.
 - RAG query normalization, chunk scoring, and citation formatting route through Rust RAG.
 
+3.2.2 automates this configuration through the test-only Compose overlay:
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.hybrid-test.yml up --detach --build
+python scripts/smoke_hybrid_runtime.py
+docker compose -f docker-compose.yml -f docker-compose.hybrid-test.yml down --volumes
+```
+
+The smoke uses only the Rust deterministic stub and local Python runtime. It does not require an API key, external model call, or external network service.
+
 ### 4. Sidecar unavailable fallback
 
 With any flag enabled, stop the sidecar and repeat the relevant request:
@@ -112,6 +125,8 @@ curl http://127.0.0.1:8000/v1/models -H "Authorization: Bearer ..."
 ```
 
 Expected: request falls back to Python because `DEEPSEEK_RUST_GATEWAY_FALLBACK=1` by default.
+
+The 3.2.2 smoke stops `rust-gateway` after the healthy-path checks and proves Gateway, MCP, Policy, and RAG fallback through the still-running Python container.
 
 ### 5. Policy deny blocks unsafe tool call
 
@@ -147,6 +162,7 @@ The `ci / release-readiness` job produces the following artifacts:
 | Skill security | `scripts/smoke_skill_security.py` | `docs/evidence/skill-security-v3.0.1.json` |
 | Skill catalog | `scripts/smoke_skill_catalog.py` | `docs/evidence/skill-catalog-v3.0.1.json` |
 | Context taint | `scripts/smoke_context_taint.py` | `docs/evidence/context-taint-v3.0.1.json` |
+| Hybrid Python/Rust runtime | `scripts/smoke_hybrid_runtime.py` | `ci / hybrid-runtime-e2e` log |
 
 The release preflight also runs:
 
@@ -181,15 +197,16 @@ No state migration is needed because Rust components are stateless delegates.
 
 ## Sign-off
 
-Before tagging 3.2.0, confirm:
+Before tagging 3.2.2, confirm:
 
 - [ ] All CI gates above are green on the release commit.
 - [ ] All offline eval gates above pass with `--strict`.
-- [ ] Runtime gates 1–6 above have been executed and recorded.
+- [ ] Runtime gates 1–6 above have been executed; gates 3–6 are covered by `ci / hybrid-runtime-e2e`.
 - [ ] The hybrid runtime runbook is up to date: [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md).
-- [ ] `docs/IMPLEMENTATION_STATUS.md` and `docs/RUST_MIGRATION_ROADMAP.md` reflect the 3.2.0 quality state.
-- [ ] `CHANGELOG.md` has a 3.2.0 release entry.
-- [ ] No Docker, Rust default-on, runtime feature, or 4.0.0 breaking changes are included in the release.
+- [ ] `docs/RUST_MIGRATION_ROADMAP.md` reflects the 3.2.2 quality state.
+- [ ] `CHANGELOG.md` has a 3.2.2 release entry.
+- [ ] The default Compose deployment and Rust default-disabled behavior are unchanged.
+- [ ] No coverage-gate increase or 4.0.0 breaking change is included in the release.
 
 ---
 

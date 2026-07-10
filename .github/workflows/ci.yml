@@ -111,6 +111,37 @@ jobs:
         if: always()
         run: docker rm --force deepseek-rust-gateway || true
 
+  hybrid-runtime-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and start hybrid runtime
+        run: |
+          cp .env.example .env
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.hybrid-test.yml \
+            up --detach --build
+      - name: Run hybrid runtime smoke tests
+        run: python scripts/smoke_hybrid_runtime.py
+      - name: Show hybrid runtime logs
+        if: failure()
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.hybrid-test.yml \
+            logs --no-color || true
+      - name: Stop hybrid runtime
+        if: always()
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.hybrid-test.yml \
+            down --volumes --remove-orphans || true
+
   release-readiness:
     runs-on: ubuntu-latest
     steps:
