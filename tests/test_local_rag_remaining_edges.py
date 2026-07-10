@@ -35,6 +35,7 @@ def test_onnx_pipeline_loads_fake_runtime_and_embeds(tmp_path: Path, monkeypatch
     monkeypatch.setattr(local_rag, "LOCAL_RAG_ONNX_MODEL_PATH", str(model))
     monkeypatch.setattr(local_rag, "LOCAL_RAG_TOKENIZER_PATH", str(tokenizer))
     monkeypatch.setattr(local_rag, "LOCAL_RAG_EMBEDDING_DIMENSIONS", 2)
+    monkeypatch.setitem(sys.modules, "numpy", SimpleNamespace())
     monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(InferenceSession=lambda *_args, **_kwargs: session))
     monkeypatch.setitem(sys.modules, "tokenizers", SimpleNamespace(Tokenizer=SimpleNamespace(from_file=lambda _path: token)))
 
