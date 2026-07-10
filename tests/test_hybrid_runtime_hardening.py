@@ -24,6 +24,7 @@ def _clear_rust_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(prefix, raising=False)
         monkeypatch.delenv(f"{prefix}_FALLBACK", raising=False)
         monkeypatch.delenv(f"{prefix}_TIMEOUT_MS", raising=False)
+    monkeypatch.delenv("DEEPSEEK_RUST_POLICY_FAILURE_MODE", raising=False)
     monkeypatch.delenv("DEEPSEEK_RUST_GATEWAY_URL", raising=False)
 
 
@@ -250,8 +251,9 @@ def test_policy_client_malformed_decision(mock_urlopen, monkeypatch: pytest.Monk
     monkeypatch.setenv("DEEPSEEK_RUST_POLICY", "1")
     mock_urlopen.return_value = MockHTTPResponse(200, json.dumps({"foo": "bar"}).encode())
     result = policy_client.check_url("https://example.com")
-    assert result.ok
+    assert not result.ok
     assert not result.allowed
+    assert result.code == "policy_backend_unavailable"
 
 
 def test_policy_client_check_path_and_capability(monkeypatch: pytest.MonkeyPatch, mock_urlopen) -> None:

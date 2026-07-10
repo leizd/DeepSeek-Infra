@@ -8,6 +8,7 @@ import ipaddress
 import csv
 import io
 import json
+import logging
 import re
 import socket
 import ssl
@@ -16,6 +17,7 @@ import sys
 import threading
 import time
 import statistics
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,9 +34,12 @@ from deepseek_infra.infra.data.memory import build_memory_suggestion, delete_mem
 from deepseek_infra.infra.tool_runtime.mindmaps import create_mindmap
 from deepseek_infra.infra.tool_runtime.presentations import create_presentation
 from deepseek_infra.infra.rust_core.policy_client import (
+    POLICY_BACKEND_UNAVAILABLE,
+    PolicyProxyResult,
     check_capability as rust_check_capability,
     check_path as rust_check_path,
     check_url as rust_check_url,
+    failure_mode as rust_policy_failure_mode,
     fallback_to_python_enabled as rust_policy_fallback_enabled,
     rust_policy_enabled,
 )
@@ -52,6 +57,7 @@ PYTHON_EVAL_TIMEOUT_SECONDS = 8
 URL_FETCH_CACHE_PREFIX = "fetch-url-"
 FETCH_URL_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 SERIAL_TOOL_NAMES = {"create_reminder", "forget_memory", "suggest_memory", "web_search", "compare_search_results"}
+rust_policy_logger = logging.getLogger("deepseek_infra.rust_policy")
 
 
 PYTHON_EVAL_RUNNER = r"""
@@ -767,7 +773,139 @@ def schema_for_tool(name: str) -> dict[str, Any] | None:
     return tool_parameter_schemas().get(tool_name)
 
 
-def _make_rust_policy_denial(name: str, reason: str, risk: str = "high") -> dict[str, Any]:
+@dataclass(frozen=True, slots=True)
+class _RustPolicyOutcome:
+    ok: bool
+    allowed: bool
+    status: int
+    code: str
+    reason: str
+    decision_id: str
+    trace_id: str
+    capability: str
+    risk_level: str
+
+
+def _rust_capability(name: str, meta: Any) -> str:
+    if meta.capability == "browser":
+        return "BrowserControl"
+    if meta.network:
+        return "NetworkFetch"
+    if name == "python_eval":
+        return "ShellExec"
+    if meta.filesystem and (name.startswith("create_") or name in {"browser_download"}):
+        return "WriteFile"
+    return "ReadFile"
+
+
+def _rust_granted_capabilities(policy: ToolPolicy | None, requested: str) -> list[str]:
+    if policy is None:
+        return [requested]
+    granted = {
+        _rust_capability(tool_name, metadata)
+        for tool_name in policy.allowed_tools
+        if (metadata := tool_metadata(tool_name)) is not None
+    }
+    return sorted(granted)
+
+
+def _policy_decision_id() -> str:
+    return f"pd_py_{uuid.uuid4().hex}"
+
+
+def _redact_policy_text(value: Any) -> str:
+    text = str(value or "")
+    text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+\-/=]+", "Bearer [REDACTED]", text)
+    text = re.sub(r"(?i)(authorization[\"'\s:=]+)[^\s,}\]]+", r"\1[REDACTED]", text)
+    return text[:500]
+
+
+def _redact_policy_target(value: str, *, is_url: bool) -> str:
+    if not value:
+        return ""
+    if not is_url:
+        return f"<workspace>/{Path(value).name}" if Path(value).name else "<workspace>"
+    try:
+        parsed = urlsplit(value)
+        if not parsed.scheme or not parsed.hostname:
+            return "<invalid-url>"
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        return urlunsplit((parsed.scheme.lower(), f"{host}{port}", parsed.path, "", ""))
+    except (TypeError, ValueError):
+        return "<invalid-url>"
+
+
+def _normalize_rust_policy_result(
+    result: PolicyProxyResult | Any,
+    *,
+    trace_id: str,
+    capability: str,
+    risk_level: str,
+) -> _RustPolicyOutcome:
+    ok = bool(getattr(result, "ok", False))
+    allowed = bool(getattr(result, "allowed", False))
+    code = str(getattr(result, "code", "") or ("allowed" if ok and allowed else POLICY_BACKEND_UNAVAILABLE))
+    return _RustPolicyOutcome(
+        ok=ok,
+        allowed=allowed,
+        status=int(getattr(result, "status", 0) or 0),
+        code=code,
+        reason=_redact_policy_text(getattr(result, "reason", "")),
+        decision_id=str(getattr(result, "decision_id", "") or _policy_decision_id()),
+        trace_id=str(getattr(result, "trace_id", "") or trace_id),
+        capability=str(getattr(result, "capability", "") or capability),
+        risk_level=str(getattr(result, "risk_level", "") or risk_level),
+    )
+
+
+def _current_rust_policy_failure_mode() -> str:
+    mode = rust_policy_failure_mode()
+    if mode == "fallback" and not rust_policy_fallback_enabled():
+        return "deny"
+    return mode
+
+
+def _audit_rust_policy(outcome: _RustPolicyOutcome, *, target: str = "", failure_mode: str = "") -> None:
+    event = {
+        "event": "tool_policy_decision",
+        "decision_id": outcome.decision_id,
+        "trace_id": outcome.trace_id,
+        "allowed": outcome.allowed,
+        "code": outcome.code,
+        "capability": outcome.capability,
+        "risk_level": outcome.risk_level,
+        "reason": outcome.reason,
+        "target": target,
+        "failure_mode": failure_mode,
+    }
+    rust_policy_logger.info(
+        json.dumps(event, ensure_ascii=False, separators=(",", ":")),
+        extra={
+            "event": "tool_policy_decision",
+            "decision_id": outcome.decision_id,
+            "trace_id": outcome.trace_id,
+            "allowed": outcome.allowed,
+            "policy_code": outcome.code,
+            "capability": outcome.capability,
+            "risk_level": outcome.risk_level,
+            "policy_reason": outcome.reason,
+            "policy_target": target,
+            "failure_mode": failure_mode,
+        },
+    )
+
+
+def _make_rust_policy_denial(
+    name: str,
+    outcome: _RustPolicyOutcome,
+    *,
+    reason_prefix: str,
+    risk: str = "high",
+    status: int = 403,
+) -> dict[str, Any]:
     decision = PolicyDecision(
         tool=name,
         action=DENY,
@@ -775,57 +913,158 @@ def _make_rust_policy_denial(name: str, reason: str, risk: str = "high") -> dict
         reasons=("rust_policy",),
         violations=(),
         capability="full",
-        reason=reason,
-        suggestion="Review the Rust Policy decision or disable DEEPSEEK_RUST_POLICY",
+        reason=f"{reason_prefix}: {outcome.reason}".rstrip(": "),
+        suggestion="Review the policy decision and target before retrying",
     )
-    return ToolPolicy.denial_output(decision)
+    output = ToolPolicy.denial_output(decision)
+    output.update(
+        {
+            "code": outcome.code,
+            "status": status,
+            "decision_id": outcome.decision_id,
+            "trace_id": outcome.trace_id,
+            "policy_backend": "rust",
+        }
+    )
+    output["policy"].update(
+        {
+            "code": outcome.code,
+            "decisionId": outcome.decision_id,
+            "traceId": outcome.trace_id,
+            "backend": "rust",
+        }
+    )
+    return output
 
 
-def _evaluate_rust_policy(name: str, arguments: dict[str, Any], policy: ToolPolicy | None) -> dict[str, Any] | None:
+def _handle_rust_policy_result(
+    name: str,
+    result: PolicyProxyResult | Any,
+    *,
+    trace_id: str,
+    capability: str,
+    risk_level: str,
+    target: str,
+    deny_prefix: str,
+) -> dict[str, Any] | None:
+    outcome = _normalize_rust_policy_result(
+        result,
+        trace_id=trace_id,
+        capability=capability,
+        risk_level=risk_level,
+    )
+    if outcome.ok:
+        _audit_rust_policy(outcome, target=target)
+        if outcome.allowed:
+            return None
+        return _make_rust_policy_denial(
+            name,
+            outcome,
+            reason_prefix=deny_prefix,
+            risk=risk_level.lower(),
+        )
+
+    failure_mode = _current_rust_policy_failure_mode()
+    _audit_rust_policy(outcome, target=target, failure_mode=failure_mode)
+    if failure_mode == "fallback":
+        return None
+    if failure_mode == "error":
+        return {
+            "ok": False,
+            "tool": name,
+            "error": "Rust Policy backend is unavailable",
+            "code": outcome.code or POLICY_BACKEND_UNAVAILABLE,
+            "status": 503,
+            "decision_id": outcome.decision_id,
+            "trace_id": outcome.trace_id,
+            "policy_backend": "rust",
+            "failure_mode": "error",
+        }
+    return _make_rust_policy_denial(
+        name,
+        outcome,
+        reason_prefix="Rust Policy backend unavailable",
+        risk=risk_level.lower(),
+    )
+
+
+def _evaluate_rust_policy(
+    name: str,
+    arguments: dict[str, Any],
+    policy: ToolPolicy | None,
+    trace_id: str = "",
+) -> dict[str, Any] | None:
     if not rust_policy_enabled():
         return None
     meta = tool_metadata(name)
     if meta is None:
         return None
 
+    rust_capability = _rust_capability(name, meta)
+    risk_map = {"low": "Low", "medium": "Medium", "high": "High", "critical": "Critical"}
+    max_risk = risk_map.get(meta.risk, "Medium")
+
     # URL guard for network tools.
     url = str(arguments.get("url") or "").strip()
     if url and meta.network:
-        result = rust_check_url(url)
-        if result.ok and not result.allowed:
-            return _make_rust_policy_denial(name, f"URL blocked by Rust Policy: {result.reason}", "critical")
-        if not result.ok and not rust_policy_fallback_enabled():
-            return _make_rust_policy_denial(name, f"Rust Policy unreachable: {result.reason}", "critical")
+        result = rust_check_url(
+            url,
+            trace_id=trace_id,
+            capability=rust_capability,
+            risk_level=max_risk,
+        )
+        denial = _handle_rust_policy_result(
+            name,
+            result,
+            trace_id=trace_id,
+            capability=rust_capability,
+            risk_level=max_risk,
+            target=_redact_policy_target(url, is_url=True),
+            deny_prefix="URL blocked by Rust Policy",
+        )
+        if denial is not None:
+            return denial
 
     # Path guard for filesystem tools.
     requested_path = str(arguments.get("path") or arguments.get("fileId") or "").strip()
     if requested_path and meta.filesystem:
         root = str(Path.cwd())
-        result = rust_check_path(root, requested_path)
-        if result.ok and not result.allowed:
-            return _make_rust_policy_denial(name, f"Path blocked by Rust Policy: {result.reason}", "critical")
-        if not result.ok and not rust_policy_fallback_enabled():
-            return _make_rust_policy_denial(name, f"Rust Policy unreachable: {result.reason}", "critical")
+        result = rust_check_path(
+            root,
+            requested_path,
+            trace_id=trace_id,
+            capability=rust_capability,
+            risk_level=max_risk,
+        )
+        denial = _handle_rust_policy_result(
+            name,
+            result,
+            trace_id=trace_id,
+            capability=rust_capability,
+            risk_level=max_risk,
+            target=_redact_policy_target(requested_path, is_url=False),
+            deny_prefix="Path blocked by Rust Policy",
+        )
+        if denial is not None:
+            return denial
 
     # Capability/risk guard.
-    cap_map = {
-        "research": "NetworkFetch",
-        "browser": "BrowserControl",
-        "code": "ShellExec",
-        "general": "ReadFile",
-        "assistant": "ReadFile",
-    }
-    rust_capability = cap_map.get(meta.capability, "ReadFile")
-    risk_map = {"low": "Low", "medium": "Medium", "high": "High", "critical": "Critical"}
-    max_risk = risk_map.get(meta.risk, "Medium")
-    granted_capabilities = [cap_map.get(c, "ReadFile") for c in (policy.allowed_tools if policy is not None else set())]
-    result = rust_check_capability(rust_capability, granted_capabilities, max_risk)
-    if result.ok and not result.allowed:
-        return _make_rust_policy_denial(name, f"Capability blocked by Rust Policy: {result.reason}", meta.risk)
-    if not result.ok and not rust_policy_fallback_enabled():
-        return _make_rust_policy_denial(name, f"Rust Policy unreachable: {result.reason}", meta.risk)
-
-    return None
+    granted_capabilities = _rust_granted_capabilities(policy, rust_capability)
+    result = rust_check_capability(
+        rust_capability,
+        granted_capabilities,
+        max_risk,
+        trace_id=trace_id,
+    )
+    return _handle_rust_policy_result(
+        name,
+        result,
+        trace_id=trace_id,
+        capability=rust_capability,
+        risk_level=max_risk,
+        target="",
+        deny_prefix="Capability blocked by Rust Policy",
+    )
 
 
 def execute_tool_call(
@@ -848,11 +1087,16 @@ def execute_tool_call(
         from deepseek_infra.infra.mcp.executor import call_external_mcp_tool
 
         return call_external_mcp_tool(name, arguments, policy, trace_id=trace_id, parent_span_id=parent_span_id)
-    rust_decision = _evaluate_rust_policy(name, arguments, policy)
+    effective_policy = policy
+    if effective_policy is None and rust_policy_enabled():
+        # Rust fallback must always land on the Python security guards. Without
+        # this local policy, a sidecar outage on a bare tool call could fail open.
+        effective_policy = ToolPolicy.permissive()
+    rust_decision = _evaluate_rust_policy(name, arguments, effective_policy, trace_id=trace_id)
     if rust_decision is not None:
         return rust_decision
-    if policy is not None:
-        decision = policy.evaluate(name, arguments, schema=schema_for_tool(name))
+    if effective_policy is not None:
+        decision = effective_policy.evaluate(name, arguments, schema=schema_for_tool(name))
         if not decision.allowed:
             return ToolPolicy.denial_output(decision)
     try:
@@ -930,8 +1174,8 @@ def execute_tool_call(
         else:
             raise AppError(f"Unsupported tool: {name}", code=ErrorCode.INVALID_PAYLOAD)
         output = {"ok": True, "tool": name, "result": result}
-        if policy is not None:
-            output = policy.sanitize_result(name, output)
+        if effective_policy is not None:
+            output = effective_policy.sanitize_result(name, output)
         return output
     except AppError as exc:
         return {"ok": False, "tool": name or "unknown", "error": str(exc), "code": exc.code.value}

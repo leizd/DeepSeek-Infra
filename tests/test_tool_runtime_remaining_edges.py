@@ -72,13 +72,21 @@ def test_rust_policy_unknown_tool_and_fail_closed_paths(monkeypatch: pytest.Monk
 
     metadata = SimpleNamespace(network=False, filesystem=True, capability="general", risk="high")
     monkeypatch.setattr(tools, "tool_metadata", lambda _name: metadata)
-    monkeypatch.setattr(tools, "rust_check_path", lambda *_args: SimpleNamespace(ok=False, allowed=False, reason="offline"))
+    monkeypatch.setattr(
+        tools,
+        "rust_check_path",
+        lambda *_args, **_kwargs: SimpleNamespace(ok=False, allowed=False, reason="offline"),
+    )
     denied = tools._evaluate_rust_policy("read_file_chunk", {"path": "../secret"}, None)
     assert denied is not None
     assert denied["ok"] is False
 
     metadata.filesystem = False
-    monkeypatch.setattr(tools, "rust_check_capability", lambda *_args: SimpleNamespace(ok=False, allowed=False, reason="offline"))
+    monkeypatch.setattr(
+        tools,
+        "rust_check_capability",
+        lambda *_args, **_kwargs: SimpleNamespace(ok=False, allowed=False, reason="offline"),
+    )
     denied = tools._evaluate_rust_policy("python_eval", {}, None)
     assert denied is not None
     assert denied["ok"] is False

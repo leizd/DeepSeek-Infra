@@ -1,8 +1,8 @@
 # Hybrid Rust Runtime Runbook
 
-This runbook covers day-to-day operation of the DeepSeek Infra 3.1.x / 3.2.2 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
+This runbook covers day-to-day operation of the DeepSeek Infra 3.1.x / 3.2.3 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
 
-> **Scope**: every Rust component remains opt-in and falls back to the existing Python implementation by default. 3.2.2 adds only a test overlay and E2E smoke; the default Python image and `docker compose up` behavior are unchanged.
+> **Scope**: every Rust component remains opt-in. 3.2.3 hardens Rust Policy decisions, redacted audit logs, and backend failure behavior; the default Python image, default-disabled Rust flags, and `docker compose up` behavior are unchanged.
 
 ---
 
@@ -154,7 +154,8 @@ Each Rust component has its own opt-in flag. All flags accept the same truthy/fa
 | `DEEPSEEK_RUST_GATEWAY_TIMEOUT_MS` | `3000` | Gateway proxy timeout in milliseconds |
 | `DEEPSEEK_RUST_MCP_FALLBACK` | `1` | Fall back to Python MCP if Rust fails |
 | `DEEPSEEK_RUST_MCP_TIMEOUT_MS` | `3000` | MCP proxy timeout in milliseconds |
-| `DEEPSEEK_RUST_POLICY_FALLBACK` | `1` | Fall back to Python Tool Policy if Rust fails |
+| `DEEPSEEK_RUST_POLICY_FAILURE_MODE` | `fallback` | Policy backend failure behavior: `fallback`, `deny`, or `error` |
+| `DEEPSEEK_RUST_POLICY_FALLBACK` | unset | Legacy compatibility switch; `0` maps to `deny`, otherwise `fallback` |
 | `DEEPSEEK_RUST_POLICY_TIMEOUT_MS` | `3000` | Policy proxy timeout in milliseconds |
 | `DEEPSEEK_RUST_RAG_FALLBACK` | `1` | Fall back to Python RAG if Rust fails |
 | `DEEPSEEK_RUST_RAG_TIMEOUT_MS` | `3000` | RAG proxy timeout in milliseconds |
@@ -189,13 +190,13 @@ python -m deepseek_infra.app
 
 ## Fallback behavior
 
-Every Rust component has a Python equivalent. When a Rust flag is enabled but the Rust call fails, the Python app chooses one of the following behaviors based on the corresponding `*_FALLBACK` flag.
+Every Rust component has a Python equivalent. Gateway, MCP, and RAG use their corresponding `*_FALLBACK` switches; Policy uses `DEEPSEEK_RUST_POLICY_FAILURE_MODE` so backend failure can fall back, deny, or return an error explicitly.
 
-| Component | Fallback enabled | Fallback disabled |
+| Component | Default recovery | Fail-closed behavior |
 | --- | --- | --- |
 | **Gateway** | Python Gateway handles the request | Returns `502 Bad Gateway` with `UPSTREAM_FAILURE` |
 | **MCP** | Python MCP handler processes the JSON-RPC message | Returns `502 Bad Gateway` with `UPSTREAM_FAILURE` |
-| **Policy** | Python Tool Policy re-evaluates the decision | The tool call is blocked with the Rust error reason |
+| **Policy** | `fallback`: Python Tool Policy re-evaluates the call | `deny`: block execution; `error`: return a structured 503 |
 | **RAG** | Python RAG hot-path runs locally | The Rust result is ignored and Python continues |
 
 A "Rust call failure" includes any of these conditions:
@@ -206,7 +207,17 @@ A "Rust call failure" includes any of these conditions:
 - Malformed JSON or missing expected fields in the response
 - Invalid timeout value in the environment variable (falls back to the default `3000` ms)
 
-> **Default is safe**: all `*_FALLBACK` flags default to `1`, so enabling a Rust component cannot break a working 3.0.x deployment.
+> **Default is safe**: Rust Policy defaults to `fallback`, and the Python Tool Policy is attached even to bare tool calls after a Rust backend failure. A sidecar outage therefore cannot silently skip policy evaluation.
+
+### Rust Policy failure modes
+
+| Mode | Sidecar failure behavior | Tool execution |
+| --- | --- | --- |
+| `fallback` | Re-evaluate with Python Tool Policy | Runs only if Python Policy allows it |
+| `deny` | Return `policy_backend_unavailable` as a structured denial | Never runs |
+| `error` | Return `policy_backend_unavailable` with `status: 503` | Never runs |
+
+An invalid mode falls back to `fallback`. `DEEPSEEK_RUST_POLICY_FALLBACK=0` remains supported as a compatibility alias for `deny`.
 
 ---
 
@@ -286,7 +297,25 @@ curl -X POST http://127.0.0.1:8787/v1/chat/completions \
 
 **Symptom**: A tool call is blocked with a reason mentioning `Rust Policy` or `PolicyDecision`.
 
-**Diagnosis**: The request was delegated to Rust Policy and the sidecar returned `Deny`.
+**Diagnosis**: The request was delegated to Rust Policy and the sidecar returned `allowed: false`. The tool response includes a stable `code`, `decision_id`, and the correlated `trace_id`.
+
+Example decision:
+
+```json
+{
+  "allowed": false,
+  "code": "private_network_blocked",
+  "reason": "private network addresses are not allowed",
+  "decision_id": "pd_...",
+  "trace_id": "trace_...",
+  "capability": "NetworkFetch",
+  "risk_level": "High"
+}
+```
+
+Each allow, deny, and backend-failure outcome emits a `tool_policy_decision` structured log. URL targets keep only scheme, host, port, and path; credentials, query values, authorization values, complete tool arguments, and workspace roots are omitted or redacted. No audit database is introduced in 3.2.3.
+
+Stable codes in this milestone are `unsupported_scheme`, `localhost_blocked`, `private_network_blocked`, `link_local_blocked`, `path_traversal`, `protected_path`, `missing_capability`, `risk_limit_exceeded`, `invalid_policy_request`, and `policy_backend_unavailable`.
 
 **Remediation**:
 
@@ -297,7 +326,7 @@ curl -X POST http://127.0.0.1:8787/v1/chat/completions \
   DEEPSEEK_RUST_POLICY=0
   ```
 
-- If Python allows the same call, the Rust Policy rule may need tuning; report it as a bug with the deny reason.
+- If Python allows the same call, the Rust Policy rule may need tuning; report it with the stable code and decision identifier, never with secrets or complete sensitive arguments.
 
 ---
 

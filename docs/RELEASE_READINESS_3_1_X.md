@@ -1,8 +1,8 @@
-# Release Readiness Checklist — 3.1.x / 3.2.2 Quality Track
+# Release Readiness Checklist — 3.1.x / 3.2.3 Quality Track
 
-This checklist is the go/no-go gate for the hybrid Rust runtime line through the 3.2.2 end-to-end smoke milestone. It is intentionally conservative: it verifies that the Rust integration is stable, documented, safely disabled by default, and able to fall back to Python after a live sidecar failure.
+This checklist is the go/no-go gate for the hybrid Rust runtime line through the 3.2.3 Policy deny/audit milestone. It is intentionally conservative: it verifies that Rust integration is stable, safely disabled by default, able to fall back to Python, and unable to execute a denied tool.
 
-> **Non-goals for 3.2.2**: enable Rust by default, replace the Python image, raise the 85% coverage gate, require API keys or external services, or introduce 4.0.0 breaking changes. Those remain tracked in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+> **Non-goals for 3.2.3**: enable Rust Policy by default, remove Python Policy, add an audit database, raise the 85% coverage gate, require API keys or external services, or introduce 4.0.0 breaking changes. Those remain tracked in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
 ---
 
@@ -128,9 +128,15 @@ Expected: request falls back to Python because `DEEPSEEK_RUST_GATEWAY_FALLBACK=1
 
 The 3.2.2 smoke stops `rust-gateway` after the healthy-path checks and proves Gateway, MCP, Policy, and RAG fallback through the still-running Python container.
 
-### 5. Policy deny blocks unsafe tool call
+### 5. Policy deny blocks unsafe tool call and is auditable
 
-With `DEEPSEEK_RUST_POLICY=1`, attempt a tool call that the Rust Policy sidecar should deny (e.g., a private IP URL or a path traversal). The call must be blocked and the deny reason must be present in the response or trace.
+With `DEEPSEEK_RUST_POLICY=1`, attempt a tool call that the Rust Policy sidecar should deny (e.g., a private IP URL or a path traversal). The call must be blocked before its implementation runs. The response and structured audit event must preserve the same stable `code`, `decision_id`, and `trace_id`; credentials, authorization values, complete sensitive arguments, and workspace roots must not appear in logs.
+
+Repeat a safe tool call with the sidecar unavailable under each `DEEPSEEK_RUST_POLICY_FAILURE_MODE`:
+
+- `fallback`: Python Tool Policy evaluates the call.
+- `deny`: execution is blocked with `policy_backend_unavailable`.
+- `error`: execution is blocked with a structured `status: 503` response.
 
 ### 6. RAG CJK query preserved
 
@@ -197,14 +203,14 @@ No state migration is needed because Rust components are stateless delegates.
 
 ## Sign-off
 
-Before tagging 3.2.2, confirm:
+Before tagging 3.2.3, confirm:
 
 - [ ] All CI gates above are green on the release commit.
 - [ ] All offline eval gates above pass with `--strict`.
 - [ ] Runtime gates 1–6 above have been executed; gates 3–6 are covered by `ci / hybrid-runtime-e2e`.
 - [ ] The hybrid runtime runbook is up to date: [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md).
-- [ ] `docs/RUST_MIGRATION_ROADMAP.md` reflects the 3.2.2 quality state.
-- [ ] `CHANGELOG.md` has a 3.2.2 release entry.
+- [ ] `docs/RUST_MIGRATION_ROADMAP.md` reflects the 3.2.3 quality state.
+- [ ] `CHANGELOG.md` has a 3.2.3 release entry.
 - [ ] The default Compose deployment and Rust default-disabled behavior are unchanged.
 - [ ] No coverage-gate increase or 4.0.0 breaking change is included in the release.
 

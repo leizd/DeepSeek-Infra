@@ -125,12 +125,13 @@ def test_mcp_client_http_error_body_read_fails(mock_urlopen, monkeypatch: pytest
 # --- policy_client.py ---
 
 
-def test_policy_client_empty_response_allows(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_policy_client_empty_response_is_backend_failure(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEEPSEEK_RUST_POLICY", "1")
     mock_urlopen.return_value = MockHTTPResponse(200, b"")
     result = policy_client.check_url("https://example.com")
-    assert result.ok
-    assert result.allowed is True
+    assert not result.ok
+    assert result.allowed is False
+    assert result.code == "policy_backend_unavailable"
 
 
 def test_policy_client_preserves_authorization(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:
