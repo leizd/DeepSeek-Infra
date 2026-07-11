@@ -308,7 +308,7 @@ def normalize_run(record: dict[str, Any]) -> dict[str, Any]:
         "status": str(record.get("status") or "completed")[:40],
         "startedAt": str(record.get("startedAt") or ""),
         "completedAt": str(record.get("completedAt") or ""),
-        "latencyMs": max(0, int(record.get("latencyMs") or 0)),
+        "latencyMs": _safe_int(record.get("latencyMs")),
         "offline": bool(record.get("offline")),
         "model": str(record.get("model") or "")[:120],
         "inputSummary": str(record.get("inputSummary") or "")[:SUMMARY_LIMIT],

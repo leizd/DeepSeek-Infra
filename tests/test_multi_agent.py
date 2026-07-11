@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from deepseek_infra.core.config import MULTI_AGENT_TIMEOUT_SECONDS
 from deepseek_infra.infra.agent_runtime import multi_agent
@@ -1520,14 +1520,133 @@ def test_stream_agent_plan_token_gate_skips_later_tiers_but_always_synthesizes()
     assert ran == ["researcher"]
     # 综合阶段无论预算如何都必须执行，保证有最终答案
     assert synth_calls == [True]
-    assert any(
-        event.get("type") == "agent_note" and "预算" in str(event.get("text")) for event in events
-    )
+    assert any(event.get("type") == "agent_note" and "预算" in str(event.get("text")) for event in events)
     done = [event for event in events if event.get("type") == "done"][-1]
     diagnostics = done["diagnostics"]
     assert diagnostics["agentTokenBudgetLimit"] == 500
-    # researcher(1000) + 综合(50) 都被记账
     assert diagnostics["agentTokenBudgetUsed"] == 1050
+
+
+class _FakeFuture:
+    def __init__(self, *, done: bool, result: dict[str, Any] | None = None, error: Exception | None = None) -> None:
+        self._done = done
+        self._result = result
+        self._error = error
+        self.cancelled = False
+
+    def done(self) -> bool:
+        return self._done
+
+    def result(self) -> dict[str, Any]:
+        if self._error:
+            raise self._error
+        assert self._result is not None
+        return dict(self._result)
+
+    def cancel(self) -> bool:
+        self.cancelled = True
+        return True
+
+
+class _FakePool:
+    futures: list[_FakeFuture] = []
+
+    def __init__(self, max_workers: int) -> None:
+        self.max_workers = max_workers
+        self.submitted = 0
+        self.shutdown_args: tuple[bool, bool] | None = None
+
+    def submit(self, *_args: Any, **_kwargs: Any) -> _FakeFuture:
+        future = self.futures[self.submitted]
+        self.submitted += 1
+        return future
+
+    def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+        self.shutdown_args = (wait, cancel_futures)
+
+
+def test_parallel_tier_timeout_preserves_done_error_and_pending_results() -> None:
+    _FakePool.futures = [
+        _FakeFuture(done=True, result=_worker_output("researcher")),
+        _FakeFuture(done=True, error=RuntimeError("worker failed")),
+        _FakeFuture(done=False),
+    ]
+    tier = [{"id": "researcher", "task": "r"}, {"id": "coder", "task": "c"}, {"id": "reasoner", "task": "x"}]
+    events: list[dict[str, Any]] = []
+    span = MagicMock(span_id="span")
+    with (
+        patch.object(multi_agent, "ThreadPoolExecutor", _FakePool),
+        patch.object(multi_agent, "as_completed", side_effect=multi_agent.FuturesTimeoutError()),
+        patch.object(multi_agent, "start_span", return_value=span),
+    ):
+        outputs = multi_agent._execute_agent_tier_parallel(
+            {}, tier, prior_outputs=[], search_budget=SearchBudget(total_limit=3, per_key_limit=1), emit_event=events.append
+        )
+    assert [output["id"] for output in outputs] == ["researcher", "coder", "reasoner"]
+    assert outputs[0].get("failed") is not True
+    assert outputs[1]["failed"] is True and outputs[2]["failed"] is True
+    assert _FakePool.futures[2].cancelled
+
+
+def test_parallel_tier_cancellation_clears_and_cancels_futures() -> None:
+    _FakePool.futures = [_FakeFuture(done=False), _FakeFuture(done=False)]
+    cancelled = threading.Event()
+    tier = [{"id": "coder", "task": "c"}, {"id": "reasoner", "task": "x"}]
+    with (
+        patch.object(multi_agent, "ThreadPoolExecutor", _FakePool),
+        patch.object(multi_agent, "as_completed", side_effect=multi_agent.RequestCancelled()),
+        patch.object(multi_agent, "start_span", return_value=MagicMock(span_id="span")),
+    ):
+        try:
+            multi_agent._execute_agent_tier_parallel(
+                {}, tier, prior_outputs=[], search_budget=SearchBudget(total_limit=2, per_key_limit=1), emit_event=lambda _: None, cancel_event=cancelled
+            )
+        except multi_agent.RequestCancelled:
+            pass
+        else:
+            raise AssertionError("cancellation should propagate")
+    assert all(future.cancelled for future in _FakePool.futures)
+
+
+def test_multi_agent_normalizers_handle_invalid_json_order_and_durations() -> None:
+    assert multi_agent.extract_json_object("[]") == {}
+    assert multi_agent.extract_json_object("prefix {bad} suffix") == {}
+    assert multi_agent.extract_json_object('prefix {"ok":true} suffix') == {"ok": True}
+    plan = [{"id": "coder"}, {"id": "reasoner"}, {"id": "coder"}]
+    outputs = [{"id": "unknown"}, {"id": "reasoner"}, {"id": "coder"}, {}]
+    assert [row.get("id") for row in multi_agent._outputs_in_plan_order(plan, outputs)] == ["coder", "reasoner", "unknown", None]
+    durations = multi_agent.agent_durations_for_diagnostics(
+        [{"id": "leader", "duration_ms": 1}, {"id": "coder", "duration_ms": True}, {"id": "reasoner", "duration_ms": "bad"}, {"id": "critic", "duration_ms": "4"}]
+    )
+    assert durations == {"critic": 4}
+
+
+def test_synthesize_answer_handles_nonstream_usage_and_empty_content() -> None:
+    usage: dict[str, Any] = {}
+    with patch.object(multi_agent, "call_deepseek", return_value={"content": "", "usage": {"total_tokens": 3}}):
+        result = multi_agent.synthesize_answer({}, "model", "q", [], usage_callback=usage.update)
+    assert result == multi_agent.EMPTY_SYNTHESIS_FALLBACK
+    assert usage == {"total_tokens": 3}
+
+
+def test_synthesize_answer_stream_relay_filters_terminal_events() -> None:
+    events: list[dict[str, Any]] = []
+    usage: dict[str, Any] = {}
+
+    def stream(_payload: dict[str, Any], emit: Any, **_kwargs: Any) -> None:
+        for event in (
+            {"type": "reasoning", "text": "why"},
+            {"type": "content", "text": "answer"},
+            {"type": "done", "usage": {"total_tokens": 2}},
+            {"type": "error", "error": "ignored"},
+        ):
+            emit(event)
+
+    with patch.object(multi_agent, "stream_deepseek", side_effect=stream):
+        result = multi_agent.synthesize_answer({}, "model", "q", [], events.append, usage_callback=usage.update)
+    assert result == "answer"
+    assert [event["type"] for event in events] == ["reasoning", "content"]
+    assert usage == {"total_tokens": 2}
 
 
 def test_stream_agent_plan_high_budget_runs_all_tiers() -> None:

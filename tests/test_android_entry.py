@@ -56,3 +56,34 @@ def test_start_json_returns_existing_handle_without_restarting(tmp_path: Path, m
         "host": "127.0.0.1",
         "port": 8000,
     }
+
+
+def test_android_environment_defaults_and_clears_auth_disabled(tmp_path: Path) -> None:
+    with patch.dict(os.environ, {"AUTH_DISABLED": "1"}, clear=True):
+        payload = android_entry.configure_android_environment(str(tmp_path), port=0)
+        assert payload["port"] == str(android_entry.DEFAULT_ANDROID_PORT)
+        assert "DEEPSEEK_API_KEY" not in os.environ
+        assert "TAVILY_API_KEY" not in os.environ
+        assert "AUTH_DISABLED" not in os.environ
+
+
+def test_android_start_and_stop_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    handle = SimpleNamespace(computer_url="http://local", phone_url="http://phone", host="127.0.0.1", port=8123)
+    monkeypatch.setattr(android_entry, "_HANDLE", None)
+    import deepseek_infra.app as app
+
+    starts: list[tuple[str, int, bool]] = []
+    stopped: list[object] = []
+
+    def prepare(*, host: str, port: int, serve: bool) -> object:
+        starts.append((host, port, serve))
+        return handle
+
+    monkeypatch.setattr(app, "prepare_and_start", prepare)
+    monkeypatch.setattr(app, "shutdown_handle", lambda value: stopped.append(value))
+    with patch.dict(os.environ, {}, clear=False):
+        assert android_entry.start(str(tmp_path), 8123)["port"] == 8123
+        assert starts == [("127.0.0.1", 8123, True)]
+        android_entry.stop()
+        android_entry.stop()
+    assert stopped == [handle]

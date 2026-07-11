@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import sys
 
 import deepseek_infra.launcher.gui as gui
 from deepseek_infra.launcher.credentials import DEFAULT_HOST, DEFAULT_PORT, LAN_HOST, LauncherCredentials
@@ -281,3 +283,131 @@ def test_launcher_misc_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gui, "LauncherWindow", lambda root: root)
 
     gui.main()
+
+
+def test_launcher_load_save_and_start_failures_are_nonfatal(
+    launcher_window: tuple[gui.LauncherWindow, FakeRoot, FakeMessageBox, list[LauncherCredentials]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, _root, messagebox, _saved = launcher_window
+    monkeypatch.setattr(gui.credentials_store, "load", lambda: (_ for _ in ()).throw(OSError("corrupt credentials")))
+    window._load_persisted()
+
+    window.deepseek_var.set("")
+    messagebox.yesno = False
+    window._on_start()
+    assert cast(FakeRuntime, window.runtime).started_with is None
+
+    window.deepseek_var.set("sk")
+    monkeypatch.setattr(gui, "port_in_use", lambda _host, _port: True)
+    window._on_start()
+    assert cast(FakeRuntime, window.runtime).started_with is None
+
+    messagebox.yesno = True
+    monkeypatch.setattr(gui.credentials_store, "save", lambda _creds: (_ for _ in ()).throw(OSError("disk full")))
+    window._on_start()
+    assert cast(FakeRuntime, window.runtime).started_with is not None
+
+    window._on_save()
+    assert messagebox.errors[-1][1] == "disk full"
+
+
+def test_launcher_empty_clear_open_copy_and_invalid_logs_are_noops(
+    launcher_window: tuple[gui.LauncherWindow, FakeRoot, FakeMessageBox, list[LauncherCredentials]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, root, messagebox, saved = launcher_window
+    opened: list[str] = []
+    monkeypatch.setattr(gui.webbrowser, "open", lambda url, new=0: opened.append(url))
+    window.computer_url_var.set("")
+    window._on_open_browser()
+    window._copy_url(window.computer_url_var)
+    assert opened == [] and root.clipboard == []
+
+    messagebox.yesno = False
+    window._on_clear()
+    assert saved == []
+    window._try_update_urls_from_log("server_started without-json")
+    window._try_update_urls_from_log("server_started {bad json")
+    assert window.open_button.config["state"] == "disabled"
+
+
+def test_launcher_status_and_url_fallback_branches(
+    launcher_window: tuple[gui.LauncherWindow, FakeRoot, FakeMessageBox, list[LauncherCredentials]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, _root, _messagebox, _saved = launcher_window
+    for status in ("starting", "stopping", "custom"):
+        window._apply_status(status)
+        assert window.status_var.get()
+    window._restore_status_text(True)
+    window._restore_status_text(False)
+
+    monkeypatch.setattr(gui, "local_ip", lambda: (_ for _ in ()).throw(OSError("no network")))
+    monkeypatch.setattr(gui, "settings", SimpleNamespace(auth=SimpleNamespace(token="token")))
+    window._update_urls(LauncherCredentials(port=8123, auth_disabled=False))
+    assert "token=" in window.computer_url_var.get()
+    assert "127.0.0.1" in window.phone_url_var.get()
+
+
+def test_port_probe_reports_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Probe:
+        def __enter__(self) -> "Probe":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def settimeout(self, value: float) -> None:
+            assert value == 0.2
+
+        def connect(self, address: tuple[str, int]) -> None:
+            assert address == ("127.0.0.1", 8123)
+
+    monkeypatch.setattr(gui.socket, "socket", lambda *_args, **_kwargs: Probe())
+    assert gui.port_in_use("127.0.0.1", 8123) is True
+
+
+def test_windows_dpi_awareness_uses_legacy_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class Shcore:
+        def SetProcessDpiAwareness(self, level: int) -> None:
+            calls.append(f"shcore:{level}")
+            if level == 2:
+                raise OSError("unsupported")
+
+    class User32:
+        def GetDpiForSystem(self) -> int:
+            raise AttributeError
+
+        def GetDC(self, value: int) -> int:
+            return 7
+
+        def ReleaseDC(self, hdc: int, value: int) -> None:
+            calls.append(f"release:{hdc}:{value}")
+
+        def SetProcessDPIAware(self) -> None:
+            calls.append("legacy")
+
+    windll = SimpleNamespace(
+        shcore=Shcore(),
+        user32=User32(),
+        gdi32=SimpleNamespace(GetDeviceCaps=lambda hdc, index: 144),
+    )
+    monkeypatch.setattr(sys, "platform", "win32")
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "windll", windll, raising=False)
+    assert gui._enable_windows_dpi_awareness() == 2.0
+    assert calls[:2] == ["shcore:2", "shcore:1"]
+
+
+def test_windows_dpi_awareness_non_windows_and_total_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert gui._enable_windows_dpi_awareness() == 0.0
+    monkeypatch.setattr(sys, "platform", "win32")
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(), raising=False)
+    assert gui._enable_windows_dpi_awareness() == 0.0

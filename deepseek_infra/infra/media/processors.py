@@ -167,7 +167,7 @@ def chunk_transcript_text(text: str, *, max_chars: int = TRANSCRIPT_CHUNK_CHARS)
         return []
     chunks: list[str] = []
     current = ""
-    for piece in _transcript_pieces(normalized):
+    for piece in _transcript_pieces(normalized, max_chars=max_chars):
         candidate = f"{current}\n{piece}".strip() if current else piece
         if len(candidate) <= max_chars:
             current = candidate
@@ -180,17 +180,17 @@ def chunk_transcript_text(text: str, *, max_chars: int = TRANSCRIPT_CHUNK_CHARS)
     return chunks
 
 
-def _transcript_pieces(text: str) -> list[str]:
+def _transcript_pieces(text: str, *, max_chars: int = TRANSCRIPT_CHUNK_CHARS) -> list[str]:
     pieces: list[str] = []
     for paragraph in [part.strip() for part in text.split("\n") if part.strip()]:
-        if len(paragraph) <= TRANSCRIPT_CHUNK_CHARS:
+        if len(paragraph) <= max_chars:
             pieces.append(paragraph)
             continue
         words = paragraph.split()
         current = ""
         for word in words:
             candidate = f"{current} {word}".strip() if current else word
-            if len(candidate) <= TRANSCRIPT_CHUNK_CHARS:
+            if len(candidate) <= max_chars:
                 current = candidate
             else:
                 if current:

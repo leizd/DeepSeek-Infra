@@ -45,6 +45,7 @@ evals/reports/*
 !evals/reports/browser-v*.json
 
 .coverage
+/artifacts/
 .mypy_cache/
 .npm-cache/
 .pytest_cache/

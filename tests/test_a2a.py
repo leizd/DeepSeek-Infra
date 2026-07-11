@@ -322,3 +322,112 @@ def test_a2a_trace_and_prometheus_metrics(tmp_settings, monkeypatch: pytest.Monk
     prometheus = render_prometheus()
     assert "ai_a2a_tasks_total" in prometheus
     assert "ai_a2a_active_tasks" in prometheus
+
+
+def test_a2a_disk_and_persistence_failures_are_best_effort(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    task_id = "task_corrupt01"
+    path = a2a.A2A_TASKS_DIR / f"{task_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not json", encoding="utf-8")
+    assert a2a._load_task_from_disk(task_id) is None
+    path.write_text("[]", encoding="utf-8")
+    assert a2a._load_task_from_disk(task_id) is None
+
+    monkeypatch.setattr(a2a, "_task_path", lambda _task_id: path)
+    monkeypatch.setattr(path.__class__, "write_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    a2a._persist_task({"id": task_id})
+
+
+def test_a2a_task_eviction_removes_only_old_terminal_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(a2a, "A2A_MAX_TASKS", 2)
+    with a2a._TASK_LOCK:
+        a2a._TASKS.update(
+            {
+                "task_old": {"createdAt": "1", "status": {"state": COMPLETED}},
+                "task_active": {"createdAt": "2", "status": {"state": "working"}},
+                "task_new": {"createdAt": "3", "status": {"state": FAILED}},
+            }
+        )
+        a2a._TASK_CONDITIONS["task_old"] = threading.Condition()
+        a2a._TASK_CANCEL_EVENTS["task_old"] = threading.Event()
+    a2a._evict_old_tasks()
+    assert "task_old" not in a2a._TASKS
+    assert "task_active" in a2a._TASKS
+
+
+def test_a2a_artifact_chunk_handles_canceling_and_corrupt_chunk_list(tmp_settings) -> None:
+    task_id = "task_chunks01"
+    with a2a._TASK_LOCK:
+        a2a._TASKS[task_id] = {"id": task_id, "status": {"state": CANCELING}, "artifactChunks": "bad"}
+    assert a2a._append_artifact_chunk(task_id, artifact_id="a", name="n", text="x", skip_if_canceling=True) == {}
+    chunk = a2a._append_artifact_chunk(task_id, artifact_id="a", name="n", text="x", skip_if_canceling=False)
+    assert chunk["chunkIndex"] == 0
+
+
+def test_a2a_message_text_and_public_history_boundaries() -> None:
+    assert a2a._text_from_message(None) == ""
+    assert a2a._text_from_message({"parts": "bad"}) == ""
+    assert a2a._text_from_message({"parts": [None, {"kind": "data", "text": "skip"}, {"type": "text", "text": "one"}]}) == "one"
+    task = {"_secret": 1, "history": [1, 2, 3]}
+    assert a2a.public_task(task, history_length=0) == {"history": []}
+    assert a2a.public_task(task, history_length=2)["history"] == [2, 3]
+
+
+def test_a2a_resubscribe_invalid_and_missing_task_errors() -> None:
+    invalid = _decoded_sse(a2a._stream_resubscribe_events({"id": 1, "params": {}}))
+    assert invalid[0]["error"]["code"] == INVALID_PARAMS
+    missing = _decoded_sse(a2a._stream_resubscribe_events({"id": 2, "params": {"id": "task_missing"}}))
+    assert missing[0]["error"]["code"] == TASK_NOT_FOUND
+
+
+def _decoded_sse(events: Iterator[bytes]) -> list[dict[str, Any]]:
+    return [json.loads(item.decode("utf-8").removeprefix("data: ").strip()) for item in events]
+
+
+class _RpcResponse:
+    def __init__(self, value: bytes) -> None:
+        self.value = value
+
+    def __enter__(self) -> "_RpcResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.value
+
+    def __iter__(self) -> Iterator[bytes]:
+        return iter(self.value.splitlines(keepends=True))
+
+
+@pytest.mark.parametrize("payload", [b"not-json", b"[]", b'{"error":{"code":-1,"message":"bad"}}'])
+def test_a2a_client_rpc_rejects_invalid_and_error_responses(payload: bytes) -> None:
+    client = A2AClient("http://peer", auth_token="secret")
+    assert client._headers("json")["Authorization"] == "Bearer secret"
+    with patch("urllib.request.urlopen", return_value=_RpcResponse(payload)), pytest.raises(AppError):
+        client.get_task("task")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"ignored\n",
+        b"data: []\n",
+        b'data: {"error":{"code":-1,"message":"bad"}}\n',
+        b"data: not-json\n",
+    ],
+)
+def test_a2a_client_stream_rejects_invalid_events(payload: bytes) -> None:
+    client = A2AClient("http://peer")
+    with patch("urllib.request.urlopen", return_value=_RpcResponse(payload)):
+        if payload == b"ignored\n":
+            assert list(client.message_stream("x")) == []
+        else:
+            with pytest.raises((AppError, json.JSONDecodeError)):
+                list(client.message_stream("x"))
+
+
+def test_a2a_peer_client_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(a2a, "A2A_PEERS", ("http://one", "http://two"))
+    assert [client.base_url for client in a2a.peer_clients()] == ["http://one", "http://two"]

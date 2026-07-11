@@ -72,7 +72,7 @@ DEFAULT_EVIDENCE_PATHS = (
 )
 
 DEFAULT_QUALITY_GATES = {
-    "coverage": "80%",
+    "coverage": "90%",
     "offlineEval": "PASS",
     "agentEval": "PASS",
     "injectionStrict": "PASS",
@@ -113,6 +113,8 @@ def build_manifest(
 ) -> dict[str, Any]:
     evidence_paths = list(evidence) if evidence is not None else list(DEFAULT_EVIDENCE_PATHS)
     ga_evidence = next((path for path in evidence_paths if path.startswith("docs/evidence/ga-v")), f"docs/evidence/ga-v{version}.json")
+    gates = dict(quality_gates) if quality_gates is not None else dict(DEFAULT_QUALITY_GATES)
+    gates["coverage"] = coverage_gate
     return {
         "schemaVersion": SCHEMA_VERSION,
         "version": version,
@@ -120,7 +122,7 @@ def build_manifest(
         "builtAt": built_at or utc_now(),
         "python": python_version,
         "coverageGate": coverage_gate,
-        "qualityGates": dict(quality_gates) if quality_gates is not None else dict(DEFAULT_QUALITY_GATES),
+        "qualityGates": gates,
         "evalReport": eval_report,
         "agentReport": agent_report,
         "gaEvidence": ga_evidence,

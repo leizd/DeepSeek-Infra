@@ -31,7 +31,7 @@ def test_requirements_manifest_has_owned_classified_entries() -> None:
     data = _requirements()
 
     assert data["target_version"] == "4.0.0-rc.1"
-    assert data["baseline_version"] == "3.3.0"
+    assert data["baseline_version"] == "3.3.1"
     assert len(data["requirements"]) >= 15
     for item in data["requirements"]:
         assert item["id"]
@@ -45,9 +45,9 @@ def test_requirements_manifest_has_owned_classified_entries() -> None:
 def test_rc_coverage_target_is_distinct_from_current_gate() -> None:
     items = _items_by_id()
 
-    assert items["python_coverage_gate"]["required"] == 85.0
+    assert items["python_coverage_gate"]["required"] == 90.0
     assert items["python_measured_coverage"]["required"] == 95.0
-    assert items["python_measured_coverage"]["observed"] == 85.63
+    assert items["python_measured_coverage"]["observed"] == 90.52
     assert items["python_measured_coverage"]["blocking"] is True
 
 
@@ -59,7 +59,7 @@ def test_current_readiness_report_is_honestly_blocked() -> None:
     assert report["summary"]["advisories"] >= 1
 
     rendered = readiness.render_report(report)
-    assert "BLOCK  Python measured coverage: 85.63% < 95.00%" in rendered
+    assert "BLOCK  Python measured coverage: 90.52% < 95.00%" in rendered
     assert "Decision: NOT READY FOR 4.0.0-rc.1" in rendered
 
 

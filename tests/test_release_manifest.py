@@ -172,7 +172,7 @@ def test_release_script_emits_manifest_and_checksum(tmp_path: Path) -> None:
     assert manifest.is_file()
     data = json.loads(manifest.read_text(encoding="utf-8"))
     assert data["version"] == "2.2.9"
-    assert data["coverageGate"] == "85%"
+    assert data["coverageGate"] == "90%"
     assert data["artifact"] == artifact.name
     recorded = data["sha256"]
     assert release_manifest.verify_checksum(artifact, recorded) is True

@@ -7,6 +7,8 @@ import argparse
 import json
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,17 @@ if str(REPO_ROOT) not in sys.path:
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
 from scripts.smoke_browser import FIXTURES, configure_browser_runtime  # noqa: E402
+
+
+@contextmanager
+def managed_browser_sessions() -> Iterator[None]:
+    """Close browser processes before TemporaryDirectory removes profiles."""
+    try:
+        yield
+    finally:
+        from deepseek_infra.infra.browser.session import reset_sessions_for_tests
+
+        reset_sessions_for_tests()
 
 
 def load_cases() -> list[dict[str, Any]]:
@@ -31,7 +44,9 @@ def load_cases() -> list[dict[str, Any]]:
 
 
 def build_report(version: str) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="deepseek-browser-eval-") as tmp:
+    # Contexts exit right-to-left: sessions/controllers close before Windows
+    # attempts to remove Playwright's profile directory and LevelDB files.
+    with tempfile.TemporaryDirectory(prefix="deepseek-browser-eval-") as tmp, managed_browser_sessions():
         root = Path(tmp)
         configure_browser_runtime(root)
         from deepseek_infra.infra.browser.actions import execute_browser_action
