@@ -461,14 +461,15 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Current themes (3.2.5 4.0 RC readiness audit completed):
+Current themes (3.3.0 4.0 runtime architecture decision completed):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.
 - 3.2.2: Test-only hybrid Compose stack and offline E2E smoke covering all four Python-to-Rust delegates plus sidecar-loss fallback; defaults remain unchanged.
 - 3.2.3: Stable Policy decision codes and identifiers, trace-preserving redacted audits, explicit backend failure modes, and execution-blocking tests; Rust remains opt-in.
 - 3.2.4: Shared 38-case deterministic RAG corpus, strict live-sidecar parity gate, stable validation categories, and machine-readable difference reports; Rust remains opt-in.
-- 3.2.5: Machine-readable 4.0 RC blocker matrix, owner sign-off checklist, JSON/terminal readiness report, and branch-aware CI enforcement. Current decision: **NOT READY FOR 4.0.0-rc.1** because measured Python coverage is 85.63% versus 95.00% and architecture decisions remain open.
+- 3.2.5: Machine-readable 4.0 RC blocker matrix, owner sign-off checklist, JSON/terminal readiness report, and branch-aware CI enforcement. At that milestone, the decision was **NOT READY FOR 4.0.0-rc.1** because measured Python coverage was 85.63% versus 95.00% and architecture decisions were open.
+- 3.3.0: ADR-0040 approves a Python-first hybrid 4.0 architecture: an empty Rust default-on set, Python-only default deployment, Python fallback through 4.x, Python-owned Gateway streaming and real MCP tool execution, plus Rust-owned MCP validation/routing. Architecture blockers are resolved; measured Python coverage remains the sole RC blocker.
 
 See [PRE_4_0_QUALITY_BASELINE.md](PRE_4_0_QUALITY_BASELINE.md) for the quality baseline and [4_0_RC_READINESS.md](4_0_RC_READINESS.md) for the current blocker matrix.
 

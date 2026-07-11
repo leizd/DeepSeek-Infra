@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "baseline_version": "3.2.5",
+  "baseline_version": "3.3.0",
   "target_version": "4.0.0-rc.1",
-  "generated_from": "3.2.4 merged quality evidence",
+  "generated_from": "3.2.5 merged readiness evidence and ADR-0040",
   "requirements": [
     {
       "id": "all_ci_jobs_green",
@@ -160,10 +160,14 @@
       "owner": "Runtime Architecture",
       "blocking": true,
       "required": true,
-      "observed": false,
-      "check": "decision_recorded",
-      "evidence": ["docs/4_0_RC_READINESS.md"],
-      "description": "The exact Gateway, MCP, Policy, and RAG default-on set has not been approved."
+      "check": "architecture_decision",
+      "decision_file": "release/4_0_runtime_decision.json",
+      "field": "rust_default_on_components",
+      "field_type": "list",
+      "allow_empty": true,
+      "expected": [],
+      "evidence": ["release/4_0_runtime_decision.json", "docs/adr/ADR-0040-hybrid-runtime-architecture.md"],
+      "description": "ADR-0040 explicitly approves an empty Rust default-on set for 4.0."
     },
     {
       "id": "rust_sidecar_default_deployment_decision",
@@ -172,10 +176,13 @@
       "owner": "Release Engineering",
       "blocking": true,
       "required": true,
-      "observed": false,
-      "check": "decision_recorded",
-      "evidence": ["docs/4_0_RC_READINESS.md"],
-      "description": "The sidecar is optional; inclusion in the default 4.0 deployment has not been approved."
+      "check": "architecture_decision",
+      "decision_file": "release/4_0_runtime_decision.json",
+      "field": "default_sidecar_deployment",
+      "field_type": "boolean",
+      "expected": false,
+      "evidence": ["release/4_0_runtime_decision.json", "docs/adr/ADR-0040-hybrid-runtime-architecture.md"],
+      "description": "ADR-0040 approves Python-only default deployment with an optional Rust sidecar."
     },
     {
       "id": "python_fallback_lifecycle_decision",
@@ -184,34 +191,52 @@
       "owner": "Runtime Architecture",
       "blocking": true,
       "required": true,
-      "observed": false,
-      "check": "decision_recorded",
-      "evidence": ["docs/4_0_RC_READINESS.md"],
-      "description": "The support period and removal criteria for Python fallbacks have not been approved."
+      "check": "architecture_decision",
+      "decision_file": "release/4_0_runtime_decision.json",
+      "field": "python_fallback",
+      "field_type": "object",
+      "required_fields": ["supported_through", "removal_not_before"],
+      "expected": {
+        "supported_through": "4.x",
+        "removal_not_before": "5.0.0"
+      },
+      "evidence": ["release/4_0_runtime_decision.json", "docs/adr/ADR-0040-hybrid-runtime-architecture.md"],
+      "description": "ADR-0040 guarantees Python fallback through 4.x and forbids removal before 5.0.0."
     },
     {
       "id": "gateway_streaming_rust_path",
-      "label": "Gateway streaming Rust path",
+      "label": "Gateway streaming architecture decision",
       "category": "decision_blocker",
       "owner": "Gateway",
       "blocking": true,
       "required": true,
-      "observed": false,
-      "check": "capability_complete",
-      "evidence": ["docs/PRE_4_0_QUALITY_BASELINE.md", "docs/4_0_RC_READINESS.md"],
-      "description": "Streaming chat still uses Python and needs implementation or an explicit approved 4.0 design decision."
+      "check": "architecture_decision",
+      "decision_file": "release/4_0_runtime_decision.json",
+      "field": "gateway_streaming_owner",
+      "field_type": "string",
+      "allowed_values": ["python", "rust"],
+      "expected": "python",
+      "evidence": ["release/4_0_runtime_decision.json", "docs/adr/ADR-0040-hybrid-runtime-architecture.md"],
+      "description": "ADR-0040 assigns 4.0 streaming chat to Python without claiming a Rust streaming implementation."
     },
     {
       "id": "mcp_real_tool_bridge",
-      "label": "MCP real tool execution bridge",
+      "label": "MCP real tool execution architecture decision",
       "category": "decision_blocker",
       "owner": "MCP",
       "blocking": true,
       "required": true,
-      "observed": false,
-      "check": "capability_complete",
-      "evidence": ["docs/PRE_4_0_QUALITY_BASELINE.md", "docs/4_0_RC_READINESS.md"],
-      "description": "Rust handles JSON-RPC but does not yet bridge real Python tool execution."
+      "check": "architecture_decision",
+      "decision_file": "release/4_0_runtime_decision.json",
+      "field": "mcp_tool_execution_owner",
+      "field_type": "string",
+      "allowed_values": ["python", "rust"],
+      "expected": "python",
+      "additional_expected": {
+        "rust_mcp_responsibility": ["json_rpc_validation", "protocol_routing"]
+      },
+      "evidence": ["release/4_0_runtime_decision.json", "docs/adr/ADR-0040-hybrid-runtime-architecture.md"],
+      "description": "ADR-0040 keeps real tool execution in Python and limits Rust MCP ownership to validation and routing."
     },
     {
       "id": "expand_parity_corpus",

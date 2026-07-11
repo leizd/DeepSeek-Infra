@@ -2,9 +2,9 @@
 
 This checklist determines whether the repository may create `4.0.0-rc.1`. It does not create a tag, change Rust defaults, or declare the release candidate ready.
 
-> **Current decision: NOT READY FOR 4.0.0-rc.1.** The hybrid runtime quality gates are established, but measured Python coverage is 85.63% against the explicit 95.00% RC target, and five runtime architecture decisions or capabilities remain unresolved.
+> **Current decision: NOT READY FOR 4.0.0-rc.1.** ADR-0040 resolves all five runtime architecture blockers with an approved Python-first hybrid design. Measured Python coverage remains 85.63% against the explicit 95.00% RC target and is the only remaining blocker.
 
-The machine-readable source of truth is [`release/4_0_rc_requirements.json`](../release/4_0_rc_requirements.json). Run the checker in report-only mode during normal development:
+The machine-readable requirements source is [`release/4_0_rc_requirements.json`](../release/4_0_rc_requirements.json), and the approved architecture contract is [`release/4_0_runtime_decision.json`](../release/4_0_runtime_decision.json). Run the checker in report-only mode during normal development:
 
 ```bash
 python scripts/check_4_0_rc_readiness.py \
@@ -39,15 +39,15 @@ python scripts/check_4_0_rc_readiness.py \
 | Default Python behavior unchanged | Runtime Architecture | PASS | `.env.example` keeps all four Rust delegates at `0`; default Compose remains Python-only. |
 | Rollback path | Release Engineering | PASS | The runbook documents all-flags-off rollback and hybrid tests exercise fallback. |
 
-### Decision and capability blockers
+### Architecture decisions
 
 | Requirement | Owner | Current status | Exit condition |
 | --- | --- | --- | --- |
-| Rust default-on component set | Runtime Architecture | **BLOCK: no approved decision** | Approve and record which of Gateway, MCP, Policy, and RAG are default-on for 4.0. |
-| Sidecar in default deployment | Release Engineering | **BLOCK: no approved decision** | Approve default packaging and lifecycle behavior, or explicitly approve an opt-in 4.0 design. |
-| Python fallback lifecycle | Runtime Architecture | **BLOCK: no approved decision** | Record support duration, compatibility guarantees, and removal criteria. |
-| Gateway streaming path | Gateway | **BLOCK: incomplete** | Implement Rust streaming or explicitly approve Python streaming as the 4.0 architecture. |
-| MCP real tool bridge | MCP | **BLOCK: incomplete** | Bridge real tool execution through Rust or explicitly approve the split design for 4.0. |
+| Rust default-on component set | Runtime Architecture | **PASS: approved empty set** | ADR-0040 explicitly keeps Gateway, MCP, Policy, and RAG opt-in. Empty is a valid decision value. |
+| Sidecar in default deployment | Release Engineering | **PASS: Python-only default** | The Rust sidecar remains an optional Compose deployment. |
+| Python fallback lifecycle | Runtime Architecture | **PASS: supported through 4.x** | Removal may not be considered before 5.0.0. |
+| Gateway streaming path | Gateway | **PASS: Python-owned for 4.0** | Rust continues to handle models and opt-in non-streaming chat; no Rust streaming implementation is claimed. |
+| MCP real tool bridge | MCP | **PASS: Python-owned execution for 4.0** | Rust validates and routes JSON-RPC; Python Tool Runtime executes real tools. No Rust tool bridge is claimed. |
 
 ### Non-blocking recommendations
 
@@ -63,12 +63,12 @@ These items remain visible in the generated JSON report but do not independently
 
 | Component | Proven Rust surface | Remaining gap | Current recommendation | Decision |
 | --- | --- | --- | --- | --- |
-| Gateway | Models and non-streaming chat delegation | Streaming still uses Python | Do not enable by default yet | Pending |
-| MCP | JSON-RPC initialize, list, and deterministic calls | No real Python tool execution bridge | Do not enable by default yet | Pending |
-| Policy | Stable deny/audit contract and explicit backend failure modes | Broader Python/Rust policy corpus can still grow | First default-on candidate, subject to a separate approval | Pending |
-| RAG | Deterministic hot-path parity at 38/38 | Embedding and vector database work remains in Python | Keep opt-in | Pending |
+| Gateway | Models and non-streaming chat delegation | Streaming remains in Python by design | Keep opt-in | Approved: opt-in |
+| MCP | JSON-RPC initialize, validation, and routing | Real tool execution remains in Python by design | Keep opt-in | Approved: opt-in |
+| Policy | Stable deny/audit contract and explicit backend failure modes | Broader Python/Rust policy corpus can still grow | Keep opt-in | Approved: opt-in |
+| RAG | Deterministic hot-path parity at 38/38 | Embedding and vector database work remains in Python | Keep opt-in | Approved: opt-in |
 
-This document records recommendations only. This 3.2.5 change does not modify `.env.example`, default Compose, or runtime flag defaults.
+ADR-0040 is an approved architecture contract, not a runtime-default change. This 3.3.0 change does not modify `.env.example`, default Compose, or runtime flag defaults.
 
 ## Sign-off
 
@@ -78,16 +78,17 @@ Before creating `4.0.0-rc.1`, the accountable owners must sign the following on 
 - [ ] Python Runtime: measured full-suite coverage is at least 95.00%.
 - [ ] Rust Core: workspace, Docker smoke, hybrid E2E, and parity jobs are green.
 - [ ] Tool Runtime Security: deny/audit contracts remain green and no denied tool implementation executes.
-- [ ] Runtime Architecture: default-on components, default sidecar deployment, and Python fallback lifecycle are approved.
-- [ ] Gateway: streaming ownership for 4.0 is approved.
-- [ ] MCP: real tool bridge ownership for 4.0 is approved.
+- [x] Runtime Architecture: default-on components, default sidecar deployment, and Python fallback lifecycle are approved by ADR-0040.
+- [x] Gateway: Python streaming ownership for 4.0 is approved by ADR-0040.
+- [x] MCP: Python real-tool execution and Rust protocol ownership for 4.0 are approved by ADR-0040.
 - [ ] Release Engineering: rollback is rehearsed and `--strict` exits zero.
 
-Until every blocking requirement is satisfied, the decision remains **NOT READY FOR 4.0.0-rc.1**.
+Until measured Python coverage reaches 95.00% and every release-commit gate is satisfied, the decision remains **NOT READY FOR 4.0.0-rc.1**.
 
 ## Related documents
 
 - [Pre-4.0 Quality Baseline](PRE_4_0_QUALITY_BASELINE.md)
+- [ADR-0040: Python-first hybrid runtime architecture](adr/ADR-0040-hybrid-runtime-architecture.md)
 - [3.1.x / 3.2.x Release Readiness](RELEASE_READINESS_3_1_X.md)
 - [Rust Hybrid Runtime Runbook](RUST_HYBRID_RUNTIME_RUNBOOK.md)
 - [Rust Migration Roadmap](RUST_MIGRATION_ROADMAP.md)

@@ -10,6 +10,7 @@ from typing import Any
 
 
 DEFAULT_REQUIREMENTS = Path("release/4_0_rc_requirements.json")
+DEFAULT_ARCHITECTURE_DECISION = Path("release/4_0_runtime_decision.json")
 CI_ENV_PREFIX = "RC_CI_"
 PASSING_CI_RESULTS = {"success"}
 
@@ -124,6 +125,82 @@ def _check_default_rust_disabled(root: Path, requirement: dict[str, Any]) -> dic
     return _result(requirement, passed, passed, detail)
 
 
+def _architecture_decision_path(root: Path, requirement: dict[str, Any]) -> Path:
+    path = Path(str(requirement.get("decision_file", DEFAULT_ARCHITECTURE_DECISION)))
+    return path if path.is_absolute() else root / path
+
+
+def _decision_contract_errors(decision: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    expected_values = {
+        "schema_version": 1,
+        "target_version": "4.0.0",
+        "status": "approved",
+        "architecture": "python_first_hybrid",
+    }
+    for field, expected in expected_values.items():
+        if decision.get(field) != expected:
+            errors.append(f"{field} must be {expected!r}")
+
+    approved_by = decision.get("approved_by")
+    if not isinstance(approved_by, list) or not approved_by or not all(isinstance(item, str) and item.strip() for item in approved_by):
+        errors.append("approved_by must be a non-empty list of names")
+    return errors
+
+
+def _matches_field_type(value: Any, field_type: str) -> bool:
+    if field_type == "boolean":
+        return isinstance(value, bool)
+    if field_type == "list":
+        return isinstance(value, list)
+    if field_type == "object":
+        return isinstance(value, dict)
+    if field_type == "string":
+        return isinstance(value, str)
+    raise ValueError(f"unsupported architecture decision field type: {field_type}")
+
+
+def _check_architecture_decision(root: Path, requirement: dict[str, Any]) -> dict[str, Any]:
+    path = _architecture_decision_path(root, requirement)
+    if not path.is_file():
+        return _result(requirement, False, None, f"architecture decision file missing: {path}")
+
+    try:
+        decision = _load_json(path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _result(requirement, False, None, f"invalid architecture decision file: {exc}")
+
+    errors = _decision_contract_errors(decision)
+    field = str(requirement["field"])
+    if field not in decision:
+        errors.append(f"missing decision field: {field}")
+        value: Any = None
+    else:
+        value = decision[field]
+        field_type = str(requirement["field_type"])
+        if not _matches_field_type(value, field_type):
+            errors.append(f"{field} must be a {field_type}")
+        else:
+            if field_type in {"list", "object", "string"} and not value and not bool(requirement.get("allow_empty", False)):
+                errors.append(f"{field} must not be empty")
+            if "allowed_values" in requirement and value not in requirement["allowed_values"]:
+                errors.append(f"{field} must be one of {requirement['allowed_values']!r}")
+            if "expected" in requirement and value != requirement["expected"]:
+                errors.append(f"{field} must equal {requirement['expected']!r}")
+            if field_type == "object":
+                missing = [name for name in requirement.get("required_fields", []) if name not in value or value[name] in (None, "")]
+                if missing:
+                    errors.append(f"{field} is missing lifecycle fields: {', '.join(missing)}")
+
+    for companion, expected in requirement.get("additional_expected", {}).items():
+        if decision.get(companion) != expected:
+            errors.append(f"{companion} must equal {expected!r}")
+
+    if errors:
+        return _result(requirement, False, value, "; ".join(errors))
+    return _result(requirement, True, value, f"approved architecture decision: {field}={value!r}")
+
+
 def _evaluate_one(root: Path, requirement: dict[str, Any], coverage_override: float | None) -> dict[str, Any]:
     check = str(requirement["check"])
     if check == "ci_results":
@@ -146,6 +223,8 @@ def _evaluate_one(root: Path, requirement: dict[str, Any], coverage_override: fl
         return _check_files_contain(root, requirement)
     if check == "default_rust_disabled":
         return _check_default_rust_disabled(root, requirement)
+    if check == "architecture_decision":
+        return _check_architecture_decision(root, requirement)
     if check in {"decision_recorded", "capability_complete", "advisory"}:
         observed = bool(requirement["observed"])
         detail = "recorded as complete" if observed else requirement["description"]
