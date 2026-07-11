@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "target_version": "4.0.0",
+  "status": "approved",
+  "architecture": "python_first_hybrid",
+  "rust_default_on_components": [],
+  "default_sidecar_deployment": false,
+  "python_fallback": {
+    "supported_through": "4.x",
+    "removal_not_before": "5.0.0"
+  },
+  "gateway_streaming_owner": "python",
+  "mcp_tool_execution_owner": "python",
+  "rust_mcp_responsibility": [
+    "json_rpc_validation",
+    "protocol_routing"
+  ],
+  "approved_by": [
+    "leizd"
+  ]
+}

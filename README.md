@@ -5,7 +5,7 @@
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-85%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> Rust core migration is now in the 3.2.5 pre-4.0 readiness track. Python FastAPI remains the default runtime and all Rust delegates remain opt-in. The hybrid runtime, Policy contract, and 38-case RAG parity corpus are established, but the repository is **not ready for 4.0.0-rc.1**: measured Python coverage is 85.63% against the 95% RC target and runtime architecture decisions remain open. See [the 4.0 RC readiness matrix](docs/4_0_RC_READINESS.md).
+> Rust core migration is now in the 3.3.0 pre-4.0 readiness track. [ADR-0040](docs/adr/ADR-0040-hybrid-runtime-architecture.md) approves a Python-first hybrid 4.0 architecture: Python FastAPI remains the default runtime, all Rust delegates remain opt-in, and Python fallback is supported throughout 4.x. The repository is still **not ready for 4.0.0-rc.1** because measured Python coverage is 85.63% against the 95% RC target. See [the 4.0 RC readiness matrix](docs/4_0_RC_READINESS.md).
 
 ## 30 秒概览
 

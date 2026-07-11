@@ -1,14 +1,14 @@
 # Pre-4.0 Quality Baseline
 
-This document tracks where the project stands after the 3.2.5 RC-readiness audit and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+This document tracks where the project stands after the 3.3.0 runtime architecture decision and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
 > **Purpose**: know and enforce the gap, not to declare 4.0.0 ready. The [4.0 RC readiness matrix](4_0_RC_READINESS.md) currently reports **NOT READY FOR 4.0.0-rc.1** and keeps the 95% RC coverage target distinct from the 85% current CI gate.
 
 ---
 
-## Current quality milestone: 3.2.5
+## Current quality milestone: 3.3.0
 
-At the end of 3.2.5:
+At the end of 3.3.0:
 
 - All Rust components remain **default-disabled**.
 - The hybrid runtime has a complete operational runbook ([RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)) and a release-readiness checklist ([RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md)).
@@ -22,6 +22,9 @@ At the end of 3.2.5:
 - A shared 38-case fixture proves Python/Rust parity for normalization, full Top-K ordering, tie-breaks, scores, citations, and index validation.
 - The independent `rag-parity` CI job runs against a live Rust sidecar and uploads a machine-readable difference report.
 - A machine-readable RC requirements manifest classifies quality blockers, architecture decision blockers, and non-blocking recommendations with explicit owners and evidence.
+- [ADR-0040](adr/ADR-0040-hybrid-runtime-architecture.md) approves a Python-first hybrid 4.0 architecture: no Rust delegate is default-on, default deployment remains Python-only, and Python fallback is guaranteed throughout 4.x.
+- Gateway streaming and real MCP tool execution remain Python-owned by design; Rust owns models/non-streaming chat delegation and MCP JSON-RPC validation/routing respectively.
+- The machine-readable architecture contract resolves all five architecture blockers from real decision fields, including the intentionally empty Rust default-on set.
 - Normal PRs and `main` generate the RC report without permanent failure; `release/*` and `rc/*` branches run the same checker in strict mode.
 - The default Docker deployment still builds and runs only the Python service.
 - Python coverage is **85.63%**, below the explicit 4.0 RC target of **95.00%**.
@@ -105,11 +108,11 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 
 1. **Python coverage**: 85% → ~95% remains a significant climb. The biggest remaining misses are in OCR, browser control, media processing, edge inference, and skill UI/UX paths.
 2. **Rust coverage**: Not measured or gated.
-3. **Rust default-on**: No component is enabled by default. 4.0.0 requires a decision on which components become the primary path.
-4. **Default packaging**: The Rust sidecar has an optional standalone image, but it is not bundled into the default Python image or single-file exe build.
+3. **Rust default-on**: ADR-0040 approves an empty default-on set for 4.0; future promotion requires a separate decision and matching evidence.
+4. **Default packaging**: ADR-0040 approves Python-only default deployment; the Rust sidecar remains optional and separate from the default Python image and single-file exe build.
 5. **Policy parity**: Stable Rust deny codes, trace correlation, redacted audits, and fail modes are proven; broader corpus-level Rust/Python rule parity is still required before default enforcement.
 6. **RAG parity**: Deterministic normalization, scoring/order, citation, and validation parity is proven; embedding, vector database, and corpus-scale performance parity remain open.
-7. **Gateway streaming**: Streaming chat completions still bypass Rust Gateway.
+7. **Gateway streaming**: Streaming chat completions remain Python-owned for 4.0 by ADR-0040; this is an explicit boundary, not a completed Rust path.
 8. **Rust-side error contracts**: Policy decisions are stable contracts; Gateway, MCP, and RAG error shapes still need the same treatment.
 
 ---
@@ -157,29 +160,38 @@ These completed milestones keep the project on the conservative path toward 4.0.
 - Added report-only CI behavior for normal development and strict blocking behavior for `release/*` and `rc/*` branches.
 - Preserved the 85% current coverage gate, 95% RC target, Python default runtime, opt-in Rust flags, and existing Docker defaults.
 
+### 3.3.0 — 4.0 runtime architecture decision (completed)
+
+- Approved ADR-0040 and a machine-readable Python-first hybrid runtime contract.
+- Resolved all five architecture blockers without claiming Rust Gateway streaming or a real Rust-to-Python MCP tool bridge.
+- Kept all Rust delegates opt-in, default Compose Python-only, and Python fallback supported throughout 4.x with removal not before 5.0.0.
+- Preserved the 95% RC measured-coverage target; 85.63% measured coverage remains the sole readiness blocker.
+
 ---
 
 ## Sign-off questions for 4.0.0
 
 Before scheduling 4.0.0, the following should be answered with evidence:
 
-- [ ] Which Rust components are default-on, and which remain opt-in?
+- [x] Which Rust components are default-on, and which remain opt-in? ADR-0040 approves an empty default-on set.
 - [ ] Is Python coverage at or near 95%?
 - [ ] Is Rust coverage measured and at or near 95%?
-- [ ] Does the default release deployment include and coordinate the Rust sidecar by design?
+- [x] Does the default release deployment include and coordinate the Rust sidecar by design? ADR-0040 explicitly approves Python-only default deployment.
 - [x] Are there end-to-end hybrid smoke tests with all flags enabled?
 - [ ] Is Rust Policy parity proven against Python Tool Policy?
 - [x] Is deterministic Rust RAG hot-path parity proven against Python RAG?
 - [ ] Are embedding, vector database, and performance parity proven?
-- [ ] Does streaming Gateway use Rust or stay on Python by design?
+- [x] Does streaming Gateway use Rust or stay on Python by design? It stays on Python for 4.0.
+- [x] Does MCP execute real tools in Rust or Python by design? Python Tool Runtime executes them; Rust validates and routes JSON-RPC.
 
-Until these are answered, the project remains in the 3.1.x / 3.2.x line.
+Architecture questions are now answered; the project remains pre-RC until the remaining quality gates, led by 95% measured Python coverage, are satisfied.
 
 ---
 
 ## Related documents
 
 - [4.0 RC Readiness](4_0_RC_READINESS.md)
+- [ADR-0040: Python-first hybrid runtime architecture](adr/ADR-0040-hybrid-runtime-architecture.md)
 - [Rust Migration Roadmap](RUST_MIGRATION_ROADMAP.md)
 - [Hybrid Rust Runtime Runbook](RUST_HYBRID_RUNTIME_RUNBOOK.md)
 - [RAG Parity Baseline](RAG_PARITY_BASELINE.md)

@@ -1,5 +1,23 @@
 # 更新日志
 
+## [3.3.0] - 4.0 Runtime Architecture Decision
+
+### Added
+- Approved ADR-0040 and a machine-readable `python_first_hybrid` architecture contract for 4.0.
+- Added field-level readiness validation for approval status, approvers, the Rust default-on set, sidecar deployment, fallback lifecycle, Gateway streaming ownership, and MCP execution ownership.
+- Added regression tests for an intentionally empty Rust default-on set and malformed or incomplete architecture decisions.
+
+### Decided
+- No Rust delegate is default-on for 4.0; all four delegates remain explicit opt-ins.
+- Default deployment remains Python-only and the Rust sidecar remains optional.
+- Python fallback is supported throughout 4.x and cannot be considered for removal before 5.0.0.
+- Gateway streaming and real MCP tool execution remain Python-owned; Rust MCP owns JSON-RPC validation and protocol routing.
+
+### Unchanged
+- Gateway streaming is not presented as implemented in Rust, and MCP is not presented as bridging real tools through Rust.
+- The current Python coverage gate remains 85%, while the 4.0 RC measured target remains 95%.
+- Measured Python coverage remains 85.63%, so strict readiness still returns non-zero and no RC tag is created.
+
 ## [3.2.5] - 4.0 RC Readiness Checklist
 
 ### Added

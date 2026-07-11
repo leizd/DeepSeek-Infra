@@ -31,7 +31,7 @@ def test_requirements_manifest_has_owned_classified_entries() -> None:
     data = _requirements()
 
     assert data["target_version"] == "4.0.0-rc.1"
-    assert data["baseline_version"] == "3.2.5"
+    assert data["baseline_version"] == "3.3.0"
     assert len(data["requirements"]) >= 15
     for item in data["requirements"]:
         assert item["id"]
@@ -55,10 +55,7 @@ def test_current_readiness_report_is_honestly_blocked() -> None:
     report = readiness.evaluate_readiness(ROOT, _requirements())
 
     assert report["ready"] is False
-    assert "python_measured_coverage" in report["blocker_ids"]
-    assert "rust_default_on_decision" in report["blocker_ids"]
-    assert "gateway_streaming_rust_path" in report["blocker_ids"]
-    assert "mcp_real_tool_bridge" in report["blocker_ids"]
+    assert report["blocker_ids"] == ["python_measured_coverage"]
     assert report["summary"]["advisories"] >= 1
 
     rendered = readiness.render_report(report)
@@ -66,14 +63,11 @@ def test_current_readiness_report_is_honestly_blocked() -> None:
     assert "Decision: NOT READY FOR 4.0.0-rc.1" in rendered
 
 
-def test_coverage_override_does_not_resolve_architecture_blockers() -> None:
+def test_coverage_override_resolves_the_only_remaining_blocker() -> None:
     report = readiness.evaluate_readiness(ROOT, _requirements(), coverage_override=95.0)
 
-    assert "python_measured_coverage" not in report["blocker_ids"]
-    assert "rust_default_on_decision" in report["blocker_ids"]
-    assert "rust_sidecar_default_deployment_decision" in report["blocker_ids"]
-    assert "python_fallback_lifecycle_decision" in report["blocker_ids"]
-    assert report["ready"] is False
+    assert report["blocker_ids"] == []
+    assert report["ready"] is True
 
 
 def test_report_only_writes_json_without_failing(tmp_path: Path) -> None:
@@ -128,3 +122,4 @@ def test_readiness_document_records_component_recommendations() -> None:
     assert "Policy | Stable deny/audit contract" in document
     assert "RAG | Deterministic hot-path parity at 38/38" in document
     assert "does not modify `.env.example`" in document
+    assert "ADR-0040" in document
