@@ -1,5 +1,19 @@
 # 更新日志
 
+## [3.2.4] - Rust/Python RAG Parity Corpus
+
+### Added
+- Added a shared 38-case RAG parity fixture with explicit expected normalization, ranking, citation, and index-validation results.
+- Added a strict offline parity runner that compares the Python reference contract with live Rust sidecar HTTP responses and writes a machine-readable difference report.
+- Added an independent `rag-parity` CI job with sidecar logs, report artifact upload, and unconditional container cleanup.
+- Added `docs/RAG_PARITY_BASELINE.md` and contract tests for corpus size, deterministic expectations, score tolerance, tie-break ordering, and strict failures.
+
+### Unchanged
+- Rust RAG remains disabled by default and the default Docker deployment remains Python-only.
+- The parity corpus does not call embeddings, vector databases, external models, or the public internet.
+- The Python coverage gate remains 85%; the 3.2.4 full suite measures 85.65%.
+- No 4.0.0 release candidate or default-on Rust decision is included.
+
 ## [3.2.3] - Rust Policy Deny and Audit Hardening
 
 ### Added

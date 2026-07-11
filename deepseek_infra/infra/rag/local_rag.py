@@ -273,6 +273,101 @@ def normalize_search_query(query: str) -> str:
     return _python_normalize_query(query)
 
 
+def python_rag_normalize_query(query: str) -> str:
+    """Pure Python reference for the Rust RAG query-normalization contract."""
+    normalized = _python_normalize_query(query)
+    if not normalized:
+        raise ValueError("empty_query")
+    return normalized
+
+
+def python_rag_rank_chunks(query: str, chunks: list[dict[str, Any]]) -> list[tuple[str, float]]:
+    """Pure Python reference for the deterministic Rust lexical scoring hot path."""
+    normalized_query = python_rag_normalize_query(query)
+    query_terms = normalized_query.split()
+    ranked: list[tuple[str, float]] = []
+    for chunk in chunks:
+        item_id = str(chunk.get("id") or "")
+        text = str(chunk.get("text") or "")
+        if not text:
+            ranked.append((item_id, 0.0))
+            continue
+
+        normalized_text = text.lower()
+        score = 10.0 if normalized_query in normalized_text else 0.0
+        text_terms = set(normalized_text.split())
+        score += sum(1.0 for term in query_terms if term.lower() in text_terms)
+
+        source = str(chunk.get("source") or "").lower()
+        if normalized_query in source:
+            score += 2.0
+        raw_metadata = chunk.get("metadata")
+        metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
+        title = metadata.get("title") if isinstance(metadata.get("title"), str) else None
+        if title is not None and normalized_query in title.lower():
+            score += 2.0
+
+        word_count = len(normalized_text.split())
+        if 0 < word_count <= 20:
+            score *= 1.1
+        ranked.append((item_id, score))
+
+    ranked.sort(key=lambda item: (-item[1], item[0]))
+    return ranked
+
+
+def python_rag_format_citation(source: str, start_line: int | None, end_line: int | None) -> str:
+    """Pure Python reference for the Rust citation-formatting contract."""
+    normalized_source = str(source or "").strip()
+    if start_line is not None and end_line is not None and start_line > end_line:
+        raise ValueError("invalid_line_range")
+    if start_line is not None and end_line is not None:
+        return f"{normalized_source}:L{start_line}-L{end_line}"
+    if start_line is not None:
+        return f"{normalized_source}:L{start_line}"
+    return normalized_source
+
+
+def python_rag_validate_index(chunks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Validate raw index metadata with categories shared by the parity corpus."""
+    seen: set[str] = set()
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            return {"valid": False, "error": "invalid_metadata"}
+        item_id = chunk.get("id")
+        source = chunk.get("source")
+        text = chunk.get("text")
+        if not isinstance(item_id, str) or not isinstance(source, str) or not isinstance(text, str):
+            return {"valid": False, "error": "invalid_metadata"}
+        if item_id in seen:
+            return {"valid": False, "error": "duplicate_chunk_id"}
+        seen.add(item_id)
+        if not item_id:
+            return {"valid": False, "error": "empty_chunk_id"}
+        if not source:
+            return {"valid": False, "error": "empty_chunk_source"}
+        if not text:
+            return {"valid": False, "error": "empty_chunk_text"}
+
+        start_line = chunk.get("start_line")
+        end_line = chunk.get("end_line")
+        if any(value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0) for value in (start_line, end_line)):
+            return {"valid": False, "error": "invalid_metadata"}
+        if isinstance(start_line, int) and isinstance(end_line, int) and start_line > end_line:
+            return {"valid": False, "error": "invalid_line_range"}
+
+        metadata = chunk.get("metadata")
+        if not isinstance(metadata, dict):
+            return {"valid": False, "error": "invalid_metadata"}
+        title = metadata.get("title")
+        extra = metadata.get("extra", {})
+        if title is not None and not isinstance(title, str):
+            return {"valid": False, "error": "invalid_metadata"}
+        if not isinstance(extra, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in extra.items()):
+            return {"valid": False, "error": "invalid_metadata"}
+    return {"valid": True, "error": None}
+
+
 def _score_chunks_with_rust(query: str, rows: list[sqlite3.Row]) -> tuple[list[float] | None, bool]:
     """Score candidate chunks via Rust, returning Python-list aligned scores or None."""
     if not _rust_rag.rust_rag_enabled():
