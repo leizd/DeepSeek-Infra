@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import io
 from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -82,3 +83,59 @@ def test_open_app_window_uses_pywebview() -> None:
 def test_webview_entry_url_marks_desktop_handshake() -> None:
     assert desktop_app.webview_entry_url("http://127.0.0.1:8000/?token=abc") == "http://127.0.0.1:8000/?token=abc&desktop=1"
     assert desktop_app.webview_entry_url("http://127.0.0.1:8000/?token=abc&desktop=1") == "http://127.0.0.1:8000/?token=abc&desktop=1"
+
+
+def test_open_app_window_reports_missing_dependency() -> None:
+    with patch.dict(sys.modules, {"webview": None}):
+        try:
+            desktop_app.open_app_window("http://127.0.0.1:8000/")
+        except RuntimeError as exc:
+            assert "dependency is missing" in str(exc)
+        else:
+            raise AssertionError("missing webview should fail")
+
+
+def test_wait_for_server_ready_retries_status_and_network_errors() -> None:
+    responses = [RuntimeError("offline"), SimpleNamespace(status=503), SimpleNamespace(status=204)]
+
+    class Response:
+        def __init__(self, value: Any) -> None:
+            self.value = value
+            self.status = getattr(value, "status", 0)
+
+        def __enter__(self) -> "Response":
+            if isinstance(self.value, BaseException):
+                raise self.value
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    with (
+        patch.object(desktop_app, "urlopen", side_effect=lambda *_args, **_kwargs: Response(responses.pop(0))),
+        patch.object(desktop_app.time, "sleep"),
+    ):
+        desktop_app.wait_for_server_ready("http://127.0.0.1:8000/", timeout_seconds=10)
+    assert responses == []
+
+
+def test_wait_for_server_ready_timeout_reports_last_error() -> None:
+    clock = iter([0.0, 0.1, 0.2, 0.3])
+    with (
+        patch.object(desktop_app.time, "monotonic", side_effect=lambda: next(clock)),
+        patch.object(desktop_app, "urlopen", side_effect=OSError("refused")),
+        patch.object(desktop_app.time, "sleep"),
+    ):
+        try:
+            desktop_app.wait_for_server_ready("http://127.0.0.1:8000/", timeout_seconds=0.15)
+        except RuntimeError as exc:
+            assert "refused" in str(exc)
+        else:
+            raise AssertionError("timeout should fail")
+
+
+def test_show_startup_error_uses_stderr() -> None:
+    stream = io.StringIO()
+    with patch.object(desktop_app.sys, "stderr", stream):
+        desktop_app.show_startup_error(RuntimeError("boom"))
+    assert "failed to start: boom" in stream.getvalue()

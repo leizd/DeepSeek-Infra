@@ -1,18 +1,18 @@
 # Pre-4.0 Quality Baseline
 
-This document tracks where the project stands after the 3.3.0 runtime architecture decision and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+This document tracks where the project stands after the 3.3.1 risk-weighted coverage uplift and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
-> **Purpose**: know and enforce the gap, not to declare 4.0.0 ready. The [4.0 RC readiness matrix](4_0_RC_READINESS.md) currently reports **NOT READY FOR 4.0.0-rc.1** and keeps the 95% RC coverage target distinct from the 85% current CI gate.
+> **Purpose**: know and enforce the gap, not to declare 4.0.0 ready. The [4.0 RC readiness matrix](4_0_RC_READINESS.md) currently reports **NOT READY FOR 4.0.0-rc.1** and keeps the 95% RC coverage target distinct from the 90% current CI gate.
 
 ---
 
-## Current quality milestone: 3.3.0
+## Current quality milestone: 3.3.1
 
-At the end of 3.3.0:
+At the end of 3.3.1:
 
 - All Rust components remain **default-disabled**.
 - The hybrid runtime has a complete operational runbook ([RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)) and a release-readiness checklist ([RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md)).
-- Python CI gates pass at the 85% coverage gate with 85.63% measured full-suite coverage.
+- Python CI gates pass at the 90% coverage gate with 90.52% measured full-suite statement-and-branch coverage.
 - Rust CI gates pass (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`).
 - Offline eval gates pass with `--strict`.
 - The Rust sidecar has a standalone multi-stage Docker image, optional Compose file, container health check, and offline smoke test.
@@ -27,7 +27,7 @@ At the end of 3.3.0:
 - The machine-readable architecture contract resolves all five architecture blockers from real decision fields, including the intentionally empty Rust default-on set.
 - Normal PRs and `main` generate the RC report without permanent failure; `release/*` and `rc/*` branches run the same checker in strict mode.
 - The default Docker deployment still builds and runs only the Python service.
-- Python coverage is **85.63%**, below the explicit 4.0 RC target of **95.00%**.
+- Python coverage is **90.52%**, below the explicit 4.0 RC target of **95.00%**.
 
 ---
 
@@ -67,8 +67,8 @@ Legend:
 
 | Metric | Current | 4.0.0 target | Gap |
 | --- | --- | --- | --- |
-| Coverage gate | **85%** | ~95% | **+10 percentage points** |
-| Measured coverage (full suite) | **85.63%** | ~95% | ~+9.37 percentage points |
+| Coverage gate | **90%** | ~95% | **+5 percentage points** |
+| Measured coverage (full suite) | **90.52%** | ~95% | ~+4.48 percentage points |
 
 The gate was raised from 82% to 85% in 3.2.0 after the measured full-suite coverage reached 85.559%; the 3.2.4 suite measures 85.65%. The uplift emphasizes Rust client failures, RAG and tool-policy edges, route/config/launcher paths, MCP execution, and isolated browser downloads. OCR, browser controller, edge inference, media processing, and several skills paths still have meaningful misses, so the next climb should remain test-led and incremental.
 
@@ -89,7 +89,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | --- | --- | --- |
 | `ruff check .` | ✅ Green | Minimal rule set by design. |
 | `mypy .` | ✅ Green | `ignore_missing_imports=true`. |
-| `pytest --cov --cov-fail-under=85` | ✅ Green | 3.2.5 measured 85.63% with 1,810 tests and 58 subtests passing. |
+| `pytest --cov --cov-fail-under=90` | ✅ Green | 3.3.1 measures a conservative 90.52% across two consecutive full runs (90.53%, 90.52%); branch coverage is recorded without a separate gate. |
 | `cargo fmt --check` | ✅ Green | Rust workspace. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ Green | No warnings. |
 | `cargo test --all` | ✅ Green | Rust crate tests. |
@@ -106,7 +106,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 
 ## Known gaps before 4.0.0
 
-1. **Python coverage**: 85% → ~95% remains a significant climb. The biggest remaining misses are in OCR, browser control, media processing, edge inference, and skill UI/UX paths.
+1. **Python coverage**: 90% → ~95% remains the final quantified RC blocker. Coverage debt remains concentrated in network, file, OCR, browser, agent-state, and skill-security boundaries.
 2. **Rust coverage**: Not measured or gated.
 3. **Rust default-on**: ADR-0040 approves an empty default-on set for 4.0; future promotion requires a separate decision and matching evidence.
 4. **Default packaging**: ADR-0040 approves Python-only default deployment; the Rust sidecar remains optional and separate from the default Python image and single-file exe build.
@@ -166,6 +166,13 @@ These completed milestones keep the project on the conservative path toward 4.0.
 - Resolved all five architecture blockers without claiming Rust Gateway streaming or a real Rust-to-Python MCP tool bridge.
 - Kept all Rust delegates opt-in, default Compose Python-only, and Python fallback supported throughout 4.x with removal not before 5.0.0.
 - Preserved the 95% RC measured-coverage target; 85.63% measured coverage remains the sole readiness blocker.
+
+### 3.3.1 — Risk-weighted Python coverage uplift (completed)
+
+- Enabled branch measurement and added a machine-readable coverage-debt report without introducing a separate branch gate.
+- Added deterministic failure and boundary tests for Browser, OCR/media, edge inference, Skills, Automation, files, launchers, DeepSeek networking, A2A, and Agent run persistence.
+- Raised measured coverage to a conservative 90.52% across two consecutive full runs and the Python CI/preflight/release-manifest gate from 85% to 90%.
+- Preserved the 95% RC measured target, approved hybrid architecture contract, Python-only default deployment, and four default-disabled Rust delegates.
 
 ---
 

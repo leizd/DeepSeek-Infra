@@ -18,9 +18,10 @@ markers = [
 [tool.coverage.run]
 source = ["deepseek_infra"]
 omit = ["tests/*", "static/*", "*/__pycache__/*"]
+branch = true
 
 [tool.coverage.report]
-fail_under = 85
+fail_under = 90
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",

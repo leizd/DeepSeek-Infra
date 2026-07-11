@@ -52,7 +52,7 @@
 
 | 门禁 | 证据 | 要求 |
 | --- | --- | --- |
-| Coverage | `pyproject.toml` + CI `pytest --cov --cov-fail-under=85` | >= 85% (3.2.0 measured 85.559%) |
+| Coverage | `pyproject.toml` + CI `pytest --cov --cov-fail-under=90` + uploaded `coverage-debt-python-3.12` artifact | >= 90% (3.3.1 conservative measured value 90.52% across consecutive full runs; branch coverage recorded without a separate gate) |
 | Offline eval | `evals/reports/latest.json` | `status=PASS` |
 | Agent Eval | `evals/reports/agent-latest.json` | `status=PASS` |
 | Baseline compare | `evals/reports/baseline-compare-latest.json` | `status=PASS` |

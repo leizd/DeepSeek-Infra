@@ -42,7 +42,8 @@ def test_ci_runs_hybrid_compose_and_always_cleans_up() -> None:
     assert "python scripts/smoke_hybrid_runtime.py" in workflow
     assert "logs --no-color" in workflow
     assert "down --volumes --remove-orphans" in workflow
-    assert "pytest --cov --cov-fail-under=85" in workflow
+    assert "--cov-report=json:artifacts/coverage.json" in workflow
+    assert "--cov-fail-under=90" in workflow
 
 
 def test_compose_command_keeps_both_files_before_action() -> None:

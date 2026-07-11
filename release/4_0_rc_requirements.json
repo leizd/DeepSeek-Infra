@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "baseline_version": "3.3.0",
+  "baseline_version": "3.3.1",
   "target_version": "4.0.0-rc.1",
-  "generated_from": "3.2.5 merged readiness evidence and ADR-0040",
+  "generated_from": "3.3.1 risk-weighted coverage evidence and ADR-0040",
   "requirements": [
     {
       "id": "all_ci_jobs_green",
@@ -34,11 +34,11 @@
       "category": "quality_blocker",
       "owner": "Python Runtime",
       "blocking": true,
-      "required": 85.0,
-      "observed": 85.0,
+      "required": 90.0,
+      "observed": 90.0,
       "check": "pyproject_coverage_gate",
       "evidence": ["pyproject.toml"],
-      "description": "The current 3.2.x CI floor remains 85%; this is distinct from the 4.0 RC measured target."
+      "description": "The 3.3.1 CI floor is 90%; this remains distinct from the 4.0 RC measured target."
     },
     {
       "id": "python_measured_coverage",
@@ -47,7 +47,7 @@
       "owner": "Python Runtime",
       "blocking": true,
       "required": 95.0,
-      "observed": 85.63,
+      "observed": 90.52,
       "check": "observed_number_gte",
       "evidence": ["docs/PRE_4_0_QUALITY_BASELINE.md"],
       "description": "The full Python suite must meet the explicit 4.0 RC coverage target."

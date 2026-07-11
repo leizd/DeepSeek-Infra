@@ -459,3 +459,79 @@ def test_run_files_are_valid_json_snapshots(tmp_settings) -> None:
     assert snapshot["runId"] == run_id
     assert snapshot["plan"] == [{"id": "critic", "task": "复核"}]
     assert snapshot["events"][0]["createdAt"].endswith("Z")
+
+
+def test_agent_run_storage_rejects_invalid_missing_and_corrupt_snapshots(tmp_settings) -> None:
+    with pytest.raises(agent_runs.AppError):
+        agent_runs.validate_run_id("../bad")
+    with pytest.raises(agent_runs.AppError):
+        agent_runs.load_run("run_missing123456")
+
+    run_id = "run_corrupt123456"
+    path = agent_runs.AGENT_RUNS_DIR / f"{run_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not json", encoding="utf-8")
+    with pytest.raises(agent_runs.AppError, match="corrupted"):
+        agent_runs.load_run(run_id)
+    path.write_text("[]", encoding="utf-8")
+    with pytest.raises(agent_runs.AppError, match="corrupted"):
+        agent_runs.load_run(run_id)
+
+
+def test_replace_with_retry_raises_after_exhausting_windows_locks(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = agent_runs.AGENT_RUNS_DIR / "locked.tmp"
+    target = agent_runs.AGENT_RUNS_DIR / "locked.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(Path, "replace", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")))
+    with pytest.raises(PermissionError, match="locked"):
+        agent_runs.replace_with_retry(source, target, delays=(0.0,))
+
+
+def test_public_run_and_runtime_payload_handle_optional_shapes() -> None:
+    assert agent_runs.merge_runtime_payload({"a": 1}, None) == {"a": 1}
+    assert agent_runs.merge_runtime_payload({"a": 1}, {"a": 2}) == {"a": 2}
+    assert agent_runs.public_run({"requestPayload": {"secret": 1}, "events": [1]}, include_events=False) == {}
+
+
+def test_start_and_continue_plan_record_cancel_and_internal_failures(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    cancelled_id = agent_runs.create_run(valid_payload())["runId"]
+    monkeypatch.setattr(agent_runs, "validate_deepseek_payload", lambda _payload: (_ for _ in ()).throw(agent_runs.RequestCancelled()))
+    agent_runs.start_planned_run(cancelled_id, valid_payload(), confirm_plan=False, agent_preset="full")
+    assert agent_runs.load_run(cancelled_id)["status"] == "cancelled"
+
+    failed_id = agent_runs.create_run(valid_payload())["runId"]
+    monkeypatch.setattr(agent_runs, "validate_deepseek_payload", lambda _payload: (_ for _ in ()).throw(RuntimeError("invalid runtime")))
+    agent_runs.continue_with_plan(failed_id, valid_payload(), [])
+    stored = agent_runs.load_run(failed_id)
+    assert stored["events"][-1]["type"] == "error"
+
+
+def test_rerun_agent_unknown_and_worker_failure_are_persisted(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    unknown_id = agent_runs.create_run(valid_payload())["runId"]
+    agent_runs.rerun_agent(unknown_id, valid_payload(), agent_id="unknown")
+    assert agent_runs.load_run(unknown_id)["events"][-1]["type"] == "error"
+
+    run_id = agent_runs.create_run(valid_payload())["runId"]
+    agent_runs.append_event(run_id, {"type": "agent_plan", "plan": [{"id": "coder", "task": "code"}]})
+    monkeypatch.setattr(agent_runs, "run_agent", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("worker crashed")))
+    agent_runs.rerun_agent(run_id, valid_payload(), agent_id="coder", resynthesize=False)
+    stored = agent_runs.load_run(run_id)
+    assert stored["agentOutputs"]["coder"]["failed"] is True
+    assert stored["status"] == "done"
+
+
+def test_resynthesize_requires_at_least_one_agent_output(tmp_settings) -> None:
+    run_id = agent_runs.create_run(valid_payload())["runId"]
+    with pytest.raises(agent_runs.AppError, match="No Agent outputs"):
+        agent_runs.resynthesize_outputs(run_id, valid_payload(), selected_model="model", user_query="q")
+
+
+def test_orphan_scans_skip_corrupt_unrelated_and_write_failures(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    directory = agent_runs.AGENT_RUNS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "run_bad.json").write_text("not json", encoding="utf-8")
+    (directory / "run_done.json").write_text(json.dumps({"runId": "run_done", "status": "done"}), encoding="utf-8")
+    (directory / "run_active.json").write_text(json.dumps({"runId": "run_active", "status": "running"}), encoding="utf-8")
+    monkeypatch.setattr(agent_runs, "append_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("locked")))
+    assert agent_runs.mark_orphan_runs_on_startup() == 0

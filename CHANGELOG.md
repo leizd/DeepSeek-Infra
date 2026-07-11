@@ -1,5 +1,19 @@
 # 更新日志
 
+## [3.3.1] - Risk-weighted Python Coverage Uplift
+
+### Added
+
+- Added branch-aware coverage measurement and `scripts/report_coverage_debt.py`, with a machine-readable CI artifact ranked by network, filesystem, browser, security, media, state-machine, and utility risk.
+- Added deterministic failure and boundary coverage across Browser control, OCR/media, edge inference, Skills, Automation, DeepSeek networking, file/PDF processing, launchers, A2A, and Agent run persistence.
+
+### Changed
+
+- Raised measured Python statement-and-branch coverage to a conservative 90.52% across two consecutive full runs (90.53%, 90.52%) and the CI, preflight, README, and release-manifest gate from 85% to 90%.
+- Kept branch coverage informational in 3.3.1; there is no separate branch threshold.
+- Kept the 4.0 RC measured coverage target at 95.00%, so strict readiness remains non-zero only for coverage.
+- Preserved ADR-0040, all default Rust flags at 0, Python-only default Compose deployment, and Python fallback throughout 4.x. No RC tag is created.
+
 ## [3.3.0] - 4.0 Runtime Architecture Decision
 
 ### Added
