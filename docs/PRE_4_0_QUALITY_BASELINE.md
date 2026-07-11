@@ -1,18 +1,18 @@
 # Pre-4.0 Quality Baseline
 
-This document tracks where the project stands after the 3.2.4 Rust/Python RAG parity milestone and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+This document tracks where the project stands after the 3.2.5 RC-readiness audit and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
-> **Purpose**: know the gap, not to declare 4.0.0 ready. 3.2.4 proves deterministic RAG hot-path parity across Python and Rust; it does not enable Rust by default, replace the wider Python retrieval pipeline, add embedding/vector parity, or raise the coverage gate.
+> **Purpose**: know and enforce the gap, not to declare 4.0.0 ready. The [4.0 RC readiness matrix](4_0_RC_READINESS.md) currently reports **NOT READY FOR 4.0.0-rc.1** and keeps the 95% RC coverage target distinct from the 85% current CI gate.
 
 ---
 
-## Current quality milestone: 3.2.4
+## Current quality milestone: 3.2.5
 
-At the end of 3.2.4:
+At the end of 3.2.5:
 
 - All Rust components remain **default-disabled**.
 - The hybrid runtime has a complete operational runbook ([RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)) and a release-readiness checklist ([RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md)).
-- Python CI gates pass at the 85% coverage gate with 85.65% measured full-suite coverage.
+- Python CI gates pass at the 85% coverage gate with 85.63% measured full-suite coverage.
 - Rust CI gates pass (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`).
 - Offline eval gates pass with `--strict`.
 - The Rust sidecar has a standalone multi-stage Docker image, optional Compose file, container health check, and offline smoke test.
@@ -21,8 +21,10 @@ At the end of 3.2.4:
 - Policy backend failures have explicit `fallback`, `deny`, and `error` behavior; all deny/error paths stop tool execution.
 - A shared 38-case fixture proves Python/Rust parity for normalization, full Top-K ordering, tie-breaks, scores, citations, and index validation.
 - The independent `rag-parity` CI job runs against a live Rust sidecar and uploads a machine-readable difference report.
+- A machine-readable RC requirements manifest classifies quality blockers, architecture decision blockers, and non-blocking recommendations with explicit owners and evidence.
+- Normal PRs and `main` generate the RC report without permanent failure; `release/*` and `rc/*` branches run the same checker in strict mode.
 - The default Docker deployment still builds and runs only the Python service.
-- Python coverage is **not** near the 4.0.0 target of ~95%.
+- Python coverage is **85.63%**, below the explicit 4.0 RC target of **95.00%**.
 
 ---
 
@@ -63,7 +65,7 @@ Legend:
 | Metric | Current | 4.0.0 target | Gap |
 | --- | --- | --- | --- |
 | Coverage gate | **85%** | ~95% | **+10 percentage points** |
-| Measured coverage (full suite) | **85.65%** | ~95% | ~+9.35 percentage points |
+| Measured coverage (full suite) | **85.63%** | ~95% | ~+9.37 percentage points |
 
 The gate was raised from 82% to 85% in 3.2.0 after the measured full-suite coverage reached 85.559%; the 3.2.4 suite measures 85.65%. The uplift emphasizes Rust client failures, RAG and tool-policy edges, route/config/launcher paths, MCP execution, and isolated browser downloads. OCR, browser controller, edge inference, media processing, and several skills paths still have meaningful misses, so the next climb should remain test-led and incremental.
 
@@ -84,7 +86,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | --- | --- | --- |
 | `ruff check .` | ✅ Green | Minimal rule set by design. |
 | `mypy .` | ✅ Green | `ignore_missing_imports=true`. |
-| `pytest --cov --cov-fail-under=85` | ✅ Green | 3.2.4 measured 85.65% with 1,801 tests and 58 subtests passing. |
+| `pytest --cov --cov-fail-under=85` | ✅ Green | 3.2.5 measured 85.63% with 1,810 tests and 58 subtests passing. |
 | `cargo fmt --check` | ✅ Green | Rust workspace. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ Green | No warnings. |
 | `cargo test --all` | ✅ Green | Rust crate tests. |
@@ -114,7 +116,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 
 ## Recommended 3.2.x milestones
 
-These are proposed, not committed. They keep the project on the conservative path toward 4.0.0 without jumping the gun.
+These completed milestones keep the project on the conservative path toward 4.0.0 without turning readiness evidence into an early release declaration.
 
 ### 3.2.0 — Coverage uplift to 85% (completed)
 
@@ -148,11 +150,12 @@ These are proposed, not committed. They keep the project on the conservative pat
 - Preserved CJK, mixed-language, punctuation, emoji, stable tie-break, and existing citation-format behavior.
 - Kept embedding/vector retrieval and performance benchmarking outside this deterministic test-only milestone.
 
-### 3.2.5 — Release candidate checklist
+### 3.2.5 — 4.0 RC readiness checklist (completed)
 
-- Define a 4.0.0 release candidate checklist.
-- Decide which Rust components become default-on and which remain opt-in.
-- Run the full release-readiness, eval, and security corpus gates with Rust enabled.
+- Added an owner-tagged, machine-readable blocker matrix and a human sign-off document without creating an RC.
+- Added terminal and JSON reporting with an honest `NOT READY` decision while coverage and architecture blockers remain.
+- Added report-only CI behavior for normal development and strict blocking behavior for `release/*` and `rc/*` branches.
+- Preserved the 85% current coverage gate, 95% RC target, Python default runtime, opt-in Rust flags, and existing Docker defaults.
 
 ---
 
@@ -176,6 +179,7 @@ Until these are answered, the project remains in the 3.1.x / 3.2.x line.
 
 ## Related documents
 
+- [4.0 RC Readiness](4_0_RC_READINESS.md)
 - [Rust Migration Roadmap](RUST_MIGRATION_ROADMAP.md)
 - [Hybrid Rust Runtime Runbook](RUST_HYBRID_RUNTIME_RUNBOOK.md)
 - [RAG Parity Baseline](RAG_PARITY_BASELINE.md)
