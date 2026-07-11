@@ -1,5 +1,23 @@
 # 更新日志
 
+## [3.2.5] - 4.0 RC Readiness Checklist
+
+### Added
+- Added a machine-readable 4.0 RC requirements manifest with owners, blocker classes, current observations, and evidence paths.
+- Added a readiness checker that emits terminal and JSON reports, supports report-only and strict modes, and honestly reports `NOT READY FOR 4.0.0-rc.1` while blockers remain.
+- Added an owner-signable blocker matrix and default-on decision matrix in `docs/4_0_RC_READINESS.md`.
+- Added a terminal `rc-readiness` CI job that uploads a report on normal PRs and `main`, then becomes blocking on `release/*` and `rc/*` branches.
+
+### Current blockers
+- Measured Python coverage is 85.63% against the explicit 95.00% RC target; the existing CI gate remains 85%.
+- Rust default-on components, default sidecar deployment, and the Python fallback lifecycle still need approval.
+- Gateway streaming still uses Python and the Rust MCP path does not yet bridge real tool execution.
+
+### Unchanged
+- No `4.0.0-rc.1` tag or release is created.
+- No Rust component or sidecar is enabled by default.
+- The Python coverage gate remains 85% and the default Docker deployment remains Python-only.
+
 ## [3.2.4] - Rust/Python RAG Parity Corpus
 
 ### Added

@@ -5,7 +5,7 @@
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-85%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> Rust core migration is now in the 3.2.3 pre-4.0 quality track. Python FastAPI remains the default runtime; Rust Gateway / MCP / Policy / RAG components are feature-flagged and discoverable via `GET /api/rust/status`. The optional sidecar and hybrid smoke do not change the default Python deployment, and Rust Policy now has stable deny codes, traceable decisions, redacted audit logs, and explicit backend failure modes. See `docs/RUST_MIGRATION_ROADMAP.md`.
+> Rust core migration is now in the 3.2.5 pre-4.0 readiness track. Python FastAPI remains the default runtime and all Rust delegates remain opt-in. The hybrid runtime, Policy contract, and 38-case RAG parity corpus are established, but the repository is **not ready for 4.0.0-rc.1**: measured Python coverage is 85.63% against the 95% RC target and runtime architecture decisions remain open. See [the 4.0 RC readiness matrix](docs/4_0_RC_READINESS.md).
 
 ## 30 秒概览
 
@@ -237,7 +237,7 @@ curl -X POST http://127.0.0.1:8787/v1/chat/completions \
 
 3.0.3 设计原则：**先让 Rust Gateway 能独立站起来**，暂时不替换 Python FastAPI 网关、不转发真实 DeepSeek API、不实现流式（`stream: true` 会返回结构化错误）。后续小版本会逐步接入 upstream proxy、MCP 处理、Tool Policy 等能力。
 
-> 完整运维说明（启动 sidecar、feature flags、fallback、排错、回滚、验证命令）见 [docs/RUST_HYBRID_RUNTIME_RUNBOOK.md](docs/RUST_HYBRID_RUNTIME_RUNBOOK.md)；发版门禁见 [docs/RELEASE_READINESS_3_1_X.md](docs/RELEASE_READINESS_3_1_X.md)。
+> 完整运维说明（启动 sidecar、feature flags、fallback、排错、回滚、验证命令）见 [docs/RUST_HYBRID_RUNTIME_RUNBOOK.md](docs/RUST_HYBRID_RUNTIME_RUNBOOK.md)；当前 3.2.x 门禁见 [docs/RELEASE_READINESS_3_1_X.md](docs/RELEASE_READINESS_3_1_X.md)，4.0 RC blocker matrix 见 [docs/4_0_RC_READINESS.md](docs/4_0_RC_READINESS.md)。
 
 详见 `docs/RUST_MIGRATION_ROADMAP.md`。
 

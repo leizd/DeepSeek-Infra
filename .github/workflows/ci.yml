@@ -2,7 +2,7 @@
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**", "rc/**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -222,4 +222,54 @@ jobs:
       - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
       - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
       - run: cargo test --manifest-path rust/Cargo.toml --all
+
+  rc-readiness:
+    if: always()
+    needs:
+      - test
+      - security
+      - eval
+      - docker
+      - rust-docker
+      - hybrid-runtime-e2e
+      - rag-parity
+      - release-readiness
+      - docs
+      - rust
+    runs-on: ubuntu-latest
+    env:
+      RC_CI_TEST: ${{ needs.test.result }}
+      RC_CI_SECURITY: ${{ needs.security.result }}
+      RC_CI_EVAL: ${{ needs.eval.result }}
+      RC_CI_DOCKER: ${{ needs.docker.result }}
+      RC_CI_RUST_DOCKER: ${{ needs['rust-docker'].result }}
+      RC_CI_HYBRID_RUNTIME_E2E: ${{ needs['hybrid-runtime-e2e'].result }}
+      RC_CI_RAG_PARITY: ${{ needs['rag-parity'].result }}
+      RC_CI_RELEASE_READINESS: ${{ needs['release-readiness'].result }}
+      RC_CI_DOCS: ${{ needs.docs.result }}
+      RC_CI_RUST: ${{ needs.rust.result }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check 4.0 RC readiness
+        shell: bash
+        run: |
+          mode=--report-only
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          case "$branch" in
+            release/*|rc/*) mode=--strict ;;
+          esac
+          python scripts/check_4_0_rc_readiness.py \
+            --requirements release/4_0_rc_requirements.json \
+            --json-out artifacts/4-0-rc-readiness.json \
+            "$mode"
+      - name: Upload 4.0 RC readiness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 4-0-rc-readiness
+          path: artifacts/4-0-rc-readiness.json
+          if-no-files-found: error
 

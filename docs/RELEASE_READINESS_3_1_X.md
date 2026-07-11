@@ -1,8 +1,8 @@
-# Release Readiness Checklist — 3.1.x / 3.2.4 Quality Track
+# Release Readiness Checklist — 3.1.x / 3.2.5 Quality Track
 
-This checklist is the go/no-go gate for the hybrid Rust runtime line through the 3.2.4 RAG parity milestone. It is intentionally conservative: it verifies that Rust integration is stable, safely disabled by default, able to fall back to Python, unable to execute a denied tool, and semantically aligned on deterministic RAG hot paths.
+This checklist is the go/no-go gate for the hybrid Rust runtime line through the 3.2.5 RC-readiness audit. It verifies that Rust integration is stable and safely disabled by default, then feeds those facts into the separate 4.0 RC blocker matrix.
 
-> **Non-goals for 3.2.4**: enable Rust components by default, replace Python RAG, add embedding/vector parity, raise the 85% coverage gate, require API keys or external services, or introduce 4.0.0 breaking changes. Those remain tracked in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+> **Current verdict**: the 3.2.x hybrid baseline is green, but the repository is **NOT READY FOR 4.0.0-rc.1**. See [4_0_RC_READINESS.md](4_0_RC_READINESS.md). This milestone does not enable Rust components, raise the 85% current gate, or create an RC.
 
 ---
 
@@ -21,6 +21,7 @@ The following jobs must pass on every PR and on `main`:
 | Rust sidecar image | `ci / rust-docker` | ci / rust-docker |
 | Hybrid runtime E2E | `ci / hybrid-runtime-e2e` | ci / hybrid-runtime-e2e |
 | Rust/Python RAG parity | `ci / rag-parity` | ci / rag-parity |
+| 4.0 RC readiness report | `ci / rc-readiness` | Release Engineering |
 | JS syntax | `node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_core.js static/app.js static/modules/network.js static/modules/markdown.js static/modules/settings.js static/modules/panels.js static/modules/chat.js static/modules/trace_waterfall.js static/modules/trace_viewer.js` | ci / test |
 | Docs link check | `python scripts/check_doc_links.py` | ci / docs |
 | Dependency audit | `pip-audit -r requirements.txt -r requirements-dev.txt` | ci / security |
@@ -180,6 +181,7 @@ The `ci / release-readiness` job produces the following artifacts:
 | Context taint | `scripts/smoke_context_taint.py` | `docs/evidence/context-taint-v3.0.1.json` |
 | Hybrid Python/Rust runtime | `scripts/smoke_hybrid_runtime.py` | `ci / hybrid-runtime-e2e` log |
 | Rust/Python RAG parity | `scripts/check_rag_parity.py` | `artifacts/rag-parity-report.json` |
+| 4.0 RC readiness | `scripts/check_4_0_rc_readiness.py` | `artifacts/4-0-rc-readiness.json` |
 
 The release preflight also runs:
 
@@ -212,16 +214,23 @@ No state migration is needed because Rust components are stateless delegates.
 
 ---
 
+## 4.0 RC readiness mode
+
+Normal PRs and `main` run the checker with `--report-only`, upload its JSON artifact, and remain usable while future RC targets are incomplete. Pushes to `release/*` and `rc/*` run `--strict`; any unresolved blocker then fails `ci / rc-readiness`.
+
+The current blockers are measured Python coverage below 95.00%, three unapproved runtime lifecycle/default decisions, Gateway streaming ownership, and the MCP real tool bridge. The 85% current CI gate is a passing baseline requirement, not a substitute for the 95% RC target.
+
 ## Sign-off
 
-Before tagging 3.2.4, confirm:
+Before accepting the 3.2.5 readiness audit, confirm:
 
 - [ ] All CI gates above are green on the release commit.
 - [ ] All offline eval gates above pass with `--strict`.
 - [ ] Runtime gates 1–6 above have been executed; gates 3–5 are covered by `ci / hybrid-runtime-e2e` and gate 6 by `ci / rag-parity`.
 - [ ] The hybrid runtime runbook is up to date: [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md).
-- [ ] `docs/RUST_MIGRATION_ROADMAP.md` reflects the 3.2.4 quality state.
-- [ ] `CHANGELOG.md` has a 3.2.4 release entry.
+- [ ] `docs/RUST_MIGRATION_ROADMAP.md` reflects the 3.2.5 readiness state.
+- [ ] `CHANGELOG.md` has a 3.2.5 entry.
+- [ ] `python scripts/check_4_0_rc_readiness.py --report-only` emits the current blocker matrix and JSON report.
 - [ ] The default Compose deployment and Rust default-disabled behavior are unchanged.
 - [ ] No coverage-gate increase or 4.0.0 breaking change is included in the release.
 
@@ -230,6 +239,7 @@ Before tagging 3.2.4, confirm:
 ## Related documents
 
 - [Hybrid Rust Runtime Runbook](RUST_HYBRID_RUNTIME_RUNBOOK.md)
+- [4.0 RC Readiness](4_0_RC_READINESS.md)
 - [RAG Parity Baseline](RAG_PARITY_BASELINE.md)
 - [Rust Migration Roadmap](RUST_MIGRATION_ROADMAP.md)
 - [Implementation Status](IMPLEMENTATION_STATUS.md)
