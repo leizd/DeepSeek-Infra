@@ -142,6 +142,41 @@ jobs:
             -f docker-compose.hybrid-test.yml \
             down --volumes --remove-orphans || true
 
+  rag-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Rust sidecar image for RAG parity
+        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:parity .
+      - name: Start Rust sidecar for RAG parity
+        run: |
+          docker run --detach \
+            --name deepseek-rust-rag-parity \
+            --publish 127.0.0.1:8787:8787 \
+            deepseek-rust-gateway:parity
+      - name: Run deterministic RAG parity corpus
+        run: |
+          python scripts/check_rag_parity.py \
+            --base-url http://127.0.0.1:8787 \
+            --strict \
+            --report artifacts/rag-parity-report.json
+      - name: Show Rust RAG parity logs
+        if: failure()
+        run: docker logs deepseek-rust-rag-parity || true
+      - name: Upload RAG parity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-parity-report
+          path: artifacts/rag-parity-report.json
+          if-no-files-found: warn
+      - name: Stop Rust RAG parity sidecar
+        if: always()
+        run: docker rm --force deepseek-rust-rag-parity || true
+
   release-readiness:
     runs-on: ubuntu-latest
     steps:

@@ -1,8 +1,8 @@
-# Release Readiness Checklist — 3.1.x / 3.2.3 Quality Track
+# Release Readiness Checklist — 3.1.x / 3.2.4 Quality Track
 
-This checklist is the go/no-go gate for the hybrid Rust runtime line through the 3.2.3 Policy deny/audit milestone. It is intentionally conservative: it verifies that Rust integration is stable, safely disabled by default, able to fall back to Python, and unable to execute a denied tool.
+This checklist is the go/no-go gate for the hybrid Rust runtime line through the 3.2.4 RAG parity milestone. It is intentionally conservative: it verifies that Rust integration is stable, safely disabled by default, able to fall back to Python, unable to execute a denied tool, and semantically aligned on deterministic RAG hot paths.
 
-> **Non-goals for 3.2.3**: enable Rust Policy by default, remove Python Policy, add an audit database, raise the 85% coverage gate, require API keys or external services, or introduce 4.0.0 breaking changes. Those remain tracked in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+> **Non-goals for 3.2.4**: enable Rust components by default, replace Python RAG, add embedding/vector parity, raise the 85% coverage gate, require API keys or external services, or introduce 4.0.0 breaking changes. Those remain tracked in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
 ---
 
@@ -20,6 +20,7 @@ The following jobs must pass on every PR and on `main`:
 | Rust tests | `cargo test --manifest-path rust/Cargo.toml --all` | ci / rust |
 | Rust sidecar image | `ci / rust-docker` | ci / rust-docker |
 | Hybrid runtime E2E | `ci / hybrid-runtime-e2e` | ci / hybrid-runtime-e2e |
+| Rust/Python RAG parity | `ci / rag-parity` | ci / rag-parity |
 | JS syntax | `node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_core.js static/app.js static/modules/network.js static/modules/markdown.js static/modules/settings.js static/modules/panels.js static/modules/chat.js static/modules/trace_waterfall.js static/modules/trace_viewer.js` | ci / test |
 | Docs link check | `python scripts/check_doc_links.py` | ci / docs |
 | Dependency audit | `pip-audit -r requirements.txt -r requirements-dev.txt` | ci / security |
@@ -138,9 +139,18 @@ Repeat a safe tool call with the sidecar unavailable under each `DEEPSEEK_RUST_P
 - `deny`: execution is blocked with `policy_backend_unavailable`.
 - `error`: execution is blocked with a structured `status: 503` response.
 
-### 6. RAG CJK query preserved
+### 6. Deterministic RAG parity corpus
 
-With `DEEPSEEK_RUST_RAG=1`, run a query containing CJK characters through the RAG path. The normalized query and returned citations must preserve the CJK content; the evaluation harness verifies this with the `run_rag_eval.py` CJK cases.
+Run the shared corpus against a live Rust sidecar:
+
+```bash
+python scripts/check_rag_parity.py \
+  --base-url http://127.0.0.1:8787 \
+  --strict \
+  --report artifacts/rag-parity-report.json
+```
+
+All 38 cases must pass. Query normalization and citation output must match exactly; Top-K IDs and tie-break order must match exactly; scores must be within `1e-6`; validation outcomes must use the same stable category. See [RAG_PARITY_BASELINE.md](RAG_PARITY_BASELINE.md).
 
 ---
 
@@ -169,6 +179,7 @@ The `ci / release-readiness` job produces the following artifacts:
 | Skill catalog | `scripts/smoke_skill_catalog.py` | `docs/evidence/skill-catalog-v3.0.1.json` |
 | Context taint | `scripts/smoke_context_taint.py` | `docs/evidence/context-taint-v3.0.1.json` |
 | Hybrid Python/Rust runtime | `scripts/smoke_hybrid_runtime.py` | `ci / hybrid-runtime-e2e` log |
+| Rust/Python RAG parity | `scripts/check_rag_parity.py` | `artifacts/rag-parity-report.json` |
 
 The release preflight also runs:
 
@@ -203,14 +214,14 @@ No state migration is needed because Rust components are stateless delegates.
 
 ## Sign-off
 
-Before tagging 3.2.3, confirm:
+Before tagging 3.2.4, confirm:
 
 - [ ] All CI gates above are green on the release commit.
 - [ ] All offline eval gates above pass with `--strict`.
-- [ ] Runtime gates 1–6 above have been executed; gates 3–6 are covered by `ci / hybrid-runtime-e2e`.
+- [ ] Runtime gates 1–6 above have been executed; gates 3–5 are covered by `ci / hybrid-runtime-e2e` and gate 6 by `ci / rag-parity`.
 - [ ] The hybrid runtime runbook is up to date: [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md).
-- [ ] `docs/RUST_MIGRATION_ROADMAP.md` reflects the 3.2.3 quality state.
-- [ ] `CHANGELOG.md` has a 3.2.3 release entry.
+- [ ] `docs/RUST_MIGRATION_ROADMAP.md` reflects the 3.2.4 quality state.
+- [ ] `CHANGELOG.md` has a 3.2.4 release entry.
 - [ ] The default Compose deployment and Rust default-disabled behavior are unchanged.
 - [ ] No coverage-gate increase or 4.0.0 breaking change is included in the release.
 
@@ -219,6 +230,7 @@ Before tagging 3.2.3, confirm:
 ## Related documents
 
 - [Hybrid Rust Runtime Runbook](RUST_HYBRID_RUNTIME_RUNBOOK.md)
+- [RAG Parity Baseline](RAG_PARITY_BASELINE.md)
 - [Rust Migration Roadmap](RUST_MIGRATION_ROADMAP.md)
 - [Implementation Status](IMPLEMENTATION_STATUS.md)
 - [CHANGELOG.md](../CHANGELOG.md)
