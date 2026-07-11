@@ -100,7 +100,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | `python scripts/check_doc_links.py` | ✅ Green | Internal doc links. |
 | `pip-audit`, `bandit`, `detect-secrets` | ✅ Green | Security scan. |
 | Offline eval suite `--strict` | ✅ Green | RAG, Tool, Injection, Agent, Security corpus. |
-| `scripts/preflight_release.py --version 3.0.1 --ga` | ✅ Green | Release readiness. |
+| `scripts/preflight_release.py --version 3.3.0 --ga` | ✅ Green | Release readiness. |
 
 ---
 

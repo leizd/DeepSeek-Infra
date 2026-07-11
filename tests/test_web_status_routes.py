@@ -20,7 +20,7 @@ def client() -> Iterator[TestClient]:
         ocr=SimpleNamespace(enabled=False, mode="balanced"),
     )
     deps = StatusRouteDeps(
-        version="3.0.1",
+        version="3.3.0",
         settings=settings,
         tavily_api_key="",
         supported_models=["deepseek-v4-pro"],
@@ -57,7 +57,7 @@ def test_api_config(client: TestClient) -> None:
     response = client.get("/api/config")
     assert response.status_code == 200
     data = response.json()
-    assert data["version"] == "3.0.1"
+    assert data["version"] == "3.3.0"
     assert data["defaultModel"] == "deepseek-v4-pro"
     assert data["computerUrl"].startswith("http://127.0.0.1:")
     assert data["phoneUrl"].startswith("http://192.168.1.2:")
@@ -71,7 +71,7 @@ def test_api_config_with_auth_enabled() -> None:
         ocr=SimpleNamespace(enabled=False, mode="balanced"),
     )
     deps = StatusRouteDeps(
-        version="3.0.1",
+        version="3.3.0",
         settings=settings,
         tavily_api_key="",
         supported_models=["deepseek-v4-pro"],

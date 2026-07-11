@@ -19,12 +19,12 @@ def test_ga_smoke_writes_pass_evidence(tmp_path: Path) -> None:
     mod = _load_smoke_ga()
     out = tmp_path / "ga-evidence.json"
 
-    code = mod.main(["--offline", "--out", str(out), "--version", "3.0.1"])
+    code = mod.main(["--offline", "--out", str(out), "--version", "3.3.0"])
     evidence = json.loads(out.read_text(encoding="utf-8"))
 
     assert code == 0
     assert evidence["schemaVersion"] == "ga-smoke.v1"
-    assert evidence["version"] == "3.0.1"
+    assert evidence["version"] == "3.3.0"
     assert evidence["status"] == "PASS"
     for check in (
         "workspaceHome",

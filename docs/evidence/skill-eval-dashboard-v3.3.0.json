@@ -1,5 +1,5 @@
 {
-  "version": "3.0.1",
+  "version": "3.3.0",
   "commit": "77f1df4100ea",
   "generatedAt": "2026-07-08T02:20:51+00:00",
   "environment": {
@@ -24,7 +24,7 @@
   },
   "details": {
     "report": {
-      "path": "evals\\reports\\skills-v3.0.1.json",
+      "path": "evals\\reports\\skills-v3.3.0.json",
       "summary": {
         "scope": "all",
         "skillCount": 18,
