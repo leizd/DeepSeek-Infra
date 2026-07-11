@@ -373,8 +373,8 @@ def test_fallback_reports_runtime_exception_empty_and_unavailable(monkeypatch: p
 
 def test_windows_tesseract_candidate_and_preprocess_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ocr.shutil, "which", lambda name: None)
-    monkeypatch.setattr(ocr.os, "name", "nt")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(ocr, "os", SimpleNamespace(name="nt", environ=ocr.os.environ))
     monkeypatch.setattr(ocr.Path, "is_file", lambda path: str(path).endswith("tesseract.exe"))
     assert ocr._locate_tesseract().endswith("tesseract.exe")  # type: ignore[union-attr]
 
@@ -494,6 +494,7 @@ def test_engine_dependency_and_corrupt_input_failures(monkeypatch: pytest.Monkey
     pytesseract.pytesseract = SimpleNamespace(tesseract_cmd="")  # type: ignore[attr-defined]
     pytesseract.get_languages = lambda config: []  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "pytesseract", pytesseract)
+    monkeypatch.setitem(sys.modules, "pdf2image", ModuleType("pdf2image"))
     monkeypatch.setattr(ocr, "_locate_tesseract", lambda: None)
     with pytest.raises(AppError, match="executable not found"):
         ocr.TesseractEngine()
