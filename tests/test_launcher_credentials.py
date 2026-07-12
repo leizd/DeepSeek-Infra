@@ -99,3 +99,9 @@ def test_invalid_port_falls_back_to_default(isolated_root: Path) -> None:
     path.write_text(json.dumps(envelope), encoding="utf-8")
     loaded = credentials.load()
     assert loaded.port == credentials.DEFAULT_PORT
+
+
+def test_restrict_permissions_contains_posix_chmod_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(credentials.os, "name", "posix")
+    monkeypatch.setattr(Path, "chmod", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("denied")))
+    credentials._restrict_permissions(tmp_path / "config")

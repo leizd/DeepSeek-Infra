@@ -535,3 +535,61 @@ def test_orphan_scans_skip_corrupt_unrelated_and_write_failures(tmp_settings, mo
     (directory / "run_active.json").write_text(json.dumps({"runId": "run_active", "status": "running"}), encoding="utf-8")
     monkeypatch.setattr(agent_runs, "append_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("locked")))
     assert agent_runs.mark_orphan_runs_on_startup() == 0
+
+
+def test_write_cleanup_delay_unknown_status_and_reasoning_edges(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(agent_runs, "replace_with_retry", lambda *_args, **_kwargs: None)
+    original_unlink = Path.unlink
+    monkeypatch.setattr(Path, "unlink", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("cleanup denied")))
+    agent_runs.write_run({"runId": "run_332_cleanup"})
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+
+    source = tmp_settings / "source"
+    target = tmp_settings / "target"
+    source.write_text("x", encoding="utf-8")
+    calls = {"count": 0}
+    original_replace = Path.replace
+    def flaky(path: Path, destination: Path) -> Path:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise PermissionError("locked")
+        return original_replace(path, destination)
+    monkeypatch.setattr(Path, "replace", flaky)
+    agent_runs.replace_with_retry(source, target, delays=(0.001,))
+    with pytest.raises(ValueError, match="Unknown Agent Run status"):
+        agent_runs.append_status("missing", "impossible")
+
+    run: dict[str, object] = {"agentOutputs": {}}
+    agent_runs.update_agent_output_snapshot(run, {"type": "agent_reasoning", "phase": "coder", "text": "reason"})
+    assert run["agentOutputs"]["coder"]["reasoning"] == "reason"  # type: ignore[index]
+
+
+def test_plan_presets_start_and_continue_success_paths(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(agent_runs, "plan_agents", lambda *_args, **_kwargs: [{"id": "coder", "task": "code"}])
+    monkeypatch.setattr(agent_runs, "auto_agent_plan", lambda *_args, **_kwargs: ([{"id": "reasoner", "task": "reason"}], "auto"))
+    assert agent_runs.plan_for_preset(valid_payload(), "leader", lambda _: None)[0][0]["id"] == "coder"
+    assert agent_runs.plan_for_preset(valid_payload(), "auto", lambda _: None)[1] == "auto"
+    assert agent_runs.plan_for_preset(valid_payload(), "critic", lambda _: None)[0][0]["id"] == "critic"
+
+    run_id = agent_runs.create_run(valid_payload())["runId"]
+    executed: list[list[dict[str, object]]] = []
+    monkeypatch.setattr(agent_runs, "should_confirm_plan", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(agent_runs, "execute_plan", lambda _run, _payload, plan, **_kwargs: executed.append(plan))
+    agent_runs.start_planned_run(run_id, valid_payload(), confirm_plan=False, agent_preset="leader")
+    assert executed
+    agent_runs.continue_with_plan(run_id, valid_payload(), [{"id": "coder", "task": "approved"}])
+    assert len(executed) == 2
+
+
+def test_prior_output_fallback_and_auto_resume_corrupt_files(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = {
+        "plan": [{"id": "coder", "task": "code"}],
+        "agentOutputs": {"coder": {"id": "coder"}, "extra": {"id": "extra"}},
+    }
+    assert agent_runs.prior_outputs_for_agent(run, "missing") == [{"id": "coder"}, {"id": "extra"}]
+
+    agent_runs.AGENT_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    (agent_runs.AGENT_RUNS_DIR / "run_broken.json").write_text("{", encoding="utf-8")
+    (agent_runs.AGENT_RUNS_DIR / "run_list.json").write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(agent_runs, "AGENT_RUNTIME_AUTO_RESUME", True)
+    assert agent_runs.resume_orphaned_runs() == 0

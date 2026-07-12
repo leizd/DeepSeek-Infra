@@ -48,7 +48,7 @@ def test_approved_decision_resolves_all_architecture_blockers() -> None:
     report = readiness.evaluate_readiness(ROOT, _requirements())
 
     assert _architecture_blockers(report) == set()
-    assert report["blocker_ids"] == ["python_measured_coverage"]
+    assert report["blocker_ids"] == []
 
 
 def test_empty_default_on_set_is_valid() -> None:
@@ -106,15 +106,15 @@ def test_decision_file_does_not_change_runtime_defaults() -> None:
     assert "DEEPSEEK_RUST_" not in compose_text
 
 
-def test_coverage_blocker_remains_after_architecture_approval() -> None:
+def test_coverage_blocker_is_resolved_after_3_3_2_uplift() -> None:
     report = readiness.evaluate_readiness(ROOT, _requirements())
 
-    assert report["blocker_ids"] == ["python_measured_coverage"]
-    assert report["ready"] is False
+    assert report["blocker_ids"] == []
+    assert report["ready"] is True
 
 
-def test_strict_mode_still_fails_only_for_coverage() -> None:
+def test_strict_mode_passes_after_coverage_uplift() -> None:
     report = readiness.evaluate_readiness(ROOT, _requirements())
 
-    assert report["blocker_ids"] == ["python_measured_coverage"]
-    assert readiness.main(["--root", str(ROOT), "--strict"]) == 1
+    assert report["blocker_ids"] == []
+    assert readiness.main(["--root", str(ROOT), "--strict"]) == 0

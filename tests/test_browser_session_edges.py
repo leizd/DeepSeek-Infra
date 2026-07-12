@@ -74,3 +74,15 @@ def test_controller_registry_reuses_and_closes_controller(tmp_path: Path, monkey
     controller.close_controller(created.browser_session_id)
     controller.close_controller(created.browser_session_id)
     assert closed == [True]
+
+
+def test_session_close_profile_cleanup_error_and_reset_containment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(session.config, "BROWSER_PROFILES_DIR", tmp_path)
+    created = session.create_session(engine="static")
+    monkeypatch.setattr(session.shutil, "rmtree", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("locked")))
+    assert session.close_session(created.browser_session_id).status == "closed"
+    with session._lock:
+        session._sessions["bad"] = session.BrowserSession("bad")
+    monkeypatch.setattr(session, "close_session", lambda _session_id: (_ for _ in ()).throw(AppError("bad close")))
+    session.reset_sessions_for_tests()
+    assert session._sessions == {}

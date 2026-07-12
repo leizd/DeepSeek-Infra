@@ -224,6 +224,8 @@ def list_segments(media_id: str) -> list[dict[str, Any]]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
+    if not isinstance(data, dict):
+        return []
     raw = data.get("segments")
     segments = raw if isinstance(raw, list) else []
     result = []
@@ -255,6 +257,8 @@ def _load_store() -> list[dict[str, Any]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, dict):
         return []
     raw_items = data.get("media")
     rows = raw_items if isinstance(raw_items, list) else []

@@ -177,3 +177,99 @@ def test_semantic_cache_attachments_use_exact_match_only(tmp_settings: Any, monk
     plain_hit = semantic_cache.lookup({"messages": [{"role": "user", "content": "Q2"}]}, body_2)
     assert plain_hit.hit is True
     assert plain_hit.diagnostics["exactMatchOnly"] is False
+
+
+def test_semantic_cache_empty_large_and_lookup_error_paths(tmp_settings: Any, monkeypatch: Any) -> None:
+    payload = {"messages": [{"role": "user", "content": "q"}]}
+    body = {"model": "deepseek-v4-pro", "messages": []}
+    monkeypatch.setattr(semantic_cache, "prompt_text_for_body", lambda _: "")
+    assert semantic_cache.lookup(payload, body).diagnostics["skippedReason"] == "empty_prompt"
+    monkeypatch.setattr(semantic_cache, "prompt_text_for_body", lambda _: "x" * 20)
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_MAX_PROMPT_CHARS", 10)
+    assert semantic_cache.lookup(payload, body).diagnostics["skippedReason"] == "prompt_too_large"
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_MAX_PROMPT_CHARS", 100)
+    monkeypatch.setattr(semantic_cache, "embed_text", lambda _: (_ for _ in ()).throw(RuntimeError("embedding corrupt")))
+    result = semantic_cache.lookup(payload, body)
+    assert result.diagnostics["skippedReason"] == "lookup_error"
+    assert "embedding corrupt" in result.diagnostics["lastError"]
+
+
+def test_semantic_cache_expired_and_bad_record_paths(tmp_settings: Any, monkeypatch: Any) -> None:
+    payload = {"messages": [{"role": "user", "content": "q"}]}
+    body = {"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "q"}]}
+    monkeypatch.setattr(semantic_cache, "embed_text", lambda _: [1.0])
+    expired = {"updated_at": 1, "prompt_hash": "other", "embedding": "[1]"}
+    monkeypatch.setattr(semantic_cache, "candidate_rows", lambda *_: [expired])
+    monkeypatch.setattr(semantic_cache.time, "time", lambda: 10_000_000)
+    assert semantic_cache.lookup(payload, body).hit is False
+
+    prompt_hash = semantic_cache.stable_hash(semantic_cache.prompt_text_for_body(body))
+    bad = {
+        "updated_at": 10_000_000,
+        "prompt_hash": prompt_hash,
+        "embedding": "[1]",
+        "response_json": "[]",
+        "cache_id": "bad",
+        "quality_score": 1,
+        "hit_count": 0,
+        "usage_json": "{}",
+    }
+    monkeypatch.setattr(semantic_cache, "candidate_rows", lambda *_: [bad])
+    assert semantic_cache.lookup(payload, body).diagnostics["skippedReason"] == "bad_cache_record"
+
+
+def test_semantic_cache_store_skip_and_failure_matrix(tmp_settings: Any, monkeypatch: Any) -> None:
+    payload = {"messages": [{"role": "user", "content": "q"}]}
+    body = {"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "q"}]}
+    monkeypatch.setattr(semantic_cache, "prompt_text_for_body", lambda _: "")
+    assert semantic_cache.store(payload, body, {"content": "answer"})["storeSkippedReason"] == "empty_prompt_or_response"
+    monkeypatch.setattr(semantic_cache, "prompt_text_for_body", lambda _: "prompt")
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_MAX_PROMPT_CHARS", 3)
+    assert semantic_cache.store(payload, body, {"content": "answer"})["storeSkippedReason"] == "prompt_too_large"
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_MAX_PROMPT_CHARS", 100)
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_MAX_RESPONSE_CHARS", 3)
+    assert semantic_cache.store(payload, body, {"content": "answer"})["storeSkippedReason"] == "response_too_large"
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_MAX_RESPONSE_CHARS", 100)
+    assert semantic_cache.store(payload, body, {"content": "answer", "search": {"results": []}})["storeSkippedReason"] == "side_effect_response"
+    monkeypatch.setattr(semantic_cache, "embed_text", lambda _: (_ for _ in ()).throw(RuntimeError("store db failure")))
+    failed = semantic_cache.store(payload, body, {"content": "answer"})
+    assert failed["storeSkippedReason"] == "store_error"
+
+
+def test_semantic_cache_status_clear_touch_and_skip_reason_failures(tmp_settings: Any, monkeypatch: Any) -> None:
+    monkeypatch.setattr(semantic_cache, "connect_db", lambda: (_ for _ in ()).throw(RuntimeError("db locked")))
+    assert semantic_cache.status()["items"] == 0
+    assert semantic_cache.clear()["ok"] is False
+    semantic_cache.touch_cache("missing")
+    assert "db locked" in semantic_cache._last_error
+
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_ENABLED", False)
+    assert semantic_cache.skip_reason({}, {}) == "disabled"
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_ENABLED", True)
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_ATTACHMENTS", False)
+    attached = {"messages": [{"role": "user", "content": "q", "attachments": [{"name": "x"}]}]}
+    assert semantic_cache.skip_reason(attached, {}) == "attachments"
+    assert semantic_cache.skip_reason({}, {"tool_choice": "auto"}) == "tool_choice_enabled"
+    assert semantic_cache.skip_reason({}, {"stream_options": {"include_usage": True}}) == ""
+
+
+def test_semantic_cache_scope_quality_decoders_and_schema_migration() -> None:
+    assert semantic_cache.scope_for({"projectId": "alpha"}) == "project:alpha"
+    assert semantic_cache.quality_score("") == 0.0
+    assert semantic_cache.quality_score("abc") == 0.1
+    assert semantic_cache.decode_embedding("not json") == []
+    assert semantic_cache.decode_embedding("{}") == []
+    assert semantic_cache.decode_embedding('[1,"bad",null]') == [1.0, 0.0, 0.0]
+    assert semantic_cache.decode_json("not json") == {}
+
+    class FakeConn:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def execute(self, statement: str) -> Any:
+            self.statements.append(statement)
+            return type("Rows", (), {"fetchall": lambda self: [{"name": "scope"}]})()
+
+    conn = FakeConn()
+    semantic_cache._ensure_columns(conn)  # type: ignore[arg-type]
+    assert sum("ALTER TABLE" in statement for statement in conn.statements) == 3

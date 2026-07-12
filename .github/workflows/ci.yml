@@ -23,7 +23,7 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: ruff check .
       - run: mypy .
-      - run: pytest --cov --cov-report=term-missing --cov-report=json:artifacts/coverage.json --cov-fail-under=90
+      - run: pytest --cov --cov-report=term-missing --cov-report=json:artifacts/coverage.json --cov-fail-under=95
       - if: matrix.python == '3.12'
         run: python scripts/report_coverage_debt.py --coverage artifacts/coverage.json --json-out artifacts/coverage-debt.json
       - if: matrix.python == '3.12'

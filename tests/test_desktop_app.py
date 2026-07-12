@@ -139,3 +139,28 @@ def test_show_startup_error_uses_stderr() -> None:
     with patch.object(desktop_app.sys, "stderr", stream):
         desktop_app.show_startup_error(RuntimeError("boom"))
     assert "failed to start: boom" in stream.getvalue()
+
+
+def test_show_startup_error_falls_back_to_tk_dialog() -> None:
+    calls: list[object] = []
+
+    class Root:
+        def withdraw(self) -> None:
+            calls.append("withdraw")
+
+        def destroy(self) -> None:
+            calls.append("destroy")
+
+    tkinter = ModuleType("tkinter")
+    tkinter.Tk = lambda: Root()  # type: ignore[attr-defined]
+    tkinter.messagebox = SimpleNamespace(showerror=lambda title, message: calls.append((title, message)))  # type: ignore[attr-defined]
+    with patch.object(desktop_app.sys, "stderr", None), patch.dict(sys.modules, {"tkinter": tkinter}):
+        desktop_app.show_startup_error(RuntimeError("boom"))
+    assert calls[0] == "withdraw"
+    assert calls[-1] == "destroy"
+    assert any(isinstance(item, tuple) and "boom" in item[1] for item in calls)
+
+
+def test_show_startup_error_ignores_missing_tk_when_stderr_unavailable() -> None:
+    with patch.object(desktop_app.sys, "stderr", None), patch.dict(sys.modules, {"tkinter": None}):
+        desktop_app.show_startup_error(RuntimeError("boom"))
