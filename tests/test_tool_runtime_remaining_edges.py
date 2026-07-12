@@ -268,7 +268,6 @@ def test_locked_http_connections_use_pinned_address(monkeypatch: pytest.MonkeyPa
     assert isinstance(tools.public_http_connection(target, 2), tools.LockedHTTPConnection)
 
     context = SimpleNamespace(wrap_socket=lambda sock, *, server_hostname: ("tls", sock, server_hostname))
-    monkeypatch.setattr(tools.ssl, "create_default_context", lambda: context)
     secure_target = tools.PublicUrlTarget(
         url="https://example.com/",
         scheme="https",
@@ -279,6 +278,7 @@ def test_locked_http_connections_use_pinned_address(monkeypatch: pytest.MonkeyPa
         host_header="example.com",
     )
     https = tools.LockedHTTPSConnection(secure_target, 2)
+    setattr(https, "_context", context)
     https.connect()
     assert https.sock == ("tls", fake_socket, "example.com")
     assert isinstance(tools.public_http_connection(secure_target, 2), tools.LockedHTTPSConnection)

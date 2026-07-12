@@ -215,7 +215,7 @@ def test_docx_dispatch_empty_text_and_cache_index_corruption(tmp_settings: Path,
         if candidate == path and not kwargs.get("follow_symlinks"):
             raise PermissionError("denied")
         return original_stat(candidate, *args, **kwargs)
-    with patch.object(Path, "stat", denied_stat), pytest.raises(AppError, match="unreadable"):
+    with patch.object(Path, "exists", return_value=True), patch.object(Path, "stat", denied_stat), pytest.raises(AppError, match="unreadable"):
         files.load_cached_file(file_id)
 
 
