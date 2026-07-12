@@ -2,10 +2,10 @@
 
 ![版本](https://img.shields.io/badge/version-3.3.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
-![Coverage Gate](https://img.shields.io/badge/coverage%20gate-90%25-brightgreen)
+![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> Rust core migration is now in the 3.3.1 pre-4.0 readiness track. [ADR-0040](docs/adr/ADR-0040-hybrid-runtime-architecture.md) approves a Python-first hybrid 4.0 architecture: Python FastAPI remains the default runtime, all Rust delegates remain opt-in, and Python fallback is supported throughout 4.x. The repository is still **not ready for 4.0.0-rc.1** because measured Python coverage is 90.52% against the 95% RC target. The current CI gate is 90%; branch coverage is recorded without a separate blocking threshold. See [the 4.0 RC readiness matrix](docs/4_0_RC_READINESS.md).
+> Rust core migration is now in the 3.3.2 pre-4.0 readiness track. [ADR-0040](docs/adr/ADR-0040-hybrid-runtime-architecture.md) approves a Python-first hybrid 4.0 architecture: Python FastAPI remains the default runtime, all Rust delegates remain opt-in, and Python fallback is supported throughout 4.x. Two consecutive full suites measured 95.3428% and 95.3396%, so the repository is **ready for 4.0.0-rc.1** with a 95% CI gate. Branch coverage is recorded without a separate blocking threshold. This milestone proves readiness but does not create an RC tag. See [the 4.0 RC readiness matrix](docs/4_0_RC_READINESS.md).
 
 ## 30 秒概览
 

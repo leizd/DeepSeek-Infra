@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from email.message import Message
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -343,3 +343,91 @@ def test_browser_dispatch_rejects_unknown_action(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(actions, "controller_for", lambda _: _DispatchController())
     with pytest.raises(AppError, match="Unsupported browser action"):
         actions._dispatch("unknown", {}, session=browser_session)
+
+
+def test_browser_action_facade_payload_success_media_and_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(AppError):
+        actions.execute_browser_action([])  # type: ignore[arg-type]
+    browser_session = BrowserSession("browser-action", current_url="https://example.test")
+    monkeypatch.setattr(actions, "create_session", lambda **_kwargs: browser_session)
+    monkeypatch.setattr(actions.safety, "evaluate_action", lambda _request: safety.BrowserSafetyDecision("open_url", safety.ALLOW, "low"))
+    audits: list[str] = []
+    monkeypatch.setattr(actions.safety, "audit_decision", lambda _decision, _request, **kwargs: audits.append(str(kwargs.get("outcome"))))
+    monkeypatch.setattr(actions, "_dispatch", lambda *_args, **_kwargs: {"url": "https://example.test/file", "downloadMedia": {"media": {"mediaId": "m1"}}})
+    result = actions.execute_browser_action({"action": "open_url", "url": "https://example.test/file"})
+    assert result["ok"] is True and audits[-1] == "pass"
+
+    monkeypatch.setattr(actions, "_dispatch", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("browser failed")))
+    with pytest.raises(RuntimeError):
+        actions.execute_browser_action({"action": "open_url", "url": "https://example.test/file"})
+    assert browser_session.status == "failed" and audits[-1] == "failed"
+
+
+def test_browser_action_denial_existing_session_and_public_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    browser_session = BrowserSession("browser-existing")
+    monkeypatch.setattr(actions, "get_session", lambda _session_id: browser_session)
+    monkeypatch.setattr(
+        actions.safety,
+        "evaluate_action",
+        lambda _request: safety.BrowserSafetyDecision("click", safety.NEEDS_CONFIRMATION, "high", ("confirm",)),
+    )
+    monkeypatch.setattr(actions.safety, "audit_decision", lambda *_args, **_kwargs: None)
+    result = actions.execute_browser_action({"action": "click", "sessionId": "browser-existing"})
+    assert result["code"] == "requires_confirmation"
+    public = actions._public_page({"url": "u", "title": "t", "text": "x" * 30_000, "selector": "body"})
+    assert len(public["text"]) == 20_000
+
+
+def test_browser_snapshot_empty_page_and_download_half_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(actions.snapshot.schema, "new_media_id", lambda: "media_page")
+    monkeypatch.setattr(actions.snapshot.library, "save_text_source", lambda *_args: "objects/media_page/source.html")
+    monkeypatch.setattr(actions.snapshot.library, "register_media", lambda **kwargs: {"mediaId": kwargs["media_id"]})
+    monkeypatch.setattr(actions.snapshot.library, "save_segments", lambda _media_id, segments: segments)
+    monkeypatch.setattr(actions.snapshot.indexer, "index_media_segments", lambda *_args: 0)
+    monkeypatch.setattr(actions.snapshot.library, "update_media", lambda _media_id, _patch: {"mediaId": _media_id})
+    saved = actions.snapshot.save_page_snapshot({"url": "https://example.test", "html": "<html/>"}, session_id="browser-x")
+    assert saved["segments"] == []
+
+    download = tmp_path / "payload.exe"
+    download.write_bytes(b"binary")
+    monkeypatch.setattr(actions.snapshot.schema, "validate_media_mime_type", lambda *_args, **_kwargs: (_ for _ in ()).throw(AppError("unsupported")))
+    from deepseek_infra.infra.workspace import artifacts
+
+    monkeypatch.setattr(artifacts, "register_artifact", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("write failed")))
+    registered = actions.snapshot.register_download({"path": str(download), "mimeType": "application/exe"}, session_id="browser-x", project_id="proj_x")
+    assert registered["media"] is None and registered["artifact"] is None
+
+
+def test_browser_safety_invalid_url_parser_and_hash_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(safety, "urlsplit", lambda _url: (_ for _ in ()).throw(ValueError("bad")))
+    assert safety.evaluate_url_safety("https://example.test") == (False, "invalid url")
+    monkeypatch.setattr(safety.json, "dumps", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad")))
+    assert safety.normalized_args_hash({"x": 1}).startswith("sha256:")
+
+
+def test_browser_safety_global_ip_and_invalid_file_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(safety.config, "BROWSER_ALLOW_PRIVATE_HOSTS", False)
+    assert safety.evaluate_url_safety("https://8.8.8.8") == (True, "")
+    monkeypatch.setattr(Path, "resolve", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("bad path")))
+    assert safety.evaluate_file_url_safety("/tmp/file") == (False, "invalid file url")
+
+
+def test_playwright_controller_constructor_uses_existing_or_new_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    existing_page = object()
+    context = SimpleNamespace(pages=[existing_page], new_page=lambda: (_ for _ in ()).throw(AssertionError("not needed")))
+    runtime = SimpleNamespace(chromium=SimpleNamespace(launch_persistent_context=lambda **_kwargs: context))
+    sync = SimpleNamespace(start=lambda: runtime)
+    module = ModuleType("playwright.sync_api")
+    module.TimeoutError = RuntimeError  # type: ignore[attr-defined]
+    module.sync_playwright = lambda: sync  # type: ignore[attr-defined]
+    package = ModuleType("playwright")
+    package.sync_api = module  # type: ignore[attr-defined]
+    monkeypatch.setitem(__import__("sys").modules, "playwright", package)
+    monkeypatch.setitem(__import__("sys").modules, "playwright.sync_api", module)
+    instance = controller.PlaywrightController(BrowserSession("browser-init", profile_dir=str(tmp_path / "profile")))
+    assert cast(Any, instance)._page is existing_page
+
+    empty_context = SimpleNamespace(pages=[], new_page=lambda: "new-page")
+    runtime.chromium.launch_persistent_context = lambda **_kwargs: empty_context
+    instance = controller.PlaywrightController(BrowserSession("browser-new", profile_dir=str(tmp_path / "profile2")))
+    assert cast(Any, instance)._page == "new-page"

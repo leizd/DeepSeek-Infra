@@ -31,7 +31,7 @@ def test_requirements_manifest_has_owned_classified_entries() -> None:
     data = _requirements()
 
     assert data["target_version"] == "4.0.0-rc.1"
-    assert data["baseline_version"] == "3.3.1"
+    assert data["baseline_version"] == "3.3.2"
     assert len(data["requirements"]) >= 15
     for item in data["requirements"]:
         assert item["id"]
@@ -42,28 +42,28 @@ def test_requirements_manifest_has_owned_classified_entries() -> None:
         assert item["description"]
 
 
-def test_rc_coverage_target_is_distinct_from_current_gate() -> None:
+def test_rc_coverage_target_matches_promoted_current_gate() -> None:
     items = _items_by_id()
 
-    assert items["python_coverage_gate"]["required"] == 90.0
+    assert items["python_coverage_gate"]["required"] == 95.0
     assert items["python_measured_coverage"]["required"] == 95.0
-    assert items["python_measured_coverage"]["observed"] == 90.52
+    assert items["python_measured_coverage"]["observed"] == 95.33
     assert items["python_measured_coverage"]["blocking"] is True
 
 
-def test_current_readiness_report_is_honestly_blocked() -> None:
+def test_current_readiness_report_is_ready() -> None:
     report = readiness.evaluate_readiness(ROOT, _requirements())
 
-    assert report["ready"] is False
-    assert report["blocker_ids"] == ["python_measured_coverage"]
+    assert report["ready"] is True
+    assert report["blocker_ids"] == []
     assert report["summary"]["advisories"] >= 1
 
     rendered = readiness.render_report(report)
-    assert "BLOCK  Python measured coverage: 90.52% < 95.00%" in rendered
-    assert "Decision: NOT READY FOR 4.0.0-rc.1" in rendered
+    assert "PASS   Python measured coverage: 95.33% >= 95.00%" in rendered
+    assert "Decision: READY FOR 4.0.0-rc.1" in rendered
 
 
-def test_coverage_override_resolves_the_only_remaining_blocker() -> None:
+def test_coverage_override_keeps_readiness_green() -> None:
     report = readiness.evaluate_readiness(ROOT, _requirements(), coverage_override=95.0)
 
     assert report["blocker_ids"] == []
@@ -76,17 +76,17 @@ def test_report_only_writes_json_without_failing(tmp_path: Path) -> None:
     completed = _run_checker("--report-only", "--json-out", str(report_path))
 
     assert completed.returncode == 0, completed.stderr
-    assert "Decision: NOT READY FOR 4.0.0-rc.1" in completed.stdout
+    assert "Decision: READY FOR 4.0.0-rc.1" in completed.stdout
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["ready"] is False
+    assert report["ready"] is True
     assert report["target_version"] == "4.0.0-rc.1"
 
 
-def test_strict_mode_fails_while_blockers_remain() -> None:
+def test_strict_mode_passes_when_blockers_are_resolved() -> None:
     completed = _run_checker("--strict")
 
-    assert completed.returncode == 1
-    assert "Decision: NOT READY FOR 4.0.0-rc.1" in completed.stdout
+    assert completed.returncode == 0
+    assert "Decision: READY FOR 4.0.0-rc.1" in completed.stdout
 
 
 def test_live_ci_results_override_recorded_baseline() -> None:
@@ -116,7 +116,7 @@ def test_workflow_uses_report_only_and_release_branch_strict_modes() -> None:
 def test_readiness_document_records_component_recommendations() -> None:
     document = (ROOT / "docs/4_0_RC_READINESS.md").read_text(encoding="utf-8")
 
-    assert "NOT READY FOR 4.0.0-rc.1" in document
+    assert "READY FOR 4.0.0-rc.1" in document
     assert "Gateway | Models and non-streaming chat delegation" in document
     assert "MCP | JSON-RPC initialize" in document
     assert "Policy | Stable deny/audit contract" in document

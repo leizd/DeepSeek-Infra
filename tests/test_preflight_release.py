@@ -21,10 +21,10 @@ def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) 
     (root / "README.md").write_text(f"![版本](https://img.shields.io/badge/version-{version}-blue)\n", encoding="utf-8")
     (root / "CHANGELOG.md").write_text(f"## [{version}] - Release Readiness\n\nbody\n", encoding="utf-8")
     (root / "Dockerfile").write_text(f"docker build -t deepseek-infra:{version} .\n", encoding="utf-8")
-    (root / "pyproject.toml").write_text("[tool.coverage.report]\nfail_under = 90\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text("[tool.coverage.report]\nfail_under = 95\n", encoding="utf-8")
     workflows = root / ".github" / "workflows"
     workflows.mkdir(parents=True)
-    (workflows / "ci.yml").write_text("      - run: pytest --cov --cov-fail-under=90\n", encoding="utf-8")
+    (workflows / "ci.yml").write_text("      - run: pytest --cov --cov-fail-under=95\n", encoding="utf-8")
     (root / "docs").mkdir()
     (root / "docs" / "IMPLEMENTATION_STATUS.md").write_text(f"适用版本：v{version}。\n", encoding="utf-8")
     (root / "docs" / "AGENT_EVAL.md").write_text("agent eval\n", encoding="utf-8")
@@ -1196,7 +1196,7 @@ def test_preflight_fails_when_security_corpus_report_is_missing(tmp_path: Path) 
 def test_preflight_fails_when_quality_gate_evidence_regresses(tmp_path: Path) -> None:
     preflight = _load_preflight()
     root = _skeleton(tmp_path, "2.4.2")
-    (root / "pyproject.toml").write_text("[tool.coverage.report]\nfail_under = 89\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text("[tool.coverage.report]\nfail_under = 94\n", encoding="utf-8")
     result = next(r for r in preflight.run_preflight(root, "2.4.2") if r.name == "quality_gate_evidence")
     assert result.status == "fail"
     assert "coverage fail_under" in result.detail

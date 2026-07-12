@@ -177,3 +177,101 @@ def test_cleanup_file_cache_tolerates_directory_and_file_io_errors(tmp_settings:
 
     with patch.object(Path, "stat", selective_stat):
         files.cleanup_file_cache()
+
+
+def test_cached_context_budget_and_chunk_selection_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    cached = {"id": "a" * 32, "name": "large.txt", "kind": "text", "chunks": [{"text": ""}, {"text": "abcdef", "index": 1}]}
+    with patch.object(files, "select_file_chunk_indices", return_value=[0, 1]):
+        rendered = files.format_cached_file_context(1, cached, "query", char_budget=3)
+    assert "abc" in rendered and "abcdef" not in rendered
+
+    chunks = [{"text": f"chunk {index} " + "x" * 100, "index": index} for index in range(20)]
+    monkeypatch.setattr(files.local_rag, "search_file_chunks", lambda *_args, **_kwargs: [10, 19])
+    chosen = files.select_file_chunk_indices(chunks, "summarize all", char_budget=350, file_id="a" * 32)
+    assert chosen and len(chosen) <= files.FILE_CONTEXT_MAX_CHUNKS
+
+    monkeypatch.setattr(files, "hybrid_chunk_score", lambda *_args: 0)
+    monkeypatch.setattr(files.local_rag, "search_file_chunks", lambda *_args, **_kwargs: [])
+    assert files.select_file_chunk_indices([{"text": "x" * 100}] * 12, "specific", char_budget=10) == [0]
+
+
+def test_docx_dispatch_empty_text_and_cache_index_corruption(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(files, "extract_docx_text", lambda _: "")
+    with pytest.raises(AppError, match="No readable text"):
+        files.extract_uploaded_file("empty.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", b"zip")
+
+    file_id = "b" * 32
+    path = files.FILE_CACHE_DIR / f"{file_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{", encoding="utf-8")
+    with pytest.raises(AppError, match="unreadable"):
+        files._load_cached_file_impl_from_path(path)
+    path.write_text("[]", encoding="utf-8")
+    with pytest.raises(AppError, match="invalid"):
+        files._load_cached_file_impl_from_path(path)
+
+    original_stat = Path.stat
+    def denied_stat(candidate: Path, *args: Any, **kwargs: Any) -> Any:
+        if candidate == path and not kwargs.get("follow_symlinks"):
+            raise PermissionError("denied")
+        return original_stat(candidate, *args, **kwargs)
+    with patch.object(Path, "stat", denied_stat), pytest.raises(AppError, match="unreadable"):
+        files.load_cached_file(file_id)
+
+
+def test_pdf_page_cache_half_failures_and_search_truncation(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    file_id = "c" * 32
+    source = tmp_settings / f"{file_id}{files.FILE_SOURCE_SUFFIX}"
+    source.write_bytes(b"pdf")
+    cached = {"id": file_id, "name": "x.pdf", "kind": "pdf", "type": "application/pdf", "pageCount": 3, "chunks": []}
+    monkeypatch.setattr(files, "cached_file_source", lambda *_args, **_kwargs: (cached, source))
+    monkeypatch.setattr(files, "render_pdf_page_png", lambda *_args, **_kwargs: (b"png", 2, 4))
+    original_stat = Path.stat
+    original_write = Path.write_bytes
+    def flaky_stat(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if ".page-" in path.name:
+            raise PermissionError("cache stat")
+        return original_stat(path, *args, **kwargs)
+    def flaky_write(path: Path, data: bytes) -> int:
+        if ".page-" in path.name:
+            raise PermissionError("cache write")
+        return original_write(path, data)
+    with patch.object(Path, "stat", flaky_stat), patch.object(Path, "write_bytes", flaky_write):
+        _, png, page, count = files.file_page_image(file_id, page=3, scale=1.0)
+    assert (png, page, count) == (b"png", 2, 4)
+
+    query = "x" * 201
+    monkeypatch.setattr(files, "load_cached_file", lambda *_args, **_kwargs: {**cached, "pageTexts": [{"page": 1, "text": query}]})
+    monkeypatch.setattr(files, "FILE_PAGE_SEARCH_MAX_RESULTS", 1)
+    result = files.file_page_search(file_id, query=query)
+    assert len(result["query"]) == 200 and result["truncated"] is True
+
+
+def test_zip_bomb_missing_entry_and_document_corruption_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    unsafe = types.SimpleNamespace(infolist=lambda: [types.SimpleNamespace(file_size=1, compress_size=0, filename="x")])
+    with pytest.raises(AppError, match="unsafe compression ratio"):
+        files.validate_zip_size(unsafe)  # type: ignore[arg-type]
+    missing = types.SimpleNamespace(getinfo=lambda _: (_ for _ in ()).throw(KeyError("missing")))
+    with pytest.raises(AppError, match="Missing file entry"):
+        files.safe_zip_read(missing, "missing.xml")  # type: ignore[arg-type]
+    with pytest.raises(AppError, match="Invalid docx"):
+        files.extract_docx_text(b"not zip")
+    with pytest.raises(AppError, match="Invalid pptx"):
+        files.extract_pptx_text(b"not zip")
+    with pytest.raises(AppError, match="Invalid xlsx"):
+        files.extract_xlsx_text(b"not zip")
+
+
+def test_html_skip_breaks_and_pdf_parser_error_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    html_text = files.extract_html_text(b"<div>Hello<br>world<script>secret</script></div>")
+    assert "Hello" in html_text and "world" in html_text and "secret" not in html_text
+
+    class BrokenReader:
+        def __init__(self, _: object) -> None:
+            raise RuntimeError("corrupt pdf")
+    broken = types.ModuleType("pypdf")
+    broken.PdfReader = BrokenReader  # type: ignore[attr-defined]
+    broken2 = types.ModuleType("PyPDF2")
+    broken2.PdfReader = BrokenReader  # type: ignore[attr-defined]
+    with patch.dict(sys.modules, {"pypdf": broken, "PyPDF2": broken2}), pytest.raises(AppError, match="Could not extract"):
+        files.extract_pdf_page_texts_native(b"pdf")

@@ -2,13 +2,23 @@ from __future__ import annotations
 
 import json
 import threading
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from deepseek_infra.core.config import MULTI_AGENT_TIMEOUT_SECONDS
 from deepseek_infra.infra.agent_runtime import multi_agent
 from deepseek_infra.infra.tool_runtime import tools
 from deepseek_infra.infra.gateway.deepseek_client import SearchBudget, TokenBudget
+
+
+class _Span332:
+    span_id = "span-332"
+
+    def finish(self, **_: Any) -> None:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -2233,3 +2243,73 @@ def test_stream_agent_plan_dag_mode_runs_layers_in_dependency_order() -> None:
     assert set(calls[1:3]) == {"coder", "reasoner"}
     assert calls[-1] == "critic"
     assert synth_calls == [True]
+
+
+def test_structured_empty_fallback_and_json_corruption_edges() -> None:
+    assert multi_agent._section_key_for_title("", exact=True) is None
+    assert multi_agent.parse_structured_agent_output("") == {"summary": "", "evidence": "", "risks": "", "full_output": ""}
+    assert multi_agent.fallback_agent_outputs()
+    assert multi_agent.build_prior_context([{"name": "empty", "content": "", "full_output": ""}]) == ""
+    assert multi_agent.search_source_note({"search": {"results": [None, {"url": ""}]}}) == ""
+    assert multi_agent.extract_json_object("not json and no object") == {}
+    assert multi_agent.extract_json_object("prefix {bad json} suffix") == {}
+
+
+def test_stream_multi_agent_records_internal_disconnect_and_cancelled_traces() -> None:
+    trace = SimpleNamespace(trace_id="trace-332", created=True)
+    events: list[dict[str, Any]] = []
+    with (
+        patch.object(multi_agent, "validate_deepseek_payload", return_value=("key", "deepseek-v4-pro", [])),
+        patch.object(multi_agent, "ensure_trace", return_value=trace),
+        patch.object(multi_agent, "start_span", return_value=_Span332()),
+        patch.object(multi_agent, "plan_agents", side_effect=RuntimeError("planner corrupt")),
+        patch.object(multi_agent, "finish_trace") as finish,
+    ):
+        multi_agent.stream_multi_agent({"messages": [{"role": "user", "content": "x"}]}, events.append)
+    assert events[-1]["code"] == "internal"
+    finish.assert_called_once()
+
+    cancelled = threading.Event()
+    with (
+        patch.object(multi_agent, "validate_deepseek_payload", return_value=("key", "deepseek-v4-pro", [])),
+        patch.object(multi_agent, "ensure_trace", return_value=trace),
+        patch.object(multi_agent, "start_span", return_value=_Span332()),
+        patch.object(multi_agent, "plan_agents", return_value=[{"id": "coder", "task": "code"}]),
+        patch.object(multi_agent, "stream_agent_plan", side_effect=BrokenPipeError),
+        patch.object(multi_agent, "finish_trace") as finish,
+    ):
+        multi_agent.stream_multi_agent({"messages": [{"role": "user", "content": "x"}]}, lambda _: None, cancel_event=cancelled)
+    assert cancelled.is_set()
+    finish.assert_called_once()
+
+
+def test_serial_and_parallel_agent_failures_become_degraded_outputs() -> None:
+    tier = [{"id": "coder", "task": "code"}]
+    with patch.object(multi_agent, "start_span", return_value=_Span332()), patch.object(multi_agent, "run_agent", side_effect=RuntimeError("worker failed")):
+        serial = multi_agent.execute_agent_tier(
+            {}, tier, prior_outputs=[], search_budget=SearchBudget(total_limit=1), emit_event=lambda _: None, parallel=False
+        )
+    assert serial[0]["failed"] is True
+
+    parallel_tier = [{"id": "coder", "task": "code"}, {"id": "reasoner", "task": "reason"}]
+    with patch.object(multi_agent, "start_span", return_value=_Span332()), patch.object(multi_agent, "run_agent", side_effect=RuntimeError("parallel failed")):
+        parallel = multi_agent.execute_agent_tier(
+            {}, parallel_tier, prior_outputs=[], search_budget=SearchBudget(total_limit=2), emit_event=lambda _: None, parallel=True
+        )
+    assert all(item["failed"] for item in parallel)
+
+
+def test_planner_and_synthesis_failures_have_stable_fallbacks() -> None:
+    with patch.object(multi_agent, "call_deepseek", side_effect=RuntimeError("planner down")):
+        assert multi_agent.plan_agents({}) == multi_agent.default_agent_plan()
+    with patch.object(multi_agent, "stream_deepseek", side_effect=RuntimeError("stream planner down")):
+        assert multi_agent.plan_agents({}, lambda _: None) == multi_agent.default_agent_plan()
+
+    with (
+        patch.object(multi_agent, "start_span", return_value=_Span332()),
+        patch.object(multi_agent, "synthesize_answer", side_effect=RuntimeError("synthesis down")),
+        pytest.raises(RuntimeError, match="synthesis down"),
+    ):
+        multi_agent.stream_synthesis_for_outputs(
+            {}, "deepseek-v4-pro", "question", [], search_budget=SearchBudget(total_limit=1), emit_event=lambda _: None
+        )

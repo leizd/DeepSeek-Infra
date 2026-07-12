@@ -42,3 +42,33 @@ def test_parse_natural_reminder_extracts_chinese_time() -> None:
 def test_parse_due_at_rejects_bad_value() -> None:
     with pytest.raises(Exception):
         reminders.parse_due_at("not a date")
+
+
+def test_reminder_corrupt_storage_delete_and_invalid_due_rows(tmp_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    reminders.REMINDERS_DIR.mkdir(parents=True)
+    reminders.REMINDERS_FILE.write_text("not-json", encoding="utf-8")
+    assert reminders.load_reminders() == []
+    reminders.REMINDERS_FILE.write_text("{}", encoding="utf-8")
+    assert reminders.load_reminders() == []
+    reminders.REMINDERS_FILE.write_text('[null,{"id":"bad","dueAt":"bad"},{"id":"done","dueAt":"2020-01-01T00:00:00+00:00","notified":true}]', encoding="utf-8")
+    assert reminders.due_reminders(datetime.now(timezone.utc)) == []
+    assert reminders.delete_reminder("") == 0
+    assert reminders.delete_reminder("missing") == 0
+
+    created = reminders.create_reminder({"title": "", "content": "x", "dueAt": datetime.now(timezone.utc).isoformat()})
+    assert reminders.delete_reminder(created["id"]) == 1
+    assert not reminders.REMINDERS_FILE.with_suffix(".tmp").exists()
+
+
+def test_reminder_due_time_timezone_and_natural_parser_edges() -> None:
+    with pytest.raises(Exception):
+        reminders.parse_due_at("")
+    assert reminders.parse_due_at("2026-01-01T10:00:00").endswith("+00:00")
+    assert reminders.parse_due_at("2026-01-01T10:00:00Z").endswith("+00:00")
+    assert reminders.parse_natural_reminder("ordinary text") is None
+    assert reminders.parse_natural_reminder("提醒 but no time") is None
+    now = datetime(2026, 1, 1, 20, 0)
+    parsed = reminders.parse_natural_reminder("晚上 9 点提醒我 test", now=now)
+    assert parsed is not None and "21:00:00" in parsed["dueAt"]
+    next_day = reminders.parse_natural_reminder("9 点提醒我 test", now=datetime(2026, 1, 1, 10, 0))
+    assert next_day is not None and "2026-01-02" in next_day["dueAt"]

@@ -184,3 +184,228 @@ def test_versioning_helpers_handle_corrupt_snapshots_and_renames(tmp_settings: P
     assert versioning._pack_tool_ids({"skills": [None, {"allowedTools": ["b", "", "a", "b"]}]}) == ["a", "b"]
     with patch.object(versioning, "eval_aware_upgrade_gate", side_effect=RuntimeError("missing report")):
         assert versioning._score_diff("skill", "skill_demo")["status"] == "unavailable"
+
+
+def test_catalog_crud_and_install_require_identifiers(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(AppError):
+        catalog.catalog_get("")
+    monkeypatch.setattr(catalog, "catalog_list", lambda: [])
+    with pytest.raises(AppError):
+        catalog.catalog_get("missing")
+    monkeypatch.setattr(catalog, "catalog_get", lambda _item_id: {"kind": "skill", "skillId": "skill_x"})
+    with pytest.raises(AppError):
+        catalog.catalog_install("skill_x")
+    with pytest.raises(AppError):
+        catalog.catalog_uninstall("skill_x")
+
+
+def test_catalog_install_and_uninstall_skill_binding_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    bindings = [
+        {"enabledSkills": [], "defaultSkill": "", "enabledPacks": [], "enabledPackVersions": []},
+        {"enabledSkills": ["skill_x", "skill_y"], "defaultSkill": "skill_x", "enabledPacks": [], "enabledPackVersions": []},
+    ]
+    monkeypatch.setattr(catalog.registry, "get_skill", lambda *_args, **_kwargs: {"skillId": "skill_x"})
+    monkeypatch.setattr(catalog.projects, "project_skill_binding", lambda _project_id: bindings.pop(0))
+    monkeypatch.setattr(catalog.projects, "set_project_skill_binding", lambda _project_id, enabled, **kwargs: {"enabled": enabled, **kwargs})
+    installed = catalog._install_skill("proj_x", "skill_x")
+    assert installed["enabled"] == ["skill_x"]
+    assert installed["default_skill"] == "skill_x"
+    uninstalled = catalog._uninstall_skill("proj_x", "skill_x")
+    assert uninstalled["enabled"] == ["skill_y"]
+    assert uninstalled["default_skill"] == "skill_y"
+
+
+def test_catalog_uninstall_pack_preserves_shared_and_skips_corrupt_pack(monkeypatch: pytest.MonkeyPatch) -> None:
+    def export_pack(pack_id: str) -> dict[str, Any]:
+        if pack_id == "pack_bad":
+            raise AppError("corrupt")
+        if pack_id == "pack_remove":
+            return {"skills": [{"skillId": "shared"}, {"skillId": "remove"}, None]}
+        return {"skills": [{"skillId": "shared"}]}
+
+    monkeypatch.setattr(catalog.registry, "export_pack", export_pack)
+    monkeypatch.setattr(
+        catalog.projects,
+        "project_skill_binding",
+        lambda _project_id: {
+            "enabledPacks": ["pack_remove", "pack_bad", "pack_keep"],
+            "enabledPackVersions": [{"packId": "pack_remove"}, {"packId": "pack_keep"}, None],
+            "enabledSkills": ["shared", "remove", "manual"],
+            "defaultSkill": "remove",
+        },
+    )
+    monkeypatch.setattr(catalog.projects, "set_project_skill_binding", lambda _project_id, enabled, **kwargs: {"enabled": enabled, **kwargs})
+    result = catalog._uninstall_pack("proj_x", "pack_remove")
+    assert result["enabled"] == ["shared", "manual"]
+    assert result["default_skill"] == "shared"
+    assert result["enabled_packs"] == ["pack_bad", "pack_keep"]
+
+
+def test_catalog_helpers_cover_local_metadata_and_filter_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    item = {"kind": "skill", "trustLevel": "trusted", "evalScore": 50, "requiredTools": [], "riskScore": 10}
+    assert catalog._matches_filters(item, {"trusted": True, "offline": True, "maxRiskScore": 10, "minEvalScore": 50})
+    assert catalog._filter_number(0) == 0.0
+    assert catalog._category_for({"name": "unknown"}, []) == "General"
+    assert catalog._tags_for("Office", ["fetch_url", "create_document", "search_files"], {"builtin": True}) == [
+        "artifact",
+        "builtin",
+        "filesystem",
+        "local",
+        "network",
+        "office",
+    ]
+    assert catalog._difficulty_for({"riskScore": 80}) == "advanced"
+    assert catalog._difficulty_for({"riskScore": 30}) == "intermediate"
+    assert catalog._difficulty_for({}) == "beginner"
+    assert catalog._use_cases_for("Unknown", {"name": "Demo"}) == ["local workspace task", "Demo"]
+    assert catalog._recommended_projects_for("Unknown") == ["workspace"]
+    assert catalog._artifact_types({"artifactPolicy": "bad"}) == []
+    assert catalog._dict_value([]) == {}
+    assert catalog._string_list("bad") == []
+    monkeypatch.setattr(catalog.projects, "list_projects", lambda: (_ for _ in ()).throw(AppError("unavailable")))
+    assert catalog._install_counts() == {"skills": {}, "packs": {}}
+
+
+def test_catalog_eval_and_install_counts_skip_partial_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        catalog,
+        "_load_eval_report",
+        lambda: {
+            "skillResults": [None, {"skillId": "s", "overallScore": 99}],
+            "packResults": [None, {"packId": "p", "overallScore": 88}],
+        },
+    )
+    assert catalog._eval_scores() == {"skills": {"s": 99.0}, "packs": {"p": 88.0}}
+    monkeypatch.setattr(
+        catalog.projects,
+        "list_projects",
+        lambda: [None, {"skills": "bad"}, {"skills": {"enabledSkills": ["s", ""], "enabledPacks": ["p", ""]}}],
+    )
+    counts = catalog._install_counts()
+    assert counts["skills"]["s"] == 1
+    assert counts["packs"]["p"] == 1
+
+
+def test_skill_eval_case_file_and_crud_validation_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    missing = tmp_path / "missing.jsonl"
+    assert skill_eval.load_case_file(missing) == []
+    path = tmp_path / "cases.jsonl"
+    path.write_text('\nnot-json\n[]\n{"caseId":"missing-skill"}\n{"caseId":"ok","skillId":"skill_x"}\n', encoding="utf-8")
+    assert [case["caseId"] for case in skill_eval.load_case_file(path)] == ["ok"]
+    monkeypatch.setattr(skill_eval, "user_eval_cases_path", lambda: path)
+    with pytest.raises(AppError):
+        skill_eval.save_eval_case({"skillId": "skill_x"})
+    with pytest.raises(AppError):
+        skill_eval.save_eval_case({"caseId": "c"})
+    with pytest.raises(AppError):
+        skill_eval.delete_eval_case("")
+    with pytest.raises(AppError):
+        skill_eval.delete_eval_case("absent")
+
+
+def test_skill_eval_markdown_policy_selection_and_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
+    markdown = skill_eval.markdown_summary(
+        {
+            "version": "3.3.2",
+            "status": "FAIL",
+            "summary": {"overallScore": 50, "passRate": 0.5, "caseCount": 2, "regressionCount": 1},
+            "skillResults": [None, {"skillId": "s", "overallScore": 50, "passRate": 0.5, "caseCount": 2, "failedCases": ["c"]}],
+            "packResults": [None, {"packId": "p", "overallScore": 50, "passRate": 0.5, "caseCount": 2, "failedCases": ["c"]}],
+        }
+    )
+    assert "| s | 50 |" in markdown and "| p | 50 |" in markdown
+    monkeypatch.setattr(skill_eval, "skill_allowed_tools", lambda _skill: ["allowed"])
+    monkeypatch.setattr(skill_eval, "evaluate_skill_tool", lambda *_args: type("Decision", (), {"allowed": True})())
+    assert not skill_eval._tool_policy_pass({}, {"requiredTools": ["missing"]})
+    assert not skill_eval._tool_policy_pass({}, {"deniedTools": ["allowed"]})
+    assert skill_eval._tool_policy_pass({}, {})
+    assert skill_eval._dedupe_cases([{"caseId": "c", "x": 1}, {"caseId": "c", "x": 2}]) == [{"caseId": "c", "x": 2}]
+    assert skill_eval._dedupe_case_results([{"caseId": "c"}, {"caseId": "d"}]) == [{"caseId": "c"}, {"caseId": "d"}]
+    assert skill_eval._string_list("a, b;c\nd") == ["a", "b", "c", "d"]
+    assert skill_eval._string_list(1) == []
+    assert skill_eval._ratio(1, 0) == 0.0
+
+
+def test_skill_eval_selection_pack_fallback_and_aggregation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(skill_eval.registry, "get_skill", lambda *_args, **_kwargs: {"skillId": "skill_x", "name": "X"})
+    monkeypatch.setattr(skill_eval.registry, "get_pack", lambda _pack_id: {"packId": "pack_x"})
+    monkeypatch.setattr(skill_eval.registry, "export_pack", lambda _pack_id: {"skills": [{"skillId": "skill_x"}]})
+    monkeypatch.setattr(skill_eval.registry, "list_skills", lambda **_kwargs: [{"skillId": "skill_x"}])
+    assert skill_eval._selected_skill_ids(scope="skill", skill_id="skill_x", pack_id="") == ["skill_x"]
+    assert skill_eval._selected_skill_ids(scope="pack", skill_id="", pack_id="pack_x") == ["skill_x"]
+    assert skill_eval._selected_skill_ids(scope="all", skill_id="", pack_id="") == ["skill_x"]
+    cases = skill_eval._cases_for_skills(["skill_x"], [{"caseId": "other", "skillId": "other"}])
+    assert cases[0]["caseId"] == "synthetic-skill_x"
+    aggregated = skill_eval._aggregate_result("skillId", "skill_x", "X", [], {})
+    assert aggregated["status"] == "FAIL" and aggregated["overallScore"] == 0.0
+    assert skill_eval._comparison_view_from_report({"skillResults": "bad", "packResults": "bad"}) == {"skillResults": [], "packResults": []}
+
+
+def test_versioning_missing_current_pack_and_public_revision_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.skills import registry
+
+    monkeypatch.setattr(versioning, "_load_skill_snapshots", lambda _skill_id: [])
+    monkeypatch.setattr(versioning, "_load_pack_snapshots", lambda _pack_id: [])
+    monkeypatch.setattr(registry, "get_skill", lambda *_args, **_kwargs: (_ for _ in ()).throw(AppError("missing")))
+    monkeypatch.setattr(registry, "get_pack", lambda *_args, **_kwargs: (_ for _ in ()).throw(AppError("missing")))
+    assert versioning.list_skill_versions("skill_missing") == []
+    assert versioning.list_pack_versions("pack_missing") == []
+    assert versioning._public_revision({"metadata": {"version": "1"}, "path": 3, "current": 1}) == {
+        "version": "1",
+        "path": "3",
+        "current": True,
+    }
+    assert versioning._strings("bad") == []
+
+
+def test_versioning_load_pack_snapshots_skips_malformed_payloads(tmp_settings: Path) -> None:
+    directory = versioning.pack_history_dir("pack_demo")
+    directory.mkdir(parents=True)
+    (directory / "wrong.json").write_text(json.dumps({"schemaVersion": versioning.PACK_REVISION_SCHEMA, "metadata": [], "pack": {}}), encoding="utf-8")
+    (directory / "valid.json").write_text(
+        json.dumps({"schemaVersion": versioning.PACK_REVISION_SCHEMA, "metadata": {"createdAt": "1"}, "pack": {"packId": "pack_demo"}}),
+        encoding="utf-8",
+    )
+    snapshots = versioning._load_pack_snapshots("pack_demo")
+    assert len(snapshots) == 1 and snapshots[0]["pack"]["packId"] == "pack_demo"
+
+
+def test_versioning_pack_rollback_builtin_and_custom_project_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.skills import registry
+
+    target = {"metadata": {"version": "1.0.0"}, "pack": {"packId": "pack_demo", "name": "Demo", "description": "Demo", "version": "1.0.0", "skills": []}}
+    monkeypatch.setattr(versioning, "_resolve_pack_revision", lambda *_args: target)
+    monkeypatch.setattr(registry, "get_pack", lambda _pack_id: {"packId": "pack_demo", "version": "2.0.0", "builtin": True})
+    with pytest.raises(AppError):
+        versioning.rollback_pack("pack_demo", "1.0.0")
+
+    monkeypatch.setattr(registry, "get_pack", lambda _pack_id: {"packId": "pack_demo", "version": "2.0.0", "builtin": False})
+    monkeypatch.setattr(versioning, "snapshot_pack", lambda pack, **_kwargs: {"revisionId": "rev", "version": pack.get("version")})
+    monkeypatch.setattr(versioning, "_pack_for_snapshot", lambda pack: dict(pack))
+    monkeypatch.setattr(registry, "write_custom_pack", lambda _pack: None)
+    monkeypatch.setattr(registry, "public_pack", lambda pack, **_kwargs: pack)
+    monkeypatch.setattr(versioning.projects, "enable_pack_for_project", lambda *_args, **_kwargs: {"enabled": True})
+    result = versioning.rollback_pack("pack_demo", "1.0.0", project_id="proj_demo")
+    assert result["projectBinding"] == {"enabled": True}
+    assert result["pack"]["version"] == "1.0.0"
+
+
+def test_versioning_pack_upgrade_current_custom_and_builtin_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.skills import registry
+
+    current = {"packId": "pack_demo", "version": "2.0.0", "builtin": False, "skills": []}
+    monkeypatch.setattr(registry, "get_pack", lambda _pack_id: current)
+    monkeypatch.setattr(versioning, "eval_aware_upgrade_gate", lambda **_kwargs: {"status": "PASS"})
+    assert versioning.upgrade_pack("pack_demo", "latest")["targetVersion"] == "2.0.0"
+
+    target = {"pack": {"packId": "pack_demo", "name": "Demo", "description": "Demo", "version": "1.0.0", "skills": []}}
+    monkeypatch.setattr(versioning, "_resolve_pack_revision", lambda *_args: target)
+    monkeypatch.setattr(versioning, "_pack_for_snapshot", lambda pack: dict(pack))
+    monkeypatch.setattr(registry, "write_custom_pack", lambda _pack: None)
+    monkeypatch.setattr(versioning, "snapshot_pack", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(versioning.projects, "enable_pack_for_project", lambda *_args, **_kwargs: {"enabled": True})
+    result = versioning.upgrade_pack("pack_demo", "1.0.0", project_id="proj_demo")
+    assert result["projectBinding"] == {"enabled": True}
+    current["builtin"] = True
+    with pytest.raises(AppError):
+        versioning.upgrade_pack("pack_demo", "1.0.0")

@@ -1,5 +1,20 @@
 # 更新日志
 
+## [3.3.2] - 95% Coverage and RC Readiness Rehearsal
+
+### Added
+
+- Added high-value failure and boundary tests for DeepSeek streaming and retry behavior, corrupt RAG/file caches and partial writes, launcher credentials, agent cancellation/concurrency/persistence, Skills security/versioning, Browser/OCR/media, MCP, and workspace persistence paths.
+- Added regression coverage for malformed media cache stores; non-object cache data now fails closed to an empty collection instead of raising an attribute error.
+
+### Changed
+
+- Raised combined statement-and-branch coverage to 95.3428% and 95.3396% across two consecutive full runs, preserving a 0.30 percentage-point RC safety margin.
+- Raised the Python CI, preflight, release-manifest, README, and release-script coverage gate from 90% to 95%; branch coverage remains measured without a separate threshold.
+- Reduced HIGH-risk coverage debt from the 3.3.1 baseline and did not expand coverage omit rules.
+- Marked the machine-readable 4.0 RC readiness contract READY after the coverage blocker cleared. ADR-0040, Python-only defaults, all four default-disabled Rust delegates, and Python fallback through 4.x remain unchanged.
+- Rehearses strict readiness without creating `4.0.0-rc.1`; version bump, frozen evidence, checksums, tag, and release notes remain a separate release change.
+
 ## [3.3.1] - Risk-weighted Python Coverage Uplift
 
 ### Added

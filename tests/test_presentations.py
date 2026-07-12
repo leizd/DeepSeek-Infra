@@ -144,3 +144,46 @@ class PresentationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_presentation_parser_and_layout_boundaries() -> None:
+    assert presentations._normalize_bullets({}) == []
+    assert presentations.infer_presentation_title("", "Product introduction")
+    slides = presentations.slides_from_outline_text(
+        "## Presentation outline\n## Slide 1: Overview\nplain body line\n  indented detail\n1. numbered detail\n```ignored",
+        topic="Product",
+    )
+    assert slides
+    assert presentations._looks_like_body_line("") is False
+    assert presentations._looks_like_body_line("PPT 大纲") is False
+    assert presentations._looks_like_body_line("| table |") is False
+    assert presentations._drop_duplicate_cover_slide([{"title": "only"}], "only") == [{"title": "only"}]
+    assert presentations._default_slides("Git")
+    assert presentations._default_slides("")
+    assert presentations._fit_font_size("short", base=20, small=10) == 20
+    assert presentations._fit_font_size("x" * 500, base=20, small=10) == 10
+    assert presentations._fit_font_size("x" * 70, base=20, small=10) == 17
+
+
+def test_presentation_all_rich_layouts_render_detail_paragraphs() -> None:
+    result = presentations.create_presentation(
+        "RC Readiness",
+        [
+            {"title": "Agenda", "layout": "agenda", "bullets": ["Coverage: reach 95%", "Readiness: strict rehearsal"]},
+            {"title": "Capabilities", "layout": "cards", "bullets": ["Tests: boundary paths", "CI: all green"]},
+            {"title": "Process", "layout": "process", "bullets": ["Measure: baseline", "Cover: failures", "Verify: twice"]},
+            {"title": "Comparison", "layout": "comparison", "bullets": ["Before: 90% gate", "After: 95% gate"]},
+            {"title": "Principle", "layout": "quote", "bullets": ["Evidence: prove readiness"]},
+            {"title": "Summary", "layout": "summary", "bullets": ["Coverage: buffered", "Tag: deferred"]},
+            {"title": "Content", "layout": "content", "bullets": ["Lead: detailed explanation"]},
+        ],
+    )
+    assert result["slideCount"] == 9
+    path = presentations.resolve_generated_file(result["fileId"])
+    assert path is not None and path.is_file()
+    path.unlink(missing_ok=True)
+
+
+def test_presentation_invalid_entries_leave_no_valid_slides() -> None:
+    with unittest.TestCase().assertRaises(AppError):
+        presentations.create_presentation("Title", [None, "bad"])
