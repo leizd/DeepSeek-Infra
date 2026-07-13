@@ -43,6 +43,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 "__pycache__",
                 ".venv",
                 ".idea",
+                "target",
                 "pytest-cache-files-demo",
             ]
             for directory in excluded_dirs:

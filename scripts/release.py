@@ -51,6 +51,7 @@ EXCLUDED_DIRS = {
     "__pycache__",
     "dist",
     "build",
+    "target",
 }
 # VCS / tooling metadata: excluded from the zip but NEVER deleted (clean_workspace must not touch these).
 NEVER_PACKAGE_DIRS = {

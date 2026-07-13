@@ -10,7 +10,7 @@ from scripts import preflight_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "3.4.0"
+VERSION = "4.0.0-rc.1"
 
 
 def read_text(rel: str) -> str:
@@ -54,15 +54,15 @@ class EncodingRegressionTests(unittest.TestCase):
         changelog = read_text("CHANGELOG.md")
         ci = read_text(".github/workflows/ci.yml")
 
-        self.assertIn("version-3.4.0-blue", readme)
-        self.assertIn('app_version: str = "3.4.0"', config)
-        self.assertIn("deepseek-infra:3.4.0", dockerfile)
-        self.assertIn('versionName "3.4.0"', build_gradle)
-        self.assertIn("versionCode 340", build_gradle)
-        self.assertIn("## [3.4.0] - Rust Semantic Cache Vector Ranking", changelog)
+        self.assertIn("version-4.0.0-rc.1-blue", readme)
+        self.assertIn('app_version: str = "4.0.0-rc.1"', config)
+        self.assertIn("deepseek-infra:4.0.0-rc.1", dockerfile)
+        self.assertIn('versionName "4.0.0-rc.1"', build_gradle)
+        self.assertIn("versionCode 400001", build_gradle)
+        self.assertIn("## [4.0.0-rc.1] - Release Candidate Freeze", changelog)
         self.assertIn("Personal AI Runtime GA", readme)
-        self.assertIn("python scripts/smoke_ga.py --offline --out docs/evidence/ga-v3.4.0.json", ci)
-        self.assertIn("python scripts/preflight_release.py --version 3.4.0 --ga", ci)
+        self.assertIn("python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.0-rc.1.json", ci)
+        self.assertIn("python scripts/preflight_release.py --version 4.0.0-rc.1 --ga", ci)
 
     def test_release_docs_are_registered(self) -> None:
         readme = read_text("README.md")
@@ -86,42 +86,42 @@ class EncodingRegressionTests(unittest.TestCase):
             self.assertTrue((ROOT / rel).is_file(), rel)
             self.assertIn(rel, readme)
 
-        self.assertIn("docs/evidence/ga-v3.4.0.json", evidence_index)
-        self.assertIn("docs/evidence/ga-v3.4.0.json", manifest)
+        self.assertIn("docs/evidence/ga-v4.0.0-rc.1.json", evidence_index)
+        self.assertIn("docs/evidence/ga-v4.0.0-rc.1.json", manifest)
         self.assertIn("gaEvidence", manifest)
 
     def test_release_doc_headers_are_readable(self) -> None:
-        header = "\u9002\u7528\u7248\u672c\uff1av3.4.0\u3002"
+        header = "\u9002\u7528\u7248\u672c\uff1av4.0.0-rc.1\u3002"
         for rel in ("docs/IMPLEMENTATION_STATUS.md", "evals/README.md"):
             self.assertIn(header, read_text(rel))
 
     def test_required_evidence_json_is_current_and_passes(self) -> None:
         required = (
-            "docs/evidence/ga-v3.4.0.json",
-            "docs/evidence/workspace-v3.4.0.json",
-            "docs/evidence/edge-router-v3.4.0.json",
-            "docs/evidence/media-v3.4.0.json",
-            "docs/evidence/browser-v3.4.0.json",
-            "docs/evidence/automation-v3.4.0.json",
-            "docs/evidence/skills-v3.4.0.json",
-            "docs/evidence/skills-ui-v3.4.0.json",
-            "docs/evidence/skill-builder-v3.4.0.json",
-            "docs/evidence/skill-packs-v3.4.0.json",
-            "docs/evidence/skill-eval-dashboard-v3.4.0.json",
-            "docs/evidence/skill-versioning-v3.4.0.json",
-            "docs/evidence/skill-analytics-v3.4.0.json",
-            "docs/evidence/skill-security-v3.4.0.json",
-            "docs/evidence/skill-catalog-v3.4.0.json",
-            "docs/evidence/context-taint-v3.4.0.json",
-            "docs/evidence/semantic-cache-onnx-v3.4.0.json",
+            "docs/evidence/ga-v4.0.0-rc.1.json",
+            "docs/evidence/workspace-v4.0.0-rc.1.json",
+            "docs/evidence/edge-router-v4.0.0-rc.1.json",
+            "docs/evidence/media-v4.0.0-rc.1.json",
+            "docs/evidence/browser-v4.0.0-rc.1.json",
+            "docs/evidence/automation-v4.0.0-rc.1.json",
+            "docs/evidence/skills-v4.0.0-rc.1.json",
+            "docs/evidence/skills-ui-v4.0.0-rc.1.json",
+            "docs/evidence/skill-builder-v4.0.0-rc.1.json",
+            "docs/evidence/skill-packs-v4.0.0-rc.1.json",
+            "docs/evidence/skill-eval-dashboard-v4.0.0-rc.1.json",
+            "docs/evidence/skill-versioning-v4.0.0-rc.1.json",
+            "docs/evidence/skill-analytics-v4.0.0-rc.1.json",
+            "docs/evidence/skill-security-v4.0.0-rc.1.json",
+            "docs/evidence/skill-catalog-v4.0.0-rc.1.json",
+            "docs/evidence/context-taint-v4.0.0-rc.1.json",
+            "docs/evidence/semantic-cache-onnx-v4.0.0-rc.1.json",
             "evals/reports/latest.json",
             "evals/reports/agent-latest.json",
             "evals/reports/baseline-compare-latest.json",
             "evals/reports/security-latest.json",
-            "evals/reports/skills-v3.4.0.json",
-            "evals/reports/media-v3.4.0.json",
-            "evals/reports/browser-v3.4.0.json",
-            "evals/reports/automation-v3.4.0.json",
+            "evals/reports/skills-v4.0.0-rc.1.json",
+            "evals/reports/media-v4.0.0-rc.1.json",
+            "evals/reports/browser-v4.0.0-rc.1.json",
+            "evals/reports/automation-v4.0.0-rc.1.json",
         )
         for rel in required:
             data = read_json(rel)
@@ -129,7 +129,7 @@ class EncodingRegressionTests(unittest.TestCase):
             self.assertEqual("PASS", data.get("status"), rel)
 
     def test_ga_evidence_shape(self) -> None:
-        data = read_json("docs/evidence/ga-v3.4.0.json")
+        data = read_json("docs/evidence/ga-v4.0.0-rc.1.json")
         raw_checks = data.get("checks")
         if not isinstance(raw_checks, dict):
             self.fail("GA evidence checks must be an object")
