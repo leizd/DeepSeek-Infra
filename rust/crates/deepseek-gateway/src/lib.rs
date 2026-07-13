@@ -74,6 +74,7 @@ pub fn create_app() -> Router {
         .route("/mcp", post(mcp))
         .route("/rag/query/normalize", post(rag_query_normalize))
         .route("/rag/chunks/score", post(rag_chunks_score))
+        .route("/rag/vectors/rank", post(rag_vectors_rank))
         .route("/rag/citation/format", post(rag_citation_format))
         .route("/rag/index/validate", post(rag_index_validate))
         .merge(policy_routes::router())
@@ -110,6 +111,18 @@ pub struct RagChunkScoreResponse {
 pub struct RagChunkScoreEntry {
     pub id: String,
     pub score: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagVectorRankRequest {
+    pub query: Vec<f64>,
+    pub candidates: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RagVectorRankResponse {
+    pub index: Option<usize>,
+    pub similarity: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -172,6 +185,14 @@ async fn rag_chunks_score(
             .map(|(id, score)| RagChunkScoreEntry { id, score })
             .collect(),
     }))
+}
+
+async fn rag_vectors_rank(Json(req): Json<RagVectorRankRequest>) -> Json<RagVectorRankResponse> {
+    let best = deepseek_rag::vector::best_match(&req.query, &req.candidates);
+    Json(RagVectorRankResponse {
+        index: best.map(|(index, _)| index),
+        similarity: best.map_or(0.0, |(_, similarity)| similarity),
+    })
 }
 
 async fn rag_citation_format(
@@ -490,6 +511,21 @@ mod tests {
         let response: RagChunkScoreResponse = serde_json::from_str(&body).unwrap();
         assert_eq!(response.ranked[0].id, "exact");
         assert!(response.ranked[0].score > response.ranked[1].score);
+    }
+
+    #[tokio::test]
+    async fn rag_vector_rank_endpoint_returns_stable_best_match() {
+        let app = create_app();
+        let body = serde_json::json!({
+            "query": [1.0, 0.0],
+            "candidates": [[0.5, 0.0], [1.0, 0.0], [1.0, 0.0]]
+        })
+        .to_string();
+        let (status, body) = send_request(app, "POST", "/rag/vectors/rank", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: RagVectorRankResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(response.index, Some(1));
+        assert_eq!(response.similarity, 1.0);
     }
 
     #[tokio::test]

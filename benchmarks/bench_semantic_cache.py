@@ -20,6 +20,7 @@ import argparse
 import json
 import logging
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -225,6 +226,7 @@ def _build_compare_evidence(hash_report: dict[str, Any], onnx_report: dict[str, 
     evidence: dict[str, Any] = {
         "schemaVersion": "semantic-cache-onnx-evidence.v1",
         "version": _app_version(),
+        "commit": _git_sha(),
         "suite": "semantic-cache-onnx",
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "environment": {"os": platform.system(), "python": platform.python_version(), "ci": False},
@@ -275,11 +277,24 @@ def _app_version() -> str:
     return APP_VERSION
 
 
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=REPO_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
 def _write_compare_markdown(evidence: dict[str, Any], path: str) -> None:
     lines = [
         "# Semantic Cache ONNX Evidence",
         "",
         f"- Version: {evidence.get('version')}",
+        f"- Commit: {evidence.get('commit')}",
         f"- Status: {evidence.get('status')}",
         f"- Generated: {evidence.get('generatedAt')}",
         f"- ONNX Available: {evidence.get('onnxAvailable')}",

@@ -135,6 +135,11 @@ class _SidecarHandler(BaseHTTPRequestHandler):
             assert "语言" in request["query"]
             self._send({"normalized": "rust 语言", "tokens": ["rust", "语言"]})
             return
+        if self.path == "/rag/vectors/rank":
+            assert request["query"] == [1.0, 0.0]
+            assert request["candidates"] == [[0.25, 0.0], [1.0, 0.0]]
+            self._send({"index": 1, "similarity": 1.0})
+            return
         self.send_error(404)
 
 
@@ -154,7 +159,7 @@ def sidecar_url() -> Iterator[str]:
 def test_smoke_exercises_all_offline_sidecar_contracts(sidecar_url: str) -> None:
     checks = smoke.run_smoke(sidecar_url, wait_seconds=1, timeout=1)
 
-    assert [check.name for check in checks] == ["health", "models", "chat", "mcp", "policy", "rag"]
+    assert [check.name for check in checks] == ["health", "models", "chat", "mcp", "policy", "rag", "rag_vector_rank"]
 
 
 def test_smoke_rejects_malformed_json(monkeypatch: pytest.MonkeyPatch) -> None:

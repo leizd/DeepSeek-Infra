@@ -205,6 +205,31 @@ def test_rag_client_score_chunks_fallback_disabled(mock_urlopen, monkeypatch: py
     assert not used_rust
 
 
+def test_rag_client_rank_vectors_accepts_valid_best_match(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
+    mock_urlopen.return_value = MockHTTPResponse(200, json.dumps({"index": 1, "similarity": 0.75}).encode())
+    result, used_rust = rag_client.rank_vectors([1.0, 0.0], [[0.5, 0.0], [0.75, 0.0]])
+    assert result == (1, 0.75)
+    assert used_rust is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"index": True, "similarity": 1.0},
+        {"index": 9, "similarity": 1.0},
+        {"index": 0, "similarity": "1.0"},
+        {"index": 0, "similarity": 1.5},
+    ],
+)
+def test_rag_client_rank_vectors_rejects_malformed_response(
+    mock_urlopen, monkeypatch: pytest.MonkeyPatch, body: dict[str, object]
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
+    mock_urlopen.return_value = MockHTTPResponse(200, json.dumps(body).encode())
+    assert rag_client.rank_vectors([1.0], [[1.0]]) == (None, False)
+
+
 def test_rag_client_format_citation_fallback_disabled(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
     monkeypatch.setenv("DEEPSEEK_RUST_RAG_FALLBACK", "0")

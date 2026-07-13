@@ -154,6 +154,17 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
     _require(rag.get("tokens") == ["rust", "语言"], "RAG normalization returned unexpected tokens")
     checks.append(CheckResult("rag", "POST /rag/query/normalize"))
 
+    vector_rank = _request_json(
+        base_url,
+        "POST",
+        "/rag/vectors/rank",
+        payload={"query": [1.0, 0.0], "candidates": [[0.25, 0.0], [1.0, 0.0]]},
+        timeout=timeout,
+    )
+    _require(vector_rank.get("index") == 1, "RAG vector ranking returned the wrong candidate")
+    _require(vector_rank.get("similarity") == 1.0, "RAG vector ranking returned the wrong similarity")
+    checks.append(CheckResult("rag_vector_rank", "POST /rag/vectors/rank"))
+
     return checks
 
 

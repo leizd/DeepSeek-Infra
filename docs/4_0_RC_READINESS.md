@@ -28,7 +28,7 @@ python scripts/check_4_0_rc_readiness.py \
 | Requirement | Owner | Current status | Evidence / exit condition |
 | --- | --- | --- | --- |
 | All required CI jobs green | Release Engineering | PASS on merged baseline; evaluated live in CI | All jobs listed in the requirements manifest return `success` or an intentional `skipped` result. |
-| Current Python coverage gate | Python Runtime | PASS: 95% | `pyproject.toml` sets `fail_under = 95`; statement and branch coverage are measured together, with no separate branch threshold in 3.3.2. |
+| Current Python coverage gate | Python Runtime | PASS: 95% | `pyproject.toml` sets `fail_under = 95`; statement and branch coverage are measured together, with no separate branch threshold in 3.4.0. |
 | Python measured coverage | Python Runtime | **PASS: 95.33% >= 95.00%** | Consecutive full runs measured 95.3428% and 95.3396%, both above the 95.30% rehearsal floor. |
 | Rust fmt / clippy / tests | Rust Core | PASS | `ci / rust` is green. |
 | Rust sidecar Docker smoke | Rust Core | PASS | `ci / rust-docker` is green. |
@@ -66,9 +66,9 @@ These items remain visible in the generated JSON report but do not independently
 | Gateway | Models and non-streaming chat delegation | Streaming remains in Python by design | Keep opt-in | Approved: opt-in |
 | MCP | JSON-RPC initialize, validation, and routing | Real tool execution remains in Python by design | Keep opt-in | Approved: opt-in |
 | Policy | Stable deny/audit contract and explicit backend failure modes | Broader Python/Rust policy corpus can still grow | Keep opt-in | Approved: opt-in |
-| RAG | Deterministic hot-path parity at 38/38 | Embedding and vector database work remains in Python | Keep opt-in | Approved: opt-in |
+| RAG | Deterministic hot-path parity at 38/38 plus 3.4.0 semantic-cache vector ranking | Embedding and vector database work remains in Python | Keep opt-in | Approved: opt-in |
 
-ADR-0040 is an approved architecture contract, not a runtime-default change. The 3.3.2 coverage uplift does not modify `.env.example`, default Compose, the decision file, or runtime flag defaults.
+ADR-0040 is an approved architecture contract, not a runtime-default change. The 3.3.2 coverage uplift and the 3.4.0 vector-ranking delegate do not modify runtime defaults; specifically, 3.4.0 does not modify `.env.example`, default Compose, or the decision file.
 
 ## Sign-off
 

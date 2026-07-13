@@ -1,18 +1,18 @@
 # Pre-4.0 Quality Baseline
 
-This document tracks where the project stands after the 3.3.2 95% coverage and RC rehearsal milestone and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+This document tracks where the project stands after the 3.4.0 semantic-cache vector-ranking update, built on the 3.3.2 95% coverage and RC rehearsal milestone, and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
 
 > **Purpose**: know and enforce the gap. The [4.0 RC readiness matrix](4_0_RC_READINESS.md) now reports **READY FOR 4.0.0-rc.1** after the measured suite cleared the 95% RC target twice with a 0.30-point safety margin. This rehearsal does not create an RC tag.
 
 ---
 
-## Current quality milestone: 3.3.2
+## Current quality milestone: 3.4.0
 
-At the end of 3.3.2:
+At the end of 3.4.0:
 
 - All Rust components remain **default-disabled**.
 - The hybrid runtime has a complete operational runbook ([RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)) and a release-readiness checklist ([RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md)).
-- Python CI gates pass at the 95% coverage gate after two full-suite statement-and-branch runs measured 95.3428% and 95.3396%.
+- Python CI gates pass at the inherited 95% coverage gate after two 3.3.2 full-suite statement-and-branch runs measured 95.3428% and 95.3396%.
 - Rust CI gates pass (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`).
 - Offline eval gates pass with `--strict`.
 - The Rust sidecar has a standalone multi-stage Docker image, optional Compose file, container health check, and offline smoke test.
@@ -27,6 +27,7 @@ At the end of 3.3.2:
 - The machine-readable architecture contract resolves all five architecture blockers from real decision fields, including the intentionally empty Rust default-on set.
 - Normal PRs and `main` generate the RC report without permanent failure; `release/*` and `rc/*` branches run the same checker in strict mode.
 - The default Docker deployment still builds and runs only the Python service.
+- Semantic-cache vector ranking can use the existing opt-in Rust RAG delegate, with strict response validation, backend diagnostics, and Python fallback.
 - Python coverage is conservatively recorded as **95.33%**, above the explicit 4.0 RC target of **95.00%**.
 
 ---
@@ -38,7 +39,7 @@ At the end of 3.3.2:
 | **Gateway** | `deepseek-gateway` | `GET /healthz`, `GET /v1/models`, `POST /v1/chat/completions` (non-streaming) | `DEEPSEEK_RUST_GATEWAY=1` proxies non-streaming chat and model list | ❌ | Streaming chat still uses Python; needs default-on decision and packaging |
 | **MCP** | `deepseek-mcp` | `POST /mcp` | `DEEPSEEK_RUST_MCP=1` delegates JSON-RPC handling | ❌ | No real Python tool execution bridge into Rust; default-on not decided |
 | **Policy** | `deepseek-policy` | `POST /policy/url`, `/policy/path`, `/policy/capability` | `DEEPSEEK_RUST_POLICY=1` delegates structured, audited URL/path/capability checks | ❌ | Python Tool Policy remains the fallback; default enforcement not decided |
-| **RAG** | `deepseek-rag` | `POST /rag/query/normalize`, `/rag/chunks/score`, `/rag/citation/format`, `/rag/index/validate` | `DEEPSEEK_RUST_RAG=1` delegates hot paths | ❌ | Deterministic hot-path parity is proven; embedding and vector DB access still live in Python |
+| **RAG** | `deepseek-rag` | `POST /rag/query/normalize`, `/rag/chunks/score`, `/rag/vectors/rank`, `/rag/citation/format`, `/rag/index/validate` | `DEEPSEEK_RUST_RAG=1` delegates hot paths and semantic-cache batch vector ranking | ❌ | Deterministic hot-path parity is proven; embedding and vector DB access still live in Python |
 
 Legend:
 
@@ -56,6 +57,7 @@ Legend:
 | MCP JSON-RPC | `deepseek_infra/web/routes/mcp.py` | `DEEPSEEK_RUST_MCP` | Python `infra/mcp/server.py` | ✅ `tests/test_rust_mcp_proxy.py` | ✅ Runbook |
 | Tool policy guards | `deepseek_infra/infra/tool_runtime/tools.py` | `DEEPSEEK_RUST_POLICY` | Python `tool_policy.py` | ✅ `tests/test_rust_policy_integration.py`, `test_rust_policy_audit.py`, `test_rust_policy_fail_modes.py` | ✅ Runbook |
 | RAG hot paths | `deepseek_infra/infra/rag/local_rag.py` | `DEEPSEEK_RUST_RAG` | Python RAG functions | ✅ `tests/test_rust_rag_integration.py`, `test_rust_rag_parity_contract.py` | ✅ [Parity baseline](RAG_PARITY_BASELINE.md) |
+| Semantic-cache vector ranking | `deepseek_infra/infra/gateway/semantic_cache.py` | `DEEPSEEK_RUST_RAG` | Python `cosine_similarity` scan | ✅ `tests/test_observability_semantic_cache.py`, `test_rust_core_clients.py` | ✅ [3.4.0 candidate audit](RUST_CANDIDATE_AUDIT_3_4.md) |
 | Feature flags / config | `deepseek_infra/infra/rust_core/config.py` | all | n/a | ✅ `tests/test_hybrid_runtime_hardening.py` | ✅ Runbook |
 | Health / status | `deepseek_infra/infra/rust_core/health.py` / `registry.py` | n/a | n/a | ✅ | ✅ `GET /api/rust/status` |
 
@@ -89,7 +91,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | --- | --- | --- |
 | `ruff check .` | ✅ Green | Minimal rule set by design. |
 | `mypy .` | ✅ Green | `ignore_missing_imports=true`. |
-| `pytest --cov --cov-fail-under=95` | ✅ Green | 3.3.2 measures 95.3428% and 95.3396% across two consecutive full runs; branch coverage is recorded without a separate gate. |
+| `pytest --cov --cov-fail-under=95` | ✅ Green | 3.4.0 inherits the 3.3.2 evidence of 95.3428% and 95.3396% across two consecutive full runs; branch coverage is recorded without a separate gate. |
 | `cargo fmt --check` | ✅ Green | Rust workspace. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ Green | No warnings. |
 | `cargo test --all` | ✅ Green | Rust crate tests. |
@@ -100,7 +102,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | `python scripts/check_doc_links.py` | ✅ Green | Internal doc links. |
 | `pip-audit`, `bandit`, `detect-secrets` | ✅ Green | Security scan. |
 | Offline eval suite `--strict` | ✅ Green | RAG, Tool, Injection, Agent, Security corpus. |
-| `scripts/preflight_release.py --version 3.3.0 --ga` | ✅ Green | Release readiness. |
+| `scripts/preflight_release.py --version 3.4.0 --ga` | ✅ Green | Release readiness. |
 
 ---
 
@@ -180,6 +182,13 @@ These completed milestones keep the project on the conservative path toward 4.0.
 - Measured 95.3428% and 95.3396% across two consecutive full runs, reduced HIGH-risk debt, preserved coverage omit rules, and raised the Python gate from 90% to 95%.
 - Cleared strict 4.0 RC readiness while preserving ADR-0040, Python-only defaults, four opt-in Rust delegates, and Python fallback through 4.x.
 - Did not create an RC tag; version bump, evidence freeze, checksum, tag, and release notes remain a separate change.
+
+### 3.4.0 — Rust semantic-cache vector ranking (completed)
+
+- Added a pure Rust vector-ranking primitive and sidecar endpoint with stable first-match tie behavior.
+- Integrated semantic-cache ranking behind the existing default-disabled `DEEPSEEK_RUST_RAG` flag.
+- Kept cache storage, filtering, TTL, exact matches, thresholds, and mutation in Python.
+- Added strict response validation, backend diagnostics, endpoint smoke coverage, and Python fallback tests.
 
 ---
 

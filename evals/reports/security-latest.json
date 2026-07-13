@@ -1,8 +1,8 @@
 {
   "schemaVersion": "security-corpus-report.v1",
-  "version": "3.3.0",
-  "commit": "77f1df4",
-  "generatedAt": "2026-07-08T02:21:58Z",
+  "version": "3.4.0",
+  "commit": "b76cbdb0",
+  "generatedAt": "2026-07-12T08:12:55Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -84,7 +84,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.059,
+        "latencyMs": 0.07,
         "suite": "prompt_injection"
       },
       {
@@ -97,7 +97,7 @@
         "injectionHits": 1,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.015,
+        "latencyMs": 0.021,
         "suite": "prompt_injection"
       },
       {
@@ -110,7 +110,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.027,
+        "latencyMs": 0.039,
         "suite": "prompt_injection"
       },
       {
@@ -123,7 +123,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.02,
+        "latencyMs": 0.028,
         "suite": "prompt_injection"
       },
       {
@@ -136,7 +136,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.018,
+        "latencyMs": 0.028,
         "suite": "prompt_injection"
       },
       {
@@ -149,7 +149,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 2,
-        "latencyMs": 0.019,
+        "latencyMs": 0.028,
         "suite": "prompt_injection"
       }
     ],
@@ -164,7 +164,7 @@
           "ssrf_blocked:private or local ip is not allowed: 169.254.169.254"
         ],
         "passed": true,
-        "latencyMs": 0.074,
+        "latencyMs": 0.098,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -178,7 +178,7 @@
           "ssrf_blocked:local host is not allowed"
         ],
         "passed": true,
-        "latencyMs": 0.019,
+        "latencyMs": 0.026,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -192,7 +192,7 @@
           "path_blocked:fileId contains illegal characters"
         ],
         "passed": true,
-        "latencyMs": 0.009,
+        "latencyMs": 0.012,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -206,7 +206,7 @@
           "path_blocked:projectId path traversal"
         ],
         "passed": true,
-        "latencyMs": 0.007,
+        "latencyMs": 0.006,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -220,7 +220,7 @@
           "secret_exfiltration_blocked"
         ],
         "passed": true,
-        "latencyMs": 0.035,
+        "latencyMs": 0.045,
         "suite": "tool_policy_attacks",
         "category": "secret_exfiltration"
       },
@@ -234,7 +234,7 @@
           "unknown_tool"
         ],
         "passed": true,
-        "latencyMs": 0.002,
+        "latencyMs": 0.003,
         "suite": "tool_policy_attacks",
         "category": "tool_policy"
       }
@@ -250,7 +250,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.03,
+        "latencyMs": 0.041,
         "suite": "benign_false_positive"
       },
       {
@@ -263,7 +263,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.027,
+        "latencyMs": 0.038,
         "suite": "benign_false_positive"
       },
       {
@@ -276,7 +276,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.025,
+        "latencyMs": 0.035,
         "suite": "benign_false_positive"
       },
       {
@@ -289,7 +289,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.023,
+        "latencyMs": 0.034,
         "suite": "benign_false_positive"
       }
     ]

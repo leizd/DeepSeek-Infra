@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -137,6 +138,34 @@ def format_citation(
         citation = result.body.get("citation")
         if isinstance(citation, str):
             return citation, True
+    if _fallback_enabled():
+        return None, False
+    return None, False
+
+
+def rank_vectors(
+    query: list[float], candidates: list[list[float]]
+) -> tuple[tuple[int | None, float] | None, bool]:
+    """Return ((best_index, similarity), used_rust) for semantic-cache vectors."""
+    if not _rust_rag_enabled() or not query or not candidates:
+        return None, False
+    result = _request(
+        "POST", "/rag/vectors/rank", payload={"query": query, "candidates": candidates}
+    )
+    if _should_use_result(result):
+        index = result.body.get("index")
+        similarity = result.body.get("similarity")
+        valid_index = index is None or (
+            isinstance(index, int) and not isinstance(index, bool) and 0 <= index < len(candidates)
+        )
+        valid_similarity = (
+            isinstance(similarity, (int, float))
+            and not isinstance(similarity, bool)
+            and math.isfinite(float(similarity))
+            and 0.0 <= float(similarity) <= 1.0
+        )
+        if valid_index and valid_similarity:
+            return (index, float(similarity)), True
     if _fallback_enabled():
         return None, False
     return None, False

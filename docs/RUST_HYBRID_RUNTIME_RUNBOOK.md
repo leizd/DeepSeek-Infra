@@ -1,8 +1,8 @@
 # Hybrid Rust Runtime Runbook
 
-This runbook covers day-to-day operation of the DeepSeek Infra 3.1.x / 3.2.3 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
+This runbook covers day-to-day operation of the DeepSeek Infra 3.4.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
 
-> **Scope**: every Rust component remains opt-in. 3.2.3 hardens Rust Policy decisions, redacted audit logs, and backend failure behavior; the default Python image, default-disabled Rust flags, and `docker compose up` behavior are unchanged.
+> **Scope**: every Rust component remains opt-in. 3.4.0 adds semantic-cache batch vector ranking to the existing Rust RAG delegate; the default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged.
 
 ---
 
@@ -65,6 +65,7 @@ The sidecar exposes the following endpoints used by the Python app:
 | `POST /policy/capability` | `DEEPSEEK_RUST_POLICY=1` | Capability/risk decision |
 | `POST /rag/query/normalize` | `DEEPSEEK_RUST_RAG=1` | Query normalization |
 | `POST /rag/chunks/score` | `DEEPSEEK_RUST_RAG=1` | Chunk scoring/ranking |
+| `POST /rag/vectors/rank` | `DEEPSEEK_RUST_RAG=1` | Semantic-cache batch vector ranking |
 | `POST /rag/citation/format` | `DEEPSEEK_RUST_RAG=1` | Citation string formatting |
 | `POST /rag/index/validate` | `DEEPSEEK_RUST_RAG=1` | Index metadata validation |
 
@@ -143,7 +144,7 @@ Each Rust component has its own opt-in flag. All flags accept the same truthy/fa
 | `DEEPSEEK_RUST_GATEWAY` | `0` | Proxy `/v1/chat/completions` (non-streaming) and `/v1/models` to Rust |
 | `DEEPSEEK_RUST_MCP` | `0` | Handle `POST /mcp` JSON-RPC in Rust |
 | `DEEPSEEK_RUST_POLICY` | `0` | Delegate URL/path/capability policy checks to Rust |
-| `DEEPSEEK_RUST_RAG` | `0` | Delegate query normalization, chunk scoring, citation formatting, and index validation to Rust |
+| `DEEPSEEK_RUST_RAG` | `0` | Delegate query normalization, chunk scoring, semantic-cache vector ranking, citation formatting, and index validation to Rust |
 
 ### Configuration flags
 
