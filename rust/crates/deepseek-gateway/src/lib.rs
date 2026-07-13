@@ -1,5 +1,7 @@
 use axum::{
     Json, Router,
+    body::Bytes,
+    extract::DefaultBodyLimit,
     http::StatusCode,
     routing::{get, post},
 };
@@ -7,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 pub mod policy_routes;
+pub mod request_preparation;
 
 pub fn gateway_version() -> &'static str {
     deepseek_core::version_info().version
@@ -71,6 +74,7 @@ pub fn create_app() -> Router {
         .route("/healthz", get(healthz))
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/gateway/request/prepare", post(gateway_request_prepare))
         .route("/mcp", post(mcp))
         .route("/rag/query/normalize", post(rag_query_normalize))
         .route("/rag/chunks/score", post(rag_chunks_score))
@@ -78,7 +82,42 @@ pub fn create_app() -> Router {
         .route("/rag/citation/format", post(rag_citation_format))
         .route("/rag/index/validate", post(rag_index_validate))
         .merge(policy_routes::router())
+        .layer(DefaultBodyLimit::max(
+            request_preparation::MAX_REQUEST_BYTES + 1_000_000,
+        ))
         .layer(tower_http::trace::TraceLayer::new_for_http())
+}
+
+async fn gateway_request_prepare(body: Bytes) -> Json<serde_json::Value> {
+    if body.len() > request_preparation::MAX_REQUEST_BYTES {
+        return Json(
+            request_preparation::PreparationError {
+                code: "request_too_large",
+                message: "request exceeds the preparation budget",
+            }
+            .response(),
+        );
+    }
+    let value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => {
+            return Json(
+                request_preparation::PreparationError {
+                    code: "invalid_request",
+                    message: "request must be valid JSON",
+                }
+                .response(),
+            );
+        }
+    };
+    match request_preparation::prepare_request(&value) {
+        Ok(request) => Json(json!({
+            "ok": true,
+            "request": request,
+            "diagnostics": {"runtime": "rust", "normalized": true}
+        })),
+        Err(error) => Json(error.response()),
+    }
 }
 
 async fn mcp(Json(req): Json<serde_json::Value>) -> Json<serde_json::Value> {
@@ -390,6 +429,58 @@ mod tests {
         assert_eq!(response.model, "deepseek-v4-pro");
         assert_eq!(response.choices.len(), 1);
         assert_eq!(response.choices[0].message.role, "assistant");
+    }
+
+    #[tokio::test]
+    async fn gateway_request_prepare_endpoint_returns_normalized_contract() {
+        let app = create_app();
+        let body = r#"{"model":"fast","messages":[{"role":"user","content":" 你好 🚀 "}],"tools":[],"tool_choice":"auto","temperature":1}"#;
+        let (status, response_body) = send_request(
+            app,
+            "POST",
+            "/gateway/request/prepare",
+            Some(body.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["request"]["model"], "deepseek-v4-flash");
+        assert_eq!(response["request"]["messages"][0]["content"], "你好 🚀");
+        assert!(response["request"].get("tools").is_none());
+    }
+
+    #[tokio::test]
+    async fn gateway_request_prepare_endpoint_returns_stable_error_code() {
+        let app = create_app();
+        let body = r#"{"model":"deepseek-v4-pro","messages":[{"role":"owner","content":"hello"}]}"#;
+        let (status, response_body) = send_request(
+            app,
+            "POST",
+            "/gateway/request/prepare",
+            Some(body.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["code"], "invalid_message_role");
+    }
+
+    #[tokio::test]
+    async fn gateway_request_prepare_endpoint_rejects_malformed_json() {
+        let app = create_app();
+        let (status, response_body) = send_request(
+            app,
+            "POST",
+            "/gateway/request/prepare",
+            Some("{".to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["code"], "invalid_request");
     }
 
     #[tokio::test]

@@ -27,6 +27,8 @@ def test_hybrid_compose_enables_rust_only_in_test_overlay() -> None:
         assert f'DEEPSEEK_RUST_{component}: "1"' in hybrid
         assert f'DEEPSEEK_RUST_{component}_FALLBACK: "1"' in hybrid
     assert 'DEEPSEEK_RUST_GATEWAY_URL: "http://rust-gateway:8787"' in hybrid
+    assert 'DEEPSEEK_API_URL: "http://upstream-stub:9080/chat/completions"' in hybrid
+    assert "stub_deepseek_upstream.py" in hybrid
     assert 'DEEPSEEK_RUST_POLICY_FAILURE_MODE: "fallback"' in hybrid
     assert 'AUTH_DISABLED: "1"' in hybrid
     assert "condition: service_healthy" in hybrid
@@ -127,11 +129,12 @@ def test_http_contracts_identify_rust_gateway_and_mcp(monkeypatch: pytest.Monkey
                 },
             }
         elif path == "/v1/models":
-            body = {"object": "list", "data": [{"id": "deepseek-v4-pro", "owned_by": "deepseek"}]}
+            body = {"object": "list", "data": [{"id": "deepseek-v4-pro", "owned_by": "deepseek-infra"}]}
         elif path == "/v1/chat/completions":
             body = {
-                "id": "chatcmpl-stub",
-                "choices": [{"message": {"role": "assistant", "content": "from deepseek-gateway-rs"}}],
+                "id": "chatcmpl-hybrid-upstream",
+                "choices": [{"message": {"role": "assistant", "content": "hybrid upstream stub"}}],
+                "diagnostics": {"gatewayRequestPreparation": {"runtime": "rust", "fallback": False}},
             }
         elif path == "/mcp" and payload is not None:
             request_id = payload["id"]
@@ -151,7 +154,7 @@ def test_http_contracts_identify_rust_gateway_and_mcp(monkeypatch: pytest.Monkey
     monkeypatch.setattr(smoke, "_request", request)
 
     smoke.check_rust_status("http://test", expect_healthy=True)
-    smoke.check_gateway_proxy("http://test")
+    smoke.check_gateway_request_preparation("http://test")
     smoke.check_mcp_proxy("http://test")
 
 
@@ -168,7 +171,21 @@ def test_http_contracts_identify_python_gateway_and_mcp_fallback(monkeypatch: py
         if path == "/v1/models":
             return smoke.HttpResult(200, {"data": [{"id": "deepseek-v4-pro", "owned_by": "deepseek-infra"}]}, "")
         if path == "/v1/chat/completions":
-            return smoke.HttpResult(400, {"error": "Missing DeepSeek API Key", "code": "missing_api_key"}, "")
+            return smoke.HttpResult(
+                200,
+                {
+                    "id": "chatcmpl-hybrid-upstream",
+                    "choices": [{"message": {"content": "hybrid upstream stub"}}],
+                    "diagnostics": {
+                        "gatewayRequestPreparation": {
+                            "runtime": "python",
+                            "fallback": True,
+                            "fallbackReason": "rust_backend_unavailable",
+                        }
+                    },
+                },
+                "",
+            )
         if path == "/mcp" and payload is not None:
             request_id = payload["id"]
             mcp_method = payload["method"]
@@ -197,7 +214,7 @@ def test_run_smoke_stops_sidecar_before_fallbacks(monkeypatch: pytest.MonkeyPatc
         "check_rust_status",
         lambda *args, **kwargs: smoke.CheckResult("status", "healthy") if kwargs["expect_healthy"] else smoke.CheckResult("status", "down"),
     )
-    monkeypatch.setattr(smoke, "check_gateway_proxy", lambda *args, **kwargs: smoke.CheckResult("gateway", "ok"))
+    monkeypatch.setattr(smoke, "check_gateway_request_preparation", lambda *args, **kwargs: smoke.CheckResult("gateway", "ok"))
     monkeypatch.setattr(smoke, "check_mcp_proxy", lambda *args, **kwargs: smoke.CheckResult("mcp", "ok"))
     monkeypatch.setattr(smoke, "check_policy_integration", lambda *args, **kwargs: smoke.CheckResult("policy", "ok"))
     monkeypatch.setattr(smoke, "check_rag_integration", lambda *args, **kwargs: smoke.CheckResult("rag", "ok"))

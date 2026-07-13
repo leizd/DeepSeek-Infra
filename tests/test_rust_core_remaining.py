@@ -221,12 +221,12 @@ class TestRagClient:
         assert result is None
         assert not used_rust
 
-    def test_gateway_client_authorization_header(self, mock_urlopen, monkeypatch) -> None:
+    def test_gateway_client_drops_authorization_header(self, mock_urlopen, monkeypatch) -> None:
         monkeypatch.setenv("DEEPSEEK_RUST_GATEWAY", "1")
         mock_urlopen.return_value = MockHTTPResponse(200, b"{}")
         gateway_client.proxy_chat_to_rust({"model": "x"}, headers={"Authorization": "Bearer t"})
         request = mock_urlopen.call_args[0][0]
-        assert request.headers.get("Authorization") == "Bearer t"
+        assert request.headers.get("Authorization") is None
 
     def test_policy_client_check_path_enabled(self, mock_urlopen, monkeypatch) -> None:
         monkeypatch.setenv("DEEPSEEK_RUST_POLICY", "1")

@@ -60,7 +60,7 @@ def openai_completion_response(result: dict[str, Any], model: str) -> dict[str, 
     prompt_tokens = int(usage.get("prompt_tokens") or 0)
     completion_tokens = int(usage.get("completion_tokens") or 0)
     total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
-    return {
+    response: dict[str, Any] = {
         "id": result.get("id") or f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",
         "created": int(time.time()),
@@ -78,6 +78,10 @@ def openai_completion_response(result: dict[str, Any], model: str) -> dict[str, 
             "total_tokens": total_tokens,
         },
     }
+    diagnostics = result.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        response["diagnostics"] = diagnostics
+    return response
 
 
 def openai_chat_completion(payload: dict[str, Any], model: str) -> dict[str, Any]:

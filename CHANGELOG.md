@@ -1,5 +1,25 @@
 # 更新日志
 
+## [3.5.0] - Optional Rust Gateway Request Preparation
+
+### Added
+
+- Added deterministic `POST /gateway/request/prepare` handling to the existing Rust sidecar with stable request-validation error codes.
+- Added a shared 68-case Python/Rust parity corpus, a strict live-sidecar checker, a machine-readable CI report, Rust unit coverage, Python fallback/defensive-validation tests, and an offline hybrid E2E path.
+- Added safe `gatewayRequestPreparation` diagnostics showing the selected runtime, fallback state, latency, and stable fallback reason without logging credentials, full prompts, tool arguments, or local paths.
+
+### Changed
+
+- Replaced the opt-in Rust chat/model proxy path with request preparation only: Python continues to own API keys, provider routing, upstream HTTP, streaming/SSE, retries, circuit breaking, semantic-cache policy, RAG/context injection, tool execution, and trace lifecycle.
+- Added lightweight Python validation of successful Rust results; injected fields, credentials, non-object bodies, malformed JSON, timeouts, and sidecar outages cannot reach the upstream request and fall back according to the existing Gateway fallback setting.
+- Kept the Python coverage gate at 95%, measured the complete statement-and-branch suite at 95.34%, kept coverage omissions unchanged, and synchronized the stable application, Android, Docker, CI, documentation, and release evidence line to 3.5.0.
+
+### Compatibility and non-goals
+
+- Rust Gateway preparation remains disabled by default, default Compose remains Python-only, Python fallback remains available, and no public endpoint is removed.
+- This release does not add Rust streaming, upstream HTTP, provider routing, retries, credential management, real tool execution, or default-on Rust deployment.
+- The published `v4.0.0-rc.1` remains preserved as an architecture preview and release-flow rehearsal; 3.5.0 does not create a new RC, a 4.0.0 stable release, a tag, or a GitHub Release.
+
 ## [4.0.0-rc.1] - Release Candidate Freeze
 
 ### Release freeze

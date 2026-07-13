@@ -1,8 +1,8 @@
 {
   "schemaVersion": "security-corpus-report.v1",
-  "version": "4.0.0-rc.1",
-  "commit": "3be60b68",
-  "generatedAt": "2026-07-13T01:21:05Z",
+  "version": "3.5.0",
+  "commit": "0d9bb32c",
+  "generatedAt": "2026-07-13T03:18:50Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -84,7 +84,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.106,
+        "latencyMs": 0.068,
         "suite": "prompt_injection"
       },
       {
@@ -97,7 +97,7 @@
         "injectionHits": 1,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.034,
+        "latencyMs": 0.021,
         "suite": "prompt_injection"
       },
       {
@@ -110,7 +110,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.064,
+        "latencyMs": 0.04,
         "suite": "prompt_injection"
       },
       {
@@ -123,7 +123,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.046,
+        "latencyMs": 0.028,
         "suite": "prompt_injection"
       },
       {
@@ -136,7 +136,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.064,
+        "latencyMs": 0.027,
         "suite": "prompt_injection"
       },
       {
@@ -149,7 +149,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 2,
-        "latencyMs": 0.045,
+        "latencyMs": 0.029,
         "suite": "prompt_injection"
       }
     ],
@@ -164,7 +164,7 @@
           "ssrf_blocked:private or local ip is not allowed: 169.254.169.254"
         ],
         "passed": true,
-        "latencyMs": 0.144,
+        "latencyMs": 0.096,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -178,7 +178,7 @@
           "ssrf_blocked:local host is not allowed"
         ],
         "passed": true,
-        "latencyMs": 0.047,
+        "latencyMs": 0.028,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -192,7 +192,7 @@
           "path_blocked:fileId contains illegal characters"
         ],
         "passed": true,
-        "latencyMs": 0.02,
+        "latencyMs": 0.012,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -206,7 +206,7 @@
           "path_blocked:projectId path traversal"
         ],
         "passed": true,
-        "latencyMs": 0.01,
+        "latencyMs": 0.006,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -220,7 +220,7 @@
           "secret_exfiltration_blocked"
         ],
         "passed": true,
-        "latencyMs": 0.069,
+        "latencyMs": 0.046,
         "suite": "tool_policy_attacks",
         "category": "secret_exfiltration"
       },
@@ -234,7 +234,7 @@
           "unknown_tool"
         ],
         "passed": true,
-        "latencyMs": 0.006,
+        "latencyMs": 0.003,
         "suite": "tool_policy_attacks",
         "category": "tool_policy"
       }
@@ -250,7 +250,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.076,
+        "latencyMs": 0.043,
         "suite": "benign_false_positive"
       },
       {
@@ -263,7 +263,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.069,
+        "latencyMs": 0.039,
         "suite": "benign_false_positive"
       },
       {
@@ -276,7 +276,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.06,
+        "latencyMs": 0.037,
         "suite": "benign_false_positive"
       },
       {
@@ -289,7 +289,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.06,
+        "latencyMs": 0.035,
         "suite": "benign_false_positive"
       }
     ]

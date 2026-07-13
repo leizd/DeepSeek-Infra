@@ -1,8 +1,8 @@
 # Hybrid Rust Runtime Runbook
 
-This runbook covers day-to-day operation of the DeepSeek Infra 3.4.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
+This runbook covers day-to-day operation of the DeepSeek Infra 3.5.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
 
-> **Scope**: every Rust component remains opt-in. 3.4.0 adds semantic-cache batch vector ranking to the existing Rust RAG delegate; the default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged.
+> **Scope**: every Rust component remains opt-in. 3.5.0 adds deterministic, credential-free Gateway request preparation; the default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged. The published `v4.0.0-rc.1` remains an architecture preview, not the active stable line.
 
 ---
 
@@ -57,8 +57,7 @@ The sidecar exposes the following endpoints used by the Python app:
 | Endpoint | Used by | Purpose |
 | --- | --- | --- |
 | `GET /healthz` | Health probe | Liveness check for the sidecar |
-| `GET /v1/models` | `DEEPSEEK_RUST_GATEWAY=1` | OpenAI-compatible model list |
-| `POST /v1/chat/completions` | `DEEPSEEK_RUST_GATEWAY=1` | Non-streaming chat completion proxy |
+| `POST /gateway/request/prepare` | `DEEPSEEK_RUST_GATEWAY=1` | Credential-free deterministic non-streaming request preparation |
 | `POST /mcp` | `DEEPSEEK_RUST_MCP=1` | MCP JSON-RPC message handler |
 | `POST /policy/url` | `DEEPSEEK_RUST_POLICY=1` | URL allow/deny decision |
 | `POST /policy/path` | `DEEPSEEK_RUST_POLICY=1` | Path traversal guard decision |
@@ -69,7 +68,7 @@ The sidecar exposes the following endpoints used by the Python app:
 | `POST /rag/citation/format` | `DEEPSEEK_RUST_RAG=1` | Citation string formatting |
 | `POST /rag/index/validate` | `DEEPSEEK_RUST_RAG=1` | Index metadata validation |
 
-> **Note**: Streaming chat requests (`stream: true`) always stay on the Python path, even when `DEEPSEEK_RUST_GATEWAY=1`.
+> **Note**: Streaming, model listing, provider routing, upstream HTTP, credentials, retry/backoff, tool execution, and tracing lifecycle always stay on the Python path, even when `DEEPSEEK_RUST_GATEWAY=1`.
 
 ---
 
@@ -124,9 +123,9 @@ docker compose \
   down --volumes --remove-orphans
 ```
 
-The smoke first checks the healthy system through Python boundaries: Rust status, Gateway models/chat, MCP initialize/list/echo, Tool Policy private-URL denial, and RAG CJK normalization/exact ranking/citation. It then stops `rust-gateway` and proves all four paths fall back to Python. The script is intentionally destructive to the test sidecar, so do not run it against a shared deployment.
+The smoke first checks the healthy system through Python boundaries: Rust status, Gateway request preparation followed by Python HTTP to an offline upstream stub, MCP initialize/list/echo, Tool Policy private-URL denial, and RAG CJK normalization/exact ranking/citation. It then stops `rust-gateway` and proves all four paths fall back to Python. The script is intentionally destructive to the test sidecar, so do not run it against a shared deployment.
 
-No API key, external model call, or external network service is required. The Rust chat response is the deterministic local stub; the Python chat fallback is accepted only as a structured `missing_api_key` response rather than a traceback.
+No real API key, external model call, or external network service is required. The test overlay injects a fake key and points Python at a deterministic local upstream stub. Safe response diagnostics prove Rust preparation on the healthy path and Python preparation after sidecar loss.
 
 ---
 
@@ -141,7 +140,7 @@ Each Rust component has its own opt-in flag. All flags accept the same truthy/fa
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `DEEPSEEK_RUST_GATEWAY` | `0` | Proxy `/v1/chat/completions` (non-streaming) and `/v1/models` to Rust |
+| `DEEPSEEK_RUST_GATEWAY` | `0` | Delegate deterministic non-streaming request preparation to Rust |
 | `DEEPSEEK_RUST_MCP` | `0` | Handle `POST /mcp` JSON-RPC in Rust |
 | `DEEPSEEK_RUST_POLICY` | `0` | Delegate URL/path/capability policy checks to Rust |
 | `DEEPSEEK_RUST_RAG` | `0` | Delegate query normalization, chunk scoring, semantic-cache vector ranking, citation formatting, and index validation to Rust |
@@ -152,7 +151,7 @@ Each Rust component has its own opt-in flag. All flags accept the same truthy/fa
 | --- | --- | --- |
 | `DEEPSEEK_RUST_GATEWAY_URL` | `http://127.0.0.1:8787` | Base URL of the Rust Gateway sidecar |
 | `DEEPSEEK_RUST_GATEWAY_FALLBACK` | `1` | Fall back to Python Gateway if Rust fails |
-| `DEEPSEEK_RUST_GATEWAY_TIMEOUT_MS` | `3000` | Gateway proxy timeout in milliseconds |
+| `DEEPSEEK_RUST_GATEWAY_TIMEOUT_MS` | `3000` | Gateway request-preparation timeout in milliseconds |
 | `DEEPSEEK_RUST_MCP_FALLBACK` | `1` | Fall back to Python MCP if Rust fails |
 | `DEEPSEEK_RUST_MCP_TIMEOUT_MS` | `3000` | MCP proxy timeout in milliseconds |
 | `DEEPSEEK_RUST_POLICY_FAILURE_MODE` | `fallback` | Policy backend failure behavior: `fallback`, `deny`, or `error` |
@@ -195,7 +194,7 @@ Every Rust component has a Python equivalent. Gateway, MCP, and RAG use their co
 
 | Component | Default recovery | Fail-closed behavior |
 | --- | --- | --- |
-| **Gateway** | Python Gateway handles the request | Returns `502 Bad Gateway` with `UPSTREAM_FAILURE` |
+| **Gateway preparation** | Python prepares the same request, then continues normal Python execution | Returns `502 Bad Gateway` with `UPSTREAM_FAILURE` |
 | **MCP** | Python MCP handler processes the JSON-RPC message | Returns `502 Bad Gateway` with `UPSTREAM_FAILURE` |
 | **Policy** | `fallback`: Python Tool Policy re-evaluates the call | `deny`: block execution; `error`: return a structured 503 |
 | **RAG** | Python RAG hot-path runs locally | The Rust result is ignored and Python continues |
@@ -410,7 +409,7 @@ curl http://127.0.0.1:8000/v1/models \
   -H "Authorization: Bearer $(cat .auth-token)"
 ```
 
-With `DEEPSEEK_RUST_GATEWAY=1` and a healthy sidecar, the model list is served by Rust. With the flag off, it is served by Python.
+`GET /v1/models` is always served by Python. With `DEEPSEEK_RUST_GATEWAY=1` and a healthy sidecar, only credential-free preparation of non-streaming upstream request bodies is delegated to Rust.
 
 ### MCP path
 

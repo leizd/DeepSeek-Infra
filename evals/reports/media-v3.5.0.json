@@ -1,0 +1,50 @@
+{
+  "version": "3.5.0",
+  "commit": "0d9bb32c",
+  "generatedAt": "2026-07-13T03:17:55Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "mediaRecall": "PASS",
+    "mediaCitations": "PASS",
+    "mediaRagCollection": "PASS"
+  },
+  "details": {
+    "recall": {
+      "k": 3,
+      "cases": 2,
+      "recallAtK": 1.0,
+      "mrr": 1.0,
+      "details": [
+        {
+          "query": "first-class media objects",
+          "hit": true,
+          "rank": 1,
+          "topSourceIds": [
+            "media_1dc4a3c1d55beb8a",
+            "media_d1f5957d95b78b32"
+          ]
+        },
+        {
+          "query": "webpage citable media",
+          "hit": true,
+          "rank": 1,
+          "topSourceIds": [
+            "media_d1f5957d95b78b32",
+            "media_1dc4a3c1d55beb8a"
+          ]
+        }
+      ]
+    },
+    "projectId": "proj-72b020f75a4c"
+  },
+  "summary": {
+    "caseCount": 2,
+    "recallAtK": 1.0,
+    "mrr": 1.0
+  }
+}

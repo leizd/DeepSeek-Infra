@@ -42,7 +42,13 @@ class OpenAIPayloadTests(unittest.TestCase):
 
     def test_completion_response_maps_content_and_usage(self) -> None:
         out = openai_api.openai_completion_response(
-            {"id": "abc", "model": "deepseek-v4-pro", "content": "Hello", "usage": {"prompt_tokens": 7, "completion_tokens": 3}},
+            {
+                "id": "abc",
+                "model": "deepseek-v4-pro",
+                "content": "Hello",
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+                "diagnostics": {"gatewayRequestPreparation": {"runtime": "rust", "fallback": False}},
+            },
             "deepseek-v4-pro",
         )
         self.assertEqual(out["object"], "chat.completion")
@@ -50,6 +56,7 @@ class OpenAIPayloadTests(unittest.TestCase):
         self.assertEqual(out["choices"][0]["message"], {"role": "assistant", "content": "Hello"})
         self.assertEqual(out["choices"][0]["finish_reason"], "stop")
         self.assertEqual(out["usage"], {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10})
+        self.assertEqual(out["diagnostics"]["gatewayRequestPreparation"]["runtime"], "rust")
 
 
 class OpenAIStreamTests(unittest.TestCase):

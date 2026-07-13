@@ -461,7 +461,7 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Current themes (3.4.0 semantic-cache vector ranking completed):
+Current themes (3.5.0 optional Gateway request preparation completed):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.
@@ -473,6 +473,7 @@ Current themes (3.4.0 semantic-cache vector ranking completed):
 - 3.3.1: Branch-aware, risk-weighted failure coverage raises measured Python coverage to a conservative 90.52% across two consecutive full runs and the CI gate to 90%. Branch coverage is recorded without a separate threshold; the 95% RC measured target remains unchanged and is the sole readiness blocker.
 - 3.3.2: High-value failure tests raise combined statement-and-branch coverage to 95.3428% and 95.3396% across consecutive full runs and promote the CI gate to 95%. HIGH-risk debt decreases, coverage omit rules remain unchanged, and strict readiness reports READY without creating an RC tag.
 - 3.4.0: The semantic-cache batch vector scan moves into the existing opt-in Rust RAG delegate through `POST /rag/vectors/rank`, with stable first-match tie behavior, strict Python response validation, diagnostics, and Python fallback. Cache storage and policy remain Python-owned.
+- 3.5.0: Deterministic non-streaming Gateway request preparation moves behind the existing opt-in Gateway delegate through `POST /gateway/request/prepare`. A 68-case live-sidecar parity gate proves normalized request and stable error-category parity. Python retains credentials, provider routing, upstream HTTP, streaming, retries, cache policy, context injection, real tool execution, and tracing lifecycle.
 
 See [PRE_4_0_QUALITY_BASELINE.md](PRE_4_0_QUALITY_BASELINE.md) for the quality baseline and [4_0_RC_READINESS.md](4_0_RC_READINESS.md) for the current blocker matrix.
 
@@ -486,6 +487,16 @@ Selection rationale:
 - The existing `DEEPSEEK_RUST_RAG` flag and fallback contract can be reused without adding a new default-on surface.
 
 See [RUST_CANDIDATE_AUDIT_3_4.md](RUST_CANDIDATE_AUDIT_3_4.md) for the evaluated alternatives and non-goals.
+
+### 3.5.0 — Gateway request preparation (completed)
+
+- The boundary is pure input-to-output work and reuses the existing sidecar and `DEEPSEEK_RUST_GATEWAY` flag.
+- Rust returns a normalized request or a stable validation code; Python never parses natural-language text to determine an error category.
+- Python validates every successful Rust result against its safe normalized contract before any upstream HTTP call.
+- Backend failures fall back to Python when configured, while deterministic user-input errors remain input errors.
+- The default runtime, default Compose file, streaming owner, provider owner, credential owner, and Python fallback contract do not change.
+
+See [GATEWAY_REQUEST_PREPARATION_PARITY.md](GATEWAY_REQUEST_PREPARATION_PARITY.md) for the shared corpus, diagnostics, fallback rules, and non-goals.
 
 ## Testing Priorities
 

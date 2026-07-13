@@ -36,6 +36,7 @@ from deepseek_infra.infra.data.memory import empty_memory_state, format_memory_n
 from deepseek_infra.infra.observability.observability import ensure_trace, finish_trace, start_span, with_trace_diagnostics
 from deepseek_infra.infra.tool_runtime.presentations import create_presentation_from_text
 from deepseek_infra.infra.gateway.resiliency import diagnostics_with_gateway, open_with_resiliency, request_payload_summary
+from deepseek_infra.infra.gateway.request_preparation import prepare_request_with_optional_rust
 from deepseek_infra.infra.gateway.semantic_cache import lookup as semantic_cache_lookup
 from deepseek_infra.infra.gateway.semantic_cache import store as semantic_cache_store
 from deepseek_infra.infra.tool_runtime.slides_skill import format_slides_skill_context
@@ -1471,7 +1472,13 @@ def call_deepseek(
         parent_span_id=span_parent,
     )
     prepared = prepared_call.request
-    body = prepared.body
+    gateway_preparation = prepare_request_with_optional_rust(prepared.body)
+    body = gateway_preparation.request
+    prepared = PreparedDeepSeekRequest(
+        api_key=prepared.api_key,
+        body=body,
+        diagnostics={**prepared.diagnostics, "gatewayRequestPreparation": gateway_preparation.diagnostics},
+    )
     cache_body = body
     semantic_span = start_span(
         trace_context.trace_id,

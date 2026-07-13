@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -54,85 +53,30 @@ def test_v1_chat_completions_stream(chat_client: TestClient) -> None:
     stream.assert_called_once()
 
 
-def test_v1_chat_completions_rust_gateway_ok_with_empty_auth_headers(chat_client: TestClient) -> None:
+def test_v1_chat_completions_uses_python_execution_after_translation(chat_client: TestClient) -> None:
     payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": "hi"}]}
     with patch("deepseek_infra.web.routes.chat.openai_to_internal_payload", return_value={"model": "deepseek-chat", "stream": False}) as convert, \
-         patch("deepseek_infra.web.routes.chat.rust_gateway_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.chat.proxy_chat_to_rust", return_value=SimpleNamespace(ok=True, body={"result": "ok"})) as proxy, \
-         patch("deepseek_infra.web.routes.chat.openai_chat_completion") as fallback:
+         patch("deepseek_infra.web.routes.chat.openai_chat_completion", return_value={"result": "ok"}) as execute:
         resp = chat_client.post("/v1/chat/completions", json=payload)
     assert resp.status_code == 200
     assert resp.json() == {"result": "ok"}
     convert.assert_called_once()
-    proxy.assert_called_once()
-    assert proxy.call_args.kwargs["headers"] == {}
-    fallback.assert_not_called()
+    execute.assert_called_once_with({"model": "deepseek-chat", "stream": False}, "deepseek-chat")
 
 
-def test_v1_chat_completions_rust_gateway_unavailable_without_fallback_raises(chat_client: TestClient) -> None:
+def test_v1_chat_completions_does_not_forward_authorization_to_execution(chat_client: TestClient) -> None:
     payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": "hi"}]}
     with patch("deepseek_infra.web.routes.chat.openai_to_internal_payload", return_value={"model": "deepseek-chat", "stream": False}) as convert, \
-         patch("deepseek_infra.web.routes.chat.rust_gateway_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.chat.proxy_chat_to_rust", return_value=SimpleNamespace(ok=False, body="rust down")), \
-         patch("deepseek_infra.web.routes.chat.fallback_to_python_enabled", return_value=False), \
-         patch("deepseek_infra.web.routes.chat.openai_chat_completion") as fallback:
-        resp = chat_client.post("/v1/chat/completions", json=payload)
-    assert resp.status_code == 502
+         patch("deepseek_infra.web.routes.chat.openai_chat_completion", return_value={"result": "ok"}) as execute:
+        resp = chat_client.post("/v1/chat/completions", json=payload, headers={"Authorization": "Bearer local-token"})
+    assert resp.status_code == 200
     convert.assert_called_once()
-    fallback.assert_not_called()
+    execute.assert_called_once_with({"model": "deepseek-chat", "stream": False}, "deepseek-chat")
 
 
-def test_v1_chat_compositions_rust_gateway_falls_back_to_python(chat_client: TestClient) -> None:
-    payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": "hi"}]}
-    with patch("deepseek_infra.web.routes.chat.openai_to_internal_payload", return_value={"model": "deepseek-chat", "stream": False}) as convert, \
-         patch("deepseek_infra.web.routes.chat.rust_gateway_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.chat.proxy_chat_to_rust", return_value=SimpleNamespace(ok=False, body="rust down")), \
-         patch("deepseek_infra.web.routes.chat.fallback_to_python_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.chat.openai_chat_completion", return_value={"content": "ok"}) as fallback:
-        resp = chat_client.post("/v1/chat/completions", json=payload)
-    assert resp.status_code == 200
-    assert resp.json() == {"content": "ok"}
-    convert.assert_called_once()
-    fallback.assert_called_once()
-
-
-def test_v1_chat_completions_passes_authorization_header(chat_client: TestClient) -> None:
-    payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": "hi"}]}
-    with patch("deepseek_infra.web.routes.chat.openai_to_internal_payload", return_value={"model": "deepseek-chat", "stream": False}), \
-         patch("deepseek_infra.web.routes.chat.rust_gateway_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.chat.proxy_chat_to_rust", return_value=SimpleNamespace(ok=True, body={"result": "ok"})) as proxy:
-        resp = chat_client.post("/v1/chat/completions", json=payload, headers={"Authorization": "Bearer token"})
-    assert resp.status_code == 200
-    proxy.assert_called_once()
-    assert proxy.call_args.kwargs["headers"] == {"Authorization": "Bearer token"}
-
-
-def test_v1_models_passes_authorization_header(chat_client: TestClient) -> None:
-    with patch("deepseek_infra.web.routes.chat.rust_gateway_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.chat.proxy_models_to_rust", return_value=SimpleNamespace(ok=True, body={"object": "list", "data": []})) as proxy:
-        resp = chat_client.get("/v1/models", headers={"Authorization": "Bearer token"})
-    assert resp.status_code == 200
-    proxy.assert_called_once()
-    assert proxy.call_args.kwargs["headers"] == {"Authorization": "Bearer token"}
-
-
-def test_v1_models_rust_gateway_ok_with_empty_auth_headers(chat_client: TestClient) -> None:
-    with patch("deepseek_infra.web.routes.chat.rust_gateway_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.chat.proxy_models_to_rust", return_value=SimpleNamespace(ok=True, body={"object": "list", "data": []})) as proxy, \
-         patch("deepseek_infra.web.routes.chat.openai_models_list") as fallback:
-        resp = chat_client.get("/v1/models")
+def test_v1_models_remains_python_owned(chat_client: TestClient) -> None:
+    with patch("deepseek_infra.web.routes.chat.openai_models_list", return_value={"object": "list", "data": []}) as models:
+        resp = chat_client.get("/v1/models", headers={"Authorization": "Bearer local-token"})
     assert resp.status_code == 200
     assert resp.json() == {"object": "list", "data": []}
-    proxy.assert_called_once()
-    assert proxy.call_args.kwargs["headers"] == {}
-    fallback.assert_not_called()
-
-
-def test_v1_models_rust_gateway_unavailable_without_fallback_raises(chat_client: TestClient) -> None:
-    with patch("deepseek_infra.web.routes.chat.rust_gateway_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.chat.proxy_models_to_rust", return_value=SimpleNamespace(ok=False, body="rust down")), \
-         patch("deepseek_infra.web.routes.chat.fallback_to_python_enabled", return_value=False), \
-         patch("deepseek_infra.web.routes.chat.openai_models_list") as fallback:
-        resp = chat_client.get("/v1/models")
-    assert resp.status_code == 502
-    fallback.assert_not_called()
+    models.assert_called_once_with()

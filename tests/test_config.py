@@ -36,7 +36,7 @@ from deepseek_infra.core.config import (
 
 class ConfigTests(unittest.TestCase):
     def test_nested_settings_back_compat_constants_match(self) -> None:
-        self.assertEqual(settings.app_version, "4.0.0-rc.1")
+        self.assertEqual(settings.app_version, "3.5.0")
         self.assertEqual(settings.default_host, "127.0.0.1")
         self.assertEqual(DEFAULT_HOST, settings.default_host)
         self.assertEqual(MULTI_AGENT_TIMEOUT_SECONDS, settings.multi_agent_timeout_seconds)
@@ -82,6 +82,7 @@ class ConfigTests(unittest.TestCase):
                 "OCR_FORMULA_CMD": 'pix2tex "{image}"',
                 "OCR_FORMULA_TIMEOUT_SECONDS": "999",
                 "DEEPSEEK_TIMEOUT_SECONDS": "222",
+                "DEEPSEEK_API_URL": "http://upstream.test/chat/completions",
                 "MULTI_AGENT_TIMEOUT_SECONDS": "333",
                 "TAVILY_TIMEOUT_SECONDS": "33",
                 "UPLOAD_FILE_MAX_BYTES": "123456",
@@ -155,6 +156,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.ocr.formula_cmd, 'pix2tex "{image}"')
         self.assertEqual(loaded.ocr.formula_timeout_seconds, 600)
         self.assertEqual(loaded.deepseek_timeout_seconds, 222)
+        self.assertEqual(loaded.deepseek_url, "http://upstream.test/chat/completions")
         self.assertEqual(loaded.multi_agent_timeout_seconds, 333)
         self.assertEqual(loaded.tavily_timeout_seconds, 33)
         self.assertEqual(loaded.files.upload_file_max_bytes, 123456)
