@@ -2,7 +2,7 @@
   "schema_version": 1,
   "baseline_version": "3.4.0",
   "target_version": "4.0.0-rc.1",
-  "generated_from": "3.4.0 semantic-cache vector-ranking evidence and ADR-0040",
+  "generated_from": "3.4.0 semantic-cache vector-ranking evidence, 3.3.2 coverage and RC rehearsal evidence, plus ADR-0040",
   "requirements": [
     {
       "id": "all_ci_jobs_green",
@@ -34,11 +34,11 @@
       "category": "quality_blocker",
       "owner": "Python Runtime",
       "blocking": true,
-      "required": 90.0,
-      "observed": 90.0,
+      "required": 95.0,
+      "observed": 95.0,
       "check": "pyproject_coverage_gate",
       "evidence": ["pyproject.toml"],
-      "description": "The 3.4.0 CI floor is 90%; this remains distinct from the 4.0 RC measured target."
+      "description": "The 3.4.0 CI floor is 95%; branch coverage remains measured without a separate threshold."
     },
     {
       "id": "python_measured_coverage",
@@ -47,7 +47,7 @@
       "owner": "Python Runtime",
       "blocking": true,
       "required": 95.0,
-      "observed": 90.52,
+      "observed": 95.33,
       "check": "observed_number_gte",
       "evidence": ["docs/PRE_4_0_QUALITY_BASELINE.md"],
       "description": "The full Python suite must meet the explicit 4.0 RC coverage target."

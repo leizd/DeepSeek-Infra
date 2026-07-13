@@ -152,7 +152,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--version", default="", help="Release version. Defaults to settings.app_version.")
     parser.add_argument("--clean-workspace", action="store_true", help="Remove excluded runtime files before packaging.")
     parser.add_argument("--dry-run", action="store_true", help="Enumerate the files that would be packaged without writing the zip, checksum or manifest.")
-    parser.add_argument("--coverage-gate", default="90%", help="Coverage gate stamped into the manifest.")
+    parser.add_argument("--coverage-gate", default="95%", help="Coverage gate stamped into the manifest.")
     parser.add_argument("--eval-report", default="evals/reports/latest.json", help="Eval report path stamped into the manifest.")
     parser.add_argument("--agent-report", default="evals/reports/agent-latest.json", help="Agent eval report path stamped into the manifest.")
     parser.add_argument("--no-manifest", action="store_true", help="Skip writing the .sha256 and .manifest.json siblings.")

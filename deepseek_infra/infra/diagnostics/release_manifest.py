@@ -74,7 +74,7 @@ DEFAULT_EVIDENCE_PATHS = (
 )
 
 DEFAULT_QUALITY_GATES = {
-    "coverage": "90%",
+    "coverage": "95%",
     "offlineEval": "PASS",
     "agentEval": "PASS",
     "injectionStrict": "PASS",

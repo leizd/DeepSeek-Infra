@@ -2,10 +2,10 @@
 
 ![版本](https://img.shields.io/badge/version-3.4.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
-![Coverage Gate](https://img.shields.io/badge/coverage%20gate-90%25-brightgreen)
+![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> Rust core migration is now in the 3.4.0 pre-4.0 readiness track. The semantic cache can opt into Rust batch vector ranking through `DEEPSEEK_RUST_RAG=1`, with validated responses and Python fallback. [ADR-0040](docs/adr/ADR-0040-hybrid-runtime-architecture.md) still defines a Python-first hybrid 4.0 architecture: Python FastAPI remains the default runtime, all Rust delegates remain opt-in, and Python fallback is supported throughout 4.x. The repository is still **not ready for 4.0.0-rc.1** because conservative measured Python coverage is 90.52%, below the 95% RC target. See [the Rust candidate audit](docs/RUST_CANDIDATE_AUDIT_3_4.md) and [the 4.0 RC readiness matrix](docs/4_0_RC_READINESS.md).
+> Rust core migration is now in the 3.4.0 pre-4.0 readiness track. The semantic cache can opt into Rust batch vector ranking through `DEEPSEEK_RUST_RAG=1`, with validated responses and Python fallback. [ADR-0040](docs/adr/ADR-0040-hybrid-runtime-architecture.md) keeps Python FastAPI as the default runtime, all Rust delegates opt-in, and Python fallback supported throughout 4.x. The 3.3.2 baseline measured 95.3428% and 95.3396% across consecutive full suites, so the repository is **ready for 4.0.0-rc.1** with a 95% CI gate; 3.4.0 does not create an RC tag. See [the Rust candidate audit](docs/RUST_CANDIDATE_AUDIT_3_4.md) and [the 4.0 RC readiness matrix](docs/4_0_RC_READINESS.md).
 
 ## 30 秒概览
 

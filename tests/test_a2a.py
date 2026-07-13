@@ -380,6 +380,68 @@ def test_a2a_resubscribe_invalid_and_missing_task_errors() -> None:
     assert missing[0]["error"]["code"] == TASK_NOT_FOUND
 
 
+def test_a2a_profile_update_list_and_execution_payload_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(AppError):
+        a2a._agent_profile("missing")
+    with pytest.raises(AppError):
+        a2a._update_task("missing", lambda _task: None)
+    with a2a._TASK_LOCK:
+        a2a._TASKS.update(
+            {
+                "older": {"id": "older", "createdAt": "1", "status": {"state": COMPLETED}, "_secret": True},
+                "newer": {"id": "newer", "createdAt": "2", "status": {"state": FAILED}},
+            }
+        )
+    assert [task["id"] for task in a2a.list_tasks(limit=0)] == ["newer", "older"]
+    monkeypatch.setattr(a2a, "settings", type("Settings", (), {"deepseek_api_key": "key"})())
+    payload = a2a._execution_payload("orchestrator", "hello")
+    assert payload["apiKey"] == "key"
+    assert "allowedTools" not in payload
+
+
+def test_a2a_message_dispatch_invalid_envelopes_and_required_ids() -> None:
+    assert a2a.handle_a2a_message([])["error"]["code"] == a2a.INVALID_REQUEST  # type: ignore[index]
+    assert a2a.handle_a2a_message({"id": 1})["error"]["code"] == a2a.INVALID_REQUEST  # type: ignore[index]
+    assert a2a.handle_a2a_message(rpc("tasks/get", {}))["error"]["code"] == INVALID_PARAMS  # type: ignore[index]
+    assert a2a.handle_a2a_message(rpc("tasks/cancel", {}))["error"]["code"] == INVALID_PARAMS  # type: ignore[index]
+    listed = a2a.handle_a2a_message(rpc("tasks/list", {"limit": 1}))
+    assert listed is not None and listed["result"] == {"tasks": []}
+
+
+def test_a2a_stream_submit_error_and_resubscribe_non_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(a2a, "submit_message", lambda *_args, **_kwargs: (_ for _ in ()).throw(AppError("bad input")))
+    events = _decoded_sse(a2a.stream_message_events(rpc("message/stream", {}), agent_id="reasoner"))
+    assert events[0]["error"]["code"] == INVALID_PARAMS
+    monkeypatch.setattr(a2a, "_stream_task_events", lambda *_args, **_kwargs: (_ for _ in ()).throw(AppError("bad", code=a2a.ErrorCode.INVALID_PAYLOAD)))
+    events = _decoded_sse(a2a._stream_resubscribe_events({"id": 1, "params": {"id": "task_x"}}))
+    assert events[0]["error"]["code"] == INVALID_PARAMS
+
+
+def test_a2a_client_context_and_non_dict_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    outbound = A2AClient("https://peer.test")
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def rpc_result(method: str, params: dict[str, Any]) -> Any:
+        calls.append((method, params))
+        return []
+
+    monkeypatch.setattr(outbound, "_rpc", rpc_result)
+    assert outbound.send_message("hello", context_id="ctx") == {}
+    assert calls[-1][1]["contextId"] == "ctx"
+    assert outbound.get_task("task") == {}
+    assert outbound.cancel_task("task") == {}
+    streamed: list[tuple[str, dict[str, Any]]] = []
+
+    def stream(method: str, params: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        streamed.append((method, params))
+        yield {"ok": True}
+
+    monkeypatch.setattr(outbound, "_stream_rpc", stream)
+    assert list(outbound.message_stream("hello", context_id="ctx")) == [{"ok": True}]
+    assert streamed[-1][1]["contextId"] == "ctx"
+    assert list(outbound.resubscribe("task", after_chunk_index=2)) == [{"ok": True}]
+
+
 def _decoded_sse(events: Iterator[bytes]) -> list[dict[str, Any]]:
     return [json.loads(item.decode("utf-8").removeprefix("data: ").strip()) for item in events]
 

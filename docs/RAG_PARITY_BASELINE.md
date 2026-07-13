@@ -66,7 +66,7 @@ Any mismatch prints the case ID, expected result, Python result, Rust result, an
 
 The independent `ci / rag-parity` job builds and starts only the Rust sidecar image, runs the strict 38-case corpus, uploads `artifacts/rag-parity-report.json`, prints sidecar logs on failure, and always removes the container.
 
-The job does not enable `DEEPSEEK_RUST_RAG` in the default Compose deployment. Rust RAG remains opt-in, Python remains the default runtime, and the Python coverage gate remains 85%.
+The job does not enable `DEEPSEEK_RUST_RAG` in the default Compose deployment. Rust RAG remains opt-in, Python remains the default runtime, and the Python coverage gate is 95%.
 
 ## Boundaries
 

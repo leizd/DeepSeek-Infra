@@ -68,7 +68,7 @@ def test_ci_builds_and_smokes_rust_image_in_independent_job() -> None:
     assert "python scripts/smoke_rust_sidecar.py" in workflow
     assert "docker rm --force deepseek-rust-gateway || true" in workflow
     assert "--cov-report=json:artifacts/coverage.json" in workflow
-    assert "--cov-fail-under=90" in workflow
+    assert "--cov-fail-under=95" in workflow
 
 
 class _SidecarHandler(BaseHTTPRequestHandler):

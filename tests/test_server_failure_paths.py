@@ -263,3 +263,145 @@ def test_agent_run_action_endpoint_covers_plan_rerun_resume_and_rejections() -> 
     for action, status, body in rejection_cases:
         with pytest.raises(AppError):
             asyncio.run(invoke(action, status, body))
+
+
+class _Part332:
+    def __init__(self, *, filename: str = "", name: str = "", size: int = 0, raw: bytes = b"", value: str = "") -> None:
+        self.filename = filename
+        self.name = name
+        self.size = size
+        self.raw = raw
+        self.value = value
+        self.content_type = "text/plain"
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _multipart_request332() -> Any:
+    return cast(
+        Any,
+        SimpleNamespace(
+            headers={"Content-Type": "multipart/form-data; boundary=x", "Content-Length": "10"},
+            body=AsyncMock(return_value=b"payload"),
+        ),
+    )
+
+
+def test_multipart_parser_file_field_and_cleanup_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    parts = [_Part332(filename="safe.txt", raw=b"ok", size=2), _Part332(name="title", value=" value ")]
+    module = SimpleNamespace(
+        parse_options_header=lambda _value: ("multipart/form-data", {"boundary": "x"}),
+        MultipartParser=lambda *_args, **_kwargs: iter(parts),
+    )
+    monkeypatch.setattr(server, "multipart_module", module)
+    monkeypatch.setattr(server, "supported_multipart_module", lambda _module: True)
+    fields, uploads = asyncio.run(server.read_multipart_form(_multipart_request332()))
+    assert fields == {"title": [" value "]}
+    assert uploads[0]["filename"] == "safe.txt"
+    assert all(part.closed for part in parts)
+
+    monkeypatch.setattr(server, "MAX_MULTIPART_FILES", 0)
+    with pytest.raises(AppError) as caught:
+        asyncio.run(server.read_multipart_form(_multipart_request332()))
+    assert caught.value.code == ErrorCode.UPLOAD_TOO_LARGE
+
+
+def test_multipart_parser_size_and_translation_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = SimpleNamespace(parse_options_header=lambda _value: ("multipart/form-data", {"boundary": "x"}))
+    monkeypatch.setattr(server, "multipart_module", module)
+    monkeypatch.setattr(server, "supported_multipart_module", lambda _module: True)
+
+    oversized_file = _Part332(filename="large.bin", size=server.MAX_UPLOAD_FILE_BYTES + 1)
+    module.MultipartParser = lambda *_args, **_kwargs: iter([oversized_file])
+    with pytest.raises(AppError) as caught:
+        asyncio.run(server.read_multipart_form(_multipart_request332()))
+    assert caught.value.code == ErrorCode.UPLOAD_TOO_LARGE and oversized_file.closed
+
+    oversized_field = _Part332(name="text", size=server.MAX_MULTIPART_FIELD_BYTES + 1)
+    module.MultipartParser = lambda *_args, **_kwargs: iter([oversized_field])
+    with pytest.raises(AppError):
+        asyncio.run(server.read_multipart_form(_multipart_request332()))
+    assert oversized_field.closed
+
+    class BrokenParser:
+        def __iter__(self) -> Any:
+            error = RuntimeError("bad upload")
+            error.http_status = 400  # type: ignore[attr-defined]
+            raise error
+
+    module.MultipartParser = lambda *_args, **_kwargs: BrokenParser()
+    with pytest.raises(AppError, match="Invalid multipart upload"):
+        asyncio.run(server.read_multipart_form(_multipart_request332()))
+
+
+def test_file_routes_reject_empty_all_failed_and_invalid_chunks() -> None:
+    app = server.create_app()
+    request = cast(Any, SimpleNamespace())
+    file_text = _route_endpoint(app, "/api/file-text", "POST")
+    with patch.object(server, "require_api_auth"), patch.object(server, "read_multipart_files", AsyncMock(return_value=([], True, ""))), pytest.raises(AppError):
+        asyncio.run(file_text(request))
+
+    upload = {"filename": "bad.bin", "content_type": "application/octet-stream", "data": b"bad"}
+    with (
+        patch.object(server, "require_api_auth"),
+        patch.object(server, "read_multipart_files", AsyncMock(return_value=([upload], True, ""))),
+        patch.object(server, "extract_uploaded_file", side_effect=AppError("bad file", code=ErrorCode.INVALID_PAYLOAD, status=422)),
+        pytest.raises(AppError) as caught,
+    ):
+        asyncio.run(file_text(request))
+    assert caught.value.status == 422
+
+    file_chunk = _route_endpoint(app, "/api/file-chunk", "POST")
+    with patch.object(server, "require_api_auth"), patch.object(server, "read_json_body", AsyncMock(return_value={"chunkIndex": "bad"})), pytest.raises(AppError):
+        asyncio.run(file_chunk(request))
+    with (
+        patch.object(server, "require_api_auth"),
+        patch.object(server, "read_json_body", AsyncMock(return_value={"fileId": "f", "chunkIndex": 2})),
+        patch.object(server, "load_cached_file", return_value={"chunks": []}),
+        pytest.raises(AppError),
+    ):
+        asyncio.run(file_chunk(request))
+    with (
+        patch.object(server, "require_api_auth"),
+        patch.object(server, "read_json_body", AsyncMock(return_value={"fileId": "f", "chunkIndex": 1})),
+        patch.object(server, "load_cached_file", return_value={"chunks": ["bad"]}),
+        pytest.raises(AppError),
+    ):
+        asyncio.run(file_chunk(request))
+
+
+def test_server_stream_static_share_and_redaction_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[dict[str, Any]] = []
+    with patch.object(server, "call_deepseek_cascade", return_value={"id": "i", "model": "m", "content": "", "reasoning": ""}):
+        server.emit_cascade_as_stream({}, events.append)
+    assert [event["type"] for event in events] == ["done"]
+
+    monkeypatch.setattr(server, "agent_run_events_after", lambda *_args: (_ for _ in ()).throw(BrokenPipeError()))
+    assert list(server.agent_run_event_stream("run", -1)) == []
+    with patch.object(server, "STATIC_DIR", tmp_path):
+        assert server.resolve_static_file("") == tmp_path / "index.html"
+        assert server.resolve_static_file("../") == tmp_path / "index.html"
+    server._SHARE_TARGETS.clear()
+    server._SHARE_TARGETS["old"] = (0, {"x": 1})
+    server.cleanup_share_target_payloads(now=server.SHARE_TARGET_TTL_SECONDS + 1)
+    assert "old" not in server._SHARE_TARGETS
+    assert server.conversation_tags({"tags": "bad"}) == []
+    assert server.conversation_search_matches({"messages": "bad"}, "missing") == []
+    assert server.redact_sensitive_query("https://host/path?x=1 /api/open?x=2") == "https://host/path?x=1 /api/open?x=2"
+
+
+def test_fastapi_server_close_and_create_server_failed_socket_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = server.FastAPIServer.__new__(server.FastAPIServer)
+    instance._socket = cast(Any, SimpleNamespace(close=lambda: (_ for _ in ()).throw(OSError("already closed"))))
+    instance.server_close()
+
+    failed_socket = MagicMock()
+    failed_socket.getsockname.return_value = ("127.0.0.1", 9000)
+    monkeypatch.setattr(server, "open_bind_socket", MagicMock(side_effect=[failed_socket, OSError("busy")] + [OSError("busy")] * 18))
+    monkeypatch.setattr(server, "create_app", lambda: MagicMock())
+    monkeypatch.setattr(server, "FastAPIServer", MagicMock(side_effect=OSError("construct failed")))
+    with pytest.raises(SystemExit):
+        server.create_server(9000)
+    failed_socket.close.assert_called_once()

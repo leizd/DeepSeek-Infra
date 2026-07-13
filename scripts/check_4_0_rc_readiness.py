@@ -275,7 +275,8 @@ def render_report(report: dict[str, Any]) -> str:
         if item["id"] == "python_coverage_gate":
             suffix = f": {_format_value(item['observed'])}%"
         elif item["id"] == "python_measured_coverage":
-            suffix = f": {_format_value(item['observed'])}% < {_format_value(item['required'])}%"
+            operator = ">=" if item["passed"] else "<"
+            suffix = f": {_format_value(item['observed'])}% {operator} {_format_value(item['required'])}%"
         elif item["id"] == "rag_parity_cases":
             suffix = f": {item['observed']}/{item['required']}"
         lines.append(f"{prefix:<6} {item['label']}{suffix}")

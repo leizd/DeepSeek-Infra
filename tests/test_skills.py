@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -216,3 +217,64 @@ def test_pack_versioning_upgrade_gate_and_project_binding(tmp_settings: Path, mo
     assert upgraded["ok"] is True
     assert upgraded["projectBinding"]["enabledPackVersions"][0]["packId"] == "pack_unit_versioned"
     assert upgraded["projectBinding"]["enabledPackVersions"][0]["version"] == "1.0.0"
+
+
+def test_skill_versioning_corrupt_history_and_missing_revision(tmp_settings: Path) -> None:
+    created = registry.create_custom_skill(_custom_skill())
+    history = skill_versioning.skill_history_dir(created["skillId"])
+    history.mkdir(parents=True, exist_ok=True)
+    (history / "broken.json").write_text("{", encoding="utf-8")
+    (history / "wrong-schema.json").write_text(json.dumps({"schemaVersion": 999}), encoding="utf-8")
+    (history / "wrong-shape.json").write_text(json.dumps({"schemaVersion": 1, "metadata": [], "skill": []}), encoding="utf-8")
+
+    assert skill_versioning._resolve_skill_revision(created["skillId"], "current")["skill"]["skillId"] == created["skillId"]
+    with pytest.raises(AppError, match="version not found"):
+        skill_versioning._resolve_skill_revision(created["skillId"], "9.9.9")
+    assert skill_versioning._safe_version("bad version / value") == "bad_version_value"
+    assert skill_versioning._read_json(history / "broken.json") is None
+
+
+def test_skill_migration_marks_required_removal_and_addition_unsafe(tmp_settings: Path) -> None:
+    config = _custom_skill()
+    config["inputSchema"] = {
+        "type": "object",
+        "properties": {"topic": {"type": "string"}, "level": {"type": "string"}},
+        "required": ["topic"],
+        "additionalProperties": False,
+    }
+    created = registry.create_custom_skill(config)
+    registry.update_skill(
+        created["skillId"],
+        {
+            "version": "2.0.0",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"count": {"type": "integer"}, "level": {"type": "string"}},
+                "required": ["count", "level"],
+                "additionalProperties": False,
+            },
+        },
+    )
+    plan = skill_versioning.migration_plan(created["skillId"], "1.0.0", "2.0.0")
+    assert plan["safe"] is False
+    assert {item["type"] for item in plan["changes"]} >= {"inputFieldRemoved", "requiredFieldAdded"}
+    assert "requires review" in plan["summary"]
+
+
+def test_pack_corrupt_history_current_resolution_and_builtin_guards(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pack = registry.import_pack(
+        {"packId": "pack_corrupt_history", "name": "History", "description": "history", "version": "1.0.0", "skills": [_custom_skill()]},
+        overwrite=True,
+    )
+    history = skill_versioning.pack_history_dir(pack["packId"])
+    history.mkdir(parents=True, exist_ok=True)
+    (history / "broken.json").write_text("not-json", encoding="utf-8")
+    assert skill_versioning._resolve_pack_revision(pack["packId"], "latest")["pack"]["packId"] == pack["packId"]
+    with pytest.raises(AppError, match="version not found"):
+        skill_versioning._resolve_pack_revision(pack["packId"], "9.9.9")
+    with pytest.raises(AppError, match="Built-in"):
+        skill_versioning.rollback_skill("skill_code_review", "current")
+    monkeypatch.setattr(skill_versioning, "eval_aware_upgrade_gate", lambda **_: {})
+    monkeypatch.setattr(skill_versioning, "_resolve_pack_revision", lambda *_: {"pack": {}})
+    with pytest.raises(AppError, match="read-only"):
+        skill_versioning.upgrade_pack("pack_code", "9.9.9")
