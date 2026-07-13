@@ -200,10 +200,10 @@ fn normalize_tool_calls(value: Option<&Value>) -> Result<Value, PreparationError
             "function".to_string(),
             json!({"name": name, "arguments": arguments}),
         );
-        if let Some(id) = object.get("id").and_then(Value::as_str).map(str::trim)
-            && !id.is_empty()
-        {
-            normalized_call.insert("id".to_string(), Value::String(id.to_string()));
+        if let Some(id) = object.get("id").and_then(Value::as_str).map(str::trim) {
+            if !id.is_empty() {
+                normalized_call.insert("id".to_string(), Value::String(id.to_string()));
+            }
         }
         normalized.push(Value::Object(normalized_call));
     }
@@ -335,18 +335,20 @@ fn normalize_tool_choice(
     if let Some(choice @ ("auto" | "none" | "required")) = value.and_then(Value::as_str) {
         return Ok(Value::String(choice.to_string()));
     }
-    if let Some(object) = value.and_then(Value::as_object)
-        && object.get("type").and_then(Value::as_str) == Some("function")
-        && let Some(name) = object
+    if let Some(object) = value.and_then(Value::as_object) {
+        let name = object
             .get("function")
             .and_then(Value::as_object)
             .and_then(|function| function.get("name"))
             .and_then(Value::as_str)
-            .map(str::trim)
-        && !name.is_empty()
-        && tool_names.contains(name)
-    {
-        return Ok(json!({"type": "function", "function": {"name": name}}));
+            .map(str::trim);
+        if object.get("type").and_then(Value::as_str) == Some("function") {
+            if let Some(name) = name {
+                if !name.is_empty() && tool_names.contains(name) {
+                    return Ok(json!({"type": "function", "function": {"name": name}}));
+                }
+            }
+        }
     }
     Err(PreparationError::new(
         "invalid_tool_choice",
