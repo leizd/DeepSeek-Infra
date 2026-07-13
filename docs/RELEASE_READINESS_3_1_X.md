@@ -163,22 +163,22 @@ The `ci / release-readiness` job produces the following artifacts:
 | --- | --- | --- |
 | MCP headless bridge | `scripts/smoke_mcp_headless_bridge.py` | `docs/evidence/headless-mcp-bridge.json` |
 | A2A external peer | `scripts/smoke_a2a_external_peer.py` | `docs/evidence/a2a-external-peer.json` |
-| General availability | `scripts/smoke_ga.py` | `docs/evidence/ga-v3.3.0.json` |
-| Workspace | `scripts/smoke_workspace.py` | `docs/evidence/workspace-v3.3.0.json` |
-| Edge router | `scripts/smoke_edge_router.py` | `docs/evidence/edge-router-v3.3.0.json` |
-| Media | `scripts/smoke_media.py` | `docs/evidence/media-v3.3.0.json` |
-| Browser | `scripts/smoke_browser.py` | `docs/evidence/browser-v3.3.0.json` |
-| Automation | `scripts/smoke_automation.py` | `docs/evidence/automation-v3.3.0.json` |
-| Skills | `scripts/smoke_skills.py` | `docs/evidence/skills-v3.3.0.json` |
-| Skills UI | `scripts/smoke_skills_ui.py` | `docs/evidence/skills-ui-v3.3.0.json` |
-| Skill builder | `scripts/smoke_skill_builder.py` | `docs/evidence/skill-builder-v3.3.0.json` |
-| Skill packs | `scripts/smoke_skill_packs.py` | `docs/evidence/skill-packs-v3.3.0.json` |
-| Skill eval dashboard | `scripts/smoke_skill_eval_dashboard.py` | `docs/evidence/skill-eval-dashboard-v3.3.0.json` |
-| Skill versioning | `scripts/smoke_skill_versioning.py` | `docs/evidence/skill-versioning-v3.3.0.json` |
-| Skill analytics | `scripts/smoke_skill_analytics.py` | `docs/evidence/skill-analytics-v3.3.0.json` |
-| Skill security | `scripts/smoke_skill_security.py` | `docs/evidence/skill-security-v3.3.0.json` |
-| Skill catalog | `scripts/smoke_skill_catalog.py` | `docs/evidence/skill-catalog-v3.3.0.json` |
-| Context taint | `scripts/smoke_context_taint.py` | `docs/evidence/context-taint-v3.3.0.json` |
+| General availability | `scripts/smoke_ga.py` | `docs/evidence/ga-v3.4.0.json` |
+| Workspace | `scripts/smoke_workspace.py` | `docs/evidence/workspace-v3.4.0.json` |
+| Edge router | `scripts/smoke_edge_router.py` | `docs/evidence/edge-router-v3.4.0.json` |
+| Media | `scripts/smoke_media.py` | `docs/evidence/media-v3.4.0.json` |
+| Browser | `scripts/smoke_browser.py` | `docs/evidence/browser-v3.4.0.json` |
+| Automation | `scripts/smoke_automation.py` | `docs/evidence/automation-v3.4.0.json` |
+| Skills | `scripts/smoke_skills.py` | `docs/evidence/skills-v3.4.0.json` |
+| Skills UI | `scripts/smoke_skills_ui.py` | `docs/evidence/skills-ui-v3.4.0.json` |
+| Skill builder | `scripts/smoke_skill_builder.py` | `docs/evidence/skill-builder-v3.4.0.json` |
+| Skill packs | `scripts/smoke_skill_packs.py` | `docs/evidence/skill-packs-v3.4.0.json` |
+| Skill eval dashboard | `scripts/smoke_skill_eval_dashboard.py` | `docs/evidence/skill-eval-dashboard-v3.4.0.json` |
+| Skill versioning | `scripts/smoke_skill_versioning.py` | `docs/evidence/skill-versioning-v3.4.0.json` |
+| Skill analytics | `scripts/smoke_skill_analytics.py` | `docs/evidence/skill-analytics-v3.4.0.json` |
+| Skill security | `scripts/smoke_skill_security.py` | `docs/evidence/skill-security-v3.4.0.json` |
+| Skill catalog | `scripts/smoke_skill_catalog.py` | `docs/evidence/skill-catalog-v3.4.0.json` |
+| Context taint | `scripts/smoke_context_taint.py` | `docs/evidence/context-taint-v3.4.0.json` |
 | Hybrid Python/Rust runtime | `scripts/smoke_hybrid_runtime.py` | `ci / hybrid-runtime-e2e` log |
 | Rust/Python RAG parity | `scripts/check_rag_parity.py` | `artifacts/rag-parity-report.json` |
 | 4.0 RC readiness | `scripts/check_4_0_rc_readiness.py` | `artifacts/4-0-rc-readiness.json` |
@@ -186,7 +186,7 @@ The `ci / release-readiness` job produces the following artifacts:
 The release preflight also runs:
 
 ```bash
-python scripts/preflight_release.py --version 3.3.0 --ga
+python scripts/preflight_release.py --version 3.4.0 --ga
 python scripts/doctor.py --offline
 python scripts/release.py --clean-workspace --dry-run
 ```

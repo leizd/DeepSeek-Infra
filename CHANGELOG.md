@@ -1,5 +1,25 @@
 # 更新日志
 
+## [3.4.0] - Rust Semantic Cache Vector Ranking
+
+### Added
+
+- Added `deepseek_rag::vector` for deterministic, stable batch vector ranking and the opt-in `POST /rag/vectors/rank` sidecar endpoint.
+- Added Python client validation, semantic-cache integration tests, malformed-response coverage, Python fallback coverage, and a Rust sidecar smoke check for vector ranking.
+- Added [the 3.4.0 Rust candidate audit](docs/RUST_CANDIDATE_AUDIT_3_4.md) with selection criteria, deferred candidates, and migration guardrails.
+
+### Changed
+
+- Delegated the semantic-cache O(candidates x dimensions) similarity scan to Rust when `DEEPSEEK_RUST_RAG=1`; exact matches, SQLite access, TTL, namespaces, thresholds, and cache mutation remain Python-owned.
+- Added `rankingBackend` diagnostics (`exact`, `rust`, or `python`) so operators can verify which path served a semantic-cache lookup.
+- Synchronized the application, Android, Docker, CI, release manifest, documentation, tests, and versioned offline evidence paths to 3.4.0.
+- Recorded a conservative 90.52% full-suite Python coverage value across two runs (90.57%, 90.52%); the 90% CI gate passes while the 95% RC target remains unmet.
+
+### Compatibility
+
+- Kept all Rust flags disabled by default and preserved Python fallback for unreachable or malformed Rust responses.
+- Preserved ADR-0040: Python remains the default runtime, streaming and real MCP tool execution remain Python-owned, and the project remains not ready for `4.0.0-rc.1` while measured Python coverage is below 95%.
+
 ## [3.3.1] - Risk-weighted Python Coverage Uplift
 
 ### Added

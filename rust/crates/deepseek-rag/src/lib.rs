@@ -5,6 +5,7 @@ pub mod citation;
 pub mod index;
 pub mod query;
 pub mod score;
+pub mod vector;
 
 pub fn rag_version() -> &'static str {
     version_info().version

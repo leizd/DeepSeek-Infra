@@ -1,4 +1,4 @@
-﻿name: ci
+name: ci
 
 on:
   push:
@@ -73,10 +73,10 @@ jobs:
       - run: python evals/runners/run_security_corpus.py --strict --out evals/reports/security-latest.json --markdown evals/reports/security-latest.md
       - run: python evals/runners/compare_eval_baseline.py --strict --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json --agent-baseline evals/baselines/agent-v2.2.8.json --out evals/reports/baseline-compare-latest.json
       - run: python evals/runners/run_agent_eval.py --report-dir evals/reports --strict
-      - run: python evals/runners/run_skill_eval.py --out evals/reports/skills-v3.3.0.json --strict
-      - run: python evals/runners/run_media_eval.py --out evals/reports/media-v3.3.0.json --strict
-      - run: python evals/runners/run_browser_eval.py --out evals/reports/browser-v3.3.0.json --strict
-      - run: python evals/runners/run_automation_eval.py --out evals/reports/automation-v3.3.0.json --strict
+      - run: python evals/runners/run_skill_eval.py --out evals/reports/skills-v3.4.0.json --strict
+      - run: python evals/runners/run_media_eval.py --out evals/reports/media-v3.4.0.json --strict
+      - run: python evals/runners/run_browser_eval.py --out evals/reports/browser-v3.4.0.json --strict
+      - run: python evals/runners/run_automation_eval.py --out evals/reports/automation-v3.4.0.json --strict
       - uses: actions/upload-artifact@v4
         with:
           name: offline-eval-report
@@ -88,10 +88,10 @@ jobs:
             evals/reports/baseline-compare-latest.json
             evals/reports/security-latest.json
             evals/reports/security-latest.md
-            evals/reports/skills-v3.3.0.json
-            evals/reports/media-v3.3.0.json
-            evals/reports/browser-v3.3.0.json
-            evals/reports/automation-v3.3.0.json
+            evals/reports/skills-v3.4.0.json
+            evals/reports/media-v3.4.0.json
+            evals/reports/browser-v3.4.0.json
+            evals/reports/automation-v3.4.0.json
 
   docker:
     runs-on: ubuntu-latest
@@ -197,23 +197,23 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
       - run: python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
-      - run: python scripts/smoke_ga.py --offline --out docs/evidence/ga-v3.3.0.json
-      - run: python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v3.3.0.json
-      - run: python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v3.3.0.json
-      - run: python scripts/smoke_media.py --offline --out docs/evidence/media-v3.3.0.json
-      - run: python scripts/smoke_browser.py --offline --out docs/evidence/browser-v3.3.0.json --version 3.3.0
-      - run: python scripts/smoke_automation.py --offline --out docs/evidence/automation-v3.3.0.json --version 3.3.0
-      - run: python scripts/smoke_skills.py --offline --out docs/evidence/skills-v3.3.0.json
-      - run: python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v3.3.0.json
-      - run: python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v3.3.0.json
-      - run: python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v3.3.0.json
-      - run: python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v3.3.0.json --report-out evals/reports/skills-v3.3.0.json
-      - run: python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v3.3.0.json
-      - run: python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v3.3.0.json
-      - run: python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v3.3.0.json
-      - run: python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v3.3.0.json
-      - run: python scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v3.3.0.json
-      - run: python scripts/preflight_release.py --version 3.3.0 --ga
+      - run: python scripts/smoke_ga.py --offline --out docs/evidence/ga-v3.4.0.json
+      - run: python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v3.4.0.json
+      - run: python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v3.4.0.json
+      - run: python scripts/smoke_media.py --offline --out docs/evidence/media-v3.4.0.json
+      - run: python scripts/smoke_browser.py --offline --out docs/evidence/browser-v3.4.0.json --version 3.4.0
+      - run: python scripts/smoke_automation.py --offline --out docs/evidence/automation-v3.4.0.json --version 3.4.0
+      - run: python scripts/smoke_skills.py --offline --out docs/evidence/skills-v3.4.0.json
+      - run: python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v3.4.0.json
+      - run: python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v3.4.0.json
+      - run: python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v3.4.0.json
+      - run: python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v3.4.0.json --report-out evals/reports/skills-v3.4.0.json
+      - run: python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v3.4.0.json
+      - run: python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v3.4.0.json
+      - run: python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v3.4.0.json
+      - run: python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v3.4.0.json
+      - run: python scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v3.4.0.json
+      - run: python scripts/preflight_release.py --version 3.4.0 --ga
       - run: python scripts/doctor.py --offline
       - run: python scripts/release.py --clean-workspace --dry-run
 

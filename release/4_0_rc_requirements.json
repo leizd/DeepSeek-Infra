@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "baseline_version": "3.3.1",
+  "baseline_version": "3.4.0",
   "target_version": "4.0.0-rc.1",
-  "generated_from": "3.3.1 risk-weighted coverage evidence and ADR-0040",
+  "generated_from": "3.4.0 semantic-cache vector-ranking evidence and ADR-0040",
   "requirements": [
     {
       "id": "all_ci_jobs_green",
@@ -38,7 +38,7 @@
       "observed": 90.0,
       "check": "pyproject_coverage_gate",
       "evidence": ["pyproject.toml"],
-      "description": "The 3.3.1 CI floor is 90%; this remains distinct from the 4.0 RC measured target."
+      "description": "The 3.4.0 CI floor is 90%; this remains distinct from the 4.0 RC measured target."
     },
     {
       "id": "python_measured_coverage",

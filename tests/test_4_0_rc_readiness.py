@@ -31,7 +31,7 @@ def test_requirements_manifest_has_owned_classified_entries() -> None:
     data = _requirements()
 
     assert data["target_version"] == "4.0.0-rc.1"
-    assert data["baseline_version"] == "3.3.1"
+    assert data["baseline_version"] == "3.4.0"
     assert len(data["requirements"]) >= 15
     for item in data["requirements"]:
         assert item["id"]

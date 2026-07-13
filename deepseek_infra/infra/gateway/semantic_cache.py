@@ -28,6 +28,7 @@ from deepseek_infra.core.config import (
 from deepseek_infra.core.utils import latest_user_query
 from deepseek_infra.infra.gateway.chat_payload import count_payload_attachments
 from deepseek_infra.infra.rag.local_rag import cosine_similarity, embed_text, embedding_pipeline
+from deepseek_infra.infra.rust_core import rag_client as _rust_rag
 
 # Answers matching these markers are non-answers (fallbacks / refusals) and must not be cached.
 LOW_QUALITY_MARKERS = (
@@ -92,20 +93,16 @@ def lookup(payload: dict[str, Any], body: dict[str, Any]) -> CacheLookup:
         return CacheLookup(diagnostics)
 
     now = int(time.time())
-    best_row: sqlite3.Row | None = None
-    best_similarity = 0.0
-    for row in rows:
-        if cache_expired(row, now):
-            continue
-        exact = row["prompt_hash"] == prompt_hash
-        if exact_only and not exact:
-            continue
-        similarity = 1.0 if exact else cosine_similarity(query_embedding, decode_embedding(row["embedding"]))
-        if similarity > best_similarity:
-            best_similarity = similarity
-            best_row = row
+    best_row, best_similarity, ranking_backend = best_candidate(
+        query_embedding,
+        rows,
+        now=now,
+        prompt_hash=prompt_hash,
+        exact_only=exact_only,
+    )
 
     diagnostics["similarity"] = round(best_similarity, 4)
+    diagnostics["rankingBackend"] = ranking_backend
     if best_row is None or best_similarity < SEMANTIC_CACHE_THRESHOLD:
         return CacheLookup(diagnostics)
 
@@ -488,6 +485,43 @@ def decode_embedding(value: Any) -> list[float]:
         except (TypeError, ValueError):
             result.append(0.0)
     return result
+
+
+def best_candidate(
+    query_embedding: list[float],
+    rows: list[sqlite3.Row],
+    *,
+    now: int,
+    prompt_hash: str,
+    exact_only: bool,
+) -> tuple[sqlite3.Row | None, float, str]:
+    """Rank eligible cache rows with Rust when enabled, preserving Python parity."""
+    eligible: list[sqlite3.Row] = []
+    for row in rows:
+        if cache_expired(row, now):
+            continue
+        if row["prompt_hash"] == prompt_hash:
+            return row, 1.0, "exact"
+        if not exact_only:
+            eligible.append(row)
+
+    if exact_only or not eligible:
+        return None, 0.0, "python"
+
+    candidates = [decode_embedding(row["embedding"]) for row in eligible]
+    ranked, used_rust = _rust_rag.rank_vectors(query_embedding, candidates)
+    if used_rust and ranked is not None:
+        index, similarity = ranked
+        return (eligible[index] if index is not None else None), similarity, "rust"
+
+    best_row: sqlite3.Row | None = None
+    best_similarity = 0.0
+    for row, candidate in zip(eligible, candidates):
+        similarity = cosine_similarity(query_embedding, candidate)
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_row = row
+    return best_row, best_similarity, "python"
 
 
 def decode_json(value: Any) -> Any:

@@ -461,7 +461,7 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Current themes (3.3.1 risk-weighted Python coverage uplift completed):
+Current themes (3.4.0 semantic-cache vector ranking completed):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.
@@ -471,8 +471,20 @@ Current themes (3.3.1 risk-weighted Python coverage uplift completed):
 - 3.2.5: Machine-readable 4.0 RC blocker matrix, owner sign-off checklist, JSON/terminal readiness report, and branch-aware CI enforcement. At that milestone, the decision was **NOT READY FOR 4.0.0-rc.1** because measured Python coverage was 85.63% versus 95.00% and architecture decisions were open.
 - 3.3.0: ADR-0040 approves a Python-first hybrid 4.0 architecture: an empty Rust default-on set, Python-only default deployment, Python fallback through 4.x, Python-owned Gateway streaming and real MCP tool execution, plus Rust-owned MCP validation/routing. Architecture blockers are resolved; measured Python coverage remains the sole RC blocker.
 - 3.3.1: Branch-aware, risk-weighted failure coverage raises measured Python coverage to a conservative 90.52% across two consecutive full runs and the CI gate to 90%. Branch coverage is recorded without a separate threshold; the 95% RC measured target remains unchanged and is the sole readiness blocker.
+- 3.4.0: The semantic-cache batch vector scan moves into the existing opt-in Rust RAG delegate through `POST /rag/vectors/rank`, with stable first-match tie behavior, strict Python response validation, diagnostics, and Python fallback. Cache storage and policy remain Python-owned.
 
 See [PRE_4_0_QUALITY_BASELINE.md](PRE_4_0_QUALITY_BASELINE.md) for the quality baseline and [4_0_RC_READINESS.md](4_0_RC_READINESS.md) for the current blocker matrix.
+
+### 3.4.0 — Semantic-cache vector ranking (completed)
+
+Selection rationale:
+
+- The candidate scan is pure CPU work with a small JSON contract and no filesystem, database, network, or mutable runtime ownership.
+- Its O(candidates x dimensions) loop benefits from Rust most as cache size or embedding dimensions grow.
+- Exact-match handling, SQLite queries, TTL, namespaces, thresholds, and hit mutation stay in Python, limiting the blast radius.
+- The existing `DEEPSEEK_RUST_RAG` flag and fallback contract can be reused without adding a new default-on surface.
+
+See [RUST_CANDIDATE_AUDIT_3_4.md](RUST_CANDIDATE_AUDIT_3_4.md) for the evaluated alternatives and non-goals.
 
 ## Testing Priorities
 
