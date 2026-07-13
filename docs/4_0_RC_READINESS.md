@@ -1,8 +1,8 @@
 # 4.0.0 RC Readiness
 
-This checklist determines whether the repository may create `4.0.0-rc.1`. It does not create a tag or change Rust defaults.
+This checklist governs the `4.0.0-rc.1` release freeze. It does not create a tag or change Rust defaults.
 
-> **Current decision: READY FOR 4.0.0-rc.1.** ADR-0040 resolves all five runtime architecture blockers with an approved Python-first hybrid design. Two consecutive full suites measured 95.3428% and 95.3396%, clearing the explicit 95.00% RC target with the required 0.30-point safety margin. This rehearsal does not create an RC tag.
+> **Current decision: READY FOR 4.0.0-rc.1.** ADR-0040 resolves all five runtime architecture blockers with an approved Python-first hybrid design. Two consecutive readiness suites measured 95.3428% and 95.3396%, clearing the explicit 95.00% RC target with the required 0.30-point safety margin. The `rc/*` branch enforces this checker in strict mode; tag creation remains a post-merge action.
 
 The machine-readable requirements source is [`release/4_0_rc_requirements.json`](../release/4_0_rc_requirements.json), and the approved architecture contract is [`release/4_0_runtime_decision.json`](../release/4_0_runtime_decision.json). Run the checker in report-only mode during normal development:
 
@@ -28,7 +28,7 @@ python scripts/check_4_0_rc_readiness.py \
 | Requirement | Owner | Current status | Evidence / exit condition |
 | --- | --- | --- | --- |
 | All required CI jobs green | Release Engineering | PASS on merged baseline; evaluated live in CI | All jobs listed in the requirements manifest return `success` or an intentional `skipped` result. |
-| Current Python coverage gate | Python Runtime | PASS: 95% | `pyproject.toml` sets `fail_under = 95`; statement and branch coverage are measured together, with no separate branch threshold in 3.4.0. |
+| Current Python coverage gate | Python Runtime | PASS: 95% | `pyproject.toml` sets `fail_under = 95`; statement and branch coverage are measured together, with no separate branch threshold in 4.0.0-rc.1. |
 | Python measured coverage | Python Runtime | **PASS: 95.33% >= 95.00%** | Consecutive full runs measured 95.3428% and 95.3396%, both above the 95.30% rehearsal floor. |
 | Rust fmt / clippy / tests | Rust Core | PASS | `ci / rust` is green. |
 | Rust sidecar Docker smoke | Rust Core | PASS | `ci / rust-docker` is green. |
@@ -83,7 +83,7 @@ Before creating `4.0.0-rc.1`, the accountable owners must sign the following on 
 - [x] MCP: Python real-tool execution and Rust protocol ownership for 4.0 are approved by ADR-0040.
 - [x] Release Engineering: rollback remains documented and `--strict` exits zero on an `rc/*` rehearsal branch.
 
-The repository is **READY FOR 4.0.0-rc.1**, but this milestone intentionally stops before version bump, evidence freeze, checksums, tag creation, and release notes.
+The repository is **READY FOR 4.0.0-rc.1**. This release-freeze PR synchronizes the version, regenerates evidence, adds release notes, and prepares checksummed artifacts; it intentionally stops before tag creation and GitHub prerelease publication.
 
 ## Related documents
 

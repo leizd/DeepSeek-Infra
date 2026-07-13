@@ -1,5 +1,25 @@
 # 更新日志
 
+## [4.0.0-rc.1] - Release Candidate Freeze
+
+### Release freeze
+
+- Promoted the active application, Android, Docker, CI, documentation, and evidence version to the `4.0.0-rc.1` prerelease.
+- Regenerated the release-facing smoke and evaluation evidence from the frozen RC source commit and prepared the checksummed source archive and manifest.
+- Added [the 4.0.0-rc.1 prerelease notes](docs/releases/4.0.0-rc.1.md) and retained strict readiness enforcement on `rc/*` branches.
+
+### Runtime architecture
+
+- Preserved ADR-0040 without modification: Python remains the default runtime and default Compose remains Python-only.
+- Kept Gateway, MCP, Policy, and RAG Rust delegates opt-in; the Rust sidecar remains optional.
+- Kept Gateway streaming and real MCP tool execution Python-owned, with Python fallback supported throughout 4.x.
+
+### Quality
+
+- Retained the 95% combined statement-and-branch coverage gate and the readiness-approved 95.3428% / 95.3396% rehearsal evidence.
+- Preserved the 38/38 deterministic Rust/Python RAG parity corpus and all release, security, evaluation, Docker, hybrid-runtime, and Rust gates.
+- This change prepares a prerelease candidate only; it does not create a Git tag or a stable `4.0.0` release.
+
 ## [3.4.0] - Rust Semantic Cache Vector Ranking
 
 ### Added

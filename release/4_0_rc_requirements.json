@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "baseline_version": "3.4.0",
+  "baseline_version": "4.0.0-rc.1",
   "target_version": "4.0.0-rc.1",
-  "generated_from": "3.4.0 semantic-cache vector-ranking evidence, 3.3.2 coverage and RC rehearsal evidence, plus ADR-0040",
+  "generated_from": "4.0.0-rc.1 frozen evidence built from the verified 3.4.0 feature baseline, 3.3.2 coverage rehearsal, and ADR-0040",
   "requirements": [
     {
       "id": "all_ci_jobs_green",
@@ -38,7 +38,7 @@
       "observed": 95.0,
       "check": "pyproject_coverage_gate",
       "evidence": ["pyproject.toml"],
-      "description": "The 3.4.0 CI floor is 95%; branch coverage remains measured without a separate threshold."
+      "description": "The 4.0.0-rc.1 CI floor is 95%; branch coverage remains measured without a separate threshold."
     },
     {
       "id": "python_measured_coverage",
