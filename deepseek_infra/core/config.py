@@ -447,7 +447,7 @@ class SkillsSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "4.0.0-rc.1"
+    app_version: str = "3.5.0"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -655,6 +655,8 @@ class Settings:
         ocr_defaults = OCRSettings()
         return cls(
             root=runtime_root,
+            deepseek_url=os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions").strip()
+            or "https://api.deepseek.com/chat/completions",
             deepseek_timeout_seconds=_env_int("DEEPSEEK_TIMEOUT_SECONDS", 180),
             multi_agent_timeout_seconds=_env_int("MULTI_AGENT_TIMEOUT_SECONDS", 3900),
             tavily_timeout_seconds=_env_int("TAVILY_TIMEOUT_SECONDS", 45),

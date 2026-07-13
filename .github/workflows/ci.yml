@@ -73,10 +73,10 @@ jobs:
       - run: python evals/runners/run_security_corpus.py --strict --out evals/reports/security-latest.json --markdown evals/reports/security-latest.md
       - run: python evals/runners/compare_eval_baseline.py --strict --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json --agent-baseline evals/baselines/agent-v2.2.8.json --out evals/reports/baseline-compare-latest.json
       - run: python evals/runners/run_agent_eval.py --report-dir evals/reports --strict
-      - run: python evals/runners/run_skill_eval.py --out evals/reports/skills-v4.0.0-rc.1.json --strict
-      - run: python evals/runners/run_media_eval.py --out evals/reports/media-v4.0.0-rc.1.json --strict
-      - run: python evals/runners/run_browser_eval.py --out evals/reports/browser-v4.0.0-rc.1.json --strict
-      - run: python evals/runners/run_automation_eval.py --out evals/reports/automation-v4.0.0-rc.1.json --strict
+      - run: python evals/runners/run_skill_eval.py --out evals/reports/skills-v3.5.0.json --strict
+      - run: python evals/runners/run_media_eval.py --out evals/reports/media-v3.5.0.json --strict
+      - run: python evals/runners/run_browser_eval.py --out evals/reports/browser-v3.5.0.json --strict
+      - run: python evals/runners/run_automation_eval.py --out evals/reports/automation-v3.5.0.json --strict
       - uses: actions/upload-artifact@v4
         with:
           name: offline-eval-report
@@ -88,10 +88,10 @@ jobs:
             evals/reports/baseline-compare-latest.json
             evals/reports/security-latest.json
             evals/reports/security-latest.md
-            evals/reports/skills-v4.0.0-rc.1.json
-            evals/reports/media-v4.0.0-rc.1.json
-            evals/reports/browser-v4.0.0-rc.1.json
-            evals/reports/automation-v4.0.0-rc.1.json
+            evals/reports/skills-v3.5.0.json
+            evals/reports/media-v3.5.0.json
+            evals/reports/browser-v3.5.0.json
+            evals/reports/automation-v3.5.0.json
 
   docker:
     runs-on: ubuntu-latest
@@ -186,6 +186,41 @@ jobs:
         if: always()
         run: docker rm --force deepseek-rust-rag-parity || true
 
+  gateway-request-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Rust sidecar image for Gateway request parity
+        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:request-parity .
+      - name: Start Rust sidecar for Gateway request parity
+        run: |
+          docker run --detach \
+            --name deepseek-rust-gateway-request-parity \
+            --publish 127.0.0.1:8787:8787 \
+            deepseek-rust-gateway:request-parity
+      - name: Run deterministic Gateway request parity corpus
+        run: |
+          python scripts/check_gateway_request_parity.py \
+            --base-url http://127.0.0.1:8787 \
+            --strict \
+            --report artifacts/gateway-request-parity-report.json
+      - name: Show Rust Gateway request parity logs
+        if: failure()
+        run: docker logs deepseek-rust-gateway-request-parity || true
+      - name: Upload Gateway request parity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-request-parity-report
+          path: artifacts/gateway-request-parity-report.json
+          if-no-files-found: warn
+      - name: Stop Rust Gateway request parity sidecar
+        if: always()
+        run: docker rm --force deepseek-rust-gateway-request-parity || true
+
   release-readiness:
     runs-on: ubuntu-latest
     steps:
@@ -197,23 +232,23 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
       - run: python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
-      - run: python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.0-rc.1.json
-      - run: python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v4.0.0-rc.1.json
-      - run: python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v4.0.0-rc.1.json
-      - run: python scripts/smoke_media.py --offline --out docs/evidence/media-v4.0.0-rc.1.json
-      - run: python scripts/smoke_browser.py --offline --out docs/evidence/browser-v4.0.0-rc.1.json --version 4.0.0-rc.1
-      - run: python scripts/smoke_automation.py --offline --out docs/evidence/automation-v4.0.0-rc.1.json --version 4.0.0-rc.1
-      - run: python scripts/smoke_skills.py --offline --out docs/evidence/skills-v4.0.0-rc.1.json
-      - run: python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v4.0.0-rc.1.json
-      - run: python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v4.0.0-rc.1.json
-      - run: python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v4.0.0-rc.1.json
-      - run: python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v4.0.0-rc.1.json --report-out evals/reports/skills-v4.0.0-rc.1.json
-      - run: python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v4.0.0-rc.1.json
-      - run: python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v4.0.0-rc.1.json
-      - run: python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v4.0.0-rc.1.json
-      - run: python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v4.0.0-rc.1.json
-      - run: python scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v4.0.0-rc.1.json
-      - run: python scripts/preflight_release.py --version 4.0.0-rc.1 --ga
+      - run: python scripts/smoke_ga.py --offline --out docs/evidence/ga-v3.5.0.json
+      - run: python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v3.5.0.json
+      - run: python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v3.5.0.json
+      - run: python scripts/smoke_media.py --offline --out docs/evidence/media-v3.5.0.json
+      - run: python scripts/smoke_browser.py --offline --out docs/evidence/browser-v3.5.0.json --version 3.5.0
+      - run: python scripts/smoke_automation.py --offline --out docs/evidence/automation-v3.5.0.json --version 3.5.0
+      - run: python scripts/smoke_skills.py --offline --out docs/evidence/skills-v3.5.0.json
+      - run: python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v3.5.0.json
+      - run: python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v3.5.0.json
+      - run: python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v3.5.0.json
+      - run: python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v3.5.0.json --report-out evals/reports/skills-v3.5.0.json
+      - run: python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v3.5.0.json
+      - run: python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v3.5.0.json
+      - run: python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v3.5.0.json
+      - run: python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v3.5.0.json
+      - run: python scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v3.5.0.json
+      - run: python scripts/preflight_release.py --version 3.5.0 --ga
       - run: python scripts/doctor.py --offline
       - run: python scripts/release.py --clean-workspace --dry-run
 
@@ -241,6 +276,7 @@ jobs:
       - docker
       - rust-docker
       - hybrid-runtime-e2e
+      - gateway-request-parity
       - rag-parity
       - release-readiness
       - docs
@@ -253,6 +289,7 @@ jobs:
       RC_CI_DOCKER: ${{ needs.docker.result }}
       RC_CI_RUST_DOCKER: ${{ needs['rust-docker'].result }}
       RC_CI_HYBRID_RUNTIME_E2E: ${{ needs['hybrid-runtime-e2e'].result }}
+      RC_CI_GATEWAY_REQUEST_PARITY: ${{ needs['gateway-request-parity'].result }}
       RC_CI_RAG_PARITY: ${{ needs['rag-parity'].result }}
       RC_CI_RELEASE_READINESS: ${{ needs['release-readiness'].result }}
       RC_CI_DOCS: ${{ needs.docs.result }}

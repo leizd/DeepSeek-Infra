@@ -198,12 +198,12 @@ def check_rust_status(base_url: str, *, expect_healthy: bool, timeout: float = 5
     return CheckResult("rust-status", f"all flags enabled; gateway {phase}")
 
 
-def check_gateway_proxy(base_url: str, *, timeout: float = 5.0) -> CheckResult:
+def check_gateway_request_preparation(base_url: str, *, expect_rust: bool = True, timeout: float = 5.0) -> CheckResult:
     models = _expect_ok(_request(base_url, "GET", "/v1/models", timeout=timeout), "GET /v1/models")
     entries = models.get("data")
     if not isinstance(entries, list) or not entries:
-        raise SmokeFailure("Rust-proxied model list is empty")
-    _require(all(isinstance(item, dict) and item.get("owned_by") == "deepseek" for item in entries), "model list did not come from Rust")
+        raise SmokeFailure("Python model list is empty")
+    _require(all(isinstance(item, dict) and item.get("owned_by") == "deepseek-infra" for item in entries), "model list did not stay Python-owned")
     chat = _expect_ok(
         _request(
             base_url,
@@ -217,9 +217,21 @@ def check_gateway_proxy(base_url: str, *, timeout: float = 5.0) -> CheckResult:
     choices = chat.get("choices")
     message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
     content = message.get("content") if isinstance(message, dict) else ""
-    _require(chat.get("id") == "chatcmpl-stub", "chat completion did not come from the Rust stub")
-    _require("deepseek-gateway-rs" in str(content), "Rust stub fingerprint is missing from chat content")
-    return CheckResult("gateway-proxy", "Python /v1 routes returned Rust models and deterministic chat stub")
+    _require(chat.get("id") == "chatcmpl-hybrid-upstream", "chat completion did not come from the offline upstream stub")
+    _require(content == "hybrid upstream stub", "offline upstream stub content is missing")
+    diagnostics = chat.get("diagnostics")
+    preparation = diagnostics.get("gatewayRequestPreparation") if isinstance(diagnostics, dict) else None
+    if not isinstance(preparation, dict):
+        raise SmokeFailure("Gateway preparation diagnostics are missing")
+    expected_runtime = "rust" if expect_rust else "python"
+    _require(preparation.get("runtime") == expected_runtime, f"Gateway preparation runtime must be {expected_runtime}")
+    _require(preparation.get("fallback") is (not expect_rust), "Gateway preparation fallback flag is incorrect")
+    if not expect_rust:
+        _require(preparation.get("fallbackReason") == "rust_backend_unavailable", "Gateway fallback reason is not stable")
+    return CheckResult(
+        "gateway-request-preparation",
+        f"Python models and upstream HTTP passed with {expected_runtime} request preparation",
+    )
 
 
 def _mcp_call(base_url: str, request_id: str, method: str, params: dict[str, Any] | None, timeout: float) -> dict[str, Any]:
@@ -353,20 +365,7 @@ def stop_sidecar(compose_files: tuple[str, ...], *, timeout: float = 30.0) -> Ch
 
 
 def _check_gateway_fallback(base_url: str, *, timeout: float) -> CheckResult:
-    models = _expect_ok(_request(base_url, "GET", "/v1/models", timeout=timeout), "GET /v1/models fallback")
-    entries = models.get("data")
-    if not isinstance(entries, list) or not entries:
-        raise SmokeFailure("Python fallback model list is empty")
-    _require(all(isinstance(item, dict) and item.get("owned_by") == "deepseek-infra" for item in entries), "Gateway did not fall back to Python")
-    chat = _request(
-        base_url,
-        "POST",
-        "/v1/chat/completions",
-        payload={"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "fallback smoke"}], "stream": False},
-        timeout=timeout,
-    )
-    _require(chat.status == 400 and chat.body.get("code") == "missing_api_key", "Python chat fallback did not return a structured missing-key error")
-    return CheckResult("gateway-fallback", "Python models served; chat returned structured offline error")
+    return check_gateway_request_preparation(base_url, expect_rust=False, timeout=timeout)
 
 
 def _check_mcp_fallback(base_url: str, *, timeout: float) -> CheckResult:
@@ -409,7 +408,7 @@ def run_smoke(
 ) -> list[CheckResult]:
     checks = [wait_for_service(base_url, wait_seconds=wait_seconds, timeout=timeout)]
     checks.append(check_rust_status(base_url, expect_healthy=True, timeout=timeout))
-    checks.append(check_gateway_proxy(base_url, timeout=timeout))
+    checks.append(check_gateway_request_preparation(base_url, timeout=timeout))
     checks.append(check_mcp_proxy(base_url, timeout=timeout))
     checks.append(check_policy_integration(compose_files, expect_rust=True))
     checks.append(check_rag_integration(compose_files, expect_rust=True))

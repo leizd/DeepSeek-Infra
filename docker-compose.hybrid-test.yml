@@ -5,6 +5,8 @@ services:
       MCP_ENABLED: "1"
       LOCAL_RAG_ENABLED: "1"
       LOCAL_RAG_EMBEDDING_PROVIDER: "hash"
+      DEEPSEEK_API_KEY: "hybrid-offline-key"
+      DEEPSEEK_API_URL: "http://upstream-stub:9080/chat/completions"
       DEEPSEEK_RUST_GATEWAY: "1"
       DEEPSEEK_RUST_MCP: "1"
       DEEPSEEK_RUST_POLICY: "1"
@@ -22,6 +24,28 @@ services:
     depends_on:
       rust-gateway:
         condition: service_healthy
+      upstream-stub:
+        condition: service_healthy
+    restart: "no"
+
+  upstream-stub:
+    image: python:3.12-slim
+    working_dir: /workspace
+    volumes:
+      - .:/workspace:ro
+    command: ["python", "scripts/stub_deepseek_upstream.py", "--host", "0.0.0.0", "--port", "9080"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9080/healthz', timeout=2)",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 12
+      start_period: 2s
     restart: "no"
 
   rust-gateway:

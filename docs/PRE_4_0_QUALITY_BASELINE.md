@@ -1,14 +1,14 @@
 # Pre-4.0 Quality Baseline
 
-This document tracks where the project stands after the 3.4.0 semantic-cache vector-ranking update, built on the 3.3.2 95% coverage and RC rehearsal milestone, and how far it is from the 4.0.0 goals defined in [RUST_MIGRATION_ROADMAP.md](RUST_MIGRATION_ROADMAP.md).
+This document tracks where the project stands after the 3.5.0 optional Gateway request-preparation update, built on the 3.3.2 95% coverage milestone and 3.4.0 semantic-cache vector ranking. The stable development line remains 3.x; the published `v4.0.0-rc.1` is an architecture preview and release-flow rehearsal.
 
-> **Purpose**: know and enforce the gap. The [4.0 RC readiness matrix](4_0_RC_READINESS.md) now reports **READY FOR 4.0.0-rc.1** after the measured suite cleared the 95% RC target twice with a 0.30-point safety margin. This rehearsal does not create an RC tag.
+> **Purpose**: know and enforce the gap. The [4.0 RC readiness matrix](4_0_RC_READINESS.md) records the already-published `v4.0.0-rc.1` rehearsal; it does not make 4.0.0 the active stable line or imply a near-term stable 4.0.0 release.
 
 ---
 
-## Current quality milestone: 3.4.0
+## Current quality milestone: 3.5.0
 
-At the end of 3.4.0:
+At the end of 3.5.0:
 
 - All Rust components remain **default-disabled**.
 - The hybrid runtime has a complete operational runbook ([RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)) and a release-readiness checklist ([RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md)).
@@ -16,19 +16,21 @@ At the end of 3.4.0:
 - Rust CI gates pass (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`).
 - Offline eval gates pass with `--strict`.
 - The Rust sidecar has a standalone multi-stage Docker image, optional Compose file, container health check, and offline smoke test.
-- A test-only Compose overlay starts Python and Rust together with all four Rust flags enabled, then verifies Python-to-Rust delegation and Python fallback after stopping the sidecar.
+- A test-only Compose overlay starts Python, Rust, and an offline upstream stub, verifies Rust request preparation through the real Python Gateway path, then stops the sidecar and proves the same request succeeds through Python fallback.
 - Rust Policy decisions carry stable codes, decision and trace identifiers, capability/risk context, and structured redacted audit fields.
 - Policy backend failures have explicit `fallback`, `deny`, and `error` behavior; all deny/error paths stop tool execution.
 - A shared 38-case fixture proves Python/Rust parity for normalization, full Top-K ordering, tie-breaks, scores, citations, and index validation.
 - The independent `rag-parity` CI job runs against a live Rust sidecar and uploads a machine-readable difference report.
+- The independent `gateway-request-parity` CI job runs 68 deterministic valid/invalid cases against a live sidecar and uploads a machine-readable report.
 - A machine-readable RC requirements manifest classifies quality blockers, architecture decision blockers, and non-blocking recommendations with explicit owners and evidence.
 - [ADR-0040](adr/ADR-0040-hybrid-runtime-architecture.md) approves a Python-first hybrid 4.0 architecture: no Rust delegate is default-on, default deployment remains Python-only, and Python fallback is guaranteed throughout 4.x.
-- Gateway streaming and real MCP tool execution remain Python-owned by design; Rust owns models/non-streaming chat delegation and MCP JSON-RPC validation/routing respectively.
+- Gateway streaming, model listing, provider routing, upstream HTTP, credentials, retries, and real MCP tool execution remain Python-owned by design; Rust Gateway owns only deterministic request preparation, while Rust MCP owns JSON-RPC validation/routing.
 - The machine-readable architecture contract resolves all five architecture blockers from real decision fields, including the intentionally empty Rust default-on set.
 - Normal PRs and `main` generate the RC report without permanent failure; `release/*` and `rc/*` branches run the same checker in strict mode.
 - The default Docker deployment still builds and runs only the Python service.
 - Semantic-cache vector ranking can use the existing opt-in Rust RAG delegate, with strict response validation, backend diagnostics, and Python fallback.
-- Python coverage is conservatively recorded as **95.33%**, above the explicit 4.0 RC target of **95.00%**.
+- Gateway request preparation can use the existing opt-in Rust Gateway delegate, with strict response validation, stable error codes, safe diagnostics, and Python fallback.
+- The complete 3.5.0 statement-and-branch run measures **95.34%**, above the 95% CI gate and the 95.20% release minimum; coverage omissions are unchanged.
 
 ---
 
@@ -36,7 +38,7 @@ At the end of 3.4.0:
 
 | Component | Rust crate | Sidecar routes | Python opt-in integration | Default-on in 3.1.x | Gap before 4.0.0 |
 | --- | --- | --- | --- | --- | --- |
-| **Gateway** | `deepseek-gateway` | `GET /healthz`, `GET /v1/models`, `POST /v1/chat/completions` (non-streaming) | `DEEPSEEK_RUST_GATEWAY=1` proxies non-streaming chat and model list | ❌ | Streaming chat still uses Python; needs default-on decision and packaging |
+| **Gateway** | `deepseek-gateway` | `GET /healthz`, `POST /gateway/request/prepare` | `DEEPSEEK_RUST_GATEWAY=1` delegates deterministic preparation only | ❌ | Streaming, models, credentials, providers, upstream HTTP, retries, tools, and trace lifecycle remain Python-owned |
 | **MCP** | `deepseek-mcp` | `POST /mcp` | `DEEPSEEK_RUST_MCP=1` delegates JSON-RPC handling | ❌ | No real Python tool execution bridge into Rust; default-on not decided |
 | **Policy** | `deepseek-policy` | `POST /policy/url`, `/policy/path`, `/policy/capability` | `DEEPSEEK_RUST_POLICY=1` delegates structured, audited URL/path/capability checks | ❌ | Python Tool Policy remains the fallback; default enforcement not decided |
 | **RAG** | `deepseek-rag` | `POST /rag/query/normalize`, `/rag/chunks/score`, `/rag/vectors/rank`, `/rag/citation/format`, `/rag/index/validate` | `DEEPSEEK_RUST_RAG=1` delegates hot paths and semantic-cache batch vector ranking | ❌ | Deterministic hot-path parity is proven; embedding and vector DB access still live in Python |
@@ -53,7 +55,7 @@ Legend:
 
 | Python boundary | Location | Rust flag | Fallback path | Tests | Docs |
 | --- | --- | --- | --- | --- | --- |
-| Gateway chat/models | `deepseek_infra/web/routes/chat.py` | `DEEPSEEK_RUST_GATEWAY` | Python `openai_api.py` | ✅ `tests/test_rust_gateway_proxy.py` | ✅ Runbook |
+| Gateway request preparation | `deepseek_infra/infra/gateway/request_preparation.py` | `DEEPSEEK_RUST_GATEWAY` | Python deterministic preparation | ✅ `tests/test_gateway_request_preparation.py`, `test_rust_gateway_request_parity_contract.py` | ✅ [Parity contract](GATEWAY_REQUEST_PREPARATION_PARITY.md) |
 | MCP JSON-RPC | `deepseek_infra/web/routes/mcp.py` | `DEEPSEEK_RUST_MCP` | Python `infra/mcp/server.py` | ✅ `tests/test_rust_mcp_proxy.py` | ✅ Runbook |
 | Tool policy guards | `deepseek_infra/infra/tool_runtime/tools.py` | `DEEPSEEK_RUST_POLICY` | Python `tool_policy.py` | ✅ `tests/test_rust_policy_integration.py`, `test_rust_policy_audit.py`, `test_rust_policy_fail_modes.py` | ✅ Runbook |
 | RAG hot paths | `deepseek_infra/infra/rag/local_rag.py` | `DEEPSEEK_RUST_RAG` | Python RAG functions | ✅ `tests/test_rust_rag_integration.py`, `test_rust_rag_parity_contract.py` | ✅ [Parity baseline](RAG_PARITY_BASELINE.md) |
@@ -70,7 +72,7 @@ Legend:
 | Metric | Current | 4.0.0 target | Gap |
 | --- | --- | --- | --- |
 | Coverage gate | **95%** | ~95% | Cleared |
-| Measured coverage (full suite) | **95.33%** | ~95% | Cleared with 0.30-point rehearsal margin |
+| Measured coverage (full suite) | **95.34%** | ~95% | Cleared; above the 95.20% release minimum |
 
 The gate was raised from 82% to 85% in 3.2.0, to 90% in 3.3.1, and to 95% in 3.3.2. The final uplift targets real failure behavior in DeepSeek streaming, RAG/files, launcher credentials, agent persistence/concurrency, Skills security/versioning, Browser/OCR/media, MCP, and workspace persistence. Coverage omit rules remain unchanged, and HIGH-risk coverage debt is lower than the 3.3.1 baseline.
 
@@ -91,18 +93,19 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | --- | --- | --- |
 | `ruff check .` | ✅ Green | Minimal rule set by design. |
 | `mypy .` | ✅ Green | `ignore_missing_imports=true`. |
-| `pytest --cov --cov-fail-under=95` | ✅ Green | 3.4.0 inherits the 3.3.2 evidence of 95.3428% and 95.3396% across two consecutive full runs; branch coverage is recorded without a separate gate. |
+| `pytest --cov --cov-fail-under=95` | ✅ Green | The complete 3.5.0 run measured 95.34%; coverage omissions are unchanged. |
 | `cargo fmt --check` | ✅ Green | Rust workspace. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ Green | No warnings. |
 | `cargo test --all` | ✅ Green | Rust crate tests. |
 | Rust sidecar Docker build + smoke | ✅ CI gate | Independent job; does not alter the Python image. |
 | Hybrid runtime E2E + fallback | ✅ CI gate | Gateway, MCP, Policy, and RAG over the live Compose network. |
 | Rust/Python RAG parity | ✅ CI gate | 38 deterministic cases against a live Rust sidecar; JSON report uploaded. |
+| Rust/Python Gateway request parity | ✅ CI gate | 68 deterministic cases against a live Rust sidecar; JSON report uploaded. |
 | `node --check ...` | ✅ Green | Listed JS files. |
 | `python scripts/check_doc_links.py` | ✅ Green | Internal doc links. |
 | `pip-audit`, `bandit`, `detect-secrets` | ✅ Green | Security scan. |
 | Offline eval suite `--strict` | ✅ Green | RAG, Tool, Injection, Agent, Security corpus. |
-| `scripts/preflight_release.py --version 3.4.0 --ga` | ✅ Green | Release readiness. |
+| `scripts/preflight_release.py --version 3.5.0 --ga` | Required | Release readiness. |
 
 ---
 
@@ -115,7 +118,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 5. **Policy parity**: Stable Rust deny codes, trace correlation, redacted audits, and fail modes are proven; broader corpus-level Rust/Python rule parity is still required before default enforcement.
 6. **RAG parity**: Deterministic normalization, scoring/order, citation, and validation parity is proven; embedding, vector database, and corpus-scale performance parity remain open.
 7. **Gateway streaming**: Streaming chat completions remain Python-owned for 4.0 by ADR-0040; this is an explicit boundary, not a completed Rust path.
-8. **Rust-side error contracts**: Policy decisions are stable contracts; Gateway, MCP, and RAG error shapes still need the same treatment.
+8. **Rust-side error contracts**: Policy decisions and Gateway request-preparation categories are stable contracts; broader MCP and RAG error-shape coverage remains open.
 
 ---
 

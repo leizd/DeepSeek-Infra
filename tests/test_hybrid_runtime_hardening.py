@@ -153,12 +153,12 @@ def test_gateway_client_successful_response(mock_urlopen, monkeypatch: pytest.Mo
     assert result.body == {"id": "x"}
 
 
-def test_gateway_client_preserves_authorization(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gateway_client_drops_authorization(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEEPSEEK_RUST_GATEWAY", "1")
     mock_urlopen.return_value = MockHTTPResponse(200, b"{}")
     gateway_client.proxy_chat_to_rust({"model": "x"}, headers={"Authorization": "Bearer token"})
     request = mock_urlopen.call_args[0][0]
-    assert request.headers.get("Authorization") == "Bearer token"
+    assert request.headers.get("Authorization") is None
 
 
 def test_gateway_client_timeout_invalid_value_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:

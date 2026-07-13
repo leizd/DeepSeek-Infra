@@ -1,9 +1,10 @@
-"""HTTP proxy client for the Rust Gateway sidecar."""
+"""HTTP client for optional Rust Gateway sidecar contracts."""
 
 from __future__ import annotations
 
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ class GatewayProxyResult:
     ok: bool
     status: int
     body: Any
+    error_kind: str = ""
 
 
 def _rust_gateway_enabled() -> bool:
@@ -51,8 +53,7 @@ def _request(
     url = f"{rust_gateway_url()}{path}"
     timeout = (timeout_ms if timeout_ms is not None else _timeout_ms()) / 1000.0
     req_headers = {"Accept": "application/json"}
-    if headers and "Authorization" in headers:
-        req_headers["Authorization"] = headers["Authorization"]
+    del headers  # Local auth and provider credentials are never forwarded to Rust.
     data = None
     if payload is not None:
         req_headers["Content-Type"] = "application/json"
@@ -62,18 +63,27 @@ def _request(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read()
             if not raw:
-                return GatewayProxyResult(ok=True, status=response.status, body={})
-            return GatewayProxyResult(
-                ok=True, status=response.status, body=json.loads(raw.decode("utf-8"))
-            )
+                return GatewayProxyResult(ok=True, status=response.status, body={}, error_kind="rust_empty_response")
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                return GatewayProxyResult(ok=False, status=response.status, body=str(exc), error_kind="rust_malformed_json")
+            if not isinstance(body, dict):
+                return GatewayProxyResult(ok=False, status=response.status, body=body, error_kind="rust_invalid_shape")
+            return GatewayProxyResult(ok=True, status=response.status, body=body)
     except urllib.error.HTTPError as exc:
         try:
             body = exc.read().decode("utf-8")
         except Exception:
             body = str(exc)
-        return GatewayProxyResult(ok=False, status=exc.code, body=body)
+        return GatewayProxyResult(ok=False, status=exc.code, body=body, error_kind="rust_http_error")
+    except urllib.error.URLError as exc:
+        reason = "rust_backend_timeout" if isinstance(exc.reason, (TimeoutError, socket.timeout)) else "rust_backend_unavailable"
+        return GatewayProxyResult(ok=False, status=0, body=str(exc), error_kind=reason)
+    except (TimeoutError, socket.timeout) as exc:
+        return GatewayProxyResult(ok=False, status=0, body=str(exc), error_kind="rust_backend_timeout")
     except Exception as exc:
-        return GatewayProxyResult(ok=False, status=0, body=str(exc))
+        return GatewayProxyResult(ok=False, status=0, body=str(exc), error_kind="rust_backend_unavailable")
 
 
 def proxy_chat_to_rust(
@@ -92,6 +102,18 @@ def proxy_models_to_rust(headers: dict[str, str] | None = None) -> GatewayProxyR
             ok=False, status=0, body={"error": "Rust Gateway is disabled"}
         )
     return _request("GET", "/v1/models", headers=headers)
+
+
+def prepare_request_with_rust(payload: dict[str, Any]) -> GatewayProxyResult:
+    """Send only a credential-free request body to deterministic preparation."""
+    if not _rust_gateway_enabled():
+        return GatewayProxyResult(
+            ok=False,
+            status=0,
+            body={"error": "Rust Gateway is disabled"},
+            error_kind="rust_gateway_disabled",
+        )
+    return _request("POST", "/gateway/request/prepare", payload=payload)
 
 
 def rust_gateway_enabled() -> bool:
