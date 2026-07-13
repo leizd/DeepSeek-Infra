@@ -2,6 +2,8 @@
 
 适用版本：v4.0.0-rc.1。
 
+RC evidence source commit: `3be60b6884b36fbb77ea6562707b085b5d7ce17c`. The versioned `v4.0.0-rc.1` smoke and evaluation files below were regenerated against this frozen source commit; historical evidence remains unchanged.
+
 本页汇总 DeepSeek Infra v2.3.x 以来的互操作证据、评测报告、v2.4 质量门禁证据、v2.5 Workspace Core 证据与 release artifact，作为证据链的统一入口。所有标 ✅ 的项都有可复现的 smoke / evidence 路径；标 🟡 的项需要人工 GUI、本地模型或真实第三方生态实测。
 
 ## 证据矩阵

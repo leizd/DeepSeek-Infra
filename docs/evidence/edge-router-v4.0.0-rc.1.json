@@ -1,0 +1,165 @@
+{
+  "version": "4.0.0-rc.1",
+  "commit": "3be60b68",
+  "generatedAt": "2026-07-13T01:20:11Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "edgeDoctor": "PASS",
+    "statusShape": "PASS",
+    "routePreviewApi": "PASS",
+    "fakeProvider": "PASS",
+    "routingPolicy": "PASS",
+    "fallbackPolicy": "PASS",
+    "forcedLocalUnavailable": "PASS"
+  },
+  "details": {
+    "edgeDoctor": {
+      "name": "edge_router",
+      "status": "pass",
+      "detail": "Edge Router disabled (optional); set EDGE_INFERENCE_ENABLED=1 to enable local routing",
+      "data": {
+        "enabled": false,
+        "provider": "llama_cpp",
+        "providerSupported": true,
+        "available": false,
+        "dependencyAvailable": false,
+        "modelPathConfigured": false,
+        "modelPathExists": false,
+        "modelPathSuffixSupported": true,
+        "modelPath": "",
+        "modelName": "deepseek-r1-distill-local",
+        "loaded": false,
+        "quantization": "",
+        "nCtx": 4096,
+        "nThreads": 0,
+        "nGpuLayers": 0,
+        "maxTokens": 1024,
+        "temperature": 0.7,
+        "topP": 0.95,
+        "allowModelPathOverride": false,
+        "suggestions": [
+          "Set EDGE_INFERENCE_ENABLED=1 to enable local model routing."
+        ]
+      }
+    },
+    "previews": {
+      "simple": {
+        "useEdge": true,
+        "reason": "simple_task_local",
+        "mode": "auto",
+        "provider": "fake",
+        "status": {
+          "enabled": true,
+          "provider": "fake",
+          "providerSupported": true,
+          "available": true,
+          "dependencyAvailable": true,
+          "modelPathConfigured": true,
+          "modelPathExists": true,
+          "modelPathSuffixSupported": true,
+          "modelPath": "",
+          "modelName": "edge-fake",
+          "loaded": false,
+          "quantization": "",
+          "nCtx": 4096,
+          "nThreads": 0,
+          "nGpuLayers": 0,
+          "maxTokens": 128,
+          "temperature": 0.0,
+          "topP": 1.0,
+          "allowModelPathOverride": false,
+          "suggestions": []
+        }
+      },
+      "current": {
+        "useEdge": false,
+        "reason": "complex_task_cloud",
+        "mode": "auto",
+        "provider": "fake",
+        "status": {
+          "enabled": true,
+          "provider": "fake",
+          "providerSupported": true,
+          "available": true,
+          "dependencyAvailable": true,
+          "modelPathConfigured": true,
+          "modelPathExists": true,
+          "modelPathSuffixSupported": true,
+          "modelPath": "",
+          "modelName": "edge-fake",
+          "loaded": false,
+          "quantization": "",
+          "nCtx": 4096,
+          "nThreads": 0,
+          "nGpuLayers": 0,
+          "maxTokens": 128,
+          "temperature": 0.0,
+          "topP": 1.0,
+          "allowModelPathOverride": false,
+          "suggestions": []
+        }
+      },
+      "image": {
+        "useEdge": false,
+        "reason": "unsupported_payload",
+        "mode": "auto",
+        "provider": "fake",
+        "status": {
+          "enabled": true,
+          "provider": "fake",
+          "providerSupported": true,
+          "available": true,
+          "dependencyAvailable": true,
+          "modelPathConfigured": true,
+          "modelPathExists": true,
+          "modelPathSuffixSupported": true,
+          "modelPath": "",
+          "modelName": "edge-fake",
+          "loaded": false,
+          "quantization": "",
+          "nCtx": 4096,
+          "nThreads": 0,
+          "nGpuLayers": 0,
+          "maxTokens": 128,
+          "temperature": 0.0,
+          "topP": 1.0,
+          "allowModelPathOverride": false,
+          "suggestions": []
+        }
+      },
+      "fallback": {
+        "useEdge": true,
+        "reason": "cloud_unavailable_simple_local",
+        "mode": "auto",
+        "provider": "fake",
+        "status": {
+          "enabled": true,
+          "provider": "fake",
+          "providerSupported": true,
+          "available": true,
+          "dependencyAvailable": true,
+          "modelPathConfigured": true,
+          "modelPathExists": true,
+          "modelPathSuffixSupported": true,
+          "modelPath": "",
+          "modelName": "edge-fake",
+          "loaded": false,
+          "quantization": "",
+          "nCtx": 4096,
+          "nThreads": 0,
+          "nGpuLayers": 0,
+          "maxTokens": 128,
+          "temperature": 0.0,
+          "topP": 1.0,
+          "allowModelPathOverride": false,
+          "suggestions": []
+        }
+      }
+    }
+  }
+}
