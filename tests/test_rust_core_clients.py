@@ -100,12 +100,12 @@ def test_mcp_client_empty_response(mock_urlopen, monkeypatch: pytest.MonkeyPatch
     assert result.body == {}
 
 
-def test_mcp_client_preserves_authorization(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mcp_client_never_forwards_authorization(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEEPSEEK_RUST_MCP", "1")
     mock_urlopen.return_value = MockHTTPResponse(200, b"{}")
     mcp_client.proxy_mcp_to_rust({"jsonrpc": "2.0"}, headers={"Authorization": "Bearer token"})
     request = mock_urlopen.call_args[0][0]
-    assert request.headers.get("Authorization") == "Bearer token"
+    assert request.headers.get("Authorization") is None
 
 
 def test_mcp_client_http_error_body_read_fails(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:

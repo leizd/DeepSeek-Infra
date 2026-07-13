@@ -104,17 +104,14 @@ class _SidecarHandler(BaseHTTPRequestHandler):
                 }
             )
             return
-        if self.path == "/mcp":
-            assert request["method"] == "initialize"
+        if self.path == "/mcp/request/prepare":
+            assert request["method"] == "tools/call"
             self._send(
                 {
-                    "jsonrpc": "2.0",
-                    "id": request["id"],
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "serverInfo": {"name": "deepseek-mcp-rs", "version": "0.1.0"},
-                        "capabilities": {},
-                    },
+                    "ok": True,
+                    "messageType": "request",
+                    "request": request,
+                    "routing": {"owner": "python", "category": "tools"},
                 }
             )
             return
@@ -159,7 +156,15 @@ def sidecar_url() -> Iterator[str]:
 def test_smoke_exercises_all_offline_sidecar_contracts(sidecar_url: str) -> None:
     checks = smoke.run_smoke(sidecar_url, wait_seconds=1, timeout=1)
 
-    assert [check.name for check in checks] == ["health", "models", "chat", "mcp", "policy", "rag", "rag_vector_rank"]
+    assert [check.name for check in checks] == [
+        "health",
+        "models",
+        "chat",
+        "mcp_protocol_preparation",
+        "policy",
+        "rag",
+        "rag_vector_rank",
+    ]
 
 
 def test_smoke_rejects_malformed_json(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -105,30 +105,30 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
     _require(isinstance(first_message, dict) and first_message.get("role") == "assistant", "chat response has no assistant message")
     checks.append(CheckResult("chat", "POST /v1/chat/completions"))
 
+    mcp_request = {
+        "jsonrpc": "2.0",
+        "id": "docker-smoke",
+        "method": "tools/call",
+        "params": {
+            "name": "docker-smoke-tool",
+            "arguments": {"text": "Rust MCP preparation preserves 中文 🚀"},
+        },
+    }
     mcp = _request_json(
         base_url,
         "POST",
-        "/mcp",
-        payload={
-            "jsonrpc": "2.0",
-            "id": "docker-smoke",
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "docker-smoke", "version": "1.0.0"},
-            },
-        },
+        "/mcp/request/prepare",
+        payload=mcp_request,
         timeout=timeout,
     )
-    mcp_result = mcp.get("result")
-    _require(mcp.get("jsonrpc") == "2.0", "MCP response is not JSON-RPC 2.0")
-    if not isinstance(mcp_result, dict):
-        raise SmokeFailure("MCP initialize response has no result")
-    _require(mcp_result.get("protocolVersion") == "2024-11-05", "MCP protocol version mismatch")
-    server_info = mcp_result.get("serverInfo")
-    _require(isinstance(server_info, dict) and server_info.get("name") == "deepseek-mcp-rs", "MCP serverInfo mismatch")
-    checks.append(CheckResult("mcp", "POST /mcp"))
+    routing = mcp.get("routing")
+    prepared = mcp.get("request")
+    _require(mcp.get("ok") is True, "MCP protocol preparation did not succeed")
+    _require(mcp.get("messageType") == "request", "MCP preparation returned the wrong message type")
+    _require(isinstance(routing, dict) and routing.get("owner") == "python", "MCP preparation changed the routing owner")
+    _require(prepared == mcp_request, "MCP preparation changed tool arguments")
+    _require("result" not in mcp, "MCP preparation unexpectedly executed a tool")
+    checks.append(CheckResult("mcp_protocol_preparation", "POST /mcp/request/prepare"))
 
     policy = _request_json(
         base_url,

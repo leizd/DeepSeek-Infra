@@ -1,5 +1,25 @@
 # 更新日志
 
+## [3.6.0] - Optional Rust MCP Protocol Preparation
+
+### Added
+
+- Added deterministic `POST /mcp/request/prepare` handling to the existing Rust sidecar for established Python MCP requests, notifications, and responses, with stable internal categories mapped to JSON-RPC error codes.
+- Added a shared 105-case Python/Rust parity corpus, strict live-sidecar checker, redacted CI report, Rust unit coverage, Python defensive/fallback coverage, Docker smoke, and hybrid runtime E2E coverage.
+- Added safe MCP preparation diagnostics containing only method, message type, request-ID type, payload size, runtime, fallback state/reason, and latency.
+
+### Changed
+
+- Replaced the opt-in Rust MCP execution/proxy path with protocol preparation only. Python computes the local contract first, accepts only a contract-identical descriptor whose routing owner is Python, and continues to own transport, authentication, sessions, capabilities, registries, tool execution, resources, prompts, cancellation, scheduling, tracing, credentials, and business state.
+- Backend connection, timeout, HTTP, empty-body, malformed-JSON, non-object, incomplete-contract, unknown-message-type, unsafe-owner, changed-argument, and semantic-divergence failures use the already-computed Python result. Deterministic user protocol errors keep the same stable error category and are not reported as fallback.
+- Synchronized the active application, Android, Docker, CI, documentation, manifest, tests, and offline evidence line to 3.6.0. The complete statement-and-branch suite measures 95.41%, the Python CI gate remains 95%, and coverage omissions are unchanged.
+
+### Compatibility and non-goals
+
+- `DEEPSEEK_RUST_MCP` remains disabled by default, default Compose remains Python-only, established single-message behavior remains unchanged, and no JSON-RPC batch support is added or removed.
+- Rust never executes tools, validates tool-specific schemas, receives credentials, logs full params or tool arguments, owns MCP transports/sessions, or loads resource/prompt content. Python fallback remains available and `tools/call` executes only once in Python.
+- This release does not add Rust MCP transport/session state, tool registry/execution, resource/prompt loading, cancellation execution, default-on Rust deployment, a new 4.0 RC, stable 4.0.0, a tag, or a GitHub Release. The published `v4.0.0-rc.1` remains a historical architecture preview.
+
 ## [3.5.0] - Optional Rust Gateway Request Preparation
 
 ### Added

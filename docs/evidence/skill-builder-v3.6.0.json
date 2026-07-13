@@ -1,0 +1,51 @@
+{
+  "version": "3.6.0",
+  "commit": "8d98fd739cda",
+  "generatedAt": "2026-07-13T05:18:02+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "builderOpen": "PASS",
+    "cloneBuiltinSkill": "PASS",
+    "visualInputSchemaEdit": "PASS",
+    "toolPermissionPicker": "PASS",
+    "schemaValidation": "PASS",
+    "offlineDryRun": "PASS",
+    "saveCustomSkill": "PASS",
+    "exportCreatedSkill": "PASS",
+    "skillBuilderStyles": "PASS",
+    "skillBuilderAssets": "PASS",
+    "skillBuilderJsSyntax": "PASS",
+    "ciSyntaxGate": "PASS"
+  },
+  "details": {
+    "skillBuilderAssets": [
+      "docs/assets/skill-builder.png",
+      "docs/assets/skill-builder-dry-run.png"
+    ],
+    "skillBuilderJsSyntax": {
+      "returnCode": 0,
+      "stderr": ""
+    },
+    "builderEntrypoints": [
+      "#skillNewButton",
+      "#skillBuilderHost",
+      "#skillBuilderForm",
+      "#skillBuilderToolPicker"
+    ],
+    "toolOptions": [
+      "search_files",
+      "read_file_chunk",
+      "web_search",
+      "fetch_url",
+      "create_document",
+      "create_pptx",
+      "create_mindmap",
+      "python_eval"
+    ]
+  }
+}

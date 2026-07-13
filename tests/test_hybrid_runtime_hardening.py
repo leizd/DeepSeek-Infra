@@ -190,7 +190,8 @@ def test_mcp_client_timeout(monkeypatch: pytest.MonkeyPatch, mock_urlopen) -> No
     result = mcp_client.proxy_mcp_to_rust({"jsonrpc": "2.0"})
     assert not result.ok
     assert result.status == 0
-    assert "connection refused" in str(result.body)
+    assert result.body is None
+    assert result.error_kind == "rust_backend_unavailable"
 
 
 def test_mcp_client_http_error(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:

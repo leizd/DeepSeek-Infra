@@ -110,7 +110,7 @@ def test_rag_probe_requires_all_delegations_and_exact_ranking() -> None:
     smoke._assert_rag_probe({**common, "delegated": {"normalize": False, "score": False, "citation": False}}, expect_rust=False)
 
 
-def test_http_contracts_identify_rust_gateway_and_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_http_contracts_identify_rust_mcp_preparation_with_python_execution(monkeypatch: pytest.MonkeyPatch) -> None:
     def request(
         base_url: str,
         method: str,
@@ -139,23 +139,38 @@ def test_http_contracts_identify_rust_gateway_and_mcp(monkeypatch: pytest.Monkey
         elif path == "/mcp" and payload is not None:
             request_id = payload["id"]
             mcp_method = payload["method"]
+            headers = {
+                "x-deepseek-mcp-preparation-runtime": "rust",
+                "x-deepseek-mcp-preparation-fallback": "0",
+            }
             result: dict[str, Any]
             if mcp_method == "initialize":
-                result = {"protocolVersion": "2024-11-05", "serverInfo": {"name": "deepseek-mcp-rs"}}
+                result = {"protocolVersion": "2025-06-18", "serverInfo": {"name": "deepseek-infra"}}
             elif mcp_method == "tools/list":
-                result = {"tools": [{"name": "echo"}, {"name": "health"}]}
+                result = {"tools": [{"name": "data_transform"}]}
+            elif payload.get("params") == {}:
+                body = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "invalid", "data": {"code": "invalid_params"}},
+                }
+                headers = {
+                    "x-deepseek-mcp-preparation-runtime": "python",
+                    "x-deepseek-mcp-preparation-fallback": "0",
+                }
+                return smoke.HttpResult(200, body, "", headers)
             else:
-                result = {"content": [{"type": "text", "text": "hello from hybrid e2e"}], "isError": False}
+                result = {"structuredContent": {"ok": True, "result": {"count": 4}}, "isError": False}
             body = {"jsonrpc": "2.0", "id": request_id, "result": result}
         else:
             raise AssertionError(f"unexpected request: {path}")
-        return smoke.HttpResult(200, body, "")
+        return smoke.HttpResult(200, body, "", headers if path == "/mcp" else {})
 
     monkeypatch.setattr(smoke, "_request", request)
 
     smoke.check_rust_status("http://test", expect_healthy=True)
     smoke.check_gateway_request_preparation("http://test")
-    smoke.check_mcp_proxy("http://test")
+    smoke.check_mcp_protocol_preparation("http://test", expect_rust=True)
 
 
 def test_http_contracts_identify_python_gateway_and_mcp_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,14 +204,30 @@ def test_http_contracts_identify_python_gateway_and_mcp_fallback(monkeypatch: py
         if path == "/mcp" and payload is not None:
             request_id = payload["id"]
             mcp_method = payload["method"]
+            headers = {
+                "x-deepseek-mcp-preparation-runtime": "python",
+                "x-deepseek-mcp-preparation-fallback": "1",
+                "x-deepseek-mcp-preparation-fallback-reason": "rust_backend_unavailable",
+            }
             result: dict[str, Any]
             if mcp_method == "initialize":
                 result = {"protocolVersion": "2025-06-18", "serverInfo": {"name": "deepseek-infra"}}
             elif mcp_method == "tools/list":
                 result = {"tools": [{"name": "data_transform"}]}
+            elif payload.get("params") == {}:
+                body = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "invalid", "data": {"code": "invalid_params"}},
+                }
+                headers = {
+                    "x-deepseek-mcp-preparation-runtime": "python",
+                    "x-deepseek-mcp-preparation-fallback": "0",
+                }
+                return smoke.HttpResult(200, body, "", headers)
             else:
                 result = {"structuredContent": {"ok": True, "result": {"count": 4}}, "isError": False}
-            return smoke.HttpResult(200, {"jsonrpc": "2.0", "id": request_id, "result": result}, "")
+            return smoke.HttpResult(200, {"jsonrpc": "2.0", "id": request_id, "result": result}, "", headers)
         raise AssertionError(f"unexpected request: {path}")
 
     monkeypatch.setattr(smoke, "_request", request)
@@ -215,7 +246,7 @@ def test_run_smoke_stops_sidecar_before_fallbacks(monkeypatch: pytest.MonkeyPatc
         lambda *args, **kwargs: smoke.CheckResult("status", "healthy") if kwargs["expect_healthy"] else smoke.CheckResult("status", "down"),
     )
     monkeypatch.setattr(smoke, "check_gateway_request_preparation", lambda *args, **kwargs: smoke.CheckResult("gateway", "ok"))
-    monkeypatch.setattr(smoke, "check_mcp_proxy", lambda *args, **kwargs: smoke.CheckResult("mcp", "ok"))
+    monkeypatch.setattr(smoke, "check_mcp_protocol_preparation", lambda *args, **kwargs: smoke.CheckResult("mcp", "ok"))
     monkeypatch.setattr(smoke, "check_policy_integration", lambda *args, **kwargs: smoke.CheckResult("policy", "ok"))
     monkeypatch.setattr(smoke, "check_rag_integration", lambda *args, **kwargs: smoke.CheckResult("rag", "ok"))
 

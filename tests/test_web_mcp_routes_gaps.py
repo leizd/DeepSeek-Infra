@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -13,6 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from deepseek_infra.core.errors import AppError
+from deepseek_infra.infra.mcp.protocol_preparation import McpProtocolDecision, prepare_mcp_protocol
 from deepseek_infra.web.routes.mcp import McpRouteDeps, create_mcp_router
 
 
@@ -57,41 +57,53 @@ def test_mcp_endpoint_disabled(mcp_disabled_client: TestClient) -> None:
     assert resp.status_code == 403
 
 
-def test_mcp_rust_proxy_passes_authorization_header(mcp_client: TestClient) -> None:
+def test_mcp_protocol_preparation_never_receives_authorization_header(mcp_client: TestClient) -> None:
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-    with patch("deepseek_infra.web.routes.mcp.rust_mcp_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.mcp.proxy_mcp_to_rust", return_value=SimpleNamespace(ok=True, body={"tools": []})) as proxy:
+    decision = McpProtocolDecision(
+        prepare_mcp_protocol(body),
+        {"runtime": "rust", "fallback": False, "fallbackReason": "", "latencyMs": 1},
+    )
+    with patch("deepseek_infra.web.routes.mcp.prepare_mcp_protocol_with_optional_rust", return_value=decision) as prepare:
         resp = mcp_client.post("/mcp", json=body, headers={"Authorization": "Bearer token"})
     assert resp.status_code == 200
-    proxy.assert_called_once()
-    assert proxy.call_args.kwargs["headers"] == {"Authorization": "Bearer token"}
+    prepare.assert_called_once_with(body)
+    assert resp.headers["X-DeepSeek-MCP-Preparation-Runtime"] == "rust"
 
 
-def test_mcp_rust_proxy_ok_with_empty_auth_headers(mcp_client: TestClient) -> None:
+def test_mcp_protocol_preparation_success_uses_python_handler(mcp_client: TestClient) -> None:
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-    with patch("deepseek_infra.web.routes.mcp.rust_mcp_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.mcp.proxy_mcp_to_rust", return_value=SimpleNamespace(ok=True, body={"tools": []})) as proxy, \
-         patch("deepseek_infra.web.routes.mcp.fallback_to_python_enabled", return_value=False):
+    decision = McpProtocolDecision(
+        prepare_mcp_protocol(body),
+        {"runtime": "python", "fallback": True, "fallbackReason": "rust_backend_unavailable", "latencyMs": 2},
+    )
+    with patch("deepseek_infra.web.routes.mcp.prepare_mcp_protocol_with_optional_rust", return_value=decision):
         resp = mcp_client.post("/mcp", json=body)
     assert resp.status_code == 200
-    assert resp.json() == {"tools": []}
-    proxy.assert_called_once()
-    assert proxy.call_args.kwargs["headers"] == {}
+    assert resp.json() == {"jsonrpc": "2.0", "id": 1, "result": []}
+    assert resp.headers["X-DeepSeek-MCP-Preparation-Fallback"] == "1"
+    assert resp.headers["X-DeepSeek-MCP-Preparation-Fallback-Reason"] == "rust_backend_unavailable"
 
 
-def test_mcp_rust_proxy_returns_202_on_empty_body(mcp_client: TestClient) -> None:
-    body = {"jsonrpc": "2.0", "id": 1, "method": "notifications/initialized"}
-    with patch("deepseek_infra.web.routes.mcp.rust_mcp_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.mcp.proxy_mcp_to_rust", return_value=SimpleNamespace(ok=True, body=None)):
+def test_mcp_protocol_notification_error_returns_202(mcp_client: TestClient) -> None:
+    body = {"jsonrpc": "2.0", "method": "notifications/unknown"}
+    decision = McpProtocolDecision(
+        prepare_mcp_protocol(body),
+        {"runtime": "python", "fallback": False, "fallbackReason": "", "latencyMs": 0},
+    )
+    with patch("deepseek_infra.web.routes.mcp.prepare_mcp_protocol_with_optional_rust", return_value=decision):
         resp = mcp_client.post("/mcp", json=body)
     assert resp.status_code == 202
     assert resp.content == b""
 
 
-def test_mcp_rust_proxy_unavailable_without_fallback_raises(mcp_client: TestClient) -> None:
-    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-    with patch("deepseek_infra.web.routes.mcp.rust_mcp_enabled", return_value=True), \
-         patch("deepseek_infra.web.routes.mcp.proxy_mcp_to_rust", return_value=SimpleNamespace(ok=False, body="rust down")), \
-         patch("deepseek_infra.web.routes.mcp.fallback_to_python_enabled", return_value=False):
+def test_mcp_protocol_invalid_request_returns_stable_jsonrpc_error(mcp_client: TestClient) -> None:
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}}
+    with patch("deepseek_infra.web.routes.mcp.prepare_mcp_protocol_with_optional_rust") as prepare:
+        preparation = prepare_mcp_protocol(body)
+        prepare.return_value = McpProtocolDecision(
+            preparation,
+            {"runtime": "python", "fallback": False, "fallbackReason": "", "latencyMs": 0},
+        )
         resp = mcp_client.post("/mcp", json=body)
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json()["error"]["data"]["code"] == "invalid_params"
