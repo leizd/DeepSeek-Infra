@@ -75,7 +75,8 @@ pub fn create_app() -> Router {
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/gateway/request/prepare", post(gateway_request_prepare))
-        .route("/mcp", post(mcp))
+        .route("/mcp", post(mcp_protocol_prepare))
+        .route("/mcp/request/prepare", post(mcp_protocol_prepare))
         .route("/rag/query/normalize", post(rag_query_normalize))
         .route("/rag/chunks/score", post(rag_chunks_score))
         .route("/rag/vectors/rank", post(rag_vectors_rank))
@@ -120,8 +121,8 @@ async fn gateway_request_prepare(body: Bytes) -> Json<serde_json::Value> {
     }
 }
 
-async fn mcp(Json(req): Json<serde_json::Value>) -> Json<serde_json::Value> {
-    Json(deepseek_mcp::handle_mcp_message(req))
+async fn mcp_protocol_prepare(body: Bytes) -> Json<serde_json::Value> {
+    Json(deepseek_mcp::prepare_protocol_bytes(&body))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -481,6 +482,64 @@ mod tests {
         let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
         assert_eq!(response["ok"], false);
         assert_eq!(response["code"], "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn mcp_protocol_prepare_endpoint_returns_python_owned_descriptor() {
+        let app = create_app();
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": " search ", "arguments": {"query": "Rust MCP 中文🚀"}}
+        })
+        .to_string();
+        let (status, response_body) =
+            send_request(app, "POST", "/mcp/request/prepare", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["messageType"], "request");
+        assert_eq!(response["request"]["params"]["name"], "search");
+        assert_eq!(
+            response["request"]["params"]["arguments"]["query"],
+            "Rust MCP 中文🚀"
+        );
+        assert_eq!(response["routing"]["owner"], "python");
+        assert!(response.get("result").is_none());
+    }
+
+    #[tokio::test]
+    async fn mcp_protocol_prepare_endpoint_returns_stable_error_mapping() {
+        let app = create_app();
+        let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}).to_string();
+        let (status, response_body) =
+            send_request(app, "POST", "/mcp/request/prepare", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["code"], "invalid_params");
+        assert_eq!(response["jsonRpcCode"], -32602);
+    }
+
+    #[tokio::test]
+    async fn mcp_protocol_prepare_endpoint_rejects_malformed_json() {
+        let app = create_app();
+        let (status, response_body) =
+            send_request(app, "POST", "/mcp/request/prepare", Some("{".to_string())).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+        assert_eq!(response["code"], "parse_error");
+
+        let app = create_app();
+        let alias_body = json!({"jsonrpc":"2.0","id":1,"method":"ping"}).to_string();
+        let (alias_status, alias_response) =
+            send_request(app, "POST", "/mcp", Some(alias_body)).await;
+        assert_eq!(alias_status, StatusCode::OK);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&alias_response).unwrap()["routing"]["owner"],
+            "python"
+        );
     }
 
     #[tokio::test]

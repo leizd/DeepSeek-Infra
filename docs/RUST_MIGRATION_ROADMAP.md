@@ -461,7 +461,7 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Current themes (3.5.0 optional Gateway request preparation completed):
+Current themes (3.6.0 optional MCP protocol preparation completed):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.
@@ -474,6 +474,7 @@ Current themes (3.5.0 optional Gateway request preparation completed):
 - 3.3.2: High-value failure tests raise combined statement-and-branch coverage to 95.3428% and 95.3396% across consecutive full runs and promote the CI gate to 95%. HIGH-risk debt decreases, coverage omit rules remain unchanged, and strict readiness reports READY without creating an RC tag.
 - 3.4.0: The semantic-cache batch vector scan moves into the existing opt-in Rust RAG delegate through `POST /rag/vectors/rank`, with stable first-match tie behavior, strict Python response validation, diagnostics, and Python fallback. Cache storage and policy remain Python-owned.
 - 3.5.0: Deterministic non-streaming Gateway request preparation moves behind the existing opt-in Gateway delegate through `POST /gateway/request/prepare`. A 68-case live-sidecar parity gate proves normalized request and stable error-category parity. Python retains credentials, provider routing, upstream HTTP, streaming, retries, cache policy, context injection, real tool execution, and tracing lifecycle.
+- 3.6.0: Deterministic MCP envelope and method preparation moves behind the existing opt-in MCP delegate through `POST /mcp/request/prepare`. A 105-case live-sidecar parity gate proves normalized request/notification/response descriptors and stable error-category parity. Python retains transport, sessions, authentication, runtime capability decisions, registries, tool execution, resource/prompt loading, cancellation, scheduling, tracing, credentials, and business state.
 
 See [PRE_4_0_QUALITY_BASELINE.md](PRE_4_0_QUALITY_BASELINE.md) for the quality baseline and [4_0_RC_READINESS.md](4_0_RC_READINESS.md) for the current blocker matrix.
 
@@ -497,6 +498,17 @@ See [RUST_CANDIDATE_AUDIT_3_4.md](RUST_CANDIDATE_AUDIT_3_4.md) for the evaluated
 - The default runtime, default Compose file, streaming owner, provider owner, credential owner, and Python fallback contract do not change.
 
 See [GATEWAY_REQUEST_PREPARATION_PARITY.md](GATEWAY_REQUEST_PREPARATION_PARITY.md) for the shared corpus, diagnostics, fallback rules, and non-goals.
+
+### 3.6.0 — MCP protocol preparation (completed)
+
+- The boundary is pure input JSON to a normalized protocol descriptor or stable error and reuses the existing sidecar and default-disabled `DEEPSEEK_RUST_MCP` flag.
+- Python computes the local result before calling Rust and accepts only a JSON-serializable, contract-identical result whose routing owner remains Python.
+- Backend failures and semantic divergence use the local Python result; deterministic user protocol errors preserve their stable category and are never reported as backend fallback.
+- Rust validates only established Python MCP methods and preserves the repository's single-message, non-batch behavior. It never interprets tool arguments, receives credentials, loads resources/prompts, or executes tools.
+- The 105-case shared corpus, Rust unit tests, Python defensive/fallback tests, Docker smoke, and hybrid E2E prove protocol parity, argument preservation, Python-only execution, and sidecar-loss recovery.
+- The default runtime, default Compose file, Python fallback, and all transport/session/execution ownership remain unchanged.
+
+See [MCP_PROTOCOL_PREPARATION_PARITY.md](MCP_PROTOCOL_PREPARATION_PARITY.md) for the shared corpus, stable error mapping, redacted diagnostics, fallback rules, and non-goals.
 
 ## Testing Priorities
 

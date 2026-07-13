@@ -23,23 +23,3 @@ pub fn tool_descriptors() -> Vec<Value> {
         }),
     ]
 }
-
-pub fn call_tool(name: &str, arguments: &Value) -> Option<Value> {
-    match name {
-        "echo" => {
-            let message = arguments
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            Some(json!({
-                "content": [{"type": "text", "text": message}],
-                "isError": false
-            }))
-        }
-        "health" => Some(json!({
-            "content": [{"type": "text", "text": "ok"}],
-            "isError": false
-        })),
-        _ => None,
-    }
-}

@@ -4,7 +4,7 @@ import argparse
 import json
 import subprocess
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -22,6 +22,7 @@ class HttpResult:
     status: int
     body: dict[str, Any]
     raw: str
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -144,9 +145,11 @@ def _request(
         with urlopen(request, timeout=timeout) as response:  # noqa: S310 - local operator-supplied URL
             status = response.status
             raw = response.read().decode("utf-8", errors="replace")
+            headers = {key.lower(): value for key, value in response.headers.items()}
     except HTTPError as exc:
         status = exc.code
         raw = exc.read().decode("utf-8", errors="replace")
+        headers = {key.lower(): value for key, value in exc.headers.items()}
     except (URLError, TimeoutError, OSError) as exc:
         raise SmokeFailure(f"{method} {path} failed: {exc}") from exc
     try:
@@ -155,7 +158,7 @@ def _request(
         raise SmokeFailure(f"{method} {path} returned HTTP {status} with invalid JSON: {raw[:500]}") from exc
     if not isinstance(value, dict):
         raise SmokeFailure(f"{method} {path} returned HTTP {status} with non-object JSON: {raw[:500]}")
-    return HttpResult(status=status, body=value, raw=raw)
+    return HttpResult(status=status, body=value, raw=raw, headers=headers)
 
 
 def _expect_ok(result: HttpResult, endpoint: str) -> dict[str, Any]:
@@ -234,38 +237,101 @@ def check_gateway_request_preparation(base_url: str, *, expect_rust: bool = True
     )
 
 
-def _mcp_call(base_url: str, request_id: str, method: str, params: dict[str, Any] | None, timeout: float) -> dict[str, Any]:
+def _mcp_call(
+    base_url: str,
+    request_id: str,
+    method: str,
+    params: dict[str, Any] | None,
+    timeout: float,
+) -> tuple[dict[str, Any], HttpResult]:
     payload: dict[str, Any] = {"jsonrpc": "2.0", "id": request_id, "method": method}
     if params is not None:
         payload["params"] = params
-    body = _expect_ok(_request(base_url, "POST", "/mcp", payload=payload, timeout=timeout), f"POST /mcp ({method})")
+    response = _request(base_url, "POST", "/mcp", payload=payload, timeout=timeout)
+    body = _expect_ok(response, f"POST /mcp ({method})")
     _require(body.get("jsonrpc") == "2.0", f"MCP {method} response is not JSON-RPC 2.0")
     _require(body.get("id") == request_id, f"MCP {method} did not preserve request id")
     _require("error" not in body, f"MCP {method} returned an error: {body.get('error')}")
     result = body.get("result")
     if not isinstance(result, dict):
         raise SmokeFailure(f"MCP {method} response has no result")
-    return result
+    return result, response
 
 
-def check_mcp_proxy(base_url: str, *, timeout: float = 5.0) -> CheckResult:
-    initialized = _mcp_call(base_url, "hybrid-init", "initialize", {"protocolVersion": "2024-11-05"}, timeout)
-    server_info = initialized.get("serverInfo")
-    _require(isinstance(server_info, dict) and server_info.get("name") == "deepseek-mcp-rs", "MCP initialize did not reach Rust")
-    tools = _mcp_call(base_url, "hybrid-list", "tools/list", {}, timeout).get("tools")
-    names = {item.get("name") for item in tools if isinstance(item, dict)} if isinstance(tools, list) else set()
-    _require({"echo", "health"} <= names, "Rust MCP tool list is incomplete")
-    called = _mcp_call(
+def _require_mcp_diagnostics(response: HttpResult, *, runtime: str, fallback: bool) -> None:
+    headers = response.headers
+    _require(
+        headers.get("x-deepseek-mcp-preparation-runtime") == runtime,
+        f"MCP protocol preparation runtime must be {runtime}",
+    )
+    _require(
+        headers.get("x-deepseek-mcp-preparation-fallback") == ("1" if fallback else "0"),
+        "MCP protocol preparation fallback flag is incorrect",
+    )
+    if fallback:
+        _require(
+            headers.get("x-deepseek-mcp-preparation-fallback-reason") == "rust_backend_unavailable",
+            "MCP protocol preparation fallback reason is not stable",
+        )
+
+
+def _check_invalid_mcp_request(base_url: str, *, timeout: float) -> None:
+    response = _request(
         base_url,
-        "hybrid-echo",
-        "tools/call",
-        {"name": "echo", "arguments": {"message": "hello from hybrid e2e"}},
+        "POST",
+        "/mcp",
+        payload={"jsonrpc": "2.0", "id": "invalid-tools-call", "method": "tools/call", "params": {}},
+        timeout=timeout,
+    )
+    body = _expect_ok(response, "POST /mcp (invalid tools/call)")
+    error = body.get("error")
+    data = error.get("data") if isinstance(error, dict) else None
+    _require(isinstance(error, dict) and error.get("code") == -32602, "invalid MCP request did not return JSON-RPC invalid params")
+    _require(isinstance(data, dict) and data.get("code") == "invalid_params", "invalid MCP request lost its stable error category")
+    _require_mcp_diagnostics(response, runtime="python", fallback=False)
+
+
+def check_mcp_protocol_preparation(base_url: str, *, expect_rust: bool, timeout: float = 5.0) -> CheckResult:
+    runtime = "rust" if expect_rust else "python"
+    fallback = not expect_rust
+    initialized, initialized_response = _mcp_call(
+        base_url,
+        "hybrid-init" if expect_rust else "fallback-init",
+        "initialize",
+        {"protocolVersion": "2024-11-05"},
         timeout,
     )
-    content = called.get("content")
-    text = content[0].get("text") if isinstance(content, list) and content and isinstance(content[0], dict) else None
-    _require(text == "hello from hybrid e2e", "Rust MCP echo returned the wrong payload")
-    return CheckResult("mcp-proxy", "initialize, tools/list, and echo passed through Python /mcp")
+    _require_mcp_diagnostics(initialized_response, runtime=runtime, fallback=fallback)
+    server_info = initialized.get("serverInfo")
+    _require(isinstance(server_info, dict) and server_info.get("name") == "deepseek-infra", "MCP execution did not stay Python-owned")
+    listed, listed_response = _mcp_call(
+        base_url,
+        "hybrid-list" if expect_rust else "fallback-list",
+        "tools/list",
+        {},
+        timeout,
+    )
+    _require_mcp_diagnostics(listed_response, runtime=runtime, fallback=fallback)
+    tools = listed.get("tools")
+    names = {item.get("name") for item in tools if isinstance(item, dict)} if isinstance(tools, list) else set()
+    _require("data_transform" in names, "Python MCP tool catalog is missing data_transform")
+    called, called_response = _mcp_call(
+        base_url,
+        "hybrid-call" if expect_rust else "fallback-call",
+        "tools/call",
+        {"name": "data_transform", "arguments": {"operation": "number_summary", "input": "1 2 3 4"}},
+        timeout,
+    )
+    _require_mcp_diagnostics(called_response, runtime=runtime, fallback=fallback)
+    structured = called.get("structuredContent")
+    summary = structured.get("result") if isinstance(structured, dict) else None
+    _require(isinstance(summary, dict) and summary.get("count") == 4, "Python-owned MCP tool call returned the wrong result")
+    _check_invalid_mcp_request(base_url, timeout=timeout)
+    phase = "Rust protocol preparation" if expect_rust else "Python protocol fallback"
+    return CheckResult(
+        "mcp-protocol-preparation" if expect_rust else "mcp-fallback",
+        f"{phase}; initialize, catalog, Python tool execution, and stable invalid_params passed",
+    )
 
 
 def _compose_command(compose_files: tuple[str, ...], *args: str) -> list[str]:
@@ -369,23 +435,7 @@ def _check_gateway_fallback(base_url: str, *, timeout: float) -> CheckResult:
 
 
 def _check_mcp_fallback(base_url: str, *, timeout: float) -> CheckResult:
-    initialized = _mcp_call(base_url, "fallback-init", "initialize", {}, timeout)
-    server_info = initialized.get("serverInfo")
-    _require(isinstance(server_info, dict) and server_info.get("name") == "deepseek-infra", "MCP did not fall back to Python")
-    tools = _mcp_call(base_url, "fallback-list", "tools/list", {}, timeout).get("tools")
-    names = {item.get("name") for item in tools if isinstance(item, dict)} if isinstance(tools, list) else set()
-    _require("data_transform" in names, "Python MCP fallback tool catalog is missing data_transform")
-    result = _mcp_call(
-        base_url,
-        "fallback-call",
-        "tools/call",
-        {"name": "data_transform", "arguments": {"operation": "number_summary", "input": "1 2 3 4"}},
-        timeout,
-    )
-    structured = result.get("structuredContent")
-    summary = structured.get("result") if isinstance(structured, dict) else None
-    _require(isinstance(summary, dict) and summary.get("count") == 4, "Python MCP fallback tool call returned the wrong result")
-    return CheckResult("mcp-fallback", "Python MCP initialize, catalog, and tool execution passed")
+    return check_mcp_protocol_preparation(base_url, expect_rust=False, timeout=timeout)
 
 
 def check_fallbacks(base_url: str, compose_files: tuple[str, ...], *, timeout: float = 5.0) -> list[CheckResult]:
@@ -409,7 +459,7 @@ def run_smoke(
     checks = [wait_for_service(base_url, wait_seconds=wait_seconds, timeout=timeout)]
     checks.append(check_rust_status(base_url, expect_healthy=True, timeout=timeout))
     checks.append(check_gateway_request_preparation(base_url, timeout=timeout))
-    checks.append(check_mcp_proxy(base_url, timeout=timeout))
+    checks.append(check_mcp_protocol_preparation(base_url, expect_rust=True, timeout=timeout))
     checks.append(check_policy_integration(compose_files, expect_rust=True))
     checks.append(check_rag_integration(compose_files, expect_rust=True))
     if not keep_sidecar:
