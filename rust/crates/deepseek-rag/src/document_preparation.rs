@@ -161,10 +161,10 @@ fn chunk_text(
         let mut end = (start + chunk_chars).min(text_length);
         if end < text_length {
             let boundary = (start..end).rev().find(|index| characters[*index] == '\n');
-            if let Some(boundary) = boundary
-                && boundary > start + chunk_chars / 2
-            {
-                end = boundary;
+            if let Some(boundary) = boundary {
+                if boundary > start + chunk_chars / 2 {
+                    end = boundary;
+                }
             }
         }
         let raw: String = characters[start..end].iter().collect();
