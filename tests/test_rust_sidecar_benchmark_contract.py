@@ -69,6 +69,7 @@ def _report() -> dict[str, Any]:
     return {
         "schemaVersion": benchmark.SCHEMA_VERSION,
         "version": benchmark.VERSION,
+        "status": "PASS",
         "machine": {"rustProfile": "release", "operatingSystem": "full machine detail"},
         "delegates": delegates,
     }

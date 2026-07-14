@@ -62,6 +62,29 @@ Cold process launch, health readiness, and the first request are reported separa
 
 The 26 scenarios cover minimal/multi-turn/tools-heavy/multipart/invalid Gateway inputs; initialize, tools/list, small/large tools/call, and invalid JSON-RPC MCP inputs; allow/deny URL, path, and capability policy inputs; four vector scales including ties; and small, medium, large, high-overlap, CJK-heavy, and non-BMP-heavy document inputs. Representative scenarios also run at concurrency 1, 8, and 32.
 
+## Committed release result
+
+The committed Windows x86_64 evidence was produced from commit `88a519912778e8bc290d8426ae2a1a9b3ca21e2f` with Rust 1.96.1, Python 3.13.5, 20 logical CPUs, five measured iterations, two excluded warmups, and concurrency 1/8/32. The table uses the first required scenario for each delegate family and reports median/p95 in microseconds; every shown layer had zero errors and the full integration layer had zero fallbacks.
+
+| Delegate / representative scenario | Python baseline median / p95 | Pure Rust median / p95 | Warm HTTP median / p95 | Full integration median / p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Gateway / minimal request | 22.3 / 32.36 | 7.8 / 22.82 | 420.8 / 467.66 | 425.3 / 655.42 |
+| MCP / initialize | 46.1 / 61.18 | 17.4 / 32.16 | 459.2 / 550.84 | 526.4 / 555.92 |
+| Policy / safe public URL | 16.3 / 27.48 | 6.3 / 18.08 | 458.4 / 550.60 | 488.7 / 683.22 |
+| Vector ranking / 16 × 384 | 535.5 / 538.28 | 201.3 / 261.22 | 929.5 / 2744.16 | 1430.0 / 1684.20 |
+| Document preparation / small | 402.6 / 473.66 | 25.4 / 36.04 | 1347.1 / 1557.00 | 2289.2 / 2625.14 |
+
+Cold startup was separate: process launch 132,446 µs, health readiness 256,919 µs, and first request 15,118 µs. None of these values contributes to the warm table.
+
+The full evidence is deliberately not uniformly favorable to delegation:
+
+- Pure Rust was faster than direct Python in 24 of 26 scenarios on this machine. The exceptions were Gateway tools-heavy preparation (204.1 µs Rust vs 177.2 µs Python) and capability-allow policy (10.5 µs vs 9.5 µs), both small enough that the difference should not drive architecture.
+- Warm sidecar HTTP beat direct Python only for MCP large nested arguments (9,943.5 µs vs 12,678.7 µs), large document preparation (171,524.4 µs vs 198,855.4 µs), and high-overlap document preparation (60,315.1 µs vs 63,089.5 µs). For small Gateway, MCP, Policy, vector, and document requests, TCP/HTTP/JSON overhead erased the core benefit.
+- Full Python-to-Rust integration remained slower for every valid representative workload because Python still computes or validates the authoritative result. That cost is intentional defense, not benchmark noise to remove. The invalid Gateway result was locally rejected before delegation and its tiny timing difference is not evidence of Rust benefit.
+- Large vector ranking showed a strong pure-core difference (44,495.3 µs Rust vs 461,540.8 µs Python at 1000 × 1536), but warm HTTP still measured 520,120.3 µs and full defensive integration 913,294.7 µs. Payload serialization, transfer, and Python parity therefore remain decisive.
+
+These measurements do not make any current delegate worth enabling by default. They identify where batching or a future lower-overhead boundary might be investigated, while proving that the current HTTP boundary is mostly an observability/optionality mechanism rather than a general latency win.
+
 ## Timing diagnostics
 
 Every Python delegate exposes these observational fields without including them in semantic parity:
@@ -97,7 +120,7 @@ Sidecar logs may contain only component, payload/response byte counts, duration,
 
 The `rust-sidecar-performance` CI job builds and runs the release binary and publishes complete machine-local results. It strictly gates schema, delegate coverage, semantic parity, zero errors/fallbacks, persistent-sidecar use, report redaction, and bounded complexity behavior. Absolute cross-run latency is informational because public runners are not stable performance hosts. Only deterministic complexity ratios use deliberately wide thresholds; vector ranking must remain consistent with `O(candidates × dimensions)`, and document preparation must avoid obvious quadratic growth or overlap loops.
 
-The committed evidence is [rust-sidecar-performance-v3.8.0.json](evidence/rust-sidecar-performance-v3.8.0.json). Its per-scenario values, including slower Rust cases, are authoritative. A final five-delegate median/p95 summary is added to this document from that same run during release evidence refresh.
+The committed evidence is [rust-sidecar-performance-v3.8.0.json](evidence/rust-sidecar-performance-v3.8.0.json). Its per-scenario values, including slower Rust cases, are authoritative.
 
 ## What this milestone does not prove
 

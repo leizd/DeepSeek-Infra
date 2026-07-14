@@ -669,6 +669,8 @@ def _stable_evidence(report: dict[str, Any]) -> dict[str, Any]:
 def validate_report(report: dict[str, Any]) -> None:
     if report.get("schemaVersion") != SCHEMA_VERSION or report.get("version") != VERSION:
         raise RuntimeError("benchmark report version/schema mismatch")
+    if report.get("status") != "PASS":
+        raise RuntimeError("benchmark report did not pass its contract gates")
     if report.get("machine", {}).get("rustProfile") != "release":
         raise RuntimeError("formal benchmark must use the release profile")
     delegates = report.get("delegates")
@@ -807,6 +809,7 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
     report = {
         "schemaVersion": SCHEMA_VERSION,
         "version": VERSION,
+        "status": "PASS",
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "informationalOnly": True,
         "absoluteLatencyMergeGate": False,
