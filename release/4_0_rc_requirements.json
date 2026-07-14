@@ -23,7 +23,8 @@
         "rag-parity",
         "release-readiness",
         "docs",
-        "rust"
+        "rust",
+        "rust-sidecar-performance"
       ],
       "evidence": [".github/workflows/ci.yml"],
       "description": "The release commit must have successful results for every required CI job."

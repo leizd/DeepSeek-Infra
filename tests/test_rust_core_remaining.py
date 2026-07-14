@@ -69,7 +69,7 @@ class TestGatewayClient:
         assert "Authorization" not in request.headers
 
     def test_request_connection_error(self) -> None:
-        with patch("urllib.request.urlopen", side_effect=Exception("refused")):
+        with patch("deepseek_infra.infra.rust_core.transport.urlopen", side_effect=Exception("refused")):
             result = gateway_client._request("GET", "/test")
         assert not result.ok
         assert result.status == 0
@@ -91,7 +91,7 @@ class TestMcpClient:
         assert result.body == {"error": "Rust MCP is disabled"}
 
     def test_request_connection_error(self) -> None:
-        with patch("urllib.request.urlopen", side_effect=Exception("refused")):
+        with patch("deepseek_infra.infra.rust_core.transport.urlopen", side_effect=Exception("refused")):
             result = mcp_client._request("GET", "/test")
         assert not result.ok
         assert result.status == 0
@@ -108,7 +108,7 @@ class TestPolicyClient:
         assert result.reason == "Rust Policy is disabled"
 
     def test_request_connection_error(self) -> None:
-        with patch("urllib.request.urlopen", side_effect=Exception("refused")):
+        with patch("deepseek_infra.infra.rust_core.transport.urlopen", side_effect=Exception("refused")):
             result = policy_client._request("/test", {})
         assert not result.ok
         assert result.status == 0

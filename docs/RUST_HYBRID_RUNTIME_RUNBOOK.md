@@ -1,8 +1,8 @@
 # Hybrid Rust Runtime Runbook
 
-This runbook covers day-to-day operation of the DeepSeek Infra 3.7.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
+This runbook covers day-to-day operation of the DeepSeek Infra 3.8.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
 
-> **Scope**: every Rust component remains opt-in. 3.7.0 adds deterministic document preparation for text already parsed by Python. Python still owns uploads, paths, file parsing, OCR, embeddings, persistence, indexes, retrieval, authorization, transports, sessions, tools, tracing, and business state. Rust cannot read files or write an index. The default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged. The published `v4.0.0-rc.1` remains a historical architecture preview, not the active stable line. 可视化职责边界图请见 [docs/ARCHITECTURE.md](ARCHITECTURE.md)。
+> **Scope**: every Rust component remains opt-in. 3.8.0 adds release-mode performance evidence, bounded persistent connections, layered timing, metrics, and safe correlation tracing for the existing delegates; it adds no delegate and moves no ownership. Python still owns uploads, paths, file parsing, OCR, embeddings, persistence, indexes, retrieval, authorization, transports, sessions, tools, tracing, and business state. Rust cannot read files or write an index. The default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged. The published `v4.0.0-rc.1` remains a historical architecture preview, not the active stable line. 可视化职责边界图请见 [docs/ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ---
 
@@ -58,6 +58,7 @@ The sidecar exposes the following endpoints used by the Python app:
 | Endpoint | Used by | Purpose |
 | --- | --- | --- |
 | `GET /healthz` | Health probe | Liveness check for the sidecar |
+| `GET /metrics` | Prometheus scraper | Bounded release observability on the existing listener |
 | `POST /gateway/request/prepare` | `DEEPSEEK_RUST_GATEWAY=1` | Credential-free deterministic non-streaming request preparation |
 | `POST /mcp/request/prepare` | `DEEPSEEK_RUST_MCP=1` | Deterministic MCP JSON-RPC preparation; routing owner remains Python |
 | `POST /policy/url` | `DEEPSEEK_RUST_POLICY=1` | URL allow/deny decision |
@@ -71,6 +72,17 @@ The sidecar exposes the following endpoints used by the Python app:
 | `POST /rag/documents/prepare` | `DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1` | Normalize/chunk text already parsed by Python; no file I/O or persistence |
 
 > **Note**: Streaming, model listing, provider routing, upstream HTTP, credentials, retry/backoff, MCP transports/sessions, tool execution, resources/prompts, file parsing/OCR, embeddings, persistence/indexes, retrieval, and tracing lifecycle always stay on the Python path. Rust MCP never executes tools and Rust RAG never reads files or writes an index.
+
+For release-equivalent local runs, build the exact locked binary instead of using `cargo run`:
+
+```bash
+cargo build --release --locked --manifest-path rust/Cargo.toml -p deepseek-gateway
+rust/target/release/deepseek-gateway
+```
+
+Python reuses a bounded process-local connection pool (`DEEPSEEK_RUST_SIDECAR_MAX_CONNECTIONS`, default 32; hard maximum 128) and caps buffered responses (`DEEPSEEK_RUST_SIDECAR_MAX_RESPONSE_BYTES`, default 16 MiB; hard maximum 64 MiB). Component-specific request timeouts are unchanged. Tests and launchers may call the transport reset hook; a fork or PID change always discards inherited connections.
+
+Each delegate reports `pythonPreparationUs`, `serializationUs`, `transportUs`, `rustProcessingUs`, `pythonValidationUs`, and `totalDelegateUs`. A field is `null` when it cannot be measured accurately. `rustProcessingUs` is observational sidecar telemetry and is never trusted for parity, security, routing, fallback, or business logic.
 
 ---
 
@@ -214,9 +226,9 @@ A "Rust call failure" includes any of these conditions:
 - Malformed JSON or missing expected fields in the response
 - Invalid timeout value in the environment variable (falls back to the default `3000` ms)
 
-For MCP, an empty body, non-object response, missing contract fields, unknown message type, unsafe routing owner, non-serializable value, changed `tools/call` arguments, or any Python/Rust semantic difference is also a backend failure. Diagnostics contain only method, message type, request ID type, payload size, runtime, fallback state/reason, and latency; they never contain full params, tool arguments, credentials, prompt content, or local paths.
+For MCP, an empty body, non-object response, missing contract fields, unknown message type, unsafe routing owner, non-serializable value, changed `tools/call` arguments, or any Python/Rust semantic difference is also a backend failure. Logs contain only bounded component, message/request-ID type, payload/response size, runtime/outcome, fallback reason, duration, and system correlation ID; they never contain the MCP method, full params, tool arguments, credentials, prompt content, or local paths.
 
-For RAG document preparation, invalid/missing document or chunk fields, offset drift, text/range mismatch, duplicate IDs, invalid hashes, metadata expansion, a changed document ID, sensitive fields, or any semantic difference are backend failures. Diagnostics contain only a document-ID hash, counts, chunk configuration, runtime, fallback state/reason, and latency; they never contain document/chunk text, filenames, paths, raw bytes, credentials, or private metadata.
+For RAG document preparation, invalid/missing document or chunk fields, offset drift, text/range mismatch, duplicate IDs, invalid hashes, metadata expansion, a changed document ID, sensitive fields, or any semantic difference are backend failures. Logs contain only bounded component, counts, payload/response sizes, runtime/outcome, fallback reason, duration, and system correlation ID; they never contain a document ID/hash, document/chunk text, filenames, paths, raw bytes, credentials, or private metadata.
 
 > **Default is safe**: Rust Policy defaults to `fallback`, and the Python Tool Policy is attached even to bare tool calls after a Rust backend failure. A sidecar outage therefore cannot silently skip policy evaluation.
 
@@ -466,4 +478,5 @@ python evals/runners/run_rag_eval.py
 - [Release readiness checklist](RELEASE_READINESS_3_1_X.md)
 - [Rust migration roadmap](RUST_MIGRATION_ROADMAP.md)
 - [Implementation status](IMPLEMENTATION_STATUS.md)
+- [Rust sidecar performance and observability](RUST_SIDECAR_PERFORMANCE.md)
 - [RAG document preparation parity](RAG_DOCUMENT_PREPARATION_PARITY.md)

@@ -148,7 +148,9 @@ def fake_deepseek() -> Callable[[str, str, dict[str, int] | None], dict[str, obj
 
 @pytest.fixture
 def mock_urlopen() -> object:
-    with patch("urllib.request.urlopen") as mocked:
+    with patch("urllib.request.urlopen") as mocked, patch(
+        "deepseek_infra.infra.rust_core.transport.urlopen", mocked
+    ):
         yield mocked
 
 

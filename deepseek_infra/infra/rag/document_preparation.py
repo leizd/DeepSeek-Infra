@@ -272,7 +272,13 @@ def prepare_rag_document_json(raw: str | bytes) -> dict[str, Any]:
     return prepare_rag_document(value, payload_size=len(encoded))
 
 
-def _diagnostics(value: dict[str, Any], local: dict[str, Any]) -> dict[str, Any]:
+def _diagnostics(
+    value: dict[str, Any],
+    local: dict[str, Any],
+    *,
+    python_preparation_us: int,
+    total_started_ns: int,
+) -> dict[str, Any]:
     document_id = value.get("documentId") if isinstance(value.get("documentId"), str) else ""
     chunking_value = value.get("chunking")
     chunking: dict[str, Any] = chunking_value if isinstance(chunking_value, dict) else {}
@@ -288,6 +294,17 @@ def _diagnostics(value: dict[str, Any], local: dict[str, Any]) -> dict[str, Any]
         "fallback": False,
         "fallbackReason": "",
         "latencyMs": 0,
+        "pythonPreparationUs": python_preparation_us,
+        "serializationUs": None,
+        "transportUs": None,
+        "rustProcessingUs": None,
+        "pythonValidationUs": None,
+        "totalDelegateUs": max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+        "requestBytes": 0,
+        "responseBytes": 0,
+        "connectionReused": None,
+        "connectionCount": None,
+        "correlationId": "",
     }
 
 
@@ -361,11 +378,20 @@ def rag_document_preparation_enabled() -> bool:
 
 
 def prepare_rag_document_with_optional_rust(value: dict[str, Any]) -> RagDocumentPreparationDecision:
+    total_started_ns = time.perf_counter_ns()
+    preparation_started_ns = time.perf_counter_ns()
     local = prepare_rag_document(value)
+    python_preparation_us = max(0, (time.perf_counter_ns() - preparation_started_ns) // 1000)
     text_value = value.get("text")
     normalized_text = normalize_document_text(text_value) if isinstance(text_value, str) else ""
-    diagnostics = _diagnostics(value, local)
+    diagnostics = _diagnostics(
+        value,
+        local,
+        python_preparation_us=python_preparation_us,
+        total_started_ns=total_started_ns,
+    )
     if local.get("ok") is not True or not rag_document_preparation_enabled():
+        diagnostics["totalDelegateUs"] = max(0, (time.perf_counter_ns() - total_started_ns) // 1000)
         return RagDocumentPreparationDecision(local, normalized_text, diagnostics)
 
     from deepseek_infra.infra.rust_core import rag_client
@@ -376,13 +402,31 @@ def prepare_rag_document_with_optional_rust(value: dict[str, Any]) -> RagDocumen
         "metadata": local.get("document", {}).get("metadata", {}),
         "chunking": local.get("chunking", {}),
     }
-    started = time.perf_counter()
     result = rag_client.prepare_document(safe_payload)
-    diagnostics["latencyMs"] = max(result.latency_ms, int((time.perf_counter() - started) * 1000))
+    diagnostics.update(
+        serializationUs=getattr(result, "serialization_us", None),
+        transportUs=getattr(result, "transport_us", None),
+        rustProcessingUs=getattr(result, "rust_processing_us", None),
+        requestBytes=int(getattr(result, "request_bytes", 0) or 0),
+        responseBytes=int(getattr(result, "response_bytes", 0) or 0),
+        connectionReused=getattr(result, "connection_reused", None),
+        connectionCount=getattr(result, "connection_count", None),
+        correlationId=str(getattr(result, "correlation_id", "") or ""),
+    )
     if not result.ok:
+        total_us = max(0, (time.perf_counter_ns() - total_started_ns) // 1000)
+        diagnostics.update(totalDelegateUs=total_us, latencyMs=max(0, round(total_us / 1000)))
         diagnostics.update(runtime="python", fallback=True, fallbackReason=result.error_kind or "rust_backend_unavailable")
         return RagDocumentPreparationDecision(local, normalized_text, diagnostics)
+    validation_started_ns = time.perf_counter_ns()
     valid, reason = _validate_rust_success(local, result.body, normalized_text)
+    validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
+    total_us = max(0, (time.perf_counter_ns() - total_started_ns) // 1000)
+    diagnostics.update(
+        pythonValidationUs=validation_us,
+        totalDelegateUs=total_us,
+        latencyMs=max(0, round(total_us / 1000)),
+    )
     if not valid:
         diagnostics.update(runtime="python", fallback=True, fallbackReason=reason)
         return RagDocumentPreparationDecision(local, normalized_text, diagnostics)
@@ -394,15 +438,16 @@ def log_rag_document_preparation(diagnostics: dict[str, Any]) -> None:
     logger.info(
         "rag_document_preparation",
         extra={
-            "document_id_hash": str(diagnostics.get("documentIdHash") or ""),
+            "component": "rag_document_prepare",
             "character_count": int(diagnostics.get("characterCount") or 0),
             "chunk_count": int(diagnostics.get("chunkCount") or 0),
-            "chunk_size": int(diagnostics.get("chunkSize") or 0),
-            "chunk_overlap": int(diagnostics.get("chunkOverlap") or 0),
             "runtime": str(diagnostics.get("runtime") or "python"),
             "fallback": bool(diagnostics.get("fallback")),
             "fallback_reason": str(diagnostics.get("fallbackReason") or ""),
-            "latency_ms": int(diagnostics.get("latencyMs") or 0),
+            "payload_bytes": int(diagnostics.get("requestBytes") or 0),
+            "response_bytes": int(diagnostics.get("responseBytes") or 0),
+            "duration_us": int(diagnostics.get("totalDelegateUs") or 0),
+            "correlation_id": str(diagnostics.get("correlationId") or ""),
         },
     )
 
@@ -415,4 +460,15 @@ def public_rag_document_diagnostics(diagnostics: dict[str, Any]) -> dict[str, An
         "characterCount": int(diagnostics.get("characterCount") or 0),
         "chunkCount": int(diagnostics.get("chunkCount") or 0),
         "latencyMs": int(diagnostics.get("latencyMs") or 0),
+        "pythonPreparationUs": diagnostics.get("pythonPreparationUs"),
+        "serializationUs": diagnostics.get("serializationUs"),
+        "transportUs": diagnostics.get("transportUs"),
+        "rustProcessingUs": diagnostics.get("rustProcessingUs"),
+        "pythonValidationUs": diagnostics.get("pythonValidationUs"),
+        "totalDelegateUs": diagnostics.get("totalDelegateUs"),
+        "requestBytes": int(diagnostics.get("requestBytes") or 0),
+        "responseBytes": int(diagnostics.get("responseBytes") or 0),
+        "connectionReused": diagnostics.get("connectionReused"),
+        "connectionCount": diagnostics.get("connectionCount"),
+        "correlationId": str(diagnostics.get("correlationId") or ""),
     }

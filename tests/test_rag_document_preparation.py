@@ -281,7 +281,8 @@ def test_rust_rag_document_prepare_diagnostics_are_redacted(monkeypatch: pytest.
     rendered = json.dumps(record.__dict__, ensure_ascii=False, default=str).lower()
     assert "private document body" not in rendered
     assert "safe.txt" not in rendered
-    assert getattr(record, "document_id_hash", "")
+    assert not hasattr(record, "document_id_hash")
+    assert getattr(record, "component", "") == "rag_document_prepare"
     assert prep.public_rag_document_diagnostics(decision.diagnostics)["runtime"] == "rust"
 
 

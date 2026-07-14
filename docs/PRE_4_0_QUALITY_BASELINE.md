@@ -1,14 +1,14 @@
 # Pre-4.0 Quality Baseline
 
-This document tracks where the project stands after the 3.7.0 optional Rust RAG document-preparation update, built on the 3.5.0 Gateway and 3.6.0 MCP preparation milestones. The stable development line remains 3.x; the published `v4.0.0-rc.1` is a historical architecture preview and release-flow rehearsal.
+This document tracks where the project stands after the 3.8.0 Rust sidecar release performance and observability milestone, built on the existing Gateway, MCP, Policy, vector-ranking, and document-preparation delegates. The stable development line remains 3.x; the published `v4.0.0-rc.1` is a historical architecture preview and release-flow rehearsal.
 
 > **Purpose**: know and enforce the gap. The [4.0 RC readiness matrix](4_0_RC_READINESS.md) records the already-published `v4.0.0-rc.1` rehearsal; it does not make 4.0.0 the active stable line or imply a near-term stable 4.0.0 release.
 
 ---
 
-## Current quality milestone: 3.7.0
+## Current quality milestone: 3.8.0
 
-At the end of 3.7.0:
+At the end of 3.8.0:
 
 - All Rust components remain **default-disabled**.
 - The hybrid runtime has a complete operational runbook ([RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)) and a release-readiness checklist ([RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md)).
@@ -16,6 +16,9 @@ At the end of 3.7.0:
 - Rust CI gates pass (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`).
 - Offline eval gates pass with `--strict`.
 - The Rust sidecar has a standalone multi-stage Docker image, optional Compose file, container health check, and offline smoke test.
+- A locked release-mode benchmark separates Python baseline, pure Rust core, warm HTTP, cold start, and full Python integration for every current delegate; public-runner absolute latency remains informational.
+- Python Rust clients reuse bounded process-local connections without retaining bodies or caller credentials, and recreate the pool after close, fork, or PID change.
+- The sidecar exports bounded metrics on its existing listener and logs only safe size/duration/outcome/correlation fields.
 - A test-only Compose overlay starts Python, Rust, and an offline upstream stub, verifies Rust request preparation through the real Python Gateway path, then stops the sidecar and proves the same request succeeds through Python fallback.
 - Rust Policy decisions carry stable codes, decision and trace identifiers, capability/risk context, and structured redacted audit fields.
 - Policy backend failures have explicit `fallback`, `deny`, and `error` behavior; all deny/error paths stop tool execution.
@@ -34,7 +37,7 @@ At the end of 3.7.0:
 - Gateway request preparation can use the existing opt-in Rust Gateway delegate, with strict response validation, stable error codes, safe diagnostics, and Python fallback.
 - MCP protocol preparation can use the existing opt-in Rust MCP delegate. Python computes the local contract first, accepts only a contract-identical Python-owned Rust descriptor, and remains the sole owner of routing, tool execution, resources, prompts, sessions, transports, credentials, tracing, and business state.
 - RAG document preparation can use the independent default-disabled Rust delegate after Python file parsing. Python computes and validates the local chunk contract first and remains the sole owner of uploads, paths, parsers/OCR, embeddings, persistence, indexes, retrieval, authorization, and business state. Rust cannot read files or write an index.
-- The complete 3.7.0 statement-and-branch run measures **95.38%** (95.3774% unrounded), above the 95% CI gate and the 95.20% release minimum; coverage omissions are unchanged.
+- The complete 3.8.0 statement-and-branch run measures **95.38%** (95.3774% unrounded), above the 95% CI gate and the 95.20% release minimum; coverage omissions are unchanged.
 
 ---
 
@@ -101,8 +104,9 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | `pytest --cov --cov-fail-under=95` | ✅ Green | 2,454 tests and 58 subtests passed; complete statement-and-branch coverage measured 95.38%; omissions are unchanged. |
 | `cargo fmt --check` | ✅ Green | Rust workspace. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ Green | No warnings. |
-| `cargo test --all` | ✅ Green | 153 Rust workspace tests in 3.7.0. |
+| `cargo test --all` | ✅ Green | 153 Rust workspace tests in 3.8.0. |
 | Rust sidecar Docker build + smoke | ✅ CI gate | Independent job; does not alter the Python image. |
+| Rust sidecar release performance | ✅ CI contract gate | Locked release binary, all five delegate families, schema/parity/redaction/complexity checks; absolute latency is informational. |
 | Hybrid runtime E2E + fallback | ✅ CI gate | Gateway, MCP, Policy, and RAG over the live Compose network. |
 | Rust/Python RAG parity | ✅ CI gate | 38 deterministic cases against a live Rust sidecar; JSON report uploaded. |
 | Rust/Python Gateway request parity | ✅ CI gate | 68 deterministic cases against a live Rust sidecar; JSON report uploaded. |
@@ -112,7 +116,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | `python scripts/check_doc_links.py` | ✅ Green | Internal doc links. |
 | `pip-audit`, `bandit`, `detect-secrets` | ✅ Green | Security scan. |
 | Offline eval suite `--strict` | ✅ Green | RAG, Tool, Injection, Agent, Security corpus. |
-| `scripts/preflight_release.py --version 3.7.0 --ga` | Required | Release readiness. |
+| `scripts/preflight_release.py --version 3.8.0 --ga` | Required | Release readiness. |
 
 ---
 

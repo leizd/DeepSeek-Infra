@@ -3,11 +3,13 @@ use axum::{
     body::Bytes,
     extract::DefaultBodyLimit,
     http::StatusCode,
+    middleware,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+pub mod observability;
 pub mod policy_routes;
 pub mod request_preparation;
 
@@ -72,6 +74,7 @@ pub struct ModelDescriptor {
 pub fn create_app() -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/metrics", get(observability::metrics))
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/gateway/request/prepare", post(gateway_request_prepare))
@@ -87,7 +90,7 @@ pub fn create_app() -> Router {
         .layer(DefaultBodyLimit::max(
             deepseek_rag::document_preparation::MAX_REQUEST_BYTES + 1_000_000,
         ))
-        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(middleware::from_fn(observability::observe_sidecar_request))
 }
 
 async fn gateway_request_prepare(body: Bytes) -> Json<serde_json::Value> {

@@ -376,7 +376,13 @@ def _safe_payload_size(value: Any) -> int:
         return 0
 
 
-def _diagnostics(value: Any, preparation: dict[str, Any]) -> dict[str, Any]:
+def _diagnostics(
+    value: Any,
+    preparation: dict[str, Any],
+    *,
+    python_preparation_us: int,
+    total_started_ns: int,
+) -> dict[str, Any]:
     method = value.get("method") if isinstance(value, dict) and isinstance(value.get("method"), str) else ""
     present = isinstance(value, dict) and "id" in value
     identifier = value.get("id") if isinstance(value, dict) else None
@@ -389,6 +395,17 @@ def _diagnostics(value: Any, preparation: dict[str, Any]) -> dict[str, Any]:
         "fallback": False,
         "fallbackReason": "",
         "latencyMs": 0,
+        "pythonPreparationUs": python_preparation_us,
+        "serializationUs": None,
+        "transportUs": None,
+        "rustProcessingUs": None,
+        "pythonValidationUs": None,
+        "totalDelegateUs": max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+        "requestBytes": 0,
+        "responseBytes": 0,
+        "connectionReused": None,
+        "connectionCount": None,
+        "correlationId": "",
     }
 
 
@@ -425,21 +442,40 @@ def _validate_rust_success(
 
 def prepare_mcp_protocol_with_optional_rust(value: Any) -> McpProtocolDecision:
     """Prepare locally, optionally verify/adopt the Rust equivalent."""
+    total_started_ns = time.perf_counter_ns()
+    preparation_started_ns = time.perf_counter_ns()
     local = prepare_mcp_protocol(value)
-    diagnostics = _diagnostics(value, local)
+    python_preparation_us = max(0, (time.perf_counter_ns() - preparation_started_ns) // 1000)
+    diagnostics = _diagnostics(
+        value,
+        local,
+        python_preparation_us=python_preparation_us,
+        total_started_ns=total_started_ns,
+    )
     if local.get("ok") is not True:
+        diagnostics["totalDelegateUs"] = max(0, (time.perf_counter_ns() - total_started_ns) // 1000)
         return McpProtocolDecision(local, diagnostics)
 
     from deepseek_infra.infra.rust_core import mcp_client
 
     if not mcp_client.rust_mcp_enabled():
+        diagnostics["totalDelegateUs"] = max(0, (time.perf_counter_ns() - total_started_ns) // 1000)
         return McpProtocolDecision(local, diagnostics)
 
-    started = time.perf_counter()
     result = mcp_client.prepare_mcp_with_rust(value)
-    elapsed_ms = max(result.latency_ms, int((time.perf_counter() - started) * 1000))
-    diagnostics["latencyMs"] = elapsed_ms
+    diagnostics.update(
+        serializationUs=getattr(result, "serialization_us", None),
+        transportUs=getattr(result, "transport_us", None),
+        rustProcessingUs=getattr(result, "rust_processing_us", None),
+        requestBytes=int(getattr(result, "request_bytes", 0) or 0),
+        responseBytes=int(getattr(result, "response_bytes", 0) or 0),
+        connectionReused=getattr(result, "connection_reused", None),
+        connectionCount=getattr(result, "connection_count", None),
+        correlationId=str(getattr(result, "correlation_id", "") or ""),
+    )
     if not result.ok:
+        total_us = max(0, (time.perf_counter_ns() - total_started_ns) // 1000)
+        diagnostics.update(totalDelegateUs=total_us, latencyMs=max(0, round(total_us / 1000)))
         diagnostics.update(
             runtime="python",
             fallback=True,
@@ -447,7 +483,15 @@ def prepare_mcp_protocol_with_optional_rust(value: Any) -> McpProtocolDecision:
         )
         return McpProtocolDecision(local, diagnostics)
 
+    validation_started_ns = time.perf_counter_ns()
     valid, reason = _validate_rust_success(local, result.body)
+    validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
+    total_us = max(0, (time.perf_counter_ns() - total_started_ns) // 1000)
+    diagnostics.update(
+        pythonValidationUs=validation_us,
+        totalDelegateUs=total_us,
+        latencyMs=max(0, round(total_us / 1000)),
+    )
     if not valid:
         diagnostics.update(runtime="python", fallback=True, fallbackReason=reason)
         return McpProtocolDecision(local, diagnostics)
@@ -480,14 +524,15 @@ def log_mcp_protocol_diagnostics(diagnostics: dict[str, Any]) -> None:
     logger.info(
         "mcp_protocol_preparation",
         extra={
-            "method": str(diagnostics.get("method") or ""),
+            "component": "mcp_prepare",
             "message_type": str(diagnostics.get("messageType") or "invalid"),
             "request_id_type": str(diagnostics.get("requestIdType") or "invalid"),
-            "payload_size": int(diagnostics.get("payloadSize") or 0),
+            "payload_bytes": int(diagnostics.get("payloadSize") or 0),
             "runtime": str(diagnostics.get("runtime") or "python"),
             "fallback": bool(diagnostics.get("fallback")),
             "fallback_reason": str(diagnostics.get("fallbackReason") or ""),
-            "latency_ms": int(diagnostics.get("latencyMs") or 0),
+            "duration_us": int(diagnostics.get("totalDelegateUs") or 0),
+            "correlation_id": str(diagnostics.get("correlationId") or ""),
         },
     )
 
