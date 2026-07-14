@@ -59,7 +59,7 @@ The active evidence paths below target the 3.8.0 stable line. The published `v4.
 
 | 门禁 | 证据 | 要求 |
 | --- | --- | --- |
-| Coverage | `pyproject.toml` + CI `pytest --cov --cov-fail-under=95` + uploaded `coverage-debt-python-3.12` artifact | 3.8.0 full statement-and-branch run: 95.38% (2,454 tests + 58 subtests); gate 95%, release minimum 95.20%, omissions unchanged; HIGH-risk debt unchanged at 201 statements / 198 branches |
+| Coverage | `pyproject.toml` + CI `pytest --cov --cov-fail-under=95` + uploaded `coverage-debt-python-3.12` artifact | 3.8.0 full statement-and-branch run: 95.35% (2,490 tests + 58 subtests); gate 95%, release minimum 95.20%, omissions unchanged; HIGH-risk debt unchanged at 201 statements / 198 branches |
 | Offline eval | `evals/reports/latest.json` | `status=PASS` |
 | Agent Eval | `evals/reports/agent-latest.json` | `status=PASS` |
 | Baseline compare | `evals/reports/baseline-compare-latest.json` | `status=PASS` |

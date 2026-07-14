@@ -71,6 +71,15 @@ def test_fetch_download_uses_content_disposition_and_unique_names(tmp_settings: 
     assert second["filename"] == "final-2.txt"
 
 
+def test_fetch_download_uses_url_name_without_content_disposition(tmp_settings: Path) -> None:
+    response = _Response(b"report", {})
+
+    with patch.object(downloads.urllib.request, "urlopen", return_value=response):
+        result = downloads.fetch_download("session-url-name", "https://example.com/My%20Report.txt")
+
+    assert result["filename"] == "My-Report.txt"
+
+
 def test_save_download_bytes_rejects_oversize(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "BROWSER_DOWNLOAD_MAX_BYTES", 1)
 

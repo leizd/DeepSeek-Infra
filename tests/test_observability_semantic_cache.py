@@ -79,13 +79,29 @@ def test_semantic_cache_uses_rust_vector_ranking(tmp_settings: Any, monkeypatch:
     second_body = {"model": "deepseek-v4-pro", "messages": second["messages"]}
     assert semantic_cache.store(first, first_body, {"model": "deepseek-v4-pro", "content": "rust ranked"})["stored"] is True
 
-    with patch.object(semantic_cache._rust_rag, "rank_vectors", return_value=((0, 0.99), True)) as rank:
+    with patch.object(semantic_cache._rust_rag, "rank_vectors", return_value=((0, 1.0), True)) as rank:
         hit = semantic_cache.lookup(second, second_body)
 
     rank.assert_called_once_with([1.0, 0.0], [[1.0, 0.0]])
     assert hit.hit is True
     assert hit.result is not None and hit.result["content"] == "rust ranked"
     assert hit.diagnostics["rankingBackend"] == "rust"
+
+
+def test_semantic_cache_rejects_divergent_rust_vector_score(tmp_settings: Any, monkeypatch: Any) -> None:
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
+    monkeypatch.setattr(semantic_cache, "embed_text", lambda _text: [1.0, 0.0])
+    first = {"messages": [{"role": "user", "content": "parity source"}], "toolsEnabled": False}
+    second = {"messages": [{"role": "user", "content": "parity query"}], "toolsEnabled": False}
+    first_body = {"model": "deepseek-v4-pro", "messages": first["messages"]}
+    second_body = {"model": "deepseek-v4-pro", "messages": second["messages"]}
+    assert semantic_cache.store(first, first_body, {"model": "deepseek-v4-pro", "content": "python parity"})["stored"] is True
+
+    with patch.object(semantic_cache._rust_rag, "rank_vectors", return_value=((0, 0.99), True)):
+        hit = semantic_cache.lookup(second, second_body)
+
+    assert hit.hit is True
+    assert hit.diagnostics["rankingBackend"] == "python"
 
 
 def test_semantic_cache_rust_failure_falls_back_to_python(tmp_settings: Any, monkeypatch: Any) -> None:

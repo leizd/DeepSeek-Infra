@@ -37,7 +37,7 @@ At the end of 3.8.0:
 - Gateway request preparation can use the existing opt-in Rust Gateway delegate, with strict response validation, stable error codes, safe diagnostics, and Python fallback.
 - MCP protocol preparation can use the existing opt-in Rust MCP delegate. Python computes the local contract first, accepts only a contract-identical Python-owned Rust descriptor, and remains the sole owner of routing, tool execution, resources, prompts, sessions, transports, credentials, tracing, and business state.
 - RAG document preparation can use the independent default-disabled Rust delegate after Python file parsing. Python computes and validates the local chunk contract first and remains the sole owner of uploads, paths, parsers/OCR, embeddings, persistence, indexes, retrieval, authorization, and business state. Rust cannot read files or write an index.
-- The complete 3.8.0 statement-and-branch run measures **95.38%** (95.3774% unrounded), above the 95% CI gate and the 95.20% release minimum; coverage omissions are unchanged.
+- The complete 3.8.0 statement-and-branch run measures **95.35%** (95.3523% unrounded), above the 95% CI gate and the 95.20% release minimum; coverage omissions are unchanged.
 
 ---
 
@@ -80,7 +80,7 @@ Legend:
 | Metric | Current | 4.0.0 target | Gap |
 | --- | --- | --- | --- |
 | Coverage gate | **95%** | ~95% | Cleared |
-| Measured coverage (full suite) | **95.38%** | ~95% | Cleared; above the 95.20% release minimum |
+| Measured coverage (full suite) | **95.35%** | ~95% | Cleared; above the 95.20% release minimum |
 
 The gate was raised from 82% to 85% in 3.2.0, to 90% in 3.3.1, and to 95% in 3.3.2. The final uplift targets real failure behavior in DeepSeek streaming, RAG/files, launcher credentials, agent persistence/concurrency, Skills security/versioning, Browser/OCR/media, MCP, and workspace persistence. Coverage omit rules remain unchanged. Compared with the 3.5.0 baseline, HIGH-risk debt is exactly unchanged at 201 missing statements and 198 missing branches across the same 19 classified modules.
 
@@ -101,10 +101,10 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | --- | --- | --- |
 | `ruff check .` | ✅ Green | Minimal rule set by design. |
 | `mypy .` | ✅ Green | `ignore_missing_imports=true`. |
-| `pytest --cov --cov-fail-under=95` | ✅ Green | 2,454 tests and 58 subtests passed; complete statement-and-branch coverage measured 95.38%; omissions are unchanged. |
+| `pytest --cov --cov-fail-under=95` | ✅ Green | 2,490 tests and 58 subtests passed; complete statement-and-branch coverage measured 95.35%; omissions are unchanged. |
 | `cargo fmt --check` | ✅ Green | Rust workspace. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ Green | No warnings. |
-| `cargo test --all` | ✅ Green | 153 Rust workspace tests in 3.8.0. |
+| `cargo test --all` | ✅ Green | 155 Rust workspace tests in 3.8.0. |
 | Rust sidecar Docker build + smoke | ✅ CI gate | Independent job; does not alter the Python image. |
 | Rust sidecar release performance | ✅ CI contract gate | Locked release binary, all five delegate families, schema/parity/redaction/complexity checks; absolute latency is informational. |
 | Hybrid runtime E2E + fallback | ✅ CI gate | Gateway, MCP, Policy, and RAG over the live Compose network. |
