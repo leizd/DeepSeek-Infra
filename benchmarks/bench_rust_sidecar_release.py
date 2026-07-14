@@ -7,6 +7,7 @@ import concurrent.futures
 import copy
 import hashlib
 import json
+import math
 import os
 import platform
 import socket
@@ -39,11 +40,11 @@ from deepseek_infra.infra.rag.document_preparation import (  # noqa: E402
     prepare_rag_document,
     prepare_rag_document_with_optional_rust,
 )
-from deepseek_infra.infra.rust_core import policy_client, rag_client, transport  # noqa: E402
+from deepseek_infra.infra.rust_core import policy_client, rag_client, transport, vector_binary  # noqa: E402
 from deepseek_infra.infra.tool_runtime.tool_policy import evaluate_path_safety, evaluate_url_safety  # noqa: E402
 
-VERSION = "3.8.0"
-SCHEMA_VERSION = "rust-sidecar-performance.v1"
+VERSION = "3.9.0"
+SCHEMA_VERSION = "rust-sidecar-performance.v2"
 BUILD_COMMAND = [
     "cargo",
     "build",
@@ -77,6 +78,17 @@ class Scenario:
 class CallResult:
     output: Any
     fallback: bool = False
+
+
+@dataclass(frozen=True)
+class VectorLayerResult:
+    output: dict[str, Any]
+    fallback: bool
+    request_bytes: int
+    response_bytes: int
+    serialization_us: int | None = None
+    transport_us: int | None = None
+    rust_processing_us: int | None = None
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -193,6 +205,15 @@ def _python_vector(payload: dict[str, Any]) -> dict[str, Any]:
     return {"index": best_index, "similarity": best_similarity}
 
 
+def _vector_outputs_match(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
+    return expected.get("index") == actual.get("index") and math.isclose(
+        float(expected.get("similarity") or 0.0),
+        float(actual.get("similarity") or 0.0),
+        rel_tol=1e-9,
+        abs_tol=1e-12,
+    )
+
+
 _RISK_ORDER = {"Low": 0, "Medium": 1, "High": 2, "Critical": 3}
 _CAPABILITY_RISK = {
     "ReadFile": "Low",
@@ -278,6 +299,201 @@ def http_call(base_url: str, scenario: Scenario, timeout: float) -> CallResult:
     return CallResult(value)
 
 
+def _vector_json_serialization(scenario: Scenario) -> VectorLayerResult:
+    started_ns = time.perf_counter_ns()
+    raw = json.dumps(scenario.payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    elapsed = max(0, (time.perf_counter_ns() - started_ns) // 1000)
+    return VectorLayerResult(
+        output={"requestBytes": len(raw)},
+        fallback=False,
+        request_bytes=len(raw),
+        response_bytes=0,
+        serialization_us=elapsed,
+    )
+
+
+def _vector_binary_serialization(scenario: Scenario) -> VectorLayerResult:
+    started_ns = time.perf_counter_ns()
+    encoded = vector_binary.encode_rank_request(scenario.payload["query"], scenario.payload["candidates"])
+    elapsed = max(0, (time.perf_counter_ns() - started_ns) // 1000)
+    return VectorLayerResult(
+        output={"requestBytes": len(encoded.body)},
+        fallback=False,
+        request_bytes=len(encoded.body),
+        response_bytes=0,
+        serialization_us=elapsed,
+    )
+
+
+def _vector_json_http(base_url: str, scenario: Scenario, timeout: float) -> VectorLayerResult:
+    serialization_started_ns = time.perf_counter_ns()
+    raw = json.dumps(scenario.payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    serialization_us = max(0, (time.perf_counter_ns() - serialization_started_ns) // 1000)
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/rag/vectors/rank",
+        data=raw,
+        method="POST",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-DeepSeek-Request-ID": transport.new_correlation_id(),
+        },
+    )
+    with transport.urlopen(request, timeout=timeout) as response:
+        response_body = response.read()
+        value = json.loads(response_body.decode("utf-8"))
+        rust_processing_us = _response_processing_us(response)
+        transport_us = getattr(response, "transport_us", None)
+    if not isinstance(value, dict):
+        raise RuntimeError("JSON vector response must be an object")
+    return VectorLayerResult(
+        output=value,
+        fallback=False,
+        request_bytes=len(raw),
+        response_bytes=len(response_body),
+        serialization_us=serialization_us,
+        transport_us=transport_us if isinstance(transport_us, int) else None,
+        rust_processing_us=rust_processing_us,
+    )
+
+
+def _vector_binary_http(base_url: str, scenario: Scenario, timeout: float) -> VectorLayerResult:
+    serialization_started_ns = time.perf_counter_ns()
+    encoded = vector_binary.encode_rank_request(scenario.payload["query"], scenario.payload["candidates"])
+    serialization_us = max(0, (time.perf_counter_ns() - serialization_started_ns) // 1000)
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/rag/vectors/rank-binary",
+        data=encoded.body,
+        method="POST",
+        headers={
+            "Accept": vector_binary.CONTENT_TYPE,
+            "Content-Type": vector_binary.CONTENT_TYPE,
+            "X-DeepSeek-Request-ID": transport.new_correlation_id(),
+        },
+    )
+    with transport.urlopen(request, timeout=timeout) as response:
+        response_body = response.read()
+        content_type = transport.response_header(response, "Content-Type")
+        rust_processing_us = _response_processing_us(response)
+        transport_us = getattr(response, "transport_us", None)
+    if content_type is None or content_type.lower() != vector_binary.CONTENT_TYPE:
+        raise RuntimeError("binary vector response content type is invalid")
+    decoded = vector_binary.decode_rank_response(response_body, candidate_count=len(scenario.payload["candidates"]))
+    return VectorLayerResult(
+        output={"index": decoded.index, "similarity": decoded.similarity},
+        fallback=False,
+        request_bytes=len(encoded.body),
+        response_bytes=len(response_body),
+        serialization_us=serialization_us,
+        transport_us=transport_us if isinstance(transport_us, int) else None,
+        rust_processing_us=rust_processing_us,
+    )
+
+
+def _vector_full_integration(scenario: Scenario, encoding: str) -> VectorLayerResult:
+    previous = os.environ.get("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT")
+    os.environ["DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT"] = encoding
+    try:
+        ranked, used_rust = rag_client.rank_vectors(scenario.payload["query"], scenario.payload["candidates"])
+        diagnostics = rag_client.last_delegate_diagnostics("rag_vector_rank")
+    finally:
+        if previous is None:
+            os.environ.pop("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT", None)
+        else:
+            os.environ["DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT"] = previous
+    expected = _python_vector(scenario.payload)
+    candidate = {"index": ranked[0], "similarity": ranked[1]} if used_rust and ranked is not None else expected
+    parity = candidate.get("index") == expected.get("index") and math.isclose(
+        float(candidate.get("similarity") or 0.0),
+        float(expected.get("similarity") or 0.0),
+        rel_tol=1e-9,
+        abs_tol=1e-12,
+    )
+    return VectorLayerResult(
+        output=candidate if parity else expected,
+        fallback=not used_rust or not parity,
+        request_bytes=int(diagnostics.get("requestPayloadBytes") or 0),
+        response_bytes=int(diagnostics.get("responsePayloadBytes") or 0),
+        serialization_us=diagnostics.get("serializationUs") if isinstance(diagnostics.get("serializationUs"), int) else None,
+        transport_us=diagnostics.get("transportUs") if isinstance(diagnostics.get("transportUs"), int) else None,
+        rust_processing_us=diagnostics.get("rustProcessingUs") if isinstance(diagnostics.get("rustProcessingUs"), int) else None,
+    )
+
+
+def _vector_concurrency_call(base_url: str, scenario: Scenario, timeout: float, encoding: str) -> CallResult:
+    result = (
+        _vector_binary_http(base_url, scenario, timeout)
+        if encoding == "binary"
+        else _vector_json_http(base_url, scenario, timeout)
+    )
+    return CallResult(result.output, fallback=result.fallback)
+
+
+def _timing_pair(values: list[float]) -> tuple[float | None, float | None]:
+    if not values:
+        return None, None
+    return round(statistics.median(values), 3), round(_percentile(values, 0.95), 3)
+
+
+def _measure_vector_layer(
+    call: Callable[[], VectorLayerResult],
+    *,
+    iterations: int,
+    warmups: int,
+) -> tuple[dict[str, Any], str]:
+    for _ in range(warmups):
+        call()
+    samples: list[float] = []
+    serialization: list[float] = []
+    transport_samples: list[float] = []
+    rust_processing: list[float] = []
+    errors = 0
+    fallbacks = 0
+    request_bytes = 0
+    response_bytes = 0
+    output_hash = ""
+    wall_started = time.perf_counter()
+    for _ in range(iterations):
+        started_ns = time.perf_counter_ns()
+        try:
+            result = call()
+            fallbacks += int(result.fallback)
+            request_bytes = result.request_bytes
+            response_bytes = result.response_bytes
+            output_hash = semantic_hash("rag_vector_rank", result.output)
+            if result.serialization_us is not None:
+                serialization.append(float(result.serialization_us))
+            if result.transport_us is not None:
+                transport_samples.append(float(result.transport_us))
+            if result.rust_processing_us is not None:
+                rust_processing.append(float(result.rust_processing_us))
+        except Exception:
+            errors += 1
+        samples.append(max(0.0, (time.perf_counter_ns() - started_ns) / 1000.0))
+    stats = _stats(
+        samples,
+        iterations=iterations,
+        warmups=warmups,
+        input_bytes=request_bytes,
+        output_bytes=response_bytes,
+        errors=errors,
+        fallbacks=fallbacks,
+        wall_seconds=time.perf_counter() - wall_started,
+    )
+    serialization_median, serialization_p95 = _timing_pair(serialization)
+    transport_median, transport_p95 = _timing_pair(transport_samples)
+    rust_median, rust_p95 = _timing_pair(rust_processing)
+    stats.update(
+        serializationMedianUs=serialization_median,
+        serializationP95Us=serialization_p95,
+        transportMedianUs=transport_median,
+        transportP95Us=transport_p95,
+        rustProcessingMedianUs=rust_median,
+        rustProcessingP95Us=rust_p95,
+    )
+    return stats, output_hash
+
+
 def full_integration(scenario: Scenario) -> CallResult:
     payload = scenario.payload
     if scenario.component == "gateway_prepare":
@@ -300,7 +516,7 @@ def full_integration(scenario: Scenario) -> CallResult:
         ranked, used_rust = rag_client.rank_vectors(payload["query"], payload["candidates"])
         expected = _python_vector(payload)
         candidate = {"index": ranked[0], "similarity": ranked[1]} if used_rust and ranked is not None else expected
-        parity = semantic_hash(scenario.component, candidate) == semantic_hash(scenario.component, expected)
+        parity = _vector_outputs_match(expected, candidate)
         return CallResult(candidate if parity else expected, fallback=not used_rust or not parity)
     if scenario.component == "policy_url":
         result = policy_client.check_url(str(payload["url"]))
@@ -471,12 +687,16 @@ def rust_environment(base_url: str) -> Iterator[None]:
 
 
 def _vector_payload(candidates: int, dimensions: int, *, tie: bool = False) -> dict[str, Any]:
-    query = [1.0] + [0.0] * (dimensions - 1)
-    values: list[list[float]] = []
-    for index in range(candidates):
-        leading = 0.9 if tie and index < 2 else 0.1 + (0.8 * index / max(1, candidates - 1))
-        values.append([leading] + [0.0] * (dimensions - 1))
-    return {"query": query, "candidates": values}
+    if tie:
+        query = [1.0] + [0.0] * (dimensions - 1)
+        tie_candidates = [[0.9] + [0.0] * (dimensions - 1) for _ in range(candidates)]
+        return {"query": query, "candidates": tie_candidates}
+    query = [round((((index + 29) * 12_345) % 19_999 - 9_999) / 1_000_000.0, 6) for index in range(dimensions)]
+    candidate_vectors: list[list[float]] = []
+    for candidate_index in range(candidates):
+        scale = 0.35 + (0.6 * candidate_index / max(1, candidates - 1))
+        candidate_vectors.append([round(value * scale, 6) for value in query])
+    return {"query": query, "candidates": candidate_vectors}
 
 
 def scenarios() -> dict[str, list[Scenario]]:
@@ -692,6 +912,42 @@ def validate_report(report: dict[str, Any]) -> None:
             for layer in layers.values():
                 if layer.get("errors") or layer.get("fallbacks"):
                     raise RuntimeError(f"benchmark errors/fallbacks are not allowed: {scenario.get('name')}")
+            if delegate.get("delegate") == "rag_vector_ranking":
+                comparison = scenario.get("transportComparison") or {}
+                required_layers = {
+                    "pythonDirect",
+                    "pureRustCore",
+                    "jsonSerialization",
+                    "binarySerialization",
+                    "warmJsonHttp",
+                    "warmBinaryHttp",
+                    "fullJsonIntegration",
+                    "fullBinaryIntegration",
+                }
+                if set(comparison.get("layers") or {}) != required_layers:
+                    raise RuntimeError(f"vector transport comparison is incomplete: {scenario.get('name')}")
+                if not comparison.get("semanticParity"):
+                    raise RuntimeError(f"vector transport semantic parity failed: {scenario.get('name')}")
+                for layer in (comparison.get("layers") or {}).values():
+                    if layer.get("errors") or layer.get("fallbacks"):
+                        raise RuntimeError(f"vector transport errors/fallbacks are not allowed: {scenario.get('name')}")
+                binary_response = comparison["layers"]["warmBinaryHttp"].get("outputBytes")
+                if binary_response != vector_binary.RESPONSE_BYTES:
+                    raise RuntimeError(f"binary response size is not fixed: {scenario.get('name')}")
+                if scenario.get("name") == "1000_candidates_x_1536_dimensions":
+                    json_bytes = comparison["layers"]["jsonSerialization"].get("inputBytes")
+                    binary_bytes = comparison["layers"]["binarySerialization"].get("inputBytes")
+                    if not isinstance(json_bytes, int) or not isinstance(binary_bytes, int) or binary_bytes >= json_bytes:
+                        raise RuntimeError("large binary vector request is not smaller than JSON")
+        if delegate.get("delegate") == "rag_vector_ranking":
+            comparison_concurrency = delegate.get("transportConcurrency") or {}
+            if set(comparison_concurrency) != {"json", "binary"}:
+                raise RuntimeError("vector transport concurrency comparison is incomplete")
+            for encoding, values in comparison_concurrency.items():
+                if {item.get("concurrency") for item in values} != {1, 8, 32}:
+                    raise RuntimeError(f"vector {encoding} concurrency coverage is incomplete")
+                if any(item.get("errors") or item.get("fallbacks") for item in values):
+                    raise RuntimeError(f"vector {encoding} concurrency errors/fallbacks are not allowed")
     rendered = json.dumps(report, ensure_ascii=False).lower()
     forbidden = ("authorization", "api_key", "bearer ", "topsecret", "tool arguments", "document body")
     if any(value in rendered for value in forbidden):
@@ -739,7 +995,8 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
                     warmups=warmups,
                     input_bytes=input_bytes,
                 )
-                python_signature = semantic_hash(scenario.component, python_baseline(scenario).output)
+                python_output = python_baseline(scenario).output
+                python_signature = semantic_hash(scenario.component, python_output)
                 pure_stats, pure_signature = pure_rust(
                     core_binary,
                     scenario,
@@ -754,7 +1011,8 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
                     warmups=warmups,
                     input_bytes=input_bytes,
                 )
-                http_signature = semantic_hash(scenario.component, http_call(sidecar.base_url, scenario, timeout).output)
+                http_output = http_call(sidecar.base_url, scenario, timeout).output
+                http_signature = semantic_hash(scenario.component, http_output)
                 transport.reset_persistent_clients()
                 integration_stats, _ = _measure(
                     lambda: full_integration(scenario),
@@ -764,21 +1022,92 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
                 )
                 integration_signature = semantic_hash(scenario.component, full_integration(scenario).output)
                 signatures = {python_signature, pure_signature, http_signature, integration_signature}
-                scenario_reports.append(
-                    {
-                        "name": scenario.name,
-                        "component": scenario.component,
-                        "inputBytes": input_bytes,
-                        "layers": {
-                            "pythonBaseline": python_stats,
-                            "pureRustCore": pure_stats,
-                            "releaseSidecarHttp": http_stats,
-                            "fullPythonIntegration": integration_stats,
-                        },
-                        "semanticParity": len(signatures) == 1,
-                        "semanticHash": python_signature,
+                semantic_parity = len(signatures) == 1
+                if scenario.component == "rag_vector_rank":
+                    semantic_parity = (
+                        isinstance(python_output, dict)
+                        and isinstance(http_output, dict)
+                        and _vector_outputs_match(python_output, http_output)
+                        and len({pure_signature, http_signature, integration_signature}) == 1
+                    )
+                scenario_report = {
+                    "name": scenario.name,
+                    "component": scenario.component,
+                    "inputBytes": input_bytes,
+                    "layers": {
+                        "pythonBaseline": python_stats,
+                        "pureRustCore": pure_stats,
+                        "releaseSidecarHttp": http_stats,
+                        "fullPythonIntegration": integration_stats,
+                    },
+                    "semanticParity": semantic_parity,
+                    "semanticHash": python_signature,
+                }
+                if scenario.component == "rag_vector_rank":
+                    json_serialization, _ = _measure_vector_layer(
+                        lambda: _vector_json_serialization(scenario),
+                        iterations=iterations,
+                        warmups=warmups,
+                    )
+                    binary_serialization, _ = _measure_vector_layer(
+                        lambda: _vector_binary_serialization(scenario),
+                        iterations=iterations,
+                        warmups=warmups,
+                    )
+                    transport.reset_persistent_clients()
+                    warm_json, warm_json_hash = _measure_vector_layer(
+                        lambda: _vector_json_http(sidecar.base_url, scenario, timeout),
+                        iterations=iterations,
+                        warmups=warmups,
+                    )
+                    transport.reset_persistent_clients()
+                    warm_binary, warm_binary_hash = _measure_vector_layer(
+                        lambda: _vector_binary_http(sidecar.base_url, scenario, timeout),
+                        iterations=iterations,
+                        warmups=warmups,
+                    )
+                    transport.reset_persistent_clients()
+                    full_json, full_json_hash = _measure_vector_layer(
+                        lambda: _vector_full_integration(scenario, "json"),
+                        iterations=iterations,
+                        warmups=warmups,
+                    )
+                    transport.reset_persistent_clients()
+                    full_binary, full_binary_hash = _measure_vector_layer(
+                        lambda: _vector_full_integration(scenario, "binary"),
+                        iterations=iterations,
+                        warmups=warmups,
+                    )
+                    comparison_signatures = {
+                        pure_signature,
+                        warm_json_hash,
+                        warm_binary_hash,
+                        full_json_hash,
+                        full_binary_hash,
                     }
-                )
+                    json_request_bytes = int(json_serialization["inputBytes"])
+                    binary_request_bytes = int(binary_serialization["inputBytes"])
+                    reduction_percent = (
+                        round((1.0 - binary_request_bytes / json_request_bytes) * 100.0, 3) if json_request_bytes else 0.0
+                    )
+                    scenario_report["transportComparison"] = {
+                        "layers": {
+                            "pythonDirect": python_stats,
+                            "pureRustCore": pure_stats,
+                            "jsonSerialization": json_serialization,
+                            "binarySerialization": binary_serialization,
+                            "warmJsonHttp": warm_json,
+                            "warmBinaryHttp": warm_binary,
+                            "fullJsonIntegration": full_json,
+                            "fullBinaryIntegration": full_binary,
+                        },
+                        "semanticParity": len(comparison_signatures) == 1 and semantic_parity,
+                        "jsonRequestBytes": json_request_bytes,
+                        "binaryRequestBytes": binary_request_bytes,
+                        "binaryResponseBytes": int(warm_binary["outputBytes"]),
+                        "requestReductionPercent": reduction_percent,
+                    }
+                scenario_reports.append(scenario_report)
 
             representative = delegate_scenarios[0]
             concurrency_reports: list[dict[str, Any]] = []
@@ -793,15 +1122,36 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
                         input_bytes=len(_json_bytes(representative.payload)),
                     )
                 )
-            delegate_reports.append(
-                {
-                    "delegate": delegate,
-                    "components": list(DELEGATE_COMPONENTS[delegate]),
-                    "scenarios": scenario_reports,
-                    "concurrencyScenario": representative.name,
-                    "concurrency": concurrency_reports,
+            delegate_report: dict[str, Any] = {
+                "delegate": delegate,
+                "components": list(DELEGATE_COMPONENTS[delegate]),
+                "scenarios": scenario_reports,
+                "concurrencyScenario": representative.name,
+                "concurrency": concurrency_reports,
+            }
+            if delegate == "rag_vector_ranking":
+                binary_concurrency: list[dict[str, Any]] = []
+                binary_input_bytes = len(
+                    vector_binary.encode_rank_request(
+                        representative.payload["query"], representative.payload["candidates"]
+                    ).body
+                )
+                for level in concurrency:
+                    transport.reset_persistent_clients()
+                    binary_concurrency.append(
+                        _concurrency_measure(
+                            lambda: _vector_concurrency_call(sidecar.base_url, representative, timeout, "binary"),
+                            concurrency=level,
+                            iterations=iterations,
+                            warmups=warmups,
+                            input_bytes=binary_input_bytes,
+                        )
+                    )
+                delegate_report["transportConcurrency"] = {
+                    "json": concurrency_reports,
+                    "binary": binary_concurrency,
                 }
-            )
+            delegate_reports.append(delegate_report)
 
         with urllib.request.urlopen(f"{sidecar.base_url}/metrics", timeout=timeout) as response:  # noqa: S310 - local sidecar
             metrics_text = response.read().decode("utf-8")
@@ -826,6 +1176,7 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
                     "request_payload_bytes",
                     "response_payload_bytes",
                     "backend_errors_total",
+                    "vector_rank_transport_total",
                 )
             ),
             "componentAllowlist": [component for values in DELEGATE_COMPONENTS.values() for component in values],
@@ -843,6 +1194,8 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
             "rustSidecarInDefaultCompose": False,
             "pythonFallbackRetained": True,
             "persistenceOwner": "python",
+            "vectorTransportDefault": "json",
+            "automaticTransportSelection": False,
         },
         "redaction": {
             "payloadsStored": False,
@@ -850,6 +1203,7 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
             "documentTextStored": False,
             "urlsOrPathsStored": False,
             "credentialsStored": False,
+            "vectorValuesStored": False,
         },
     }
     validate_report(report)
@@ -877,7 +1231,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--artifact-out", type=Path, default=ROOT / "artifacts/rust-sidecar-performance.json")
-    parser.add_argument("--evidence-out", type=Path, default=ROOT / "docs/evidence/rust-sidecar-performance-v3.8.0.json")
+    parser.add_argument("--evidence-out", type=Path, default=ROOT / "docs/evidence/rust-sidecar-performance-v3.9.0.json")
     args = parser.parse_args(argv)
     try:
         report = run_benchmark(

@@ -71,6 +71,12 @@ def test_parse_json_output_uses_last_nonempty_line() -> None:
         smoke._parse_json_output("not json", "probe")
 
 
+def test_binary_probe_rows_include_semantic_cache_expiry_fields() -> None:
+    assert '"updated_at":' in smoke.RAG_VECTOR_BINARY_PROBE
+    assert '"prompt_hash":' in smoke.RAG_VECTOR_BINARY_PROBE
+    assert '"embedding":' in smoke.RAG_VECTOR_BINARY_PROBE
+
+
 def test_policy_probe_requires_rust_then_python_fallback() -> None:
     rust_payload = {
         "client": {
@@ -268,6 +274,11 @@ def test_run_smoke_stops_sidecar_before_fallbacks(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(smoke, "check_mcp_protocol_preparation", lambda *args, **kwargs: smoke.CheckResult("mcp", "ok"))
     monkeypatch.setattr(smoke, "check_policy_integration", lambda *args, **kwargs: smoke.CheckResult("policy", "ok"))
     monkeypatch.setattr(smoke, "check_rag_integration", lambda *args, **kwargs: smoke.CheckResult("rag", "ok"))
+    monkeypatch.setattr(
+        smoke,
+        "check_rag_vector_binary",
+        lambda *args, **kwargs: (smoke.CheckResult("rag-vector-binary", "ok"), ("binary-127", 0.9)),
+    )
     monkeypatch.setattr(
         smoke,
         "check_rag_document_preparation",

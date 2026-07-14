@@ -1,5 +1,24 @@
 # 更新日志
 
+## [3.9.0] - Rust Vector Ranking Compact Binary Transport
+
+### 新增
+
+- 为现有 Rust RAG vector-ranking delegate 新增 `POST /rag/vectors/rank-binary`，使用严格 little-endian `f64` 请求和固定 24-byte 响应；原有 `POST /rag/vectors/rank` JSON contract 完全保留。
+- 新增标准库 `array`/`struct` Python 编解码器、显式 `DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=json|binary` 配置、固定低基数 transport metric，以及 110 个确定性有效案例与 16 个畸形协议案例的 release-sidecar parity gate。
+- 扩展 3.8.0 benchmark，分别报告 JSON/binary 序列化、warm HTTP、Rust processing、完整 Python 集成、请求/响应字节与并发 1/8/32；提交完整机器 artifact 和隐私稳定 evidence。
+
+### 安全、fallback 与性能
+
+- Binary decoder 在任何候选矩阵分配或 scalar 扫描前完成 magic、Content-Type、dimensions、candidate count、checked arithmetic、scalar budget 和精确 body length 校验；拒绝 trailing bytes、非有限数和越界输入，错误响应不回显向量。
+- Binary 连接、timeout、HTTP/404、错误 Content-Type、空体、错误长度/magic/reserved、越界 index、非有限 similarity 或 Python parity 分歧均直接进入 Python fallback；同一次业务请求不会再调用 JSON Rust endpoint。
+- 正式本机证据中，16×384、128×768 与 1000×1536 dense 请求体约缩小 14.6%，binary 序列化和 warm/full 路径均下降；tie-heavy 小输入的 binary 请求反而从 288 bytes 增至 528 bytes，明确证明不应自动或默认选择 binary。
+
+### 兼容性与非目标
+
+- `DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT` 默认且非法值均为 `json`，不存在 `auto`；Rust RAG delegate、全部 Rust flags 和 sidecar 部署仍默认关闭，默认 Compose 仍为 Python-only，Python 全量 authoritative ranking、tolerance、first-match tie、fallback 和所有权边界不变。
+- 本版本不增加 Rust delegate，不实现 Rust primary ranking、sampled parity、`f32`、压缩/base64、socket/pipe/FFI、Rust 文件/OCR/embedding/数据库所有权、Gateway streaming 或 MCP transport/工具执行，也不创建新的 4.0 RC、4.0.0、tag 或 GitHub Release。
+
 ## [3.8.0] - Rust Sidecar Release Performance & Observability
 
 ### 新增

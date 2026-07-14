@@ -12,8 +12,12 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-from deepseek_infra.infra.rust_core.config import rust_gateway_url
-from deepseek_infra.infra.rust_core import transport
+from deepseek_infra.infra.rust_core import transport, vector_binary
+from deepseek_infra.infra.rust_core.config import (
+    rust_gateway_url,
+    rust_rag_vector_transport,
+    rust_rag_vector_transport_invalid,
+)
 
 DEFAULT_RAG_TIMEOUT_MS = 3000
 _delegate_state = threading.local()
@@ -174,6 +178,96 @@ def _request(
         return result(ok=False, status=0, body=str(exc), error_kind="rust_backend_unavailable")
 
 
+def _binary_request(
+    path: str,
+    data: bytes,
+    *,
+    serialization_us: int,
+    timeout_ms: int | None = None,
+) -> RagProxyResult:
+    total_started_ns = time.perf_counter_ns()
+    url = f"{rust_gateway_url()}{path}"
+    timeout = (timeout_ms if timeout_ms is not None else _timeout_ms()) / 1000.0
+    correlation_id = transport.new_correlation_id()
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "Accept": vector_binary.CONTENT_TYPE,
+            "Content-Type": vector_binary.CONTENT_TYPE,
+            "X-DeepSeek-Request-ID": correlation_id,
+        },
+    )
+    started_ns = time.perf_counter_ns()
+
+    def result(
+        *,
+        ok: bool,
+        status: int,
+        body: Any,
+        error_kind: str = "",
+        response: Any = None,
+        response_bytes: int = 0,
+    ) -> RagProxyResult:
+        observed_transport_us = getattr(response, "transport_us", None)
+        if not isinstance(observed_transport_us, int):
+            observed_transport_us = max(0, (time.perf_counter_ns() - started_ns) // 1000)
+        rust_processing_us: int | None = None
+        raw_rust_us = transport.response_header(response, "X-DeepSeek-Rust-Processing-Us") if response is not None else None
+        if raw_rust_us is not None:
+            try:
+                rust_processing_us = max(0, int(raw_rust_us))
+            except ValueError:
+                rust_processing_us = None
+        return RagProxyResult(
+            ok=ok,
+            status=status,
+            body=body,
+            error_kind=error_kind,
+            latency_ms=max(0, (time.perf_counter_ns() - started_ns) // 1_000_000),
+            serialization_us=serialization_us,
+            transport_us=observed_transport_us,
+            rust_processing_us=rust_processing_us,
+            total_us=max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+            request_bytes=len(data),
+            response_bytes=response_bytes,
+            correlation_id=correlation_id,
+            connection_reused=getattr(response, "connection_reused", None),
+            connection_count=getattr(response, "connection_count", None),
+        )
+
+    try:
+        with transport.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            if not raw:
+                return result(ok=False, status=response.status, body=None, error_kind="rust_empty_response", response=response)
+            content_type = transport.response_header(response, "Content-Type")
+            if content_type is None or content_type.strip().lower() != vector_binary.CONTENT_TYPE:
+                return result(
+                    ok=False,
+                    status=response.status,
+                    body=None,
+                    error_kind="rust_binary_content_type",
+                    response=response,
+                    response_bytes=len(raw),
+                )
+            return result(ok=True, status=response.status, body=raw, response=response, response_bytes=len(raw))
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read()
+        except Exception:
+            raw = b""
+        return result(ok=False, status=exc.code, body=None, error_kind="rust_http_failure", response=exc, response_bytes=len(raw))
+    except TimeoutError:
+        return result(ok=False, status=0, body=None, error_kind="rust_backend_timeout")
+    except urllib.error.URLError as exc:
+        kind = "rust_backend_timeout" if "timed out" in str(exc).lower() else "rust_backend_unavailable"
+        return result(ok=False, status=0, body=None, error_kind=kind)
+    except Exception:
+        return result(ok=False, status=0, body=None, error_kind="rust_backend_unavailable")
+
+
 def _should_use_result(result: RagProxyResult) -> bool:
     if not result.ok:
         return False
@@ -251,29 +345,67 @@ def rank_vectors(
     """Return ((best_index, similarity), used_rust) for semantic-cache vectors."""
     total_started_ns = time.perf_counter_ns()
     component = "rag_vector_rank"
+    preparation_started_ns = time.perf_counter_ns()
+    configured_transport = rust_rag_vector_transport()
+    invalid_transport_config = rust_rag_vector_transport_invalid()
+    preparation_us = max(0, (time.perf_counter_ns() - preparation_started_ns) // 1000)
     if not _rust_rag_enabled() or not query or not candidates:
         _set_delegate_diagnostics(
             component,
             {
                 "runtime": "python",
                 "fallback": False,
-                "pythonPreparationUs": 0,
+                "pythonPreparationUs": preparation_us,
                 "serializationUs": None,
                 "transportUs": None,
                 "rustProcessingUs": None,
                 "pythonValidationUs": None,
                 "totalDelegateUs": max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+                "transportEncoding": "python",
+                "requestPayloadBytes": 0,
+                "responsePayloadBytes": 0,
+                "transportConfigInvalid": invalid_transport_config,
             },
         )
         return None, False
-    result = _request(
-        "POST", "/rag/vectors/rank", payload={"query": query, "candidates": candidates}
-    )
+    if configured_transport == "binary":
+        serialization_started_ns = time.perf_counter_ns()
+        try:
+            encoded = vector_binary.encode_rank_request(query, candidates)
+        except vector_binary.VectorBinaryError as exc:
+            serialization_us = max(0, (time.perf_counter_ns() - serialization_started_ns) // 1000)
+            _set_delegate_diagnostics(
+                component,
+                {
+                    "runtime": "python",
+                    "fallback": True,
+                    "fallbackReason": exc.code,
+                    "pythonPreparationUs": preparation_us,
+                    "serializationUs": serialization_us,
+                    "transportUs": None,
+                    "rustProcessingUs": None,
+                    "pythonValidationUs": None,
+                    "totalDelegateUs": max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+                    "transportEncoding": "binary",
+                    "requestPayloadBytes": 0,
+                    "responsePayloadBytes": 0,
+                    "transportConfigInvalid": invalid_transport_config,
+                },
+            )
+            return None, False
+        serialization_us = max(0, (time.perf_counter_ns() - serialization_started_ns) // 1000)
+        result = _binary_request(
+            "/rag/vectors/rank-binary",
+            encoded.body,
+            serialization_us=serialization_us,
+        )
+    else:
+        result = _request("POST", "/rag/vectors/rank", payload={"query": query, "candidates": candidates})
     diagnostics = {
         "runtime": "python",
         "fallback": not result.ok,
         "fallbackReason": result.error_kind,
-        "pythonPreparationUs": 0,
+        "pythonPreparationUs": preparation_us,
         "serializationUs": result.serialization_us,
         "transportUs": result.transport_us,
         "rustProcessingUs": result.rust_processing_us,
@@ -281,14 +413,36 @@ def rank_vectors(
         "totalDelegateUs": max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
         "requestBytes": result.request_bytes,
         "responseBytes": result.response_bytes,
+        "requestPayloadBytes": result.request_bytes,
+        "responsePayloadBytes": result.response_bytes,
+        "transportEncoding": configured_transport,
+        "transportConfigInvalid": invalid_transport_config,
         "connectionReused": result.connection_reused,
         "connectionCount": result.connection_count,
         "correlationId": result.correlation_id,
     }
-    if _should_use_result(result):
+    usable_result = result.ok and result.status == 200 and (
+        isinstance(result.body, bytes) if configured_transport == "binary" else isinstance(result.body, dict)
+    )
+    if usable_result:
         validation_started_ns = time.perf_counter_ns()
-        index = result.body.get("index")
-        similarity = result.body.get("similarity")
+        if configured_transport == "binary":
+            try:
+                decoded = vector_binary.decode_rank_response(result.body, candidate_count=len(candidates))
+            except vector_binary.VectorBinaryError as exc:
+                diagnostics.update(
+                    fallback=True,
+                    fallbackReason=exc.code,
+                    pythonValidationUs=max(0, (time.perf_counter_ns() - validation_started_ns) // 1000),
+                    totalDelegateUs=max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+                )
+                _set_delegate_diagnostics(component, diagnostics)
+                return None, False
+            index = decoded.index
+            similarity = decoded.similarity
+        else:
+            index = result.body.get("index")
+            similarity = result.body.get("similarity")
         valid_index = index is None or (
             isinstance(index, int) and not isinstance(index, bool) and 0 <= index < len(candidates)
         )

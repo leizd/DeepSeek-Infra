@@ -1,0 +1,518 @@
+{
+  "version": "3.9.0",
+  "commit": "0b6b69b91beb",
+  "generatedAt": "2026-07-14T08:29:24+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "catalogManifest": "PASS",
+    "catalogList": "PASS",
+    "catalogSearch": "PASS",
+    "catalogInstallPreview": "PASS",
+    "catalogInstall": "PASS",
+    "catalogUninstall": "PASS",
+    "evalScoreShown": "PASS",
+    "toolPermissionSummary": "PASS",
+    "catalogExport": "PASS",
+    "securityGateBeforeInstall": "PASS",
+    "catalogApiActions": "PASS",
+    "catalogUi": "PASS",
+    "catalogAssets": "PASS",
+    "catalogJsSyntax": "PASS",
+    "ciReleaseGate": "PASS"
+  },
+  "details": {
+    "manifestSummary": {
+      "itemCount": 22,
+      "skillCount": 18,
+      "packCount": 4,
+      "trusted": 22,
+      "needsReview": 0,
+      "highRisk": 0,
+      "blocked": 0,
+      "averageEvalScore": 100.0,
+      "localOnly": true
+    },
+    "studyPack": {
+      "itemId": "pack_study",
+      "trustLevel": "trusted",
+      "riskScore": 100,
+      "evalScore": 100.0,
+      "requiredTools": [
+        "create_document",
+        "create_mindmap",
+        "fetch_url",
+        "list_project_files",
+        "python_eval",
+        "read_file_chunk",
+        "search_files",
+        "web_search"
+      ]
+    },
+    "installPreview": {
+      "itemId": "pack_study",
+      "kind": "pack",
+      "projectId": "proj-dd1f8544162e",
+      "includedSkills": [
+        "skill_study_tutor",
+        "skill_paper_writer",
+        "skill_document_reader"
+      ],
+      "newSkills": [
+        "skill_study_tutor",
+        "skill_paper_writer",
+        "skill_document_reader"
+      ],
+      "alreadyEnabledSkills": [],
+      "willEnablePack": true,
+      "willModifyProjectBinding": true,
+      "requiresSecurityApproval": false,
+      "blocked": false,
+      "reviewStatus": "trusted",
+      "trustLevel": "trusted",
+      "riskScore": 100,
+      "evalScore": 100.0,
+      "signed": false,
+      "requiredTools": [
+        "create_document",
+        "create_mindmap",
+        "fetch_url",
+        "list_project_files",
+        "python_eval",
+        "read_file_chunk",
+        "search_files",
+        "web_search"
+      ],
+      "toolPermissionSummary": [
+        {
+          "skillId": "skill_study_tutor",
+          "embedded": true,
+          "allowedTools": [
+            {
+              "tool": "search_files",
+              "risk": "filesystem",
+              "requiresApproval": false
+            },
+            {
+              "tool": "python_eval",
+              "risk": "medium",
+              "requiresApproval": false
+            },
+            {
+              "tool": "create_mindmap",
+              "risk": "filesystem",
+              "requiresApproval": false
+            },
+            {
+              "tool": "create_document",
+              "risk": "filesystem",
+              "requiresApproval": false
+            }
+          ]
+        },
+        {
+          "skillId": "skill_paper_writer",
+          "embedded": true,
+          "allowedTools": [
+            {
+              "tool": "search_files",
+              "risk": "filesystem",
+              "requiresApproval": false
+            },
+            {
+              "tool": "web_search",
+              "risk": "network",
+              "requiresApproval": false
+            },
+            {
+              "tool": "fetch_url",
+              "risk": "network",
+              "requiresApproval": false
+            },
+            {
+              "tool": "create_document",
+              "risk": "filesystem",
+              "requiresApproval": false
+            }
+          ]
+        },
+        {
+          "skillId": "skill_document_reader",
+          "embedded": true,
+          "allowedTools": [
+            {
+              "tool": "list_project_files",
+              "risk": "filesystem",
+              "requiresApproval": false
+            },
+            {
+              "tool": "search_files",
+              "risk": "filesystem",
+              "requiresApproval": false
+            },
+            {
+              "tool": "read_file_chunk",
+              "risk": "filesystem",
+              "requiresApproval": false
+            },
+            {
+              "tool": "create_document",
+              "risk": "filesystem",
+              "requiresApproval": false
+            }
+          ]
+        }
+      ],
+      "securityReview": {
+        "schemaVersion": "skill-security-review.v1",
+        "reviewId": "sec-pack-pack_study-dbcdf96a45e61183",
+        "kind": "pack",
+        "packId": "pack_study",
+        "name": "Study Pack",
+        "version": "1.0.0",
+        "builtin": true,
+        "trustLevel": "trusted",
+        "reviewStatus": "trusted",
+        "riskScore": 100,
+        "allowedToolsRisk": [
+          {
+            "tool": "create_document",
+            "risk": "filesystem",
+            "riskScore": 10,
+            "network": false,
+            "filesystem": true,
+            "sensitive": false,
+            "requiresApproval": false
+          },
+          {
+            "tool": "create_mindmap",
+            "risk": "filesystem",
+            "riskScore": 10,
+            "network": false,
+            "filesystem": true,
+            "sensitive": false,
+            "requiresApproval": false
+          },
+          {
+            "tool": "fetch_url",
+            "risk": "network",
+            "riskScore": 42,
+            "network": true,
+            "filesystem": false,
+            "sensitive": false,
+            "requiresApproval": false
+          },
+          {
+            "tool": "list_project_files",
+            "risk": "filesystem",
+            "riskScore": 10,
+            "network": false,
+            "filesystem": true,
+            "sensitive": false,
+            "requiresApproval": false
+          },
+          {
+            "tool": "python_eval",
+            "risk": "medium",
+            "riskScore": 12,
+            "network": false,
+            "filesystem": false,
+            "sensitive": false,
+            "requiresApproval": false
+          },
+          {
+            "tool": "read_file_chunk",
+            "risk": "filesystem",
+            "riskScore": 10,
+            "network": false,
+            "filesystem": true,
+            "sensitive": false,
+            "requiresApproval": false
+          },
+          {
+            "tool": "search_files",
+            "risk": "filesystem",
+            "riskScore": 10,
+            "network": false,
+            "filesystem": true,
+            "sensitive": false,
+            "requiresApproval": false
+          },
+          {
+            "tool": "web_search",
+            "risk": "network",
+            "riskScore": 30,
+            "network": true,
+            "filesystem": false,
+            "sensitive": false,
+            "requiresApproval": false
+          }
+        ],
+        "requiresApprovalCount": 0,
+        "capabilities": [
+          "code",
+          "general",
+          "research"
+        ],
+        "findings": [
+          {
+            "type": "high_risk_tool",
+            "field": "skills.skill_paper_writer.allowedTools.fetch_url",
+            "severity": "high",
+            "message": "Tool fetch_url is network.",
+            "suggestion": "Review the tool grant and require approval before trusting the Skill."
+          },
+          {
+            "type": "high_risk_tool",
+            "field": "allowedTools.fetch_url",
+            "severity": "high",
+            "message": "Tool fetch_url is network.",
+            "suggestion": "Review the tool grant and require approval before trusting the Skill."
+          }
+        ],
+        "skillReviews": [
+          {
+            "skillId": "skill_study_tutor",
+            "reviewStatus": "needs-review",
+            "riskScore": 42,
+            "findingCount": 0,
+            "toolGrantHash": "sha256:6d83304eac9ac0b8fff0190103d168ff50e7e38e5e77d69255b2d2c8fac9d470"
+          },
+          {
+            "skillId": "skill_paper_writer",
+            "reviewStatus": "high-risk",
+            "riskScore": 100,
+            "findingCount": 1,
+            "toolGrantHash": "sha256:076cf00c9e7f0af9a10c5ac3cf560252923aa62498a511ca1f1e1b88912f9581"
+          },
+          {
+            "skillId": "skill_document_reader",
+            "reviewStatus": "needs-review",
+            "riskScore": 40,
+            "findingCount": 0,
+            "toolGrantHash": "sha256:70833fc7e97c503aa233c339bf7fda1c88a2d64e007e631164ab12882fe89f35"
+          }
+        ],
+        "manifest": {
+          "schemaVersion": "skill-security-manifest.v1",
+          "kind": "pack",
+          "packId": "pack_study",
+          "version": "1.0.0",
+          "contentHash": "sha256:dbcdf96a45e61183083630966154c31f99a6ac68bbb685b9074393a141651805",
+          "schemaHash": "sha256:27fe353722e5b20d445c39ddf679a32a8e08fb9a5928e13d662150f554ed7dcd",
+          "promptHash": "sha256:73bdcd07048204165d086ec803a481af9c44d38071a7cf09fc924971464aa331",
+          "toolGrantHash": "sha256:328d9b9a831ecc97a3a34c9f926d868d1dd6ad25ead3d7999687f2d3c1b48f40",
+          "reviewStatus": "",
+          "signed": false
+        },
+        "lastSecurityReviewAt": "2026-07-14T08:29:22+00:00",
+        "signed": false
+      },
+      "projectChanges": {
+        "enabledPacksBefore": [],
+        "enabledSkillsBefore": []
+      }
+    },
+    "riskyPreview": {
+      "itemId": "pack_catalog_smoke_risky",
+      "kind": "pack",
+      "projectId": "proj-dd1f8544162e",
+      "includedSkills": [
+        "skill_catalog_smoke_risky"
+      ],
+      "newSkills": [
+        "skill_catalog_smoke_risky"
+      ],
+      "alreadyEnabledSkills": [],
+      "willEnablePack": true,
+      "willModifyProjectBinding": true,
+      "requiresSecurityApproval": true,
+      "blocked": false,
+      "reviewStatus": "high-risk",
+      "trustLevel": "high-risk",
+      "riskScore": 100,
+      "evalScore": 0.0,
+      "signed": false,
+      "requiredTools": [
+        "fetch_url",
+        "forget_memory",
+        "python_eval",
+        "search_files"
+      ],
+      "toolPermissionSummary": [
+        {
+          "skillId": "skill_catalog_smoke_risky",
+          "embedded": true,
+          "allowedTools": [
+            {
+              "tool": "search_files",
+              "risk": "filesystem",
+              "requiresApproval": false
+            },
+            {
+              "tool": "fetch_url",
+              "risk": "network",
+              "requiresApproval": false
+            },
+            {
+              "tool": "python_eval",
+              "risk": "medium",
+              "requiresApproval": false
+            },
+            {
+              "tool": "forget_memory",
+              "risk": "requires approval",
+              "requiresApproval": true
+            }
+          ]
+        }
+      ],
+      "securityReview": {
+        "schemaVersion": "skill-security-review.v1",
+        "reviewId": "sec-pack-pack_catalog_smoke_risky-b44843dafb49f485",
+        "kind": "pack",
+        "packId": "pack_catalog_smoke_risky",
+        "name": "Catalog Smoke Risky Pack",
+        "version": "1.0.0",
+        "builtin": false,
+        "trustLevel": "high-risk",
+        "reviewStatus": "high-risk",
+        "riskScore": 100,
+        "allowedToolsRisk": [
+          {
+            "tool": "fetch_url",
+            "risk": "network",
+            "riskScore": 42,
+            "network": true,
+            "filesystem": false,
+            "sensitive": false,
+            "requiresApproval": false
+          },
+          {
+            "tool": "forget_memory",
+            "risk": "requires approval",
+            "riskScore": 44,
+            "network": false,
+            "filesystem": false,
+            "sensitive": false,
+            "requiresApproval": true
+          },
+          {
+            "tool": "python_eval",
+            "risk": "medium",
+            "riskScore": 12,
+            "network": false,
+            "filesystem": false,
+            "sensitive": false,
+            "requiresApproval": false
+          },
+          {
+            "tool": "search_files",
+            "risk": "filesystem",
+            "riskScore": 10,
+            "network": false,
+            "filesystem": true,
+            "sensitive": false,
+            "requiresApproval": false
+          }
+        ],
+        "requiresApprovalCount": 1,
+        "capabilities": [
+          "assistant",
+          "code",
+          "research"
+        ],
+        "findings": [
+          {
+            "type": "prompt_injection",
+            "field": "skills.skill_catalog_smoke_risky.systemPrompt",
+            "severity": "high",
+            "message": "Suspicious instruction in systemPrompt.",
+            "suggestion": "Remove instructions that try to override upstream system or developer guidance."
+          },
+          {
+            "type": "secret_exfiltration",
+            "field": "skills.skill_catalog_smoke_risky.systemPrompt",
+            "severity": "high",
+            "message": "Suspicious instruction in systemPrompt.",
+            "suggestion": "Remove instructions that request exposing credentials, tokens, or private files."
+          },
+          {
+            "type": "secret_file_access",
+            "field": "skills.skill_catalog_smoke_risky.systemPrompt",
+            "severity": "high",
+            "message": "Suspicious instruction in systemPrompt.",
+            "suggestion": "Do not instruct Skills to read credential stores or secret-bearing files."
+          },
+          {
+            "type": "high_risk_tool",
+            "field": "skills.skill_catalog_smoke_risky.allowedTools.fetch_url",
+            "severity": "high",
+            "message": "Tool fetch_url is network.",
+            "suggestion": "Review the tool grant and require approval before trusting the Skill."
+          },
+          {
+            "type": "high_risk_tool",
+            "field": "skills.skill_catalog_smoke_risky.allowedTools.forget_memory",
+            "severity": "high",
+            "message": "Tool forget_memory is requires approval.",
+            "suggestion": "Review the tool grant and require approval before trusting the Skill."
+          },
+          {
+            "type": "high_risk_tool",
+            "field": "allowedTools.fetch_url",
+            "severity": "high",
+            "message": "Tool fetch_url is network.",
+            "suggestion": "Review the tool grant and require approval before trusting the Skill."
+          },
+          {
+            "type": "high_risk_tool",
+            "field": "allowedTools.forget_memory",
+            "severity": "high",
+            "message": "Tool forget_memory is requires approval.",
+            "suggestion": "Review the tool grant and require approval before trusting the Skill."
+          }
+        ],
+        "skillReviews": [
+          {
+            "skillId": "skill_catalog_smoke_risky",
+            "reviewStatus": "high-risk",
+            "riskScore": 100,
+            "findingCount": 6,
+            "toolGrantHash": "sha256:c15dff3f6d484d1ada54c37f4f852af4d26b4bd9304088743c975c9091312d2f"
+          }
+        ],
+        "manifest": {
+          "schemaVersion": "skill-security-manifest.v1",
+          "kind": "pack",
+          "packId": "pack_catalog_smoke_risky",
+          "version": "1.0.0",
+          "contentHash": "sha256:b44843dafb49f485e488ac5ca72aea811955b510d6942db6816dd4aebb12f8cd",
+          "schemaHash": "sha256:88f1c29c5b380f5fc465791c6929783a1c4aff3938ef448c83b3619dd605dd91",
+          "promptHash": "sha256:959ef24a960475c02e2188ff35b00b2a8c184f3ceb4aca30d461b46d862c69e2",
+          "toolGrantHash": "sha256:c15dff3f6d484d1ada54c37f4f852af4d26b4bd9304088743c975c9091312d2f",
+          "reviewStatus": "",
+          "signed": false
+        },
+        "lastSecurityReviewAt": "2026-07-14T08:29:23+00:00",
+        "signed": false
+      },
+      "projectChanges": {
+        "enabledPacksBefore": [],
+        "enabledSkillsBefore": []
+      }
+    },
+    "assets": [
+      "docs/assets/skill-catalog.png",
+      "docs/assets/skill-catalog-install-preview.png"
+    ],
+    "catalogJsSyntax": {
+      "returnCode": 0,
+      "stderr": ""
+    }
+  }
+}

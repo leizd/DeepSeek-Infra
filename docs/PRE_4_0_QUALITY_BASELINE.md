@@ -1,14 +1,14 @@
 # Pre-4.0 Quality Baseline
 
-This document tracks where the project stands after the 3.8.0 Rust sidecar release performance and observability milestone, built on the existing Gateway, MCP, Policy, vector-ranking, and document-preparation delegates. The stable development line remains 3.x; the published `v4.0.0-rc.1` is a historical architecture preview and release-flow rehearsal.
+This document tracks where the project stands after the 3.9.0 compact binary transport milestone for the existing Rust vector-ranking delegate. The stable development line remains 3.x; the published `v4.0.0-rc.1` is a historical architecture preview and release-flow rehearsal.
 
 > **Purpose**: know and enforce the gap. The [4.0 RC readiness matrix](4_0_RC_READINESS.md) records the already-published `v4.0.0-rc.1` rehearsal; it does not make 4.0.0 the active stable line or imply a near-term stable 4.0.0 release.
 
 ---
 
-## Current quality milestone: 3.8.0
+## Current quality milestone: 3.9.0
 
-At the end of 3.8.0:
+At the end of 3.9.0:
 
 - All Rust components remain **default-disabled**.
 - The hybrid runtime has a complete operational runbook ([RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)) and a release-readiness checklist ([RELEASE_READINESS_3_1_X.md](RELEASE_READINESS_3_1_X.md)).
@@ -17,6 +17,7 @@ At the end of 3.8.0:
 - Offline eval gates pass with `--strict`.
 - The Rust sidecar has a standalone multi-stage Docker image, optional Compose file, container health check, and offline smoke test.
 - A locked release-mode benchmark separates Python baseline, pure Rust core, warm HTTP, cold start, and full Python integration for every current delegate; public-runner absolute latency remains informational.
+- Vector ranking additionally separates JSON/binary serialization, warmed HTTP, Rust processing, and full integration. The binary contract is explicit opt-in, fixed little-endian `f64`, bounded, and backed by 110 valid plus 16 malformed live-sidecar cases.
 - Python Rust clients reuse bounded process-local connections without retaining bodies or caller credentials, and recreate the pool after close, fork, or PID change.
 - The sidecar exports bounded metrics on its existing listener and logs only safe size/duration/outcome/correlation fields.
 - A test-only Compose overlay starts Python, Rust, and an offline upstream stub, verifies Rust request preparation through the real Python Gateway path, then stops the sidecar and proves the same request succeeds through Python fallback.
@@ -27,6 +28,7 @@ At the end of 3.8.0:
 - The independent `gateway-request-parity` CI job runs 68 deterministic valid/invalid cases against a live sidecar and uploads a machine-readable report.
 - The independent `mcp-protocol-parity` CI job runs 105 deterministic request, notification, response, initialize, tools, resources, prompts, Unicode, size, and depth cases against a live sidecar and uploads a redacted machine-readable report.
 - The independent `rag-document-preparation-parity` CI job runs 125 deterministic basic, overlap, Unicode, metadata, limit, error, hash, and ID cases against a live sidecar and uploads a redacted machine-readable report.
+- The independent `rag-vector-binary-parity` CI job proves Python/JSON/binary best-index parity, production similarity tolerance, first-match ties, stable malformed categories, fixed response size, and redacted artifacts.
 - A machine-readable RC requirements manifest classifies quality blockers, architecture decision blockers, and non-blocking recommendations with explicit owners and evidence.
 - [ADR-0040](adr/ADR-0040-hybrid-runtime-architecture.md) approves a Python-first hybrid 4.0 architecture: no Rust delegate is default-on, default deployment remains Python-only, and Python fallback is guaranteed throughout 4.x.
 - Gateway streaming, model listing, provider routing, upstream HTTP, credentials, retries, and real MCP tool execution remain Python-owned by design; Rust Gateway owns only deterministic request preparation, while Rust MCP owns JSON-RPC validation/routing.
@@ -37,7 +39,7 @@ At the end of 3.8.0:
 - Gateway request preparation can use the existing opt-in Rust Gateway delegate, with strict response validation, stable error codes, safe diagnostics, and Python fallback.
 - MCP protocol preparation can use the existing opt-in Rust MCP delegate. Python computes the local contract first, accepts only a contract-identical Python-owned Rust descriptor, and remains the sole owner of routing, tool execution, resources, prompts, sessions, transports, credentials, tracing, and business state.
 - RAG document preparation can use the independent default-disabled Rust delegate after Python file parsing. Python computes and validates the local chunk contract first and remains the sole owner of uploads, paths, parsers/OCR, embeddings, persistence, indexes, retrieval, authorization, and business state. Rust cannot read files or write an index.
-- The complete 3.8.0 statement-and-branch run measures **95.35%** (95.3523% unrounded), above the 95% CI gate and the 95.20% release minimum; coverage omissions are unchanged.
+- The complete 3.9.0 statement-and-branch run measures **95.33%** (95.3349% unrounded), above the 95% CI gate and the 95.20% release minimum; coverage omissions are unchanged.
 
 ---
 
@@ -48,7 +50,7 @@ At the end of 3.8.0:
 | **Gateway** | `deepseek-gateway` | `GET /healthz`, `POST /gateway/request/prepare` | `DEEPSEEK_RUST_GATEWAY=1` delegates deterministic preparation only | ❌ | Streaming, models, credentials, providers, upstream HTTP, retries, tools, and trace lifecycle remain Python-owned |
 | **MCP** | `deepseek-mcp` | `POST /mcp/request/prepare` (`POST /mcp` is a preparation-only compatibility alias) | `DEEPSEEK_RUST_MCP=1` delegates deterministic protocol preparation only | ❌ | Python intentionally retains transport, sessions, routing, tool/resource/prompt execution, credentials, tracing, and state |
 | **Policy** | `deepseek-policy` | `POST /policy/url`, `/policy/path`, `/policy/capability` | `DEEPSEEK_RUST_POLICY=1` delegates structured, audited URL/path/capability checks | ❌ | Python Tool Policy remains the fallback; default enforcement not decided |
-| **RAG** | `deepseek-rag` | `POST /rag/query/normalize`, `/rag/chunks/score`, `/rag/vectors/rank`, `/rag/citation/format`, `/rag/index/validate`, `/rag/documents/prepare` | `DEEPSEEK_RUST_RAG=1` delegates existing hot paths; independent `DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1` delegates parsed-text preparation | ❌ | Python retains files/parsers/OCR, embeddings, persistence, vector/SQLite indexes, retrieval, and context assembly |
+| **RAG** | `deepseek-rag` | `POST /rag/query/normalize`, `/rag/chunks/score`, `/rag/vectors/rank`, `/rag/vectors/rank-binary`, `/rag/citation/format`, `/rag/index/validate`, `/rag/documents/prepare` | `DEEPSEEK_RUST_RAG=1` delegates existing hot paths; vector transport defaults to JSON and requires explicit `DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=binary`; independent document flag delegates parsed text | ❌ | Python retains full authoritative ranking/parity, files/parsers/OCR, embeddings, persistence, vector/SQLite indexes, retrieval, and context assembly |
 
 Legend:
 
@@ -67,7 +69,7 @@ Legend:
 | Tool policy guards | `deepseek_infra/infra/tool_runtime/tools.py` | `DEEPSEEK_RUST_POLICY` | Python `tool_policy.py` | ✅ `tests/test_rust_policy_integration.py`, `test_rust_policy_audit.py`, `test_rust_policy_fail_modes.py` | ✅ Runbook |
 | RAG hot paths | `deepseek_infra/infra/rag/local_rag.py` | `DEEPSEEK_RUST_RAG` | Python RAG functions | ✅ `tests/test_rust_rag_integration.py`, `test_rust_rag_parity_contract.py` | ✅ [Parity baseline](RAG_PARITY_BASELINE.md) |
 | RAG document preparation | `deepseek_infra/infra/rag/document_preparation.py`, `infra/rag/files.py` | `DEEPSEEK_RUST_RAG_DOCUMENT_PREP` | Python normalization/chunking, then Python embedding/persistence/indexing | ✅ `tests/test_rag_document_preparation.py`, `test_rust_rag_document_preparation_parity_contract.py` | ✅ [Parity contract](RAG_DOCUMENT_PREPARATION_PARITY.md) |
-| Semantic-cache vector ranking | `deepseek_infra/infra/gateway/semantic_cache.py` | `DEEPSEEK_RUST_RAG` | Python `cosine_similarity` scan | ✅ `tests/test_observability_semantic_cache.py`, `test_rust_core_clients.py` | ✅ [3.4.0 candidate audit](RUST_CANDIDATE_AUDIT_3_4.md) |
+| Semantic-cache vector ranking | `deepseek_infra/infra/gateway/semantic_cache.py`, `infra/rust_core/vector_binary.py` | `DEEPSEEK_RUST_RAG`; optional explicit `DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=binary` | Full Python `cosine_similarity` scan; binary failure never retries Rust JSON | ✅ `tests/test_observability_semantic_cache.py`, `test_rust_vector_binary_transport.py`, `test_rust_rag_vector_binary_parity_contract.py` | ✅ [Binary contract](RAG_VECTOR_BINARY_TRANSPORT.md) |
 | Feature flags / config | `deepseek_infra/infra/rust_core/config.py` | all | n/a | ✅ `tests/test_hybrid_runtime_hardening.py` | ✅ Runbook |
 | Health / status | `deepseek_infra/infra/rust_core/health.py` / `registry.py` | n/a | n/a | ✅ | ✅ `GET /api/rust/status` |
 
@@ -80,7 +82,7 @@ Legend:
 | Metric | Current | 4.0.0 target | Gap |
 | --- | --- | --- | --- |
 | Coverage gate | **95%** | ~95% | Cleared |
-| Measured coverage (full suite) | **95.35%** | ~95% | Cleared; above the 95.20% release minimum |
+| Measured coverage (full suite) | **95.33%** | ~95% | Cleared; above the 95.20% release minimum |
 
 The gate was raised from 82% to 85% in 3.2.0, to 90% in 3.3.1, and to 95% in 3.3.2. The final uplift targets real failure behavior in DeepSeek streaming, RAG/files, launcher credentials, agent persistence/concurrency, Skills security/versioning, Browser/OCR/media, MCP, and workspace persistence. Coverage omit rules remain unchanged. Compared with the 3.5.0 baseline, HIGH-risk debt is exactly unchanged at 201 missing statements and 198 missing branches across the same 19 classified modules.
 
@@ -101,12 +103,13 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | --- | --- | --- |
 | `ruff check .` | ✅ Green | Minimal rule set by design. |
 | `mypy .` | ✅ Green | `ignore_missing_imports=true`. |
-| `pytest --cov --cov-fail-under=95` | ✅ Green | 2,490 tests and 58 subtests passed; complete statement-and-branch coverage measured 95.35%; omissions are unchanged. |
+| `pytest --cov --cov-fail-under=95` | ✅ Green | 2,528 tests and 58 subtests passed; complete statement-and-branch coverage measured 95.33%; omissions are unchanged. |
 | `cargo fmt --check` | ✅ Green | Rust workspace. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ Green | No warnings. |
-| `cargo test --all` | ✅ Green | 155 Rust workspace tests in 3.8.0. |
+| `cargo test --all` | ✅ Green | 172 Rust workspace tests in 3.9.0. |
 | Rust sidecar Docker build + smoke | ✅ CI gate | Independent job; does not alter the Python image. |
 | Rust sidecar release performance | ✅ CI contract gate | Locked release binary, all five delegate families, schema/parity/redaction/complexity checks; absolute latency is informational. |
+| Rust vector binary parity | ✅ CI gate | 110 valid + 16 malformed deterministic cases; fixed response, stable errors, payload reduction, redaction, no JSON retry. |
 | Hybrid runtime E2E + fallback | ✅ CI gate | Gateway, MCP, Policy, and RAG over the live Compose network. |
 | Rust/Python RAG parity | ✅ CI gate | 38 deterministic cases against a live Rust sidecar; JSON report uploaded. |
 | Rust/Python Gateway request parity | ✅ CI gate | 68 deterministic cases against a live Rust sidecar; JSON report uploaded. |
@@ -116,7 +119,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | `python scripts/check_doc_links.py` | ✅ Green | Internal doc links. |
 | `pip-audit`, `bandit`, `detect-secrets` | ✅ Green | Security scan. |
 | Offline eval suite `--strict` | ✅ Green | RAG, Tool, Injection, Agent, Security corpus. |
-| `scripts/preflight_release.py --version 3.8.0 --ga` | Required | Release readiness. |
+| `scripts/preflight_release.py --version 3.9.0 --ga` | Required | Release readiness. |
 
 ---
 

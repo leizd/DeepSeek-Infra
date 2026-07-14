@@ -1,6 +1,6 @@
 """Documentation and architecture asset tests.
 
-These tests guard the v3.8.0 hybrid-architecture documentation refresh:
+These tests guard the v3.9.0 hybrid-architecture documentation refresh:
 - architecture.svg is valid XML and contains the expected version/ownership labels.
 - README.md references the SVG and links to ARCHITECTURE.md.
 - ARCHITECTURE.md contains a Mermaid diagram and the required ownership statements.
@@ -23,7 +23,7 @@ def _read(path: Path) -> str:
 @pytest.mark.parametrize(
     ("substring", "should_contain"),
     [
-        ("v3.8.0", True),
+        ("v3.9.0", True),
         ("v2.1.6", False),
         ("Optional Rust Sidecar", True),
         ("Python Default Runtime", True),
@@ -31,6 +31,8 @@ def _read(path: Path) -> str:
         ("POST /gateway/request/prepare", True),
         ("POST /mcp/request/prepare", True),
         ("POST /rag/vectors/rank", True),
+        ("POST /rag/vectors/rank-binary", True),
+        ("RAG Vector Ranking · JSON / compact binary", True),
         ("POST /rag/documents/prepare", True),
     ],
 )

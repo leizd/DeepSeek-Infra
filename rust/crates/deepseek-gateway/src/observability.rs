@@ -20,6 +20,7 @@ const COMPONENTS: [&str; 7] = [
 ];
 const OUTCOMES: [&str; 3] = ["success", "client_error", "server_error"];
 const BACKEND_REASONS: [&str; 4] = ["timeout", "unavailable", "malformed_response", "internal"];
+const VECTOR_TRANSPORT_ENCODINGS: [&str; 2] = ["json", "binary"];
 const DURATION_BUCKETS: [f64; 10] = [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0];
 const BYTE_BUCKETS: [f64; 9] = [
     256.0,
@@ -73,6 +74,7 @@ struct Metrics {
     request_bytes: BTreeMap<&'static str, Histogram>,
     response_bytes: BTreeMap<&'static str, Histogram>,
     backend_errors: BTreeMap<(&'static str, &'static str), u64>,
+    vector_rank_transport: BTreeMap<(&'static str, &'static str), u64>,
 }
 
 impl Metrics {
@@ -83,6 +85,7 @@ impl Metrics {
             request_bytes: BTreeMap::new(),
             response_bytes: BTreeMap::new(),
             backend_errors: BTreeMap::new(),
+            vector_rank_transport: BTreeMap::new(),
         };
         for component in COMPONENTS {
             metrics
@@ -101,6 +104,11 @@ impl Metrics {
                 metrics.backend_errors.insert((component, reason), 0);
             }
         }
+        for encoding in VECTOR_TRANSPORT_ENCODINGS {
+            for outcome in OUTCOMES {
+                metrics.vector_rank_transport.insert((encoding, outcome), 0);
+            }
+        }
         metrics
     }
 
@@ -111,6 +119,7 @@ impl Metrics {
         duration_seconds: f64,
         request_bytes: usize,
         response_bytes: usize,
+        vector_encoding: Option<&'static str>,
     ) {
         *self.requests.entry((component, outcome)).or_default() += 1;
         if let Some(histogram) = self.duration.get_mut(component) {
@@ -128,6 +137,12 @@ impl Metrics {
                 .entry((component, "internal"))
                 .or_default() += 1;
         }
+        if let Some(encoding) = vector_encoding {
+            *self
+                .vector_rank_transport
+                .entry((encoding, outcome))
+                .or_default() += 1;
+        }
     }
 }
 
@@ -142,8 +157,16 @@ fn component_for_path(path: &str) -> Option<&'static str> {
         "/policy/url" => Some("policy_url"),
         "/policy/path" => Some("policy_path"),
         "/policy/capability" => Some("policy_capability"),
-        "/rag/vectors/rank" => Some("rag_vector_rank"),
+        "/rag/vectors/rank" | "/rag/vectors/rank-binary" => Some("rag_vector_rank"),
         "/rag/documents/prepare" => Some("rag_document_prepare"),
+        _ => None,
+    }
+}
+
+fn vector_encoding_for_path(path: &str) -> Option<&'static str> {
+    match path {
+        "/rag/vectors/rank" => Some("json"),
+        "/rag/vectors/rank-binary" => Some("binary"),
         _ => None,
     }
 }
@@ -203,6 +226,7 @@ pub async fn observe_sidecar_request(request: Request, next: Next) -> Response {
         return next.run(request).await;
     };
     let payload_bytes = content_length(&request);
+    let vector_encoding = vector_encoding_for_path(request.uri().path());
     let request_id = correlation_id(&request);
     let started = Instant::now();
     let mut response = next.run(request).await;
@@ -217,6 +241,7 @@ pub async fn observe_sidecar_request(request: Request, next: Next) -> Response {
             elapsed.as_secs_f64(),
             payload_bytes,
             response_bytes,
+            vector_encoding,
         );
     }
     if let Ok(value) = HeaderValue::from_str(&duration_us.to_string()) {
@@ -265,6 +290,7 @@ pub async fn metrics() -> impl IntoResponse {
     output.push_str("# TYPE request_payload_bytes histogram\n");
     output.push_str("# TYPE response_payload_bytes histogram\n");
     output.push_str("# TYPE backend_errors_total counter\n");
+    output.push_str("# TYPE vector_rank_transport_total counter\n");
     if let Ok(metrics) = registry().lock() {
         for ((component, outcome), count) in &metrics.requests {
             output.push_str(&format!(
@@ -290,6 +316,11 @@ pub async fn metrics() -> impl IntoResponse {
                 "backend_errors_total{{component=\"{component}\",reason=\"{reason}\"}} {count}\n"
             ));
         }
+        for ((encoding, outcome), count) in &metrics.vector_rank_transport {
+            output.push_str(&format!(
+                "vector_rank_transport_total{{encoding=\"{encoding}\",outcome=\"{outcome}\"}} {count}\n"
+            ));
+        }
     }
     (
         [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
@@ -305,8 +336,18 @@ mod tests {
     fn component_and_label_values_are_bounded() {
         assert_eq!(component_for_path("/policy/url"), Some("policy_url"));
         assert_eq!(component_for_path("/policy/url/example.com"), None);
+        assert_eq!(
+            component_for_path("/rag/vectors/rank-binary"),
+            Some("rag_vector_rank")
+        );
+        assert_eq!(vector_encoding_for_path("/rag/vectors/rank"), Some("json"));
+        assert_eq!(
+            vector_encoding_for_path("/rag/vectors/rank-binary"),
+            Some("binary")
+        );
         assert_eq!(OUTCOMES, ["success", "client_error", "server_error"]);
         assert_eq!(BACKEND_REASONS.len(), 4);
+        assert_eq!(VECTOR_TRANSPORT_ENCODINGS, ["json", "binary"]);
     }
 
     #[test]
