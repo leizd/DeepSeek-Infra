@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -20,6 +21,8 @@ class RagProxyResult:
     ok: bool
     status: int
     body: Any
+    error_kind: str = ""
+    latency_ms: int = 0
 
 
 def _rust_rag_enabled() -> bool:
@@ -43,7 +46,7 @@ def _timeout_ms() -> int:
 def _request(
     method: str,
     path: str,
-    payload: dict[str, Any] | None = None,
+    payload: Any = None,
     timeout_ms: int | None = None,
 ) -> RagProxyResult:
     url = f"{rust_gateway_url()}{path}"
@@ -52,24 +55,44 @@ def _request(
     data = None
     if payload is not None:
         headers["Content-Type"] = "application/json"
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
+    started = time.perf_counter()
+
+    def result(*, ok: bool, status: int, body: Any, error_kind: str = "") -> RagProxyResult:
+        return RagProxyResult(
+            ok=ok,
+            status=status,
+            body=body,
+            error_kind=error_kind,
+            latency_ms=max(0, int((time.perf_counter() - started) * 1000)),
+        )
+
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read()
             if not raw:
-                return RagProxyResult(ok=True, status=response.status, body={})
-            return RagProxyResult(
-                ok=True, status=response.status, body=json.loads(raw.decode("utf-8"))
-            )
+                return result(ok=False, status=response.status, body=None, error_kind="rust_empty_response")
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return result(ok=False, status=response.status, body=None, error_kind="rust_malformed_json")
+            if not isinstance(body, dict):
+                return result(ok=False, status=response.status, body=body, error_kind="rust_response_not_object")
+            return result(ok=True, status=response.status, body=body)
     except urllib.error.HTTPError as exc:
         try:
             body = exc.read().decode("utf-8")
         except Exception:
             body = str(exc)
-        return RagProxyResult(ok=False, status=exc.code, body=body)
+        return result(ok=False, status=exc.code, body=body, error_kind="rust_http_failure")
+    except TimeoutError:
+        return result(ok=False, status=0, body=None, error_kind="rust_backend_timeout")
+    except urllib.error.URLError as exc:
+        kind = "rust_backend_timeout" if "timed out" in str(exc).lower() else "rust_backend_unavailable"
+        return result(ok=False, status=0, body=None, error_kind=kind)
     except Exception as exc:
-        return RagProxyResult(ok=False, status=0, body=str(exc))
+        return result(ok=False, status=0, body=str(exc), error_kind="rust_backend_unavailable")
 
 
 def _should_use_result(result: RagProxyResult) -> bool:
@@ -183,6 +206,18 @@ def validate_index(chunks: list[dict[str, Any]]) -> tuple[dict[str, Any] | None,
     if _fallback_enabled():
         return None, False
     return None, False
+
+
+def prepare_document(payload: dict[str, Any]) -> RagProxyResult:
+    """Prepare already-parsed text; never forwards caller headers or credentials."""
+    if not rag_document_preparation_enabled():
+        return RagProxyResult(ok=False, status=0, body=None, error_kind="rust_disabled")
+    return _request("POST", "/rag/documents/prepare", payload=payload)
+
+
+def rag_document_preparation_enabled() -> bool:
+    value = os.environ.get("DEEPSEEK_RUST_RAG_DOCUMENT_PREP", "0")
+    return value.strip().lower() in ("1", "true", "yes", "on")
 
 
 def rust_rag_enabled() -> bool:

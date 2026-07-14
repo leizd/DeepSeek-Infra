@@ -1,8 +1,8 @@
 # Hybrid Rust Runtime Runbook
 
-This runbook covers day-to-day operation of the DeepSeek Infra 3.6.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
+This runbook covers day-to-day operation of the DeepSeek Infra 3.7.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
 
-> **Scope**: every Rust component remains opt-in. 3.6.0 adds deterministic, credential-free MCP protocol preparation; Python still owns transports, authentication, sessions, capabilities, registries, tools, resources, prompts, tracing, and business state. The default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged. The published `v4.0.0-rc.1` remains a historical architecture preview, not the active stable line.
+> **Scope**: every Rust component remains opt-in. 3.7.0 adds deterministic document preparation for text already parsed by Python. Python still owns uploads, paths, file parsing, OCR, embeddings, persistence, indexes, retrieval, authorization, transports, sessions, tools, tracing, and business state. Rust cannot read files or write an index. The default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged. The published `v4.0.0-rc.1` remains a historical architecture preview, not the active stable line.
 
 ---
 
@@ -29,6 +29,7 @@ DEEPSEEK_RUST_GATEWAY=0
 DEEPSEEK_RUST_MCP=0
 DEEPSEEK_RUST_POLICY=0
 DEEPSEEK_RUST_RAG=0
+DEEPSEEK_RUST_RAG_DOCUMENT_PREP=0
 ```
 
 When a component is disabled, the Python FastAPI runtime handles the request exactly as it did in 3.0.x. No Rust sidecar needs to be running for the application to work.
@@ -67,8 +68,9 @@ The sidecar exposes the following endpoints used by the Python app:
 | `POST /rag/vectors/rank` | `DEEPSEEK_RUST_RAG=1` | Semantic-cache batch vector ranking |
 | `POST /rag/citation/format` | `DEEPSEEK_RUST_RAG=1` | Citation string formatting |
 | `POST /rag/index/validate` | `DEEPSEEK_RUST_RAG=1` | Index metadata validation |
+| `POST /rag/documents/prepare` | `DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1` | Normalize/chunk text already parsed by Python; no file I/O or persistence |
 
-> **Note**: Streaming, model listing, provider routing, upstream HTTP, credentials, retry/backoff, MCP transports/sessions, tool execution, resources/prompts, and tracing lifecycle always stay on the Python path. Rust MCP never executes tools.
+> **Note**: Streaming, model listing, provider routing, upstream HTTP, credentials, retry/backoff, MCP transports/sessions, tool execution, resources/prompts, file parsing/OCR, embeddings, persistence/indexes, retrieval, and tracing lifecycle always stay on the Python path. Rust MCP never executes tools and Rust RAG never reads files or writes an index.
 
 ---
 
@@ -97,6 +99,7 @@ DEEPSEEK_RUST_GATEWAY=1
 DEEPSEEK_RUST_MCP=1
 DEEPSEEK_RUST_POLICY=1
 DEEPSEEK_RUST_RAG=1
+DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1
 DEEPSEEK_RUST_GATEWAY_URL=http://rust-gateway:8787
 ```
 
@@ -123,7 +126,7 @@ docker compose \
   down --volumes --remove-orphans
 ```
 
-The smoke first checks the healthy system through Python boundaries: Rust status, Gateway request preparation followed by Python HTTP to an offline upstream stub, MCP initialize/list/call after Rust preparation with Python-owned tool results, stable invalid MCP error categories, Tool Policy private-URL denial, and RAG CJK normalization/exact ranking/citation. It then stops `rust-gateway` and proves all four paths fall back to Python, including the same MCP requests and error category. The script is intentionally destructive to the test sidecar, so do not run it against a shared deployment.
+The smoke first checks the healthy system through Python boundaries: Rust status, Gateway request preparation followed by Python HTTP to an offline upstream stub, MCP initialize/list/call after Rust preparation with Python-owned tool results, stable invalid MCP error categories, Tool Policy private-URL denial, RAG CJK normalization/exact ranking/citation, and a real Python file-ingestion call whose parsed text is prepared in Rust and persisted/read in Python. It verifies that Rust receives no path, raw bytes, or credential field. It then stops `rust-gateway` and proves every path falls back to Python, including identical document-chunk fingerprints. The script is intentionally destructive to the test sidecar, so do not run it against a shared deployment.
 
 No real API key, external model call, or external network service is required. The test overlay injects a fake key and points Python at a deterministic local upstream stub. Safe response diagnostics prove Rust preparation on the healthy path and Python preparation after sidecar loss.
 
@@ -144,6 +147,7 @@ Each Rust component has its own opt-in flag. All flags accept the same truthy/fa
 | `DEEPSEEK_RUST_MCP` | `0` | Compare Python's local MCP preparation with Rust, then continue routing/execution in Python |
 | `DEEPSEEK_RUST_POLICY` | `0` | Delegate URL/path/capability policy checks to Rust |
 | `DEEPSEEK_RUST_RAG` | `0` | Delegate query normalization, chunk scoring, semantic-cache vector ranking, citation formatting, and index validation to Rust |
+| `DEEPSEEK_RUST_RAG_DOCUMENT_PREP` | `0` | Compare Python's local preparation with Rust for text already parsed by Python; Python still persists/indexes chunks |
 
 ### Configuration flags
 
@@ -170,6 +174,7 @@ DEEPSEEK_RUST_GATEWAY=1 \
 DEEPSEEK_RUST_MCP=0 \
 DEEPSEEK_RUST_POLICY=0 \
 DEEPSEEK_RUST_RAG=0 \
+DEEPSEEK_RUST_RAG_DOCUMENT_PREP=0 \
 python -m deepseek_infra.app
 ```
 
@@ -183,6 +188,7 @@ DEEPSEEK_RUST_GATEWAY=1 \
 DEEPSEEK_RUST_MCP=1 \
 DEEPSEEK_RUST_POLICY=1 \
 DEEPSEEK_RUST_RAG=1 \
+DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1 \
 python -m deepseek_infra.app
 ```
 
@@ -190,7 +196,7 @@ python -m deepseek_infra.app
 
 ## Fallback behavior
 
-Every Rust component has a Python equivalent. Gateway and RAG retain their corresponding `*_FALLBACK` switches; MCP always computes the Python preparation result first and uses it for any Rust backend failure, malformed response, sensitive-field injection, changed tool arguments, routing-owner change, or semantic divergence. Policy uses `DEEPSEEK_RUST_POLICY_FAILURE_MODE` so backend failure can fall back, deny, or return an error explicitly.
+Every Rust component has a Python equivalent. Gateway and existing RAG hot paths retain their corresponding `*_FALLBACK` switches; MCP and RAG document preparation always compute the Python result first and use it for any Rust backend failure, malformed response, sensitive-field injection, changed contract, or semantic divergence. Policy uses `DEEPSEEK_RUST_POLICY_FAILURE_MODE` so backend failure can fall back, deny, or return an error explicitly.
 
 | Component | Default recovery | Fail-closed behavior |
 | --- | --- | --- |
@@ -198,6 +204,7 @@ Every Rust component has a Python equivalent. Gateway and RAG retain their corre
 | **MCP preparation** | Use the already-computed Python protocol result, then route/execute in Python | User protocol errors remain their stable JSON-RPC/internal category and are never disguised as fallback |
 | **Policy** | `fallback`: Python Tool Policy re-evaluates the call | `deny`: block execution; `error`: return a structured 503 |
 | **RAG** | Python RAG hot-path runs locally | The Rust result is ignored and Python continues |
+| **RAG document preparation** | Use the already-computed Python chunks, then embed/persist/index in Python | Invalid user/config input retains its stable category; malformed Rust output never reaches persistence |
 
 A "Rust call failure" includes any of these conditions:
 
@@ -208,6 +215,8 @@ A "Rust call failure" includes any of these conditions:
 - Invalid timeout value in the environment variable (falls back to the default `3000` ms)
 
 For MCP, an empty body, non-object response, missing contract fields, unknown message type, unsafe routing owner, non-serializable value, changed `tools/call` arguments, or any Python/Rust semantic difference is also a backend failure. Diagnostics contain only method, message type, request ID type, payload size, runtime, fallback state/reason, and latency; they never contain full params, tool arguments, credentials, prompt content, or local paths.
+
+For RAG document preparation, invalid/missing document or chunk fields, offset drift, text/range mismatch, duplicate IDs, invalid hashes, metadata expansion, a changed document ID, sensitive fields, or any semantic difference are backend failures. Diagnostics contain only a document-ID hash, counts, chunk configuration, runtime, fallback state/reason, and latency; they never contain document/chunk text, filenames, paths, raw bytes, credentials, or private metadata.
 
 > **Default is safe**: Rust Policy defaults to `fallback`, and the Python Tool Policy is attached even to bare tool calls after a Rust backend failure. A sidecar outage therefore cannot silently skip policy evaluation.
 
@@ -343,6 +352,7 @@ To immediately return to the pure Python 3.0.x runtime:
    export DEEPSEEK_RUST_MCP=0
    export DEEPSEEK_RUST_POLICY=0
    export DEEPSEEK_RUST_RAG=0
+   export DEEPSEEK_RUST_RAG_DOCUMENT_PREP=0
    ```
 
 2. Restart the Python process (or launcher) so all workers pick up the new environment.
@@ -434,6 +444,15 @@ python examples/local_rag_demo.py
 
 With `DEEPSEEK_RUST_RAG=1`, the hot paths are delegated to the Rust sidecar. With the flag off, Python RAG handles them.
 
+With the independent `DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1`, the upload path parses files in Python and sends only parsed text, allowlisted metadata, and the current chunk configuration to `/rag/documents/prepare`. Python adopts only a contract-identical result and continues to compute embeddings, persist chunks, and update indexes. Verify the deterministic boundary with:
+
+```bash
+python scripts/check_rag_document_preparation_parity.py \
+  --base-url http://127.0.0.1:8787 \
+  --strict \
+  --report artifacts/rag-document-preparation-parity-report.json
+```
+
 Alternatively, verify end-to-end RAG via the evaluation harness:
 
 ```bash
@@ -447,3 +466,4 @@ python evals/runners/run_rag_eval.py
 - [Release readiness checklist](RELEASE_READINESS_3_1_X.md)
 - [Rust migration roadmap](RUST_MIGRATION_ROADMAP.md)
 - [Implementation status](IMPLEMENTATION_STATUS.md)
+- [RAG document preparation parity](RAG_DOCUMENT_PREPARATION_PARITY.md)

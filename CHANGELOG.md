@@ -1,5 +1,25 @@
 # 更新日志
 
+## [3.7.0] - Optional Rust RAG Document Preparation
+
+### Added
+
+- Added deterministic `POST /rag/documents/prepare` handling to the existing Rust sidecar for text already parsed by Python, with Python-compatible normalization, chunking, Unicode character offsets, BLAKE2b-96 hashes, deterministic chunk IDs, allowlisted metadata, and stable internal error categories.
+- Added a shared 125-case Python/Rust parity corpus, strict live-sidecar checker, redacted CI report, Rust and Python unit coverage, informational five-profile benchmark, and real-ingestion hybrid runtime E2E coverage.
+- Added safe document-preparation diagnostics containing only a document-ID hash, character/chunk counts, chunk configuration, runtime, fallback state/reason, and latency.
+
+### Changed
+
+- Wired the real Python upload/RAG ingestion path to the independent default-disabled `DEEPSEEK_RUST_RAG_DOCUMENT_PREP` delegate. Python parses the file and computes its local result first, adopts Rust only after exact defensive validation, and continues to own embeddings, persistence, indexes, retrieval, and business state.
+- Connection, timeout, HTTP, empty-body, malformed-JSON, non-object, incomplete-contract, unsafe-field, metadata-expansion, offset, duplicate-ID, hash, and semantic-divergence failures use the already-computed Python result. Deterministic input/configuration errors retain their stable category and are not reported as backend fallback.
+- Synchronized the active application, Android, Docker, CI, documentation, manifest, tests, and deterministic offline evidence line to 3.7.0. The Python CI gate remains 95%, coverage omissions are unchanged, and the feature remains informational/opt-in regardless of benchmark results.
+
+### Compatibility and non-goals
+
+- All Rust delegates remain disabled by default, default Compose remains Python-only, the existing `DEEPSEEK_RUST_RAG` semantics are unchanged, and Python fallback remains available.
+- Rust never receives filesystem paths, raw file bytes, credentials, private metadata, or file ownership; it cannot read files, parse PDF/Office/HTML/media/archive content, run OCR, compute embeddings, persist chunks, write SQLite/vector indexes, schedule ingestion, or assemble query context.
+- This release does not add default-on Rust RAG, a default Rust sidecar deployment, public API breakage, a new 4.0 RC, stable 4.0.0, a tag, or a GitHub Release. The published `v4.0.0-rc.1` remains a historical architecture preview.
+
 ## [3.6.0] - Optional Rust MCP Protocol Preparation
 
 ### Added

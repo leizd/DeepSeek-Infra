@@ -38,6 +38,12 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import query_tokens, score_chunk
 from deepseek_infra.infra.gateway.context_taint import file_context_guard_line as context_taint_file_guard_line
 from deepseek_infra.infra.rag import local_rag
+from deepseek_infra.infra.rag.document_preparation import (
+    log_rag_document_preparation,
+    prepare_rag_document_with_optional_rust,
+    public_rag_document_diagnostics,
+    rag_document_preparation_enabled,
+)
 from deepseek_infra.infra.tool_runtime.ocr import extract_image_ocr, extract_pdf_ocr
 
 
@@ -315,11 +321,42 @@ def extract_uploaded_file(
             status=415,
         )
 
-    text = normalize_extracted_text(text)
+    file_id = file_content_id(filename, data)
+    preparation_diagnostics: dict[str, Any] | None = None
+    if rag_document_preparation_enabled():
+        safe_display_name = Path(str(filename or "").replace("\\", "/")).name or "document"
+        decision = prepare_rag_document_with_optional_rust(
+            {
+                "documentId": file_id,
+                "text": text,
+                "metadata": {
+                    "displayName": safe_display_name,
+                    "sourceType": str(content_type or "").split(";", 1)[0].strip().lower(),
+                    "kind": kind,
+                },
+                "chunking": {"chunkChars": FILE_CHUNK_CHARS, "chunkOverlap": FILE_CHUNK_OVERLAP},
+            }
+        )
+        if decision.preparation.get("ok") is not True:
+            raise AppError(
+                str(decision.preparation.get("message") or "Invalid RAG document preparation input"),
+                code=ErrorCode.INVALID_PAYLOAD,
+                status=422,
+            )
+        text = decision.normalized_text
+        prepared_chunks = decision.preparation.get("chunks")
+        chunks = [
+            {**chunk, "vector": local_text_vector(str(chunk.get("text") or ""))}
+            for chunk in prepared_chunks
+            if isinstance(chunk, dict)
+        ] if isinstance(prepared_chunks, list) else []
+        preparation_diagnostics = public_rag_document_diagnostics(decision.diagnostics)
+        log_rag_document_preparation(decision.diagnostics)
+    else:
+        text = normalize_extracted_text(text)
+        chunks = chunk_text(text)
     if not text:
         raise AppError("No readable text found in this file", status=422)
-
-    chunks = chunk_text(text)
     page_count = infer_original_page_count(kind, data)
     page_texts = page_texts_for_cache(kind, data, text, page_count=page_count)
     file_id = cache_file_chunks(
@@ -333,9 +370,10 @@ def extract_uploaded_file(
         project_id=project_id,
         page_count=page_count,
         page_texts=page_texts,
+        file_id=file_id,
     )
 
-    return {
+    result = {
         "name": filename,
         "type": content_type,
         "size": len(data),
@@ -351,6 +389,9 @@ def extract_uploaded_file(
         "chunked": len(chunks) > 1,
         "truncated": False,
     }
+    if preparation_diagnostics is not None:
+        result["ragDocumentPreparation"] = preparation_diagnostics
+    return result
 
 
 def is_image_file(extension: str, content_type: str) -> bool:
@@ -496,16 +537,11 @@ def cache_file_chunks(
     project_id: str | None = None,
     page_count: int = 0,
     page_texts: list[dict[str, Any]] | None = None,
+    file_id: str | None = None,
 ) -> str:
     target_dir = project_file_cache_dir(project_id) if project_id else FILE_CACHE_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256()
-    digest.update(filename.encode("utf-8", errors="ignore"))
-    digest.update(b"\0")
-    digest.update(len(source_bytes).to_bytes(8, "big"))
-    digest.update(b"\0")
-    digest.update(source_bytes)
-    file_id = digest.hexdigest()[:32]
+    file_id = file_id or file_content_id(filename, source_bytes)
     payload = {
         "id": file_id,
         "name": filename,
@@ -530,6 +566,17 @@ def cache_file_chunks(
     temp_path.replace(final_path)
     local_rag.index_file_payload(payload, project_id=project_id or "")
     return file_id
+
+
+def file_content_id(filename: str, source_bytes: bytes) -> str:
+    """Return the existing Python-owned upload identifier without exposing bytes to Rust."""
+    digest = hashlib.sha256()
+    digest.update(filename.encode("utf-8", errors="ignore"))
+    digest.update(b"\0")
+    digest.update(len(source_bytes).to_bytes(8, "big"))
+    digest.update(b"\0")
+    digest.update(source_bytes)
+    return digest.hexdigest()[:32]
 
 
 def cleanup_file_cache() -> None:
