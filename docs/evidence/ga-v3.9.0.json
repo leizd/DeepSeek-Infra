@@ -1,8 +1,8 @@
 {
   "schemaVersion": "ga-smoke.v1",
   "version": "3.9.0",
-  "commit": "842b0af5",
-  "generatedAt": "2026-07-14T07:43:23Z",
+  "commit": "0b6b69b9",
+  "generatedAt": "2026-07-14T08:33:55Z",
   "environment": {
     "os": "Windows-11-10.0.26200-SP0",
     "python": "3.13.5",
@@ -24,42 +24,42 @@
     "exportRedaction": "PASS"
   },
   "details": {
-    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-ga-smoke-mup629vd",
-    "projectId": "proj-1bec95249c1c",
-    "memoryId": "3ff1ac0a452398234451",
-    "skillRunId": "run-a3b7407c58697eff",
-    "mediaId": "media_a5dfdd34fbb9306a",
-    "savedId": "save_9bb31aa40fc74277",
-    "artifactId": "art_50a8b4d613a3fd2b",
-    "automationRunId": "auto_run_de1621566eedd8b5",
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-ga-smoke-rtrmtwke",
+    "projectId": "proj-4e388d7a79aa",
+    "memoryId": "2a6b50c3d88657a00149",
+    "skillRunId": "run-bf00aa8d8b11c755",
+    "mediaId": "media_b2576471947c5f6f",
+    "savedId": "save_e8440670de6dd978",
+    "artifactId": "art_a9a76f225c08d81c",
+    "automationRunId": "auto_run_6c922f21e5cdd0d7",
     "export": {
-      "exportId": "export_547755136d465cc2",
-      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-ga-smoke-mup629vd\\.projects\\proj-1bec95249c1c\\exports\\export_547755136d465cc2-GA-Personal-Runtime-project-export.zip",
+      "exportId": "export_b10fc79d20fbab8e",
+      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-ga-smoke-rtrmtwke\\.projects\\proj-4e388d7a79aa\\exports\\export_b10fc79d20fbab8e-GA-Personal-Runtime-project-export.zip",
       "entries": [
         "artifacts/Automation-Project-Summary.md",
         "artifacts/GA-Runtime-Report.md",
         "conversations/conversation-conv-ga-smoke.md",
         "media/media.json",
-        "media/segments/media_a5dfdd34fbb9306a.json",
+        "media/segments/media_b2576471947c5f6f.json",
         "metadata.json",
         "project.md",
         "saved-items/saved-items.json"
       ],
       "includes": {
-        "projectId": "proj-1bec95249c1c",
+        "projectId": "proj-4e388d7a79aa",
         "conversationIds": [
           "conv-ga-smoke"
         ],
         "savedItemIds": [
-          "save_3960516cfd6dff89",
-          "save_9bb31aa40fc74277"
+          "save_04622ae2c0801c75",
+          "save_e8440670de6dd978"
         ],
         "artifactIds": [
-          "art_7a72aaa6ac14f259",
-          "art_50a8b4d613a3fd2b"
+          "art_c0cc8f259592fb35",
+          "art_a9a76f225c08d81c"
         ],
         "mediaIds": [
-          "media_a5dfdd34fbb9306a"
+          "media_b2576471947c5f6f"
         ]
       }
     },

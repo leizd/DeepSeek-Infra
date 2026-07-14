@@ -1,9 +1,9 @@
 # Semantic Cache ONNX Evidence
 
 - Version: 3.9.0
-- Commit: 842b0af5
+- Commit: 0b6b69b9
 - Status: PASS
-- Generated: 2026-07-14T07:41:15Z
+- Generated: 2026-07-14T08:33:55Z
 - ONNX Available: False
 
 ## Hash Embedding (zero-dependency default)

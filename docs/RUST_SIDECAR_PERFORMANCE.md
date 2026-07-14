@@ -70,18 +70,18 @@ The committed Windows x86_64 evidence uses Rust 1.96.1, Python 3.13.5, 20 logica
 
 | Scenario | JSON bytes → binary bytes | JSON serialization | Binary serialization | Warm JSON HTTP | Warm binary HTTP | Full JSON | Full binary |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 16 × 384 | 61,212 → 52,240 | 5,064 / 5,266 | 1,853 / 2,117 | 7,115 / 7,355 | 3,098 / 3,275 | 9,719 / 10,490 | 5,238 / 5,513 |
-| 128 × 768 | 927,803 → 792,592 | 75,363 / 83,002 | 28,165 / 31,429 | 95,193 / 131,860 | 34,849 / 46,807 | 132,055 / 139,518 | 59,289 / 76,164 |
-| 1000 × 1536 | 14,399,713 → 12,300,304 | 1,239,560 / 1,324,321 | 641,243 / 660,238 | 1,453,591 / 1,514,543 | 601,468 / 758,639 | 689,275 / 768,267 | 372,460 / 410,224 |
-| tie-heavy (3 × 16) | 288 → 528 | 6 / 6 | 7 / 7 | 757 / 891 | 283 / 447 | 1,033 / 1,227 | 911 / 1,168 |
+| 16 × 384 | 61,212 → 52,240 | 3,335 / 3,565 | 1,033 / 1,267 | 3,286 / 3,413 | 1,411 / 1,716 | 3,184 / 3,839 | 2,200 / 2,300 |
+| 128 × 768 | 927,803 → 792,592 | 36,863 / 40,098 | 14,038 / 15,622 | 46,302 / 64,966 | 15,637 / 15,877 | 56,710 / 60,660 | 32,573 / 39,759 |
+| 1000 × 1536 | 14,399,713 → 12,300,304 | 1,305,382 / 1,399,884 | 579,717 / 612,676 | 1,431,674 / 1,524,849 | 689,536 / 717,219 | 1,791,355 / 1,919,616 | 1,035,570 / 1,078,017 |
+| tie-heavy (3 × 16) | 288 → 528 | 46 / 49 | 48 / 55 | 1,484 / 1,805 | 1,448 / 1,664 | 1,656 / 1,771 | 1,765 / 1,815 |
 
 The result is deliberately not uniformly favorable:
 
 - The three dense scale scenarios reduced request bytes by about 14.6%, and binary serialization, warm HTTP, and full integration were lower on this machine.
-- The tiny tie-heavy request demonstrates the opposite size result: fixed-width binary was 528 bytes versus 288 bytes for sparse JSON, and serialization was slightly slower (7 µs versus 6 µs). This is direct evidence against automatic selection.
-- At 1000 × 1536, pure Rust core remained much faster than Python direct (42,489 µs versus 406,347 µs), and binary reduced the measured full integration to 372,460 µs. The full path still computes Python parity; that cost is an intentional safety requirement.
+- The tiny tie-heavy request demonstrates the opposite size result: fixed-width binary was 528 bytes versus 288 bytes for sparse JSON, serialization was slightly slower (48 µs versus 46 µs), and full binary integration was slower (1,765 µs versus 1,656 µs). This is direct evidence against automatic selection.
+- At 1000 × 1536, pure Rust core remained faster than Python direct (75,564 µs versus 168,363 µs), and binary reduced the measured full integration from 1,791,355 µs to 1,035,570 µs. The full path still computes Python parity; that cost is an intentional safety requirement.
 - Binary is not compression. Dense six-decimal JSON shrinks by about 14.6%, not by an order of magnitude, and results will vary with number formatting and vector sparsity.
-- Cold startup remained separate (18,917 µs process launch, 143,433 µs health readiness, 25,048 µs first request) and contributes to no warm value.
+- Cold startup remained separate (397,497 µs process launch, 572,211 µs health readiness, 2,083 µs first request) and contributes to no warm value.
 
 These local results justify an explicit binary option for large vector ranking. They do not justify Rust default enablement, a binary default, `auto` selection, sampled parity, or removing JSON/fallback.
 

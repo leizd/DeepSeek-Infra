@@ -1,9 +1,9 @@
 {
   "schemaVersion": "semantic-cache-onnx-evidence.v1",
   "version": "3.9.0",
-  "commit": "842b0af5",
+  "commit": "0b6b69b9",
   "suite": "semantic-cache-onnx",
-  "generatedAt": "2026-07-14T07:41:15Z",
+  "generatedAt": "2026-07-14T08:33:55Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
