@@ -21,6 +21,7 @@
         "rust-docker",
         "hybrid-runtime-e2e",
         "rag-parity",
+        "rag-vector-binary-parity",
         "release-readiness",
         "docs",
         "rust",

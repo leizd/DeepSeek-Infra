@@ -1,8 +1,8 @@
 {
   "schemaVersion": "security-corpus-report.v1",
-  "version": "3.8.0",
-  "commit": "f9bdda79",
-  "generatedAt": "2026-07-14T05:47:49Z",
+  "version": "3.9.0",
+  "commit": "842b0af5",
+  "generatedAt": "2026-07-14T08:06:00Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -84,7 +84,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.05,
+        "latencyMs": 0.084,
         "suite": "prompt_injection"
       },
       {
@@ -97,7 +97,7 @@
         "injectionHits": 1,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.016,
+        "latencyMs": 0.028,
         "suite": "prompt_injection"
       },
       {
@@ -110,7 +110,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.031,
+        "latencyMs": 0.049,
         "suite": "prompt_injection"
       },
       {
@@ -123,7 +123,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.021,
+        "latencyMs": 0.035,
         "suite": "prompt_injection"
       },
       {
@@ -136,7 +136,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.021,
+        "latencyMs": 0.033,
         "suite": "prompt_injection"
       },
       {
@@ -149,7 +149,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 2,
-        "latencyMs": 0.022,
+        "latencyMs": 0.035,
         "suite": "prompt_injection"
       }
     ],
@@ -164,7 +164,7 @@
           "ssrf_blocked:private or local ip is not allowed: 169.254.169.254"
         ],
         "passed": true,
-        "latencyMs": 0.071,
+        "latencyMs": 0.131,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -178,7 +178,7 @@
           "ssrf_blocked:local host is not allowed"
         ],
         "passed": true,
-        "latencyMs": 0.022,
+        "latencyMs": 0.038,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -192,7 +192,7 @@
           "path_blocked:fileId contains illegal characters"
         ],
         "passed": true,
-        "latencyMs": 0.009,
+        "latencyMs": 0.016,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -206,7 +206,7 @@
           "path_blocked:projectId path traversal"
         ],
         "passed": true,
-        "latencyMs": 0.005,
+        "latencyMs": 0.008,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -220,7 +220,7 @@
           "secret_exfiltration_blocked"
         ],
         "passed": true,
-        "latencyMs": 0.035,
+        "latencyMs": 0.06,
         "suite": "tool_policy_attacks",
         "category": "secret_exfiltration"
       },
@@ -234,7 +234,7 @@
           "unknown_tool"
         ],
         "passed": true,
-        "latencyMs": 0.003,
+        "latencyMs": 0.004,
         "suite": "tool_policy_attacks",
         "category": "tool_policy"
       }
@@ -250,7 +250,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.033,
+        "latencyMs": 0.054,
         "suite": "benign_false_positive"
       },
       {
@@ -263,7 +263,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.031,
+        "latencyMs": 0.049,
         "suite": "benign_false_positive"
       },
       {
@@ -276,7 +276,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.028,
+        "latencyMs": 0.046,
         "suite": "benign_false_positive"
       },
       {
@@ -289,7 +289,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.027,
+        "latencyMs": 0.044,
         "suite": "benign_false_positive"
       }
     ]

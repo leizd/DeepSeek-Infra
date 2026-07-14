@@ -2,8 +2,9 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::DefaultBodyLimit,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header::CONTENT_TYPE},
     middleware,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -83,6 +84,7 @@ pub fn create_app() -> Router {
         .route("/rag/query/normalize", post(rag_query_normalize))
         .route("/rag/chunks/score", post(rag_chunks_score))
         .route("/rag/vectors/rank", post(rag_vectors_rank))
+        .route("/rag/vectors/rank-binary", post(rag_vectors_rank_binary))
         .route("/rag/citation/format", post(rag_citation_format))
         .route("/rag/index/validate", post(rag_index_validate))
         .route("/rag/documents/prepare", post(rag_document_prepare))
@@ -239,6 +241,67 @@ async fn rag_vectors_rank(Json(req): Json<RagVectorRankRequest>) -> Json<RagVect
     })
 }
 
+fn vector_binary_error(
+    status: StatusCode,
+    error: deepseek_rag::vector_binary::BinaryError,
+) -> Response {
+    (
+        status,
+        [(CONTENT_TYPE, "application/json")],
+        Json(json!({
+            "ok": false,
+            "code": error.code(),
+            "message": error.message(),
+        })),
+    )
+        .into_response()
+}
+
+async fn rag_vectors_rank_binary(headers: HeaderMap, body: Bytes) -> Response {
+    let expected = deepseek_rag::vector_binary::CONTENT_TYPE;
+    let valid_content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case(expected));
+    if !valid_content_type {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            [(CONTENT_TYPE, "application/json")],
+            Json(json!({
+                "ok": false,
+                "code": "invalid_content_type",
+                "message": "binary vector ranking requires the versioned binary content type",
+            })),
+        )
+            .into_response();
+    }
+    let request = match deepseek_rag::vector_binary::decode_request(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            let status = if error == deepseek_rag::vector_binary::BinaryError::PayloadTooLarge {
+                StatusCode::PAYLOAD_TOO_LARGE
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return vector_binary_error(status, error);
+        }
+    };
+    let best = match request.best_match() {
+        Ok(best) => best,
+        Err(error) => return vector_binary_error(StatusCode::UNPROCESSABLE_ENTITY, error),
+    };
+    let response = match deepseek_rag::vector_binary::encode_response(best) {
+        Ok(response) => response,
+        Err(error) => return vector_binary_error(StatusCode::UNPROCESSABLE_ENTITY, error),
+    };
+    (
+        StatusCode::OK,
+        [(CONTENT_TYPE, deepseek_rag::vector_binary::CONTENT_TYPE)],
+        response,
+    )
+        .into_response()
+}
+
 async fn rag_citation_format(
     Json(req): Json<RagCitationFormatRequest>,
 ) -> Result<Json<RagCitationFormatResponse>, (StatusCode, Json<serde_json::Value>)> {
@@ -380,6 +443,30 @@ mod tests {
         let status = response.status();
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    async fn send_bytes(
+        app: Router,
+        uri: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> (StatusCode, String, Vec<u8>) {
+        let request = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(CONTENT_TYPE, content_type)
+            .body(Body::from(body))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, content_type, bytes.to_vec())
     }
 
     #[test]
@@ -686,6 +773,48 @@ mod tests {
         let response: RagVectorRankResponse = serde_json::from_str(&body).unwrap();
         assert_eq!(response.index, Some(1));
         assert_eq!(response.similarity, 1.0);
+    }
+
+    #[tokio::test]
+    async fn rag_vector_binary_endpoint_matches_json_endpoint() {
+        let mut body = Vec::new();
+        body.extend_from_slice(deepseek_rag::vector_binary::REQUEST_MAGIC);
+        body.extend_from_slice(&2_u32.to_le_bytes());
+        body.extend_from_slice(&3_u32.to_le_bytes());
+        for value in [1.0_f64, 0.0, 0.5, 0.0, 1.0, 0.0, 1.0, 0.0] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        let (status, content_type, response) = send_bytes(
+            create_app(),
+            "/rag/vectors/rank-binary",
+            deepseek_rag::vector_binary::CONTENT_TYPE,
+            body,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(content_type, deepseek_rag::vector_binary::CONTENT_TYPE);
+        assert_eq!(response.len(), deepseek_rag::vector_binary::RESPONSE_BYTES);
+        assert_eq!(&response[..8], deepseek_rag::vector_binary::RESPONSE_MAGIC);
+        assert_eq!(u32::from_le_bytes(response[8..12].try_into().unwrap()), 1);
+        assert_eq!(
+            f64::from_le_bytes(response[16..24].try_into().unwrap()),
+            1.0
+        );
+    }
+
+    #[tokio::test]
+    async fn rag_vector_binary_endpoint_returns_stable_json_errors() {
+        let (status, content_type, response) = send_bytes(
+            create_app(),
+            "/rag/vectors/rank-binary",
+            "application/octet-stream",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(content_type, "application/json");
+        let error: serde_json::Value = serde_json::from_slice(&response).unwrap();
+        assert_eq!(error["code"], "invalid_content_type");
     }
 
     #[tokio::test]

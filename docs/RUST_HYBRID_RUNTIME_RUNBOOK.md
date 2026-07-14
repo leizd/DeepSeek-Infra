@@ -1,8 +1,8 @@
 # Hybrid Rust Runtime Runbook
 
-This runbook covers day-to-day operation of the DeepSeek Infra 3.8.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
+This runbook covers day-to-day operation of the DeepSeek Infra 3.9.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
 
-> **Scope**: every Rust component remains opt-in. 3.8.0 adds release-mode performance evidence, bounded persistent connections, layered timing, metrics, and safe correlation tracing for the existing delegates; it adds no delegate and moves no ownership. Python still owns uploads, paths, file parsing, OCR, embeddings, persistence, indexes, retrieval, authorization, transports, sessions, tools, tracing, and business state. Rust cannot read files or write an index. The default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged. The published `v4.0.0-rc.1` remains a historical architecture preview, not the active stable line. 可视化职责边界图请见 [docs/ARCHITECTURE.md](ARCHITECTURE.md)。
+> **Scope**: every Rust component remains opt-in. 3.9.0 adds a compact binary wire option only for the existing vector-ranking delegate; it adds no delegate and moves no ownership. JSON remains the transport default, full Python ranking/parity remains mandatory, and any binary failure falls directly to Python without retrying the Rust JSON endpoint. Python still owns uploads, paths, file parsing, OCR, embeddings, persistence, indexes, retrieval, authorization, transports, sessions, tools, tracing, and business state. Rust cannot read files or write an index. The default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged. The published `v4.0.0-rc.1` remains a historical architecture preview, not the active stable line. 可视化职责边界图请见 [docs/ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ---
 
@@ -29,6 +29,7 @@ DEEPSEEK_RUST_GATEWAY=0
 DEEPSEEK_RUST_MCP=0
 DEEPSEEK_RUST_POLICY=0
 DEEPSEEK_RUST_RAG=0
+DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=json
 DEEPSEEK_RUST_RAG_DOCUMENT_PREP=0
 ```
 
@@ -67,6 +68,7 @@ The sidecar exposes the following endpoints used by the Python app:
 | `POST /rag/query/normalize` | `DEEPSEEK_RUST_RAG=1` | Query normalization |
 | `POST /rag/chunks/score` | `DEEPSEEK_RUST_RAG=1` | Chunk scoring/ranking |
 | `POST /rag/vectors/rank` | `DEEPSEEK_RUST_RAG=1` | Semantic-cache batch vector ranking |
+| `POST /rag/vectors/rank-binary` | `DEEPSEEK_RUST_RAG=1` plus explicit binary transport | Compact little-endian `f64` vector ranking; errors remain structured JSON |
 | `POST /rag/citation/format` | `DEEPSEEK_RUST_RAG=1` | Citation string formatting |
 | `POST /rag/index/validate` | `DEEPSEEK_RUST_RAG=1` | Index metadata validation |
 | `POST /rag/documents/prepare` | `DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1` | Normalize/chunk text already parsed by Python; no file I/O or persistence |
@@ -111,6 +113,7 @@ DEEPSEEK_RUST_GATEWAY=1
 DEEPSEEK_RUST_MCP=1
 DEEPSEEK_RUST_POLICY=1
 DEEPSEEK_RUST_RAG=1
+DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=json
 DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1
 DEEPSEEK_RUST_GATEWAY_URL=http://rust-gateway:8787
 ```
@@ -138,7 +141,7 @@ docker compose \
   down --volumes --remove-orphans
 ```
 
-The smoke first checks the healthy system through Python boundaries: Rust status, Gateway request preparation followed by Python HTTP to an offline upstream stub, MCP initialize/list/call after Rust preparation with Python-owned tool results, stable invalid MCP error categories, Tool Policy private-URL denial, RAG CJK normalization/exact ranking/citation, and a real Python file-ingestion call whose parsed text is prepared in Rust and persisted/read in Python. It verifies that Rust receives no path, raw bytes, or credential field. It then stops `rust-gateway` and proves every path falls back to Python, including identical document-chunk fingerprints. The script is intentionally destructive to the test sidecar, so do not run it against a shared deployment.
+The smoke first checks the healthy system through Python boundaries: Rust status, Gateway request preparation followed by Python HTTP to an offline upstream stub, MCP initialize/list/call after Rust preparation with Python-owned tool results, stable invalid MCP error categories, Tool Policy private-URL denial, RAG CJK normalization/exact ranking/citation, a 128 × 768 semantic-cache ranking with exactly one binary request and no JSON retry, and a real Python file-ingestion call whose parsed text is prepared in Rust and persisted/read in Python. It verifies parity and that Rust receives no path, raw bytes, credential, or logged vector value. It then stops `rust-gateway` and proves every path—including the same large vector ranking—falls back to Python with no second sidecar attempt and identical results. The script is intentionally destructive to the test sidecar, so do not run it against a shared deployment.
 
 No real API key, external model call, or external network service is required. The test overlay injects a fake key and points Python at a deterministic local upstream stub. Safe response diagnostics prove Rust preparation on the healthy path and Python preparation after sidecar loss.
 
@@ -174,6 +177,7 @@ Each Rust component has its own opt-in flag. All flags accept the same truthy/fa
 | `DEEPSEEK_RUST_POLICY_FALLBACK` | unset | Legacy compatibility switch; `0` maps to `deny`, otherwise `fallback` |
 | `DEEPSEEK_RUST_POLICY_TIMEOUT_MS` | `3000` | Policy proxy timeout in milliseconds |
 | `DEEPSEEK_RUST_RAG_FALLBACK` | `1` | Fall back to Python RAG if Rust fails |
+| `DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT` | `json` | `json` or explicit `binary`; invalid values fail closed to JSON and there is no `auto` mode |
 | `DEEPSEEK_RUST_RAG_TIMEOUT_MS` | `3000` | RAG proxy timeout in milliseconds |
 
 ### Example: enable only the Gateway
@@ -200,9 +204,20 @@ DEEPSEEK_RUST_GATEWAY=1 \
 DEEPSEEK_RUST_MCP=1 \
 DEEPSEEK_RUST_POLICY=1 \
 DEEPSEEK_RUST_RAG=1 \
+DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=json \
 DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1 \
 python -m deepseek_infra.app
 ```
+
+### Example: explicitly enable compact binary vector ranking
+
+```bash
+DEEPSEEK_RUST_RAG=1 \
+DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=binary \
+python -m deepseek_infra.app
+```
+
+The media type is `application/vnd.deepseek.vector-rank.v1+octet-stream`. See [RAG_VECTOR_BINARY_TRANSPORT.md](RAG_VECTOR_BINARY_TRANSPORT.md) for the fixed wire layout, bounds, stable errors, 110-case parity corpus, and size/performance evidence.
 
 ---
 
@@ -215,7 +230,7 @@ Every Rust component has a Python equivalent. Gateway and existing RAG hot paths
 | **Gateway preparation** | Python prepares the same request, then continues normal Python execution | Returns `502 Bad Gateway` with `UPSTREAM_FAILURE` |
 | **MCP preparation** | Use the already-computed Python protocol result, then route/execute in Python | User protocol errors remain their stable JSON-RPC/internal category and are never disguised as fallback |
 | **Policy** | `fallback`: Python Tool Policy re-evaluates the call | `deny`: block execution; `error`: return a structured 503 |
-| **RAG** | Python RAG hot-path runs locally | The Rust result is ignored and Python continues |
+| **RAG** | Python RAG hot-path runs locally; binary failure does not retry the JSON sidecar | The Rust result is ignored and Python continues |
 | **RAG document preparation** | Use the already-computed Python chunks, then embed/persist/index in Python | Invalid user/config input retains its stable category; malformed Rust output never reaches persistence |
 
 A "Rust call failure" includes any of these conditions:
@@ -225,6 +240,8 @@ A "Rust call failure" includes any of these conditions:
 - Non-2xx HTTP response from the sidecar
 - Malformed JSON or missing expected fields in the response
 - Invalid timeout value in the environment variable (falls back to the default `3000` ms)
+
+For binary vector ranking this also includes wrong Content-Type, empty/non-24-byte response, wrong magic/reserved field, out-of-range index, non-finite similarity, or index/similarity divergence from the complete Python ranking. These conditions perform no second Rust JSON request. Diagnostics contain only encoding, dimensions/counts, scalar/payload sizes, fixed error category, timing, and system correlation ID; they never contain vector values.
 
 For MCP, an empty body, non-object response, missing contract fields, unknown message type, unsafe routing owner, non-serializable value, changed `tools/call` arguments, or any Python/Rust semantic difference is also a backend failure. Logs contain only bounded component, message/request-ID type, payload/response size, runtime/outcome, fallback reason, duration, and system correlation ID; they never contain the MCP method, full params, tool arguments, credentials, prompt content, or local paths.
 

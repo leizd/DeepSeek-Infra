@@ -1,0 +1,66 @@
+{
+  "version": "3.9.0",
+  "commit": "842b0af5",
+  "generatedAt": "2026-07-14T08:04:51Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "imageImport": "PASS",
+    "pdfPageIndex": "PASS",
+    "webpageSnapshot": "PASS",
+    "mediaSegments": "PASS",
+    "mediaToRag": "PASS",
+    "mediaCitations": "PASS",
+    "mediaUploadLimits": "PASS",
+    "projectExportIncludesMedia": "PASS",
+    "secretRedaction": "PASS"
+  },
+  "details": {
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-media-smoke-u2z_ezdk",
+    "projectId": "proj-875e4025ed89",
+    "mediaIds": [
+      "media_ef44505d5e49e88b",
+      "media_d0d5d3235f5dfd24",
+      "media_17df26893a14825b"
+    ],
+    "projectExport": {
+      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-media-smoke-u2z_ezdk\\.projects\\proj-875e4025ed89\\exports\\export_f9ac2d293144f205-Media-Smoke-project-export.zip",
+      "entries": [
+        "media/media.json",
+        "media/segments/media_17df26893a14825b.json",
+        "media/segments/media_d0d5d3235f5dfd24.json",
+        "media/segments/media_ef44505d5e49e88b.json",
+        "media/source/Roadmap-Screenshot.txt",
+        "media/source/Snapshot.html",
+        "metadata.json",
+        "project.md",
+        "saved-items/saved-items.json"
+      ]
+    },
+    "localRag": {
+      "enabled": true,
+      "backend": "sqlite_vec",
+      "databasePath": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-media-smoke-u2z_ezdk\\.local-rag\\rag.sqlite3",
+      "sqliteVecAvailable": false,
+      "embeddingProvider": "hash",
+      "embeddingProviderRequested": "hash",
+      "embeddingDimensions": 64,
+      "embeddingModelPathConfigured": false,
+      "tokenizerPathConfigured": false,
+      "hybridSearch": "bm25+vector",
+      "bm25K1": 1.5,
+      "bm25B": 0.75,
+      "incremental": true,
+      "lastError": "sqlite-vec unavailable: No module named 'sqlite_vec'",
+      "indexedItems": 5,
+      "indexedFiles": 0,
+      "indexedMedia": 3,
+      "indexedMemories": 0,
+      "vectorTableAvailable": false
+    }
+  }
+}

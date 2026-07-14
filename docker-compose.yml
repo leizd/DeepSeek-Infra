@@ -3,7 +3,7 @@
 services:
   deepseek-infra:
     build: .
-    image: deepseek-infra:3.8.0
+    image: deepseek-infra:3.9.0
     env_file:
       - .env
     ports:

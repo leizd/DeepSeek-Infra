@@ -270,6 +270,11 @@ def test_run_smoke_stops_sidecar_before_fallbacks(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(smoke, "check_rag_integration", lambda *args, **kwargs: smoke.CheckResult("rag", "ok"))
     monkeypatch.setattr(
         smoke,
+        "check_rag_vector_binary",
+        lambda *args, **kwargs: (smoke.CheckResult("rag-vector-binary", "ok"), ("binary-127", 0.9)),
+    )
+    monkeypatch.setattr(
+        smoke,
         "check_rag_document_preparation",
         lambda *args, **kwargs: (smoke.CheckResult("rag-document", "ok"), "a" * 64),
     )

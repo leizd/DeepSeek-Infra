@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import struct
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -99,6 +100,7 @@ class _SidecarHandler(BaseHTTPRequestHandler):
                 "request_payload_bytes 1\n"
                 "response_payload_bytes 1\n"
                 "backend_errors_total 0\n"
+                "vector_rank_transport_total{encoding=\"binary\",outcome=\"success\"} 1\n"
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; version=0.0.4")
@@ -110,7 +112,20 @@ class _SidecarHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
-        request = json.loads(self.rfile.read(length).decode("utf-8"))
+        body = self.rfile.read(length)
+        if self.path == "/rag/vectors/rank-binary":
+            assert self.headers.get("Content-Type") == "application/vnd.deepseek.vector-rank.v1+octet-stream"
+            magic, dimensions, candidate_count, *values = struct.unpack("<8sII6d", body)
+            assert (magic, dimensions, candidate_count) == (b"DSVRNK01", 2, 2)
+            assert values == [1.0, 0.0, 0.25, 0.0, 1.0, 0.0]
+            response = struct.pack("<8sIId", b"DSVRSP01", 1, 0, 1.0)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.deepseek.vector-rank.v1+octet-stream")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+            return
+        request = json.loads(body.decode("utf-8"))
         if self.path == "/v1/chat/completions":
             assert request["stream"] is False
             self._send(
@@ -192,6 +207,7 @@ def test_smoke_exercises_all_offline_sidecar_contracts(sidecar_url: str) -> None
         "policy",
         "rag",
         "rag_vector_rank",
+        "rag_vector_rank_binary",
         "rag_document_preparation",
     ]
 

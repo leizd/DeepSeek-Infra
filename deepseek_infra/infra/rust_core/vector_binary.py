@@ -1,0 +1,106 @@
+"""Compact little-endian f64 contract for Rust vector ranking."""
+
+from __future__ import annotations
+
+import array
+import math
+import struct
+import sys
+from dataclasses import dataclass
+
+REQUEST_MAGIC = b"DSVRNK01"
+RESPONSE_MAGIC = b"DSVRSP01"
+CONTENT_TYPE = "application/vnd.deepseek.vector-rank.v1+octet-stream"
+HEADER_BYTES = 16
+RESPONSE_BYTES = 24
+MAX_DIMENSIONS = 4_096
+MAX_CANDIDATES = 50_000
+MAX_SCALARS = 1_600_000
+MAX_REQUEST_BYTES = HEADER_BYTES + MAX_SCALARS * 8
+NO_MATCH_INDEX = 0xFFFF_FFFF
+
+
+class VectorBinaryError(ValueError):
+    """Stable local codec failure without vector values in its message."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class EncodedVectorRankRequest:
+    body: bytes
+    dimensions: int
+    candidate_count: int
+    scalar_count: int
+
+
+@dataclass(frozen=True)
+class DecodedVectorRankResponse:
+    index: int | None
+    similarity: float
+
+
+def _little_endian_bytes(values: array.array[float], *, host_byteorder: str = sys.byteorder) -> bytes:
+    if values.itemsize != 8:
+        raise VectorBinaryError("invalid_f64_width")
+    if host_byteorder == "big":
+        values.byteswap()
+    elif host_byteorder != "little":
+        raise VectorBinaryError("invalid_host_byteorder")
+    return values.tobytes()
+
+
+def _finite(values: list[float]) -> bool:
+    try:
+        return all(math.isfinite(float(value)) for value in values)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def encode_rank_request(query: list[float], candidates: list[list[float]]) -> EncodedVectorRankRequest:
+    dimensions = len(query)
+    candidate_count = len(candidates)
+    if not 0 < dimensions <= MAX_DIMENSIONS:
+        raise VectorBinaryError("invalid_dimensions")
+    if not 0 < candidate_count <= MAX_CANDIDATES:
+        raise VectorBinaryError("invalid_candidate_count")
+    if any(len(candidate) != dimensions for candidate in candidates):
+        raise VectorBinaryError("invalid_dimensions")
+    scalar_count = dimensions * (candidate_count + 1)
+    if scalar_count > MAX_SCALARS:
+        raise VectorBinaryError("payload_too_large")
+    if not _finite(query) or any(not _finite(candidate) for candidate in candidates):
+        raise VectorBinaryError("non_finite_vector")
+
+    values = array.array("d", query)
+    for candidate in candidates:
+        values.extend(candidate)
+    payload = _little_endian_bytes(values)
+    body = struct.pack("<8sII", REQUEST_MAGIC, dimensions, candidate_count) + payload
+    if len(body) != HEADER_BYTES + scalar_count * 8 or len(body) > MAX_REQUEST_BYTES:
+        raise VectorBinaryError("payload_length_mismatch")
+    return EncodedVectorRankRequest(
+        body=body,
+        dimensions=dimensions,
+        candidate_count=candidate_count,
+        scalar_count=scalar_count,
+    )
+
+
+def decode_rank_response(body: bytes, *, candidate_count: int) -> DecodedVectorRankResponse:
+    if len(body) != RESPONSE_BYTES:
+        raise VectorBinaryError("invalid_binary_response_length")
+    magic, index, reserved, similarity = struct.unpack("<8sIId", body)
+    if magic != RESPONSE_MAGIC:
+        raise VectorBinaryError("invalid_binary_response_magic")
+    if reserved != 0:
+        raise VectorBinaryError("invalid_binary_response_reserved")
+    if not math.isfinite(similarity) or not 0.0 <= similarity <= 1.0:
+        raise VectorBinaryError("invalid_binary_response_similarity")
+    if index == NO_MATCH_INDEX:
+        return DecodedVectorRankResponse(index=None, similarity=similarity)
+    if index >= candidate_count:
+        raise VectorBinaryError("invalid_binary_response_index")
+    return DecodedVectorRankResponse(index=index, similarity=similarity)

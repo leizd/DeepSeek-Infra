@@ -183,6 +183,72 @@ print(json.dumps({
 """
 
 
+RAG_VECTOR_BINARY_PROBE = r"""
+import json
+import re
+import time
+import urllib.request
+from deepseek_infra.infra.gateway import semantic_cache
+from deepseek_infra.infra.rust_core import rag_client
+
+trace = {"binaryCalls": 0, "jsonCalls": 0}
+original_binary = rag_client._binary_request
+original_json = rag_client._request
+
+def tracked_binary(*args, **kwargs):
+    trace["binaryCalls"] += 1
+    return original_binary(*args, **kwargs)
+
+def tracked_json(*args, **kwargs):
+    trace["jsonCalls"] += 1
+    return original_json(*args, **kwargs)
+
+def binary_success_count():
+    try:
+        with urllib.request.urlopen("http://rust-gateway:8787/metrics", timeout=2) as response:
+            text = response.read().decode("utf-8")
+    except Exception:
+        return None
+    match = re.search(r'vector_rank_transport_total\{encoding="binary",outcome="success"\} (\d+)', text)
+    return int(match.group(1)) if match else 0
+
+rag_client._binary_request = tracked_binary
+rag_client._request = tracked_json
+dimensions = 768
+candidate_count = 128
+query = [1.0] + [0.0] * (dimensions - 1)
+rows = []
+for index in range(candidate_count):
+    leading = round(0.1 + (0.8 * index / (candidate_count - 1)), 12)
+    rows.append({
+        "id": f"binary-{index:03d}",
+        "expires_at": int(time.time()) + 600,
+        "prompt_hash": f"candidate-{index:03d}",
+        "embedding": json.dumps([leading] + [0.0] * (dimensions - 1), separators=(",", ":")),
+    })
+before = binary_success_count()
+row, similarity, backend = semantic_cache.best_candidate(
+    query,
+    rows,
+    now=int(time.time()),
+    prompt_hash="no-exact-match",
+    exact_only=False,
+)
+after = binary_success_count()
+diagnostics = rag_client.last_delegate_diagnostics("rag_vector_rank")
+print(json.dumps({
+    "trace": trace,
+    "selectedId": row.get("id") if isinstance(row, dict) else None,
+    "similarity": similarity,
+    "backend": backend,
+    "diagnostics": diagnostics,
+    "metricsBinarySuccessDelta": after - before if isinstance(before, int) and isinstance(after, int) else None,
+    "candidateCount": candidate_count,
+    "dimensions": dimensions,
+}, separators=(",", ":")))
+"""
+
+
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise SmokeFailure(message)
@@ -416,7 +482,12 @@ def _parse_json_output(output: str, label: str) -> dict[str, Any]:
 
 
 def _run_container_probe(probe: str, compose_files: tuple[str, ...], *, timeout: float = 30.0) -> dict[str, Any]:
-    probes = {"policy": POLICY_PROBE, "rag": RAG_PROBE, "rag-document": RAG_DOCUMENT_PROBE}
+    probes = {
+        "policy": POLICY_PROBE,
+        "rag": RAG_PROBE,
+        "rag-document": RAG_DOCUMENT_PROBE,
+        "rag-vector-binary": RAG_VECTOR_BINARY_PROBE,
+    }
     code = probes.get(probe, "")
     if not code:
         raise SmokeFailure(f"unknown container probe: {probe}")
@@ -480,6 +551,42 @@ def check_rag_integration(compose_files: tuple[str, ...], *, expect_rust: bool) 
     return CheckResult("rag-integration", phase)
 
 
+def check_rag_vector_binary(
+    compose_files: tuple[str, ...],
+    *,
+    expect_rust: bool,
+    expected_result: tuple[str, float] | None = None,
+) -> tuple[CheckResult, tuple[str, float]]:
+    payload = _run_container_probe("rag-vector-binary", compose_files, timeout=60.0)
+    trace = payload.get("trace")
+    diagnostics = payload.get("diagnostics")
+    if not isinstance(trace, dict) or not isinstance(diagnostics, dict):
+        raise SmokeFailure("binary vector probe is malformed")
+    _require(trace.get("binaryCalls") == 1, "semantic-cache ranking did not issue exactly one binary request")
+    _require(trace.get("jsonCalls") == 0, "binary failure retried the JSON Rust endpoint")
+    _require(diagnostics.get("transportEncoding") == "binary", "vector ranking did not select binary transport")
+    _require(payload.get("candidateCount") == 128 and payload.get("dimensions") == 768, "binary vector probe was not the required large workload")
+    expected_backend = "rust" if expect_rust else "python"
+    _require(payload.get("backend") == expected_backend, f"binary vector ranking backend must be {expected_backend}")
+    _require(diagnostics.get("runtime") == expected_backend, "binary vector diagnostics runtime is incorrect")
+    _require(diagnostics.get("fallback") is (not expect_rust), "binary vector fallback flag is incorrect")
+    if expect_rust:
+        _require(payload.get("metricsBinarySuccessDelta") == 1, "binary endpoint did not record exactly one successful request")
+        _require(diagnostics.get("responsePayloadBytes") == 24, "binary vector response was not 24 bytes")
+    else:
+        _require(diagnostics.get("fallbackReason") == "rust_backend_unavailable", "binary vector fallback reason is not stable")
+        _require(payload.get("metricsBinarySuccessDelta") is None, "stopped sidecar unexpectedly exposed binary metrics")
+    selected_id = payload.get("selectedId")
+    similarity = payload.get("similarity")
+    if not isinstance(selected_id, str) or not isinstance(similarity, (int, float)):
+        raise SmokeFailure("binary vector probe returned an invalid ranking")
+    result = (selected_id, float(similarity))
+    if expected_result is not None:
+        _require(result == expected_result, "binary Rust and Python fallback rankings differ")
+    phase = "one binary Rust request with full Python parity" if expect_rust else "one failed binary request then direct Python fallback"
+    return CheckResult("rag-vector-binary", phase), result
+
+
 def _assert_rag_document_probe(payload: dict[str, Any], *, expect_rust: bool) -> str:
     trace = payload.get("trace")
     diagnostics = payload.get("diagnostics")
@@ -540,11 +647,17 @@ def check_fallbacks(
     *,
     timeout: float = 5.0,
     rag_document_fingerprint: str | None = None,
+    rag_vector_result: tuple[str, float] | None = None,
 ) -> list[CheckResult]:
     rag_document, _ = check_rag_document_preparation(
         compose_files,
         expect_rust=False,
         expected_fingerprint=rag_document_fingerprint,
+    )
+    rag_vector, _ = check_rag_vector_binary(
+        compose_files,
+        expect_rust=False,
+        expected_result=rag_vector_result,
     )
     return [
         check_rust_status(base_url, expect_healthy=False, timeout=timeout),
@@ -552,6 +665,7 @@ def check_fallbacks(
         _check_mcp_fallback(base_url, timeout=timeout),
         check_policy_integration(compose_files, expect_rust=False),
         check_rag_integration(compose_files, expect_rust=False),
+        rag_vector,
         rag_document,
     ]
 
@@ -570,11 +684,21 @@ def run_smoke(
     checks.append(check_mcp_protocol_preparation(base_url, expect_rust=True, timeout=timeout))
     checks.append(check_policy_integration(compose_files, expect_rust=True))
     checks.append(check_rag_integration(compose_files, expect_rust=True))
+    rag_vector, rag_vector_result = check_rag_vector_binary(compose_files, expect_rust=True)
+    checks.append(rag_vector)
     rag_document, rag_document_fingerprint = check_rag_document_preparation(compose_files, expect_rust=True)
     checks.append(rag_document)
     if not keep_sidecar:
         checks.append(stop_sidecar(compose_files))
-        checks.extend(check_fallbacks(base_url, compose_files, timeout=timeout, rag_document_fingerprint=rag_document_fingerprint))
+        checks.extend(
+            check_fallbacks(
+                base_url,
+                compose_files,
+                timeout=timeout,
+                rag_document_fingerprint=rag_document_fingerprint,
+                rag_vector_result=rag_vector_result,
+            )
+        )
     return checks
 
 

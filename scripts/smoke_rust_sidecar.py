@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import struct
 import time
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -70,6 +72,28 @@ def _request_text(base_url: str, path: str, *, timeout: float = 5.0) -> str:
     return raw
 
 
+def _request_binary(base_url: str, path: str, body: bytes, *, timeout: float = 5.0) -> bytes:
+    content_type = "application/vnd.deepseek.vector-rank.v1+octet-stream"
+    request = Request(
+        f"{base_url.rstrip('/')}{path}",
+        data=body,
+        method="POST",
+        headers={"Accept": content_type, "Content-Type": content_type},
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - target URL is operator supplied
+            status = response.status
+            response_type = response.headers.get("Content-Type", "").lower()
+            raw = response.read()
+    except HTTPError as exc:
+        raise SmokeFailure(f"POST {path} returned HTTP {exc.code}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise SmokeFailure(f"POST {path} failed: {exc}") from exc
+    if status != 200 or response_type != content_type:
+        raise SmokeFailure(f"POST {path} returned an invalid binary response contract")
+    return raw
+
+
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise SmokeFailure(message)
@@ -102,6 +126,7 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
         "request_payload_bytes",
         "response_payload_bytes",
         "backend_errors_total",
+        "vector_rank_transport_total",
     ):
         _require(metric in metrics, f"metrics response is missing {metric}")
     checks.append(CheckResult("metrics", "GET /metrics"))
@@ -191,6 +216,15 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
     _require(vector_rank.get("index") == 1, "RAG vector ranking returned the wrong candidate")
     _require(vector_rank.get("similarity") == 1.0, "RAG vector ranking returned the wrong similarity")
     checks.append(CheckResult("rag_vector_rank", "POST /rag/vectors/rank"))
+
+    binary_request = struct.pack("<8sII6d", b"DSVRNK01", 2, 2, 1.0, 0.0, 0.25, 0.0, 1.0, 0.0)
+    binary_response = _request_binary(base_url, "/rag/vectors/rank-binary", binary_request, timeout=timeout)
+    _require(len(binary_response) == 24, "binary RAG vector response is not 24 bytes")
+    magic, index, reserved, similarity = struct.unpack("<8sIId", binary_response)
+    _require(magic == b"DSVRSP01", "binary RAG vector response magic is invalid")
+    _require(index == 1 and reserved == 0, "binary RAG vector response selected the wrong candidate")
+    _require(math.isfinite(similarity) and similarity == 1.0, "binary RAG vector response similarity is invalid")
+    checks.append(CheckResult("rag_vector_rank_binary", "POST /rag/vectors/rank-binary"))
 
     document_payload = {
         "documentId": "docker-smoke-document",

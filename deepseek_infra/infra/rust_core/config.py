@@ -8,6 +8,8 @@ from dataclasses import dataclass
 DEFAULT_RUST_GATEWAY_URL = "http://127.0.0.1:8787"
 DEFAULT_RUST_POLICY_FAILURE_MODE = "fallback"
 RUST_POLICY_FAILURE_MODES = frozenset({"fallback", "deny", "error"})
+DEFAULT_RUST_RAG_VECTOR_TRANSPORT = "json"
+RUST_RAG_VECTOR_TRANSPORTS = frozenset({"json", "binary"})
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,17 @@ def rust_policy_failure_mode() -> str:
     if legacy_fallback is not None and not _env_bool("DEEPSEEK_RUST_POLICY_FALLBACK", True):
         return "deny"
     return DEFAULT_RUST_POLICY_FAILURE_MODE
+
+
+def rust_rag_vector_transport() -> str:
+    configured = os.environ.get("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT", DEFAULT_RUST_RAG_VECTOR_TRANSPORT)
+    normalized = configured.strip().lower()
+    return normalized if normalized in RUST_RAG_VECTOR_TRANSPORTS else DEFAULT_RUST_RAG_VECTOR_TRANSPORT
+
+
+def rust_rag_vector_transport_invalid() -> bool:
+    configured = os.environ.get("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT")
+    return configured is not None and configured.strip().lower() not in RUST_RAG_VECTOR_TRANSPORTS
 
 
 def _env_bool(name: str, default: bool) -> bool:

@@ -88,8 +88,9 @@ def test_semantic_cache_uses_rust_vector_ranking(tmp_settings: Any, monkeypatch:
     assert hit.diagnostics["rankingBackend"] == "rust"
 
 
-def test_semantic_cache_rejects_divergent_rust_vector_score(tmp_settings: Any, monkeypatch: Any) -> None:
+def test_binary_parity_divergence_falls_back(tmp_settings: Any, monkeypatch: Any) -> None:
     monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT", "binary")
     monkeypatch.setattr(semantic_cache, "embed_text", lambda _text: [1.0, 0.0])
     first = {"messages": [{"role": "user", "content": "parity source"}], "toolsEnabled": False}
     second = {"messages": [{"role": "user", "content": "parity query"}], "toolsEnabled": False}
@@ -102,6 +103,8 @@ def test_semantic_cache_rejects_divergent_rust_vector_score(tmp_settings: Any, m
 
     assert hit.hit is True
     assert hit.diagnostics["rankingBackend"] == "python"
+    diagnostics = semantic_cache._rust_rag.last_delegate_diagnostics("rag_vector_rank")
+    assert diagnostics["fallbackReason"] == "rust_semantic_divergence"
 
 
 def test_semantic_cache_rust_failure_falls_back_to_python(tmp_settings: Any, monkeypatch: Any) -> None:

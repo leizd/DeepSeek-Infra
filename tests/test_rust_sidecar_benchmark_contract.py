@@ -45,27 +45,46 @@ def _report() -> dict[str, Any]:
     for delegate, components in benchmark.DELEGATE_COMPONENTS.items():
         scenarios = []
         for component in components:
-            scenarios.append(
-                {
-                    "name": f"synthetic_{component}",
-                    "component": component,
-                    "layers": {
-                        "pythonBaseline": _layer(),
-                        "pureRustCore": _layer(),
-                        "releaseSidecarHttp": _layer(),
-                        "fullPythonIntegration": _layer(),
-                    },
-                    "semanticParity": True,
-                }
-            )
-        delegates.append(
-            {
-                "delegate": delegate,
-                "components": list(components),
-                "scenarios": scenarios,
-                "concurrency": [{"concurrency": value} for value in (1, 8, 32)],
+            scenario: dict[str, Any] = {
+                "name": f"synthetic_{component}",
+                "component": component,
+                "layers": {
+                    "pythonBaseline": _layer(),
+                    "pureRustCore": _layer(),
+                    "releaseSidecarHttp": _layer(),
+                    "fullPythonIntegration": _layer(),
+                },
+                "semanticParity": True,
             }
-        )
+            if component == "rag_vector_rank":
+                comparison_layers = {
+                    name: _layer()
+                    for name in (
+                        "pythonDirect",
+                        "pureRustCore",
+                        "jsonSerialization",
+                        "binarySerialization",
+                        "warmJsonHttp",
+                        "warmBinaryHttp",
+                        "fullJsonIntegration",
+                        "fullBinaryIntegration",
+                    )
+                }
+                comparison_layers["warmBinaryHttp"]["outputBytes"] = 24
+                scenario["transportComparison"] = {"layers": comparison_layers, "semanticParity": True}
+            scenarios.append(scenario)
+        delegate_report: dict[str, Any] = {
+            "delegate": delegate,
+            "components": list(components),
+            "scenarios": scenarios,
+            "concurrency": [{"concurrency": value} for value in (1, 8, 32)],
+        }
+        if delegate == "rag_vector_ranking":
+            delegate_report["transportConcurrency"] = {
+                encoding: [{"concurrency": value, "errors": 0, "fallbacks": 0} for value in (1, 8, 32)]
+                for encoding in ("json", "binary")
+            }
+        delegates.append(delegate_report)
     return {
         "schemaVersion": benchmark.SCHEMA_VERSION,
         "version": benchmark.VERSION,
@@ -121,6 +140,15 @@ def test_all_current_delegates_are_reported() -> None:
         "rag_vector_ranking",
         "rag_document_preparation",
     }
+
+
+def test_vector_transport_report_contract_is_stable() -> None:
+    report = _report()
+    benchmark.validate_report(report)
+    vector = next(item for item in report["delegates"] if item["delegate"] == "rag_vector_ranking")
+    comparison = vector["scenarios"][0]["transportComparison"]
+    assert comparison["layers"]["warmBinaryHttp"]["outputBytes"] == 24
+    assert set(vector["transportConcurrency"]) == {"json", "binary"}
 
 
 def test_benchmark_report_redacts_sensitive_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,6 +207,20 @@ def test_vector_ranking_scaling_is_consistent_with_candidate_dimension_product()
     dimension_ratio = _median_runtime(lambda: benchmark._python_vector(twice_dimensions)) / small_time
     assert candidate_ratio < 8.0
     assert dimension_ratio < 8.0
+
+
+def test_binary_serialization_is_smaller_and_scales_with_scalar_count() -> None:
+    medium = benchmark._vector_payload(128, 384)
+    large = benchmark._vector_payload(256, 384)
+    medium_json = len(benchmark._json_bytes(medium))
+    medium_binary = len(benchmark.vector_binary.encode_rank_request(medium["query"], medium["candidates"]).body)
+    assert medium_binary < medium_json
+    medium_time = max(
+        _median_runtime(lambda: benchmark.vector_binary.encode_rank_request(medium["query"], medium["candidates"])),
+        1e-9,
+    )
+    large_time = _median_runtime(lambda: benchmark.vector_binary.encode_rank_request(large["query"], large["candidates"]))
+    assert large_time / medium_time < 8.0
 
 
 def test_document_preparation_has_bounded_scaling_and_overlap() -> None:

@@ -1,13 +1,13 @@
 # Demo 3.0
 
-Applicable version: v3.8.0.
+Applicable version: v3.9.0.
 
 This demo shows the Personal AI Runtime as one local workspace rather than separate features.
 
 ## Run
 
 ```bash
-python scripts/smoke_ga.py --offline --out docs/evidence/ga-v3.8.0.json --json
+python scripts/smoke_ga.py --offline --out docs/evidence/ga-v3.9.0.json --json
 ```
 
 The smoke creates an isolated runtime root and exercises the complete chain:
@@ -34,10 +34,10 @@ The smoke creates an isolated runtime root and exercises the complete chain:
 
 ## Evidence
 
-Primary evidence: `docs/evidence/ga-v3.8.0.json`.
+Primary evidence: `docs/evidence/ga-v3.9.0.json`.
 
 Release gate:
 
 ```bash
-python scripts/preflight_release.py --version 3.8.0 --ga
+python scripts/preflight_release.py --version 3.9.0 --ga
 ```

@@ -461,7 +461,7 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Current themes (3.8.0 Rust sidecar release performance and observability completed):
+Current themes (3.9.0 compact binary vector transport completed):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.
@@ -477,6 +477,7 @@ Current themes (3.8.0 Rust sidecar release performance and observability complet
 - 3.6.0: Deterministic MCP envelope and method preparation moves behind the existing opt-in MCP delegate through `POST /mcp/request/prepare`. A 105-case live-sidecar parity gate proves normalized request/notification/response descriptors and stable error-category parity. Python retains transport, sessions, authentication, runtime capability decisions, registries, tool execution, resource/prompt loading, cancellation, scheduling, tracing, credentials, and business state.
 - 3.7.0: Deterministic normalization and chunking of text already parsed by Python moves behind the independent default-disabled `DEEPSEEK_RUST_RAG_DOCUMENT_PREP` delegate through `POST /rag/documents/prepare`. A 125-case live-sidecar gate proves exact chunks, Unicode character offsets, overlap, BLAKE2b-96 hashes, chunk IDs, metadata boundaries, and stable errors. Python retains uploads, paths, parsing/OCR, embeddings, persistence, indexes, scheduling, authorization, retrieval, and context assembly.
 - 3.8.0: No delegate is added. All five existing delegate families gain a locked release-mode layered benchmark, bounded persistent Python HTTP connections, per-layer timing, fixed-label metrics, and safe correlation tracing. Absolute public-runner latency is informational; semantic parity, zero error/fallback, redaction, connection lifecycle, and complexity contracts are merge gates. Python-first defaults and ownership remain unchanged.
+- 3.9.0: The existing vector-ranking delegate gains an explicit compact little-endian `f64` endpoint beside compatible JSON. A 110-valid/16-malformed live-sidecar gate, fixed 24-byte response, checked bounds, direct Python fallback without JSON retry, and extended JSON/binary benchmark prove the contract. JSON remains the default; full Python parity and ownership are unchanged.
 
 See [PRE_4_0_QUALITY_BASELINE.md](PRE_4_0_QUALITY_BASELINE.md) for the quality baseline and [4_0_RC_READINESS.md](4_0_RC_READINESS.md) for the current blocker matrix.
 
@@ -532,6 +533,16 @@ See [RAG_DOCUMENT_PREPARATION_PARITY.md](RAG_DOCUMENT_PREPARATION_PARITY.md) for
 - No Rust delegate, ownership transfer, default flag, default Compose service, or fallback removal is part of this milestone.
 
 See [RUST_SIDECAR_PERFORMANCE.md](RUST_SIDECAR_PERFORMANCE.md) for the audit, measurement contract, evidence, observability allowlists, and interpretation limits.
+
+### 3.9.0 — Vector-ranking compact binary transport (completed)
+
+- `POST /rag/vectors/rank-binary` uses a fixed little-endian `f64` request and 24-byte response while `POST /rag/vectors/rank` remains fully compatible JSON.
+- The decoder validates media type, magic, checked size arithmetic, dimensions/candidates/scalar budgets, exact body length, trailing bytes, and finite values before ranking; it borrows the validated body and never materializes a candidate matrix.
+- `DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT` accepts explicit `json|binary`, defaults/fails closed to JSON, and has no `auto` mode. A binary backend/protocol/parity failure makes no second Rust request and returns directly to the Python ranking.
+- Python still scans the full candidate set, requires exact best index/first-match semantics, applies the existing similarity tolerance, and remains authoritative for cache policy, storage, thresholds, retrieval, and persistence.
+- The release benchmark reports JSON/binary serialization, warmed HTTP, Rust processing, full integration, body sizes, and bounded concurrency without an absolute public-runner latency gate. Dense large requests shrink about 14.6%; tiny sparse JSON can be smaller, so no default or automatic selection follows.
+
+See [RAG_VECTOR_BINARY_TRANSPORT.md](RAG_VECTOR_BINARY_TRANSPORT.md) for the wire contract, bounds, stable errors, corpus, fallback proof, evidence, and non-goals.
 
 ## Testing Priorities
 
