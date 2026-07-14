@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from deepseek_infra.infra.rust_core.config import rust_gateway_url, rust_policy_failure_mode
+from deepseek_infra.infra.rust_core import transport
 
 DEFAULT_POLICY_TIMEOUT_MS = 3000
 POLICY_BACKEND_UNAVAILABLE = "policy_backend_unavailable"
@@ -31,6 +33,31 @@ class PolicyProxyResult:
     trace_id: str = ""
     capability: str = ""
     risk_level: str = ""
+    serialization_us: int | None = None
+    transport_us: int | None = None
+    rust_processing_us: int | None = None
+    total_us: int | None = None
+    request_bytes: int = 0
+    response_bytes: int = 0
+    correlation_id: str = ""
+    connection_reused: bool | None = None
+    connection_count: int | None = None
+
+    @property
+    def diagnostics(self) -> dict[str, Any]:
+        return {
+            "pythonPreparationUs": None,
+            "serializationUs": self.serialization_us,
+            "transportUs": self.transport_us,
+            "rustProcessingUs": self.rust_processing_us,
+            "pythonValidationUs": None,
+            "totalDelegateUs": self.total_us,
+            "requestBytes": self.request_bytes,
+            "responseBytes": self.response_bytes,
+            "connectionReused": self.connection_reused,
+            "connectionCount": self.connection_count,
+            "correlationId": self.correlation_id,
+        }
 
 
 def _rust_policy_enabled() -> bool:
@@ -52,7 +79,14 @@ def _redact_error(value: Any) -> str:
     return _BEARER_PATTERN.sub("Bearer [REDACTED]", text)
 
 
-def _failure_result(status: int, reason: str, body: Any, *, code: str = POLICY_BACKEND_UNAVAILABLE) -> PolicyProxyResult:
+def _failure_result(
+    status: int,
+    reason: str,
+    body: Any,
+    *,
+    code: str = POLICY_BACKEND_UNAVAILABLE,
+    **timing: Any,
+) -> PolicyProxyResult:
     return PolicyProxyResult(
         ok=False,
         status=status,
@@ -60,18 +94,19 @@ def _failure_result(status: int, reason: str, body: Any, *, code: str = POLICY_B
         reason=_redact_error(reason),
         body=body,
         code=code,
+        **timing,
     )
 
 
-def _parse_response(status: int, raw: bytes) -> PolicyProxyResult:
+def _parse_response(status: int, raw: bytes, **timing: Any) -> PolicyProxyResult:
     if not raw:
-        return _failure_result(status, "Rust Policy returned an empty response", {})
+        return _failure_result(status, "Rust Policy returned an empty response", {}, **timing)
     try:
         body = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return _failure_result(status, f"Rust Policy returned malformed JSON: {exc}", {})
+        return _failure_result(status, f"Rust Policy returned malformed JSON: {exc}", {}, **timing)
     if not isinstance(body, dict):
-        return _failure_result(status, "Rust Policy response must be a JSON object", body)
+        return _failure_result(status, "Rust Policy response must be a JSON object", body, **timing)
 
     allowed = body.get("allowed")
     legacy = False
@@ -80,7 +115,7 @@ def _parse_response(status: int, raw: bytes) -> PolicyProxyResult:
         # unrelated or incomplete JSON instead of silently allowing it.
         legacy_decision = body.get("decision")
         if legacy_decision not in ("Allow", "Deny"):
-            return _failure_result(status, "Rust Policy response is missing allowed", body)
+            return _failure_result(status, "Rust Policy response is missing allowed", body, **timing)
         allowed = legacy_decision == "Allow"
         legacy = True
 
@@ -92,6 +127,7 @@ def _parse_response(status: int, raw: bytes) -> PolicyProxyResult:
                 status,
                 f"Rust Policy response is missing structured fields: {', '.join(missing)}",
                 body,
+                **timing,
             )
 
     default_code = "allowed" if allowed else "invalid_policy_request"
@@ -106,6 +142,7 @@ def _parse_response(status: int, raw: bytes) -> PolicyProxyResult:
         trace_id=str(body.get("trace_id") or ""),
         capability=str(body.get("capability") or ""),
         risk_level=str(body.get("risk_level") or ""),
+        **timing,
     )
 
 
@@ -115,24 +152,59 @@ def _request(
     headers: dict[str, str] | None = None,
     timeout_ms: int | None = None,
 ) -> PolicyProxyResult:
+    total_started_ns = time.perf_counter_ns()
     url = f"{rust_gateway_url()}{path}"
     timeout = (timeout_ms if timeout_ms is not None else _timeout_ms()) / 1000.0
-    req_headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    if headers and "Authorization" in headers:
-        req_headers["Authorization"] = headers["Authorization"]
+    correlation_id = transport.new_correlation_id()
+    req_headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-DeepSeek-Request-ID": correlation_id,
+    }
+    del headers  # Policy preparation is credential-free; caller headers never cross this boundary.
+    serialization_started_ns = time.perf_counter_ns()
     data = json.dumps(payload).encode("utf-8")
+    serialization_us = max(0, (time.perf_counter_ns() - serialization_started_ns) // 1000)
     request = urllib.request.Request(url, data=data, method="POST", headers=req_headers)
+    transport_started_ns = time.perf_counter_ns()
+
+    def timing(response: Any = None, response_bytes: int = 0) -> dict[str, Any]:
+        observed_transport_us = getattr(response, "transport_us", None)
+        if not isinstance(observed_transport_us, int):
+            observed_transport_us = max(0, (time.perf_counter_ns() - transport_started_ns) // 1000)
+        rust_processing_us: int | None = None
+        raw_rust_us = transport.response_header(response, "X-DeepSeek-Rust-Processing-Us") if response is not None else None
+        if raw_rust_us is not None:
+            try:
+                rust_processing_us = max(0, int(raw_rust_us))
+            except ValueError:
+                rust_processing_us = None
+        return {
+            "serialization_us": serialization_us,
+            "transport_us": observed_transport_us,
+            "rust_processing_us": rust_processing_us,
+            "total_us": max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+            "request_bytes": len(data),
+            "response_bytes": response_bytes,
+            "correlation_id": correlation_id,
+            "connection_reused": getattr(response, "connection_reused", None),
+            "connection_count": getattr(response, "connection_count", None),
+        }
+
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return _parse_response(response.status, response.read())
+        with transport.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            return _parse_response(response.status, raw, **timing(response, len(raw)))
     except urllib.error.HTTPError as exc:
         try:
-            body = exc.read().decode("utf-8")
+            raw = exc.read()
+            body = raw.decode("utf-8")
         except Exception:
+            raw = b""
             body = str(exc)
-        return _failure_result(exc.code, str(body), body)
+        return _failure_result(exc.code, str(body), body, **timing(exc, len(raw)))
     except Exception as exc:
-        return _failure_result(0, str(exc), str(exc))
+        return _failure_result(0, str(exc), str(exc), **timing())
 
 
 def check_url(

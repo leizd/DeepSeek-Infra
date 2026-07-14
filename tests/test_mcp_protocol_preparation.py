@@ -243,8 +243,8 @@ def test_rust_mcp_transport_failure_classification(
     kind: str,
 ) -> None:
     monkeypatch.setenv("DEEPSEEK_RUST_MCP", "1")
-    mocked = patch("urllib.request.urlopen", side_effect=side_effect) if side_effect else patch(
-        "urllib.request.urlopen", return_value=_Response(body or b"")
+    mocked = patch("deepseek_infra.infra.rust_core.transport.urlopen", side_effect=side_effect) if side_effect else patch(
+        "deepseek_infra.infra.rust_core.transport.urlopen", return_value=_Response(body or b"")
     )
     with mocked:
         result = mcp_client.prepare_mcp_with_rust(_payload())
@@ -262,7 +262,7 @@ def test_rust_mcp_never_receives_credentials(monkeypatch: pytest.MonkeyPatch) ->
         local = prepare_mcp_protocol(captured["body"])
         return _Response(json.dumps(local).encode("utf-8"))
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("deepseek_infra.infra.rust_core.transport.urlopen", side_effect=fake_urlopen):
         result = mcp_client.proxy_mcp_to_rust(
             _payload(), headers={"Authorization": "Bearer should-never-reach-rust", "X-Token": "secret"}
         )
@@ -287,8 +287,11 @@ def test_rust_mcp_diagnostics_are_redacted(caplog: pytest.LogCaptureFixture) -> 
     with caplog.at_level(logging.INFO, logger="deepseek_infra.mcp.protocol_preparation"):
         log_mcp_protocol_diagnostics(decision.diagnostics)
     record = caplog.records[-1]
-    assert record.method == "tools/call"  # type: ignore[attr-defined]
+    assert not hasattr(record, "method")
+    assert record.component == "mcp_prepare"  # type: ignore[attr-defined]
+    assert record.payload_bytes == 123  # type: ignore[attr-defined]
     assert not any("arguments" in str(value).lower() or "secret" in str(value).lower() for value in record.__dict__.values())
+    assert "tools/call" not in str(record.__dict__).lower()
 
     headers = protocol_diagnostic_headers(diagnostics)
     assert headers["X-DeepSeek-MCP-Preparation-Runtime"] == "rust"

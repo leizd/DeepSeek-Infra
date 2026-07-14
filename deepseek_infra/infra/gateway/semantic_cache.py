@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import sqlite3
 import threading
 import time
@@ -93,6 +94,7 @@ def lookup(payload: dict[str, Any], body: dict[str, Any]) -> CacheLookup:
         return CacheLookup(diagnostics)
 
     now = int(time.time())
+    _rust_rag.reset_delegate_diagnostics()
     best_row, best_similarity, ranking_backend = best_candidate(
         query_embedding,
         rows,
@@ -103,6 +105,9 @@ def lookup(payload: dict[str, Any], body: dict[str, Any]) -> CacheLookup:
 
     diagnostics["similarity"] = round(best_similarity, 4)
     diagnostics["rankingBackend"] = ranking_backend
+    rust_delegate_timing = _rust_rag.last_delegate_diagnostics("rag_vector_rank")
+    if rust_delegate_timing:
+        diagnostics["rustVectorRanking"] = rust_delegate_timing
     if best_row is None or best_similarity < SEMANTIC_CACHE_THRESHOLD:
         return CacheLookup(diagnostics)
 
@@ -510,17 +515,31 @@ def best_candidate(
 
     candidates = [decode_embedding(row["embedding"]) for row in eligible]
     ranked, used_rust = _rust_rag.rank_vectors(query_embedding, candidates)
-    if used_rust and ranked is not None:
-        index, similarity = ranked
-        return (eligible[index] if index is not None else None), similarity, "rust"
-
+    validation_started_ns = time.perf_counter_ns()
     best_row: sqlite3.Row | None = None
     best_similarity = 0.0
-    for row, candidate in zip(eligible, candidates):
+    best_index: int | None = None
+    for index, (row, candidate) in enumerate(zip(eligible, candidates)):
         similarity = cosine_similarity(query_embedding, candidate)
         if similarity > best_similarity:
             best_similarity = similarity
             best_row = row
+            best_index = index
+    validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
+    if used_rust and ranked is not None:
+        rust_index, rust_similarity = ranked
+        parity = rust_index == best_index and math.isclose(rust_similarity, best_similarity, rel_tol=1e-9, abs_tol=1e-12)
+        current = _rust_rag.last_delegate_diagnostics("rag_vector_rank")
+        _rust_rag.update_delegate_diagnostics(
+            "rag_vector_rank",
+            pythonValidationUs=int(current.get("pythonValidationUs") or 0) + validation_us,
+            totalDelegateUs=int(current.get("totalDelegateUs") or 0) + validation_us,
+            runtime="rust" if parity else "python",
+            fallback=not parity,
+            fallbackReason="" if parity else "rust_semantic_divergence",
+        )
+        if parity:
+            return best_row, rust_similarity, "rust"
     return best_row, best_similarity, "python"
 
 

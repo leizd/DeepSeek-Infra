@@ -54,6 +54,22 @@ def _request_json(
     return value
 
 
+def _request_text(base_url: str, path: str, *, timeout: float = 5.0) -> str:
+    request = Request(f"{base_url.rstrip('/')}{path}", method="GET", headers={"Accept": "text/plain"})
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - target URL is operator supplied
+            status = response.status
+            raw = response.read().decode("utf-8")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise SmokeFailure(f"GET {path} returned HTTP {exc.code}: {body}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise SmokeFailure(f"GET {path} failed: {exc}") from exc
+    if status != 200:
+        raise SmokeFailure(f"GET {path} returned HTTP {status}")
+    return raw
+
+
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise SmokeFailure(message)
@@ -78,6 +94,17 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
     health = wait_for_health(base_url, wait_seconds=wait_seconds, timeout=timeout)
     _require(health.get("service") == "deepseek-gateway-rs", "healthz returned the wrong service name")
     checks = [CheckResult("health", "GET /healthz")]
+
+    metrics = _request_text(base_url, "/metrics", timeout=timeout)
+    for metric in (
+        "requests_total",
+        "request_duration_seconds",
+        "request_payload_bytes",
+        "response_payload_bytes",
+        "backend_errors_total",
+    ):
+        _require(metric in metrics, f"metrics response is missing {metric}")
+    checks.append(CheckResult("metrics", "GET /metrics"))
 
     models = _request_json(base_url, "GET", "/v1/models", timeout=timeout)
     model_data = models.get("data")

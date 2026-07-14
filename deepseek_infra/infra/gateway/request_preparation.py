@@ -280,7 +280,14 @@ def prepare_gateway_request(value: Any) -> dict[str, Any]:
 
 
 def _fallback(
-    baseline: dict[str, Any], *, reason: str, started: float, details: Any = None
+    baseline: dict[str, Any],
+    *,
+    reason: str,
+    total_started_ns: int,
+    python_preparation_us: int,
+    result: Any = None,
+    python_validation_us: int | None = None,
+    details: Any = None,
 ) -> PreparedGatewayRequest:
     from deepseek_infra.infra.rust_core.gateway_client import fallback_to_python_enabled
 
@@ -292,50 +299,153 @@ def _fallback(
             "runtime": "python",
             "fallback": True,
             "fallbackReason": reason,
-            "latencyMs": max(0, round((time.perf_counter() - started) * 1000)),
+            **_delegate_timing(
+                result,
+                total_started_ns=total_started_ns,
+                python_preparation_us=python_preparation_us,
+                python_validation_us=python_validation_us,
+            ),
         },
     )
 
 
+def _delegate_timing(
+    result: Any,
+    *,
+    total_started_ns: int,
+    python_preparation_us: int,
+    python_validation_us: int | None,
+) -> dict[str, Any]:
+    total_us = max(0, (time.perf_counter_ns() - total_started_ns) // 1000)
+    return {
+        "pythonPreparationUs": python_preparation_us,
+        "serializationUs": getattr(result, "serialization_us", None),
+        "transportUs": getattr(result, "transport_us", None),
+        "rustProcessingUs": getattr(result, "rust_processing_us", None),
+        "pythonValidationUs": python_validation_us,
+        "totalDelegateUs": total_us,
+        "latencyMs": max(0, round(total_us / 1000)),
+        "requestBytes": int(getattr(result, "request_bytes", 0) or 0),
+        "responseBytes": int(getattr(result, "response_bytes", 0) or 0),
+        "connectionReused": getattr(result, "connection_reused", None),
+        "connectionCount": getattr(result, "connection_count", None),
+        "correlationId": str(getattr(result, "correlation_id", "") or ""),
+    }
+
+
 def prepare_request_with_optional_rust(value: Any) -> PreparedGatewayRequest:
     """Return the normalized request and safe runtime diagnostics."""
+    total_started_ns = time.perf_counter_ns()
+    preparation_started_ns = time.perf_counter_ns()
     baseline = prepare_gateway_request(value)
+    python_preparation_us = max(0, (time.perf_counter_ns() - preparation_started_ns) // 1000)
     from deepseek_infra.infra.rust_core.gateway_client import prepare_request_with_rust, rust_gateway_enabled
 
     if not rust_gateway_enabled():
-        return PreparedGatewayRequest(baseline, {"runtime": "python", "fallback": False})
+        return PreparedGatewayRequest(
+            baseline,
+            {
+                "runtime": "python",
+                "fallback": False,
+                **_delegate_timing(
+                    None,
+                    total_started_ns=total_started_ns,
+                    python_preparation_us=python_preparation_us,
+                    python_validation_us=None,
+                ),
+            },
+        )
 
-    started = time.perf_counter()
     result = prepare_request_with_rust(value)
     if not result.ok:
         reason = result.error_kind or "rust_backend_unavailable"
-        return _fallback(baseline, reason=reason, started=started, details=result.body)
+        return _fallback(
+            baseline,
+            reason=reason,
+            total_started_ns=total_started_ns,
+            python_preparation_us=python_preparation_us,
+            result=result,
+            details=result.body,
+        )
     if result.error_kind:
-        return _fallback(baseline, reason=result.error_kind, started=started, details=result.body)
+        return _fallback(
+            baseline,
+            reason=result.error_kind,
+            total_started_ns=total_started_ns,
+            python_preparation_us=python_preparation_us,
+            result=result,
+            details=result.body,
+        )
     response = result.body
     if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
-        return _fallback(baseline, reason="rust_invalid_shape", started=started, details=response)
+        return _fallback(
+            baseline,
+            reason="rust_invalid_shape",
+            total_started_ns=total_started_ns,
+            python_preparation_us=python_preparation_us,
+            result=result,
+            details=response,
+        )
     if response["ok"] is False:
         code = response.get("code")
         message = response.get("message")
         if isinstance(code, str) and code in PREPARATION_ERROR_CODES and isinstance(message, str):
             raise _error(ErrorCode(code), message)
-        return _fallback(baseline, reason="rust_invalid_shape", started=started, details=response)
+        return _fallback(
+            baseline,
+            reason="rust_invalid_shape",
+            total_started_ns=total_started_ns,
+            python_preparation_us=python_preparation_us,
+            result=result,
+            details=response,
+        )
     candidate = response.get("request")
     if not isinstance(candidate, dict):
-        return _fallback(baseline, reason="rust_invalid_shape", started=started, details=response)
+        return _fallback(
+            baseline,
+            reason="rust_invalid_shape",
+            total_started_ns=total_started_ns,
+            python_preparation_us=python_preparation_us,
+            result=result,
+            details=response,
+        )
+    validation_started_ns = time.perf_counter_ns()
     try:
         normalized_candidate = prepare_gateway_request(candidate)
         _json_size(normalized_candidate)
     except AppError:
-        return _fallback(baseline, reason="rust_defensive_validation_failed", started=started, details=response)
+        validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
+        return _fallback(
+            baseline,
+            reason="rust_defensive_validation_failed",
+            total_started_ns=total_started_ns,
+            python_preparation_us=python_preparation_us,
+            result=result,
+            python_validation_us=validation_us,
+            details=response,
+        )
     if normalized_candidate != baseline or set(candidate) - ALLOWED_REQUEST_FIELDS:
-        return _fallback(baseline, reason="rust_defensive_validation_failed", started=started, details=response)
+        validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
+        return _fallback(
+            baseline,
+            reason="rust_defensive_validation_failed",
+            total_started_ns=total_started_ns,
+            python_preparation_us=python_preparation_us,
+            result=result,
+            python_validation_us=validation_us,
+            details=response,
+        )
+    validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
     return PreparedGatewayRequest(
         candidate,
         {
             "runtime": "rust",
             "fallback": False,
-            "latencyMs": max(0, round((time.perf_counter() - started) * 1000)),
+            **_delegate_timing(
+                result,
+                total_started_ns=total_started_ns,
+                python_preparation_us=python_preparation_us,
+                python_validation_us=validation_us,
+            ),
         },
     )

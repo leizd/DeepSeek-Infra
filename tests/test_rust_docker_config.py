@@ -92,6 +92,20 @@ class _SidecarHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/models":
             self._send({"object": "list", "data": [{"id": "deepseek-v4-pro", "object": "model"}]})
             return
+        if self.path == "/metrics":
+            body = (
+                "requests_total 1\n"
+                "request_duration_seconds 0.1\n"
+                "request_payload_bytes 1\n"
+                "response_payload_bytes 1\n"
+                "backend_errors_total 0\n"
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:
@@ -171,6 +185,7 @@ def test_smoke_exercises_all_offline_sidecar_contracts(sidecar_url: str) -> None
 
     assert [check.name for check in checks] == [
         "health",
+        "metrics",
         "models",
         "chat",
         "mcp_protocol_preparation",

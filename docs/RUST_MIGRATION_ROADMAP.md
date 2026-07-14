@@ -461,7 +461,7 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Current themes (3.7.0 optional RAG document preparation completed):
+Current themes (3.8.0 Rust sidecar release performance and observability completed):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.
@@ -476,6 +476,7 @@ Current themes (3.7.0 optional RAG document preparation completed):
 - 3.5.0: Deterministic non-streaming Gateway request preparation moves behind the existing opt-in Gateway delegate through `POST /gateway/request/prepare`. A 68-case live-sidecar parity gate proves normalized request and stable error-category parity. Python retains credentials, provider routing, upstream HTTP, streaming, retries, cache policy, context injection, real tool execution, and tracing lifecycle.
 - 3.6.0: Deterministic MCP envelope and method preparation moves behind the existing opt-in MCP delegate through `POST /mcp/request/prepare`. A 105-case live-sidecar parity gate proves normalized request/notification/response descriptors and stable error-category parity. Python retains transport, sessions, authentication, runtime capability decisions, registries, tool execution, resource/prompt loading, cancellation, scheduling, tracing, credentials, and business state.
 - 3.7.0: Deterministic normalization and chunking of text already parsed by Python moves behind the independent default-disabled `DEEPSEEK_RUST_RAG_DOCUMENT_PREP` delegate through `POST /rag/documents/prepare`. A 125-case live-sidecar gate proves exact chunks, Unicode character offsets, overlap, BLAKE2b-96 hashes, chunk IDs, metadata boundaries, and stable errors. Python retains uploads, paths, parsing/OCR, embeddings, persistence, indexes, scheduling, authorization, retrieval, and context assembly.
+- 3.8.0: No delegate is added. All five existing delegate families gain a locked release-mode layered benchmark, bounded persistent Python HTTP connections, per-layer timing, fixed-label metrics, and safe correlation tracing. Absolute public-runner latency is informational; semantic parity, zero error/fallback, redaction, connection lifecycle, and complexity contracts are merge gates. Python-first defaults and ownership remain unchanged.
 
 See [PRE_4_0_QUALITY_BASELINE.md](PRE_4_0_QUALITY_BASELINE.md) for the quality baseline and [4_0_RC_READINESS.md](4_0_RC_READINESS.md) for the current blocker matrix.
 
@@ -521,6 +522,16 @@ See [MCP_PROTOCOL_PREPARATION_PARITY.md](MCP_PROTOCOL_PREPARATION_PARITY.md) for
 - The independent flag, all other Rust delegates, and the sidecar deployment remain default-disabled. This is not Rust RAG ingestion and does not move any file, OCR, embedding, persistence, index, retrieval, or transaction ownership.
 
 See [RAG_DOCUMENT_PREPARATION_PARITY.md](RAG_DOCUMENT_PREPARATION_PARITY.md) for the 125-case contract, offset/hash/ID semantics, fallback rules, redacted diagnostics, benchmark, and non-goals.
+
+### 3.8.0 — Rust sidecar release performance and observability (completed)
+
+- The benchmark uses `cargo build --release --locked --manifest-path rust/Cargo.toml -p deepseek-gateway` and records profile/toolchain/target/Python/OS/CPU/commit/warmup/iteration/concurrency provenance.
+- Python baseline, pure Rust core, warm sidecar HTTP, cold start, and full Python integration are separate. The report retains slower Rust scenarios and never treats sidecar timing as a security or business input.
+- Gateway, MCP, Policy, and RAG clients reuse bounded process-local standard-library connections with component timeouts, close/reset hooks, fork/PID invalidation, no caller credentials, and unchanged fallback behavior.
+- `GET /metrics` extends the existing sidecar listener with seven fixed components and allowlisted outcomes/reasons. Metrics and tracing exclude models, methods, tools, document IDs, URLs, paths, raw errors, request IDs as labels, payloads, and credentials.
+- No Rust delegate, ownership transfer, default flag, default Compose service, or fallback removal is part of this milestone.
+
+See [RUST_SIDECAR_PERFORMANCE.md](RUST_SIDECAR_PERFORMANCE.md) for the audit, measurement contract, evidence, observability allowlists, and interpretation limits.
 
 ## Testing Priorities
 

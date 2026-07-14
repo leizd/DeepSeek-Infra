@@ -148,7 +148,10 @@ def test_rust_gateway_disabled_uses_python(monkeypatch: pytest.MonkeyPatch) -> N
 
     prepared = preparation.prepare_request_with_optional_rust(minimal_request())
 
-    assert prepared.diagnostics == {"runtime": "python", "fallback": False}
+    assert prepared.diagnostics["runtime"] == "python"
+    assert prepared.diagnostics["fallback"] is False
+    assert prepared.diagnostics["pythonPreparationUs"] >= 0
+    assert prepared.diagnostics["transportUs"] is None
 
 
 @pytest.mark.parametrize(
@@ -321,7 +324,9 @@ def test_real_python_gateway_path_prepares_in_rust_then_executes_upstream(
             }
         )
 
-    with patch("urllib.request.urlopen", side_effect=urlopen):
+    with patch("urllib.request.urlopen", side_effect=urlopen), patch(
+        "deepseek_infra.infra.rust_core.transport.urlopen", side_effect=urlopen
+    ):
         result = call_deepseek(
             {
                 "apiKey": "server-secret",

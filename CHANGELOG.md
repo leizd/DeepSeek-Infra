@@ -1,5 +1,24 @@
 # 更新日志
 
+## [3.8.0] - Rust Sidecar Release Performance & Observability
+
+### 新增
+
+- 新增覆盖五类现有 delegate、七个固定 component、26 个等价场景和并发 1/8/32 的 locked release-mode 分层 benchmark；单独报告 Python baseline、pure Rust core、warm sidecar HTTP、完整 Python-to-Rust integration 与 cold start，并提交去隐私稳定证据。
+- 在 sidecar 现有监听器上新增低基数 `GET /metrics`，提供请求计数、持续时间、请求/响应字节和后端错误指标；metric label 仅使用固定 component、outcome 和 reason allowlist。
+- 为所有 Python delegate 增加 `pythonPreparationUs`、`serializationUs`、`transportUs`、`rustProcessingUs`、`pythonValidationUs` 与 `totalDelegateUs` 分层诊断；Rust 处理时间仅用于观测，不参与安全或业务决策。
+
+### 变更
+
+- Gateway、MCP、Policy 与 RAG Rust clients 复用有界、线程安全、进程本地的标准库 HTTP 连接；保留各组件 timeout、全部 failure/malformed/parity fallback、可关闭/重建行为与 fork/PID 失效保护，且不转发 caller Authorization/API key。
+- Rust 默认日志级别调整为 release 合理的 `info`，日志仅包含 bounded component、字节数、耗时、结果、稳定错误码和系统生成/严格验证的 correlation ID，不记录用户 payload 或凭证。
+- 活跃应用、Android、Docker、CI、文档、清单、测试和离线证据线同步到 3.8.0。公共 CI 的绝对延迟仅作为 informational artifact；严格门禁针对 release binary、schema、delegate 覆盖、语义一致性、零 error/fallback、连接复用、敏感数据清理和宽松复杂度约束。
+
+### 兼容性与非目标
+
+- 本版本不增加 Rust delegate，不修改业务语义、防御性 parity、Python fallback 或所有权边界；所有 Rust flags 与 sidecar 部署仍默认关闭，默认 Compose 仍为 Python-only，持久化仍由 Python 拥有。
+- 本版本不实现 Rust Gateway streaming/上游 HTTP、MCP transport/工具执行、文件读取/OCR/embedding/SQLite/索引写入，不创建新的 4.0 RC、4.0.0、tag 或 GitHub Release。
+
 ## [3.7.0] - 可选 Rust RAG 文档预处理
 
 ### 新增

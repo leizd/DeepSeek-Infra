@@ -3,7 +3,7 @@ use std::path::Path;
 use axum::{Json, Router, routing::post};
 use deepseek_core::TraceId;
 use deepseek_policy::PolicyDecision;
-use deepseek_policy::audit::{AuditEvent, redact_path_target, redact_url_target};
+use deepseek_policy::audit::{redact_path_target, redact_url_target};
 use deepseek_policy::capability::{Capability, RiskLevel, is_capability_allowed};
 use deepseek_policy::path_guard::{PathPolicy, validate_workspace_path};
 use deepseek_policy::url_guard::{UrlPolicy, validate_url_access};
@@ -117,23 +117,9 @@ async fn policy_capability(Json(req): Json<Value>) -> Json<PolicyDecision> {
 }
 
 fn audited(decision: PolicyDecision, target: Option<String>) -> Json<PolicyDecision> {
-    let event = AuditEvent::from_decision(&decision, target);
-    let audit = serde_json::to_string(&event)
-        .unwrap_or_else(|_| "{\"event\":\"tool_policy_decision\"}".to_string());
-    tracing::info!(
-        target: "deepseek_policy::audit",
-        audit = %audit,
-        event = %event.event,
-        decision_id = %event.decision_id,
-        trace_id = event.trace_id.as_ref().map(|value| value.0.as_str()).unwrap_or(""),
-        allowed = event.allowed,
-        code = %event.code,
-        reason = %event.reason,
-        capability = ?event.capability,
-        risk_level = ?event.risk_level,
-        policy_target = event.target.as_deref().unwrap_or(""),
-        "tool policy decision"
-    );
+    // The request middleware emits bounded operational fields.  Do not log
+    // policy targets, URLs, paths, tool names, reasons, or caller trace IDs.
+    drop(target);
     Json(decision)
 }
 
