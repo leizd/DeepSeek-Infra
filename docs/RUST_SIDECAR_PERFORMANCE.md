@@ -64,24 +64,24 @@ The 26 scenarios cover minimal/multi-turn/tools-heavy/multipart/invalid Gateway 
 
 ## Committed release result
 
-The committed Windows x86_64 evidence was produced from commit `88a519912778e8bc290d8426ae2a1a9b3ca21e2f` with Rust 1.96.1, Python 3.13.5, 20 logical CPUs, five measured iterations, two excluded warmups, and concurrency 1/8/32. The table uses the first required scenario for each delegate family and reports median/p95 in microseconds; every shown layer had zero errors and the full integration layer had zero fallbacks.
+The committed Windows x86_64 evidence was produced from commit `7d52af19005d4d05d70af5cbc764cf2355782f5d` with Rust 1.96.1, Python 3.13.5, 20 logical CPUs, five measured iterations, two excluded warmups, and concurrency 1/8/32. The table uses the first required scenario for each delegate family and reports median/p95 in microseconds; every shown layer had zero errors and the full integration layer had zero fallbacks.
 
 | Delegate / representative scenario | Python baseline median / p95 | Pure Rust median / p95 | Warm HTTP median / p95 | Full integration median / p95 |
 | --- | ---: | ---: | ---: | ---: |
-| Gateway / minimal request | 22.3 / 32.36 | 7.8 / 22.82 | 420.8 / 467.66 | 425.3 / 655.42 |
-| MCP / initialize | 46.1 / 61.18 | 17.4 / 32.16 | 459.2 / 550.84 | 526.4 / 555.92 |
-| Policy / safe public URL | 16.3 / 27.48 | 6.3 / 18.08 | 458.4 / 550.60 | 488.7 / 683.22 |
-| Vector ranking / 16 × 384 | 535.5 / 538.28 | 201.3 / 261.22 | 929.5 / 2744.16 | 1430.0 / 1684.20 |
-| Document preparation / small | 402.6 / 473.66 | 25.4 / 36.04 | 1347.1 / 1557.00 | 2289.2 / 2625.14 |
+| Gateway / minimal request | 18.8 / 25.94 | 7.0 / 18.04 | 263.2 / 296.24 | 331.3 / 379.16 |
+| MCP / initialize | 21.3 / 28.68 | 9.8 / 18.92 | 359.1 / 572.70 | 421.8 / 663.94 |
+| Policy / safe public URL | 10.7 / 16.92 | 4.2 / 12.62 | 362.2 / 408.24 | 764.0 / 1003.28 |
+| Vector ranking / 16 × 384 | 321.8 / 328.94 | 114.3 / 159.30 | 1010.7 / 1261.34 | 1471.0 / 1679.66 |
+| Document preparation / small | 263.8 / 466.62 | 33.7 / 53.96 | 2128.2 / 2477.26 | 2593.0 / 2728.72 |
 
-Cold startup was separate: process launch 132,446 µs, health readiness 256,919 µs, and first request 15,118 µs. None of these values contributes to the warm table.
+Cold startup was separate: process launch 7,127 µs, health readiness 93,782 µs, and first request 948 µs. None of these values contributes to the warm table.
 
 The full evidence is deliberately not uniformly favorable to delegation:
 
-- Pure Rust was faster than direct Python in 24 of 26 scenarios on this machine. The exceptions were Gateway tools-heavy preparation (204.1 µs Rust vs 177.2 µs Python) and capability-allow policy (10.5 µs vs 9.5 µs), both small enough that the difference should not drive architecture.
-- Warm sidecar HTTP beat direct Python only for MCP large nested arguments (9,943.5 µs vs 12,678.7 µs), large document preparation (171,524.4 µs vs 198,855.4 µs), and high-overlap document preparation (60,315.1 µs vs 63,089.5 µs). For small Gateway, MCP, Policy, vector, and document requests, TCP/HTTP/JSON overhead erased the core benefit.
+- Pure Rust was faster than direct Python in 25 of 26 scenarios on this machine. The exception was Gateway tools-heavy preparation (159.6 µs Rust vs 132.9 µs Python), small enough that the difference should not drive architecture.
+- Warm sidecar HTTP beat direct Python only for MCP large nested arguments (8,346.1 µs vs 10,275.0 µs). For every Gateway, Policy, vector-ranking, and document-preparation scenario, TCP/HTTP/JSON overhead erased the core benefit.
 - Full Python-to-Rust integration remained slower for every valid representative workload because Python still computes or validates the authoritative result. That cost is intentional defense, not benchmark noise to remove. The invalid Gateway result was locally rejected before delegation and its tiny timing difference is not evidence of Rust benefit.
-- Large vector ranking showed a strong pure-core difference (44,495.3 µs Rust vs 461,540.8 µs Python at 1000 × 1536), but warm HTTP still measured 520,120.3 µs and full defensive integration 913,294.7 µs. Payload serialization, transfer, and Python parity therefore remain decisive.
+- Large vector ranking showed a strong pure-core difference (43,769.8 µs Rust vs 349,158.7 µs Python at 1000 × 1536), but warm HTTP still measured 493,128.7 µs and full defensive integration 821,399.9 µs. Payload serialization, transfer, and Python parity therefore remain decisive.
 
 These measurements do not make any current delegate worth enabling by default. They identify where batching or a future lower-overhead boundary might be investigated, while proving that the current HTTP boundary is mostly an observability/optionality mechanism rather than a general latency win.
 
