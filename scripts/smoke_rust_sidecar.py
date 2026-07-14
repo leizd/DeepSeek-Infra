@@ -165,6 +165,29 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
     _require(vector_rank.get("similarity") == 1.0, "RAG vector ranking returned the wrong similarity")
     checks.append(CheckResult("rag_vector_rank", "POST /rag/vectors/rank"))
 
+    document_payload = {
+        "documentId": "docker-smoke-document",
+        "text": "A\r\n\u4e2d\u6587\U0001f680B",
+        "metadata": {"sourceType": "text/plain"},
+        "chunking": {"chunkChars": 3, "chunkOverlap": 1},
+    }
+    document = _request_json(
+        base_url,
+        "POST",
+        "/rag/documents/prepare",
+        payload=document_payload,
+        timeout=timeout,
+    )
+    descriptor = document.get("document")
+    chunks = document.get("chunks")
+    _require(document.get("ok") is True, "RAG document preparation did not succeed")
+    _require(isinstance(descriptor, dict) and descriptor.get("characterCount") == 6, "RAG document character count is incorrect")
+    _require(isinstance(chunks, list) and bool(chunks), "RAG document preparation returned no chunks")
+    first_chunk = chunks[0] if isinstance(chunks, list) and chunks else None
+    _require(isinstance(first_chunk, dict) and first_chunk.get("end") == 3, "RAG document offsets are not Unicode character offsets")
+    _require(isinstance(first_chunk, dict) and first_chunk.get("text") == "A\n\u4e2d", "RAG document normalization changed chunk text")
+    checks.append(CheckResult("rag_document_preparation", "POST /rag/documents/prepare"))
+
     return checks
 
 

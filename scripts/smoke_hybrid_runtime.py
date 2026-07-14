@@ -123,6 +123,66 @@ print(json.dumps({
 """
 
 
+RAG_DOCUMENT_PROBE = r"""
+import hashlib
+import json
+from deepseek_infra.infra.rag import files
+from deepseek_infra.infra.rust_core import rag_client
+
+trace = {"calls": 0, "safePayload": False}
+original = rag_client.prepare_document
+
+def has_bytes(value):
+    if isinstance(value, bytes):
+        return True
+    if isinstance(value, dict):
+        return any(has_bytes(key) or has_bytes(item) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(has_bytes(item) for item in value)
+    return False
+
+def tracked(payload):
+    trace["calls"] += 1
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).lower()
+    forbidden = ("absolutepath", "temporarypath", "uploadpath", "cachepath", "authorization", "apikey", "token", "rawfilebytes", "databaselocation", "workspacesecret")
+    trace["safePayload"] = not has_bytes(payload) and not any(field in encoded for field in forbidden)
+    return original(payload)
+
+rag_client.prepare_document = tracked
+source = "First paragraph.\r\n\r\nUnicode \u4e2d\u6587 \U0001f680 e\u0301.\n\nLast paragraph.".encode("utf-8")
+extracted = files.extract_uploaded_file("hybrid-rag-document.txt", "text/plain", source)
+cached = files.load_cached_file(extracted["fileId"])
+window = files.file_reader_window(extracted["fileId"])
+chunks = cached.get("chunks", [])
+semantic_chunks = [
+    {
+        "index": chunk.get("index"),
+        "start": chunk.get("start"),
+        "end": chunk.get("end"),
+        "lineStart": chunk.get("lineStart"),
+        "lineEnd": chunk.get("lineEnd"),
+        "text": chunk.get("text"),
+        "chunkId": chunk.get("chunkId"),
+        "contentHash": chunk.get("contentHash"),
+    }
+    for chunk in chunks
+    if isinstance(chunk, dict)
+]
+fingerprint = hashlib.sha256(
+    json.dumps(semantic_chunks, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+window_chunks = window.get("chunks", []) if isinstance(window, dict) else []
+print(json.dumps({
+    "trace": trace,
+    "diagnostics": extracted.get("ragDocumentPreparation", {}),
+    "chunkCount": len(semantic_chunks),
+    "fingerprint": fingerprint,
+    "readerMatched": [chunk.get("text") for chunk in window_chunks if isinstance(chunk, dict)] == [chunk.get("text") for chunk in chunks if isinstance(chunk, dict)],
+    "persistedByPython": bool(cached.get("id") == extracted.get("fileId") and chunks),
+}, ensure_ascii=False, separators=(",", ":")))
+"""
+
+
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise SmokeFailure(message)
@@ -356,7 +416,8 @@ def _parse_json_output(output: str, label: str) -> dict[str, Any]:
 
 
 def _run_container_probe(probe: str, compose_files: tuple[str, ...], *, timeout: float = 30.0) -> dict[str, Any]:
-    code = POLICY_PROBE if probe == "policy" else RAG_PROBE if probe == "rag" else ""
+    probes = {"policy": POLICY_PROBE, "rag": RAG_PROBE, "rag-document": RAG_DOCUMENT_PROBE}
+    code = probes.get(probe, "")
     if not code:
         raise SmokeFailure(f"unknown container probe: {probe}")
     command = _compose_command(compose_files, "exec", "-T", "deepseek-infra", "python", "-c", code)
@@ -419,6 +480,41 @@ def check_rag_integration(compose_files: tuple[str, ...], *, expect_rust: bool) 
     return CheckResult("rag-integration", phase)
 
 
+def _assert_rag_document_probe(payload: dict[str, Any], *, expect_rust: bool) -> str:
+    trace = payload.get("trace")
+    diagnostics = payload.get("diagnostics")
+    if not isinstance(trace, dict) or not isinstance(diagnostics, dict):
+        raise SmokeFailure("RAG document preparation probe is malformed")
+    _require(trace.get("calls") == 1, "real Python ingestion did not call the Rust document preparation client exactly once")
+    _require(trace.get("safePayload") is True, "Rust document preparation received a path, credential, or raw file bytes")
+    expected_runtime = "rust" if expect_rust else "python"
+    _require(diagnostics.get("runtime") == expected_runtime, f"RAG document preparation runtime must be {expected_runtime}")
+    _require(diagnostics.get("fallback") is (not expect_rust), "RAG document preparation fallback flag is incorrect")
+    if not expect_rust:
+        _require(diagnostics.get("fallbackReason") == "rust_backend_unavailable", "RAG document fallback reason is not stable")
+    _require(payload.get("persistedByPython") is True, "Python did not persist the prepared chunks")
+    _require(payload.get("readerMatched") is True, "Python query/reader path did not return the persisted chunks")
+    _require(isinstance(payload.get("chunkCount"), int) and payload["chunkCount"] > 0, "RAG document preparation returned no chunks")
+    fingerprint = payload.get("fingerprint")
+    if not isinstance(fingerprint, str) or len(fingerprint) != 64:
+        raise SmokeFailure("RAG document chunk fingerprint is invalid")
+    return fingerprint
+
+
+def check_rag_document_preparation(
+    compose_files: tuple[str, ...],
+    *,
+    expect_rust: bool,
+    expected_fingerprint: str | None = None,
+) -> tuple[CheckResult, str]:
+    payload = _run_container_probe("rag-document", compose_files)
+    fingerprint = _assert_rag_document_probe(payload, expect_rust=expect_rust)
+    if expected_fingerprint is not None:
+        _require(fingerprint == expected_fingerprint, "Rust and Python fallback produced different document chunks")
+    phase = "Rust preparation with Python persistence" if expect_rust else "Python preparation fallback with identical chunks"
+    return CheckResult("rag-document-preparation", phase), fingerprint
+
+
 def stop_sidecar(compose_files: tuple[str, ...], *, timeout: float = 30.0) -> CheckResult:
     command = _compose_command(compose_files, "stop", "rust-gateway")
     try:
@@ -438,13 +534,25 @@ def _check_mcp_fallback(base_url: str, *, timeout: float) -> CheckResult:
     return check_mcp_protocol_preparation(base_url, expect_rust=False, timeout=timeout)
 
 
-def check_fallbacks(base_url: str, compose_files: tuple[str, ...], *, timeout: float = 5.0) -> list[CheckResult]:
+def check_fallbacks(
+    base_url: str,
+    compose_files: tuple[str, ...],
+    *,
+    timeout: float = 5.0,
+    rag_document_fingerprint: str | None = None,
+) -> list[CheckResult]:
+    rag_document, _ = check_rag_document_preparation(
+        compose_files,
+        expect_rust=False,
+        expected_fingerprint=rag_document_fingerprint,
+    )
     return [
         check_rust_status(base_url, expect_healthy=False, timeout=timeout),
         _check_gateway_fallback(base_url, timeout=timeout),
         _check_mcp_fallback(base_url, timeout=timeout),
         check_policy_integration(compose_files, expect_rust=False),
         check_rag_integration(compose_files, expect_rust=False),
+        rag_document,
     ]
 
 
@@ -462,9 +570,11 @@ def run_smoke(
     checks.append(check_mcp_protocol_preparation(base_url, expect_rust=True, timeout=timeout))
     checks.append(check_policy_integration(compose_files, expect_rust=True))
     checks.append(check_rag_integration(compose_files, expect_rust=True))
+    rag_document, rag_document_fingerprint = check_rag_document_preparation(compose_files, expect_rust=True)
+    checks.append(rag_document)
     if not keep_sidecar:
         checks.append(stop_sidecar(compose_files))
-        checks.extend(check_fallbacks(base_url, compose_files, timeout=timeout))
+        checks.extend(check_fallbacks(base_url, compose_files, timeout=timeout, rag_document_fingerprint=rag_document_fingerprint))
     return checks
 
 

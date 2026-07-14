@@ -1,0 +1,68 @@
+{
+  "version": "3.7.0",
+  "informationalOnly": true,
+  "defaultChanged": false,
+  "rustSidecarMeasured": true,
+  "profiles": [
+    {
+      "profile": "small",
+      "inputCharacterCount": 960,
+      "requestBytes": 1181,
+      "chunkCount": 1,
+      "chunkChars": 6000,
+      "chunkOverlap": 400,
+      "rounds": 5,
+      "pythonPreparationMedianMs": 0.188,
+      "rustSidecarMedianMs": 17.362,
+      "serializationMedianMs": 0.032
+    },
+    {
+      "profile": "medium",
+      "inputCharacterCount": 50000,
+      "requestBytes": 53729,
+      "chunkCount": 9,
+      "chunkChars": 6000,
+      "chunkOverlap": 400,
+      "rounds": 5,
+      "pythonPreparationMedianMs": 1.374,
+      "rustSidecarMedianMs": 61.993,
+      "serializationMedianMs": 0.518
+    },
+    {
+      "profile": "large",
+      "inputCharacterCount": 500000,
+      "requestBytes": 516286,
+      "chunkCount": 90,
+      "chunkChars": 6000,
+      "chunkOverlap": 400,
+      "rounds": 5,
+      "pythonPreparationMedianMs": 72.179,
+      "rustSidecarMedianMs": 1572.287,
+      "serializationMedianMs": 7.618
+    },
+    {
+      "profile": "high-overlap",
+      "inputCharacterCount": 100000,
+      "requestBytes": 104172,
+      "chunkCount": 208,
+      "chunkChars": 2000,
+      "chunkOverlap": 1500,
+      "rounds": 5,
+      "pythonPreparationMedianMs": 38.531,
+      "rustSidecarMedianMs": 893.573,
+      "serializationMedianMs": 2.353
+    },
+    {
+      "profile": "cjk-heavy",
+      "inputCharacterCount": 100000,
+      "requestBytes": 294283,
+      "chunkCount": 18,
+      "chunkChars": 6000,
+      "chunkOverlap": 400,
+      "rounds": 5,
+      "pythonPreparationMedianMs": 12.57,
+      "rustSidecarMedianMs": 215.696,
+      "serializationMedianMs": 3.212
+    }
+  ]
+}

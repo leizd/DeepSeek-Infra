@@ -58,6 +58,8 @@ def test_example_environment_keeps_all_rust_components_disabled() -> None:
     for component in ("GATEWAY", "MCP", "POLICY", "RAG"):
         assert f"DEEPSEEK_RUST_{component}=0" in env_example
         assert f"DEEPSEEK_RUST_{component}=1" not in env_example
+    assert "DEEPSEEK_RUST_RAG_DOCUMENT_PREP=0" in env_example
+    assert "DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1" not in env_example
 
 
 def test_ci_builds_and_smokes_rust_image_in_independent_job() -> None:
@@ -137,6 +139,17 @@ class _SidecarHandler(BaseHTTPRequestHandler):
             assert request["candidates"] == [[0.25, 0.0], [1.0, 0.0]]
             self._send({"index": 1, "similarity": 1.0})
             return
+        if self.path == "/rag/documents/prepare":
+            assert request["text"] == "A\r\n\u4e2d\u6587\U0001f680B"
+            assert set(request) == {"documentId", "text", "metadata", "chunking"}
+            self._send(
+                {
+                    "ok": True,
+                    "document": {"documentId": request["documentId"], "characterCount": 6, "chunkCount": 3},
+                    "chunks": [{"index": 0, "text": "A\n\u4e2d", "start": 0, "end": 3}],
+                }
+            )
+            return
         self.send_error(404)
 
 
@@ -164,6 +177,7 @@ def test_smoke_exercises_all_offline_sidecar_contracts(sidecar_url: str) -> None
         "policy",
         "rag",
         "rag_vector_rank",
+        "rag_document_preparation",
     ]
 
 

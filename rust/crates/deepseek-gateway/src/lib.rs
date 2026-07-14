@@ -82,9 +82,10 @@ pub fn create_app() -> Router {
         .route("/rag/vectors/rank", post(rag_vectors_rank))
         .route("/rag/citation/format", post(rag_citation_format))
         .route("/rag/index/validate", post(rag_index_validate))
+        .route("/rag/documents/prepare", post(rag_document_prepare))
         .merge(policy_routes::router())
         .layer(DefaultBodyLimit::max(
-            request_preparation::MAX_REQUEST_BYTES + 1_000_000,
+            deepseek_rag::document_preparation::MAX_REQUEST_BYTES + 1_000_000,
         ))
         .layer(tower_http::trace::TraceLayer::new_for_http())
 }
@@ -261,6 +262,12 @@ async fn rag_index_validate(
             error: Some(err.to_string()),
         })),
     }
+}
+
+async fn rag_document_prepare(body: Bytes) -> Json<serde_json::Value> {
+    Json(deepseek_rag::document_preparation::prepare_document_bytes(
+        &body,
+    ))
 }
 
 async fn healthz() -> Json<HealthzResponse> {
@@ -717,5 +724,40 @@ mod tests {
         let response: RagIndexValidateResponse = serde_json::from_str(&body).unwrap();
         assert!(!response.valid);
         assert!(response.error.unwrap().contains("duplicate"));
+    }
+
+    #[tokio::test]
+    async fn rag_document_prepare_endpoint_uses_character_offsets() {
+        let app = create_app();
+        let body = serde_json::json!({
+            "documentId":"doc-1",
+            "text":"中文🚀abc",
+            "metadata":{"displayName":"notes.txt","sourceType":"text/plain"},
+            "chunking":{"chunkChars":3,"chunkOverlap":1}
+        })
+        .to_string();
+        let (status, body) = send_request(app, "POST", "/rag/documents/prepare", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["chunks"][0]["text"], "中文🚀");
+        assert_eq!(response["chunks"][1]["start"], 2);
+        assert_eq!(response["document"]["characterCount"], 6);
+    }
+
+    #[tokio::test]
+    async fn rag_document_prepare_endpoint_rejects_sensitive_metadata() {
+        let app = create_app();
+        let body = serde_json::json!({
+            "documentId":"doc-1",
+            "text":"already parsed",
+            "metadata":{"absolutePath":"/tmp/secret"},
+            "chunking":{"chunkChars":6000,"chunkOverlap":400}
+        })
+        .to_string();
+        let (status, body) = send_request(app, "POST", "/rag/documents/prepare", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(response["code"], "invalid_metadata");
     }
 }

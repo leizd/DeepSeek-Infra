@@ -2,6 +2,7 @@ use deepseek_core::version_info;
 
 pub mod chunk;
 pub mod citation;
+pub mod document_preparation;
 pub mod index;
 pub mod query;
 pub mod score;

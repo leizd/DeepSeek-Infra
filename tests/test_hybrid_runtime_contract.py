@@ -26,6 +26,7 @@ def test_hybrid_compose_enables_rust_only_in_test_overlay() -> None:
     for component in ("GATEWAY", "MCP", "POLICY", "RAG"):
         assert f'DEEPSEEK_RUST_{component}: "1"' in hybrid
         assert f'DEEPSEEK_RUST_{component}_FALLBACK: "1"' in hybrid
+    assert 'DEEPSEEK_RUST_RAG_DOCUMENT_PREP: "1"' in hybrid
     assert 'DEEPSEEK_RUST_GATEWAY_URL: "http://rust-gateway:8787"' in hybrid
     assert 'DEEPSEEK_API_URL: "http://upstream-stub:9080/chat/completions"' in hybrid
     assert "stub_deepseek_upstream.py" in hybrid
@@ -108,6 +109,24 @@ def test_rag_probe_requires_all_delegations_and_exact_ranking() -> None:
 
     smoke._assert_rag_probe({**common, "delegated": {"normalize": True, "score": True, "citation": True}}, expect_rust=True)
     smoke._assert_rag_probe({**common, "delegated": {"normalize": False, "score": False, "citation": False}}, expect_rust=False)
+
+
+def test_rag_document_probe_requires_safe_single_delegation_and_identical_fallback() -> None:
+    common = {
+        "trace": {"calls": 1, "safePayload": True},
+        "chunkCount": 2,
+        "fingerprint": "a" * 64,
+        "readerMatched": True,
+        "persistedByPython": True,
+    }
+    rust = {**common, "diagnostics": {"runtime": "rust", "fallback": False, "fallbackReason": ""}}
+    fallback = {
+        **common,
+        "diagnostics": {"runtime": "python", "fallback": True, "fallbackReason": "rust_backend_unavailable"},
+    }
+
+    assert smoke._assert_rag_document_probe(rust, expect_rust=True) == "a" * 64
+    assert smoke._assert_rag_document_probe(fallback, expect_rust=False) == "a" * 64
 
 
 def test_http_contracts_identify_rust_mcp_preparation_with_python_execution(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -249,6 +268,11 @@ def test_run_smoke_stops_sidecar_before_fallbacks(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(smoke, "check_mcp_protocol_preparation", lambda *args, **kwargs: smoke.CheckResult("mcp", "ok"))
     monkeypatch.setattr(smoke, "check_policy_integration", lambda *args, **kwargs: smoke.CheckResult("policy", "ok"))
     monkeypatch.setattr(smoke, "check_rag_integration", lambda *args, **kwargs: smoke.CheckResult("rag", "ok"))
+    monkeypatch.setattr(
+        smoke,
+        "check_rag_document_preparation",
+        lambda *args, **kwargs: (smoke.CheckResult("rag-document", "ok"), "a" * 64),
+    )
 
     def stop(*args: object, **kwargs: object) -> smoke.CheckResult:
         events.append("stop")

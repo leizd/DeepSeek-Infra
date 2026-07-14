@@ -461,7 +461,7 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Current themes (3.6.0 optional MCP protocol preparation completed):
+Current themes (3.7.0 optional RAG document preparation completed):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.
@@ -475,6 +475,7 @@ Current themes (3.6.0 optional MCP protocol preparation completed):
 - 3.4.0: The semantic-cache batch vector scan moves into the existing opt-in Rust RAG delegate through `POST /rag/vectors/rank`, with stable first-match tie behavior, strict Python response validation, diagnostics, and Python fallback. Cache storage and policy remain Python-owned.
 - 3.5.0: Deterministic non-streaming Gateway request preparation moves behind the existing opt-in Gateway delegate through `POST /gateway/request/prepare`. A 68-case live-sidecar parity gate proves normalized request and stable error-category parity. Python retains credentials, provider routing, upstream HTTP, streaming, retries, cache policy, context injection, real tool execution, and tracing lifecycle.
 - 3.6.0: Deterministic MCP envelope and method preparation moves behind the existing opt-in MCP delegate through `POST /mcp/request/prepare`. A 105-case live-sidecar parity gate proves normalized request/notification/response descriptors and stable error-category parity. Python retains transport, sessions, authentication, runtime capability decisions, registries, tool execution, resource/prompt loading, cancellation, scheduling, tracing, credentials, and business state.
+- 3.7.0: Deterministic normalization and chunking of text already parsed by Python moves behind the independent default-disabled `DEEPSEEK_RUST_RAG_DOCUMENT_PREP` delegate through `POST /rag/documents/prepare`. A 125-case live-sidecar gate proves exact chunks, Unicode character offsets, overlap, BLAKE2b-96 hashes, chunk IDs, metadata boundaries, and stable errors. Python retains uploads, paths, parsing/OCR, embeddings, persistence, indexes, scheduling, authorization, retrieval, and context assembly.
 
 See [PRE_4_0_QUALITY_BASELINE.md](PRE_4_0_QUALITY_BASELINE.md) for the quality baseline and [4_0_RC_READINESS.md](4_0_RC_READINESS.md) for the current blocker matrix.
 
@@ -509,6 +510,17 @@ See [GATEWAY_REQUEST_PREPARATION_PARITY.md](GATEWAY_REQUEST_PREPARATION_PARITY.m
 - The default runtime, default Compose file, Python fallback, and all transport/session/execution ownership remain unchanged.
 
 See [MCP_PROTOCOL_PREPARATION_PARITY.md](MCP_PROTOCOL_PREPARATION_PARITY.md) for the shared corpus, stable error mapping, redacted diagnostics, fallback rules, and non-goals.
+
+### 3.7.0 — RAG document preparation (completed)
+
+- The boundary is parsed text plus allowlisted metadata and chunk configuration to a normalized document/chunk descriptor or stable error; it performs no file, database, index, network, model, or embedding I/O.
+- Python computes the local contract before calling Rust and verifies the document ID, metadata, contiguous indexes, unique IDs, character offsets, text ranges, overlap, hashes, and full semantics before adopting a Rust result.
+- The established Python algorithm remains the specification: CRLF/CR normalization, per-line trailing whitespace removal, paragraph/newline-aware 6,000-character windows, 400-character overlap, stripped chunk bodies, Python Unicode character offsets, BLAKE2b-96 lineage hashes, and deterministic IDs.
+- Backend failures or malformed/divergent results use Python; deterministic input/configuration errors retain stable categories. Diagnostics and parity reports exclude document/chunk text, paths, bytes, credentials, and private metadata.
+- The existing hybrid E2E proves real Python parsing, Rust preparation, Python persistence/readback, payload isolation, sidecar-loss fallback, and identical semantic chunk fingerprints.
+- The independent flag, all other Rust delegates, and the sidecar deployment remain default-disabled. This is not Rust RAG ingestion and does not move any file, OCR, embedding, persistence, index, retrieval, or transaction ownership.
+
+See [RAG_DOCUMENT_PREPARATION_PARITY.md](RAG_DOCUMENT_PREPARATION_PARITY.md) for the 125-case contract, offset/hash/ID semantics, fallback rules, redacted diagnostics, benchmark, and non-goals.
 
 ## Testing Priorities
 
