@@ -222,6 +222,7 @@ for index in range(candidate_count):
     leading = round(0.1 + (0.8 * index / (candidate_count - 1)), 12)
     rows.append({
         "id": f"binary-{index:03d}",
+        "updated_at": int(time.time()),
         "expires_at": int(time.time()) + 600,
         "prompt_hash": f"candidate-{index:03d}",
         "embedding": json.dumps([leading] + [0.0] * (dimensions - 1), separators=(",", ":")),

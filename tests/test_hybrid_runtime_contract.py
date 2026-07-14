@@ -71,6 +71,12 @@ def test_parse_json_output_uses_last_nonempty_line() -> None:
         smoke._parse_json_output("not json", "probe")
 
 
+def test_binary_probe_rows_include_semantic_cache_expiry_fields() -> None:
+    assert '"updated_at":' in smoke.RAG_VECTOR_BINARY_PROBE
+    assert '"prompt_hash":' in smoke.RAG_VECTOR_BINARY_PROBE
+    assert '"embedding":' in smoke.RAG_VECTOR_BINARY_PROBE
+
+
 def test_policy_probe_requires_rust_then_python_fallback() -> None:
     rust_payload = {
         "client": {
