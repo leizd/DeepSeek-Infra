@@ -1,608 +1,608 @@
 # 更新日志
 
-## [3.7.0] - Optional Rust RAG Document Preparation
+## [3.7.0] - 可选 Rust RAG 文档预处理
 
-### Added
+### 新增
 
-- Added deterministic `POST /rag/documents/prepare` handling to the existing Rust sidecar for text already parsed by Python, with Python-compatible normalization, chunking, Unicode character offsets, BLAKE2b-96 hashes, deterministic chunk IDs, allowlisted metadata, and stable internal error categories.
-- Added a shared 125-case Python/Rust parity corpus, strict live-sidecar checker, redacted CI report, Rust and Python unit coverage, informational five-profile benchmark, and real-ingestion hybrid runtime E2E coverage.
-- Added safe document-preparation diagnostics containing only a document-ID hash, character/chunk counts, chunk configuration, runtime, fallback state/reason, and latency.
+- 为现有 Rust sidecar 增加确定性的 `POST /rag/documents/prepare` 处理能力，处理已由 Python 解析的文本，具备与 Python 兼容的规范化、分块、Unicode 字符偏移、BLAKE2b-96 哈希、确定性分块 ID、允许列表元数据和稳定的内部错误分类。
+- 新增共享的 125 例 Python/Rust 一致性语料、严格的实时 sidecar 校验器、脱敏 CI 报告、Rust 与 Python 单元覆盖、参考性的五档基准测试，以及真实摄入的混合运行时端到端覆盖。
+- 新增安全的文档预处理诊断信息，仅包含文档 ID 哈希、字符/分块数量、分块配置、运行时、回退状态/原因和延迟。
 
-### Changed
+### 变更
 
-- Wired the real Python upload/RAG ingestion path to the independent default-disabled `DEEPSEEK_RUST_RAG_DOCUMENT_PREP` delegate. Python parses the file and computes its local result first, adopts Rust only after exact defensive validation, and continues to own embeddings, persistence, indexes, retrieval, and business state.
-- Connection, timeout, HTTP, empty-body, malformed-JSON, non-object, incomplete-contract, unsafe-field, metadata-expansion, offset, duplicate-ID, hash, and semantic-divergence failures use the already-computed Python result. Deterministic input/configuration errors retain their stable category and are not reported as backend fallback.
-- Synchronized the active application, Android, Docker, CI, documentation, manifest, tests, and deterministic offline evidence line to 3.7.0. The Python CI gate remains 95%, coverage omissions are unchanged, and the feature remains informational/opt-in regardless of benchmark results.
+- 将真实的 Python 上传/RAG 摄入路径接入独立且默认关闭的 `DEEPSEEK_RUST_RAG_DOCUMENT_PREP` 委托。Python 先解析文件并计算本地结果，仅在通过精确的防御性校验后才采用 Rust 结果，并继续保有嵌入、持久化、索引、检索和业务状态。
+- 连接、超时、HTTP、空体、JSON 格式错误、非对象、合同不完整、不安全字段、元数据扩展、偏移、重复 ID、哈希和语义分歧类失败均使用已计算的 Python 结果。确定性输入/配置错误保持其稳定分类，不会被报告为后端回退。
+- 将活跃应用、Android、Docker、CI、文档、清单、测试和确定性离线证据线同步到 3.7.0。Python CI 门禁保持 95%，覆盖排除项不变，且无论基准结果如何，该功能仍保持参考性/可选加入。
 
-### Compatibility and non-goals
+### 兼容性与非目标
 
-- All Rust delegates remain disabled by default, default Compose remains Python-only, the existing `DEEPSEEK_RUST_RAG` semantics are unchanged, and Python fallback remains available.
-- Rust never receives filesystem paths, raw file bytes, credentials, private metadata, or file ownership; it cannot read files, parse PDF/Office/HTML/media/archive content, run OCR, compute embeddings, persist chunks, write SQLite/vector indexes, schedule ingestion, or assemble query context.
-- This release does not add default-on Rust RAG, a default Rust sidecar deployment, public API breakage, a new 4.0 RC, stable 4.0.0, a tag, or a GitHub Release. The published `v4.0.0-rc.1` remains a historical architecture preview.
+- 所有 Rust 委托默认保持关闭，默认 Compose 保持纯 Python，现有 `DEEPSEEK_RUST_RAG` 语义不变，Python 回退仍然可用。
+- Rust 从不接收文件系统路径、原始文件字节、凭证、私有元数据或文件所有权；它不能读取文件、解析 PDF/Office/HTML/媒体/归档内容、运行 OCR、计算嵌入、持久化分块、写入 SQLite/向量索引、调度摄入或组装查询上下文。
+- 本次发布不会添加默认开启的 Rust RAG、默认 Rust sidecar 部署、公共 API 破坏性变更、新的 4.0 RC、稳定的 4.0.0、标签或 GitHub Release。已发布的 `v4.0.0-rc.1` 仍作为历史架构预览。
 
-## [3.6.0] - Optional Rust MCP Protocol Preparation
+## [3.6.0] - 可选 Rust MCP 协议预处理
 
-### Added
+### 新增
 
-- Added deterministic `POST /mcp/request/prepare` handling to the existing Rust sidecar for established Python MCP requests, notifications, and responses, with stable internal categories mapped to JSON-RPC error codes.
-- Added a shared 105-case Python/Rust parity corpus, strict live-sidecar checker, redacted CI report, Rust unit coverage, Python defensive/fallback coverage, Docker smoke, and hybrid runtime E2E coverage.
-- Added safe MCP preparation diagnostics containing only method, message type, request-ID type, payload size, runtime, fallback state/reason, and latency.
+- 为现有 Rust sidecar 增加确定性的 `POST /mcp/request/prepare` 处理能力，处理已建立的 Python MCP 请求、通知与响应，具备稳定的内部分类并映射到 JSON-RPC 错误码。
+- 新增共享的 105 例 Python/Rust 一致性语料、严格的实时 sidecar 校验器、脱敏 CI 报告、Rust 单元覆盖、Python 防御/回退覆盖、Docker 冒烟测试，以及混合运行时端到端覆盖。
+- 新增安全的 MCP 预处理诊断信息，仅包含方法、消息类型、请求 ID 类型、载荷大小、运行时、回退状态/原因和延迟。
 
-### Changed
+### 变更
 
-- Replaced the opt-in Rust MCP execution/proxy path with protocol preparation only. Python computes the local contract first, accepts only a contract-identical descriptor whose routing owner is Python, and continues to own transport, authentication, sessions, capabilities, registries, tool execution, resources, prompts, cancellation, scheduling, tracing, credentials, and business state.
-- Backend connection, timeout, HTTP, empty-body, malformed-JSON, non-object, incomplete-contract, unknown-message-type, unsafe-owner, changed-argument, and semantic-divergence failures use the already-computed Python result. Deterministic user protocol errors keep the same stable error category and are not reported as fallback.
-- Synchronized the active application, Android, Docker, CI, documentation, manifest, tests, and offline evidence line to 3.6.0. The complete statement-and-branch suite measures 95.41%, the Python CI gate remains 95%, and coverage omissions are unchanged.
+- 将可选加入的 Rust MCP 执行/代理路径替换为仅做协议预处理。Python 先计算本地契约，只接受与契约完全一致且路由所有者为 Python 的描述符，并继续拥有传输、认证、会话、能力、注册表、工具执行、资源、提示、取消、调度、追踪、凭证和业务状态。
+- 后端连接、超时、HTTP、空体、JSON 格式错误、非对象、契约不完整、未知消息类型、不安全所有者、参数变更和语义分歧类失败均使用已计算的 Python 结果。确定性用户协议错误保持相同稳定分类，不会被报告为回退。
+- 将活跃应用、Android、Docker、CI、文档、清单、测试和离线证据线同步到 3.6.0。完整语句与分支覆盖率为 95.41%，Python CI 门禁保持 95%，覆盖排除项不变。
 
-### Compatibility and non-goals
+### 兼容性与非目标
 
-- `DEEPSEEK_RUST_MCP` remains disabled by default, default Compose remains Python-only, established single-message behavior remains unchanged, and no JSON-RPC batch support is added or removed.
-- Rust never executes tools, validates tool-specific schemas, receives credentials, logs full params or tool arguments, owns MCP transports/sessions, or loads resource/prompt content. Python fallback remains available and `tools/call` executes only once in Python.
-- This release does not add Rust MCP transport/session state, tool registry/execution, resource/prompt loading, cancellation execution, default-on Rust deployment, a new 4.0 RC, stable 4.0.0, a tag, or a GitHub Release. The published `v4.0.0-rc.1` remains a historical architecture preview.
+- `DEEPSEEK_RUST_MCP` 默认保持关闭，默认 Compose 保持纯 Python，已建立的单消息行为不变，且不新增或移除 JSON-RPC 批量支持。
+- Rust 从不执行工具、校验工具专属 schema、接收凭证、记录完整参数或工具参数、拥有 MCP 传输/会话，或加载资源/提示内容。Python 回退仍然可用，且 `tools/call` 只在 Python 中执行一次。
+- 本次发布不会添加 Rust MCP 传输/会话状态、工具注册表/执行、资源/提示加载、取消执行、默认开启的 Rust 部署、新的 4.0 RC、稳定的 4.0.0、标签或 GitHub Release。已发布的 `v4.0.0-rc.1` 仍作为历史架构预览。
 
-## [3.5.0] - Optional Rust Gateway Request Preparation
+## [3.5.0] - 可选 Rust Gateway 请求预处理
 
-### Added
+### 新增
 
-- Added deterministic `POST /gateway/request/prepare` handling to the existing Rust sidecar with stable request-validation error codes.
-- Added a shared 68-case Python/Rust parity corpus, a strict live-sidecar checker, a machine-readable CI report, Rust unit coverage, Python fallback/defensive-validation tests, and an offline hybrid E2E path.
-- Added safe `gatewayRequestPreparation` diagnostics showing the selected runtime, fallback state, latency, and stable fallback reason without logging credentials, full prompts, tool arguments, or local paths.
+- 为现有 Rust sidecar 增加确定性的 `POST /gateway/request/prepare` 处理能力，具备稳定的请求校验错误码。
+- 新增共享的 68 例 Python/Rust 一致性语料、严格的实时 sidecar 校验器、机器可读 CI 报告、Rust 单元覆盖、Python 回退/防御性校验测试，以及离线混合端到端路径。
+- 新增安全的 `gatewayRequestPreparation` 诊断信息，展示所选运行时、回退状态、延迟和稳定的回退原因，且不记录凭证、完整提示词、工具参数或本地路径。
 
-### Changed
+### 变更
 
-- Replaced the opt-in Rust chat/model proxy path with request preparation only: Python continues to own API keys, provider routing, upstream HTTP, streaming/SSE, retries, circuit breaking, semantic-cache policy, RAG/context injection, tool execution, and trace lifecycle.
-- Added lightweight Python validation of successful Rust results; injected fields, credentials, non-object bodies, malformed JSON, timeouts, and sidecar outages cannot reach the upstream request and fall back according to the existing Gateway fallback setting.
-- Kept the Python coverage gate at 95%, measured the complete statement-and-branch suite at 95.34%, kept coverage omissions unchanged, and synchronized the stable application, Android, Docker, CI, documentation, and release evidence line to 3.5.0.
+- 将可选加入的 Rust 聊天/模型代理路径替换为仅做请求预处理：Python 继续拥有 API Key、提供商路由、上游 HTTP、流式/SSE、重试、熔断、语义缓存策略、RAG/上下文注入、工具执行和追踪生命周期。
+- 增加对 Rust 成功结果的轻量 Python 校验；注入字段、凭证、非对象体、JSON 格式错误、超时和 sidecar 中断均无法到达上游请求，会按现有 Gateway 回退设置回退。
+- Python 覆盖率门禁保持 95%，完整语句与分支覆盖率为 95.34%，覆盖排除项不变，并将稳定应用、Android、Docker、CI、文档和发布证据线同步到 3.5.0。
 
-### Compatibility and non-goals
+### 兼容性与非目标
 
-- Rust Gateway preparation remains disabled by default, default Compose remains Python-only, Python fallback remains available, and no public endpoint is removed.
-- This release does not add Rust streaming, upstream HTTP, provider routing, retries, credential management, real tool execution, or default-on Rust deployment.
-- The published `v4.0.0-rc.1` remains preserved as an architecture preview and release-flow rehearsal; 3.5.0 does not create a new RC, a 4.0.0 stable release, a tag, or a GitHub Release.
+- Rust Gateway 预处理默认保持关闭，默认 Compose 保持纯 Python，Python 回退仍然可用，且不移除任何公共端点。
+- 本次发布不会添加 Rust 流式、上游 HTTP、提供商路由、重试、凭证管理、真实工具执行或默认开启的 Rust 部署。
+- 已发布的 `v4.0.0-rc.1` 仍作为架构预览和发布流程演练保留；3.5.0 不会创建新的 RC、4.0.0 稳定版、标签或 GitHub Release。
 
-## [4.0.0-rc.1] - Release Candidate Freeze
+## [4.0.0-rc.1] - 发布候选冻结
 
-### Release freeze
+### 发布冻结
 
-- Promoted the active application, Android, Docker, CI, documentation, and evidence version to the `4.0.0-rc.1` prerelease.
-- Regenerated the release-facing smoke and evaluation evidence from the frozen RC source commit and prepared the checksummed source archive and manifest.
-- Added [the 4.0.0-rc.1 prerelease notes](docs/releases/4.0.0-rc.1.md) and retained strict readiness enforcement on `rc/*` branches.
+- 将活跃应用、Android、Docker、CI、文档和证据版本提升到 `4.0.0-rc.1` 预发布。
+- 从冻结的 RC 源提交重新生成面向发布的冒烟和评测证据，并准备带校验和的源码归档与清单。
+- 新增 [4.0.0-rc.1 预发布说明](docs/releases/4.0.0-rc.1.md)，并在 `rc/*` 分支保持严格的就绪强制。
 
-### Runtime architecture
+### 运行时架构
 
-- Preserved ADR-0040 without modification: Python remains the default runtime and default Compose remains Python-only.
-- Kept Gateway, MCP, Policy, and RAG Rust delegates opt-in; the Rust sidecar remains optional.
-- Kept Gateway streaming and real MCP tool execution Python-owned, with Python fallback supported throughout 4.x.
+- 不做修改地保留 ADR-0040：Python 仍是默认运行时，默认 Compose 仍是纯 Python。
+- Gateway、MCP、Policy 和 RAG Rust 委托保持可选加入；Rust sidecar 仍是可选组件。
+- Gateway 流式和真实 MCP 工具执行保持由 Python 拥有，且在 4.x 全周期支持 Python 回退。
 
-### Quality
+### 质量
 
-- Retained the 95% combined statement-and-branch coverage gate and the readiness-approved 95.3428% / 95.3396% rehearsal evidence.
-- Preserved the 38/38 deterministic Rust/Python RAG parity corpus and all release, security, evaluation, Docker, hybrid-runtime, and Rust gates.
-- This change prepares a prerelease candidate only; it does not create a Git tag or a stable `4.0.0` release.
+- 保留 95% 的综合语句与分支覆盖率门禁，以及就绪批准的 95.3428% / 95.3396% 演练证据。
+- 保留 38/38 确定性 Rust/Python RAG 一致性语料，以及所有发布、安全、评测、Docker、混合运行时和 Rust 门禁。
+- 本次变更仅准备预发布候选；不会创建 Git 标签或稳定的 `4.0.0` 发布。
 
-## [3.4.0] - Rust Semantic Cache Vector Ranking
+## [3.4.0] - Rust 语义缓存向量排序
 
-### Added
+### 新增
 
-- Added `deepseek_rag::vector` for deterministic, stable batch vector ranking and the opt-in `POST /rag/vectors/rank` sidecar endpoint.
-- Added Python client validation, semantic-cache integration tests, malformed-response coverage, Python fallback coverage, and a Rust sidecar smoke check for vector ranking.
-- Added [the 3.4.0 Rust candidate audit](docs/RUST_CANDIDATE_AUDIT_3_4.md) with selection criteria, deferred candidates, and migration guardrails.
+- 新增 `deepseek_rag::vector`，用于确定性、稳定的批量向量排序，以及可选加入的 `POST /rag/vectors/rank` sidecar 端点。
+- 新增 Python 客户端校验、语义缓存集成测试、异常响应覆盖、Python 回退覆盖，以及 Rust sidecar 向量排序冒烟检查。
+- 新增 [3.4.0 Rust 候选审计](docs/RUST_CANDIDATE_AUDIT_3_4.md)，包含选择标准、暂缓候选和迁移护栏。
 
-### Changed
+### 变更
 
-- Delegated the semantic-cache O(candidates x dimensions) similarity scan to Rust when `DEEPSEEK_RUST_RAG=1`; exact matches, SQLite access, TTL, namespaces, thresholds, and cache mutation remain Python-owned.
-- Added `rankingBackend` diagnostics (`exact`, `rust`, or `python`) so operators can verify which path served a semantic-cache lookup.
-- Synchronized the application, Android, Docker, CI, release manifest, documentation, tests, and versioned offline evidence paths to 3.4.0.
-- Inherited the 95% Python coverage gate and conservative 95.33% measured baseline from 3.3.2; strict 4.0 RC readiness remains green.
+- 当 `DEEPSEEK_RUST_RAG=1` 时，将语义缓存的 O(candidates × dimensions) 相似度扫描委托给 Rust；精确匹配、SQLite 访问、TTL、命名空间、阈值和缓存变更仍由 Python 拥有。
+- 新增 `rankingBackend` 诊断（`exact`、`rust` 或 `python`），以便运维人员确认语义缓存查询由哪条路径服务。
+- 将应用、Android、Docker、CI、发布清单、文档、测试和版本化离线证据路径同步到 3.4.0。
+- 继承 3.3.2 的 95% Python 覆盖率门禁和保守的 95.33% 实测基线；严格的 4.0 RC 就绪状态仍为绿色。
 
-### Compatibility
+### 兼容性
 
-- Kept all Rust flags disabled by default and preserved Python fallback for unreachable or malformed Rust responses.
-- Preserved ADR-0040: Python remains the default runtime, streaming and real MCP tool execution remain Python-owned, and the repository remains ready for `4.0.0-rc.1` without creating an RC tag.
+- 所有 Rust 标志默认保持关闭，并对不可达或格式异常的 Rust 响应保留 Python 回退。
+- 保留 ADR-0040：Python 仍是默认运行时，流式和真实 MCP 工具执行仍由 Python 拥有，仓库仍可在不创建 RC 标签的情况下进入 `4.0.0-rc.1`。
 
-## [3.3.2] - 95% Coverage and RC Readiness Rehearsal
+## [3.3.2] - 95% 覆盖率与 RC 就绪演练
 
-### Added
+### 新增
 
-- Added high-value failure and boundary tests for DeepSeek streaming and retry behavior, corrupt RAG/file caches and partial writes, launcher credentials, agent cancellation/concurrency/persistence, Skills security/versioning, Browser/OCR/media, MCP, and workspace persistence paths.
-- Added regression coverage for malformed media cache stores; non-object cache data now fails closed to an empty collection instead of raising an attribute error.
+- 为 DeepSeek 流式与重试行为、损坏的 RAG/文件缓存与部分写入、启动器凭证、Agent 取消/并发/持久化、Skill 安全/版本化、浏览器/OCR/媒体、MCP 和工作空间持久化路径新增高价值失败与边界测试。
+- 为格式异常的媒体缓存存储新增回归覆盖；非对象缓存数据现在会安全失败为空集合，而不是抛出属性错误。
 
-### Changed
+### 变更
 
-- Raised combined statement-and-branch coverage to 95.3428% and 95.3396% across two consecutive full runs, preserving a 0.30 percentage-point RC safety margin.
-- Raised the Python CI, preflight, release-manifest, README, and release-script coverage gate from 90% to 95%; branch coverage remains measured without a separate threshold.
-- Reduced HIGH-risk coverage debt from the 3.3.1 baseline and did not expand coverage omit rules.
-- Marked the machine-readable 4.0 RC readiness contract READY after the coverage blocker cleared. ADR-0040, Python-only defaults, all four default-disabled Rust delegates, and Python fallback through 4.x remain unchanged.
-- Rehearses strict readiness without creating `4.0.0-rc.1`; version bump, frozen evidence, checksums, tag, and release notes remain a separate release change.
+- 在连续两次完整运行中将综合语句与分支覆盖率提升到 95.3428% 和 95.3396%，保留 0.30 个百分点的 RC 安全余量。
+- 将 Python CI、preflight、发布清单、README 和发布脚本的覆盖率门禁从 90% 提升到 95%；分支覆盖率仍保持测量，但不设独立阈值。
+- 降低 3.3.1 基线的高风险覆盖债务，且不扩展覆盖排除规则。
+- 在覆盖率阻塞项清除后，将机器可读的 4.0 RC 就绪合同标记为 READY。ADR-0040、纯 Python 默认、四个默认关闭的 Rust 委托，以及 4.x 全周期的 Python 回退均保持不变。
+- 演练严格就绪状态，但不创建 `4.0.0-rc.1`；版本提升、冻结证据、校验和、标签与发布说明仍是独立的发布变更。
 
-## [3.3.1] - Risk-weighted Python Coverage Uplift
+## [3.3.1] - 风险加权 Python 覆盖率提升
 
-### Added
-
-- Added branch-aware coverage measurement and `scripts/report_coverage_debt.py`, with a machine-readable CI artifact ranked by network, filesystem, browser, security, media, state-machine, and utility risk.
-- Added deterministic failure and boundary coverage across Browser control, OCR/media, edge inference, Skills, Automation, DeepSeek networking, file/PDF processing, launchers, A2A, and Agent run persistence.
-
-### Changed
-
-- Raised measured Python statement-and-branch coverage to a conservative 90.52% across two consecutive full runs (90.53%, 90.52%) and the CI, preflight, README, and release-manifest gate from 85% to 90%.
-- Kept branch coverage informational in 3.3.1; there is no separate branch threshold.
-- Kept the 4.0 RC measured coverage target at 95.00%, so strict readiness remains non-zero only for coverage.
-- Preserved ADR-0040, all default Rust flags at 0, Python-only default Compose deployment, and Python fallback throughout 4.x. No RC tag is created.
-
-## [3.3.0] - 4.0 Runtime Architecture Decision
-
-### Added
-- Approved ADR-0040 and a machine-readable `python_first_hybrid` architecture contract for 4.0.
-- Added field-level readiness validation for approval status, approvers, the Rust default-on set, sidecar deployment, fallback lifecycle, Gateway streaming ownership, and MCP execution ownership.
-- Added regression tests for an intentionally empty Rust default-on set and malformed or incomplete architecture decisions.
-
-### Decided
-- No Rust delegate is default-on for 4.0; all four delegates remain explicit opt-ins.
-- Default deployment remains Python-only and the Rust sidecar remains optional.
-- Python fallback is supported throughout 4.x and cannot be considered for removal before 5.0.0.
-- Gateway streaming and real MCP tool execution remain Python-owned; Rust MCP owns JSON-RPC validation and protocol routing.
-
-### Unchanged
-- Gateway streaming is not presented as implemented in Rust, and MCP is not presented as bridging real tools through Rust.
-- The current Python coverage gate remains 85%, while the 4.0 RC measured target remains 95%.
-- Measured Python coverage remains 85.63%, so strict readiness still returns non-zero and no RC tag is created.
-
-## [3.2.5] - 4.0 RC Readiness Checklist
-
-### Added
-- Added a machine-readable 4.0 RC requirements manifest with owners, blocker classes, current observations, and evidence paths.
-- Added a readiness checker that emits terminal and JSON reports, supports report-only and strict modes, and honestly reports `NOT READY FOR 4.0.0-rc.1` while blockers remain.
-- Added an owner-signable blocker matrix and default-on decision matrix in `docs/4_0_RC_READINESS.md`.
-- Added a terminal `rc-readiness` CI job that uploads a report on normal PRs and `main`, then becomes blocking on `release/*` and `rc/*` branches.
-
-### Current blockers
-- Measured Python coverage is 85.63% against the explicit 95.00% RC target; the existing CI gate remains 85%.
-- Rust default-on components, default sidecar deployment, and the Python fallback lifecycle still need approval.
-- Gateway streaming still uses Python and the Rust MCP path does not yet bridge real tool execution.
-
-### Unchanged
-- No `4.0.0-rc.1` tag or release is created.
-- No Rust component or sidecar is enabled by default.
-- The Python coverage gate remains 85% and the default Docker deployment remains Python-only.
-
-## [3.2.4] - Rust/Python RAG Parity Corpus
-
-### Added
-- Added a shared 38-case RAG parity fixture with explicit expected normalization, ranking, citation, and index-validation results.
-- Added a strict offline parity runner that compares the Python reference contract with live Rust sidecar HTTP responses and writes a machine-readable difference report.
-- Added an independent `rag-parity` CI job with sidecar logs, report artifact upload, and unconditional container cleanup.
-- Added `docs/RAG_PARITY_BASELINE.md` and contract tests for corpus size, deterministic expectations, score tolerance, tie-break ordering, and strict failures.
-
-### Unchanged
-- Rust RAG remains disabled by default and the default Docker deployment remains Python-only.
-- The parity corpus does not call embeddings, vector databases, external models, or the public internet.
-- The Python coverage gate remains 85%; the 3.2.4 full suite measures 85.65%.
-- No 4.0.0 release candidate or default-on Rust decision is included.
-
-## [3.2.3] - Rust Policy Deny and Audit Hardening
-
-### Added
-- Added stable Rust Policy decision codes, unique decision identifiers, trace propagation, capability/risk context, and structured redacted audit events.
-- Added explicit `fallback`, `deny`, and `error` backend failure modes through `DEEPSEEK_RUST_POLICY_FAILURE_MODE`.
-- Added regression tests proving Rust Policy denial prevents network, filesystem, and execution helpers from running.
-- Extended the offline hybrid smoke to require the Rust deny code and decision identifier through the Python tool boundary.
-
-### Changed
-- Malformed, empty, or incomplete Rust Policy responses are now backend failures instead of implicit allow decisions.
-- The default `fallback` mode always re-evaluates the call with Python Tool Policy, including bare tool calls without an explicitly supplied policy.
-- Rust URL and path audit targets omit credentials, query values, and workspace roots; transport errors redact authorization values.
-
-### Unchanged
-- Rust Policy remains disabled by default and Python Tool Policy remains available.
-- Audit output remains structured logging only; no persistent audit database was added.
-- The Python coverage gate remains 85%; the 3.2.3 full suite measures 85.60%.
-- Default Docker behavior is unchanged and no 4.0.0 release candidate is declared.
-
-## [3.2.2] - End-to-End Hybrid Runtime Smoke Tests
-
-### Added
-- Added `docker-compose.hybrid-test.yml` to run the Python app and Rust sidecar together with all four Rust delegates enabled only for testing.
-- Added an offline hybrid smoke that verifies Rust status, Gateway proxying, MCP initialize/list/echo, Rust Policy denial, and Rust RAG normalization/ranking/citation through Python boundaries.
-- Added sidecar-loss checks that stop the Rust container and verify Gateway, MCP, Policy, and RAG fall back to Python without an application crash.
-- Added deployment contract tests and an independent `hybrid-runtime-e2e` CI job with failure logs and unconditional cleanup.
-
-### Unchanged
-- The default Compose deployment remains Python-only and all Rust flags remain disabled by default.
-- The Python coverage gate remains 85%.
-- No API key, external model call, or external service is required.
-- No Rust component is made default-on and no 4.0.0 release candidate is declared.
-
-## [3.2.1] - Optional Rust Sidecar Docker Profile
-
-### Added
-- Added a multi-stage, non-root Rust Gateway sidecar image that contains only the compiled Rust binary and its health-check dependency.
-- Added `docker-compose.rust.yml` for standalone or explicitly combined deployment without changing the default Python Compose service.
-- Added an offline six-endpoint Rust sidecar smoke script and Docker deployment contract tests.
-- Added an independent CI job that builds, runs, health-checks, and smoke-tests the Rust sidecar image.
-
-### Unchanged
-- Rust Gateway, MCP, Policy, and RAG delegation remain disabled by default.
-- The default Docker deployment and runtime remain Python-only.
-- The Python coverage gate remains 85%.
-- No API key, model call, or external service is required by the sidecar smoke test.
-- No 4.0.0 release candidate is declared.
-
-## [3.2.0] - Python Coverage Uplift to 85%
-
-### Added
-- Added failure-path and boundary tests for Rust core clients, Local RAG, tool execution and policy, MCP execution, browser downloads, web routes, core config, and launcher paths.
-- Added coverage for invalid JSON, missing fields, timeout/connection failures, non-2xx and malformed sidecar responses, fallback modes, empty queries, duplicate chunk IDs, path traversal, and policy denial.
-
-### Changed
-- Raised the Python coverage gate from 82% to 85% in `pyproject.toml`, CI, release preflight, release manifest defaults, README, AGENTS, and release-readiness documentation.
-- Recorded 85.559% measured full-suite coverage before enabling the new gate.
-
-### Non-goals
-- No runtime features added.
-- No Rust components enabled by default.
-- No Docker sidecar changes.
-- No 4.0.0 release candidate declared.
-
-## [3.1.7] - Pre-4.0 Quality Baseline
-
-### Added
-- Added `docs/PRE_4_0_QUALITY_BASELINE.md`: a pre-4.0 quality baseline audit for the hybrid Rust runtime.
-- Includes Rust core and Python integration status matrices, coverage status, CI/release gate status, known gaps before 4.0.0, and recommended 3.2.x milestones.
-
-### Non-goals
-- No new runtime features.
-- No Rust components enabled by default.
-- No coverage gate raised.
-- No 4.0.0 readiness declared.
-
-## [3.1.6] - Hybrid Runtime Release Readiness
-
-### Added
-- Added `docs/RUST_HYBRID_RUNTIME_RUNBOOK.md`: operational guide for the 3.1.x hybrid Rust runtime, covering default-disabled behavior, sidecar startup, feature flags, fallback matrix, troubleshooting, rollback, and verification commands.
-- Added `docs/RELEASE_READINESS_3_1_X.md`: release checklist with CI gates, offline eval gates, runtime gates, release evidence, rollback steps, and sign-off criteria for the 3.1.x line.
-
-### Changed
-- Updated `docs/IMPLEMENTATION_STATUS.md` to v3.1.6 and linked the new runbook and release-readiness checklist from the Rust Core Hybrid Runtime row.
-- Updated `docs/RUST_MIGRATION_ROADMAP.md` to describe 3.1.6 as the release-readiness documentation milestone.
-- Updated `README.md` Rust Gateway section to link to the runbook and release checklist.
-
-### Non-goals
-- No new Rust runtime features.
-- No Rust components enabled by default.
-- No Docker or packaging changes.
-- Python coverage gate remains at 82%.
-- No 4.0.0 breaking changes.
-
-## [3.1.5] - Hybrid Runtime Hardening + Coverage Uplift
-
-### Added
-- Added comprehensive failure-path tests for Rust Gateway, MCP, Policy, and RAG clients: timeout, connection error, invalid JSON, unexpected status code, and missing expected fields.
-- Added feature-flag parsing tests covering `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` for all Rust component flags.
-- Added fallback behavior tests for unreachable sidecar, non-2xx responses, malformed policy decisions, and invalid timeout values falling back to defaults.
-- Added hybrid runtime combination tests: all Rust flags enabled and all disabled.
-
-### Changed
-- Raised Python coverage gate from 80% to 82% in `pyproject.toml`, CI workflow, release preflight, and README badge.
-- Updated `AGENTS.md`, `docs/EVIDENCE_INDEX.md`, and `scripts/preflight_release.py` to reflect the new 82% coverage gate.
-
-### Non-goals
-- No new Rust runtime features added.
-- No Rust components enabled by default.
-- No Docker changes.
-- No Python runtime paths replaced.
-- Coverage gate not raised to 85% yet.
-
-## [3.1.4] - Rust RAG Opt-in Integration
-
-### Added
-- Added Rust sidecar RAG hot-path endpoints: `POST /rag/query/normalize`, `POST /rag/chunks/score`, `POST /rag/citation/format`, `POST /rag/index/validate` backed by `deepseek-rag`.
-- Added `deepseek_infra/infra/rust_core/rag_client.py` to delegate query normalization, chunk scoring, citation formatting, and index validation to the Rust sidecar when `DEEPSEEK_RUST_RAG=1`.
-- Added `DEEPSEEK_RUST_RAG_FALLBACK` (default `1`) and `DEEPSEEK_RUST_RAG_TIMEOUT_MS` (default `3000`) configuration knobs.
-- Integrated Rust RAG into `deepseek_infra/infra/rag/local_rag.py` for query normalization and chunk scoring in `_search_db`, plus citation formatting in `chunk_lineage`.
-- Added `tests/test_rust_rag_integration.py` covering disabled, enabled, CJK, score delegation, fallback, and citation paths.
-- Added Rust sidecar tests for each RAG endpoint.
-
-### Unchanged
-- Rust RAG remains default-disabled (`DEEPSEEK_RUST_RAG=0`).
-- Python document parsing, embedding, and vector database access are unchanged.
-- Python RAG remains the fallback.
-- Docker and coverage gates are untouched.
-
-## [3.1.3] - Rust Policy Opt-in Integration
-
-### Added
-- Added Rust sidecar policy decision endpoints: `POST /policy/url`, `POST /policy/path`, `POST /policy/capability` backed by `deepseek-policy`.
-- Added `deepseek_infra/infra/rust_core/policy_client.py` to delegate URL, path, and capability checks to the Rust sidecar when `DEEPSEEK_RUST_POLICY=1`.
-- Added `DEEPSEEK_RUST_POLICY_FALLBACK` (default `1`) and `DEEPSEEK_RUST_POLICY_TIMEOUT_MS` (default `3000`) configuration knobs.
-- Integrated Rust Policy checks into `deepseek_infra/infra/tool_runtime/tools.py` `execute_tool_call` for network tools (URL guard), filesystem tools (path guard), and capability/risk checks.
-- Re-exported `PolicyDecision` from `deepseek-policy` is already available via the public crate API; the sidecar endpoints return structured decisions.
-- Added `tests/test_rust_policy_integration.py` covering disabled, enabled, allow, deny, fallback, and unreachable paths.
-- Added Rust sidecar tests for each policy endpoint.
-
-### Unchanged
-- Rust Policy remains default-disabled (`DEEPSEEK_RUST_POLICY=0`).
-- Python Tool Policy is not removed; it is used as fallback.
-- No real tool execution is changed beyond the decision boundary.
-- Docker and coverage gates are untouched.
-
-## [3.1.2] - Rust MCP Opt-in Proxy Integration
-
-### Added
-- Added `POST /mcp` route to the Rust Gateway sidecar, backed by `deepseek_mcp::handle_mcp_message`.
-- Added `deepseek_infra/infra/rust_core/mcp_client.py` to proxy MCP JSON-RPC messages to the Rust sidecar when `DEEPSEEK_RUST_MCP=1`.
-- Added `DEEPSEEK_RUST_MCP_FALLBACK` (default `1`) and `DEEPSEEK_RUST_MCP_TIMEOUT_MS` (default `3000`) configuration knobs.
-- Updated `deepseek_infra/web/routes/mcp.py` so that `/mcp` delegates to the Rust MCP handler under the feature flag, with fallback to the existing Python MCP implementation when the sidecar is unavailable or fallback is enabled.
-- Re-exported `handle_mcp_message` from `deepseek_mcp` crate root for easier integration.
-- Added `tests/test_rust_mcp_proxy.py` covering disabled, enabled, fallback, error, and auth-preservation paths.
-
-### Unchanged
-- Rust MCP remains default-disabled (`DEEPSEEK_RUST_MCP=0`).
-- Rust Policy / RAG are not routed through Python yet.
-- Docker and coverage gates are untouched.
-
-## [3.1.1] - Rust Gateway Opt-in Proxy Integration
-
-### Added
-- Added `deepseek_infra/infra/rust_core/gateway_client.py` to proxy `/v1/chat/completions` and `/v1/models` to the Rust Gateway sidecar when `DEEPSEEK_RUST_GATEWAY=1`.
-- Added `DEEPSEEK_RUST_GATEWAY_FALLBACK` (default `1`) and `DEEPSEEK_RUST_GATEWAY_TIMEOUT_MS` (default `3000`) configuration knobs.
-- Updated `deepseek_infra/web/routes/chat.py` to route OpenAI-compatible chat and model requests to Rust Gateway under the feature flag, with fallback to the existing Python implementation when the sidecar is unreachable or fallback is explicitly enabled.
-- Streaming chat requests continue to use the Python path to avoid breaking existing behavior.
-- Added `tests/test_rust_gateway_proxy.py` covering disabled, enabled, fallback, timeout, and auth-preservation paths.
-
-### Unchanged
-- Rust Gateway remains default-disabled (`DEEPSEEK_RUST_GATEWAY=0`).
-- MCP, Policy, and RAG routes are not proxied to Rust yet.
-- Docker and coverage gates are untouched.
-
-## [3.1.0] - Rust Hybrid Runtime Integration Foundation
-
-### Added
-- Added Python-side Rust component discovery module `deepseek_infra/infra/rust_core/` with:
-  - `config.py`: feature flags (`DEEPSEEK_RUST_GATEWAY`, `DEEPSEEK_RUST_MCP`, `DEEPSEEK_RUST_POLICY`, `DEEPSEEK_RUST_RAG`) and configurable `DEEPSEEK_RUST_GATEWAY_URL`.
-  - `registry.py`: `RustRegistry` and `rust_status()` for reporting enabled components and Gateway health.
-  - `health.py`: lightweight HTTP health probe for the Rust Gateway sidecar.
-- Added read-only status endpoint `GET /api/rust/status` behind existing API auth.
-
-### Unchanged
-- All Rust components remain default-disabled; existing Python runtime is unaffected.
-- No Python routes are forwarded to Rust.
-- Docker and release entrypoints are not modified.
-- Coverage gate remains at 80%.
-
-## [3.0.6] - Rust RAG Hot-path MVP
-
-### Added
-- Added pure, testable RAG primitives in `deepseek-rag`:
-  - `chunk`: `RagChunk` and `ChunkMetadata` with normalization and validation (empty id rejection, line-range validation, empty title normalization).
-  - `query`: query normalization (ASCII lowercasing, CJK preservation, whitespace collapse) and simple token split; empty query rejection.
-  - `score`: deterministic lexical scoring with exact-match, token-overlap, title/source-match, and short-chunk bonuses; empty chunks score zero.
-  - `citation`: source + line-range locator formatting with source-only fallback and invalid-range rejection.
-  - `index`: `IndexMetadata` validation (unique chunk ids, valid chunks) and JSON round-trip.
-- Added unit tests for CJK query handling, chunk validation, lexical scoring, citation formatting, and index metadata round-trip.
-
-### Unchanged
-- Does not replace the Python RAG runtime.
-- Does not parse PDF, Word, or PPT documents.
-- Does not use embeddings or vector databases (sqlite-vec, etc.).
-- Does not modify Python FastAPI routes, Docker, or runtime entrypoints.
-- Remains a standalone Rust crate; no Python/Rust bridge introduced.
+### 新增
+
+- 新增分支感知覆盖率测量和 `scripts/report_coverage_debt.py`，附带机器可读 CI 产物，按网络、文件系统、浏览器、安全、媒体、状态机和工具风险排序。
+- 在浏览器控制、OCR/媒体、端侧推理、Skill、Automation、DeepSeek 网络、文件/PDF 处理、启动器、A2A 和 Agent 运行持久化方面新增确定性失败与边界覆盖。
+
+### 变更
+
+- 在连续两次完整运行中将实测 Python 语句与分支覆盖率提升到保守的 90.52%（90.53%、90.52%），并将 CI、preflight、README 和发布清单门禁从 85% 提升到 90%。
+- 3.3.1 中分支覆盖率仍保持参考性；不设独立分支阈值。
+- 4.0 RC 实测覆盖率目标保持 95.00%，因此严格就绪状态仅因覆盖率非零。
+- 保留 ADR-0040、所有默认 Rust 标志为 0、纯 Python 默认 Compose 部署，以及 4.x 全周期的 Python 回退。不创建 RC 标签。
+
+## [3.3.0] - 4.0 运行时架构决策
+
+### 新增
+- 批准 ADR-0040 和面向 4.0 的机器可读 `python_first_hybrid` 架构合同。
+- 新增字段级就绪校验，覆盖审批状态、审批人、Rust 默认开启集合、sidecar 部署、回退生命周期、Gateway 流式所有权和 MCP 执行所有权。
+- 新增回归测试，覆盖故意为空的 Rust 默认开启集合，以及格式异常或不完整的架构决策。
+
+### 决策
+- 4.0 没有 Rust 委托默认开启；四个委托仍保持显式可选加入。
+- 默认部署保持纯 Python，Rust sidecar 保持可选。
+- 4.x 全周期支持 Python 回退，在 5.0.0 之前不能考虑移除。
+- Gateway 流式和真实 MCP 工具执行保持由 Python 拥有；Rust MCP 负责 JSON-RPC 校验和协议路由。
+
+### 不变
+- Gateway 流式不会声明为已在 Rust 中实现，MCP 也不会声明为通过 Rust 桥接真实工具。
+- 当前 Python 覆盖率门禁保持 85%，4.0 RC 实测目标保持 95%。
+- 实测 Python 覆盖率为 85.63%，因此严格就绪状态仍返回非零，且不创建 RC 标签。
+
+## [3.2.5] - 4.0 RC 就绪检查清单
+
+### 新增
+- 新增机器可读的 4.0 RC 需求清单，包含负责人、阻塞项类别、当前观察和证据路径。
+- 新增就绪检查器，输出终端和 JSON 报告，支持仅报告模式和严格模式，并在阻塞项存在时如实报告 `NOT READY FOR 4.0.0-rc.1`。
+- 在 `docs/4_0_RC_READINESS.md` 中新增可由负责人签名的阻塞矩阵和默认开启决策矩阵。
+- 新增终端 `rc-readiness` CI 任务，在普通 PR 和 `main` 上上传报告，并在 `release/*` 和 `rc/*` 分支变为阻塞项。
+
+### 当前阻塞项
+- 实测 Python 覆盖率为 85.63%，距离明确的 95.00% RC 目标仍有差距；现有 CI 门禁保持 85%。
+- Rust 默认开启组件、默认 sidecar 部署和 Python 回退生命周期仍需审批。
+- Gateway 流式仍使用 Python，Rust MCP 路径尚未桥接真实工具执行。
+
+### 不变
+- 不创建 `4.0.0-rc.1` 标签或发布。
+- 没有 Rust 组件或 sidecar 默认开启。
+- Python 覆盖率门禁保持 85%，默认 Docker 部署保持纯 Python。
+
+## [3.2.4] - Rust/Python RAG 一致性语料
+
+### 新增
+- 新增共享的 38 例 RAG 一致性夹具，包含明确的期望规范化、排序、引用和索引校验结果。
+- 新增严格的离线一致性运行器，将 Python 参考契约与实时 Rust sidecar HTTP 响应对比，并输出机器可读的差异报告。
+- 新增独立的 `rag-parity` CI 任务，包含 sidecar 日志、报告产物上传和无条件的容器清理。
+- 新增 `docs/RAG_PARITY_BASELINE.md` 和契约测试，覆盖语料大小、确定性期望、分数容差、并列排序和严格失败。
+
+### 不变
+- Rust RAG 默认保持关闭，默认 Docker 部署保持纯 Python。
+- 一致性语料不调用嵌入、向量数据库、外部模型或公共互联网。
+- Python 覆盖率门禁保持 85%；3.2.4 完整套件实测 85.65%。
+- 不包含 4.0.0 发布候选或默认开启 Rust 决策。
+
+## [3.2.3] - Rust Policy 拒绝与审计加固
+
+### 新增
+- 新增稳定的 Rust Policy 决策码、唯一决策标识符、追踪传播、能力/风险上下文和结构化脱敏审计事件。
+- 通过 `DEEPSEEK_RUST_POLICY_FAILURE_MODE` 新增显式的 `fallback`、`deny` 和 `error` 后端失败模式。
+- 新增回归测试，证明 Rust Policy 拒绝可阻止网络、文件系统和执行辅助工具运行。
+- 扩展离线混合冒烟测试，要求通过 Python 工具边界传递 Rust 拒绝码和决策标识符。
+
+### 变更
+- 格式异常、为空或不完整的 Rust Policy 响应现在作为后端失败，而非隐式允许决策。
+- 默认 `fallback` 模式始终使用 Python Tool Policy 重新评估调用，包括未显式提供策略的裸工具调用。
+- Rust URL 和路径审计目标会省略凭证、查询值和工作区根；传输错误会脱敏 authorization 值。
+
+### 不变
+- Rust Policy 默认保持关闭，Python Tool Policy 仍然可用。
+- 审计输出仍仅为结构化日志；未添加持久化审计数据库。
+- Python 覆盖率门禁保持 85%；3.2.3 完整套件实测 85.60%。
+- 默认 Docker 行为不变，且不声明 4.0.0 发布候选。
+
+## [3.2.2] - 端到端混合运行时冒烟测试
+
+### 新增
+- 新增 `docker-compose.hybrid-test.yml`，用于将 Python 应用和 Rust sidecar 一起运行，仅在测试时启用全部四个 Rust 委托。
+- 新增离线混合冒烟测试，验证 Rust 状态、Gateway 代理、MCP initialize/list/echo、Rust Policy 拒绝，以及通过 Python 边界的 Rust RAG 规范化/排序/引用。
+- 新增 sidecar 丢失检查，停止 Rust 容器并验证 Gateway、MCP、Policy 和 RAG 可回退到 Python 而不会导致应用崩溃。
+- 新增部署契约测试和独立的 `hybrid-runtime-e2e` CI 任务，附带失败日志和无条件清理。
+
+### 不变
+- 默认 Compose 部署保持纯 Python，所有 Rust 标志默认保持关闭。
+- Python 覆盖率门禁保持 85%。
+- 不需要 API Key、外部模型调用或外部服务。
+- 没有 Rust 组件默认开启，也不声明 4.0.0 发布候选。
+
+## [3.2.1] - 可选 Rust Sidecar Docker 配置
+
+### 新增
+- 新增多阶段、非 root 的 Rust Gateway sidecar 镜像，仅包含编译后的 Rust 二进制文件及其健康检查依赖。
+- 新增 `docker-compose.rust.yml`，用于独立或显式组合部署，且不改变默认 Python Compose 服务。
+- 新增离线六端点 Rust sidecar 冒烟脚本和 Docker 部署契约测试。
+- 新增独立 CI 任务，构建、运行、健康检查和冒烟测试 Rust sidecar 镜像。
+
+### 不变
+- Rust Gateway、MCP、Policy 和 RAG 委托默认保持关闭。
+- 默认 Docker 部署和运行时保持纯 Python。
+- Python 覆盖率门禁保持 85%。
+- sidecar 冒烟测试不需要 API Key、模型调用或外部服务。
+- 不声明 4.0.0 发布候选。
+
+## [3.2.0] - Python 覆盖率提升到 85%
+
+### 新增
+- 为 Rust 核心客户端、Local RAG、工具执行与策略、MCP 执行、浏览器下载、Web 路由、核心配置和启动器路径新增失败路径和边界测试。
+- 新增对无效 JSON、缺失字段、超时/连接失败、非 2xx 和格式异常 sidecar 响应、回退模式、空查询、重复分块 ID、路径遍历和策略拒绝的覆盖。
+
+### 变更
+- 在 `pyproject.toml`、CI、发布 preflight、发布清单默认值、README、AGENTS 和发布就绪文档中，将 Python 覆盖率门禁从 82% 提升到 85%。
+- 在启用新门禁前记录了 85.559% 的完整套件实测覆盖率。
+
+### 非目标
+- 不新增运行时功能。
+- 默认不启用 Rust 组件。
+- 不改变 Docker sidecar。
+- 不声明 4.0.0 发布候选。
+
+## [3.1.7] - 4.0 前质量基线
+
+### 新增
+- 新增 `docs/PRE_4_0_QUALITY_BASELINE.md`：面向混合 Rust 运行时的 4.0 前质量基线审计。
+- 包含 Rust 核心与 Python 集成状态矩阵、覆盖率状态、CI/发布门禁状态、4.0.0 前已知缺口，以及推荐的 3.2.x 里程碑。
+
+### 非目标
+- 不新增运行时功能。
+- 默认不启用 Rust 组件。
+- 不提升覆盖率门禁。
+- 不声明 4.0.0 就绪。
+
+## [3.1.6] - 混合运行时发布就绪
+
+### 新增
+- 新增 `docs/RUST_HYBRID_RUNTIME_RUNBOOK.md`：3.1.x 混合 Rust 运行时的运维指南，涵盖默认关闭行为、sidecar 启动、功能标志、回退矩阵、故障排查、回滚和验证命令。
+- 新增 `docs/RELEASE_READINESS_3_1_X.md`：3.1.x 线的发布检查清单，包含 CI 门禁、离线评测门禁、运行时门禁、发布证据、回滚步骤和签收标准。
+
+### 变更
+- 将 `docs/IMPLEMENTATION_STATUS.md` 更新到 v3.1.6，并在 Rust Core Hybrid Runtime 行链接新的运维手册和发布就绪检查清单。
+- 将 `docs/RUST_MIGRATION_ROADMAP.md` 更新为把 3.1.6 描述为发布就绪文档里程碑。
+- 更新 `README.md` 的 Rust Gateway 章节，链接到运维手册和发布检查清单。
+
+### 非目标
+- 不新增 Rust 运行时功能。
+- 默认不启用 Rust 组件。
+- 不改变 Docker 或打包。
+- Python 覆盖率门禁保持 82%。
+- 没有 4.0.0 破坏性变更。
+
+## [3.1.5] - 混合运行时加固 + 覆盖率提升
+
+### 新增
+- 为 Rust Gateway、MCP、Policy 和 RAG 客户端新增全面的失败路径测试：超时、连接错误、无效 JSON、意外状态码和缺失期望字段。
+- 新增功能标志解析测试，覆盖所有 Rust 组件标志的 `1`/`true`/`yes`/`on` 和 `0`/`false`/`no`/`off`。
+- 新增回退行为测试，覆盖不可达 sidecar、非 2xx 响应、格式异常策略决策，以及无效超时值回退到默认值。
+- 新增混合运行时组合测试：全部 Rust 标志启用和全部禁用。
+
+### 变更
+- 在 `pyproject.toml`、CI 工作流、发布 preflight 和 README 徽章中，将 Python 覆盖率门禁从 80% 提升到 82%。
+- 更新 `AGENTS.md`、`docs/EVIDENCE_INDEX.md` 和 `scripts/preflight_release.py` 以反映新的 82% 覆盖率门禁。
+
+### 非目标
+- 不新增 Rust 运行时功能。
+- 默认不启用 Rust 组件。
+- 不改变 Docker。
+- 不替换 Python 运行时路径。
+- 覆盖率门禁暂不提升到 85%。
+
+## [3.1.4] - Rust RAG 可选集成
+
+### 新增
+- 新增 Rust sidecar RAG 热路径端点：`POST /rag/query/normalize`、`POST /rag/chunks/score`、`POST /rag/citation/format`、`POST /rag/index/validate`，由 `deepseek-rag` 提供支持。
+- 新增 `deepseek_infra/infra/rust_core/rag_client.py`，在 `DEEPSEEK_RUST_RAG=1` 时将查询规范化、分块打分、引用格式化和索引校验委托给 Rust sidecar。
+- 新增配置项 `DEEPSEEK_RUST_RAG_FALLBACK`（默认 `1`）和 `DEEPSEEK_RUST_RAG_TIMEOUT_MS`（默认 `3000`）。
+- 将 Rust RAG 集成到 `deepseek_infra/infra/rag/local_rag.py`，在 `_search_db` 中进行查询规范化和分块打分，并在 `chunk_lineage` 中进行引用格式化。
+- 新增 `tests/test_rust_rag_integration.py`，覆盖禁用、启用、CJK、打分委托、回退和引用路径。
+- 为每个 RAG 端点新增 Rust sidecar 测试。
+
+### 不变
+- Rust RAG 保持默认关闭（`DEEPSEEK_RUST_RAG=0`）。
+- Python 文档解析、嵌入和向量数据库访问不变。
+- Python RAG 仍是回退。
+- Docker 和覆盖率门禁未改动。
+
+## [3.1.3] - Rust Policy 可选集成
+
+### 新增
+- 新增 Rust sidecar 策略决策端点：`POST /policy/url`、`POST /policy/path`、`POST /policy/capability`，由 `deepseek-policy` 提供支持。
+- 新增 `deepseek_infra/infra/rust_core/policy_client.py`，在 `DEEPSEEK_RUST_POLICY=1` 时将 URL、路径和能力检查委托给 Rust sidecar。
+- 新增配置项 `DEEPSEEK_RUST_POLICY_FALLBACK`（默认 `1`）和 `DEEPSEEK_RUST_POLICY_TIMEOUT_MS`（默认 `3000`）。
+- 将 Rust Policy 检查集成到 `deepseek_infra/infra/tool_runtime/tools.py` 的 `execute_tool_call` 中，用于网络工具（URL 守卫）、文件系统工具（路径守卫）和能力/风险检查。
+- `deepseek-policy` 已重新导出 `PolicyDecision` 并通过公共 crate API 提供；sidecar 端点返回结构化决策。
+- 新增 `tests/test_rust_policy_integration.py`，覆盖禁用、启用、允许、拒绝、回退和不可达路径。
+- 为每个策略端点新增 Rust sidecar 测试。
+
+### 不变
+- Rust Policy 保持默认关闭（`DEEPSEEK_RUST_POLICY=0`）。
+- Python Tool Policy 未被移除；它作为回退使用。
+- 除决策边界外，真实工具执行未改变。
+- Docker 和覆盖率门禁未改动。
+
+## [3.1.2] - Rust MCP 可选代理集成
+
+### 新增
+- 在 Rust Gateway sidecar 中新增 `POST /mcp` 路由，由 `deepseek_mcp::handle_mcp_message` 提供支持。
+- 新增 `deepseek_infra/infra/rust_core/mcp_client.py`，在 `DEEPSEEK_RUST_MCP=1` 时将 MCP JSON-RPC 消息代理到 Rust sidecar。
+- 新增配置项 `DEEPSEEK_RUST_MCP_FALLBACK`（默认 `1`）和 `DEEPSEEK_RUST_MCP_TIMEOUT_MS`（默认 `3000`）。
+- 更新 `deepseek_infra/web/routes/mcp.py`，使 `/mcp` 在功能标志下委托给 Rust MCP 处理器，并在 sidecar 不可用或回退启用时回退到现有 Python MCP 实现。
+- 从 `deepseek_mcp` crate 根重新导出 `handle_mcp_message`，便于集成。
+- 新增 `tests/test_rust_mcp_proxy.py`，覆盖禁用、启用、回退、错误和鉴权保留路径。
+
+### 不变
+- Rust MCP 保持默认关闭（`DEEPSEEK_RUST_MCP=0`）。
+- Rust Policy / RAG 尚未通过 Python 路由。
+- Docker 和覆盖率门禁未改动。
+
+## [3.1.1] - Rust Gateway 可选代理集成
+
+### 新增
+- 新增 `deepseek_infra/infra/rust_core/gateway_client.py`，在 `DEEPSEEK_RUST_GATEWAY=1` 时将 `/v1/chat/completions` 和 `/v1/models` 代理到 Rust Gateway sidecar。
+- 新增配置项 `DEEPSEEK_RUST_GATEWAY_FALLBACK`（默认 `1`）和 `DEEPSEEK_RUST_GATEWAY_TIMEOUT_MS`（默认 `3000`）。
+- 更新 `deepseek_infra/web/routes/chat.py`，在功能标志下将 OpenAI 兼容的聊天和模型请求路由到 Rust Gateway，并在 sidecar 不可达或显式启用回退时回退到现有 Python 实现。
+- 流式聊天请求继续使用 Python 路径，以避免破坏现有行为。
+- 新增 `tests/test_rust_gateway_proxy.py`，覆盖禁用、启用、回退、超时和鉴权保留路径。
+
+### 不变
+- Rust Gateway 保持默认关闭（`DEEPSEEK_RUST_GATEWAY=0`）。
+- MCP、Policy 和 RAG 路由尚未代理到 Rust。
+- Docker 和覆盖率门禁未改动。
+
+## [3.1.0] - Rust 混合运行时集成基础
+
+### 新增
+- 新增 Python 端 Rust 组件发现模块 `deepseek_infra/infra/rust_core/`，包括：
+  - `config.py`：功能标志（`DEEPSEEK_RUST_GATEWAY`、`DEEPSEEK_RUST_MCP`、`DEEPSEEK_RUST_POLICY`、`DEEPSEEK_RUST_RAG`）和可配置的 `DEEPSEEK_RUST_GATEWAY_URL`。
+  - `registry.py`：`RustRegistry` 和 `rust_status()`，用于报告已启用组件和 Gateway 健康状态。
+  - `health.py`：针对 Rust Gateway sidecar 的轻量 HTTP 健康探测。
+- 在现有 API 鉴权后新增只读状态端点 `GET /api/rust/status`。
+
+### 不变
+- 所有 Rust 组件保持默认关闭；现有 Python 运行时不受影响。
+- 没有 Python 路由被转发到 Rust。
+- Docker 和发布入口点未修改。
+- 覆盖率门禁保持 80%。
+
+## [3.0.6] - Rust RAG 热路径 MVP
+
+### 新增
+- 在 `deepseek-rag` 中新增纯函数、可测试的 RAG 原语：
+  - `chunk`：`RagChunk` 和 `ChunkMetadata`，具备规范化和校验（拒绝空 id、行范围校验、空标题规范化）。
+  - `query`：查询规范化（ASCII 小写、保留 CJK、空白折叠）和简单分词；拒绝空查询。
+  - `score`：确定性词法打分，包含精确匹配、token 重叠、标题/来源匹配和短分块加分；空分块得零分。
+  - `citation`：来源 + 行范围定位符格式化，支持仅来源回退和无效范围拒绝。
+  - `index`：`IndexMetadata` 校验（唯一分块 id、有效分块）和 JSON 往返。
+- 新增 CJK 查询处理、分块校验、词法打分、引用格式化和索引元数据往返的单元测试。
+
+### 不变
+- 不替代 Python RAG 运行时。
+- 不解析 PDF、Word 或 PPT 文档。
+- 不使用嵌入或向量数据库（sqlite-vec 等）。
+- 不修改 Python FastAPI 路由、Docker 或运行时入口点。
+- 保持为独立 Rust crate；未引入 Python/Rust 桥接。
 
 ## [3.0.3] - Rust Gateway Sidecar MVP
 
-### Added
-- Added independently runnable `deepseek-gateway` Rust crate with `GET /healthz`, `GET /v1/models`, and `POST /v1/chat/completions`.
-- Added OpenAI-compatible request/response types: `ChatCompletionRequest`, `ChatMessage`, `ChatCompletionResponse`, `ChatChoice`, `ModelListResponse`, `ModelDescriptor`.
-- Added deterministic local stub response for `/v1/chat/completions` with payload validation.
-- Added explicit rejection of streaming (`stream: true`) with a structured error in the MVP.
-- Added `tokio`, `axum`, `tower`, `tower-http`, `tracing`, and `tracing-subscriber` to the Rust workspace.
-- Added unit tests for health check, model list, chat validation, minimal non-stream chat, and streaming rejection.
+### 新增
+- 新增可独立运行的 `deepseek-gateway` Rust crate，包含 `GET /healthz`、`GET /v1/models` 和 `POST /v1/chat/completions`。
+- 新增 OpenAI 兼容的请求/响应类型：`ChatCompletionRequest`、`ChatMessage`、`ChatCompletionResponse`、`ChatChoice`、`ModelListResponse`、`ModelDescriptor`。
+- 新增 `/v1/chat/completions` 的确定性本地桩响应，并带载荷校验。
+- 在 MVP 中显式拒绝流式（`stream: true`），返回结构化错误。
+- 在 Rust 工作区中新增 `tokio`、`axum`、`tower`、`tower-http`、`tracing` 和 `tracing-subscriber`。
+- 新增健康检查、模型列表、聊天校验、最小非流式聊天和流式拒绝的单元测试。
 
-### Unchanged
-- Does not replace the Python FastAPI gateway.
-- Does not change Docker or the default application entrypoint.
-- Does not require API keys or network access.
+### 不变
+- 不替代 Python FastAPI 网关。
+- 不改变 Docker 或默认应用入口点。
+- 不需要 API Key 或网络访问。
 
-## [3.0.2] - Rust Protocol Model Foundation
+## [3.0.2] - Rust 协议模型基础
 
-### Added
-- Added shared Rust protocol types in `deepseek-core`: `RequestId`, `TraceId`, `UnixTimestampMillis`, `DeepseekError`, `DeepseekResult<T>`.
-- Added MCP / JSON-RPC 2.0 base types in `deepseek-mcp`: `JsonRpcRequest`, `JsonRpcResponse`, `JsonRpcError`, `JsonRpcNotification`, `ToolDescriptor`, `ToolCallParams`, `ToolCallResult`.
-- Added fixture JSON files under `rust/fixtures/mcp/`.
-- Added round-trip and validation tests for protocol payloads, including invalid JSON-RPC version, missing method, and `id` shape coverage.
-- Added `JsonRpcResponse::is_valid_shape()` to enforce result/error exclusivity.
+### 新增
+- 在 `deepseek-core` 中新增共享 Rust 协议类型：`RequestId`、`TraceId`、`UnixTimestampMillis`、`DeepseekError`、`DeepseekResult<T>`。
+- 在 `deepseek-mcp` 中新增 MCP / JSON-RPC 2.0 基础类型：`JsonRpcRequest`、`JsonRpcResponse`、`JsonRpcError`、`JsonRpcNotification`、`ToolDescriptor`、`ToolCallParams`、`ToolCallResult`。
+- 在 `rust/fixtures/mcp/` 下新增夹具 JSON 文件。
+- 新增协议载荷的往返和校验测试，覆盖无效 JSON-RPC 版本、缺失方法和 `id` 形状。
+- 新增 `JsonRpcResponse::is_valid_shape()` 以强制 result/error 互斥。
 
-### Unchanged
-- No Python modules modified.
-- Python FastAPI remains the default entrypoint.
-- Coverage gate remains at 80%.
-- Dockerfile not touched.
+### 不变
+- 未修改 Python 模块。
+- Python FastAPI 仍是默认入口点。
+- 覆盖率门禁保持 80%。
+- Dockerfile 未改动。
 
-## [3.0.1] - Rust Core Migration Foundation
+## [3.0.1] - Rust 核心迁移基础
 
-### Added
-- Added Rust core migration roadmap ([docs/RUST_MIGRATION_ROADMAP.md](docs/RUST_MIGRATION_ROADMAP.md)).
-- Added initial Rust workspace skeleton under `rust/`.
-- Added Rust CI gates for formatting, clippy, and tests.
+### 新增
+- 新增 Rust 核心迁移路线图（[docs/RUST_MIGRATION_ROADMAP.md](docs/RUST_MIGRATION_ROADMAP.md)）。
+- 在 `rust/` 下新增初始 Rust 工作区骨架。
+- 新增 Rust CI 门禁：格式化、clippy 和测试。
 
-### Unchanged
-- No runtime behavior changes.
-- Python FastAPI remains the default application entrypoint.
-- Existing Python coverage gate remains unchanged.
+### 不变
+- 无运行时行为变更。
+- Python FastAPI 仍是默认应用入口点。
+- 现有 Python 覆盖率门禁保持不变。
 
-## [3.0.0] - Personal AI Runtime GA
+## [3.0.0] - 个人 AI 运行时 GA
 
-### Added
-- **First-class Memory**: add structured memory schema, scoped storage, search/edit/delete APIs, sensitive-memory blocking and skill-readable policy helpers.
-- **Workspace Home and Provenance**: add unified workspace home status plus project provenance graph APIs that link Projects, Memory, Skills, Media, Browser snapshots, Automations, Artifacts, Saved Items and Exports.
-- **GA evidence**: add `scripts/smoke_ga.py --offline`, `docs/evidence/ga-v3.0.0.json`, `docs/DEMO_3_0.md` and v3.0.0 demo screenshots.
+### 新增
+- **一等记忆**：新增结构化记忆 schema、作用域存储、搜索/编辑/删除 API、敏感记忆拦截和 Skill 可读策略辅助。
+- **工作空间主页与溯源**：新增统一的工作空间主页状态，以及项目溯源图 API，将 Project、Memory、Skill、Media、Browser 快照、Automation、Artifact、Saved Item 和 Export 关联起来。
+- **GA 证据**：新增 `scripts/smoke_ga.py --offline`、`docs/evidence/ga-v3.0.0.json`、`docs/DEMO_3_0.md` 和 v3.0.0 演示截图。
 
-### Changed
-- **Release readiness**: bump app/runtime/docs evidence paths to 3.0.0 and add `python scripts/preflight_release.py --version 3.0.0 --ga`.
-- **Automation summaries**: successful automation runs now write project-scoped memory summaries for workspace continuity.
+### 变更
+- **发布就绪**：将应用/运行时/文档证据路径提升到 3.0.0，并新增 `python scripts/preflight_release.py --version 3.0.0 --ga`。
+- **Automation 摘要**：成功的 Automation 运行现在会写入项目作用域的记忆摘要，以保持工作空间连续性。
 
-## [2.9.1] - Automation Runtime Hardening & Release Hygiene
+## [2.9.1] - Automation 运行时加固与发布卫生
 
-### Fixed
-- **Automation fixture safety**: constrain `browser_check` `fixturePath` reads to runtime fixture roots and the automation test fixture tree.
-- **Browser session cleanup**: close Automation Browser sessions after read-only snapshot actions and record close failures in run logs without masking the action result.
-- **Deterministic scheduling**: thread simulated `now` through policy daily limits, run records, `run_due` and trigger simulation.
+### 修复
+- **Automation 夹具安全**：将 `browser_check` 的 `fixturePath` 读取限制在运行时夹具根目录和 Automation 测试夹具树。
+- **Browser 会话清理**：在只读快照操作后关闭 Automation Browser 会话，并在运行日志中记录关闭失败，而不掩盖动作结果。
+- **确定性调度**：将模拟的 `now` 贯穿策略每日限制、运行记录、`run_due` 和触发器模拟。
 
-### Changed
-- **Cron matching**: support common `*/n`, `a-b` and `a-b/n` cron field forms in addition to `*`, numeric values and comma lists.
-- **Retry / timeout evidence**: record retry backoff, timeout checks and per-attempt failures in Automation run evidence.
-- **Release hygiene**: refresh 2.9.1 docs, CI evidence paths, release manifest defaults and Automation hardening tests.
+### 变更
+- **Cron 匹配**：除 `*`、数值和逗号列表外，还支持常见的 `*/n`、`a-b` 和 `a-b/n` cron 字段形式。
+- **重试/超时证据**：在 Automation 运行证据中记录重试退避、超时检查和每次尝试失败。
+- **发布卫生**：刷新 2.9.1 文档、CI 证据路径、发布清单默认值和 Automation 加固测试。
 
-## [2.9.0] - Automation Runtime
+## [2.9.0] - Automation 运行时
 
-### Added
-- **Automation Runtime**: add `deepseek_infra/infra/automation/` with local automation schema, registry, scheduler, runner, triggers, actions, policy, history and release evidence helpers.
-- **Automation API**: add authenticated `/api/automation` routes for CRUD, templates, manual runs, reruns, due-run simulation and run history.
-- **Governed actions**: support `run_skill`, `browser_snapshot`, `browser_check`, `project_summary`, `media_process`, `create_artifact`, `save_item`, `export_conversation` and `export_project` with policy-gated browser/network defaults.
-- **Offline evidence**: add `scripts/smoke_automation.py`, `evals/runners/run_automation_eval.py`, golden automation cases, fixtures, `docs/AUTOMATION.md`, and v2.9.0 smoke/eval evidence paths.
+### 新增
+- **Automation 运行时**：新增 `deepseek_infra/infra/automation/`，包含本地自动化 schema、注册表、调度器、运行器、触发器、动作、策略、历史和发布证据辅助。
+- **Automation API**：新增经认证的 `/api/automation` 路由，支持 CRUD、模板、手动运行、重跑、到期运行模拟和运行历史。
+- **受治理动作**：支持 `run_skill`、`browser_snapshot`、`browser_check`、`project_summary`、`media_process`、`create_artifact`、`save_item`、`export_conversation` 和 `export_project`，并带有策略门控的浏览器/网络默认值。
+- **离线证据**：新增 `scripts/smoke_automation.py`、`evals/runners/run_automation_eval.py`、golden automation 用例、夹具、`docs/AUTOMATION.md`，以及 v2.9.0 冒烟/评测证据路径。
 
-### Changed
-- **Release gates**: add `automation_runtime_evidence` to preflight, add `automationRuntime` to the release manifest quality gates, and exclude `.automation` from release archives and clean workspaces.
-- **Version sync**: bump README badge, `settings.app_version`, Dockerfile tag, Android `versionName` / `versionCode`, docs "适用版本" headers, CI evidence / eval paths and current release docs to `2.9.0`.
+### 变更
+- **发布门禁**：在 preflight 中新增 `automation_runtime_evidence`，在发布清单质量门禁中新增 `automationRuntime`，并将 `.automation` 排除在发布归档和干净工作空间之外。
+- **版本同步**：将 README 徽章、`settings.app_version`、Dockerfile 标签、Android `versionName` / `versionCode`、文档「适用版本」标题、CI 证据/评测路径和当前发布文档提升到 `2.9.0`。
 
-## [2.8.2] - Evidence Index & Manifest Example Sync
+## [2.8.2] - 证据索引与清单示例同步
 
-### Fixed
-- **Evidence index consistency**: `docs/EVIDENCE_INDEX.md` preflight command now uses `--version 2.8.2`.
-- **Manifest example sync**: `docs/RELEASE_READINESS.md` manifest example now includes `mediaLayer` / `browserControl` quality gates and Browser Control evidence / eval reports.
-- **Encoding gate scope**: `docs/RELEASE_READINESS.md` and `docs/EVIDENCE_INDEX.md` now document that `deepseek_infra/**/*.py` is included in the encoding sanity scan.
-- **Version sync**: bump README badge, `settings.app_version`, Dockerfile tag, Android `versionName` / `versionCode`, docs "适用版本" headers, CI evidence / eval paths, eval report versions and evidence filenames to `2.8.2`.
+### 修复
+- **证据索引一致性**：`docs/EVIDENCE_INDEX.md` 的 preflight 命令现在使用 `--version 2.8.2`。
+- **清单示例同步**：`docs/RELEASE_READINESS.md` 的清单示例现在包含 `mediaLayer` / `browserControl` 质量门禁和 Browser Control 证据/评测报告。
+- **编码门禁范围**：`docs/RELEASE_READINESS.md` 和 `docs/EVIDENCE_INDEX.md` 现在说明编码健全性扫描包含 `deepseek_infra/**/*.py`。
+- **版本同步**：将 README 徽章、`settings.app_version`、Dockerfile 标签、Android `versionName` / `versionCode`、文档「适用版本」标题、CI 证据/评测路径、评测报告版本和证据文件名提升到 `2.8.2`。
 
 
 本项目使用类似 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分组方式维护变更记录。未发布内容记录在 `[Unreleased]`，正式发版时迁移到具体版本。
 
-## [2.8.1] - Browser Control Runtime Polish & Release Hygiene
+## [2.8.1] - 浏览器控制运行时打磨与发布卫生
 
-**Theme: fix release-facing doc drift, extend encoding hygiene to source code, and harden Browser Control operability.** This patch aligns README / RELEASE_READINESS / IMPLEMENTATION_STATUS narratives, closes a preflight encoding-gap that allowed mojibake in `deepseek_infra/**/*.py`, and adds small but observable Browser runtime hardening.
+**主题：修复面向发布的文档漂移、将编码卫生扩展到源码，并加固浏览器控制可操作性。** 本补丁对齐 README / RELEASE_READINESS / IMPLEMENTATION_STATUS 的叙述，堵住允许 `deepseek_infra/**/*.py` 中出现乱码的 preflight 编码缺口，并增加若干可观察的浏览器运行时加固。
 
-### Fixed
+### 修复
 
-- **Release doc theme mismatch**: `docs/RELEASE_READINESS.md` now correctly describes v2.8.1 as *Browser Control Runtime Polish & Release Hygiene* instead of the stale 2.7.x *Context Taint Firewall Hardening* copy.
-- **Source-code mojibake**: fix garbled smart-quote characters in `deepseek_infra/core/config.py` Scheduler and MCP docstrings.
-- **Encoding gate coverage**: `scripts/preflight_release.py` `docs_encoding_sanity` now scans `deepseek_infra/**/*.py` in addition to docs / scripts / workflows / Dockerfile / README / CHANGELOG.
+- **发布文档主题不匹配**：`docs/RELEASE_READINESS.md` 现在正确将 v2.8.1 描述为 *浏览器控制运行时打磨与发布卫生*，而非陈旧的 2.7.x *上下文污染防火墙加固* 副本。
+- **源码乱码**：修复 `deepseek_infra/core/config.py` 中 Scheduler 和 MCP 文档字符串的乱码弯引号字符。
+- **编码门禁覆盖**：`scripts/preflight_release.py` 的 `docs_encoding_sanity` 现在除文档/脚本/工作流/Dockerfile/README/CHANGELOG 外，还扫描 `deepseek_infra/**/*.py`。
 
-### Changed
+### 变更
 
-- **README core modules table**: extend the "核心基础设施模块" table from 10 to 12 modules, adding Multimodal Media Layer (`infra/media/`) and Browser Control Runtime (`infra/browser/`).
-- **Version sync**: bump README badge, `settings.app_version`, Dockerfile tag, Android `versionName` / `versionCode`, docs "适用版本" headers, CI evidence / eval paths and eval report versions to `2.8.1`.
+- **README 核心模块表**：将「核心基础设施模块」表从 10 个模块扩展到 12 个，新增 Multimodal Media Layer（`infra/media/`）和 Browser Control Runtime（`infra/browser/`）。
+- **版本同步**：将 README 徽章、`settings.app_version`、Dockerfile 标签、Android `versionName` / `versionCode`、文档「适用版本」标题、CI 证据/评测路径和评测报告版本提升到 `2.8.1`。
 
-### Browser Control Hardening
+### 浏览器控制加固
 
-- **Audit log enrichment**: browser audit entries now include `requestId`, `sessionId` and `riskLevel` fields for better traceability.
-- **Stricter download filename sanitize**: collapse path separators, multiple dots/dashes and leading/trailing separators; reject empty names.
-- **Idempotent session close**: `browser.close_session` no longer raises when the session is already closed or expired; repeated close returns the closed session state.
-- **Edge-case evidence**: `scripts/smoke_browser.py` and `tests/test_browser_runtime.py` now cover repeated close, session TTL expiration and download byte-limit enforcement.
+- **审计日志增强**：浏览器审计条目现在包含 `requestId`、`sessionId` 和 `riskLevel` 字段，以提升可追溯性。
+- **更严格的下载文件名清理**：折叠路径分隔符、多个点/横杠以及首尾分隔符；拒绝空名称。
+- **幂等会话关闭**：当会话已关闭或过期时，`browser.close_session` 不再抛出；重复关闭返回已关闭会话状态。
+- **边界证据**：`scripts/smoke_browser.py` 和 `tests/test_browser_runtime.py` 现在覆盖重复关闭、会话 TTL 过期和下载字节限制执行。
 
-## [2.8.0] - Browser Control Runtime
+## [2.8.0] - 浏览器控制运行时
 
-**Theme: make browser control a governed runtime, not a raw automation escape hatch.** This release adds controlled browser sessions, safety-gated actions, Browser-to-Media snapshots, Local RAG indexing and offline evidence for the browser workspace ingress path.
+**主题：让浏览器控制成为受治理的运行时，而非原始的自动化逃生通道。** 本版本新增受控浏览器会话、安全门控动作、Browser-to-Media 快照、Local RAG 索引，以及浏览器工作空间入口路径的离线证据。
 
-### Added
+### 新增
 
-- **Browser runtime**: add `deepseek_infra/infra/browser/` with session lifecycle, optional Playwright Chromium control, static HTML fallback, isolated profiles and isolated download directories.
-- **Controlled browser actions**: add `browser.open_url`, `browser.read_page`, `browser.screenshot`, `browser.extract_links`, `browser.extract_dom`, `browser.scroll`, `browser.click`, `browser.type_text`, `browser.select`, `browser.download` and `browser.close_session` through Tool Runtime policy.
-- **Browser Safety**: gate the runtime behind `BROWSER_CONTROL_ENABLED`, block private hosts by default, require confirmation for write actions, password fields and submit/delete/payment flows, cap downloads and append decisions to `.browser-audit/audit.jsonl`.
-- **Workspace ingress**: save webpage snapshots, screenshots and downloads through Media Library, emit `browser://` citations and index webpage text into Local RAG as untrusted context.
-- **Browser skills**: add `web_researcher`, `webpage_reader`, `website_summarizer`, `form_assistant`, `download_and_summarize` and `browser_to_report` with explicit `browserPolicy` permissions.
-- **Offline evidence**: add `docs/BROWSER_CONTROL.md`, `scripts/smoke_browser.py --offline`, `evals/runners/run_browser_eval.py`, `evals/golden/browser/`, browser fixtures and `docs/evidence/browser-v2.8.0.json` / `evals/reports/browser-v2.8.0.json`.
+- **浏览器运行时**：新增 `deepseek_infra/infra/browser/`，包含会话生命周期、可选 Playwright Chromium 控制、静态 HTML 回退、隔离配置和隔离下载目录。
+- **受控浏览器动作**：通过 Tool Runtime 策略新增 `browser.open_url`、`browser.read_page`、`browser.screenshot`、`browser.extract_links`、`browser.extract_dom`、`browser.scroll`、`browser.click`、`browser.type_text`、`browser.select`、`browser.download` 和 `browser.close_session`。
+- **浏览器安全**：在 `BROWSER_CONTROL_ENABLED` 后开启运行时，默认拦截私有主机，写动作、密码字段和提交/删除/支付流程需要确认，限制下载大小，并将决策追加到 `.browser-audit/audit.jsonl`。
+- **工作空间入口**：通过 Media Library 保存网页快照、截图和下载，发出 `browser://` 引用，并将网页文本作为不可信上下文索引到 Local RAG。
+- **浏览器 Skill**：新增 `web_researcher`、`webpage_reader`、`website_summarizer`、`form_assistant`、`download_and_summarize` 和 `browser_to_report`，并带有显式的 `browserPolicy` 权限。
+- **离线证据**：新增 `docs/BROWSER_CONTROL.md`、`scripts/smoke_browser.py --offline`、`evals/runners/run_browser_eval.py`、`evals/golden/browser/`、浏览器夹具，以及 `docs/evidence/browser-v2.8.0.json` / `evals/reports/browser-v2.8.0.json`。
 
-### Changed
+### 变更
 
-- Context Taint now treats `browser.*` tool output as `untrusted_browser`.
-- Release preflight requires Browser Control evidence starting at v2.8.0 and keeps older release trains as WARN-only for that gate.
-- Release manifest, smoke orchestration, CI evidence upload and runtime doctor know about Browser Control runtime artifacts.
+- Context Taint 现在将 `browser.*` 工具输出视为 `untrusted_browser`。
+- 发布 preflight 从 v2.8.0 开始需要 Browser Control 证据，并对旧发布列车保持该门禁为仅警告（WARN-only）。
+- 发布清单、冒烟编排、CI 证据上传和运行时诊断均已识别 Browser Control 运行时产物。
 
-## [2.7.4] - Context Taint Firewall Hardening
+## [2.7.4] - 上下文污染防火墙加固
 
-**Theme: promote Context Taint Firewall from experimental defense to MVP / release-gated protection.** This patch adds dedicated media and RAG taint sources, ships an offline smoke suite, makes context-taint evidence a hard preflight gate and exposes clearer risk diagnostics.
+**主题：将上下文污染防火墙从实验性防御推进到 MVP / 发布门禁保护。** 本补丁新增专用媒体和 RAG 污染来源、交付离线冒烟套件、将上下文污染证据设为硬 preflight 门禁，并暴露更清晰的风险诊断。
 
-### Added
+### 新增
 
-- **Media / RAG taint sources**: `context_taint.py` now classifies `[Media context]` blocks as `untrusted_media` and local RAG retrieval results as `untrusted_rag`, keeping them distinct from generic files and web search.
-- **Context Taint Smoke**: added `scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v2.7.4.json` covering web injection, file injection, media transcript injection, tool directive detection and tainted-turn high-risk tool escalation.
-- **Preflight gate**: `preflight_release.py --version 2.7.4` checks `docs/evidence/context-taint-v2.7.4.json` with `status = PASS`.
-- **Release manifest gate**: `contextTaint` added to release manifest quality gates and evidence list.
-- **Clearer diagnostics**: `diagnostics.contextTaint` now includes `riskLevel`, `escalatedTools` and `recommendedAction`.
+- **媒体 / RAG 污染来源**：`context_taint.py` 现在将 `[Media context]` 块分类为 `untrusted_media`，将本地 RAG 检索结果分类为 `untrusted_rag`，使其与普通文件和网页搜索区分开来。
+- **上下文污染冒烟**：新增 `scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v2.7.4.json`，覆盖网页注入、文件注入、媒体转录注入、工具指令检测和污染轮高风险工具升级。
+- **Preflight 门禁**：`preflight_release.py --version 2.7.4` 检查 `docs/evidence/context-taint-v2.7.4.json` 的 `status = PASS`。
+- **发布清单门禁**：将 `contextTaint` 加入发布清单质量门禁和证据列表。
+- **更清晰的诊断**：`diagnostics.contextTaint` 现在包含 `riskLevel`、`escalatedTools` 和 `recommendedAction`。
 
-### Changed
+### 变更
 
-- Implementation status matrix: `Context Taint Firewall` moves from `Experimental` to `MVP, release gated`.
-- README, Dockerfile, Android version, CI, release readiness docs, evidence index and eval/report paths are synced to v2.7.4.
+- 实现状态矩阵：`Context Taint Firewall` 从 `Experimental` 推进为 `MVP, release gated`。
+- README、Dockerfile、Android 版本、CI、发布就绪文档、证据索引和评测/报告路径同步到 v2.7.4。
 
-## [2.7.3] - Edge Router Stabilization
+## [2.7.3] - Edge Router 稳定化
 
-**Theme: make the Edge-Cloud Model Router diagnosable, explainable and release-gated without requiring a real local model in CI.** This patch moves the router from demo-grade experimental behavior toward a daily-use MVP surface while keeping real GGUF / MLC inference optional.
+**主题：让端云模型路由器可诊断、可解释，并在无需 CI 中真实本地模型的情况下进入发布门禁。** 本补丁将路由器从演示级实验行为推向日常使用的 MVP 表面，同时保持真实 GGUF / MLC 推理为可选。
 
-### Added
+### 新增
 
-- **Edge Router Doctor**: `doctor.py --offline` now reports Edge provider support, optional dependency availability, model path readiness, GGUF suffix checks, quantization hints and actionable setup suggestions.
-- **Route preview API**: add `POST /api/edge/route-preview` so clients can dry-run a chat payload and see `useEdge`, `reason`, `provider`, `mode` and current Edge status without loading a model.
-- **Fake Edge provider**: add a zero-dependency provider for routing, fallback and API tests; simple requests route local, current/news/search/image/multi-agent requests route cloud, and forced-local unavailable returns HTTP 409.
-- **Edge release evidence**: add `scripts/smoke_edge_router.py --offline` and `docs/evidence/edge-router-v2.7.3.json`, then make `edge_router_evidence` a hard preflight gate and `edgeRouter` a release manifest quality gate.
+- **Edge Router Doctor**：`doctor.py --offline` 现在报告 Edge 提供商支持、可选依赖可用性、模型路径就绪情况、GGUF 后缀检查、量化提示和可操作的设置建议。
+- **路由预览 API**：新增 `POST /api/edge/route-preview`，让客户端可以干跑聊天载荷并查看 `useEdge`、`reason`、`provider`、`mode` 和当前 Edge 状态，而无需加载模型。
+- **Fake Edge provider**：新增零依赖提供商，用于路由、回退和 API 测试；简单请求走本地，当前/新闻/搜索/图片/多 Agent 请求走云端，强制本地不可用时返回 HTTP 409。
+- **Edge 发布证据**：新增 `scripts/smoke_edge_router.py --offline` 和 `docs/evidence/edge-router-v2.7.3.json`，并将 `edge_router_evidence` 设为硬 preflight 门禁、`edgeRouter` 设为发布清单质量门禁。
 
-### Changed
+### 变更
 
-- README, Dockerfile, Android version, CI, release readiness docs, evidence index and eval/report paths are synced to v2.7.3.
-- Edge Router documentation now includes the minimal `EDGE_INFERENCE_ENABLED` / `EDGE_PROVIDER` / `EDGE_MODEL_PATH` / `EDGE_MODE` configuration and the route-preview verification path.
+- README、Dockerfile、Android 版本、CI、发布就绪文档、证据索引和评测/报告路径同步到 v2.7.3。
+- Edge Router 文档现在包含最简 `EDGE_INFERENCE_ENABLED` / `EDGE_PROVIDER` / `EDGE_MODEL_PATH` / `EDGE_MODE` 配置和路由预览验证路径。
 
-## [2.7.2] - Release Hygiene & Encoding Gates
+## [2.7.2] - 发布卫生与编码门禁
 
-**Theme: release-facing polish and encoding guardrails.** This patch cleans up residual mojibake in release-visible files and expands preflight coverage so encoding regressions are caught before tagging.
+**主题：面向发布的打磨和编码护栏。** 本补丁清理面向发布文件中残留的乱码，并扩展 preflight 覆盖，以便在标记前捕获编码回归。
 
-### Added
+### 新增
 
-- **Expanded encoding gate**: `preflight_release.py` now scans Dockerfile, GitHub workflows, scripts, README, CHANGELOG and docs markdown for common mojibake signatures including `???`, replacement characters and UTF-8/GBK corruption fragments.
-- **Workflow trigger clarity**: CI now explicitly runs on `main` pushes, `main` pull requests and manual `workflow_dispatch` runs.
-- **Release checklist**: added `docs/RELEASE_CHECKLIST.md` for version bump, smoke, preflight, encoding sanity, CI trigger verification, Docker build and release artifact steps.
+- **扩展编码门禁**：`preflight_release.py` 现在扫描 Dockerfile、GitHub 工作流、脚本、README、CHANGELOG 和 docs markdown，查找常见乱码特征，包括 `???`、替换字符和 UTF-8/GBK 损坏片段。
+- **工作流触发说明**：CI 现在明确在 `main` push、`main` pull request 和手动 `workflow_dispatch` 运行时执行。
+- **发布检查清单**：新增 `docs/RELEASE_CHECKLIST.md`，包含版本提升、冒烟、preflight、编码健全性、CI 触发验证、Docker 构建和发布产物步骤。
 
-### Fixed
+### 修复
 
-- Dockerfile comments are now clean English and the sample Docker tag is synced to 2.7.2.
+- Dockerfile 注释现在为干净英文，示例 Docker 标签同步到 2.7.2。
 
-## [2.7.1] - Media Layer Hardening
+## [2.7.1] - 媒体层加固
 
-**Theme: Media Layer security, stability and release polish.** This patch hardens v2.7.0 media ingestion while keeping the Multimodal Media Layer API shape stable.
+**主题：媒体层安全、稳定与发布打磨。** 本补丁在保持 Multimodal Media Layer API 形状稳定的同时，加固 v2.7.0 的媒体摄入。
 
-### Added
+### 新增
 
-- **Media upload gates**: enforce a 50 MB per-media upload limit, a 20-item media upload request limit and a media MIME allowlist for images, audio, video, PDF and HTML snapshots.
-- **Media PATCH / reprocess**: add `PATCH /api/media/{mediaId}` for title, project binding and metadata updates; `POST /api/media/{mediaId}/process` now accepts `force=true` to rebuild segments and Local RAG index.
-- **Media evidence gate**: add `mediaUploadLimits` to Media Layer smoke/preflight evidence and refresh release paths to v2.7.1.
+- **媒体上传门控**：强制单媒体 50 MB 上传限制、单次 20 项媒体上传请求限制，以及图片、音频、视频、PDF 和 HTML 快照的媒体 MIME 允许列表。
+- **媒体 PATCH / 重新处理**：新增 `PATCH /api/media/{mediaId}`，用于标题、项目绑定和元数据更新；`POST /api/media/{mediaId}/process` 现在接受 `force=true` 以重建片段和 Local RAG 索引。
+- **媒体证据门禁**：将 `mediaUploadLimits` 加入 Media Layer 冒烟/preflight 证据，并将发布路径刷新到 v2.7.1。
 
-### Changed
+### 变更
 
-- Media source paths must remain under `.media/objects/{mediaId}/...`; absolute paths and traversal are rejected before processing or export.
-- Audio/video transcript imports now split long transcripts into smaller searchable segments; video frame captions are sorted by time and validate `framePath`.
-- Skill media context now tolerates missing media IDs, applies a total context budget and prioritizes query/citation-relevant segments.
+- 媒体源路径必须保持在 `.media/objects/{mediaId}/...` 下；绝对路径和路径遍历在处理或导出前被拒绝。
+- 音频/视频转录导入现在将长转录拆分为更小的可搜索片段；视频帧字幕按时间排序并校验 `framePath`。
+- Skill 媒体上下文现在容忍缺失媒体 ID，应用总上下文预算，并优先处理与查询/引用相关的片段。
 
 ## [2.7.0] - Multimodal Media Layer
 
 **主题：媒体成为 Workspace 一级对象。** 继 v2.6.x 把工具、Prompt、Schema、产物策略和项目绑定封装成 Skill 后，本版本新增 Multimodal Media Layer，让 Project、Skill 与 Local RAG 可以统一接收、解析、索引、引用和导出图片、PDF、网页快照以及 transcript/frame import 形式的音视频媒体。
 
-### Added
+### 新增
 
-- **Media Library**：新增 `deepseek_infra/infra/media/`，包含 schema、library、ingestion、processors、indexer、citations 和 evidence，媒体 metadata 持久化在 `.media/library.json`。
+- **媒体库**：新增 `deepseek_infra/infra/media/`，包含 schema、library、ingestion、processors、indexer、citations 和 evidence，媒体 metadata 持久化在 `.media/library.json`。
 - **Media API**：新增 `deepseek_infra/web/routes/media.py`，提供 `POST /api/media`、`GET /api/media`、`GET /api/media/{mediaId}`、`POST /api/media/{mediaId}/process`、`GET /api/media/{mediaId}/segments` 与删除接口。
-- **Media Processing**：图片/screenshot 支持 OCR text 与 caption，PDF 支持 page text 与 page citation，网页支持 HTML/text snapshot，音频/视频支持 transcript import 与 frame caption import MVP。
+- **媒体处理**：图片/screenshot 支持 OCR text 与 caption，PDF 支持 page text 与 page citation，网页支持 HTML/text snapshot，音频/视频支持 transcript import 与 frame caption import MVP。
 - **Media-to-RAG**：新增 Local RAG `media` collection，媒体片段以 `sourceType=media`、`mediaId`、`segmentId`、`page`、`timeRange` 和 `media://...` citation metadata 写入项目知识库。
 - **Media Skills**：新增内置 `image_explainer`、`pdf_reader`、`webpage_summarizer`、`audio_transcript_summarizer`、`video_brief_generator` 与 `media_to_report`，Skill Runner 会把 `mediaIds` 对应片段注入项目上下文。
 - **Media Evidence**：新增 `docs/MEDIA.md`、`scripts/smoke_media.py --offline`、`docs/evidence/media-v2.7.0.json`、`evals/golden/media/` 与 `evals/runners/run_media_eval.py`，release manifest / preflight / CI 纳入 `mediaLayer` gate。
 
-### Changed
+### 变更
 
 - Project export 现在包含 media metadata、segments 和经过 secret redaction 的可导出 source。
 - 项目删除会同步清理关联 media metadata、segment 文件与 Local RAG media index。
 - README、docs/EVIDENCE_INDEX.md、docs/RELEASE_READINESS.md 和实现状态矩阵同步到 v2.7.0。
 
-## [2.6.9] - Local Skill Catalog
+## [2.6.9] - 本地 Skill 目录
 
 **主题：本地 Skill Marketplace-lite。** 继 v2.6.8 增加安全审查、信任状态和 hash manifest 后，本版本新增本地 Skill Catalog，用于发现、搜索、预检、安装、卸载和导出本机 Skills / Packs，不引入远程市场或第三方下载。
 
-### Added
+### 新增
 
 - **Local Skill Catalog**：新增 `deepseek_infra/infra/skills/catalog.py`，索引内置 Skill、自定义 Skill、内置 Pack、自定义 Pack 和已导入 Pack。
 - **Catalog Manifest**：聚合 `category`、`tags`、`trustLevel`、`riskScore`、`evalScore`、`installCount`、`requiredTools`、`includedSkills`、`contentHash`、`schemaHash`、`promptHash` 和 `toolGrantHash`。
@@ -611,12 +611,12 @@
 - **Catalog UI**：Skill Workbench 新增 `Catalog` 页签，支持搜索、信任筛选、安装预检、安装到当前项目、跳转安全审查和导出 catalog manifest。
 - **Catalog Evidence**：新增 `scripts/smoke_skill_catalog.py`、`docs/evidence/skill-catalog-v2.6.9.json`、Catalog 截图资产，并将 release manifest / preflight / CI 纳入 `skillCatalog` gate。
 
-### Changed
+### 变更
 
 - README、docs/SKILLS.md、docs/EVIDENCE_INDEX.md、docs/RELEASE_READINESS.md 和实现状态矩阵同步到 v2.6.9。
 - `scripts/smoke_release.py` 增加 `skill_catalog` stage；CI release-readiness job 生成并校验 Catalog evidence。
 
-## [2.6.8] - Skill Security Review
+## [2.6.8] - Skill 安全审查
 
 **主题：Skill 信任与签名预备。** 继 v2.6.7 新增使用分析之后，本版本新增本地 Skill / Pack 安全审查、信任等级、提示风险扫描、防篡改清单和运行时安全元数据。
 
@@ -635,7 +635,7 @@
 - Skill Runner 拦截高风险未信任的 Skill，除非提供 `securityApproved=true`；被拦截的 Skill 在执行前始终失败。
 - 发布就绪、CI、smoke release、preflight 和 release manifest 纳入 Skill Security 证据。
 
-## [2.6.7] - Skill Run Analytics
+## [2.6.7] - Skill 运行分析
 
 **主题：Skill 使用与运行历史。** 继 v2.6.6 新增 Skill / Pack 生命周期管理之后，本版本新增本地 Skill 运行历史、使用分析、失败诊断、trace/artifact 链接、保留清理和隐私脱敏。
 
@@ -653,7 +653,7 @@
 - Skill Runner 现在为成功和失败的运行持久化分析元数据，同时以摘要优先的方式保存分析日志以保护本地隐私。
 - 发布就绪、CI、smoke release 和 release manifest 纳入 Skill Analytics 证据。
 
-## [2.6.6] - Skill Versioning & Migration
+## [2.6.6] - Skill 版本化与迁移
 
 **主题：Skill 生命周期管理。** 继 v2.6.5 新增 Skill / Pack 质量评测后，本版本新增本地版本历史、diff、迁移计划、回滚、版本化 Pack 安装和评测感知的升级门禁。
 
@@ -671,7 +671,7 @@
 - 项目 Skill 绑定保持与字符串 `enabledPacks` 的向后兼容，同时新增 `enabledPackVersions` 元数据。
 - 发布就绪、CI、smoke release 和 release manifest 纳入 `skillVersioning` 质量门禁。
 
-## [2.6.5] - Skill Eval Dashboard
+## [2.6.5] - Skill 评测仪表盘
 
 **主题：Skill 质量与回归闭环。** 继 v2.6.4 新增本地 Skill Pack 之后，本版本新增离线 Skill / Pack 评测、Workbench 质量仪表盘、评测用例编写、报告导出和发布门禁证据。
 
@@ -694,40 +694,40 @@
 
 **主题：Skill Pack 与模板库。** 继 v2.6.3 支持可视化创建单个 Skill 后，本版本把 Skills 扩展为可成套导入、导出、安装和项目绑定的本地 Skill Packs。
 
-### Added
+### 新增
 
 - **Skill Pack schema**：新增本地 `.skillpack.json` 格式，支持 packId、name、description、version、author、skills 与 install metadata，skills 条目可为引用或完整内嵌 Skill 配置。
 - **Pack Import / Export**：支持导入、导出、校验 Skill Pack，生成 skillId 冲突处理与工具权限摘要；冲突策略支持 error / overwrite / skip。
-- **Built-in Template Library**：新增 Study / Research / Code / Office 四个内置 Skill Pack。
+- **内置模板库**：新增 Study / Research / Code / Office 四个内置 Skill Pack。
 - **Pack Workbench UI**：Skill Workbench 新增 Packs 页签，支持查看、安装、导出、批量启用和删除 Pack 内 Skills，并展示导入摘要与高风险工具提示。
 - **Project Pack Binding**：项目配置支持 `enabledPacks`，可从 Pack 一键启用一组 Skills。
 - **Pack Safety Checks**：导入前展示 allowedTools diff 与 requires approval 风险提示，skillId 冲突必须显式处理，仅支持本地文件导入。
 - **Skill Pack Evidence**：新增 `scripts/smoke_skill_packs.py` 与 `docs/evidence/skill-packs-v2.6.4.json`，release readiness 纳入 `skillPacks` gate。
 
-### Changed
+### 变更
 
 - docs/SKILLS.md 增加 Skill Pack 格式、导入导出流程和安全说明。
 - README roadmap 增加 Skill Packs / Template Library。
 - `preflight_release.py` / `smoke_release.py` / release manifest 纳入 `skill_packs_evidence` 与 `skillPacks` 质量门。
 
-## [2.6.3] - Custom Skill Builder
+## [2.6.3] - 自定义 Skill 构建器
 
-**Theme: Custom Skill authoring.** After v2.6.2 made Skills usable from the Workbench, this release upgrades custom Skill creation from JSON import to a visual builder with validation and offline dry-run.
+**主题：自定义 Skill 编写。** 在 v2.6.2 让 Skill 可在 Workbench 使用之后，本版本将自定义 Skill 创建从 JSON 导入升级为带有校验和离线干跑的可视化构建器。
 
-### Added
+### 新增
 
-- **Custom Skill Builder**: guided authoring for base metadata, systemPrompt, inputSchema, outputSchema, allowedTools, memoryPolicy, artifactPolicy, and projectBinding.
-- **Visual Schema Editor**: creates `inputSchema` fields for string, textarea, number, integer, enum, and boolean inputs.
-- **Tool Permission Picker**: selects `allowedTools` by capability and risk label, with server-side schema validation before save.
-- **Clone Built-in Skill**: clones built-in Skills into custom editable Skills.
-- **Preview / Validate / Dry Run**: previews final Skill JSON, validates the schema, and performs offline dry-run before save.
-- **Skill Builder Evidence**: adds `scripts/smoke_skill_builder.py` and `docs/evidence/skill-builder-v2.6.3.json` to release readiness.
+- **自定义 Skill 构建器**：引导式编写基础元数据、systemPrompt、inputSchema、outputSchema、allowedTools、memoryPolicy、artifactPolicy 和 projectBinding。
+- **可视化 Schema 编辑器**：为 string、textarea、number、integer、enum 和 boolean 输入创建 `inputSchema` 字段。
+- **工具权限选择器**：按能力和风险标签选择 `allowedTools`，并在保存前进行服务端 schema 校验。
+- **克隆内置 Skill**：将内置 Skill 克隆为可编辑的自定义 Skill。
+- **预览 / 校验 / 干跑**：预览最终 Skill JSON、校验 schema，并在保存前执行离线干跑。
+- **Skill 构建器证据**：新增 `scripts/smoke_skill_builder.py` 和 `docs/evidence/skill-builder-v2.6.3.json` 到发布就绪。
 
-### Changed
+### 变更
 
-- Replaced the old custom Skill `window.prompt` edit flow with the full builder panel.
-- Added `validate` and `dry_run` actions to `POST /api/skills` for local authoring flows.
-- Expanded docs/SKILLS.md with Custom Skill Builder usage notes.
+- 用完整构建器面板替换旧的自定义 Skill `window.prompt` 编辑流程。
+- 在 `POST /api/skills` 中新增 `validate` 和 `dry_run` 动作，用于本地编写流程。
+- 在 docs/SKILLS.md 中扩展自定义 Skill 构建器使用说明。
 
 ## [2.6.2] - Skill Workbench UI
 
@@ -747,7 +747,7 @@
 - `docs/SKILLS.md` 增加前端使用说明和 UI 操作流。
 - CI 将 `static/modules/skills.js` 纳入 `node --check`，release-readiness 生成 Workspace / Skill System / Skill UI 三类 evidence 后再跑 preflight。
 
-## [2.6.1] - Skill API Integration Patch
+## [2.6.1] - Skill API 集成补丁
 
 **主题：Skill System 收口补丁。** 补齐 Skill System 的 HTTP API 集成，把 2.6.0 已落地的 registry / runner / artifact / evidence 能力接到 Web 层，并同步发布证据。
 
@@ -779,7 +779,7 @@
 
 - 全仓版本号从 2.5.9 同步到 2.6.0（README badge、`app_version`、Dockerfile tag、Android `versionName` / `versionCode`、CI preflight 版本、evidence 路径、文档「适用版本」、eval / agent / security / baseline 报告版本）。
 
-## [2.5.9] - Web Route Split Final
+## [2.5.9] - Web 路由拆分收官
 
 **主题：Chat 路由拆分 & Web Route Split 收口。** 提取 chat、title、conversation search 与 OpenAI-compatible 路由到 `routes/chat.py`，完成 #14 全部路由拆分。
 
@@ -793,7 +793,7 @@
 - **server.py 精简为路由装配**：移除全部内联 chat route handler。
 - **create_server 改用 `create_app()`**：便于测试 deps 注入。
 
-## [2.5.8] - Web Route Split Phase 5
+## [2.5.8] - Web 路由拆分 Phase 5
 
 **主题：Web Route Split Phase 5 / Workspace 路由拆分。** 提取 Workspace Core 全部 API（projects、saved items、artifacts、exports 共 22 条路由）到 `routes/workspace.py`。
 
@@ -807,7 +807,7 @@
 - **server.py 移除 project_action**：逻辑迁移到 workspace.py。
 - **server.py 精简 imports**：移除不再直接引用的 workspace 模块。
 
-## [2.5.7] - Web Route Split Phase 4
+## [2.5.7] - Web 路由拆分 Phase 4
 
 **主题：Web Route Split Phase 4 / MCP & A2A & Edge 路由拆分。** 本版本提取 MCP（JSON-RPC + external tools）、A2A（agent card / task lifecycle / streaming）与 Edge（reload）路由。
 
@@ -823,7 +823,7 @@
 - **enabled 字段改用 Callable lambda**：`mcp_enabled` / `a2a_enabled` 使用 lambda 读取 `settings.*`，非 bool 快照。
 - **编码回归重定向**：MCP / A2A 断言从 `server.py` 切换到 `routes/mcp.py` / `routes/a2a.py`。
 
-## [2.5.6] - Web Route Split Phase 3
+## [2.5.6] - Web 路由拆分 Phase 3
 
 **主题：Web Route Split Phase 3 / RAG & Memory 路由拆分。** 本版本继续处理 #14 的 `server.py` 路由拆分，提取 RAG reindex/verify-citation/eval 与 Memory list/upsert/delete/conflicts 路由，继续遵循 dependency 传参模式，不触碰 chat、A2A、MCP、workspace、reminders 等高耦合路径。
 
@@ -842,7 +842,7 @@
 
 - 新增并验证 `tests/test_web_rag_routes.py`、`tests/test_web_memory_routes.py` 与 `tests/test_web_route_split.py` Phase 3 检查，确保 RAG / Memory 拆分后原 API 路径、auth、AppError code 与旧 `server_module` patch 习惯不回归。
 
-## [2.5.5] - Web Route Split Phase 2
+## [2.5.5] - Web 路由拆分 Phase 2
 
 **主题：Web Route Split Phase 2 / Files & Downloads 路由拆分。** 本版本继续处理 #14 的 `server.py` 路由拆分，只推进边界清晰的文件预览与下载路由，不触碰 chat、A2A、MCP、workspace、memory 等高耦合路径。
 
@@ -862,7 +862,7 @@
 
 - 新增并验证 `tests/test_web_file_routes.py`、`tests/test_web_download_routes.py` 与 `tests/test_web_route_split.py`，确保 Files / Downloads 拆分后原 API 路径与安全响应头不回归。
 
-## [2.5.4] - Web Route Split Phase 1
+## [2.5.4] - Web 路由拆分 Phase 1
 
 **主题：Web Route Split Phase 1 / 状态路由拆分。** 本版本开始处理 #14 的 `server.py` 路由拆分，先抽公共 HTTP helper 与只读状态/诊断路由，不触碰 chat、files、RAG 写入、workspace 写入和下载路径。
 
@@ -882,13 +882,13 @@
 
 - 新增 `tests/test_web_route_split.py`；保留并验证 `/api/config`、RAG / semantic cache / gateway / edge status 等原有集成路径。
 
-## [2.5.3] - ONNX Semantic Cache Evidence Patch
+## [2.5.3] - ONNX 语义缓存证据补丁
 
 **主题：语义缓存 ONNX evidence 补丁。** 本版把语义缓存的"hash vs ONNX"决策从一句话推进为结构化 evidence，新增 `--compare` 对照模式和 preflight 检查，不强制依赖 ONNX 模型文件。
 
 ### 新增
 
-- **Semantic cache compare mode**：`benchmarks/bench_semantic_cache.py` 新增 `--compare` 标志，自动跑 hash + ONNX 两路 benchmark 并产出结构化 evidence JSON + Markdown，`--out` / `--markdown` 指定输出路径。
+- **语义缓存对比模式**：`benchmarks/bench_semantic_cache.py` 新增 `--compare` 标志，自动跑 hash + ONNX 两路 benchmark 并产出结构化 evidence JSON + Markdown，`--out` / `--markdown` 指定输出路径。
 - **语义缓存 ONNX evidence**：新增 `docs/evidence/semantic-cache-onnx-v2.5.3.json` 与 `.md`，记录 hash / ONNX 两路 exactHitRate、paraphraseHitRate、unrelatedFalseHitRate 与决策结论。
 - **Preflight 语义缓存 ONNX 检查**：`scripts/preflight_release.py` 新增 `semantic_cache_onnx_evidence` 检查；缺失时 WARNING，提交后若 exactHitRate < 1.0、unrelatedFalseHitRate > 0.0 或 metadata 不完整则 FAIL。
 
@@ -902,15 +902,15 @@
 
 - 新增 `test_preflight_warns_on_missing_semantic_cache_onnx_evidence`、`test_preflight_fails_on_semantic_cache_onnx_non_pass_status`、`test_preflight_fails_on_semantic_cache_onnx_missing_metadata`、`test_preflight_passes_on_semantic_cache_onnx_evidence_complete` 共 4 个 preflight 单测。
 
-## [2.5.2] - Edge/Ollama Cascade Draft Layer
+## [2.5.2] - Edge/Ollama Cascade 草稿层
 
 **主题：Edge/Ollama Cascade 草稿层。** 本版让本地 Ollama / GGUF 模型真正进入 cascade 草稿层：便宜本地草稿 → 质量门控 → 不合格再升级 DeepSeek 云端精算。
 
 ### 新增
 
-- **Cascade Ollama draft provider**：`call_deepseek_cascade()` 支持 `ollama/` 前缀的 draft model，通过 provider registry 调用 OllamaProvider.chat()，不再卡在 `validate_deepseek_payload()` 的 `SUPPORTED_MODELS` 白名单。
+- **Cascade Ollama 草稿提供商**：`call_deepseek_cascade()` 支持 `ollama/` 前缀的 draft model，通过 provider registry 调用 OllamaProvider.chat()，不再卡在 `validate_deepseek_payload()` 的 `SUPPORTED_MODELS` 白名单。
 - **Cascade 诊断增强**：`modelCascade` diagnostics 新增 `draftProvider` 字段，`router_status()` 同步返回 `draftProvider`，`CascadePlan` 新增 `draft_provider` 属性。
-- **Edge Router cascade smoke**：`examples/edge_router_smoke.py` 新增 `--cascade` 标志，探测 cascade 状态、draft provider 类型，并执行 cascade chat completion 验证 modelCascade diagnostics。
+- **Edge Router cascade 冒烟**：`examples/edge_router_smoke.py` 新增 `--cascade` 标志，探测 cascade 状态、draft provider 类型，并执行 cascade chat completion 验证 modelCascade diagnostics。
 - **环境变量覆盖**：新增 `MODEL_ROUTER_DRAFT_MODEL`、`MODEL_ROUTER_REFINE_MODEL`、`MODEL_ROUTER_JUDGE_MODEL` 环境变量，`.env.example` 同步说明。
 
 ### 更改
@@ -923,7 +923,7 @@
 
 - 新增 `test_cascade_plan_sets_ollama_provider`、`test_cascade_ollama_draft_call_uses_ollama_provider`、`test_cascade_diagnostics_includes_draft_provider`、`test_router_status_includes_draft_provider` 共 5 个 cascade ollama 路径单测。
 
-## [2.5.1] - Backlog Hygiene & Release Sync Patch
+## [2.5.1] - Backlog 整理与发布同步补丁
 
 **主题：版本同步与发布证据刷新补丁。** 本版为 v2.5.0 的发布后小修补：同步全仓版本号到 2.5.1、刷新 workspace smoke evidence、清理已完成但未关闭的 roadmap issues。
 
@@ -957,7 +957,7 @@
 - 新增 `tests/test_workspace.py`、`tests/test_smoke_workspace.py`，覆盖 Workspace Core 数据模型、导出包结构、脱敏和项目删除边界。
 - 扩展 release preflight、smoke release 与 manifest 测试，固定 Workspace Core evidence 和 `workspaceCore` gate。
 
-## [2.4.6] - OpenAI-Compatible SDK Evidence Patch
+## [2.4.6] - OpenAI 兼容 SDK 证据补丁
 
 **主题：OpenAI-compatible SDK 兼容性证据补丁。** 本版不新增核心运行时能力，重点把 OpenAI API Compatibility 中仍处于 🔲 的 Other OpenAI-compatible SDKs 从 Not tested 推进为结构化 SDK smoke evidence，验证 DeepSeek Infra 的 `/v1` OpenAI-compatible endpoint 能被 LangChain、LiteLLM、LlamaIndex 等常见 SDK 复用。
 
@@ -980,7 +980,7 @@
 - 新增 OpenAI-compatible SDK evidence schema / preflight 测试，覆盖 evidence 缺失 WARNING、status 非 PASS 失败、metadata 缺失失败、关键 SDK checks 缺失失败与完整 PASS。
 - 新增 SDK smoke runner 单测，覆盖 JSON / Markdown 输出、SDK 缺失时跳过说明、以及 mock OpenAI-compatible client 的成功路径。
 
-## [2.4.5] - Continue.dev MCP Compatibility Patch
+## [2.4.5] - Continue.dev MCP 兼容性补丁
 
 **主题：Continue.dev MCP 兼容性证据补丁。** 本版不新增核心运行时能力，重点把 MCP Client Compatibility 中仍处于 🔲 的 Continue.dev 从 Not tested 推进为可复现的配置文档与结构化 evidence，验证 Continue.dev 能通过 DeepSeek Infra 的 MCP endpoint 完成 initialize、tools/list、低风险工具调用、Tool Policy 拦截与系统提示无污染检查。
 
@@ -1003,7 +1003,7 @@
 - 新增 Continue.dev evidence schema / preflight 测试，覆盖 evidence 缺失 WARNING、status 非 PASS 失败、必要 checks 缺失失败、metadata 缺失失败与完整 PASS。
 - 更新 docs encoding / compatibility matrix 测试，确保 Continue.dev 集成文档、evidence 索引与兼容矩阵状态同步。
 
-## [2.4.4] - A2A Third-Party Ecosystem Evidence Patch
+## [2.4.4] - A2A 第三方生态证据补丁
 
 **主题：A2A 第三方生态互操作证据补丁。** 本版不新增核心运行时能力，重点把 v2.3.x / v2.4.x 中仍处于 🟡 的 Third-party A2A ecosystem peer 从 adapter path documented 推进为结构化 third-party evidence，验证 DeepSeek Infra 的 A2AClient 能连接外部 A2A-compatible peer 并完成 Agent Card、message/send、message/stream、tasks/get、tasks/cancel、tasks/list、artifact chunks 与 SSE final event 全流程。
 
@@ -1011,7 +1011,7 @@
 
 - **A2A third-party peer evidence**：新增 `docs/evidence/a2a-third-party-peer.json` 与 `docs/evidence/a2a-third-party-peer.md`，记录第三方 A2A-compatible peer 的互操作验收结果。
 - **A2A third-party evidence schema**：新增 `evals/schemas/a2a_third_party_peer_evidence.schema.json`，固定 metadata、peer 信息、`peerType=third-party`、checks 与 PASS / FAIL 状态结构。
-- **External peer smoke markdown 输出**：`scripts/smoke_a2a_external_peer.py` 支持 `--markdown`，可同时生成机器可读 JSON 与人工可读验收摘要。
+- **外部 peer 冒烟 Markdown 输出**：`scripts/smoke_a2a_external_peer.py` 支持 `--markdown`，可同时生成机器可读 JSON 与人工可读验收摘要。
 - **Preflight third-party A2A evidence 检查**：`scripts/preflight_release.py` 新增 `a2a_third_party_peer_evidence` 检查；缺失时 WARNING，提交后若 status、metadata、peerType 或关键 checks 不完整则 FAIL。
 
 ### 更改
@@ -1026,16 +1026,16 @@
 - 新增 A2A third-party evidence schema / preflight 测试，覆盖 evidence 缺失 WARNING、status 非 PASS 失败、必要 checks 缺失失败、metadata 缺失失败、peerType 错误失败与完整 PASS。
 - 更新 A2A external peer smoke 测试，覆盖 `--peer-type third-party`、JSON evidence 输出与 Markdown evidence 输出。
 
-## [2.4.3] - Edge Router Evidence Patch
+## [2.4.3] - Edge Router 证据补丁
 
 **主题：Edge Router 实机证据补丁。** 本版不新增协议或运行时功能，重点把 v2.4.x 中仍处于 🟡 的 Edge-Cloud Model Router 验收路径从 runbook 推进为结构化 evidence，补齐 Ollama provider、本地 `/v1/models` 暴露、Edge status endpoint 与 OpenAI-compatible local call 的可复现证据。
 
 ### 新增
 
-- **Edge Router smoke evidence**：新增 `docs/evidence/edge-router-smoke.json` 与 `docs/evidence/edge-router-smoke.md`，记录 Ollama provider、本地模型目录、Edge status endpoint 与 OpenAI-compatible local call 的验收结果。
+- **Edge Router 冒烟证据**：新增 `docs/evidence/edge-router-smoke.json` 与 `docs/evidence/edge-router-smoke.md`，记录 Ollama provider、本地模型目录、Edge status endpoint 与 OpenAI-compatible local call 的验收结果。
 - **Edge Router smoke 输出增强**：`examples/edge_router_smoke.py` 支持 `--out` 与 `--markdown`，可直接生成 release evidence；新增 OpenAI-compatible local chat call 验证与统一 metadata。
 - **Preflight Edge evidence 检查**：`scripts/preflight_release.py` 新增 `edge_router_smoke_evidence` 检查；缺失 evidence 保持 WARNING，已有 evidence 但 `status` 或必要 checks 非 PASS 时 FAIL，避免无本地模型的 CI runner 被强制阻断。
-- **Edge Router evidence schema**：新增 `evals/schemas/edge_router_smoke_evidence.schema.json`，固定 `ollamaModelsListed` / `openaiCompatibleLocalCall` / `edgeStatusEndpoint` / `fallbackReady` 四类 checks。
+- **Edge Router 证据 schema**：新增 `evals/schemas/edge_router_smoke_evidence.schema.json`，固定 `ollamaModelsListed` / `openaiCompatibleLocalCall` / `edgeStatusEndpoint` / `fallbackReady` 四类 checks。
 
 ### 更改
 
@@ -1046,10 +1046,10 @@
 
 ### 测试
 
-- 新增 Edge Router evidence builder / markdown writer / schema 测试，覆盖完整 PASS、无本地模型 WARNING 与文件输出路径。
+- 新增 Edge Router 证据构建器 / Markdown 写入器 / schema 测试，覆盖完整 PASS、无本地模型 WARNING 与文件输出路径。
 - 新增 preflight 测试，覆盖 Edge evidence 缺失 WARNING、status 非 PASS 失败、必要 check 缺失失败、metadata 缺失失败。
 
-## [2.4.2] - GUI Interop Evidence Patch
+## [2.4.2] - GUI 互操作证据补丁
 
 **主题：GUI 互操作证据补丁。** 本版不新增协议或运行时功能，专门把 v2.3.x / v2.4.x 中仍处于 🟡 的 Claude Desktop / Cursor GUI 证据补齐到 ✅ GUI tested，并同步刷新所有版本号与 eval/security/baseline release evidence，使 `preflight_release.py --version 2.4.2` 的 `gui_interop_evidence` 检查由 WARNING 变为 PASS。
 
@@ -1069,7 +1069,7 @@
 
 - **GUI 证据状态未闭环**：v2.3.1 预留的 GUI interop evidence check 在 v2.4.2 完成人工 GUI 验证后，兼容矩阵与 integration docs 已同步，preflight 不再报 WARNING。
 
-## [2.4.1] - Release Evidence Patch
+## [2.4.1] - 发布证据补丁
 
 **主题：发版证据补丁。** 本版不新增协议或运行时功能，重点补齐 v2.4.0 质量门禁与安全评测的 release evidence，使 baseline regression、安全语料评测和 preflight 检查形成可复现、可提交、可追溯的闭环。
 
@@ -1118,7 +1118,7 @@
 - **发布阻断条件**：当 injection bypass rate、false positive rate、tool policy pass rate 或 Agent success rate 低于 v2.4 阈值时，阻塞发布。
 - **安全语料指标证据化**：在 release evidence 中记录 block rate、false-positive rate、bypass rate、SSRF block rate、path traversal block rate 与 secret exfiltration block rate 等安全指标。
 
-## [2.3.4] - Release Evidence Polish & Encoding Fix
+## [2.3.4] - 发布证据打磨与编码修复
 
 **主题：Release Evidence Polish / Encoding Fix。** 本版不继续扩大 MCP / A2A 协议面，而是修复 v2.3.3 文档编码残留，统一 evidence 文件格式，新增互操作证据索引页，并让 preflight 检查文档可读性与证据完整性。属于 v2.3 系列的验收闭环。
 
@@ -1141,7 +1141,7 @@
 - 新增 `tests/test_release_manifest.py`，覆盖 manifest 缺 `evidence` 列表、evidence JSON 缺 `version` / `commit` / `generatedAt` / `status` 时 FAIL。
 - 更新 `tests/test_preflight_release.py`，覆盖 `docs_encoding_sanity` PASS / FAIL 路径。
 
-## [2.3.3] - A2A External Peer Compatibility Pack
+## [2.3.3] - A2A 外部 Peer 兼容性包
 
 **主题：A2A 外部 peer 兼容性证据包。** 本版不扩大 Agent Runtime 功能面，而是把 A2A 互操作从独立进程 demo 推进为可复现的 external peer smoke、结构化 evidence、preflight 分层检查和第三方生态 adapter 路径。
 
@@ -1163,14 +1163,14 @@
 - 新增 A2A external peer smoke / evidence 测试，覆盖 Agent Card 获取、`message/send` 与 task id、`message/stream` 与 final event、artifact chunk 顺序、`tasks/cancel` 与完整 evidence 结构。
 - 新增 preflight A2A evidence 测试，覆盖 external evidence 缺失 FAIL、check 缺失 FAIL、third-party evidence 缺失 WARNING 路径。
 
-## [2.3.2] - Headless MCP Client Compatibility Pack
+## [2.3.2] - 无头 MCP 客户端兼容性包
 
 **主题：无头 MCP 客户端兼容性证据包。** 本版不把 Claude Desktop / Cursor 未实机强行标 ✅，而是补齐无 GUI 环境下可自动复现的 MCP 客户端兼容性证据：stdio bridge、配置生成、headless smoke 和 preflight 硬证据。
 
 ### 新增
 
 - **Headless MCP bridge smoke**：新增 `scripts/smoke_mcp_headless_bridge.py`，启动本地 DeepSeek Infra，经内置 stdio → Streamable HTTP bridge 跑 `initialize`、`tools/list`、`data_transform` 工具调用和 `fetch_url` SSRF policy denial，并输出 `docs/evidence/headless-mcp-bridge.json`。
-- **MCP client config generator**：新增 `scripts/generate_mcp_client_config.py`，生成 Claude Desktop direct HTTP、Claude Desktop stdio bridge（`mcp-remote`）和 Cursor `.cursor/mcp.json` 配置。
+- **MCP 客户端配置生成器**：新增 `scripts/generate_mcp_client_config.py`，生成 Claude Desktop direct HTTP、Claude Desktop stdio bridge（`mcp-remote`）和 Cursor `.cursor/mcp.json` 配置。
 - **Headless MCP client 文档**：新增 `docs/integrations/headless-mcp-client.md`，说明 CI / server / 未安装 GUI 客户端环境下如何验证 stdio bridge + tools/list + tools/call + policy denial。
 - **Preflight headless evidence**：`scripts/preflight_release.py` 新增 `headless_mcp_bridge_evidence` 检查，缺失或步骤不完整时 FAIL。
 
@@ -1186,7 +1186,7 @@
 - 新增 headless MCP bridge evidence 测试，覆盖 PASS/FAIL 状态和 token 不进入 evidence。
 - 新增 preflight headless MCP evidence 测试，覆盖 evidence 缺失与关键步骤缺失时 FAIL。
 
-## [2.3.1] - GUI Interop Evidence Patch
+## [2.3.1] - GUI 互操作证据补丁
 
 **主题：协议互操作证据补丁。** 本版不开新功能，只做小版本收口：修正文档残留、把 GUI 实机证据纳入发版前体检、明确第三方 A2A 验证下一步。
 
@@ -1206,7 +1206,7 @@
 - 新增 `test_preflight_warns_on_pending_gui_interop_evidence` 与 `test_preflight_passes_on_completed_gui_interop_evidence`，覆盖 GUI 证据 WARNING / PASS 两条路径。
 - 版本回归断言更新到 2.3.1。
 
-## [2.3.0] - Protocol Interop GA
+## [2.3.0] - 协议互操作 GA
 
 **主题：协议互操作真正跑通。** 本版不扩大模块面，而是把 v2.2.x 已准备好的 MCP / A2A / 安全评测能力真正拿到外部实现里验一遍：MCP 客户端与官方 MCP Python SDK 的 Streamable HTTP transport 真正互通、A2A 客户端与独立进程 peer 端到端验证、Prompt Injection 对抗评测从 soft gate 毕业为 CI 硬门禁。
 
@@ -1231,7 +1231,7 @@
 - 新增 `test_offline_eval_suite_injection_hard_gate_fails_suite`，验证 injection gate 未达标时 suite 状态为 FAIL（v2.3.0 硬门禁行为）。
 - 现有 MCP / A2A / eval 全量测试通过，版本回归断言更新到 2.3.0。
 
-## [2.2.9] - Release Readiness & Runtime Doctor
+## [2.2.9] - 发布就绪与运行时诊断
 
 **主题：发布前体检与运行时诊断。** 本版作为 v2.2.x 收官，不继续扩大协议面或评测面，而是把环境检查、版本一致性、发布产物证明和一键 smoke 编排补齐，为 v2.3 的真实互操作验证提供稳定交付底座。
 
@@ -1258,7 +1258,7 @@
 - 新增 smoke_release 测试，覆盖 offline / with-server 阶段编排、skip 标志、默认 offline 与 `--json` 计划输出。
 - 新增 `test_v229_release_readiness_is_present` 版本回归测试，锁定新文件、版本同步与 CI job 存在。
 
-## [2.2.8] - Agent Eval Replay & Stability
+## [2.2.8] - Agent Eval 回放与稳定性
 
 **主题：Agent Eval 录制回放稳定化。** 本版不把 Agent Eval 直接升级为 CI 硬门禁，而是先补齐稳定录制格式、非确定字段归一化、report-only 报告和 baseline 对比，为 v2.4 的 Agent Eval CI 固化做准备。
 
@@ -1266,7 +1266,7 @@
 
 - **Agent recording schema**：新增 `evals/schemas/agent_prediction.schema.json` 与 `evals/golden/agent_predictions.v2.2.8.sample.jsonl`，固定 `id`、`tools`、`final`、`status`、`latencyMs`、`usage` 与 trace 摘要字段。
 - **Agent recording normalizer**：新增 `deepseek_infra/infra/evaluation/agent_recording.py`，剔除 `runId` / `traceId` / timestamp 等非确定字段，稳定 tool call、usage、latency 与 final answer 的评分输入。
-- **Agent eval report**：`run_agent_eval.py` 输出 `agent-latest.json` / `agent-latest.md`，记录 Tool Call Accuracy、Agent Success Rate、Prompt Regression、latency 与 token / USD cost。
+- **Agent 评测报告**：`run_agent_eval.py` 输出 `agent-latest.json` / `agent-latest.md`，记录 Tool Call Accuracy、Agent Success Rate、Prompt Regression、latency 与 token / USD cost。
 - **Agent baseline**：新增 `evals/baselines/agent-v2.2.8.json`，支持 current vs baseline 的 report-only 对比。
 - **Agent Eval 文档**：新增 `docs/AGENT_EVAL.md`，说明录制格式、回放命令、normalizer 忽略字段和 baseline 更新流程。
 
@@ -1282,7 +1282,7 @@
 - 新增 Agent eval replay 测试，覆盖 golden / predictions join、缺失 prediction、工具调用评分、关键词成功率与 Markdown 报告输出。
 - 新增 offline suite `--include-agent` 聚合测试，确保 Agent report-only 状态不会误伤 RAG / Tool Policy / Injection 的硬门禁。
 
-## [2.2.7] - Eval Reports & Regression Evidence
+## [2.2.7] - 评测报告与回归证据
 
 **主题：评测报告沉淀与回归证据链。** 本版不继续扩大协议面，也不直接把 injection soft gate 升级为 hard gate，而是把 v2.2.6 已接入的 RAG / Tool Policy / Prompt Injection 离线评测整理成统一报告、版本基线和 CI artifact，为 v2.3 的严格门禁与真实互操作验收提供可追踪证据。
 
@@ -1304,7 +1304,7 @@
 - 新增 offline eval suite 聚合测试，覆盖 JSON schema、Markdown 输出、soft gate 状态聚合。
 - 新增 baseline compare 测试，覆盖无退化、轻微退化 warning、严重退化 fail 三类路径。
 
-## [2.2.6] - Eval Gate & Security Hardening
+## [2.2.6] - 评测门禁与安全加固
 
 **主题：安全评测门禁与策略可解释性。** 本版不继续扩大协议面，而是把 Context Taint、Tool Policy 和 Injection Eval 从“已有能力”推进到“可量化、可解释、可在 CI 中持续守住”的安全工程闭环。
 
@@ -1327,7 +1327,7 @@
 - 新增 Context Taint `scan_text` 参数化矩阵：override / exfiltration / tool_directive 三类正例 + 五条良性 prose 反例（含「提交」误伤回归）。
 - 新增 injection soft gate 单元测试：阈值通过、blockRate 过低、falsePositive 过高三条路径，以及 `main()` 在 soft / `--strict` 下的退出码与 banner 文本。
 
-## [2.2.5] - Compatibility Smoke & Release Polish
+## [2.2.5] - 兼容性冒烟与发布打磨
 
 **主题：协议兼容冒烟验证与发布收口。** 本版不继续堆新模块，而是把 v2.2.4 已完成的 MCP / A2A 能力整理成可复跑、可排障、可写入兼容矩阵的验证路径，为 v2.3 的真实第三方互操作做准备。
 
@@ -1335,7 +1335,7 @@
 
 - **MCP compatibility smoke runner**：新增 `scripts/smoke_mcp_compat.py`，验证本地 MCP `initialize` / `tools/list` / `tools/call` / policy gate / external health API，并提供 `--external-server-url` 入口给真实第三方 Streamable HTTP MCP server 做冒烟。
 - **A2A contract smoke runner**：新增 `scripts/smoke_a2a_compat.py` 与 `examples/a2a_compat_smoke.py`，验证 Agent Card、`message/send`、`message/stream`、`tasks/resubscribe` 和 `tasks/cancel` 的最小互操作路径。
-- **A2A contract regression**：新增 `tests/test_a2a_compat_contract.py`，离线固定 Agent Card、artifact chunks、SSE final status、resubscribe cursor 和 cancel lifecycle 的标准 contract。
+- **A2A 契约回归**：新增 `tests/test_a2a_compat_contract.py`，离线固定 Agent Card、artifact chunks、SSE final status、resubscribe cursor 和 cancel lifecycle 的标准 contract。
 - **Edge Router runbook**：新增 `docs/EDGE_ROUTER_RUNBOOK.md` 与 `examples/edge_router_smoke.py`，补充 Ollama / GGUF 场景下的本地模型路由验证步骤。
 
 ### 更改
@@ -1349,7 +1349,7 @@
 - 新增 A2A compatibility contract tests，覆盖协议 contract、断线重订阅、错误响应和取消生命周期。
 - 新增 MCP / A2A smoke scripts，可在本地服务启动后手动验证协议端点与基础 health check。
 
-## [2.2.4] - A2A Artifact Streaming & Agent Interop
+## [2.2.4] - A2A 产物流式传输与 Agent 互操作
 
 **主题：A2A 任务产物流式增量与 Agent 互操作补强。** 本版把 A2A Agent Mesh 从 Experimental 推到 MVP，重点补“长任务能边跑边交付、断线能恢复、peer loopback 能复现、观测能落库”的可信路径。
 
@@ -1370,7 +1370,7 @@
 
 - `tests/test_a2a.py` 从 11 项扩到 14 项，覆盖 artifact chunk 顺序、`tasks/resubscribe` 游标恢复、A2AClient streaming loopback、取消中间态和 A2A Prometheus 指标。
 
-## [2.2.3] - MCP Interop & Trust Hardening
+## [2.2.3] - MCP 互操作与信任加固
 
 **主题：互操作验证 + 真实场景可信度补强。** 本版不继续堆新概念，重点把 MCP 外接路径、安全闸门、失败可观测性、评测与 benchmark 的可复跑证据打实。
 
@@ -1394,7 +1394,7 @@
 - MCP 新增覆盖：retry stats、registry health / circuit breaker、外部调用 trace diagnostics。
 - Eval 新增覆盖：adversarial injection runner 的 Base64 解码与 block / bypass / false-positive 指标聚合。
 
-## [2.2.2] - MCP Policy Hardening
+## [2.2.2] - MCP 策略加固
 
 **主题：MCP Policy Hardening——把外部 MCP bridged tools 的策略闸门从“主 Agent 路径可用”补强到“任何入口都不可绕过”。** 本版聚焦外部 MCP 工具的安全一致性：`/mcp tools/call`、Agent tool calls、远端工具错误、SSRF/path guard、schema 刷新和命名碰撞都进入明确的回归覆盖。
 
@@ -1409,7 +1409,7 @@
 - `tests/test_mcp.py` 新增外部 MCP policy、`isError`、schema refresh、自动 refresh、命名碰撞回归。
 - `tests/test_tool_policy.py` 新增外部 network/filesystem 工具的泛化 SSRF/path guard 回归。
 
-## [2.2.1] - External MCP Tool Bridge
+## [2.2.1] - 外部 MCP 工具桥接
 
 **主题：External MCP Tool Bridge——把外部 MCP server 的工具目录安全地桥接进本地 Agent 工具面。** 本版不再扩大 2.2.0 的 Trace / Eval / Docker 范围，而是聚焦 MCP 出方向能力：发现外部工具、命名隔离、接入 Tool Policy、清洗外部结果，并补齐 CI 修复与临时测试产物清理。
 
@@ -1429,7 +1429,7 @@
 ### 清理
 - 移除误入版本库的 `tmp_tests/` 本地 pytest 临时产物，并把 `tmp_tests/` 加入 `.gitignore`。
 
-## [2.2.0] - Visualization & Verification
+## [2.2.0] - 可视化与验证
 
 **主题：Visualization & Verification——让 Agent Trace、Eval、Docker 部署从「已有能力」变成「可展示、可验证、可交付」。** 本版补齐独立 Trace Viewer、脱敏导出、截图资产、Eval CI、Docker build gate 与镜像基础瘦身，并把 README / API / Demo / 部署 / 安全文档全部对齐到可验收状态。
 
@@ -1454,7 +1454,7 @@
 
 ### 修复
 - CI docker job 先 `cp .env.example .env` 再跑 `compose config`
-- Service Worker cache bump 到 `deepseek-infra-v187`，预缓存独立 Trace Viewer 页面与新增模块。
+- Service Worker 缓存版本提升到 `deepseek-infra-v187`，预缓存独立 Trace Viewer 页面与新增模块。
 
 ## [2.1.6]
 

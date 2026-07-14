@@ -59,7 +59,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("deepseek-infra:3.7.0", dockerfile)
         self.assertIn('versionName "3.7.0"', build_gradle)
         self.assertIn("versionCode 370", build_gradle)
-        self.assertIn("## [3.7.0] - Optional Rust RAG Document Preparation", changelog)
+        self.assertIn("## [3.7.0] - 可选 Rust RAG 文档预处理", changelog)
         self.assertIn("Personal AI Runtime GA", readme)
         self.assertIn("python scripts/smoke_ga.py --offline --out docs/evidence/ga-v3.7.0.json", ci)
         self.assertIn("python scripts/preflight_release.py --version 3.7.0 --ga", ci)

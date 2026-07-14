@@ -2,7 +2,7 @@
 
 This runbook covers day-to-day operation of the DeepSeek Infra 3.7.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
 
-> **Scope**: every Rust component remains opt-in. 3.7.0 adds deterministic document preparation for text already parsed by Python. Python still owns uploads, paths, file parsing, OCR, embeddings, persistence, indexes, retrieval, authorization, transports, sessions, tools, tracing, and business state. Rust cannot read files or write an index. The default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged. The published `v4.0.0-rc.1` remains a historical architecture preview, not the active stable line.
+> **Scope**: every Rust component remains opt-in. 3.7.0 adds deterministic document preparation for text already parsed by Python. Python still owns uploads, paths, file parsing, OCR, embeddings, persistence, indexes, retrieval, authorization, transports, sessions, tools, tracing, and business state. Rust cannot read files or write an index. The default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged. The published `v4.0.0-rc.1` remains a historical architecture preview, not the active stable line. 可视化职责边界图请见 [docs/ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ---
 
