@@ -1,24 +1,134 @@
 # 架构说明
 
-适用版本：v2.9.1。
+适用版本：v3.7.0。
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：本地工具面经 **MCP**（`POST /mcp`）暴露给任意 MCP 客户端，本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
+
+## Hybrid Runtime 总览（v3.7.0）
+
+> 运维细节、feature flags 与回滚命令见 [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)。
+
+```mermaid
+flowchart TB
+    subgraph Clients
+        C1[Web UI / PWA]
+        C2[Desktop WebView]
+        C3[Android APK]
+        C4[OpenAI SDK → /v1]
+        C5[MCP Client → /mcp]
+        C6[A2A Peer → /a2a]
+    end
+
+    subgraph Python["Python 默认运行时 — FastAPI / ASGI"]
+        P1[鉴权]
+        P2[HTTP / SSE / 流式]
+        P3[模型路由 · 重试 / 退避]
+        P4[Agent DAG 编排]
+        P5[MCP 传输与会话]
+        P6[真实工具执行]
+        P7[文件解析与 OCR]
+        P8[embeddings]
+        P9[持久化与索引]
+        P10[可观测性与业务状态]
+    end
+
+    subgraph Rust["可选 Rust Sidecar — 默认禁用"]
+        R1[Gateway 请求准备<br/>POST /gateway/request/prepare]
+        R2[MCP 协议准备<br/>POST /mcp/request/prepare]
+        R3[工具策略评估<br/>POST /policy/{url,path,capability}]
+        R4[RAG 向量排序<br/>POST /rag/vectors/rank]
+        R5[RAG 文档准备<br/>POST /rag/documents/prepare]
+    end
+
+    subgraph Data["Python 拥有的本地数据"]
+        D1[SQLite 向量 RAG]
+        D2[长期记忆]
+        D3[语义缓存]
+        D4[Trace Runs · Span Tree]
+        D5[请求队列 · DLQ]
+        D6[预算]
+    end
+
+    subgraph External["显式外部调用"]
+        E1[DeepSeek API]
+        E2[Tavily Search]
+        E3[Ollama / Edge inference]
+    end
+
+    Clients --> Python
+    Python --> Data
+    Python --> External
+
+    Python -. 可选确定性委托 .-> Rust
+    Rust -. 已验证结果 .-> Python
+    Rust -. "超时 / 不可用 / 畸形 / 分歧" .-> Python
+```
+
+### 一句话职责边界
+
+- **Python 是默认且权威运行时。** 默认部署为纯 Python；普通 `docker compose up -d` 只启动 Python FastAPI / ASGI 服务。
+- **Rust 委托是可选、确定性且带 fallback 保护的。** 每个 Rust 委托都默认禁用，可通过 `DEEPSEEK_RUST_*` 标志单独启用。
+- **持久化与工具执行仍由 Python 拥有：** Rust sidecar 不读文件、不写索引、不持有凭据、不执行工具、不拥有传输/会话，也不发起上游 HTTP 调用。
+- 当 sidecar 故障、超时、返回畸形响应或出现契约分歧时，系统会回退到等价的 Python 路径。
+
+### Rust Sidecar 做什么（以及不做什么）
+
+Sidecar 在单一 HTTP 监听器（默认 `127.0.0.1:8787`）上暴露以下 Python 调用的**确定性、无凭据委托**：
+
+| 委托 | 端点 | 启用开关 | Python 仍保留 |
+| --- | --- | --- | --- |
+| Gateway 请求准备 | `POST /gateway/request/prepare` | `DEEPSEEK_RUST_GATEWAY=1` | 流式、上游 HTTP、凭据、重试/退避、模型列表 |
+| MCP 协议准备 | `POST /mcp/request/prepare` | `DEEPSEEK_RUST_MCP=1` | 传输、会话、工具执行、resources/prompts |
+| 工具策略评估 | `POST /policy/url`, `/policy/path`, `/policy/capability` | `DEEPSEEK_RUST_POLICY=1` | 策略审计日志、最终执行闸门 |
+| RAG 向量排序 | `POST /rag/vectors/rank` | `DEEPSEEK_RUST_RAG=1` | 查询执行、检索、索引持久化 |
+| RAG 文档准备 | `POST /rag/documents/prepare` | `DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1` | 文件解析、OCR、embeddings、持久化、索引 |
+
+Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具执行、文件读取、OCR、embeddings、SQLite 或索引持久化。这些能力都留在 Python 路径。
+
+### Fallback 行为
+
+每个 Rust 组件都有对应的 Python 等价实现：
+
+- **Gateway 准备**回退到 Python 请求准备。
+- **MCP 准备**总是先计算 Python 结果，任何 Rust 分歧都使用 Python 结果继续执行。
+- **Policy**默认 `fallback`；后端失败时用 Python Tool Policy 重新评估。
+- **RAG 热路径**回退到 Python RAG 实现。
+- **RAG 文档准备**先计算 Python chunks，丢弃畸形或分歧的 Rust 输出后再持久化。
+
+### 版本说明
+
+- **Stable line:** `3.x`（当前 `3.7.0`）。
+- **`v4.0.0-rc.1`** 仍是历史架构预览，不是当前稳定线。
 
 ## 分层架构
 
 ![DeepSeek Infra 架构总览](assets/architecture.svg)
 
 ```
-Client Layer        Web UI / PWA · Desktop WebView · Android APK
-      │  HTTP · NDJSON · SSE · OpenAI /v1
-Local AI Runtime    FastAPI: Auth · Streaming · /v1/chat · /healthz · /metrics
+Client Layer    Web UI/PWA · Desktop WebView · Android APK · OpenAI SDK /v1 · MCP /mcp · A2A /a2a
+      │  HTTP · NDJSON · SSE · JSON-RPC 2.0
       │
-  ┌───┴───────────────┬───────────────────┐
-LLM Gateway        Agent DAG Runtime     Tool Runtime
-+ Model Router                           + Sandbox
-  └───┬───────────────┴───────────────────┘
-      │
-Local Data & Observability   Vector RAG · Memory · Trace · Semantic Cache · Request Queue
+Python Default Runtime   FastAPI / ASGI: Auth · Streaming · /v1/chat · /healthz · /metrics
+      │                                    ▲
+      │     optional deterministic         │ validated result / Python fallback
+      │     delegation (disabled by default)
+      │                                    │
+      ▼                                    │
+  ┌───┴───────────────┬───────────────────┐      ┌─────────────────────────────┐
+  │ LLM Gateway       │ Agent DAG Runtime │      │ Optional Rust Sidecar       │
+  │ + Model Router    │ + A2A Mesh        │      │ · Gateway request prepare   │
+  │ + Context Manager │                   │      │ · MCP protocol prepare      │
+  │ + Scheduler       │                   │      │ · Tool policy evaluation    │
+  │ + Budget          │                   │      │ · RAG vector ranking        │
+  └───────┬───────────┴─────────┬─────────┘      │ · RAG document preparation  │
+          │                     │                └─────────────────────────────┘
+          │                     │
+          └───────────┬─────────┘
+                      │
+      ┌───────────────┴───────────────────────┐
+      │ Local Data & Observability (Python-owned)
+      │ Vector RAG · Memory · Trace · Semantic Cache · Request Queue · Budget
+      └───────────────────────────────────────┘
 ```
 
 后端代码按基础设施分层组织在 `deepseek_infra/` 下：
