@@ -68,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     contract = CONTRACTS[args.kind]
     output = args.out if args.out.is_absolute() else ROOT / args.out
     output.parent.mkdir(parents=True, exist_ok=True)
+    basetemp = ROOT / "artifacts" / f"pytest-{args.kind}-contract"
+    basetemp.parent.mkdir(parents=True, exist_ok=True)
     command = [
         sys.executable,
         "-m",
@@ -78,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         "-p",
         "no:cacheprovider",
         "--basetemp",
-        str(ROOT / "artifacts" / f"pytest-{args.kind}-contract"),
+        str(basetemp),
         "-v",
         str(contract["test"]),
     ]

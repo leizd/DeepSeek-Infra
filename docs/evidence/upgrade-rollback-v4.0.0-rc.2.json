@@ -1,8 +1,8 @@
 {
   "schemaVersion": "upgrade-rollback.v1",
   "version": "4.0.0-rc.2",
-  "commit": "824447a168a38d7042b8b28a4ce646202b49ad5d",
-  "generatedAt": "2026-07-15T08:06:57Z",
+  "commit": "e5c1e7ddf3eabbbd56d92978117d10f8ec6081c0",
+  "generatedAt": "2026-07-15T08:15:38Z",
   "status": "PASS",
   "testFile": "tests/test_4_0_upgrade_contract.py",
   "testCount": 4,
