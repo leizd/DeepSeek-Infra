@@ -86,6 +86,21 @@ def test_conflict_filters_and_suggestion_rejections(tmp_settings: Path) -> None:
         memory.upsert_memory("")
 
 
+def test_conflict_detection_skips_unrelated_and_identical_memories(tmp_settings: Path) -> None:
+    different_category = memory.upsert_memory("English is a language", category="fact")
+    different_domain = memory.upsert_memory("I prefer a dark theme", category="preference")
+    identical = memory.upsert_memory("Chinese replies", category="preference")
+    conflict = memory.upsert_memory("English replies", category="preference")
+
+    conflicts = memory.detect_memory_conflicts("Chinese replies", category="preference")
+
+    assert [item["id"] for item in conflicts] == [conflict["id"]]
+    returned_ids = {item["id"] for item in conflicts}
+    assert different_category["id"] not in returned_ids
+    assert different_domain["id"] not in returned_ids
+    assert identical["id"] not in returned_ids
+
+
 def test_delete_clear_retrieve_and_context_budget_edges(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert memory.delete_memories_by_query("") == 0
     memory.upsert_memory("Pinned project memory", category="project", pinned=True)
