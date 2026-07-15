@@ -596,19 +596,26 @@ def _semantic_cache_storage_comparison(
     timeout: float,
 ) -> dict[str, Any]:
     query = scenario.payload["query"]
-    list_candidates = scenario.payload["candidates"]
+    source_candidates = scenario.payload["candidates"]
     dimensions = len(query)
     mixed = scenario.name == "mixed_blob_legacy_rows"
-    expected = _python_vector(scenario.payload)
     json_texts: list[str] = []
     all_blobs: list[bytes] = []
-    for candidate in list_candidates:
+    list_candidates: list[list[float]] = []
+    for candidate in source_candidates:
         representations = semantic_cache.encode_embedding_representations(
             candidate,
             expected_dimensions=dimensions,
         )
         json_texts.append(representations.json_text)
         all_blobs.append(representations.blob)
+        list_candidates.append(list(representations.values))
+    storage_scenario = Scenario(
+        name=scenario.name,
+        component=scenario.component,
+        payload={"query": query, "candidates": list_candidates},
+    )
+    expected = _python_vector(storage_scenario.payload)
 
     temp_dir = Path(tempfile.mkdtemp(prefix="semantic-cache-storage-benchmark-"))
     json_database = temp_dir / "json.sqlite3"
@@ -807,7 +814,7 @@ def _semantic_cache_storage_comparison(
             "sqliteBlobFetch": fetch_blobs,
             "blobValidation": validate_blobs,
             "directBlobAssembly": assemble_from_blobs,
-            "warmBinaryHttpFromLists": lambda: _vector_binary_http(base_url, scenario, timeout),
+            "warmBinaryHttpFromLists": lambda: _vector_binary_http(base_url, storage_scenario, timeout),
             "warmBinaryHttpFromBlobs": lambda: _vector_binary_blob_http(
                 base_url,
                 query,

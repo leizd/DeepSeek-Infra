@@ -274,7 +274,12 @@ def test_semantic_cache_storage_comparison_covers_mixed_database_layers(monkeypa
         "rag_vector_rank",
         benchmark._vector_payload(4, 8),
     )
-    expected = benchmark._python_vector(scenario.payload)
+    scenario.payload["candidates"][0][0] += 0.00000049
+    canonical_candidates = [
+        list(benchmark.semantic_cache.encode_embedding_representations(candidate).values)
+        for candidate in scenario.payload["candidates"]
+    ]
+    expected = benchmark._python_vector({"query": scenario.payload["query"], "candidates": canonical_candidates})
 
     def http_result(*_args: object, **_kwargs: object) -> benchmark.VectorLayerResult:
         return benchmark.VectorLayerResult(expected, False, 1, 24, transport_us=1, rust_processing_us=1)
