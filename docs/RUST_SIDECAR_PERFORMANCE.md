@@ -91,7 +91,27 @@ These 3.9.0 local results justified an explicit binary option for large vector r
 
 The 3.10.0 evidence adds the requested `16 × 384`, `128 × 768`, `1000 × 1536`, and mixed BLOB/legacy scenarios. Each scenario compares SQLite JSON fetch/decode/list assembly with SQLite BLOB fetch/validation/direct assembly, warmed binary HTTP from lists and BLOBs, full shadow integration from both representations, and direct Python ranking from decoded JSON versus BLOB-backed arrays. The `databaseBytes` block reports the JSON-only database, dual-write database, byte increase, and percent increase.
 
-The committed evidence file is the source of truth for measured values. It retains slower cases and storage overhead, and it does not set an absolute millisecond gate on public runners.
+The committed Windows x86_64 measurement used Rust 1.96.1, Python 3.13.5, 20 logical CPUs, five measured iterations, two excluded warmups, and commit `4d192753487af0e4c9780069725ef34540702553`. The following values are medians in microseconds; database values are physical SQLite file bytes.
+
+| Scenario | JSON DB → dual-write DB (increase) | JSON fetch | JSON decode | List assembly | BLOB fetch | BLOB validation | Direct BLOB assembly |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16 × 384 | 73,728 → 139,264 (+88.889%) | 3,922 | 3,127 | 3,038 | 7,224 | 1,836 | 304 |
+| 128 × 768 | 1,056,768 → 1,757,184 (+66.279%) | 12,353 | 56,717 | 36,168 | 11,520 | 22,274 | 1,037 |
+| 1000 × 1536 | 16,396,288 → 28,688,384 (+74.969%) | 104,139 | 820,432 | 751,556 | 141,943 | 329,325 | 19,385 |
+| mixed BLOB/legacy | 1,056,768 → 1,581,056 (+49.612%) | 13,109 | 52,406 | 44,712 | 19,147 | 116,577 | 1,040 |
+
+| Scenario | Warm binary from lists | Warm binary from BLOBs | Full shadow from JSON | Full shadow from BLOBs | Python direct from JSON | Python direct from BLOB arrays |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16 × 384 | 3,114 | 390 | 20,160 | 10,434 | 5,908 | 2,497 |
+| 128 × 768 | 34,702 | 2,415 | 137,235 | 72,711 | 73,461 | 34,465 |
+| 1000 × 1536 | 715,239 | 67,033 | 2,185,992 | 1,121,373 | 1,315,816 | 496,195 |
+| mixed BLOB/legacy | 40,012 | 4,055 | 153,422 | 172,769 | 80,773 | 34,922 |
+
+Every storage row produced the same normalized six-decimal ranking result, zero errors, zero unexpected fallbacks, and byte-identical `DSVRNK01` requests. The direct path did not invoke `json.loads()` or create candidate `list[list[float]]` values, and the report stored no vector content. In the required large scenario, direct assembly was 19,385 µs versus 751,556 µs for list assembly (38.8× lower), while the complete shadow path was 1,121,373 µs versus 2,185,992 µs from JSON. The mixed row is deliberately retained even though its full BLOB shadow path was slower on this run; no absolute latency or speedup is a public-runner merge gate.
+
+Dual-write has a material storage cost: these small SQLite fixtures increased by 49.612% to 88.889%, and the large dense fixture increased by 12,292,096 bytes (74.969%). This is accepted compatibility overhead because the JSON column remains rollback-readable; the migration tool never removes it.
+
+The committed evidence file is the source of truth for all medians, p95/p99 values, timing breakdowns, machine metadata, and gates. It retains slower cases and storage overhead, and it does not set an absolute millisecond gate on public runners.
 
 ## Timing diagnostics
 
