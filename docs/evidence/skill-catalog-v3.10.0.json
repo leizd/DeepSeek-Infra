@@ -1,7 +1,7 @@
 {
   "version": "3.10.0",
-  "commit": "1b2106c4b818",
-  "generatedAt": "2026-07-15T01:38:33+00:00",
+  "commit": "9e47b274b1d8",
+  "generatedAt": "2026-07-15T01:47:02+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -56,7 +56,7 @@
     "installPreview": {
       "itemId": "pack_study",
       "kind": "pack",
-      "projectId": "proj-c4170edb9ec6",
+      "projectId": "proj-c829a4d3016b",
       "includedSkills": [
         "skill_study_tutor",
         "skill_paper_writer",
@@ -309,7 +309,7 @@
           "reviewStatus": "",
           "signed": false
         },
-        "lastSecurityReviewAt": "2026-07-15T01:38:32+00:00",
+        "lastSecurityReviewAt": "2026-07-15T01:47:00+00:00",
         "signed": false
       },
       "projectChanges": {
@@ -320,7 +320,7 @@
     "riskyPreview": {
       "itemId": "pack_catalog_smoke_risky",
       "kind": "pack",
-      "projectId": "proj-c4170edb9ec6",
+      "projectId": "proj-c829a4d3016b",
       "includedSkills": [
         "skill_catalog_smoke_risky"
       ],
@@ -498,7 +498,7 @@
           "reviewStatus": "",
           "signed": false
         },
-        "lastSecurityReviewAt": "2026-07-15T01:38:33+00:00",
+        "lastSecurityReviewAt": "2026-07-15T01:47:01+00:00",
         "signed": false
       },
       "projectChanges": {

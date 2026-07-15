@@ -1,14 +1,14 @@
 {
   "schemaVersion": "headless-mcp-bridge-evidence.v1",
   "version": "3.10.0",
-  "commit": "1b2106c4",
-  "generatedAt": "2026-07-15T01:34:33Z",
+  "commit": "9e47b274",
+  "generatedAt": "2026-07-15T01:45:43Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
-  "gitSha": "1b2106c4",
+  "gitSha": "9e47b274",
   "gitDirty": true,
   "status": "PASS",
   "transport": {

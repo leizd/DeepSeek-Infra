@@ -1,7 +1,7 @@
 {
   "version": "3.10.0",
-  "commit": "1b2106c4b818",
-  "generatedAt": "2026-07-15T01:38:30+00:00",
+  "commit": "9e47b274b1d8",
+  "generatedAt": "2026-07-15T01:46:58+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -139,7 +139,7 @@
         "reviewStatus": "",
         "signed": false
       },
-      "lastSecurityReviewAt": "2026-07-15T01:38:29+00:00",
+      "lastSecurityReviewAt": "2026-07-15T01:46:57+00:00",
       "signed": false
     },
     "toolGrantDiff": {
@@ -211,20 +211,20 @@
         "reviewStatus": "",
         "signed": false
       },
-      "lastSecurityReviewAt": "2026-07-15T01:38:29+00:00",
+      "lastSecurityReviewAt": "2026-07-15T01:46:58+00:00",
       "signed": false
     },
     "blockedRuns": [
       {
         "schemaVersion": "skill-run.v1",
-        "skillRunId": "run-0e02f408d16df149",
+        "skillRunId": "run-0cdcefbf1bf69e1b",
         "skillId": "skill_security_smoke_run",
         "skillVersion": "1.0.0",
         "packId": "",
         "projectId": "",
         "status": "failed",
-        "startedAt": "2026-07-15T01:38:30+00:00",
-        "completedAt": "2026-07-15T01:38:30+00:00",
+        "startedAt": "2026-07-15T01:46:58+00:00",
+        "completedAt": "2026-07-15T01:46:58+00:00",
         "latencyMs": 0,
         "offline": true,
         "model": "",
@@ -250,21 +250,21 @@
     ],
     "approvedRun": {
       "schemaVersion": "skill-run.v1",
-      "skillRunId": "run-c8bccefc8968f51d",
+      "skillRunId": "run-95933c0a3e68e446",
       "skillId": "skill_security_smoke_run",
       "skillVersion": "1.0.0",
       "packId": "",
       "projectId": "",
       "status": "completed",
-      "startedAt": "2026-07-15T01:38:30+00:00",
-      "completedAt": "2026-07-15T01:38:30+00:00",
+      "startedAt": "2026-07-15T01:46:58+00:00",
+      "completedAt": "2026-07-15T01:46:58+00:00",
       "latencyMs": 0,
       "offline": true,
       "model": "",
       "inputSummary": "topic=approved",
       "outputSummary": "# approved Skill: Security Smoke Risky Skill (skill_security_smoke_run) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised.",
       "artifactIds": [
-        "art-b5679ea061061b7c"
+        "art-3eeea01142b682fe"
       ],
       "savedItemIds": [],
       "artifactCount": 1,
@@ -272,9 +272,9 @@
       "errorReason": "",
       "failureCategory": "",
       "diagnosticSuggestion": "",
-      "traceId": "73eae8c08e624e3b91da187a858d4ff6",
+      "traceId": "b6795f34d47145e4b6ac573e179f482e",
       "links": {
-        "trace": "/api/traces/73eae8c08e624e3b91da187a858d4ff6"
+        "trace": "/api/traces/b6795f34d47145e4b6ac573e179f482e"
       },
       "redacted": false,
       "runSecurityLevel": "high-risk",
@@ -411,7 +411,7 @@
         "reviewStatus": "",
         "signed": false
       },
-      "lastSecurityReviewAt": "2026-07-15T01:38:30+00:00",
+      "lastSecurityReviewAt": "2026-07-15T01:46:58+00:00",
       "signed": false
     },
     "summary": {

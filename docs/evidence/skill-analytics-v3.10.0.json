@@ -1,7 +1,7 @@
 {
   "version": "3.10.0",
-  "commit": "1b2106c4b818",
-  "generatedAt": "2026-07-15T01:38:29+00:00",
+  "commit": "9e47b274b1d8",
+  "generatedAt": "2026-07-15T01:46:56+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -28,37 +28,37 @@
   "details": {
     "run": {
       "schemaVersion": "skill-run.v1",
-      "skillRunId": "run-64c7f71e2df1c694",
+      "skillRunId": "run-85816021de1a35a8",
       "skillId": "skill_research_brief",
       "skillVersion": "1.0.0",
       "packId": "pack_research",
-      "projectId": "proj-b5fce4496e9b",
+      "projectId": "proj-deec4fae62ec",
       "status": "completed",
-      "startedAt": "2026-07-15T01:38:28+00:00",
-      "completedAt": "2026-07-15T01:38:28+00:00",
+      "startedAt": "2026-07-15T01:46:56+00:00",
+      "completedAt": "2026-07-15T01:46:56+00:00",
       "latencyMs": 0,
       "offline": true,
       "model": "",
       "inputSummary": "topic=Skill Run Analytics, depth=quick",
-      "outputSummary": "# Skill Run Analytics Skill: Research Brief Skill (skill_research_brief) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised. ## Project Context [Project context] projectId: proj-b5fce4496e9b name: Skill Analytics Smoke Project",
+      "outputSummary": "# Skill Run Analytics Skill: Research Brief Skill (skill_research_brief) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised. ## Project Context [Project context] projectId: proj-deec4fae62ec name: Skill Analytics Smoke Project",
       "artifactIds": [
-        "art-94fb0a5220daa334"
+        "art-4d95f5972198d24e"
       ],
       "savedItemIds": [
-        "saved-b975069758c1733d"
+        "saved-f6abf9c25aec9647"
       ],
       "artifactCount": 1,
       "savedItemCount": 1,
       "errorReason": "",
       "failureCategory": "",
       "diagnosticSuggestion": "",
-      "traceId": "16dcd713c96c4afabdd994fdf9719561",
+      "traceId": "e4f8016b1af54f01996731efb04d3a98",
       "links": {
-        "trace": "/api/traces/16dcd713c96c4afabdd994fdf9719561",
-        "projectRuns": "/api/workspace/projects/proj-b5fce4496e9b/skill-runs",
-        "projectAnalytics": "/api/workspace/projects/proj-b5fce4496e9b/skill-analytics",
-        "savedItems": "/api/workspace/projects/proj-b5fce4496e9b/saved-items",
-        "artifacts": "/api/workspace/projects/proj-b5fce4496e9b/artifacts"
+        "trace": "/api/traces/e4f8016b1af54f01996731efb04d3a98",
+        "projectRuns": "/api/workspace/projects/proj-deec4fae62ec/skill-runs",
+        "projectAnalytics": "/api/workspace/projects/proj-deec4fae62ec/skill-analytics",
+        "savedItems": "/api/workspace/projects/proj-deec4fae62ec/saved-items",
+        "artifacts": "/api/workspace/projects/proj-deec4fae62ec/artifacts"
       },
       "redacted": false,
       "runSecurityLevel": "trusted",
@@ -143,37 +143,37 @@
       "recentRuns": [
         {
           "schemaVersion": "skill-run.v1",
-          "skillRunId": "run-64c7f71e2df1c694",
+          "skillRunId": "run-85816021de1a35a8",
           "skillId": "skill_research_brief",
           "skillVersion": "1.0.0",
           "packId": "pack_research",
-          "projectId": "proj-b5fce4496e9b",
+          "projectId": "proj-deec4fae62ec",
           "status": "completed",
-          "startedAt": "2026-07-15T01:38:28+00:00",
-          "completedAt": "2026-07-15T01:38:28+00:00",
+          "startedAt": "2026-07-15T01:46:56+00:00",
+          "completedAt": "2026-07-15T01:46:56+00:00",
           "latencyMs": 0,
           "offline": true,
           "model": "",
           "inputSummary": "topic=Skill Run Analytics, depth=quick",
-          "outputSummary": "# Skill Run Analytics Skill: Research Brief Skill (skill_research_brief) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised. ## Project Context [Project context] projectId: proj-b5fce4496e9b name: Skill Analytics Smoke Project",
+          "outputSummary": "# Skill Run Analytics Skill: Research Brief Skill (skill_research_brief) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised. ## Project Context [Project context] projectId: proj-deec4fae62ec name: Skill Analytics Smoke Project",
           "artifactIds": [
-            "art-94fb0a5220daa334"
+            "art-4d95f5972198d24e"
           ],
           "savedItemIds": [
-            "saved-b975069758c1733d"
+            "saved-f6abf9c25aec9647"
           ],
           "artifactCount": 1,
           "savedItemCount": 1,
           "errorReason": "",
           "failureCategory": "",
           "diagnosticSuggestion": "",
-          "traceId": "16dcd713c96c4afabdd994fdf9719561",
+          "traceId": "e4f8016b1af54f01996731efb04d3a98",
           "links": {
-            "trace": "/api/traces/16dcd713c96c4afabdd994fdf9719561",
-            "projectRuns": "/api/workspace/projects/proj-b5fce4496e9b/skill-runs",
-            "projectAnalytics": "/api/workspace/projects/proj-b5fce4496e9b/skill-analytics",
-            "savedItems": "/api/workspace/projects/proj-b5fce4496e9b/saved-items",
-            "artifacts": "/api/workspace/projects/proj-b5fce4496e9b/artifacts"
+            "trace": "/api/traces/e4f8016b1af54f01996731efb04d3a98",
+            "projectRuns": "/api/workspace/projects/proj-deec4fae62ec/skill-runs",
+            "projectAnalytics": "/api/workspace/projects/proj-deec4fae62ec/skill-analytics",
+            "savedItems": "/api/workspace/projects/proj-deec4fae62ec/saved-items",
+            "artifacts": "/api/workspace/projects/proj-deec4fae62ec/artifacts"
           },
           "redacted": false,
           "runSecurityLevel": "trusted",
@@ -184,13 +184,13 @@
           "approvalRequired": false
         }
       ],
-      "generatedAt": "2026-07-15T01:38:28+00:00"
+      "generatedAt": "2026-07-15T01:46:56+00:00"
     },
     "projectSummary": {
       "scope": "project",
       "skillId": "",
       "packId": "",
-      "projectId": "proj-b5fce4496e9b",
+      "projectId": "proj-deec4fae62ec",
       "totalRuns": 1,
       "successRuns": 1,
       "failedRuns": 0,
@@ -261,37 +261,37 @@
       "recentRuns": [
         {
           "schemaVersion": "skill-run.v1",
-          "skillRunId": "run-64c7f71e2df1c694",
+          "skillRunId": "run-85816021de1a35a8",
           "skillId": "skill_research_brief",
           "skillVersion": "1.0.0",
           "packId": "pack_research",
-          "projectId": "proj-b5fce4496e9b",
+          "projectId": "proj-deec4fae62ec",
           "status": "completed",
-          "startedAt": "2026-07-15T01:38:28+00:00",
-          "completedAt": "2026-07-15T01:38:28+00:00",
+          "startedAt": "2026-07-15T01:46:56+00:00",
+          "completedAt": "2026-07-15T01:46:56+00:00",
           "latencyMs": 0,
           "offline": true,
           "model": "",
           "inputSummary": "topic=Skill Run Analytics, depth=quick",
-          "outputSummary": "# Skill Run Analytics Skill: Research Brief Skill (skill_research_brief) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised. ## Project Context [Project context] projectId: proj-b5fce4496e9b name: Skill Analytics Smoke Project",
+          "outputSummary": "# Skill Run Analytics Skill: Research Brief Skill (skill_research_brief) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised. ## Project Context [Project context] projectId: proj-deec4fae62ec name: Skill Analytics Smoke Project",
           "artifactIds": [
-            "art-94fb0a5220daa334"
+            "art-4d95f5972198d24e"
           ],
           "savedItemIds": [
-            "saved-b975069758c1733d"
+            "saved-f6abf9c25aec9647"
           ],
           "artifactCount": 1,
           "savedItemCount": 1,
           "errorReason": "",
           "failureCategory": "",
           "diagnosticSuggestion": "",
-          "traceId": "16dcd713c96c4afabdd994fdf9719561",
+          "traceId": "e4f8016b1af54f01996731efb04d3a98",
           "links": {
-            "trace": "/api/traces/16dcd713c96c4afabdd994fdf9719561",
-            "projectRuns": "/api/workspace/projects/proj-b5fce4496e9b/skill-runs",
-            "projectAnalytics": "/api/workspace/projects/proj-b5fce4496e9b/skill-analytics",
-            "savedItems": "/api/workspace/projects/proj-b5fce4496e9b/saved-items",
-            "artifacts": "/api/workspace/projects/proj-b5fce4496e9b/artifacts"
+            "trace": "/api/traces/e4f8016b1af54f01996731efb04d3a98",
+            "projectRuns": "/api/workspace/projects/proj-deec4fae62ec/skill-runs",
+            "projectAnalytics": "/api/workspace/projects/proj-deec4fae62ec/skill-analytics",
+            "savedItems": "/api/workspace/projects/proj-deec4fae62ec/saved-items",
+            "artifacts": "/api/workspace/projects/proj-deec4fae62ec/artifacts"
           },
           "redacted": false,
           "runSecurityLevel": "trusted",
@@ -302,7 +302,7 @@
           "approvalRequired": false
         }
       ],
-      "generatedAt": "2026-07-15T01:38:28+00:00"
+      "generatedAt": "2026-07-15T01:46:56+00:00"
     },
     "cleanup": {
       "ok": true,

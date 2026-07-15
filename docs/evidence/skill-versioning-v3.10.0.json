@@ -1,7 +1,7 @@
 {
   "version": "3.10.0",
-  "commit": "1b2106c4b818",
-  "generatedAt": "2026-07-15T01:38:28+00:00",
+  "commit": "9e47b274b1d8",
+  "generatedAt": "2026-07-15T01:46:55+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -30,32 +30,32 @@
         {
           "skillId": "skill_version_smoke",
           "version": "1.0.0",
-          "revisionId": "rev_20260715013826_106c918bfd",
-          "createdAt": "2026-07-15T01:38:26+00:00",
+          "revisionId": "rev_20260715014652_8f435c7be9",
+          "createdAt": "2026-07-15T01:46:52+00:00",
           "changeSummary": "Created custom Skill",
           "event": "create",
           "schemaHash": "ae4add8bebdcdfbeb90cb5d0217da169f2771d46757edce545ce6536ab7d8aa2",
           "promptHash": "0b487621000a01f59882cd97421e683de805078083e3c13e64079e275096d7ca",
           "toolGrantHash": "d0d5ab39c517d3d0a4d8a7f5f1855604779d628f3c3e6c5710345288317a7027",
-          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-2buqpkud\\.skills\\history\\skill_version_smoke\\1.0.0--rev_20260715013826_106c918bfd.json"
+          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-4o50on4j\\.skills\\history\\skill_version_smoke\\1.0.0--rev_20260715014652_8f435c7be9.json"
         },
         {
           "skillId": "skill_version_smoke",
           "version": "1.1.0",
-          "revisionId": "rev_20260715013826_d449816fae",
-          "createdAt": "2026-07-15T01:38:26+00:00",
+          "revisionId": "rev_20260715014652_4d85e806a1",
+          "createdAt": "2026-07-15T01:46:52+00:00",
           "changeSummary": "Smoke schema migration",
           "event": "update",
           "schemaHash": "8dddffd685923f242c38a541cabf9006badf6f61b97d84bd43a5a2ec69d451a3",
           "promptHash": "0b487621000a01f59882cd97421e683de805078083e3c13e64079e275096d7ca",
           "toolGrantHash": "6fddb82b10280c0dd4f368af67cfaf3e3947900a5e2a6b4504c4efca3e94a356",
-          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-2buqpkud\\.skills\\history\\skill_version_smoke\\1.1.0--rev_20260715013826_d449816fae.json"
+          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-4o50on4j\\.skills\\history\\skill_version_smoke\\1.1.0--rev_20260715014652_4d85e806a1.json"
         },
         {
           "skillId": "skill_version_smoke",
           "version": "1.1.0",
-          "revisionId": "rev_20260715013826_12b6e81fc9",
-          "createdAt": "2026-07-15T01:38:26+00:00",
+          "revisionId": "rev_20260715014653_91182b08cf",
+          "createdAt": "2026-07-15T01:46:53+00:00",
           "changeSummary": "Current registry state",
           "event": "current",
           "schemaHash": "8dddffd685923f242c38a541cabf9006badf6f61b97d84bd43a5a2ec69d451a3",
@@ -98,35 +98,35 @@
         {
           "packId": "pack_version_smoke",
           "version": "1.0.0",
-          "revisionId": "rev_20260715013826_74243f8f99",
-          "createdAt": "2026-07-15T01:38:26+00:00",
+          "revisionId": "rev_20260715014653_bd592b3929",
+          "createdAt": "2026-07-15T01:46:53+00:00",
           "changeSummary": "Imported Skill Pack",
           "event": "import",
-          "packHash": "5661323cffab187ba73095cf30ed5c76f41f2910c72d8ec82b0c7a0bcb17b707",
+          "packHash": "b5dc43900f9b875121626f78c4fd254592633d82b838b0e79b811f39e1be2ef6",
           "skillIdsHash": "47c0cbbca510c74cb931615a471c64cb0a02a7eb7aef1d6e18773a74376457ba",
           "toolGrantHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-2buqpkud\\.skills\\history\\packs\\pack_version_smoke\\1.0.0--rev_20260715013826_74243f8f99.json"
+          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-4o50on4j\\.skills\\history\\packs\\pack_version_smoke\\1.0.0--rev_20260715014653_bd592b3929.json"
         },
         {
           "packId": "pack_version_smoke",
           "version": "1.1.0",
-          "revisionId": "rev_20260715013826_90ed99d132",
-          "createdAt": "2026-07-15T01:38:26+00:00",
+          "revisionId": "rev_20260715014653_5cf3f785f3",
+          "createdAt": "2026-07-15T01:46:53+00:00",
           "changeSummary": "Imported Skill Pack",
           "event": "import",
-          "packHash": "dbade6efc0b37e7077f7d609614bb395800a24c07b1de77caec1cd48780dcbb7",
+          "packHash": "ebd006986fc2eb46bb4fb9be1c01b5fee2e3ac563affc9891424dbc08ab30d4e",
           "skillIdsHash": "47c0cbbca510c74cb931615a471c64cb0a02a7eb7aef1d6e18773a74376457ba",
           "toolGrantHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-2buqpkud\\.skills\\history\\packs\\pack_version_smoke\\1.1.0--rev_20260715013826_90ed99d132.json"
+          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-4o50on4j\\.skills\\history\\packs\\pack_version_smoke\\1.1.0--rev_20260715014653_5cf3f785f3.json"
         },
         {
           "packId": "pack_version_smoke",
           "version": "1.1.0",
-          "revisionId": "rev_20260715013826_7c652f215a",
-          "createdAt": "2026-07-15T01:38:26+00:00",
+          "revisionId": "rev_20260715014653_374621e75e",
+          "createdAt": "2026-07-15T01:46:53+00:00",
           "changeSummary": "Current registry state",
           "event": "current",
-          "packHash": "dbade6efc0b37e7077f7d609614bb395800a24c07b1de77caec1cd48780dcbb7",
+          "packHash": "ebd006986fc2eb46bb4fb9be1c01b5fee2e3ac563affc9891424dbc08ab30d4e",
           "skillIdsHash": "47c0cbbca510c74cb931615a471c64cb0a02a7eb7aef1d6e18773a74376457ba",
           "toolGrantHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
           "current": true
