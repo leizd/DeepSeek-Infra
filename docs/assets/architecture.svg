@@ -16,7 +16,7 @@
   <text x="48" y="58" font-size="26" font-weight="700" fill="#0f172a">DeepSeek Infra</text>
   <text x="48" y="84" font-size="14" fill="#64748b">Local-first Agentic AI Infrastructure Platform — LLM Gateway · Agent DAG · MCP · A2A · Local RAG · Observability</text>
   <rect x="1070" y="38" width="82" height="28" rx="14" fill="#2563eb"/>
-  <text x="1111" y="57" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v3.9.0</text>
+  <text x="1111" y="57" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v3.10.0</text>
 
   <!-- clients layer -->
   <rect x="48" y="110" width="1104" height="74" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
@@ -101,7 +101,7 @@
     <text x="326" y="590">Long-term Memory</text>
     <text x="326" y="606" font-size="10" fill="#94a3b8">scoped · confirmed</text>
     <rect x="440" y="572" width="148" height="48" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="514" y="590">Semantic Cache</text>
+    <text x="514" y="590">Semantic Cache · JSON + f64le BLOB</text>
     <text x="514" y="606" font-size="10" fill="#94a3b8">scoped · quality-gated</text>
     <rect x="628" y="572" width="148" height="48" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
     <text x="702" y="590">Trace Runs · Span Tree</text>
@@ -113,7 +113,7 @@
     <text x="1078" y="590">Budget</text>
     <text x="1078" y="606" font-size="10" fill="#94a3b8">daily ledger</text>
   </g>
-  <text x="600" y="648" font-size="11" fill="#047857" text-anchor="middle" font-weight="600">Persistence remains Python-owned</text>
+  <text x="600" y="648" font-size="11" fill="#047857" text-anchor="middle" font-weight="600">Persistence remains Python-owned · Rust never reads SQLite</text>
 
   <!-- external boundary -->
   <line x1="48" y1="720" x2="1152" y2="720" stroke="#cbd5e1" stroke-dasharray="6 6"/>

@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 from deepseek_infra.infra.rust_core import transport, vector_binary
 from deepseek_infra.infra.rust_core.config import (
@@ -180,7 +180,7 @@ def _request(
 
 def _binary_request(
     path: str,
-    data: bytes,
+    data: bytes | bytearray,
     *,
     serialization_us: int,
     timeout_ms: int | None = None,
@@ -465,6 +465,147 @@ def rank_vectors(
     _set_delegate_diagnostics(component, diagnostics)
     if _fallback_enabled():
         return None, False
+    return None, False
+
+
+def rank_vectors_from_blobs(
+    query: Sequence[float],
+    candidate_blobs: Sequence[bytes | memoryview],
+    *,
+    dimensions: int,
+    blobs_validated: bool = False,
+) -> tuple[tuple[int | None, float] | None, bool]:
+    """Rank f64le SQLite candidate buffers through the binary endpoint once."""
+    total_started_ns = time.perf_counter_ns()
+    component = "rag_vector_rank"
+    preparation_started_ns = time.perf_counter_ns()
+    configured_transport = rust_rag_vector_transport()
+    invalid_transport_config = rust_rag_vector_transport_invalid()
+    preparation_us = max(0, (time.perf_counter_ns() - preparation_started_ns) // 1000)
+    if not _rust_rag_enabled() or not query or not candidate_blobs:
+        _set_delegate_diagnostics(
+            component,
+            {
+                "runtime": "python",
+                "fallback": False,
+                "pythonPreparationUs": preparation_us,
+                "serializationUs": None,
+                "transportUs": None,
+                "rustProcessingUs": None,
+                "pythonValidationUs": None,
+                "totalDelegateUs": max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+                "transportEncoding": "python",
+                "requestPayloadBytes": 0,
+                "responsePayloadBytes": 0,
+                "transportConfigInvalid": invalid_transport_config,
+                "payloadAssemblySource": "blob",
+            },
+        )
+        return None, False
+    if configured_transport != "binary":
+        _set_delegate_diagnostics(
+            component,
+            {
+                "runtime": "python",
+                "fallback": True,
+                "fallbackReason": "binary_blob_transport_inactive",
+                "pythonPreparationUs": preparation_us,
+                "serializationUs": None,
+                "transportUs": None,
+                "rustProcessingUs": None,
+                "pythonValidationUs": None,
+                "totalDelegateUs": max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+                "transportEncoding": configured_transport,
+                "requestPayloadBytes": 0,
+                "responsePayloadBytes": 0,
+                "transportConfigInvalid": invalid_transport_config,
+                "payloadAssemblySource": "blob",
+            },
+        )
+        return None, False
+
+    serialization_started_ns = time.perf_counter_ns()
+    try:
+        encoded = vector_binary.encode_rank_request_from_blobs(
+            query,
+            candidate_blobs,
+            dimensions,
+            blobs_validated=blobs_validated,
+        )
+    except vector_binary.VectorBinaryError as exc:
+        serialization_us = max(0, (time.perf_counter_ns() - serialization_started_ns) // 1000)
+        _set_delegate_diagnostics(
+            component,
+            {
+                "runtime": "python",
+                "fallback": True,
+                "fallbackReason": exc.code,
+                "pythonPreparationUs": preparation_us,
+                "serializationUs": serialization_us,
+                "transportUs": None,
+                "rustProcessingUs": None,
+                "pythonValidationUs": None,
+                "totalDelegateUs": max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+                "transportEncoding": "binary",
+                "requestPayloadBytes": 0,
+                "responsePayloadBytes": 0,
+                "transportConfigInvalid": invalid_transport_config,
+                "payloadAssemblySource": "blob",
+            },
+        )
+        return None, False
+    serialization_us = max(0, (time.perf_counter_ns() - serialization_started_ns) // 1000)
+    result = _binary_request(
+        "/rag/vectors/rank-binary",
+        encoded.body,
+        serialization_us=serialization_us,
+    )
+    diagnostics = {
+        "runtime": "python",
+        "fallback": not result.ok,
+        "fallbackReason": result.error_kind,
+        "pythonPreparationUs": preparation_us,
+        "serializationUs": result.serialization_us,
+        "transportUs": result.transport_us,
+        "rustProcessingUs": result.rust_processing_us,
+        "pythonValidationUs": None,
+        "totalDelegateUs": max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+        "requestBytes": result.request_bytes,
+        "responseBytes": result.response_bytes,
+        "requestPayloadBytes": result.request_bytes,
+        "responsePayloadBytes": result.response_bytes,
+        "transportEncoding": "binary",
+        "transportConfigInvalid": invalid_transport_config,
+        "connectionReused": result.connection_reused,
+        "connectionCount": result.connection_count,
+        "correlationId": result.correlation_id,
+        "payloadAssemblySource": "blob",
+    }
+    usable_result = result.ok and result.status == 200 and isinstance(result.body, bytes)
+    if usable_result:
+        validation_started_ns = time.perf_counter_ns()
+        try:
+            decoded = vector_binary.decode_rank_response(result.body, candidate_count=len(candidate_blobs))
+        except vector_binary.VectorBinaryError as exc:
+            diagnostics.update(
+                fallback=True,
+                fallbackReason=exc.code,
+                pythonValidationUs=max(0, (time.perf_counter_ns() - validation_started_ns) // 1000),
+                totalDelegateUs=max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+            )
+            _set_delegate_diagnostics(component, diagnostics)
+            return None, False
+        validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
+        diagnostics.update(
+            pythonValidationUs=validation_us,
+            totalDelegateUs=max(0, (time.perf_counter_ns() - total_started_ns) // 1000),
+            runtime="rust",
+            fallback=False,
+            fallbackReason="",
+        )
+        _set_delegate_diagnostics(component, diagnostics)
+        return (decoded.index, decoded.similarity), True
+    _set_delegate_diagnostics(component, diagnostics)
     return None, False
 
 

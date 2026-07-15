@@ -185,9 +185,14 @@ print(json.dumps({
 
 RAG_VECTOR_BINARY_PROBE = r"""
 import json
+import shutil
+import sqlite3
 import re
+import tempfile
 import time
 import urllib.request
+from pathlib import Path
+from types import SimpleNamespace
 from deepseek_infra.infra.gateway import semantic_cache
 from deepseek_infra.infra.rust_core import rag_client
 
@@ -214,39 +219,84 @@ def binary_success_count():
 
 rag_client._binary_request = tracked_binary
 rag_client._request = tracked_json
-dimensions = 768
-candidate_count = 128
-query = [1.0] + [0.0] * (dimensions - 1)
-rows = []
-for index in range(candidate_count):
-    leading = round(0.1 + (0.8 * index / (candidate_count - 1)), 12)
-    rows.append({
-        "id": f"binary-{index:03d}",
-        "updated_at": int(time.time()),
-        "expires_at": int(time.time()) + 600,
-        "prompt_hash": f"candidate-{index:03d}",
-        "embedding": json.dumps([leading] + [0.0] * (dimensions - 1), separators=(",", ":")),
-    })
-before = binary_success_count()
-row, similarity, backend = semantic_cache.best_candidate(
-    query,
-    rows,
-    now=int(time.time()),
-    prompt_hash="no-exact-match",
-    exact_only=False,
-)
-after = binary_success_count()
-diagnostics = rag_client.last_delegate_diagnostics("rag_vector_rank")
-print(json.dumps({
-    "trace": trace,
-    "selectedId": row.get("id") if isinstance(row, dict) else None,
-    "similarity": similarity,
-    "backend": backend,
-    "diagnostics": diagnostics,
-    "metricsBinarySuccessDelta": after - before if isinstance(before, int) and isinstance(after, int) else None,
-    "candidateCount": candidate_count,
-    "dimensions": dimensions,
-}, separators=(",", ":")))
+dimensions = 4
+vectors = {
+    "blob-source": [1.0, 0.0, 0.0, 0.0],
+    "legacy-source": [0.8, 0.0, 0.0, 0.0],
+    "corrupt-source": [0.6, 0.0, 0.0, 0.0],
+    "lookup-query": [1.0, 0.0, 0.0, 0.0],
+}
+
+def embed(text):
+    for marker, vector in vectors.items():
+        if marker in text:
+            return list(vector)
+    return [0.0] * dimensions
+
+cache_dir = Path(tempfile.mkdtemp(prefix="hybrid-semcache-binary-"))
+semantic_cache.SEMANTIC_CACHE_ENABLED = True
+semantic_cache.SEMANTIC_CACHE_DIR = cache_dir
+semantic_cache.SEMANTIC_CACHE_DB = cache_dir / "cache.sqlite3"
+semantic_cache.embedding_pipeline = lambda: SimpleNamespace(active_provider="hybrid-e2e", dimensions=dimensions, error="")
+semantic_cache.embed_text = embed
+
+def body(marker):
+    return {"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": marker}]}
+
+try:
+    stored = []
+    for marker, answer in (
+        ("blob-source", "blob winner"),
+        ("legacy-source", "legacy candidate"),
+        ("corrupt-source", "corrupt fallback candidate"),
+    ):
+        payload = {"messages": body(marker)["messages"]}
+        stored.append(semantic_cache.store(payload, body(marker), {"content": answer}).get("stored") is True)
+    with sqlite3.connect(semantic_cache.SEMANTIC_CACHE_DB) as conn:
+        dual_rows = conn.execute(
+            "SELECT cache_id, embedding, embedding_blob, embedding_dimensions, embedding_format, response_json "
+            "FROM semantic_cache_items ORDER BY created_at, cache_id"
+        ).fetchall()
+        dual_write_ok = len(dual_rows) == 3 and all(
+            isinstance(row[1], str)
+            and isinstance(row[2], bytes)
+            and row[3] == dimensions
+            and row[4] == semantic_cache.EMBEDDING_FORMAT_F64LE_V1
+            for row in dual_rows
+        )
+        by_content = {json.loads(row[5])["content"]: row[0] for row in dual_rows}
+        conn.execute(
+            "UPDATE semantic_cache_items SET embedding_blob=NULL, embedding_dimensions=0, embedding_format='' WHERE cache_id=?",
+            (by_content["legacy candidate"],),
+        )
+        conn.execute(
+            "UPDATE semantic_cache_items SET embedding_blob=?, embedding_dimensions=?, embedding_format=? WHERE cache_id=?",
+            (b"short", dimensions, semantic_cache.EMBEDDING_FORMAT_F64LE_V1, by_content["corrupt fallback candidate"]),
+        )
+    before = binary_success_count()
+    lookup = semantic_cache.lookup({"messages": body("lookup-query")["messages"]}, body("lookup-query"))
+    after = binary_success_count()
+    diagnostics = lookup.diagnostics.get("rustVectorRanking", {})
+    print(json.dumps({
+        "trace": trace,
+        "selectedContent": lookup.result.get("content") if isinstance(lookup.result, dict) else None,
+        "similarity": lookup.diagnostics.get("similarity"),
+        "backend": lookup.diagnostics.get("rankingBackend"),
+        "diagnostics": diagnostics,
+        "storageDiagnostics": {
+            "embeddingStorage": lookup.diagnostics.get("embeddingStorage"),
+            "blobCandidates": lookup.diagnostics.get("blobCandidates"),
+            "legacyCandidates": lookup.diagnostics.get("legacyCandidates"),
+            "invalidBlobCandidates": lookup.diagnostics.get("invalidBlobCandidates"),
+        },
+        "metricsBinarySuccessDelta": after - before if isinstance(before, int) and isinstance(after, int) else None,
+        "candidateCount": len(dual_rows),
+        "dimensions": dimensions,
+        "storedDual": all(stored) and dual_write_ok,
+        "pythonOwnsSQLite": True,
+    }, separators=(",", ":")))
+finally:
+    shutil.rmtree(cache_dir, ignore_errors=True)
 """
 
 
@@ -566,7 +616,17 @@ def check_rag_vector_binary(
     _require(trace.get("binaryCalls") == 1, "semantic-cache ranking did not issue exactly one binary request")
     _require(trace.get("jsonCalls") == 0, "binary failure retried the JSON Rust endpoint")
     _require(diagnostics.get("transportEncoding") == "binary", "vector ranking did not select binary transport")
-    _require(payload.get("candidateCount") == 128 and payload.get("dimensions") == 768, "binary vector probe was not the required large workload")
+    _require(payload.get("candidateCount") == 3 and payload.get("dimensions") == 4, "binary vector probe did not rank all storage modes")
+    _require(payload.get("storedDual") is True, "fresh semantic-cache writes did not persist JSON and BLOB representations")
+    _require(payload.get("pythonOwnsSQLite") is True, "semantic-cache persistence ownership changed")
+    storage = payload.get("storageDiagnostics")
+    if not isinstance(storage, dict):
+        raise SmokeFailure("binary vector storage diagnostics are missing")
+    _require(storage.get("embeddingStorage") == "mixed", "mixed BLOB/legacy storage was not reported")
+    _require(storage.get("blobCandidates") == 1, "valid BLOB candidate count is incorrect")
+    _require(storage.get("legacyCandidates") == 2, "legacy/fallback candidate count is incorrect")
+    _require(storage.get("invalidBlobCandidates") == 1, "corrupt BLOB fallback count is incorrect")
+    _require(diagnostics.get("payloadAssemblySource") == "blob", "binary request was not assembled from BLOB buffers")
     expected_backend = "rust" if expect_rust else "python"
     _require(payload.get("backend") == expected_backend, f"binary vector ranking backend must be {expected_backend}")
     _require(diagnostics.get("runtime") == expected_backend, "binary vector diagnostics runtime is incorrect")
@@ -577,7 +637,7 @@ def check_rag_vector_binary(
     else:
         _require(diagnostics.get("fallbackReason") == "rust_backend_unavailable", "binary vector fallback reason is not stable")
         _require(payload.get("metricsBinarySuccessDelta") is None, "stopped sidecar unexpectedly exposed binary metrics")
-    selected_id = payload.get("selectedId")
+    selected_id = payload.get("selectedContent")
     similarity = payload.get("similarity")
     if not isinstance(selected_id, str) or not isinstance(similarity, (int, float)):
         raise SmokeFailure("binary vector probe returned an invalid ranking")

@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import array
 import hashlib
 import json
 import logging
 import math
 import sqlite3
+import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 from deepseek_infra.core.config import (
     SEMANTIC_CACHE_ATTACHMENTS,
@@ -41,6 +43,8 @@ LOW_QUALITY_MARKERS = (
 logger = logging.getLogger("deepseek_infra.semantic_cache")
 
 CACHE_TABLE = "semantic_cache_items"
+EMBEDDING_FORMAT_F64LE_V1 = "f64le-v1"
+MAX_EMBEDDING_DIMENSIONS = 4_096
 
 _db_lock = threading.RLock()
 _last_error = ""
@@ -54,6 +58,31 @@ class CacheLookup:
     @property
     def hit(self) -> bool:
         return self.result is not None
+
+
+class EmbeddingBlobError(ValueError):
+    """Stable embedding-storage failure that never contains vector values."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedEmbedding:
+    values: tuple[float, ...]
+    json_text: str
+    blob: bytes
+    dimensions: int
+    format: str = EMBEDDING_FORMAT_F64LE_V1
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidateEmbedding:
+    row: Any
+    values: Sequence[float]
+    blob: bytes | memoryview | None
+    used_blob: bool
 
 
 def lookup(payload: dict[str, Any], body: dict[str, Any]) -> CacheLookup:
@@ -81,27 +110,41 @@ def lookup(payload: dict[str, Any], body: dict[str, Any]) -> CacheLookup:
     # dominates the embedding, so fuzzy similarity would falsely match different
     # questions about the same file — exact match keeps reuse correct.
     exact_only = has_attachments(payload)
+    model = str(body.get("model") or "")
+    now = int(time.time())
     diagnostics["cacheVersion"] = version
     diagnostics["scope"] = scope
     diagnostics["exactMatchOnly"] = exact_only
+    _rust_rag.reset_delegate_diagnostics()
     try:
-        query_embedding = embed_text(prompt_text)
-        rows = candidate_rows(str(body.get("model") or ""), version, scope)
+        exact_row = exact_candidate_row(prompt_hash, model, version, scope, now=now)
     except Exception as exc:
         set_last_error(f"semantic cache lookup failed: {exc}")
         diagnostics["skippedReason"] = "lookup_error"
         diagnostics["lastError"] = _last_error
         return CacheLookup(diagnostics)
 
-    now = int(time.time())
-    _rust_rag.reset_delegate_diagnostics()
-    best_row, best_similarity, ranking_backend = best_candidate(
-        query_embedding,
-        rows,
-        now=now,
-        prompt_hash=prompt_hash,
-        exact_only=exact_only,
-    )
+    if exact_row is not None:
+        best_row, best_similarity, ranking_backend = exact_row, 1.0, "exact"
+    elif exact_only:
+        best_row, best_similarity, ranking_backend = None, 0.0, "python"
+    else:
+        try:
+            query_embedding = embed_text(prompt_text)
+            rows = candidate_rows(model, version, scope)
+        except Exception as exc:
+            set_last_error(f"semantic cache lookup failed: {exc}")
+            diagnostics["skippedReason"] = "lookup_error"
+            diagnostics["lastError"] = _last_error
+            return CacheLookup(diagnostics)
+        best_row, best_similarity, ranking_backend = best_candidate(
+            query_embedding,
+            rows,
+            now=now,
+            prompt_hash=prompt_hash,
+            exact_only=False,
+            storage_diagnostics=diagnostics,
+        )
 
     diagnostics["similarity"] = round(best_similarity, 4)
     diagnostics["rankingBackend"] = ranking_backend
@@ -173,6 +216,10 @@ def store(payload: dict[str, Any], body: dict[str, Any], result: dict[str, Any])
     now = int(time.time())
     try:
         embedding = embed_text(prompt_text)
+        representations = encode_embedding_representations(
+            embedding,
+            expected_dimensions=embedding_pipeline().dimensions,
+        )
         cache_id = existing_cache_id(prompt_hash, str(body.get("model") or ""), version, scope) or uuid.uuid4().hex
         with _db_lock, connect_db() as conn:
             initialize_schema(conn)
@@ -180,14 +227,19 @@ def store(payload: dict[str, Any], body: dict[str, Any], result: dict[str, Any])
                 f"""
                 INSERT INTO {CACHE_TABLE}
                     (
-                        cache_id, prompt_hash, model, prompt_text, embedding, response_json, usage_json,
+                        cache_id, prompt_hash, model, prompt_text,
+                        embedding, embedding_blob, embedding_dimensions, embedding_format,
+                        response_json, usage_json,
                         created_at, updated_at, last_hit_at, hit_count,
                         cache_version, scope, quality_score, query_text
                     )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
                 ON CONFLICT(cache_id) DO UPDATE SET
                     prompt_text = excluded.prompt_text,
                     embedding = excluded.embedding,
+                    embedding_blob = excluded.embedding_blob,
+                    embedding_dimensions = excluded.embedding_dimensions,
+                    embedding_format = excluded.embedding_format,
                     response_json = excluded.response_json,
                     usage_json = excluded.usage_json,
                     updated_at = excluded.updated_at,
@@ -199,7 +251,10 @@ def store(payload: dict[str, Any], body: dict[str, Any], result: dict[str, Any])
                     prompt_hash,
                     str(body.get("model") or ""),
                     prompt_text,
-                    encode_embedding(embedding),
+                    representations.json_text,
+                    sqlite3.Binary(representations.blob),
+                    representations.dimensions,
+                    representations.format,
                     json.dumps(response, ensure_ascii=False),
                     json.dumps(usage, ensure_ascii=False),
                     now,
@@ -211,7 +266,18 @@ def store(payload: dict[str, Any], body: dict[str, Any], result: dict[str, Any])
                 ),
             )
             trim_cache(conn)
-        diagnostics.update({"stored": True, "cacheId": cache_id, "promptHash": prompt_hash, "scope": scope, "cacheVersion": version})
+        diagnostics.update(
+            {
+                "stored": True,
+                "cacheId": cache_id,
+                "promptHash": prompt_hash,
+                "scope": scope,
+                "cacheVersion": version,
+                "embeddingStorage": "blob",
+                "embeddingDimensions": representations.dimensions,
+                "embeddingFormat": representations.format,
+            }
+        )
     except Exception as exc:
         set_last_error(f"semantic cache store failed: {exc}")
         diagnostics["storeSkippedReason"] = "store_error"
@@ -269,6 +335,10 @@ def base_diagnostics() -> dict[str, Any]:
         "similarity": 0.0,
         "skippedReason": "",
         "cacheId": "",
+        "embeddingStorage": "json",
+        "blobCandidates": 0,
+        "legacyCandidates": 0,
+        "invalidBlobCandidates": 0,
     }
 
 
@@ -372,6 +442,39 @@ def candidate_rows(model: str, version: str, scope: str) -> list[sqlite3.Row]:
     return list(rows)
 
 
+def exact_candidate_row(
+    prompt_hash: str,
+    model: str,
+    version: str,
+    scope: str,
+    *,
+    now: int,
+) -> sqlite3.Row | None:
+    """Load an exact hit without selecting either embedding representation."""
+    ttl_clause = ""
+    params: list[Any] = [prompt_hash, model, version, scope]
+    if SEMANTIC_CACHE_TTL_SECONDS > 0:
+        ttl_clause = "AND (updated_at <= 0 OR updated_at >= ?)"
+        params.append(now - SEMANTIC_CACHE_TTL_SECONDS)
+    with _db_lock, connect_db() as conn:
+        initialize_schema(conn)
+        row = conn.execute(
+            f"""
+            SELECT
+                cache_id, prompt_hash, model, prompt_text, response_json, usage_json,
+                created_at, updated_at, last_hit_at, hit_count,
+                cache_version, scope, quality_score, query_text
+            FROM {CACHE_TABLE}
+            WHERE prompt_hash = ? AND model = ? AND cache_version = ? AND scope = ?
+            {ttl_clause}
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+    return row
+
+
 def existing_cache_id(prompt_hash: str, model: str, version: str, scope: str) -> str:
     with _db_lock, connect_db() as conn:
         initialize_schema(conn)
@@ -429,6 +532,9 @@ _MIGRATION_COLUMNS = (
     ("scope", "TEXT NOT NULL DEFAULT 'global'"),
     ("quality_score", "REAL NOT NULL DEFAULT 0"),
     ("query_text", "TEXT NOT NULL DEFAULT ''"),
+    ("embedding_blob", "BLOB"),
+    ("embedding_dimensions", "INTEGER NOT NULL DEFAULT 0"),
+    ("embedding_format", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -441,6 +547,9 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             model TEXT NOT NULL,
             prompt_text TEXT NOT NULL,
             embedding TEXT NOT NULL,
+            embedding_blob BLOB,
+            embedding_dimensions INTEGER NOT NULL DEFAULT 0,
+            embedding_format TEXT NOT NULL DEFAULT '',
             response_json TEXT NOT NULL,
             usage_json TEXT NOT NULL,
             created_at INTEGER NOT NULL,
@@ -461,7 +570,7 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_columns(conn: sqlite3.Connection) -> None:
-    """Add v2.0.7 columns to caches created by older versions (idempotent)."""
+    """Add missing metadata columns only; never scan or rewrite cache rows."""
     existing = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({CACHE_TABLE})").fetchall()}
     for name, definition in _MIGRATION_COLUMNS:
         if name not in existing:
@@ -472,8 +581,61 @@ def stable_hash(text: str) -> str:
     return hashlib.blake2b(text.encode("utf-8", errors="ignore"), digest_size=16).hexdigest()
 
 
+def _embedding_byte_count(dimensions: int) -> int:
+    if not isinstance(dimensions, int) or isinstance(dimensions, bool):
+        raise EmbeddingBlobError("invalid_embedding_dimensions")
+    if not 0 < dimensions <= MAX_EMBEDDING_DIMENSIONS or dimensions > sys.maxsize // 8:
+        raise EmbeddingBlobError("invalid_embedding_dimensions")
+    return dimensions * 8
+
+
+def _f64le_bytes(values: Sequence[float], *, expected_dimensions: int | None = None) -> bytes:
+    dimensions = len(values)
+    byte_count = _embedding_byte_count(dimensions)
+    if expected_dimensions is not None and dimensions != expected_dimensions:
+        raise EmbeddingBlobError("embedding_dimension_mismatch")
+    try:
+        encoded = array.array("d", values)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise EmbeddingBlobError("invalid_embedding_values") from exc
+    if encoded.itemsize != 8:
+        raise EmbeddingBlobError("invalid_f64_width")
+    if not all(math.isfinite(value) for value in encoded):
+        raise EmbeddingBlobError("non_finite_embedding")
+    if sys.byteorder == "big":
+        encoded.byteswap()
+    elif sys.byteorder != "little":
+        raise EmbeddingBlobError("invalid_host_byteorder")
+    blob = encoded.tobytes()
+    if len(blob) != byte_count:
+        raise EmbeddingBlobError("embedding_blob_length_mismatch")
+    return blob
+
+
+def encode_embedding_representations(
+    vector: Sequence[float],
+    *,
+    expected_dimensions: int | None = None,
+) -> NormalizedEmbedding:
+    try:
+        values = tuple(round(float(item), 6) for item in vector)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise EmbeddingBlobError("invalid_embedding_values") from exc
+    _embedding_byte_count(len(values))
+    if expected_dimensions is not None and len(values) != expected_dimensions:
+        raise EmbeddingBlobError("embedding_dimension_mismatch")
+    if not all(math.isfinite(value) for value in values):
+        raise EmbeddingBlobError("non_finite_embedding")
+    return NormalizedEmbedding(
+        values=values,
+        json_text=json.dumps(values, separators=(",", ":"), allow_nan=False),
+        blob=_f64le_bytes(values, expected_dimensions=expected_dimensions),
+        dimensions=len(values),
+    )
+
+
 def encode_embedding(vector: list[float]) -> str:
-    return json.dumps([round(float(item), 6) for item in vector], separators=(",", ":"))
+    return encode_embedding_representations(vector).json_text
 
 
 def decode_embedding(value: Any) -> list[float]:
@@ -492,20 +654,120 @@ def decode_embedding(value: Any) -> list[float]:
     return result
 
 
+def decode_embedding_blob(
+    value: Any,
+    dimensions: int,
+    *,
+    expected_dimensions: int | None = None,
+) -> array.array[float]:
+    byte_count = _embedding_byte_count(dimensions)
+    if expected_dimensions is not None and dimensions != expected_dimensions:
+        raise EmbeddingBlobError("embedding_dimension_mismatch")
+    try:
+        view = memoryview(value)
+        if not view.contiguous:
+            raise EmbeddingBlobError("invalid_embedding_blob_buffer")
+        byte_view = view.cast("B")
+    except (TypeError, ValueError) as exc:
+        if isinstance(exc, EmbeddingBlobError):
+            raise
+        raise EmbeddingBlobError("invalid_embedding_blob_buffer") from exc
+    if byte_view.nbytes != byte_count:
+        raise EmbeddingBlobError("embedding_blob_length_mismatch")
+    decoded = array.array("d")
+    try:
+        decoded.frombytes(byte_view.tobytes())
+    except (BufferError, MemoryError, TypeError, ValueError) as exc:
+        raise EmbeddingBlobError("invalid_embedding_blob_buffer") from exc
+    if decoded.itemsize != 8 or len(decoded) != dimensions:
+        raise EmbeddingBlobError("embedding_blob_length_mismatch")
+    if sys.byteorder == "big":
+        decoded.byteswap()
+    elif sys.byteorder != "little":
+        raise EmbeddingBlobError("invalid_host_byteorder")
+    if not all(math.isfinite(value) for value in decoded):
+        raise EmbeddingBlobError("non_finite_embedding")
+    return decoded
+
+
+def validate_embedding_blob(
+    value: Any,
+    dimensions: int,
+    *,
+    expected_dimensions: int | None = None,
+) -> bool:
+    try:
+        decode_embedding_blob(value, dimensions, expected_dimensions=expected_dimensions)
+    except EmbeddingBlobError:
+        return False
+    return True
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        if key in row.keys():
+            return row[key]
+    except (AttributeError, KeyError, TypeError):
+        return default
+    return default
+
+
+def _json_candidate(value: Any, *, expected_dimensions: int) -> list[float] | None:
+    decoded = decode_embedding(value)
+    if len(decoded) != expected_dimensions or not all(math.isfinite(item) for item in decoded):
+        return None
+    return decoded
+
+
+def _decode_candidate(
+    row: Any,
+    *,
+    expected_dimensions: int,
+    prefer_blob: bool,
+) -> tuple[_CandidateEmbedding | None, bool]:
+    embedding_format = str(_row_value(row, "embedding_format", "") or "")
+    embedding_blob = _row_value(row, "embedding_blob")
+    embedding_dimensions = _row_value(row, "embedding_dimensions", 0)
+    has_blob_metadata = bool(embedding_format or embedding_blob is not None or embedding_dimensions)
+    invalid_blob = False
+    if prefer_blob and embedding_format == EMBEDDING_FORMAT_F64LE_V1:
+        try:
+            values = decode_embedding_blob(
+                embedding_blob,
+                embedding_dimensions,
+                expected_dimensions=expected_dimensions,
+            )
+        except EmbeddingBlobError:
+            invalid_blob = True
+        else:
+            raw_blob = embedding_blob if isinstance(embedding_blob, (bytes, memoryview)) else memoryview(embedding_blob)
+            return _CandidateEmbedding(row=row, values=values, blob=raw_blob, used_blob=True), False
+    elif prefer_blob and has_blob_metadata:
+        invalid_blob = True
+
+    json_values = _json_candidate(_row_value(row, "embedding"), expected_dimensions=expected_dimensions)
+    if json_values is None:
+        return None, invalid_blob
+    return _CandidateEmbedding(row=row, values=json_values, blob=None, used_blob=False), invalid_blob
+
+
 def best_candidate(
-    query_embedding: list[float],
-    rows: list[sqlite3.Row],
+    query_embedding: Sequence[float],
+    rows: Sequence[Any],
     *,
     now: int,
     prompt_hash: str,
     exact_only: bool,
-) -> tuple[sqlite3.Row | None, float, str]:
+    storage_diagnostics: dict[str, Any] | None = None,
+) -> tuple[Any | None, float, str]:
     """Rank eligible cache rows with Rust when enabled, preserving Python parity."""
-    eligible: list[sqlite3.Row] = []
+    eligible: list[Any] = []
     for row in rows:
         if cache_expired(row, now):
             continue
-        if row["prompt_hash"] == prompt_hash:
+        if _row_value(row, "prompt_hash") == prompt_hash:
             return row, 1.0, "exact"
         if not exact_only:
             eligible.append(row)
@@ -513,17 +775,61 @@ def best_candidate(
     if exact_only or not eligible:
         return None, 0.0, "python"
 
-    candidates = [decode_embedding(row["embedding"]) for row in eligible]
-    ranked, used_rust = _rust_rag.rank_vectors(query_embedding, candidates)
+    dimensions = len(query_embedding)
+    prefer_blob = _rust_rag.rust_rag_vector_transport() == "binary"
+    candidates: list[_CandidateEmbedding] = []
+    invalid_blob_candidates = 0
+    for row in eligible:
+        candidate, invalid_blob = _decode_candidate(
+            row,
+            expected_dimensions=dimensions,
+            prefer_blob=prefer_blob,
+        )
+        if invalid_blob:
+            invalid_blob_candidates += 1
+        if candidate is not None:
+            candidates.append(candidate)
+
+    blob_candidates = sum(candidate.used_blob for candidate in candidates)
+    legacy_candidates = len(candidates) - blob_candidates
+    embedding_storage = "mixed" if blob_candidates and legacy_candidates else "blob" if blob_candidates else "json"
+    if storage_diagnostics is not None:
+        storage_diagnostics.update(
+            embeddingStorage=embedding_storage,
+            blobCandidates=blob_candidates,
+            legacyCandidates=legacy_candidates,
+            invalidBlobCandidates=invalid_blob_candidates,
+        )
+    if not candidates:
+        return None, 0.0, "python"
+
+    if prefer_blob and blob_candidates:
+        candidate_blobs = [
+            candidate.blob
+            if candidate.blob is not None
+            else _f64le_bytes(candidate.values, expected_dimensions=dimensions)
+            for candidate in candidates
+        ]
+        ranked, used_rust = _rust_rag.rank_vectors_from_blobs(
+            query_embedding,
+            candidate_blobs,
+            dimensions=dimensions,
+            blobs_validated=True,
+        )
+    else:
+        ranked, used_rust = _rust_rag.rank_vectors(
+            list(query_embedding),
+            [list(candidate.values) for candidate in candidates],
+        )
     validation_started_ns = time.perf_counter_ns()
-    best_row: sqlite3.Row | None = None
+    best_row: Any | None = None
     best_similarity = 0.0
     best_index: int | None = None
-    for index, (row, candidate) in enumerate(zip(eligible, candidates)):
-        similarity = cosine_similarity(query_embedding, candidate)
+    for index, candidate in enumerate(candidates):
+        similarity = cosine_similarity(query_embedding, candidate.values)
         if similarity > best_similarity:
             best_similarity = similarity
-            best_row = row
+            best_row = candidate.row
             best_index = index
     validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
     if used_rust and ranked is not None:

@@ -71,10 +71,13 @@ def test_parse_json_output_uses_last_nonempty_line() -> None:
         smoke._parse_json_output("not json", "probe")
 
 
-def test_binary_probe_rows_include_semantic_cache_expiry_fields() -> None:
-    assert '"updated_at":' in smoke.RAG_VECTOR_BINARY_PROBE
-    assert '"prompt_hash":' in smoke.RAG_VECTOR_BINARY_PROBE
-    assert '"embedding":' in smoke.RAG_VECTOR_BINARY_PROBE
+def test_binary_probe_uses_fresh_sqlite_dual_write_and_mixed_rows() -> None:
+    assert "tempfile.mkdtemp" in smoke.RAG_VECTOR_BINARY_PROBE
+    assert "embedding_blob" in smoke.RAG_VECTOR_BINARY_PROBE
+    assert "embedding_dimensions" in smoke.RAG_VECTOR_BINARY_PROBE
+    assert "legacy candidate" in smoke.RAG_VECTOR_BINARY_PROBE
+    assert "corrupt fallback candidate" in smoke.RAG_VECTOR_BINARY_PROBE
+    assert "semantic_cache.lookup" in smoke.RAG_VECTOR_BINARY_PROBE
 
 
 def test_policy_probe_requires_rust_then_python_fallback() -> None:
