@@ -15,10 +15,10 @@ DeepSeek Infra 4.0 is a Python-first hybrid runtime.
 
 The internal stable endpoint inventory is frozen in `release/4_0_protocol_contract.json`. Binary magic `DSVRNK01` and `DSVRSP01` is stable for 4.x.
 
-## Candidate and stable release policy
+## Stable release policy
 
-`v4.0.0-rc.1` is superseded by rc.2 and remains only a historical architecture preview. `4.0.0-rc.2` must complete its observation period before stable `4.0.0` can be proposed through a separate promotion PR. This freeze PR does not create a tag or GitHub Release.
+`v4.0.0-rc.1` was superseded by rc.2 and remains only a historical architecture preview. Stable `4.0.0` is the metadata-only promotion of the validated `4.0.0-rc.2` candidate after its observation period. The stable promotion does not change runtime behavior, defaults, ownership, or the frozen protocol contract.
 
 ## Advisory work
 
-Sidecar image-size optimization and persistent policy audit storage remain advisory. They are not represented as completed. Expanding parity corpora and recording the hybrid performance benchmark are observed in rc.2.
+Sidecar image-size optimization and persistent policy audit storage remain advisory. They are not represented as completed. Expanded parity corpora and the hybrid performance benchmark were observed during rc.2 qualification and remain part of stable evidence.

@@ -16,7 +16,7 @@
   <text x="48" y="58" font-size="26" font-weight="700" fill="#0f172a">DeepSeek Infra</text>
   <text x="48" y="84" font-size="14" fill="#64748b">Local-first Agentic AI Infrastructure Platform — LLM Gateway · Agent DAG · MCP · A2A · Local RAG · Observability</text>
   <rect x="1070" y="38" width="82" height="28" rx="14" fill="#2563eb"/>
-  <text x="1111" y="57" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v4.0.0-rc.2</text>
+  <text x="1111" y="57" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v4.0.0</text>
 
   <!-- clients layer -->
   <rect x="48" y="110" width="1104" height="74" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
@@ -128,5 +128,5 @@
   </g>
 
   <!-- footer -->
-  <text x="600" y="820" font-size="10" fill="#94a3b8" text-anchor="middle">4.0.0-rc.2: Python-first hybrid candidate · rc.1 superseded · Rust-primary disabled</text>
+  <text x="600" y="820" font-size="10" fill="#94a3b8" text-anchor="middle">4.0.0: Python-first hybrid stable · promoted from rc.2 · Rust-primary disabled</text>
 </svg>

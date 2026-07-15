@@ -1,6 +1,6 @@
 # Pre-4.0 Quality Baseline
 
-This document records the verified `3.10.0` baseline from which `4.0.0-rc.2` is frozen. `v4.0.0-rc.1` remains historical and is not an eligible stable promotion source.
+This document records the verified `3.10.0` baseline from which `4.0.0-rc.2` was frozen. Stable `4.0.0` is promoted from that validated rc.2 candidate; `v4.0.0-rc.1` remains historical and is not an eligible stable promotion source.
 
 ## Frozen baseline
 
@@ -12,7 +12,7 @@ This document records the verified `3.10.0` baseline from which `4.0.0-rc.2` is 
 - Rust workspace quality includes fmt, clippy with warnings denied, workspace tests, Docker smoke, and measured line coverage of at least 80%.
 - Python CI continues to enforce 95%; the rc.2 freeze requires two complete runs at or above 95.20%.
 
-Two complete Python runs each measured 95.2317% combined statement/branch coverage (2581 tests and 58 subtests per run). Rust 1.85 with `cargo-llvm-cov 0.6.21` measured 80.4329% line coverage (3716/4620) across 172 workspace tests. HIGH-risk Python coverage debt stayed exactly level with the verified 3.9/3.10 baseline at 201 missing statements and 198 missing branches. The machine-readable results live in `docs/evidence/python-coverage-stability-v4.0.0-rc.2.json` and `docs/evidence/rust-coverage-v4.0.0-rc.2.json`.
+Two complete Python runs each measured 95.2317% combined statement/branch coverage (2581 tests and 58 subtests per run). Rust 1.85 with `cargo-llvm-cov 0.6.21` measured 80.4329% line coverage (3716/4620) across 172 workspace tests. HIGH-risk Python coverage debt stayed exactly level with the verified 3.9/3.10 baseline at 201 missing statements and 198 missing branches. The rc.2 qualification results remain in `docs/evidence/python-coverage-stability-v4.0.0-rc.2.json` and `docs/evidence/rust-coverage-v4.0.0-rc.2.json`; stable promotion evidence is recorded separately under `v4.0.0` filenames.
 
 ## Stable-release boundary
 

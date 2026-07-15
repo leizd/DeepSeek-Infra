@@ -1,6 +1,6 @@
 services:
   rust-gateway:
-    image: deepseek-rust-gateway:4.0.0-rc.2
+    image: deepseek-rust-gateway:4.0.0
     build:
       context: .
       dockerfile: rust/Dockerfile

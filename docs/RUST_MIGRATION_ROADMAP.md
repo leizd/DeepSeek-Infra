@@ -1,6 +1,6 @@
 # Rust Core Migration Roadmap
 
-This document records the incremental path to the active `4.0.0-rc.2` Python-first hybrid freeze. Stable `4.0.0` remains a separate post-observation promotion, not an automatic rc.2 outcome.
+This document records the incremental path to stable `4.0.0`, promoted from the validated `4.0.0-rc.2` Python-first hybrid candidate after its observation period. The promotion does not change runtime ownership or defaults.
 
 ## Goal
 
@@ -461,7 +461,7 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Frozen path (3.10.0 capabilities carried into 4.0.0-rc.2):
+Stable path (3.10.0 capabilities qualified in rc.2 and carried into 4.0.0):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.

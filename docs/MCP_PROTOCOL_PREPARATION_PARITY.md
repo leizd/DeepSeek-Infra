@@ -20,9 +20,9 @@ Run the parity gate against a local Rust sidecar:
 python scripts/check_mcp_protocol_parity.py \
   --base-url http://127.0.0.1:8787 \
   --strict \
-  --report docs/evidence/mcp-protocol-parity-v4.0.0-rc.2.json
+  --report docs/evidence/mcp-protocol-parity-v4.0.0.json
 ```
 
 The comparison requires matching accept/reject decisions, message type, normalized method/ID/params, routing owner, and stable internal and JSON-RPC error codes. Natural-language error wording may differ. Reports contain only redacted fingerprints and summaries; full params and tool arguments are never written.
 
-The `mcp-protocol-parity` CI job uploads `docs/evidence/mcp-protocol-parity-v4.0.0-rc.2.json` even when the gate fails.
+The `mcp-protocol-parity` CI job uploads `docs/evidence/mcp-protocol-parity-v4.0.0.json` even when the gate fails.

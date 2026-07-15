@@ -22,11 +22,12 @@ CONTRACTS: dict[str, dict[str, Any]] = {
     "upgrade": {
         "schema": "upgrade-rollback.v1",
         "test": "tests/test_4_0_upgrade_contract.py",
-        "expected_tests": 4,
+        "expected_tests": 5,
         "checks": [
-            "3.10.0_to_4.0.0-rc.2",
-            "4.0.0-rc.1_to_4.0.0-rc.2",
-            "4.0.0-rc.2_to_3.10.0_rollback",
+            "3.10.0_to_4.0.0",
+            "4.0.0-rc.1_to_4.0.0",
+            "4.0.0-rc.2_to_4.0.0",
+            "4.0.0_to_3.10.0_rollback",
             "sidecar_unavailable",
         ],
     },

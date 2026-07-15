@@ -1,8 +1,8 @@
 # Getting Started
 
-Applicable version: v4.0.0-rc.2.
+Applicable version: v4.0.0.
 
-DeepSeek Infra 4.0.0-rc.2 is a local-first, Python-first hybrid Personal AI Runtime frozen from the verified 3.10.0 baseline. The first screen is the Workspace: projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports all stay in the local runtime root unless you explicitly call an upstream API. The optional Rust sidecar is supported but not required; `v4.0.0-rc.1` is superseded historical preview material.
+DeepSeek Infra 4.0.0 is the stable, local-first, Python-first hybrid Personal AI Runtime promoted from the validated rc.2 candidate. The first screen is the Workspace: projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports all stay in the local runtime root unless you explicitly call an upstream API. The optional Rust sidecar is supported but not required; `v4.0.0-rc.1` is superseded historical preview material.
 
 ## Local Run
 
@@ -17,8 +17,8 @@ Open `http://127.0.0.1:8000`, create a project, then save useful chat snippets, 
 
 ```bash
 python scripts/doctor.py --offline
-python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.0-rc.2.json
-python scripts/preflight_release.py --version 4.0.0-rc.2 --ga
+python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.0.json
+python scripts/preflight_release.py --version 4.0.0 --ga
 ```
 
 The GA smoke creates an isolated project chain: Project -> Skill -> Media -> Browser Snapshot -> Saved Item -> Artifact -> Automation -> Export.
