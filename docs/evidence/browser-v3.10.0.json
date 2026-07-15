@@ -1,7 +1,7 @@
 {
   "version": "3.10.0",
-  "commit": "d5ce71f5",
-  "generatedAt": "2026-07-15T00:55:50Z",
+  "commit": "1b2106c4",
+  "generatedAt": "2026-07-15T01:37:59Z",
   "environment": {
     "os": "Windows-11-10.0.26200-SP0",
     "python": "3.13.5",
@@ -24,18 +24,18 @@
     "downloadLimit": "PASS"
   },
   "details": {
-    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-lle0i_zf",
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-r9yemmss",
     "fixtures": "D:\\deepseek\\tests\\fixtures\\browser",
-    "projectId": "proj-c0b465c132b5",
-    "browserSessionId": "browser_764c804022ba4c5b",
+    "projectId": "proj-8ba2b2395e5d",
+    "browserSessionId": "browser_fbb158c6460cf14a",
     "mediaIds": [
-      "media_dfd863f21485ed2a",
-      "media_81d4948d7933c334"
+      "media_3815234ecb68e699",
+      "media_2f7f26dc89668207"
     ],
     "localRag": {
       "enabled": true,
       "backend": "sqlite_vec",
-      "databasePath": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-lle0i_zf\\.local-rag\\rag.sqlite3",
+      "databasePath": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-r9yemmss\\.local-rag\\rag.sqlite3",
       "sqliteVecAvailable": false,
       "embeddingProvider": "hash",
       "embeddingProviderRequested": "hash",
@@ -53,6 +53,6 @@
       "indexedMemories": 0,
       "vectorTableAvailable": false
     },
-    "auditLog": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-lle0i_zf\\.browser-audit\\audit.jsonl"
+    "auditLog": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-r9yemmss\\.browser-audit\\audit.jsonl"
   }
 }

@@ -40,7 +40,7 @@ At the end of 3.10.0:
 - MCP protocol preparation can use the existing opt-in Rust MCP delegate. Python computes the local contract first, accepts only a contract-identical Python-owned Rust descriptor, and remains the sole owner of routing, tool execution, resources, prompts, sessions, transports, credentials, tracing, and business state.
 - RAG document preparation can use the independent default-disabled Rust delegate after Python file parsing. Python computes and validates the local chunk contract first and remains the sole owner of uploads, paths, parsers/OCR, embeddings, persistence, indexes, retrieval, authorization, and business state. Rust cannot read files or write an index.
 - Semantic-cache rows retain rollback-compatible JSON and new writes dual-write the same rounded values as `f64le-v1` BLOBs. Python owns SQLite and the complete ranking; mixed/corrupt rows fall back per row, migration is explicit rather than startup-driven, and the 3.9.0 wire contract is unchanged.
-- The complete 3.10.0 statement-and-branch run measures **95.23%** (95.2346% unrounded), above the 95% CI gate and the 95.20% release minimum; coverage omissions are unchanged.
+- The complete 3.10.0 statement-and-branch run measures **95.23%** (95.2316% unrounded), above the 95% CI gate and the 95.20% release minimum; coverage omissions are unchanged.
 
 ---
 
@@ -104,7 +104,7 @@ Rust coverage is currently not measured or gated. Before 4.0.0, the Rust workspa
 | --- | --- | --- |
 | `ruff check .` | ✅ Green | Minimal rule set by design. |
 | `mypy .` | ✅ Green | `ignore_missing_imports=true`. |
-| `pytest --cov --cov-fail-under=95` | ✅ Green | 2,569 tests and 58 subtests passed; complete statement-and-branch coverage measured 95.23%; omissions are unchanged. |
+| `pytest --cov --cov-fail-under=95` | ✅ Green | 2,570 tests and 58 subtests passed; complete statement-and-branch coverage measured 95.23%; omissions are unchanged. |
 | `cargo fmt --check` | ✅ Green | Rust workspace. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ Green | No warnings. |
 | `cargo test --all` | ✅ Green | 172 Rust workspace tests in 3.10.0. |

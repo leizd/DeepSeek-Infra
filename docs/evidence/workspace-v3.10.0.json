@@ -1,7 +1,7 @@
 {
   "version": "3.10.0",
-  "commit": "d5ce71f5",
-  "generatedAt": "2026-07-15T00:55:34Z",
+  "commit": "1b2106c4",
+  "generatedAt": "2026-07-15T01:37:53Z",
   "environment": {
     "os": "Windows-11-10.0.26200-SP0",
     "python": "3.13.5",
@@ -19,10 +19,10 @@
     "projectDeleteScope": "PASS"
   },
   "details": {
-    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-0l9f6cn0",
-    "projectId": "proj-61ae4c8612d9",
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-a208uzc2",
+    "projectId": "proj-0496789e5e79",
     "projectExport": {
-      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-0l9f6cn0\\.projects\\proj-61ae4c8612d9\\exports\\export_51ecb0084c7b223d-Workspace-Smoke-Renamed-project-export.zip",
+      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-a208uzc2\\.projects\\proj-0496789e5e79\\exports\\export_9fd3db94eb76b01c-Workspace-Smoke-Renamed-project-export.zip",
       "entries": [
         "artifacts/Workspace-Summary.md",
         "conversations/conversation-conv-smoke.md",
@@ -34,18 +34,18 @@
       ]
     },
     "conversationExport": {
-      "exportId": "export_fe0d252e6a51e157",
-      "projectId": "proj-61ae4c8612d9",
+      "exportId": "export_9740f053fa65d4cf",
+      "projectId": "proj-0496789e5e79",
       "kind": "conversation",
       "format": "markdown",
       "filename": "Workspace-smoke-conversation.md",
-      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-0l9f6cn0\\.projects\\proj-61ae4c8612d9\\exports\\export_fe0d252e6a51e157-Workspace-smoke-conversation.md",
+      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-a208uzc2\\.projects\\proj-0496789e5e79\\exports\\export_9740f053fa65d4cf-Workspace-smoke-conversation.md",
       "size": 180,
       "includes": {
-        "projectId": "proj-61ae4c8612d9"
+        "projectId": "proj-0496789e5e79"
       },
-      "createdAt": "2026-07-15T00:55:34Z",
-      "downloadUrl": "/api/workspace/exports/export_fe0d252e6a51e157/downloadprojectId=proj-61ae4c8612d9"
+      "createdAt": "2026-07-15T01:37:53Z",
+      "downloadUrl": "/api/workspace/exports/export_9740f053fa65d4cf/downloadprojectId=proj-0496789e5e79"
     }
   }
 }
