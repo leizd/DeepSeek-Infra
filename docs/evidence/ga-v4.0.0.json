@@ -1,0 +1,98 @@
+{
+  "schemaVersion": "ga-smoke.v1",
+  "version": "4.0.0",
+  "commit": "481772d7",
+  "generatedAt": "2026-07-15T11:07:36Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "workspaceHome": "PASS",
+    "project": "PASS",
+    "memory": "PASS",
+    "skill": "PASS",
+    "media": "PASS",
+    "browserSnapshot": "PASS",
+    "savedItem": "PASS",
+    "artifact": "PASS",
+    "automation": "PASS",
+    "export": "PASS",
+    "provenance": "PASS",
+    "exportRedaction": "PASS"
+  },
+  "details": {
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-ga-smoke-6lbwxct3",
+    "projectId": "proj-b3900f187e05",
+    "memoryId": "b55b7064d123b4970464",
+    "skillRunId": "run-54b4e355a401a958",
+    "mediaId": "media_4a453443e8b10e01",
+    "savedId": "save_4a43876bbedbc4db",
+    "artifactId": "art_95f8ace1636eb722",
+    "automationRunId": "auto_run_e3c6ef4349d12549",
+    "export": {
+      "exportId": "export_5dc707882e515b8c",
+      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-ga-smoke-6lbwxct3\\.projects\\proj-b3900f187e05\\exports\\export_5dc707882e515b8c-GA-Personal-Runtime-project-export.zip",
+      "entries": [
+        "artifacts/Automation-Project-Summary.md",
+        "artifacts/GA-Runtime-Report.md",
+        "conversations/conversation-conv-ga-smoke.md",
+        "media/media.json",
+        "media/segments/media_4a453443e8b10e01.json",
+        "metadata.json",
+        "project.md",
+        "saved-items/saved-items.json"
+      ],
+      "includes": {
+        "projectId": "proj-b3900f187e05",
+        "conversationIds": [
+          "conv-ga-smoke"
+        ],
+        "savedItemIds": [
+          "save_8aa9d59223eebd1e",
+          "save_4a43876bbedbc4db"
+        ],
+        "artifactIds": [
+          "art_3d5f3ea92059a4ec",
+          "art_95f8ace1636eb722"
+        ],
+        "mediaIds": [
+          "media_4a453443e8b10e01"
+        ]
+      }
+    },
+    "homeCounts": {
+      "projects": 1,
+      "memories": 2,
+      "skills": 1,
+      "media": 1,
+      "automations": 1,
+      "automationRuns": 1,
+      "artifacts": 2,
+      "savedItems": 2,
+      "exports": 1
+    },
+    "provenanceSummary": {
+      "nodes": 17,
+      "edges": 34,
+      "types": {
+        "project": 1,
+        "conversation": 1,
+        "message": 1,
+        "memory": 2,
+        "automation": 1,
+        "automation_run": 1,
+        "source_automation": 1,
+        "source_chat": 1,
+        "media": 1,
+        "source_browser": 1,
+        "saved_item": 2,
+        "artifact": 2,
+        "skill_run": 1,
+        "export": 1
+      }
+    }
+  }
+}

@@ -1,13 +1,13 @@
 # DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-4.0.0--rc.2-blue)
+![版本](https://img.shields.io/badge/version-4.0.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.0.0-rc.2 release candidate:** this candidate is frozen from the verified 3.10.0 hybrid baseline. Python remains the default and authoritative runtime, default Compose remains Python-only, the officially supported Rust sidecar and every Rust delegate remain opt-in, and Python fallback is guaranteed throughout 4.x. Gateway streaming, upstream HTTP/credentials/retries, MCP transport/session/tool execution, and file/OCR/embedding/SQLite/index ownership remain in Python. The 3.10 binary/BLOB path stays explicitly opt-in, and Rust-primary ranking is not enabled. `v4.0.0-rc.1` is superseded and retained only as a historical architecture preview. See [the rc.2 notes](docs/releases/4.0.0-rc.2.md), [upgrade and rollback guidance](docs/UPGRADING_TO_4_0.md), [support policy](docs/4_0_SUPPORT_POLICY.md), and [hybrid runbook](docs/RUST_HYBRID_RUNTIME_RUNBOOK.md).
+> **4.0.0 stable release:** the validated `v4.0.0-rc.2` candidate is promoted without runtime or protocol changes. Python remains the default and authoritative runtime, default Compose remains Python-only, the officially supported Rust sidecar and every Rust delegate remain opt-in, and Python fallback is guaranteed throughout 4.x. Gateway streaming, upstream HTTP/credentials/retries, MCP transport/session/tool execution, and file/OCR/embedding/SQLite/index ownership remain in Python. The 3.10 binary/BLOB path stays explicitly opt-in, and Rust-primary ranking is not enabled. `v4.0.0-rc.1` remains a historical architecture preview and rc.2 remains the validated promotion source. See [the 4.0.0 notes](docs/releases/4.0.0.md), [upgrade and rollback guidance](docs/UPGRADING_TO_4_0.md), [support policy](docs/4_0_SUPPORT_POLICY.md), and [hybrid runbook](docs/RUST_HYBRID_RUNTIME_RUNBOOK.md).
 
-**RC.2 freeze validation:** run `python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.0-rc.2.json`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, `python scripts/preflight_release.py --version 4.0.0-rc.2 --ga`, and `python scripts/check_4_0_rc_readiness.py --strict`. The PR performs a release-package dry-run only and creates no tag or GitHub Release.
+**Stable promotion validation:** run `python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.0.json`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.0 --ga`. The promotion PR performs a release-package dry-run only; tag and GitHub Release publication occur separately from the exact merge commit.
 
 ## 30 秒概览
 

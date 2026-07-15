@@ -1,5 +1,18 @@
 # 更新日志
 
+## [4.0.0] - Python-first Hybrid Runtime Stable
+
+### Stable promotion
+
+- Promotes the validated `v4.0.0-rc.2` candidate without runtime, protocol, schema, ownership, or default-behavior changes.
+- Keeps Python default and authoritative, default Compose Python-only, every Rust delegate and binary transport default-off, and Python fallback supported throughout 4.x.
+- Carries forward the blocking 95% Python and 80% Rust coverage gates, complete live parity, upgrade/rollback, sidecar-loss, performance, protocol-freeze, and release-artifact contracts.
+- Publishes stable artifacts only from the exact promotion merge commit after the independent promotion PR and complete CI rollup are green.
+
+### Non-goals
+
+- Does not enable or deploy Rust by default, enable Rust-primary ranking, remove JSON embeddings or Python fallback, change the frozen 4.0 endpoint contract, or begin a 4.0.1 milestone.
+
 ## [4.0.0-rc.2] - Hybrid Runtime Release Freeze
 
 ### Release freeze

@@ -33,7 +33,7 @@ def _endpoints() -> list[dict[str, object]]:
 def test_protocol_contract_freezes_exact_rc2_inventory() -> None:
     data = _contract()
     assert data["schema_version"] == 1
-    assert data["version"] == "4.0.0-rc.2"
+    assert data["version"] == "4.0.0"
     assert data["status"] == "frozen"
     endpoints = _endpoints()
     assert {(str(item["method"]), str(item["path"])) for item in endpoints} == EXPECTED_ENDPOINTS

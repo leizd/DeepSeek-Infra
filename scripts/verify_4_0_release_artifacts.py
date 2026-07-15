@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the 4.0.0-rc.2 ZIP, checksum, manifest, provenance, and privacy contract."""
+"""Verify the 4.0.0 ZIP, checksum, manifest, provenance, and privacy contract."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def main() -> int:
     if checksum_value != digest:
         errors.append("checksum does not match ZIP")
     if manifest.get("version") != APP_VERSION:
-        errors.append("manifest version is not rc.2")
+        errors.append(f"manifest version is not {APP_VERSION}")
     if manifest.get("commit") != commit:
         errors.append("manifest commit is not the exact validation commit")
     if manifest.get("sha256") != digest or manifest.get("archiveSha256") != digest:

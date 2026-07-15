@@ -61,7 +61,7 @@ Run live parity against a sidecar:
 python scripts/check_gateway_request_parity.py \
   --base-url http://127.0.0.1:8787 \
   --strict \
-  --report docs/evidence/gateway-request-parity-v4.0.0-rc.2.json
+  --report docs/evidence/gateway-request-parity-v4.0.0.json
 ```
 
 Successful cases require the complete normalized core request to match. Failed cases require only the stable error category to match. The `gateway-request-parity` CI job uploads the JSON report even on failure. The hybrid Compose E2E separately proves Python Gateway to Rust preparation to Python offline upstream execution, stops the sidecar, and proves the same request succeeds through Python fallback.
