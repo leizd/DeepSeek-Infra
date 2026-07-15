@@ -1,10 +1,10 @@
 # Rust Core Migration Roadmap
 
-This document defines the incremental path from the current 3.0.x line to a 4.0.0 release focused on Rust-backed infrastructure and higher test coverage.
+This document records the incremental path to the active `4.0.0-rc.2` Python-first hybrid freeze. Stable `4.0.0` remains a separate post-observation promotion, not an automatic rc.2 outcome.
 
 ## Goal
 
-DeepSeek Infra 4.0.0 should migrate selected core infrastructure paths to Rust while preserving Python for product integration, local-first UX, document/media tooling, and ecosystem-heavy features.
+DeepSeek Infra 4.0 stabilizes selected optional Rust infrastructure paths while preserving Python as the default, authoritative runtime for product integration, local-first UX, document/media tooling, protocols, persistence, and ecosystem-heavy features.
 
 The target is not a full rewrite. The target is a hybrid architecture:
 
@@ -461,7 +461,7 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Current themes (3.10.0 semantic-cache binary embedding storage completed):
+Frozen path (3.10.0 capabilities carried into 4.0.0-rc.2):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.

@@ -65,7 +65,7 @@ def _read(path: Path) -> str:
 
 def check_readme_badge(root: Path, version: str) -> CheckResult:
     text = _read(root / "README.md")
-    needle = f"version-{version}-blue"
+    needle = f"version-{version.replace('-', '--')}-blue"
     if needle in text:
         return CheckResult("readme_badge", STATUS_PASS, f"README badge is {version}", {"needle": needle})
     return CheckResult("readme_badge", STATUS_FAIL, f"README badge is not {version} (missing '{needle}')", {"needle": needle})
@@ -399,11 +399,19 @@ def check_ga_evidence_index(root: Path, version: str) -> CheckResult:
 
 def check_ga_release_manifest(root: Path, version: str) -> CheckResult:
     text = _read(root / "deepseek_infra" / "infra" / "diagnostics" / "release_manifest.py")
-    needles = ("gaEvidence", f"docs/evidence/ga-v{version}.json")
-    missing = [needle for needle in needles if needle not in text]
+    dynamic_path = 'f"docs/evidence/ga-v{APP_VERSION}.json"'
+    literal_path = f"docs/evidence/ga-v{version}.json"
+    missing = ["gaEvidence"] if "gaEvidence" not in text else []
+    if dynamic_path not in text and literal_path not in text:
+        missing.append(f"{dynamic_path} or {literal_path}")
     if missing:
         return CheckResult("ga_release_manifest", STATUS_FAIL, "release manifest missing GA evidence fields", {"missing": missing})
-    return CheckResult("ga_release_manifest", STATUS_PASS, "release manifest includes gaEvidence", {"checked": list(needles)})
+    return CheckResult(
+        "ga_release_manifest",
+        STATUS_PASS,
+        "release manifest includes gaEvidence",
+        {"checked": ["gaEvidence", dynamic_path if dynamic_path in text else literal_path]},
+    )
 
 
 def check_ga_release_exclusions(root: Path) -> CheckResult:

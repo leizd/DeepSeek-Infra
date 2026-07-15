@@ -3,11 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.release_evidence import stamp_release_report  # noqa: E402
 
 
 DEFAULT_COMPOSE_FILES = ("docker-compose.yml", "docker-compose.hybrid-test.yml")
@@ -789,7 +797,8 @@ def main() -> int:
         print(f"Hybrid runtime smoke failed: {exc}")
         return 1
     if args.as_json:
-        print(json.dumps({"ok": True, "checks": [asdict(check) for check in checks]}, ensure_ascii=False, indent=2))
+        report = stamp_release_report({"ok": True, "checks": [asdict(check) for check in checks]}, root=ROOT)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         for check in checks:
             print(f"PASS {check.name}: {check.detail}")

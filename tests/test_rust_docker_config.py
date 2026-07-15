@@ -67,11 +67,17 @@ def test_ci_builds_and_smokes_rust_image_in_independent_job() -> None:
     workflow = _read(".github/workflows/ci.yml")
 
     assert "rust-docker:" in workflow
-    assert "docker build -f rust/Dockerfile -t deepseek-rust-gateway:test ." in workflow
+    assert "docker build -f rust/Dockerfile -t deepseek-rust-gateway:4.0.0-rc.2 ." in workflow
+    assert "record_rust_sidecar_image.py" in workflow
     assert "python scripts/smoke_rust_sidecar.py" in workflow
     assert "docker rm --force deepseek-rust-gateway || true" in workflow
     assert "--cov-report=json:artifacts/coverage.json" in workflow
     assert "--cov-fail-under=95" in workflow
+
+
+def test_rust_image_has_rc2_oci_version_label() -> None:
+    dockerfile = _read("rust/Dockerfile")
+    assert 'org.opencontainers.image.version="4.0.0-rc.2"' in dockerfile
 
 
 class _SidecarHandler(BaseHTTPRequestHandler):

@@ -1,0 +1,1919 @@
+{
+  "ok": true,
+  "summary": {
+    "passed": 68,
+    "total": 68
+  },
+  "cases": [
+    {
+      "id": "valid-minimal-user",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-system-user",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "system",
+              "content": "be concise"
+            },
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "be concise",
+              "role": "system"
+            },
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-assistant-history",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "one"
+            },
+            {
+              "role": "assistant",
+              "content": "two"
+            },
+            {
+              "role": "user",
+              "content": "three"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "one",
+              "role": "user"
+            },
+            {
+              "content": "two",
+              "role": "assistant"
+            },
+            {
+              "content": "three",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-tool-call-result",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "call it"
+            },
+            {
+              "role": "assistant",
+              "content": "",
+              "tool_calls": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "echo",
+                    "arguments": "{\"text\":\"hi\"}"
+                  },
+                  "id": "call_1"
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "content": "hi",
+              "tool_call_id": "call_1"
+            },
+            {
+              "role": "user",
+              "content": "continue"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "call it",
+              "role": "user"
+            },
+            {
+              "content": "",
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "{\"text\":\"hi\"}",
+                    "name": "echo"
+                  },
+                  "id": "call_1",
+                  "type": "function"
+                }
+              ]
+            },
+            {
+              "content": "hi",
+              "role": "tool",
+              "tool_call_id": "call_1"
+            },
+            {
+              "content": "continue",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-multi-turn",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-flash",
+          "messages": [
+            {
+              "role": "user",
+              "content": "u1"
+            },
+            {
+              "role": "assistant",
+              "content": "a1"
+            },
+            {
+              "role": "user",
+              "content": "u2"
+            },
+            {
+              "role": "assistant",
+              "content": "a2"
+            },
+            {
+              "role": "user",
+              "content": "u3"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "u1",
+              "role": "user"
+            },
+            {
+              "content": "a1",
+              "role": "assistant"
+            },
+            {
+              "content": "u2",
+              "role": "user"
+            },
+            {
+              "content": "a2",
+              "role": "assistant"
+            },
+            {
+              "content": "u3",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-flash"
+        }
+      }
+    },
+    {
+      "id": "valid-empty-tools-auto",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-single-tool-auto",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "echo",
+                "parameters": {
+                  "type": "object"
+                }
+              }
+            }
+          ],
+          "tool_choice": "auto"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro",
+          "tool_choice": "auto",
+          "tools": [
+            {
+              "function": {
+                "name": "echo",
+                "parameters": {
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "valid-multiple-tools-required",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "echo",
+                "parameters": {
+                  "type": "object"
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "clock",
+                "parameters": {
+                  "type": "object"
+                }
+              }
+            }
+          ],
+          "tool_choice": "required"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro",
+          "tool_choice": "required",
+          "tools": [
+            {
+              "function": {
+                "name": "echo",
+                "parameters": {
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            },
+            {
+              "function": {
+                "name": "clock",
+                "parameters": {
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "valid-tool-choice-none",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "tool_choice": "none"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro",
+          "tool_choice": "none"
+        }
+      }
+    },
+    {
+      "id": "valid-tool-choice-function",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "echo",
+                "parameters": {
+                  "type": "object"
+                }
+              }
+            }
+          ],
+          "tool_choice": {
+            "type": "function",
+            "function": {
+              "name": "echo"
+            }
+          }
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro",
+          "tool_choice": {
+            "function": {
+              "name": "echo"
+            },
+            "type": "function"
+          },
+          "tools": [
+            {
+              "function": {
+                "name": "echo",
+                "parameters": {
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "valid-temperature-zero",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-flash",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "temperature": 0.0
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-flash",
+          "temperature": 0.0
+        }
+      }
+    },
+    {
+      "id": "valid-temperature-two",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-flash",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "temperature": 2.0
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-flash",
+          "temperature": 2.0
+        }
+      }
+    },
+    {
+      "id": "valid-max-tokens-one",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "max_tokens": 1
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "max_tokens": 1,
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-max-tokens-limit",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "max_tokens": 131072
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "max_tokens": 131072,
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-cjk",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "你好，世界"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "你好，世界",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-cjk-english",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "用 Rust prepare this request"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "用 Rust prepare this request",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-emoji",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello 🚀✅"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello 🚀✅",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-multiline",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "first paragraph\n\nsecond paragraph"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "first paragraph\n\nsecond paragraph",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-alias-expert",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-alias-fast",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-flash",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-flash"
+        }
+      }
+    },
+    {
+      "id": "valid-alias-pro-underscore",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-alias-flash-underscore",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-flash",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-flash"
+        }
+      }
+    },
+    {
+      "id": "valid-text-parts",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "part one"
+                },
+                {
+                  "type": "text",
+                  "text": "part two"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "part one",
+                  "type": "text"
+                },
+                {
+                  "text": "part two",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-image-part",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "look"
+                },
+                {
+                  "type": "image_url",
+                  "image_url": {
+                    "url": "data:image/png;base64,AA=="
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "look",
+                  "type": "text"
+                },
+                {
+                  "image_url": {
+                    "url": "data:image/png;base64,AA=="
+                  },
+                  "type": "image_url"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-image-detail",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "image_url",
+                  "image_url": {
+                    "url": "https://example.test/image.png",
+                    "detail": "high"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": [
+                {
+                  "image_url": {
+                    "detail": "high",
+                    "url": "https://example.test/image.png"
+                  },
+                  "type": "image_url"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-strict-tool",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "strict_tool",
+                "parameters": {
+                  "type": "object",
+                  "additionalProperties": false
+                },
+                "description": "validate",
+                "strict": true
+              }
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro",
+          "tools": [
+            {
+              "function": {
+                "description": "validate",
+                "name": "strict_tool",
+                "parameters": {
+                  "additionalProperties": false,
+                  "type": "object"
+                },
+                "strict": true
+              },
+              "type": "function"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "valid-nested-tool-parameters",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "nested",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "input": {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro",
+          "tools": [
+            {
+              "function": {
+                "name": "nested",
+                "parameters": {
+                  "properties": {
+                    "input": {
+                      "properties": {
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "valid-tool-call-no-id",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            },
+            {
+              "role": "assistant",
+              "content": "",
+              "tool_calls": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "echo",
+                    "arguments": "{}"
+                  }
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "continue"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            },
+            {
+              "content": "",
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "{}",
+                    "name": "echo"
+                  },
+                  "type": "function"
+                }
+              ]
+            },
+            {
+              "content": "continue",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-reasoning-minimal",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "reasoning_effort": "minimal",
+          "thinking": {
+            "type": "enabled"
+          }
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro",
+          "reasoning_effort": "minimal",
+          "thinking": {
+            "type": "enabled"
+          }
+        }
+      }
+    },
+    {
+      "id": "valid-reasoning-max",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "reasoning_effort": "max",
+          "thinking": {
+            "type": "enabled"
+          }
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro",
+          "reasoning_effort": "max",
+          "thinking": {
+            "type": "enabled"
+          }
+        }
+      }
+    },
+    {
+      "id": "valid-top-p-zero",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-flash",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "top_p": 0.0
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-flash",
+          "top_p": 0.0
+        }
+      }
+    },
+    {
+      "id": "valid-top-p-one",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-flash",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "top_p": 1.0
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-flash",
+          "top_p": 1.0
+        }
+      }
+    },
+    {
+      "id": "valid-stream-false",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ],
+          "stream": false
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro",
+          "stream": false
+        }
+      }
+    },
+    {
+      "id": "valid-unknown-fields-filtered",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "valid-trims-core-strings",
+      "group": "valid",
+      "passed": true,
+      "expectedError": null,
+      "python": {
+        "ok": true,
+        "request": {
+          "model": "deepseek-v4-pro",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ]
+        }
+      },
+      "rust": {
+        "ok": true,
+        "request": {
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "deepseek-v4-pro"
+        }
+      }
+    },
+    {
+      "id": "invalid-empty-model",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "unsupported_model",
+      "python": {
+        "ok": false,
+        "code": "unsupported_model"
+      },
+      "rust": {
+        "ok": false,
+        "code": "unsupported_model"
+      }
+    },
+    {
+      "id": "invalid-unknown-model",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "unsupported_model",
+      "python": {
+        "ok": false,
+        "code": "unsupported_model"
+      },
+      "rust": {
+        "ok": false,
+        "code": "unsupported_model"
+      }
+    },
+    {
+      "id": "invalid-missing-messages",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_messages",
+      "python": {
+        "ok": false,
+        "code": "invalid_messages"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_messages"
+      }
+    },
+    {
+      "id": "invalid-messages-not-list",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_messages",
+      "python": {
+        "ok": false,
+        "code": "invalid_messages"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_messages"
+      }
+    },
+    {
+      "id": "invalid-message-not-object",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_messages",
+      "python": {
+        "ok": false,
+        "code": "invalid_messages"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_messages"
+      }
+    },
+    {
+      "id": "invalid-role",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_message_role",
+      "python": {
+        "ok": false,
+        "code": "invalid_message_role"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_message_role"
+      }
+    },
+    {
+      "id": "invalid-content-number",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_message_content",
+      "python": {
+        "ok": false,
+        "code": "invalid_message_content"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_message_content"
+      }
+    },
+    {
+      "id": "invalid-content-empty",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_message_content",
+      "python": {
+        "ok": false,
+        "code": "invalid_message_content"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_message_content"
+      }
+    },
+    {
+      "id": "invalid-content-array-empty",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_message_content",
+      "python": {
+        "ok": false,
+        "code": "invalid_message_content"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_message_content"
+      }
+    },
+    {
+      "id": "invalid-content-part-not-object",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_message_content",
+      "python": {
+        "ok": false,
+        "code": "invalid_message_content"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_message_content"
+      }
+    },
+    {
+      "id": "invalid-content-part-type",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_message_content",
+      "python": {
+        "ok": false,
+        "code": "invalid_message_content"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_message_content"
+      }
+    },
+    {
+      "id": "invalid-tool-message-no-id",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_message_content",
+      "python": {
+        "ok": false,
+        "code": "invalid_message_content"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_message_content"
+      }
+    },
+    {
+      "id": "invalid-assistant-tool-calls-empty",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_message_content",
+      "python": {
+        "ok": false,
+        "code": "invalid_message_content"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_message_content"
+      }
+    },
+    {
+      "id": "invalid-assistant-tool-function",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_message_content",
+      "python": {
+        "ok": false,
+        "code": "invalid_message_content"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_message_content"
+      }
+    },
+    {
+      "id": "invalid-tools-not-list",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_tools",
+      "python": {
+        "ok": false,
+        "code": "invalid_tools"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_tools"
+      }
+    },
+    {
+      "id": "invalid-tool-not-object",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_tools",
+      "python": {
+        "ok": false,
+        "code": "invalid_tools"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_tools"
+      }
+    },
+    {
+      "id": "invalid-tool-type",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_tools",
+      "python": {
+        "ok": false,
+        "code": "invalid_tools"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_tools"
+      }
+    },
+    {
+      "id": "invalid-tool-name-missing",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_tools",
+      "python": {
+        "ok": false,
+        "code": "invalid_tools"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_tools"
+      }
+    },
+    {
+      "id": "invalid-tool-parameters",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_tools",
+      "python": {
+        "ok": false,
+        "code": "invalid_tools"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_tools"
+      }
+    },
+    {
+      "id": "invalid-tool-choice-string",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_tool_choice",
+      "python": {
+        "ok": false,
+        "code": "invalid_tool_choice"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_tool_choice"
+      }
+    },
+    {
+      "id": "invalid-tool-choice-function",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_tool_choice",
+      "python": {
+        "ok": false,
+        "code": "invalid_tool_choice"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_tool_choice"
+      }
+    },
+    {
+      "id": "invalid-temperature-bool",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_temperature",
+      "python": {
+        "ok": false,
+        "code": "invalid_temperature"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_temperature"
+      }
+    },
+    {
+      "id": "invalid-temperature-high",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_temperature",
+      "python": {
+        "ok": false,
+        "code": "invalid_temperature"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_temperature"
+      }
+    },
+    {
+      "id": "invalid-temperature-nan",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_request",
+      "python": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_request"
+      }
+    },
+    {
+      "id": "invalid-temperature-infinity",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_request",
+      "python": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_request"
+      }
+    },
+    {
+      "id": "invalid-max-tokens-negative",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_max_tokens",
+      "python": {
+        "ok": false,
+        "code": "invalid_max_tokens"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_max_tokens"
+      }
+    },
+    {
+      "id": "invalid-max-tokens-bool",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_max_tokens",
+      "python": {
+        "ok": false,
+        "code": "invalid_max_tokens"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_max_tokens"
+      }
+    },
+    {
+      "id": "invalid-max-tokens-high",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_max_tokens",
+      "python": {
+        "ok": false,
+        "code": "invalid_max_tokens"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_max_tokens"
+      }
+    },
+    {
+      "id": "invalid-stream-true",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_request",
+      "python": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_request"
+      }
+    },
+    {
+      "id": "invalid-stream-type",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_request",
+      "python": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_request"
+      }
+    },
+    {
+      "id": "invalid-credential-field",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "invalid_request",
+      "python": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "rust": {
+        "ok": false,
+        "code": "invalid_request"
+      }
+    },
+    {
+      "id": "invalid-request-too-large",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "request_too_large",
+      "python": {
+        "ok": false,
+        "code": "request_too_large"
+      },
+      "rust": {
+        "ok": false,
+        "code": "request_too_large"
+      }
+    },
+    {
+      "id": "invalid-request-too-deep",
+      "group": "invalid",
+      "passed": true,
+      "expectedError": "request_too_large",
+      "python": {
+        "ok": false,
+        "code": "request_too_large"
+      },
+      "rust": {
+        "ok": false,
+        "code": "request_too_large"
+      }
+    }
+  ],
+  "version": "4.0.0-rc.2",
+  "commit": "824447a168a38d7042b8b28a4ce646202b49ad5d",
+  "status": "PASS",
+  "generatedAt": "2026-07-15T08:04:52Z"
+}

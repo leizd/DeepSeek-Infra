@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from deepseek_infra.infra.rag import local_rag  # noqa: E402
+from scripts.release_evidence import stamp_release_report  # noqa: E402
 
 
 DEFAULT_FIXTURE = ROOT / "fixtures" / "rag" / "parity_cases.json"
@@ -352,12 +353,13 @@ def main(argv: list[str] | None = None) -> int:
         wait_for_sidecar(args.base_url, wait_seconds=args.wait_seconds, timeout=args.timeout)
         report = run_parity(args.base_url, fixture, timeout=args.timeout)
     except (OSError, ValueError, ParityFailure) as exc:
-        report = {"ok": False, "summary": {}, "cases": [], "fatal_error": str(exc)}
+        report = stamp_release_report({"ok": False, "summary": {}, "cases": [], "fatal_error": str(exc)}, root=ROOT)
         print(f"RAG parity failed: {exc}", file=sys.stderr)
         if args.report is not None:
             _write_report(args.report, report)
         return 1
 
+    report = stamp_release_report(report, root=ROOT)
     print_report(report)
     if args.report is not None:
         _write_report(args.report, report)

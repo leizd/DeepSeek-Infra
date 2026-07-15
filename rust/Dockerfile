@@ -11,6 +11,12 @@ RUN cargo build \
 
 FROM debian:bookworm-slim
 
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="DeepSeek Infra Rust Sidecar" \
+      org.opencontainers.image.version="4.0.0-rc.2" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.description="Optional DeepSeek Infra hybrid runtime sidecar"
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \

@@ -19,9 +19,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from deepseek_infra.core.config import APP_VERSION  # noqa: E402
 from deepseek_infra.infra.rust_core import vector_binary  # noqa: E402
+from scripts.release_evidence import git_commit  # noqa: E402
 
-VERSION = "3.10.0"
+VERSION = APP_VERSION
 SCHEMA_VERSION = "rag-vector-binary-parity.v1"
 
 
@@ -223,6 +225,7 @@ def run(base_url: str) -> dict[str, object]:
     return {
         "schemaVersion": SCHEMA_VERSION,
         "version": VERSION,
+        "commit": git_commit(ROOT),
         "status": "PASS",
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "validCaseCount": len(case_results),

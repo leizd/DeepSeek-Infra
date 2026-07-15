@@ -22,6 +22,7 @@ from deepseek_infra.infra.rag.document_preparation import (  # noqa: E402
     RAG_DOCUMENT_MAX_REQUEST_BYTES,
     prepare_rag_document_json,
 )
+from scripts.release_evidence import stamp_release_report  # noqa: E402
 
 DEFAULT_FIXTURE = ROOT / "fixtures" / "rag" / "document_preparation_cases.json"
 RequestFn = Callable[[str, bytes, float], dict[str, Any]]
@@ -221,11 +222,14 @@ def main(argv: list[str] | None = None) -> int:
         wait_for_sidecar(args.base_url, wait_seconds=args.wait_seconds, timeout=min(args.timeout, 5.0))
         report = run_parity(args.base_url, cases, timeout=args.timeout)
     except (OSError, ValueError, ParityFailure) as exc:
-        report = {"ok": False, "summary": {"passed": 0, "total": 0}, "cases": [], "fatalError": str(exc)}
+        report = stamp_release_report(
+            {"ok": False, "summary": {"passed": 0, "total": 0}, "cases": [], "fatalError": str(exc)}, root=ROOT
+        )
         print(f"RAG document preparation parity failed: {exc}", file=sys.stderr)
         if args.report is not None:
             write_report(args.report, report)
         return 1
+    report = stamp_release_report(report, root=ROOT)
     print_report(report)
     if args.report is not None:
         write_report(args.report, report)

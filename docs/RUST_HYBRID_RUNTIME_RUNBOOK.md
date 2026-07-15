@@ -1,8 +1,8 @@
 # Hybrid Rust Runtime Runbook
 
-This runbook covers day-to-day operation of the DeepSeek Infra 3.10.0 hybrid Rust runtime: how to start or containerize the Rust sidecar, verify the complete hybrid system, enable individual components, understand fallback behavior, troubleshoot common failures, and roll back to the Python runtime.
+This runbook covers day-to-day operation of the DeepSeek Infra 4.0.0-rc.2 Python-first hybrid runtime: how to start or containerize the optional Rust sidecar, verify the complete hybrid system, enable individual delegates, understand fallback behavior, troubleshoot failures, and roll back to the Python-only runtime.
 
-> **Scope**: every Rust component remains opt-in. Version 3.10.0 retains the 3.9.0 compact binary wire format and adds Python-owned dual-format semantic-cache storage plus direct BLOB payload assembly; it adds no delegate and moves no ownership. JSON remains the transport default, full Python ranking/parity remains mandatory, and any binary failure falls directly to Python without retrying the Rust JSON endpoint. Python still owns SQLite, uploads, paths, parsing, OCR, embeddings, indexes, retrieval, authorization, transports, sessions, tools, tracing, and business state. Rust cannot read files or databases or write an index. The default Python image, default-disabled Rust flags, Python fallback, and `docker compose up` behavior are unchanged. The published `v4.0.0-rc.1` remains a historical architecture preview, not the active stable line. 可视化职责边界图请见 [docs/ARCHITECTURE.md](ARCHITECTURE.md)。
+> **Scope**: every Rust component and the binary vector path remain explicit opt-ins. Python is default and authoritative, default Compose is Python-only, and fallback is supported throughout 4.x. Python owns SQLite, uploads, paths, parsing, OCR, embeddings, indexes, retrieval, authorization, upstream HTTP/credentials/retries, Gateway streaming, MCP transports/sessions/tools, tracing, and business state. Binary failures fall directly to Python without retrying the JSON Rust endpoint. `v4.0.0-rc.1` is superseded and historical; Rust-primary is not enabled. See [docs/ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
@@ -479,7 +479,7 @@ With the independent `DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1`, the upload path parses
 python scripts/check_rag_document_preparation_parity.py \
   --base-url http://127.0.0.1:8787 \
   --strict \
-  --report artifacts/rag-document-preparation-parity-report.json
+  --report docs/evidence/rag-document-preparation-parity-v4.0.0-rc.2.json
 ```
 
 Alternatively, verify end-to-end RAG via the evaluation harness:
