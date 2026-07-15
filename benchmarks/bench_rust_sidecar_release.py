@@ -492,6 +492,7 @@ def _measure_vector_layer(
     *,
     iterations: int,
     warmups: int,
+    expected_output: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     for _ in range(warmups):
         call()
@@ -502,6 +503,7 @@ def _measure_vector_layer(
     python_validation: list[float] = []
     errors = 0
     fallbacks = 0
+    semantic_mismatches = 0
     request_bytes = 0
     response_bytes = 0
     output_hash = ""
@@ -511,6 +513,8 @@ def _measure_vector_layer(
         try:
             result = call()
             fallbacks += int(result.fallback)
+            if expected_output is not None and not _vector_outputs_match(expected_output, result.output):
+                semantic_mismatches += 1
             request_bytes = result.request_bytes
             response_bytes = result.response_bytes
             output_hash = semantic_hash("rag_vector_rank", result.output)
@@ -548,6 +552,7 @@ def _measure_vector_layer(
         rustProcessingP95Us=rust_p95,
         pythonValidationMedianUs=python_validation_median,
         pythonValidationP95Us=python_validation_p95,
+        semanticMismatches=semantic_mismatches,
     )
     return stats, output_hash
 
@@ -828,11 +833,14 @@ def _semantic_cache_storage_comparison(
             "pythonDirectFromBlobArrays": python_from_blob_arrays,
         }
         layers: dict[str, dict[str, Any]] = {}
-        signatures: set[str] = set()
         for name, call in calls.items():
-            layer, signature = _measure_vector_layer(call, iterations=iterations, warmups=warmups)
+            layer, _ = _measure_vector_layer(
+                call,
+                iterations=iterations,
+                warmups=warmups,
+                expected_output=expected,
+            )
             layers[name] = layer
-            signatures.add(signature)
 
         list_request = vector_binary.encode_rank_request(query, list_candidates).body
         blob_request = vector_binary.encode_rank_request_from_blobs(
@@ -852,7 +860,7 @@ def _semantic_cache_storage_comparison(
         increase = dual_database_bytes - json_database_bytes
         return {
             "layers": layers,
-            "semanticParity": len(signatures) == 1,
+            "semanticParity": all(not layer.get("semanticMismatches") for layer in layers.values()),
             "databaseBytes": {
                 "jsonOnly": json_database_bytes,
                 "dualWrite": dual_database_bytes,

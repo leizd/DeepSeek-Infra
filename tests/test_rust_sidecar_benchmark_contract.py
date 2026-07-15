@@ -317,6 +317,7 @@ def test_semantic_cache_storage_comparison_covers_mixed_database_layers(monkeypa
     )
 
     assert comparison["semanticParity"] is True
+    assert all(layer["semanticMismatches"] == 0 for layer in comparison["layers"].values())
     assert comparison["candidateStorage"] == {"blobCandidates": 3, "legacyCandidates": 1, "mixed": True}
     assert comparison["gates"]["requestBytesIdentical"] is True
     assert comparison["gates"]["zeroErrors"] is True
