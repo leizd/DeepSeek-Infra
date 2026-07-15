@@ -73,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
         "-m",
         "pytest",
         "--no-cov",
+        "-o",
+        "addopts=",
         "-p",
         "no:cacheprovider",
         "--basetemp",
@@ -105,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
         payload["failure"] = (result.stdout + "\n" + result.stderr)[-4000:]
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"{args.kind} contract: {payload['status']} ({passed_count} tests)")
+    if not passed:
+        print(payload["failure"], file=sys.stderr)
     return 0 if passed else 1
 
 

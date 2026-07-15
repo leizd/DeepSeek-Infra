@@ -1,8 +1,8 @@
 {
   "schemaVersion": "rust-coverage.v1",
   "version": "4.0.0-rc.2",
-  "commit": "2267513840e9a0a283378babb29d111a1780586f",
-  "generatedAt": "2026-07-15T07:33:57Z",
+  "commit": "824447a168a38d7042b8b28a4ce646202b49ad5d",
+  "generatedAt": "2026-07-15T07:58:51Z",
   "status": "PASS",
   "threshold": {
     "metric": "line",

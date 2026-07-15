@@ -333,7 +333,6 @@ def _write_compare_markdown(evidence: dict[str, Any], path: str) -> None:
         "## Decision",
         "",
         str(evidence.get("decision", "")),
-        "",
     ])
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
