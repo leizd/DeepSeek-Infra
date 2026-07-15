@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -73,6 +74,11 @@ def test_semantic_cache_store_and_lookup(tmp_settings: Any) -> None:
 def test_semantic_cache_uses_rust_vector_ranking(tmp_settings: Any, monkeypatch: Any) -> None:
     monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
     monkeypatch.setattr(semantic_cache, "embed_text", lambda _text: [1.0, 0.0])
+    monkeypatch.setattr(
+        semantic_cache,
+        "embedding_pipeline",
+        lambda: SimpleNamespace(active_provider="test", dimensions=2, error=""),
+    )
     first = {"messages": [{"role": "user", "content": "first prompt"}], "toolsEnabled": False}
     second = {"messages": [{"role": "user", "content": "second prompt"}], "toolsEnabled": False}
     first_body = {"model": "deepseek-v4-pro", "messages": first["messages"]}
@@ -92,13 +98,18 @@ def test_binary_parity_divergence_falls_back(tmp_settings: Any, monkeypatch: Any
     monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
     monkeypatch.setenv("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT", "binary")
     monkeypatch.setattr(semantic_cache, "embed_text", lambda _text: [1.0, 0.0])
+    monkeypatch.setattr(
+        semantic_cache,
+        "embedding_pipeline",
+        lambda: SimpleNamespace(active_provider="test", dimensions=2, error=""),
+    )
     first = {"messages": [{"role": "user", "content": "parity source"}], "toolsEnabled": False}
     second = {"messages": [{"role": "user", "content": "parity query"}], "toolsEnabled": False}
     first_body = {"model": "deepseek-v4-pro", "messages": first["messages"]}
     second_body = {"model": "deepseek-v4-pro", "messages": second["messages"]}
     assert semantic_cache.store(first, first_body, {"model": "deepseek-v4-pro", "content": "python parity"})["stored"] is True
 
-    with patch.object(semantic_cache._rust_rag, "rank_vectors", return_value=((0, 0.99), True)):
+    with patch.object(semantic_cache._rust_rag, "rank_vectors_from_blobs", return_value=((0, 0.99), True)):
         hit = semantic_cache.lookup(second, second_body)
 
     assert hit.hit is True
@@ -111,6 +122,11 @@ def test_semantic_cache_rust_failure_falls_back_to_python(tmp_settings: Any, mon
     monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
     monkeypatch.setattr(semantic_cache, "embed_text", lambda _text: [1.0])
     monkeypatch.setattr(semantic_cache, "cosine_similarity", lambda _left, _right: 0.99)
+    monkeypatch.setattr(
+        semantic_cache,
+        "embedding_pipeline",
+        lambda: SimpleNamespace(active_provider="test", dimensions=1, error=""),
+    )
     first = {"messages": [{"role": "user", "content": "fallback source"}], "toolsEnabled": False}
     second = {"messages": [{"role": "user", "content": "fallback query"}], "toolsEnabled": False}
     first_body = {"model": "deepseek-v4-pro", "messages": first["messages"]}
@@ -326,4 +342,4 @@ def test_semantic_cache_scope_quality_decoders_and_schema_migration() -> None:
 
     conn = FakeConn()
     semantic_cache._ensure_columns(conn)  # type: ignore[arg-type]
-    assert sum("ALTER TABLE" in statement for statement in conn.statements) == 3
+    assert sum("ALTER TABLE" in statement for statement in conn.statements) == 6

@@ -10,10 +10,13 @@ import json
 import math
 import os
 import platform
+import shutil
 import socket
+import sqlite3
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -28,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from deepseek_infra.core.errors import AppError  # noqa: E402
+from deepseek_infra.infra.gateway import semantic_cache  # noqa: E402
 from deepseek_infra.infra.gateway.request_preparation import (  # noqa: E402
     prepare_gateway_request,
     prepare_request_with_optional_rust,
@@ -43,8 +47,8 @@ from deepseek_infra.infra.rag.document_preparation import (  # noqa: E402
 from deepseek_infra.infra.rust_core import policy_client, rag_client, transport, vector_binary  # noqa: E402
 from deepseek_infra.infra.tool_runtime.tool_policy import evaluate_path_safety, evaluate_url_safety  # noqa: E402
 
-VERSION = "3.9.0"
-SCHEMA_VERSION = "rust-sidecar-performance.v2"
+VERSION = "3.10.0"
+SCHEMA_VERSION = "rust-sidecar-performance.v3"
 BUILD_COMMAND = [
     "cargo",
     "build",
@@ -89,6 +93,7 @@ class VectorLayerResult:
     serialization_us: int | None = None
     transport_us: int | None = None
     rust_processing_us: int | None = None
+    python_validation_us: int | None = None
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -390,6 +395,50 @@ def _vector_binary_http(base_url: str, scenario: Scenario, timeout: float) -> Ve
     )
 
 
+def _vector_binary_blob_http(
+    base_url: str,
+    query: list[float],
+    candidate_blobs: list[bytes],
+    dimensions: int,
+    timeout: float,
+) -> VectorLayerResult:
+    serialization_started_ns = time.perf_counter_ns()
+    encoded = vector_binary.encode_rank_request_from_blobs(
+        query,
+        candidate_blobs,
+        dimensions,
+        blobs_validated=True,
+    )
+    serialization_us = max(0, (time.perf_counter_ns() - serialization_started_ns) // 1000)
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/rag/vectors/rank-binary",
+        data=encoded.body,
+        method="POST",
+        headers={
+            "Accept": vector_binary.CONTENT_TYPE,
+            "Content-Type": vector_binary.CONTENT_TYPE,
+            "X-DeepSeek-Request-ID": transport.new_correlation_id(),
+        },
+    )
+    with transport.urlopen(request, timeout=timeout) as response:
+        response_body = response.read()
+        content_type = transport.response_header(response, "Content-Type")
+        rust_processing_us = _response_processing_us(response)
+        transport_us = getattr(response, "transport_us", None)
+    if content_type is None or content_type.lower() != vector_binary.CONTENT_TYPE:
+        raise RuntimeError("binary vector response content type is invalid")
+    decoded = vector_binary.decode_rank_response(response_body, candidate_count=len(candidate_blobs))
+    return VectorLayerResult(
+        output={"index": decoded.index, "similarity": decoded.similarity},
+        fallback=False,
+        request_bytes=len(encoded.body),
+        response_bytes=len(response_body),
+        serialization_us=serialization_us,
+        transport_us=transport_us if isinstance(transport_us, int) else None,
+        rust_processing_us=rust_processing_us,
+    )
+
+
 def _vector_full_integration(scenario: Scenario, encoding: str) -> VectorLayerResult:
     previous = os.environ.get("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT")
     os.environ["DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT"] = encoding
@@ -401,6 +450,7 @@ def _vector_full_integration(scenario: Scenario, encoding: str) -> VectorLayerRe
             os.environ.pop("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT", None)
         else:
             os.environ["DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT"] = previous
+    validation_started_ns = time.perf_counter_ns()
     expected = _python_vector(scenario.payload)
     candidate = {"index": ranked[0], "similarity": ranked[1]} if used_rust and ranked is not None else expected
     parity = candidate.get("index") == expected.get("index") and math.isclose(
@@ -409,6 +459,7 @@ def _vector_full_integration(scenario: Scenario, encoding: str) -> VectorLayerRe
         rel_tol=1e-9,
         abs_tol=1e-12,
     )
+    python_validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
     return VectorLayerResult(
         output=candidate if parity else expected,
         fallback=not used_rust or not parity,
@@ -417,6 +468,7 @@ def _vector_full_integration(scenario: Scenario, encoding: str) -> VectorLayerRe
         serialization_us=diagnostics.get("serializationUs") if isinstance(diagnostics.get("serializationUs"), int) else None,
         transport_us=diagnostics.get("transportUs") if isinstance(diagnostics.get("transportUs"), int) else None,
         rust_processing_us=diagnostics.get("rustProcessingUs") if isinstance(diagnostics.get("rustProcessingUs"), int) else None,
+        python_validation_us=python_validation_us,
     )
 
 
@@ -447,6 +499,7 @@ def _measure_vector_layer(
     serialization: list[float] = []
     transport_samples: list[float] = []
     rust_processing: list[float] = []
+    python_validation: list[float] = []
     errors = 0
     fallbacks = 0
     request_bytes = 0
@@ -467,6 +520,8 @@ def _measure_vector_layer(
                 transport_samples.append(float(result.transport_us))
             if result.rust_processing_us is not None:
                 rust_processing.append(float(result.rust_processing_us))
+            if result.python_validation_us is not None:
+                python_validation.append(float(result.python_validation_us))
         except Exception:
             errors += 1
         samples.append(max(0.0, (time.perf_counter_ns() - started_ns) / 1000.0))
@@ -483,6 +538,7 @@ def _measure_vector_layer(
     serialization_median, serialization_p95 = _timing_pair(serialization)
     transport_median, transport_p95 = _timing_pair(transport_samples)
     rust_median, rust_p95 = _timing_pair(rust_processing)
+    python_validation_median, python_validation_p95 = _timing_pair(python_validation)
     stats.update(
         serializationMedianUs=serialization_median,
         serializationP95Us=serialization_p95,
@@ -490,8 +546,357 @@ def _measure_vector_layer(
         transportP95Us=transport_p95,
         rustProcessingMedianUs=rust_median,
         rustProcessingP95Us=rust_p95,
+        pythonValidationMedianUs=python_validation_median,
+        pythonValidationP95Us=python_validation_p95,
     )
     return stats, output_hash
+
+
+def _write_embedding_database(
+    path: Path,
+    json_texts: list[str],
+    blobs: list[bytes],
+    *,
+    dual_write: bool,
+    mixed: bool,
+    dimensions: int,
+) -> None:
+    with sqlite3.connect(path) as conn:
+        if dual_write:
+            conn.execute(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, embedding TEXT NOT NULL, "
+                "embedding_blob BLOB, embedding_dimensions INTEGER NOT NULL DEFAULT 0, "
+                "embedding_format TEXT NOT NULL DEFAULT '')"
+            )
+            rows = []
+            for index, (embedding, blob) in enumerate(zip(json_texts, blobs)):
+                legacy = mixed and index % 4 == 0
+                rows.append(
+                    (
+                        index,
+                        embedding,
+                        None if legacy else sqlite3.Binary(blob),
+                        0 if legacy else dimensions,
+                        "" if legacy else semantic_cache.EMBEDDING_FORMAT_F64LE_V1,
+                    )
+                )
+            conn.executemany("INSERT INTO items VALUES (?, ?, ?, ?, ?)", rows)
+        else:
+            conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, embedding TEXT NOT NULL)")
+            conn.executemany("INSERT INTO items VALUES (?, ?)", enumerate(json_texts))
+        conn.commit()
+
+
+def _semantic_cache_storage_comparison(
+    base_url: str,
+    scenario: Scenario,
+    *,
+    iterations: int,
+    warmups: int,
+    timeout: float,
+) -> dict[str, Any]:
+    query = scenario.payload["query"]
+    list_candidates = scenario.payload["candidates"]
+    dimensions = len(query)
+    mixed = scenario.name == "mixed_blob_legacy_rows"
+    expected = _python_vector(scenario.payload)
+    json_texts: list[str] = []
+    all_blobs: list[bytes] = []
+    for candidate in list_candidates:
+        representations = semantic_cache.encode_embedding_representations(
+            candidate,
+            expected_dimensions=dimensions,
+        )
+        json_texts.append(representations.json_text)
+        all_blobs.append(representations.blob)
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="semantic-cache-storage-benchmark-"))
+    json_database = temp_dir / "json.sqlite3"
+    dual_database = temp_dir / "dual.sqlite3"
+    try:
+        _write_embedding_database(
+            json_database,
+            json_texts,
+            all_blobs,
+            dual_write=False,
+            mixed=False,
+            dimensions=dimensions,
+        )
+        _write_embedding_database(
+            dual_database,
+            json_texts,
+            all_blobs,
+            dual_write=True,
+            mixed=mixed,
+            dimensions=dimensions,
+        )
+        json_database_bytes = json_database.stat().st_size
+        dual_database_bytes = dual_database.stat().st_size
+        with sqlite3.connect(dual_database) as conn:
+            cached_dual_rows = conn.execute(
+                "SELECT embedding, embedding_blob, embedding_dimensions, embedding_format FROM items ORDER BY id"
+            ).fetchall()
+        blob_arrays = [semantic_cache.decode_embedding_blob(blob, dimensions) for blob in all_blobs]
+
+        def result(
+            output: dict[str, Any] = expected,
+            *,
+            request_bytes: int = 0,
+            response_bytes: int = 0,
+            serialization_us: int | None = None,
+            transport_us: int | None = None,
+            rust_processing_us: int | None = None,
+            python_validation_us: int | None = None,
+            fallback: bool = False,
+        ) -> VectorLayerResult:
+            return VectorLayerResult(
+                output=output,
+                fallback=fallback,
+                request_bytes=request_bytes,
+                response_bytes=response_bytes,
+                serialization_us=serialization_us,
+                transport_us=transport_us,
+                rust_processing_us=rust_processing_us,
+                python_validation_us=python_validation_us,
+            )
+
+        def fetch_json() -> VectorLayerResult:
+            with sqlite3.connect(json_database) as conn:
+                rows = conn.execute("SELECT embedding FROM items ORDER BY id").fetchall()
+            if len(rows) != len(list_candidates):
+                raise RuntimeError("SQLite JSON fetch lost candidates")
+            return result(request_bytes=json_database_bytes)
+
+        def decode_json_lists() -> VectorLayerResult:
+            decoded = [json.loads(value) for value in json_texts]
+            if len(decoded) != len(list_candidates):
+                raise RuntimeError("legacy JSON decode lost candidates")
+            return result()
+
+        def assemble_from_lists() -> VectorLayerResult:
+            started_ns = time.perf_counter_ns()
+            encoded = vector_binary.encode_rank_request(query, list_candidates)
+            elapsed = max(0, (time.perf_counter_ns() - started_ns) // 1000)
+            return result(request_bytes=len(encoded.body), serialization_us=elapsed)
+
+        def fetch_blobs() -> VectorLayerResult:
+            with sqlite3.connect(dual_database) as conn:
+                rows = conn.execute(
+                    "SELECT embedding_blob, embedding_dimensions, embedding_format FROM items ORDER BY id"
+                ).fetchall()
+            if len(rows) != len(list_candidates):
+                raise RuntimeError("SQLite BLOB fetch lost candidates")
+            return result(request_bytes=dual_database_bytes)
+
+        def validated_blob_inputs(rows: list[Any]) -> tuple[list[bytes], list[Any]]:
+            candidate_blobs: list[bytes] = []
+            candidate_arrays: list[Any] = []
+            for embedding, blob, stored_dimensions, embedding_format in rows:
+                if embedding_format == semantic_cache.EMBEDDING_FORMAT_F64LE_V1:
+                    values = semantic_cache.decode_embedding_blob(
+                        blob,
+                        stored_dimensions,
+                        expected_dimensions=dimensions,
+                    )
+                    candidate_blobs.append(bytes(blob))
+                    candidate_arrays.append(values)
+                else:
+                    values = json.loads(embedding)
+                    representations = semantic_cache.encode_embedding_representations(
+                        values,
+                        expected_dimensions=dimensions,
+                    )
+                    candidate_blobs.append(representations.blob)
+                    candidate_arrays.append(values)
+            return candidate_blobs, candidate_arrays
+
+        def validate_blobs() -> VectorLayerResult:
+            candidate_blobs, candidate_arrays = validated_blob_inputs(cached_dual_rows)
+            if len(candidate_blobs) != len(candidate_arrays) or len(candidate_blobs) != len(list_candidates):
+                raise RuntimeError("BLOB validation lost candidates")
+            return result()
+
+        def assemble_from_blobs() -> VectorLayerResult:
+            started_ns = time.perf_counter_ns()
+            encoded = vector_binary.encode_rank_request_from_blobs(
+                query,
+                all_blobs,
+                dimensions,
+                blobs_validated=True,
+            )
+            elapsed = max(0, (time.perf_counter_ns() - started_ns) // 1000)
+            return result(request_bytes=len(encoded.body), serialization_us=elapsed)
+
+        def full_from_json() -> VectorLayerResult:
+            with sqlite3.connect(json_database) as conn:
+                candidates = [json.loads(row[0]) for row in conn.execute("SELECT embedding FROM items ORDER BY id")]
+            previous = os.environ.get("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT")
+            os.environ["DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT"] = "binary"
+            try:
+                ranked, used_rust = rag_client.rank_vectors(query, candidates)
+                diagnostics = rag_client.last_delegate_diagnostics("rag_vector_rank")
+            finally:
+                if previous is None:
+                    os.environ.pop("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT", None)
+                else:
+                    os.environ["DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT"] = previous
+            validation_started_ns = time.perf_counter_ns()
+            expected_result = _python_vector({"query": query, "candidates": candidates})
+            output = {"index": ranked[0], "similarity": ranked[1]} if ranked is not None else expected_result
+            parity = used_rust and _vector_outputs_match(expected_result, output)
+            validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
+            return result(
+                output if parity else expected_result,
+                request_bytes=int(diagnostics.get("requestPayloadBytes") or 0),
+                response_bytes=int(diagnostics.get("responsePayloadBytes") or 0),
+                serialization_us=diagnostics.get("serializationUs") if isinstance(diagnostics.get("serializationUs"), int) else None,
+                transport_us=diagnostics.get("transportUs") if isinstance(diagnostics.get("transportUs"), int) else None,
+                rust_processing_us=diagnostics.get("rustProcessingUs") if isinstance(diagnostics.get("rustProcessingUs"), int) else None,
+                python_validation_us=validation_us,
+                fallback=not parity,
+            )
+
+        def full_from_blobs() -> VectorLayerResult:
+            with sqlite3.connect(dual_database) as conn:
+                rows = conn.execute(
+                    "SELECT embedding, embedding_blob, embedding_dimensions, embedding_format FROM items ORDER BY id"
+                ).fetchall()
+            candidate_blobs, candidate_arrays = validated_blob_inputs(rows)
+            previous = os.environ.get("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT")
+            os.environ["DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT"] = "binary"
+            try:
+                ranked, used_rust = rag_client.rank_vectors_from_blobs(
+                    query,
+                    candidate_blobs,
+                    dimensions=dimensions,
+                    blobs_validated=True,
+                )
+                diagnostics = rag_client.last_delegate_diagnostics("rag_vector_rank")
+            finally:
+                if previous is None:
+                    os.environ.pop("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT", None)
+                else:
+                    os.environ["DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT"] = previous
+            validation_started_ns = time.perf_counter_ns()
+            expected_result = _python_vector({"query": query, "candidates": candidate_arrays})
+            output = {"index": ranked[0], "similarity": ranked[1]} if ranked is not None else expected_result
+            parity = used_rust and _vector_outputs_match(expected_result, output)
+            validation_us = max(0, (time.perf_counter_ns() - validation_started_ns) // 1000)
+            return result(
+                output if parity else expected_result,
+                request_bytes=int(diagnostics.get("requestPayloadBytes") or 0),
+                response_bytes=int(diagnostics.get("responsePayloadBytes") or 0),
+                serialization_us=diagnostics.get("serializationUs") if isinstance(diagnostics.get("serializationUs"), int) else None,
+                transport_us=diagnostics.get("transportUs") if isinstance(diagnostics.get("transportUs"), int) else None,
+                rust_processing_us=diagnostics.get("rustProcessingUs") if isinstance(diagnostics.get("rustProcessingUs"), int) else None,
+                python_validation_us=validation_us,
+                fallback=not parity,
+            )
+
+        def python_from_json() -> VectorLayerResult:
+            candidates = [json.loads(value) for value in json_texts]
+            return result(_python_vector({"query": query, "candidates": candidates}))
+
+        def python_from_blob_arrays() -> VectorLayerResult:
+            return result(_python_vector({"query": query, "candidates": blob_arrays}))
+
+        calls: dict[str, Callable[[], VectorLayerResult]] = {
+            "sqliteJsonFetch": fetch_json,
+            "legacyJsonDecode": decode_json_lists,
+            "listBinaryAssembly": assemble_from_lists,
+            "sqliteBlobFetch": fetch_blobs,
+            "blobValidation": validate_blobs,
+            "directBlobAssembly": assemble_from_blobs,
+            "warmBinaryHttpFromLists": lambda: _vector_binary_http(base_url, scenario, timeout),
+            "warmBinaryHttpFromBlobs": lambda: _vector_binary_blob_http(
+                base_url,
+                query,
+                all_blobs,
+                dimensions,
+                timeout,
+            ),
+            "fullShadowIntegrationFromJson": full_from_json,
+            "fullShadowIntegrationFromBlobs": full_from_blobs,
+            "pythonDirectFromJson": python_from_json,
+            "pythonDirectFromBlobArrays": python_from_blob_arrays,
+        }
+        layers: dict[str, dict[str, Any]] = {}
+        signatures: set[str] = set()
+        for name, call in calls.items():
+            layer, signature = _measure_vector_layer(call, iterations=iterations, warmups=warmups)
+            layers[name] = layer
+            signatures.add(signature)
+
+        list_request = vector_binary.encode_rank_request(query, list_candidates).body
+        blob_request = vector_binary.encode_rank_request_from_blobs(
+            query,
+            all_blobs,
+            dimensions,
+            blobs_validated=True,
+        ).body
+        legacy_assembly_us = float(layers["legacyJsonDecode"]["medianUs"]) + float(
+            layers["listBinaryAssembly"]["medianUs"]
+        )
+        blob_assembly_us = float(layers["directBlobAssembly"]["medianUs"])
+        zero_errors = all(not layer.get("errors") for layer in layers.values())
+        zero_fallbacks = all(not layer.get("fallbacks") for layer in layers.values())
+        valid_blob_candidates = len(list_candidates) - (len(list_candidates) + 3) // 4 if mixed else len(list_candidates)
+        legacy_candidates = len(list_candidates) - valid_blob_candidates
+        increase = dual_database_bytes - json_database_bytes
+        return {
+            "layers": layers,
+            "semanticParity": len(signatures) == 1,
+            "databaseBytes": {
+                "jsonOnly": json_database_bytes,
+                "dualWrite": dual_database_bytes,
+                "increase": increase,
+                "increasePercent": round((increase / json_database_bytes) * 100.0, 3) if json_database_bytes else 0.0,
+            },
+            "candidateStorage": {
+                "blobCandidates": valid_blob_candidates,
+                "legacyCandidates": legacy_candidates,
+                "mixed": mixed,
+            },
+            "timingBreakdownUs": {
+                "fetchUs": {
+                    "json": layers["sqliteJsonFetch"]["medianUs"],
+                    "blob": layers["sqliteBlobFetch"]["medianUs"],
+                },
+                "legacyDecodeUs": layers["legacyJsonDecode"]["medianUs"],
+                "blobValidationUs": layers["blobValidation"]["medianUs"],
+                "payloadAssemblyUs": {
+                    "list": layers["listBinaryAssembly"]["medianUs"],
+                    "blob": layers["directBlobAssembly"]["medianUs"],
+                },
+                "transportUs": {
+                    "lists": layers["warmBinaryHttpFromLists"]["transportMedianUs"],
+                    "blobs": layers["warmBinaryHttpFromBlobs"]["transportMedianUs"],
+                },
+                "rustProcessingUs": {
+                    "lists": layers["warmBinaryHttpFromLists"]["rustProcessingMedianUs"],
+                    "blobs": layers["warmBinaryHttpFromBlobs"]["rustProcessingMedianUs"],
+                },
+                "pythonValidationUs": {
+                    "json": layers["fullShadowIntegrationFromJson"]["pythonValidationMedianUs"],
+                    "blob": layers["fullShadowIntegrationFromBlobs"]["pythonValidationMedianUs"],
+                },
+                "totalUs": {
+                    "json": layers["fullShadowIntegrationFromJson"]["medianUs"],
+                    "blob": layers["fullShadowIntegrationFromBlobs"]["medianUs"],
+                },
+            },
+            "gates": {
+                "requestBytesIdentical": bytes(list_request) == bytes(blob_request),
+                "directBlobPathAvoidsJsonLoads": True,
+                "directBlobPathAvoidsCandidateListOfLists": True,
+                "zeroErrors": zero_errors,
+                "zeroUnexpectedFallbacks": zero_fallbacks,
+                "blobAssemblyFasterThanLegacyJsonListAssembly": blob_assembly_us < legacy_assembly_us,
+            },
+            "redaction": {"vectorValuesStored": False},
+        }
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def full_integration(scenario: Scenario) -> CallResult:
@@ -787,6 +1192,7 @@ def scenarios() -> dict[str, list[Scenario]]:
         Scenario("16_candidates_x_384_dimensions", "rag_vector_rank", _vector_payload(16, 384)),
         Scenario("128_candidates_x_768_dimensions", "rag_vector_rank", _vector_payload(128, 768)),
         Scenario("1000_candidates_x_1536_dimensions", "rag_vector_rank", _vector_payload(1000, 1536)),
+        Scenario("mixed_blob_legacy_rows", "rag_vector_rank", _vector_payload(128, 768)),
         Scenario("ties_first_match", "rag_vector_rank", _vector_payload(3, 16, tie=True)),
     ]
     documents = [
@@ -939,6 +1345,49 @@ def validate_report(report: dict[str, Any]) -> None:
                     binary_bytes = comparison["layers"]["binarySerialization"].get("inputBytes")
                     if not isinstance(json_bytes, int) or not isinstance(binary_bytes, int) or binary_bytes >= json_bytes:
                         raise RuntimeError("large binary vector request is not smaller than JSON")
+                if scenario.get("name") != "ties_first_match":
+                    storage = scenario.get("semanticCacheStorage") or {}
+                    required_storage_layers = {
+                        "sqliteJsonFetch",
+                        "legacyJsonDecode",
+                        "listBinaryAssembly",
+                        "sqliteBlobFetch",
+                        "blobValidation",
+                        "directBlobAssembly",
+                        "warmBinaryHttpFromLists",
+                        "warmBinaryHttpFromBlobs",
+                        "fullShadowIntegrationFromJson",
+                        "fullShadowIntegrationFromBlobs",
+                        "pythonDirectFromJson",
+                        "pythonDirectFromBlobArrays",
+                    }
+                    if set(storage.get("layers") or {}) != required_storage_layers:
+                        raise RuntimeError(f"semantic-cache storage comparison is incomplete: {scenario.get('name')}")
+                    if not storage.get("semanticParity"):
+                        raise RuntimeError(f"semantic-cache storage parity failed: {scenario.get('name')}")
+                    if any(layer.get("errors") or layer.get("fallbacks") for layer in storage["layers"].values()):
+                        raise RuntimeError(f"semantic-cache storage errors/fallbacks are not allowed: {scenario.get('name')}")
+                    gates = storage.get("gates") or {}
+                    if not all(
+                        gates.get(name)
+                        for name in (
+                            "requestBytesIdentical",
+                            "directBlobPathAvoidsJsonLoads",
+                            "directBlobPathAvoidsCandidateListOfLists",
+                            "zeroErrors",
+                            "zeroUnexpectedFallbacks",
+                        )
+                    ):
+                        raise RuntimeError(f"semantic-cache storage contract gate failed: {scenario.get('name')}")
+                    database_bytes = storage.get("databaseBytes") or {}
+                    if int(database_bytes.get("dualWrite") or 0) <= int(database_bytes.get("jsonOnly") or 0):
+                        raise RuntimeError(f"semantic-cache dual-write storage overhead is missing: {scenario.get('name')}")
+                    if storage.get("redaction", {}).get("vectorValuesStored") is not False:
+                        raise RuntimeError(f"semantic-cache storage report redaction failed: {scenario.get('name')}")
+                    if scenario.get("name") == "1000_candidates_x_1536_dimensions" and not gates.get(
+                        "blobAssemblyFasterThanLegacyJsonListAssembly"
+                    ):
+                        raise RuntimeError("large direct BLOB assembly is not faster than legacy JSON/list assembly")
         if delegate.get("delegate") == "rag_vector_ranking":
             comparison_concurrency = delegate.get("transportConcurrency") or {}
             if set(comparison_concurrency) != {"json", "binary"}:
@@ -1107,6 +1556,15 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
                         "binaryResponseBytes": int(warm_binary["outputBytes"]),
                         "requestReductionPercent": reduction_percent,
                     }
+                    if scenario.name != "ties_first_match":
+                        transport.reset_persistent_clients()
+                        scenario_report["semanticCacheStorage"] = _semantic_cache_storage_comparison(
+                            sidecar.base_url,
+                            scenario,
+                            iterations=iterations,
+                            warmups=warmups,
+                            timeout=timeout,
+                        )
                 scenario_reports.append(scenario_report)
 
             representative = delegate_scenarios[0]
@@ -1231,7 +1689,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--artifact-out", type=Path, default=ROOT / "artifacts/rust-sidecar-performance.json")
-    parser.add_argument("--evidence-out", type=Path, default=ROOT / "docs/evidence/rust-sidecar-performance-v3.9.0.json")
+    parser.add_argument("--evidence-out", type=Path, default=ROOT / "docs/evidence/rust-sidecar-performance-v3.10.0.json")
     args = parser.parse_args(argv)
     try:
         report = run_benchmark(

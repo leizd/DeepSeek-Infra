@@ -73,6 +73,51 @@ def test_binary_encoder_handles_big_endian_host() -> None:
     assert vector_binary._little_endian_bytes(values, host_byteorder="big") == struct.pack("<2d", 1.0, -2.0)
 
 
+def test_direct_blob_request_matches_list_request_byte_for_byte() -> None:
+    query = [1.0, -0.0]
+    candidates = [[0.5, 0.25], [-1.0, 2.0]]
+    blobs = [struct.pack("<2d", *candidate) for candidate in candidates]
+
+    legacy = vector_binary.encode_rank_request(query, candidates)
+    direct = vector_binary.encode_rank_request_from_blobs(query, [blobs[0], memoryview(blobs[1])], 2)
+
+    assert direct.body == legacy.body
+    assert direct.dimensions == legacy.dimensions
+    assert direct.candidate_count == legacy.candidate_count
+    assert direct.scalar_count == legacy.scalar_count
+
+
+@pytest.mark.parametrize(
+    ("blob", "code"),
+    [
+        (b"short", "payload_length_mismatch"),
+        (struct.pack("<d", math.nan), "non_finite_vector"),
+        (memoryview(b"0123456789abcdef")[::2], "invalid_blob_buffer"),
+    ],
+)
+def test_direct_blob_encoder_rejects_invalid_buffers(blob: bytes | memoryview, code: str) -> None:
+    with pytest.raises(vector_binary.VectorBinaryError) as exc_info:
+        vector_binary.encode_rank_request_from_blobs([1.0], [blob], 1)
+    assert exc_info.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("query", "blobs", "dimensions", "code"),
+    [
+        ([], [struct.pack("<d", 1.0)], 0, "invalid_dimensions"),
+        ([1.0], [struct.pack("<d", 1.0)], 2, "invalid_dimensions"),
+        ([1.0], [], 1, "invalid_candidate_count"),
+        ([math.nan], [struct.pack("<d", 1.0)], 1, "non_finite_vector"),
+    ],
+)
+def test_direct_blob_encoder_rejects_invalid_request_shape(
+    query: list[float], blobs: list[bytes], dimensions: int, code: str
+) -> None:
+    with pytest.raises(vector_binary.VectorBinaryError) as exc_info:
+        vector_binary.encode_rank_request_from_blobs(query, blobs, dimensions)
+    assert exc_info.value.code == code
+
+
 @pytest.mark.parametrize(
     ("query", "candidates", "code"),
     [
@@ -129,6 +174,74 @@ def test_binary_transport_success(mock_urlopen, monkeypatch: pytest.MonkeyPatch)
     assert diagnostics["requestPayloadBytes"] == len(request.data)
     assert diagnostics["responsePayloadBytes"] == 24
     assert diagnostics["rustProcessingUs"] == 7
+
+
+def test_binary_blob_transport_success_uses_direct_assembly(mock_urlopen, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT", "binary")
+    mock_urlopen.return_value = _Response(_binary_response(1, 0.75))
+
+    result = rag_client.rank_vectors_from_blobs(
+        [1.0, 0.0],
+        [struct.pack("<2d", 0.5, 0.0), memoryview(struct.pack("<2d", 0.75, 0.0))],
+        dimensions=2,
+    )
+
+    assert result == ((1, 0.75), True)
+    request: urllib.request.Request = mock_urlopen.call_args.args[0]
+    assert request.full_url.endswith("/rag/vectors/rank-binary")
+    assert request.data == vector_binary.encode_rank_request(
+        [1.0, 0.0], [[0.5, 0.0], [0.75, 0.0]]
+    ).body
+    assert rag_client.last_delegate_diagnostics("rag_vector_rank")["payloadAssemblySource"] == "blob"
+
+
+def test_binary_blob_transport_disabled_and_inactive_do_not_call_sidecar(
+    mock_urlopen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blob = struct.pack("<d", 1.0)
+    assert rag_client.rank_vectors_from_blobs([1.0], [blob], dimensions=1) == (None, False)
+    assert rag_client.last_delegate_diagnostics("rag_vector_rank")["transportEncoding"] == "python"
+
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
+    assert rag_client.rank_vectors_from_blobs([1.0], [blob], dimensions=1) == (None, False)
+    diagnostics = rag_client.last_delegate_diagnostics("rag_vector_rank")
+    assert diagnostics["fallbackReason"] == "binary_blob_transport_inactive"
+    assert diagnostics["transportEncoding"] == "json"
+    mock_urlopen.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("response", "reason"),
+    [
+        (_Response(b"short"), "invalid_binary_response_length"),
+        (_Response(_binary_response(0, 1.0, reserved=1)), "invalid_binary_response_reserved"),
+        (_Response(_binary_response(4, 1.0)), "invalid_binary_response_index"),
+    ],
+)
+def test_binary_blob_malformed_responses_fall_back(
+    mock_urlopen, monkeypatch: pytest.MonkeyPatch, response: _Response, reason: str
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT", "binary")
+    mock_urlopen.return_value = response
+    assert rag_client.rank_vectors_from_blobs([1.0], [struct.pack("<d", 1.0)], dimensions=1) == (None, False)
+    assert rag_client.last_delegate_diagnostics("rag_vector_rank")["fallbackReason"] == reason
+    assert mock_urlopen.call_count == 1
+
+
+def test_binary_blob_assembly_failure_does_not_call_any_rust_endpoint(
+    mock_urlopen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG", "1")
+    monkeypatch.setenv("DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT", "binary")
+
+    assert rag_client.rank_vectors_from_blobs([1.0], [b"short"], dimensions=1) == (None, False)
+
+    mock_urlopen.assert_not_called()
+    diagnostics = rag_client.last_delegate_diagnostics("rag_vector_rank")
+    assert diagnostics["fallbackReason"] == "payload_length_mismatch"
+    assert diagnostics["transportEncoding"] == "binary"
 
 
 @pytest.mark.parametrize(

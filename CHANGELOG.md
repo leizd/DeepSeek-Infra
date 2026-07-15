@@ -1,5 +1,25 @@
 # 更新日志
 
+## [3.10.0] - Semantic Cache Binary Embedding Storage & Direct Rust Payload Assembly
+
+### 新增
+
+- `semantic_cache_items` 在保留 `embedding TEXT NOT NULL` 的同时新增 nullable `embedding_blob`、`embedding_dimensions` 与 `embedding_format`；新写入从同一组六位小数规范值 dual-write JSON 与 little-endian `f64` (`f64le-v1`)。
+- 新增显式、默认 dry-run 的 `scripts/migrate_semantic_cache_embeddings.py`，支持指定数据库、批量事务、可恢复重跑与迁移后验证；损坏 JSON 只报告，不删除或改写 prompt、response、usage 与既有 JSON embedding。
+- binary Rust ranking 可把已校验的 SQLite BLOB 直接复制进现有 `DSVRNK01` body；mixed database 只为 legacy/损坏 BLOB 行解析 JSON，并在一次业务请求内只调用一次 binary endpoint。
+- 扩展 semantic-cache、migration、hybrid E2E 与 release benchmark 覆盖，分别报告 SQLite fetch、legacy decode、BLOB validation、payload assembly、transport、Rust processing、Python validation、总耗时与 dual-write 数据库体积增量。
+
+### 兼容性、安全与 fallback
+
+- 旧 JSON-only 数据库可直接启动；`initialize_schema()` 仅做幂等增列，不扫描或重写缓存。有效 BLOB 优先，missing/unknown/zero/mismatch/truncated/oversized/non-finite/buffer failure 均逐行回退原 JSON；两种表示都无效时安全忽略该记录。
+- exact prompt hash 在 embedding 计算、候选 BLOB 读取与 Rust 委托前返回；TTL、scope、cache version、quality、hit mutation 与 attachment exact-only 规则不变。
+- `DSVRNK01` wire format、scalar/payload limits、positive-best、first-match tie、zero-vector 与 `rel_tol=1e-9` / `abs_tol=1e-12` 完整 parity 不变；BLOB assembly、sidecar 连接/超时/响应或语义失败均直接进入 Python ranking，不重试 JSON Rust endpoint。
+
+### 默认行为与非目标
+
+- Python 继续拥有 SQLite、embedding、cache persistence 与 authoritative ranking；Rust 不读数据库，Rust-primary 未启用，所有 Rust flags 仍默认关闭，默认 Compose 仍为 Python-only，JSON transport 仍是默认值。
+- 本版本不删除 JSON embedding、不做启动时全表迁移、不引入 `f32`/压缩/新 delegate/自动 transport 选择，不移除 Python fallback，也不创建 4.0 RC、tag 或 GitHub Release。
+
 ## [3.9.0] - Rust Vector Ranking Compact Binary Transport
 
 ### 新增

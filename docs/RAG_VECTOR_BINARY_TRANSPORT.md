@@ -1,8 +1,8 @@
 # RAG Vector Ranking Compact Binary Transport
 
-Applicable version: v3.9.0.
+Applicable version: v3.10.0.
 
-DeepSeek Infra 3.9.0 adds an explicit, default-disabled compact binary HTTP contract for the existing Rust semantic-cache vector-ranking delegate. It does not add a delegate, make Rust authoritative, sample or remove Python parity, or change the default JSON contract. Python remains the default runtime, computes the full authoritative ranking, rejects any Rust divergence, and falls back directly to Python on every binary failure.
+DeepSeek Infra 3.9.0 added the explicit, default-disabled compact binary HTTP contract for the existing Rust semantic-cache vector-ranking delegate. Version 3.10.0 keeps that wire format unchanged and allows Python to assemble the same request directly from validated SQLite `f64le-v1` embedding BLOBs. It does not add a delegate, make Rust authoritative, sample or remove Python parity, or change the default JSON contract. Python remains the default runtime, computes the full authoritative ranking, rejects any Rust divergence, and falls back directly to Python on every binary failure.
 
 ## Enabling the transport
 
@@ -52,7 +52,17 @@ Python rejects an empty response, wrong Content-Type, wrong size/magic/reserved 
 
 ## Python encoding and diagnostics
 
-The encoder in `deepseek_infra/infra/rust_core/vector_binary.py` uses only `array.array("d")`, `memoryview`-compatible bytes, `struct`, and `sys.byteorder`. It performs one bulk scalar encoding and explicitly byte-swaps on big-endian hosts; NumPy is not a runtime dependency and there is no per-float `struct.pack` loop.
+The list encoder in `deepseek_infra/infra/rust_core/vector_binary.py` uses only `array.array("d")`, `memoryview`-compatible bytes, `struct`, and `sys.byteorder`. It performs one bulk scalar encoding and explicitly byte-swaps on big-endian hosts; NumPy is not a runtime dependency and there is no per-float `struct.pack` loop.
+
+Version 3.10.0 adds `encode_rank_request_from_blobs()`. It validates dimensions, candidate count, scalar count, exact BLOB lengths, finite values, and total payload size before one final body allocation. The query is encoded once; validated candidate buffers are copied into their final offsets with `memoryview`, without building a candidate `list[list[float]]` or parsing candidate floats during assembly. On big-endian hosts, SQLite's canonical little-endian BLOB bytes are already in wire order. Contract tests require this body to be byte-for-byte identical to the list encoder.
+
+## Semantic-cache storage input
+
+The storage contract is documented in [SEMANTIC_CACHE_BINARY_EMBEDDINGS.md](SEMANTIC_CACHE_BINARY_EMBEDDINGS.md). New cache rows retain the existing six-decimal JSON text and dual-write the same normalized values as a contiguous little-endian `f64` BLOB. Python owns SQLite and validates every BLOB before delegation; Rust never opens the database.
+
+For a mixed candidate set, valid BLOB rows are copied directly, while only legacy or invalid-BLOB rows decode their existing JSON and are temporarily encoded to the same little-endian buffer form. The lookup still sends one binary request at most. A BLOB failure falls back to the same row's JSON representation; a binary backend/protocol/parity failure falls back directly to Python and never invokes the JSON Rust endpoint. Full Python parity preferentially scans the decoded `array("d")` values and retains positive-best, first-match tie, zero-vector, and `rel=1e-9`/`abs=1e-12` semantics.
+
+Fixed storage diagnostics are `embeddingStorage=blob|mixed|json`, `blobCandidates`, `legacyCandidates`, and `invalidBlobCandidates`. They expose counts only and never vector values.
 
 Delegate diagnostics retain the six layered timings and add bounded transport metadata:
 
@@ -82,7 +92,7 @@ python scripts/check_rag_vector_binary_parity.py \
   --report artifacts/rag-vector-binary-parity.json
 ```
 
-The committed [3.9.0 parity evidence](evidence/rag-vector-binary-parity-v3.9.0.json) contains 110 deterministic valid cases and 16 malformed protocol cases. Python, JSON Rust, and binary Rust select the same best index; similarities meet the production tolerance; ties remain first-match; malformed cases retain stable categories; all binary successes are 24 bytes; and no vectors are stored.
+The committed [3.10.0 parity evidence](evidence/rag-vector-binary-parity-v3.10.0.json) contains 110 deterministic valid cases and 16 malformed protocol cases. Python, JSON Rust, and binary Rust select the same best index; similarities meet the production tolerance; ties remain first-match; malformed cases retain stable categories; all binary successes are 24 bytes; and no vectors are stored.
 
 Equivalent dense six-decimal payload sizes from the parity run are:
 
@@ -96,6 +106,6 @@ The release benchmark uses a separately generated but equivalent deterministic d
 
 ## Failure and ownership boundaries
 
-Connection failure, timeout, HTTP error/404, invalid Content-Type, empty/malformed response, invalid index/similarity, or parity divergence all return to the Python result. The binary branch makes one sidecar request and never retries the JSON endpoint. The hybrid E2E exercises a real 128 × 768 semantic-cache ranking, proves one binary request and no JSON retry, stops the sidecar, and proves the same result through Python fallback.
+Connection failure, timeout, HTTP error/404, invalid Content-Type, empty/malformed response, invalid index/similarity, or parity divergence all return to the Python result. The binary branch makes one sidecar request and never retries the JSON endpoint. The hybrid E2E creates a fresh Python-owned semantic-cache database, proves dual-write rows, adds one legacy JSON-only row and one corrupt-BLOB/valid-JSON row, performs a real mixed lookup with exactly one binary request and no JSON retry, then stops the sidecar and proves the same result through Python fallback.
 
 Rust still does not own embedding generation, files, OCR, SQLite, vector indexes, cache persistence, retrieval, authorization, or any upstream HTTP. The transport evidence does not justify enabling Rust or binary by default, weakening full parity, or moving any ownership boundary.

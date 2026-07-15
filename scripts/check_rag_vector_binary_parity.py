@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
 
 from deepseek_infra.infra.rust_core import vector_binary  # noqa: E402
 
-VERSION = "3.9.0"
+VERSION = "3.10.0"
 SCHEMA_VERSION = "rag-vector-binary-parity.v1"
 
 
@@ -128,7 +128,7 @@ def _rank_binary(base_url: str, case: VectorCase) -> tuple[tuple[int | None, flo
     encoded = vector_binary.encode_rank_request(case.query, case.candidates)
     status, content_type, response = _post(
         f"{base_url}/rag/vectors/rank-binary",
-        encoded.body,
+        bytes(encoded.body),
         vector_binary.CONTENT_TYPE,
         vector_binary.CONTENT_TYPE,
     )
@@ -139,7 +139,7 @@ def _rank_binary(base_url: str, case: VectorCase) -> tuple[tuple[int | None, flo
 
 
 def _malformed_cases() -> list[tuple[str, bytes, str, str]]:
-    valid = vector_binary.encode_rank_request([1.0], [[1.0]]).body
+    valid = bytes(vector_binary.encode_rank_request([1.0], [[1.0]]).body)
     non_finite_query = struct.pack("<8sII2d", vector_binary.REQUEST_MAGIC, 1, 1, math.nan, 1.0)
     non_finite_candidate = struct.pack("<8sII2d", vector_binary.REQUEST_MAGIC, 1, 1, 1.0, math.inf)
     return [

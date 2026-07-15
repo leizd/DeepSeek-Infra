@@ -72,6 +72,37 @@ def _report() -> dict[str, Any]:
                 }
                 comparison_layers["warmBinaryHttp"]["outputBytes"] = 24
                 scenario["transportComparison"] = {"layers": comparison_layers, "semanticParity": True}
+                storage_layers = {
+                    name: _layer()
+                    for name in (
+                        "sqliteJsonFetch",
+                        "legacyJsonDecode",
+                        "listBinaryAssembly",
+                        "sqliteBlobFetch",
+                        "blobValidation",
+                        "directBlobAssembly",
+                        "warmBinaryHttpFromLists",
+                        "warmBinaryHttpFromBlobs",
+                        "fullShadowIntegrationFromJson",
+                        "fullShadowIntegrationFromBlobs",
+                        "pythonDirectFromJson",
+                        "pythonDirectFromBlobArrays",
+                    )
+                }
+                scenario["semanticCacheStorage"] = {
+                    "layers": storage_layers,
+                    "semanticParity": True,
+                    "databaseBytes": {"jsonOnly": 1, "dualWrite": 2, "increase": 1, "increasePercent": 100.0},
+                    "gates": {
+                        "requestBytesIdentical": True,
+                        "directBlobPathAvoidsJsonLoads": True,
+                        "directBlobPathAvoidsCandidateListOfLists": True,
+                        "zeroErrors": True,
+                        "zeroUnexpectedFallbacks": True,
+                        "blobAssemblyFasterThanLegacyJsonListAssembly": True,
+                    },
+                    "redaction": {"vectorValuesStored": False},
+                }
             scenarios.append(scenario)
         delegate_report: dict[str, Any] = {
             "delegate": delegate,
@@ -148,6 +179,20 @@ def test_vector_transport_report_contract_is_stable() -> None:
     vector = next(item for item in report["delegates"] if item["delegate"] == "rag_vector_ranking")
     comparison = vector["scenarios"][0]["transportComparison"]
     assert comparison["layers"]["warmBinaryHttp"]["outputBytes"] == 24
+    assert set(vector["scenarios"][0]["semanticCacheStorage"]["layers"]) == {
+        "sqliteJsonFetch",
+        "legacyJsonDecode",
+        "listBinaryAssembly",
+        "sqliteBlobFetch",
+        "blobValidation",
+        "directBlobAssembly",
+        "warmBinaryHttpFromLists",
+        "warmBinaryHttpFromBlobs",
+        "fullShadowIntegrationFromJson",
+        "fullShadowIntegrationFromBlobs",
+        "pythonDirectFromJson",
+        "pythonDirectFromBlobArrays",
+    }
     assert set(vector["transportConcurrency"]) == {"json", "binary"}
 
 
@@ -221,6 +266,56 @@ def test_binary_serialization_is_smaller_and_scales_with_scalar_count() -> None:
     )
     large_time = _median_runtime(lambda: benchmark.vector_binary.encode_rank_request(large["query"], large["candidates"]))
     assert large_time / medium_time < 8.0
+
+
+def test_semantic_cache_storage_comparison_covers_mixed_database_layers(monkeypatch: pytest.MonkeyPatch) -> None:
+    scenario = benchmark.Scenario(
+        "mixed_blob_legacy_rows",
+        "rag_vector_rank",
+        benchmark._vector_payload(4, 8),
+    )
+    expected = benchmark._python_vector(scenario.payload)
+
+    def http_result(*_args: object, **_kwargs: object) -> benchmark.VectorLayerResult:
+        return benchmark.VectorLayerResult(expected, False, 1, 24, transport_us=1, rust_processing_us=1)
+
+    monkeypatch.setattr(benchmark, "_vector_binary_http", http_result)
+    monkeypatch.setattr(benchmark, "_vector_binary_blob_http", http_result)
+    monkeypatch.setattr(
+        benchmark.rag_client,
+        "rank_vectors",
+        lambda *_args, **_kwargs: ((expected["index"], expected["similarity"]), True),
+    )
+    monkeypatch.setattr(
+        benchmark.rag_client,
+        "rank_vectors_from_blobs",
+        lambda *_args, **_kwargs: ((expected["index"], expected["similarity"]), True),
+    )
+    monkeypatch.setattr(
+        benchmark.rag_client,
+        "last_delegate_diagnostics",
+        lambda _component: {
+            "requestPayloadBytes": 1,
+            "responsePayloadBytes": 24,
+            "serializationUs": 1,
+            "transportUs": 1,
+            "rustProcessingUs": 1,
+        },
+    )
+
+    comparison = benchmark._semantic_cache_storage_comparison(
+        "http://127.0.0.1:8787",
+        scenario,
+        iterations=1,
+        warmups=0,
+        timeout=1.0,
+    )
+
+    assert comparison["semanticParity"] is True
+    assert comparison["candidateStorage"] == {"blobCandidates": 3, "legacyCandidates": 1, "mixed": True}
+    assert comparison["gates"]["requestBytesIdentical"] is True
+    assert comparison["gates"]["zeroErrors"] is True
+    assert comparison["databaseBytes"]["dualWrite"] >= comparison["databaseBytes"]["jsonOnly"]
 
 
 def test_document_preparation_has_bounded_scaling_and_overlap() -> None:

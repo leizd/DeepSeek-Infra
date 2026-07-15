@@ -461,7 +461,7 @@ Non-goals:
 
 ### 3.2.x — Coverage and parity work
 
-Current themes (3.9.0 compact binary vector transport completed):
+Current themes (3.10.0 semantic-cache binary embedding storage completed):
 
 - 3.2.0: Python coverage gate raised from 82% to 85%; full suite measured at 85.559% with no runtime or default-enable changes.
 - 3.2.1: Multi-stage non-root Rust sidecar image, independent Compose file, offline endpoint smoke, and dedicated Docker CI job; still opt-in and separate from the default Python image.
@@ -478,6 +478,7 @@ Current themes (3.9.0 compact binary vector transport completed):
 - 3.7.0: Deterministic normalization and chunking of text already parsed by Python moves behind the independent default-disabled `DEEPSEEK_RUST_RAG_DOCUMENT_PREP` delegate through `POST /rag/documents/prepare`. A 125-case live-sidecar gate proves exact chunks, Unicode character offsets, overlap, BLAKE2b-96 hashes, chunk IDs, metadata boundaries, and stable errors. Python retains uploads, paths, parsing/OCR, embeddings, persistence, indexes, scheduling, authorization, retrieval, and context assembly.
 - 3.8.0: No delegate is added. All five existing delegate families gain a locked release-mode layered benchmark, bounded persistent Python HTTP connections, per-layer timing, fixed-label metrics, and safe correlation tracing. Absolute public-runner latency is informational; semantic parity, zero error/fallback, redaction, connection lifecycle, and complexity contracts are merge gates. Python-first defaults and ownership remain unchanged.
 - 3.9.0: The existing vector-ranking delegate gains an explicit compact little-endian `f64` endpoint beside compatible JSON. A 110-valid/16-malformed live-sidecar gate, fixed 24-byte response, checked bounds, direct Python fallback without JSON retry, and extended JSON/binary benchmark prove the contract. JSON remains the default; full Python parity and ownership are unchanged.
+- 3.10.0: Python-owned semantic-cache storage retains the six-decimal JSON column and dual-writes the same normalized values as `f64le-v1` BLOBs. The binary path assembles the unchanged 3.9.0 request directly from valid SQLite BLOBs, handles mixed/legacy/corrupt rows per row, keeps complete Python parity, and provides an explicit batched/resumable migration tool. Startup never performs a full-table rewrite; Rust still does not read SQLite.
 
 See [PRE_4_0_QUALITY_BASELINE.md](PRE_4_0_QUALITY_BASELINE.md) for the quality baseline and [4_0_RC_READINESS.md](4_0_RC_READINESS.md) for the current blocker matrix.
 
@@ -543,6 +544,17 @@ See [RUST_SIDECAR_PERFORMANCE.md](RUST_SIDECAR_PERFORMANCE.md) for the audit, me
 - The release benchmark reports JSON/binary serialization, warmed HTTP, Rust processing, full integration, body sizes, and bounded concurrency without an absolute public-runner latency gate. Dense large requests shrink about 14.6%; tiny sparse JSON can be smaller, so no default or automatic selection follows.
 
 See [RAG_VECTOR_BINARY_TRANSPORT.md](RAG_VECTOR_BINARY_TRANSPORT.md) for the wire contract, bounds, stable errors, corpus, fallback proof, evidence, and non-goals.
+
+### 3.10.0 — Semantic-cache binary embedding storage and direct payload assembly (completed)
+
+- `semantic_cache_items.embedding TEXT NOT NULL` remains the rollback-compatible source contract. New nullable `embedding_blob` plus dimensions/format metadata are added idempotently without scanning or rewriting rows at startup.
+- Every new write rounds once to the established six-decimal semantics, then derives JSON and `f64le-v1` BLOB representations from that same normalized vector. The only non-empty format is `f64le-v1`.
+- Valid BLOB candidates feed the unchanged `DSVRNK01` request through a single final allocation and `memoryview` copies. Mixed rows decode only the legacy/invalid rows and still make at most one binary sidecar call.
+- Missing, unknown, truncated, oversized, dimension-mismatched, non-finite, or otherwise unusable BLOBs fall back to the same row's JSON. If both representations are bad, the row keeps the established corrupt-record behavior. Diagnostics contain counts, never vector contents.
+- `scripts/migrate_semantic_cache_embeddings.py` is explicit, dry-run by default, batched, repeatable, resumable, and preserves every legacy JSON value and all unrelated columns. Old databases do not require migration and old versions can read newly written rows through the retained JSON column.
+- Complete Python authoritative parity, sidecar-loss fallback, JSON transport behavior, Rust flags, Python-only default Compose, and ownership boundaries remain unchanged. Rust-primary, automatic transport selection, `f32`, compression, startup backfill, and Rust SQLite access remain out of scope.
+
+See [SEMANTIC_CACHE_BINARY_EMBEDDINGS.md](SEMANTIC_CACHE_BINARY_EMBEDDINGS.md) for the storage, migration, corruption, downgrade, diagnostics, and operational contracts.
 
 ## Testing Priorities
 

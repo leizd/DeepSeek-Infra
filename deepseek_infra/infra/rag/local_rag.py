@@ -13,7 +13,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from deepseek_infra.core.config import (
     FILE_CACHE_DIR,
@@ -190,7 +190,7 @@ def normalize_vector(vector: list[Any], dimensions: int = LOCAL_RAG_EMBEDDING_DI
     return [round(item / norm, 6) for item in cleaned]
 
 
-def cosine_similarity(left: list[Any], right: list[Any]) -> float:
+def cosine_similarity(left: Sequence[Any], right: Sequence[Any]) -> float:
     if not left or not right:
         return 0.0
     total = 0.0
