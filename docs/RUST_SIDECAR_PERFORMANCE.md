@@ -1,6 +1,6 @@
 # Rust Sidecar Release Performance and Observability
 
-Applicable version: v3.10.0.
+Applicable version: v4.0.0-rc.2.
 
 ## Decision summary
 
@@ -46,7 +46,7 @@ python scripts/run_rust_sidecar_benchmarks.py \
   --warmups 2 \
   --concurrency 1,8,32 \
   --artifact-out artifacts/rust-sidecar-performance.json \
-  --evidence-out docs/evidence/rust-sidecar-performance-v3.10.0.json
+  --evidence-out docs/evidence/rust-sidecar-performance-v4.0.0-rc.2.json
 ```
 
 The report records Rust profile and version, target triple, Python version, operating system, logical CPU count, commit SHA, warmups, iterations, concurrency, input/output sizes, requests per second, median, p95, p99, minimum, maximum, errors, fallbacks, and observable connection counts. Repository evidence removes host-specific detail and never stores prompts, messages, tool arguments, document text, URLs, paths, credentials, tokens, or user metadata.
@@ -152,7 +152,7 @@ Sidecar logs may contain only component, payload/response byte counts, duration,
 
 The `rust-sidecar-performance` CI job builds and runs the release binary and publishes complete machine-local results. It strictly gates schema, delegate/transport layers, semantic parity, zero errors/fallbacks, fixed 24-byte binary responses, large-payload reduction, persistent-sidecar use, report redaction, and bounded complexity behavior. Absolute cross-run latency is informational because public runners are not stable performance hosts. Only deterministic complexity ratios use deliberately wide thresholds; vector ranking/encoding must remain consistent with scalar count, and document preparation must avoid obvious quadratic growth or overlap loops.
 
-The committed 3.10.0 evidence is [rust-sidecar-performance-v3.10.0.json](evidence/rust-sidecar-performance-v3.10.0.json). Its per-scenario values, including slower paths and database overhead, are authoritative. The earlier compact-transport baseline remains preserved as [rust-sidecar-performance-v3.9.0.json](evidence/rust-sidecar-performance-v3.9.0.json).
+The current rc.2 evidence is [rust-sidecar-performance-v4.0.0-rc.2.json](evidence/rust-sidecar-performance-v4.0.0-rc.2.json). Its per-scenario values, including slower paths and database overhead, are authoritative for this freeze. The 3.10 storage baseline and earlier compact-transport baseline remain preserved as [rust-sidecar-performance-v3.10.0.json](evidence/rust-sidecar-performance-v3.10.0.json) and [rust-sidecar-performance-v3.9.0.json](evidence/rust-sidecar-performance-v3.9.0.json).
 
 ## What this milestone does not prove
 
@@ -161,4 +161,4 @@ The committed 3.10.0 evidence is [rust-sidecar-performance-v3.10.0.json](evidenc
 - It does not prove binary is smaller or faster for sparse/tiny inputs, or justify automatic transport selection.
 - It does not justify default enablement, default sidecar deployment, removal of Python validation/fallback, or an ownership migration.
 - It does not cover Gateway streaming/upstream HTTP, MCP transport/tool execution, file reading/OCR/embeddings, SQLite/index writes, or Python-owned persistence.
-- It does not create a 4.0 RC, a 4.0.0 stable release, a tag, or a GitHub Release.
+- It does not enable Rust by default, promote rc.2 to stable 4.0.0, create a tag, or publish a GitHub Release.

@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::io::{self, Read};
 use std::path::Path;
@@ -160,7 +161,11 @@ fn semantic_value(component: &str, value: &Value) -> Value {
 fn output_hash(component: &str, value: &Value) -> String {
     let encoded = serde_json::to_vec(&semantic_value(component, value)).unwrap_or_default();
     let digest = Blake2s256::digest(encoded);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    let mut rendered = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut rendered, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    rendered
 }
 
 fn main() {

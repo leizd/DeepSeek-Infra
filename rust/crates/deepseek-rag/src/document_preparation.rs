@@ -4,6 +4,7 @@ use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 pub const MAX_DOCUMENT_CHARACTERS: usize = 8_000_000;
 pub const MAX_REQUEST_BYTES: usize = 40_000_000;
@@ -98,7 +99,11 @@ fn blake2b_96(bytes: &[u8]) -> String {
     hasher
         .finalize_variable(&mut output)
         .expect("fixed output buffer has the configured size");
-    output.iter().map(|byte| format!("{byte:02x}")).collect()
+    let mut encoded = String::with_capacity(output.len() * 2);
+    for byte in output {
+        write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    encoded
 }
 
 pub fn chunk_content_hash(text: &str) -> String {

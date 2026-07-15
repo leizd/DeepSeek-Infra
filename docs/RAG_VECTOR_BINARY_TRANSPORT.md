@@ -1,6 +1,6 @@
 # RAG Vector Ranking Compact Binary Transport
 
-Applicable version: v3.10.0.
+Applicable version: v4.0.0-rc.2.
 
 DeepSeek Infra 3.9.0 added the explicit, default-disabled compact binary HTTP contract for the existing Rust semantic-cache vector-ranking delegate. Version 3.10.0 keeps that wire format unchanged and allows Python to assemble the same request directly from validated SQLite `f64le-v1` embedding BLOBs. It does not add a delegate, make Rust authoritative, sample or remove Python parity, or change the default JSON contract. Python remains the default runtime, computes the full authoritative ranking, rejects any Rust divergence, and falls back directly to Python on every binary failure.
 
@@ -92,7 +92,7 @@ python scripts/check_rag_vector_binary_parity.py \
   --report docs/evidence/rag-vector-binary-parity-v4.0.0-rc.2.json
 ```
 
-The committed [3.10.0 parity evidence](evidence/rag-vector-binary-parity-v3.10.0.json) contains 110 deterministic valid cases and 16 malformed protocol cases. Python, JSON Rust, and binary Rust select the same best index; similarities meet the production tolerance; ties remain first-match; malformed cases retain stable categories; all binary successes are 24 bytes; and no vectors are stored.
+The current [4.0.0-rc.2 parity evidence](evidence/rag-vector-binary-parity-v4.0.0-rc.2.json) contains 110 deterministic valid cases and 16 malformed protocol cases. Python, JSON Rust, and binary Rust select the same best index; similarities meet the production tolerance; ties remain first-match; malformed cases retain stable categories; all binary successes are 24 bytes; and no vectors are stored. The original [3.10.0 evidence](evidence/rag-vector-binary-parity-v3.10.0.json) remains historical.
 
 Equivalent dense six-decimal payload sizes from the parity run are:
 

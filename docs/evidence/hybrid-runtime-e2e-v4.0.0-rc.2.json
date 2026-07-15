@@ -1,0 +1,73 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "name": "python-health",
+      "detail": "GET /healthz"
+    },
+    {
+      "name": "rust-status",
+      "detail": "all flags enabled; gateway healthy"
+    },
+    {
+      "name": "gateway-request-preparation",
+      "detail": "Python models and upstream HTTP passed with rust request preparation"
+    },
+    {
+      "name": "mcp-protocol-preparation",
+      "detail": "Rust protocol preparation; initialize, catalog, Python tool execution, and stable invalid_params passed"
+    },
+    {
+      "name": "policy-integration",
+      "detail": "Rust Policy deny"
+    },
+    {
+      "name": "rag-integration",
+      "detail": "Rust RAG hot paths"
+    },
+    {
+      "name": "rag-vector-binary",
+      "detail": "one binary Rust request with full Python parity"
+    },
+    {
+      "name": "rag-document-preparation",
+      "detail": "Rust preparation with Python persistence"
+    },
+    {
+      "name": "sidecar-stop",
+      "detail": "rust-gateway stopped for fallback verification"
+    },
+    {
+      "name": "rust-status",
+      "detail": "all flags enabled; gateway unhealthy after stop"
+    },
+    {
+      "name": "gateway-request-preparation",
+      "detail": "Python models and upstream HTTP passed with python request preparation"
+    },
+    {
+      "name": "mcp-fallback",
+      "detail": "Python protocol fallback; initialize, catalog, Python tool execution, and stable invalid_params passed"
+    },
+    {
+      "name": "policy-integration",
+      "detail": "Python Tool Policy fallback deny"
+    },
+    {
+      "name": "rag-integration",
+      "detail": "Python RAG fallbacks"
+    },
+    {
+      "name": "rag-vector-binary",
+      "detail": "one failed binary request then direct Python fallback"
+    },
+    {
+      "name": "rag-document-preparation",
+      "detail": "Python preparation fallback with identical chunks"
+    }
+  ],
+  "version": "4.0.0-rc.2",
+  "commit": "2267513840e9a0a283378babb29d111a1780586f",
+  "status": "PASS",
+  "generatedAt": "2026-07-15T06:36:08Z"
+}

@@ -1,6 +1,6 @@
 # Semantic Cache Binary Embedding Storage
 
-Applicable version: v3.10.0.
+Applicable version: v4.0.0-rc.2.
 
 DeepSeek Infra 3.10.0 keeps the existing semantic-cache JSON embedding contract and adds a compatible little-endian `f64` BLOB representation for the explicit Rust binary-ranking path. Python still owns SQLite, embedding generation, cache semantics, the complete authoritative ranking, parity, and fallback. Rust never opens the database, Rust-primary is not enabled, every Rust flag remains off by default, the vector transport still defaults to JSON, and default Compose remains Python-only.
 
@@ -110,4 +110,4 @@ The release benchmark reports `16 x 384`, `128 x 768`, `1000 x 1536`, and mixed 
 
 ## Non-goals
 
-3.10.0 does not delete `embedding TEXT`, run a startup backfill, let Rust read SQLite, move semantic-cache ownership to Rust, enable Rust-primary or sampled parity, select binary automatically, use `f32`, compress embeddings, change `DSVRNK01`, add a delegate, enable any Rust flag or sidecar deployment by default, remove Python fallback, create a 4.0 RC/stable release, tag a commit, or publish a GitHub Release.
+The rc.2 freeze does not delete `embedding TEXT`, run a startup backfill, let Rust read SQLite, move semantic-cache ownership to Rust, enable Rust-primary or sampled parity, select binary automatically, use `f32`, compress embeddings, change `DSVRNK01`, add a delegate, enable any Rust flag or sidecar deployment by default, remove Python fallback, promote directly to stable 4.0.0, tag a commit, or publish a GitHub Release.

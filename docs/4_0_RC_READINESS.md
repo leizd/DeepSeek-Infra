@@ -2,7 +2,7 @@
 
 This checklist governs the `4.0.0-rc.2` freeze from the verified `3.10.0` hybrid runtime baseline. `v4.0.0-rc.1` is superseded and retained only as a historical architecture preview; it must not be promoted directly to stable. This PR creates neither a tag nor a GitHub Release.
 
-> **Current decision: pending final local and GitHub CI validation.** The checker may emit `Decision: READY FOR 4.0.0-rc.2` only after every blocking requirement is supported by current-commit PASS evidence.
+> **Current local decision: READY; GitHub CI confirmation remains pending.** Two complete Python runs measured 95.2317%, Rust 1.85 workspace line coverage measured 80.4329%, and strict readiness exits zero. The PR head still requires the full required-job rollup before merge.
 
 The machine contract is [`release/4_0_rc_requirements.json`](../release/4_0_rc_requirements.json), the approved ADR-0040 ownership decision is [`release/4_0_runtime_decision.json`](../release/4_0_runtime_decision.json), and the protocol freeze is [`release/4_0_protocol_contract.json`](../release/4_0_protocol_contract.json).
 
@@ -49,11 +49,11 @@ Expanded parity corpora and the hybrid performance benchmark are observed. Sidec
 
 ## Sign-off
 
-- [ ] Two complete Python coverage runs are each at least 95.20%.
-- [ ] Rust line coverage is at least 80% and the report covers all five crates.
-- [ ] Upgrade, rollback, sidecar-loss, protocol, parity, performance, package, smoke, and preflight evidence is current-commit PASS.
-- [ ] Strict readiness exits zero with `Decision: READY FOR 4.0.0-rc.2`.
+- [x] Two complete Python coverage runs are each 95.2317%, above 95.20%.
+- [x] Rust line coverage is 80.4329% (3716/4620) across all five crates and 172 tests.
+- [x] Upgrade, rollback, sidecar-loss, protocol, parity, performance, package, smoke, and preflight evidence is PASS.
+- [x] Strict readiness exits zero with `Decision: READY FOR 4.0.0-rc.2`.
 - [ ] GitHub Actions is fully green on the PR head.
-- [ ] No tag or GitHub Release was created.
+- [x] No tag or GitHub Release was created.
 
 Stable `4.0.0` remains out of scope and requires an independent promotion PR after the rc.2 observation period.

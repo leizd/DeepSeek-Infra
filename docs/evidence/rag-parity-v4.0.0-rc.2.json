@@ -1,0 +1,873 @@
+{
+  "ok": true,
+  "summary": {
+    "normalization": {
+      "passed": 12,
+      "total": 12
+    },
+    "ranking": {
+      "passed": 10,
+      "total": 10
+    },
+    "citation": {
+      "passed": 8,
+      "total": 8
+    },
+    "validation": {
+      "passed": 8,
+      "total": 8
+    }
+  },
+  "cases": [
+    {
+      "category": "normalization",
+      "id": "normalization-english-basic",
+      "passed": true,
+      "expected": {
+        "value": "deepseek rag parity"
+      },
+      "python": {
+        "value": "deepseek rag parity"
+      },
+      "rust": {
+        "value": "deepseek rag parity"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-extra-whitespace",
+      "passed": true,
+      "expected": {
+        "value": "deepseek rag parity"
+      },
+      "python": {
+        "value": "deepseek rag parity"
+      },
+      "rust": {
+        "value": "deepseek rag parity"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-cjk",
+      "passed": true,
+      "expected": {
+        "value": "上下文 缓存"
+      },
+      "python": {
+        "value": "上下文 缓存"
+      },
+      "rust": {
+        "value": "上下文 缓存"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-mixed-cjk",
+      "passed": true,
+      "expected": {
+        "value": "deepseek 上下文 缓存"
+      },
+      "python": {
+        "value": "deepseek 上下文 缓存"
+      },
+      "rust": {
+        "value": "deepseek 上下文 缓存"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-fullwidth-punctuation",
+      "passed": true,
+      "expected": {
+        "value": "deepseek，缓存。rag！"
+      },
+      "python": {
+        "value": "deepseek，缓存。rag！"
+      },
+      "rust": {
+        "value": "deepseek，缓存。rag！"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-ascii-case",
+      "passed": true,
+      "expected": {
+        "value": "deepseek rust rag"
+      },
+      "python": {
+        "value": "deepseek rust rag"
+      },
+      "rust": {
+        "value": "deepseek rust rag"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-version-number",
+      "passed": true,
+      "expected": {
+        "value": "deepseek v3.2.4 rust 1.85"
+      },
+      "python": {
+        "value": "deepseek v3.2.4 rust 1.85"
+      },
+      "rust": {
+        "value": "deepseek v3.2.4 rust 1.85"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-emoji",
+      "passed": true,
+      "expected": {
+        "value": "rag 🔎 检索"
+      },
+      "python": {
+        "value": "rag 🔎 检索"
+      },
+      "rust": {
+        "value": "rag 🔎 检索"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-tabs-newlines",
+      "passed": true,
+      "expected": {
+        "value": "deepseek rag parity"
+      },
+      "python": {
+        "value": "deepseek rag parity"
+      },
+      "rust": {
+        "value": "deepseek rag parity"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-symbols",
+      "passed": true,
+      "expected": {
+        "value": "deepseek-v3.2 + rag_2026"
+      },
+      "python": {
+        "value": "deepseek-v3.2 + rag_2026"
+      },
+      "rust": {
+        "value": "deepseek-v3.2 + rag_2026"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-empty",
+      "passed": true,
+      "expected": {
+        "error": "empty_query"
+      },
+      "python": {
+        "error": "empty_query"
+      },
+      "rust": {
+        "error": "empty_query"
+      },
+      "detail": ""
+    },
+    {
+      "category": "normalization",
+      "id": "normalization-whitespace-only",
+      "passed": true,
+      "expected": {
+        "error": "empty_query"
+      },
+      "python": {
+        "error": "empty_query"
+      },
+      "rust": {
+        "error": "empty_query"
+      },
+      "detail": ""
+    },
+    {
+      "category": "ranking",
+      "id": "ranking-exact-english",
+      "passed": true,
+      "expected": {
+        "order": [
+          "exact",
+          "partial",
+          "irrelevant"
+        ],
+        "scores": [
+          13.2,
+          1.1,
+          0.0
+        ]
+      },
+      "python": {
+        "order": [
+          "exact",
+          "partial",
+          "irrelevant"
+        ],
+        "scores": [
+          13.200000000000001,
+          1.1,
+          0.0
+        ]
+      },
+      "rust": {
+        "order": [
+          "exact",
+          "partial",
+          "irrelevant"
+        ],
+        "scores": [
+          13.200000000000001,
+          1.1,
+          0.0
+        ]
+      },
+      "detail": ""
+    },
+    {
+      "category": "ranking",
+      "id": "ranking-token-overlap",
+      "passed": true,
+      "expected": {
+        "order": [
+          "all",
+          "double",
+          "single",
+          "none"
+        ],
+        "scores": [
+          14.3,
+          2.2,
+          1.1,
+          0.0
+        ]
+      },
+      "python": {
+        "order": [
+          "all",
+          "double",
+          "single",
+          "none"
+        ],
+        "scores": [
+          14.3,
+          2.2,
+          1.1,
+          0.0
+        ]
+      },
+      "rust": {
+        "order": [
+          "all",
+          "double",
+          "single",
+          "none"
+        ],
+        "scores": [
+          14.3,
+          2.2,
+          1.1,
+          0.0
+        ]
+      },
+      "detail": ""
+    },
+    {
+      "category": "ranking",
+      "id": "ranking-title-match",
+      "passed": true,
+      "expected": {
+        "order": [
+          "title-hit",
+          "no-title"
+        ],
+        "scores": [
+          2.2,
+          0.0
+        ]
+      },
+      "python": {
+        "order": [
+          "title-hit",
+          "no-title"
+        ],
+        "scores": [
+          2.2,
+          0.0
+        ]
+      },
+      "rust": {
+        "order": [
+          "title-hit",
+          "no-title"
+        ],
+        "scores": [
+          2.2,
+          0.0
+        ]
+      },
+      "detail": ""
+    },
+    {
+      "category": "ranking",
+      "id": "ranking-source-match",
+      "passed": true,
+      "expected": {
+        "order": [
+          "source-hit",
+          "source-miss"
+        ],
+        "scores": [
+          2.2,
+          0.0
+        ]
+      },
+      "python": {
+        "order": [
+          "source-hit",
+          "source-miss"
+        ],
+        "scores": [
+          2.2,
+          0.0
+        ]
+      },
+      "rust": {
+        "order": [
+          "source-hit",
+          "source-miss"
+        ],
+        "scores": [
+          2.2,
+          0.0
+        ]
+      },
+      "detail": ""
+    },
+    {
+      "category": "ranking",
+      "id": "ranking-short-chunk-weight",
+      "passed": true,
+      "expected": {
+        "order": [
+          "short",
+          "long"
+        ],
+        "scores": [
+          12.1,
+          11.0
+        ]
+      },
+      "python": {
+        "order": [
+          "short",
+          "long"
+        ],
+        "scores": [
+          12.100000000000001,
+          11.0
+        ]
+      },
+      "rust": {
+        "order": [
+          "short",
+          "long"
+        ],
+        "scores": [
+          12.100000000000001,
+          11.0
+        ]
+      },
+      "detail": ""
+    },
+    {
+      "category": "ranking",
+      "id": "ranking-cjk-exact",
+      "passed": true,
+      "expected": {
+        "order": [
+          "cjk-exact",
+          "cjk-partial",
+          "cjk-unrelated"
+        ],
+        "scores": [
+          11.0,
+          0.0,
+          0.0
+        ]
+      },
+      "python": {
+        "order": [
+          "cjk-exact",
+          "cjk-partial",
+          "cjk-unrelated"
+        ],
+        "scores": [
+          11.0,
+          0.0,
+          0.0
+        ]
+      },
+      "rust": {
+        "order": [
+          "cjk-exact",
+          "cjk-partial",
+          "cjk-unrelated"
+        ],
+        "scores": [
+          11.0,
+          0.0,
+          0.0
+        ]
+      },
+      "detail": ""
+    },
+    {
+      "category": "ranking",
+      "id": "ranking-no-match-stable",
+      "passed": true,
+      "expected": {
+        "order": [
+          "zero-a",
+          "zero-b",
+          "zero-c"
+        ],
+        "scores": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "python": {
+        "order": [
+          "zero-a",
+          "zero-b",
+          "zero-c"
+        ],
+        "scores": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "rust": {
+        "order": [
+          "zero-a",
+          "zero-b",
+          "zero-c"
+        ],
+        "scores": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "detail": ""
+    },
+    {
+      "category": "ranking",
+      "id": "ranking-tie-break-by-id",
+      "passed": true,
+      "expected": {
+        "order": [
+          "tie-a",
+          "tie-b",
+          "tie-c"
+        ],
+        "scores": [
+          12.1,
+          12.1,
+          12.1
+        ]
+      },
+      "python": {
+        "order": [
+          "tie-a",
+          "tie-b",
+          "tie-c"
+        ],
+        "scores": [
+          12.100000000000001,
+          12.100000000000001,
+          12.100000000000001
+        ]
+      },
+      "rust": {
+        "order": [
+          "tie-a",
+          "tie-b",
+          "tie-c"
+        ],
+        "scores": [
+          12.100000000000001,
+          12.100000000000001,
+          12.100000000000001
+        ]
+      },
+      "detail": ""
+    },
+    {
+      "category": "ranking",
+      "id": "ranking-duplicate-content-distinct-ids",
+      "passed": true,
+      "expected": {
+        "order": [
+          "duplicate-a",
+          "duplicate-z"
+        ],
+        "scores": [
+          12.1,
+          12.1
+        ]
+      },
+      "python": {
+        "order": [
+          "duplicate-a",
+          "duplicate-z"
+        ],
+        "scores": [
+          12.100000000000001,
+          12.100000000000001
+        ]
+      },
+      "rust": {
+        "order": [
+          "duplicate-a",
+          "duplicate-z"
+        ],
+        "scores": [
+          12.100000000000001,
+          12.100000000000001
+        ]
+      },
+      "detail": ""
+    },
+    {
+      "category": "ranking",
+      "id": "ranking-top-k-truncation",
+      "passed": true,
+      "expected": {
+        "order": [
+          "exact-a",
+          "source-c",
+          "title-b"
+        ],
+        "scores": [
+          13.2,
+          2.2,
+          2.2
+        ]
+      },
+      "python": {
+        "order": [
+          "exact-a",
+          "source-c",
+          "title-b"
+        ],
+        "scores": [
+          13.200000000000001,
+          2.2,
+          2.2
+        ]
+      },
+      "rust": {
+        "order": [
+          "exact-a",
+          "source-c",
+          "title-b"
+        ],
+        "scores": [
+          13.200000000000001,
+          2.2,
+          2.2
+        ]
+      },
+      "detail": ""
+    },
+    {
+      "category": "citation",
+      "id": "citation-line-range",
+      "passed": true,
+      "expected": {
+        "value": "docs/cache.md:L12-L18"
+      },
+      "python": {
+        "value": "docs/cache.md:L12-L18"
+      },
+      "rust": {
+        "value": "docs/cache.md:L12-L18"
+      },
+      "detail": ""
+    },
+    {
+      "category": "citation",
+      "id": "citation-single-line",
+      "passed": true,
+      "expected": {
+        "value": "docs/cache.md:L12"
+      },
+      "python": {
+        "value": "docs/cache.md:L12"
+      },
+      "rust": {
+        "value": "docs/cache.md:L12"
+      },
+      "detail": ""
+    },
+    {
+      "category": "citation",
+      "id": "citation-no-lines",
+      "passed": true,
+      "expected": {
+        "value": "docs/cache.md"
+      },
+      "python": {
+        "value": "docs/cache.md"
+      },
+      "rust": {
+        "value": "docs/cache.md"
+      },
+      "detail": ""
+    },
+    {
+      "category": "citation",
+      "id": "citation-end-only",
+      "passed": true,
+      "expected": {
+        "value": "docs/cache.md"
+      },
+      "python": {
+        "value": "docs/cache.md"
+      },
+      "rust": {
+        "value": "docs/cache.md"
+      },
+      "detail": ""
+    },
+    {
+      "category": "citation",
+      "id": "citation-cjk-source",
+      "passed": true,
+      "expected": {
+        "value": "文档/上下文缓存.md:L3-L9"
+      },
+      "python": {
+        "value": "文档/上下文缓存.md:L3-L9"
+      },
+      "rust": {
+        "value": "文档/上下文缓存.md:L3-L9"
+      },
+      "detail": ""
+    },
+    {
+      "category": "citation",
+      "id": "citation-source-with-spaces",
+      "passed": true,
+      "expected": {
+        "value": "docs/Cache Guide.md:L1-L2"
+      },
+      "python": {
+        "value": "docs/Cache Guide.md:L1-L2"
+      },
+      "rust": {
+        "value": "docs/Cache Guide.md:L1-L2"
+      },
+      "detail": ""
+    },
+    {
+      "category": "citation",
+      "id": "citation-trims-source",
+      "passed": true,
+      "expected": {
+        "value": "docs/cache.md:L5-L5"
+      },
+      "python": {
+        "value": "docs/cache.md:L5-L5"
+      },
+      "rust": {
+        "value": "docs/cache.md:L5-L5"
+      },
+      "detail": ""
+    },
+    {
+      "category": "citation",
+      "id": "citation-invalid-range",
+      "passed": true,
+      "expected": {
+        "error": "invalid_line_range"
+      },
+      "python": {
+        "error": "invalid_line_range"
+      },
+      "rust": {
+        "error": "invalid_line_range"
+      },
+      "detail": ""
+    },
+    {
+      "category": "validation",
+      "id": "index-valid-basic",
+      "passed": true,
+      "expected": {
+        "valid": true,
+        "error": null
+      },
+      "python": {
+        "valid": true,
+        "error": null
+      },
+      "rust": {
+        "valid": true,
+        "error": null
+      },
+      "detail": ""
+    },
+    {
+      "category": "validation",
+      "id": "index-valid-metadata",
+      "passed": true,
+      "expected": {
+        "valid": true,
+        "error": null
+      },
+      "python": {
+        "valid": true,
+        "error": null
+      },
+      "rust": {
+        "valid": true,
+        "error": null
+      },
+      "detail": ""
+    },
+    {
+      "category": "validation",
+      "id": "index-duplicate-id",
+      "passed": true,
+      "expected": {
+        "valid": false,
+        "error": "duplicate_chunk_id"
+      },
+      "python": {
+        "valid": false,
+        "error": "duplicate_chunk_id"
+      },
+      "rust": {
+        "valid": false,
+        "error": "duplicate_chunk_id"
+      },
+      "detail": ""
+    },
+    {
+      "category": "validation",
+      "id": "index-empty-id",
+      "passed": true,
+      "expected": {
+        "valid": false,
+        "error": "empty_chunk_id"
+      },
+      "python": {
+        "valid": false,
+        "error": "empty_chunk_id"
+      },
+      "rust": {
+        "valid": false,
+        "error": "empty_chunk_id"
+      },
+      "detail": ""
+    },
+    {
+      "category": "validation",
+      "id": "index-empty-source",
+      "passed": true,
+      "expected": {
+        "valid": false,
+        "error": "empty_chunk_source"
+      },
+      "python": {
+        "valid": false,
+        "error": "empty_chunk_source"
+      },
+      "rust": {
+        "valid": false,
+        "error": "empty_chunk_source"
+      },
+      "detail": ""
+    },
+    {
+      "category": "validation",
+      "id": "index-invalid-line-range",
+      "passed": true,
+      "expected": {
+        "valid": false,
+        "error": "invalid_line_range"
+      },
+      "python": {
+        "valid": false,
+        "error": "invalid_line_range"
+      },
+      "rust": {
+        "valid": false,
+        "error": "invalid_line_range"
+      },
+      "detail": ""
+    },
+    {
+      "category": "validation",
+      "id": "index-invalid-metadata",
+      "passed": true,
+      "expected": {
+        "valid": false,
+        "error": "invalid_metadata"
+      },
+      "python": {
+        "valid": false,
+        "error": "invalid_metadata"
+      },
+      "rust": {
+        "valid": false,
+        "error": "invalid_metadata"
+      },
+      "detail": ""
+    },
+    {
+      "category": "validation",
+      "id": "index-json-roundtrip",
+      "passed": true,
+      "expected": {
+        "valid": true,
+        "error": null
+      },
+      "python": {
+        "valid": true,
+        "error": null
+      },
+      "rust": {
+        "valid": true,
+        "error": null
+      },
+      "detail": ""
+    }
+  ],
+  "version": "4.0.0-rc.2",
+  "commit": "2267513840e9a0a283378babb29d111a1780586f",
+  "status": "PASS",
+  "generatedAt": "2026-07-15T06:38:14Z"
+}

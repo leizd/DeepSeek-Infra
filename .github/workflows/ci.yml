@@ -389,6 +389,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
       - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
       - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
       - run: cargo test --manifest-path rust/Cargo.toml --all
@@ -403,7 +405,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: llvm-tools-preview
-      - run: cargo install cargo-llvm-cov --locked --version 0.8.7
+      - run: cargo install cargo-llvm-cov --locked --version 0.6.21
       - name: Enforce Rust workspace line coverage
         run: >-
           python scripts/run_rust_coverage.py
