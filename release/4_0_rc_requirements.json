@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "baseline_version": "4.0.0-rc.1",
-  "target_version": "4.0.0-rc.1",
-  "generated_from": "4.0.0-rc.1 frozen evidence built from the verified 3.4.0 feature baseline, 3.3.2 coverage rehearsal, and ADR-0040",
+  "baseline_version": "4.0.0-rc.2",
+  "target_version": "4.0.0-rc.2",
+  "generated_from": "4.0.0-rc.2 frozen from the verified 3.10.0 hybrid runtime baseline",
   "requirements": [
     {
       "id": "all_ci_jobs_green",
@@ -20,12 +20,16 @@
         "docker",
         "rust-docker",
         "hybrid-runtime-e2e",
+        "gateway-request-parity",
+        "mcp-protocol-parity",
         "rag-parity",
+        "rag-document-preparation-parity",
         "rag-vector-binary-parity",
+        "rust-sidecar-performance",
+        "rust-coverage",
         "release-readiness",
         "docs",
-        "rust",
-        "rust-sidecar-performance"
+        "rust"
       ],
       "evidence": [".github/workflows/ci.yml"],
       "description": "The release commit must have successful results for every required CI job."
@@ -40,7 +44,7 @@
       "observed": 95.0,
       "check": "pyproject_coverage_gate",
       "evidence": ["pyproject.toml"],
-      "description": "The 4.0.0-rc.1 CI floor is 95%; branch coverage remains measured without a separate threshold."
+      "description": "The 4.0.0-rc.2 Python CI floor remains 95%; branch coverage remains measured without a separate threshold."
     },
     {
       "id": "python_measured_coverage",
@@ -48,11 +52,27 @@
       "category": "quality_blocker",
       "owner": "Python Runtime",
       "blocking": true,
-      "required": 95.0,
-      "observed": 95.33,
+      "required": 95.2,
+      "observed": 0.0,
       "check": "observed_number_gte",
       "evidence": ["docs/PRE_4_0_QUALITY_BASELINE.md"],
-      "description": "The full Python suite must meet the explicit 4.0 RC coverage target."
+      "description": "Each full rc.2 Python suite must clear the 95.20% release-freeze floor."
+    },
+    {
+      "id": "python_coverage_stability",
+      "label": "Two consecutive Python coverage runs",
+      "category": "quality_blocker",
+      "owner": "Python Runtime",
+      "blocking": true,
+      "required": 95.2,
+      "observed": [],
+      "check": "observed_numbers_gte",
+      "evidence": [
+        "artifacts/coverage-rc2-run-1.json",
+        "artifacts/coverage-rc2-run-2.json",
+        "docs/evidence/python-coverage-stability-v4.0.0-rc.2.json"
+      ],
+      "description": "Two complete runs must each measure at least 95.20% without lowering the 95% CI gate."
     },
     {
       "id": "rust_workspace_ci",
@@ -66,6 +86,31 @@
       "job": "rust",
       "evidence": [".github/workflows/ci.yml", "rust/Cargo.toml"],
       "description": "Rust formatting, linting with warnings denied, and workspace tests are release gates."
+    },
+    {
+      "id": "rust_measured_line_coverage",
+      "label": "Rust measured line coverage",
+      "category": "quality_blocker",
+      "owner": "Rust Core",
+      "blocking": true,
+      "required": 80.0,
+      "check": "evidence_number_gte",
+      "path": ["coverage", "lines", "percent"],
+      "evidence": ["docs/evidence/rust-coverage-v4.0.0-rc.2.json"],
+      "description": "cargo llvm-cov must measure the complete five-crate workspace at 80% line coverage or higher."
+    },
+    {
+      "id": "rust_coverage_ci",
+      "label": "Rust coverage blocking CI job",
+      "category": "quality_blocker",
+      "owner": "Rust Core",
+      "blocking": true,
+      "required": true,
+      "observed": true,
+      "check": "workflow_job",
+      "job": "rust-coverage",
+      "evidence": [".github/workflows/ci.yml", "scripts/run_rust_coverage.py"],
+      "description": "The independent rust-coverage job blocks rc readiness at the measured 80% line threshold."
     },
     {
       "id": "rust_docker_smoke",
@@ -104,6 +149,66 @@
       "check": "rag_parity_cases",
       "evidence": ["fixtures/rag/parity_cases.json", "scripts/check_rag_parity.py", "docs/RAG_PARITY_BASELINE.md"],
       "description": "All deterministic normalization, ranking, citation, and validation cases must remain present."
+    },
+    {
+      "id": "gateway_parity_cases",
+      "label": "Gateway request parity corpus",
+      "category": "quality_blocker",
+      "owner": "Gateway",
+      "blocking": true,
+      "required": 68,
+      "check": "json_collection_count_gte",
+      "path": ["cases"],
+      "evidence": ["fixtures/gateway/request_preparation_cases.json"],
+      "description": "All 68 deterministic Gateway request preparation cases are required."
+    },
+    {
+      "id": "mcp_parity_cases",
+      "label": "MCP protocol parity corpus",
+      "category": "quality_blocker",
+      "owner": "MCP",
+      "blocking": true,
+      "required": 105,
+      "check": "json_collection_count_gte",
+      "path": ["cases"],
+      "evidence": ["fixtures/mcp/protocol_preparation_cases.json"],
+      "description": "All 105 deterministic MCP protocol preparation cases are required."
+    },
+    {
+      "id": "rag_document_parity_cases",
+      "label": "RAG document preparation parity corpus",
+      "category": "quality_blocker",
+      "owner": "RAG",
+      "blocking": true,
+      "required": 125,
+      "check": "json_collection_count_gte",
+      "path": ["cases"],
+      "evidence": ["fixtures/rag/document_preparation_cases.json"],
+      "description": "All 125 deterministic RAG document preparation cases are required."
+    },
+    {
+      "id": "rag_vector_binary_valid_cases",
+      "label": "RAG vector binary valid parity",
+      "category": "quality_blocker",
+      "owner": "RAG",
+      "blocking": true,
+      "required": 110,
+      "check": "evidence_number_gte",
+      "path": ["validCaseCount"],
+      "evidence": ["docs/evidence/rag-vector-binary-parity-v4.0.0-rc.2.json"],
+      "description": "The compact binary transport must pass all 110 valid cases."
+    },
+    {
+      "id": "rag_vector_binary_malformed_cases",
+      "label": "RAG vector binary malformed parity",
+      "category": "quality_blocker",
+      "owner": "RAG",
+      "blocking": true,
+      "required": 16,
+      "check": "evidence_number_gte",
+      "path": ["malformedCaseCount"],
+      "evidence": ["docs/evidence/rag-vector-binary-parity-v4.0.0-rc.2.json"],
+      "description": "The compact binary transport must reject all 16 malformed cases with stable errors."
     },
     {
       "id": "policy_deny_audit_contract",
@@ -154,6 +259,75 @@
       "needles": ["Rollback", "DEEPSEEK_RUST_GATEWAY=0", "DEEPSEEK_RUST_RAG=0"],
       "evidence": ["docs/RUST_HYBRID_RUNTIME_RUNBOOK.md", "docs/RELEASE_READINESS_3_1_X.md"],
       "description": "The stateless rollback to all-Python execution must remain explicit and exercised by hybrid fallback tests."
+    },
+    {
+      "id": "upgrade_rollback_contract",
+      "label": "3.10/rc.1 upgrade and 3.10 rollback contract",
+      "category": "quality_blocker",
+      "owner": "Release Engineering",
+      "blocking": true,
+      "required": true,
+      "check": "release_evidence",
+      "evidence": [
+        "docs/UPGRADING_TO_4_0.md",
+        "tests/test_4_0_upgrade_contract.py",
+        "docs/evidence/upgrade-rollback-v4.0.0-rc.2.json"
+      ],
+      "description": "Upgrade, rollback, Python-only startup, sidecar-loss fallback, and data preservation must pass."
+    },
+    {
+      "id": "protocol_freeze_contract",
+      "label": "4.0 Rust protocol freeze contract",
+      "category": "quality_blocker",
+      "owner": "Runtime Architecture",
+      "blocking": true,
+      "required": true,
+      "check": "release_evidence",
+      "evidence": [
+        "release/4_0_protocol_contract.json",
+        "tests/test_4_0_protocol_contract.py",
+        "docs/evidence/protocol-contract-v4.0.0-rc.2.json"
+      ],
+      "description": "The supported endpoint inventory, schemas, media types, limits, errors, ownership, and binary magic are frozen."
+    },
+    {
+      "id": "rc2_release_evidence",
+      "label": "Complete rc.2 release evidence set",
+      "category": "quality_blocker",
+      "owner": "Release Engineering",
+      "blocking": true,
+      "required": true,
+      "check": "release_evidence",
+      "evidence": [
+        "docs/evidence/ga-v4.0.0-rc.2.json",
+        "docs/evidence/workspace-v4.0.0-rc.2.json",
+        "docs/evidence/media-v4.0.0-rc.2.json",
+        "docs/evidence/browser-v4.0.0-rc.2.json",
+        "docs/evidence/automation-v4.0.0-rc.2.json",
+        "docs/evidence/skills-v4.0.0-rc.2.json",
+        "docs/evidence/skill-security-v4.0.0-rc.2.json",
+        "docs/evidence/skill-catalog-v4.0.0-rc.2.json",
+        "docs/evidence/skill-builder-v4.0.0-rc.2.json",
+        "docs/evidence/skill-versioning-v4.0.0-rc.2.json",
+        "docs/evidence/edge-router-v4.0.0-rc.2.json",
+        "docs/evidence/context-taint-v4.0.0-rc.2.json",
+        "docs/evidence/gateway-request-parity-v4.0.0-rc.2.json",
+        "docs/evidence/mcp-protocol-parity-v4.0.0-rc.2.json",
+        "docs/evidence/rag-parity-v4.0.0-rc.2.json",
+        "docs/evidence/rag-document-preparation-parity-v4.0.0-rc.2.json",
+        "docs/evidence/rag-vector-binary-parity-v4.0.0-rc.2.json",
+        "docs/evidence/rust-sidecar-performance-v4.0.0-rc.2.json",
+        "docs/evidence/rust-coverage-v4.0.0-rc.2.json",
+        "docs/evidence/python-coverage-stability-v4.0.0-rc.2.json",
+        "docs/evidence/rust-sidecar-image-v4.0.0-rc.2.json",
+        "docs/evidence/hybrid-runtime-e2e-v4.0.0-rc.2.json",
+        "docs/evidence/upgrade-rollback-v4.0.0-rc.2.json",
+        "evals/reports/skills-v4.0.0-rc.2.json",
+        "evals/reports/media-v4.0.0-rc.2.json",
+        "evals/reports/browser-v4.0.0-rc.2.json",
+        "evals/reports/automation-v4.0.0-rc.2.json"
+      ],
+      "description": "All carried 3.5-3.10 capabilities and new rc.2 contracts have versioned PASS evidence bound to a validation commit."
     },
     {
       "id": "rust_default_on_decision",
@@ -247,7 +421,7 @@
       "owner": "Rust Core",
       "blocking": false,
       "required": true,
-      "observed": false,
+      "observed": true,
       "check": "advisory",
       "evidence": ["docs/RAG_PARITY_BASELINE.md"],
       "description": "Add broader Policy and RAG corpora beyond the current deterministic baseline."
@@ -259,22 +433,10 @@
       "owner": "Performance",
       "blocking": false,
       "required": true,
-      "observed": false,
+      "observed": true,
       "check": "advisory",
       "evidence": ["docs/RUST_MIGRATION_ROADMAP.md"],
       "description": "Record latency and throughput baselines for Python, Rust, and fallback paths."
-    },
-    {
-      "id": "rust_coverage_metrics",
-      "label": "Rust coverage metrics",
-      "category": "advisory",
-      "owner": "Rust Core",
-      "blocking": false,
-      "required": true,
-      "observed": false,
-      "check": "advisory",
-      "evidence": ["docs/PRE_4_0_QUALITY_BASELINE.md"],
-      "description": "Add Rust coverage reporting and establish a measured baseline."
     },
     {
       "id": "sidecar_image_optimization",

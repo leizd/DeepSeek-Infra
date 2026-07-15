@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
+import os
 import platform
 import shutil
 import subprocess
@@ -41,6 +43,7 @@ EXCLUDED_DIRS = {
     ".semantic-cache",
     ".request-queue",
     ".generated",
+    "artifacts",
     ".gradle",
     ".mypy_cache",
     ".npm-cache",
@@ -97,10 +100,89 @@ def collect_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*") if path.is_file() and should_include(path, root))
 
 
-def git_short_sha(root: Path) -> str:
-    result = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root, check=False, capture_output=True, text=True)
+def git_sha(root: Path) -> str:
+    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=False, capture_output=True, text=True)
     value = result.stdout.strip()
     return value if result.returncode == 0 and value else "unknown"
+
+
+def _read_json(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def measured_python_coverage(root: Path) -> float | None:
+    totals = _read_json(root / "artifacts" / "coverage.json").get("totals")
+    if not isinstance(totals, dict):
+        return None
+    value = totals.get("percent_covered")
+    return float(value) if isinstance(value, int | float) else None
+
+
+def rust_coverage_summary(root: Path, version: str) -> tuple[float | None, int | None]:
+    paths = (
+        root / "artifacts" / "rust-coverage.json",
+        root / "docs" / "evidence" / f"rust-coverage-v{version}.json",
+    )
+    for path in paths:
+        data = _read_json(path)
+        coverage = data.get("coverage")
+        lines = coverage.get("lines") if isinstance(coverage, dict) else None
+        percent = lines.get("percent") if isinstance(lines, dict) else None
+        count = data.get("rustTestCount")
+        if isinstance(percent, int | float) and isinstance(count, int):
+            return float(percent), count
+    return None, None
+
+
+def parity_counts(root: Path, version: str) -> dict[str, object]:
+    prefix = root / "docs" / "evidence"
+
+    def summary_total(name: str) -> int | None:
+        summary = _read_json(prefix / f"{name}-v{version}.json").get("summary")
+        total = summary.get("total") if isinstance(summary, dict) else None
+        return int(total) if isinstance(total, int) else None
+
+    rag = _read_json(prefix / f"rag-parity-v{version}.json").get("summary")
+    rag_total = None
+    if isinstance(rag, dict):
+        values = [item.get("total") for item in rag.values() if isinstance(item, dict)]
+        if values:
+            total = 0
+            for value in values:
+                if not isinstance(value, int):
+                    break
+                total += value
+            else:
+                rag_total = total
+    binary = _read_json(prefix / f"rag-vector-binary-parity-v{version}.json")
+    return {
+        "gateway": summary_total("gateway-request-parity"),
+        "mcp": summary_total("mcp-protocol-parity"),
+        "rag": rag_total,
+        "ragDocumentPreparation": summary_total("rag-document-preparation-parity"),
+        "ragVectorBinary": {
+            "valid": binary.get("validCaseCount"),
+            "malformed": binary.get("malformedCaseCount"),
+        },
+    }
+
+
+def file_sha256(path: Path) -> str:
+    return release_manifest.sha256_of(path) if path.is_file() else ""
+
+
+def rust_sidecar_image(root: Path, version: str) -> tuple[str, str]:
+    data = _read_json(root / "docs" / "evidence" / f"rust-sidecar-image-v{version}.json")
+    tag = data.get("tag")
+    digest = data.get("digest")
+    return (
+        str(tag) if isinstance(tag, str) else "",
+        str(digest) if isinstance(digest, str) else "",
+    )
 
 
 def clean_workspace(root: Path) -> list[Path]:
@@ -156,7 +238,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--coverage-gate", default="95%", help="Coverage gate stamped into the manifest.")
     parser.add_argument("--eval-report", default="evals/reports/latest.json", help="Eval report path stamped into the manifest.")
     parser.add_argument("--agent-report", default="evals/reports/agent-latest.json", help="Agent eval report path stamped into the manifest.")
-    parser.add_argument("--no-manifest", action="store_true", help="Skip writing the .sha256 and .manifest.json siblings.")
+    parser.add_argument("--python-coverage", type=float, help="Measured Python coverage stamped into the manifest.")
+    parser.add_argument("--rust-coverage", type=float, help="Measured Rust line coverage stamped into the manifest.")
+    parser.add_argument("--rust-test-count", type=int, help="Rust workspace test count stamped into the manifest.")
+    parser.add_argument("--rust-sidecar-image-tag", default="", help="Rust sidecar image tag stamped into the manifest.")
+    parser.add_argument(
+        "--rust-sidecar-image-digest",
+        default=os.environ.get("RUST_SIDECAR_IMAGE_DIGEST", ""),
+        help="Rust sidecar image digest; defaults to RUST_SIDECAR_IMAGE_DIGEST or an honest not-published marker.",
+    )
+    parser.add_argument("--no-manifest", action="store_true", help="Skip writing the .zip.sha256 and .zip.manifest.json siblings.")
     return parser.parse_args()
 
 
@@ -179,15 +270,25 @@ def main() -> int:
     if not args.no_manifest:
         sha256 = release_manifest.sha256_of(archive_path)
         release_manifest.write_checksum(archive_path, sha256)
+        measured_rust_coverage, measured_rust_tests = rust_coverage_summary(root, version)
+        measured_image_tag, measured_image_digest = rust_sidecar_image(root, version)
         manifest = release_manifest.build_manifest(
             version=version,
-            commit=git_short_sha(root),
+            commit=git_sha(root),
             python_version=platform.python_version(),
             coverage_gate=args.coverage_gate,
             eval_report=args.eval_report,
             agent_report=args.agent_report,
             artifact=archive_path,
             sha256=sha256,
+            python_coverage=args.python_coverage if args.python_coverage is not None else measured_python_coverage(root),
+            rust_coverage=args.rust_coverage if args.rust_coverage is not None else measured_rust_coverage,
+            rust_test_count=args.rust_test_count if args.rust_test_count is not None else measured_rust_tests,
+            parity_counts=parity_counts(root, version),
+            architecture_decision_sha256=file_sha256(root / "release" / "4_0_runtime_decision.json"),
+            protocol_contract_sha256=file_sha256(root / "release" / "4_0_protocol_contract.json"),
+            rust_sidecar_image_tag=args.rust_sidecar_image_tag or measured_image_tag,
+            rust_sidecar_image_digest=args.rust_sidecar_image_digest or measured_image_digest,
         )
         release_manifest.write_manifest(archive_path, manifest)
     print(archive_path)

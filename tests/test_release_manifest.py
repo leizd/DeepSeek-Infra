@@ -27,6 +27,14 @@ def test_build_manifest_has_required_fields(tmp_path: Path) -> None:
         agent_report="evals/reports/agent-latest.json",
         artifact=artifact,
         sha256="deadbeef",
+        python_coverage=95.25,
+        rust_coverage=80.27,
+        rust_test_count=172,
+        parity_counts={"gateway": 68, "mcp": 105},
+        architecture_decision_sha256="aa" * 32,
+        protocol_contract_sha256="bb" * 32,
+        rust_sidecar_image_tag="deepseek-rust-gateway:4.0.0-rc.2",
+        rust_sidecar_image_digest="sha256:1234",
     )
     assert manifest["schemaVersion"] == release_manifest.SCHEMA_VERSION
     assert manifest["version"] == "2.2.9"
@@ -56,40 +64,53 @@ def test_build_manifest_has_required_fields(tmp_path: Path) -> None:
     assert manifest["artifact"] == "deepseek-infra-2.2.9.zip"
     assert manifest["sha256"] == "deadbeef"
     assert manifest["bytes"] == len(b"zip-bytes")
+    assert manifest["pythonCoverage"] == {"percent": 95.25, "gate": "80%"}
+    assert manifest["rustCoverage"] == {"linePercent": 80.27, "minimumPercent": 80.0}
+    assert manifest["rustTestCount"] == 172
+    assert manifest["parityCounts"] == {"gateway": 68, "mcp": 105}
+    assert manifest["architectureDecisionSha256"] == "aa" * 32
+    assert manifest["protocolContractSha256"] == "bb" * 32
+    assert manifest["archiveSha256"] == "deadbeef"
+    assert manifest["rustSidecarImage"] == {
+        "tag": "deepseek-rust-gateway:4.0.0-rc.2",
+        "digest": "sha256:1234",
+    }
+    assert manifest["runtimeDefaults"]["authoritativeRuntime"] == "python"
+    assert manifest["runtimeDefaults"]["defaultCompose"] == "python-only"
     assert "evidence" in manifest
     assert isinstance(manifest["evidence"], list)
-    assert manifest["gaEvidence"] == "docs/evidence/ga-v3.10.0.json"
+    assert manifest["gaEvidence"] == "docs/evidence/ga-v4.0.0-rc.2.json"
     assert "docs/evidence/headless-mcp-bridge.json" in manifest["evidence"]
     assert "docs/evidence/a2a-third-party-peer.json" in manifest["evidence"]
     assert "docs/evidence/edge-router-smoke.json" in manifest["evidence"]
-    assert "docs/evidence/edge-router-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/ga-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/workspace-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/context-taint-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/semantic-cache-onnx-v3.10.0.json" in manifest["evidence"]
+    assert "docs/evidence/edge-router-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/ga-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/workspace-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/context-taint-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/semantic-cache-onnx-v4.0.0-rc.2.json" in manifest["evidence"]
     assert "docs/RUST_CANDIDATE_AUDIT_3_4.md" in manifest["evidence"]
-    assert "docs/evidence/media-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/browser-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/automation-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/skills-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/skills-ui-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/skill-builder-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/skill-packs-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/skill-eval-dashboard-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/skill-versioning-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/skill-analytics-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/skill-security-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/skill-catalog-v3.10.0.json" in manifest["evidence"]
-    assert "evals/reports/skills-v3.10.0.json" in manifest["evidence"]
-    assert "evals/reports/media-v3.10.0.json" in manifest["evidence"]
-    assert "evals/reports/browser-v3.10.0.json" in manifest["evidence"]
-    assert "evals/reports/automation-v3.10.0.json" in manifest["evidence"]
+    assert "docs/evidence/media-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/browser-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/automation-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/skills-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/skills-ui-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/skill-builder-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/skill-packs-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/skill-eval-dashboard-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/skill-versioning-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/skill-analytics-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/skill-security-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/skill-catalog-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "evals/reports/skills-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "evals/reports/media-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "evals/reports/browser-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "evals/reports/automation-v4.0.0-rc.2.json" in manifest["evidence"]
     assert "docs/MCP_PROTOCOL_PREPARATION_PARITY.md" in manifest["evidence"]
     assert manifest["qualityGates"]["mcpProtocolParity"] == "PASS"
     assert manifest["qualityGates"]["ragDocumentPreparationParity"] == "PASS"
     assert "docs/RAG_DOCUMENT_PREPARATION_PARITY.md" in manifest["evidence"]
-    assert "docs/evidence/rust-sidecar-performance-v3.10.0.json" in manifest["evidence"]
-    assert "docs/evidence/rag-vector-binary-parity-v3.10.0.json" in manifest["evidence"]
+    assert "docs/evidence/rust-sidecar-performance-v4.0.0-rc.2.json" in manifest["evidence"]
+    assert "docs/evidence/rag-vector-binary-parity-v4.0.0-rc.2.json" in manifest["evidence"]
     assert "docs/RUST_SIDECAR_PERFORMANCE.md" in manifest["evidence"]
     assert "docs/RAG_VECTOR_BINARY_TRANSPORT.md" in manifest["evidence"]
     assert "docs/SEMANTIC_CACHE_BINARY_EMBEDDINGS.md" in manifest["evidence"]
@@ -141,7 +162,7 @@ def test_write_manifest_roundtrip(tmp_path: Path) -> None:
         sha256="abc123",
     )
     path = release_manifest.write_manifest(artifact, manifest)
-    assert path == artifact.with_name("deepseek-infra-2.2.9.manifest.json")
+    assert path == artifact.with_name("deepseek-infra-2.2.9.zip.manifest.json")
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["version"] == "2.2.9"
     assert data["sha256"] == "abc123"
@@ -150,7 +171,7 @@ def test_write_manifest_roundtrip(tmp_path: Path) -> None:
 def test_checksum_and_manifest_path_helpers(tmp_path: Path) -> None:
     artifact = tmp_path / "deepseek-infra-2.2.9.zip"
     assert release_manifest.checksum_path_for(artifact).name == "deepseek-infra-2.2.9.zip.sha256"
-    assert release_manifest.manifest_path_for(artifact).name == "deepseek-infra-2.2.9.manifest.json"
+    assert release_manifest.manifest_path_for(artifact).name == "deepseek-infra-2.2.9.zip.manifest.json"
 
 
 def test_verify_checksum(tmp_path: Path) -> None:

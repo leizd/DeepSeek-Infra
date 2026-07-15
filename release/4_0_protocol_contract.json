@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "version": "4.0.0-rc.2",
+  "status": "frozen",
+  "binary_protocol": {
+    "request_magic": "DSVRNK01",
+    "response_magic": "DSVRSP01",
+    "byte_order": "little-endian",
+    "response_bytes": 24
+  },
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "request_schema_version": "none",
+      "response_schema_version": "healthz.v1",
+      "request_content_type": "none",
+      "response_content_type": "application/json",
+      "max_payload_bytes": 0,
+      "stable_error_codes": [],
+      "fallback_owner": "not_applicable",
+      "business_owner": "rust_sidecar_operations",
+      "stability": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "request_schema_version": "none",
+      "response_schema_version": "prometheus.0.0.4",
+      "request_content_type": "none",
+      "response_content_type": "text/plain; version=0.0.4; charset=utf-8",
+      "max_payload_bytes": 0,
+      "stable_error_codes": [],
+      "fallback_owner": "not_applicable",
+      "business_owner": "rust_sidecar_observability",
+      "stability": "public"
+    },
+    {
+      "method": "POST",
+      "path": "/gateway/request/prepare",
+      "request_schema_version": "gateway-request-prepare.v1",
+      "response_schema_version": "gateway-request-prepare.v1",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json",
+      "max_payload_bytes": 16000000,
+      "stable_error_codes": [
+        "invalid_max_tokens",
+        "invalid_message_content",
+        "invalid_message_role",
+        "invalid_messages",
+        "invalid_request",
+        "invalid_tool_choice",
+        "invalid_tools",
+        "request_too_large",
+        "unsupported_model"
+      ],
+      "fallback_owner": "python",
+      "business_owner": "python_gateway",
+      "stability": "internal_stable"
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/request/prepare",
+      "request_schema_version": "mcp-protocol-prepare.v1",
+      "response_schema_version": "mcp-protocol-prepare.v1",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json",
+      "max_payload_bytes": 2000000,
+      "stable_error_codes": [
+        "invalid_capabilities",
+        "invalid_initialize_request",
+        "invalid_jsonrpc_version",
+        "invalid_method",
+        "invalid_params",
+        "invalid_protocol_version",
+        "invalid_request",
+        "invalid_request_id",
+        "method_not_supported",
+        "nesting_limit_exceeded",
+        "parse_error",
+        "request_too_large"
+      ],
+      "fallback_owner": "python",
+      "business_owner": "python_mcp_transport_session_and_tool_execution",
+      "stability": "internal_stable"
+    },
+    {
+      "method": "POST",
+      "path": "/policy/url",
+      "request_schema_version": "policy-url.v1",
+      "response_schema_version": "policy-decision.v1",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json",
+      "max_payload_bytes": 41000000,
+      "stable_error_codes": [
+        "allowed",
+        "invalid_policy_request",
+        "link_local_blocked",
+        "localhost_blocked",
+        "private_network_blocked",
+        "unsupported_scheme"
+      ],
+      "fallback_owner": "python",
+      "business_owner": "python_tool_runtime",
+      "stability": "internal_stable"
+    },
+    {
+      "method": "POST",
+      "path": "/policy/path",
+      "request_schema_version": "policy-path.v1",
+      "response_schema_version": "policy-decision.v1",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json",
+      "max_payload_bytes": 41000000,
+      "stable_error_codes": [
+        "allowed",
+        "invalid_policy_request",
+        "path_traversal",
+        "protected_path"
+      ],
+      "fallback_owner": "python",
+      "business_owner": "python_tool_runtime",
+      "stability": "internal_stable"
+    },
+    {
+      "method": "POST",
+      "path": "/policy/capability",
+      "request_schema_version": "policy-capability.v1",
+      "response_schema_version": "policy-decision.v1",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json",
+      "max_payload_bytes": 41000000,
+      "stable_error_codes": [
+        "allowed",
+        "invalid_policy_request",
+        "missing_capability",
+        "risk_limit_exceeded"
+      ],
+      "fallback_owner": "python",
+      "business_owner": "python_tool_runtime",
+      "stability": "internal_stable"
+    },
+    {
+      "method": "POST",
+      "path": "/rag/vectors/rank",
+      "request_schema_version": "rag-vector-rank-json.v1",
+      "response_schema_version": "rag-vector-rank-json.v1",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json",
+      "max_payload_bytes": 41000000,
+      "stable_error_codes": [],
+      "fallback_owner": "python",
+      "business_owner": "python_semantic_cache_ranking",
+      "stability": "internal_stable"
+    },
+    {
+      "method": "POST",
+      "path": "/rag/vectors/rank-binary",
+      "request_schema_version": "DSVRNK01",
+      "response_schema_version": "DSVRSP01",
+      "request_content_type": "application/vnd.deepseek.vector-rank.v1+octet-stream",
+      "response_content_type": "application/vnd.deepseek.vector-rank.v1+octet-stream",
+      "error_content_type": "application/json",
+      "max_payload_bytes": 12800016,
+      "stable_error_codes": [
+        "arithmetic_overflow",
+        "invalid_binary_header",
+        "invalid_binary_magic",
+        "invalid_candidate_count",
+        "invalid_content_type",
+        "invalid_dimensions",
+        "non_finite_vector",
+        "payload_length_mismatch",
+        "payload_too_large",
+        "ranking_failed"
+      ],
+      "fallback_owner": "python",
+      "business_owner": "python_semantic_cache_ranking",
+      "stability": "experimental"
+    },
+    {
+      "method": "POST",
+      "path": "/rag/documents/prepare",
+      "request_schema_version": "rag-document-prepare.v1",
+      "response_schema_version": "rag-document-prepare.v1",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json",
+      "max_payload_bytes": 40000000,
+      "stable_error_codes": [
+        "chunk_overlap_too_large",
+        "document_too_large",
+        "invalid_chunk_overlap",
+        "invalid_chunk_size",
+        "invalid_document_id",
+        "invalid_metadata",
+        "invalid_request",
+        "invalid_text",
+        "nesting_limit_exceeded",
+        "request_too_large"
+      ],
+      "fallback_owner": "python",
+      "business_owner": "python_rag_file_ocr_embedding_sqlite_and_index",
+      "stability": "internal_stable"
+    }
+  ]
+}

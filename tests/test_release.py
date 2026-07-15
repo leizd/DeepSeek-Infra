@@ -36,6 +36,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 ".semantic-cache",
                 ".request-queue",
                 ".generated",
+                "artifacts",
                 ".gradle",
                 ".mypy_cache",
                 ".pytest_cache",
@@ -50,6 +51,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 path = workspace / directory
                 path.mkdir()
                 (path / "private.txt").write_text("secret", encoding="utf-8")
+            (workspace / "artifacts" / "benchmark-sensitive-payload.json").write_text("secret", encoding="utf-8")
             (workspace / "server.8010.err.log").write_text("secret", encoding="utf-8")
             (workspace / ".server.err.log").write_text("secret", encoding="utf-8")
             (workspace / ".coverage").write_text("secret", encoding="utf-8")

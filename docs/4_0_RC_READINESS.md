@@ -1,95 +1,59 @@
-# 4.0.0 RC Readiness
+# 4.0.0-rc.2 Release Readiness
 
-This checklist governs the `4.0.0-rc.1` release freeze. It does not create a tag or change Rust defaults.
+This checklist governs the `4.0.0-rc.2` freeze from the verified `3.10.0` hybrid runtime baseline. `v4.0.0-rc.1` is superseded and retained only as a historical architecture preview; it must not be promoted directly to stable. This PR creates neither a tag nor a GitHub Release.
 
-> **Current decision: READY FOR 4.0.0-rc.1.** ADR-0040 resolves all five runtime architecture blockers with an approved Python-first hybrid design. Two consecutive readiness suites measured 95.3428% and 95.3396%, clearing the explicit 95.00% RC target with the required 0.30-point safety margin. The `rc/*` branch enforces this checker in strict mode; tag creation remains a post-merge action.
+> **Current decision: pending final local and GitHub CI validation.** The checker may emit `Decision: READY FOR 4.0.0-rc.2` only after every blocking requirement is supported by current-commit PASS evidence.
 
-The machine-readable requirements source is [`release/4_0_rc_requirements.json`](../release/4_0_rc_requirements.json), and the approved architecture contract is [`release/4_0_runtime_decision.json`](../release/4_0_runtime_decision.json). Run the checker in report-only mode during normal development:
-
-```bash
-python scripts/check_4_0_rc_readiness.py \
-  --requirements release/4_0_rc_requirements.json \
-  --report-only \
-  --json-out artifacts/4-0-rc-readiness.json
-```
-
-Only an actual `release/*` or `rc/*` branch should use the blocking mode:
+The machine contract is [`release/4_0_rc_requirements.json`](../release/4_0_rc_requirements.json), the approved ADR-0040 ownership decision is [`release/4_0_runtime_decision.json`](../release/4_0_runtime_decision.json), and the protocol freeze is [`release/4_0_protocol_contract.json`](../release/4_0_protocol_contract.json).
 
 ```bash
-python scripts/check_4_0_rc_readiness.py \
-  --requirements release/4_0_rc_requirements.json \
-  --strict
+python scripts/check_4_0_rc_readiness.py --requirements release/4_0_rc_requirements.json --report-only --json-out artifacts/4-0-rc-readiness.json
+python scripts/check_4_0_rc_readiness.py --requirements release/4_0_rc_requirements.json --strict
 ```
 
-## Blocker matrix
+## Blocking matrix
 
-### Quality blockers
+| Requirement | Freeze condition |
+| --- | --- |
+| Python coverage | CI floor remains 95%; two complete rc.2 runs must each be at least 95.20%. |
+| Rust measured line coverage | `cargo llvm-cov` measures `deepseek-core`, `deepseek-gateway`, `deepseek-mcp`, `deepseek-policy`, and `deepseek-rag`; line coverage must be at least 80% with no core exclusions. |
+| Rust quality | Rust fmt, clippy with warnings denied, workspace tests, Rust Docker, and the independent `rust-coverage` job pass. |
+| Parity | Gateway 68/68, MCP 105/105, RAG 38/38, RAG document 125/125, vector binary 110 valid + 16 malformed. |
+| Upgrade and rollback | 3.10.0 and rc.1 upgrade, 3.10.0 rollback, Python-only startup, and sidecar-loss fallback pass without data loss. |
+| Protocol freeze | All ten supported endpoints, schemas, media types, payload limits, errors, ownership, fallback, and stability classes match the frozen contract. |
+| Product evidence | GA, Workspace, Media, Browser, Automation, Skills, security/catalog/builder/versioning, Edge Router, and Context Taint evidence is regenerated from the current commit. |
+| Release archive | ZIP, checksum, and rich manifest agree; no credentials, user data, caches, databases, or sensitive benchmark payloads are included. |
+| CI | Every job listed by `all_ci_jobs_green.required_jobs` passes on this exact branch commit. |
 
-| Requirement | Owner | Current status | Evidence / exit condition |
-| --- | --- | --- | --- |
-| All required CI jobs green | Release Engineering | PASS on merged baseline; evaluated live in CI | All jobs listed in the requirements manifest return `success` or an intentional `skipped` result. |
-| Current Python coverage gate | Python Runtime | PASS: 95% | `pyproject.toml` sets `fail_under = 95`; statement and branch coverage are measured together, with no separate branch threshold in 4.0.0-rc.1. |
-| Python measured coverage | Python Runtime | **PASS: 95.33% >= 95.00%** | Consecutive full runs measured 95.3428% and 95.3396%, both above the 95.30% rehearsal floor. |
-| Rust fmt / clippy / tests | Rust Core | PASS | `ci / rust` is green. |
-| Rust sidecar Docker smoke | Rust Core | PASS | `ci / rust-docker` is green. |
-| Hybrid runtime E2E and fallback | Hybrid Runtime | PASS | `ci / hybrid-runtime-e2e` is green. |
-| Rust/Python RAG parity | RAG | PASS: 38/38 | `ci / rag-parity` is green and the full deterministic fixture remains present. |
-| Policy deny / audit contract | Tool Runtime Security | PASS | Stable deny identifiers, redaction, failure modes, and no-execution tests pass. |
-| Release preflight | Release Engineering | PASS | `ci / release-readiness` is green. |
-| Default Python behavior unchanged | Runtime Architecture | PASS | `.env.example` keeps all four Rust delegates at `0`; default Compose remains Python-only. |
-| Rollback path | Release Engineering | PASS | The runbook documents all-flags-off rollback and hybrid tests exercise fallback. |
+## Frozen architecture ownership
 
-### Architecture decisions
+- Python is the default and authoritative runtime; default Compose is Python-only.
+- The Rust sidecar is officially supported but optional. Every Rust delegate and binary transport remain default-off and explicit opt-ins.
+- Python fallback is supported throughout 4.x and may not be removed before 5.0.0.
+- Python owns Gateway streaming, upstream HTTP, credentials, retries, MCP transport/session/real tool execution, file reading, OCR, embedding, SQLite, indexes, and business state.
+- Rust request preparation, MCP protocol preparation, Tool Policy evaluation, vector ranking, document preparation, and binary vector transport remain bounded optional delegates.
+- Rust-primary ranking is not enabled.
 
-| Requirement | Owner | Current status | Exit condition |
-| --- | --- | --- | --- |
-| Rust default-on component set | Runtime Architecture | **PASS: approved empty set** | ADR-0040 explicitly keeps Gateway, MCP, Policy, and RAG opt-in. Empty is a valid decision value. |
-| Sidecar in default deployment | Release Engineering | **PASS: Python-only default** | The Rust sidecar remains an optional Compose deployment. |
-| Python fallback lifecycle | Runtime Architecture | **PASS: supported through 4.x** | Removal may not be considered before 5.0.0. |
-| Gateway streaming path | Gateway | **PASS: Python-owned for 4.0** | Rust continues to handle models and opt-in non-streaming chat; no Rust streaming implementation is claimed. |
-| MCP real tool bridge | MCP | **PASS: Python-owned execution for 4.0** | Rust validates and routes JSON-RPC; Python Tool Runtime executes real tools. No Rust tool bridge is claimed. |
+## Delegate status
 
-### Non-blocking recommendations
+| Component | Proven surface | Freeze decision |
+| --- | --- | --- |
+| Gateway | Models and non-streaming chat delegation | Opt-in request preparation; streaming and upstream HTTP remain Python-owned. |
+| MCP | JSON-RPC initialize, validation, and routing | Opt-in protocol preparation; transport, sessions, and execution remain Python-owned. |
+| Policy | Stable deny/audit contract and failure modes | Opt-in evaluation with Python fallback. |
+| RAG | Deterministic hot-path parity at 38/38 plus document and binary corpora | Opt-in preparation/ranking; files, embeddings, SQLite, and indexes remain Python-owned. |
 
-- Expand the deterministic RAG and Policy parity corpora.
-- Record hybrid latency and throughput benchmarks.
-- Add Rust coverage measurement and a data-backed target.
-- Measure and optimize the Rust sidecar image.
-- Evaluate persistent policy audit storage after the logging contract stabilizes.
+## Advisory state
 
-These items remain visible in the generated JSON report but do not independently block an RC.
-
-## Default-on decision matrix
-
-| Component | Proven Rust surface | Remaining gap | Current recommendation | Decision |
-| --- | --- | --- | --- | --- |
-| Gateway | Models and non-streaming chat delegation | Streaming remains in Python by design | Keep opt-in | Approved: opt-in |
-| MCP | JSON-RPC initialize, validation, and routing | Real tool execution remains in Python by design | Keep opt-in | Approved: opt-in |
-| Policy | Stable deny/audit contract and explicit backend failure modes | Broader Python/Rust policy corpus can still grow | Keep opt-in | Approved: opt-in |
-| RAG | Deterministic hot-path parity at 38/38 plus 3.4.0 semantic-cache vector ranking | Embedding and vector database work remains in Python | Keep opt-in | Approved: opt-in |
-
-ADR-0040 is an approved architecture contract, not a runtime-default change. The 3.3.2 coverage uplift and the 3.4.0 vector-ranking delegate do not modify runtime defaults; specifically, 3.4.0 does not modify `.env.example`, default Compose, or the decision file.
+Expanded parity corpora and the hybrid performance benchmark are observed. Sidecar image size optimization and persistent policy audit storage remain advisory; their incomplete state must not be reported as green.
 
 ## Sign-off
 
-Before creating `4.0.0-rc.1`, the accountable owners must sign the following on the release change:
+- [ ] Two complete Python coverage runs are each at least 95.20%.
+- [ ] Rust line coverage is at least 80% and the report covers all five crates.
+- [ ] Upgrade, rollback, sidecar-loss, protocol, parity, performance, package, smoke, and preflight evidence is current-commit PASS.
+- [ ] Strict readiness exits zero with `Decision: READY FOR 4.0.0-rc.2`.
+- [ ] GitHub Actions is fully green on the PR head.
+- [ ] No tag or GitHub Release was created.
 
-- [x] Release Engineering: all required CI jobs and release preflight are green on the rehearsal commit.
-- [x] Python Runtime: two consecutive measured full-suite runs exceed 95.30%.
-- [x] Rust Core: workspace, Docker smoke, hybrid E2E, and parity jobs are green.
-- [x] Tool Runtime Security: deny/audit contracts remain green and no denied tool implementation executes.
-- [x] Runtime Architecture: default-on components, default sidecar deployment, and Python fallback lifecycle are approved by ADR-0040.
-- [x] Gateway: Python streaming ownership for 4.0 is approved by ADR-0040.
-- [x] MCP: Python real-tool execution and Rust protocol ownership for 4.0 are approved by ADR-0040.
-- [x] Release Engineering: rollback remains documented and `--strict` exits zero on an `rc/*` rehearsal branch.
-
-The repository is **READY FOR 4.0.0-rc.1**. This release-freeze PR synchronizes the version, regenerates evidence, adds release notes, and prepares checksummed artifacts; it intentionally stops before tag creation and GitHub prerelease publication.
-
-## Related documents
-
-- [Pre-4.0 Quality Baseline](PRE_4_0_QUALITY_BASELINE.md)
-- [ADR-0040: Python-first hybrid runtime architecture](adr/ADR-0040-hybrid-runtime-architecture.md)
-- [3.1.x / 3.2.x Release Readiness](RELEASE_READINESS_3_1_X.md)
-- [Rust Hybrid Runtime Runbook](RUST_HYBRID_RUNTIME_RUNBOOK.md)
-- [Rust Migration Roadmap](RUST_MIGRATION_ROADMAP.md)
-- [RAG Parity Baseline](RAG_PARITY_BASELINE.md)
+Stable `4.0.0` remains out of scope and requires an independent promotion PR after the rc.2 observation period.

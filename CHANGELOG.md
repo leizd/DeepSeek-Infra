@@ -1,5 +1,18 @@
 # 更新日志
 
+## [4.0.0-rc.2] - Hybrid Runtime Release Freeze
+
+### Release freeze
+
+- Refreezes 4.0 from the verified 3.10.0 hybrid baseline; `v4.0.0-rc.1` remains historical and is not promoted.
+- Preserves Python as the default and authoritative runtime, Python-only default Compose, default-off Rust delegates, and Python fallback throughout 4.x.
+- Adds blocking Rust workspace line coverage at 80%, two-run Python coverage stability at 95.20%, upgrade/rollback and sidecar-loss contracts, and the frozen ten-endpoint protocol contract.
+- Regenerates the complete 3.5-3.10 evidence surface and dry-runs the versioned ZIP, checksum, and rich release manifest.
+
+### Non-goals
+
+- Does not enable or deploy Rust by default, enable Rust-primary ranking, remove JSON embeddings or Python fallback, transfer Python-owned streaming/HTTP/MCP/file/data work to Rust, create a tag, publish a GitHub Release, or publish stable 4.0.0.
+
 ## [3.10.0] - Semantic Cache Binary Embedding Storage & Direct Rust Payload Assembly
 
 ### 新增

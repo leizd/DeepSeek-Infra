@@ -57,14 +57,14 @@ Run the strict corpus:
 python scripts/check_rag_parity.py \
   --base-url http://127.0.0.1:8787 \
   --strict \
-  --report artifacts/rag-parity-report.json
+  --report docs/evidence/rag-parity-v4.0.0-rc.2.json
 ```
 
 Any mismatch prints the case ID, expected result, Python result, Rust result, and first ranking divergence when applicable. `--strict` exits nonzero on any mismatch.
 
 ## CI gate
 
-The independent `ci / rag-parity` job builds and starts only the Rust sidecar image, runs the strict 38-case corpus, uploads `artifacts/rag-parity-report.json`, prints sidecar logs on failure, and always removes the container.
+The independent `ci / rag-parity` job builds and starts only the Rust sidecar image, runs the strict 38-case corpus, uploads `docs/evidence/rag-parity-v4.0.0-rc.2.json`, prints sidecar logs on failure, and always removes the container.
 
 The job does not enable `DEEPSEEK_RUST_RAG` in the default Compose deployment. Rust RAG remains opt-in, Python remains the default runtime, and the Python coverage gate is 95%.
 

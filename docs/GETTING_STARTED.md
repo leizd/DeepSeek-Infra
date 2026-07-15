@@ -2,7 +2,7 @@
 
 Applicable version: v3.10.0.
 
-DeepSeek Infra 3.10.0 is a local-first Personal AI Runtime. The first screen is the Workspace: projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports all stay in the local runtime root unless you explicitly call an upstream API. The published `v4.0.0-rc.1` remains an architecture preview rather than the active stable line.
+DeepSeek Infra 4.0.0-rc.2 is a local-first, Python-first hybrid Personal AI Runtime frozen from the verified 3.10.0 baseline. The first screen is the Workspace: projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports all stay in the local runtime root unless you explicitly call an upstream API. The optional Rust sidecar is supported but not required; `v4.0.0-rc.1` is superseded historical preview material.
 
 ## Local Run
 

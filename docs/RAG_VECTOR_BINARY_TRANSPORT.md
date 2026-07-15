@@ -89,7 +89,7 @@ cargo build --release --locked --manifest-path rust/Cargo.toml -p deepseek-gatew
 python scripts/check_rag_vector_binary_parity.py \
   --base-url http://127.0.0.1:8787 \
   --strict \
-  --report artifacts/rag-vector-binary-parity.json
+  --report docs/evidence/rag-vector-binary-parity-v4.0.0-rc.2.json
 ```
 
 The committed [3.10.0 parity evidence](evidence/rag-vector-binary-parity-v3.10.0.json) contains 110 deterministic valid cases and 16 malformed protocol cases. Python, JSON Rust, and binary Rust select the same best index; similarities meet the production tolerance; ties remain first-match; malformed cases retain stable categories; all binary successes are 24 bytes; and no vectors are stored.

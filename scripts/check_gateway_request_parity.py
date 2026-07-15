@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from deepseek_infra.core.errors import AppError  # noqa: E402
 from deepseek_infra.infra.gateway.request_preparation import prepare_gateway_request  # noqa: E402
+from scripts.release_evidence import stamp_release_report  # noqa: E402
 
 DEFAULT_FIXTURE = ROOT / "fixtures" / "gateway" / "request_preparation_cases.json"
 
@@ -177,11 +178,14 @@ def main(argv: list[str] | None = None) -> int:
         wait_for_sidecar(args.base_url, wait_seconds=args.wait_seconds, timeout=args.timeout)
         report = run_parity(args.base_url, cases, timeout=args.timeout)
     except (OSError, ValueError, ParityFailure) as exc:
-        report = {"ok": False, "summary": {"passed": 0, "total": 0}, "cases": [], "fatalError": str(exc)}
+        report = stamp_release_report(
+            {"ok": False, "summary": {"passed": 0, "total": 0}, "cases": [], "fatalError": str(exc)}, root=ROOT
+        )
         print(f"Gateway request parity failed: {exc}", file=sys.stderr)
         if args.report is not None:
             write_report(args.report, report)
         return 1
+    report = stamp_release_report(report, root=ROOT)
     print_report(report)
     if args.report is not None:
         write_report(args.report, report)
