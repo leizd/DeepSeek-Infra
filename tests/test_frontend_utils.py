@@ -24,7 +24,10 @@ def run_frontend_utils(script: str) -> None:
         "  const speech = await load('speech_text');\n"
         "  const stream = await load('stream');\n"
         "  const agentTimeline = await load('agent_timeline');\n"
-        "  const context = { assert, charts, format, normalize, reminder, speech, stream, agentTimeline };\n"
+        "  const credentialStore = await load('credential_store');\n"
+        "  const uploadController = await load('upload_controller');\n"
+        "  const skillBuilder = await load('skill_builder');\n"
+        "  const context = { assert, charts, format, normalize, reminder, speech, stream, agentTimeline, credentialStore, uploadController, skillBuilder };\n"
         "  await (async function() {\n"
         + textwrap.dedent(script)
         + "\n  }).call(context);\n"
@@ -34,6 +37,112 @@ def run_frontend_utils(script: str) -> None:
 
 
 class FrontendUtilsTests(unittest.TestCase):
+    def test_credentials_are_session_scoped_and_legacy_local_values_are_purged(self) -> None:
+        run_frontend_utils(
+            r"""
+            const { credentialStore } = this;
+            const makeStorage = (initial = {}) => {
+              const values = new Map(Object.entries(initial));
+              return {
+                getItem: (key) => values.has(key) ? values.get(key) : null,
+                setItem: (key, value) => values.set(key, String(value)),
+                removeItem: (key) => values.delete(key),
+                values,
+              };
+            };
+            const keys = {
+              apiKey: "deepseek-infra.api-key",
+              rememberKey: "deepseek-infra.remember-key",
+              tavilyKey: "deepseek-infra.tavily-key",
+              rememberTavilyKey: "deepseek-infra.remember-tavily-key",
+            };
+            const local = makeStorage({
+              [keys.apiKey]: "sk-legacy",
+              [keys.rememberKey]: "1",
+              "deepseek-mobile.tavily-key": "tvly-legacy",
+              "deepseek-mobile.remember-tavily-key": "1",
+            });
+            const session = makeStorage();
+            const store = credentialStore.createCredentialSession(keys, { localStorage: local, sessionStorage: session });
+
+            assert.strictEqual(local.getItem(keys.apiKey), null);
+            assert.strictEqual(local.getItem(keys.rememberKey), null);
+            assert.strictEqual(local.getItem("deepseek-mobile.tavily-key"), null);
+            assert.strictEqual(store.load("deepseek"), "sk-legacy");
+            assert.strictEqual(store.load("tavily"), "tvly-legacy");
+
+            store.update("deepseek", "sk-session");
+            assert.strictEqual(session.getItem(keys.apiKey), "sk-session");
+            store.setRetained("deepseek", false, "");
+            assert.strictEqual(store.load("deepseek"), "");
+            assert.strictEqual(session.getItem(keys.apiKey), null);
+            """
+        )
+
+    def test_upload_task_supports_timeout_cancel_and_success(self) -> None:
+        run_frontend_utils(
+            r"""
+            const { uploadController } = this;
+            class FakeXhr {
+              constructor() { this.upload = {}; this.headers = {}; this.status = 0; this.responseText = ""; }
+              open(method, url) { this.method = method; this.url = url; }
+              setRequestHeader(name, value) { this.headers[name] = value; }
+              send(body) { this.body = body; }
+              abort() { this.onabort(); }
+            }
+            const file = new File(["hello"], "note.txt", { type: "text/plain" });
+
+            const cancelledXhr = new FakeXhr();
+            const cancelled = uploadController.createUploadTask([file], {
+              xhrFactory: () => cancelledXhr,
+              timeoutMs: 1234,
+              authToken: "local-token",
+            });
+            assert.strictEqual(cancelledXhr.timeout, 1234);
+            assert.strictEqual(cancelledXhr.headers.Authorization, "Bearer local-token");
+            cancelled.cancel();
+            await assert.rejects(cancelled.promise, (error) => error.name === "AbortError" && error.message === "上传已取消");
+            assert.strictEqual(cancelled.active, false);
+
+            const timeoutXhr = new FakeXhr();
+            const timedOut = uploadController.createUploadTask([file], { xhrFactory: () => timeoutXhr });
+            timeoutXhr.ontimeout();
+            await assert.rejects(timedOut.promise, /上传超时/);
+
+            const successXhr = new FakeXhr();
+            const progress = [];
+            const success = uploadController.createUploadTask([file], {
+              xhrFactory: () => successXhr,
+              onProgress: (value) => progress.push(value),
+            });
+            successXhr.upload.onprogress({ lengthComputable: true, loaded: 1, total: 2 });
+            successXhr.status = 200;
+            successXhr.responseText = JSON.stringify({ file: { name: "note.txt" } });
+            successXhr.onload();
+            assert.deepStrictEqual(await success.promise, { files: [{ name: "note.txt" }], errors: [] });
+            assert.deepStrictEqual(progress, [50]);
+            """
+        )
+
+    def test_skill_builder_schema_logic_is_isolated_from_dom(self) -> None:
+        run_frontend_utils(
+            r"""
+            const { skillBuilder } = this;
+            const fields = [
+              { key: "depth", title: "Depth", type: "integer", required: true, defaultValue: "2", enumOptions: [], maxLength: 0 },
+              { key: "mode", title: "Mode", type: "enum", required: false, defaultValue: "", enumOptions: ["fast", "deep"], maxLength: 0 },
+            ];
+            const schema = skillBuilder.buildInputSchema(fields);
+            assert.deepStrictEqual(schema.required, ["depth"]);
+            assert.strictEqual(schema.properties.depth.default, 2);
+            assert.deepStrictEqual(schema.properties.mode.enum, ["fast", "deep"]);
+            assert.deepStrictEqual(skillBuilder.sampleInputFromFields(fields), { depth: 2 });
+            assert.strictEqual(skillBuilder.fieldTypeFromSchema({ type: "string", maxLength: 500 }), "textarea");
+            assert.strictEqual(skillBuilder.outputModeFromSchema(skillBuilder.defaultOutputSchema("title_content")), "title_content");
+            assert.strictEqual(skillBuilder.defaultBuilderSkill(1).skillId, "skill_custom_1");
+            """
+        )
+
     def test_charts_format_normalize_and_reminders(self) -> None:
         run_frontend_utils(
             r"""

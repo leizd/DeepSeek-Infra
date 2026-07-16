@@ -1,9 +1,18 @@
 /** Skill Workbench UI, Builder, Packs, Eval Dashboard, Versioning, Runs, Security, and Catalog - v2.6.9 frontend integration. */
 
+import {
+  ARTIFACT_TYPES,
+  FIELD_TYPES,
+  buildInputSchema,
+  defaultBuilderSkill,
+  defaultOutputSchema,
+  fieldTypeFromSchema,
+  outputModeFromSchema,
+  sampleInputFromFields,
+} from "./skill_builder.js";
+
 const SKILL_API = "/api/skills";
 const PROJECT_API = "/api/workspace/projects";
-const FIELD_TYPES = ["string", "textarea", "number", "integer", "enum", "boolean"];
-const ARTIFACT_TYPES = ["md", "docx", "pdf", "pptx"];
 const TOOL_OPTIONS = [
   { id: "search_files", label: "File search", risk: "read-only", description: "Search cached project and local files." },
   { id: "read_file_chunk", label: "Read file chunk", risk: "read-only", description: "Read bounded file snippets." },
@@ -734,35 +743,6 @@ function onSkillListClick(event) {
   }
 }
 
-function defaultBuilderSkill() {
-  return {
-    skillId: `skill_custom_${Date.now().toString(36)}`,
-    name: "My Custom Skill",
-    description: "A reusable custom Skill.",
-    version: "1.0.0",
-    systemPrompt: "You are a focused Skill. Follow the input schema, use only allowed tools, and return concise markdown.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        topic: {
-          type: "string",
-          title: "Topic",
-          description: "What should this Skill work on?",
-          maxLength: 500,
-        },
-      },
-      required: ["topic"],
-      additionalProperties: false,
-    },
-    outputSchema: defaultOutputSchema("content"),
-    allowedTools: ["search_files"],
-    memoryPolicy: { scope: "project", read: true, write: false },
-    artifactPolicy: { autoSave: true, types: ["md"] },
-    projectBinding: { enabled: true },
-    exampleInputs: [{ topic: "Example topic" }],
-  };
-}
-
 function openSkillBuilder({ mode = "create", skill = null } = {}) {
   if (!els.skillBuilderHost) return;
   closeSkillRunHost();
@@ -950,30 +930,6 @@ function updateBuilderFieldRow(row) {
   if (enumWrap) enumWrap.hidden = type !== "enum";
 }
 
-function fieldTypeFromSchema(prop) {
-  if (Array.isArray(prop.enum)) return "enum";
-  if (prop.type === "string" && Number(prop.maxLength || 0) > 120) return "textarea";
-  if (FIELD_TYPES.includes(prop.type)) return prop.type;
-  return "string";
-}
-
-function outputModeFromSchema(schema) {
-  return schema.properties?.title ? "title_content" : "content";
-}
-
-function defaultOutputSchema(mode) {
-  const properties = {
-    content: { type: "string" },
-    mode: { type: "string" },
-  };
-  const required = ["content"];
-  if (mode === "title_content") {
-    properties.title = { type: "string" };
-    required.unshift("title");
-  }
-  return { type: "object", properties, required, additionalProperties: true };
-}
-
 function buildSkillConfigFromBuilder() {
   const skillId = (els.skillBuilderIdInput?.value || "").trim();
   const fields = collectBuilderFields();
@@ -1020,66 +976,10 @@ function collectBuilderFields() {
   return fields;
 }
 
-function buildInputSchema(fields) {
-  const properties = {};
-  const required = [];
-  for (const field of fields) {
-    const prop = builderFieldToSchema(field);
-    properties[field.key] = prop;
-    if (field.required) required.push(field.key);
-  }
-  return { type: "object", properties, required, additionalProperties: false };
-}
-
-function builderFieldToSchema(field) {
-  const prop = {
-    type: field.type === "textarea" || field.type === "enum" ? "string" : field.type,
-    title: field.title || field.key,
-  };
-  if (field.description) prop.description = field.description;
-  if (field.type === "enum") prop.enum = field.enumOptions.length ? field.enumOptions : ["option"];
-  if (field.type === "textarea") prop.maxLength = field.maxLength || 2000;
-  if (field.maxLength && (field.type === "string" || field.type === "textarea")) prop.maxLength = field.maxLength;
-  const defaultValue = parseBuilderDefault(field);
-  if (defaultValue !== undefined) prop.default = defaultValue;
-  return prop;
-}
-
-function parseBuilderDefault(field) {
-  const value = field.defaultValue;
-  if (value === "") return undefined;
-  if (field.type === "number") return Number(value);
-  if (field.type === "integer") return parseInt(value, 10);
-  if (field.type === "boolean") return value === "true" || value === "1" || value.toLowerCase() === "yes";
-  return value;
-}
-
 function selectedBuilderValues(selector) {
   return Array.from(els.skillBuilderHost?.querySelectorAll(selector) || [])
     .filter((input) => input.checked)
     .map((input) => input.value);
-}
-
-function sampleInputFromFields(fields) {
-  const input = {};
-  for (const field of fields) {
-    if (!field.required && field.defaultValue === "") continue;
-    const defaultValue = parseBuilderDefault(field);
-    if (defaultValue !== undefined) {
-      input[field.key] = defaultValue;
-    } else if (field.type === "boolean") {
-      input[field.key] = true;
-    } else if (field.type === "number") {
-      input[field.key] = 1.5;
-    } else if (field.type === "integer") {
-      input[field.key] = 1;
-    } else if (field.type === "enum") {
-      input[field.key] = field.enumOptions[0] || "option";
-    } else {
-      input[field.key] = `Sample ${field.title || field.key}`;
-    }
-  }
-  return input;
 }
 
 function previewBuilderConfig() {

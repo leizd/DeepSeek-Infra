@@ -1,6 +1,10 @@
 # Upgrading to 4.0
 
-This guide covers the stable `4.0.0` Python-first hybrid runtime. The upgrade is intentionally additive: no mandatory database migration, user-directory deletion, or Rust sidecar deployment is required.
+This guide covers the stable 4.0.x Python-first hybrid runtime, including current patch release `4.0.1`. The upgrade is intentionally additive: no mandatory database migration, user-directory deletion, or Rust sidecar deployment is required.
+
+## 4.0.0 to 4.0.1
+
+Stop the 4.0.0 service, install 4.0.1, and restart it with the same configuration and runtime data. No database or protocol migration is required. Browser credentials previously remembered in `localStorage` are removed; enter them again if needed, and they will be retained only for the current tab session. Reload once while online so the versioned Service Worker can install the complete 4.0.1 app shell before relying on offline mode.
 
 ## 3.10.0 to 4.0.0
 
@@ -20,13 +24,13 @@ Old configuration remains parseable. The legacy Rust delegate flags and policy f
 
 This is a metadata-only promotion. No database migration, configuration rewrite, user-directory rebuild, protocol change, or Rust sidecar deployment is required. Stop rc.2, install 4.0.0, and start the same deployment with the same configuration and runtime data.
 
-## Rollback from 4.0.0 to 3.10.0
+## Rollback from 4.0.1 to 3.10.0
 
-1. Stop 4.0.0 cleanly.
+1. Stop 4.0.1 cleanly.
 2. Set all delegate flags to `0` and `DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=json`.
 3. Install or start 3.10.0 against the same runtime data directory.
 
-The required `embedding TEXT` column and JSON values are still present, so 3.10.0 can read cache rows created by 4.0.0. Older SQLite readers ignore the added nullable BLOB columns. Do not run a destructive schema downgrade. With Rust flags off, operation returns to Python-only.
+The required `embedding TEXT` column and JSON values are still present, so 3.10.0 can read cache rows created by 4.0.1. Older SQLite readers ignore the added nullable BLOB columns. Do not run a destructive schema downgrade. With Rust flags off, operation returns to Python-only.
 
 ## Sidecar unavailable
 
@@ -38,4 +42,4 @@ Run the executable contract before deployment:
 python -m pytest --no-cov tests/test_4_0_upgrade_contract.py
 ```
 
-The versioned result is recorded in `docs/evidence/upgrade-rollback-v4.0.0.json`.
+The versioned result is recorded in `docs/evidence/upgrade-rollback-v4.0.1.json`.

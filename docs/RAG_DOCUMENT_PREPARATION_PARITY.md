@@ -43,7 +43,7 @@ The shared fixture at `fixtures/rag/document_preparation_cases.json` contains 12
 python scripts/check_rag_document_preparation_parity.py \
   --base-url http://127.0.0.1:8787 \
   --strict \
-  --report docs/evidence/rag-document-preparation-parity-v4.0.0.json
+  --report docs/evidence/rag-document-preparation-parity-v4.0.1.json
 ```
 
 The report contains only redacted summaries and fingerprints. The independent `rag-document-preparation-parity` CI job uploads it even when the comparison fails. Existing Gateway, MCP, RAG, Policy, Docker, hybrid E2E, release, and security gates remain in place.

@@ -72,5 +72,5 @@ def test_ci_and_docs_wire_the_mcp_protocol_parity_contract() -> None:
 
     assert "mcp-protocol-parity:" in workflow
     assert "python scripts/check_mcp_protocol_parity.py" in workflow
-    assert "docs/evidence/mcp-protocol-parity-v4.0.0.json" in workflow
+    assert "docs/evidence/mcp-protocol-parity-v4.0.1.json" in workflow
     assert documentation.is_file()

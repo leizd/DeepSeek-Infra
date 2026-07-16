@@ -17,7 +17,7 @@ The internal stable endpoint inventory is frozen in `release/4_0_protocol_contra
 
 ## Stable release policy
 
-`v4.0.0-rc.1` was superseded by rc.2 and remains only a historical architecture preview. Stable `4.0.0` is the metadata-only promotion of the validated `4.0.0-rc.2` candidate after its observation period. The stable promotion does not change runtime behavior, defaults, ownership, or the frozen protocol contract.
+`v4.0.0-rc.1` was superseded by rc.2 and remains only a historical architecture preview. Stable `4.0.0` was promoted from the validated rc.2 candidate. Patch release `4.0.1` hardens frontend CSP, credential lifetime, uploads, offline resources, navigation semantics, and browser testing without changing runtime behavior, defaults, ownership, or the frozen protocol contract.
 
 ## Advisory work
 

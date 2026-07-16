@@ -1,5 +1,20 @@
 # 更新日志
 
+## [4.0.1] - Frontend Security and Offline Reliability
+
+### Security and reliability
+
+- Keeps the strict self-hosted CSP while moving theme bootstrap code to a same-origin module and vendoring the Inter font with its OFL license.
+- Stops persisting DeepSeek and Tavily credentials in `localStorage`; remembered values now live only for the current tab session and legacy plaintext keys are purged.
+- Adds upload timeout, explicit cancellation, abort handling, and centralized UI-state cleanup.
+- Rebuilds the Service Worker app shell with query-normalized cache keys, isolated optional assets, and stale-while-revalidate runtime caching.
+- Connects the Workspace tabs with complete ARIA and keyboard behavior, and moves credential, upload, tab, and Skill Builder responsibilities into focused ES modules.
+- Adds a real Chromium smoke gate covering CSP, first-paint theme, mock chat, upload cancellation, complete offline resources, and offline refresh.
+
+### Compatibility
+
+- Does not change the frozen 4.0 protocol, runtime ownership, Python-first defaults, Rust opt-in boundaries, or fallback contract.
+
 ## [4.0.0] - Python-first Hybrid Runtime Stable
 
 ### Stable promotion

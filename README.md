@@ -1,13 +1,13 @@
 # DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-4.0.0-blue)
+![版本](https://img.shields.io/badge/version-4.0.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.0.0 stable release:** the validated `v4.0.0-rc.2` candidate is promoted without runtime or protocol changes. Python remains the default and authoritative runtime, default Compose remains Python-only, the officially supported Rust sidecar and every Rust delegate remain opt-in, and Python fallback is guaranteed throughout 4.x. Gateway streaming, upstream HTTP/credentials/retries, MCP transport/session/tool execution, and file/OCR/embedding/SQLite/index ownership remain in Python. The 3.10 binary/BLOB path stays explicitly opt-in, and Rust-primary ranking is not enabled. `v4.0.0-rc.1` remains a historical architecture preview and rc.2 remains the validated promotion source. See [the 4.0.0 notes](docs/releases/4.0.0.md), [upgrade and rollback guidance](docs/UPGRADING_TO_4_0.md), [support policy](docs/4_0_SUPPORT_POLICY.md), and [hybrid runbook](docs/RUST_HYBRID_RUNTIME_RUNBOOK.md).
+> **4.0.1 frontend hardening release:** strict self-hosted CSP now works without inline bootstrap code or external fonts; browser credentials are session-scoped; uploads support timeout and cancellation; the offline app shell is complete and query-version tolerant; Workspace tabs are real, keyboard-accessible controls; and a Chromium smoke gate covers first paint, mock chat, upload cancellation, CSP, and offline refresh. The frozen 4.0 runtime contract is unchanged: Python remains default and authoritative, all Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.0.1 notes](docs/releases/4.0.1.md), [upgrade and rollback guidance](docs/UPGRADING_TO_4_0.md), [support policy](docs/4_0_SUPPORT_POLICY.md), and [hybrid runbook](docs/RUST_HYBRID_RUNTIME_RUNBOOK.md).
 
-**Stable promotion validation:** run `python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.0.json`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.0 --ga`. The promotion PR performs a release-package dry-run only; tag and GitHub Release publication occur separately from the exact merge commit.
+**4.0.1 validation:** run `python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.1.json`, `python scripts/smoke_release.py --offline`, `python scripts/smoke_frontend_browser.py --out docs/evidence/frontend-browser-v4.0.1.json`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.1 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
 
 ## 30 秒概览
 

@@ -1,10 +1,41 @@
 const CACHE_PREFIX = "deepseek-infra-";
-const CACHE_NAME = "deepseek-infra-v187";
-const APP_SHELL = [
-  "/",
+const CACHE_NAME = "deepseek-infra-v401";
+const CORE_SHELL = [
   "/index.html",
-  "/trace_viewer.html",
+  "/theme_boot.js",
+  "/vendor/inter/inter.css",
+  "/vendor/inter/Inter-Variable.ttf",
   "/styles.css",
+  "/vaultr-brutalist.css",
+  "/vendor/katex/katex.min.css",
+  "/vendor/katex/katex.min.js",
+  "/math_core.js",
+  "/seek_core.js",
+  "/modules/network.js",
+  "/modules/upload_controller.js",
+  "/modules/credential_store.js",
+  "/modules/workspace_tabs.js",
+  "/modules/charts.js",
+  "/modules/format.js",
+  "/modules/markdown.js",
+  "/modules/normalize.js",
+  "/modules/settings.js",
+  "/modules/panels.js",
+  "/modules/skills.js",
+  "/modules/skill_builder.js",
+  "/modules/reminder_parse.js",
+  "/modules/speech_text.js",
+  "/modules/stream.js",
+  "/modules/agent_timeline.js",
+  "/modules/chat.js",
+  "/app.js",
+  "/manifest.webmanifest",
+];
+const OPTIONAL_SHELL = [
+  "/",
+  "/trace_viewer.html",
+  "/modules/trace_waterfall.js",
+  "/modules/trace_viewer.js",
   "/gemini.css",
   "/favicon.ico",
   "/icons/apple-touch-icon.png",
@@ -17,8 +48,6 @@ const APP_SHELL = [
   "/icons/maskable-512x512.png",
   "/icons/pwa-192x192.png",
   "/icons/pwa-512x512.png",
-  "/vendor/katex/katex.min.css",
-  "/vendor/katex/katex.min.js",
   "/vendor/katex/fonts/KaTeX_AMS-Regular.woff2",
   "/vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2",
   "/vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2",
@@ -39,30 +68,16 @@ const APP_SHELL = [
   "/vendor/katex/fonts/KaTeX_Size3-Regular.woff2",
   "/vendor/katex/fonts/KaTeX_Size4-Regular.woff2",
   "/vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2",
-  "/math_core.js",
-  "/seek_core.js",
-  "/modules/network.js",
-  "/modules/charts.js",
-  "/modules/format.js",
-  "/modules/markdown.js",
-  "/modules/normalize.js",
-  "/modules/settings.js",
-  "/modules/panels.js",
-  "/modules/skills.js",
-  "/modules/reminder_parse.js",
-  "/modules/speech_text.js",
-  "/modules/stream.js",
-  "/modules/agent_timeline.js",
-  "/modules/trace_waterfall.js",
-  "/modules/trace_viewer.js",
-  "/modules/chat.js",
-  "/app.js",
-  "/manifest.webmanifest",
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
-  self.skipWaiting();
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(async (cache) => {
+      await cache.addAll(CORE_SHELL);
+      await Promise.allSettled(OPTIONAL_SHELL.map((url) => cache.add(url)));
+      await self.skipWaiting();
+    })
+  );
 });
 
 self.addEventListener("activate", (event) => {
@@ -85,12 +100,48 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (url.pathname.startsWith("/api/")) return;
-
-  event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
-  );
+  if (event.request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+  if (event.request.mode === "navigate") {
+    event.respondWith(networkFirstNavigation(event.request));
+    return;
+  }
+  event.respondWith(staleWhileRevalidate(event));
 });
+
+async function networkFirstNavigation(request) {
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(canonicalCacheKey(request), response.clone());
+    }
+    return response;
+  } catch {
+    return (await caches.match(canonicalCacheKey(request))) || (await caches.match("/index.html"));
+  }
+}
+
+async function staleWhileRevalidate(event) {
+  const cache = await caches.open(CACHE_NAME);
+  const key = canonicalCacheKey(event.request);
+  const cached = await cache.match(key);
+  const refresh = fetch(event.request).then(async (response) => {
+    if (response.ok) await cache.put(key, response.clone());
+    return response;
+  });
+  if (cached) {
+    event.waitUntil(refresh.catch(() => undefined));
+    return cached;
+  }
+  return refresh.catch(() => caches.match(key));
+}
+
+function canonicalCacheKey(request) {
+  const url = new URL(typeof request === "string" ? request : request.url, self.location.origin);
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
 
 self.addEventListener("message", (event) => {
   const data = event.data || {};

@@ -1065,6 +1065,72 @@ def check_browser_control_evidence(root: Path, version: str) -> CheckResult:
     )
 
 
+def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
+    if _version_tuple(version) < (4, 0, 1):
+        return CheckResult(
+            "frontend_browser_evidence",
+            STATUS_PASS,
+            "Frontend browser evidence not required before v4.0.1",
+            {"version": version, "requiredFrom": "4.0.1"},
+        )
+    path = root / "docs" / "evidence" / f"frontend-browser-v{version}.json"
+    if not path.is_file():
+        return CheckResult(
+            "frontend_browser_evidence",
+            STATUS_FAIL,
+            "Frontend browser evidence missing; run scripts/smoke_frontend_browser.py",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("frontend_browser_evidence", STATUS_FAIL, f"cannot parse frontend browser evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("frontend_browser", data, path)
+    if metadata_fail:
+        return metadata_fail
+    reported = str(data.get("version") or "")
+    if reported != version:
+        return CheckResult(
+            "frontend_browser_evidence",
+            STATUS_FAIL,
+            f"Frontend browser evidence version is {reported!r}, expected {version!r}",
+            {"version": reported, "expected": version},
+        )
+    if data.get("status") != "PASS" or data.get("browser") != "chromium":
+        return CheckResult(
+            "frontend_browser_evidence",
+            STATUS_FAIL,
+            "Frontend browser evidence is not a passing Chromium run",
+            {"status": data.get("status"), "browser": data.get("browser")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = (
+        "cspHeader",
+        "firstPaintTheme",
+        "workspaceTabs",
+        "mockChat",
+        "uploadCancel",
+        "completeAppShell",
+        "offlineRefresh",
+        "noCspConsoleErrors",
+    )
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult(
+            "frontend_browser_evidence",
+            STATUS_FAIL,
+            f"Frontend browser evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    return CheckResult(
+        "frontend_browser_evidence",
+        STATUS_PASS,
+        "Frontend Chromium safety and offline evidence recorded",
+        {"path": str(path), "checks": list(required)},
+    )
+
+
 def check_automation_runtime_evidence(root: Path, version: str) -> CheckResult:
     if _version_tuple(version) < (2, 9, 0):
         return CheckResult(
@@ -1863,6 +1929,7 @@ def run_preflight(root: Path, version: str, *, ga: bool = False) -> list[CheckRe
         check_context_taint_evidence(root, version),
         check_media_layer_evidence(root, version),
         check_browser_control_evidence(root, version),
+        check_frontend_browser_evidence(root, version),
         check_automation_runtime_evidence(root, version),
         check_skill_system_evidence(root, version),
         check_skill_ui_evidence(root, version),

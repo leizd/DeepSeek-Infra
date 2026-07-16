@@ -1,0 +1,2431 @@
+{
+  "ok": true,
+  "summary": {
+    "passed": 105,
+    "total": 105
+  },
+  "cases": [
+    {
+      "name": "ping_integer_id",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "83024d58cc9f3c99b620ec8208e8eb7d7643ff163e89f367fce09f9b97c2bc31",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "83024d58cc9f3c99b620ec8208e8eb7d7643ff163e89f367fce09f9b97c2bc31",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      }
+    },
+    {
+      "name": "ping_string_id",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "fcbef2ffe347c446fd07df9bea204136a36e00da98009aecaa83f336d17c80b2",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "fcbef2ffe347c446fd07df9bea204136a36e00da98009aecaa83f336d17c80b2",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      }
+    },
+    {
+      "name": "ping_null_id",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "2b0a16809fe054de8f7ed81dd1913c7b6d894833ee9f8977434a25354326cd7e",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "2b0a16809fe054de8f7ed81dd1913c7b6d894833ee9f8977434a25354326cd7e",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      }
+    },
+    {
+      "name": "ping_unicode_id",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "d48312dac889d91b812653f2e0b310803827f4e662d60dd34004c5cbaeb8ac50",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "d48312dac889d91b812653f2e0b310803827f4e662d60dd34004c5cbaeb8ac50",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      }
+    },
+    {
+      "name": "initialized_notification",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "notification"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "182748c2130edd2cb87d107d82d3a1a359180ed445ac786f61016c4f547a701e",
+        "messageType": "notification",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "182748c2130edd2cb87d107d82d3a1a359180ed445ac786f61016c4f547a701e",
+        "messageType": "notification",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "initialized_notification_with_id",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "notification"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "f1bf2af0388ab7b730d2e53bd59b3daeafaedc96f12f7d6bb8a82278bee2cd00",
+        "messageType": "notification",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "f1bf2af0388ab7b730d2e53bd59b3daeafaedc96f12f7d6bb8a82278bee2cd00",
+        "messageType": "notification",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "missing_jsonrpc",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_jsonrpc_version"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "2f25b2fddf484eee7d5234bd791ebca90638855a81a15bf5908e0d91d1948b4e",
+        "code": "invalid_jsonrpc_version",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "2f25b2fddf484eee7d5234bd791ebca90638855a81a15bf5908e0d91d1948b4e",
+        "code": "invalid_jsonrpc_version",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "null_jsonrpc",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_jsonrpc_version"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "2f25b2fddf484eee7d5234bd791ebca90638855a81a15bf5908e0d91d1948b4e",
+        "code": "invalid_jsonrpc_version",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "2f25b2fddf484eee7d5234bd791ebca90638855a81a15bf5908e0d91d1948b4e",
+        "code": "invalid_jsonrpc_version",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "wrong_jsonrpc_version",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_jsonrpc_version"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "2f25b2fddf484eee7d5234bd791ebca90638855a81a15bf5908e0d91d1948b4e",
+        "code": "invalid_jsonrpc_version",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "2f25b2fddf484eee7d5234bd791ebca90638855a81a15bf5908e0d91d1948b4e",
+        "code": "invalid_jsonrpc_version",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "numeric_jsonrpc_version",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_jsonrpc_version"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "2f25b2fddf484eee7d5234bd791ebca90638855a81a15bf5908e0d91d1948b4e",
+        "code": "invalid_jsonrpc_version",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "2f25b2fddf484eee7d5234bd791ebca90638855a81a15bf5908e0d91d1948b4e",
+        "code": "invalid_jsonrpc_version",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "missing_method",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_method"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "60b256f572af3d9b07e480e0cdc4ed71789b2e57786d6cc7cd38156e00d622ec",
+        "code": "invalid_method",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "60b256f572af3d9b07e480e0cdc4ed71789b2e57786d6cc7cd38156e00d622ec",
+        "code": "invalid_method",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "null_method",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_method"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "60b256f572af3d9b07e480e0cdc4ed71789b2e57786d6cc7cd38156e00d622ec",
+        "code": "invalid_method",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "60b256f572af3d9b07e480e0cdc4ed71789b2e57786d6cc7cd38156e00d622ec",
+        "code": "invalid_method",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "numeric_method",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_method"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "60b256f572af3d9b07e480e0cdc4ed71789b2e57786d6cc7cd38156e00d622ec",
+        "code": "invalid_method",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "60b256f572af3d9b07e480e0cdc4ed71789b2e57786d6cc7cd38156e00d622ec",
+        "code": "invalid_method",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "empty_method",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_method"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "60b256f572af3d9b07e480e0cdc4ed71789b2e57786d6cc7cd38156e00d622ec",
+        "code": "invalid_method",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "60b256f572af3d9b07e480e0cdc4ed71789b2e57786d6cc7cd38156e00d622ec",
+        "code": "invalid_method",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "whitespace_method",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_method"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "60b256f572af3d9b07e480e0cdc4ed71789b2e57786d6cc7cd38156e00d622ec",
+        "code": "invalid_method",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "60b256f572af3d9b07e480e0cdc4ed71789b2e57786d6cc7cd38156e00d622ec",
+        "code": "invalid_method",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "unknown_request_method",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "method_not_supported"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a71e726a92a51b493de24d586786e6a4efbe17e955803456481250220b8c39a1",
+        "code": "method_not_supported",
+        "jsonRpcCode": -32601
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a71e726a92a51b493de24d586786e6a4efbe17e955803456481250220b8c39a1",
+        "code": "method_not_supported",
+        "jsonRpcCode": -32601
+      }
+    },
+    {
+      "name": "unknown_notification",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "method_not_supported"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a99d5d11a7e9a11a4b49a67da6233913911e061ff5ff32070d68d56464739269",
+        "code": "method_not_supported",
+        "jsonRpcCode": -32601
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a99d5d11a7e9a11a4b49a67da6233913911e061ff5ff32070d68d56464739269",
+        "code": "method_not_supported",
+        "jsonRpcCode": -32601
+      }
+    },
+    {
+      "name": "unknown_notification_with_id",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "method_not_supported"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a99d5d11a7e9a11a4b49a67da6233913911e061ff5ff32070d68d56464739269",
+        "code": "method_not_supported",
+        "jsonRpcCode": -32601
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a99d5d11a7e9a11a4b49a67da6233913911e061ff5ff32070d68d56464739269",
+        "code": "method_not_supported",
+        "jsonRpcCode": -32601
+      }
+    },
+    {
+      "name": "top_level_array",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "b09055cfcfe07cd57cb63286848a7c30804c0734b7f887555f88d087664f93bf",
+        "code": "invalid_request",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "b09055cfcfe07cd57cb63286848a7c30804c0734b7f887555f88d087664f93bf",
+        "code": "invalid_request",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "top_level_string",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "b09055cfcfe07cd57cb63286848a7c30804c0734b7f887555f88d087664f93bf",
+        "code": "invalid_request",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "b09055cfcfe07cd57cb63286848a7c30804c0734b7f887555f88d087664f93bf",
+        "code": "invalid_request",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "top_level_number",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "b09055cfcfe07cd57cb63286848a7c30804c0734b7f887555f88d087664f93bf",
+        "code": "invalid_request",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "b09055cfcfe07cd57cb63286848a7c30804c0734b7f887555f88d087664f93bf",
+        "code": "invalid_request",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "empty_object",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_jsonrpc_version"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "1e5601954670c34442921f0e06c56f535d8a9306e1da0ea78b6556e30a3f08f3",
+        "code": "invalid_jsonrpc_version",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "1e5601954670c34442921f0e06c56f535d8a9306e1da0ea78b6556e30a3f08f3",
+        "code": "invalid_jsonrpc_version",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "malformed_json",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "parse_error"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "9f2cb0335c60701d57afa5db9e73919fe3e9817b2217ff2b34860295a0479e12",
+        "code": "parse_error",
+        "jsonRpcCode": -32700
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "9f2cb0335c60701d57afa5db9e73919fe3e9817b2217ff2b34860295a0479e12",
+        "code": "parse_error",
+        "jsonRpcCode": -32700
+      }
+    },
+    {
+      "name": "trailing_json",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "parse_error"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "9f2cb0335c60701d57afa5db9e73919fe3e9817b2217ff2b34860295a0479e12",
+        "code": "parse_error",
+        "jsonRpcCode": -32700
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "9f2cb0335c60701d57afa5db9e73919fe3e9817b2217ff2b34860295a0479e12",
+        "code": "parse_error",
+        "jsonRpcCode": -32700
+      }
+    },
+    {
+      "name": "response_result",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "response"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "0f81b3d3b631bcdbe8bebee87da5a61133fa15ec825edc886c9b99f6f5e80418",
+        "messageType": "response",
+        "routing": {
+          "owner": "python",
+          "category": "response"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "0f81b3d3b631bcdbe8bebee87da5a61133fa15ec825edc886c9b99f6f5e80418",
+        "messageType": "response",
+        "routing": {
+          "owner": "python",
+          "category": "response"
+        }
+      }
+    },
+    {
+      "name": "response_error",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "response"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "a3364126db0a5adeff5e6c80b9c3f9b1f52ac0b8bbd84b6945a666a7dc3a1b19",
+        "messageType": "response",
+        "routing": {
+          "owner": "python",
+          "category": "response"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "a3364126db0a5adeff5e6c80b9c3f9b1f52ac0b8bbd84b6945a666a7dc3a1b19",
+        "messageType": "response",
+        "routing": {
+          "owner": "python",
+          "category": "response"
+        }
+      }
+    },
+    {
+      "name": "response_result_and_error",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "64760d461bbad11feea880686dac889f66a785d84183763603894fa726c379c6",
+        "code": "invalid_request",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "64760d461bbad11feea880686dac889f66a785d84183763603894fa726c379c6",
+        "code": "invalid_request",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "response_missing_id",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request_id"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "3eb477152fef9fdd5216cc629bacb3111320ae3303056400142ebb3ad1f8cd49",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "3eb477152fef9fdd5216cc629bacb3111320ae3303056400142ebb3ad1f8cd49",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "response_invalid_error",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "64760d461bbad11feea880686dac889f66a785d84183763603894fa726c379c6",
+        "code": "invalid_request",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "64760d461bbad11feea880686dac889f66a785d84183763603894fa726c379c6",
+        "code": "invalid_request",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "response_bool_id",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request_id"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "3eb477152fef9fdd5216cc629bacb3111320ae3303056400142ebb3ad1f8cd49",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "3eb477152fef9fdd5216cc629bacb3111320ae3303056400142ebb3ad1f8cd49",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "request_bool_id",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request_id"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "c1b149c187e3e9f5684b5eaefa64271866d6e8cb1b909ae34b59c469a86dd82e",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "c1b149c187e3e9f5684b5eaefa64271866d6e8cb1b909ae34b59c469a86dd82e",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "request_float_id",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request_id"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "c1b149c187e3e9f5684b5eaefa64271866d6e8cb1b909ae34b59c469a86dd82e",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "c1b149c187e3e9f5684b5eaefa64271866d6e8cb1b909ae34b59c469a86dd82e",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "request_object_id",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request_id"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "c1b149c187e3e9f5684b5eaefa64271866d6e8cb1b909ae34b59c469a86dd82e",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "c1b149c187e3e9f5684b5eaefa64271866d6e8cb1b909ae34b59c469a86dd82e",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "request_array_id",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request_id"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "c1b149c187e3e9f5684b5eaefa64271866d6e8cb1b909ae34b59c469a86dd82e",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "c1b149c187e3e9f5684b5eaefa64271866d6e8cb1b909ae34b59c469a86dd82e",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "request_i64_max",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "62059a4a403a9b5ae960ebfdd960e5102c507313f60b7a3575a6c922e5ab227c",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "62059a4a403a9b5ae960ebfdd960e5102c507313f60b7a3575a6c922e5ab227c",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      }
+    },
+    {
+      "name": "request_i64_min",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "c16a73398e368547e683784167ec1d65bd314ced47b0a28f648e28eef16d1029",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "c16a73398e368547e683784167ec1d65bd314ced47b0a28f648e28eef16d1029",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      }
+    },
+    {
+      "name": "request_i64_overflow",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_request_id"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "c1b149c187e3e9f5684b5eaefa64271866d6e8cb1b909ae34b59c469a86dd82e",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "c1b149c187e3e9f5684b5eaefa64271866d6e8cb1b909ae34b59c469a86dd82e",
+        "code": "invalid_request_id",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "tools_list_params_missing",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "928439f5f97d251fdd545fb41f6b312c77bb87e9ddc5f45eb148bfda8eb05d85",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "928439f5f97d251fdd545fb41f6b312c77bb87e9ddc5f45eb148bfda8eb05d85",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_list_params_object",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "e40439215058a886956456ee5a35d8304b7f07008a9b17b719a877c7a0ad0e3f",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "e40439215058a886956456ee5a35d8304b7f07008a9b17b719a877c7a0ad0e3f",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_list_params_array_existing_behavior",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "e40439215058a886956456ee5a35d8304b7f07008a9b17b719a877c7a0ad0e3f",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "e40439215058a886956456ee5a35d8304b7f07008a9b17b719a877c7a0ad0e3f",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "ping_params_string_existing_behavior",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "d5e2e8c5f5d3f0d483884b8a460232498c362b6dadf577dbc977c2d67a5f5764",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "d5e2e8c5f5d3f0d483884b8a460232498c362b6dadf577dbc977c2d67a5f5764",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      }
+    },
+    {
+      "name": "initialize_params_null_existing_behavior",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "867ecaf9dbf599e1855919446684433e358799cf3d2b01270d99a33cdc4374e0",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "867ecaf9dbf599e1855919446684433e358799cf3d2b01270d99a33cdc4374e0",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "unicode_and_emoji",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "bae44362679ffef53adceb905ef8d58bcf7b054debf5962e91040a255e8ee435",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "bae44362679ffef53adceb905ef8d58bcf7b054debf5962e91040a255e8ee435",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "control"
+        }
+      }
+    },
+    {
+      "name": "excessive_nesting",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "nesting_limit_exceeded"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "2567037ce438f211ac1cf8c7b659b35862ebdc833be8c6b16abdaa9aeab59194",
+        "code": "nesting_limit_exceeded",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "2567037ce438f211ac1cf8c7b659b35862ebdc833be8c6b16abdaa9aeab59194",
+        "code": "nesting_limit_exceeded",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "oversized_request",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "request_too_large"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "3310f0b81dcbb9d663de8074eb124031f9bf835028b822054a57f8332ade9e46",
+        "code": "request_too_large",
+        "jsonRpcCode": -32600
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "3310f0b81dcbb9d663de8074eb124031f9bf835028b822054a57f8332ade9e46",
+        "code": "request_too_large",
+        "jsonRpcCode": -32600
+      }
+    },
+    {
+      "name": "initialize_minimal",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "cba3e699bab5cba2bc2e5834405ee805a4e51b926881c207facf7c3adadd7c3d",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "cba3e699bab5cba2bc2e5834405ee805a4e51b926881c207facf7c3adadd7c3d",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "initialize_empty_params",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "867ecaf9dbf599e1855919446684433e358799cf3d2b01270d99a33cdc4374e0",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "867ecaf9dbf599e1855919446684433e358799cf3d2b01270d99a33cdc4374e0",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "initialize_current_version",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "8eacae4bd6cae7947c3d6a0f60e723d11380c88ea7a356d10fcc96de36a28d8c",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "8eacae4bd6cae7947c3d6a0f60e723d11380c88ea7a356d10fcc96de36a28d8c",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "initialize_legacy_version",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "52e0249b3f79c084b1f09e5729f69747a8f4ae2cdd4d07a6e6d59b76679b21a7",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "52e0249b3f79c084b1f09e5729f69747a8f4ae2cdd4d07a6e6d59b76679b21a7",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "initialize_unknown_version",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_protocol_version"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "9a052026500f94a5253a3aca5d77ac354838d10536bcbc2c7a79708fa648cfb7",
+        "code": "invalid_protocol_version",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "9a052026500f94a5253a3aca5d77ac354838d10536bcbc2c7a79708fa648cfb7",
+        "code": "invalid_protocol_version",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "initialize_numeric_version",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_protocol_version"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "9a052026500f94a5253a3aca5d77ac354838d10536bcbc2c7a79708fa648cfb7",
+        "code": "invalid_protocol_version",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "9a052026500f94a5253a3aca5d77ac354838d10536bcbc2c7a79708fa648cfb7",
+        "code": "invalid_protocol_version",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "initialize_null_version",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_protocol_version"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "9a052026500f94a5253a3aca5d77ac354838d10536bcbc2c7a79708fa648cfb7",
+        "code": "invalid_protocol_version",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "9a052026500f94a5253a3aca5d77ac354838d10536bcbc2c7a79708fa648cfb7",
+        "code": "invalid_protocol_version",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "initialize_empty_capabilities",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "b9e980a2129e3cc3b7703ff4ac552651bde963cda84514a24fe9303ec15928df",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "b9e980a2129e3cc3b7703ff4ac552651bde963cda84514a24fe9303ec15928df",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "initialize_full_capabilities",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "422235f9eb78cf346dc7fb77854c4d7a9d496dc0ea24312591b092a5d4283dd2",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "422235f9eb78cf346dc7fb77854c4d7a9d496dc0ea24312591b092a5d4283dd2",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "initialize_array_capabilities",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_capabilities"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "bfe6075290839233236ab300202d9eb3fb2dcab6af9921b84e6a8b2a432ce0af",
+        "code": "invalid_capabilities",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "bfe6075290839233236ab300202d9eb3fb2dcab6af9921b84e6a8b2a432ce0af",
+        "code": "invalid_capabilities",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "initialize_null_capabilities",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_capabilities"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "bfe6075290839233236ab300202d9eb3fb2dcab6af9921b84e6a8b2a432ce0af",
+        "code": "invalid_capabilities",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "bfe6075290839233236ab300202d9eb3fb2dcab6af9921b84e6a8b2a432ce0af",
+        "code": "invalid_capabilities",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "initialize_client_info_name",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "a03679471ff9d63fb62a5367c57d4a9b3482590619c04288f72ecbef70ddcd91",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "a03679471ff9d63fb62a5367c57d4a9b3482590619c04288f72ecbef70ddcd91",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "initialize_client_info_full",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "69ecf18ce2f5405cf3f86983a499d356a6c42b4767b45686a515e2681fac065f",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "69ecf18ce2f5405cf3f86983a499d356a6c42b4767b45686a515e2681fac065f",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "initialize_client_info_missing_name",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_initialize_request"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "ca79b2542479c590ec51e9d98da2b95780bd4a783d04670efc1250cb4a4c406f",
+        "code": "invalid_initialize_request",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "ca79b2542479c590ec51e9d98da2b95780bd4a783d04670efc1250cb4a4c406f",
+        "code": "invalid_initialize_request",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "initialize_client_info_empty_name",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_initialize_request"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "ca79b2542479c590ec51e9d98da2b95780bd4a783d04670efc1250cb4a4c406f",
+        "code": "invalid_initialize_request",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "ca79b2542479c590ec51e9d98da2b95780bd4a783d04670efc1250cb4a4c406f",
+        "code": "invalid_initialize_request",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "initialize_client_info_array",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_initialize_request"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "ca79b2542479c590ec51e9d98da2b95780bd4a783d04670efc1250cb4a4c406f",
+        "code": "invalid_initialize_request",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "ca79b2542479c590ec51e9d98da2b95780bd4a783d04670efc1250cb4a4c406f",
+        "code": "invalid_initialize_request",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "initialize_client_info_numeric_version",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_initialize_request"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "ca79b2542479c590ec51e9d98da2b95780bd4a783d04670efc1250cb4a4c406f",
+        "code": "invalid_initialize_request",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "ca79b2542479c590ec51e9d98da2b95780bd4a783d04670efc1250cb4a4c406f",
+        "code": "invalid_initialize_request",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "initialize_unknown_extension",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "b6047f5f3da3703ad16e36c2a0e560a31b9102cd3d500ce0471be1fe8174652a",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "b6047f5f3da3703ad16e36c2a0e560a31b9102cd3d500ce0471be1fe8174652a",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "initialize_complete",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "d0c83a560550267b7007677f5a233d0bf7fa6a7c05fb99f366c5db77ef9945f6",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "d0c83a560550267b7007677f5a233d0bf7fa6a7c05fb99f366c5db77ef9945f6",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "lifecycle"
+        }
+      }
+    },
+    {
+      "name": "tools_list",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "928439f5f97d251fdd545fb41f6b312c77bb87e9ddc5f45eb148bfda8eb05d85",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "928439f5f97d251fdd545fb41f6b312c77bb87e9ddc5f45eb148bfda8eb05d85",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_list_cursor_string",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "3c7a171cb7fb652def8741ecf56644e31189b1dfc793648ca6924d435ddc8e83",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "3c7a171cb7fb652def8741ecf56644e31189b1dfc793648ca6924d435ddc8e83",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_list_cursor_null",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "0f07c808a98d14566ce52f3d216324a50510350585007f6088ca4cf8d816e6ca",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "0f07c808a98d14566ce52f3d216324a50510350585007f6088ca4cf8d816e6ca",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_list_cursor_numeric_existing_behavior",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "d870c35936955435ac6f8ed90fca0f1c8e1eb46698a215eb809f9ab80e342879",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "d870c35936955435ac6f8ed90fca0f1c8e1eb46698a215eb809f9ab80e342879",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_call_minimal",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "94e06db306967af4fa3e8cdf52644872e3c8bea2e94437146fc13ce0a34e7597",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "94e06db306967af4fa3e8cdf52644872e3c8bea2e94437146fc13ce0a34e7597",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_call_empty_arguments",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "ba8657a2584633ce8ebdfa02634a7631fce5f11563a986f83140fdbeef036c08",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "ba8657a2584633ce8ebdfa02634a7631fce5f11563a986f83140fdbeef036c08",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_call_cjk_arguments",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "292c89ddf63083d47b5b242f82a6e78a97b020304708fede6c47275b36019bed",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "292c89ddf63083d47b5b242f82a6e78a97b020304708fede6c47275b36019bed",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_call_nested_arguments",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "8e4d3ba9ae54f94634c05932ea4c7cedfef16a860d183e3e8dc4a1b2d6aa8bfe",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "8e4d3ba9ae54f94634c05932ea4c7cedfef16a860d183e3e8dc4a1b2d6aa8bfe",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_call_array_arguments",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "tools_call_string_arguments",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "tools_call_null_arguments",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "5d5704f8815c97d6d9594b51be5504dbc828ddf4d2c9735b7ffcbde10d27a919",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "5d5704f8815c97d6d9594b51be5504dbc828ddf4d2c9735b7ffcbde10d27a919",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_call_missing_name",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "tools_call_empty_name",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "tools_call_whitespace_name",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "tools_call_numeric_name",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "tools_call_trim_name",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "9379d33737145c7b987d1aa5604428736a5134a705c74fc9a96f16aabb1aa88b",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "9379d33737145c7b987d1aa5604428736a5134a705c74fc9a96f16aabb1aa88b",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_call_argument_json_types",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "61315ec0b25cff4a27b82c7e2eb15d405ba5be9b99ae2bd2a8520a3d6de71135",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "61315ec0b25cff4a27b82c7e2eb15d405ba5be9b99ae2bd2a8520a3d6de71135",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_call_meta_preserved",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "76beadca1648aac3516345760ebb9a110902e86d9e44ff6af6252d448abebc94",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "76beadca1648aac3516345760ebb9a110902e86d9e44ff6af6252d448abebc94",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_list_notification_existing_behavior",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "notification"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "077df54d12c9c727c0cec615cc9297a7baf8f989fc2f2b333a19a86834caf0fe",
+        "messageType": "notification",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "077df54d12c9c727c0cec615cc9297a7baf8f989fc2f2b333a19a86834caf0fe",
+        "messageType": "notification",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "tools_call_notification_existing_behavior",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "notification"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "c6b2992ae8bab65a1c7e34024cf05e3a4c52c6f8da001b3a1d6bc6efbb0b8993",
+        "messageType": "notification",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "c6b2992ae8bab65a1c7e34024cf05e3a4c52c6f8da001b3a1d6bc6efbb0b8993",
+        "messageType": "notification",
+        "routing": {
+          "owner": "python",
+          "category": "tools"
+        }
+      }
+    },
+    {
+      "name": "resources_list",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "f00b2345884c648a7565303531fb48b56fe8ee834c18665a03ca459fa563db60",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "f00b2345884c648a7565303531fb48b56fe8ee834c18665a03ca459fa563db60",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      }
+    },
+    {
+      "name": "resources_list_cursor",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "6089ac7f0e05685b904fd1c62c216b14de8f6908bccf8af2a48a49319c1a50d3",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "6089ac7f0e05685b904fd1c62c216b14de8f6908bccf8af2a48a49319c1a50d3",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      }
+    },
+    {
+      "name": "resources_list_array_cursor_existing_behavior",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "c1efbd18e2aa4601cfcc9a5acdab3be9059dbcfe7a58a215c7c99260f4ac0302",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "c1efbd18e2aa4601cfcc9a5acdab3be9059dbcfe7a58a215c7c99260f4ac0302",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      }
+    },
+    {
+      "name": "resources_read_runtime",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "576baadfcf1707a66624eaf17f80df4a3aca3f37b0279419a1224bc86fb52483",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "576baadfcf1707a66624eaf17f80df4a3aca3f37b0279419a1224bc86fb52483",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      }
+    },
+    {
+      "name": "resources_read_cjk_uri",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "7c0b0225afd9f0c4026202b077e9e8fe711daf252ab42bd0c39e44e071fa9385",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "7c0b0225afd9f0c4026202b077e9e8fe711daf252ab42bd0c39e44e071fa9385",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      }
+    },
+    {
+      "name": "resources_read_missing_uri",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "resources_read_empty_uri",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "resources_read_whitespace_uri",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "resources_read_numeric_uri",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "resources_read_trim_uri",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "576baadfcf1707a66624eaf17f80df4a3aca3f37b0279419a1224bc86fb52483",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "576baadfcf1707a66624eaf17f80df4a3aca3f37b0279419a1224bc86fb52483",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "resources"
+        }
+      }
+    },
+    {
+      "name": "prompts_list",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "686cbee38eec41fad9a231e534bccd4aa14064104626ad44a07c4389cb98ae84",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "686cbee38eec41fad9a231e534bccd4aa14064104626ad44a07c4389cb98ae84",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      }
+    },
+    {
+      "name": "prompts_list_cursor",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "8578abca465127e0b3ac37f17dfd3814516c4632c13def8582488ee0fdf5754c",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "8578abca465127e0b3ac37f17dfd3814516c4632c13def8582488ee0fdf5754c",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      }
+    },
+    {
+      "name": "prompts_get_minimal",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "ae319b28dd3675a194511692bace5f1d6f4bebd8492463c7b2a200c0fa486c61",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "ae319b28dd3675a194511692bace5f1d6f4bebd8492463c7b2a200c0fa486c61",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      }
+    },
+    {
+      "name": "prompts_get_empty_arguments",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "5ef9e83c6487cfa6262457978e6f66695478efb0c7467f2ac35dd2429350e76b",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "5ef9e83c6487cfa6262457978e6f66695478efb0c7467f2ac35dd2429350e76b",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      }
+    },
+    {
+      "name": "prompts_get_cjk_arguments",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "cef9a78a168be1797ed41c356f228ad0016f08e39c118def3fc8a67321fdb82a",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "cef9a78a168be1797ed41c356f228ad0016f08e39c118def3fc8a67321fdb82a",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      }
+    },
+    {
+      "name": "prompts_get_missing_name",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "prompts_get_empty_name",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "prompts_get_numeric_name",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "prompts_get_array_arguments",
+      "passed": true,
+      "expected": {
+        "ok": false,
+        "code": "invalid_params"
+      },
+      "python": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      },
+      "rust": {
+        "ok": false,
+        "fingerprint": "a1adc7df0ac1b201d35d3ae93e9d918347a44c006340d6aaefd0333d47d90d9a",
+        "code": "invalid_params",
+        "jsonRpcCode": -32602
+      }
+    },
+    {
+      "name": "prompts_get_null_arguments",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "2245d9e89789a1c310ebc331ca9e51a1157fb2ce21c9b78f3b86187bfc523842",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "2245d9e89789a1c310ebc331ca9e51a1157fb2ce21c9b78f3b86187bfc523842",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      }
+    },
+    {
+      "name": "prompts_get_trim_name",
+      "passed": true,
+      "expected": {
+        "ok": true,
+        "messageType": "request"
+      },
+      "python": {
+        "ok": true,
+        "fingerprint": "619adc2fa29a2da4f3e0e5f639c2495491510a3670e25bae72d66cae101eea26",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      },
+      "rust": {
+        "ok": true,
+        "fingerprint": "619adc2fa29a2da4f3e0e5f639c2495491510a3670e25bae72d66cae101eea26",
+        "messageType": "request",
+        "routing": {
+          "owner": "python",
+          "category": "prompts"
+        }
+      }
+    }
+  ],
+  "version": "4.0.1",
+  "commit": "2c6b1d99926c28007cfd56cb7ee71165fb443374",
+  "status": "PASS",
+  "generatedAt": "2026-07-16T07:03:15Z"
+}

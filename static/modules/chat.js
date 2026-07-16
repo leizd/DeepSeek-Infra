@@ -1,4 +1,6 @@
 import { createNetworkClient } from "./network.js";
+import { createCredentialSession } from "./credential_store.js";
+import { initWorkspaceTabs } from "./workspace_tabs.js";
 import { chartSvg, parseChartCell } from "./charts.js";
 import {
   createId,
@@ -87,6 +89,8 @@ const storageKeys = {
   historySideClosed: "deepseek-infra.history-side-closed",
 };
 
+const credentialSession = createCredentialSession(storageKeys);
+
 // ---------------------------------------------------------------------------
 // v2.1.7 branding migration: deepseek-mobile.* → deepseek-infra.*
 // One-time: copies any existing values from the old key prefix to the new one.
@@ -95,6 +99,7 @@ const storageKeys = {
 (function _migrateStoragePrefix() {
   if (localStorage.getItem("deepseek-infra._migrated")) return;
   for (const k in storageKeys) {
+    if (["apiKey", "rememberKey", "tavilyKey", "rememberTavilyKey"].includes(k)) continue;
     const oldKey = storageKeys[k].replace("deepseek-infra.", "deepseek-mobile.");
     if (oldKey !== storageKeys[k]) {
       const oldVal = localStorage.getItem(oldKey);
@@ -252,6 +257,7 @@ const state = {
   seekEditorAttachments: [],
   seekEditorUploadingAttachments: [],
   uploadActive: false,
+  activeUploadTask: null,
   attachmentConfirmEachSend: localStorage.getItem(storageKeys.attachmentConfirmEachSend) === "1",
   installPrompt: null,
   editingConversationId: null,
@@ -467,6 +473,7 @@ export function bootstrap() {
   setupSettings();
   applyAppearanceSettings();
   setupEvents();
+  initWorkspaceTabs({ onAction: handleWorkspaceAction });
   loadConfig();
   loadProjects();
   offerDraftRestore();
@@ -902,22 +909,12 @@ function setupEvents() {
   backdrop.addEventListener("click", closePanels);
 
   rememberKeyInput.addEventListener("change", () => {
-    localStorage.setItem(storageKeys.rememberKey, rememberKeyInput.checked ? "1" : "0");
-    if (rememberKeyInput.checked && apiKeyInput.value.trim()) {
-      localStorage.setItem(storageKeys.apiKey, apiKeyInput.value.trim());
-    } else {
-      localStorage.removeItem(storageKeys.apiKey);
-    }
+    credentialSession.setRetained("deepseek", rememberKeyInput.checked, apiKeyInput.value);
   });
 
   if (rememberTavilyKeyInput) {
     rememberTavilyKeyInput.addEventListener("change", () => {
-      localStorage.setItem(storageKeys.rememberTavilyKey, rememberTavilyKeyInput.checked ? "1" : "0");
-      if (rememberTavilyKeyInput.checked && tavilyKeyInput?.value.trim()) {
-        localStorage.setItem(storageKeys.tavilyKey, tavilyKeyInput.value.trim());
-      } else {
-        localStorage.removeItem(storageKeys.tavilyKey);
-      }
+      credentialSession.setRetained("tavily", rememberTavilyKeyInput.checked, tavilyKeyInput?.value || "");
     });
   }
 
@@ -945,16 +942,12 @@ function setupEvents() {
   }
 
   apiKeyInput.addEventListener("input", () => {
-    if (rememberKeyInput.checked) {
-      localStorage.setItem(storageKeys.apiKey, apiKeyInput.value.trim());
-    }
+    credentialSession.update("deepseek", apiKeyInput.value);
   });
 
   if (tavilyKeyInput) {
     tavilyKeyInput.addEventListener("input", () => {
-      if (rememberTavilyKeyInput?.checked) {
-        localStorage.setItem(storageKeys.tavilyKey, tavilyKeyInput.value.trim());
-      }
+      credentialSession.update("tavily", tavilyKeyInput.value);
       updateSearchAvailability();
     });
   }
@@ -1076,13 +1069,13 @@ function setupEvents() {
 }
 
 function setupSettings() {
-  const remember = localStorage.getItem(storageKeys.rememberKey) === "1";
+  const remember = credentialSession.isRetained("deepseek");
   rememberKeyInput.checked = remember;
-  apiKeyInput.value = remember ? localStorage.getItem(storageKeys.apiKey) || "" : "";
+  apiKeyInput.value = credentialSession.load("deepseek");
   if (rememberTavilyKeyInput && tavilyKeyInput) {
-    const rememberTavily = localStorage.getItem(storageKeys.rememberTavilyKey) === "1";
+    const rememberTavily = credentialSession.isRetained("tavily");
     rememberTavilyKeyInput.checked = rememberTavily;
-    tavilyKeyInput.value = rememberTavily ? localStorage.getItem(storageKeys.tavilyKey) || "" : "";
+    tavilyKeyInput.value = credentialSession.load("tavily");
   }
   if (memoryEnabledInput) {
     memoryEnabledInput.checked = state.memoryEnabled;
@@ -1109,6 +1102,36 @@ function setupSettings() {
   renderModelTabs();
   renderSearchToggle();
   renderAgentModeButton();
+}
+
+function handleWorkspaceAction(action) {
+  if (action === "agents") {
+    if (!state.agentMode) {
+      state.agentMode = true;
+      localStorage.setItem(storageKeys.agentMode, "1");
+      renderAgentModeButton();
+    }
+    promptInput.focus();
+    showToast("多 Agent 模式已开启");
+    return;
+  }
+  if (action === "memory") {
+    viewMemories();
+    return;
+  }
+  if (action === "skills") {
+    skillButton?.click();
+    return;
+  }
+  if (action === "trace") {
+    const message = [...state.messages].reverse().find((item) => item.role === "assistant") || state.messages.at(-1);
+    if (!message) {
+      showToast("发送一条消息后即可查看运行诊断");
+      promptInput.focus();
+      return;
+    }
+    openDiagnosticsPanel(message);
+  }
 }
 
 function onGlobalKeydown(event) {
@@ -5534,6 +5557,33 @@ function shouldRequestSearch() {
   return state.hasSearch && state.searchMode !== "off";
 }
 
+async function runUploadTask(task) {
+  state.activeUploadTask = task;
+  setUploadActive(true);
+  try {
+    return await task.promise;
+  } finally {
+    if (state.activeUploadTask === task) {
+      state.activeUploadTask = null;
+      setUploadActive(false);
+    }
+  }
+}
+
+function setUploadActive(active) {
+  state.uploadActive = Boolean(active);
+  attachmentButton.setAttribute("aria-disabled", String(state.uploadActive));
+  updateSeekReferenceControls();
+  renderAttachmentList();
+  renderSeekReferenceList();
+}
+
+function cancelActiveUpload() {
+  if (!state.activeUploadTask?.active) return;
+  state.activeUploadTask.cancel();
+  announceStatus("上传已取消", { alert: true });
+}
+
 function seekReferenceSlotsRemaining() {
   return Math.max(
     0,
@@ -5594,13 +5644,10 @@ async function onSeekReferenceInputChange(event) {
       return;
     }
 
-    state.uploadActive = true;
-    attachmentButton.setAttribute("aria-disabled", "true");
-    updateSeekReferenceControls();
     showToast(`正在上传 ${filesToUpload.length} 个 Seek 参考文件`);
 
     try {
-      const result = await uploadFilesWithProgress(
+      const task = uploadFilesWithProgress(
         filesToUpload,
         (progress) => {
           updateSeekReferenceUploadItems(uploadItems, { status: "uploading", progress });
@@ -5610,6 +5657,7 @@ async function onSeekReferenceInputChange(event) {
         },
         { ocrEnabled: true, apiKey: apiKeyInput.value.trim() }
       );
+      const result = await runUploadTask(task);
       applySeekReferenceUploadResult(uploadItems, result);
     } catch (error) {
       for (const item of uploadItems) {
@@ -5617,10 +5665,6 @@ async function onSeekReferenceInputChange(event) {
           markSeekReferenceUploadFailed(item.id, friendlyUploadError(error.message || "文件识别失败"));
         }
       }
-    } finally {
-      state.uploadActive = false;
-      attachmentButton.setAttribute("aria-disabled", String(state.uploadActive));
-      updateSeekReferenceControls();
     }
   } finally {
     seekReferenceInput.value = "";
@@ -5762,6 +5806,15 @@ function renderSeekReferenceItem(attachment, { uploading = false } = {}) {
 
   const actions = document.createElement("div");
   actions.className = "attachment-actions";
+  if (uploading && attachment.status !== "error" && state.uploadActive) {
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "attachment-remove";
+    cancel.dataset.cancelUpload = "1";
+    cancel.setAttribute("aria-label", "取消当前上传");
+    cancel.textContent = "取消";
+    actions.append(cancel);
+  }
   if (uploading && isOcrRetryError(attachment)) {
     const retry = document.createElement("button");
     retry.type = "button";
@@ -5800,12 +5853,10 @@ async function retrySeekReferenceWithOcr(uploadId) {
   item.status = "uploading";
   item.progress = 0;
   item.error = "";
-  state.uploadActive = true;
-  attachmentButton.setAttribute("aria-disabled", "true");
   renderSeekReferenceList();
 
   try {
-    const result = await uploadFilesWithProgress(
+    const task = uploadFilesWithProgress(
       [item.file],
       (progress) => {
         updateSeekReferenceUploadItems([item], { status: "uploading", progress });
@@ -5815,17 +5866,20 @@ async function retrySeekReferenceWithOcr(uploadId) {
       },
       { ocrEnabled: true, apiKey: apiKeyInput.value.trim() }
     );
+    const result = await runUploadTask(task);
     applySeekReferenceUploadResult([item], result);
   } catch (error) {
     markSeekReferenceUploadFailed(item.id, friendlyUploadError(error.message || "OCR 失败"));
-  } finally {
-    state.uploadActive = false;
-    attachmentButton.setAttribute("aria-disabled", String(state.uploadActive));
-    updateSeekReferenceControls();
   }
 }
 
 function onSeekReferenceListClick(event) {
+  const cancelButton = event.target.closest("button[data-cancel-upload]");
+  if (cancelButton) {
+    cancelActiveUpload();
+    return;
+  }
+
   const retryButton = event.target.closest("button[data-retry-seek-reference-ocr]");
   if (retryButton) {
     retrySeekReferenceWithOcr(retryButton.dataset.retrySeekReferenceOcr || "");
@@ -5957,13 +6011,10 @@ async function uploadPendingAttachmentFiles(files, { emptyMessage = "没有选�
     return;
   }
 
-  state.uploadActive = true;
-  attachmentButton.setAttribute("aria-disabled", "true");
-  updateSeekReferenceControls();
   showToast(`正在上传 ${filesToUpload.length} 个文件`);
 
   try {
-    const result = await uploadFilesWithProgress(
+    const task = uploadFilesWithProgress(
       filesToUpload,
       (progress) => {
         updateUploadItems(uploadItems, { status: "uploading", progress });
@@ -5973,6 +6024,7 @@ async function uploadPendingAttachmentFiles(files, { emptyMessage = "没有选�
       },
       { ocrEnabled: true, apiKey: apiKeyInput.value.trim() }
     );
+    const result = await runUploadTask(task);
     applyBatchUploadResult(uploadItems, result);
   } catch (error) {
     for (const item of uploadItems) {
@@ -5980,10 +6032,6 @@ async function uploadPendingAttachmentFiles(files, { emptyMessage = "没有选�
         markUploadFailed(item.id, friendlyUploadError(error.message || "文件识别失败"));
       }
     }
-  } finally {
-    state.uploadActive = false;
-    attachmentButton.setAttribute("aria-disabled", String(state.uploadActive));
-    updateSeekReferenceControls();
   }
 }
 
@@ -6251,6 +6299,15 @@ function renderAttachmentList() {
 
     const actions = document.createElement("div");
     actions.className = "attachment-actions";
+    if (attachment.status !== "error" && state.uploadActive) {
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "attachment-remove";
+      cancel.dataset.cancelUpload = "1";
+      cancel.setAttribute("aria-label", "取消当前上传");
+      cancel.textContent = "取消";
+      actions.append(cancel);
+    }
     if (isOcrRetryError(attachment)) {
       const retry = document.createElement("button");
       retry.type = "button";
@@ -6376,14 +6433,11 @@ async function retryAttachmentWithOcr(uploadId) {
   item.status = "uploading";
   item.progress = 0;
   item.error = "";
-  state.uploadActive = true;
-  attachmentButton.setAttribute("aria-disabled", "true");
-  updateSeekReferenceControls();
   renderAttachmentList();
   resizeComposer();
 
   try {
-    const result = await uploadFilesWithProgress(
+    const task = uploadFilesWithProgress(
       [item.file],
       (progress) => {
         updateUploadItems([item], { status: "uploading", progress });
@@ -6393,17 +6447,20 @@ async function retryAttachmentWithOcr(uploadId) {
       },
       { ocrEnabled: true, apiKey: apiKeyInput.value.trim() }
     );
+    const result = await runUploadTask(task);
     applyBatchUploadResult([item], result);
   } catch (error) {
     markUploadFailed(item.id, friendlyUploadError(error.message || "OCR 失败"));
-  } finally {
-    state.uploadActive = false;
-    attachmentButton.setAttribute("aria-disabled", String(state.uploadActive));
-    updateSeekReferenceControls();
   }
 }
 
 function onAttachmentListClick(event) {
+  const cancelButton = event.target.closest("button[data-cancel-upload]");
+  if (cancelButton) {
+    cancelActiveUpload();
+    return;
+  }
+
   const retryButton = event.target.closest("button[data-retry-ocr-attachment]");
   if (retryButton) {
     retryAttachmentWithOcr(retryButton.dataset.retryOcrAttachment || "");
@@ -7930,8 +7987,8 @@ async function clearLocalBrowserData() {
   }
   for (const key of Object.values(storageKeys)) {
     localStorage.removeItem(key);
+    sessionStorage.removeItem(key);
   }
-  sessionStorage.removeItem(storageKeys.authToken);
   showToast("本地数据已清空，正在刷新。");
   window.location.replace("/");
 }

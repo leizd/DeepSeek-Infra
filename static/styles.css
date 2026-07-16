@@ -3411,6 +3411,14 @@ body.history-side-open {
   --history-side-width: min(300px, 30vw);
 }
 
+@media (min-width: 1100px) {
+  body.history-side-open .empty-state {
+    width: min(940px, calc(100vw - var(--history-side-width) - 48px));
+    margin-left: calc(var(--history-side-width) + 24px);
+    margin-right: 24px;
+  }
+}
+
 body.activity-side-open {
   --activity-side-width: min(430px, 92vw);
 }

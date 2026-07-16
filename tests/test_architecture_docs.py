@@ -1,6 +1,6 @@
 """Documentation and architecture asset tests.
 
-These tests guard the v4.0.0 stable hybrid-architecture contract:
+These tests guard the v4.0.1 stable hybrid-architecture contract:
 - architecture.svg is valid XML and contains the expected version/ownership labels.
 - README.md references the SVG and links to ARCHITECTURE.md.
 - ARCHITECTURE.md contains a Mermaid diagram and the required ownership statements.
@@ -23,7 +23,7 @@ def _read(path: Path) -> str:
 @pytest.mark.parametrize(
     ("substring", "should_contain"),
     [
-        ("v4.0.0", True),
+        ("v4.0.1", True),
         ("v2.1.6", False),
         ("Optional Rust Sidecar", True),
         ("Python Default Runtime", True),

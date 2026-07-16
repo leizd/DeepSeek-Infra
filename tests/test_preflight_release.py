@@ -1724,3 +1724,45 @@ def test_preflight_passes_on_semantic_cache_onnx_evidence_complete(tmp_path: Pat
     root = _skeleton(tmp_path, "2.6.3")
     result = next(r for r in preflight.run_preflight(root, "2.6.3") if r.name == "semantic_cache_onnx_evidence")
     assert result.status == "pass"
+
+
+def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    evidence = tmp_path / "docs" / "evidence"
+    evidence.mkdir(parents=True)
+    path = evidence / "frontend-browser-v4.0.1.json"
+    checks = {
+        "cspHeader": "PASS",
+        "firstPaintTheme": "PASS",
+        "workspaceTabs": "PASS",
+        "mockChat": "PASS",
+        "uploadCancel": "PASS",
+        "completeAppShell": "PASS",
+        "offlineRefresh": "PASS",
+        "noCspConsoleErrors": "PASS",
+    }
+    path.write_text(
+        json.dumps(
+            {
+                "version": "4.0.1",
+                "commit": "abc1234",
+                "generatedAt": "2026-07-16T00:00:00Z",
+                "environment": {"os": "Linux", "python": "3.12", "ci": True},
+                "status": "PASS",
+                "browser": "chromium",
+                "checks": checks,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.1")
+    assert result.status == "pass"
+
+    checks["offlineRefresh"] = "FAIL"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["checks"] = checks
+    path.write_text(json.dumps(data), encoding="utf-8")
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.1")
+    assert result.status == "fail"
+    assert "offlineRefresh" in result.detail

@@ -30,6 +30,7 @@ def _contains_all(text: str, needles: tuple[str, ...]) -> bool:
 def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     index = _read("static/index.html")
     skills = _read("static/modules/skills.js")
+    skill_builder = _read("static/modules/skill_builder.js")
     styles = _read("static/styles.css")
     routes = _read("deepseek_infra/web/routes/skills.py")
     ci = _read(".github/workflows/ci.yml")
@@ -38,7 +39,7 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     details: dict[str, Any] = {}
 
     checks["builderOpen"] = "PASS" if _contains_all(
-        index + skills,
+        index + skills + skill_builder,
         (
             'id="skillNewButton"',
             'id="skillBuilderHost"',
@@ -59,7 +60,7 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     ) else "FAIL"
 
     checks["visualInputSchemaEdit"] = "PASS" if _contains_all(
-        index + skills,
+        index + skills + skill_builder,
         (
             "skillBuilderFieldList",
             "addBuilderField",
@@ -138,11 +139,19 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     checks["skillBuilderAssets"] = "PASS" if all((REPO_ROOT / path).is_file() for path in asset_paths) else "FAIL"
     details["skillBuilderAssets"] = list(asset_paths)
 
-    syntax = subprocess.run(["node", "--check", "static/modules/skills.js"], cwd=REPO_ROOT, capture_output=True, text=True)
-    checks["skillBuilderJsSyntax"] = "PASS" if syntax.returncode == 0 else "FAIL"
-    details["skillBuilderJsSyntax"] = {"returnCode": syntax.returncode, "stderr": syntax.stderr.strip()}
+    syntax_results = [
+        subprocess.run(["node", "--check", path], cwd=REPO_ROOT, capture_output=True, text=True)
+        for path in ("static/modules/skill_builder.js", "static/modules/skills.js")
+    ]
+    checks["skillBuilderJsSyntax"] = "PASS" if all(result.returncode == 0 for result in syntax_results) else "FAIL"
+    details["skillBuilderJsSyntax"] = [
+        {"returnCode": result.returncode, "stderr": result.stderr.strip()} for result in syntax_results
+    ]
 
-    checks["ciSyntaxGate"] = "PASS" if "node --check static/modules/skills.js" in ci else "FAIL"
+    checks["ciSyntaxGate"] = "PASS" if _contains_all(
+        ci,
+        ("node --check static/modules/skill_builder.js", "node --check static/modules/skills.js"),
+    ) else "FAIL"
 
     details["builderEntrypoints"] = ["#skillNewButton", "#skillBuilderHost", "#skillBuilderForm", "#skillBuilderToolPicker"]
     details["toolOptions"] = [
