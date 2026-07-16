@@ -1,6 +1,6 @@
 # Hybrid Rust Runtime Runbook
 
-This runbook covers day-to-day operation of the stable DeepSeek Infra 4.0.1 Python-first hybrid runtime: how to start or containerize the optional Rust sidecar, verify the complete hybrid system, enable individual delegates, understand fallback behavior, troubleshoot failures, and roll back to the Python-only runtime.
+This runbook covers day-to-day operation of the stable DeepSeek Infra 4.0.2 Python-first hybrid runtime: how to start or containerize the optional Rust sidecar, verify the complete hybrid system, enable individual delegates, understand fallback behavior, troubleshoot failures, and roll back to the Python-only runtime.
 
 > **Scope**: every Rust component and the binary vector path remain explicit opt-ins. Python is default and authoritative, default Compose is Python-only, and fallback is supported throughout 4.x. Python owns SQLite, uploads, paths, parsing, OCR, embeddings, indexes, retrieval, authorization, upstream HTTP/credentials/retries, Gateway streaming, MCP transports/sessions/tools, tracing, and business state. Binary failures fall directly to Python without retrying the JSON Rust endpoint. `v4.0.0-rc.1` is superseded and historical; Rust-primary is not enabled. See [docs/ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -479,7 +479,7 @@ With the independent `DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1`, the upload path parses
 python scripts/check_rag_document_preparation_parity.py \
   --base-url http://127.0.0.1:8787 \
   --strict \
-  --report docs/evidence/rag-document-preparation-parity-v4.0.1.json
+  --report docs/evidence/rag-document-preparation-parity-v4.0.2.json
 ```
 
 Alternatively, verify end-to-end RAG via the evaluation harness:

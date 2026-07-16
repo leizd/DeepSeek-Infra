@@ -46,6 +46,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 ".idea",
                 "target",
                 "pytest-cache-files-demo",
+                ".tmp-pytest-release-gate",
             ]
             for directory in excluded_dirs:
                 path = workspace / directory

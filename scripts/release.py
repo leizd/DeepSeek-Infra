@@ -60,9 +60,11 @@ EXCLUDED_DIRS = {
 NEVER_PACKAGE_DIRS = {
     ".git",
     ".claude",
+    "node_modules",
 }
 EXCLUDED_DIR_PATTERNS = {
     "pytest-cache-files-*",
+    ".tmp-pytest-*",
     "audit-cleanup-*",
     ".test-*",
 }
@@ -228,6 +230,18 @@ def build_release_zip(root: Path, output_dir: Path, version: str) -> Path:
     return archive_path
 
 
+def build_frontend(root: Path) -> bool:
+    frontend_package = root / "frontend" / "package.json"
+    if not frontend_package.is_file():
+        return True
+    script = root / "scripts" / "build_frontend.py"
+    if not script.is_file():
+        print("frontend build failed: scripts/build_frontend.py is missing", file=sys.stderr)
+        return False
+    result = subprocess.run([sys.executable, str(script), "--root", str(root)], cwd=root, check=False)
+    return result.returncode == 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Project root to package.")
@@ -235,6 +249,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--version", default="", help="Release version. Defaults to settings.app_version.")
     parser.add_argument("--clean-workspace", action="store_true", help="Remove excluded runtime files before packaging.")
     parser.add_argument("--dry-run", action="store_true", help="Enumerate the files that would be packaged without writing the zip, checksum or manifest.")
+    parser.add_argument("--skip-frontend-build", action="store_true", help="Package an already-built static/ui tree without rebuilding it.")
     parser.add_argument("--coverage-gate", default="95%", help="Coverage gate stamped into the manifest.")
     parser.add_argument("--eval-report", default="evals/reports/latest.json", help="Eval report path stamped into the manifest.")
     parser.add_argument("--agent-report", default="evals/reports/agent-latest.json", help="Agent eval report path stamped into the manifest.")
@@ -260,12 +275,16 @@ def main() -> int:
         version = settings.app_version
     root = args.root.resolve()
     if args.dry_run:
+        if not args.skip_frontend_build and not build_frontend(root):
+            return 1
         files = collect_files(root)
         archive_name = f"deepseek-infra-{version}.zip"
         print(f"dry-run: would package {len(files)} files into {args.output_dir / archive_name}")
         return 0
     if args.clean_workspace:
         clean_workspace(root)
+    if not args.skip_frontend_build and not build_frontend(root):
+        return 1
     archive_path = build_release_zip(root, args.output_dir, version)
     if not args.no_manifest:
         sha256 = release_manifest.sha256_of(archive_path)

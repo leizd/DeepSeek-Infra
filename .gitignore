@@ -48,6 +48,8 @@ evals/reports/*
 /artifacts/
 .mypy_cache/
 .npm-cache/
+node_modules/
+static/ui/
 .pytest_cache/
 .ruff_cache/
 .search-cache/
@@ -71,6 +73,7 @@ android/app/build/
 android/build/
 server*.log
 pytest-cache-files-*/
+.tmp-pytest-*/
 audit-cleanup-*/
 .test-*/
 tests/tmp/

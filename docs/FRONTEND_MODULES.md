@@ -1,8 +1,10 @@
 # 前端模块索引
 
-适用版本：v4.0.1；模块拆分自 v0.8.2 起。
+适用版本：v4.0.2；模块拆分自 v0.8.2 起。
 
-`static/modules/chat.js` 仍然是聊天主流程和渲染入口，但第一轮拆分已经把不依赖 `state`、不直接操作 DOM 的纯函数移出。后续新增工具函数时，优先放到下面对应模块，避免继续扩大 `chat.js`。
+`static/modules/chat.js` 仍然是默认 `/` 的聊天主流程和渲染入口。4.0.2 新增的 `frontend/` 是完全隔离的 React/TypeScript/Vite 迁移树，生产构建输出到 `static/ui/` 并由 `/ui/` 提供；两套前端不得共同控制同一棵 DOM。
+
+v4.0.2 完成 React 迁移的第一刀：`frontend/src/domain/chat/types.ts` 固定真实流事件联合类型，`streamReducer.ts` 用纯不可变转换处理 reasoning/search/agent/content/done/error/interrupted，`domain/conversation/types.ts` 固定会话对象，`api/httpClient.ts` 统一鉴权注入和 API 错误，`api/chatStream.ts` 提供跨 chunk 的 NDJSON async iterator。CI 独立执行 typecheck、Vitest 和 Vite build，FastAPI 为 `/ui/` 提供 SPA 回退，Docker、PyInstaller 与 release ZIP 都要求先生成 `static/ui/`。本版本不迁移 Composer、服务端状态或高级面板，也不引入新的全局 React store。
 
 v0.9.1 在设置面板新增思考强度选择，`chat.js` 负责持久化 `deepseek-infra.reasoning-effort` 并在聊天、继续生成、重新生成和编辑后重发时把 `reasoningEffort` 传给后端。
 v0.9.2 的上传和交互升级仍集中在 `chat.js`：拖拽、粘贴、文件选择、Seek 参考文件和项目文档上传共用 `validatedUploadFiles()` 预检；图片缩略图、lightbox、toast action、确认弹窗、快捷键面板、live region、焦点陷阱和软键盘安全区也是 DOM/状态耦合逻辑，暂不拆到纯函数模块。`normalizeStoredAttachment()` 负责保留本地图片预览字段。

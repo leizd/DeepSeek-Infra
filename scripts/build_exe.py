@@ -31,6 +31,7 @@ APP_NAME = "DeepSeekInfra"
 LEGACY_NAME = "DeepSeekMobile"
 STATIC_DIR = PROJECT_ROOT / "static"
 ICON_PATH = PROJECT_ROOT / "static" / "icons" / "favicon.ico"
+FRONTEND_BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_frontend.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,6 +76,10 @@ def main() -> int:
         spec = PROJECT_ROOT / f"{args.name}.spec"
         if spec.exists():
             spec.unlink()
+
+    frontend_result = subprocess.call([sys.executable, str(FRONTEND_BUILD_SCRIPT)], cwd=str(PROJECT_ROOT))
+    if frontend_result != 0:
+        return frontend_result
 
     cmd = [
         sys.executable,

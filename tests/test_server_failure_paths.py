@@ -205,6 +205,23 @@ def test_resolve_static_file_rejects_path_escape(tmp_path: Path) -> None:
         assert server.resolve_static_file("../secret") is None
 
 
+def test_resolve_static_file_serves_isolated_react_spa(tmp_path: Path) -> None:
+    react = tmp_path / "ui"
+    assets = react / "assets"
+    assets.mkdir(parents=True)
+    index = react / "index.html"
+    script = assets / "app.js"
+    index.write_text("<main>react</main>", encoding="utf-8")
+    script.write_text("export {};", encoding="utf-8")
+
+    with patch.object(server, "STATIC_DIR", tmp_path):
+        assert server.resolve_static_file("/ui/") == index
+        assert server.resolve_static_file("/ui/projects/example") == index
+        assert server.resolve_static_file("/ui/assets/app.js") == script
+        assert server.resolve_static_file("/ui/assets/missing.js") is None
+        assert server.resolve_static_file("/") == tmp_path / "index.html"
+
+
 def _route_endpoint(app: Any, path: str, method: str) -> Any:
     return next(route.endpoint for route in app.routes if getattr(route, "path", "") == path and method in getattr(route, "methods", set()))
 

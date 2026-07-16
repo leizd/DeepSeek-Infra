@@ -803,7 +803,8 @@ def open_bind_socket(host: str, port: int) -> socket.socket:
 
 
 def handle_auth_token_redirect(request: Request) -> Response | None:
-    if request.url.path != "/" or not settings.auth.enabled:
+    request_path = request.url.path
+    if request_path not in {"/", "/ui", "/ui/"} or not settings.auth.enabled:
         return None
     token = request.query_params.get("token", "")
     if not token:
@@ -811,7 +812,7 @@ def handle_auth_token_redirect(request: Request) -> Response | None:
     if not secrets.compare_digest(token, settings.auth.token):
         return json_response(AppError("Auth required", code=ErrorCode.UNAUTHORIZED, status=401).to_response(), status=401)
     if truthy(request.query_params.get("desktop", "")):
-        index_path = STATIC_DIR / "index.html"
+        index_path = frontend_index_path("react" if request_path.startswith("/ui") else "legacy")
         if not index_path.exists():
             return json_response({"error": "Not found", "code": ErrorCode.NOT_FOUND.value}, status=404)
         return FileResponse(
@@ -819,7 +820,8 @@ def handle_auth_token_redirect(request: Request) -> Response | None:
             media_type="text/html; charset=utf-8",
             headers={"Set-Cookie": auth_cookie_header(settings.auth.token)},
         )
-    return RedirectResponse("/", status_code=302, headers={"Set-Cookie": auth_cookie_header(settings.auth.token)})
+    redirect_path = "/ui/" if request_path.startswith("/ui") else "/"
+    return RedirectResponse(redirect_path, status_code=302, headers={"Set-Cookie": auth_cookie_header(settings.auth.token)})
 
 
 async def read_multipart_files(request: Request) -> tuple[list[dict[str, Any]], bool, str]:
@@ -1030,13 +1032,22 @@ def conversation_search(payload: dict[str, Any]) -> dict[str, Any]:
     return {"results": results[:50]}
 
 
+def frontend_index_path(frontend: str = "legacy") -> Path:
+    if frontend == "react":
+        return STATIC_DIR / "ui" / "index.html"
+    return STATIC_DIR / "index.html"
+
+
 def resolve_static_file(raw_path: str) -> Path | None:
     path = unquote(raw_path)
     if path == "/" or path == "":
-        return STATIC_DIR / "index.html"
+        return frontend_index_path()
     parts = [part for part in path.split("/") if part and part not in {".", ".."}]
     if not parts:
-        return STATIC_DIR / "index.html"
+        return frontend_index_path()
+    if parts == ["ui"]:
+        react_index = frontend_index_path("react")
+        return react_index if react_index.is_file() else None
     static_root = STATIC_DIR.resolve()
     candidate = (static_root / Path(*parts)).resolve()
     try:
@@ -1044,6 +1055,9 @@ def resolve_static_file(raw_path: str) -> Path | None:
     except ValueError:
         return None
     if not candidate.is_file():
+        if parts[0] == "ui" and not Path(parts[-1]).suffix:
+            react_index = frontend_index_path("react")
+            return react_index if react_index.is_file() else None
         return None
     return candidate
 

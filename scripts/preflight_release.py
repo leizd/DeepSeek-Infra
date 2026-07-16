@@ -1111,6 +1111,7 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
         "workspaceTabs",
         "mockChat",
         "uploadCancel",
+        "reactPreview",
         "completeAppShell",
         "offlineRefresh",
         "noCspConsoleErrors",

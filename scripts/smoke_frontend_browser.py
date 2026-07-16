@@ -1,4 +1,4 @@
-"""Run the real-browser 4.0.1 frontend safety and offline smoke gate."""
+"""Run the real-browser frontend safety, React preview, and offline smoke gate."""
 
 from __future__ import annotations
 
@@ -159,6 +159,28 @@ async def run_browser(base_url: str) -> dict[str, str]:
             raise AssertionError("upload state did not recover after cancellation")
         checks["uploadCancel"] = "PASS"
 
+        react_page = await context.new_page()
+        react_page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
+        react_page.on("pageerror", lambda error: page_errors.append(str(error)))
+        react_response = await react_page.goto(f"{base_url}ui/", wait_until="networkidle")
+        if react_response is None or react_response.status != 200:
+            raise AssertionError("React preview did not return HTTP 200")
+        if await react_page.locator("#migration-title").text_content() != "React 迁移基础已经独立运行":
+            raise AssertionError("React preview did not mount its isolated application root")
+        if await react_page.locator("#promptInput").count() != 0:
+            raise AssertionError("legacy and React frontends unexpectedly share one DOM tree")
+        asset_urls = await react_page.locator('script[type="module"][src]').evaluate_all(
+            "elements => elements.map((element) => element.src)"
+        )
+        if not asset_urls or any(not url.startswith(f"{base_url}ui/assets/") for url in asset_urls):
+            raise AssertionError(f"React assets are not served from the isolated /ui/ base: {asset_urls}")
+        deep_link_response = await react_page.goto(f"{base_url}ui/projects/example", wait_until="networkidle")
+        if deep_link_response is None or deep_link_response.status != 200:
+            raise AssertionError("React SPA deep-link fallback did not return HTTP 200")
+        await react_page.locator("#migration-title").wait_for()
+        checks["reactPreview"] = "PASS"
+        await react_page.close()
+
         await page.evaluate(
             """async () => {
               await navigator.serviceWorker.ready;
@@ -172,7 +194,7 @@ async def run_browser(base_url: str) -> dict[str, str]:
         )
         cached_paths = await page.evaluate(
             """async () => {
-              const cache = await caches.open('deepseek-infra-v401');
+              const cache = await caches.open('deepseek-infra-v402');
               return (await cache.keys()).map((request) => new URL(request.url).pathname);
             }"""
         )

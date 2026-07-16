@@ -1,13 +1,13 @@
 # DeepSeek Infra
 
-![版本](https://img.shields.io/badge/version-4.0.1-blue)
+![版本](https://img.shields.io/badge/version-4.0.2-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.0.1 frontend hardening release:** strict self-hosted CSP now works without inline bootstrap code or external fonts; browser credentials are session-scoped; uploads support timeout and cancellation; the offline app shell is complete and query-version tolerant; Workspace tabs are real, keyboard-accessible controls; and a Chromium smoke gate covers first paint, mock chat, upload cancellation, CSP, and offline refresh. The frozen 4.0 runtime contract is unchanged: Python remains default and authoritative, all Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.0.1 notes](docs/releases/4.0.1.md), [upgrade and rollback guidance](docs/UPGRADING_TO_4_0.md), [support policy](docs/4_0_SUPPORT_POLICY.md), and [hybrid runbook](docs/RUST_HYBRID_RUNTIME_RUNBOOK.md).
+> **4.0.2 React migration foundation:** the stable vanilla-JS workspace remains at `/`, while an isolated React 19 + TypeScript + Vite preview is built to `/ui/`. The first migration slice defines typed chat/conversation contracts, a pure stream reducer, normalized HTTP errors, and an async NDJSON stream iterator before any complex UI is moved. CI, Docker, PyInstaller, release archives, SPA routing, and Chromium smoke now treat that build as a required artifact. The frozen 4.0 runtime contract is unchanged: Python remains default and authoritative, all Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.0.2 notes](docs/releases/4.0.2.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade and rollback guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
-**4.0.1 validation:** run `python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.1.json`, `python scripts/smoke_release.py --offline`, `python scripts/smoke_frontend_browser.py --out docs/evidence/frontend-browser-v4.0.1.json`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.1 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
+**4.0.2 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python scripts/smoke_release.py --offline`, `python scripts/smoke_frontend_browser.py --out docs/evidence/frontend-browser-v4.0.2.json`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.2 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
 
 ## 30 秒概览
 

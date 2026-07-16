@@ -1,0 +1,172 @@
+:root {
+  color: #e5e7eb;
+  background: #080b12;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 12% 8%, rgb(34 211 238 / 14%), transparent 32rem),
+    radial-gradient(circle at 88% 22%, rgb(129 140 248 / 15%), transparent 34rem),
+    #080b12;
+}
+
+button,
+a {
+  font: inherit;
+}
+
+.migration-shell {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 72px 0;
+}
+
+.hero,
+.foundation {
+  border: 1px solid rgb(148 163 184 / 20%);
+  border-radius: 28px;
+  background: rgb(15 23 42 / 72%);
+  box-shadow: 0 32px 100px rgb(0 0 0 / 28%);
+  backdrop-filter: blur(18px);
+}
+
+.hero {
+  padding: clamp(32px, 7vw, 72px);
+}
+
+.eyebrow {
+  color: #67e8f9;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  max-width: 780px;
+  margin: 18px 0 22px;
+  color: #f8fafc;
+  font-size: clamp(2.5rem, 7vw, 5.7rem);
+  line-height: 0.98;
+  letter-spacing: -0.06em;
+}
+
+.hero > p {
+  max-width: 720px;
+  color: #bac5d6;
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  line-height: 1.75;
+}
+
+code {
+  color: #a5f3fc;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  margin-top: 32px;
+}
+
+.primary-action {
+  padding: 12px 18px;
+  border-radius: 12px;
+  color: #082f49;
+  background: #67e8f9;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.primary-action:focus-visible {
+  outline: 3px solid #f8fafc;
+  outline-offset: 4px;
+}
+
+.status-pill {
+  padding: 10px 14px;
+  border: 1px solid rgb(148 163 184 / 24%);
+  border-radius: 999px;
+  color: #cbd5e1;
+  background: rgb(15 23 42 / 74%);
+}
+
+.boundary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin: 20px 0;
+}
+
+.boundary-card {
+  min-height: 150px;
+  padding: 24px;
+  border: 1px solid rgb(148 163 184 / 18%);
+  border-radius: 20px;
+  background: rgb(15 23 42 / 54%);
+}
+
+.boundary-card code {
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+
+.boundary-card p {
+  margin: 18px 0 0;
+  color: #94a3b8;
+  line-height: 1.55;
+}
+
+.foundation {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 48px;
+  padding: clamp(28px, 5vw, 52px);
+}
+
+.foundation h2 {
+  margin: 14px 0 0;
+  font-size: clamp(1.8rem, 4vw, 3rem);
+  letter-spacing: -0.04em;
+}
+
+.foundation ol {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding-left: 28px;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.foundation li::marker {
+  color: #67e8f9;
+  font-weight: 800;
+}
+
+@media (max-width: 800px) {
+  .migration-shell {
+    padding: 24px 0;
+  }
+
+  .boundary-grid,
+  .foundation {
+    grid-template-columns: 1fr;
+  }
+}

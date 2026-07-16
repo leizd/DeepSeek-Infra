@@ -1,5 +1,18 @@
 # 更新日志
 
+## [4.0.2] - React Migration Foundation
+
+### Frontend architecture
+
+- Adds an isolated React 19 + TypeScript + Vite application at `/ui/` while keeping the stable vanilla-JS workspace at `/`.
+- Introduces typed chat/conversation contracts, a pure immutable stream reducer, normalized HTTP errors, and an async NDJSON stream iterator before migrating complex UI.
+- Adds FastAPI SPA fallback for `/ui/` and deep links without allowing React and legacy code to control the same DOM tree.
+- Integrates deterministic frontend typecheck, Vitest, production build, npm audit, Docker multi-stage build, PyInstaller/release packaging, and Chromium preview smoke into release gates.
+
+### Compatibility
+
+- Keeps the legacy frontend as the default, preserves the 4.0 Python-first runtime and frozen protocol, and does not migrate server state, Composer, advanced panels, or PWA ownership yet.
+
 ## [4.0.1] - Frontend Security and Offline Reliability
 
 ### Security and reliability

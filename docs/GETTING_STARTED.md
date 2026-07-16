@@ -1,24 +1,26 @@
 # Getting Started
 
-Applicable version: v4.0.1.
+Applicable version: v4.0.2.
 
-DeepSeek Infra 4.0.1 is the frontend-security and offline-reliability patch for the stable, local-first, Python-first hybrid Personal AI Runtime. The first screen is the Workspace: projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports all stay in the local runtime root unless you explicitly call an upstream API. The optional Rust sidecar is supported but not required, and the frozen 4.0 runtime contract is unchanged.
+DeepSeek Infra 4.0.2 starts the React migration without replacing the stable workspace. The default `/` screen remains the complete legacy UI; `/ui/` exposes the isolated React migration preview. Projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports stay in the local runtime root unless you explicitly call an upstream API. The optional Rust sidecar is supported but not required, and the frozen 4.0 runtime contract is unchanged.
 
 ## Local Run
 
 ```bash
 python -m pip install -r requirements.txt -r requirements-dev.txt
+npm ci --prefix frontend
+npm run build --prefix frontend
 python app.py
 ```
 
-Open `http://127.0.0.1:8000`, create a project, then save useful chat snippets, media snapshots or generated artifacts into that project.
+Open `http://127.0.0.1:8000` for the stable workspace. Open `http://127.0.0.1:8000/ui/` only to inspect the isolated migration preview.
 
 ## Release Smoke
 
 ```bash
 python scripts/doctor.py --offline
-python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.1.json
-python scripts/preflight_release.py --version 4.0.1 --ga
+python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.2.json
+python scripts/preflight_release.py --version 4.0.2 --ga
 ```
 
 The GA smoke creates an isolated project chain: Project -> Skill -> Media -> Browser Snapshot -> Saved Item -> Artifact -> Automation -> Export.

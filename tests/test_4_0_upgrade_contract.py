@@ -81,7 +81,7 @@ def test_upgrade_from_310_needs_no_forced_migration_and_keeps_python_default(
     assert {"embedding", "embedding_blob", "embedding_dimensions", "embedding_format"} <= columns
     assert rust_config.load_rust_flags() == rust_config.RustComponentFlags(False, False, False, False)
     assert rust_config.rust_rag_vector_transport() == "json"
-    assert server.create_app().version == "4.0.1"
+    assert server.create_app().version == "4.0.2"
 
     monkeypatch.setattr(
         semantic_cache,
@@ -122,12 +122,12 @@ def test_upgrade_from_rc1_preserves_legacy_flags_sqlite_rows_and_user_directory(
     assert sentinel.read_text(encoding="utf-8") == "preserve"
 
 
-def test_400_to_401_is_frontend_only_and_preserves_the_frozen_contract() -> None:
+def test_401_to_402_adds_only_the_isolated_frontend_foundation() -> None:
     runtime = json.loads((ROOT / "release/4_0_runtime_decision.json").read_text(encoding="utf-8"))
     protocol = json.loads((ROOT / "release/4_0_protocol_contract.json").read_text(encoding="utf-8"))
-    notes = (ROOT / "docs/releases/4.0.1.md").read_text(encoding="utf-8")
+    notes = (ROOT / "docs/releases/4.0.2.md").read_text(encoding="utf-8")
 
-    assert server.create_app().version == "4.0.1"
+    assert server.create_app().version == "4.0.2"
     assert runtime["target_version"] == "4.0.0"
     assert runtime["architecture"] == "python_first_hybrid"
     assert runtime["default_sidecar_deployment"] is False
@@ -135,10 +135,12 @@ def test_400_to_401_is_frontend_only_and_preserves_the_frozen_contract() -> None
     assert protocol["version"] == "4.0.0"
     assert protocol["binary_protocol"]["request_magic"] == "DSVRNK01"
     assert protocol["binary_protocol"]["response_magic"] == "DSVRSP01"
-    assert "frontend-security and offline-reliability patch" in notes
+    assert "separate React 19 + TypeScript + Vite source tree" in notes
+    assert "`/` does not switch to React" in notes
+    assert "Python-first ownership" in notes
 
 
-def test_401_rows_remain_readable_by_310_style_rollback(tmp_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_402_rows_remain_readable_by_310_style_rollback(tmp_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     _all_rust_flags_off(monkeypatch)
     semantic_cache.SEMANTIC_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(semantic_cache.SEMANTIC_CACHE_DB) as connection:

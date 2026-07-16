@@ -9,23 +9,26 @@ Executable config (CI, `pyproject.toml`, requirements) is the source of truth; t
   - HTTP server: `deepseek_infra/app.py:main` → `deepseek_infra/web/server.py:create_server`
   - `launch.py` flags: `--gui` (Tk launcher), `--mobile` (mobile launcher), `--server` (headless), `--app` (desktop WebView, default)
 - All backend code is the single package `deepseek_infra/`. The 9 infra modules live under `deepseek_infra/infra/` (`gateway`, `agent_runtime`, `rag`, `tool_runtime`, `observability`, `mcp`, `evaluation`, `data`).
-- Frontend is hand-written vanilla JS in `static/` — **no bundler, no build step, no `package.json`**. CI only syntax-checks specific JS files with `node --check` (see below). Do not introduce a JS build pipeline.
+- Frontend migration is intentionally dual-track: `/` still uses the hand-written vanilla JS app in `static/`, while the isolated React + TypeScript + Vite app lives in `frontend/` and is served from `/ui/`. `npm run build --prefix frontend` writes generated assets to the gitignored `static/ui/`; never hand-edit that output or let React and legacy JS own the same DOM tree.
 - `android/` is an Android Studio project wrapping the Python backend into an APK; `scripts/build_exe.py` builds a single-file PyInstaller exe.
 
 ## Dev verification (run in this order — matches CI)
 
 ```bash
 python -m pip install -r requirements.txt -r requirements-dev.txt
+npm ci --prefix frontend
+npm run check --prefix frontend
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-# JS syntax (only these files are checked):
+# Legacy JS syntax (only these files are checked):
 node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_core.js static/app.js \
       static/modules/network.js static/modules/markdown.js static/modules/settings.js static/modules/panels.js \
       static/modules/chat.js static/modules/trace_waterfall.js static/modules/trace_viewer.js
 ```
 
 - Python 3.10+ (CI matrix: 3.10 / 3.11 / 3.12). `mypy` targets `python_version="3.10"`.
+- Node 22.12+ is required for the Vite frontend; CI uses Node 24 and the committed `frontend/package-lock.json`.
 - No API key or network needed for tests or evals — everything is offline.
 - Single test: `pytest tests/test_mcp.py::test_name`. Run fast subset: `pytest -m "not integration and not slow"`.
 
