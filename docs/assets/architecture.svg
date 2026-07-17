@@ -1,4 +1,4 @@
-<svg viewBox="0 0 1200 960" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<svg viewBox="0 0 1200 850" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
@@ -9,8 +9,8 @@
   </defs>
 
   <!-- self-contained light card: readable on both GitHub light & dark themes -->
-  <rect x="0" y="0" width="1200" height="960" rx="18" fill="#ffffff"/>
-  <rect x="0.5" y="0.5" width="1199" height="959" rx="18" fill="none" stroke="#dbe3ee"/>
+  <rect x="0" y="0" width="1200" height="850" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="1199" height="849" rx="18" fill="none" stroke="#dbe3ee"/>
 
   <!-- header -->
   <text x="48" y="58" font-size="26" font-weight="700" fill="#0f172a">DeepSeek Infra</text>
@@ -20,20 +20,22 @@
 
   <!-- clients layer -->
   <rect x="48" y="110" width="1104" height="74" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
-  <text x="64" y="128" font-size="10" letter-spacing="2" fill="#94a3b8">CLIENTS</text>
-  <g font-size="13" fill="#334155" text-anchor="middle">
-    <rect x="64" y="136" width="166" height="34" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="147" y="158">Web UI / PWA</text>
-    <rect x="242" y="136" width="166" height="34" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="325" y="158">Desktop WebView</text>
-    <rect x="420" y="136" width="166" height="34" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="503" y="158">Android APK</text>
-    <rect x="598" y="136" width="178" height="34" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-    <text x="687" y="158" fill="#1d4ed8">OpenAI SDK → /v1</text>
-    <rect x="788" y="136" width="172" height="34" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-    <text x="874" y="158" fill="#1d4ed8">MCP Client → /mcp</text>
-    <rect x="972" y="136" width="164" height="34" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-    <text x="1054" y="158" fill="#1d4ed8">A2A Peer → /a2a</text>
+  <text x="64" y="128" font-size="10" letter-spacing="2" fill="#94a3b8">CLIENTS · DUAL-TRACK FRONTEND</text>
+  <g font-size="11.5" fill="#334155" text-anchor="middle">
+    <rect x="64" y="136" width="142" height="34" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="135" y="158">Legacy UI · /</text>
+    <rect x="216" y="136" width="150" height="34" rx="8" fill="#dbeafe" stroke="#60a5fa"/>
+    <text x="291" y="158" fill="#1d4ed8" font-weight="600">React Chat · /ui/</text>
+    <rect x="376" y="136" width="146" height="34" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="449" y="158">Desktop WebView</text>
+    <rect x="532" y="136" width="128" height="34" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="596" y="158">Android APK</text>
+    <rect x="670" y="136" width="150" height="34" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="745" y="158" fill="#1d4ed8">OpenAI SDK → /v1</text>
+    <rect x="830" y="136" width="144" height="34" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="902" y="158" fill="#1d4ed8">MCP Client → /mcp</text>
+    <rect x="984" y="136" width="152" height="34" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="1060" y="158" fill="#1d4ed8">A2A Peer → /a2a</text>
   </g>
 
   <!-- arrow clients -> runtime -->
@@ -57,13 +59,14 @@
     <text x="420" y="332">• embeddings</text>
     <text x="420" y="354">• persistence and indexes</text>
     <text x="420" y="376">• observability and business state</text>
+    <text x="420" y="398">• legacy + React frontend serving</text>
   </g>
 
   <!-- optional rust sidecar -->
   <rect x="832" y="210" width="320" height="300" rx="12" fill="#fff7ed" stroke="#f59e0b" stroke-dasharray="6 4"/>
   <rect x="832" y="210" width="6" height="300" rx="3" fill="#f59e0b"/>
   <text x="856" y="240" font-size="17" font-weight="700" fill="#92400e">Optional Rust Sidecar</text>
-  <text x="856" y="262" font-size="11" fill="#d97706">Disabled by default — opt-in delegates with Python fallback</text>
+  <text x="856" y="262" font-size="10" fill="#d97706">Default off · opt-in delegates · Python fallback</text>
   <g font-size="11" fill="#78350f">
     <text x="856" y="292" font-weight="600">Gateway Request Preparation</text>
     <text x="856" y="306" fill="#b45309">POST /gateway/request/prepare</text>
@@ -80,12 +83,13 @@
   </g>
 
   <!-- delegation arrows -->
-  <line x1="808" y1="330" x2="832" y2="330" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#rust-arrow)"/>
-  <text x="820" y="322" font-size="10" fill="#d97706" text-anchor="middle">optional deterministic delegation</text>
-  <line x1="832" y1="390" x2="808" y2="390" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#rust-arrow)"/>
-  <text x="820" y="382" font-size="10" fill="#d97706" text-anchor="middle">validated result</text>
-  <text x="820" y="406" font-size="10" fill="#d97706" text-anchor="middle">timeout / unavailable / malformed / divergent</text>
-  <text x="820" y="420" font-size="10" fill="#d97706" text-anchor="middle">→ Python fallback</text>
+  <text x="796" y="316" font-size="10" fill="#b45309" text-anchor="end">opt-in deterministic delegate</text>
+  <line x1="780" y1="324" x2="832" y2="324" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#rust-arrow)"/>
+  <line x1="832" y1="386" x2="780" y2="386" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#rust-arrow)"/>
+  <text x="796" y="378" font-size="10" fill="#b45309" text-anchor="end">validated result</text>
+  <rect x="570" y="418" width="226" height="40" rx="7" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="783" y="433" font-size="9.5" fill="#b45309" text-anchor="end">timeout · unavailable · malformed · divergent</text>
+  <text x="783" y="449" font-size="10" fill="#92400e" text-anchor="end" font-weight="600">Python fallback remains authoritative</text>
 
   <!-- arrow runtime -> data -->
   <line x1="428" y1="510" x2="428" y2="536" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
@@ -128,5 +132,5 @@
   </g>
 
   <!-- footer -->
-  <text x="600" y="820" font-size="10" fill="#94a3b8" text-anchor="middle">4.0.3: frontend-hardened Python-first hybrid · Rust-primary disabled</text>
+  <text x="600" y="820" font-size="10" fill="#94a3b8" text-anchor="middle">4.0.3: React chat isolated at /ui/ · legacy / remains default · Rust-primary disabled</text>
 </svg>
