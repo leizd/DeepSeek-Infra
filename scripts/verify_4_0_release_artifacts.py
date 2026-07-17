@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the 4.0.2 ZIP, checksum, manifest, provenance, and privacy contract."""
+"""Verify the 4.0.3 ZIP, checksum, manifest, provenance, and privacy contract."""
 
 from __future__ import annotations
 

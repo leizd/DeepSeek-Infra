@@ -1730,7 +1730,7 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
     preflight = _load_preflight()
     evidence = tmp_path / "docs" / "evidence"
     evidence.mkdir(parents=True)
-    path = evidence / "frontend-browser-v4.0.2.json"
+    path = evidence / "frontend-browser-v4.0.3.json"
     checks = {
         "cspHeader": "PASS",
         "firstPaintTheme": "PASS",
@@ -1738,6 +1738,9 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
         "mockChat": "PASS",
         "uploadCancel": "PASS",
         "reactPreview": "PASS",
+        "reactChatVerticalSlice": "PASS",
+        "reactHistoryPersistence": "PASS",
+        "reactStopGeneration": "PASS",
         "completeAppShell": "PASS",
         "offlineRefresh": "PASS",
         "noCspConsoleErrors": "PASS",
@@ -1745,7 +1748,7 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
     path.write_text(
         json.dumps(
             {
-                "version": "4.0.2",
+                "version": "4.0.3",
                 "commit": "abc1234",
                 "generatedAt": "2026-07-16T00:00:00Z",
                 "environment": {"os": "Linux", "python": "3.12", "ci": True},
@@ -1757,13 +1760,13 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
         encoding="utf-8",
     )
 
-    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.2")
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.3")
     assert result.status == "pass"
 
-    checks["offlineRefresh"] = "FAIL"
+    checks["reactStopGeneration"] = "FAIL"
     data = json.loads(path.read_text(encoding="utf-8"))
     data["checks"] = checks
     path.write_text(json.dumps(data), encoding="utf-8")
-    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.2")
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.3")
     assert result.status == "fail"
-    assert "offlineRefresh" in result.detail
+    assert "reactStopGeneration" in result.detail

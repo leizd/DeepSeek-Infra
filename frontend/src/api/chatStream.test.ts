@@ -56,4 +56,23 @@ describe("chat stream protocol", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(events.map((event) => event.type)).toEqual(["content", "done"]);
   });
+
+  it("cancels an interrupted reader and always releases its lock", async () => {
+    const abortError = new DOMException("stopped", "AbortError");
+    const reader = {
+      read: vi.fn(async () => { throw abortError; }),
+      cancel: vi.fn(async () => undefined),
+      releaseLock: vi.fn(),
+    };
+    const response = { body: { getReader: () => reader } } as unknown as Response;
+    const consume = async () => {
+      for await (const _event of readChatStream(response)) {
+        // No event is expected before interruption.
+      }
+    };
+
+    await expect(consume()).rejects.toBe(abortError);
+    expect(reader.cancel).toHaveBeenCalledOnce();
+    expect(reader.releaseLock).toHaveBeenCalledOnce();
+  });
 });

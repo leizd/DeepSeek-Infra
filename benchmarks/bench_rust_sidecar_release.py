@@ -47,7 +47,7 @@ from deepseek_infra.infra.rag.document_preparation import (  # noqa: E402
 from deepseek_infra.infra.rust_core import policy_client, rag_client, transport, vector_binary  # noqa: E402
 from deepseek_infra.infra.tool_runtime.tool_policy import evaluate_path_safety, evaluate_url_safety  # noqa: E402
 
-VERSION = "4.0.2"
+VERSION = "4.0.3"
 SCHEMA_VERSION = "rust-sidecar-performance.v3"
 BUILD_COMMAND = [
     "cargo",
@@ -1705,7 +1705,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--artifact-out", type=Path, default=ROOT / "artifacts/rust-sidecar-performance.json")
-    parser.add_argument("--evidence-out", type=Path, default=ROOT / "docs/evidence/rust-sidecar-performance-v4.0.2.json")
+    parser.add_argument("--evidence-out", type=Path, default=ROOT / "docs/evidence/rust-sidecar-performance-v4.0.3.json")
     args = parser.parse_args(argv)
     try:
         report = run_benchmark(

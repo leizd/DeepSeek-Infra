@@ -117,24 +117,31 @@ export async function* readChatStream(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let completed = false;
 
-  while (true) {
-    await waitUntilResumed();
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
+  try {
+    while (true) {
       await waitUntilResumed();
-      const event = parseStreamEventLine(line, logger);
-      if (event) yield event;
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        await waitUntilResumed();
+        const event = parseStreamEventLine(line, logger);
+        if (event) yield event;
+      }
     }
-  }
 
-  buffer += decoder.decode();
-  const finalEvent = parseStreamEventLine(buffer, logger);
-  if (finalEvent) yield finalEvent;
+    buffer += decoder.decode();
+    const finalEvent = parseStreamEventLine(buffer, logger);
+    if (finalEvent) yield finalEvent;
+    completed = true;
+  } finally {
+    if (!completed) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 export async function* streamChat(

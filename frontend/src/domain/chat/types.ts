@@ -41,8 +41,10 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   reasoning: string;
+  createdAt: number;
   phase: StreamPhase;
   streaming: boolean;
+  interrupted?: boolean;
   attachments: readonly Attachment[];
   timeline: readonly TimelineStep[];
   systemNotes: readonly string[];
@@ -59,9 +61,15 @@ export interface ChatMessage {
 
 export interface ChatRequestPayload extends JsonRecord {
   messages: readonly JsonRecord[];
+  apiKey?: string;
+  tavilyApiKey?: string;
   model?: string;
   stream?: boolean;
   agentMode?: boolean;
+  thinkingEnabled?: boolean;
+  searchEnabled?: boolean;
+  searchMode?: "off" | "auto" | "on";
+  systemPrompt?: string;
 }
 
 interface StreamEventBase {

@@ -19,6 +19,7 @@ compatibility; pass ``--name DeepSeekMobile`` to produce it explicitly.)
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import os
 import shutil
 import subprocess
@@ -32,6 +33,25 @@ LEGACY_NAME = "DeepSeekMobile"
 STATIC_DIR = PROJECT_ROOT / "static"
 ICON_PATH = PROJECT_ROOT / "static" / "icons" / "favicon.ico"
 FRONTEND_BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_frontend.py"
+
+
+def validate_multipart_build_environment() -> None:
+    """Reject the known ``multipart`` / ``python-multipart`` namespace collision."""
+    try:
+        importlib.metadata.distribution("python-multipart")
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    else:
+        raise RuntimeError(
+            "python-multipart conflicts with the required multipart package. "
+            "Uninstall python-multipart and reinstall requirements.txt before building."
+        )
+
+    import multipart
+
+    module_path = Path(str(getattr(multipart, "__file__", ""))).resolve()
+    if module_path.name.lower() != "multipart.py":
+        raise RuntimeError(f"expected the multipart>=1.3 module, found incompatible import at {module_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +88,12 @@ def main() -> int:
         )
         return 1
 
+    try:
+        validate_multipart_build_environment()
+    except RuntimeError as exc:
+        print(f"Cannot build executable: {exc}", file=sys.stderr)
+        return 1
+
     if args.clean:
         for sub in ("build", "dist"):
             path = PROJECT_ROOT / sub
@@ -94,6 +120,7 @@ def main() -> int:
         "--collect-all=webview",
         "--collect-all=pythonnet",
         "--collect-all=clr_loader",
+        "--hidden-import=multipart",
     ]
     if args.onefile:
         cmd.append("--onefile")

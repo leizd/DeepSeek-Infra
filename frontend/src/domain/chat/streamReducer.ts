@@ -13,6 +13,7 @@ export function createAssistantMessage(id: string): ChatMessage {
     role: "assistant",
     content: "",
     reasoning: "",
+    createdAt: Date.now(),
     phase: "idle",
     streaming: true,
     attachments: [],
@@ -140,7 +141,7 @@ export function applyStreamEvent(message: ChatMessage, event: ChatStreamEvent): 
         model: event.model ?? message.model,
         diagnostics: event.diagnostics ?? message.diagnostics,
         agentRunId: event.runId ?? message.agentRunId,
-        agentRunStatus: "done",
+        agentRunStatus: message.agentRunId ? "done" : message.agentRunStatus,
         error: undefined,
         errorCode: undefined,
       };

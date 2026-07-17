@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "deepseek-infra-";
-const CACHE_NAME = "deepseek-infra-v402";
+const CACHE_NAME = "deepseek-infra-v403";
 const CORE_SHELL = [
   "/index.html",
   "/theme_boot.js",

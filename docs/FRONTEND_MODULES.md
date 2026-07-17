@@ -1,10 +1,12 @@
 # 前端模块索引
 
-适用版本：v4.0.2；模块拆分自 v0.8.2 起。
+适用版本：v4.0.3；模块拆分自 v0.8.2 起。
 
-`static/modules/chat.js` 仍然是默认 `/` 的聊天主流程和渲染入口。4.0.2 新增的 `frontend/` 是完全隔离的 React/TypeScript/Vite 迁移树，生产构建输出到 `static/ui/` 并由 `/ui/` 提供；两套前端不得共同控制同一棵 DOM。
+`static/modules/chat.js` 仍然是默认 `/` 的聊天主流程和渲染入口。`frontend/` 是完全隔离的 React/TypeScript/Vite 迁移树，生产构建输出到 `static/ui/` 并由 `/ui/` 提供；两套前端不得共同控制同一棵 DOM。
 
-v4.0.2 完成 React 迁移的第一刀：`frontend/src/domain/chat/types.ts` 固定真实流事件联合类型，`streamReducer.ts` 用纯不可变转换处理 reasoning/search/agent/content/done/error/interrupted，`domain/conversation/types.ts` 固定会话对象，`api/httpClient.ts` 统一鉴权注入和 API 错误，`api/chatStream.ts` 提供跨 chunk 的 NDJSON async iterator。CI 独立执行 typecheck、Vitest 和 Vite build，FastAPI 为 `/ui/` 提供 SPA 回退，Docker、PyInstaller 与 release ZIP 都要求先生成 `static/ui/`。本版本不迁移 Composer、服务端状态或高级面板，也不引入新的全局 React store。
+v4.0.3 完成普通聊天纵切片：`ChatContext` 组装纯 `chatReducer`、会话迁移/持久化、typed request builder 与 NDJSON reader；`SettingsContext` 只把非敏感偏好写入 `localStorage`，DeepSeek/Tavily Key 始终留在 React 内存；`OverlayContext` 独立管理抽屉。`features/chat` 负责消息与 Markdown 流式呈现，`features/composer` 负责输入、模型/思考/联网选项和停止生成，`features/history` 负责新建、恢复和删除本地会话。未完成的 reader 会在 `finally` 中 cancel 并 release lock，普通 `done` 不会伪造 Agent 完成状态。
+
+本版本仍不迁移附件、Agent/activity、Projects、Skills、Memory、高级设置、Speech、Diagnostics 或 PWA 所有权，也不删除 `chat.js`。默认入口继续是 `/`；只有等全部能力和异常路径达到对等，才会切换默认入口并移除旧模块。
 
 v0.9.1 在设置面板新增思考强度选择，`chat.js` 负责持久化 `deepseek-infra.reasoning-effort` 并在聊天、继续生成、重新生成和编辑后重发时把 `reasoningEffort` 传给后端。
 v0.9.2 的上传和交互升级仍集中在 `chat.js`：拖拽、粘贴、文件选择、Seek 参考文件和项目文档上传共用 `validatedUploadFiles()` 预检；图片缩略图、lightbox、toast action、确认弹窗、快捷键面板、live region、焦点陷阱和软键盘安全区也是 DOM/状态耦合逻辑，暂不拆到纯函数模块。`normalizeStoredAttachment()` 负责保留本地图片预览字段。
@@ -58,4 +60,4 @@ v4.0.1 完成第二轮高风险边界拆分：`theme_boot.js` 在首屏以同源
 
 ## 测试约定
 
-纯函数模块由 `tests/test_frontend_utils.py` 通过 Node 动态导入测试，静态跨文件契约由 `tests/test_frontend_runtime_contract.py` 固定。`scripts/smoke_frontend_browser.py` 使用真实 Chromium 覆盖 CSP、首屏主题、Workspace tabs、模拟消息、上传取消和离线刷新。以后新增纯函数时，优先补低成本单测；涉及浏览器安全策略、Service Worker、焦点或 DOM 事件时，同时扩展浏览器 smoke。
+纯函数模块由 `tests/test_frontend_utils.py` 通过 Node 动态导入测试，React reducer/API/迁移逻辑由 Vitest 覆盖，静态跨文件契约由 `tests/test_frontend_runtime_contract.py` 与 `tests/test_react_frontend_contract.py` 固定。`scripts/smoke_frontend_browser.py` 使用真实 Chromium 覆盖 CSP、首屏主题、Workspace tabs、旧版模拟消息/上传取消、React 发送/历史恢复/停止生成/深链接和离线刷新。以后新增纯函数时，优先补低成本单测；涉及浏览器安全策略、Service Worker、焦点或 DOM 事件时，同时扩展浏览器 smoke。

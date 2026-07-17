@@ -1,5 +1,21 @@
 # 更新日志
 
+## [4.0.3] - React Chat Vertical Slice
+
+### Frontend migration
+
+- Moves normal chat on `/ui/` into React with typed request construction, NDJSON streaming, Markdown rendering, model/thinking/search controls, best-effort titles, and an explicit stop action.
+- Adds reducer-driven conversation state, migration from compatible legacy browser history, local conversation persistence, history restore/delete/new-chat flows, and separate Chat/Settings/Overlay contexts.
+- Keeps DeepSeek and Tavily credentials in React memory only; neither key is written to `localStorage`, conversation persistence, or release evidence.
+- Hardens interrupted streams by cancelling unfinished readers, always releasing reader locks, and only marking real Agent runs complete.
+- Expands the Chromium gate to send a React message, reload persisted history, stop an in-flight request, and verify `/ui/` deep links.
+- Fixes PyInstaller builds by explicitly including the required `multipart` module and refusing build environments polluted by the incompatible `python-multipart` distribution.
+
+### Compatibility
+
+- Keeps `/` as the default legacy workspace and does not delete `static/modules/chat.js`; attachments, Agent mode, Projects, Skills, Memory, advanced settings, speech, activity, diagnostics, and PWA ownership remain later migration slices.
+- Preserves the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates, and Python fallback.
+
 ## [4.0.2] - React Migration Foundation
 
 ### Frontend architecture

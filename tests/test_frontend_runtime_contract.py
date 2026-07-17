@@ -66,7 +66,7 @@ def test_service_worker_precaches_complete_versioned_app_shell() -> None:
         '"/modules/skill_builder.js"',
     ):
         assert asset in worker
-    assert 'const CACHE_NAME = "deepseek-infra-v402"' in worker
+    assert 'const CACHE_NAME = "deepseek-infra-v403"' in worker
     assert "await cache.addAll(CORE_SHELL)" in worker
     assert "Promise.allSettled" in worker
     assert "staleWhileRevalidate" in worker

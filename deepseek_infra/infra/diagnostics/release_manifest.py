@@ -85,7 +85,7 @@ DEFAULT_EVIDENCE_PATHS = (
     f"evals/reports/browser-v{APP_VERSION}.json",
     f"evals/reports/automation-v{APP_VERSION}.json",
     "docs/EVIDENCE_INDEX.md",
-    "docs/releases/4.0.2.md",
+    "docs/releases/4.0.3.md",
     "docs/releases/4.0.1.md",
     "docs/UPGRADING_TO_4_0.md",
     "docs/4_0_SUPPORT_POLICY.md",

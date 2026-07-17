@@ -1,4 +1,4 @@
-"""Run the real-browser frontend safety, React preview, and offline smoke gate."""
+"""Run the real-browser frontend safety, React chat, and offline smoke gate."""
 
 from __future__ import annotations
 
@@ -74,7 +74,26 @@ async def run_browser(base_url: str) -> dict[str, str]:
         page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
         page.on("pageerror", lambda error: page_errors.append(str(error)))
 
+        react_stop_release = asyncio.Event()
+        react_stop_requested = asyncio.Event()
+
         async def mock_chat(route: Any) -> None:
+            try:
+                request_data = route.request.post_data_json
+            except (json.JSONDecodeError, TypeError):
+                request_data = {}
+            messages = request_data.get("messages", []) if isinstance(request_data, dict) else []
+            if any(
+                isinstance(message, dict) and message.get("content") == "Stop the React stream"
+                for message in messages
+            ):
+                react_stop_requested.set()
+                await react_stop_release.wait()
+                try:
+                    await route.abort("aborted")
+                except PlaywrightError:
+                    pass
+                return
             body = '\n'.join(
                 [
                     json.dumps({"type": "content", "text": "Browser smoke reply"}),
@@ -99,11 +118,25 @@ async def run_browser(base_url: str) -> dict[str, str]:
                     {
                         "hasServerKey": True,
                         "hasSearch": False,
+                        "version": VERSION,
+                        "defaultModel": "deepseek-v4-pro",
+                        "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+                        "modelRoutes": {
+                            "deepseek-v4-pro": "deepseek-chat",
+                            "deepseek-v4-flash": "deepseek-chat",
+                        },
                         "computerUrl": base_url,
                         "phoneUrl": base_url,
                         "uploadLimits": {"fileMaxBytes": 200_000_000, "requestMaxBytes": 220_000_000, "maxFiles": 8},
                     }
                 ),
+            )
+
+        async def mock_title(route: Any) -> None:
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"title": "React smoke chat"}),
             )
 
         upload_release = asyncio.Event()
@@ -115,9 +148,10 @@ async def run_browser(base_url: str) -> dict[str, str]:
             except PlaywrightError:
                 pass
 
-        await page.route("**/api/config", mock_config)
-        await page.route("**/api/chat", mock_chat)
-        await page.route("**/api/file-text", hold_upload)
+        await context.route("**/api/config", mock_config)
+        await context.route("**/api/chat", mock_chat)
+        await context.route("**/api/title", mock_title)
+        await context.route("**/api/file-text", hold_upload)
         response = await page.goto(base_url, wait_until="domcontentloaded")
         if response is None or response.status != 200:
             raise AssertionError("home page did not return HTTP 200")
@@ -164,9 +198,8 @@ async def run_browser(base_url: str) -> dict[str, str]:
         react_page.on("pageerror", lambda error: page_errors.append(str(error)))
         react_response = await react_page.goto(f"{base_url}ui/", wait_until="networkidle")
         if react_response is None or react_response.status != 200:
-            raise AssertionError("React preview did not return HTTP 200")
-        if await react_page.locator("#migration-title").text_content() != "React 迁移基础已经独立运行":
-            raise AssertionError("React preview did not mount its isolated application root")
+            raise AssertionError("React chat did not return HTTP 200")
+        await react_page.locator("#reactPromptInput").wait_for()
         if await react_page.locator("#promptInput").count() != 0:
             raise AssertionError("legacy and React frontends unexpectedly share one DOM tree")
         asset_urls = await react_page.locator('script[type="module"][src]').evaluate_all(
@@ -174,10 +207,33 @@ async def run_browser(base_url: str) -> dict[str, str]:
         )
         if not asset_urls or any(not url.startswith(f"{base_url}ui/assets/") for url in asset_urls):
             raise AssertionError(f"React assets are not served from the isolated /ui/ base: {asset_urls}")
+
+        await react_page.locator("#reactPromptInput").fill("Run the React browser smoke")
+        await react_page.locator("button.send-button").click()
+        await react_page.get_by_text("Browser smoke reply", exact=True).last.wait_for(timeout=10_000)
+        checks["reactChatVerticalSlice"] = "PASS"
+        await react_page.wait_for_function(
+            """() => (localStorage.getItem('deepseek-infra.conversations') || '').includes('Browser smoke reply')"""
+        )
+        await react_page.reload(wait_until="networkidle")
+        await react_page.get_by_text("Browser smoke reply", exact=True).last.wait_for(timeout=10_000)
+        checks["reactHistoryPersistence"] = "PASS"
+
+        await react_page.locator("button.new-chat-button").click()
+        await react_page.locator("#reactPromptInput").fill("Stop the React stream")
+        await react_page.locator("button.send-button").click()
+        await asyncio.wait_for(react_stop_requested.wait(), timeout=5)
+        stop_button = react_page.locator("button.stop-button")
+        await stop_button.wait_for(timeout=10_000)
+        await stop_button.click()
+        react_stop_release.set()
+        await react_page.locator(".chat-notice").filter(has_text="已停止生成").wait_for(timeout=10_000)
+        checks["reactStopGeneration"] = "PASS"
+
         deep_link_response = await react_page.goto(f"{base_url}ui/projects/example", wait_until="networkidle")
         if deep_link_response is None or deep_link_response.status != 200:
             raise AssertionError("React SPA deep-link fallback did not return HTTP 200")
-        await react_page.locator("#migration-title").wait_for()
+        await react_page.locator("#reactPromptInput").wait_for()
         checks["reactPreview"] = "PASS"
         await react_page.close()
 
@@ -194,7 +250,7 @@ async def run_browser(base_url: str) -> dict[str, str]:
         )
         cached_paths = await page.evaluate(
             """async () => {
-              const cache = await caches.open('deepseek-infra-v402');
+              const cache = await caches.open('deepseek-infra-v403');
               return (await cache.keys()).map((request) => new URL(request.url).pathname);
             }"""
         )

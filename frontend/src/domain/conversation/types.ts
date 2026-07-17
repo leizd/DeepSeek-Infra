@@ -4,10 +4,15 @@ export interface Conversation {
   id: string;
   title: string;
   messages: readonly ChatMessage[];
-  createdAt: string;
-  updatedAt: string;
+  model: string;
+  thinkingEnabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  customTitle?: boolean;
+  autoTitleDone?: boolean;
   favorite?: boolean;
   tags?: readonly string[];
+  seekId?: string;
   projectId?: string;
   metadata?: JsonRecord;
 }
@@ -15,7 +20,7 @@ export interface Conversation {
 export interface ConversationIndexEntry {
   id: string;
   title: string;
-  updatedAt: string;
+  updatedAt: number;
   favorite: boolean;
   tags: readonly string[];
   messageCount: number;

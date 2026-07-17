@@ -1,10 +1,10 @@
 # Upgrading to 4.0
 
-This guide covers the stable 4.0.x Python-first hybrid runtime, including current patch release `4.0.2`. The upgrade is intentionally additive: no mandatory database migration, user-directory deletion, or Rust sidecar deployment is required.
+This guide covers the stable 4.0.x Python-first hybrid runtime, including current patch release `4.0.3`. The upgrade is intentionally additive: no mandatory database migration, user-directory deletion, or Rust sidecar deployment is required.
 
-## 4.0.1 to 4.0.2
+## 4.0.2 to 4.0.3
 
-Stop the 4.0.1 service, install 4.0.2, and restart it with the same configuration and runtime data. Packaged releases already include the React preview assets. Source deployments must run `npm ci --prefix frontend` and `npm run build --prefix frontend` before packaging or starting a deployment that should expose `/ui/`. The stable workspace remains at `/`; `/ui/` is an isolated preview and does not write a new database or replace legacy conversation persistence. Roll back by reinstalling 4.0.1; no data conversion is required.
+Stop the 4.0.2 service, install 4.0.3, and restart it with the same configuration and runtime data. Packaged releases already include the React assets. Source deployments must run `npm ci --prefix frontend` and `npm run build --prefix frontend` before packaging or starting a deployment that should expose `/ui/`. The stable workspace remains at `/`; `/ui/` can read compatible legacy browser conversation history and persists only normalized conversation data plus non-sensitive UI preferences. API keys stay in memory and are never migrated into local storage. Roll back by reinstalling 4.0.2; no database or conversation conversion is required.
 
 ## 4.0.0 to 4.0.1
 
@@ -28,13 +28,13 @@ Old configuration remains parseable. The legacy Rust delegate flags and policy f
 
 This is a metadata-only promotion. No database migration, configuration rewrite, user-directory rebuild, protocol change, or Rust sidecar deployment is required. Stop rc.2, install 4.0.0, and start the same deployment with the same configuration and runtime data.
 
-## Rollback from 4.0.2 to 3.10.0
+## Rollback from 4.0.3 to 3.10.0
 
-1. Stop 4.0.2 cleanly.
+1. Stop 4.0.3 cleanly.
 2. Set all delegate flags to `0` and `DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=json`.
 3. Install or start 3.10.0 against the same runtime data directory.
 
-The required `embedding TEXT` column and JSON values are still present, so 3.10.0 can read cache rows created by 4.0.2. Older SQLite readers ignore the added nullable BLOB columns. The `/ui/` preview introduces no backend storage migration. Do not run a destructive schema downgrade. With Rust flags off, operation returns to Python-only.
+The required `embedding TEXT` column and JSON values are still present, so 3.10.0 can read cache rows created by 4.0.3. Older SQLite readers ignore the added nullable BLOB columns. The `/ui/` preview introduces no backend storage migration. Do not run a destructive schema downgrade. With Rust flags off, operation returns to Python-only.
 
 ## Sidecar unavailable
 
@@ -46,4 +46,4 @@ Run the executable contract before deployment:
 python -m pytest --no-cov tests/test_4_0_upgrade_contract.py
 ```
 
-The versioned result is recorded in `docs/evidence/upgrade-rollback-v4.0.2.json`.
+The versioned result is recorded in `docs/evidence/upgrade-rollback-v4.0.3.json`.

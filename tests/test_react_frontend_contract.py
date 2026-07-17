@@ -13,7 +13,7 @@ def read(path: str) -> str:
 
 def test_react_frontend_is_an_isolated_versioned_build() -> None:
     package = json.loads(read("frontend/package.json"))
-    assert package["version"] == "4.0.2"
+    assert package["version"] == "4.0.3"
     assert package["engines"]["node"] == ">=22.12.0"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test"] == "vitest run"
@@ -50,6 +50,35 @@ def test_react_migration_starts_with_typed_protocol_boundaries() -> None:
     assert "localStorage" not in client and "sessionStorage" not in client
 
 
+def test_react_chat_vertical_slice_has_separated_state_and_ui_boundaries() -> None:
+    required = (
+        "frontend/src/api/chatApi.ts",
+        "frontend/src/api/titleApi.ts",
+        "frontend/src/contexts/ChatContext.tsx",
+        "frontend/src/contexts/SettingsContext.tsx",
+        "frontend/src/contexts/OverlayContext.tsx",
+        "frontend/src/domain/chat/chatReducer.ts",
+        "frontend/src/domain/chat/requestBuilder.ts",
+        "frontend/src/domain/chat/selectors.ts",
+        "frontend/src/domain/conversation/migration.ts",
+        "frontend/src/domain/conversation/persistence.ts",
+        "frontend/src/features/chat/ChatPage.tsx",
+        "frontend/src/features/chat/useChatController.ts",
+        "frontend/src/features/composer/Composer.tsx",
+        "frontend/src/features/history/HistoryDrawer.tsx",
+        "frontend/src/shared/markdown/MarkdownContent.tsx",
+    )
+    for path in required:
+        assert (ROOT / path).is_file(), path
+
+    settings = read("frontend/src/contexts/SettingsContext.tsx")
+    stream = read("frontend/src/api/chatStream.ts")
+    assert 'useState("")' in settings
+    assert "localStorage.setItem" not in settings.split("function setModel", 1)[0]
+    assert "reader.cancel()" in stream
+    assert "reader.releaseLock()" in stream
+
+
 def test_build_packaging_and_ci_include_the_react_frontend() -> None:
     workflow = read(".github/workflows/ci.yml")
     dockerfile = read("Dockerfile")
@@ -70,12 +99,18 @@ def test_build_packaging_and_ci_include_the_react_frontend() -> None:
     assert "COPY --from=frontend-builder /build/static/ui ./static/ui" in dockerfile
     assert "build_frontend(root)" in release
     assert "FRONTEND_BUILD_SCRIPT" in exe
+    assert '"--hidden-import=multipart"' in exe
+    assert "validate_multipart_build_environment()" in exe
     assert "isolated React + TypeScript + Vite app" in agents
 
 
-def test_browser_gate_covers_react_preview_and_spa_fallback() -> None:
+def test_browser_gate_covers_react_chat_history_stop_and_spa_fallback() -> None:
     smoke = read("scripts/smoke_frontend_browser.py")
     preflight = read("scripts/preflight_release.py")
     assert 'checks["reactPreview"] = "PASS"' in smoke
+    assert 'checks["reactChatVerticalSlice"] = "PASS"' in smoke
+    assert 'checks["reactHistoryPersistence"] = "PASS"' in smoke
+    assert 'checks["reactStopGeneration"] = "PASS"' in smoke
     assert "ui/projects/example" in smoke
-    assert '"reactPreview"' in preflight
+    for check in ("reactPreview", "reactChatVerticalSlice", "reactHistoryPersistence", "reactStopGeneration"):
+        assert f'"{check}"' in preflight

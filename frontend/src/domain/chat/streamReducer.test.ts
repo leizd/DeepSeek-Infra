@@ -16,6 +16,7 @@ describe("applyStreamEvent", () => {
     expect(answering).toMatchObject({ content: "hello", phase: "answering" });
     expect(done).toMatchObject({ content: "hello", phase: "done", streaming: false });
     expect(done.diagnostics).toEqual({ traceId: "trace-1" });
+    expect(done.agentRunStatus).toBeUndefined();
   });
 
   it("keeps agent events scoped to the timeline and handles interruption", () => {
@@ -45,5 +46,11 @@ describe("applyStreamEvent", () => {
 
     expect(unknown).toBe(initial);
     expect(failed).toMatchObject({ phase: "error", streaming: false, error: "blocked", errorCode: "policy" });
+  });
+
+  it("marks only an actual Agent Run as done", () => {
+    const initial = { ...createAssistantMessage("message-agent"), agentRunId: "run-1", agentRunStatus: "running" };
+    const done = applyStreamEvent(initial, { type: "done", runId: "run-1" });
+    expect(done.agentRunStatus).toBe("done");
   });
 });

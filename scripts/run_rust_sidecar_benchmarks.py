@@ -1,4 +1,4 @@
-"""Run the bounded 4.0.2 Rust sidecar release benchmark suite."""
+"""Run the bounded 4.0.3 Rust sidecar release benchmark suite."""
 
 from __future__ import annotations
 
