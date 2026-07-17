@@ -1,8 +1,8 @@
 """Documentation and architecture asset tests.
 
 These tests guard the v4.0.3 stable hybrid-architecture contract:
-- architecture.svg is valid XML and contains the expected version/ownership labels.
-- README.md references the SVG and links to ARCHITECTURE.md.
+- English and Simplified Chinese architecture SVGs are valid XML.
+- README.md exposes both language variants and links to ARCHITECTURE.md.
 - ARCHITECTURE.md contains a Mermaid diagram and the required ownership statements.
 """
 
@@ -43,13 +43,33 @@ def test_architecture_svg_content(substring: str, should_contain: bool) -> None:
     )
 
 
-def test_architecture_svg_is_valid_xml() -> None:
-    ET.parse(ROOT / "docs" / "assets" / "architecture.svg")
+@pytest.mark.parametrize("filename", ["architecture.svg", "architecture.zh-CN.svg"])
+def test_architecture_svg_is_valid_xml(filename: str) -> None:
+    ET.parse(ROOT / "docs" / "assets" / filename)
 
 
-def test_readme_references_architecture_svg() -> None:
+def test_readme_offers_bilingual_architecture_svgs() -> None:
     readme = _read(ROOT / "README.md")
     assert "docs/assets/architecture.svg" in readme
+    assert "docs/assets/architecture.zh-CN.svg" in readme
+    assert "<details open>" in readme
+    assert "中文架构图" in readme
+    assert "English architecture" in readme
+
+
+def test_chinese_architecture_svg_preserves_runtime_boundaries() -> None:
+    svg_text = _read(ROOT / "docs" / "assets" / "architecture.zh-CN.svg")
+    assert "Python 默认运行时" in svg_text
+    assert "可选 Rust 旁车" in svg_text
+    assert "Python 回退始终权威" in svg_text
+    assert "React 对话 · /ui/" in svg_text
+    assert "数据默认不出端" in svg_text
+
+
+def test_english_architecture_svg_uses_english_external_boundary() -> None:
+    svg_text = _read(ROOT / "docs" / "assets" / "architecture.svg")
+    assert "Data stays local by default" in svg_text
+    assert "数据默认不出端" not in svg_text
 
 
 def test_readme_links_to_architecture_md() -> None:
