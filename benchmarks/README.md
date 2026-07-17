@@ -1,5 +1,10 @@
 # Benchmarks
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 适用版本：v2.6.1。
 
 四个可复跑基准，全部支持 `--json` 机器可读输出。**离线两项**不需要服务和 API Key，可以直接跑（CI / 评审同样适用）；**在线两项**打的是真实上游模型，会消耗 token。

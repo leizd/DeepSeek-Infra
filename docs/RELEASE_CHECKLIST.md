@@ -1,5 +1,10 @@
 # Release Checklist
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 适用版本：v2.9.1。
 
 Use this checklist before tagging a release.

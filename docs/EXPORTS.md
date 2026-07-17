@@ -1,5 +1,10 @@
 # Exports
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v4.0.3.
 
 Workspace exports turn local project objects into portable Markdown, HTML, JSON or ZIP bundles. Export builders live in `deepseek_infra/infra/workspace/exports.py`.

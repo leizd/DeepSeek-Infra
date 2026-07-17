@@ -1,5 +1,10 @@
 # Hybrid Rust Runtime Runbook
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This runbook covers day-to-day operation of the stable DeepSeek Infra 4.0.3 Python-first hybrid runtime: how to start or containerize the optional Rust sidecar, verify the complete hybrid system, enable individual delegates, understand fallback behavior, troubleshoot failures, and roll back to the Python-only runtime.
 
 > **Scope**: every Rust component and the binary vector path remain explicit opt-ins. Python is default and authoritative, default Compose is Python-only, and fallback is supported throughout 4.x. Python owns SQLite, uploads, paths, parsing, OCR, embeddings, indexes, retrieval, authorization, upstream HTTP/credentials/retries, Gateway streaming, MCP transports/sessions/tools, tracing, and business state. Binary failures fall directly to Python without retrying the JSON Rust endpoint. `v4.0.0-rc.1` is superseded and historical; Rust-primary is not enabled. See [docs/ARCHITECTURE.md](ARCHITECTURE.md).

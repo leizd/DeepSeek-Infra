@@ -1,5 +1,10 @@
 # 前端模块索引
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 适用版本：v4.0.3；模块拆分自 v0.8.2 起。
 
 `static/modules/chat.js` 仍然是默认 `/` 的聊天主流程和渲染入口。`frontend/` 是完全隔离的 React/TypeScript/Vite 迁移树，生产构建输出到 `static/ui/` 并由 `/ui/` 提供；两套前端不得共同控制同一棵 DOM。

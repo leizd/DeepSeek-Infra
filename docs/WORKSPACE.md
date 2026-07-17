@@ -1,5 +1,10 @@
 # Workspace Core
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 适用版本：v2.9.1。
 
 v2.5.0 引入 **Workspace Core**；本文适用于 v2.9.1：把项目空间、保存项、生成产物、对话和导出统一成 DeepSeek Infra 的本地 AI 工作台对象模型。它不是新的协议门禁，也不是 Skill / 浏览器控制 / 自动化系统，而是 3.0.0 前的第一块产品地基。

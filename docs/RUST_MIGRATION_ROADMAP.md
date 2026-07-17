@@ -1,5 +1,10 @@
 # Rust Core Migration Roadmap
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This document records the incremental path to stable `4.0.0`, promoted from the validated `4.0.0-rc.2` Python-first hybrid candidate after its observation period. The promotion does not change runtime ownership or defaults.
 
 ## Goal
@@ -591,4 +596,3 @@ Use these labels in issues and PRs:
 - `rag`
 - `release-readiness`
 - `4.0.0`
-

@@ -1,5 +1,10 @@
 # Gateway Request Preparation Parity
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v3.5.0.
 
 DeepSeek Infra 3.5.0 can delegate deterministic, credential-free preparation of a non-streaming Gateway request to the existing Rust sidecar. The stable release line remains 3.x. The published `v4.0.0-rc.1` is an architecture preview and release-flow rehearsal, not a commitment to ship stable 4.0.0 next.

@@ -1,5 +1,10 @@
 # RAG Document Preparation Parity
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 DeepSeek Infra 3.7.0 adds an optional Rust delegate for deterministic preparation of text that Python has already parsed. The stable development line remains 3.x. The published `v4.0.0-rc.1` is a historical architecture preview, not the active release target.
 
 ## Ownership boundary

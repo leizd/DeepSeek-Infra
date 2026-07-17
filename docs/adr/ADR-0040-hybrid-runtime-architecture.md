@@ -1,5 +1,10 @@
 # ADR-0040: Python-first hybrid runtime architecture for 4.0
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 - Status: Approved
 - Date: 2026-07-11
 - Target: `4.0.0` / `4.0.0-rc.1`

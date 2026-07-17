@@ -1,5 +1,10 @@
 # Rust Candidate Audit for 3.4.0
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v3.4.0.
 
 ## Decision

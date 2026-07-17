@@ -1,5 +1,10 @@
 # Multimodal Media Layer
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v2.9.1.
 
 DeepSeek Infra v2.8.0 makes media a first-class workspace object. A media item can belong to a project, keep source metadata, move through a processing lifecycle, emit citable segments, enter Local RAG, and travel with Project Export.

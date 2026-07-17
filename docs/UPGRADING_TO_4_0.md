@@ -1,5 +1,10 @@
 # Upgrading to 4.0
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This guide covers the stable 4.0.x Python-first hybrid runtime, including current patch release `4.0.3`. The upgrade is intentionally additive: no mandatory database migration, user-directory deletion, or Rust sidecar deployment is required.
 
 ## 4.0.2 to 4.0.3

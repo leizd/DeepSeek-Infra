@@ -1,5 +1,10 @@
 # 边缘路由运维手册
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 适用版本：v2.9.1。
 
 Edge-Cloud Model Router 在 v2.7.3 进入 **MVP stabilization**：CI 会离线覆盖 doctor、状态字段、route-preview、fake provider、路由策略、云不可用回退和 forced-local 409，不下载模型、不安装本地推理后端，也不跑真实 GGUF/MLC 推理。真实 Ollama / GGUF / MLC 仍作为可选实机 evidence 补充。

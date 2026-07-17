@@ -1,5 +1,10 @@
 # 4.0.0-rc.2 Release Readiness
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This checklist governs the `4.0.0-rc.2` freeze from the verified `3.10.0` hybrid runtime baseline. `v4.0.0-rc.1` is superseded and retained only as a historical architecture preview; it must not be promoted directly to stable. This PR creates neither a tag nor a GitHub Release.
 
 > **Current local decision: READY; GitHub CI confirmation remains pending.** Two complete Python runs measured 95.2317%, Rust 1.85 workspace line coverage measured 80.4329%, and strict readiness exits zero. The PR head still requires the full required-job rollup before merge.

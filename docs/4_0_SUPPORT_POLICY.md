@@ -1,5 +1,10 @@
 # 4.0 Hybrid Runtime Support Policy
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 DeepSeek Infra 4.0 is a Python-first hybrid runtime.
 
 ## Supported contract

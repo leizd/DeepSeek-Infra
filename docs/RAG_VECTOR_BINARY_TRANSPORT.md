@@ -1,5 +1,10 @@
 # RAG Vector Ranking Compact Binary Transport
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v4.0.3.
 
 DeepSeek Infra 3.9.0 added the explicit, default-disabled compact binary HTTP contract for the existing Rust semantic-cache vector-ranking delegate. Version 3.10.0 keeps that wire format unchanged and allows Python to assemble the same request directly from validated SQLite `f64le-v1` embedding BLOBs. It does not add a delegate, make Rust authoritative, sample or remove Python parity, or change the default JSON contract. Python remains the default runtime, computes the full authoritative ranking, rejects any Rust divergence, and falls back directly to Python on every binary failure.

@@ -1,5 +1,10 @@
 # Demo 3.0
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v4.0.3.
 
 This demo shows the Personal AI Runtime as one local workspace rather than separate features.

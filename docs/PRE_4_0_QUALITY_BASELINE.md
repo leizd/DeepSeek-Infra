@@ -1,5 +1,10 @@
 # Pre-4.0 Quality Baseline
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This document records the verified `3.10.0` baseline from which `4.0.0-rc.2` was frozen. Stable `4.0.0` is promoted from that validated rc.2 candidate; `v4.0.0-rc.1` remains historical and is not an eligible stable promotion source.
 
 ## Frozen baseline

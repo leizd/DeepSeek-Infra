@@ -1,5 +1,10 @@
 # Rust/Python RAG Parity Baseline
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This document records the deterministic RAG hot-path parity baseline introduced in 3.2.4. It compares one shared fixture against a pure Python reference contract and the live Rust sidecar HTTP routes.
 
 > **Scope**: query normalization, lexical chunk scoring and ordering, citation formatting, and index validation. This baseline does not call embeddings, a vector database, an external model, or the public internet.

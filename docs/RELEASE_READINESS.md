@@ -48,6 +48,11 @@ python scripts/preflight_release.py --version 2.9.1
 
 ```bash
 # 离线，CI 安全：doctor + workspace smoke + media/browser smoke + strict eval suite + security corpus + Agent eval + baseline compare
+
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 python scripts/smoke_release.py --offline
 
 # 带服务：额外跑 MCP / A2A 兼容 smoke

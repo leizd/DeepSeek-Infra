@@ -1,5 +1,10 @@
 # Browser Control Runtime
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v2.9.1.
 
 Browser Control Runtime lets Agents and Skills read pages, capture screenshots,

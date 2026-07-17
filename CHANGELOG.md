@@ -1,5 +1,10 @@
 # 更新日志
 
+<!-- docs-language-switcher:start -->
+[中文](README.md) / [English](README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 ## [4.0.3] - React Chat Vertical Slice
 
 ### Frontend migration

@@ -1,5 +1,10 @@
 # Android APK 打包说明
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 适用版本：v2.9.1。
 
 本仓库现在包含 `android/` Android Studio 工程，可把 DeepSeek Infra 打包成手机上直接运行的 APK。APK 的结构是：

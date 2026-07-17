@@ -1,5 +1,10 @@
 # Release Readiness Checklist — 3.1.x / 3.2.5 Quality Track
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This checklist is the go/no-go gate for the hybrid Rust runtime line through the 3.2.5 RC-readiness audit. It verifies that Rust integration is stable and safely disabled by default, then feeds those facts into the separate 4.0 RC blocker matrix.
 
 > **Current verdict**: the 3.2.x hybrid baseline is green, but the repository is **NOT READY FOR 4.0.0-rc.1**. See [4_0_RC_READINESS.md](4_0_RC_READINESS.md). This milestone does not enable Rust components, raise the 85% current gate, or create an RC.

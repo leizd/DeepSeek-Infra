@@ -1,5 +1,10 @@
 # Rust Sidecar Release Performance and Observability
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v4.0.3.
 
 ## Decision summary

@@ -1,5 +1,10 @@
 # Release Evidence Index
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v4.0.3.
 
 This index binds the 4.0.3 React-migration foundation to evidence regenerated from the implementation commit. Every versioned JSON below records `version=4.0.3`, its validation `commit`, and `status=PASS`; exact-merge container identity and release archives are regenerated only during the separate publication run. The legacy `/` frontend remains default, `/ui/` is isolated, and the frozen 4.0 runtime and protocol contracts remain unchanged.

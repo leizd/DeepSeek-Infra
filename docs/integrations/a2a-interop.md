@@ -1,5 +1,10 @@
 # A2A 互操作 — 独立进程 Peer
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 适用版本：DeepSeek Infra v2.3.0。
 
 本页记录 DeepSeek Infra 的 `A2AClient` 与一个**独立进程 A2A peer** 的互操作验证结果。

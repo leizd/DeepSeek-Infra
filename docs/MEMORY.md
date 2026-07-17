@@ -1,5 +1,10 @@
 # Memory
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v4.0.3.
 
 Memory is a first-class Personal AI Runtime module in `deepseek_infra/infra/memory/`. It keeps the legacy local JSON store compatible while exposing a stable public object shape for workspace, skills and automations.

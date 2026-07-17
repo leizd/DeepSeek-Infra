@@ -1,5 +1,10 @@
 # 安全冒烟检查清单
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 适用版本：v2.9.1。
 
 这页是 DeepSeek Infra 安全能力的**最小可复现命令集**：任何人克隆仓库后，无需 API Key、无需联网，都能在本地验证 Tool Policy、Context Taint 防火墙与 Prompt Injection 评测门禁是否工作。先跑通这套冒烟，再去看 [THREAT_MODEL.md](THREAT_MODEL.md) 的威胁分类与 [SECURITY.md](SECURITY.md) 的数据驻留口径。

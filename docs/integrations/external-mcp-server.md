@@ -1,5 +1,10 @@
 # 外部 MCP Server 互操作
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 适用版本：DeepSeek Infra v2.3.0。
 
 本页记录 DeepSeek Infra 的 MCP 外部 server 桥接与一个**真实第三方 MCP SDK 实现**的互操作验证结果。验证使用官方 `mcp` Python SDK（PyPI `mcp>=1.0`）构建的 Streamable HTTP server 作为 interop partner，不是同进程 mock。

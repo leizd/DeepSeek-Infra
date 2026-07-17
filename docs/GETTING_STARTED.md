@@ -1,5 +1,10 @@
 # Getting Started
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v4.0.3.
 
 DeepSeek Infra 4.0.3 starts the React migration without replacing the stable workspace. The default `/` screen remains the complete legacy UI; `/ui/` exposes the isolated React migration preview. Projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports stay in the local runtime root unless you explicitly call an upstream API. The optional Rust sidecar is supported but not required, and the frozen 4.0 runtime contract is unchanged.

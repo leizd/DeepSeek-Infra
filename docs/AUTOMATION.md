@@ -1,5 +1,10 @@
 # Automation Runtime
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Applicable version: v2.9.1.
 
 Automation Runtime is the local workflow layer that connects Workspace Core, Skills, Browser Control, Media and export artifacts. It is intentionally small and policy-first: definitions are local JSON records, runs are auditable, and every release gate can be reproduced offline.

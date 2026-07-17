@@ -1,5 +1,10 @@
 # MCP Protocol Preparation Parity
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 DeepSeek Infra 3.6.0 adds an optional Rust delegate for deterministic MCP JSON-RPC protocol preparation. The stable development line remains 3.x; `v4.0.0-rc.1` is a historical architecture preview, not the active release target.
 
 ## Ownership boundary
