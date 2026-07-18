@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { ChatMessage } from "../../domain/chat/types";
+import { agentExecutionReport } from "../../domain/chat/agentTimeline";
 import { useChat } from "../../contexts/ChatContext";
 import { useFilePreview } from "../../contexts/FilePreviewContext";
 import { formatBytes } from "../attachments/attachmentMapper";
@@ -113,6 +114,7 @@ function UserMessageEditor({ message, onClose }: { message: ChatMessage; onClose
 function AssistantActions({ message }: { message: ChatMessage }) {
   const chat = useChat();
   const busy = chat.state.requestStatus === "streaming";
+  const agentReport = message.agentRunId ? agentExecutionReport(message) : "";
   return (
     <div className="message-actions" aria-label="回复操作">
       {message.error && (
@@ -137,6 +139,7 @@ function AssistantActions({ message }: { message: ChatMessage }) {
       >
         导出
       </button>
+      {agentReport && <CopyButton text={agentReport} label="复制 Agent 过程" />}
     </div>
   );
 }

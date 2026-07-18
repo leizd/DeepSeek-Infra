@@ -42,6 +42,38 @@ describe("conversation persistence", () => {
     expect(message?.attachments[0]?.preview).toContain("data:image/png");
   });
 
+  it("restores agent cards with content and the run cursor", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(conversationStorageKeys.conversations, JSON.stringify([{
+      id: "agent-1",
+      title: "Agent",
+      model: "deepseek-v4-pro",
+      messages: [{
+        id: "assistant-9",
+        role: "assistant",
+        content: "answer",
+        agentRunId: "run_x",
+        agentRunStatus: "running",
+        agentRunLastEventIndex: 41,
+        agentPlan: [{ id: "coder", task: "写代码" }],
+        agentPlanLabel: "Leader 自动拆解",
+        timeline: [
+          { type: "agent", id: "agent-coder", phase: "coder", status: "running", name: "Coder", output: "片段", notes: ["n1"], durationMs: 5 },
+          { type: "search", id: "s-coder-main", phase: "coder", status: "searching", search: { query: "q" } },
+        ],
+        createdAt: 100,
+      }],
+      createdAt: 100,
+      updatedAt: 200,
+    }]));
+    const state = loadPersistedConversationState(storage);
+    const message = state.conversations[0]?.messages[0];
+    expect(message).toMatchObject({ agentRunId: "run_x", agentRunStatus: "running", agentRunLastEventIndex: 41, agentPlanLabel: "Leader 自动拆解" });
+    expect(message?.agentPlan?.[0]).toMatchObject({ id: "coder", task: "写代码" });
+    expect(message?.timeline[0]).toMatchObject({ id: "agent-coder", name: "Coder", output: "片段", status: "error" });
+    expect(message?.timeline[1]).toMatchObject({ status: "error" });
+  });
+
   it("stores conversations but never creates credential keys", () => {
     const storage = new MemoryStorage();
     const state = loadPersistedConversationState(storage);

@@ -7,6 +7,8 @@ const preferenceKeys = {
   model: "deepseek-infra.model",
   thinking: "deepseek-infra.thinking-enabled",
   search: "deepseek-infra.search-enabled",
+  agentMode: "deepseek-infra.agent-mode",
+  agentPreset: "deepseek-infra.agent-preset",
 } as const;
 
 export interface SettingsContextValue {
@@ -15,6 +17,8 @@ export interface SettingsContextValue {
   model: string;
   thinkingEnabled: boolean;
   searchEnabled: boolean;
+  agentMode: boolean;
+  agentPreset: string;
   runtime: ChatRuntimeConfig | null;
   loading: boolean;
   error: string;
@@ -23,6 +27,8 @@ export interface SettingsContextValue {
   setModel(value: string): void;
   setThinkingEnabled(value: boolean): void;
   setSearchEnabled(value: boolean): void;
+  setAgentMode(value: boolean): void;
+  setAgentPreset(value: string): void;
   reloadRuntime(): Promise<void>;
 }
 
@@ -39,6 +45,8 @@ export function SettingsProvider({ children }: PropsWithChildren) {
   const [model, setModelState] = useState(() => storedPreference(preferenceKeys.model, DEFAULT_MODEL));
   const [thinkingEnabled, setThinkingState] = useState(() => storedPreference(preferenceKeys.thinking, "1") !== "0");
   const [searchEnabled, setSearchState] = useState(() => storedPreference(preferenceKeys.search, "0") === "1");
+  const [agentMode, setAgentModeState] = useState(() => storedPreference(preferenceKeys.agentMode, "0") === "1");
+  const [agentPreset, setAgentPresetState] = useState(() => storedPreference(preferenceKeys.agentPreset, "full"));
   const [runtime, setRuntime] = useState<ChatRuntimeConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -76,6 +84,16 @@ export function SettingsProvider({ children }: PropsWithChildren) {
     window.localStorage.setItem(preferenceKeys.search, value ? "1" : "0");
   }
 
+  function setAgentMode(value: boolean) {
+    setAgentModeState(value);
+    window.localStorage.setItem(preferenceKeys.agentMode, value ? "1" : "0");
+  }
+
+  function setAgentPreset(value: string) {
+    setAgentPresetState(value);
+    window.localStorage.setItem(preferenceKeys.agentPreset, value);
+  }
+
   const value = useMemo<SettingsContextValue>(
     () => ({
       apiKey,
@@ -83,6 +101,8 @@ export function SettingsProvider({ children }: PropsWithChildren) {
       model,
       thinkingEnabled,
       searchEnabled,
+      agentMode,
+      agentPreset,
       runtime,
       loading,
       error,
@@ -91,9 +111,11 @@ export function SettingsProvider({ children }: PropsWithChildren) {
       setModel,
       setThinkingEnabled,
       setSearchEnabled,
+      setAgentMode,
+      setAgentPreset,
       reloadRuntime,
     }),
-    [apiKey, tavilyApiKey, model, thinkingEnabled, searchEnabled, runtime, loading, error],
+    [apiKey, tavilyApiKey, model, thinkingEnabled, searchEnabled, agentMode, agentPreset, runtime, loading, error],
   );
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;

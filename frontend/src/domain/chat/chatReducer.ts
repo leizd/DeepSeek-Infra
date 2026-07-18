@@ -41,6 +41,8 @@ export type ChatAction =
     }
   | { type: "assistantRegenerated"; messageId: string }
   | { type: "continuationStarted"; messageId: string }
+  | { type: "agentStreamAttached"; messageId: string }
+  | { type: "agentStreamSettled"; messageId: string }
   | { type: "conversationTitleUpdated"; conversationId: string; title: string }
   | { type: "conversationRenamed"; conversationId: string; title: string; updatedAt: number }
   | { type: "conversationFavoriteToggled"; conversationId: string; updatedAt: number }
@@ -189,6 +191,23 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         error: undefined,
       }));
       return { ...next, requestStatus: "streaming", activeAssistantId: action.messageId, notice: "" };
+    }
+    case "agentStreamAttached": {
+      if (state.requestStatus === "streaming") return state;
+      const next = replaceMessage(state, action.messageId, (message) => ({
+        ...message,
+        streaming: true,
+        error: undefined,
+      }));
+      return { ...next, requestStatus: "streaming", activeAssistantId: action.messageId, notice: "" };
+    }
+    case "agentStreamSettled": {
+      const activeStatuses = new Set(["created", "planning", "running"]);
+      const next = replaceMessage(state, action.messageId, (message) => ({
+        ...message,
+        streaming: activeStatuses.has(message.agentRunStatus ?? "") ? message.streaming : false,
+      }));
+      return { ...next, requestStatus: "idle", activeAssistantId: null };
     }
     case "conversationTitleUpdated":
       return {

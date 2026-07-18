@@ -1,3 +1,11 @@
+import {
+  appendTimelineAgent,
+  appendTimelineAgentDelta,
+  appendTimelineAgentNote,
+  appendTimelineAgentReasoning,
+  mergeAgentSearchStep,
+  resetTimelineAgentPhase,
+} from "./agentTimeline";
 import type {
   AgentStreamEvent,
   ChatMessage,
@@ -49,6 +57,23 @@ function agentTimelineStep(event: AgentStreamEvent): TimelineStep {
   };
 }
 
+function applyAgentEvent(timeline: readonly TimelineStep[], event: AgentStreamEvent): readonly TimelineStep[] {
+  switch (event.type) {
+    case "agent":
+      return appendTimelineAgent(timeline, event);
+    case "agent_delta":
+      return appendTimelineAgentDelta(timeline, event);
+    case "agent_reasoning":
+      return appendTimelineAgentReasoning(timeline, event);
+    case "agent_note":
+      return appendTimelineAgentNote(timeline, event);
+    case "agent_search":
+      return mergeAgentSearchStep(timeline, event);
+    default:
+      return [...timeline, agentTimelineStep(event)];
+  }
+}
+
 function phaseForRunStatus(status: string, current: StreamPhase): StreamPhase {
   if (status === "done") return "done";
   if (status === "failed") return "error";
@@ -61,6 +86,14 @@ function recordPayload(type: string, payload: JsonRecord): TimelineStep {
 }
 
 export function applyStreamEvent(message: ChatMessage, event: ChatStreamEvent): ChatMessage {
+  const next = applyStreamEventBody(message, event);
+  if (typeof event.index === "number" && event.index > (message.agentRunLastEventIndex ?? -1)) {
+    return { ...next, agentRunLastEventIndex: event.index };
+  }
+  return next;
+}
+
+function applyStreamEventBody(message: ChatMessage, event: ChatStreamEvent): ChatMessage {
   switch (event.type) {
     case "reasoning":
       return {
@@ -98,7 +131,7 @@ export function applyStreamEvent(message: ChatMessage, event: ChatStreamEvent): 
       return {
         ...message,
         phase: event.type === "agent_search" ? "searching" : "agent",
-        timeline: [...message.timeline, agentTimelineStep(event)],
+        timeline: applyAgentEvent(message.timeline, event),
       };
 
     case "memory_suggestion":
@@ -115,6 +148,7 @@ export function applyStreamEvent(message: ChatMessage, event: ChatStreamEvent): 
         streaming: !["done", "failed", "cancelled", "interrupted"].includes(event.status),
         agentRunId: event.runId ?? message.agentRunId,
         agentRunStatus: event.status,
+        content: event.status === "awaiting_plan" && !message.content ? "Agent 计划已生成，等待确认执行。" : message.content,
       };
     }
 
@@ -142,7 +176,7 @@ export function applyStreamEvent(message: ChatMessage, event: ChatStreamEvent): 
         ...message,
         phase: "agent",
         diagnostics: null,
-        timeline: event.phase ? message.timeline.filter((step) => step.phase !== event.phase) : message.timeline,
+        timeline: event.phase ? resetTimelineAgentPhase(message.timeline, event.phase) : message.timeline,
       };
 
     case "agent_output":

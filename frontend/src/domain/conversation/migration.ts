@@ -1,4 +1,5 @@
 import type { Attachment, ChatMessage, JsonRecord, StreamPhase, TimelineStep } from "../chat/types";
+import { normalizeTimeline } from "../chat/agentTimeline";
 import type { Conversation } from "./types";
 import { createId } from "../../shared/createId";
 import { titleFromMessages } from "./reducer";
@@ -46,15 +47,29 @@ function migrateAttachments(value: unknown): Attachment[] {
   }));
 }
 
-function migrateTimeline(value: unknown): TimelineStep[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isRecord).map((step) => ({
-    type: text(step.type) || text(step.kind) || "event",
+function migrateTimelineStep(step: JsonRecord): TimelineStep {
+  const type = text(step.type) || text(step.kind) || "event";
+  const notes = Array.isArray(step.notes) ? step.notes.map(text).filter(Boolean) : undefined;
+  return {
+    type,
     phase: text(step.phase) || undefined,
     status: text(step.status) || undefined,
     text: text(step.text) || undefined,
     payload: step,
-  }));
+    id: text(step.id) || undefined,
+    name: text(step.name) || undefined,
+    reasoning: text(step.reasoning) || undefined,
+    notes,
+    output: text(step.output) || undefined,
+    durationMs: typeof step.durationMs === "number" ? step.durationMs : undefined,
+    collapsed: typeof step.collapsed === "boolean" ? step.collapsed : undefined,
+    search: isRecord(step.search) ? step.search : undefined,
+  };
+}
+
+function migrateTimeline(value: unknown): TimelineStep[] {
+  if (!Array.isArray(value)) return [];
+  return normalizeTimeline(value.filter(isRecord).map(migrateTimelineStep));
 }
 
 function messagePhase(value: JsonRecord, role: "user" | "assistant"): StreamPhase {
@@ -92,8 +107,13 @@ export function migrateLegacyMessage(value: unknown): ChatMessage | null {
     errorCode: text(value.errorCode) || undefined,
     agentRunId: text(value.agentRunId) || undefined,
     agentRunStatus: text(value.agentRunStatus) || undefined,
-    agentPlan: Array.isArray(value.agentRunPlan) ? value.agentRunPlan.filter(isRecord) : undefined,
-    agentPlanLabel: text(value.agentAutoPlanLabel) || undefined,
+    agentRunLastEventIndex: typeof value.agentRunLastEventIndex === "number" ? value.agentRunLastEventIndex : undefined,
+    agentPlan: Array.isArray(value.agentRunPlan)
+      ? value.agentRunPlan.filter(isRecord)
+      : Array.isArray(value.agentPlan)
+        ? value.agentPlan.filter(isRecord)
+        : undefined,
+    agentPlanLabel: text(value.agentAutoPlanLabel) || text(value.agentPlanLabel) || undefined,
   };
 }
 

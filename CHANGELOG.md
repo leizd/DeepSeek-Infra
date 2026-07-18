@@ -5,6 +5,21 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.0.5] - React Agent Runs and Activity
+
+### Frontend migration
+
+- Migrates Agent mode end to end: run creation with presets and plan confirmation, an editable plan workbench (phase select, task edits, add/remove, preset plans), and per-phase reruns straight from the agent cards.
+- Ports the event-sourced run stream with cursor-based resume: NDJSON `?after=` reconnect with stalled backoff, refresh recovery via persisted `agentRunLastEventIndex`, and server-sent reset/final-reset handling.
+- Ports the agent timeline engine: running-card merging, per-phase reasoning/output/notes accumulation with caps, stable step ids, run summaries, and the Markdown execution report with one-click copy.
+- Adds the Activity side panel: auto-open on wide screens for streaming work, manual dismiss that suppresses reopening, live elapsed-time summary, and shared rendering with the inline reasoning area.
+- Adds pure-frontend output pause/resume gating that halts event consumption without cancelling the backend run, for both normal and Agent streams.
+
+### Compatibility
+
+- Keeps `/` as the default legacy workspace and does not delete `static/modules/chat.js`; Projects, Skills, Memory, speech, diagnostics, and PWA ownership remain later migration slices.
+- Preserves the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates, and Python fallback.
+
 ## [4.0.4] - React Normal Chat Parity
 
 ### Frontend migration

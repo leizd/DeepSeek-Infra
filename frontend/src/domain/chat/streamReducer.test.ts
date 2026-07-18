@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyStreamEvent, createAssistantMessage, resetAssistantMessage } from "./streamReducer";
+import { applyStreamEvent, createAssistantMessage } from "./streamReducer";
 
 describe("applyStreamEvent", () => {
   it("moves through reasoning, search, content and done without mutating prior messages", () => {
@@ -31,16 +31,20 @@ describe("applyStreamEvent", () => {
 
     expect(agent.content).toBe("");
     expect(agent.timeline).toHaveLength(1);
-    expect(agent.timeline[0]).toMatchObject({ type: "agent_delta", phase: "coder", text: "patch" });
+    expect(agent.timeline[0]).toMatchObject({ type: "agent", phase: "coder", output: "patch", status: "running" });
     expect(interrupted).toMatchObject({ phase: "interrupted", streaming: false, agentRunId: "run-1" });
   });
 
-  it("resets an assistant message for regeneration", () => {
-    const initial = applyStreamEvent(createAssistantMessage("message-reset"), { type: "content", text: "old" });
-    const withError = applyStreamEvent(initial, { type: "search", search: { query: "q" } });
-    const reset = resetAssistantMessage(withError);
-    expect(reset).toMatchObject({ content: "", reasoning: "", phase: "idle", streaming: true, search: null, error: undefined });
-    expect(reset.id).toBe("message-reset");
+  it("tracks the event cursor and fills the awaiting_plan placeholder", () => {
+    const initial = createAssistantMessage("message-cursor");
+    const withCursor = applyStreamEvent(initial, { type: "run_status", status: "awaiting_plan", runId: "run-9", index: 7 });
+    expect(withCursor).toMatchObject({
+      agentRunLastEventIndex: 7,
+      agentRunStatus: "awaiting_plan",
+      content: "Agent 计划已生成，等待确认执行。",
+    });
+    const stale = applyStreamEvent(withCursor, { type: "content", text: "x", index: 3 });
+    expect(stale.agentRunLastEventIndex).toBe(7);
   });
 
   it("records terminal errors and ignores forward-compatible unknown events", () => {

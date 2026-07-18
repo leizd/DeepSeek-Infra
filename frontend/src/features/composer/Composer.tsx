@@ -86,10 +86,28 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
           >
             联网
           </button>
+          <button
+            className={settings.agentMode ? "option-button active" : "option-button"}
+            type="button"
+            aria-pressed={settings.agentMode}
+            onClick={() => settings.setAgentMode(!settings.agentMode)}
+          >
+            多 Agent
+          </button>
           <button className="option-button" type="button" onClick={() => overlay.openOverlay("settings")}>连接设置</button>
         </div>
         {busy ? (
-          <button className="stop-button" type="button" onClick={chat.stopGeneration}>停止生成</button>
+          <>
+            <button
+              className="option-button pause-button"
+              type="button"
+              aria-pressed={chat.outputPaused}
+              onClick={() => (chat.outputPaused ? chat.resumeOutput() : chat.pauseOutput())}
+            >
+              {chat.outputPaused ? "继续输出" : "暂停输出"}
+            </button>
+            <button className="stop-button" type="button" onClick={chat.stopGeneration}>停止生成</button>
+          </>
         ) : (
           <button className="send-button" type="submit" disabled={!composer.canSend} aria-label="发送消息">发送</button>
         )}

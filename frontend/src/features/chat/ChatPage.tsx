@@ -5,6 +5,7 @@ import { useChat } from "../../contexts/ChatContext";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useSettings } from "../../contexts/SettingsContext";
 import { Composer } from "../composer/Composer";
+import { ActivityDrawer } from "../activity/ActivityDrawer";
 import { FilePreviewDrawer } from "../file-reader/FilePreviewDrawer";
 import { ImageLightbox } from "../file-reader/ImageLightbox";
 import { HistoryDrawer } from "../history/HistoryDrawer";
@@ -78,7 +79,7 @@ export function ChatPage() {
             <span><i className={connected ? "status-ok" : "status-warn"} />{connected ? "对话后端可用" : "需要 API Key"}</span>
           </div>
           <div className="topbar-actions">
-            <span className="migration-badge">4.0.4 · React Chat</span>
+            <span className="migration-badge">4.0.5 · React Chat</span>
             <button className="topbar-icon" type="button" aria-label="连接设置" onClick={() => overlay.openOverlay("settings")}>⚙</button>
           </div>
         </header>
@@ -100,6 +101,7 @@ export function ChatPage() {
       <ConnectionSettingsDrawer />
       <FilePreviewDrawer />
       <ImageLightbox />
+      <ActivityDrawer />
     </main>
   );
 }

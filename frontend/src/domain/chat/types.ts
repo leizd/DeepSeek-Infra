@@ -40,6 +40,14 @@ export interface TimelineStep {
   status?: string;
   text?: string;
   payload?: JsonRecord;
+  id?: string;
+  name?: string;
+  reasoning?: string;
+  notes?: readonly string[];
+  output?: string;
+  durationMs?: number;
+  collapsed?: boolean;
+  search?: SearchSnapshot | null;
 }
 
 export type ChatDiagnostics = JsonRecord;
@@ -65,6 +73,7 @@ export interface ChatMessage {
   errorCode?: string;
   agentRunId?: string;
   agentRunStatus?: string;
+  agentRunLastEventIndex?: number;
   agentPlan?: readonly JsonRecord[];
   agentPlanLabel?: string;
 }

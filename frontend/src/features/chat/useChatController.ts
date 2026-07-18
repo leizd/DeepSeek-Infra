@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { generateConversationTitle } from "../../api/titleApi";
 import { streamChat } from "../../api/chatStream";
@@ -15,6 +15,8 @@ import type { Attachment, ChatMessage, ChatRequestPayload } from "../../domain/c
 import { loadPersistedConversationState, savePersistedConversationState } from "../../domain/conversation/persistence";
 import { createId } from "../../shared/createId";
 import { useSettings } from "../../contexts/SettingsContext";
+import { createOutputPauseGate } from "../activity/outputPause";
+import { useAgentRun } from "../agent-run/useAgentRun";
 
 function userMessage(content: string, attachments: readonly Attachment[]): ChatMessage {
   return {
@@ -49,6 +51,10 @@ export function useChatController() {
     () => createInitialChatState(loadPersistedConversationState()),
   );
   const abortControllerRef = useRef<AbortController | null>(null);
+  const outputPauseGateRef = useRef<ReturnType<typeof createOutputPauseGate> | null>(null);
+  if (!outputPauseGateRef.current) outputPauseGateRef.current = createOutputPauseGate();
+  const [outputPaused, setOutputPaused] = useState(false);
+  const waitUntilResumed = useCallback(() => outputPauseGateRef.current?.waitUntilResumed() ?? Promise.resolve(), []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -76,7 +82,7 @@ export function useChatController() {
       let current = assistantMessage;
       let terminalReceived = false;
       try {
-        for await (const event of streamChat(payload, { signal: controller.signal })) {
+        for await (const event of streamChat(payload, { signal: controller.signal, waitUntilResumed })) {
           current = applyStreamEvent(current, event);
           dispatch({ type: "streamEventReceived", messageId: current.id, event });
           if (event.type === "done" || event.type === "error") terminalReceived = true;
@@ -97,7 +103,7 @@ export function useChatController() {
         if (abortControllerRef.current === controller) abortControllerRef.current = null;
       }
     },
-    [],
+    [waitUntilResumed],
   );
 
   const maybeGenerateTitle = useCallback(
@@ -122,8 +128,22 @@ export function useChatController() {
     [settings.apiKey, settings.runtime],
   );
 
+  const agentRun = useAgentRun({
+    state,
+    dispatch,
+    abortControllerRef,
+    requestSettings,
+    hasBackendKey,
+    maybeGenerateTitle,
+    waitUntilResumed,
+  });
+
   const sendMessage = useCallback(
     async (input: string, options: { attachments?: readonly Attachment[] } = {}) => {
+      if (settings.agentMode) {
+        await agentRun.sendAgentMessage(input, options);
+        return;
+      }
       const content = input.trim();
       const attachments = options.attachments ?? [];
       if ((!content && !attachments.length) || state.requestStatus === "streaming") return;
@@ -151,7 +171,7 @@ export function useChatController() {
       const finished = await streamIntoMessage(assistantMessage, payload);
       await maybeGenerateTitle(conversationId, firstTurn, newUserMessage.content, finished?.content ?? "");
     },
-    [hasBackendKey, maybeGenerateTitle, requestSettings, settings, state, streamIntoMessage],
+    [agentRun, hasBackendKey, maybeGenerateTitle, requestSettings, settings, state, streamIntoMessage],
   );
 
   const editAndResend = useCallback(
@@ -237,14 +257,33 @@ export function useChatController() {
 
   const stopGeneration = useCallback(() => abortControllerRef.current?.abort(), []);
 
+  const pauseOutput = useCallback(() => {
+    outputPauseGateRef.current?.pause();
+    setOutputPaused(true);
+  }, []);
+
+  const resumeOutput = useCallback(() => {
+    outputPauseGateRef.current?.resume();
+    setOutputPaused(false);
+  }, []);
+
+  useEffect(() => {
+    if (state.requestStatus === "idle" && outputPaused) resumeOutput();
+  }, [state.requestStatus, outputPaused, resumeOutput]);
+
   return {
     state,
     messages: selectCurrentMessages(state),
+    outputPaused,
     sendMessage,
     editAndResend,
     regenerate,
     continueGeneration,
+    confirmAgentPlan: agentRun.confirmPlan,
+    rerunAgentPhase: agentRun.rerunPhase,
     stopGeneration,
+    pauseOutput,
+    resumeOutput,
     newConversation: () => dispatch({ type: "newConversation" }),
     openConversation: (conversationId: string) => dispatch({ type: "openConversation", conversationId }),
     deleteConversation: (conversationId: string) => dispatch({ type: "deleteConversation", conversationId }),
