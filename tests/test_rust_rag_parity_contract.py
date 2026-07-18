@@ -168,7 +168,7 @@ def test_ci_runs_rag_parity_as_independent_offline_job() -> None:
     assert "deepseek-rust-gateway:parity" in workflow
     assert "python scripts/check_rag_parity.py" in workflow
     assert "--strict" in workflow
-    assert "docs/evidence/rag-parity-v4.0.3.json" in workflow
+    assert "docs/evidence/rag-parity-v4.0.7.json" in workflow
     assert "actions/upload-artifact@v4" in workflow
     assert "DEEPSEEK_RUST_RAG=1" not in default_compose
     assert "connect_db(" not in script
