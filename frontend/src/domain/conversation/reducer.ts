@@ -45,5 +45,17 @@ export function replaceConversationMessages(
 }
 
 export function sortConversations(conversations: readonly Conversation[]): Conversation[] {
-  return [...conversations].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 60);
+  return [...conversations]
+    .sort((left, right) => Number(right.favorite ?? false) - Number(left.favorite ?? false) || right.updatedAt - left.updatedAt)
+    .slice(0, 60);
+}
+
+export function withRenamedTitle(conversation: Conversation, title: string, now: number): Conversation {
+  const trimmed = title.trim();
+  if (!trimmed) return conversation;
+  return { ...conversation, title: trimmed, customTitle: true, updatedAt: now };
+}
+
+export function withFavoriteToggled(conversation: Conversation, now: number): Conversation {
+  return { ...conversation, favorite: !conversation.favorite, updatedAt: now };
 }

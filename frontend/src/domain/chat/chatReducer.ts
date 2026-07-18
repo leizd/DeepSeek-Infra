@@ -1,6 +1,12 @@
-import { applyStreamEvent } from "./streamReducer";
+import { applyStreamEvent, resetAssistantMessage } from "./streamReducer";
 import type { ChatMessage, ChatStreamEvent } from "./types";
-import { createConversation, replaceConversationMessages, sortConversations } from "../conversation/reducer";
+import {
+  createConversation,
+  replaceConversationMessages,
+  sortConversations,
+  withFavoriteToggled,
+  withRenamedTitle,
+} from "../conversation/reducer";
 import type { Conversation, PersistedConversationState } from "../conversation/types";
 
 export interface ChatState extends PersistedConversationState {
@@ -24,7 +30,20 @@ export type ChatAction =
   | { type: "streamEventReceived"; messageId: string; event: ChatStreamEvent }
   | { type: "requestFailed"; messageId: string; error: string }
   | { type: "requestStopped"; messageId: string }
+  | {
+      type: "messageEditResubmitted";
+      messageId: string;
+      content: string;
+      updatedAt: number;
+      assistantMessage: ChatMessage;
+      model: string;
+      thinkingEnabled: boolean;
+    }
+  | { type: "assistantRegenerated"; messageId: string }
+  | { type: "continuationStarted"; messageId: string }
   | { type: "conversationTitleUpdated"; conversationId: string; title: string }
+  | { type: "conversationRenamed"; conversationId: string; title: string; updatedAt: number }
+  | { type: "conversationFavoriteToggled"; conversationId: string; updatedAt: number }
   | { type: "noticeSet"; notice: string }
   | { type: "noticeCleared" };
 
@@ -115,6 +134,62 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }));
       return { ...next, requestStatus: "idle", activeAssistantId: null, notice: "已停止生成" };
     }
+    case "messageEditResubmitted": {
+      if (state.requestStatus === "streaming" || !state.currentConversationId) return state;
+      const conversation = state.conversations.find((item) => item.id === state.currentConversationId);
+      if (!conversation) return state;
+      const userIndex = conversation.messages.findIndex((message) => message.id === action.messageId && message.role === "user");
+      if (userIndex < 0) return state;
+      const messages = conversation.messages.slice(0, userIndex + 1).map((message, index) =>
+        index === userIndex ? { ...message, content: action.content, updatedAt: action.updatedAt } : message,
+      );
+      messages.push(action.assistantMessage);
+      const conversations = updateConversation(state.conversations, conversation.id, (item) => ({
+        ...replaceConversationMessages(item, messages),
+        model: action.model,
+        thinkingEnabled: action.thinkingEnabled,
+      }));
+      return {
+        ...state,
+        conversations,
+        requestStatus: "streaming",
+        activeAssistantId: action.assistantMessage.id,
+        notice: "",
+      };
+    }
+    case "assistantRegenerated": {
+      if (state.requestStatus === "streaming" || !state.currentConversationId) return state;
+      const conversation = state.conversations.find((item) => item.id === state.currentConversationId);
+      if (!conversation) return state;
+      const targetIndex = conversation.messages.findIndex((message) => message.id === action.messageId && message.role === "assistant");
+      if (targetIndex <= 0) return state;
+      const messages = conversation.messages
+        .slice(0, targetIndex + 1)
+        .map((message, index) => (index === targetIndex ? resetAssistantMessage(message) : message));
+      const conversations = updateConversation(state.conversations, conversation.id, (item) =>
+        replaceConversationMessages(item, messages),
+      );
+      return {
+        ...state,
+        conversations,
+        requestStatus: "streaming",
+        activeAssistantId: action.messageId,
+        notice: "",
+      };
+    }
+    case "continuationStarted": {
+      if (state.requestStatus === "streaming") return state;
+      const conversation = state.conversations.find((item) => item.id === state.currentConversationId);
+      const target = conversation?.messages.find((message) => message.id === action.messageId && message.role === "assistant");
+      if (!target?.interrupted) return state;
+      const next = replaceMessage(state, action.messageId, (message) => ({
+        ...message,
+        streaming: true,
+        interrupted: false,
+        error: undefined,
+      }));
+      return { ...next, requestStatus: "streaming", activeAssistantId: action.messageId, notice: "" };
+    }
     case "conversationTitleUpdated":
       return {
         ...state,
@@ -123,6 +198,21 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           title: action.title,
           autoTitleDone: true,
         })),
+      };
+    case "conversationRenamed":
+      if (!action.title.trim()) return state;
+      return {
+        ...state,
+        conversations: updateConversation(state.conversations, action.conversationId, (conversation) =>
+          withRenamedTitle(conversation, action.title, action.updatedAt),
+        ),
+      };
+    case "conversationFavoriteToggled":
+      return {
+        ...state,
+        conversations: updateConversation(state.conversations, action.conversationId, (conversation) =>
+          withFavoriteToggled(conversation, action.updatedAt),
+        ),
       };
     case "noticeSet":
       return { ...state, notice: action.notice };

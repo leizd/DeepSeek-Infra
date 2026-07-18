@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyStreamEvent, createAssistantMessage } from "./streamReducer";
+import { applyStreamEvent, createAssistantMessage, resetAssistantMessage } from "./streamReducer";
 
 describe("applyStreamEvent", () => {
   it("moves through reasoning, search, content and done without mutating prior messages", () => {
@@ -33,6 +33,14 @@ describe("applyStreamEvent", () => {
     expect(agent.timeline).toHaveLength(1);
     expect(agent.timeline[0]).toMatchObject({ type: "agent_delta", phase: "coder", text: "patch" });
     expect(interrupted).toMatchObject({ phase: "interrupted", streaming: false, agentRunId: "run-1" });
+  });
+
+  it("resets an assistant message for regeneration", () => {
+    const initial = applyStreamEvent(createAssistantMessage("message-reset"), { type: "content", text: "old" });
+    const withError = applyStreamEvent(initial, { type: "search", search: { query: "q" } });
+    const reset = resetAssistantMessage(withError);
+    expect(reset).toMatchObject({ content: "", reasoning: "", phase: "idle", streaming: true, search: null, error: undefined });
+    expect(reset.id).toBe("message-reset");
   });
 
   it("records terminal errors and ignores forward-compatible unknown events", () => {

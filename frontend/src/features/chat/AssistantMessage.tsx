@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../../domain/chat/types";
 import { MarkdownContent } from "../../shared/markdown/MarkdownContent";
+import { SearchBlock } from "../citations/SearchBlock";
 
 function activityLabel(message: ChatMessage): string {
   if (message.phase === "thinking") return "正在思考";
@@ -10,7 +11,13 @@ function activityLabel(message: ChatMessage): string {
   return message.streaming ? "处理中" : "回答完成";
 }
 
-export function AssistantMessage({ message }: { message: ChatMessage }) {
+export function AssistantMessage({
+  message,
+  onCitation,
+}: {
+  message: ChatMessage;
+  onCitation?: (citationId: string) => void;
+}) {
   return (
     <div className="assistant-message">
       {(message.reasoning || message.systemNotes.length > 0 || message.streaming) && (
@@ -20,10 +27,11 @@ export function AssistantMessage({ message }: { message: ChatMessage }) {
             {message.streaming && <span className="stream-dot" aria-hidden="true" />}
           </summary>
           {message.systemNotes.map((note, index) => <p className="system-note" key={index}>{note}</p>)}
-          {message.reasoning && <MarkdownContent content={message.reasoning} />}
+          {message.reasoning && <MarkdownContent content={message.reasoning} onCitation={onCitation} />}
         </details>
       )}
-      {message.content ? <MarkdownContent content={message.content} /> : message.streaming ? <p className="response-placeholder">等待模型输出…</p> : null}
+      {message.search && <SearchBlock search={message.search} streaming={message.streaming} />}
+      {message.content ? <MarkdownContent content={message.content} onCitation={onCitation} /> : message.streaming ? <p className="response-placeholder">等待模型输出…</p> : null}
       {message.error && <p className="message-error" role="alert">{message.error}</p>}
       {message.interrupted && <p className="message-meta">生成已由用户停止，已保留当前内容。</p>}
     </div>

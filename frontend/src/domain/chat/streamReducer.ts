@@ -22,6 +22,23 @@ export function createAssistantMessage(id: string): ChatMessage {
   };
 }
 
+export function resetAssistantMessage(message: ChatMessage): ChatMessage {
+  return {
+    ...message,
+    content: "",
+    reasoning: "",
+    phase: "idle",
+    streaming: true,
+    interrupted: false,
+    timeline: [],
+    systemNotes: [],
+    search: null,
+    diagnostics: null,
+    error: undefined,
+    errorCode: undefined,
+  };
+}
+
 function agentTimelineStep(event: AgentStreamEvent): TimelineStep {
   return {
     type: event.type,

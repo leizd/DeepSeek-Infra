@@ -1,8 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useRef, type ClipboardEvent } from "react";
 
+import { useAttachments } from "../../contexts/AttachmentsContext";
 import { useChat } from "../../contexts/ChatContext";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useSettings } from "../../contexts/SettingsContext";
+import { AttachmentList } from "../attachments/AttachmentList";
+import { ATTACHMENT_ACCEPT } from "../attachments/attachmentMapper";
 import { ModelSelector } from "./ModelSelector";
 import { useComposer } from "./useComposer";
 
@@ -10,7 +13,9 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
   const chat = useChat();
   const overlay = useOverlay();
   const settings = useSettings();
+  const attachments = useAttachments();
   const composer = useComposer();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const busy = chat.state.requestStatus === "streaming";
 
   useEffect(() => {
@@ -19,8 +24,16 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
     onInitialPromptUsed();
   }, [initialPrompt, onInitialPromptUsed]);
 
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = event.clipboardData?.files;
+    if (!files?.length) return;
+    event.preventDefault();
+    attachments.addFiles(files);
+  }
+
   return (
     <form className="composer" onSubmit={composer.onSubmit}>
+      <AttachmentList />
       <textarea
         id="reactPromptInput"
         aria-label="输入消息"
@@ -29,10 +42,33 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
         value={composer.value}
         onChange={(event) => composer.setValue(event.target.value)}
         onKeyDown={composer.onKeyDown}
+        onPaste={onPaste}
         disabled={busy}
+      />
+      <input
+        ref={fileInputRef}
+        className="sr-only"
+        type="file"
+        multiple
+        accept={ATTACHMENT_ACCEPT}
+        aria-label="添加附件"
+        tabIndex={-1}
+        onChange={(event) => {
+          if (event.target.files?.length) attachments.addFiles(event.target.files);
+          event.target.value = "";
+        }}
       />
       <div className="composer-toolbar">
         <div className="composer-options">
+          <button
+            className="option-button"
+            type="button"
+            aria-label="添加附件"
+            disabled={attachments.state.uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            附件
+          </button>
           <ModelSelector />
           <button
             className={settings.thinkingEnabled ? "option-button active" : "option-button"}
@@ -55,7 +91,7 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
         {busy ? (
           <button className="stop-button" type="button" onClick={chat.stopGeneration}>停止生成</button>
         ) : (
-          <button className="send-button" type="submit" disabled={!composer.value.trim()} aria-label="发送消息">发送</button>
+          <button className="send-button" type="submit" disabled={!composer.canSend} aria-label="发送消息">发送</button>
         )}
       </div>
     </form>

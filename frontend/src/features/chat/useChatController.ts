@@ -3,15 +3,20 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { generateConversationTitle } from "../../api/titleApi";
 import { streamChat } from "../../api/chatStream";
 import { chatReducer, createInitialChatState } from "../../domain/chat/chatReducer";
-import { buildChatPayload } from "../../domain/chat/requestBuilder";
+import {
+  buildChatPayload,
+  buildContinuationPayload,
+  buildRegenerationPayload,
+  type ChatRequestSettings,
+} from "../../domain/chat/requestBuilder";
 import { selectCurrentMessages } from "../../domain/chat/selectors";
-import { applyStreamEvent, createAssistantMessage } from "../../domain/chat/streamReducer";
-import type { ChatMessage } from "../../domain/chat/types";
+import { applyStreamEvent, createAssistantMessage, resetAssistantMessage } from "../../domain/chat/streamReducer";
+import type { Attachment, ChatMessage, ChatRequestPayload } from "../../domain/chat/types";
 import { loadPersistedConversationState, savePersistedConversationState } from "../../domain/conversation/persistence";
 import { createId } from "../../shared/createId";
 import { useSettings } from "../../contexts/SettingsContext";
 
-function userMessage(content: string): ChatMessage {
+function userMessage(content: string, attachments: readonly Attachment[]): ChatMessage {
   return {
     id: createId("user"),
     role: "user",
@@ -20,7 +25,7 @@ function userMessage(content: string): ChatMessage {
     createdAt: Date.now(),
     phase: "done",
     streaming: false,
-    attachments: [],
+    attachments,
     timeline: [],
     systemNotes: [],
   };
@@ -56,27 +61,83 @@ export function useChatController() {
     return () => window.clearTimeout(timer);
   }, [state.conversations, state.currentConversationId]);
 
+  const requestSettings = useCallback((): ChatRequestSettings => ({
+    apiKey: settings.apiKey,
+    tavilyApiKey: settings.tavilyApiKey,
+    model: settings.model,
+    thinkingEnabled: settings.thinkingEnabled,
+    searchEnabled: settings.searchEnabled,
+  }), [settings]);
+
+  const streamIntoMessage = useCallback(
+    async (assistantMessage: ChatMessage, payload: ChatRequestPayload): Promise<ChatMessage | null> => {
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      let current = assistantMessage;
+      let terminalReceived = false;
+      try {
+        for await (const event of streamChat(payload, { signal: controller.signal })) {
+          current = applyStreamEvent(current, event);
+          dispatch({ type: "streamEventReceived", messageId: current.id, event });
+          if (event.type === "done" || event.type === "error") terminalReceived = true;
+        }
+        if (!terminalReceived) {
+          dispatch({ type: "requestFailed", messageId: current.id, error: "连接提前结束，请重试" });
+          return null;
+        }
+        return current;
+      } catch (reason) {
+        if (controller.signal.aborted || isAbortError(reason)) {
+          dispatch({ type: "requestStopped", messageId: current.id });
+        } else {
+          dispatch({ type: "requestFailed", messageId: current.id, error: errorMessage(reason) });
+        }
+        return null;
+      } finally {
+        if (abortControllerRef.current === controller) abortControllerRef.current = null;
+      }
+    },
+    [],
+  );
+
+  const maybeGenerateTitle = useCallback(
+    async (conversationId: string, firstTurn: boolean, userText: string, assistantContent: string) => {
+      if (!firstTurn || !assistantContent.trim()) return;
+      try {
+        const title = await generateConversationTitle({
+          apiKey: settings.apiKey,
+          userMessage: userText,
+          assistantMessage: assistantContent,
+        });
+        if (title) dispatch({ type: "conversationTitleUpdated", conversationId, title });
+      } catch {
+        // Local title remains available when best-effort title generation fails.
+      }
+    },
+    [settings.apiKey],
+  );
+
+  const hasBackendKey = useCallback(
+    () => Boolean(settings.apiKey.trim() || settings.runtime?.hasServerKey),
+    [settings.apiKey, settings.runtime],
+  );
+
   const sendMessage = useCallback(
-    async (input: string) => {
+    async (input: string, options: { attachments?: readonly Attachment[] } = {}) => {
       const content = input.trim();
-      if (!content || state.requestStatus === "streaming") return;
-      if (!settings.apiKey.trim() && !settings.runtime?.hasServerKey) {
+      const attachments = options.attachments ?? [];
+      if ((!content && !attachments.length) || state.requestStatus === "streaming") return;
+      if (!hasBackendKey()) {
         dispatch({ type: "noticeSet", notice: "请先在连接设置中输入 DeepSeek API Key" });
         return;
       }
 
       const existingMessages = selectCurrentMessages(state);
-      const newUserMessage = userMessage(content);
-      let assistantMessage = createAssistantMessage(createId("assistant"));
+      const newUserMessage = userMessage(content, attachments);
+      const assistantMessage = createAssistantMessage(createId("assistant"));
       const conversationId = state.currentConversationId ?? createId("conversation");
       const firstTurn = !existingMessages.some((message) => message.role === "user");
-      const payload = buildChatPayload(existingMessages, newUserMessage, {
-        apiKey: settings.apiKey,
-        tavilyApiKey: settings.tavilyApiKey,
-        model: settings.model,
-        thinkingEnabled: settings.thinkingEnabled,
-        searchEnabled: settings.searchEnabled,
-      });
+      const payload = buildChatPayload(existingMessages, newUserMessage, requestSettings());
 
       dispatch({
         type: "requestStarted",
@@ -87,42 +148,91 @@ export function useChatController() {
         thinkingEnabled: settings.thinkingEnabled,
       });
 
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-      let terminalReceived = false;
-      try {
-        for await (const event of streamChat(payload, { signal: controller.signal })) {
-          assistantMessage = applyStreamEvent(assistantMessage, event);
-          dispatch({ type: "streamEventReceived", messageId: assistantMessage.id, event });
-          if (event.type === "done" || event.type === "error") terminalReceived = true;
-        }
-        if (!terminalReceived) {
-          dispatch({ type: "requestFailed", messageId: assistantMessage.id, error: "连接提前结束，请重试" });
-          return;
-        }
-        if (firstTurn && assistantMessage.content.trim()) {
-          try {
-            const title = await generateConversationTitle({
-              apiKey: settings.apiKey,
-              userMessage: newUserMessage.content,
-              assistantMessage: assistantMessage.content,
-            });
-            if (title) dispatch({ type: "conversationTitleUpdated", conversationId, title });
-          } catch {
-            // Local title remains available when best-effort title generation fails.
-          }
-        }
-      } catch (reason) {
-        if (controller.signal.aborted || isAbortError(reason)) {
-          dispatch({ type: "requestStopped", messageId: assistantMessage.id });
-        } else {
-          dispatch({ type: "requestFailed", messageId: assistantMessage.id, error: errorMessage(reason) });
-        }
-      } finally {
-        if (abortControllerRef.current === controller) abortControllerRef.current = null;
-      }
+      const finished = await streamIntoMessage(assistantMessage, payload);
+      await maybeGenerateTitle(conversationId, firstTurn, newUserMessage.content, finished?.content ?? "");
     },
-    [settings, state],
+    [hasBackendKey, maybeGenerateTitle, requestSettings, settings, state, streamIntoMessage],
+  );
+
+  const editAndResend = useCallback(
+    async (messageId: string, input: string) => {
+      const content = input.trim();
+      if (state.requestStatus === "streaming" || !state.currentConversationId) return;
+      const messages = selectCurrentMessages(state);
+      const target = messages.find((message) => message.id === messageId && message.role === "user");
+      if (!target) return;
+      if (!content && !target.attachments.length) {
+        dispatch({ type: "noticeSet", notice: "请输入修改后的内容" });
+        return;
+      }
+      if (!hasBackendKey()) {
+        dispatch({ type: "noticeSet", notice: "请先在连接设置中输入 DeepSeek API Key" });
+        return;
+      }
+
+      const targetIndex = messages.findIndex((message) => message.id === messageId);
+      const editedUserMessage: ChatMessage = { ...target, content, updatedAt: Date.now() };
+      const assistantMessage = createAssistantMessage(createId("assistant"));
+      const payload = buildChatPayload(messages.slice(0, targetIndex), editedUserMessage, requestSettings());
+
+      dispatch({
+        type: "messageEditResubmitted",
+        messageId,
+        content,
+        updatedAt: editedUserMessage.updatedAt as number,
+        assistantMessage,
+        model: settings.model,
+        thinkingEnabled: settings.thinkingEnabled,
+      });
+
+      const firstTurn = !messages.slice(0, targetIndex).some((message) => message.role === "user");
+      const finished = await streamIntoMessage(assistantMessage, payload);
+      await maybeGenerateTitle(state.currentConversationId, firstTurn, content, finished?.content ?? "");
+    },
+    [hasBackendKey, maybeGenerateTitle, requestSettings, settings, state, streamIntoMessage],
+  );
+
+  const regenerate = useCallback(
+    async (messageId: string) => {
+      if (state.requestStatus === "streaming") return;
+      const messages = selectCurrentMessages(state);
+      const targetIndex = messages.findIndex((message) => message.id === messageId && message.role === "assistant");
+      if (targetIndex <= 0) return;
+      const messagesBefore = messages.slice(0, targetIndex);
+      if (!messagesBefore.some((message) => message.role === "user")) {
+        dispatch({ type: "noticeSet", notice: "没有可重新生成的用户问题" });
+        return;
+      }
+      if (!hasBackendKey()) {
+        dispatch({ type: "noticeSet", notice: "请先在连接设置中输入 DeepSeek API Key" });
+        return;
+      }
+
+      const payload = buildRegenerationPayload(messagesBefore, requestSettings());
+      dispatch({ type: "assistantRegenerated", messageId });
+      await streamIntoMessage(resetAssistantMessage(messages[targetIndex]), payload);
+    },
+    [hasBackendKey, requestSettings, state, streamIntoMessage],
+  );
+
+  const continueGeneration = useCallback(
+    async (messageId: string) => {
+      if (state.requestStatus === "streaming") return;
+      const messages = selectCurrentMessages(state);
+      const targetIndex = messages.findIndex((message) => message.id === messageId && message.role === "assistant");
+      if (targetIndex < 0) return;
+      const target = messages[targetIndex];
+      if (!target.interrupted) return;
+      if (!hasBackendKey()) {
+        dispatch({ type: "noticeSet", notice: "请先在连接设置中输入 DeepSeek API Key" });
+        return;
+      }
+
+      const payload = buildContinuationPayload(messages.slice(0, targetIndex), target, requestSettings());
+      dispatch({ type: "continuationStarted", messageId });
+      await streamIntoMessage(target, payload);
+    },
+    [hasBackendKey, requestSettings, state, streamIntoMessage],
   );
 
   const stopGeneration = useCallback(() => abortControllerRef.current?.abort(), []);
@@ -131,10 +241,17 @@ export function useChatController() {
     state,
     messages: selectCurrentMessages(state),
     sendMessage,
+    editAndResend,
+    regenerate,
+    continueGeneration,
     stopGeneration,
     newConversation: () => dispatch({ type: "newConversation" }),
     openConversation: (conversationId: string) => dispatch({ type: "openConversation", conversationId }),
     deleteConversation: (conversationId: string) => dispatch({ type: "deleteConversation", conversationId }),
+    renameConversation: (conversationId: string, title: string) =>
+      dispatch({ type: "conversationRenamed", conversationId, title, updatedAt: Date.now() }),
+    toggleFavorite: (conversationId: string) => dispatch({ type: "conversationFavoriteToggled", conversationId, updatedAt: Date.now() }),
     clearNotice: () => dispatch({ type: "noticeCleared" }),
+    notify: (notice: string) => dispatch({ type: "noticeSet", notice }),
   };
 }

@@ -339,7 +339,7 @@ class SchedulerSettings:
 
     Defaults are deliberately *generous* so the live path stays transparent under
     normal/test load (``rate_per_second=0`` means unlimited); tighten via env to make
-    the limits bite. ``max_queue_depth`` bounds waiting+in-flight — once exceeded the
+    the limits bite. ``max_queue_depth`` bounds waiting+in-flight 鈥?once exceeded the
     scheduler sheds load (fast 503) instead of growing unboundedly.
     """
 
@@ -369,7 +369,7 @@ class MCPSettings:
     (``POST /mcp``, local-auth gated) and re-exposes the local tool runtime as
     standard MCP ``tools`` plus optional ``resources`` (generated artifacts) and
     ``prompts``. ``capability`` picks the Tool Policy capability profile granted to
-    MCP clients — every ``tools/call`` still goes through the full policy gate
+    MCP clients 鈥?every ``tools/call`` still goes through the full policy gate
     (schema / SSRF / path / sensitive guards), so an external MCP client never gets
     more than that slice. The outbound MCP *client* (connecting external MCP
     servers) is opt-in and off by default.
@@ -447,7 +447,7 @@ class SkillsSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "4.0.3"
+    app_version: str = "4.0.4"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180

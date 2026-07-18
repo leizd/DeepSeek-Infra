@@ -81,13 +81,28 @@ function safeUrl(value: string): string | null {
   }
 }
 
-function inlineMarkdown(value: string): ReactNode[] {
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^\s)]+\)|\*[^*]+\*)/g;
+function citationClass(id: string): string {
+  if (/^W\d+$/i.test(id)) return "citation-pin citation-web";
+  if (/^F\d+-\d+$/i.test(id)) return "citation-pin citation-file";
+  return "citation-pin";
+}
+
+function inlineMarkdown(value: string, onCitation?: (citationId: string) => void): ReactNode[] {
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^\s)]+\)|\[\^[A-Za-z0-9_-]+\]|\*[^*]+\*)/g;
   const parts = value.split(pattern).filter(Boolean);
   return parts.map((part, index) => {
     if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
     if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
     if (part.startsWith("*") && part.endsWith("*")) return <em key={index}>{part.slice(1, -1)}</em>;
+    const citation = part.match(/^\[\^([A-Za-z0-9_-]+)\]$/);
+    if (citation) {
+      const id = citation[1] ?? "";
+      return (
+        <button key={index} className={citationClass(id)} type="button" onClick={() => onCitation?.(id)}>
+          [{id}]
+        </button>
+      );
+    }
     const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
     if (link) {
       const href = safeUrl(link[2] ?? "");
@@ -97,21 +112,21 @@ function inlineMarkdown(value: string): ReactNode[] {
   });
 }
 
-export function MarkdownContent({ content }: { content: string }) {
+export function MarkdownContent({ content, onCitation }: { content: string; onCitation?: (citationId: string) => void }) {
   return (
     <div className="markdown-content">
       {parseMarkdownBlocks(content).map((block, index) => {
         if (block.type === "heading") {
           const Tag = `h${Math.min(block.level + 1, 6)}` as "h2" | "h3" | "h4" | "h5";
-          return <Tag key={index}>{inlineMarkdown(block.text)}</Tag>;
+          return <Tag key={index}>{inlineMarkdown(block.text, onCitation)}</Tag>;
         }
         if (block.type === "code") return <pre key={index}><code data-language={block.language}>{block.text}</code></pre>;
-        if (block.type === "quote") return <blockquote key={index}>{inlineMarkdown(block.text)}</blockquote>;
+        if (block.type === "quote") return <blockquote key={index}>{inlineMarkdown(block.text, onCitation)}</blockquote>;
         if (block.type === "list") {
           const Tag = block.ordered ? "ol" : "ul";
-          return <Tag key={index}>{block.items.map((item, itemIndex) => <li key={itemIndex}>{inlineMarkdown(item)}</li>)}</Tag>;
+          return <Tag key={index}>{block.items.map((item, itemIndex) => <li key={itemIndex}>{inlineMarkdown(item, onCitation)}</li>)}</Tag>;
         }
-        return <p key={index}>{inlineMarkdown(block.text)}</p>;
+        return <p key={index}>{inlineMarkdown(block.text, onCitation)}</p>;
       })}
     </div>
   );

@@ -1,12 +1,14 @@
 import { useEffect, useRef } from "react";
 
 import type { ChatMessage } from "../../domain/chat/types";
+import { useOpenCitation } from "../citations/useOpenCitation";
 import { MessageItem } from "./MessageItem";
 
 const suggestions = ["解释一下这个项目的架构", "给我一个分步骤的实现方案", "帮我审查一段代码"];
 
 export function MessageList({ messages, onSuggestion }: { messages: readonly ChatMessage[]; onSuggestion(text: string): void }) {
   const endRef = useRef<HTMLDivElement>(null);
+  const openCitation = useOpenCitation(messages);
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages]);
@@ -16,15 +18,15 @@ export function MessageList({ messages, onSuggestion }: { messages: readonly Cha
       {!messages.length && (
         <div className="empty-chat">
           <div className="empty-mark">DS</div>
-          <p className="eyebrow">REACT CHAT · 4.0.3</p>
+          <p className="eyebrow">REACT CHAT · 4.0.4</p>
           <h1>今天想一起解决什么？</h1>
-          <p>普通聊天、思考流、Markdown、停止生成和本地历史已经迁入 React。</p>
+          <p>普通聊天、附件、文件阅读器、思考流、Markdown、消息操作和本地历史已经迁入 React。</p>
           <div className="suggestion-grid">
             {suggestions.map((suggestion) => <button key={suggestion} type="button" onClick={() => onSuggestion(suggestion)}>{suggestion}</button>)}
           </div>
         </div>
       )}
-      {messages.map((message) => <MessageItem key={message.id} message={message} />)}
+      {messages.map((message) => <MessageItem key={message.id} message={message} onCitation={openCitation(message)} />)}
       <div ref={endRef} />
     </section>
   );

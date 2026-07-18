@@ -5,6 +5,21 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.0.4] - React Normal Chat Parity
+
+### Frontend migration
+
+- Migrates the attachment pipeline to React: XHR upload with progress, 240s timeout and abort, drag-and-drop with overlay, paste, and file picker, server-driven upload limits, OCR retry, and dual-tier canvas image previews.
+- Adds the file reader: chunked text windows with prev/next navigation, original-file mode (PDF page images, images, sandboxed text frames), image lightbox with keyboard navigation, and citation-aware chunk jumping via `/api/file-chunk`.
+- Completes message operations: edit-and-resend with conversation truncation, regenerate with in-place reset, continuation for interrupted answers with carry-over context, copy, and single-reply Markdown export.
+- Adds history management with favorite-first ordering, inline rename that blocks auto-title overwrite, and conversation search; favorites and titles persist locally.
+- Renders search sources and citations: `[^Wn]` opens the referenced page, `[^Fn-m]` opens the file reader at the exact chunk, and multi-round search blocks show per-round status with an expandable source list.
+
+### Compatibility
+
+- Keeps `/` as the default legacy workspace and does not delete `static/modules/chat.js`; Agent mode, Projects, Skills, Memory, speech, diagnostics, and PWA ownership remain later migration slices.
+- Preserves the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates, and Python fallback.
+
 ## [4.0.3] - React Chat Vertical Slice
 
 ### Frontend migration

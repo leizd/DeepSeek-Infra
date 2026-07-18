@@ -20,8 +20,17 @@ export interface Attachment {
   kind?: string;
   size?: number;
   fileId?: string;
+  projectId?: string;
+  sourceAvailable?: boolean;
   preview?: string;
   text?: string;
+  thumbnail?: string;
+  imagePreview?: string;
+  pageCount?: number;
+  charCount?: number;
+  chunkCount?: number;
+  chunked?: boolean;
+  truncated?: boolean;
   metadata?: JsonRecord;
 }
 
@@ -42,6 +51,7 @@ export interface ChatMessage {
   content: string;
   reasoning: string;
   createdAt: number;
+  updatedAt?: number;
   phase: StreamPhase;
   streaming: boolean;
   interrupted?: boolean;

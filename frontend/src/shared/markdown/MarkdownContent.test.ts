@@ -12,4 +12,9 @@ describe("parseMarkdownBlocks", () => {
       { type: "code", language: "ts", text: "const ok = true;" },
     ]);
   });
+
+  it("keeps citation markers inside paragraph text for inline rendering", () => {
+    const blocks = parseMarkdownBlocks("结论来自网页[^W1]和文件[^F1-2]。");
+    expect(blocks).toEqual([{ type: "paragraph", text: "结论来自网页[^W1]和文件[^F1-2]。" }]);
+  });
 });
