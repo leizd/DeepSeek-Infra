@@ -152,7 +152,7 @@ async def run_browser(base_url: str) -> dict[str, str]:
         await context.route("**/api/chat", mock_chat)
         await context.route("**/api/title", mock_title)
         await context.route("**/api/file-text", hold_upload)
-        response = await page.goto(base_url, wait_until="domcontentloaded")
+        response = await page.goto(f"{base_url}legacy", wait_until="domcontentloaded")
         if response is None or response.status != 200:
             raise AssertionError("home page did not return HTTP 200")
         csp = (await response.header_value("content-security-policy")) or ""
@@ -250,32 +250,37 @@ async def run_browser(base_url: str) -> dict[str, str]:
         )
         cached_paths = await page.evaluate(
             """async () => {
-              const cache = await caches.open('deepseek-infra-v403');
-              return (await cache.keys()).map((request) => new URL(request.url).pathname);
+              const names = await caches.keys();
+              const collected = [];
+              for (const name of names) {
+                const cache = await caches.open(name);
+                collected.push(...(await cache.keys()).map((request) => new URL(request.url).pathname));
+              }
+              return collected;
             }"""
         )
-        for required in ("/vaultr-brutalist.css", "/vendor/inter/inter.css", "/vendor/inter/Inter-Variable.ttf"):
-            if required not in cached_paths:
-                raise AssertionError(f"service worker cache is missing {required}")
+        if not any(path.startswith("/ui/assets/") for path in cached_paths):
+            raise AssertionError(f"service worker cache is missing the React shell assets: {cached_paths}")
         checks["completeAppShell"] = "PASS"
 
+        offline_page = await context.new_page()
+        offline_response = await offline_page.goto(f"{base_url}ui/", wait_until="networkidle")
+        if offline_response is None or offline_response.status != 200:
+            raise AssertionError("React page did not load before the offline check")
+        await offline_page.locator("#reactPromptInput").wait_for()
         await context.set_offline(True)
-        await page.reload(wait_until="domcontentloaded", timeout=15_000)
-        await page.evaluate("() => document.fonts.ready")
-        await page.evaluate("() => document.fonts.load('16px Inter')")
-        offline_style = await page.evaluate(
+        await offline_page.reload(wait_until="domcontentloaded", timeout=15_000)
+        await offline_page.locator("#reactPromptInput").wait_for(timeout=10_000)
+        offline_style = await offline_page.evaluate(
             """() => ({
               sheets: Array.from(document.styleSheets).map((sheet) => sheet.href || ''),
-              border: getComputedStyle(document.querySelector('.vaultr-tab')).borderTopWidth,
-              font: getComputedStyle(document.body).fontFamily,
-              interReady: document.fonts.check('16px Inter'),
+              bodyFont: getComputedStyle(document.body).fontFamily,
             })"""
         )
-        if not any("/vaultr-brutalist.css" in href for href in offline_style["sheets"]):
-            raise AssertionError(f"offline skin stylesheet missing: {offline_style}")
-        if offline_style["border"] != "3px" or not offline_style["interReady"]:
-            raise AssertionError(f"offline CSS/font rendering is incomplete: {offline_style}")
+        if not any("/ui/assets/" in href for href in offline_style["sheets"]):
+            raise AssertionError(f"offline React stylesheet missing from cache: {offline_style}")
         checks["offlineRefresh"] = "PASS"
+        await offline_page.close()
 
         csp_errors = [
             error

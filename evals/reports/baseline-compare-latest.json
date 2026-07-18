@@ -1,8 +1,8 @@
 {
   "schemaVersion": "offline-eval-compare.v1",
-  "version": "4.0.3",
-  "commit": "fbd78c0c",
-  "generatedAt": "2026-07-16T11:32:33Z",
+  "version": "4.0.7",
+  "commit": "2076a4a9",
+  "generatedAt": "2026-07-18T11:10:28Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -14,8 +14,8 @@
     "gitSha": "v2.2.6-baseline"
   },
   "current": {
-    "version": "4.0.3",
-    "gitSha": "fbd78c0c"
+    "version": "4.0.7",
+    "gitSha": "2076a4a9"
   },
   "checks": [
     {
@@ -31,8 +31,8 @@
       "metric": "rag.citationAccuracy",
       "label": "Citation Accuracy",
       "baseline": 0.8333,
-      "current": 0.8333,
-      "delta": 0.0,
+      "current": 1.0,
+      "delta": 0.1667,
       "allowed": "drop <= 0.0500",
       "status": "PASS"
     },

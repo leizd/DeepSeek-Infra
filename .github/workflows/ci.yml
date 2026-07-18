@@ -88,12 +88,12 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt
       - run: python -m playwright install --with-deps chromium
-      - run: python scripts/smoke_frontend_browser.py --out docs/evidence/frontend-browser-v4.0.3.json
+      - run: python scripts/smoke_frontend_browser.py --out docs/evidence/frontend-browser-v4.0.7.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: frontend-browser-smoke
-          path: docs/evidence/frontend-browser-v4.0.3.json
+          path: docs/evidence/frontend-browser-v4.0.7.json
           if-no-files-found: error
 
   security:
@@ -130,10 +130,10 @@ jobs:
       - run: python evals/runners/run_security_corpus.py --strict --out evals/reports/security-latest.json --markdown evals/reports/security-latest.md
       - run: python evals/runners/compare_eval_baseline.py --strict --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json --agent-baseline evals/baselines/agent-v2.2.8.json --out evals/reports/baseline-compare-latest.json
       - run: python evals/runners/run_agent_eval.py --report-dir evals/reports --strict
-      - run: python evals/runners/run_skill_eval.py --out evals/reports/skills-v4.0.3.json --strict
-      - run: python evals/runners/run_media_eval.py --out evals/reports/media-v4.0.3.json --strict
-      - run: python evals/runners/run_browser_eval.py --out evals/reports/browser-v4.0.3.json --strict --version 4.0.3
-      - run: python evals/runners/run_automation_eval.py --out evals/reports/automation-v4.0.3.json --strict --version 4.0.3
+      - run: python evals/runners/run_skill_eval.py --out evals/reports/skills-v4.0.7.json --strict
+      - run: python evals/runners/run_media_eval.py --out evals/reports/media-v4.0.7.json --strict
+      - run: python evals/runners/run_browser_eval.py --out evals/reports/browser-v4.0.7.json --strict --version 4.0.7
+      - run: python evals/runners/run_automation_eval.py --out evals/reports/automation-v4.0.7.json --strict --version 4.0.7
       - uses: actions/upload-artifact@v4
         with:
           name: offline-eval-report
@@ -145,10 +145,10 @@ jobs:
             evals/reports/baseline-compare-latest.json
             evals/reports/security-latest.json
             evals/reports/security-latest.md
-            evals/reports/skills-v4.0.3.json
-            evals/reports/media-v4.0.3.json
-            evals/reports/browser-v4.0.3.json
-            evals/reports/automation-v4.0.3.json
+            evals/reports/skills-v4.0.7.json
+            evals/reports/media-v4.0.7.json
+            evals/reports/browser-v4.0.7.json
+            evals/reports/automation-v4.0.7.json
 
   docker:
     runs-on: ubuntu-latest
@@ -165,14 +165,14 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build Rust sidecar image
-        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:4.0.3 .
+        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:4.0.7 .
       - name: Record Rust sidecar image identity
         run: >-
           python scripts/record_rust_sidecar_image.py
-          --tag deepseek-rust-gateway:4.0.3
-          --out docs/evidence/rust-sidecar-image-v4.0.3.json
+          --tag deepseek-rust-gateway:4.0.7
+          --out docs/evidence/rust-sidecar-image-v4.0.7.json
       - name: Run Rust sidecar
-        run: docker run --detach --name deepseek-rust-gateway --publish 127.0.0.1:8787:8787 deepseek-rust-gateway:4.0.3
+        run: docker run --detach --name deepseek-rust-gateway --publish 127.0.0.1:8787:8787 deepseek-rust-gateway:4.0.7
       - name: Smoke test Rust sidecar
         run: python scripts/smoke_rust_sidecar.py --base-url http://127.0.0.1:8787
       - name: Show Rust sidecar logs
@@ -183,7 +183,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rust-sidecar-image
-          path: docs/evidence/rust-sidecar-image-v4.0.3.json
+          path: docs/evidence/rust-sidecar-image-v4.0.7.json
           if-no-files-found: error
       - name: Stop Rust sidecar
         if: always()
@@ -204,13 +204,13 @@ jobs:
             -f docker-compose.hybrid-test.yml \
             up --detach --build
       - name: Run hybrid runtime smoke tests
-        run: python scripts/smoke_hybrid_runtime.py --json > docs/evidence/hybrid-runtime-e2e-v4.0.3.json
+        run: python scripts/smoke_hybrid_runtime.py --json > docs/evidence/hybrid-runtime-e2e-v4.0.7.json
       - name: Upload hybrid runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hybrid-runtime-e2e
-          path: docs/evidence/hybrid-runtime-e2e-v4.0.3.json
+          path: docs/evidence/hybrid-runtime-e2e-v4.0.7.json
           if-no-files-found: error
       - name: Show hybrid runtime logs
         if: failure()
@@ -247,7 +247,7 @@ jobs:
           python scripts/check_rag_parity.py \
             --base-url http://127.0.0.1:8787 \
             --strict \
-            --report docs/evidence/rag-parity-v4.0.3.json
+            --report docs/evidence/rag-parity-v4.0.7.json
       - name: Show Rust RAG parity logs
         if: failure()
         run: docker logs deepseek-rust-rag-parity || true
@@ -256,7 +256,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rag-parity-report
-          path: docs/evidence/rag-parity-v4.0.3.json
+          path: docs/evidence/rag-parity-v4.0.7.json
           if-no-files-found: warn
       - name: Stop Rust RAG parity sidecar
         if: always()
@@ -282,7 +282,7 @@ jobs:
           python scripts/check_rag_vector_binary_parity.py \
             --base-url http://127.0.0.1:8787 \
             --strict \
-            --report docs/evidence/rag-vector-binary-parity-v4.0.3.json
+            --report docs/evidence/rag-vector-binary-parity-v4.0.7.json
       - name: Show Rust binary vector parity logs
         if: failure()
         run: docker logs deepseek-rust-rag-vector-binary-parity || true
@@ -291,7 +291,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rag-vector-binary-parity
-          path: docs/evidence/rag-vector-binary-parity-v4.0.3.json
+          path: docs/evidence/rag-vector-binary-parity-v4.0.7.json
           if-no-files-found: error
       - name: Stop Rust binary vector parity sidecar
         if: always()
@@ -317,7 +317,7 @@ jobs:
           python scripts/check_gateway_request_parity.py \
             --base-url http://127.0.0.1:8787 \
             --strict \
-            --report docs/evidence/gateway-request-parity-v4.0.3.json
+            --report docs/evidence/gateway-request-parity-v4.0.7.json
       - name: Show Rust Gateway request parity logs
         if: failure()
         run: docker logs deepseek-rust-gateway-request-parity || true
@@ -326,7 +326,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gateway-request-parity-report
-          path: docs/evidence/gateway-request-parity-v4.0.3.json
+          path: docs/evidence/gateway-request-parity-v4.0.7.json
           if-no-files-found: warn
       - name: Stop Rust Gateway request parity sidecar
         if: always()
@@ -352,7 +352,7 @@ jobs:
           python scripts/check_mcp_protocol_parity.py \
             --base-url http://127.0.0.1:8787 \
             --strict \
-            --report docs/evidence/mcp-protocol-parity-v4.0.3.json
+            --report docs/evidence/mcp-protocol-parity-v4.0.7.json
       - name: Show Rust MCP protocol parity logs
         if: failure()
         run: docker logs deepseek-rust-mcp-protocol-parity || true
@@ -361,7 +361,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mcp-protocol-parity-report
-          path: docs/evidence/mcp-protocol-parity-v4.0.3.json
+          path: docs/evidence/mcp-protocol-parity-v4.0.7.json
           if-no-files-found: warn
       - name: Stop Rust MCP protocol parity sidecar
         if: always()
@@ -387,7 +387,7 @@ jobs:
           python scripts/check_rag_document_preparation_parity.py \
             --base-url http://127.0.0.1:8787 \
             --strict \
-            --report docs/evidence/rag-document-preparation-parity-v4.0.3.json
+            --report docs/evidence/rag-document-preparation-parity-v4.0.7.json
       - name: Show Rust RAG document preparation parity logs
         if: failure()
         run: docker logs deepseek-rust-rag-document-preparation-parity || true
@@ -396,7 +396,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rag-document-preparation-parity-report
-          path: docs/evidence/rag-document-preparation-parity-v4.0.3.json
+          path: docs/evidence/rag-document-preparation-parity-v4.0.7.json
           if-no-files-found: warn
       - name: Stop Rust RAG document preparation parity sidecar
         if: always()
@@ -420,25 +420,25 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
       - run: python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
-      - run: python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.3.json
-      - run: python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v4.0.3.json
-      - run: python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v4.0.3.json
-      - run: python scripts/smoke_media.py --offline --out docs/evidence/media-v4.0.3.json
-      - run: python scripts/smoke_browser.py --offline --out docs/evidence/browser-v4.0.3.json --version 4.0.3
-      - run: python scripts/smoke_automation.py --offline --out docs/evidence/automation-v4.0.3.json --version 4.0.3
-      - run: python scripts/smoke_skills.py --offline --out docs/evidence/skills-v4.0.3.json
-      - run: python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v4.0.3.json
-      - run: python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v4.0.3.json
-      - run: python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v4.0.3.json
-      - run: python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v4.0.3.json --report-out evals/reports/skills-v4.0.3.json
-      - run: python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v4.0.3.json
-      - run: python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v4.0.3.json
-      - run: python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v4.0.3.json
-      - run: python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v4.0.3.json
-      - run: python scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v4.0.3.json
-      - run: python scripts/generate_4_0_contract_evidence.py --kind upgrade --out docs/evidence/upgrade-rollback-v4.0.3.json
-      - run: python scripts/generate_4_0_contract_evidence.py --kind protocol --out docs/evidence/protocol-contract-v4.0.3.json
-      - run: python scripts/preflight_release.py --version 4.0.3 --ga
+      - run: python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.7.json
+      - run: python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v4.0.7.json
+      - run: python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v4.0.7.json
+      - run: python scripts/smoke_media.py --offline --out docs/evidence/media-v4.0.7.json
+      - run: python scripts/smoke_browser.py --offline --out docs/evidence/browser-v4.0.7.json --version 4.0.7
+      - run: python scripts/smoke_automation.py --offline --out docs/evidence/automation-v4.0.7.json --version 4.0.7
+      - run: python scripts/smoke_skills.py --offline --out docs/evidence/skills-v4.0.7.json
+      - run: python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v4.0.7.json
+      - run: python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v4.0.7.json
+      - run: python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v4.0.7.json
+      - run: python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v4.0.7.json --report-out evals/reports/skills-v4.0.7.json
+      - run: python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v4.0.7.json
+      - run: python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v4.0.7.json
+      - run: python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v4.0.7.json
+      - run: python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v4.0.7.json
+      - run: python scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v4.0.7.json
+      - run: python scripts/generate_4_0_contract_evidence.py --kind upgrade --out docs/evidence/upgrade-rollback-v4.0.7.json
+      - run: python scripts/generate_4_0_contract_evidence.py --kind protocol --out docs/evidence/protocol-contract-v4.0.7.json
+      - run: python scripts/preflight_release.py --version 4.0.7 --ga
       - run: python scripts/doctor.py --offline
       - run: python scripts/release.py --clean-workspace --dry-run
 
@@ -477,7 +477,7 @@ jobs:
           --threshold 80
           --artifact-out artifacts/rust-coverage.json
           --lcov-out artifacts/rust-coverage.lcov
-          --evidence-out docs/evidence/rust-coverage-v4.0.3.json
+          --evidence-out docs/evidence/rust-coverage-v4.0.7.json
       - name: Upload Rust coverage evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -486,7 +486,7 @@ jobs:
           path: |
             artifacts/rust-coverage.json
             artifacts/rust-coverage.lcov
-            docs/evidence/rust-coverage-v4.0.3.json
+            docs/evidence/rust-coverage-v4.0.7.json
           if-no-files-found: error
 
   rust-sidecar-performance:
@@ -510,7 +510,7 @@ jobs:
           --concurrency 1,8,32
           --timeout 45
           --artifact-out artifacts/rust-sidecar-performance.json
-          --evidence-out docs/evidence/rust-sidecar-performance-v4.0.3.json
+          --evidence-out docs/evidence/rust-sidecar-performance-v4.0.7.json
       - name: Upload informational performance report
         if: always()
         uses: actions/upload-artifact@v4
@@ -518,7 +518,7 @@ jobs:
           name: rust-sidecar-performance
           path: |
             artifacts/rust-sidecar-performance.json
-            docs/evidence/rust-sidecar-performance-v4.0.3.json
+            docs/evidence/rust-sidecar-performance-v4.0.7.json
           if-no-files-found: error
 
   rc-readiness:
