@@ -5,13 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.0.3；模块拆分自 v0.8.2 起。
+适用版本：v4.0.7；模块拆分自 v0.8.2 起。
 
-`static/modules/chat.js` 仍然是默认 `/` 的聊天主流程和渲染入口。`frontend/` 是完全隔离的 React/TypeScript/Vite 迁移树，生产构建输出到 `static/ui/` 并由 `/ui/` 提供；两套前端不得共同控制同一棵 DOM。
+自 4.0.7 起 `/` 默认加载 `frontend/` 的 React/TypeScript/Vite 构建产物（`static/ui/`），legacy 原生 JS 工作区保留在 `/legacy`，`DEEPSEEK_FRONTEND=legacy` 可恢复旧默认。React 侧已完成普通聊天（4.0.4）、Agent 与 Activity（4.0.5）、Projects/Skills/Memory、Diagnostics/Trace、PWA/离线/Share Target、Speech、选区引用与 Reminders（4.0.6）的对等迁移；`static/modules/chat.js` 与 `static/app.js` 仍未删除，退役提交另行安排。
 
-v4.0.3 完成普通聊天纵切片：`ChatContext` 组装纯 `chatReducer`、会话迁移/持久化、typed request builder 与 NDJSON reader；`SettingsContext` 只把非敏感偏好写入 `localStorage`，DeepSeek/Tavily Key 始终留在 React 内存；`OverlayContext` 独立管理抽屉。`features/chat` 负责消息与 Markdown 流式呈现，`features/composer` 负责输入、模型/思考/联网选项和停止生成，`features/history` 负责新建、恢复和删除本地会话。未完成的 reader 会在 `finally` 中 cancel 并 release lock，普通 `done` 不会伪造 Agent 完成状态。
-
-本版本仍不迁移附件、Agent/activity、Projects、Skills、Memory、高级设置、Speech、Diagnostics 或 PWA 所有权，也不删除 `chat.js`。默认入口继续是 `/`；只有等全部能力和异常路径达到对等，才会切换默认入口并移除旧模块。
+React 架构：domain 层为纯 reducer（`chatReducer` / `streamReducer` / `attachmentReducer` / `filePreviewReducer` / `agentTimeline`），控制器按域拆分（`useChatController` / `useAgentRun` / `useAttachmentController` / `useProjectController` / `useSkillController` / `useMemoryController` / `useFilePreviewController`），各 Context（Chat/Settings/Overlay/Attachments/FilePreview/Activity/Projects/Skills/Memory/Diagnostics）挂在 `AppProviders` 下；DeepSeek/Tavily Key 始终留在 React 内存。所有抽屉由 ChatPage 统一挂载，避免单页组件膨胀。
 
 v0.9.1 在设置面板新增思考强度选择，`chat.js` 负责持久化 `deepseek-infra.reasoning-effort` 并在聊天、继续生成、重新生成和编辑后重发时把 `reasoningEffort` 传给后端。
 v0.9.2 的上传和交互升级仍集中在 `chat.js`：拖拽、粘贴、文件选择、Seek 参考文件和项目文档上传共用 `validatedUploadFiles()` 预检；图片缩略图、lightbox、toast action、确认弹窗、快捷键面板、live region、焦点陷阱和软键盘安全区也是 DOM/状态耦合逻辑，暂不拆到纯函数模块。`normalizeStoredAttachment()` 负责保留本地图片预览字段。

@@ -5,6 +5,20 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.0.7] - React Default Entry
+
+### Frontend migration
+
+- Switches the default entry: `/` now serves the React frontend, while `/legacy` keeps the full legacy workspace reachable, and `DEEPSEEK_FRONTEND=legacy` restores the old default for instant rollback.
+- Splits PWA ownership per frontend: in React mode `/sw.js` serves a root-scoped runtime service worker with reminder notifications, and `/manifest.webmanifest` serves the React manifest including `share_target`; legacy mode serves the original files untouched.
+- Hardens the rollout: missing React build output falls back to the legacy index instead of failing, auth token redirects cover `/legacy`, and the Android Gradle build now runs the frontend build ahead of packaging (best-effort with a legacy fallback warning).
+- Verifies the packaging matrix for the React build: Docker multi-stage copy, PyInstaller `--add-data`, release archive, and Android source sync all ship `static/ui/`.
+
+### Compatibility
+
+- Keeps every legacy file in place (`static/index.html`, `static/app.js`, `static/modules/chat.js`); retirement is a separate follow-up after the switched default proves itself in the field.
+- Preserves the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates, and Python fallback.
+
 ## [4.0.6] - React Workspace and Platform Parity
 
 ### Frontend migration

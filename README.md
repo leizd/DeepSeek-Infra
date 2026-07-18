@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.0.6-blue)
+![版本](https://img.shields.io/badge/version-4.0.7-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.0.6 React workspace & platform parity:** `/ui/` now covers the full legacy surface — Projects with document upload and project-scoped requests, Skills with simplified builder and project binding, Memory with suggestion toasts, Diagnostics and Trace waterfall, installable PWA with offline refresh and Share Target, speech read-aloud, selection quote, and reminders with SW notifications. Together with 4.0.4 (normal chat parity) and 4.0.5 (Agent & Activity), the React frontend has reached full feature parity. The legacy `chat.js` stays in place until the default-entry switch lands with a `DEEPSEEK_FRONTEND=legacy` rollback. The frozen 4.0 runtime contract is unchanged: Python remains default and authoritative, all Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.0.6 notes](docs/releases/4.0.6.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade and rollback guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+> **4.0.7 React default entry:** `/` now serves the React frontend. After 4.0.4 (normal chat parity), 4.0.5 (Agent & Activity) and 4.0.6 (Projects, Skills, Memory, Diagnostics/Trace, PWA/offline/Share Target, speech, selection quote, reminders), the React surface covers the full legacy workspace. The legacy workspace stays reachable at `/legacy`, and `DEEPSEEK_FRONTEND=legacy` restores the old default instantly; no legacy file is deleted yet. The frozen 4.0 runtime contract is unchanged: Python remains default and authoritative, all Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.0.7 notes](docs/releases/4.0.7.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade and rollback guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
-**4.0.6 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.6 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
+**4.0.7 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.7 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
 
 ## 30 秒概览
 

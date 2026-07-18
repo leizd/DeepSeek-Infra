@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import mimetypes
+import os
 import queue
 import re
 import secrets
@@ -804,7 +805,7 @@ def open_bind_socket(host: str, port: int) -> socket.socket:
 
 def handle_auth_token_redirect(request: Request) -> Response | None:
     request_path = request.url.path
-    if request_path not in {"/", "/ui", "/ui/"} or not settings.auth.enabled:
+    if request_path not in {"/", "/ui", "/ui/", "/legacy", "/legacy/"} or not settings.auth.enabled:
         return None
     token = request.query_params.get("token", "")
     if not token:
@@ -1032,9 +1033,16 @@ def conversation_search(payload: dict[str, Any]) -> dict[str, Any]:
     return {"results": results[:50]}
 
 
-def frontend_index_path(frontend: str = "legacy") -> Path:
-    if frontend == "react":
-        return STATIC_DIR / "ui" / "index.html"
+def default_frontend() -> str:
+    return "legacy" if os.environ.get("DEEPSEEK_FRONTEND", "").strip().lower() == "legacy" else "react"
+
+
+def frontend_index_path(frontend: str = "") -> Path:
+    choice = (frontend or default_frontend()).strip().lower()
+    if choice == "react":
+        react_index = STATIC_DIR / "ui" / "index.html"
+        if react_index.is_file():
+            return react_index
     return STATIC_DIR / "index.html"
 
 
@@ -1048,6 +1056,18 @@ def resolve_static_file(raw_path: str) -> Path | None:
     if parts == ["ui"]:
         react_index = frontend_index_path("react")
         return react_index if react_index.is_file() else None
+    if parts == ["legacy"]:
+        legacy_index = STATIC_DIR / "index.html"
+        return legacy_index if legacy_index.is_file() else None
+    if default_frontend() == "react":
+        if parts == ["sw.js"]:
+            react_sw = STATIC_DIR / "ui" / "sw-root.js"
+            if react_sw.is_file():
+                return react_sw
+        if parts == ["manifest.webmanifest"]:
+            react_manifest = STATIC_DIR / "ui" / "manifest-root.webmanifest"
+            if react_manifest.is_file():
+                return react_manifest
     static_root = STATIC_DIR.resolve()
     candidate = (static_root / Path(*parts)).resolve()
     try:

@@ -219,7 +219,53 @@ def test_resolve_static_file_serves_isolated_react_spa(tmp_path: Path) -> None:
         assert server.resolve_static_file("/ui/projects/example") == index
         assert server.resolve_static_file("/ui/assets/app.js") == script
         assert server.resolve_static_file("/ui/assets/missing.js") is None
-        assert server.resolve_static_file("/") == tmp_path / "index.html"
+
+
+def test_resolve_static_file_switches_default_frontend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    react = tmp_path / "ui"
+    react.mkdir()
+    react_index = react / "index.html"
+    react_index.write_text("<main>react</main>", encoding="utf-8")
+    legacy_index = tmp_path / "index.html"
+    legacy_index.write_text("<main>legacy</main>", encoding="utf-8")
+
+    monkeypatch.delenv("DEEPSEEK_FRONTEND", raising=False)
+    with patch.object(server, "STATIC_DIR", tmp_path):
+        assert server.resolve_static_file("/") == react_index
+        assert server.resolve_static_file("/legacy") == legacy_index
+
+    monkeypatch.setenv("DEEPSEEK_FRONTEND", "legacy")
+    with patch.object(server, "STATIC_DIR", tmp_path):
+        assert server.resolve_static_file("/") == legacy_index
+
+
+def test_resolve_static_file_falls_back_to_legacy_without_react_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    legacy_index = tmp_path / "index.html"
+    legacy_index.write_text("<main>legacy</main>", encoding="utf-8")
+    monkeypatch.delenv("DEEPSEEK_FRONTEND", raising=False)
+    with patch.object(server, "STATIC_DIR", tmp_path):
+        assert server.resolve_static_file("/") == legacy_index
+
+
+def test_resolve_static_file_overrides_sw_and_manifest_in_react_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    react = tmp_path / "ui"
+    react.mkdir()
+    (tmp_path / "sw.js").write_text("// legacy sw", encoding="utf-8")
+    (tmp_path / "manifest.webmanifest").write_text("{}", encoding="utf-8")
+    react_sw = react / "sw-root.js"
+    react_sw.write_text("// react root sw", encoding="utf-8")
+    react_manifest = react / "manifest-root.webmanifest"
+    react_manifest.write_text("{}", encoding="utf-8")
+
+    monkeypatch.delenv("DEEPSEEK_FRONTEND", raising=False)
+    with patch.object(server, "STATIC_DIR", tmp_path):
+        assert server.resolve_static_file("/sw.js") == react_sw
+        assert server.resolve_static_file("/manifest.webmanifest") == react_manifest
+
+    monkeypatch.setenv("DEEPSEEK_FRONTEND", "legacy")
+    with patch.object(server, "STATIC_DIR", tmp_path):
+        assert server.resolve_static_file("/sw.js") == tmp_path / "sw.js"
+        assert server.resolve_static_file("/manifest.webmanifest") == tmp_path / "manifest.webmanifest"
 
 
 def _route_endpoint(app: Any, path: str, method: str) -> Any:
