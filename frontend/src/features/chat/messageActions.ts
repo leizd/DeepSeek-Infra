@@ -1,4 +1,17 @@
-import type { ChatMessage } from "../../domain/chat/types";
+import type { ChatMessage, QuoteDraft } from "../../domain/chat/types";
+
+export function quoteAwareContent(content: string, quoteDraft: QuoteDraft | null): string {
+  const quoteText = quoteDraft?.isFragment ? quoteDraft.fragment || quoteDraft.text : quoteDraft?.text;
+  if (!quoteText) return content;
+  const quoted = quoteText
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  if (quoteDraft?.isFragment) {
+    return `关于上文中的这一段：\n\n${quoted}\n\n${content}`.trim();
+  }
+  return `针对这段内容提问：\n\n${quoted}\n\n${content}`.trim();
+}
 
 export function exportFilename(source: string): string {
   const base = source

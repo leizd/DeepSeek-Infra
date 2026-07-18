@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject } 
 
 import { confirmAgentPlan, createAgentRun, isActiveRunStatus, rerunAgentPhase, type AgentPlanItem } from "../../api/agentRunApi";
 import { createAssistantMessage } from "../../domain/chat/streamReducer";
-import { buildChatPayload, type ChatRequestSettings } from "../../domain/chat/requestBuilder";
+import { applyProjectContext, buildChatPayload, type ChatRequestSettings } from "../../domain/chat/requestBuilder";
 import { selectCurrentMessages } from "../../domain/chat/selectors";
 import type { ChatAction, ChatState } from "../../domain/chat/chatReducer";
 import type { Attachment, ChatMessage, JsonRecord } from "../../domain/chat/types";
 import { createId } from "../../shared/createId";
 import { useSettings } from "../../contexts/SettingsContext";
+import { useProjects } from "../../contexts/ProjectsContext";
 import { streamAgentRunEvents } from "./agentRunFlow";
 
 function errorMessage(reason: unknown): string {
@@ -45,6 +46,7 @@ export interface AgentRunHookParams {
 
 export function useAgentRun(params: AgentRunHookParams) {
   const settings = useSettings();
+  const projects = useProjects();
   const { state, dispatch, abortControllerRef, requestSettings, hasBackendKey, maybeGenerateTitle, waitUntilResumed } = params;
 
   const runtimePayload = useCallback((): JsonRecord => {
@@ -111,12 +113,15 @@ export function useAgentRun(params: AgentRunHookParams) {
       }
 
       const existingMessages = selectCurrentMessages(state);
-      const newUserMessage = userMessage(content, attachments);
+      const projectContext = projects.chatContext();
+      const newUserMessage = applyProjectContext(userMessage(content, attachments), projectContext);
       const assistantMessage = createAssistantMessage(createId("assistant"));
       const conversationId = state.currentConversationId ?? createId("conversation");
       const firstTurn = !existingMessages.some((message) => message.role === "user");
       const payload = {
-        ...buildChatPayload(existingMessages, newUserMessage, requestSettings()),
+        ...buildChatPayload(existingMessages, newUserMessage, requestSettings(), {
+          memoryScope: projectContext.memoryScope,
+        }),
         agentMode: true,
       };
 
@@ -152,7 +157,7 @@ export function useAgentRun(params: AgentRunHookParams) {
       const streamedContent = await attachStream({ ...assistantMessage, agentRunId: runId }, runId, -1);
       await maybeGenerateTitle(conversationId, firstTurn, newUserMessage.content, streamedContent);
     },
-    [attachStream, dispatch, hasBackendKey, maybeGenerateTitle, requestSettings, settings, state],
+    [attachStream, dispatch, hasBackendKey, maybeGenerateTitle, projects, requestSettings, settings, state],
   );
 
   const confirmPlan = useCallback(

@@ -3,7 +3,7 @@ import {
   hasInlineAttachmentText,
   toApiAttachments,
 } from "../../features/attachments/attachmentMapper";
-import type { ChatMessage, ChatRequestPayload, JsonRecord } from "./types";
+import type { Attachment, ChatMessage, ChatRequestPayload, JsonRecord } from "./types";
 
 const DEFAULT_SYSTEM_PROMPT =
   "你是一个有帮助、回答准确、表达清晰的中文助手。涉及公式时使用标准 LaTeX，并明确说明重要假设与边界。";
@@ -16,6 +16,13 @@ export interface ChatRequestSettings {
   model: string;
   thinkingEnabled: boolean;
   searchEnabled: boolean;
+  memoryEnabled: boolean;
+}
+
+export interface ChatRequestContext {
+  memoryScope?: string;
+  projectId?: string;
+  projectAttachments?: readonly Attachment[];
 }
 
 function requestContent(message: ChatMessage): string {
@@ -29,6 +36,7 @@ function requestMessage(message: ChatMessage, includeImages: boolean): JsonRecor
     role: message.role,
     content: requestContent(message),
   };
+  if (message.projectId) record.projectId = message.projectId;
   const attachments = toApiAttachments(message.attachments, { includeImages });
   if (attachments.length) record.attachments = attachments;
   return record;
@@ -54,8 +62,17 @@ export function basePayloadFields(settings: ChatRequestSettings): Omit<ChatReque
     thinkingEnabled: settings.thinkingEnabled,
     searchEnabled: settings.searchEnabled,
     searchMode: settings.searchEnabled ? "auto" : "off",
-    memoryEnabled: false,
+    memoryEnabled: settings.memoryEnabled,
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  };
+}
+
+export function applyProjectContext(userMessage: ChatMessage, context: ChatRequestContext): ChatMessage {
+  if (!context.projectId) return userMessage;
+  return {
+    ...userMessage,
+    projectId: context.projectId,
+    attachments: [...userMessage.attachments, ...(context.projectAttachments ?? [])],
   };
 }
 
@@ -63,9 +80,11 @@ export function buildChatPayload(
   existingMessages: readonly ChatMessage[],
   userMessage: ChatMessage,
   settings: ChatRequestSettings,
+  context: ChatRequestContext = {},
 ): ChatRequestPayload {
   return {
     ...basePayloadFields(settings),
+    ...(context.memoryScope && settings.memoryEnabled ? { memoryScope: context.memoryScope } : {}),
     messages: messagesToApiMessages([...existingMessages, userMessage]),
   };
 }

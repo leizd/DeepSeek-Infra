@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyProjectContext,
   buildChatPayload,
   buildContinuationPayload,
   buildRegenerationPayload,
@@ -17,6 +18,7 @@ const settings: ChatRequestSettings = {
   model: "deepseek-v4-pro",
   thinkingEnabled: false,
   searchEnabled: false,
+  memoryEnabled: false,
 };
 
 function message(role: "user" | "assistant", content: string): ChatMessage {
@@ -42,6 +44,7 @@ describe("buildChatPayload", () => {
       model: "deepseek-v4-pro",
       thinkingEnabled: true,
       searchEnabled: false,
+      memoryEnabled: false,
     });
 
     expect(payload).toMatchObject({ apiKey: "secret", model: "deepseek-v4-pro", agentMode: false, stream: true });
@@ -114,6 +117,28 @@ describe("buildChatPayload", () => {
     const payload = buildChatPayload([], outgoing, settings);
     expect(payload.messages).toHaveLength(1);
     expect(payload.messages[0].attachments).toBeDefined();
+  });
+
+  it("adds memoryScope only when memory is enabled and a scope is provided", () => {
+    const withMemory = buildChatPayload([], message("user", "hi"), { ...settings, memoryEnabled: true }, { memoryScope: "project:proj-1" });
+    expect(withMemory.memoryScope).toBe("project:proj-1");
+    const disabled = buildChatPayload([], message("user", "hi"), settings, { memoryScope: "project:proj-1" });
+    expect(disabled.memoryScope).toBeUndefined();
+    const globalScope = buildChatPayload([], message("user", "hi"), { ...settings, memoryEnabled: true }, { memoryScope: "" });
+    expect(globalScope.memoryScope).toBeUndefined();
+  });
+
+  it("applyProjectContext stamps the project and merges its attachments", () => {
+    const outgoing = applyProjectContext(message("user", "问题"), {
+      projectId: "proj-1",
+      projectAttachments: [{ name: "spec.pdf", kind: "pdf", fileId: "pf1", projectId: "proj-1" }],
+    });
+    expect(outgoing.projectId).toBe("proj-1");
+    expect(outgoing.attachments).toHaveLength(1);
+    const payload = buildChatPayload([], outgoing, settings);
+    expect(payload.messages[0].projectId).toBe("proj-1");
+    const plain = message("user", "x");
+    expect(applyProjectContext(plain, {})).toBe(plain);
   });
 });
 

@@ -2,8 +2,11 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { generateConversationTitle } from "../../api/titleApi";
 import { streamChat } from "../../api/chatStream";
+import { addMemory, MemoryConflictError, normalizeMemorySuggestion } from "../../api/memoryApi";
+import { createReminder } from "../../api/remindersApi";
 import { chatReducer, createInitialChatState } from "../../domain/chat/chatReducer";
 import {
+  applyProjectContext,
   buildChatPayload,
   buildContinuationPayload,
   buildRegenerationPayload,
@@ -11,12 +14,16 @@ import {
 } from "../../domain/chat/requestBuilder";
 import { selectCurrentMessages } from "../../domain/chat/selectors";
 import { applyStreamEvent, createAssistantMessage, resetAssistantMessage } from "../../domain/chat/streamReducer";
-import type { Attachment, ChatMessage, ChatRequestPayload } from "../../domain/chat/types";
+import type { Attachment, ChatMessage, ChatRequestPayload, QuoteDraft } from "../../domain/chat/types";
 import { loadPersistedConversationState, savePersistedConversationState } from "../../domain/conversation/persistence";
 import { createId } from "../../shared/createId";
 import { useSettings } from "../../contexts/SettingsContext";
+import { useProjects } from "../../contexts/ProjectsContext";
 import { createOutputPauseGate } from "../activity/outputPause";
 import { useAgentRun } from "../agent-run/useAgentRun";
+import { detectReminderFromText } from "../reminders/reminderParse";
+import { ensureNotificationPermission } from "../reminders/useReminderPolling";
+import { quoteAwareContent } from "./messageActions";
 
 function userMessage(content: string, attachments: readonly Attachment[]): ChatMessage {
   return {
@@ -43,8 +50,16 @@ function isAbortError(reason: unknown): boolean {
     : reason instanceof Error && reason.name === "AbortError";
 }
 
+export interface PendingMemorySuggestion {
+  content: string;
+  category: string;
+  scope: string;
+  conflicts: readonly { id: string; content: string; reason: string }[];
+}
+
 export function useChatController() {
   const settings = useSettings();
+  const projects = useProjects();
   const [state, dispatch] = useReducer(
     chatReducer,
     undefined,
@@ -54,6 +69,8 @@ export function useChatController() {
   const outputPauseGateRef = useRef<ReturnType<typeof createOutputPauseGate> | null>(null);
   if (!outputPauseGateRef.current) outputPauseGateRef.current = createOutputPauseGate();
   const [outputPaused, setOutputPaused] = useState(false);
+  const [pendingMemorySuggestion, setPendingMemorySuggestion] = useState<PendingMemorySuggestion | null>(null);
+  const [quoteDraft, setQuoteDraft] = useState<QuoteDraft | null>(null);
   const waitUntilResumed = useCallback(() => outputPauseGateRef.current?.waitUntilResumed() ?? Promise.resolve(), []);
 
   useEffect(() => {
@@ -73,6 +90,7 @@ export function useChatController() {
     model: settings.model,
     thinkingEnabled: settings.thinkingEnabled,
     searchEnabled: settings.searchEnabled,
+    memoryEnabled: settings.memoryEnabled,
   }), [settings]);
 
   const streamIntoMessage = useCallback(
@@ -86,6 +104,10 @@ export function useChatController() {
           current = applyStreamEvent(current, event);
           dispatch({ type: "streamEventReceived", messageId: current.id, event });
           if (event.type === "done" || event.type === "error") terminalReceived = true;
+          if (event.type === "memory_suggestion") {
+            const suggestion = normalizeMemorySuggestion(event.payload);
+            if (suggestion) setPendingMemorySuggestion({ ...suggestion, conflicts: [] });
+          }
         }
         if (!terminalReceived) {
           dispatch({ type: "requestFailed", messageId: current.id, error: "连接提前结束，请重试" });
@@ -128,6 +150,17 @@ export function useChatController() {
     [settings.apiKey, settings.runtime],
   );
 
+  const maybeCreateReminder = useCallback((input: string) => {
+    const draft = detectReminderFromText(input);
+    if (!draft) return;
+    void createReminder(draft)
+      .then(() => {
+        dispatch({ type: "noticeSet", notice: "已创建本地提醒" });
+        void ensureNotificationPermission();
+      })
+      .catch(() => undefined);
+  }, []);
+
   const agentRun = useAgentRun({
     state,
     dispatch,
@@ -144,20 +177,25 @@ export function useChatController() {
         await agentRun.sendAgentMessage(input, options);
         return;
       }
-      const content = input.trim();
+      const quotedContent = quoteAwareContent(input.trim(), quoteDraft);
       const attachments = options.attachments ?? [];
-      if ((!content && !attachments.length) || state.requestStatus === "streaming") return;
+      if ((!quotedContent && !attachments.length) || state.requestStatus === "streaming") return;
       if (!hasBackendKey()) {
         dispatch({ type: "noticeSet", notice: "请先在连接设置中输入 DeepSeek API Key" });
         return;
       }
 
       const existingMessages = selectCurrentMessages(state);
-      const newUserMessage = userMessage(content, attachments);
+      const projectContext = projects.chatContext();
+      const newUserMessage = applyProjectContext(userMessage(quotedContent, attachments), projectContext);
+      setQuoteDraft(null);
+      maybeCreateReminder(input.trim());
       const assistantMessage = createAssistantMessage(createId("assistant"));
       const conversationId = state.currentConversationId ?? createId("conversation");
       const firstTurn = !existingMessages.some((message) => message.role === "user");
-      const payload = buildChatPayload(existingMessages, newUserMessage, requestSettings());
+      const payload = buildChatPayload(existingMessages, newUserMessage, requestSettings(), {
+        memoryScope: projectContext.memoryScope,
+      });
 
       dispatch({
         type: "requestStarted",
@@ -171,7 +209,7 @@ export function useChatController() {
       const finished = await streamIntoMessage(assistantMessage, payload);
       await maybeGenerateTitle(conversationId, firstTurn, newUserMessage.content, finished?.content ?? "");
     },
-    [agentRun, hasBackendKey, maybeGenerateTitle, requestSettings, settings, state, streamIntoMessage],
+    [agentRun, hasBackendKey, maybeCreateReminder, maybeGenerateTitle, projects, quoteDraft, requestSettings, settings, state, streamIntoMessage],
   );
 
   const editAndResend = useCallback(
@@ -271,10 +309,56 @@ export function useChatController() {
     if (state.requestStatus === "idle" && outputPaused) resumeOutput();
   }, [state.requestStatus, outputPaused, resumeOutput]);
 
+  const saveMemorySuggestion = useCallback(
+    async (replaceIds: readonly string[] = []) => {
+      const suggestion = pendingMemorySuggestion;
+      if (!suggestion) return;
+      try {
+        await addMemory({
+          content: suggestion.content,
+          category: suggestion.category,
+          scope: suggestion.scope,
+          replaceIds,
+        });
+        setPendingMemorySuggestion(null);
+        dispatch({ type: "noticeSet", notice: "已保存到长期记忆" });
+      } catch (reason) {
+        if (reason instanceof MemoryConflictError) {
+          setPendingMemorySuggestion({ ...suggestion, conflicts: reason.conflicts });
+        } else {
+          dispatch({ type: "noticeSet", notice: errorMessage(reason) });
+        }
+      }
+    },
+    [pendingMemorySuggestion],
+  );
+
+  const dismissMemorySuggestion = useCallback(() => setPendingMemorySuggestion(null), []);
+
+  const quoteMessage = useCallback((message: ChatMessage, fragment?: string) => {
+    const text = (fragment ?? message.content).trim();
+    if (!text) return;
+    setQuoteDraft({
+      messageId: message.id,
+      role: message.role,
+      text: message.content.trim(),
+      fragment: text,
+      isFragment: Boolean(fragment && fragment.trim() !== message.content.trim()),
+    });
+  }, []);
+
+  const clearQuote = useCallback(() => setQuoteDraft(null), []);
+
+  useEffect(() => {
+    setQuoteDraft(null);
+  }, [state.currentConversationId]);
+
   return {
     state,
     messages: selectCurrentMessages(state),
     outputPaused,
+    pendingMemorySuggestion,
+    quoteDraft,
     sendMessage,
     editAndResend,
     regenerate,
@@ -292,5 +376,9 @@ export function useChatController() {
     toggleFavorite: (conversationId: string) => dispatch({ type: "conversationFavoriteToggled", conversationId, updatedAt: Date.now() }),
     clearNotice: () => dispatch({ type: "noticeCleared" }),
     notify: (notice: string) => dispatch({ type: "noticeSet", notice }),
+    saveMemorySuggestion,
+    dismissMemorySuggestion,
+    quoteMessage,
+    clearQuote,
   };
 }

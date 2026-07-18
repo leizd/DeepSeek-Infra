@@ -61,6 +61,15 @@ export function ConnectionSettingsDrawer() {
           <option value="plan">先确认计划</option>
         </select>
       </label>
+      <label className="show-key-toggle">
+        <input
+          type="checkbox"
+          checked={settings.memoryEnabled}
+          onChange={(event) => settings.setMemoryEnabled(event.target.checked)}
+        />
+        启用长期记忆
+      </label>
+      <button className="message-action" type="button" onClick={() => overlay.openOverlay("memory")}>查看记忆</button>
       <div className="connection-status-grid">
         <div><span className={hasGeneration ? "status-ok" : "status-warn"} />普通对话：{hasGeneration ? "可用" : "待配置"}</div>
         <div><span className={hasSearch ? "status-ok" : "status-warn"} />联网搜索：{hasSearch ? "可用" : "未配置"}</div>

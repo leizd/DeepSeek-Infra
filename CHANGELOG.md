@@ -5,6 +5,21 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.0.6] - React Workspace and Platform Parity
+
+### Frontend migration
+
+- Migrates the workspace panels: Projects (create/rename/delete, document upload, reader preview, active-project chip, project attachments and `memoryScope` merged into requests), Skills (search, simplified builder, enable/disable, edit, delete, per-project binding), and Memory (toggle, drawer, per-item delete and clear).
+- Ports memory suggestions end to end: `memory_suggestion` stream events surface a save/dismiss toast, and HTTP 409 conflicts offer replace-old-memory retry.
+- Adds Diagnostics and Trace: per-message diagnostics rows (usage, cost, cache, routing, agent cache) and an OpenTelemetry-style span-tree waterfall from `/api/traces/{id}` with JSON export.
+- Makes the React app installable and resilient: `/ui/`-scoped service worker with offline refresh, offline detection with send gating, and Share Target import (`?share=` prompt plus ready attachments).
+- Migrates speech playback (chunked, voice-matched read-aloud with stop), selection quote (floating quote button, quote-aware prompts, composer preview), and reminders (`提醒我` parsing on send, 60s due polling with SW notifications, plus a list/delete/create drawer).
+
+### Compatibility
+
+- Keeps `/` as the default legacy workspace and does not delete `static/modules/chat.js`; the default-entry switch is the next and final migration slice.
+- Preserves the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates, and Python fallback.
+
 ## [4.0.5] - React Agent Runs and Activity
 
 ### Frontend migration

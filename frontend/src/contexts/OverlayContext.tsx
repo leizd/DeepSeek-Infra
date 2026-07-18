@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo, useState, type PropsWithChildren } from "react";
 
-export type OverlayName = "history" | "settings" | null;
+export type OverlayName = "history" | "settings" | "projects" | "skills" | "memory" | "reminders" | null;
 
 interface OverlayContextValue {
   activeOverlay: OverlayName;

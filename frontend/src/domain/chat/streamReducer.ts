@@ -191,6 +191,7 @@ function applyStreamEventBody(message: ChatMessage, event: ChatStreamEvent): Cha
         reasoning: event.reasoning ?? message.reasoning,
         model: event.model ?? message.model,
         diagnostics: event.diagnostics ?? message.diagnostics,
+        usage: event.usage ?? message.usage,
         agentRunId: event.runId ?? message.agentRunId,
         agentRunStatus: message.agentRunId ? "done" : message.agentRunStatus,
         error: undefined,

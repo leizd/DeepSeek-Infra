@@ -102,6 +102,7 @@ export function migrateLegacyMessage(value: unknown): ChatMessage | null {
     systemNotes: Array.isArray(value.systemNotes) ? value.systemNotes.map(text).filter(Boolean).slice(0, 20) : [],
     search: isRecord(value.search) ? value.search : null,
     diagnostics: isRecord(value.diagnostics) ? value.diagnostics : null,
+    usage: isRecord(value.usage) ? value.usage : undefined,
     model: migrateLegacyModel(value.model),
     error,
     errorCode: text(value.errorCode) || undefined,

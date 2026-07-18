@@ -23,6 +23,12 @@ export function HistoryDrawer() {
       >
         ＋ 新对话
       </button>
+      <div className="workspace-nav">
+        <button type="button" onClick={() => overlay.openOverlay("projects")}>项目</button>
+        <button type="button" onClick={() => overlay.openOverlay("skills")}>技能</button>
+        <button type="button" onClick={() => overlay.openOverlay("memory")}>记忆</button>
+        <button type="button" onClick={() => overlay.openOverlay("reminders")}>提醒</button>
+      </div>
       <ConversationList />
       <div className="history-footer">
         <span>历史仅保存在本机浏览器</span>

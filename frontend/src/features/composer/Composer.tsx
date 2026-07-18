@@ -3,6 +3,7 @@ import { useEffect, useRef, type ClipboardEvent } from "react";
 import { useAttachments } from "../../contexts/AttachmentsContext";
 import { useChat } from "../../contexts/ChatContext";
 import { useOverlay } from "../../contexts/OverlayContext";
+import { useProjects } from "../../contexts/ProjectsContext";
 import { useSettings } from "../../contexts/SettingsContext";
 import { AttachmentList } from "../attachments/AttachmentList";
 import { ATTACHMENT_ACCEPT } from "../attachments/attachmentMapper";
@@ -13,6 +14,7 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
   const chat = useChat();
   const overlay = useOverlay();
   const settings = useSettings();
+  const projects = useProjects();
   const attachments = useAttachments();
   const composer = useComposer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -34,6 +36,24 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
   return (
     <form className="composer" onSubmit={composer.onSubmit}>
       <AttachmentList />
+      {chat.quoteDraft && (
+        <div className="quote-preview" aria-label="引用预览">
+          <span className="quote-preview-label">{chat.quoteDraft.isFragment ? "引用片段" : "引用"}</span>
+          <span className="quote-preview-text">{chat.quoteDraft.fragment || chat.quoteDraft.text}</span>
+          <span className="quote-preview-actions">
+            <button
+              type="button"
+              aria-label="跳转到原消息"
+              onClick={() => {
+                document.querySelector(`[data-message-id="${chat.quoteDraft?.messageId}"]`)?.scrollIntoView({ block: "center" });
+              }}
+            >
+              定位
+            </button>
+            <button type="button" aria-label="移除引用" onClick={chat.clearQuote}>×</button>
+          </span>
+        </div>
+      )}
       <textarea
         id="reactPromptInput"
         aria-label="输入消息"
@@ -60,6 +80,27 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
       />
       <div className="composer-toolbar">
         <div className="composer-options">
+          {projects.activeProject && (
+            <button
+              className="option-button project-chip active"
+              type="button"
+              title="点击打开项目面板"
+              onClick={() => overlay.openOverlay("projects")}
+            >
+              {projects.activeProject.name}
+              <span
+                className="project-chip-clear"
+                role="button"
+                aria-label="取消项目关联"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  projects.setActive("");
+                }}
+              >
+                ×
+              </span>
+            </button>
+          )}
           <button
             className="option-button"
             type="button"

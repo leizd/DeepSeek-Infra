@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { exportFilename, messageToMarkdown } from "./messageActions";
+import { exportFilename, messageToMarkdown, quoteAwareContent } from "./messageActions";
 import type { ChatMessage } from "../../domain/chat/types";
 
 function assistantMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
@@ -32,6 +32,38 @@ describe("exportFilename", () => {
   it("caps the base length", () => {
     const name = exportFilename("x".repeat(100));
     expect(name.length).toBeLessThanOrEqual(52);
+  });
+});
+
+describe("quoteAwareContent", () => {
+  it("returns the content untouched without a quote", () => {
+    expect(quoteAwareContent("问题", null)).toBe("问题");
+    expect(quoteAwareContent("问题", { messageId: "m", role: "assistant", text: "", fragment: "", isFragment: true })).toBe("问题");
+  });
+
+  it("wraps a fragment quote with the fragment prefix", () => {
+    const output = quoteAwareContent("这段对吗", {
+      messageId: "m1",
+      role: "assistant",
+      text: "完整回答",
+      fragment: "第二行\n第三行",
+      isFragment: true,
+    });
+    expect(output).toContain("关于上文中的这一段：");
+    expect(output).toContain("> 第二行\n> 第三行");
+    expect(output.endsWith("这段对吗")).toBe(true);
+  });
+
+  it("wraps a whole-message quote with the question prefix", () => {
+    const output = quoteAwareContent("展开讲讲", {
+      messageId: "m1",
+      role: "assistant",
+      text: "完整回答",
+      fragment: "完整回答",
+      isFragment: false,
+    });
+    expect(output).toContain("针对这段内容提问：");
+    expect(output).toContain("> 完整回答");
   });
 });
 

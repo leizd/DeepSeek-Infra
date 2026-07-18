@@ -3,8 +3,11 @@ import { useState } from "react";
 import type { ChatMessage } from "../../domain/chat/types";
 import { agentExecutionReport } from "../../domain/chat/agentTimeline";
 import { useChat } from "../../contexts/ChatContext";
+import { useDiagnostics } from "../../contexts/DiagnosticsContext";
 import { useFilePreview } from "../../contexts/FilePreviewContext";
 import { formatBytes } from "../attachments/attachmentMapper";
+import { hasDiagnostics, traceIdForMessage } from "../diagnostics/diagnosticsRows";
+import type { SpeechPlayer } from "../speech/useSpeechPlayer";
 import { copyTextToClipboard, downloadTextFile, exportFilename, messageToMarkdown } from "./messageActions";
 import { MarkdownContent } from "../../shared/markdown/MarkdownContent";
 import { AssistantMessage } from "./AssistantMessage";
@@ -111,10 +114,14 @@ function UserMessageEditor({ message, onClose }: { message: ChatMessage; onClose
   );
 }
 
-function AssistantActions({ message }: { message: ChatMessage }) {
+function AssistantActions({ message, speech }: { message: ChatMessage; speech: SpeechPlayer }) {
   const chat = useChat();
+  const diagnostics = useDiagnostics();
   const busy = chat.state.requestStatus === "streaming";
   const agentReport = message.agentRunId ? agentExecutionReport(message) : "";
+  const showDiagnostics = hasDiagnostics(message);
+  const traceId = traceIdForMessage(message);
+  const speaking = speech.speakingMessageId === message.id;
   return (
     <div className="message-actions" aria-label="回复操作">
       {message.error && (
@@ -131,6 +138,19 @@ function AssistantActions({ message }: { message: ChatMessage }) {
       <button className="message-action" type="button" disabled={busy} onClick={() => void chat.regenerate(message.id)}>
         重新生成
       </button>
+      {message.content.trim() && (
+        <button
+          className={speaking ? "message-action speaking" : "message-action"}
+          type="button"
+          aria-pressed={speaking}
+          onClick={() => speech.toggleSpeak(message)}
+        >
+          {speaking ? "停止朗读" : "朗读"}
+        </button>
+      )}
+      <button className="message-action" type="button" onClick={() => chat.quoteMessage(message)}>
+        引用
+      </button>
       <button
         className="message-action"
         type="button"
@@ -140,6 +160,16 @@ function AssistantActions({ message }: { message: ChatMessage }) {
         导出
       </button>
       {agentReport && <CopyButton text={agentReport} label="复制 Agent 过程" />}
+      {showDiagnostics && (
+        <button className="message-action" type="button" onClick={() => diagnostics.openDiagnostics(message.id)}>
+          诊断
+        </button>
+      )}
+      {traceId && (
+        <button className="message-action" type="button" onClick={() => diagnostics.openDiagnostics(message.id, "trace")}>
+          Trace
+        </button>
+      )}
     </div>
   );
 }
@@ -147,9 +177,11 @@ function AssistantActions({ message }: { message: ChatMessage }) {
 export function MessageItem({
   message,
   onCitation,
+  speech,
 }: {
   message: ChatMessage;
   onCitation?: (citationId: string) => void;
+  speech: SpeechPlayer;
 }) {
   const chat = useChat();
   const [editing, setEditing] = useState(false);
@@ -175,10 +207,13 @@ export function MessageItem({
               编辑
             </button>
             <CopyButton text={message.content} label="复制" />
+            <button className="message-action" type="button" onClick={() => chat.quoteMessage(message)}>
+              引用
+            </button>
             {message.updatedAt ? <span className="message-edited-mark">已编辑</span> : null}
           </div>
         )}
-        {message.role === "assistant" && !message.streaming && <AssistantActions message={message} />}
+        {message.role === "assistant" && !message.streaming && <AssistantActions message={message} speech={speech} />}
       </div>
     </article>
   );

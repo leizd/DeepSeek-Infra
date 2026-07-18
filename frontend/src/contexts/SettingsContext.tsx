@@ -9,6 +9,7 @@ const preferenceKeys = {
   search: "deepseek-infra.search-enabled",
   agentMode: "deepseek-infra.agent-mode",
   agentPreset: "deepseek-infra.agent-preset",
+  memory: "deepseek-infra.memory-enabled",
 } as const;
 
 export interface SettingsContextValue {
@@ -19,6 +20,7 @@ export interface SettingsContextValue {
   searchEnabled: boolean;
   agentMode: boolean;
   agentPreset: string;
+  memoryEnabled: boolean;
   runtime: ChatRuntimeConfig | null;
   loading: boolean;
   error: string;
@@ -29,6 +31,7 @@ export interface SettingsContextValue {
   setSearchEnabled(value: boolean): void;
   setAgentMode(value: boolean): void;
   setAgentPreset(value: string): void;
+  setMemoryEnabled(value: boolean): void;
   reloadRuntime(): Promise<void>;
 }
 
@@ -47,6 +50,7 @@ export function SettingsProvider({ children }: PropsWithChildren) {
   const [searchEnabled, setSearchState] = useState(() => storedPreference(preferenceKeys.search, "0") === "1");
   const [agentMode, setAgentModeState] = useState(() => storedPreference(preferenceKeys.agentMode, "0") === "1");
   const [agentPreset, setAgentPresetState] = useState(() => storedPreference(preferenceKeys.agentPreset, "full"));
+  const [memoryEnabled, setMemoryState] = useState(() => storedPreference(preferenceKeys.memory, "1") !== "0");
   const [runtime, setRuntime] = useState<ChatRuntimeConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -94,6 +98,11 @@ export function SettingsProvider({ children }: PropsWithChildren) {
     window.localStorage.setItem(preferenceKeys.agentPreset, value);
   }
 
+  function setMemoryEnabled(value: boolean) {
+    setMemoryState(value);
+    window.localStorage.setItem(preferenceKeys.memory, value ? "1" : "0");
+  }
+
   const value = useMemo<SettingsContextValue>(
     () => ({
       apiKey,
@@ -103,6 +112,7 @@ export function SettingsProvider({ children }: PropsWithChildren) {
       searchEnabled,
       agentMode,
       agentPreset,
+      memoryEnabled,
       runtime,
       loading,
       error,
@@ -113,9 +123,10 @@ export function SettingsProvider({ children }: PropsWithChildren) {
       setSearchEnabled,
       setAgentMode,
       setAgentPreset,
+      setMemoryEnabled,
       reloadRuntime,
     }),
-    [apiKey, tavilyApiKey, model, thinkingEnabled, searchEnabled, agentMode, agentPreset, runtime, loading, error],
+    [apiKey, tavilyApiKey, model, thinkingEnabled, searchEnabled, agentMode, agentPreset, memoryEnabled, runtime, loading, error],
   );
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;

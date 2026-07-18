@@ -2,6 +2,7 @@ import { useState, type FormEvent, type KeyboardEvent } from "react";
 
 import { useAttachments } from "../../contexts/AttachmentsContext";
 import { useChat } from "../../contexts/ChatContext";
+import { useOnlineStatus } from "../../shared/useOnlineStatus";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useSettings } from "../../contexts/SettingsContext";
 
@@ -11,10 +12,15 @@ export function useComposer() {
   const settings = useSettings();
   const overlay = useOverlay();
   const attachments = useAttachments();
+  const online = useOnlineStatus();
 
   function submit() {
     const content = value.trim();
     if (chat.state.requestStatus === "streaming") return;
+    if (!online) {
+      chat.notify("当前处于离线模式，不能发送消息");
+      return;
+    }
     if (attachments.state.uploading) {
       chat.notify("文件还在上传或识别，请稍等");
       return;
@@ -24,7 +30,7 @@ export function useComposer() {
       return;
     }
     const ready = attachments.consumeReadyAttachments();
-    if (!content && !ready.length) return;
+    if (!content && !ready.length && !chat.quoteDraft) return;
     if (!settings.apiKey.trim() && !settings.runtime?.hasServerKey) {
       overlay.openOverlay("settings");
       void chat.sendMessage(content, { attachments: ready });
@@ -46,7 +52,7 @@ export function useComposer() {
     }
   }
 
-  const canSend = Boolean(value.trim()) || attachments.readyCount > 0;
+  const canSend = Boolean(value.trim()) || attachments.readyCount > 0 || Boolean(chat.quoteDraft);
 
   return { value, setValue, onSubmit, onKeyDown, submit, canSend };
 }

@@ -53,6 +53,14 @@ export interface TimelineStep {
 export type ChatDiagnostics = JsonRecord;
 export type SearchSnapshot = JsonRecord;
 
+export interface QuoteDraft {
+  messageId: string;
+  role: MessageRole;
+  text: string;
+  fragment: string;
+  isFragment: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -68,6 +76,7 @@ export interface ChatMessage {
   systemNotes: readonly string[];
   search?: SearchSnapshot | null;
   diagnostics?: ChatDiagnostics | null;
+  usage?: JsonRecord;
   model?: string;
   error?: string;
   errorCode?: string;
@@ -76,6 +85,7 @@ export interface ChatMessage {
   agentRunLastEventIndex?: number;
   agentPlan?: readonly JsonRecord[];
   agentPlanLabel?: string;
+  projectId?: string;
 }
 
 export interface ChatRequestPayload extends JsonRecord {

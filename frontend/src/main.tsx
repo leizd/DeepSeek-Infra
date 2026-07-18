@@ -18,3 +18,9 @@ createRoot(root).render(
     </AppProviders>
   </StrictMode>,
 );
+
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/ui/sw.js", { scope: "/ui/" }).catch(() => undefined);
+  });
+}
