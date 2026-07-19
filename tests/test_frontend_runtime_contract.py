@@ -56,11 +56,15 @@ def test_react_runtime_keeps_csp_safe_local_assets() -> None:
     assert "font-src 'self'" in csp
 
 
-def test_independent_trace_viewer_remains_available() -> None:
-    trace_html = read("static/trace_viewer.html")
-    trace_viewer = read("static/modules/trace_viewer.js")
-    trace_waterfall = read("static/modules/trace_waterfall.js")
+def test_trace_viewer_is_owned_by_react() -> None:
+    assert not (STATIC_DIR / "trace_viewer.html").exists()
+    assert not (STATIC_DIR / "modules" / "trace_viewer.js").exists()
+    assert not (STATIC_DIR / "modules" / "trace_waterfall.js").exists()
 
-    assert 'src="/modules/trace_viewer.js"' in trace_html
-    assert 'from "./trace_waterfall.js"' in trace_viewer
-    assert "export function buildTraceSpanTree" in trace_waterfall
+    app = read("frontend/src/app/App.tsx")
+    diagnostics = read("frontend/src/features/diagnostics/DiagnosticsDrawer.tsx")
+    detail = read("frontend/src/features/trace/TraceDetailView.tsx")
+    assert 'path="/trace/:traceId"' in app
+    assert '<TraceDetailView traceId={traceId} variant="drawer" />' in diagnostics
+    assert "<TraceSpanTree" in detail
+    assert "<TraceWaterfall" in detail

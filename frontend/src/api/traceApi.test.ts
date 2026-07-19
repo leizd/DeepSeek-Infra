@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { HttpClient } from "./httpClient";
-import { buildTraceSpanTree, formatTraceDuration, getTrace, isErrorSpan, normalizeTrace } from "./traceApi";
+import { getTrace, normalizeTrace } from "./traceApi";
 import { buildDiagnosticsRows, hasDiagnostics, traceIdForMessage } from "../features/diagnostics/diagnosticsRows";
+import { buildTraceSpanTree, formatTraceDuration, isErrorSpan } from "../features/trace/traceSelectors";
 import type { ChatMessage } from "../domain/chat/types";
 
 function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
@@ -36,17 +37,17 @@ describe("traceApi", () => {
 
   it("builds the span tree with parents before children, sorted by offset", () => {
     const tree = buildTraceSpanTree([
-      { spanId: "child", parentSpanId: "root", name: "child", kind: "", status: "ok", offsetMs: 50, durationMs: 10, totalTokens: 0, cacheHitRate: null, error: "" },
-      { spanId: "root", parentSpanId: "", name: "root", kind: "", status: "ok", offsetMs: 0, durationMs: 100, totalTokens: 0, cacheHitRate: null, error: "" },
-      { spanId: "orphan", parentSpanId: "missing", name: "orphan", kind: "", status: "ok", offsetMs: 25, durationMs: 5, totalTokens: 0, cacheHitRate: null, error: "" },
+      { spanId: "child", parentSpanId: "root", name: "child", kind: "", status: "ok", offsetMs: 50, durationMs: 10, totalTokens: 0, cacheHitRate: null, cacheHit: false, error: "" },
+      { spanId: "root", parentSpanId: "", name: "root", kind: "", status: "ok", offsetMs: 0, durationMs: 100, totalTokens: 0, cacheHitRate: null, cacheHit: false, error: "" },
+      { spanId: "orphan", parentSpanId: "missing", name: "orphan", kind: "", status: "ok", offsetMs: 25, durationMs: 5, totalTokens: 0, cacheHitRate: null, cacheHit: false, error: "" },
     ]);
     expect(tree.map((entry) => `${entry.span.spanId}:${entry.depth}`)).toEqual(["root:0", "child:1", "orphan:0"]);
   });
 
   it("guards cycles and duplicate visits", () => {
     const tree = buildTraceSpanTree([
-      { spanId: "a", parentSpanId: "b", name: "a", kind: "", status: "ok", offsetMs: 0, durationMs: 1, totalTokens: 0, cacheHitRate: null, error: "" },
-      { spanId: "b", parentSpanId: "a", name: "b", kind: "", status: "ok", offsetMs: 1, durationMs: 1, totalTokens: 0, cacheHitRate: null, error: "" },
+      { spanId: "a", parentSpanId: "b", name: "a", kind: "", status: "ok", offsetMs: 0, durationMs: 1, totalTokens: 0, cacheHitRate: null, cacheHit: false, error: "" },
+      { spanId: "b", parentSpanId: "a", name: "b", kind: "", status: "ok", offsetMs: 1, durationMs: 1, totalTokens: 0, cacheHitRate: null, cacheHit: false, error: "" },
     ]);
     expect(tree).toHaveLength(2);
   });
@@ -55,7 +56,7 @@ describe("traceApi", () => {
     expect(formatTraceDuration(400)).toBe("400ms");
     expect(formatTraceDuration(1200)).toBe("1.2s");
     expect(formatTraceDuration(61_000)).toBe("1m 1s");
-    expect(formatTraceDuration(0)).toBe("");
+    expect(formatTraceDuration(0)).toBe("0ms");
     expect(isErrorSpan({ status: "error" } as never)).toBe(true);
     expect(isErrorSpan({ status: "ok" } as never)).toBe(false);
   });

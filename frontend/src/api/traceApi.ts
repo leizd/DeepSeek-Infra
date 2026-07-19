@@ -11,6 +11,7 @@ export interface TraceSpan {
   durationMs: number;
   totalTokens: number;
   cacheHitRate: number | null;
+  cacheHit: boolean;
   error: string;
 }
 
@@ -23,15 +24,15 @@ export interface TraceSummary {
 
 export interface TraceDetail {
   traceId: string;
+  title: string;
+  kind: string;
   status: string;
+  startedAt: string;
+  completedAt: string;
   durationMs: number;
+  error: string;
   summary: TraceSummary;
   spans: TraceSpan[];
-}
-
-export interface TraceTreeEntry {
-  span: TraceSpan;
-  depth: number;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -48,6 +49,7 @@ function asNumber(value: unknown): number {
 
 export function normalizeTraceSpan(raw: unknown): TraceSpan | null {
   if (!isRecord(raw)) return null;
+  const diagnostics = isRecord(raw.diagnostics) ? raw.diagnostics : {};
   return {
     spanId: asString(raw.spanId),
     parentSpanId: asString(raw.parentSpanId),
@@ -58,6 +60,7 @@ export function normalizeTraceSpan(raw: unknown): TraceSpan | null {
     durationMs: asNumber(raw.durationMs),
     totalTokens: asNumber(raw.totalTokens),
     cacheHitRate: typeof raw.cacheHitRate === "number" ? raw.cacheHitRate : null,
+    cacheHit: diagnostics.cacheHit === true,
     error: asString(raw.error),
   };
 }
@@ -73,8 +76,13 @@ export function normalizeTrace(raw: unknown): TraceDetail {
     : [];
   return {
     traceId: asString(record.traceId),
+    title: asString(record.title),
+    kind: asString(record.kind),
     status: asString(record.status) || "unknown",
+    startedAt: asString(record.startedAt),
+    completedAt: asString(record.completedAt),
     durationMs: asNumber(record.durationMs),
+    error: asString(record.error),
     summary: {
       spanCount: asNumber(summary.spanCount) || spans.length,
       totalTokens: asNumber(summary.totalTokens),
@@ -83,54 +91,6 @@ export function normalizeTrace(raw: unknown): TraceDetail {
     },
     spans,
   };
-}
-
-export function buildTraceSpanTree(spans: readonly TraceSpan[]): TraceTreeEntry[] {
-  const byId = new Map<string, TraceSpan>();
-  for (const span of spans) {
-    if (span.spanId) byId.set(span.spanId, span);
-  }
-  const childrenByParent = new Map<string, TraceSpan[]>();
-  const roots: TraceSpan[] = [];
-  for (const span of spans) {
-    const parentId =
-      span.parentSpanId && byId.has(span.parentSpanId) && span.parentSpanId !== span.spanId ? span.parentSpanId : "";
-    if (!parentId) {
-      roots.push(span);
-    } else {
-      const children = childrenByParent.get(parentId) ?? [];
-      children.push(span);
-      childrenByParent.set(parentId, children);
-    }
-  }
-  const ordered: TraceTreeEntry[] = [];
-  const visited = new Set<string>();
-  const walk = (span: TraceSpan, depth: number) => {
-    if (visited.has(span.spanId)) return;
-    visited.add(span.spanId);
-    ordered.push({ span, depth });
-    const children = (childrenByParent.get(span.spanId) ?? []).slice().sort((a, b) => a.offsetMs - b.offsetMs);
-    for (const child of children) walk(child, depth + 1);
-  };
-  for (const root of roots.slice().sort((a, b) => a.offsetMs - b.offsetMs)) walk(root, 0);
-  for (const span of spans) {
-    if (!visited.has(span.spanId)) ordered.push({ span, depth: 0 });
-  }
-  return ordered;
-}
-
-export function formatTraceDuration(ms: number | undefined): string {
-  const value = asNumber(ms);
-  if (!value) return "";
-  if (value < 1_000) return `${Math.round(value)}ms`;
-  if (value < 60_000) return `${(value / 1_000).toFixed(1)}s`;
-  return `${Math.floor(value / 60_000)}m ${Math.round((value % 60_000) / 1_000)}s`;
-}
-
-const OK_STATUSES = new Set(["ok", "hit", "miss", "skipped", ""]);
-
-export function isErrorSpan(span: TraceSpan): boolean {
-  return !OK_STATUSES.has(span.status);
 }
 
 export async function getTrace(traceId: string, client: HttpClient = httpClient): Promise<TraceDetail> {

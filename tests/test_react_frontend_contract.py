@@ -13,11 +13,14 @@ def read(path: str) -> str:
 
 def test_react_frontend_is_an_isolated_versioned_build() -> None:
     package = json.loads(read("frontend/package.json"))
-    assert package["version"] == "4.0.8"
+    assert package["version"] == "4.0.9"
     assert package["engines"]["node"] == ">=22.12.0"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test"] == "vitest run"
-    assert package["dependencies"] == {"react": "19.2.7", "react-dom": "19.2.7"}
+    assert package["dependencies"] == {"react": "19.2.7", "react-dom": "19.2.7", "react-router-dom": "7.18.1"}
+    assert package["devDependencies"]["@testing-library/react"] == "16.3.0"
+    assert package["devDependencies"]["@testing-library/user-event"] == "14.6.1"
+    assert package["devDependencies"]["jsdom"] == "27.0.1"
     assert (ROOT / "frontend/package-lock.json").is_file()
     assert "registry=https://registry.npmjs.org/" in read("frontend/.npmrc")
     assert "registry.npmmirror.com" not in read("frontend/package-lock.json")
@@ -115,15 +118,17 @@ def test_build_packaging_and_ci_include_the_react_frontend() -> None:
     assert "React + TypeScript + Vite build" in agents
 
 
-def test_browser_gate_covers_react_chat_history_stop_and_spa_fallback() -> None:
+def test_browser_gate_covers_react_chat_trace_history_stop_and_spa_fallback() -> None:
     smoke = read("scripts/smoke_frontend_browser.py")
     preflight = read("scripts/preflight_release.py")
     assert 'checks["reactOnlyRoot"] = "PASS"' in smoke
     assert 'checks["legacyRouteRetired"] = "PASS"' in smoke
     assert 'checks["rootSpaDeepLink"] = "PASS"' in smoke
+    assert 'checks["reactTraceRouteRefresh"] = "PASS"' in smoke
     assert 'checks["reactChatVerticalSlice"] = "PASS"' in smoke
     assert 'checks["reactHistoryPersistence"] = "PASS"' in smoke
     assert 'checks["reactStopGeneration"] = "PASS"' in smoke
     assert "projects/example" in smoke
-    for check in ("reactOnlyRoot", "legacyRouteRetired", "rootSpaDeepLink", "reactChatVerticalSlice", "reactHistoryPersistence", "reactStopGeneration"):
+    assert 'get_by_role("heading", name="Waterfall")' in smoke
+    for check in ("reactOnlyRoot", "legacyRouteRetired", "rootSpaDeepLink", "reactTraceRouteRefresh", "reactChatVerticalSlice", "reactHistoryPersistence", "reactStopGeneration"):
         assert f'"{check}"' in preflight

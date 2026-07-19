@@ -5,6 +5,21 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.0.9] - React Trace Viewer
+
+### Frontend
+
+- Migrates the standalone Trace Viewer to the React application at `/trace/:traceId` with summary, span tree, waterfall, category aggregation, error reporting, refresh recovery, and JSON export.
+- Introduces `react-router-dom` routes for chat, Trace detail, the `/ui/` compatibility entry, and a real not-found page while preserving FastAPI SPA fallback.
+- Extracts shared Trace components and selectors so the Diagnostics drawer and routed Trace page use the same API loading and visualization implementation.
+- Adds React Testing Library, `user-event`, and scoped jsdom component tests for routed rendering, API failures, selectors, and navigation.
+
+### Retirement
+
+- Removes `static/trace_viewer.html`, `static/modules/trace_viewer.js`, and `static/modules/trace_waterfall.js`; React is now the only application UI source.
+- Updates the Chromium release gate to verify direct Trace navigation and refresh recovery without loading legacy Trace scripts.
+
+
 ## [4.0.8] - Legacy Frontend Retirement
 
 ### Frontend

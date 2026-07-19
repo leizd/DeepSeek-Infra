@@ -1,8 +1,8 @@
 {
   "schemaVersion": "security-corpus-report.v1",
-  "version": "4.0.8",
-  "commit": "8e26bee1",
-  "generatedAt": "2026-07-19T00:42:46Z",
+  "version": "4.0.9",
+  "commit": "617ac79c",
+  "generatedAt": "2026-07-19T04:59:09Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -84,7 +84,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.077,
+        "latencyMs": 0.08,
         "suite": "prompt_injection"
       },
       {
@@ -164,7 +164,7 @@
           "ssrf_blocked:private or local ip is not allowed: 169.254.169.254"
         ],
         "passed": true,
-        "latencyMs": 0.106,
+        "latencyMs": 0.108,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -178,7 +178,7 @@
           "ssrf_blocked:local host is not allowed"
         ],
         "passed": true,
-        "latencyMs": 0.03,
+        "latencyMs": 0.031,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -192,7 +192,7 @@
           "path_blocked:fileId contains illegal characters"
         ],
         "passed": true,
-        "latencyMs": 0.014,
+        "latencyMs": 0.013,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -263,7 +263,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.046,
+        "latencyMs": 0.047,
         "suite": "benign_false_positive"
       },
       {
@@ -276,7 +276,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.044,
+        "latencyMs": 0.042,
         "suite": "benign_false_positive"
       },
       {

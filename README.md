@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.0.8-blue)
+![版本](https://img.shields.io/badge/version-4.0.9-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.0.8 Legacy Frontend Retirement:** `/` now has a single React owner. The `/legacy` route, `DEEPSEEK_FRONTEND` rollback switch, legacy HTML/JavaScript entry, and legacy root PWA files have been removed. Every startup and packaging path now requires `static/ui/index.html`; missing React output fails with an actionable build error. The frozen 4.0 runtime contract is unchanged: Python remains authoritative, Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.0.8 notes](docs/releases/4.0.8.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+> **4.0.9 React Trace Viewer:** `/trace/:traceId` is now a routed React workspace with shared summary, span tree, waterfall, category, error, and export components. Diagnostics reuses the same implementation, and the final standalone HTML/JavaScript UI has been removed. The frozen 4.0 runtime contract is unchanged: Python remains authoritative, Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.0.9 notes](docs/releases/4.0.9.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
-**4.0.8 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.8 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
+**4.0.9 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.9 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
 
 ## 30 秒概览
 

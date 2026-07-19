@@ -1117,7 +1117,7 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
         )
     checks = data.get("checks")
     check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
-    required = (
+    required = [
         "cspHeader",
         "reactOnlyRoot",
         "legacyRouteRetired",
@@ -1129,7 +1129,9 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
         "completeAppShell",
         "offlineRefresh",
         "noCspConsoleErrors",
-    )
+    ]
+    if _version_tuple(version) >= (4, 0, 9):
+        required.append("reactTraceRouteRefresh")
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(

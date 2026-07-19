@@ -1,4 +1,4 @@
-"""HTTP route registration for trace listing, detail, export, and viewer pages."""
+"""HTTP route registration for trace listing, detail, export, and routed React pages."""
 
 from __future__ import annotations
 
@@ -18,13 +18,14 @@ TraceGetter = Callable[[str], dict[str, Any] | None]
 TraceExporter = Callable[[str], dict[str, Any] | None]
 TraceLister = Callable[[int | None], list[dict[str, Any]]]
 TraceStatus = Callable[[], dict[str, Any]]
+FrontendIndex = Callable[[], Path]
 
 
 def register_trace_routes(
     api: FastAPI,
     *,
     require_api_auth: RequireAuth,
-    static_dir: Path,
+    frontend_index_path: FrontendIndex,
     get_trace_fn: TraceGetter = get_trace,
     export_trace_fn: TraceExporter = export_trace,
     list_traces_fn: TraceLister = list_traces,
@@ -62,10 +63,7 @@ def register_trace_routes(
         require_api_auth(request)
         if get_trace_fn(trace_id) is None:
             raise AppError("Trace not found", code=ErrorCode.NOT_FOUND, status=404)
-        viewer_path = static_dir / "trace_viewer.html"
-        if not viewer_path.is_file():
-            raise AppError("Trace viewer is not available", code=ErrorCode.NOT_FOUND, status=404)
-        return FileResponse(viewer_path, media_type="text/html; charset=utf-8")
+        return FileResponse(frontend_index_path(), media_type="text/html; charset=utf-8")
 
 
 def export_filename(trace_id: str) -> str:

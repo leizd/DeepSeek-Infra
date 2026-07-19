@@ -436,7 +436,7 @@ def create_app() -> FastAPI:
     register_trace_routes(
         api,
         require_api_auth=require_trace_api_auth,
-        static_dir=STATIC_DIR,
+        frontend_index_path=lambda: frontend_index_path(),
         get_trace_fn=get_trace_for_api,
         export_trace_fn=export_trace_for_api,
         list_traces_fn=list_traces_for_api,

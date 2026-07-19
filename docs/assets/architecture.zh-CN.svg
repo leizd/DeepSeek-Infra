@@ -16,7 +16,7 @@
   <text x="48" y="58" font-size="26" font-weight="700" fill="#0f172a">DeepSeek Infra</text>
   <text x="48" y="84" font-size="14" fill="#64748b">本地优先的 Agentic AI 基础设施平台 — LLM 网关 · Agent DAG · MCP · A2A · 本地 RAG · 可观测性</text>
   <rect x="1070" y="38" width="82" height="28" rx="14" fill="#2563eb"/>
-  <text x="1111" y="57" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v4.0.8</text>
+  <text x="1111" y="57" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v4.0.9</text>
 
   <!-- clients layer -->
   <rect x="48" y="110" width="1104" height="74" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
@@ -132,5 +132,5 @@
   </g>
 
   <!-- footer -->
-  <text x="600" y="820" font-size="10" fill="#94a3b8" text-anchor="middle">4.0.8：仅保留 React 前端 · 构建产物为硬门禁 · Rust 主运行时关闭</text>
+  <text x="600" y="820" font-size="10" fill="#94a3b8" text-anchor="middle">4.0.9：React Trace 路由化 · 单一 UI 源码 · Rust 主运行时关闭</text>
 </svg>

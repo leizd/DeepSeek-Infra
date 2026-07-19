@@ -1770,7 +1770,7 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
     preflight = _load_preflight()
     evidence = tmp_path / "docs" / "evidence"
     evidence.mkdir(parents=True)
-    path = evidence / "frontend-browser-v4.0.3.json"
+    path = evidence / "frontend-browser-v4.0.9.json"
     checks = {
         "cspHeader": "PASS",
         "reactOnlyRoot": "PASS",
@@ -1783,11 +1783,12 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
         "completeAppShell": "PASS",
         "offlineRefresh": "PASS",
         "noCspConsoleErrors": "PASS",
+        "reactTraceRouteRefresh": "PASS",
     }
     path.write_text(
         json.dumps(
             {
-                "version": "4.0.3",
+                "version": "4.0.9",
                 "commit": "abc1234",
                 "generatedAt": "2026-07-16T00:00:00Z",
                 "environment": {"os": "Linux", "python": "3.12", "ci": True},
@@ -1799,13 +1800,13 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
         encoding="utf-8",
     )
 
-    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.3")
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.9")
     assert result.status == "pass"
 
     checks["reactStopGeneration"] = "FAIL"
     data = json.loads(path.read_text(encoding="utf-8"))
     data["checks"] = checks
     path.write_text(json.dumps(data), encoding="utf-8")
-    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.3")
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.9")
     assert result.status == "fail"
     assert "reactStopGeneration" in result.detail

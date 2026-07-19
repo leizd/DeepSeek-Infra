@@ -21,9 +21,8 @@ npm run check --prefix frontend
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-# Retained standalone/static JS syntax (only these files are checked):
-node --check static/vendor/katex/katex.min.js \
-      static/modules/trace_waterfall.js static/modules/trace_viewer.js
+# Retained vendor JavaScript syntax:
+node --check static/vendor/katex/katex.min.js
 ```
 
 - Python 3.10+ (CI matrix: 3.10 / 3.11 / 3.12). `mypy` targets `python_version="3.10"`.

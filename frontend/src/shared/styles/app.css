@@ -299,18 +299,6 @@ a { color: inherit; }
 }
 .diagnostics-row span { color: #77839a; }
 .diagnostics-row strong { color: #c6d0e2; font-weight: 650; text-align: right; overflow-wrap: anywhere; }
-.trace-export-link { color: #8ba9ff; }
-
-.trace-waterfall { display: grid; gap: 8px; margin-top: 18px; }
-.trace-span { padding: 9px 11px; border: 1px solid rgb(148 163 184 / 12%); border-radius: 10px; background: #0b1018; }
-.trace-span.is-error { border-color: rgb(255 116 116 / 30%); }
-.trace-span-header { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
-.trace-span-header strong { overflow: hidden; color: #c6d0e2; font-size: 0.74rem; text-overflow: ellipsis; white-space: nowrap; }
-.trace-span-header span { flex-shrink: 0; color: #68758a; font-size: 0.64rem; }
-.trace-span-rail { height: 5px; margin-top: 7px; overflow: hidden; border-radius: 3px; background: rgb(148 163 184 / 10%); }
-.trace-span-bar { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #5c82f8, #7561e8); }
-.trace-span.is-error .trace-span-bar { background: #b94f5b; }
-.trace-span-details { margin-top: 6px; color: #68758a; font-size: 0.64rem; }
 
 .chat-workspace {
   position: relative;

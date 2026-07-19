@@ -13,7 +13,7 @@ FROM debian:bookworm-slim
 
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="DeepSeek Infra Rust Sidecar" \
-      org.opencontainers.image.version="4.0.8" \
+      org.opencontainers.image.version="4.0.9" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.description="Optional DeepSeek Infra hybrid runtime sidecar"
 

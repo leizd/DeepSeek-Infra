@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepseek_infra.core.config import APP_VERSION  # noqa: E402
+from deepseek_infra.core.config import APP_VERSION, settings  # noqa: E402
+from deepseek_infra.infra.observability.observability import finish_trace, start_span, start_trace  # noqa: E402
 from deepseek_infra.web.server import create_server  # noqa: E402
 
 
@@ -53,7 +54,7 @@ def wait_until_ready(url: str, timeout: float = 15.0) -> None:
     raise RuntimeError(f"frontend server did not become ready: {url}")
 
 
-async def run_browser(base_url: str) -> dict[str, str]:
+async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
     from playwright.async_api import Error as PlaywrightError
     from playwright.async_api import FilePayload
     from playwright.async_api import async_playwright
@@ -62,6 +63,8 @@ async def run_browser(base_url: str) -> dict[str, str]:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         context = await browser.new_context(service_workers="allow")
+        if settings.auth.enabled:
+            await context.add_cookies([{"name": "auth_token", "value": settings.auth.token, "url": base_url}])
         page = await context.new_page()
         console_errors: list[str] = []
         page_errors: list[str] = []
@@ -193,8 +196,19 @@ async def run_browser(base_url: str) -> dict[str, str]:
         deep_link_response = await page.goto(f"{base_url}projects/example", wait_until="networkidle")
         if deep_link_response is None or deep_link_response.status != 200:
             raise AssertionError("root React SPA deep-link fallback did not return HTTP 200")
-        await page.locator("#reactPromptInput").wait_for()
+        await page.get_by_role("heading", name="Page not found").wait_for()
         checks["rootSpaDeepLink"] = "PASS"
+
+        trace_response = await page.goto(f"{base_url}trace/{trace_id}", wait_until="networkidle")
+        if trace_response is None or trace_response.status != 200:
+            raise AssertionError("React trace route did not return HTTP 200")
+        await page.get_by_role("heading", name="Browser trace smoke").wait_for()
+        await page.get_by_role("heading", name="Waterfall").wait_for()
+        await page.reload(wait_until="networkidle")
+        await page.get_by_role("heading", name="Browser trace smoke").wait_for()
+        if await page.locator('script[src="/modules/trace_viewer.js"]').count() != 0:
+            raise AssertionError("legacy Trace Viewer script is still loaded")
+        checks["reactTraceRouteRefresh"] = "PASS"
 
         legacy_response = await context.request.get(f"{base_url}legacy")
         if legacy_response.status != 404:
@@ -267,13 +281,19 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    trace_id = start_trace(kind="browser_smoke", title="Browser trace smoke")
+    if not trace_id:
+        raise RuntimeError("tracing is disabled; cannot exercise the routed Trace page")
+    span = start_span(trace_id, name="browser trace render", kind="browser")
+    span.finish(status="ok", usage={"total_tokens": 12}, diagnostics={"cacheHit": True})
+    finish_trace(trace_id)
     server, port = create_server(0, host="127.0.0.1")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base_url = f"http://127.0.0.1:{port}/"
     try:
         wait_until_ready(base_url)
-        checks = asyncio.run(run_browser(base_url))
+        checks = asyncio.run(run_browser(base_url, trace_id))
         payload = {
             "schemaVersion": 1,
             "version": VERSION,

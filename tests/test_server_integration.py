@@ -558,7 +558,7 @@ class ServerIntegrationTests(unittest.TestCase):
         self.assertEqual(json.loads(export_data.decode("utf-8"))["_export"]["redaction"]["applied"], True)
         self.assertIn('attachment; filename="trace-trace-1.json"', export_response.getheader("Content-Disposition") or "")
         self.assertEqual(viewer_status, 200)
-        self.assertIn(b"Trace Viewer", viewer_data)
+        self.assertIn(b'<div id="root"></div>', viewer_data)
         self.assertIn("text/html", viewer_response.getheader("Content-Type") or "")
         self.assertEqual(cache_status, 200)
         self.assertEqual(cast(dict[str, Any], cache_payload["semanticCache"])["items"], 0)
@@ -581,7 +581,7 @@ class ServerIntegrationTests(unittest.TestCase):
 
     def test_cache_headers_differ_for_api_and_static_routes(self) -> None:
         api_status, _, api_response = self.request_raw("GET", "/api/config")
-        static_status, _, static_response = self.request_raw("GET", "/modules/trace_viewer.js")
+        static_status, _, static_response = self.request_raw("GET", "/vendor/katex/katex.min.js")
 
         self.assertEqual(api_status, 200)
         self.assertEqual(static_status, 200)
