@@ -15,16 +15,14 @@ if (!hasReleaseSigning && releaseStoreFilePath) {
 }
 
 tasks.register("buildReactFrontend", Exec) {
-    // static/ui is a gitignored build artifact; the server falls back to the
-    // legacy UI at "/" when it is missing, so a fresh clone still works, but
-    // the React frontend (now the default) requires this build to have run.
+    // static/ui is a required, gitignored build artifact.
     workingDir rootProject.projectDir.parentFile
     def pythonCmd = org.gradle.internal.os.OperatingSystem.current().isWindows() ? "python" : "python3"
     commandLine pythonCmd, "scripts/build_frontend.py"
-    ignoreExitValue true
+    ignoreExitValue false
     doLast {
         if (!file("${rootProject.projectDir}/../static/ui/index.html").exists()) {
-            logger.warn("React frontend build unavailable; '/' will serve the legacy UI. Run scripts/build_frontend.py (needs Node 22.12+) to enable the React default.")
+            throw new GradleException("React frontend build is missing. Run scripts/build_frontend.py.")
         }
     }
 }
@@ -49,8 +47,8 @@ android {
         applicationId "com.deepseek.mobile"
         minSdk 24
         targetSdk 34
-        versionCode 400010
-        versionName "4.0.7"
+        versionCode 400011
+        versionName "4.0.8"
 
         ndk {
             abiFilters "arm64-v8a", "x86_64"

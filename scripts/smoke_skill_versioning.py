@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -109,9 +108,9 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     details["pack"] = {"versions": pack_versions, "diffChanged": pack_diff["changed"], "upgradeGate": upgrade["evalAwareUpgradeGate"]}
 
     routes = _read("deepseek_infra/web/routes/skills.py")
-    index = _read("static/index.html")
-    skills_js = _read("static/modules/skills.js")
-    styles = _read("static/styles.css")
+    drawer = _read("frontend/src/features/skills/SkillsDrawer.tsx")
+    skills_api = _read("frontend/src/api/skillsApi.ts")
+    styles = _read("frontend/src/shared/styles/app.css")
     ci = _read(".github/workflows/ci.yml")
 
     checks["versioningApiActions"] = "PASS" if _contains_all(
@@ -125,28 +124,19 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
             'action == "rollback_pack"',
         ),
     ) else "FAIL"
-    checks["versioningUi"] = "PASS" if _contains_all(
-        index + skills_js + styles,
+    checks["reactSkillSurface"] = "PASS" if _contains_all(
+        drawer + skills_api + styles,
         (
-            'id="skillVersionsButton"',
-            'id="skillVersionsHost"',
-            'id="skillVersionList"',
-            'id="skillPackVersionList"',
-            "openVersionHost",
-            "compareSkillVersions",
-            "showSkillMigrationPlan",
-            "rollbackSkillVersion",
-            ".skill-version-host",
-            ".skill-version-diff",
+            "export function SkillsDrawer",
+            "buildSimpleSkillConfig",
+            ".skill-card",
         ),
     ) else "FAIL"
     asset_paths = ("docs/assets/skill-version-history.png", "docs/assets/skill-version-diff.png")
     checks["versioningAssets"] = "PASS" if all((REPO_ROOT / path).is_file() for path in asset_paths) else "FAIL"
-    syntax = subprocess.run(["node", "--check", "static/modules/skills.js"], cwd=REPO_ROOT, capture_output=True, text=True)
-    checks["versioningJsSyntax"] = "PASS" if syntax.returncode == 0 else "FAIL"
+    checks["frontendTypecheckGate"] = "PASS" if "npm run typecheck --prefix frontend" in ci else "FAIL"
     checks["ciReleaseGate"] = "PASS" if "smoke_skill_versioning.py" in ci else "FAIL"
     details["assets"] = list(asset_paths)
-    details["versioningJsSyntax"] = {"returnCode": syntax.returncode, "stderr": syntax.stderr.strip()}
     return checks, details
 
 

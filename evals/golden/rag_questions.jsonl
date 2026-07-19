@@ -7,4 +7,4 @@
 {"id": "rag_003", "question": "fetch_url 的 SSRF 防护会拦截哪些内网或元数据地址？", "expected_source": "docs/SECURITY.md", "expected_keywords": ["SSRF", "169.254.169.254"]}
 {"id": "rag_004", "question": "本地鉴权 auth_token 的 Cookie 是怎么下发和校验的？", "expected_source": "docs/SECURITY.md", "expected_keywords": ["auth_token", "Cookie"]}
 {"id": "rag_005", "question": "成本与 token 预算治理在 budget_manager 模块里怎么实现？", "expected_source": "docs/ARCHITECTURE.md", "expected_keywords": ["budget_manager.py", "BudgetPolicy"]}
-{"id": "rag_006", "question": "前端模块是怎么拆分的，agent_timeline 在哪个文件？", "expected_source": "docs/FRONTEND_MODULES.md", "expected_keywords": ["agent_timeline", "chat.js"]}
+{"id": "rag_006", "question": "前端模块是怎么拆分的，Agent timeline 在哪个文件？", "expected_source": "docs/FRONTEND_MODULES.md", "expected_keywords": ["agentTimeline", "frontend/src/domain/chat"]}

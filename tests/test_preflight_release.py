@@ -18,6 +18,9 @@ def _load_preflight() -> Any:
 def _skeleton(tmp_path: Path, version: str, *, release_exclusions: bool = True) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
+    frontend_build = root / "static" / "ui"
+    frontend_build.mkdir(parents=True)
+    (frontend_build / "index.html").write_text("<!doctype html><title>React</title>\n", encoding="utf-8")
     (root / "README.md").write_text(f"![版本](https://img.shields.io/badge/version-{version}-blue)\n", encoding="utf-8")
     (root / "CHANGELOG.md").write_text(f"## [{version}] - Release Readiness\n\nbody\n", encoding="utf-8")
     (root / "Dockerfile").write_text(f"docker build -t deepseek-infra:{version} .\n", encoding="utf-8")
@@ -437,14 +440,17 @@ def _write_skill_ui_evidence(path: Path, version: str, *, status: str = "PASS", 
     checks = {
         "skillWorkbenchEntrypoint": "PASS",
         "skillRunSchemaForm": "PASS",
+        "skillCreateEditDelete": "PASS",
         "skillApiActions": "PASS",
         "projectSkillBindingUi": "PASS",
         "skillRunResultLinks": "PASS",
         "skillPanelLifecycle": "PASS",
         "skillPanelStyles": "PASS",
+        "reactPwaOwnership": "PASS",
         "skillAppShellCache": "PASS",
         "skillUiAssets": "PASS",
         "skillJsSyntax": "PASS",
+        "frontendTypecheckGate": "PASS",
         "ciSyntaxGate": "PASS",
     }
     if omit_check:
@@ -565,16 +571,22 @@ def _write_automation_evidence(path: Path, version: str, *, status: str = "PASS"
 def _write_skill_builder_evidence(path: Path, version: str, *, status: str = "PASS", omit_check: str = "", omit_metadata: str = "") -> None:
     checks = {
         "builderOpen": "PASS",
+        "simpleDraftSchema": "PASS",
+        "createCustomSkill": "PASS",
+        "updateCustomSkill": "PASS",
         "cloneBuiltinSkill": "PASS",
         "visualInputSchemaEdit": "PASS",
         "toolPermissionPicker": "PASS",
         "schemaValidation": "PASS",
         "offlineDryRun": "PASS",
+        "builderInputValidation": "PASS",
+        "exportApi": "PASS",
         "saveCustomSkill": "PASS",
         "exportCreatedSkill": "PASS",
         "skillBuilderStyles": "PASS",
         "skillBuilderAssets": "PASS",
         "skillBuilderJsSyntax": "PASS",
+        "frontendTypecheckGate": "PASS",
         "ciSyntaxGate": "PASS",
     }
     if omit_check:
@@ -602,6 +614,8 @@ def _write_skill_packs_evidence(path: Path, version: str, *, status: str = "PASS
         "toolPermissionDiff": "PASS",
         "projectPackBinding": "PASS",
         "packInstallDryRun": "PASS",
+        "reactSkillSurface": "PASS",
+        "frontendTypecheckGate": "PASS",
         "packUiTab": "PASS",
         "packJsSyntax": "PASS",
         "ciSyntaxGate": "PASS",
@@ -625,6 +639,7 @@ def _write_skill_packs_evidence(path: Path, version: str, *, status: str = "PASS
 def _write_skill_eval_dashboard_evidence(path: Path, version: str, *, status: str = "PASS", omit_check: str = "", omit_metadata: str = "") -> None:
     checks = {
         "evalDashboardEntrypoint": "PASS",
+        "reactSkillSurface": "PASS",
         "evalCaseBuilder": "PASS",
         "skillEvalApiActions": "PASS",
         "skillEvalReport": "PASS",
@@ -634,6 +649,7 @@ def _write_skill_eval_dashboard_evidence(path: Path, version: str, *, status: st
         "skillEvalStyles": "PASS",
         "skillEvalAssets": "PASS",
         "skillEvalRunner": "PASS",
+        "frontendTypecheckGate": "PASS",
         "skillEvalJsSyntax": "PASS",
         "ciReleaseGate": "PASS",
     }
@@ -663,9 +679,11 @@ def _write_skill_versioning_evidence(path: Path, version: str, *, status: str = 
         "evalAwareUpgradeGate": "PASS",
         "projectBindingMigration": "PASS",
         "versioningApiActions": "PASS",
+        "reactSkillSurface": "PASS",
         "versioningUi": "PASS",
         "versioningAssets": "PASS",
         "versioningJsSyntax": "PASS",
+        "frontendTypecheckGate": "PASS",
         "ciReleaseGate": "PASS",
     }
     if omit_check:
@@ -695,9 +713,11 @@ def _write_skill_analytics_evidence(path: Path, version: str, *, status: str = "
         "retentionCleanup": "PASS",
         "privacyRedaction": "PASS",
         "analyticsApiActions": "PASS",
+        "reactSkillSurface": "PASS",
         "analyticsUi": "PASS",
         "analyticsAssets": "PASS",
         "analyticsJsSyntax": "PASS",
+        "frontendTypecheckGate": "PASS",
         "ciReleaseGate": "PASS",
     }
     if omit_check:
@@ -727,9 +747,11 @@ def _write_skill_security_evidence(path: Path, version: str, *, status: str = "P
         "securityManifestExport": "PASS",
         "runSecurityMetadata": "PASS",
         "securityApiActions": "PASS",
+        "reactSkillSurface": "PASS",
         "securityUi": "PASS",
         "securityAssets": "PASS",
         "securityJsSyntax": "PASS",
+        "frontendTypecheckGate": "PASS",
         "ciReleaseGate": "PASS",
     }
     if omit_check:
@@ -760,9 +782,11 @@ def _write_skill_catalog_evidence(path: Path, version: str, *, status: str = "PA
         "toolPermissionSummary": "PASS",
         "catalogExport": "PASS",
         "catalogApiActions": "PASS",
+        "reactSkillSurface": "PASS",
         "catalogUi": "PASS",
         "catalogAssets": "PASS",
         "catalogJsSyntax": "PASS",
+        "frontendTypecheckGate": "PASS",
         "ciReleaseGate": "PASS",
     }
     if omit_check:
@@ -855,6 +879,22 @@ def test_preflight_fails_on_dockerfile_tag(tmp_path: Path) -> None:
     (root / "Dockerfile").write_text("docker build -t deepseek-infra:2.2.8 .\n", encoding="utf-8")
     docker = next(r for r in preflight.run_preflight(root, "2.2.9") if r.name == "dockerfile_tag")
     assert docker.status == "fail"
+
+
+def test_preflight_requires_react_frontend_build(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.2.9")
+    (root / "static" / "ui" / "index.html").unlink()
+    result = preflight.check_react_frontend_build(root)
+    assert result.status == "fail"
+    assert "scripts/build_frontend.py" in result.detail
+
+
+def test_preflight_accepts_react_frontend_build(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    root = _skeleton(tmp_path, "2.2.9")
+    result = preflight.check_react_frontend_build(root)
+    assert result.status == "pass"
 
 
 def test_preflight_fails_on_doc_version(tmp_path: Path) -> None:
@@ -1459,10 +1499,10 @@ def test_preflight_fails_on_missing_skill_ui_evidence(tmp_path: Path) -> None:
 def test_preflight_fails_on_skill_ui_missing_required_check(tmp_path: Path) -> None:
     preflight = _load_preflight()
     root = _skeleton(tmp_path, "2.6.3")
-    _write_skill_ui_evidence(root / "docs" / "evidence" / "skills-ui-v2.6.3.json", "2.6.3", omit_check="skillRunSchemaForm")
+    _write_skill_ui_evidence(root / "docs" / "evidence" / "skills-ui-v2.6.3.json", "2.6.3", omit_check="skillCreateEditDelete")
     result = next(r for r in preflight.run_preflight(root, "2.6.3") if r.name == "skill_ui_evidence")
     assert result.status == "fail"
-    assert "skillRunSchemaForm" in result.detail
+    assert "skillCreateEditDelete" in result.detail
 
 
 def test_preflight_passes_on_skill_ui_evidence_complete(tmp_path: Path) -> None:
@@ -1733,11 +1773,10 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
     path = evidence / "frontend-browser-v4.0.3.json"
     checks = {
         "cspHeader": "PASS",
-        "firstPaintTheme": "PASS",
-        "workspaceTabs": "PASS",
-        "mockChat": "PASS",
+        "reactOnlyRoot": "PASS",
+        "legacyRouteRetired": "PASS",
         "uploadCancel": "PASS",
-        "reactPreview": "PASS",
+        "rootSpaDeepLink": "PASS",
         "reactChatVerticalSlice": "PASS",
         "reactHistoryPersistence": "PASS",
         "reactStopGeneration": "PASS",

@@ -27,6 +27,7 @@ def test_offline_mode_runs_doctor_evals_and_agent_only() -> None:
     stages = mod.build_stages(args)
     names = _names(stages)
     assert names == [
+        "frontend_build",
         "doctor",
         "workspace_core",
         "edge_router",
@@ -50,14 +51,14 @@ def test_offline_mode_runs_doctor_evals_and_agent_only() -> None:
         "agent_eval",
         "baseline_compare",
     ]
-    doctor_cmd = stages[0][1]
+    doctor_cmd = dict(stages)["doctor"]
     assert "--offline" in doctor_cmd
     assert "--with-server" not in doctor_cmd
     stage_commands = {name: cmd for name, cmd in stages}
-    assert stage_commands["browser_control"][-2:] == ["--version", "4.0.7"]
-    assert stage_commands["browser_eval"][-2:] == ["--version", "4.0.7"]
-    assert stage_commands["automation_runtime"][-2:] == ["--version", "4.0.7"]
-    assert stage_commands["automation_eval"][-2:] == ["--version", "4.0.7"]
+    assert stage_commands["browser_control"][-2:] == ["--version", "4.0.8"]
+    assert stage_commands["browser_eval"][-2:] == ["--version", "4.0.8"]
+    assert stage_commands["automation_runtime"][-2:] == ["--version", "4.0.8"]
+    assert stage_commands["automation_eval"][-2:] == ["--version", "4.0.8"]
     assert not any("smoke_mcp_compat" in " ".join(cmd) for _, cmd in stages)
     assert not any("smoke_a2a_compat" in " ".join(cmd) for _, cmd in stages)
 
@@ -68,6 +69,7 @@ def test_with_server_mode_includes_protocol_smokes() -> None:
     stages = mod.build_stages(args)
     names = _names(stages)
     assert names == [
+        "frontend_build",
         "doctor",
         "workspace_core",
         "edge_router",
@@ -93,7 +95,7 @@ def test_with_server_mode_includes_protocol_smokes() -> None:
         "mcp_smoke",
         "a2a_smoke",
     ]
-    doctor_cmd = stages[0][1]
+    doctor_cmd = dict(stages)["doctor"]
     assert "--with-server" in doctor_cmd
     assert "--base-url" in doctor_cmd
     stage_commands = {name: cmd for name, cmd in stages}
@@ -112,6 +114,7 @@ def test_default_mode_is_offline() -> None:
     assert args.offline is True
     assert args.with_server is False
     assert _names(mod.build_stages(args)) == [
+        "frontend_build",
         "doctor",
         "workspace_core",
         "edge_router",
@@ -154,6 +157,7 @@ def test_skip_flags_drop_stages() -> None:
         ]
     )
     assert _names(mod.build_stages(args)) == [
+        "frontend_build",
         "workspace_core",
         "edge_router",
         "media_layer",
@@ -173,6 +177,7 @@ def test_with_server_skip_protocol_keeps_evals() -> None:
     mod = _load_smoke_release()
     args = mod.parse_args(["--with-server", "--skip-mcp", "--skip-a2a", "--skip-doctor"])
     assert _names(mod.build_stages(args)) == [
+        "frontend_build",
         "workspace_core",
         "edge_router",
         "media_layer",
@@ -206,6 +211,7 @@ def test_json_mode_emits_plan_without_running(capsys: pytest.CaptureFixture[str]
     assert payload["mode"] == "with-server"
     stage_names = [stage["name"] for stage in payload["stages"]]
     assert stage_names == [
+        "frontend_build",
         "doctor",
         "workspace_core",
         "edge_router",
@@ -238,4 +244,3 @@ def test_offline_and_with_server_are_mutually_exclusive() -> None:
     mod = _load_smoke_release()
     with pytest.raises(SystemExit):
         mod.parse_args(["--offline", "--with-server"])
-

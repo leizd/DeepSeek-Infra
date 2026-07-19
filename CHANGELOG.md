@@ -5,6 +5,21 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.0.8] - Legacy Frontend Retirement
+
+### Frontend
+
+- Retires the legacy vanilla-JavaScript entry, including `/legacy`, `DEEPSEEK_FRONTEND=legacy`, `static/index.html`, `static/app.js`, and `static/modules/chat.js`.
+- Makes the React build the only frontend and returns a clear startup error when `static/ui/index.html` is missing instead of serving a partial fallback page.
+- Fixes root SPA deep-link recovery and pins `/sw.js` plus `/manifest.webmanifest` to the React build outputs; the obsolete root worker and manifest are removed.
+- Replaces legacy browser and Skill UI source contracts with React-only checks while preserving the independent Trace Viewer and its static modules.
+
+### Packaging
+
+- Makes React build failures fatal for Android, PyInstaller, Docker, release ZIPs, release smoke, preflight, and local startup.
+- Preserves the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates, and Python fallback.
+
+
 ## [4.0.7] - React Default Entry
 
 ### Frontend migration

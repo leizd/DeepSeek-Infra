@@ -13,7 +13,7 @@ def read(path: str) -> str:
 
 def test_react_frontend_is_an_isolated_versioned_build() -> None:
     package = json.loads(read("frontend/package.json"))
-    assert package["version"] == "4.0.7"
+    assert package["version"] == "4.0.8"
     assert package["engines"]["node"] == ">=22.12.0"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test"] == "vitest run"
@@ -84,6 +84,9 @@ def test_build_packaging_and_ci_include_the_react_frontend() -> None:
     dockerfile = read("Dockerfile")
     release = read("scripts/release.py")
     exe = read("scripts/build_exe.py")
+    android = read("android/app/build.gradle")
+    smoke_release = read("scripts/smoke_release.py")
+    preflight = read("scripts/preflight_release.py")
     agents = read("AGENTS.md")
 
     assert "  frontend:" in workflow
@@ -96,21 +99,31 @@ def test_build_packaging_and_ci_include_the_react_frontend() -> None:
         assert command in workflow
     assert "RC_CI_FRONTEND" in workflow
     assert "FROM node:24-bookworm-slim AS frontend-builder" in dockerfile
+    assert "test -f /build/static/ui/index.html" in dockerfile
     assert "COPY --from=frontend-builder /build/static/ui ./static/ui" in dockerfile
+    assert "test -f /app/static/ui/index.html" in dockerfile
     assert "build_frontend(root)" in release
+    assert "require_frontend_build(root)" in release
     assert "FRONTEND_BUILD_SCRIPT" in exe
+    assert 'STATIC_DIR / "ui" / "index.html"' in exe
     assert '"--hidden-import=multipart"' in exe
     assert "validate_multipart_build_environment()" in exe
-    assert "isolated React + TypeScript + Vite app" in agents
+    assert "ignoreExitValue false" in android
+    assert "ignoreExitValue true" not in android
+    assert "build_frontend.py" in smoke_release
+    assert "check_react_frontend_build" in preflight
+    assert "React + TypeScript + Vite build" in agents
 
 
 def test_browser_gate_covers_react_chat_history_stop_and_spa_fallback() -> None:
     smoke = read("scripts/smoke_frontend_browser.py")
     preflight = read("scripts/preflight_release.py")
-    assert 'checks["reactPreview"] = "PASS"' in smoke
+    assert 'checks["reactOnlyRoot"] = "PASS"' in smoke
+    assert 'checks["legacyRouteRetired"] = "PASS"' in smoke
+    assert 'checks["rootSpaDeepLink"] = "PASS"' in smoke
     assert 'checks["reactChatVerticalSlice"] = "PASS"' in smoke
     assert 'checks["reactHistoryPersistence"] = "PASS"' in smoke
     assert 'checks["reactStopGeneration"] = "PASS"' in smoke
-    assert "ui/projects/example" in smoke
-    for check in ("reactPreview", "reactChatVerticalSlice", "reactHistoryPersistence", "reactStopGeneration"):
+    assert "projects/example" in smoke
+    for check in ("reactOnlyRoot", "legacyRouteRetired", "rootSpaDeepLink", "reactChatVerticalSlice", "reactHistoryPersistence", "reactStopGeneration"):
         assert f'"{check}"' in preflight

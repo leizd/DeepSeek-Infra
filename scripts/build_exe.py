@@ -106,6 +106,9 @@ def main() -> int:
     frontend_result = subprocess.call([sys.executable, str(FRONTEND_BUILD_SCRIPT)], cwd=str(PROJECT_ROOT))
     if frontend_result != 0:
         return frontend_result
+    if not (STATIC_DIR / "ui" / "index.html").is_file():
+        print("Cannot build executable: static/ui/index.html is missing", file=sys.stderr)
+        return 1
 
     cmd = [
         sys.executable,

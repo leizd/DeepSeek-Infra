@@ -117,7 +117,6 @@ export function ChatPage() {
             </span>
           </div>
           <div className="topbar-actions">
-            <span className="migration-badge">4.0.3 · React Chat</span>
             <button className="topbar-icon" type="button" aria-label="连接设置" onClick={() => overlay.openOverlay("settings")}>⚙</button>
           </div>
         </header>

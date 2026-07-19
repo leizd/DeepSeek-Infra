@@ -604,7 +604,7 @@ v2.0.5 起快照新增 `nodes`：由 plan + 事件日志纯重放得到的节点
 
 ## POST `/share-target`
 
-PWA Share Target 接收入口。手机系统分享菜单会按 `static/manifest.webmanifest` 的 `share_target` 配置把标题、正文、URL 和文件以 `multipart/form-data` POST 到该路径。
+PWA Share Target 接收入口。手机系统分享菜单会按 React 构建生成的 `static/ui/manifest-root.webmanifest` 中的 `share_target` 配置，把标题、正文、URL 和文件以 `multipart/form-data` POST 到该路径。
 
 字段：
 

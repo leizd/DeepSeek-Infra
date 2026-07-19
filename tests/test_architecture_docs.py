@@ -1,6 +1,6 @@
 """Documentation and architecture asset tests.
 
-These tests guard the v4.0.3 stable hybrid-architecture contract:
+These tests guard the v4.0.8 stable hybrid-architecture contract:
 - English and Simplified Chinese architecture SVGs are valid XML.
 - README.md exposes both language variants and links to ARCHITECTURE.md.
 - ARCHITECTURE.md contains a Mermaid diagram and the required ownership statements.
@@ -23,7 +23,7 @@ def _read(path: Path) -> str:
 @pytest.mark.parametrize(
     ("substring", "should_contain"),
     [
-        ("v4.0.7", True),
+        ("v4.0.8", True),
         ("v2.1.6", False),
         ("Optional Rust Sidecar", True),
         ("Python Default Runtime", True),
@@ -62,7 +62,8 @@ def test_chinese_architecture_svg_preserves_runtime_boundaries() -> None:
     assert "Python 默认运行时" in svg_text
     assert "可选 Rust 旁车" in svg_text
     assert "Python 回退始终权威" in svg_text
-    assert "React 对话 · /ui/" in svg_text
+    assert "React 应用 · /" in svg_text
+    assert "React 别名 · /ui/" in svg_text
     assert "数据默认不出端" in svg_text
 
 

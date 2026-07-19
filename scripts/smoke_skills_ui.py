@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Offline smoke for the Skill Workbench UI integration."""
+"""Offline source-contract smoke for the React Skill workspace."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,117 +27,72 @@ def _contains_all(text: str, needles: tuple[str, ...]) -> bool:
 
 
 def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
-    index = _read("static/index.html")
-    chat = _read("static/modules/chat.js")
-    skills = _read("static/modules/skills.js")
-    styles = _read("static/styles.css")
-    service_worker = _read("static/sw.js")
+    drawer = _read("frontend/src/features/skills/SkillsDrawer.tsx")
+    controller = _read("frontend/src/features/skills/useSkillController.ts")
+    api = _read("frontend/src/api/skillsApi.ts")
+    projects = _read("frontend/src/features/projects/ProjectsDrawer.tsx")
+    history = _read("frontend/src/features/history/HistoryDrawer.tsx")
+    styles = _read("frontend/src/shared/styles/app.css")
+    main = _read("frontend/src/main.tsx")
+    root_worker = _read("frontend/public/sw-root.js")
     ci = _read(".github/workflows/ci.yml")
 
     checks: dict[str, str] = {}
     details: dict[str, Any] = {}
 
     checks["skillWorkbenchEntrypoint"] = "PASS" if _contains_all(
-        index,
+        drawer + history,
         (
-            'id="skillButton"',
-            'id="skillPanel"',
-            'id="skillRunForm"',
-            'id="skillBuiltinList"',
-            'id="skillCustomList"',
-            'id="skillRecentRunList"',
+            'openOverlay("skills")',
+            'activeOverlay !== "skills"',
+            'className="settings-drawer workspace-drawer"',
+            'className="skill-list"',
         ),
     ) else "FAIL"
-
-    checks["skillRunSchemaForm"] = "PASS" if _contains_all(
-        skills,
-        (
-            "function renderRunFields",
-            "schema.properties",
-            "data-run-field",
-            "prop.enum",
-            "input.required = true",
-            "collectRunInput",
-        ),
+    checks["skillCreateEditDelete"] = "PASS" if _contains_all(
+        drawer + controller,
+        ("skills.create(draft)", "skills.update({ ...draft", "skills.remove(skill.skillId)", "createSkill", "updateSkillPrompt", "deleteSkill"),
     ) else "FAIL"
-
     checks["skillApiActions"] = "PASS" if _contains_all(
-        skills,
-        (
-            'action: "list"',
-            'action: "run"',
-            'const action = skill.disabled ? "enable" : "disable"',
-            'action: "import"',
-            'action: "export"',
-        ),
+        api,
+        ('action: "list"', 'action: "create"', 'action: "update"', 'disabled ? "disable" : "enable"', 'action: "delete"'),
     ) else "FAIL"
-
     checks["projectSkillBindingUi"] = "PASS" if _contains_all(
-        index + chat + skills,
-        (
-            'id="projectSkills"',
-            "renderProjectSkillBinding(project.id, projectSkillsBody)",
-            "PROJECT_API",
-            "${projectId}/skills",
-            'data-project-skill-binding="enabled"',
-            'data-project-skill-binding="default"',
-        ),
+        projects + controller + api,
+        ("loadBinding(project.id)", "saveBinding(project.id", "fetchProjectSkillBinding", "saveProjectSkillBinding", "enabledSkills", "defaultSkill"),
     ) else "FAIL"
-
-    checks["skillRunResultLinks"] = "PASS" if _contains_all(
-        index + skills,
-        (
-            "skillRunResult",
-            "skillRunResultBody",
-            "skillRunSavedItemsLink",
-            "skillRunArtifactsLink",
-            "savedItems",
-            "artifacts",
-        ),
-    ) else "FAIL"
-
     checks["skillPanelLifecycle"] = "PASS" if _contains_all(
-        chat + skills,
-        (
-            "beforeOpenPanel",
-            "onPanelStateChange",
-            "isSkillPanelOpen()",
-            "closeSkillWorkbench()",
-            "setPanelTriggerState(skillButton, skillPanel",
-        ),
+        drawer,
+        ('activeOverlay !== "skills"', "overlay.closeOverlay", 'role="dialog"', 'aria-modal="true"'),
     ) else "FAIL"
-
     checks["skillPanelStyles"] = "PASS" if _contains_all(
         styles,
-        (
-            ".skill-panel",
-            ".skill-panel.open",
-            ".skill-card",
-            ".skill-run-form",
-            ".project-skills",
-        ),
+        (".workspace-drawer", ".workspace-toolbar", ".skill-list", ".skill-card", ".skill-form"),
     ) else "FAIL"
-
-    checks["skillAppShellCache"] = "PASS" if '"/modules/skills.js"' in service_worker else "FAIL"
-
-    syntax = subprocess.run(["node", "--check", "static/modules/skills.js"], cwd=REPO_ROOT, capture_output=True, text=True)
-    checks["skillJsSyntax"] = "PASS" if syntax.returncode == 0 else "FAIL"
-    details["skillJsSyntax"] = {"returnCode": syntax.returncode, "stderr": syntax.stderr.strip()}
-
-    checks["ciSyntaxGate"] = "PASS" if "node --check static/modules/skills.js" in ci else "FAIL"
+    checks["reactPwaOwnership"] = "PASS" if _contains_all(
+        main + root_worker,
+        ('register(atRoot ? "/sw.js" : "/ui/sw.js"', 'const CACHE_NAME = "deepseek-react-root-', "staleWhileRevalidate"),
+    ) else "FAIL"
+    checks["frontendTypecheckGate"] = "PASS" if _contains_all(
+        ci,
+        ("npm run typecheck --prefix frontend", "npm test --prefix frontend", "npm run build --prefix frontend"),
+    ) else "FAIL"
 
     assets = ["docs/assets/skill-workbench.png", "docs/assets/skill-run-result.png"]
     missing_assets = [asset for asset in assets if not (REPO_ROOT / asset).is_file() or (REPO_ROOT / asset).stat().st_size <= 0]
     checks["skillUiAssets"] = "PASS" if not missing_assets else "FAIL"
     details["skillUiAssets"] = {"assets": assets, "missingOrEmpty": missing_assets}
-
-    details["uiEntrypoints"] = ["#skillButton", "#skillPanel", "#skillRunForm", "#projectSkills"]
-    details["assets"] = assets
+    details["uiSources"] = [
+        "frontend/src/features/skills/SkillsDrawer.tsx",
+        "frontend/src/features/skills/useSkillController.ts",
+        "frontend/src/api/skillsApi.ts",
+        "frontend/src/features/projects/ProjectsDrawer.tsx",
+    ]
     return checks, details
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run offline Skill Workbench UI smoke")
+    parser = argparse.ArgumentParser(description="Run offline React Skill workspace smoke")
     parser.add_argument("--offline", action="store_true", help="Kept for release-smoke symmetry; this smoke is always offline.")
     parser.add_argument("--version", default=APP_VERSION)
     parser.add_argument("--out", default=str(REPO_ROOT / "docs" / "evidence" / f"skills-ui-v{APP_VERSION}.json"))
@@ -156,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         for name, status in checks.items():
             print(f"[{status}] {name}")
-        print(f"Skill UI smoke summary: {payload['status']} -> {args.out}")
+        print(f"React Skill UI smoke summary: {payload['status']} -> {args.out}")
     return 0 if payload["status"] == "PASS" else 1
 
 

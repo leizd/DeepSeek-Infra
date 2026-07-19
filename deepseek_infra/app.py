@@ -66,6 +66,9 @@ def prepare_and_start(
     configure_logging()
     if not STATIC_DIR.exists():
         raise SystemExit("Missing static directory")
+    react_index = STATIC_DIR / "ui" / "index.html"
+    if not react_index.is_file():
+        raise RuntimeError("React frontend build is missing. Run scripts/build_frontend.py.")
     ensure_startup_dependencies()
     register_mimetypes()
     cleanup_runtime_caches()

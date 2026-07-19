@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -72,9 +71,9 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     checks["privacyRedaction"] = "PASS" if redacted["run"]["redacted"] and redacted["run"]["inputSummary"] == "[redacted]" else "FAIL"
 
     routes = _read("deepseek_infra/web/routes/skills.py") + _read("deepseek_infra/web/routes/workspace.py")
-    index = _read("static/index.html")
-    skills_js = _read("static/modules/skills.js")
-    styles = _read("static/styles.css")
+    drawer = _read("frontend/src/features/skills/SkillsDrawer.tsx")
+    skills_api = _read("frontend/src/api/skillsApi.ts")
+    styles = _read("frontend/src/shared/styles/app.css")
     ci = _read(".github/workflows/ci.yml")
 
     checks["analyticsApiActions"] = "PASS" if _contains_all(
@@ -87,24 +86,17 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
             "skill-analytics",
         ),
     ) else "FAIL"
-    checks["analyticsUi"] = "PASS" if _contains_all(
-        index + skills_js + styles,
+    checks["reactSkillSurface"] = "PASS" if _contains_all(
+        drawer + skills_api + styles,
         (
-            'id="skillRunsButton"',
-            'id="skillRunsHost"',
-            'id="skillRunsSummary"',
-            'id="skillRunsList"',
-            "openRunsHost",
-            "loadRunsDashboard",
-            "cleanupFailedRuns",
-            ".skill-runs-host",
-            ".skill-run-analytics-row",
+            "export function SkillsDrawer",
+            "buildSimpleSkillConfig",
+            ".skill-card",
         ),
     ) else "FAIL"
     asset_paths = ("docs/assets/skill-runs.png", "docs/assets/skill-analytics.png")
     checks["analyticsAssets"] = "PASS" if all((REPO_ROOT / path).is_file() for path in asset_paths) else "FAIL"
-    syntax = subprocess.run(["node", "--check", "static/modules/skills.js"], cwd=REPO_ROOT, capture_output=True, text=True)
-    checks["analyticsJsSyntax"] = "PASS" if syntax.returncode == 0 else "FAIL"
+    checks["frontendTypecheckGate"] = "PASS" if "npm run typecheck --prefix frontend" in ci else "FAIL"
     checks["ciReleaseGate"] = "PASS" if "smoke_skill_analytics.py" in ci else "FAIL"
 
     details["run"] = run_record
@@ -112,7 +104,6 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     details["projectSummary"] = project_summary
     details["cleanup"] = cleanup
     details["assets"] = list(asset_paths)
-    details["analyticsJsSyntax"] = {"returnCode": syntax.returncode, "stderr": syntax.stderr.strip()}
     return checks, details
 
 

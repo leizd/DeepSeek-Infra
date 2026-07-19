@@ -200,10 +200,10 @@ def check_static_dir(static_dir: Path) -> CheckResult:
         return CheckResult("static_dir", STATUS_FAIL, f"static directory missing: {static_dir}", {"path": str(static_dir)})
     if not static_dir.is_dir():
         return CheckResult("static_dir", STATUS_FAIL, f"static path is not a directory: {static_dir}", {"path": str(static_dir)})
-    index = static_dir / "index.html"
+    index = static_dir / "ui" / "index.html"
     if index.exists():
-        return CheckResult("static_dir", STATUS_PASS, "static directory present with index.html", {"path": str(static_dir)})
-    return CheckResult("static_dir", STATUS_WARN, "static directory present but index.html missing", {"path": str(static_dir)})
+        return CheckResult("static_dir", STATUS_PASS, "static directory present with React index", {"path": str(static_dir)})
+    return CheckResult("static_dir", STATUS_WARN, "static directory present but ui/index.html missing", {"path": str(static_dir)})
 
 
 def check_data_dirs(root: Path, names: tuple[str, ...]) -> CheckResult:

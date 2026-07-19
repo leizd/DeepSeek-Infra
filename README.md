@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.0.7-blue)
+![版本](https://img.shields.io/badge/version-4.0.8-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.0.7 React default entry:** `/` now serves the React frontend. After 4.0.4 (normal chat parity), 4.0.5 (Agent & Activity) and 4.0.6 (Projects, Skills, Memory, Diagnostics/Trace, PWA/offline/Share Target, speech, selection quote, reminders), the React surface covers the full legacy workspace. The legacy workspace stays reachable at `/legacy`, and `DEEPSEEK_FRONTEND=legacy` restores the old default instantly; no legacy file is deleted yet. The frozen 4.0 runtime contract is unchanged: Python remains default and authoritative, all Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.0.7 notes](docs/releases/4.0.7.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade and rollback guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+> **4.0.8 Legacy Frontend Retirement:** `/` now has a single React owner. The `/legacy` route, `DEEPSEEK_FRONTEND` rollback switch, legacy HTML/JavaScript entry, and legacy root PWA files have been removed. Every startup and packaging path now requires `static/ui/index.html`; missing React output fails with an actionable build error. The frozen 4.0 runtime contract is unchanged: Python remains authoritative, Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.0.8 notes](docs/releases/4.0.8.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
-**4.0.7 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.7 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
+**4.0.8 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.0.8 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
 
 ## 30 秒概览
 
@@ -457,4 +457,4 @@ The roadmap now lives in a standalone document: [ROADMAP.en.md](ROADMAP.en.md).
 
 ## 注意事项
 
-手机浏览器可以直接使用 `http://局域网IP:端口`。如果要像正式 App 一样稳定安装到手机桌面，通常需要 HTTPS 部署；本地 HTTP 更适合开发和局域网试用。`/metrics`、`/healthz`、`/readyz` 默认不鉴权，请保持服务绑定在 `127.0.0.1`，或在局域网模式下用反向代理 / 防火墙限制访问。PWA 缓存清理由 `static/sw.js` 的 activate 阶段统一负责。
+手机浏览器可以直接使用 `http://局域网IP:端口`。如果要像正式 App 一样稳定安装到手机桌面，通常需要 HTTPS 部署；本地 HTTP 更适合开发和局域网试用。`/metrics`、`/healthz`、`/readyz` 默认不鉴权，请保持服务绑定在 `127.0.0.1`，或在局域网模式下用反向代理 / 防火墙限制访问。根作用域 PWA 缓存由 React 构建生成的 `static/ui/sw-root.js` 负责。

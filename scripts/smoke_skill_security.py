@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -112,9 +111,9 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     checks["securitySummary"] = "PASS" if summary["summary"]["highRisk"] >= 1 and summary["summary"]["blocked"] >= 1 else "FAIL"
 
     routes = _read("deepseek_infra/web/routes/skills.py")
-    index = _read("static/index.html")
-    skills_js = _read("static/modules/skills.js")
-    styles = _read("static/styles.css")
+    drawer = _read("frontend/src/features/skills/SkillsDrawer.tsx")
+    skills_api = _read("frontend/src/api/skillsApi.ts")
+    styles = _read("frontend/src/shared/styles/app.css")
     ci = _read(".github/workflows/ci.yml")
 
     checks["securityApiActions"] = "PASS" if _contains_all(
@@ -128,22 +127,17 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
             'action == "security_summary"',
         ),
     ) else "FAIL"
-    checks["securityUi"] = "PASS" if _contains_all(
-        index + skills_js + styles,
+    checks["reactSkillSurface"] = "PASS" if _contains_all(
+        drawer + skills_api + styles,
         (
-            'id="skillSecurityButton"',
-            'id="skillSecurityHost"',
-            "openSecurityHost",
-            "loadSecurityDashboard",
-            "setSkillTrust",
-            ".skill-security-host",
-            ".skill-security-row",
+            "export function SkillsDrawer",
+            "buildSimpleSkillConfig",
+            ".skill-card",
         ),
     ) else "FAIL"
     asset_paths = ("docs/assets/skill-security-review.png", "docs/assets/skill-trust-store.png")
     checks["securityAssets"] = "PASS" if all((REPO_ROOT / path).is_file() for path in asset_paths) else "FAIL"
-    syntax = subprocess.run(["node", "--check", "static/modules/skills.js"], cwd=REPO_ROOT, capture_output=True, text=True)
-    checks["securityJsSyntax"] = "PASS" if syntax.returncode == 0 else "FAIL"
+    checks["frontendTypecheckGate"] = "PASS" if "npm run typecheck --prefix frontend" in ci else "FAIL"
     checks["ciReleaseGate"] = "PASS" if "smoke_skill_security.py" in ci and f"skill-security-v{APP_VERSION}.json" in ci else "FAIL"
 
     details["review"] = review
@@ -154,7 +148,6 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     details["packReview"] = pack_review
     details["summary"] = summary["summary"]
     details["assets"] = list(asset_paths)
-    details["securityJsSyntax"] = {"returnCode": syntax.returncode, "stderr": syntax.stderr.strip()}
     return checks, details
 
 

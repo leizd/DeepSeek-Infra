@@ -21,7 +21,7 @@ This standalone roadmap summarizes the current direction. The detailed historica
 - [ ] Move history management, search, rename, export, and destructive confirmation flows into React.
 - [ ] Move Agent run/activity views and trace navigation into React.
 - [ ] Move Projects, Skills, Memory, advanced settings, speech, diagnostics, and remaining PWA behavior into React.
-- [ ] Switch the default frontend only after browser smoke coverage proves parity; remove legacy `chat.js` only after that gate.
+- [x] Retire the legacy frontend after browser smoke coverage proved React parity (completed in 4.0.8).
 
 ## Runtime and release direction
 

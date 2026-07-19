@@ -1,4 +1,5 @@
-const CACHE_NAME = "deepseek-react-root-v1";
+const CACHE_NAME = "deepseek-react-root-v2";
+const RETIRED_CACHE_PREFIXES = ["deepseek-mobile-", "deepseek-infra-"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -11,7 +12,11 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key.startsWith("deepseek-react-") && key !== CACHE_NAME)
+            .filter(
+              (key) =>
+                (key.startsWith("deepseek-react-") && key !== CACHE_NAME) ||
+                RETIRED_CACHE_PREFIXES.some((prefix) => key.startsWith(prefix)),
+            )
             .map((key) => caches.delete(key)),
         ),
       )
@@ -23,6 +28,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname === "/legacy" || url.pathname.startsWith("/legacy/")) return;
   if (event.request.mode === "navigate") {
     event.respondWith(networkFirst(event.request));
     return;

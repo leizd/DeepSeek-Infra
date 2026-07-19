@@ -85,6 +85,12 @@ EXCLUDED_FILE_PATTERNS = {
     ".server*.log",
     "server*.log",
 }
+GENERATED_PACKAGE_DIRS = (
+    ("static", "ui"),
+    ("docs", "evidence"),
+    ("docs", "releases"),
+    ("evals", "reports"),
+)
 
 
 def should_include(path: Path, root: Path) -> bool:
@@ -97,9 +103,32 @@ def should_include(path: Path, root: Path) -> bool:
     return not any(fnmatch.fnmatch(relative.name, pattern) for pattern in EXCLUDED_FILE_PATTERNS)
 
 
+def tracked_project_files(root: Path) -> set[str] | None:
+    """Return Git-owned files, or ``None`` when ``root`` is not a worktree."""
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--cached"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return {item for item in result.stdout.split("\0") if item}
+
+
 def collect_files(root: Path) -> list[Path]:
     root = root.resolve()
-    return sorted(path for path in root.rglob("*") if path.is_file() and should_include(path, root))
+    tracked = tracked_project_files(root)
+    if tracked is None:
+        candidates = set(root.rglob("*"))
+    else:
+        candidates = {root / relative for relative in tracked}
+        for parts in GENERATED_PACKAGE_DIRS:
+            generated_root = root.joinpath(*parts)
+            if generated_root.is_dir():
+                candidates.update(generated_root.rglob("*"))
+    return sorted(path for path in candidates if path.is_file() and should_include(path, root))
 
 
 def git_sha(root: Path) -> str:
@@ -217,9 +246,7 @@ def build_release_zip(root: Path, output_dir: Path, version: str) -> Path:
         archive_path.unlink()
 
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(root.rglob("*")):
-            if not path.is_file() or not should_include(path, root):
-                continue
+        for path in collect_files(root):
             archive.write(path, path.relative_to(root).as_posix())
 
     # Keep legacy-name zip as copy (backward compatibility)
@@ -233,13 +260,22 @@ def build_release_zip(root: Path, output_dir: Path, version: str) -> Path:
 def build_frontend(root: Path) -> bool:
     frontend_package = root / "frontend" / "package.json"
     if not frontend_package.is_file():
-        return True
+        print("frontend build failed: frontend/package.json is missing", file=sys.stderr)
+        return False
     script = root / "scripts" / "build_frontend.py"
     if not script.is_file():
         print("frontend build failed: scripts/build_frontend.py is missing", file=sys.stderr)
         return False
     result = subprocess.run([sys.executable, str(script), "--root", str(root)], cwd=root, check=False)
-    return result.returncode == 0
+    return result.returncode == 0 and require_frontend_build(root)
+
+
+def require_frontend_build(root: Path) -> bool:
+    index = root / "static" / "ui" / "index.html"
+    if index.is_file():
+        return True
+    print("frontend build failed: static/ui/index.html is missing", file=sys.stderr)
+    return False
 
 
 def parse_args() -> argparse.Namespace:
@@ -275,7 +311,8 @@ def main() -> int:
         version = settings.app_version
     root = args.root.resolve()
     if args.dry_run:
-        if not args.skip_frontend_build and not build_frontend(root):
+        frontend_ready = require_frontend_build(root) if args.skip_frontend_build else build_frontend(root)
+        if not frontend_ready:
             return 1
         files = collect_files(root)
         archive_name = f"deepseek-infra-{version}.zip"
@@ -283,7 +320,8 @@ def main() -> int:
         return 0
     if args.clean_workspace:
         clean_workspace(root)
-    if not args.skip_frontend_build and not build_frontend(root):
+    frontend_ready = require_frontend_build(root) if args.skip_frontend_build else build_frontend(root)
+    if not frontend_ready:
         return 1
     archive_path = build_release_zip(root, args.output_dir, version)
     if not args.no_manifest:

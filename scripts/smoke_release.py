@@ -38,7 +38,9 @@ def _py() -> str:
 
 
 def build_stages(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
-    stages: list[tuple[str, list[str]]] = []
+    stages: list[tuple[str, list[str]]] = [
+        ("frontend_build", [_py(), str(REPO_ROOT / "scripts" / "build_frontend.py")]),
+    ]
     if not args.skip_doctor:
         doctor_cmd = [_py(), str(REPO_ROOT / "scripts" / "doctor.py")]
         if args.offline:

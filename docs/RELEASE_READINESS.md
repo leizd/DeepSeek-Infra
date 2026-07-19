@@ -411,7 +411,7 @@ python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builde
 - Tool 权限差异：`tool_permission_summary` 为每个 allowedTool 标注风险级别并标记高风险 / 需审批工具。
 - 项目 pack 绑定：`enable_pack_for_project` 将 Pack 的 Skill 添加到项目并记录 `enabledPacks`。
 - Pack 安装试运行：安装内置 Pack 会将其引用的 Skill 启用到项目上。
-- Packs UI 选项卡：`skillPacksButton` / `skillPacksHost` / `skillBuiltinPackList` / `skillCustomPackList` 存在，且 `skills.js` 通过 `node --check`。
+- Skills 工作台由 `frontend/src/features/skills/SkillsDrawer.tsx` 和 `useSkillController.ts` 提供，前端 `typecheck`、Vitest 与生产构建共同作为发布门禁。
 - Pack 资源：`docs/assets/skill-packs.png` 和 `docs/assets/skill-pack-import.png` 存在。
 
 刷新命令：

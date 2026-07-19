@@ -215,57 +215,43 @@ def test_resolve_static_file_serves_isolated_react_spa(tmp_path: Path) -> None:
     script.write_text("export {};", encoding="utf-8")
 
     with patch.object(server, "STATIC_DIR", tmp_path):
+        assert server.resolve_static_file("/") == index
+        assert server.resolve_static_file("/projects/example") == index
         assert server.resolve_static_file("/ui/") == index
         assert server.resolve_static_file("/ui/projects/example") == index
         assert server.resolve_static_file("/ui/assets/app.js") == script
         assert server.resolve_static_file("/ui/assets/missing.js") is None
+        assert server.resolve_static_file("/legacy") is None
+        assert server.resolve_static_file("/legacy/") is None
 
 
-def test_resolve_static_file_switches_default_frontend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_frontend_index_path_requires_react_build(tmp_path: Path) -> None:
+    with patch.object(server, "STATIC_DIR", tmp_path), pytest.raises(RuntimeError, match="scripts/build_frontend.py"):
+        server.frontend_index_path()
+
+
+def test_resolve_static_file_always_uses_react_frontend(tmp_path: Path) -> None:
     react = tmp_path / "ui"
     react.mkdir()
     react_index = react / "index.html"
     react_index.write_text("<main>react</main>", encoding="utf-8")
-    legacy_index = tmp_path / "index.html"
-    legacy_index.write_text("<main>legacy</main>", encoding="utf-8")
 
-    monkeypatch.delenv("DEEPSEEK_FRONTEND", raising=False)
     with patch.object(server, "STATIC_DIR", tmp_path):
         assert server.resolve_static_file("/") == react_index
-        assert server.resolve_static_file("/legacy") == legacy_index
-
-    monkeypatch.setenv("DEEPSEEK_FRONTEND", "legacy")
-    with patch.object(server, "STATIC_DIR", tmp_path):
-        assert server.resolve_static_file("/") == legacy_index
+        assert server.resolve_static_file("/legacy") is None
 
 
-def test_resolve_static_file_falls_back_to_legacy_without_react_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    legacy_index = tmp_path / "index.html"
-    legacy_index.write_text("<main>legacy</main>", encoding="utf-8")
-    monkeypatch.delenv("DEEPSEEK_FRONTEND", raising=False)
-    with patch.object(server, "STATIC_DIR", tmp_path):
-        assert server.resolve_static_file("/") == legacy_index
-
-
-def test_resolve_static_file_overrides_sw_and_manifest_in_react_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_static_file_maps_root_sw_and_manifest_to_react_build(tmp_path: Path) -> None:
     react = tmp_path / "ui"
     react.mkdir()
-    (tmp_path / "sw.js").write_text("// legacy sw", encoding="utf-8")
-    (tmp_path / "manifest.webmanifest").write_text("{}", encoding="utf-8")
     react_sw = react / "sw-root.js"
     react_sw.write_text("// react root sw", encoding="utf-8")
     react_manifest = react / "manifest-root.webmanifest"
     react_manifest.write_text("{}", encoding="utf-8")
 
-    monkeypatch.delenv("DEEPSEEK_FRONTEND", raising=False)
     with patch.object(server, "STATIC_DIR", tmp_path):
         assert server.resolve_static_file("/sw.js") == react_sw
         assert server.resolve_static_file("/manifest.webmanifest") == react_manifest
-
-    monkeypatch.setenv("DEEPSEEK_FRONTEND", "legacy")
-    with patch.object(server, "STATIC_DIR", tmp_path):
-        assert server.resolve_static_file("/sw.js") == tmp_path / "sw.js"
-        assert server.resolve_static_file("/manifest.webmanifest") == tmp_path / "manifest.webmanifest"
 
 
 def _route_endpoint(app: Any, path: str, method: str) -> Any:
@@ -443,9 +429,13 @@ def test_server_stream_static_share_and_redaction_edges(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(server, "agent_run_events_after", lambda *_args: (_ for _ in ()).throw(BrokenPipeError()))
     assert list(server.agent_run_event_stream("run", -1)) == []
+    react = tmp_path / "ui"
+    react.mkdir()
+    index = react / "index.html"
+    index.write_text("<main>react</main>", encoding="utf-8")
     with patch.object(server, "STATIC_DIR", tmp_path):
-        assert server.resolve_static_file("") == tmp_path / "index.html"
-        assert server.resolve_static_file("../") == tmp_path / "index.html"
+        assert server.resolve_static_file("") == index
+        assert server.resolve_static_file("../") is None
     server._SHARE_TARGETS.clear()
     server._SHARE_TARGETS["old"] = (0, {"x": 1})
     server.cleanup_share_target_payloads(now=server.SHARE_TARGET_TTL_SECONDS + 1)

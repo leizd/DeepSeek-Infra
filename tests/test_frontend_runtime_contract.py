@@ -7,88 +7,60 @@ from starlette.responses import Response
 
 
 ROOT = Path(__file__).resolve().parents[1]
+STATIC_DIR = ROOT / "static"
+SERVER_PATH = ROOT / "deepseek_infra" / "web" / "server.py"
 
 
 def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_index_uses_csp_safe_theme_boot_and_local_inter() -> None:
-    index = read("static/index.html")
-    assert '<script src="/theme_boot.js?v=401"></script>' in index
-    assert "<script>" not in index
+def test_legacy_frontend_is_retired() -> None:
+    assert not (STATIC_DIR / "index.html").exists()
+    assert not (STATIC_DIR / "app.js").exists()
+    assert not (STATIC_DIR / "modules" / "chat.js").exists()
+    assert not (STATIC_DIR / "sw.js").exists()
+    assert not (STATIC_DIR / "manifest.webmanifest").exists()
+
+    server_source = SERVER_PATH.read_text(encoding="utf-8")
+    assert "DEEPSEEK_FRONTEND" not in server_source
+    assert '["legacy"]' not in server_source
+
+
+def test_react_root_pwa_sources_are_owned_by_frontend_build() -> None:
+    index = read("frontend/index.html")
+    root_worker = read("frontend/public/sw-root.js")
+    root_manifest = read("frontend/public/manifest-root.webmanifest")
+    main = read("frontend/src/main.tsx")
+
+    assert '<link rel="manifest" href="/manifest.webmanifest" />' in index
+    assert 'register(atRoot ? "/sw.js" : "/ui/sw.js"' in main
+    assert 'const CACHE_NAME = "deepseek-react-root-' in root_worker
+    assert 'url.pathname.startsWith("/api/")' in root_worker
+    assert '"start_url": "/"' in root_manifest
+    assert '"scope": "/"' in root_manifest
+    assert '"share_target"' in root_manifest
+
+
+def test_react_runtime_keeps_csp_safe_local_assets() -> None:
+    index = read("frontend/index.html")
     assert "fonts.googleapis.com" not in index
     assert "fonts.gstatic.com" not in index
-    assert '/vendor/inter/inter.css?v=401' in index
-    assert (ROOT / "static/vendor/inter/Inter-Variable.ttf").stat().st_size > 100_000
-    assert "SIL OPEN FONT LICENSE" in read("static/vendor/inter/OFL.txt")
+    assert '/icons/favicon.svg' in index
+    assert (ROOT / "static" / "icons" / "favicon.svg").is_file()
 
     response = Response()
     apply_common_headers(response, "/")
     csp = response.headers["Content-Security-Policy"]
     assert "script-src 'self'" in csp
     assert "font-src 'self'" in csp
-    assert "fonts.googleapis.com" not in csp
 
 
-def test_credentials_are_not_written_to_local_storage() -> None:
-    chat = read("static/modules/chat.js")
-    credentials = read("static/modules/credential_store.js")
-    assert "localStorage.setItem(storageKeys.apiKey" not in chat
-    assert "localStorage.setItem(storageKeys.tavilyKey" not in chat
-    assert "createCredentialSession(storageKeys)" in chat
-    assert "safeRemove(local, key)" in credentials
-    assert "sessionStorage" in credentials
+def test_independent_trace_viewer_remains_available() -> None:
+    trace_html = read("static/trace_viewer.html")
+    trace_viewer = read("static/modules/trace_viewer.js")
+    trace_waterfall = read("static/modules/trace_waterfall.js")
 
-
-def test_upload_contract_has_timeout_abort_and_finally_cleanup() -> None:
-    upload = read("static/modules/upload_controller.js")
-    chat = read("static/modules/chat.js")
-    assert "xhr.timeout = positiveTimeout(options.timeoutMs)" in upload
-    assert "xhr.ontimeout" in upload
-    assert "xhr.onabort" in upload
-    assert "cancel()" in upload and "xhr.abort()" in upload
-    assert "return await task.promise" in chat
-    assert "setUploadActive(false)" in chat
-    assert 'data-cancel-upload' in chat
-
-
-def test_service_worker_precaches_complete_versioned_app_shell() -> None:
-    worker = read("static/sw.js")
-    for asset in (
-        '"/theme_boot.js"',
-        '"/vendor/inter/inter.css"',
-        '"/vendor/inter/Inter-Variable.ttf"',
-        '"/vaultr-brutalist.css"',
-        '"/modules/upload_controller.js"',
-        '"/modules/credential_store.js"',
-        '"/modules/workspace_tabs.js"',
-        '"/modules/skill_builder.js"',
-    ):
-        assert asset in worker
-    assert 'const CACHE_NAME = "deepseek-infra-v403"' in worker
-    assert "await cache.addAll(CORE_SHELL)" in worker
-    assert "Promise.allSettled" in worker
-    assert "staleWhileRevalidate" in worker
-    assert "url.search = \"\"" in worker
-    assert "fetch(event.request).catch(() => caches.match(event.request))" not in worker
-
-
-def test_workspace_tabs_have_complete_aria_and_keyboard_contract() -> None:
-    index = read("static/index.html")
-    tabs = read("static/modules/workspace_tabs.js")
-    assert index.count('role="tab"') == 5
-    assert index.count('role="tabpanel"') == 5
-    assert index.count('aria-controls="workspace') == 5
-    assert "ArrowRight" in tabs and "ArrowLeft" in tabs
-    assert 'event.key === "Home"' in tabs and 'event.key === "End"' in tabs
-    assert 'tab.setAttribute("aria-selected", String(selected))' in tabs
-
-
-def test_frontend_responsibilities_are_split_into_es_modules() -> None:
-    chat = read("static/modules/chat.js")
-    skills = read("static/modules/skills.js")
-    assert 'from "./credential_store.js"' in chat
-    assert 'from "./workspace_tabs.js"' in chat
-    assert 'from "./skill_builder.js"' in skills
-    assert "function defaultBuilderSkill" not in skills
+    assert 'src="/modules/trace_viewer.js"' in trace_html
+    assert 'from "./trace_waterfall.js"' in trace_viewer
+    assert "export function buildTraceSpanTree" in trace_waterfall

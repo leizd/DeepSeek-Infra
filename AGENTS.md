@@ -9,7 +9,7 @@ Executable config (CI, `pyproject.toml`, requirements) is the source of truth; t
   - HTTP server: `deepseek_infra/app.py:main` → `deepseek_infra/web/server.py:create_server`
   - `launch.py` flags: `--gui` (Tk launcher), `--mobile` (mobile launcher), `--server` (headless), `--app` (desktop WebView, default)
 - All backend code is the single package `deepseek_infra/`. The 9 infra modules live under `deepseek_infra/infra/` (`gateway`, `agent_runtime`, `rag`, `tool_runtime`, `observability`, `mcp`, `evaluation`, `data`).
-- Frontend migration is past the dual-track phase: `/` serves the React + TypeScript + Vite build from `frontend/` by default (the isolated React + TypeScript + Vite app emits generated assets into the gitignored `static/ui/`; build with `npm run build --prefix frontend`). The legacy vanilla JS workspace remains reachable at `/legacy`, and `DEEPSEEK_FRONTEND=legacy` restores it as the default. `static/` legacy files are still present pending the scheduled retirement commit; never hand-edit `static/ui/` output.
+- `/` serves the React + TypeScript + Vite build from `frontend/` exclusively. Generated assets are emitted into the gitignored `static/ui/`; build with `npm run build --prefix frontend` and never hand-edit that output. Startup and packaging require `static/ui/index.html`.
 - `android/` is an Android Studio project wrapping the Python backend into an APK; `scripts/build_exe.py` builds a single-file PyInstaller exe.
 
 ## Dev verification (run in this order — matches CI)
@@ -21,10 +21,9 @@ npm run check --prefix frontend
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-# Legacy JS syntax (only these files are checked):
-node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_core.js static/app.js \
-      static/modules/network.js static/modules/markdown.js static/modules/settings.js static/modules/panels.js \
-      static/modules/chat.js static/modules/trace_waterfall.js static/modules/trace_viewer.js
+# Retained standalone/static JS syntax (only these files are checked):
+node --check static/vendor/katex/katex.min.js \
+      static/modules/trace_waterfall.js static/modules/trace_viewer.js
 ```
 
 - Python 3.10+ (CI matrix: 3.10 / 3.11 / 3.12). `mypy` targets `python_version="3.10"`.

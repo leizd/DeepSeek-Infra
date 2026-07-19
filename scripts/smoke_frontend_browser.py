@@ -62,20 +62,14 @@ async def run_browser(base_url: str) -> dict[str, str]:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         context = await browser.new_context(service_workers="allow")
-        await context.add_init_script(
-            """
-            localStorage.setItem('deepseek-infra.theme-style', 'linear');
-            localStorage.setItem('deepseek-infra.theme-mode', 'dark');
-            """
-        )
         page = await context.new_page()
         console_errors: list[str] = []
         page_errors: list[str] = []
         page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
         page.on("pageerror", lambda error: page_errors.append(str(error)))
 
-        react_stop_release = asyncio.Event()
-        react_stop_requested = asyncio.Event()
+        stop_release = asyncio.Event()
+        stop_requested = asyncio.Event()
 
         async def mock_chat(route: Any) -> None:
             try:
@@ -83,18 +77,15 @@ async def run_browser(base_url: str) -> dict[str, str]:
             except (json.JSONDecodeError, TypeError):
                 request_data = {}
             messages = request_data.get("messages", []) if isinstance(request_data, dict) else []
-            if any(
-                isinstance(message, dict) and message.get("content") == "Stop the React stream"
-                for message in messages
-            ):
-                react_stop_requested.set()
-                await react_stop_release.wait()
+            if any(isinstance(message, dict) and message.get("content") == "Stop the React stream" for message in messages):
+                stop_requested.set()
+                await stop_release.wait()
                 try:
                     await route.abort("aborted")
                 except PlaywrightError:
                     pass
                 return
-            body = '\n'.join(
+            body = "\n".join(
                 [
                     json.dumps({"type": "content", "text": "Browser smoke reply"}),
                     json.dumps(
@@ -133,11 +124,7 @@ async def run_browser(base_url: str) -> dict[str, str]:
             )
 
         async def mock_title(route: Any) -> None:
-            await route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=json.dumps({"title": "React smoke chat"}),
-            )
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"title": "React smoke chat"}))
 
         upload_release = asyncio.Event()
 
@@ -152,90 +139,67 @@ async def run_browser(base_url: str) -> dict[str, str]:
         await context.route("**/api/chat", mock_chat)
         await context.route("**/api/title", mock_title)
         await context.route("**/api/file-text", hold_upload)
-        response = await page.goto(f"{base_url}legacy", wait_until="domcontentloaded")
+
+        response = await page.goto(base_url, wait_until="networkidle")
         if response is None or response.status != 200:
-            raise AssertionError("home page did not return HTTP 200")
+            raise AssertionError("root page did not return HTTP 200")
         csp = (await response.header_value("content-security-policy")) or ""
         if "script-src 'self'" not in csp or "font-src 'self'" not in csp:
             raise AssertionError(f"unexpected CSP: {csp}")
         checks["cspHeader"] = "PASS"
 
-        theme = await page.evaluate("() => ({ theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode })")
-        if theme != {"theme": "linear", "mode": "dark"}:
-            raise AssertionError(f"theme boot did not run before application startup: {theme}")
-        checks["firstPaintTheme"] = "PASS"
-
-        await page.keyboard.press("Escape")
-        await page.locator("#workspaceAgentsTab").click()
-        if await page.locator("#workspaceAgentsTab").get_attribute("aria-selected") != "true":
-            raise AssertionError("workspace tab click did not update aria-selected")
-        await page.locator("#workspaceAgentsTab").press("ArrowRight")
-        if await page.locator("#workspaceMemoryTab").get_attribute("aria-selected") != "true":
-            raise AssertionError("workspace tab keyboard navigation failed")
-        checks["workspaceTabs"] = "PASS"
-
-        await page.locator("#apiKeyInput").fill("sk-browser-smoke")
-        await page.locator("#promptInput").fill("Run the browser smoke")
-        await page.locator("#sendButton").wait_for(state="visible")
-        await page.wait_for_function("() => !document.querySelector('#sendButton').disabled")
-        await page.locator("#sendButton").click()
-        await page.get_by_text("Browser smoke reply", exact=True).wait_for(timeout=10_000)
-        checks["mockChat"] = "PASS"
-
-        upload_file: FilePayload = {"name": "smoke.txt", "mimeType": "text/plain", "buffer": b"cancel me"}
-        await page.locator("#fileInput").set_input_files(files=upload_file)
-        cancel = page.locator("button[data-cancel-upload]").first
-        await cancel.wait_for(timeout=10_000)
-        await cancel.click()
-        upload_release.set()
-        await page.get_by_text("上传已取消", exact=False).first.wait_for(timeout=10_000)
-        if await page.locator("#attachmentButton").get_attribute("aria-disabled") != "false":
-            raise AssertionError("upload state did not recover after cancellation")
-        checks["uploadCancel"] = "PASS"
-
-        react_page = await context.new_page()
-        react_page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
-        react_page.on("pageerror", lambda error: page_errors.append(str(error)))
-        react_response = await react_page.goto(f"{base_url}ui/", wait_until="networkidle")
-        if react_response is None or react_response.status != 200:
-            raise AssertionError("React chat did not return HTTP 200")
-        await react_page.locator("#reactPromptInput").wait_for()
-        if await react_page.locator("#promptInput").count() != 0:
-            raise AssertionError("legacy and React frontends unexpectedly share one DOM tree")
-        asset_urls = await react_page.locator('script[type="module"][src]').evaluate_all(
+        await page.locator("#reactPromptInput").wait_for()
+        if await page.locator("#promptInput").count() != 0:
+            raise AssertionError("legacy chat DOM is still present at the root entry")
+        asset_urls = await page.locator('script[type="module"][src]').evaluate_all(
             "elements => elements.map((element) => element.src)"
         )
         if not asset_urls or any(not url.startswith(f"{base_url}ui/assets/") for url in asset_urls):
-            raise AssertionError(f"React assets are not served from the isolated /ui/ base: {asset_urls}")
+            raise AssertionError(f"React assets are not served from static/ui: {asset_urls}")
+        checks["reactOnlyRoot"] = "PASS"
 
-        await react_page.locator("#reactPromptInput").fill("Run the React browser smoke")
-        await react_page.locator("button.send-button").click()
-        await react_page.get_by_text("Browser smoke reply", exact=True).last.wait_for(timeout=10_000)
+        await page.locator("#reactPromptInput").fill("Run the React browser smoke")
+        await page.locator("button.send-button").click()
+        await page.get_by_text("Browser smoke reply", exact=True).last.wait_for(timeout=10_000)
         checks["reactChatVerticalSlice"] = "PASS"
-        await react_page.wait_for_function(
+
+        upload_file: FilePayload = {"name": "smoke.txt", "mimeType": "text/plain", "buffer": b"cancel me"}
+        await page.locator('input[type="file"]').set_input_files(files=upload_file)
+        cancel = page.locator(".attachment-item.uploading button").first
+        await cancel.wait_for(timeout=10_000)
+        await cancel.click()
+        upload_release.set()
+        await page.wait_for_function("() => document.querySelectorAll('.attachment-item').length === 0")
+        checks["uploadCancel"] = "PASS"
+
+        await page.wait_for_function(
             """() => (localStorage.getItem('deepseek-infra.conversations') || '').includes('Browser smoke reply')"""
         )
-        await react_page.reload(wait_until="networkidle")
-        await react_page.get_by_text("Browser smoke reply", exact=True).last.wait_for(timeout=10_000)
+        await page.reload(wait_until="networkidle")
+        await page.get_by_text("Browser smoke reply", exact=True).last.wait_for(timeout=10_000)
         checks["reactHistoryPersistence"] = "PASS"
 
-        await react_page.locator("button.new-chat-button").click()
-        await react_page.locator("#reactPromptInput").fill("Stop the React stream")
-        await react_page.locator("button.send-button").click()
-        await asyncio.wait_for(react_stop_requested.wait(), timeout=5)
-        stop_button = react_page.locator("button.stop-button")
+        await page.locator("button.new-chat-button").click()
+        await page.locator("#reactPromptInput").fill("Stop the React stream")
+        await page.locator("button.send-button").click()
+        await asyncio.wait_for(stop_requested.wait(), timeout=5)
+        stop_button = page.locator("button.stop-button")
         await stop_button.wait_for(timeout=10_000)
         await stop_button.click()
-        react_stop_release.set()
-        await react_page.locator(".chat-notice").filter(has_text="已停止生成").wait_for(timeout=10_000)
+        stop_release.set()
+        await page.locator(".chat-notice").wait_for(timeout=10_000)
         checks["reactStopGeneration"] = "PASS"
 
-        deep_link_response = await react_page.goto(f"{base_url}ui/projects/example", wait_until="networkidle")
+        deep_link_response = await page.goto(f"{base_url}projects/example", wait_until="networkidle")
         if deep_link_response is None or deep_link_response.status != 200:
-            raise AssertionError("React SPA deep-link fallback did not return HTTP 200")
-        await react_page.locator("#reactPromptInput").wait_for()
-        checks["reactPreview"] = "PASS"
-        await react_page.close()
+            raise AssertionError("root React SPA deep-link fallback did not return HTTP 200")
+        await page.locator("#reactPromptInput").wait_for()
+        checks["rootSpaDeepLink"] = "PASS"
+
+        legacy_response = await context.request.get(f"{base_url}legacy")
+        if legacy_response.status != 404:
+            raise AssertionError(f"legacy route returned HTTP {legacy_response.status}, expected 404")
+        checks["legacyRouteRetired"] = "PASS"
 
         await page.evaluate(
             """async () => {
@@ -264,7 +228,7 @@ async def run_browser(base_url: str) -> dict[str, str]:
         checks["completeAppShell"] = "PASS"
 
         offline_page = await context.new_page()
-        offline_response = await offline_page.goto(f"{base_url}ui/", wait_until="networkidle")
+        offline_response = await offline_page.goto(base_url, wait_until="networkidle")
         if offline_response is None or offline_response.status != 200:
             raise AssertionError("React page did not load before the offline check")
         await offline_page.locator("#reactPromptInput").wait_for()

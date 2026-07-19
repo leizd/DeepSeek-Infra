@@ -1,6 +1,0 @@
-/* Compatibility shim.
- * The brutalist skin has been renamed to /vaultr-brutalist.css.
- * Keep this file so older index.html / cached pages that still load
- * /gemini.css continue to render correctly.
- */
-@import url("/vaultr-brutalist.css");

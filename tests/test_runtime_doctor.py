@@ -113,7 +113,8 @@ def test_static_dir_states(tmp_path: Path) -> None:
     assert doctor.check_static_dir(missing).status == doctor.STATUS_FAIL
     missing.mkdir()
     assert doctor.check_static_dir(missing).status == doctor.STATUS_WARN
-    (missing / "index.html").write_text("<html></html>", encoding="utf-8")
+    (missing / "ui").mkdir()
+    (missing / "ui" / "index.html").write_text("<html></html>", encoding="utf-8")
     assert doctor.check_static_dir(missing).status == doctor.STATUS_PASS
 
 
@@ -155,7 +156,8 @@ def test_token_file_states_and_masking(tmp_path: Path) -> None:
 def test_run_doctor_offline_skips_health_probes(tmp_path: Path) -> None:
     static = tmp_path / "static"
     static.mkdir()
-    (static / "index.html").write_text("ok", encoding="utf-8")
+    (static / "ui").mkdir()
+    (static / "ui" / "index.html").write_text("ok", encoding="utf-8")
     options = doctor.DoctorOptions(root=tmp_path, static_dir=static, offline=True, required_imports=(), optional_imports=())
     results = doctor.run_doctor(options)
     names = [r.name for r in results]
@@ -167,7 +169,8 @@ def test_run_doctor_offline_skips_health_probes(tmp_path: Path) -> None:
 def test_run_doctor_with_server_probes_health(tmp_path: Path) -> None:
     static = tmp_path / "static"
     static.mkdir()
-    (static / "index.html").write_text("ok", encoding="utf-8")
+    (static / "ui").mkdir()
+    (static / "ui" / "index.html").write_text("ok", encoding="utf-8")
     options = doctor.DoctorOptions(
         root=tmp_path,
         static_dir=static,
@@ -216,7 +219,8 @@ def test_offline_doctor_passes_in_clean_tmp(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     static = tmp_path / "static"
     static.mkdir()
-    (static / "index.html").write_text("ok", encoding="utf-8")
+    (static / "ui").mkdir()
+    (static / "ui" / "index.html").write_text("ok", encoding="utf-8")
     options = doctor.DoctorOptions(
         root=tmp_path,
         static_dir=static,

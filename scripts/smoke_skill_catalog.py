@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -92,9 +91,9 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     checks["securityGateBeforeInstall"] = "PASS" if risky_preview["installPreview"]["requiresSecurityApproval"] and denied else "FAIL"
 
     routes = _read("deepseek_infra/web/routes/skills.py")
-    index = _read("static/index.html")
-    skills_js = _read("static/modules/skills.js")
-    styles = _read("static/styles.css")
+    drawer = _read("frontend/src/features/skills/SkillsDrawer.tsx")
+    skills_api = _read("frontend/src/api/skillsApi.ts")
+    styles = _read("frontend/src/shared/styles/app.css")
     ci = _read(".github/workflows/ci.yml")
 
     checks["catalogApiActions"] = "PASS" if _contains_all(
@@ -109,23 +108,17 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
             'action == "catalog_export"',
         ),
     ) else "FAIL"
-    checks["catalogUi"] = "PASS" if _contains_all(
-        index + skills_js + styles,
+    checks["reactSkillSurface"] = "PASS" if _contains_all(
+        drawer + skills_api + styles,
         (
-            'id="skillCatalogButton"',
-            'id="skillCatalogHost"',
-            "openCatalogHost",
-            "loadCatalogDashboard",
-            "previewCatalogInstall",
-            "installCatalogItem",
-            ".skill-catalog-host",
-            ".skill-catalog-row",
+            "export function SkillsDrawer",
+            "buildSimpleSkillConfig",
+            ".skill-card",
         ),
     ) else "FAIL"
     asset_paths = ("docs/assets/skill-catalog.png", "docs/assets/skill-catalog-install-preview.png")
     checks["catalogAssets"] = "PASS" if all((REPO_ROOT / path).is_file() for path in asset_paths) else "FAIL"
-    syntax = subprocess.run(["node", "--check", "static/modules/skills.js"], cwd=REPO_ROOT, capture_output=True, text=True)
-    checks["catalogJsSyntax"] = "PASS" if syntax.returncode == 0 else "FAIL"
+    checks["frontendTypecheckGate"] = "PASS" if "npm run typecheck --prefix frontend" in ci else "FAIL"
     checks["ciReleaseGate"] = "PASS" if "smoke_skill_catalog.py" in ci and f"skill-catalog-v{APP_VERSION}.json" in ci else "FAIL"
 
     details["manifestSummary"] = manifest["summary"]
@@ -133,7 +126,6 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     details["installPreview"] = preview["installPreview"]
     details["riskyPreview"] = risky_preview["installPreview"]
     details["assets"] = list(asset_paths)
-    details["catalogJsSyntax"] = {"returnCode": syntax.returncode, "stderr": syntax.stderr.strip()}
     return checks, details
 
 

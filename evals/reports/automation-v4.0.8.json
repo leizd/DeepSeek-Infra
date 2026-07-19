@@ -1,0 +1,83 @@
+{
+  "version": "4.0.8",
+  "commit": "8e26bee16b90",
+  "generatedAt": "2026-07-19T00:42:13+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "automationCreate": "PASS",
+    "manualRun": "PASS",
+    "scheduleTrigger": "PASS",
+    "eventTrigger": "PASS",
+    "runSkillAction": "PASS",
+    "browserReadOnlyAction": "PASS",
+    "projectExportAction": "PASS",
+    "unsafeActionBlocked": "PASS",
+    "runHistory": "PASS",
+    "traceLinked": "PASS",
+    "artifactOutput": "PASS",
+    "templates": "PASS",
+    "evidenceGenerated": "PASS",
+    "browserCheckChanged": "PASS",
+    "browserCheckUnchanged": "PASS",
+    "fixturePathBlocked": "PASS",
+    "cronStepRange": "PASS",
+    "maxRunsPerDay": "PASS",
+    "retryBackoff": "PASS",
+    "timeoutEvidence": "PASS",
+    "rerun": "PASS",
+    "templateCreate": "PASS",
+    "goldenCasesLoaded": "PASS",
+    "coreActionsCovered": "PASS"
+  },
+  "details": {
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-automation-eval-xovx9om_",
+    "fixtures": "D:\\deepseek\\tests\\fixtures\\automation",
+    "projectId": "proj-dd09156f6dab",
+    "automationIds": [
+      "auto_8678cbbbb8d33326",
+      "auto_3128e624fb7c22f7",
+      "auto_9d119c9d7dc199f4",
+      "auto_ac6393adbe1f8f35",
+      "auto_c21fe1ed235d32ac",
+      "auto_4327a11ee9fe0c3a",
+      "auto_29bbba71038ab384",
+      "auto_f2ff42068d9e5088",
+      "auto_9092e6d557399cd1",
+      "auto_cb8ff64a1adf7e4f",
+      "auto_57e6626b1b322e24",
+      "auto_756ed6e004dc3538",
+      "auto_9735eccb0fe1c573"
+    ],
+    "runIds": [
+      "auto_run_407e162a2054f824",
+      "auto_run_918fbe851e4686ed",
+      "auto_run_68bc394110b802a5",
+      "auto_run_3b4a79979a2c9e70",
+      "auto_run_8647910c2ac4f8f4",
+      "auto_run_5934e855818988b3",
+      "auto_run_2758c4269c2d0223",
+      "auto_run_53aa9cccdf081b9e",
+      "auto_run_38c17828b45a92c6",
+      "auto_run_b3d5585e9c36adc2",
+      "auto_run_78b23ded82ffd5df",
+      "auto_run_94cff62b6733bd08",
+      "auto_run_8cf73b0c21f73437",
+      "auto_run_a326351876085617",
+      "auto_run_0120246151dfd77a",
+      "auto_run_d9667f23d4ee8be1"
+    ],
+    "savedItemCount": 8,
+    "artifactCount": 1,
+    "caseCount": 3
+  },
+  "summary": {
+    "caseCount": 3,
+    "passCount": 24,
+    "checkCount": 24
+  }
+}

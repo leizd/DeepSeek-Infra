@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,10 +27,10 @@ def _contains_all(text: str, needles: tuple[str, ...]) -> bool:
 
 
 def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
-    index = _read("static/index.html")
-    skills = _read("static/modules/skills.js")
-    skill_builder = _read("static/modules/skill_builder.js")
-    styles = _read("static/styles.css")
+    drawer = _read("frontend/src/features/skills/SkillsDrawer.tsx")
+    controller = _read("frontend/src/features/skills/useSkillController.ts")
+    api = _read("frontend/src/api/skillsApi.ts")
+    styles = _read("frontend/src/shared/styles/app.css")
     routes = _read("deepseek_infra/web/routes/skills.py")
     ci = _read(".github/workflows/ci.yml")
 
@@ -39,96 +38,85 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     details: dict[str, Any] = {}
 
     checks["builderOpen"] = "PASS" if _contains_all(
-        index + skills + skill_builder,
+        drawer,
         (
-            'id="skillNewButton"',
-            'id="skillBuilderHost"',
-            'id="skillBuilderForm"',
-            "openSkillBuilder",
-            "Custom Skill Builder",
+            "function SkillForm",
+            "setCreating",
+            "emptyDraft",
+            'className="skill-form"',
         ),
     ) else "FAIL"
 
-    checks["cloneBuiltinSkill"] = "PASS" if _contains_all(
-        skills,
+    checks["simpleDraftSchema"] = "PASS" if _contains_all(
+        api,
         (
-            "data-skill-clone",
-            "cloneSkill",
-            'mode: "clone"',
-            "nextCloneSkillId",
+            "export interface SimpleSkillDraft",
+            "buildSimpleSkillConfig",
+            "systemPrompt",
+            'version: "1.0.0"',
         ),
     ) else "FAIL"
 
-    checks["visualInputSchemaEdit"] = "PASS" if _contains_all(
-        index + skills + skill_builder,
+    checks["createCustomSkill"] = "PASS" if _contains_all(
+        drawer + controller + api,
         (
-            "skillBuilderFieldList",
-            "addBuilderField",
-            "data-builder-field-key",
-            "FIELD_TYPES",
-            "buildInputSchema",
-            "builderFieldToSchema",
+            "skills.create(draft)",
+            "createSkill",
+            'action: "create"',
+            "buildSimpleSkillConfig(draft)",
         ),
     ) else "FAIL"
 
-    checks["toolPermissionPicker"] = "PASS" if _contains_all(
-        index + skills,
+    checks["updateCustomSkill"] = "PASS" if _contains_all(
+        drawer + controller + api,
         (
-            "TOOL_OPTIONS",
-            "skillBuilderToolPicker",
-            "data-builder-tool",
-            "allowedTools",
-            "requires approval",
+            "skills.update({ ...draft",
+            "updateSkillPrompt",
+            'action: "update"',
         ),
     ) else "FAIL"
 
     checks["schemaValidation"] = "PASS" if _contains_all(
-        skills + routes,
+        routes,
         (
-            'action: "validate"',
-            "validateBuilderConfig",
+            'action == "validate"',
             "validate_skill_config",
         ),
     ) else "FAIL"
 
     checks["offlineDryRun"] = "PASS" if _contains_all(
-        skills + routes,
+        routes,
         (
-            'action: "dry_run"',
-            "dryRunBuilderConfig",
+            'action == "dry_run"',
             "_dry_run_skill_config",
             "offline_skill_content",
         ),
     ) else "FAIL"
 
-    checks["saveCustomSkill"] = "PASS" if _contains_all(
-        skills,
+    checks["builderInputValidation"] = "PASS" if _contains_all(
+        drawer,
         (
-            "saveBuilderConfig",
-            'const action = mode === "edit" ? "update" : "create"',
-            'action === "update"',
-            "{ action, skill: config",
-            "loadSkills()",
+            "!draft.name.trim()",
+            "!draft.systemPrompt.trim()",
+            "maxLength={20_000}",
         ),
-    ) and "window.prompt" not in skills else "FAIL"
+    ) else "FAIL"
 
-    checks["exportCreatedSkill"] = "PASS" if _contains_all(
-        skills,
+    checks["exportApi"] = "PASS" if _contains_all(
+        routes,
         (
-            "exportSkill",
-            "exportAllCustomSkills",
-            "downloadTextFile",
-            'action: "export"',
+            'action == "export"',
+            'action == "import"',
         ),
     ) else "FAIL"
 
     checks["skillBuilderStyles"] = "PASS" if _contains_all(
         styles,
         (
-            ".skill-builder-host",
-            ".skill-builder-form",
-            ".skill-tool-picker",
-            ".skill-builder-preview",
+            ".skill-form",
+            ".skill-form input",
+            ".skill-form textarea",
+            ".skill-card",
         ),
     ) else "FAIL"
 
@@ -139,30 +127,15 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     checks["skillBuilderAssets"] = "PASS" if all((REPO_ROOT / path).is_file() for path in asset_paths) else "FAIL"
     details["skillBuilderAssets"] = list(asset_paths)
 
-    syntax_results = [
-        subprocess.run(["node", "--check", path], cwd=REPO_ROOT, capture_output=True, text=True)
-        for path in ("static/modules/skill_builder.js", "static/modules/skills.js")
-    ]
-    checks["skillBuilderJsSyntax"] = "PASS" if all(result.returncode == 0 for result in syntax_results) else "FAIL"
-    details["skillBuilderJsSyntax"] = [
-        {"returnCode": result.returncode, "stderr": result.stderr.strip()} for result in syntax_results
-    ]
-
-    checks["ciSyntaxGate"] = "PASS" if _contains_all(
+    checks["frontendTypecheckGate"] = "PASS" if _contains_all(
         ci,
-        ("node --check static/modules/skill_builder.js", "node --check static/modules/skills.js"),
+        ("npm run typecheck --prefix frontend", "npm test --prefix frontend", "npm run build --prefix frontend"),
     ) else "FAIL"
 
-    details["builderEntrypoints"] = ["#skillNewButton", "#skillBuilderHost", "#skillBuilderForm", "#skillBuilderToolPicker"]
-    details["toolOptions"] = [
-        "search_files",
-        "read_file_chunk",
-        "web_search",
-        "fetch_url",
-        "create_document",
-        "create_pptx",
-        "create_mindmap",
-        "python_eval",
+    details["builderSources"] = [
+        "frontend/src/features/skills/SkillsDrawer.tsx",
+        "frontend/src/features/skills/useSkillController.ts",
+        "frontend/src/api/skillsApi.ts",
     ]
     return checks, details
 

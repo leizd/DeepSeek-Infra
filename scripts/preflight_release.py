@@ -87,6 +87,18 @@ def check_dockerfile_tag(root: Path, version: str) -> CheckResult:
     return CheckResult("dockerfile_tag", STATUS_FAIL, f"Dockerfile tag is not {version} (missing '{needle}')", {"needle": needle})
 
 
+def check_react_frontend_build(root: Path) -> CheckResult:
+    path = root / "static" / "ui" / "index.html"
+    if path.is_file():
+        return CheckResult("react_frontend_build", STATUS_PASS, "React frontend build is present", {"path": str(path)})
+    return CheckResult(
+        "react_frontend_build",
+        STATUS_FAIL,
+        "React frontend build is missing; run scripts/build_frontend.py",
+        {"path": str(path)},
+    )
+
+
 def check_doc_version(root: Path, doc_rel: str, version: str) -> CheckResult:
     text = _read(root / doc_rel)
     needle = f"适用版本：v{version}。"
@@ -1107,11 +1119,10 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
     check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
     required = (
         "cspHeader",
-        "firstPaintTheme",
-        "workspaceTabs",
-        "mockChat",
+        "reactOnlyRoot",
+        "legacyRouteRetired",
         "uploadCancel",
-        "reactPreview",
+        "rootSpaDeepLink",
         "reactChatVerticalSlice",
         "reactHistoryPersistence",
         "reactStopGeneration",
@@ -1359,16 +1370,14 @@ def check_skill_ui_evidence(root: Path, version: str) -> CheckResult:
     check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
     required = (
         "skillWorkbenchEntrypoint",
-        "skillRunSchemaForm",
+        "skillCreateEditDelete",
         "skillApiActions",
         "projectSkillBindingUi",
-        "skillRunResultLinks",
         "skillPanelLifecycle",
         "skillPanelStyles",
-        "skillAppShellCache",
+        "reactPwaOwnership",
         "skillUiAssets",
-        "skillJsSyntax",
-        "ciSyntaxGate",
+        "frontendTypecheckGate",
     )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
@@ -1421,17 +1430,16 @@ def check_skill_builder_evidence(root: Path, version: str) -> CheckResult:
     check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
     required = (
         "builderOpen",
-        "cloneBuiltinSkill",
-        "visualInputSchemaEdit",
-        "toolPermissionPicker",
+        "simpleDraftSchema",
+        "createCustomSkill",
+        "updateCustomSkill",
         "schemaValidation",
         "offlineDryRun",
-        "saveCustomSkill",
-        "exportCreatedSkill",
+        "builderInputValidation",
+        "exportApi",
         "skillBuilderStyles",
         "skillBuilderAssets",
-        "skillBuilderJsSyntax",
-        "ciSyntaxGate",
+        "frontendTypecheckGate",
     )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
@@ -1491,9 +1499,8 @@ def check_skill_packs_evidence(root: Path, version: str) -> CheckResult:
         "toolPermissionDiff",
         "projectPackBinding",
         "packInstallDryRun",
-        "packUiTab",
-        "packJsSyntax",
-        "ciSyntaxGate",
+        "reactSkillSurface",
+        "frontendTypecheckGate",
         "packAssets",
     )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
@@ -1547,17 +1554,15 @@ def check_skill_eval_dashboard_evidence(root: Path, version: str) -> CheckResult
     checks = data.get("checks")
     check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
     required = (
-        "evalDashboardEntrypoint",
+        "reactSkillSurface",
         "evalCaseBuilder",
         "skillEvalApiActions",
         "skillEvalReport",
         "packLevelEval",
         "regressionCompare",
-        "evalExportActions",
-        "skillEvalStyles",
         "skillEvalAssets",
         "skillEvalRunner",
-        "skillEvalJsSyntax",
+        "frontendTypecheckGate",
         "ciReleaseGate",
     )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
@@ -1629,9 +1634,9 @@ def check_skill_versioning_evidence(root: Path, version: str) -> CheckResult:
         "evalAwareUpgradeGate",
         "projectBindingMigration",
         "versioningApiActions",
-        "versioningUi",
+        "reactSkillSurface",
         "versioningAssets",
-        "versioningJsSyntax",
+        "frontendTypecheckGate",
         "ciReleaseGate",
     )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
@@ -1694,9 +1699,9 @@ def check_skill_analytics_evidence(root: Path, version: str) -> CheckResult:
         "retentionCleanup",
         "privacyRedaction",
         "analyticsApiActions",
-        "analyticsUi",
+        "reactSkillSurface",
         "analyticsAssets",
-        "analyticsJsSyntax",
+        "frontendTypecheckGate",
         "ciReleaseGate",
     )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
@@ -1759,9 +1764,9 @@ def check_skill_security_evidence(root: Path, version: str) -> CheckResult:
         "securityManifestExport",
         "runSecurityMetadata",
         "securityApiActions",
-        "securityUi",
+        "reactSkillSurface",
         "securityAssets",
-        "securityJsSyntax",
+        "frontendTypecheckGate",
         "ciReleaseGate",
     )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
@@ -1825,9 +1830,9 @@ def check_skill_catalog_evidence(root: Path, version: str) -> CheckResult:
         "toolPermissionSummary",
         "catalogExport",
         "catalogApiActions",
-        "catalogUi",
+        "reactSkillSurface",
         "catalogAssets",
-        "catalogJsSyntax",
+        "frontendTypecheckGate",
         "ciReleaseGate",
     )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
@@ -1911,6 +1916,7 @@ def run_preflight(root: Path, version: str, *, ga: bool = False) -> list[CheckRe
         check_readme_badge(root, version),
         check_changelog_entry(root, version),
         check_dockerfile_tag(root, version),
+        check_react_frontend_build(root),
         check_doc_version(root, "docs/IMPLEMENTATION_STATUS.md", version),
         check_doc_version(root, "evals/README.md", version),
         check_docs_encoding_sanity(root),

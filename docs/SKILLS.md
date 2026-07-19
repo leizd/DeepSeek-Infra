@@ -107,19 +107,19 @@ Runner 永远不会绕过 Tool Policy。`allowedTools` 会限定 DeepSeek payloa
 
 v2.7.3 在主 Web UI 中新增了一个本地 Skill Workbench：
 
-- 打开侧边栏中的 `Skills` 入口，浏览内置和自定义 Skill。
-- 使用 Workbench 工具栏进行搜索、导入 Skill JSON、导出自定义 Skill、以及启用或禁用自定义 Skill。
-- 在 Skill 上选择 `Run` 打开 Skill Run Panel。该面板将 `inputSchema.properties` 映射为表单控件，标记必填字段，并通过 Skill Web API 提交 `projectId`、`offline` 和 `persist` 参数。
-- 打开项目即可管理 `enabledSkills`、`defaultSkill` 和 `recentSkills`。附带项目 id 的 Skill run 会更新项目历史并保留 Skill 生成的 saved items 和 artifacts。
-- 运行完成后，结果预览会展示输出内容、`skillRunId`、关联的 Saved Items 和关联的 Artifacts，使输出作为 Workspace 数据（而非仅聊天文本）被管理。
+- 打开侧边栏中的 `Skills` 入口，搜索、创建、编辑、启用/禁用或删除 Skill。
+- React 表单直接维护 `name`、`description` 和 `systemPrompt`；密钥与表单状态不会写入长期浏览器存储。
+- 打开项目即可管理 `enabledSkills` 和 `defaultSkill`，项目绑定通过 Workspace API 保存。
+- 高级 schema validation、dry-run、导入/导出、Pack、Eval、Versioning、Analytics、Security 和 Catalog 能力继续由同一 Skill API 提供，并由离线 smoke/eval 门禁覆盖。
 
 前端集成文件：
 
 ```text
-static/index.html
-static/modules/skills.js
-static/modules/chat.js
-static/styles.css
+frontend/src/features/skills/SkillsDrawer.tsx
+frontend/src/features/skills/useSkillController.ts
+frontend/src/features/projects/ProjectsDrawer.tsx
+frontend/src/api/skillsApi.ts
+frontend/src/shared/styles/app.css
 ```
 
 ## Custom Skill Builder / 自定义 Skill Builder

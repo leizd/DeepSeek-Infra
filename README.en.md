@@ -5,22 +5,23 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.0.7-blue)
+![Version](https://img.shields.io/badge/version-4.0.8-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.0.7 at a glance
+## 4.0.8 at a glance
 
-- `/` now serves the React frontend by default after the parity releases (4.0.4 normal chat, 4.0.5 Agent & Activity, 4.0.6 workspace & platform).
-- The legacy vanilla-JavaScript workspace stays reachable at `/legacy`, and `DEEPSEEK_FRONTEND=legacy` restores the old default instantly.
+- `/` has one frontend owner: the React + TypeScript + Vite build.
+- The legacy route, rollback environment switch, HTML/JavaScript entry, and root PWA files are retired.
+- Startup and every packaging path fail clearly when `static/ui/index.html` is missing.
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.0.7 release notes](docs/releases/4.0.7.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.0.8 release notes](docs/releases/4.0.8.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -80,7 +81,7 @@ npm run check --prefix frontend
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.0.7 --ga
+python scripts/preflight_release.py --version 4.0.8 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

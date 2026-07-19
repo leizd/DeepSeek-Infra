@@ -71,9 +71,9 @@ export function MessageList({ messages, onSuggestion }: { messages: readonly Cha
       {!messages.length && (
         <div className="empty-chat">
           <div className="empty-mark">DS</div>
-          <p className="eyebrow">REACT CHAT · 4.0.3</p>
+          <p className="eyebrow">DEEPSEEK INFRA</p>
           <h1>今天想一起解决什么？</h1>
-          <p>普通聊天、思考流、Markdown、停止生成和本地历史已经迁入 React。</p>
+          <p>从一个问题、文件或项目开始。</p>
           <div className="suggestion-grid">
             {suggestions.map((suggestion) => <button key={suggestion} type="button" onClick={() => onSuggestion(suggestion)}>{suggestion}</button>)}
           </div>

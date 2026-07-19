@@ -27,7 +27,7 @@ The following jobs must pass on every PR and on `main`:
 | Hybrid runtime E2E | `ci / hybrid-runtime-e2e` | ci / hybrid-runtime-e2e |
 | Rust/Python RAG parity | `ci / rag-parity` | ci / rag-parity |
 | 4.0 RC readiness report | `ci / rc-readiness` | Release Engineering |
-| JS syntax | `node --check static/vendor/katex/katex.min.js static/math_core.js static/seek_core.js static/app.js static/modules/network.js static/modules/markdown.js static/modules/settings.js static/modules/panels.js static/modules/chat.js static/modules/trace_waterfall.js static/modules/trace_viewer.js` | ci / test |
+| JS syntax | `node --check static/vendor/katex/katex.min.js static/modules/trace_waterfall.js static/modules/trace_viewer.js` | ci / test |
 | Docs link check | `python scripts/check_doc_links.py` | ci / docs |
 | Dependency audit | `pip-audit -r requirements.txt -r requirements-dev.txt` | ci / security |
 | Static analysis | `bandit -r deepseek_infra --severity-level high -q` | ci / security |

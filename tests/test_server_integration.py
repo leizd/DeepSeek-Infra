@@ -581,7 +581,7 @@ class ServerIntegrationTests(unittest.TestCase):
 
     def test_cache_headers_differ_for_api_and_static_routes(self) -> None:
         api_status, _, api_response = self.request_raw("GET", "/api/config")
-        static_status, _, static_response = self.request_raw("GET", "/app.js")
+        static_status, _, static_response = self.request_raw("GET", "/modules/trace_viewer.js")
 
         self.assertEqual(api_status, 200)
         self.assertEqual(static_status, 200)

@@ -1,6 +1,6 @@
 # DeepSeek Infra - local-first Personal AI Runtime
-# Build: docker build -t deepseek-infra:4.0.7 .
-# Run: docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:4.0.7
+# Build: docker build -t deepseek-infra:4.0.8 .
+# Run: docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:4.0.8
 # See docs/DEPLOYMENT.md for deployment notes.
 FROM node:24-bookworm-slim AS frontend-builder
 
@@ -9,12 +9,13 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend ./
 RUN npm run build
+RUN test -f /build/static/ui/index.html
 
 FROM python:3.12-slim
 
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="DeepSeek Infra" \
-      org.opencontainers.image.version="4.0.7" \
+      org.opencontainers.image.version="4.0.8" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.description="Python-first hybrid Personal AI Runtime"
 
@@ -31,6 +32,7 @@ COPY app.py ./
 COPY deepseek_infra ./deepseek_infra
 COPY static ./static
 COPY --from=frontend-builder /build/static/ui ./static/ui
+RUN test -f /app/static/ui/index.html
 RUN find /app -type d -name __pycache__ -prune -exec rm -rf {} +
 
 # Store writable runtime data under /data: auth tokens, caches, indexes,

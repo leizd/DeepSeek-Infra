@@ -1,4 +1,4 @@
 export const appRoutes = {
+  root: "/",
   preview: "/ui/",
-  legacy: "/",
 } as const;

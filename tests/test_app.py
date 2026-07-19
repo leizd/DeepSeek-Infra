@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import MagicMock, call, patch
@@ -256,6 +257,11 @@ def test_prepare_and_start_exits_when_static_dir_missing() -> None:
             assert "Missing static directory" in str(exc)
         else:
             raise AssertionError("expected SystemExit")
+
+
+def test_prepare_and_start_fails_when_react_build_is_missing(tmp_path: Path) -> None:
+    with patch.object(app_module, "STATIC_DIR", tmp_path), pytest.raises(RuntimeError, match="scripts/build_frontend.py"):
+        app_module.prepare_and_start(host="127.0.0.1", port=8000, serve=False)
 
 
 def test_prepare_and_start_logs_resume_orphan_exception(_prepare_and_start_patches) -> None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -36,9 +35,9 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
 
 
 def run_checks(*, version: str, report_out: Path) -> tuple[dict[str, str], dict[str, Any]]:
-    index = _read("static/index.html")
-    skills_js = _read("static/modules/skills.js")
-    styles = _read("static/styles.css")
+    drawer = _read("frontend/src/features/skills/SkillsDrawer.tsx")
+    skills_api = _read("frontend/src/api/skillsApi.ts")
+    styles = _read("frontend/src/shared/styles/app.css")
     routes = _read("deepseek_infra/web/routes/skills.py")
     runner = _read("evals/runners/run_skill_eval.py")
     ci = _read(".github/workflows/ci.yml")
@@ -51,26 +50,21 @@ def run_checks(*, version: str, report_out: Path) -> tuple[dict[str, str], dict[
         report = skill_eval.build_skill_eval_report(version=version)
     _write_report(report_out, report)
 
-    checks["evalDashboardEntrypoint"] = "PASS" if _contains_all(
-        index + skills_js,
+    checks["reactSkillSurface"] = "PASS" if _contains_all(
+        drawer + skills_api + styles,
         (
-            'id="skillEvalButton"',
-            'id="skillEvalHost"',
-            "Skill Eval Dashboard",
-            "openEvalHost",
-            "runSkillEval",
+            "export function SkillsDrawer",
+            "buildSimpleSkillConfig",
+            ".skill-card",
         ),
     ) else "FAIL"
 
     checks["evalCaseBuilder"] = "PASS" if _contains_all(
-        index + skills_js,
+        routes,
         (
-            'id="skillEvalCaseForm"',
-            "saveSkillEvalCase",
-            "create_eval_case",
-            "expectedKeywords",
-            "requiredOutputPaths",
-            "expectedArtifactTypes",
+            'action == "create_eval_case"',
+            'action == "list_eval_cases"',
+            'action == "delete_eval_case"',
         ),
     ) else "FAIL"
 
@@ -88,26 +82,6 @@ def run_checks(*, version: str, report_out: Path) -> tuple[dict[str, str], dict[
     checks["packLevelEval"] = "PASS" if report.get("checks", {}).get("packLevelEval") == "PASS" and report.get("packResults") else "FAIL"
     checks["regressionCompare"] = "PASS" if report.get("checks", {}).get("regressionCompare") == "PASS" else "FAIL"
 
-    checks["evalExportActions"] = "PASS" if _contains_all(
-        skills_js,
-        (
-            "exportSkillEvalJson",
-            "exportSkillEvalMarkdown",
-            "copySkillEvalSummary",
-            "skillEvalMarkdown",
-        ),
-    ) else "FAIL"
-
-    checks["skillEvalStyles"] = "PASS" if _contains_all(
-        styles,
-        (
-            ".skill-eval-host",
-            ".skill-eval-summary",
-            ".skill-eval-case-form",
-            ".skill-eval-row",
-        ),
-    ) else "FAIL"
-
     asset_paths = (
         "docs/assets/skill-eval-dashboard.png",
         "docs/assets/skill-eval-case-builder.png",
@@ -124,9 +98,7 @@ def run_checks(*, version: str, report_out: Path) -> tuple[dict[str, str], dict[
         ),
     ) else "FAIL"
 
-    syntax = subprocess.run(["node", "--check", "static/modules/skills.js"], cwd=REPO_ROOT, capture_output=True, text=True)
-    checks["skillEvalJsSyntax"] = "PASS" if syntax.returncode == 0 else "FAIL"
-
+    checks["frontendTypecheckGate"] = "PASS" if "npm run typecheck --prefix frontend" in ci else "FAIL"
     checks["ciReleaseGate"] = "PASS" if "smoke_skill_eval_dashboard.py" in ci and "run_skill_eval.py" in ci else "FAIL"
 
     details["report"] = {
@@ -135,7 +107,6 @@ def run_checks(*, version: str, report_out: Path) -> tuple[dict[str, str], dict[
         "checks": report.get("checks", {}),
     }
     details["assets"] = list(asset_paths)
-    details["skillEvalJsSyntax"] = {"returnCode": syntax.returncode, "stderr": syntax.stderr.strip()}
     return checks, details
 
 
