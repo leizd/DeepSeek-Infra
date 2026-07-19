@@ -78,12 +78,12 @@ export function normalizeProject(raw: unknown): Project | null {
   };
 }
 
-async function projectAction<T>(body: JsonRecord, client: HttpClient): Promise<T> {
-  return client.postJson<T>("/api/projects", body);
+async function projectAction<T>(body: JsonRecord, client: HttpClient, init: RequestInit = {}): Promise<T> {
+  return client.postJson<T>("/api/projects", body, init);
 }
 
-export async function listProjects(client: HttpClient = httpClient): Promise<Project[]> {
-  const body = await projectAction<{ projects?: unknown }>({ action: "list" }, client);
+export async function listProjects(init: RequestInit = {}, client: HttpClient = httpClient): Promise<Project[]> {
+  const body = await projectAction<{ projects?: unknown }>({ action: "list" }, client, init);
   if (!Array.isArray(body.projects)) return [];
   return body.projects.flatMap((project) => {
     const normalized = normalizeProject(project);

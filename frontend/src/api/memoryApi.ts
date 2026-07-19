@@ -74,8 +74,8 @@ export function normalizeMemorySuggestion(raw: unknown): { content: string; cate
   };
 }
 
-export async function listMemories(client: HttpClient = httpClient): Promise<MemoryEntry[]> {
-  const body = await client.json<{ memories?: unknown }>("/api/memory");
+export async function listMemories(init: RequestInit = {}, client: HttpClient = httpClient): Promise<MemoryEntry[]> {
+  const body = await client.json<{ memories?: unknown }>("/api/memory", init);
   if (!Array.isArray(body.memories)) return [];
   return body.memories.flatMap((memory) => {
     const normalized = normalizeMemoryEntry(memory);

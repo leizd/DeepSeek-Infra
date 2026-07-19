@@ -1,0 +1,177 @@
+// @vitest-environment jsdom
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, renderHook, waitFor, act } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PropsWithChildren } from "react";
+
+import type { ProjectSkillBinding, Skill } from "../../api/skillsApi";
+import { SKILLS_QUERY_KEY, projectSkillBindingQueryKey } from "../../app/queryKeys";
+
+vi.mock("../../api/skillsApi", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../api/skillsApi")>();
+  return {
+    ...original,
+    listSkills: vi.fn(),
+    setSkillDisabled: vi.fn(),
+    deleteSkill: vi.fn(),
+    createSkill: vi.fn(),
+    updateSkillPrompt: vi.fn(),
+    fetchProjectSkillBinding: vi.fn(),
+    saveProjectSkillBinding: vi.fn(),
+  };
+});
+
+import {
+  createSkill,
+  deleteSkill,
+  fetchProjectSkillBinding,
+  listSkills,
+  saveProjectSkillBinding,
+  setSkillDisabled,
+  updateSkillPrompt,
+} from "../../api/skillsApi";
+import { useSkillController } from "./useSkillController";
+
+const listSkillsMock = vi.mocked(listSkills);
+const setSkillDisabledMock = vi.mocked(setSkillDisabled);
+const deleteSkillMock = vi.mocked(deleteSkill);
+const createSkillMock = vi.mocked(createSkill);
+const updateSkillPromptMock = vi.mocked(updateSkillPrompt);
+const fetchBindingMock = vi.mocked(fetchProjectSkillBinding);
+const saveBindingMock = vi.mocked(saveProjectSkillBinding);
+
+function skill(skillId: string, disabled = false): Skill {
+  return { skillId, name: skillId, description: "", version: "1.0.0", systemPrompt: "", builtin: false, disabled, updatedAt: "" };
+}
+
+function binding(enabledSkills: readonly string[]): ProjectSkillBinding {
+  return { enabledSkills: [...enabledSkills], defaultSkill: "", recentSkills: [], enabledPacks: [] };
+}
+
+function createTestQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+}
+
+function wrapperFor(client: QueryClient) {
+  return function Wrapper({ children }: PropsWithChildren) {
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  };
+}
+
+let serverSkills: Skill[];
+
+beforeEach(() => {
+  serverSkills = [skill("s1"), skill("s2", true)];
+  listSkillsMock.mockImplementation(() => Promise.resolve([...serverSkills]));
+  setSkillDisabledMock.mockImplementation((skillId: string, disabled: boolean) => {
+    serverSkills = serverSkills.map((item) => (item.skillId === skillId ? { ...item, disabled } : item));
+    return Promise.resolve(undefined);
+  });
+  deleteSkillMock.mockImplementation((skillId: string) => {
+    serverSkills = serverSkills.filter((item) => item.skillId !== skillId);
+    return Promise.resolve(undefined);
+  });
+  createSkillMock.mockImplementation((draft) => {
+    const created = { ...skill("s-new"), name: draft.name };
+    serverSkills.push(created);
+    return Promise.resolve(created);
+  });
+  updateSkillPromptMock.mockImplementation((draft) => {
+    serverSkills = serverSkills.map((item) => (item.skillId === draft.skillId ? { ...item, name: draft.name } : item));
+    return Promise.resolve({ ...skill(draft.skillId), name: draft.name });
+  });
+  saveBindingMock.mockImplementation((_projectId, input) =>
+    Promise.resolve(binding(input.enabledSkills)),
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe("useSkillController", () => {
+  it("toggles a skill disabled flag inside the cache", async () => {
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    const [init] = listSkillsMock.mock.calls[0] as [RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+
+    await act(async () => {
+      await result.current.toggle(skill("s1"));
+    });
+    expect(setSkillDisabledMock).toHaveBeenCalledWith("s1", true);
+    expect(client.getQueryData<Skill[]>(SKILLS_QUERY_KEY)?.find((item) => item.skillId === "s1")?.disabled).toBe(true);
+  });
+
+  it("creates, updates and deletes skills with list invalidation", async () => {
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.create({ name: "新技能", description: "", systemPrompt: "提示词" });
+    });
+    expect(createSkillMock).toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.update({ skillId: "s1", name: "改名", description: "", systemPrompt: "x" });
+    });
+    expect(updateSkillPromptMock).toHaveBeenCalledWith({ skillId: "s1", name: "改名", description: "", systemPrompt: "x" });
+
+    await act(async () => {
+      await result.current.remove("s2");
+    });
+    expect(deleteSkillMock).toHaveBeenCalledWith("s2");
+    expect(client.getQueryData<Skill[]>(SKILLS_QUERY_KEY)?.map((item) => item.skillId)).toEqual(["s1", "s-new"]);
+    await waitFor(() => expect(listSkillsMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("keeps binding caches isolated per projectId", async () => {
+    fetchBindingMock.mockImplementation((projectId: string) =>
+      Promise.resolve(projectId === "p1" ? binding(["s1"]) : binding(["s2"])),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+
+    const first = await act(async () => result.current.loadBinding("p1"));
+    const second = await act(async () => result.current.loadBinding("p2"));
+
+    expect(first?.enabledSkills).toEqual(["s1"]);
+    expect(second?.enabledSkills).toEqual(["s2"]);
+    expect(client.getQueryData(projectSkillBindingQueryKey("p1"))).toMatchObject({ enabledSkills: ["s1"] });
+    expect(client.getQueryData(projectSkillBindingQueryKey("p2"))).toMatchObject({ enabledSkills: ["s2"] });
+    expect(fetchBindingMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates only the saved project binding", async () => {
+    fetchBindingMock.mockResolvedValue(binding([]));
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await act(async () => {
+      await result.current.loadBinding("p1");
+      await result.current.loadBinding("p2");
+    });
+
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+    await act(async () => {
+      await result.current.saveBinding("p1", ["s2"], "s2");
+    });
+
+    expect(saveBindingMock).toHaveBeenCalledWith("p1", { enabledSkills: ["s2"], defaultSkill: "s2" });
+    expect(client.getQueryData(projectSkillBindingQueryKey("p1"))).toMatchObject({ enabledSkills: ["s2"] });
+    expect(
+      invalidateSpy.mock.calls.every(
+        ([options]) => JSON.stringify(options?.queryKey) === JSON.stringify(projectSkillBindingQueryKey("p1")),
+      ),
+    ).toBe(true);
+  });
+});

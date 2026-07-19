@@ -13,16 +13,14 @@ import {
   type SimpleSkillDraft,
   type Skill,
 } from "../../api/skillsApi";
+import { SKILLS_QUERY_KEY, projectSkillBindingQueryKey } from "../../app/queryKeys";
 
-export const SKILLS_QUERY_KEY = ["skills"] as const;
-
-export function projectSkillBindingQueryKey(projectId: string) {
-  return ["projects", projectId, "skillBinding"] as const;
-}
+export { SKILLS_QUERY_KEY, projectSkillBindingQueryKey };
 
 export interface SkillController {
   skills: readonly Skill[];
   loading: boolean;
+  refreshing: boolean;
   error: string;
   refresh(): Promise<void>;
   toggle(skill: Skill): Promise<void>;
@@ -41,7 +39,7 @@ export function useSkillController(): SkillController {
   const queryClient = useQueryClient();
   const skillsQuery = useQuery<Skill[]>({
     queryKey: SKILLS_QUERY_KEY,
-    queryFn: () => listSkills(),
+    queryFn: ({ signal }) => listSkills({ signal }),
   });
 
   const invalidate = useCallback(
@@ -51,12 +49,22 @@ export function useSkillController(): SkillController {
 
   const toggleMutation = useMutation({
     mutationFn: (skill: Skill) => setSkillDisabled(skill.skillId, !skill.disabled),
-    onSuccess: () => void invalidate(),
+    onSuccess: (_result, skill) => {
+      queryClient.setQueryData<Skill[]>(SKILLS_QUERY_KEY, (current) =>
+        (current ?? []).map((item) => (item.skillId === skill.skillId ? { ...item, disabled: !skill.disabled } : item)),
+      );
+      void invalidate();
+    },
   });
 
   const removeMutation = useMutation({
     mutationFn: (skillId: string) => deleteSkill(skillId),
-    onSuccess: () => void invalidate(),
+    onSuccess: (_result, skillId) => {
+      queryClient.setQueryData<Skill[]>(SKILLS_QUERY_KEY, (current) =>
+        (current ?? []).filter((item) => item.skillId !== skillId),
+      );
+      void invalidate();
+    },
   });
 
   const createMutation = useMutation({
@@ -72,8 +80,10 @@ export function useSkillController(): SkillController {
   const bindingMutation = useMutation({
     mutationFn: ({ projectId, enabledSkills, defaultSkill }: { projectId: string; enabledSkills: readonly string[]; defaultSkill: string }) =>
       saveProjectSkillBinding(projectId, { enabledSkills, defaultSkill }),
-    onSuccess: (_binding, variables) =>
-      queryClient.invalidateQueries({ queryKey: projectSkillBindingQueryKey(variables.projectId) }),
+    onSuccess: (binding, variables) => {
+      queryClient.setQueryData(projectSkillBindingQueryKey(variables.projectId), binding);
+      void queryClient.invalidateQueries({ queryKey: projectSkillBindingQueryKey(variables.projectId) });
+    },
   });
 
   const refresh = useCallback(async () => {
@@ -109,7 +119,7 @@ export function useSkillController(): SkillController {
     (projectId: string) =>
       queryClient.fetchQuery({
         queryKey: projectSkillBindingQueryKey(projectId),
-        queryFn: () => fetchProjectSkillBinding(projectId),
+        queryFn: ({ signal }) => fetchProjectSkillBinding(projectId, { signal }),
       }),
     [queryClient],
   );
@@ -127,6 +137,7 @@ export function useSkillController(): SkillController {
   return {
     skills: skillsQuery.data ?? [],
     loading: skillsQuery.isLoading,
+    refreshing: skillsQuery.isFetching && !skillsQuery.isLoading,
     error: firstError ? errorText(firstError, "技能操作失败") : "",
     refresh,
     toggle,

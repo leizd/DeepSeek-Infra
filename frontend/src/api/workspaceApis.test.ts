@@ -25,7 +25,7 @@ describe("projectsApi", () => {
 
   it("lists projects via the action endpoint", async () => {
     const { client, fetchImpl } = fakeClient({ projects: [{ id: "p1", name: "A" }] });
-    const projects = await listProjects(client);
+    const projects = await listProjects({}, client);
     const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ action: "list" });
     expect(projects).toHaveLength(1);

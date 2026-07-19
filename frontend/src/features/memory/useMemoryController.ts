@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -9,8 +9,9 @@ import {
   MemoryConflictError,
   type MemoryEntry,
 } from "../../api/memoryApi";
+import { MEMORIES_QUERY_KEY } from "../../app/queryKeys";
 
-export const MEMORIES_QUERY_KEY = ["memories"] as const;
+export { MEMORIES_QUERY_KEY };
 
 export interface MemorySaveResult {
   saved: boolean;
@@ -20,6 +21,7 @@ export interface MemorySaveResult {
 export interface MemoryController {
   memories: readonly MemoryEntry[];
   loading: boolean;
+  refreshing: boolean;
   error: string;
   refresh(): Promise<void>;
   remove(memoryId: string): Promise<void>;
@@ -33,11 +35,10 @@ function errorText(reason: unknown, fallback: string): string {
 
 export function useMemoryController(): MemoryController {
   const queryClient = useQueryClient();
-  const [actionError, setActionError] = useState("");
 
   const memoriesQuery = useQuery<MemoryEntry[]>({
     queryKey: MEMORIES_QUERY_KEY,
-    queryFn: () => listMemories(),
+    queryFn: ({ signal }) => listMemories({ signal }),
   });
 
   const invalidate = useCallback(
@@ -47,20 +48,20 @@ export function useMemoryController(): MemoryController {
 
   const removeMutation = useMutation({
     mutationFn: (memoryId: string) => deleteMemory(memoryId),
-    onSuccess: () => {
-      setActionError("");
+    onSuccess: (_result, memoryId) => {
+      queryClient.setQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY, (current) =>
+        (current ?? []).filter((entry) => entry.id !== memoryId),
+      );
       void invalidate();
     },
-    onError: (reason) => setActionError(errorText(reason, "记忆删除失败")),
   });
 
   const clearMutation = useMutation({
     mutationFn: () => clearMemories(),
     onSuccess: () => {
-      setActionError("");
+      queryClient.setQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY, []);
       void invalidate();
     },
-    onError: (reason) => setActionError(errorText(reason, "记忆清空失败")),
   });
 
   const refresh = useCallback(async () => {
@@ -94,10 +95,13 @@ export function useMemoryController(): MemoryController {
     [invalidate],
   );
 
+  const firstError = memoriesQuery.error ?? removeMutation.error ?? clearMutation.error;
+
   return {
     memories: memoriesQuery.data ?? [],
     loading: memoriesQuery.isLoading,
-    error: actionError || (memoriesQuery.error ? errorText(memoriesQuery.error, "记忆加载失败") : ""),
+    refreshing: memoriesQuery.isFetching && !memoriesQuery.isLoading,
+    error: firstError ? errorText(firstError, "记忆操作失败") : "",
     refresh,
     remove,
     clear,

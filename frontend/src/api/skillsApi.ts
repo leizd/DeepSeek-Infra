@@ -57,12 +57,12 @@ export function normalizeProjectSkillBinding(raw: unknown): ProjectSkillBinding 
   };
 }
 
-async function skillAction<T>(body: JsonRecord, client: HttpClient): Promise<T> {
-  return client.postJson<T>("/api/skills", body);
+async function skillAction<T>(body: JsonRecord, client: HttpClient, init: RequestInit = {}): Promise<T> {
+  return client.postJson<T>("/api/skills", body, init);
 }
 
-export async function listSkills(client: HttpClient = httpClient): Promise<Skill[]> {
-  const body = await skillAction<{ skills?: unknown }>({ action: "list", includeDisabled: true }, client);
+export async function listSkills(init: RequestInit = {}, client: HttpClient = httpClient): Promise<Skill[]> {
+  const body = await skillAction<{ skills?: unknown }>({ action: "list", includeDisabled: true }, client, init);
   if (!Array.isArray(body.skills)) return [];
   return body.skills.flatMap((skill) => {
     const normalized = normalizeSkill(skill);
@@ -129,8 +129,15 @@ export async function updateSkillPrompt(draft: SimpleSkillDraft & { skillId: str
   return skill;
 }
 
-export async function fetchProjectSkillBinding(projectId: string, client: HttpClient = httpClient): Promise<ProjectSkillBinding> {
-  const body = await client.json<{ skills?: unknown }>(`/api/workspace/projects/${encodeURIComponent(projectId)}/skills`);
+export async function fetchProjectSkillBinding(
+  projectId: string,
+  init: RequestInit = {},
+  client: HttpClient = httpClient,
+): Promise<ProjectSkillBinding> {
+  const body = await client.json<{ skills?: unknown }>(
+    `/api/workspace/projects/${encodeURIComponent(projectId)}/skills`,
+    init,
+  );
   return normalizeProjectSkillBinding(body.skills);
 }
 

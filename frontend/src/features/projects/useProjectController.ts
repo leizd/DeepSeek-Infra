@@ -10,10 +10,12 @@ import {
   type Project,
 } from "../../api/projectsApi";
 import type { Attachment } from "../../domain/chat/types";
+import { PROJECTS_QUERY_KEY } from "../../app/queryKeys";
 import { useSettings } from "../../contexts/SettingsContext";
 
 const ACTIVE_PROJECT_KEY = "deepseek-infra.active-project";
-export const PROJECTS_QUERY_KEY = ["projects"] as const;
+
+export { PROJECTS_QUERY_KEY };
 
 export interface ProjectChatContext {
   projectId?: string;
@@ -43,6 +45,7 @@ export interface ProjectController {
   activeProjectId: string;
   activeProject: Project | null;
   loading: boolean;
+  refreshing: boolean;
   uploading: boolean;
   error: string;
   refresh(): Promise<void>;
@@ -67,11 +70,10 @@ export function useProjectController(): ProjectController {
   const settings = useSettings();
   const queryClient = useQueryClient();
   const [activeProjectId, setActiveProjectId] = useState(storedActiveProject);
-  const [actionError, setActionError] = useState("");
 
   const projectsQuery = useQuery<Project[]>({
     queryKey: PROJECTS_QUERY_KEY,
-    queryFn: () => listProjects(),
+    queryFn: ({ signal }) => listProjects({ signal }),
   });
   const projects: readonly Project[] = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data]);
 
@@ -91,30 +93,31 @@ export function useProjectController(): ProjectController {
   const createMutation = useMutation({
     mutationFn: (name: string) => createProject(name.trim()),
     onSuccess: (project) => {
-      setActionError("");
+      queryClient.setQueryData<Project[]>(PROJECTS_QUERY_KEY, (current) => [...(current ?? []), project]);
       setActive(project.id);
       void invalidate();
     },
-    onError: (reason) => setActionError(errorText(reason, "项目创建失败")),
   });
 
   const removeMutation = useMutation({
     mutationFn: (projectId: string) => deleteProject(projectId),
     onSuccess: (_result, projectId) => {
-      setActionError("");
+      queryClient.setQueryData<Project[]>(PROJECTS_QUERY_KEY, (current) =>
+        (current ?? []).filter((project) => project.id !== projectId),
+      );
       if (activeProjectId === projectId) setActive("");
       void invalidate();
     },
-    onError: (reason) => setActionError(errorText(reason, "项目删除失败")),
   });
 
   const renameMutation = useMutation({
     mutationFn: ({ projectId, name }: { projectId: string; name: string }) => renameProject(projectId, name.trim()),
-    onSuccess: () => {
-      setActionError("");
+    onSuccess: (updated) => {
+      queryClient.setQueryData<Project[]>(PROJECTS_QUERY_KEY, (current) =>
+        (current ?? []).map((project) => (project.id === updated.id ? { ...project, name: updated.name } : project)),
+      );
       void invalidate();
     },
-    onError: (reason) => setActionError(errorText(reason, "项目重命名失败")),
   });
 
   const uploadMutation = useMutation({
@@ -123,11 +126,7 @@ export function useProjectController(): ProjectController {
         ocrEnabled: true,
         apiKey: settings.apiKey.trim() || undefined,
       }),
-    onSuccess: () => {
-      setActionError("");
-      void invalidate();
-    },
-    onError: (reason) => setActionError(errorText(reason, "项目文档上传失败")),
+    onSuccess: () => void invalidate(),
   });
 
   const refresh = useCallback(async () => {
@@ -175,13 +174,21 @@ export function useProjectController(): ProjectController {
     };
   }, [activeProject]);
 
+  const firstError =
+    projectsQuery.error
+    ?? createMutation.error
+    ?? renameMutation.error
+    ?? removeMutation.error
+    ?? uploadMutation.error;
+
   return {
     projects,
     activeProjectId,
     activeProject,
     loading: projectsQuery.isLoading,
+    refreshing: projectsQuery.isFetching && !projectsQuery.isLoading,
     uploading: uploadMutation.isPending,
-    error: actionError || (projectsQuery.error ? errorText(projectsQuery.error, "项目列表加载失败") : ""),
+    error: firstError ? errorText(firstError, "项目操作失败") : "",
     refresh,
     create,
     remove,
