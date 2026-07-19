@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   createSkill,
@@ -13,6 +14,12 @@ import {
   type Skill,
 } from "../../api/skillsApi";
 
+export const SKILLS_QUERY_KEY = ["skills"] as const;
+
+export function projectSkillBindingQueryKey(projectId: string) {
+  return ["projects", projectId, "skillBinding"] as const;
+}
+
 export interface SkillController {
   skills: readonly Skill[];
   loading: boolean;
@@ -26,64 +33,107 @@ export interface SkillController {
   saveBinding(projectId: string, enabledSkills: readonly string[], defaultSkill: string): Promise<void>;
 }
 
+function errorText(reason: unknown, fallback: string): string {
+  return reason instanceof Error && reason.message ? reason.message : fallback;
+}
+
 export function useSkillController(): SkillController {
-  const [skills, setSkills] = useState<readonly Skill[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const queryClient = useQueryClient();
+  const skillsQuery = useQuery<Skill[]>({
+    queryKey: SKILLS_QUERY_KEY,
+    queryFn: () => listSkills(),
+  });
+
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: SKILLS_QUERY_KEY }),
+    [queryClient],
+  );
+
+  const toggleMutation = useMutation({
+    mutationFn: (skill: Skill) => setSkillDisabled(skill.skillId, !skill.disabled),
+    onSuccess: () => void invalidate(),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (skillId: string) => deleteSkill(skillId),
+    onSuccess: () => void invalidate(),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (draft: SimpleSkillDraft) => createSkill(draft),
+    onSuccess: () => void invalidate(),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (draft: SimpleSkillDraft & { skillId: string }) => updateSkillPrompt(draft),
+    onSuccess: () => void invalidate(),
+  });
+
+  const bindingMutation = useMutation({
+    mutationFn: ({ projectId, enabledSkills, defaultSkill }: { projectId: string; enabledSkills: readonly string[]; defaultSkill: string }) =>
+      saveProjectSkillBinding(projectId, { enabledSkills, defaultSkill }),
+    onSuccess: (_binding, variables) =>
+      queryClient.invalidateQueries({ queryKey: projectSkillBindingQueryKey(variables.projectId) }),
+  });
 
   const refresh = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      setSkills(await listSkills());
-    } catch (reason) {
-      setError(reason instanceof Error && reason.message ? reason.message : "技能列表加载失败");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    await invalidate();
+  }, [invalidate]);
 
   const toggle = useCallback(
     async (skill: Skill) => {
-      await setSkillDisabled(skill.skillId, !skill.disabled);
-      await refresh();
+      await toggleMutation.mutateAsync(skill);
     },
-    [refresh],
+    [toggleMutation],
   );
-
   const remove = useCallback(
     async (skillId: string) => {
-      await deleteSkill(skillId);
-      await refresh();
+      await removeMutation.mutateAsync(skillId);
     },
-    [refresh],
+    [removeMutation],
   );
-
   const create = useCallback(
     async (draft: SimpleSkillDraft) => {
-      await createSkill(draft);
-      await refresh();
+      await createMutation.mutateAsync(draft);
     },
-    [refresh],
+    [createMutation],
   );
-
   const update = useCallback(
     async (draft: SimpleSkillDraft & { skillId: string }) => {
-      await updateSkillPrompt(draft);
-      await refresh();
+      await updateMutation.mutateAsync(draft);
     },
-    [refresh],
+    [updateMutation],
   );
 
-  const loadBinding = useCallback((projectId: string) => fetchProjectSkillBinding(projectId), []);
+  const loadBinding = useCallback(
+    (projectId: string) =>
+      queryClient.fetchQuery({
+        queryKey: projectSkillBindingQueryKey(projectId),
+        queryFn: () => fetchProjectSkillBinding(projectId),
+      }),
+    [queryClient],
+  );
 
-  const saveBinding = useCallback(async (projectId: string, enabledSkills: readonly string[], defaultSkill: string) => {
-    await saveProjectSkillBinding(projectId, { enabledSkills, defaultSkill });
-  }, []);
+  const saveBinding = useCallback(
+    async (projectId: string, enabledSkills: readonly string[], defaultSkill: string) => {
+      await bindingMutation.mutateAsync({ projectId, enabledSkills, defaultSkill });
+    },
+    [bindingMutation],
+  );
 
-  return { skills, loading, error, refresh, toggle, remove, create, update, loadBinding, saveBinding };
+  const firstError =
+    skillsQuery.error ?? toggleMutation.error ?? removeMutation.error ?? createMutation.error ?? updateMutation.error;
+
+  return {
+    skills: skillsQuery.data ?? [],
+    loading: skillsQuery.isLoading,
+    error: firstError ? errorText(firstError, "技能操作失败") : "",
+    refresh,
+    toggle,
+    remove,
+    create,
+    update,
+    loadBinding,
+    saveBinding,
+  };
 }

@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   addMemory,
@@ -8,6 +9,8 @@ import {
   MemoryConflictError,
   type MemoryEntry,
 } from "../../api/memoryApi";
+
+export const MEMORIES_QUERY_KEY = ["memories"] as const;
 
 export interface MemorySaveResult {
   saved: boolean;
@@ -24,38 +27,62 @@ export interface MemoryController {
   save(input: { content: string; category?: string; scope?: string; replaceIds?: readonly string[] }): Promise<MemorySaveResult>;
 }
 
+function errorText(reason: unknown, fallback: string): string {
+  return reason instanceof Error && reason.message ? reason.message : fallback;
+}
+
 export function useMemoryController(): MemoryController {
-  const [memories, setMemories] = useState<readonly MemoryEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const queryClient = useQueryClient();
+  const [actionError, setActionError] = useState("");
+
+  const memoriesQuery = useQuery<MemoryEntry[]>({
+    queryKey: MEMORIES_QUERY_KEY,
+    queryFn: () => listMemories(),
+  });
+
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: MEMORIES_QUERY_KEY }),
+    [queryClient],
+  );
+
+  const removeMutation = useMutation({
+    mutationFn: (memoryId: string) => deleteMemory(memoryId),
+    onSuccess: () => {
+      setActionError("");
+      void invalidate();
+    },
+    onError: (reason) => setActionError(errorText(reason, "记忆删除失败")),
+  });
+
+  const clearMutation = useMutation({
+    mutationFn: () => clearMemories(),
+    onSuccess: () => {
+      setActionError("");
+      void invalidate();
+    },
+    onError: (reason) => setActionError(errorText(reason, "记忆清空失败")),
+  });
 
   const refresh = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      setMemories(await listMemories());
-    } catch (reason) {
-      setError(reason instanceof Error && reason.message ? reason.message : "记忆加载失败");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    await invalidate();
+  }, [invalidate]);
 
-  const remove = useCallback(async (memoryId: string) => {
-    await deleteMemory(memoryId);
-    setMemories((current) => current.filter((memory) => memory.id !== memoryId));
-  }, []);
+  const remove = useCallback(
+    async (memoryId: string) => {
+      await removeMutation.mutateAsync(memoryId);
+    },
+    [removeMutation],
+  );
 
   const clear = useCallback(async () => {
-    await clearMemories();
-    setMemories([]);
-  }, []);
+    await clearMutation.mutateAsync();
+  }, [clearMutation]);
 
   const save = useCallback(
     async (input: { content: string; category?: string; scope?: string; replaceIds?: readonly string[] }): Promise<MemorySaveResult> => {
       try {
         await addMemory(input);
-        void refresh();
+        void invalidate();
         return { saved: true, conflicts: [] };
       } catch (reason) {
         if (reason instanceof MemoryConflictError) {
@@ -64,8 +91,16 @@ export function useMemoryController(): MemoryController {
         throw reason;
       }
     },
-    [refresh],
+    [invalidate],
   );
 
-  return { memories, loading, error, refresh, remove, clear, save };
+  return {
+    memories: memoriesQuery.data ?? [],
+    loading: memoriesQuery.isLoading,
+    error: actionError || (memoriesQuery.error ? errorText(memoriesQuery.error, "记忆加载失败") : ""),
+    refresh,
+    remove,
+    clear,
+    save,
+  };
 }
