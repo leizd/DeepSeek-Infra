@@ -18,7 +18,12 @@ def test_react_frontend_is_an_isolated_versioned_build() -> None:
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test"] == "vitest run"
     assert package["scripts"]["check:bundle"] == "python ../scripts/check_frontend_bundle.py"
-    assert package["dependencies"] == {"react": "19.2.7", "react-dom": "19.2.7", "react-router-dom": "7.18.1"}
+    assert package["dependencies"] == {
+        "@tanstack/react-query": "5.101.2",
+        "react": "19.2.7",
+        "react-dom": "19.2.7",
+        "react-router-dom": "7.18.1",
+    }
     assert package["devDependencies"]["@testing-library/react"] == "16.3.0"
     assert package["devDependencies"]["@testing-library/user-event"] == "14.6.1"
     assert package["devDependencies"]["jsdom"] == "27.0.1"
