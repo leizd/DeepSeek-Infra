@@ -8,6 +8,7 @@ import { TraceErrorList } from "./TraceErrorList";
 import { TraceSpanTree } from "./TraceSpanTree";
 import { TraceSummary } from "./TraceSummary";
 import { TraceWaterfall } from "./TraceWaterfall";
+import "./trace.css";
 
 interface TraceDetailViewProps {
   traceId: string;
@@ -19,25 +20,20 @@ export function TraceDetailView({ traceId, variant = "page" }: TraceDetailViewPr
   const [error, setError] = useState("");
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     setTrace(null);
     setError("");
     if (!traceId) {
       setError("Trace id is missing.");
-      return () => {
-        cancelled = true;
-      };
+      return () => controller.abort();
     }
-    getTrace(traceId)
-      .then((detail) => {
-        if (!cancelled) setTrace(detail);
-      })
+    getTrace(traceId, { signal: controller.signal })
+      .then(setTrace)
       .catch((reason: unknown) => {
-        if (!cancelled) setError(reason instanceof Error && reason.message ? reason.message : "Unable to load trace.");
+        if (controller.signal.aborted) return;
+        setError(reason instanceof Error && reason.message ? reason.message : "Unable to load trace.");
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [traceId]);
 
   useEffect(() => {

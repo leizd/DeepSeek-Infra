@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "version": "4.1.0",
+  "commit": "1e423dfeccf8718cb250df53ca7abcc36ad6dfdb",
+  "gitDirty": true,
+  "generatedAt": "2026-07-19T06:44:07.707983+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "browser": "chromium",
+  "checks": {
+    "cspHeader": "PASS",
+    "reactOnlyRoot": "PASS",
+    "reactChatVerticalSlice": "PASS",
+    "uploadCancel": "PASS",
+    "reactHistoryPersistence": "PASS",
+    "reactStopGeneration": "PASS",
+    "rootSpaDeepLink": "PASS",
+    "traceChunkDeferred": "PASS",
+    "traceRouteProviderIsolation": "PASS",
+    "reactTraceRouteRefresh": "PASS",
+    "legacyRouteRetired": "PASS",
+    "completeAppShell": "PASS",
+    "offlineRefresh": "PASS",
+    "noCspConsoleErrors": "PASS"
+  }
+}

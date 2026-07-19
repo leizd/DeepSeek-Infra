@@ -787,6 +787,46 @@ a { color: inherit; }
 .connection-status-grid div { padding: 12px; border: 1px solid rgb(148 163 184 / 12%); border-radius: 10px; color: #aeb8c9; background: #111722; font-size: 0.75rem; }
 .drawer-done { width: 100%; padding: 11px; border: 0; border-radius: 10px; color: white; background: linear-gradient(135deg, #5b81f7, #7560e6); font-weight: 750; }
 
+.route-loading, .route-error {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  width: 100%;
+  min-height: 100vh;
+  padding: 24px;
+  color: #e9edf5;
+  background: #090d13;
+  text-align: center;
+}
+.route-loading { gap: 14px; color: #aab6c9; font-size: 0.8rem; }
+.route-loading > span {
+  width: 28px;
+  height: 28px;
+  border: 2px solid rgb(148 163 184 / 20%);
+  border-top-color: #7ea2ff;
+  border-radius: 50%;
+  animation: route-loading-spin 800ms linear infinite;
+}
+.route-error > p { margin: 0 0 10px; color: #f39ba1; font-size: 0.68rem; font-weight: 800; }
+.route-error > h1 { margin: 0; font-size: 1.7rem; letter-spacing: 0; }
+.route-error > span { max-width: 620px; margin-top: 12px; color: #8793a6; font-size: 0.78rem; overflow-wrap: anywhere; }
+.route-error > div { display: flex; gap: 9px; margin-top: 24px; }
+.route-error a, .route-error button {
+  min-height: 34px;
+  padding: 8px 12px;
+  border: 1px solid rgb(148 163 184 / 18%);
+  border-radius: 7px;
+  color: #cbd5e5;
+  background: #131a26;
+  font: inherit;
+  font-size: 0.74rem;
+  line-height: 16px;
+  text-decoration: none;
+}
+.route-error a:hover, .route-error button:hover { border-color: rgb(113 143 255 / 50%); color: white; }
+
+@keyframes route-loading-spin { to { transform: rotate(360deg); } }
+
 @media (max-width: 900px) {
   .chat-app-shell { grid-template-columns: 1fr; }
   .history-drawer { position: fixed; top: 0; bottom: 0; left: 0; width: min(310px, 88vw); transform: translateX(-105%); transition: transform 180ms ease; box-shadow: 24px 0 60px rgb(0 0 0 / 34%); }

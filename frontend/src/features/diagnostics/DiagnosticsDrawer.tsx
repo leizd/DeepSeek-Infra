@@ -1,8 +1,15 @@
+import { lazy, Suspense } from "react";
+
 import { useChat } from "../../contexts/ChatContext";
 import { useDiagnostics } from "../../contexts/DiagnosticsContext";
 import type { ChatMessage } from "../../domain/chat/types";
-import { TraceDetailView } from "../trace/TraceDetailView";
 import { buildDiagnosticsRows } from "./diagnosticsRows";
+
+const TraceDetailView = lazy(() =>
+  import("../trace/TraceDetailView").then((module) => ({
+    default: module.TraceDetailView,
+  })),
+);
 
 function DiagnosticsRows({ message }: { message: ChatMessage }) {
   const rows = buildDiagnosticsRows(message);
@@ -38,7 +45,11 @@ export function DiagnosticsDrawer() {
       <div className="diagnostics-body">
         {diagnostics.target.mode === "rows" && <DiagnosticsRows message={message} />}
         {diagnostics.target.mode === "trace" && (
-          traceId ? <TraceDetailView traceId={traceId} variant="drawer" /> : <p className="history-empty">这条消息没有 Trace。</p>
+          traceId ? (
+            <Suspense fallback={<div className="trace-state trace-state--drawer" role="status"><strong>Loading trace...</strong></div>}>
+              <TraceDetailView traceId={traceId} variant="drawer" />
+            </Suspense>
+          ) : <p className="history-empty">这条消息没有 Trace。</p>
         )}
       </div>
     </section>

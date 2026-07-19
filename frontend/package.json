@@ -1,7 +1,7 @@
 {
   "name": "deepseek-infra-frontend",
   "private": true,
-  "version": "4.0.9",
+  "version": "4.1.0",
   "type": "module",
   "packageManager": "npm@11.8.0",
   "engines": {
@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check:bundle": "python ../scripts/check_frontend_bundle.py",
+    "check": "npm run typecheck && npm test && npm run build && npm run check:bundle"
   },
   "dependencies": {
     "react": "19.2.7",

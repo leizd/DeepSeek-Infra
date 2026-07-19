@@ -93,8 +93,18 @@ export function normalizeTrace(raw: unknown): TraceDetail {
   };
 }
 
-export async function getTrace(traceId: string, client: HttpClient = httpClient): Promise<TraceDetail> {
-  const body = await client.json<{ trace?: unknown }>(`/api/traces/${encodeURIComponent(traceId)}`);
+export interface GetTraceOptions {
+  signal?: AbortSignal;
+}
+
+export async function getTrace(
+  traceId: string,
+  options: GetTraceOptions = {},
+  client: HttpClient = httpClient,
+): Promise<TraceDetail> {
+  const body = await client.json<{ trace?: unknown }>(`/api/traces/${encodeURIComponent(traceId)}`, {
+    signal: options.signal,
+  });
   return normalizeTrace(body.trace);
 }
 

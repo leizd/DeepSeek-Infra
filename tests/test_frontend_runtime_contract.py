@@ -65,6 +65,26 @@ def test_trace_viewer_is_owned_by_react() -> None:
     diagnostics = read("frontend/src/features/diagnostics/DiagnosticsDrawer.tsx")
     detail = read("frontend/src/features/trace/TraceDetailView.tsx")
     assert 'path="/trace/:traceId"' in app
+    assert 'import("../trace/TraceDetailView")' in diagnostics
     assert '<TraceDetailView traceId={traceId} variant="drawer" />' in diagnostics
     assert "<TraceSpanTree" in detail
     assert "<TraceWaterfall" in detail
+
+
+def test_frontend_runtime_is_scoped_and_split_by_route() -> None:
+    main = read("frontend/src/main.tsx")
+    app = read("frontend/src/app/App.tsx")
+    trace_api = read("frontend/src/api/traceApi.ts")
+    trace_view = read("frontend/src/features/trace/TraceDetailView.tsx")
+
+    assert "AppProviders" not in main
+    assert "<BrowserRouter>" in main
+    assert "function WorkspaceRoute()" in app
+    assert "<AppProviders>" in app
+    assert 'import("../features/trace/TracePage")' in app
+    assert "<RouteErrorBoundary" in app
+    assert "<Suspense" in app
+    assert "signal?: AbortSignal" in trace_api
+    assert "signal: options.signal" in trace_api
+    assert "new AbortController()" in trace_view
+    assert "controller.abort()" in trace_view

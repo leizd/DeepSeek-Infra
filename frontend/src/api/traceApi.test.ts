@@ -63,8 +63,10 @@ describe("traceApi", () => {
 
   it("fetches the trace detail", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ trace: { traceId: "t9", spans: [] } }), { status: 200 }));
-    const trace = await getTrace("t9", new HttpClient({ fetchImpl }));
+    const controller = new AbortController();
+    const trace = await getTrace("t9", { signal: controller.signal }, new HttpClient({ fetchImpl }));
     expect(String((fetchImpl.mock.calls[0] as unknown as [string])[0])).toBe("/api/traces/t9");
+    expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].signal).toBe(controller.signal);
     expect(trace.traceId).toBe("t9");
   });
 });

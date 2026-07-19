@@ -9,6 +9,7 @@ export default defineConfig({
   build: {
     outDir: fileURLToPath(new URL("../static/ui", import.meta.url)),
     emptyOutDir: true,
+    manifest: true,
     sourcemap: true,
   },
   server: {

@@ -11,7 +11,6 @@ import {
   traceWindowText,
   TRACE_CATEGORY_LABELS,
 } from "./traceSelectors";
-import "./trace.css";
 
 function spanMetrics(span: TraceSpan): string {
   return [

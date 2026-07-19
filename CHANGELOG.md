@@ -5,6 +5,21 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.1.0] - Frontend Runtime Decomposition
+
+### Frontend
+
+- Scopes the ten workspace providers to chat routes so direct Trace navigation no longer initializes chat, Projects, Skills, Memory, attachments, Activity, or Diagnostics state.
+- Lazy-loads the routed Trace page and the shared Diagnostics Trace detail implementation behind route and drawer `Suspense` boundaries, with Trace CSS emitted as a feature-owned chunk.
+- Adds route-level error containment with reload and return-to-chat recovery actions.
+- Makes Trace requests cancellable end to end by forwarding `AbortSignal` through the shared HTTP client and aborting on route changes or unmount.
+
+### Verification
+
+- Adds a Vite-manifest bundle contract that fails if Trace implementation or CSS returns to the initial workspace bundle.
+- Extends Chromium evidence with direct-route provider isolation, deferred chunk loading, navigation, refresh, and offline regression coverage.
+
+
 ## [4.0.9] - React Trace Viewer
 
 ### Frontend

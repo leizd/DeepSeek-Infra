@@ -1132,6 +1132,8 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
     ]
     if _version_tuple(version) >= (4, 0, 9):
         required.append("reactTraceRouteRefresh")
+    if _version_tuple(version) >= (4, 1, 0):
+        required.extend(["traceChunkDeferred", "traceRouteProviderIsolation"])
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(
@@ -1144,6 +1146,60 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
         "frontend_browser_evidence",
         STATUS_PASS,
         "Frontend Chromium safety and offline evidence recorded",
+        {"path": str(path), "checks": list(required)},
+    )
+
+
+def check_frontend_bundle_evidence(root: Path, version: str) -> CheckResult:
+    if _version_tuple(version) < (4, 1, 0):
+        return CheckResult(
+            "frontend_bundle_evidence",
+            STATUS_PASS,
+            "Frontend bundle evidence not required before v4.1.0",
+            {"version": version, "requiredFrom": "4.1.0"},
+        )
+    path = root / "docs" / "evidence" / f"frontend-bundle-v{version}.json"
+    if not path.is_file():
+        return CheckResult(
+            "frontend_bundle_evidence",
+            STATUS_FAIL,
+            "Frontend bundle evidence missing; run scripts/check_frontend_bundle.py",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return CheckResult("frontend_bundle_evidence", STATUS_FAIL, f"cannot parse frontend bundle evidence: {exc}", {"path": str(path)})
+    metadata_fail = _check_evidence_metadata("frontend_bundle", data, path)
+    if metadata_fail:
+        return metadata_fail
+    if str(data.get("version") or "") != version or data.get("status") != "PASS":
+        return CheckResult(
+            "frontend_bundle_evidence",
+            STATUS_FAIL,
+            "Frontend bundle evidence version or status does not match the release",
+            {"version": data.get("version"), "expected": version, "status": data.get("status")},
+        )
+    checks = data.get("checks")
+    check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
+    required = (
+        "tracePageDynamicEntry",
+        "traceDetailDynamicEntry",
+        "traceImplementationDeferred",
+        "traceCssDeferred",
+    )
+    missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
+    if missing_or_failed:
+        return CheckResult(
+            "frontend_bundle_evidence",
+            STATUS_FAIL,
+            f"Frontend bundle evidence missing PASS checks: {', '.join(missing_or_failed)}",
+            {"missingOrFailed": missing_or_failed},
+        )
+    return CheckResult(
+        "frontend_bundle_evidence",
+        STATUS_PASS,
+        "Frontend route-level bundle decomposition recorded",
         {"path": str(path), "checks": list(required)},
     )
 
@@ -1942,6 +1998,7 @@ def run_preflight(root: Path, version: str, *, ga: bool = False) -> list[CheckRe
         check_media_layer_evidence(root, version),
         check_browser_control_evidence(root, version),
         check_frontend_browser_evidence(root, version),
+        check_frontend_bundle_evidence(root, version),
         check_automation_runtime_evidence(root, version),
         check_skill_system_evidence(root, version),
         check_skill_ui_evidence(root, version),

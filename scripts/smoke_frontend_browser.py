@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import urllib.request
+from urllib.parse import urlsplit
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -199,11 +200,52 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         await page.get_by_role("heading", name="Page not found").wait_for()
         checks["rootSpaDeepLink"] = "PASS"
 
+        deferred_trace_assets = await page.evaluate(
+            r"""() => performance.getEntriesByType('resource')
+              .map((entry) => entry.name)
+              .filter((name) => /\/ui\/assets\/Trace(Page|DetailView)-/.test(name))"""
+        )
+        if deferred_trace_assets:
+            raise AssertionError(f"Trace chunks loaded before Trace navigation: {deferred_trace_assets}")
+        checks["traceChunkDeferred"] = "PASS"
+
+        isolated_trace_page = await context.new_page()
+        isolated_trace_api_requests: list[str] = []
+
+        def record_trace_api_request(request: Any) -> None:
+            path = urlsplit(request.url).path
+            if path.startswith("/api/"):
+                isolated_trace_api_requests.append(path)
+
+        isolated_trace_page.on("request", record_trace_api_request)
+        isolated_response = await isolated_trace_page.goto(f"{base_url}trace/{trace_id}", wait_until="networkidle")
+        if isolated_response is None or isolated_response.status != 200:
+            raise AssertionError("isolated React trace route did not return HTTP 200")
+        await isolated_trace_page.get_by_role("heading", name="Browser trace smoke").wait_for()
+        expected_trace_api = f"/api/traces/{trace_id}"
+        unexpected_api_requests = sorted({path for path in isolated_trace_api_requests if path != expected_trace_api})
+        if not isolated_trace_api_requests or unexpected_api_requests:
+            raise AssertionError(
+                "Trace route initialized workspace APIs: "
+                f"requests={isolated_trace_api_requests}, unexpected={unexpected_api_requests}"
+            )
+        checks["traceRouteProviderIsolation"] = "PASS"
+        await isolated_trace_page.close()
+
         trace_response = await page.goto(f"{base_url}trace/{trace_id}", wait_until="networkidle")
         if trace_response is None or trace_response.status != 200:
             raise AssertionError("React trace route did not return HTTP 200")
         await page.get_by_role("heading", name="Browser trace smoke").wait_for()
         await page.get_by_role("heading", name="Waterfall").wait_for()
+        loaded_trace_assets = await page.evaluate(
+            r"""() => performance.getEntriesByType('resource')
+              .map((entry) => entry.name)
+              .filter((name) => /\/ui\/assets\/Trace(Page|DetailView)-/.test(name))"""
+        )
+        if not any("TracePage-" in name for name in loaded_trace_assets) or not any(
+            "TraceDetailView-" in name for name in loaded_trace_assets
+        ):
+            raise AssertionError(f"Trace navigation did not load both route chunks: {loaded_trace_assets}")
         await page.reload(wait_until="networkidle")
         await page.get_by_role("heading", name="Browser trace smoke").wait_for()
         if await page.locator('script[src="/modules/trace_viewer.js"]').count() != 0:

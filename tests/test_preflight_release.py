@@ -1770,7 +1770,7 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
     preflight = _load_preflight()
     evidence = tmp_path / "docs" / "evidence"
     evidence.mkdir(parents=True)
-    path = evidence / "frontend-browser-v4.0.9.json"
+    path = evidence / "frontend-browser-v4.1.0.json"
     checks = {
         "cspHeader": "PASS",
         "reactOnlyRoot": "PASS",
@@ -1784,11 +1784,13 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
         "offlineRefresh": "PASS",
         "noCspConsoleErrors": "PASS",
         "reactTraceRouteRefresh": "PASS",
+        "traceChunkDeferred": "PASS",
+        "traceRouteProviderIsolation": "PASS",
     }
     path.write_text(
         json.dumps(
             {
-                "version": "4.0.9",
+                "version": "4.1.0",
                 "commit": "abc1234",
                 "generatedAt": "2026-07-16T00:00:00Z",
                 "environment": {"os": "Linux", "python": "3.12", "ci": True},
@@ -1800,13 +1802,82 @@ def test_frontend_browser_evidence_requires_complete_chromium_checks(tmp_path: P
         encoding="utf-8",
     )
 
-    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.9")
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.1.0")
     assert result.status == "pass"
 
     checks["reactStopGeneration"] = "FAIL"
     data = json.loads(path.read_text(encoding="utf-8"))
     data["checks"] = checks
     path.write_text(json.dumps(data), encoding="utf-8")
-    result = preflight.check_frontend_browser_evidence(tmp_path, "4.0.9")
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.1.0")
     assert result.status == "fail"
     assert "reactStopGeneration" in result.detail
+
+
+def test_frontend_browser_evidence_requires_runtime_decomposition_checks_from_4_1_0(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    evidence = tmp_path / "docs" / "evidence"
+    evidence.mkdir(parents=True)
+    path = evidence / "frontend-browser-v4.1.0.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": "4.1.0",
+                "commit": "abc1234",
+                "generatedAt": "2026-07-19T00:00:00Z",
+                "environment": {"os": "Linux", "python": "3.12", "ci": True},
+                "status": "PASS",
+                "browser": "chromium",
+                "checks": {
+                    "cspHeader": "PASS",
+                    "reactOnlyRoot": "PASS",
+                    "legacyRouteRetired": "PASS",
+                    "uploadCancel": "PASS",
+                    "rootSpaDeepLink": "PASS",
+                    "reactChatVerticalSlice": "PASS",
+                    "reactHistoryPersistence": "PASS",
+                    "reactStopGeneration": "PASS",
+                    "completeAppShell": "PASS",
+                    "offlineRefresh": "PASS",
+                    "noCspConsoleErrors": "PASS",
+                    "reactTraceRouteRefresh": "PASS",
+                    "traceChunkDeferred": "PASS",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.1.0")
+    assert result.status == "fail"
+    assert "traceRouteProviderIsolation" in result.detail
+
+
+def test_frontend_bundle_evidence_requires_all_decomposition_checks(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    evidence = tmp_path / "docs" / "evidence"
+    evidence.mkdir(parents=True)
+    path = evidence / "frontend-bundle-v4.1.0.json"
+    payload: dict[str, Any] = {
+        "version": "4.1.0",
+        "commit": "abc1234",
+        "generatedAt": "2026-07-19T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": "PASS",
+        "checks": {
+            "tracePageDynamicEntry": "PASS",
+            "traceDetailDynamicEntry": "PASS",
+            "traceImplementationDeferred": "PASS",
+            "traceCssDeferred": "PASS",
+        },
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = preflight.check_frontend_bundle_evidence(tmp_path, "4.1.0")
+    assert result.status == "pass"
+
+    payload["checks"]["traceCssDeferred"] = "FAIL"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = preflight.check_frontend_bundle_evidence(tmp_path, "4.1.0")
+    assert result.status == "fail"
+    assert "traceCssDeferred" in result.detail

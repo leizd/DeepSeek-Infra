@@ -13,10 +13,11 @@ def read(path: str) -> str:
 
 def test_react_frontend_is_an_isolated_versioned_build() -> None:
     package = json.loads(read("frontend/package.json"))
-    assert package["version"] == "4.0.9"
+    assert package["version"] == "4.1.0"
     assert package["engines"]["node"] == ">=22.12.0"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test"] == "vitest run"
+    assert package["scripts"]["check:bundle"] == "python ../scripts/check_frontend_bundle.py"
     assert package["dependencies"] == {"react": "19.2.7", "react-dom": "19.2.7", "react-router-dom": "7.18.1"}
     assert package["devDependencies"]["@testing-library/react"] == "16.3.0"
     assert package["devDependencies"]["@testing-library/user-event"] == "14.6.1"
@@ -28,6 +29,7 @@ def test_react_frontend_is_an_isolated_versioned_build() -> None:
     vite = read("frontend/vite.config.ts")
     assert 'base: "/ui/"' in vite
     assert 'new URL("../static/ui", import.meta.url)' in vite
+    assert "manifest: true" in vite
     assert '"/api": "http://127.0.0.1:8000"' in vite
     assert "static/ui/" in read(".gitignore")
 
@@ -125,10 +127,12 @@ def test_browser_gate_covers_react_chat_trace_history_stop_and_spa_fallback() ->
     assert 'checks["legacyRouteRetired"] = "PASS"' in smoke
     assert 'checks["rootSpaDeepLink"] = "PASS"' in smoke
     assert 'checks["reactTraceRouteRefresh"] = "PASS"' in smoke
+    assert 'checks["traceChunkDeferred"] = "PASS"' in smoke
+    assert 'checks["traceRouteProviderIsolation"] = "PASS"' in smoke
     assert 'checks["reactChatVerticalSlice"] = "PASS"' in smoke
     assert 'checks["reactHistoryPersistence"] = "PASS"' in smoke
     assert 'checks["reactStopGeneration"] = "PASS"' in smoke
     assert "projects/example" in smoke
     assert 'get_by_role("heading", name="Waterfall")' in smoke
-    for check in ("reactOnlyRoot", "legacyRouteRetired", "rootSpaDeepLink", "reactTraceRouteRefresh", "reactChatVerticalSlice", "reactHistoryPersistence", "reactStopGeneration"):
+    for check in ("reactOnlyRoot", "legacyRouteRetired", "rootSpaDeepLink", "reactTraceRouteRefresh", "traceChunkDeferred", "traceRouteProviderIsolation", "reactChatVerticalSlice", "reactHistoryPersistence", "reactStopGeneration"):
         assert f'"{check}"' in preflight

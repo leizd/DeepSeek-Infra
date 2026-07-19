@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -60,6 +60,20 @@ describe("TracePage", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Trace not found");
     expect(alert.textContent).toContain("missing");
+  });
+
+  it("aborts the trace request when the route unmounts", async () => {
+    let signal: AbortSignal | undefined;
+    getTraceMock.mockImplementation((_traceId, options) => {
+      signal = options?.signal;
+      return new Promise(() => undefined);
+    });
+    const view = render(<MemoryRouter initialEntries={["/trace/slow"]}><App /></MemoryRouter>);
+
+    await waitFor(() => expect(signal).toBeDefined());
+    expect(signal?.aborted).toBe(false);
+    view.unmount();
+    expect(signal?.aborted).toBe(true);
   });
 
   it("uses the fallback route and returns to chat navigation", async () => {

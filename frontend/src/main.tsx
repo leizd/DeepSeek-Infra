@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./app/App";
-import { AppProviders } from "./app/AppProviders";
 import "./shared/styles/app.css";
 
 const root = document.getElementById("root");
@@ -15,9 +14,7 @@ if (!root) {
 createRoot(root).render(
   <StrictMode>
     <BrowserRouter>
-      <AppProviders>
-        <App />
-      </AppProviders>
+      <App />
     </BrowserRouter>
   </StrictMode>,
 );
