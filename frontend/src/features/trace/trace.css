@@ -124,6 +124,20 @@
 .trace-state span { color: #6ea0ff; font-size: 0.64rem; font-weight: 800; letter-spacing: 0.14em; }
 .trace-state strong { color: #dce3ef; font-size: 1.15rem; }
 .trace-state code { max-width: 100%; overflow-wrap: anywhere; }
+.trace-retry-button {
+  min-width: 82px;
+  height: 34px;
+  margin-top: 6px;
+  padding: 0 14px;
+  border: 1px solid rgb(110 160 255 / 38%);
+  border-radius: 5px;
+  color: #dce6f8;
+  background: rgb(57 92 153 / 22%);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+.trace-retry-button:hover { border-color: rgb(110 160 255 / 72%); background: rgb(57 92 153 / 34%); }
+.trace-retry-button:focus-visible { outline: 2px solid #8eb6ff; outline-offset: 3px; }
 
 .trace-detail--drawer { min-width: 0; }
 .trace-detail--drawer .trace-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }

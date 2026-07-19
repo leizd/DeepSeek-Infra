@@ -1,6 +1,6 @@
 # DeepSeek Infra - local-first Personal AI Runtime
-# Build: docker build -t deepseek-infra:4.1.0 .
-# Run: docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:4.1.0
+# Build: docker build -t deepseek-infra:4.1.1 .
+# Run: docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:4.1.1
 # See docs/DEPLOYMENT.md for deployment notes.
 FROM node:24-bookworm-slim AS frontend-builder
 
@@ -15,7 +15,7 @@ FROM python:3.12-slim
 
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="DeepSeek Infra" \
-      org.opencontainers.image.version="4.1.0" \
+      org.opencontainers.image.version="4.1.1" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.description="Python-first hybrid Personal AI Runtime"
 

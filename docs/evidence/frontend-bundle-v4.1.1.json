@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "version": "4.1.1",
+  "commit": "8ab69541ce3b7bf42000ef258a1c94638c9da18a",
+  "gitDirty": true,
+  "generatedAt": "2026-07-19T07:28:47.160706+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "initialEntry": "static/ui/assets/index-CueWuT1L.js",
+  "initialBytes": 372017,
+  "tracePageChunk": "static/ui/assets/TracePage-BdTFuPxC.js",
+  "tracePageBytes": 760,
+  "traceDetailChunk": "static/ui/assets/TraceDetailView-BcyZ9jqs.js",
+  "traceDetailBytes": 10900,
+  "traceCss": [
+    "assets/TraceDetailView-9c1yjKWd.css"
+  ],
+  "checks": {
+    "tracePageDynamicEntry": "PASS",
+    "traceDetailDynamicEntry": "PASS",
+    "traceImplementationDeferred": "PASS",
+    "traceCssDeferred": "PASS"
+  }
+}

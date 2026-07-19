@@ -5,11 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.1.0。
+适用版本：v4.1.1。
 
 ## Runtime ownership
 
-4.0.8 完成 Legacy Frontend Retirement；4.0.9 进一步将最后一个独立原生界面 Trace Viewer 迁入 React。4.1.0 将 Workspace Provider 下沉到聊天路由，并按需加载 Trace 路由与 Diagnostics 共享详情。`/` 与 `/trace/:traceId` 只返回 `frontend/` 的 React + TypeScript + Vite 构建，`/ui/` 作为兼容别名返回同一构建。生成产物位于 gitignored `static/ui/`，不得手工修改。
+4.0.8 完成 Legacy Frontend Retirement；4.0.9 进一步将最后一个独立原生界面 Trace Viewer 迁入 React。4.1.0 将 Workspace Provider 下沉到聊天路由，并按需加载 Trace 路由与 Diagnostics 共享详情。4.1.1 为共享 Trace 加载边界增加原地重试和陈旧响应保护。`/` 与 `/trace/:traceId` 只返回 `frontend/` 的 React + TypeScript + Vite 构建，`/ui/` 作为兼容别名返回同一构建。生成产物位于 gitignored `static/ui/`，不得手工修改。
 
 服务端不再提供旧前端路由或环境变量回滚。`static/ui/index.html` 缺失时，本地启动、Android、PyInstaller、Docker、发布 ZIP、release smoke 与 preflight 都会硬失败，并提示运行 `scripts/build_frontend.py`。
 
@@ -33,7 +33,7 @@
 - `/` and `/ui/` mount `AppProviders` around `ChatPage`.
 - `/trace/:traceId` mounts no workspace Context and lazy-loads `TracePage`.
 - Diagnostics lazy-loads the same `TraceDetailView` chunk, so shared Trace rendering remains outside the initial chat bundle until requested.
-- `RouteErrorBoundary` contains route render and dynamic-import failures. Trace effects abort in-flight HTTP requests when the route changes or unmounts.
+- `RouteErrorBoundary` contains route render and dynamic-import failures. Trace effects abort in-flight HTTP requests when the route changes, retries, or unmounts; late resolutions from clients that ignore cancellation cannot replace current state.
 - `scripts/check_frontend_bundle.py` reads the Vite manifest and blocks releases if Trace JavaScript or CSS leaks into the initial entry.
 
 ## PWA ownership
@@ -55,4 +55,4 @@ Legacy retirement does not remove static assets with independent consumers:
 | `static/vendor/inter/` | Self-hosted font assets |
 | `static/vendor/katex/` | Self-hosted vendor assets kept for compatible document rendering |
 
-`tests/test_frontend_runtime_contract.py` prevents both the retired legacy entry and standalone Trace Viewer files from returning. React component tests, the Vite bundle contract, and the Chromium evidence gate lock `/trace/:traceId`, request cancellation, provider isolation, deferred chunks, API failure rendering, deep-link refresh, and shared Diagnostics ownership.
+`tests/test_frontend_runtime_contract.py` prevents both the retired legacy entry and standalone Trace Viewer files from returning. React component tests, the Vite bundle contract, and the Chromium evidence gate lock `/trace/:traceId`, request cancellation, retry recovery, stale-response suppression, provider isolation, deferred chunks, API failure rendering, deep-link refresh, and shared Diagnostics ownership.

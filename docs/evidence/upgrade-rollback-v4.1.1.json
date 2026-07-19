@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "upgrade-rollback.v1",
+  "version": "4.1.1",
+  "commit": "8ab69541ce3b7bf42000ef258a1c94638c9da18a",
+  "generatedAt": "2026-07-19T07:33:25Z",
+  "status": "PASS",
+  "testFile": "tests/test_4_0_upgrade_contract.py",
+  "testCount": 5,
+  "checks": {
+    "3.10.0_to_4.0.3": "PASS",
+    "4.0.0-rc.1_to_4.0.3": "PASS",
+    "4.0.1_to_4.0.3": "PASS",
+    "4.0.3_to_3.10.0_rollback": "PASS",
+    "sidecar_unavailable": "PASS"
+  },
+  "command": [
+    "D:\\python\\python.exe",
+    "-m",
+    "pytest",
+    "--no-cov",
+    "-o",
+    "addopts=",
+    "-p",
+    "no:cacheprovider",
+    "--basetemp",
+    "D:\\deepseek\\artifacts\\pytest-upgrade-contract",
+    "-v",
+    "tests/test_4_0_upgrade_contract.py"
+  ]
+}

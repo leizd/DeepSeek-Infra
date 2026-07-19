@@ -1134,6 +1134,8 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
         required.append("reactTraceRouteRefresh")
     if _version_tuple(version) >= (4, 1, 0):
         required.extend(["traceChunkDeferred", "traceRouteProviderIsolation"])
+    if _version_tuple(version) >= (4, 1, 1):
+        required.append("traceRetryRecovery")
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(

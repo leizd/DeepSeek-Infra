@@ -18,6 +18,7 @@ interface TraceDetailViewProps {
 export function TraceDetailView({ traceId, variant = "page" }: TraceDetailViewProps) {
   const [trace, setTrace] = useState<TraceDetail | null>(null);
   const [error, setError] = useState("");
+  const [requestAttempt, setRequestAttempt] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -28,13 +29,16 @@ export function TraceDetailView({ traceId, variant = "page" }: TraceDetailViewPr
       return () => controller.abort();
     }
     getTrace(traceId, { signal: controller.signal })
-      .then(setTrace)
+      .then((loadedTrace) => {
+        if (controller.signal.aborted) return;
+        setTrace(loadedTrace);
+      })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) return;
         setError(reason instanceof Error && reason.message ? reason.message : "Unable to load trace.");
       });
     return () => controller.abort();
-  }, [traceId]);
+  }, [requestAttempt, traceId]);
 
   useEffect(() => {
     if (variant !== "page" || !trace) return;
@@ -51,6 +55,11 @@ export function TraceDetailView({ traceId, variant = "page" }: TraceDetailViewPr
         <span>TRACE LOAD FAILED</span>
         <strong>{error}</strong>
         <code>{traceId}</code>
+        {traceId ? (
+          <button className="trace-retry-button" type="button" onClick={() => setRequestAttempt((attempt) => attempt + 1)}>
+            Retry
+          </button>
+        ) : null}
       </div>
     );
   }

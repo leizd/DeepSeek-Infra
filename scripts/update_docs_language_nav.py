@@ -44,7 +44,7 @@ def iter_managed_markdown() -> list[Path]:
     """Return human-maintained Markdown files governed by the language nav."""
 
     result = subprocess.run(
-        ["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md"],
+        ["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--", "*.md"],
         check=True,
         capture_output=True,
     )

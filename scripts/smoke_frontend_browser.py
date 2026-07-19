@@ -232,6 +232,35 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         checks["traceRouteProviderIsolation"] = "PASS"
         await isolated_trace_page.close()
 
+        retry_trace_id = trace_id
+        retry_trace_requests = 0
+
+        async def mock_retry_trace(route: Any) -> None:
+            nonlocal retry_trace_requests
+            retry_trace_requests += 1
+            if retry_trace_requests == 1:
+                await route.fulfill(
+                    status=503,
+                    content_type="application/json",
+                    body=json.dumps({"error": "Trace service temporarily unavailable"}),
+                )
+                return
+            await route.continue_()
+
+        await context.route(f"**/api/traces/{retry_trace_id}", mock_retry_trace)
+        retry_trace_page = await context.new_page()
+        retry_response = await retry_trace_page.goto(f"{base_url}trace/{retry_trace_id}", wait_until="networkidle")
+        if retry_response is None or retry_response.status != 200:
+            raise AssertionError("retry Trace route did not return HTTP 200")
+        await retry_trace_page.get_by_role("alert").wait_for()
+        await retry_trace_page.get_by_role("button", name="Retry").click()
+        await retry_trace_page.get_by_role("heading", name="Browser trace smoke").wait_for()
+        if retry_trace_requests != 2:
+            raise AssertionError(f"Trace retry issued {retry_trace_requests} API requests, expected 2")
+        checks["traceRetryRecovery"] = "PASS"
+        await retry_trace_page.close()
+        await context.unroute(f"**/api/traces/{retry_trace_id}", mock_retry_trace)
+
         trace_response = await page.goto(f"{base_url}trace/{trace_id}", wait_until="networkidle")
         if trace_response is None or trace_response.status != 200:
             raise AssertionError("React trace route did not return HTTP 200")

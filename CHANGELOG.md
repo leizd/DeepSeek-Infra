@@ -5,6 +5,20 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.1.1] - Trace Loading Resilience
+
+### Frontend
+
+- Adds in-place retry to routed and Diagnostics Trace failure states without reloading the page or initializing Workspace providers.
+- Gives every Trace attempt a fresh `AbortController` while ignoring late resolutions after route changes, retries, or unmounts even when a client does not honor cancellation.
+- Keeps Trace recovery UI inside the lazy feature-owned JavaScript and CSS chunks introduced in 4.1.0.
+
+### Verification
+
+- Covers failed-request recovery, request replacement, unmount cancellation, and stale-response suppression with React component tests.
+- Extends the Chromium and preflight gates with a first-request-503, second-request-success Trace recovery contract.
+
+
 ## [4.1.0] - Frontend Runtime Decomposition
 
 ### Frontend

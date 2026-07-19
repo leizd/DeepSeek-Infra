@@ -47,7 +47,7 @@ from deepseek_infra.infra.rag.document_preparation import (  # noqa: E402
 from deepseek_infra.infra.rust_core import policy_client, rag_client, transport, vector_binary  # noqa: E402
 from deepseek_infra.infra.tool_runtime.tool_policy import evaluate_path_safety, evaluate_url_safety  # noqa: E402
 
-VERSION = "4.1.0"
+VERSION = "4.1.1"
 SCHEMA_VERSION = "rust-sidecar-performance.v3"
 BUILD_COMMAND = [
     "cargo",

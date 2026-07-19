@@ -8,6 +8,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { getTrace } from "../../api/traceApi";
 import { App } from "../../app/App";
 import { NotFoundPage } from "../../app/NotFoundPage";
+import { TraceDetailView } from "./TraceDetailView";
 
 vi.mock("../../api/traceApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/traceApi")>();
@@ -15,6 +16,21 @@ vi.mock("../../api/traceApi", async (importOriginal) => {
 });
 
 const getTraceMock = vi.mocked(getTrace);
+
+function traceDetail(traceId: string, title: string) {
+  return {
+    traceId,
+    title,
+    kind: "agent",
+    status: "completed",
+    startedAt: "2026-07-19T10:00:00Z",
+    completedAt: "2026-07-19T10:00:01Z",
+    durationMs: 1000,
+    error: "",
+    summary: { spanCount: 0, totalTokens: 0, slowestSpan: "", slowestDurationMs: 0 },
+    spans: [],
+  };
+}
 
 beforeEach(() => {
   getTraceMock.mockReset();
@@ -60,6 +76,47 @@ describe("TracePage", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Trace not found");
     expect(alert.textContent).toContain("missing");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("retries a failed trace request without reloading the route", async () => {
+    const user = userEvent.setup();
+    getTraceMock
+      .mockRejectedValueOnce(new Error("Trace service unavailable"))
+      .mockResolvedValueOnce(traceDetail("trace-retry", "Recovered trace"));
+    render(<MemoryRouter initialEntries={["/trace/trace-retry"]}><App /></MemoryRouter>);
+
+    await screen.findByText("Trace service unavailable");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByRole("heading", { name: "Recovered trace" })).toBeTruthy();
+    expect(getTraceMock).toHaveBeenCalledTimes(2);
+    expect(getTraceMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(getTraceMock.mock.calls[1][1]?.signal?.aborted).toBe(false);
+  });
+
+  it("ignores a stale response when a client does not honor cancellation", async () => {
+    let resolveStale: ((value: ReturnType<typeof traceDetail>) => void) | undefined;
+    getTraceMock
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
+      .mockResolvedValueOnce(traceDetail("trace-new", "Current trace"));
+    const view = render(
+      <MemoryRouter>
+        <TraceDetailView traceId="trace-old" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(resolveStale).toBeDefined());
+
+    view.rerender(
+      <MemoryRouter>
+        <TraceDetailView traceId="trace-new" />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("heading", { name: "Current trace" })).toBeTruthy();
+    resolveStale?.(traceDetail("trace-old", "Stale trace"));
+
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Stale trace" })).toBeNull());
+    expect(screen.getByRole("heading", { name: "Current trace" })).toBeTruthy();
   });
 
   it("aborts the trace request when the route unmounts", async () => {

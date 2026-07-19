@@ -1853,6 +1853,52 @@ def test_frontend_browser_evidence_requires_runtime_decomposition_checks_from_4_
     assert "traceRouteProviderIsolation" in result.detail
 
 
+def test_frontend_browser_evidence_requires_trace_retry_recovery_from_4_1_1(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    evidence = tmp_path / "docs" / "evidence"
+    evidence.mkdir(parents=True)
+    path = evidence / "frontend-browser-v4.1.1.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": "4.1.1",
+                "commit": "abc1234",
+                "generatedAt": "2026-07-19T00:00:00Z",
+                "environment": {"os": "Linux", "python": "3.12", "ci": True},
+                "status": "PASS",
+                "browser": "chromium",
+                "checks": {
+                    "cspHeader": "PASS",
+                    "reactOnlyRoot": "PASS",
+                    "legacyRouteRetired": "PASS",
+                    "uploadCancel": "PASS",
+                    "rootSpaDeepLink": "PASS",
+                    "reactChatVerticalSlice": "PASS",
+                    "reactHistoryPersistence": "PASS",
+                    "reactStopGeneration": "PASS",
+                    "completeAppShell": "PASS",
+                    "offlineRefresh": "PASS",
+                    "noCspConsoleErrors": "PASS",
+                    "reactTraceRouteRefresh": "PASS",
+                    "traceChunkDeferred": "PASS",
+                    "traceRouteProviderIsolation": "PASS",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.1.1")
+    assert result.status == "fail"
+    assert "traceRetryRecovery" in result.detail
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["checks"]["traceRetryRecovery"] = "PASS"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.1.1")
+    assert result.status == "pass"
+
+
 def test_frontend_bundle_evidence_requires_all_decomposition_checks(tmp_path: Path) -> None:
     preflight = _load_preflight()
     evidence = tmp_path / "docs" / "evidence"
