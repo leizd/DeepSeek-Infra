@@ -1950,9 +1950,14 @@ def _check_evidence_metadata(name: str, data: dict[str, Any], path: Path) -> Che
     """Validate unified evidence metadata fields.
 
     Returns None if all required fields are present, otherwise a FAIL result.
+    Revision identity accepts the honest ``sourceRevision`` block as well as
+    the legacy ``commit`` field (both only describe the generator's source
+    tree, never the release commit).
     """
-    required = ("version", "commit", "generatedAt", "environment", "status")
+    required = ("version", "generatedAt", "environment", "status")
     missing = [key for key in required if not data.get(key)]
+    if not (data.get("sourceRevision") or data.get("commit")):
+        missing.append("sourceRevision|commit")
     if missing:
         return CheckResult(
             f"evidence_metadata:{name}",

@@ -1,9 +1,11 @@
 {
   "schemaVersion": 1,
   "version": "4.1.1",
-  "commit": "8ab69541ce3b7bf42000ef258a1c94638c9da18a",
-  "gitDirty": true,
-  "generatedAt": "2026-07-19T07:30:45.493271+00:00",
+  "sourceRevision": "4c576181e26dda621b39bdec7e5d1e205df9a737",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-07-19T08:58:03.736381+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",

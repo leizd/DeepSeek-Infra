@@ -7,25 +7,22 @@ import argparse
 import json
 import os
 import platform
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
+
 MANIFEST_PATH = Path("static/ui/.vite/manifest.json")
 ENTRY_KEY = "index.html"
 TRACE_PAGE_KEY = "src/features/trace/TracePage.tsx"
 TRACE_DETAIL_KEY = "src/features/trace/TraceDetailView.tsx"
 TRACE_MARKERS = ("Category summary", "Span tree", "trace-primary-grid")
-
-
-def _git_value(root: Path, *args: str) -> str:
-    completed = subprocess.run(
-        ["git", *args], cwd=root, capture_output=True, check=False, text=True, timeout=30
-    )
-    return completed.stdout.strip() if completed.returncode == 0 else "unknown"
 
 
 def _entry(manifest: dict[str, Any], key: str) -> dict[str, Any]:
@@ -125,8 +122,7 @@ def main() -> int:
     payload = {
         "schemaVersion": 1,
         "version": _frontend_version(root),
-        "commit": _git_value(root, "rev-parse", "HEAD"),
-        "gitDirty": bool(_git_value(root, "status", "--porcelain")),
+        **evidence_revision(root),
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "environment": {"os": platform.system(), "python": platform.python_version(), "ci": bool(os.getenv("CI"))},
         "status": "PASS",

@@ -1205,6 +1205,30 @@ def test_preflight_fails_when_a2a_external_peer_evidence_missing_metadata(tmp_pa
     assert "commit" in result.detail
 
 
+def test_preflight_accepts_source_revision_block_as_revision_identity(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    path = tmp_path / "docs" / "evidence" / "frontend-bundle-v2.3.4.json"
+    path.parent.mkdir(parents=True)
+    payload = {
+        "version": "2.3.4",
+        "sourceRevision": "abc1234def",
+        "sourceTreeDirty": True,
+        "releaseRevision": None,
+        "ciRevision": None,
+        "generatedAt": "2026-07-19T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": "PASS",
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert preflight._check_evidence_metadata("frontend_bundle", payload, path) is None
+
+    payload.pop("sourceRevision")
+    payload.pop("commit", None)
+    result = preflight._check_evidence_metadata("frontend_bundle", payload, path)
+    assert result is not None and result.status == "fail"
+    assert "sourceRevision|commit" in result.detail
+
+
 def test_preflight_fails_when_eval_report_missing_metadata(tmp_path: Path) -> None:
     preflight = _load_preflight()
     root = _skeleton(tmp_path, "2.3.4")

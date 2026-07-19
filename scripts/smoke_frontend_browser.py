@@ -7,7 +7,6 @@ import asyncio
 import json
 import os
 import platform
-import subprocess
 import sys
 import threading
 import time
@@ -22,25 +21,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from deepseek_infra.core.config import APP_VERSION, settings  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 from deepseek_infra.infra.observability.observability import finish_trace, start_span, start_trace  # noqa: E402
 from deepseek_infra.web.server import create_server  # noqa: E402
 
 
 VERSION = APP_VERSION
-
-
-def git_commit() -> str:
-    completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, check=False, text=True
-    )
-    return completed.stdout.strip() if completed.returncode == 0 else "unknown"
-
-
-def git_dirty() -> bool:
-    completed = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, check=False, text=True
-    )
-    return completed.returncode == 0 and bool(completed.stdout.strip())
 
 
 def wait_until_ready(url: str, timeout: float = 15.0) -> None:
@@ -368,8 +354,7 @@ def main() -> int:
         payload = {
             "schemaVersion": 1,
             "version": VERSION,
-            "commit": git_commit(),
-            "gitDirty": git_dirty(),
+            **evidence_revision(ROOT),
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "environment": {
                 "os": platform.system(),
