@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   createProject,
@@ -12,6 +13,7 @@ import type { Attachment } from "../../domain/chat/types";
 import { useSettings } from "../../contexts/SettingsContext";
 
 const ACTIVE_PROJECT_KEY = "deepseek-infra.active-project";
+export const PROJECTS_QUERY_KEY = ["projects"] as const;
 
 export interface ProjectChatContext {
   projectId?: string;
@@ -57,29 +59,26 @@ function storedActiveProject(): string {
   return window.localStorage.getItem(ACTIVE_PROJECT_KEY) ?? "";
 }
 
+function errorText(reason: unknown, fallback: string): string {
+  return reason instanceof Error && reason.message ? reason.message : fallback;
+}
+
 export function useProjectController(): ProjectController {
   const settings = useSettings();
-  const [projects, setProjects] = useState<readonly Project[]>([]);
+  const queryClient = useQueryClient();
   const [activeProjectId, setActiveProjectId] = useState(storedActiveProject);
-  const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      setProjects(await listProjects());
-    } catch (reason) {
-      setError(reason instanceof Error && reason.message ? reason.message : "项目列表加载失败");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const projectsQuery = useQuery<Project[]>({
+    queryKey: PROJECTS_QUERY_KEY,
+    queryFn: () => listProjects(),
+  });
+  const projects: readonly Project[] = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: PROJECTS_QUERY_KEY }),
+    [queryClient],
+  );
 
   const setActive = useCallback((projectId: string) => {
     setActiveProjectId(projectId);
@@ -89,48 +88,77 @@ export function useProjectController(): ProjectController {
     }
   }, []);
 
+  const createMutation = useMutation({
+    mutationFn: (name: string) => createProject(name.trim()),
+    onSuccess: (project) => {
+      setActionError("");
+      setActive(project.id);
+      void invalidate();
+    },
+    onError: (reason) => setActionError(errorText(reason, "项目创建失败")),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (projectId: string) => deleteProject(projectId),
+    onSuccess: (_result, projectId) => {
+      setActionError("");
+      if (activeProjectId === projectId) setActive("");
+      void invalidate();
+    },
+    onError: (reason) => setActionError(errorText(reason, "项目删除失败")),
+  });
+
+  const renameMutation = useMutation({
+    mutationFn: ({ projectId, name }: { projectId: string; name: string }) => renameProject(projectId, name.trim()),
+    onSuccess: () => {
+      setActionError("");
+      void invalidate();
+    },
+    onError: (reason) => setActionError(errorText(reason, "项目重命名失败")),
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: (files: File[]) =>
+      uploadProjectFiles(activeProjectId, files, {
+        ocrEnabled: true,
+        apiKey: settings.apiKey.trim() || undefined,
+      }),
+    onSuccess: () => {
+      setActionError("");
+      void invalidate();
+    },
+    onError: (reason) => setActionError(errorText(reason, "项目文档上传失败")),
+  });
+
+  const refresh = useCallback(async () => {
+    await invalidate();
+  }, [invalidate]);
+
   const create = useCallback(
     async (name: string) => {
-      const project = await createProject(name.trim());
-      setProjects((current) => [...current, project]);
-      setActive(project.id);
+      await createMutation.mutateAsync(name);
     },
-    [setActive],
+    [createMutation],
   );
-
   const remove = useCallback(
     async (projectId: string) => {
-      await deleteProject(projectId);
-      setProjects((current) => current.filter((project) => project.id !== projectId));
-      if (activeProjectId === projectId) setActive("");
+      await removeMutation.mutateAsync(projectId);
     },
-    [activeProjectId, setActive],
+    [removeMutation],
   );
-
-  const rename = useCallback(async (projectId: string, name: string) => {
-    const project = await renameProject(projectId, name.trim());
-    setProjects((current) => current.map((item) => (item.id === projectId ? { ...item, name: project.name } : item)));
-  }, []);
-
+  const rename = useCallback(
+    async (projectId: string, name: string) => {
+      await renameMutation.mutateAsync({ projectId, name });
+    },
+    [renameMutation],
+  );
   const uploadDocuments = useCallback(
     async (fileInput: Iterable<File>) => {
       const files = Array.from(fileInput);
       if (!files.length || !activeProjectId) return;
-      setUploading(true);
-      setError("");
-      try {
-        await uploadProjectFiles(activeProjectId, files, {
-          ocrEnabled: true,
-          apiKey: settings.apiKey.trim() || undefined,
-        });
-        await refresh();
-      } catch (reason) {
-        setError(reason instanceof Error && reason.message ? reason.message : "项目文档上传失败");
-      } finally {
-        setUploading(false);
-      }
+      await uploadMutation.mutateAsync(files);
     },
-    [activeProjectId, refresh, settings.apiKey],
+    [activeProjectId, uploadMutation],
   );
 
   const activeProject = useMemo(
@@ -151,9 +179,9 @@ export function useProjectController(): ProjectController {
     projects,
     activeProjectId,
     activeProject,
-    loading,
-    uploading,
-    error,
+    loading: projectsQuery.isLoading,
+    uploading: uploadMutation.isPending,
+    error: actionError || (projectsQuery.error ? errorText(projectsQuery.error, "项目列表加载失败") : ""),
     refresh,
     create,
     remove,
