@@ -398,7 +398,7 @@ async def run_query_smoke(base_url: str) -> dict[str, str]:
         binding_b_release = asyncio.Event()
         binding_b_release.set()
         binding_patch_events: list[str] = []
-        binding_patch_state = {"enabled": []}
+        binding_patch_state: dict[str, Any] = {"enabled": []}
 
         async def mock_binding(route: Any) -> None:
             url = route.request.url
