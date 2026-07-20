@@ -469,8 +469,10 @@ async def run_query_smoke(base_url: str) -> dict[str, str]:
         before = len(binding_patch_events)
         await page.locator(".project-skill-options label", has_text="Skill A").locator("input").click()
         await page.locator(".project-skill-options label", has_text="Skill B").locator("input").click()
-        await page.wait_for_function(f"() => true")
-        await page.wait_for_timeout(400)
+        for _ in range(100):
+            if binding_patch_events[before:].count("respond") >= 2:
+                break
+            await page.wait_for_timeout(50)
         events = binding_patch_events[before:]
         if events.count("start") < 2:
             raise AssertionError(f"expected two binding saves, saw {events}")
