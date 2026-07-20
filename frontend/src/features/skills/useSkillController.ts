@@ -21,6 +21,10 @@ export interface SkillController {
   skills: readonly Skill[];
   loading: boolean;
   refreshing: boolean;
+  creating: boolean;
+  updatingSkillId: string | null;
+  togglingSkillId: string | null;
+  removingSkillId: string | null;
   error: string;
   refresh(): Promise<void>;
   toggle(skill: Skill): Promise<void>;
@@ -138,6 +142,10 @@ export function useSkillController(): SkillController {
     skills: skillsQuery.data ?? [],
     loading: skillsQuery.isLoading,
     refreshing: skillsQuery.isFetching && !skillsQuery.isLoading,
+    creating: createMutation.isPending,
+    updatingSkillId: updateMutation.isPending ? (updateMutation.variables?.skillId ?? null) : null,
+    togglingSkillId: toggleMutation.isPending ? (toggleMutation.variables?.skillId ?? null) : null,
+    removingSkillId: removeMutation.isPending ? (removeMutation.variables ?? null) : null,
     error: firstError ? errorText(firstError, "技能操作失败") : "",
     refresh,
     toggle,

@@ -47,6 +47,9 @@ export interface ProjectController {
   loading: boolean;
   refreshing: boolean;
   uploading: boolean;
+  creating: boolean;
+  renamingProjectId: string | null;
+  removingProjectId: string | null;
   error: string;
   refresh(): Promise<void>;
   create(name: string): Promise<void>;
@@ -193,6 +196,9 @@ export function useProjectController(): ProjectController {
     loading: projectsQuery.isLoading,
     refreshing: projectsQuery.isFetching && !projectsQuery.isLoading,
     uploading: uploadMutation.isPending,
+    creating: createMutation.isPending,
+    renamingProjectId: renameMutation.isPending ? (renameMutation.variables?.projectId ?? null) : null,
+    removingProjectId: removeMutation.isPending ? (removeMutation.variables ?? null) : null,
     error: firstError ? errorText(firstError, "项目操作失败") : "",
     refresh,
     create,

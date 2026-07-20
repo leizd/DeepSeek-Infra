@@ -22,6 +22,8 @@ export interface MemoryController {
   memories: readonly MemoryEntry[];
   loading: boolean;
   refreshing: boolean;
+  removingMemoryId: string | null;
+  clearing: boolean;
   error: string;
   refresh(): Promise<void>;
   remove(memoryId: string): Promise<void>;
@@ -101,6 +103,8 @@ export function useMemoryController(): MemoryController {
     memories: memoriesQuery.data ?? [],
     loading: memoriesQuery.isLoading,
     refreshing: memoriesQuery.isFetching && !memoriesQuery.isLoading,
+    removingMemoryId: removeMutation.isPending ? (removeMutation.variables ?? null) : null,
+    clearing: clearMutation.isPending,
     error: firstError ? errorText(firstError, "记忆操作失败") : "",
     refresh,
     remove,

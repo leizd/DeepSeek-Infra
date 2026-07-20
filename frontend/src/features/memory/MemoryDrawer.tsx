@@ -32,19 +32,27 @@ export function MemoryDrawer() {
         <button type="button" aria-label="关闭记忆面板" onClick={overlay.closeOverlay}>×</button>
       </div>
       <div className="workspace-toolbar">
-        <span className="history-empty-inline">共 {memory.memories.length} 条</span>
+        <span className="history-empty-inline">
+          共 {memory.memories.length} 条
+          {memory.refreshing && <span className="workspace-sync-status" role="status" aria-live="polite">同步中…</span>}
+        </span>
         <button
           className="message-action danger"
           type="button"
-          disabled={!memory.memories.length}
+          disabled={!memory.memories.length || memory.clearing}
           onClick={() => {
             if (window.confirm("确定清空全部长期记忆？")) void memory.clear();
           }}
         >
-          全部清空
+          {memory.clearing ? "清空中…" : "全部清空"}
         </button>
       </div>
-      {memory.error && <p className="message-error" role="alert">{memory.error}</p>}
+      {memory.error && (
+        <div className="workspace-error" role="alert">
+          <span>{memory.error}</span>
+          <button type="button" onClick={() => void memory.refresh()}>重试</button>
+        </div>
+      )}
       <div className="workspace-list">
         {!memory.memories.length && <p className="history-empty">{memory.loading ? "加载中…" : "还没有长期记忆"}</p>}
         {memory.memories.map((entry) => (
@@ -54,7 +62,16 @@ export function MemoryDrawer() {
               <p>{entry.content}</p>
             </div>
             <div className="conversation-item-actions">
-              <button className="conversation-tool danger" type="button" title="删除" aria-label="删除这条记忆" onClick={() => void memory.remove(entry.id)}>×</button>
+              <button
+                className="conversation-tool danger"
+                type="button"
+                title="删除"
+                aria-label="删除这条记忆"
+                disabled={memory.removingMemoryId === entry.id}
+                onClick={() => void memory.remove(entry.id)}
+              >
+                ×
+              </button>
             </div>
           </div>
         ))}

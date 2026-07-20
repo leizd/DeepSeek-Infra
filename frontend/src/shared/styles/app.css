@@ -258,6 +258,30 @@ a { color: inherit; }
 .memory-entry small { color: #68758a; font-size: 0.66rem; }
 .memory-entry p { margin: 5px 0 0; color: #c6d0e2; font-size: 0.8rem; line-height: 1.55; }
 .history-empty-inline { color: #6e7b91; font-size: 0.72rem; }
+.workspace-sync-status { margin-left: 8px; color: #8fd0ff; font-size: 0.66rem; }
+.workspace-error {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid rgb(255 116 116 / 24%);
+  border-radius: 10px;
+  color: #ffb0b0;
+  background: rgb(121 39 39 / 13%);
+  font-size: 0.76rem;
+}
+.workspace-error button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgb(255 116 116 / 30%);
+  border-radius: 7px;
+  color: #ffd0d0;
+  background: transparent;
+  font-size: 0.68rem;
+}
+.workspace-error button:hover { border-color: rgb(255 116 116 / 60%); }
 .message-action.danger:hover:not(:disabled) { color: #ff9a9a; border-color: rgb(255 102 102 / 30%); }
 
 .project-chip { display: inline-flex; gap: 7px; align-items: center; max-width: 160px; }

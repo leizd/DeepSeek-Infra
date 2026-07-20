@@ -101,9 +101,15 @@ export function ProjectsDrawer() {
         }}
       >
         <input value={name} maxLength={60} placeholder="新项目名称" onChange={(event) => setName(event.target.value)} />
-        <button type="submit" disabled={!name.trim()}>创建</button>
+        <button type="submit" disabled={!name.trim() || projects.creating}>{projects.creating ? "创建中…" : "创建"}</button>
       </form>
-      {projects.error && <p className="message-error" role="alert">{projects.error}</p>}
+      {projects.refreshing && <span className="workspace-sync-status" role="status" aria-live="polite">同步中…</span>}
+      {projects.error && (
+        <div className="workspace-error" role="alert">
+          <span>{projects.error}</span>
+          <button type="button" onClick={() => void projects.refresh()}>重试</button>
+        </div>
+      )}
       <div className="workspace-list">
         {!projects.projects.length && <p className="history-empty">{projects.loading ? "加载中…" : "还没有项目"}</p>}
         {projects.projects.map((project) => (
@@ -131,8 +137,26 @@ export function ProjectsDrawer() {
               </button>
             )}
             <div className="conversation-item-actions">
-              <button className="conversation-tool" type="button" title="重命名" aria-label={`重命名项目 ${project.name}`} onClick={() => { setRenamingId(project.id); setRenameDraft(project.name); }}>✎</button>
-              <button className="conversation-tool danger" type="button" title="删除" aria-label={`删除项目 ${project.name}`} onClick={() => void projects.remove(project.id)}>×</button>
+              <button
+                className="conversation-tool"
+                type="button"
+                title="重命名"
+                aria-label={`重命名项目 ${project.name}`}
+                disabled={projects.renamingProjectId === project.id || projects.removingProjectId === project.id}
+                onClick={() => { setRenamingId(project.id); setRenameDraft(project.name); }}
+              >
+                ✎
+              </button>
+              <button
+                className="conversation-tool danger"
+                type="button"
+                title="删除"
+                aria-label={`删除项目 ${project.name}`}
+                disabled={projects.removingProjectId === project.id}
+                onClick={() => void projects.remove(project.id)}
+              >
+                ×
+              </button>
             </div>
           </div>
         ))}

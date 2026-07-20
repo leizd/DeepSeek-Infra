@@ -64,6 +64,8 @@ function SkillForm({
 function SkillCard({ skill }: { skill: Skill }) {
   const skills = useSkills();
   const [editing, setEditing] = useState(false);
+  const toggling = skills.togglingSkillId === skill.skillId;
+  const removing = skills.removingSkillId === skill.skillId;
   return (
     <li className={skill.disabled ? "skill-card disabled" : "skill-card"}>
       <div className="skill-card-header">
@@ -72,13 +74,15 @@ function SkillCard({ skill }: { skill: Skill }) {
           {skill.description && <p>{skill.description}</p>}
         </div>
         <div className="conversation-item-actions">
-          <button className="message-action" type="button" onClick={() => void skills.toggle(skill)}>
-            {skill.disabled ? "启用" : "禁用"}
+          <button className="message-action" type="button" disabled={toggling || removing} onClick={() => void skills.toggle(skill)}>
+            {toggling ? "…" : skill.disabled ? "启用" : "禁用"}
           </button>
           {!skill.builtin && (
             <>
-              <button className="message-action" type="button" onClick={() => setEditing((value) => !value)}>编辑</button>
-              <button className="message-action" type="button" onClick={() => void skills.remove(skill.skillId)}>删除</button>
+              <button className="message-action" type="button" disabled={removing} onClick={() => setEditing((value) => !value)}>编辑</button>
+              <button className="message-action" type="button" disabled={removing || toggling} onClick={() => void skills.remove(skill.skillId)}>
+                {removing ? "…" : "删除"}
+              </button>
             </>
           )}
         </div>
@@ -126,6 +130,7 @@ export function SkillsDrawer() {
           <span className="sr-only">搜索技能</span>
           <input value={query} placeholder="搜索技能" onChange={(event) => setQuery(event.target.value)} />
         </label>
+        {skills.refreshing && <span className="workspace-sync-status" role="status" aria-live="polite">同步中…</span>}
         <button className="message-action" type="button" onClick={() => setCreating((value) => !value)}>
           {creating ? "收起" : "新建技能"}
         </button>
@@ -141,7 +146,12 @@ export function SkillsDrawer() {
           onCancel={() => setCreating(false)}
         />
       )}
-      {skills.error && <p className="message-error" role="alert">{skills.error}</p>}
+      {skills.error && (
+        <div className="workspace-error" role="alert">
+          <span>{skills.error}</span>
+          <button type="button" onClick={() => void skills.refresh()}>重试</button>
+        </div>
+      )}
       <h3 className="workspace-section-title">自定义</h3>
       <ul className="skill-list">
         {!custom.length && <p className="history-empty">{skills.loading ? "加载中…" : "还没有自定义技能"}</p>}
