@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.1.1-blue)
+![版本](https://img.shields.io/badge/version-4.2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.1.1 Trace Loading Resilience:** Failed routed and Diagnostics Trace requests can now recover in place. Every retry replaces and aborts the previous request, while late responses are ignored even when a custom client does not honor cancellation. Component, Chromium, and preflight gates lock the recovery behavior without changing the frozen 4.0 runtime contract. See [the 4.1.1 notes](docs/releases/4.1.1.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+> **4.2.0 Server State Query Foundation:** Projects, Skills and Memory now run on a shared TanStack Query foundation — a centralized QueryClient with `useQuery`/`useMutation`, AbortSignal-cancellable list requests, `setQueryData` updates with background invalidation, per-project skill-binding cache keys, and derived loading/refreshing/error semantics. Chat, Attachments, Activity, Diagnostics, Settings and Overlay contexts stay unchanged. Controller behavior is locked by renderHook tests with per-case QueryClients. The frozen 4.0 runtime contract is unchanged: Python remains default and authoritative, all Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.2.0 notes](docs/releases/4.2.0.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
-**4.1.1 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.1.1 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
+**4.2.0 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.2.0 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
 
 ## 30 秒概览
 

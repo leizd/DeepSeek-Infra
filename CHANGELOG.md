@@ -5,6 +5,21 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.2.0] - Server State Query Foundation
+
+### Frontend architecture
+
+- Moves Projects, Skills and Memory server state onto TanStack Query: a shared QueryClient with `useQuery`/`useMutation`, centralized query keys, and per-project skill-binding cache keys that invalidate only the saved project.
+- Threads Query `AbortSignal` through the list APIs to `HttpClient`, so workbench unmounts and query key changes truly cancel in-flight requests.
+- Adds `refreshing` (background refetch) beside `loading`, derives error state from queries and mutations instead of hand-written flags, and applies `setQueryData` for create/rename/delete/toggle/remove/clear with background invalidation.
+- Locks controller behavior with renderHook tests that use isolated per-case QueryClients: initial fetch, activation on create, cache updates, targeted invalidation, upload refresh, binding isolation, and 409 cache purity.
+- Keeps Chat, Attachments, Activity, Diagnostics, Settings and Overlay contexts unchanged; the migration is confined to the three server-resource domains.
+
+### Compatibility
+
+- Keeps the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates, and Python fallback.
+- Evidence revision metadata keeps the honest source/commit split from `fix(evidence)`; 4.2.0 browser and bundle evidence is regenerated after the Query migration.
+
 ## [4.1.1] - Trace Loading Resilience
 
 ### Frontend
