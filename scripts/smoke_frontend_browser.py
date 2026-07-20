@@ -330,6 +330,215 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
     return checks
 
 
+async def run_query_smoke(base_url: str) -> dict[str, str]:
+    from playwright.async_api import async_playwright
+
+    checks: dict[str, str] = {}
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        context = await browser.new_context(service_workers="allow")
+        await context.add_init_script(
+            "localStorage.setItem('deepseek-infra.active-project', 'deleted-project');"
+        )
+
+        async def mock_config(route: Any) -> None:
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "hasServerKey": True,
+                        "hasSearch": False,
+                        "defaultModel": "deepseek-v4-pro",
+                        "models": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                        "modelRoutes": {},
+                        "uploadLimits": {"fileMaxBytes": 200_000_000, "requestMaxBytes": 220_000_000, "maxFiles": 8},
+                        "computerUrl": base_url,
+                        "phoneUrl": base_url,
+                    }
+                ),
+            )
+
+        memory_requests = 0
+
+        async def mock_memory(route: Any) -> None:
+            nonlocal memory_requests
+            if route.request.method == "GET":
+                memory_requests += 1
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"memories": []}))
+                return
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+
+        projects_payload = {
+            "projects": [
+                {"id": "p-a", "name": "项目A", "documents": [], "createdAt": 1, "updatedAt": 1},
+                {"id": "p-b", "name": "项目B", "documents": [], "createdAt": 1, "updatedAt": 1},
+            ]
+        }
+
+        async def mock_projects(route: Any) -> None:
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps(projects_payload))
+
+        async def mock_skills(route: Any) -> None:
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "ok": True,
+                        "skills": [
+                            {"skillId": "s-slow", "name": "Skill A", "description": "", "version": "1.0.0", "builtin": False},
+                            {"skillId": "s-fast", "name": "Skill B", "description": "", "version": "1.0.0", "builtin": False},
+                        ],
+                    }
+                ),
+            )
+
+        binding_a_release = asyncio.Event()
+        binding_b_release = asyncio.Event()
+        binding_b_release.set()
+        binding_patch_events: list[str] = []
+        binding_patch_state = {"enabled": []}
+
+        async def mock_binding(route: Any) -> None:
+            url = route.request.url
+            if route.request.method == "PATCH":
+                binding_patch_events.append("start")
+                body = route.request.post_data_json or {}
+                binding_patch_state["enabled"] = body.get("enabledSkills", binding_patch_state["enabled"])
+                binding_patch_events.append("respond")
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"ok": True, "skills": {"enabledSkills": binding_patch_state["enabled"], "defaultSkill": ""}}),
+                )
+                return
+            if "/p-a/" in url:
+                await binding_a_release.wait()
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"ok": True, "skills": {"enabledSkills": ["s-slow"], "defaultSkill": ""}}),
+                )
+                return
+            await binding_b_release.wait()
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"ok": True, "skills": {"enabledSkills": ["s-fast"], "defaultSkill": ""}}),
+            )
+
+        await context.route("**/api/config", mock_config)
+        await context.route("**/api/memory**", mock_memory)
+        await context.route("**/api/projects", mock_projects)
+        await context.route("**/api/skills", mock_skills)
+        await context.route("**/api/workspace/projects/**", mock_binding)
+
+        page = await context.new_page()
+        await page.goto(base_url, wait_until="domcontentloaded")
+
+        await page.get_by_role("button", name="记忆", exact=True).click()
+        await page.get_by_role("dialog", name="长期记忆").wait_for()
+        await page.wait_for_timeout(200)
+        if memory_requests != 1:
+            raise AssertionError(f"memory drawer triggered {memory_requests} list requests, expected exactly 1")
+        checks["memoryDrawerSingleRefresh"] = "PASS"
+
+        await page.get_by_role("button", name="关闭记忆面板").click()
+        if not await page.evaluate("() => localStorage.getItem('deepseek-infra.active-project') === null"):
+            raise AssertionError("stale activeProjectId was not repaired after the project list loaded")
+        if await page.locator(".project-chip").count() != 0:
+            raise AssertionError("stale active project still renders the composer chip")
+        checks["staleActiveProjectRepaired"] = "PASS"
+
+        await page.get_by_role("button", name="项目", exact=True).click()
+        await page.get_by_role("dialog", name="项目").wait_for()
+        await page.locator(".workspace-open", has_text="项目A").click()
+        await page.get_by_text("加载绑定中…").wait_for()
+        await page.locator(".workspace-open", has_text="项目B").click()
+        binding_a_release.set()
+        await page.locator(".project-skill-options label", has_text="Skill B").first.wait_for()
+        if await page.locator(".project-skill-options input:checked").count() != 1:
+            raise AssertionError("project B binding did not render its enabled skill")
+        if not await page.locator(".project-skill-options label", has_text="Skill B").locator("input").is_checked():
+            raise AssertionError("late project A binding overwrote project B selection")
+        checks["projectBindingLatestProjectWins"] = "PASS"
+
+        await page.locator(".workspace-open", has_text="项目A").click()
+        await page.locator(".project-skill-options label", has_text="Skill A").first.wait_for()
+        before = len(binding_patch_events)
+        await page.locator(".project-skill-options label", has_text="Skill A").locator("input").click()
+        await page.locator(".project-skill-options label", has_text="Skill B").locator("input").click()
+        await page.wait_for_function(f"() => true")
+        await page.wait_for_timeout(400)
+        events = binding_patch_events[before:]
+        if events.count("start") < 2:
+            raise AssertionError(f"expected two binding saves, saw {events}")
+        first_respond = events.index("respond")
+        if "start" not in events[first_respond + 1 :]:
+            raise AssertionError(f"second binding save started before the first completed: {events}")
+        if binding_patch_state["enabled"] != ["s-slow", "s-fast"]:
+            raise AssertionError(f"final binding state is not the second save: {binding_patch_state}")
+        checks["projectBindingSavesSerialized"] = "PASS"
+
+        list_calls = {"count": 0}
+        slow_list_release = asyncio.Event()
+
+        async def mock_projects_with_delay(route: Any) -> None:
+            try:
+                body = route.request.post_data_json or {}
+            except (json.JSONDecodeError, TypeError):
+                body = {}
+            action = body.get("action", "list")
+            if action == "create":
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"ok": True, "project": {"id": "p-c", "name": body.get("name", "项目C"), "documents": [], "createdAt": 1, "updatedAt": 1}}),
+                )
+                return
+            list_calls["count"] += 1
+            if list_calls["count"] > 1:
+                await slow_list_release.wait()
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps(projects_payload))
+
+        await context.unroute("**/api/projects", mock_projects)
+        await context.route("**/api/projects", mock_projects_with_delay)
+        await page.locator(".workspace-open", has_text="项目A").wait_for()
+        await page.locator(".project-create-form input").fill("项目C")
+        await page.get_by_role("button", name="创建", exact=True).click()
+        await page.locator(".workspace-sync-status").wait_for(timeout=5_000)
+        if not await page.locator(".workspace-open", has_text="项目A").is_visible():
+            raise AssertionError("cached project list disappeared during background refresh")
+        slow_list_release.set()
+        await page.locator(".workspace-sync-status").wait_for(state="detached", timeout=10_000)
+        checks["queryRefreshingKeepsCachedData"] = "PASS"
+
+        fail_context = await browser.new_context(service_workers="allow")
+        fail_calls = {"count": 0}
+
+        async def mock_projects_fail(route: Any) -> None:
+            fail_calls["count"] += 1
+            if fail_calls["count"] <= 2:
+                await route.abort("aborted")
+                return
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps(projects_payload))
+
+        await fail_context.route("**/api/config", mock_config)
+        await fail_context.route("**/api/projects", mock_projects_fail)
+        fail_page = await fail_context.new_page()
+        await fail_page.goto(base_url, wait_until="domcontentloaded")
+        await fail_page.get_by_role("button", name="项目", exact=True).click()
+        await fail_page.locator(".workspace-error").wait_for()
+        await fail_page.get_by_role("button", name="重试").click()
+        await fail_page.locator(".workspace-open", has_text="项目A").wait_for()
+        checks["queryFailureRetryRecovery"] = "PASS"
+        await fail_context.close()
+
+        await browser.close()
+    return checks
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="write JSON evidence to this path")
@@ -351,6 +560,7 @@ def main() -> int:
     try:
         wait_until_ready(base_url)
         checks = asyncio.run(run_browser(base_url, trace_id))
+        checks.update(asyncio.run(run_query_smoke(base_url)))
         payload = {
             "schemaVersion": 1,
             "version": VERSION,

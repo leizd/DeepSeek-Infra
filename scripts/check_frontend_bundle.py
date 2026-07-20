@@ -23,6 +23,7 @@ ENTRY_KEY = "index.html"
 TRACE_PAGE_KEY = "src/features/trace/TracePage.tsx"
 TRACE_DETAIL_KEY = "src/features/trace/TraceDetailView.tsx"
 TRACE_MARKERS = ("Category summary", "Span tree", "trace-primary-grid")
+MAX_INITIAL_BYTES = 450_000
 
 
 def _entry(manifest: dict[str, Any], key: str) -> dict[str, Any]:
@@ -67,6 +68,10 @@ def check_bundle(root: Path) -> dict[str, Any]:
     trace_detail_asset = _asset(root, trace_detail)
     if len({entry_asset.name, trace_page_asset.name, trace_detail_asset.name}) != 3:
         raise AssertionError("Trace outputs were merged into the initial workspace bundle")
+    if entry_asset.stat().st_size > MAX_INITIAL_BYTES:
+        raise AssertionError(
+            f"initial frontend bundle exceeds budget: {entry_asset.stat().st_size} > {MAX_INITIAL_BYTES}"
+        )
 
     entry_source = entry_asset.read_text(encoding="utf-8")
     detail_source = trace_detail_asset.read_text(encoding="utf-8")
@@ -90,6 +95,7 @@ def check_bundle(root: Path) -> dict[str, Any]:
     return {
         "initialEntry": entry_asset.relative_to(root).as_posix(),
         "initialBytes": entry_asset.stat().st_size,
+        "initialBundleBudgetBytes": MAX_INITIAL_BYTES,
         "tracePageChunk": trace_page_asset.relative_to(root).as_posix(),
         "tracePageBytes": trace_page_asset.stat().st_size,
         "traceDetailChunk": trace_detail_asset.relative_to(root).as_posix(),
@@ -100,6 +106,7 @@ def check_bundle(root: Path) -> dict[str, Any]:
             "traceDetailDynamicEntry": "PASS",
             "traceImplementationDeferred": "PASS",
             "traceCssDeferred": "PASS",
+            "initialBundleBudget": "PASS",
         },
     }
 
