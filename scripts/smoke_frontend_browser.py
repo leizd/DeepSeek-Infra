@@ -482,6 +482,7 @@ async def run_query_smoke(base_url: str) -> dict[str, str]:
         checks["projectBindingSavesSerialized"] = "PASS"
 
         list_calls = {"count": 0}
+        slow_list_started = asyncio.Event()
         slow_list_release = asyncio.Event()
 
         async def mock_projects_with_delay(route: Any) -> None:
@@ -498,8 +499,8 @@ async def run_query_smoke(base_url: str) -> dict[str, str]:
                 )
                 return
             list_calls["count"] += 1
-            if list_calls["count"] > 1:
-                await slow_list_release.wait()
+            slow_list_started.set()
+            await slow_list_release.wait()
             await route.fulfill(status=200, content_type="application/json", body=json.dumps(projects_payload))
 
         await context.unroute("**/api/projects", mock_projects)
@@ -507,6 +508,7 @@ async def run_query_smoke(base_url: str) -> dict[str, str]:
         await page.locator(".workspace-open", has_text="项目A").wait_for()
         await page.locator(".project-create-form input").fill("项目C")
         await page.get_by_role("button", name="创建", exact=True).click()
+        await slow_list_started.wait()
         await page.locator(".workspace-sync-status").wait_for(timeout=5_000)
         if not await page.locator(".workspace-open", has_text="项目A").is_visible():
             raise AssertionError("cached project list disappeared during background refresh")

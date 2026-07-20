@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "version": "4.2.1",
-  "sourceRevision": "6678a33d27a78a0a1c3b142b068026b5ae414bbf",
+  "sourceRevision": "8241a14db2f410b3744f11b48ace52bf780ca399",
   "sourceTreeDirty": true,
   "releaseRevision": null,
   "ciRevision": null,
-  "generatedAt": "2026-07-20T03:51:08.019233+00:00",
+  "generatedAt": "2026-07-20T04:09:15.245889+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
