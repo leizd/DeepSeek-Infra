@@ -66,7 +66,9 @@ def test_bundle_contract_accepts_deferred_trace_assets(tmp_path: Path) -> None:
         "traceDetailDynamicEntry": "PASS",
         "traceImplementationDeferred": "PASS",
         "traceCssDeferred": "PASS",
+        "initialBundleBudget": "PASS",
     }
+    assert report["initialBundleBudgetBytes"] == 450_000
 
 
 def test_bundle_contract_rejects_trace_implementation_in_entry(tmp_path: Path) -> None:
