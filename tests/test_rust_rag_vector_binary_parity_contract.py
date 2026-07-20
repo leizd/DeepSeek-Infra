@@ -114,7 +114,7 @@ def test_binary_client_has_no_json_retry_on_binary_failure() -> None:
 
 
 def test_parity_artifact_schema_redacts_vectors() -> None:
-    artifact = ROOT / "docs/evidence/rag-vector-binary-parity-v4.2.0.json"
+    artifact = ROOT / "docs/evidence/rag-vector-binary-parity-v4.2.1.json"
     if not artifact.is_file():
         return
     report = json.loads(artifact.read_text(encoding="utf-8"))

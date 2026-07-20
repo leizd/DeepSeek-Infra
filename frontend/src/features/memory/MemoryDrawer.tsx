@@ -1,5 +1,3 @@
-import { useEffect } from "react";
-
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useMemory } from "../../contexts/MemoryContext";
 
@@ -14,12 +12,6 @@ export function MemoryDrawer() {
   const overlay = useOverlay();
   const memory = useMemory();
   const open = overlay.activeOverlay === "memory";
-  const refreshMemory = memory.refresh;
-
-  useEffect(() => {
-    if (!open) return;
-    void refreshMemory();
-  }, [open, refreshMemory]);
 
   if (!open) return null;
   return (

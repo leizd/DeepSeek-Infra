@@ -5,6 +5,21 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.2.1] - Query Interaction Resilience
+
+### Frontend reliability
+
+- Fixes a Memory drawer refresh loop: the drawer no longer triggers manual refreshes from an unstable controller reference; the first open fetches exactly once and reopening follows Query staleness instead.
+- Repairs stale project selection: a `localStorage`-restored `activeProjectId` is cleared automatically once the project list proves the project is gone.
+- Makes project skill bindings declarative and race-safe: bindings load via a dedicated Query hook with error/retry, and saves run as scope-serialized mutations so rapid toggles queue instead of racing; a late response from project A can no longer overwrite project B.
+- Surfaces interaction states in all three drawers: non-blocking sync indicator during background refetch (cached data stays visible), error block with retry, and per-mutation button disabling instead of a global busy flag.
+- Adds six Chromium contracts for the Query workbench (single memory fetch, stale-id repair, latest-project-wins, serialized saves, cached-data refresh, retry recovery) and enforces a 450 KB initial-bundle budget.
+
+### Compatibility
+
+- Keeps the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates, and Python fallback.
+- Chat, Attachments, Activity, Diagnostics, Settings and Overlay contexts remain unchanged; no Context migrations in this patch.
+
 ## [4.2.0] - Server State Query Foundation
 
 ### Frontend architecture

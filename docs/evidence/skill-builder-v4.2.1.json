@@ -1,0 +1,35 @@
+{
+  "version": "4.2.1",
+  "commit": "6678a33d27a7",
+  "generatedAt": "2026-07-20T03:33:14+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "builderOpen": "PASS",
+    "simpleDraftSchema": "PASS",
+    "createCustomSkill": "PASS",
+    "updateCustomSkill": "PASS",
+    "schemaValidation": "PASS",
+    "offlineDryRun": "PASS",
+    "builderInputValidation": "PASS",
+    "exportApi": "PASS",
+    "skillBuilderStyles": "PASS",
+    "skillBuilderAssets": "PASS",
+    "frontendTypecheckGate": "PASS"
+  },
+  "details": {
+    "skillBuilderAssets": [
+      "docs/assets/skill-builder.png",
+      "docs/assets/skill-builder-dry-run.png"
+    ],
+    "builderSources": [
+      "frontend/src/features/skills/SkillsDrawer.tsx",
+      "frontend/src/features/skills/useSkillController.ts",
+      "frontend/src/api/skillsApi.ts"
+    ]
+  }
+}

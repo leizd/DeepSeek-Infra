@@ -26,7 +26,7 @@ export async function loadChatRuntimeConfig(client: HttpClient = httpClient): Pr
   const value = await client.json<Partial<ChatRuntimeConfig>>("/api/config");
   const models = Array.isArray(value.models) ? value.models.filter((model): model is string => typeof model === "string") : [];
   return {
-    version: typeof value.version === "string" ? value.version : "4.2.0",
+    version: typeof value.version === "string" ? value.version : "4.2.1",
     hasServerKey: Boolean(value.hasServerKey),
     hasSearch: Boolean(value.hasSearch),
     defaultModel: typeof value.defaultModel === "string" ? value.defaultModel : models[0] ?? "deepseek-v4-pro",

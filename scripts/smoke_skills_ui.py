@@ -59,7 +59,7 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     ) else "FAIL"
     checks["projectSkillBindingUi"] = "PASS" if _contains_all(
         projects + controller + api,
-        ("loadBinding(project.id)", "saveBinding(project.id", "fetchProjectSkillBinding", "saveProjectSkillBinding", "enabledSkills", "defaultSkill"),
+        ("useProjectSkillBinding(project.id)", ".save({", "fetchProjectSkillBinding", "saveProjectSkillBinding", "enabledSkills", "defaultSkill"),
     ) else "FAIL"
     checks["skillPanelLifecycle"] = "PASS" if _contains_all(
         drawer,

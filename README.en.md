@@ -5,24 +5,24 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.2.0-blue)
+![Version](https://img.shields.io/badge/version-4.2.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.2.0 at a glance
+## 4.2.1 at a glance
 
-- Projects, Skills and Memory now run on a shared TanStack Query foundation with a centralized QueryClient.
-- List requests are AbortSignal-cancellable end to end; mutations update the cache with `setQueryData` and revalidate in the background.
-- Project skill bindings cache per projectId and invalidate only the saved project.
-- Loading/refreshing/error states are derived from queries and mutations; controller behavior is locked by renderHook tests.
+- A reliability patch over the 4.2.0 Query foundation — no new Context migrations.
+- The Memory drawer fetches exactly once per open; stale `activeProjectId` values self-repair after the project list loads.
+- Project skill bindings load/save declaratively with scope-serialized mutations; late responses from a previous project can't overwrite the current selection.
+- Drawers surface sync indicators, retry blocks, and per-mutation button states; six new Chromium contracts lock the interactions.
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.2.0 release notes](docs/releases/4.2.0.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.2.1 release notes](docs/releases/4.2.1.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -82,7 +82,7 @@ npm run check --prefix frontend
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.2.0 --ga
+python scripts/preflight_release.py --version 4.2.1 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

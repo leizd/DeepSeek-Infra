@@ -37,28 +37,25 @@ afterEach(() => {
 });
 
 describe("MemoryDrawer refresh effect", () => {
-  it("refreshes exactly once while the drawer stays open", async () => {
+  it("does not trigger any manual refresh while the drawer is open", async () => {
     overlayState = { activeOverlay: "memory" };
     const view = render(<MemoryDrawer />);
-    await waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(refreshMock).not.toHaveBeenCalled());
 
     view.rerender(<MemoryDrawer />);
     view.rerender(<MemoryDrawer />);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshMock).not.toHaveBeenCalled();
   });
 
-  it("refreshes again only after a close and reopen", async () => {
+  it("does not refresh when the drawer closes and reopens (Query owns refetch)", async () => {
     overlayState = { activeOverlay: "memory" };
     const view = render(<MemoryDrawer />);
-    await waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
-
     overlayState = { activeOverlay: null };
     view.rerender(<MemoryDrawer />);
-    expect(refreshMock).toHaveBeenCalledTimes(1);
-
     overlayState = { activeOverlay: "memory" };
     view.rerender(<MemoryDrawer />);
-    await waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(refreshMock).not.toHaveBeenCalled();
   });
 });
