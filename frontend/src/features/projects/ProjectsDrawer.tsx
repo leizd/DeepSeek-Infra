@@ -1,41 +1,42 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useFilePreview } from "../../contexts/FilePreviewContext";
 import { useProjects } from "../../contexts/ProjectsContext";
 import { useSkills } from "../../contexts/SkillsContext";
 import { formatBytes } from "../attachments/attachmentMapper";
+import { useProjectSkillBinding } from "./useProjectSkillBinding";
 import type { Project } from "../../api/projectsApi";
 
 function ProjectSkillBinding({ project }: { project: Project }) {
   const skills = useSkills();
-  const [enabled, setEnabled] = useState<string[]>([]);
-  const [defaultSkill, setDefaultSkill] = useState("");
-  const [loaded, setLoaded] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setLoaded(false);
-    void skills.loadBinding(project.id).then((binding) => {
-      setEnabled(binding.enabledSkills);
-      setDefaultSkill(binding.defaultSkill);
-      setLoaded(true);
-    });
-  }, [project.id, skills]);
+  const binding = useProjectSkillBinding(project.id);
+  const enabled = binding.binding?.enabledSkills ?? [];
+  const defaultSkill = binding.binding?.defaultSkill ?? "";
 
   function save(nextEnabled: string[], nextDefault: string) {
-    setEnabled(nextEnabled);
-    setDefaultSkill(nextDefault);
-    setSaving(true);
-    void skills.saveBinding(project.id, nextEnabled, nextDefault).finally(() => setSaving(false));
+    void binding
+      .save({
+        enabledSkills: nextEnabled,
+        defaultSkill: nextDefault,
+        recentSkills: binding.binding?.recentSkills ?? [],
+        enabledPacks: binding.binding?.enabledPacks ?? [],
+      })
+      .catch(() => undefined);
   }
 
   if (!skills.skills.length) return null;
   return (
     <section className="project-skill-binding" aria-label="项目技能绑定">
-      <h3>项目技能{saving ? "（保存中…）" : ""}</h3>
-      {!loaded && <p className="history-empty">加载绑定中…</p>}
-      {loaded && (
+      <h3>项目技能{binding.saving ? "（保存中…）" : binding.refreshing ? "（同步中…）" : ""}</h3>
+      {binding.error ? (
+        <div className="workspace-error" role="alert">
+          <span>{binding.error instanceof Error && binding.error.message ? binding.error.message : "绑定加载失败"}</span>
+          <button type="button" onClick={binding.retry}>重试</button>
+        </div>
+      ) : binding.loading ? (
+        <p className="history-empty">加载绑定中…</p>
+      ) : (
         <>
           <div className="project-skill-options">
             {skills.skills.map((skill) => (
@@ -43,7 +44,7 @@ function ProjectSkillBinding({ project }: { project: Project }) {
                 <input
                   type="checkbox"
                   checked={enabled.includes(skill.skillId)}
-                  disabled={skill.disabled}
+                  disabled={skill.disabled || binding.saving}
                   onChange={(event) => {
                     const next = event.target.checked
                       ? [...enabled, skill.skillId]
@@ -57,7 +58,7 @@ function ProjectSkillBinding({ project }: { project: Project }) {
           </div>
           <label className="project-default-skill">
             <span>默认技能</span>
-            <select value={defaultSkill} onChange={(event) => save(enabled, event.target.value)}>
+            <select value={defaultSkill} disabled={binding.saving} onChange={(event) => save(enabled, event.target.value)}>
               <option value="">无</option>
               {enabled.map((skillId) => (
                 <option key={skillId} value={skillId}>
