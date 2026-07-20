@@ -14,10 +14,12 @@ export function MemoryDrawer() {
   const overlay = useOverlay();
   const memory = useMemory();
   const open = overlay.activeOverlay === "memory";
+  const refreshMemory = memory.refresh;
 
   useEffect(() => {
-    if (open) void memory.refresh();
-  }, [open, memory]);
+    if (!open) return;
+    void refreshMemory();
+  }, [open, refreshMemory]);
 
   if (!open) return null;
   return (

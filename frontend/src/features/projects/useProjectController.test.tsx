@@ -157,4 +157,15 @@ describe("useProjectController", () => {
     expect(window.localStorage.getItem("deepseek-infra.active-project")).toBeNull();
     expect(result.current.activeProject).toBeNull();
   });
+
+  it("repairs a stale activeProjectId restored from localStorage", async () => {
+    window.localStorage.setItem("deepseek-infra.active-project", "deleted-project");
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+
+    expect(result.current.activeProjectId).toBe("deleted-project");
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+    await waitFor(() => expect(result.current.activeProjectId).toBe(""));
+    expect(window.localStorage.getItem("deepseek-infra.active-project")).toBeNull();
+  });
 });

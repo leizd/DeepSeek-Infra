@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -89,6 +89,11 @@ export function useProjectController(): ProjectController {
       else window.localStorage.removeItem(ACTIVE_PROJECT_KEY);
     }
   }, []);
+
+  useEffect(() => {
+    if (!projectsQuery.isSuccess || !activeProjectId) return;
+    if (!projects.some((project) => project.id === activeProjectId)) setActive("");
+  }, [projects, projectsQuery.isSuccess, activeProjectId, setActive]);
 
   const createMutation = useMutation({
     mutationFn: (name: string) => createProject(name.trim()),
