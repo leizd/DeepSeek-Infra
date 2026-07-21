@@ -14,6 +14,7 @@ import {
   type Skill,
 } from "../../api/skillsApi";
 import { SKILLS_QUERY_KEY, projectSkillBindingQueryKey } from "../../app/queryKeys";
+import { latestMutationError } from "../../app/mutationErrors";
 
 export { SKILLS_QUERY_KEY, projectSkillBindingQueryKey };
 
@@ -27,6 +28,7 @@ export interface SkillController {
   removingSkillId: string | null;
   error: string;
   refresh(): Promise<void>;
+  recover(): Promise<void>;
   toggle(skill: Skill): Promise<void>;
   remove(skillId: string): Promise<void>;
   create(draft: SimpleSkillDraft): Promise<void>;
@@ -94,6 +96,14 @@ export function useSkillController(): SkillController {
     await invalidate();
   }, [invalidate]);
 
+  const recover = useCallback(async () => {
+    if (toggleMutation.isError) toggleMutation.reset();
+    if (removeMutation.isError) removeMutation.reset();
+    if (createMutation.isError) createMutation.reset();
+    if (updateMutation.isError) updateMutation.reset();
+    await invalidate();
+  }, [createMutation, invalidate, removeMutation, toggleMutation, updateMutation]);
+
   const toggle = useCallback(
     async (skill: Skill) => {
       await toggleMutation.mutateAsync(skill);
@@ -136,7 +146,7 @@ export function useSkillController(): SkillController {
   );
 
   const firstError =
-    skillsQuery.error ?? toggleMutation.error ?? removeMutation.error ?? createMutation.error ?? updateMutation.error;
+    skillsQuery.error ?? latestMutationError(toggleMutation, removeMutation, createMutation, updateMutation);
 
   return {
     skills: skillsQuery.data ?? [],
@@ -148,6 +158,7 @@ export function useSkillController(): SkillController {
     removingSkillId: removeMutation.isPending ? (removeMutation.variables ?? null) : null,
     error: firstError ? errorText(firstError, "技能操作失败") : "",
     refresh,
+    recover,
     toggle,
     remove,
     create,

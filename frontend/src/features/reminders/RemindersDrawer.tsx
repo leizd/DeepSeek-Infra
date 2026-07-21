@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { createReminder, deleteReminder, listReminders, type Reminder } from "../../api/remindersApi";
 import { useOverlay } from "../../contexts/OverlayContext";
+import { Icon } from "../../shared/ui/Icon";
 
 function formatDueAt(dueAt: string): string {
   const parsed = Date.parse(dueAt);
@@ -44,7 +45,7 @@ export function RemindersDrawer() {
           <p className="eyebrow">REMINDERS</p>
           <h2>提醒</h2>
         </div>
-        <button type="button" aria-label="关闭提醒面板" onClick={overlay.closeOverlay}>×</button>
+        <button type="button" aria-label="关闭提醒面板" onClick={overlay.closeOverlay}><Icon name="close" /></button>
       </div>
       <form
         className="skill-form"
@@ -84,7 +85,7 @@ export function RemindersDrawer() {
                 aria-label={`删除提醒 ${reminder.title}`}
                 onClick={() => void deleteReminder(reminder.id).then(refresh)}
               >
-                ×
+                <Icon name="close" />
               </button>
             </div>
           </div>

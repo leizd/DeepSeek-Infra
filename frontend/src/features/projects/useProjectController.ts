@@ -11,6 +11,7 @@ import {
 } from "../../api/projectsApi";
 import type { Attachment } from "../../domain/chat/types";
 import { PROJECTS_QUERY_KEY } from "../../app/queryKeys";
+import { latestMutationError } from "../../app/mutationErrors";
 import { useSettings } from "../../contexts/SettingsContext";
 
 const ACTIVE_PROJECT_KEY = "deepseek-infra.active-project";
@@ -52,6 +53,7 @@ export interface ProjectController {
   removingProjectId: string | null;
   error: string;
   refresh(): Promise<void>;
+  recover(): Promise<void>;
   create(name: string): Promise<void>;
   remove(projectId: string): Promise<void>;
   rename(projectId: string, name: string): Promise<void>;
@@ -141,6 +143,14 @@ export function useProjectController(): ProjectController {
     await invalidate();
   }, [invalidate]);
 
+  const recover = useCallback(async () => {
+    if (createMutation.isError) createMutation.reset();
+    if (renameMutation.isError) renameMutation.reset();
+    if (removeMutation.isError) removeMutation.reset();
+    if (uploadMutation.isError) uploadMutation.reset();
+    await invalidate();
+  }, [createMutation, invalidate, removeMutation, renameMutation, uploadMutation]);
+
   const create = useCallback(
     async (name: string) => {
       await createMutation.mutateAsync(name);
@@ -184,10 +194,7 @@ export function useProjectController(): ProjectController {
 
   const firstError =
     projectsQuery.error
-    ?? createMutation.error
-    ?? renameMutation.error
-    ?? removeMutation.error
-    ?? uploadMutation.error;
+    ?? latestMutationError(createMutation, renameMutation, removeMutation, uploadMutation);
 
   return {
     projects,
@@ -201,6 +208,7 @@ export function useProjectController(): ProjectController {
     removingProjectId: removeMutation.isPending ? (removeMutation.variables ?? null) : null,
     error: firstError ? errorText(firstError, "项目操作失败") : "",
     refresh,
+    recover,
     create,
     remove,
     rename,

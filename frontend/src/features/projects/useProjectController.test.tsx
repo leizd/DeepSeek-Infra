@@ -168,4 +168,31 @@ describe("useProjectController", () => {
     await waitFor(() => expect(result.current.activeProjectId).toBe(""));
     expect(window.localStorage.getItem("deepseek-infra.active-project")).toBeNull();
   });
+
+  it("clears a stale mutation error after a newer successful action and recover", async () => {
+    createProjectMock.mockRejectedValueOnce(new Error("创建失败")).mockRejectedValueOnce(new Error("又失败"));
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.create("失败项目").catch(() => undefined);
+    });
+    await waitFor(() => expect(result.current.error).toBe("创建失败"));
+
+    await act(async () => {
+      await result.current.rename("p1", "新名字");
+    });
+    await waitFor(() => expect(result.current.error).toBe(""));
+
+    await act(async () => {
+      await result.current.create("又失败").catch(() => undefined);
+    });
+    await waitFor(() => expect(result.current.error).toBeTruthy());
+
+    await act(async () => {
+      await result.current.recover();
+    });
+    await waitFor(() => expect(result.current.error).toBe(""));
+  });
 });

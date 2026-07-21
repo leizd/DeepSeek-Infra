@@ -1,5 +1,6 @@
 import { useAttachments } from "../../contexts/AttachmentsContext";
 import { useFilePreview } from "../../contexts/FilePreviewContext";
+import { Icon } from "../../shared/ui/Icon";
 import { formatBytes } from "./attachmentMapper";
 import type { PendingAttachment } from "./attachmentReducer";
 
@@ -39,7 +40,7 @@ function AttachmentRow({ item }: { item: PendingAttachment }) {
           <button type="button" aria-label={`预览附件 ${item.name}`} onClick={() => preview.open(item.attachment as NonNullable<typeof item.attachment>)}>预览</button>
         )}
         {!inFlight && (
-          <button type="button" aria-label={`移除附件 ${item.name}`} onClick={() => attachments.removeItem(item.id)}>×</button>
+          <button type="button" aria-label={`移除附件 ${item.name}`} onClick={() => attachments.removeItem(item.id)}><Icon name="close" /></button>
         )}
       </span>
     </li>

@@ -20,6 +20,7 @@ import { ConnectionSettingsDrawer } from "../settings/ConnectionSettingsDrawer";
 import { SkillsDrawer } from "../skills/SkillsDrawer";
 import { useReminderPolling } from "../reminders/useReminderPolling";
 import { MessageList } from "./MessageList";
+import { Icon } from "../../shared/ui/Icon";
 
 function transferHasFiles(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
@@ -108,7 +109,7 @@ export function ChatPage() {
       <HistoryDrawer />
       <section className="chat-workspace">
         <header className="chat-topbar">
-          <button className="topbar-icon history-trigger" type="button" aria-label="打开历史" onClick={() => overlay.openOverlay("history")}>☰</button>
+          <button className="topbar-icon history-trigger" type="button" aria-label="打开历史" onClick={() => overlay.openOverlay("history")}><Icon name="menu" /></button>
           <div className="topbar-title">
             <strong>{chat.state.currentConversationId ? "当前对话" : "新对话"}</strong>
             <span>
@@ -117,12 +118,12 @@ export function ChatPage() {
             </span>
           </div>
           <div className="topbar-actions">
-            <button className="topbar-icon" type="button" aria-label="连接设置" onClick={() => overlay.openOverlay("settings")}>⚙</button>
+            <button className="topbar-icon" type="button" aria-label="连接设置" onClick={() => overlay.openOverlay("settings")}><Icon name="settings" /></button>
           </div>
         </header>
         <MessageList messages={chat.messages} onSuggestion={setSuggestedPrompt} />
         {chat.state.notice && (
-          <button className="chat-notice" type="button" onClick={chat.clearNotice}>{chat.state.notice}<span>×</span></button>
+          <button className="chat-notice" type="button" onClick={chat.clearNotice}>{chat.state.notice}<span><Icon name="close" /></span></button>
         )}
         <div className="composer-zone">
           <Composer initialPrompt={suggestedPrompt} onInitialPromptUsed={() => setSuggestedPrompt("")} />

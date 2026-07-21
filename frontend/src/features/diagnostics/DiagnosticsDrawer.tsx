@@ -3,6 +3,7 @@ import { lazy, Suspense } from "react";
 import { useChat } from "../../contexts/ChatContext";
 import { useDiagnostics } from "../../contexts/DiagnosticsContext";
 import type { ChatMessage } from "../../domain/chat/types";
+import { Icon } from "../../shared/ui/Icon";
 import { buildDiagnosticsRows } from "./diagnosticsRows";
 
 const TraceDetailView = lazy(() =>
@@ -40,7 +41,7 @@ export function DiagnosticsDrawer() {
           <p className="eyebrow">{diagnostics.target.mode === "trace" ? "TRACE" : "DIAGNOSTICS"}</p>
           <h2>{diagnostics.target.mode === "trace" ? "Trace" : "诊断"}</h2>
         </div>
-        <button type="button" aria-label="关闭诊断面板" onClick={diagnostics.closeDiagnostics}>×</button>
+        <button type="button" aria-label="关闭诊断面板" onClick={diagnostics.closeDiagnostics}><Icon name="close" /></button>
       </div>
       <div className="diagnostics-body">
         {diagnostics.target.mode === "rows" && <DiagnosticsRows message={message} />}

@@ -1,5 +1,6 @@
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useMemory } from "../../contexts/MemoryContext";
+import { Icon } from "../../shared/ui/Icon";
 
 const CATEGORY_LABELS: Record<string, string> = {
   preference: "偏好",
@@ -21,7 +22,7 @@ export function MemoryDrawer() {
           <p className="eyebrow">MEMORY</p>
           <h2>长期记忆</h2>
         </div>
-        <button type="button" aria-label="关闭记忆面板" onClick={overlay.closeOverlay}>×</button>
+        <button type="button" aria-label="关闭记忆面板" onClick={overlay.closeOverlay}><Icon name="close" /></button>
       </div>
       <div className="workspace-toolbar">
         <span className="history-empty-inline">
@@ -42,7 +43,7 @@ export function MemoryDrawer() {
       {memory.error && (
         <div className="workspace-error" role="alert">
           <span>{memory.error}</span>
-          <button type="button" onClick={() => void memory.refresh()}>重试</button>
+          <button type="button" onClick={() => void memory.recover()}>重新同步</button>
         </div>
       )}
       <div className="workspace-list">
@@ -62,7 +63,7 @@ export function MemoryDrawer() {
                 disabled={memory.removingMemoryId === entry.id}
                 onClick={() => void memory.remove(entry.id)}
               >
-                ×
+                <Icon name="close" />
               </button>
             </div>
           </div>

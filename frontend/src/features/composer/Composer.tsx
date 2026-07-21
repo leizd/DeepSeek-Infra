@@ -5,6 +5,7 @@ import { useChat } from "../../contexts/ChatContext";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useProjects } from "../../contexts/ProjectsContext";
 import { useSettings } from "../../contexts/SettingsContext";
+import { Icon } from "../../shared/ui/Icon";
 import { AttachmentList } from "../attachments/AttachmentList";
 import { ATTACHMENT_ACCEPT } from "../attachments/attachmentMapper";
 import { ModelSelector } from "./ModelSelector";
@@ -50,7 +51,7 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
             >
               定位
             </button>
-            <button type="button" aria-label="移除引用" onClick={chat.clearQuote}>×</button>
+            <button type="button" aria-label="移除引用" onClick={chat.clearQuote}><Icon name="close" /></button>
           </span>
         </div>
       )}
@@ -97,7 +98,7 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
                   projects.setActive("");
                 }}
               >
-                ×
+                <Icon name="close" />
               </span>
             </button>
           )}
@@ -150,7 +151,9 @@ export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt
             <button className="stop-button" type="button" onClick={chat.stopGeneration}>停止生成</button>
           </>
         ) : (
-          <button className="send-button" type="submit" disabled={!composer.canSend} aria-label="发送消息">发送</button>
+          <button className="send-button swap-btn" type="submit" disabled={!composer.canSend} aria-label="发送消息">
+            <span className="swap"><span className="a">发送</span><span className="b">↗</span></span>
+          </button>
         )}
       </div>
     </form>

@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useSettings } from "../../contexts/SettingsContext";
+import { Icon } from "../../shared/ui/Icon";
 
 export function ConnectionSettingsDrawer() {
   const overlay = useOverlay();
@@ -18,7 +19,7 @@ export function ConnectionSettingsDrawer() {
           <p className="eyebrow">SESSION CREDENTIALS</p>
           <h2 id="connection-settings-title">连接设置</h2>
         </div>
-        <button type="button" aria-label="关闭连接设置" onClick={overlay.closeOverlay}>×</button>
+        <button type="button" aria-label="关闭连接设置" onClick={overlay.closeOverlay}><Icon name="close" /></button>
       </div>
       <p className="credential-note">页面内输入的密钥只保存在当前 React 内存中；刷新或关闭后会清空，不写入 localStorage。</p>
       <label className="credential-field">

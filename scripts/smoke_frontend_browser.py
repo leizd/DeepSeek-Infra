@@ -534,7 +534,7 @@ async def run_query_smoke(base_url: str) -> dict[str, str]:
         await fail_page.goto(base_url, wait_until="domcontentloaded")
         await fail_page.get_by_role("button", name="项目", exact=True).click()
         await fail_page.locator(".workspace-error").wait_for()
-        await fail_page.get_by_role("button", name="重试").click()
+        await fail_page.get_by_role("button", name="重新同步").click()
         await fail_page.locator(".workspace-open", has_text="项目A").wait_for()
         checks["queryFailureRetryRecovery"] = "PASS"
         await fail_context.close()

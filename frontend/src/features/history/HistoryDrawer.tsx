@@ -1,6 +1,7 @@
 import { useChat } from "../../contexts/ChatContext";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { ConversationList } from "./ConversationList";
+import { Icon } from "../../shared/ui/Icon";
 
 export function HistoryDrawer() {
   const chat = useChat();
@@ -10,10 +11,10 @@ export function HistoryDrawer() {
       <div className="history-brand">
         <div className="brand-mark">DS</div>
         <div><strong>DeepSeek Infra</strong><small>Local AI Runtime</small></div>
-        <button className="mobile-close" type="button" aria-label="关闭历史" onClick={overlay.closeOverlay}>×</button>
+        <button className="mobile-close" type="button" aria-label="关闭历史" onClick={overlay.closeOverlay}><Icon name="close" /></button>
       </div>
       <button
-        className="new-chat-button"
+        className="new-chat-button swap-btn"
         type="button"
         disabled={chat.state.requestStatus === "streaming"}
         onClick={() => {
@@ -21,7 +22,7 @@ export function HistoryDrawer() {
           overlay.closeOverlay();
         }}
       >
-        ＋ 新对话
+        <span className="swap"><span className="a">新对话</span><span className="b">↗</span></span>
       </button>
       <div className="workspace-nav">
         <button type="button" onClick={() => overlay.openOverlay("projects")}>项目</button>

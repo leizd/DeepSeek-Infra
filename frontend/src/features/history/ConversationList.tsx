@@ -3,6 +3,7 @@ import { useMemo, useState, type KeyboardEvent } from "react";
 import { useChat } from "../../contexts/ChatContext";
 import { useOverlay } from "../../contexts/OverlayContext";
 import type { Conversation } from "../../domain/conversation/types";
+import { Icon } from "../../shared/ui/Icon";
 
 function formatUpdatedAt(value: number): string {
   const date = new Date(value);
@@ -122,7 +123,7 @@ export function ConversationList() {
                 disabled={busy}
                 onClick={() => chat.deleteConversation(conversation.id)}
               >
-                ×
+                <Icon name="close" />
               </button>
             </div>
           </div>

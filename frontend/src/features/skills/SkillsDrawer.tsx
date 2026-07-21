@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { SimpleSkillDraft, Skill } from "../../api/skillsApi";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useSkills } from "../../contexts/SkillsContext";
+import { Icon } from "../../shared/ui/Icon";
 
 const emptyDraft: SimpleSkillDraft = { name: "", description: "", systemPrompt: "" };
 
@@ -123,7 +124,7 @@ export function SkillsDrawer() {
           <p className="eyebrow">SKILLS</p>
           <h2>技能</h2>
         </div>
-        <button type="button" aria-label="关闭技能面板" onClick={overlay.closeOverlay}>×</button>
+        <button type="button" aria-label="关闭技能面板" onClick={overlay.closeOverlay}><Icon name="close" /></button>
       </div>
       <div className="workspace-toolbar">
         <label className="history-search">
@@ -149,7 +150,7 @@ export function SkillsDrawer() {
       {skills.error && (
         <div className="workspace-error" role="alert">
           <span>{skills.error}</span>
-          <button type="button" onClick={() => void skills.refresh()}>重试</button>
+          <button type="button" onClick={() => void skills.recover()}>重新同步</button>
         </div>
       )}
       <h3 className="workspace-section-title">自定义</h3>

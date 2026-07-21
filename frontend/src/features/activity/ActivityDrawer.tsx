@@ -6,6 +6,7 @@ import { useOverlay } from "../../contexts/OverlayContext";
 import { agentExecutionReport } from "../../domain/chat/agentTimeline";
 import type { ChatMessage } from "../../domain/chat/types";
 import { MarkdownContent } from "../../shared/markdown/MarkdownContent";
+import { Icon } from "../../shared/ui/Icon";
 import { AgentTimeline } from "../agent-run/AgentTimeline";
 import { SearchBlock } from "../citations/SearchBlock";
 import { copyTextToClipboard } from "../chat/messageActions";
@@ -70,7 +71,7 @@ export function ActivityDrawer() {
         </div>
         <div className="activity-panel-tools">
           <CopyReportButton message={message} />
-          <button type="button" aria-label="关闭活动面板" onClick={activity.closeActivity}>×</button>
+          <button type="button" aria-label="关闭活动面板" onClick={activity.closeActivity}><Icon name="close" /></button>
         </div>
       </header>
       <div className="activity-panel-body">

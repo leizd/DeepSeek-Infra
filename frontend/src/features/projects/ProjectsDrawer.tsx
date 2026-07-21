@@ -4,6 +4,7 @@ import { useOverlay } from "../../contexts/OverlayContext";
 import { useFilePreview } from "../../contexts/FilePreviewContext";
 import { useProjects } from "../../contexts/ProjectsContext";
 import { useSkills } from "../../contexts/SkillsContext";
+import { Icon } from "../../shared/ui/Icon";
 import { formatBytes } from "../attachments/attachmentMapper";
 import { useProjectSkillBinding } from "./useProjectSkillBinding";
 import type { Project } from "../../api/projectsApi";
@@ -90,7 +91,7 @@ export function ProjectsDrawer() {
           <p className="eyebrow">PROJECTS</p>
           <h2>项目</h2>
         </div>
-        <button type="button" aria-label="关闭项目面板" onClick={overlay.closeOverlay}>×</button>
+        <button type="button" aria-label="关闭项目面板" onClick={overlay.closeOverlay}><Icon name="close" /></button>
       </div>
       <form
         className="project-create-form"
@@ -107,7 +108,7 @@ export function ProjectsDrawer() {
       {projects.error && (
         <div className="workspace-error" role="alert">
           <span>{projects.error}</span>
-          <button type="button" onClick={() => void projects.refresh()}>重试</button>
+          <button type="button" onClick={() => void projects.recover()}>重新同步</button>
         </div>
       )}
       <div className="workspace-list">
@@ -155,7 +156,7 @@ export function ProjectsDrawer() {
                 disabled={projects.removingProjectId === project.id}
                 onClick={() => void projects.remove(project.id)}
               >
-                ×
+                <Icon name="close" />
               </button>
             </div>
           </div>

@@ -1,5 +1,6 @@
 import { filePageImageUrl, fileSourceUrl, type FileReference } from "../../api/fileReaderApi";
 import { useFilePreview } from "../../contexts/FilePreviewContext";
+import { Icon } from "../../shared/ui/Icon";
 import { formatBytes } from "../attachments/attachmentMapper";
 import { supportsOriginalPreview } from "./filePreviewReducer";
 
@@ -29,7 +30,7 @@ export function FilePreviewDrawer() {
           <h2>{attachment.name}</h2>
           <p className="file-preview-meta">{meta}</p>
         </div>
-        <button type="button" aria-label="关闭文件预览" onClick={preview.close}>×</button>
+        <button type="button" aria-label="关闭文件预览" onClick={preview.close}><Icon name="close" /></button>
       </header>
 
       {canShowOriginal && (

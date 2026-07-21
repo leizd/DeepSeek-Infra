@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
 import { useFilePreview } from "../../contexts/FilePreviewContext";
+import { Icon } from "../../shared/ui/Icon";
 
 export function ImageLightbox() {
   const preview = useFilePreview();
@@ -57,7 +58,7 @@ export function ImageLightbox() {
           ›
         </button>
       )}
-      <button className="lightbox-close" type="button" aria-label="关闭图片预览" onClick={preview.closeLightbox}>×</button>
+      <button className="lightbox-close" type="button" aria-label="关闭图片预览" onClick={preview.closeLightbox}><Icon name="close" /></button>
     </div>
   );
 }

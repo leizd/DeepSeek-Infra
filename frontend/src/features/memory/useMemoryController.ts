@@ -10,6 +10,7 @@ import {
   type MemoryEntry,
 } from "../../api/memoryApi";
 import { MEMORIES_QUERY_KEY } from "../../app/queryKeys";
+import { latestMutationError } from "../../app/mutationErrors";
 
 export { MEMORIES_QUERY_KEY };
 
@@ -26,6 +27,7 @@ export interface MemoryController {
   clearing: boolean;
   error: string;
   refresh(): Promise<void>;
+  recover(): Promise<void>;
   remove(memoryId: string): Promise<void>;
   clear(): Promise<void>;
   save(input: { content: string; category?: string; scope?: string; replaceIds?: readonly string[] }): Promise<MemorySaveResult>;
@@ -70,6 +72,12 @@ export function useMemoryController(): MemoryController {
     await invalidate();
   }, [invalidate]);
 
+  const recover = useCallback(async () => {
+    if (removeMutation.isError) removeMutation.reset();
+    if (clearMutation.isError) clearMutation.reset();
+    await invalidate();
+  }, [clearMutation, invalidate, removeMutation]);
+
   const remove = useCallback(
     async (memoryId: string) => {
       await removeMutation.mutateAsync(memoryId);
@@ -97,7 +105,7 @@ export function useMemoryController(): MemoryController {
     [invalidate],
   );
 
-  const firstError = memoriesQuery.error ?? removeMutation.error ?? clearMutation.error;
+  const firstError = memoriesQuery.error ?? latestMutationError(removeMutation, clearMutation);
 
   return {
     memories: memoriesQuery.data ?? [],
@@ -107,6 +115,7 @@ export function useMemoryController(): MemoryController {
     clearing: clearMutation.isPending,
     error: firstError ? errorText(firstError, "记忆操作失败") : "",
     refresh,
+    recover,
     remove,
     clear,
     save,

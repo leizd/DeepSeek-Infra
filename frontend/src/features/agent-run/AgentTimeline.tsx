@@ -5,6 +5,7 @@ import type { ChatMessage, TimelineStep } from "../../domain/chat/types";
 import { useChat } from "../../contexts/ChatContext";
 import { MarkdownContent } from "../../shared/markdown/MarkdownContent";
 import { SearchBlock } from "../citations/SearchBlock";
+import { Icon } from "../../shared/ui/Icon";
 
 function statusLabel(step: TimelineStep): string {
   if (step.status === "running") return "工作中";
@@ -74,7 +75,7 @@ export function AgentTimeline({ message }: { message: ChatMessage }) {
           <strong>{agentSteps.length} 个 Agent</strong>
           {summary.map((entry) => (
             <span className={`agent-summary-chip status-${entry.status}`} key={entry.phase}>
-              {entry.label} {entry.status === "done" ? "✓" : entry.status === "error" ? "✕" : "…"}
+              {entry.label} {entry.status === "done" ? <Icon name="check" /> : entry.status === "error" ? <Icon name="error" /> : "…"}
             </span>
           ))}
         </div>
