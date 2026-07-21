@@ -543,6 +543,223 @@ async def run_query_smoke(base_url: str) -> dict[str, str]:
     return checks
 
 
+async def run_recovery_smoke(base_url: str) -> dict[str, str]:
+    from playwright.async_api import async_playwright
+
+    checks: dict[str, str] = {}
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+
+        async def mock_config(route: Any) -> None:
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "hasServerKey": True,
+                        "hasSearch": False,
+                        "defaultModel": "deepseek-v4-pro",
+                        "models": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                        "modelRoutes": {},
+                        "uploadLimits": {"fileMaxBytes": 200_000_000, "requestMaxBytes": 220_000_000, "maxFiles": 8},
+                        "computerUrl": base_url,
+                        "phoneUrl": base_url,
+                    }
+                ),
+            )
+
+        projects_payload = {
+            "projects": [
+                {"id": "p-a", "name": "项目A", "documents": [], "createdAt": 1, "updatedAt": 1},
+                {"id": "p-b", "name": "项目B", "documents": [], "createdAt": 1, "updatedAt": 1},
+            ]
+        }
+
+        create_attempts = {"count": 0}
+
+        async def mock_projects(route: Any) -> None:
+            try:
+                body = route.request.post_data_json or {}
+            except (json.JSONDecodeError, TypeError):
+                body = {}
+            if body.get("action") == "create" and create_attempts["count"] == 0:
+                create_attempts["count"] += 1
+                await route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "create failed"}))
+                return
+            if body.get("action") == "create":
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"ok": True, "project": {"id": "p-c", "name": body.get("name", "项目C"), "documents": [], "createdAt": 1, "updatedAt": 1}}),
+                )
+                return
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps(projects_payload))
+
+        binding_patch_calls: list[dict[str, Any]] = []
+        binding_state = {"failNext": True}
+
+        async def mock_binding(route: Any) -> None:
+            if route.request.method == "PATCH":
+                binding_patch_calls.append(route.request.post_data_json or {})
+                if binding_state["failNext"]:
+                    binding_state["failNext"] = False
+                    await route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "save failed"}))
+                    return
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"ok": True, "skills": {"enabledSkills": (route.request.post_data_json or {}).get("enabledSkills", []), "defaultSkill": ""}}),
+                )
+                return
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"ok": True, "skills": {"enabledSkills": [], "defaultSkill": ""}}),
+            )
+
+        async def mock_skills(route: Any) -> None:
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "ok": True,
+                        "skills": [
+                            {"skillId": "s1", "name": "Skill One", "description": "", "version": "1.0.0", "builtin": False},
+                        ],
+                    }
+                ),
+            )
+
+        memory_adds: list[dict[str, Any]] = []
+
+        async def mock_memory(route: Any) -> None:
+            if route.request.method == "GET":
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"memories": [{"id": "m-old", "content": "旧记忆", "category": "fact", "scope": "global"}]}),
+                )
+                return
+            body = route.request.post_data_json or {}
+            memory_adds.append(body)
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"ok": True, "memory": {"id": "m-new", "content": body.get("content", ""), "category": body.get("category", "fact"), "scope": body.get("scope", "global")}}),
+            )
+
+        async def mock_chat(route: Any) -> None:
+            body = "\n".join(
+                [
+                    json.dumps({"type": "content", "text": "好的，我记住了。"}),
+                    json.dumps({"type": "memory_suggestion", "content": "偏好深色主题", "category": "preference", "scope": "global"}),
+                    json.dumps({"type": "done", "content": "好的，我记住了。"}),
+                    "",
+                ]
+            )
+            await route.fulfill(status=200, headers={"Content-Type": "application/x-ndjson"}, body=body)
+
+        async def mock_title(route: Any) -> None:
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"title": "记忆"}))
+
+        context = await browser.new_context(service_workers="allow")
+        await context.route("**/api/config", mock_config)
+        await context.route("**/api/projects", mock_projects)
+        await context.route("**/api/skills", mock_skills)
+        await context.route("**/api/workspace/projects/**", mock_binding)
+        await context.route("**/api/memory**", mock_memory)
+        await context.route("**/api/chat", mock_chat)
+        await context.route("**/api/title", mock_title)
+
+        page = await context.new_page()
+        await page.goto(base_url, wait_until="domcontentloaded")
+
+        await page.get_by_role("button", name="项目", exact=True).click()
+        await page.get_by_role("dialog", name="项目").wait_for()
+        await page.locator(".project-create-form input").fill("失败项目")
+        await page.get_by_role("button", name="创建", exact=True).click()
+        await page.locator(".workspace-error").wait_for()
+        await page.get_by_role("button", name="重新同步").click()
+        await page.locator(".workspace-error").wait_for(state="detached")
+        checks["mutationErrorRecovery"] = "PASS"
+
+        await page.locator(".workspace-open", has_text="项目A").click()
+        await page.locator(".project-skill-options label", has_text="Skill One").locator("input").click()
+        await page.locator(".project-skill-binding .workspace-error").wait_for()
+        await page.locator(".project-skill-binding").get_by_role("button", name="重试").click()
+        await page.locator(".project-skill-binding .workspace-error").wait_for(state="detached")
+        if len(binding_patch_calls) != 2 or binding_patch_calls[0] != binding_patch_calls[1]:
+            raise AssertionError(f"binding retry did not replay the last desired state: {binding_patch_calls}")
+        checks["bindingSaveRetryRecovery"] = "PASS"
+
+        binding_state["failNext"] = True
+        await page.locator(".project-skill-options label", has_text="Skill One").locator("input").click()
+        await page.locator(".project-skill-binding .workspace-error").wait_for()
+        await page.locator(".workspace-open", has_text="项目B").click()
+        await page.wait_for_timeout(100)
+        if await page.locator(".project-skill-binding .workspace-error").count() != 0:
+            raise AssertionError("project A save error leaked into project B binding view")
+        checks["bindingMutationProjectIsolation"] = "PASS"
+
+        await page.get_by_role("button", name="关闭项目面板").click()
+
+        await page.locator("#reactPromptInput").fill("帮我记住：偏好深色主题")
+        await page.locator("button.send-button").click()
+        await page.locator(".memory-suggestion-toast").wait_for()
+        await page.get_by_role("button", name="记忆", exact=True).click()
+        await page.get_by_text("旧记忆").wait_for()
+        await page.get_by_role("button", name="保存", exact=True).click()
+        await page.locator(".memory-entry", has_text="偏好深色主题").wait_for()
+        if not memory_adds:
+            raise AssertionError("memory suggestion save never reached the backend")
+        checks["memorySuggestionCacheCoherence"] = "PASS"
+        await context.close()
+
+        client_error_context = await browser.new_context(service_workers="allow")
+        client_error_calls = {"count": 0}
+
+        async def mock_projects_400(route: Any) -> None:
+            client_error_calls["count"] += 1
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "bad request", "code": "bad_request"}))
+
+        await client_error_context.route("**/api/config", mock_config)
+        await client_error_context.route("**/api/projects", mock_projects_400)
+        client_error_page = await client_error_context.new_page()
+        await client_error_page.goto(base_url, wait_until="domcontentloaded")
+        await client_error_page.get_by_role("button", name="项目", exact=True).click()
+        await client_error_page.locator(".workspace-error").wait_for()
+        await client_error_page.wait_for_timeout(300)
+        if client_error_calls["count"] != 1:
+            raise AssertionError(f"HTTP 400 triggered {client_error_calls['count']} requests, expected exactly 1")
+        checks["clientErrorNoAutomaticRetry"] = "PASS"
+        await client_error_context.close()
+
+        transient_context = await browser.new_context(service_workers="allow")
+        transient_calls = {"count": 0}
+
+        async def mock_projects_503(route: Any) -> None:
+            transient_calls["count"] += 1
+            if transient_calls["count"] <= 2:
+                await route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "unavailable"}))
+                return
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps(projects_payload))
+
+        await transient_context.route("**/api/config", mock_config)
+        await transient_context.route("**/api/projects", mock_projects_503)
+        transient_page = await transient_context.new_page()
+        await transient_page.goto(base_url, wait_until="domcontentloaded")
+        await transient_page.get_by_role("button", name="项目", exact=True).click()
+        await transient_page.locator(".workspace-error").wait_for()
+        if transient_calls["count"] != 2:
+            raise AssertionError(f"HTTP 503 triggered {transient_calls['count']} requests, expected exactly 2 (one retry)")
+        checks["transientQueryRetry"] = "PASS"
+        await transient_context.close()
+
+        await browser.close()
+    return checks
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="write JSON evidence to this path")
@@ -565,6 +782,7 @@ def main() -> int:
         wait_until_ready(base_url)
         checks = asyncio.run(run_browser(base_url, trace_id))
         checks.update(asyncio.run(run_query_smoke(base_url)))
+        checks.update(asyncio.run(run_recovery_smoke(base_url)))
         payload = {
             "schemaVersion": 1,
             "version": VERSION,
