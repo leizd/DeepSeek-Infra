@@ -134,44 +134,4 @@ describe("useSkillController", () => {
     expect(client.getQueryData<Skill[]>(SKILLS_QUERY_KEY)?.map((item) => item.skillId)).toEqual(["s1", "s-new"]);
     await waitFor(() => expect(listSkillsMock.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
-
-  it("keeps binding caches isolated per projectId", async () => {
-    fetchBindingMock.mockImplementation((projectId: string) =>
-      Promise.resolve(projectId === "p1" ? binding(["s1"]) : binding(["s2"])),
-    );
-    const client = createTestQueryClient();
-    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
-
-    const first = await act(async () => result.current.loadBinding("p1"));
-    const second = await act(async () => result.current.loadBinding("p2"));
-
-    expect(first?.enabledSkills).toEqual(["s1"]);
-    expect(second?.enabledSkills).toEqual(["s2"]);
-    expect(client.getQueryData(projectSkillBindingQueryKey("p1"))).toMatchObject({ enabledSkills: ["s1"] });
-    expect(client.getQueryData(projectSkillBindingQueryKey("p2"))).toMatchObject({ enabledSkills: ["s2"] });
-    expect(fetchBindingMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("invalidates only the saved project binding", async () => {
-    fetchBindingMock.mockResolvedValue(binding([]));
-    const client = createTestQueryClient();
-    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
-    await act(async () => {
-      await result.current.loadBinding("p1");
-      await result.current.loadBinding("p2");
-    });
-
-    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
-    await act(async () => {
-      await result.current.saveBinding("p1", ["s2"], "s2");
-    });
-
-    expect(saveBindingMock).toHaveBeenCalledWith("p1", { enabledSkills: ["s2"], defaultSkill: "s2" });
-    expect(client.getQueryData(projectSkillBindingQueryKey("p1"))).toMatchObject({ enabledSkills: ["s2"] });
-    expect(
-      invalidateSpy.mock.calls.every(
-        ([options]) => JSON.stringify(options?.queryKey) === JSON.stringify(projectSkillBindingQueryKey("p1")),
-      ),
-    ).toBe(true);
-  });
 });

@@ -4,19 +4,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createSkill,
   deleteSkill,
-  fetchProjectSkillBinding,
   listSkills,
-  saveProjectSkillBinding,
   setSkillDisabled,
   updateSkillPrompt,
-  type ProjectSkillBinding,
   type SimpleSkillDraft,
   type Skill,
 } from "../../api/skillsApi";
-import { SKILLS_QUERY_KEY, projectSkillBindingQueryKey } from "../../app/queryKeys";
+import { SKILLS_QUERY_KEY } from "../../app/queryKeys";
 import { latestMutationError } from "../../app/mutationErrors";
 
-export { SKILLS_QUERY_KEY, projectSkillBindingQueryKey };
+export { SKILLS_QUERY_KEY };
 
 export interface SkillController {
   skills: readonly Skill[];
@@ -33,8 +30,6 @@ export interface SkillController {
   remove(skillId: string): Promise<void>;
   create(draft: SimpleSkillDraft): Promise<void>;
   update(draft: SimpleSkillDraft & { skillId: string }): Promise<void>;
-  loadBinding(projectId: string): Promise<ProjectSkillBinding>;
-  saveBinding(projectId: string, enabledSkills: readonly string[], defaultSkill: string): Promise<void>;
 }
 
 function errorText(reason: unknown, fallback: string): string {
@@ -83,15 +78,6 @@ export function useSkillController(): SkillController {
     onSuccess: () => void invalidate(),
   });
 
-  const bindingMutation = useMutation({
-    mutationFn: ({ projectId, enabledSkills, defaultSkill }: { projectId: string; enabledSkills: readonly string[]; defaultSkill: string }) =>
-      saveProjectSkillBinding(projectId, { enabledSkills, defaultSkill }),
-    onSuccess: (binding, variables) => {
-      queryClient.setQueryData(projectSkillBindingQueryKey(variables.projectId), binding);
-      void queryClient.invalidateQueries({ queryKey: projectSkillBindingQueryKey(variables.projectId) });
-    },
-  });
-
   const refresh = useCallback(async () => {
     await invalidate();
   }, [invalidate]);
@@ -129,22 +115,6 @@ export function useSkillController(): SkillController {
     [updateMutation],
   );
 
-  const loadBinding = useCallback(
-    (projectId: string) =>
-      queryClient.fetchQuery({
-        queryKey: projectSkillBindingQueryKey(projectId),
-        queryFn: ({ signal }) => fetchProjectSkillBinding(projectId, { signal }),
-      }),
-    [queryClient],
-  );
-
-  const saveBinding = useCallback(
-    async (projectId: string, enabledSkills: readonly string[], defaultSkill: string) => {
-      await bindingMutation.mutateAsync({ projectId, enabledSkills, defaultSkill });
-    },
-    [bindingMutation],
-  );
-
   const firstError =
     skillsQuery.error ?? latestMutationError(toggleMutation, removeMutation, createMutation, updateMutation);
 
@@ -163,7 +133,5 @@ export function useSkillController(): SkillController {
     remove,
     create,
     update,
-    loadBinding,
-    saveBinding,
   };
 }
