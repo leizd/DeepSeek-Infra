@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { generateConversationTitle } from "../../api/titleApi";
 import { streamChat } from "../../api/chatStream";
-import { addMemory, MemoryConflictError, normalizeMemorySuggestion } from "../../api/memoryApi";
+import { normalizeMemorySuggestion } from "../../api/memoryApi";
 import { createReminder } from "../../api/remindersApi";
 import { chatReducer, createInitialChatState } from "../../domain/chat/chatReducer";
 import {
@@ -17,6 +17,7 @@ import { applyStreamEvent, createAssistantMessage, resetAssistantMessage } from 
 import type { Attachment, ChatMessage, ChatRequestPayload, QuoteDraft } from "../../domain/chat/types";
 import { loadPersistedConversationState, savePersistedConversationState } from "../../domain/conversation/persistence";
 import { createId } from "../../shared/createId";
+import { useMemory } from "../../contexts/MemoryContext";
 import { useSettings } from "../../contexts/SettingsContext";
 import { useProjects } from "../../contexts/ProjectsContext";
 import { createOutputPauseGate } from "../activity/outputPause";
@@ -60,6 +61,7 @@ export interface PendingMemorySuggestion {
 export function useChatController() {
   const settings = useSettings();
   const projects = useProjects();
+  const memory = useMemory();
   const [state, dispatch] = useReducer(
     chatReducer,
     undefined,
@@ -314,23 +316,23 @@ export function useChatController() {
       const suggestion = pendingMemorySuggestion;
       if (!suggestion) return;
       try {
-        await addMemory({
+        const result = await memory.save({
           content: suggestion.content,
           category: suggestion.category,
           scope: suggestion.scope,
           replaceIds,
         });
+        if (!result.saved) {
+          setPendingMemorySuggestion({ ...suggestion, conflicts: result.conflicts });
+          return;
+        }
         setPendingMemorySuggestion(null);
         dispatch({ type: "noticeSet", notice: "已保存到长期记忆" });
       } catch (reason) {
-        if (reason instanceof MemoryConflictError) {
-          setPendingMemorySuggestion({ ...suggestion, conflicts: reason.conflicts });
-        } else {
-          dispatch({ type: "noticeSet", notice: errorMessage(reason) });
-        }
+        dispatch({ type: "noticeSet", notice: errorMessage(reason) });
       }
     },
-    [pendingMemorySuggestion],
+    [memory, pendingMemorySuggestion],
   );
 
   const dismissMemorySuggestion = useCallback(() => setPendingMemorySuggestion(null), []);

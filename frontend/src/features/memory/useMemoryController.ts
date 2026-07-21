@@ -92,7 +92,12 @@ export function useMemoryController(): MemoryController {
   const save = useCallback(
     async (input: { content: string; category?: string; scope?: string; replaceIds?: readonly string[] }): Promise<MemorySaveResult> => {
       try {
-        await addMemory(input);
+        const saved = await addMemory(input);
+        queryClient.setQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY, (current) => {
+          if (!current) return current;
+          const replaced = new Set(input.replaceIds ?? []);
+          return [...current.filter((entry) => entry.id !== saved.id && !replaced.has(entry.id)), saved];
+        });
         void invalidate();
         return { saved: true, conflicts: [] };
       } catch (reason) {
@@ -102,7 +107,7 @@ export function useMemoryController(): MemoryController {
         throw reason;
       }
     },
-    [invalidate],
+    [invalidate, queryClient],
   );
 
   const firstError = memoriesQuery.error ?? latestMutationError(removeMutation, clearMutation);

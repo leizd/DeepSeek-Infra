@@ -59,7 +59,12 @@ beforeEach(() => {
     serverMemories = [];
     return Promise.resolve(undefined);
   });
-  addMemoryMock.mockResolvedValue(entry("m3", "新记忆"));
+  addMemoryMock.mockImplementation((input) => {
+    const replaced = new Set(input.replaceIds ?? []);
+    const saved = entry("m3", input.content);
+    serverMemories = [...serverMemories.filter((item) => item.id !== saved.id && !replaced.has(item.id)), saved];
+    return Promise.resolve(saved);
+  });
 });
 
 afterEach(() => {
@@ -105,7 +110,21 @@ describe("useMemoryController", () => {
       saveResult = await result.current.save({ content: "记住这个", category: "fact", scope: "global" });
     });
     expect(saveResult).toEqual({ saved: true, conflicts: [] });
+    expect(client.getQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY)?.map((item) => item.id)).toContain("m3");
     await waitFor(() => expect(listMemoriesMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("replaces conflicting entries in the cache when replaceIds are provided", async () => {
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useMemoryController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.memories).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.save({ content: "偏好简洁", replaceIds: ["m2"] });
+    });
+    await waitFor(() =>
+      expect(client.getQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY)?.map((item) => item.id)).toEqual(["m1", "m3"]),
+    );
   });
 
   it("returns 409 conflicts without touching the query cache", async () => {
