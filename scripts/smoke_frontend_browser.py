@@ -632,21 +632,31 @@ async def run_recovery_smoke(base_url: str) -> dict[str, str]:
             )
 
         memory_adds: list[dict[str, Any]] = []
+        saved_memories: list[dict[str, Any]] = []
 
         async def mock_memory(route: Any) -> None:
             if route.request.method == "GET":
                 await route.fulfill(
                     status=200,
                     content_type="application/json",
-                    body=json.dumps({"memories": [{"id": "m-old", "content": "旧记忆", "category": "fact", "scope": "global"}]}),
+                    body=json.dumps(
+                        {
+                            "memories": [
+                                {"id": "m-old", "content": "旧记忆", "category": "fact", "scope": "global"},
+                                *saved_memories,
+                            ]
+                        }
+                    ),
                 )
                 return
             body = route.request.post_data_json or {}
             memory_adds.append(body)
+            saved = {"id": f"m-new-{len(saved_memories) + 1}", "content": body.get("content", ""), "category": body.get("category", "fact"), "scope": body.get("scope", "global")}
+            saved_memories.append(saved)
             await route.fulfill(
                 status=200,
                 content_type="application/json",
-                body=json.dumps({"ok": True, "memory": {"id": "m-new", "content": body.get("content", ""), "category": body.get("category", "fact"), "scope": body.get("scope", "global")}}),
+                body=json.dumps({"ok": True, "memory": saved}),
             )
 
         async def mock_chat(route: Any) -> None:
