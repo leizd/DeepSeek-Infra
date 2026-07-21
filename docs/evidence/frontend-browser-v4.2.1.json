@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "version": "4.2.1",
-  "sourceRevision": "da496d07c42d72a2784a54f032ac5284c8e127b7",
+  "sourceRevision": "af85fbeb61bb19a5f9d9cf94d8ba0eb6d3fbcab1",
   "sourceTreeDirty": true,
   "releaseRevision": null,
   "ciRevision": null,
-  "generatedAt": "2026-07-20T04:17:10.385678+00:00",
+  "generatedAt": "2026-07-21T03:06:05.706788+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -34,6 +34,12 @@
     "projectBindingLatestProjectWins": "PASS",
     "projectBindingSavesSerialized": "PASS",
     "queryRefreshingKeepsCachedData": "PASS",
-    "queryFailureRetryRecovery": "PASS"
+    "queryFailureRetryRecovery": "PASS",
+    "mutationErrorRecovery": "PASS",
+    "bindingSaveRetryRecovery": "PASS",
+    "bindingMutationProjectIsolation": "PASS",
+    "memorySuggestionCacheCoherence": "PASS",
+    "clientErrorNoAutomaticRetry": "PASS",
+    "transientQueryRetry": "PASS"
   }
 }

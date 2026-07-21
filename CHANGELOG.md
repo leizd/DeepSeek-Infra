@@ -5,6 +5,22 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.2.2] - Query Recovery and Cache Coherence
+
+### Frontend reliability
+
+- Recovers stale mutation errors: `latestMutationError` only surfaces the newest failed mutation, so a later successful action clears an older failure; all controllers gain `recover()` which resets failed mutations and refetches — the drawer action is now an honest "重新同步" rather than re-executing non-idempotent mutations.
+- Isolates binding save failures per project (`key={project.id}`) and retries them by replaying the last desired binding state instead of a bare GET.
+- Routes chat memory saves through the Query cache: suggestions saved from chat now update the Memory drawer instantly (saved entry written into cache, conflicts filtered, background invalidation) instead of bypassing the Query write path.
+- Removes the deprecated skill-binding channels from SkillController; project bindings have a single authoritative path through `useProjectSkillBinding`.
+- Retries only transient query failures: AbortError and plain 4xx never retry, 408/425/429/5xx and network errors retry exactly once.
+- Adds six browser contracts for recovery and coherence, and hook tests for stale-error clearing, save replay, project isolation, memory cache updates, and retry policy.
+
+### Compatibility
+
+- Keeps the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates, and Python fallback.
+- Chat, Attachments, Activity, Diagnostics, Settings and Overlay contexts remain unchanged.
+
 ## [4.2.1] - Query Interaction Resilience
 
 ### Frontend reliability

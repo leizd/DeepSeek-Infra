@@ -23,7 +23,7 @@ def _read(path: Path) -> str:
 @pytest.mark.parametrize(
     ("substring", "should_contain"),
     [
-        ("v4.2.1", True),
+        ("v4.2.2", True),
         ("v2.1.6", False),
         ("Optional Rust Sidecar", True),
         ("Python Default Runtime", True),

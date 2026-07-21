@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "version": "4.2.2",
+  "sourceRevision": "a7584868b4b8a41d8319f5dacdbd3924f8114f76",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-07-21T03:16:48.901002+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "initialEntry": "static/ui/assets/index-Bc_cne4b.js",
+  "initialBytes": 413716,
+  "initialBundleBudgetBytes": 450000,
+  "tracePageChunk": "static/ui/assets/TracePage-Bg4TY0Ps.js",
+  "tracePageBytes": 738,
+  "traceDetailChunk": "static/ui/assets/TraceDetailView-Cs5ebY4V.js",
+  "traceDetailBytes": 10900,
+  "traceCss": [
+    "assets/TraceDetailView-DRm3eTNC.css"
+  ],
+  "checks": {
+    "tracePageDynamicEntry": "PASS",
+    "traceDetailDynamicEntry": "PASS",
+    "traceImplementationDeferred": "PASS",
+    "traceCssDeferred": "PASS",
+    "initialBundleBudget": "PASS"
+  }
+}
