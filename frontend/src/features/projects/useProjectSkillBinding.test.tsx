@@ -135,8 +135,39 @@ describe("useProjectSkillBinding", () => {
     const { result } = renderHook(() => useProjectSkillBinding("p1"), { wrapper: wrapperFor(client) });
 
     await waitFor(() => expect(result.current.error).toBeTruthy());
-    act(() => result.current.retry());
+    expect(result.current.errorKind).toBe("load");
+    await act(async () => {
+      await result.current.retry();
+    });
     await waitFor(() => expect(result.current.binding?.enabledSkills).toEqual(["s1"]));
     expect(result.current.error).toBeNull();
+    expect(result.current.errorKind).toBeNull();
+  });
+
+  it("retries a failed save with the last desired binding", async () => {
+    let serverBinding = binding([]);
+    fetchBindingMock.mockImplementation(() => Promise.resolve(serverBinding));
+    saveBindingMock
+      .mockRejectedValueOnce(new Error("save failed"))
+      .mockImplementation((_projectId, input) => {
+        serverBinding = binding(input.enabledSkills, input.defaultSkill);
+        return Promise.resolve(serverBinding);
+      });
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectSkillBinding("p1"), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.save(binding(["s1"], "s1")).catch(() => undefined);
+    });
+    await waitFor(() => expect(result.current.error).toBeTruthy());
+    expect(result.current.errorKind).toBe("save");
+
+    await act(async () => {
+      await result.current.retry();
+    });
+    await waitFor(() => expect(result.current.error).toBeNull());
+    expect(saveBindingMock).toHaveBeenLastCalledWith("p1", { enabledSkills: ["s1"], defaultSkill: "s1" });
+    expect(client.getQueryData<ProjectSkillBinding>(projectSkillBindingQueryKey("p1"))?.enabledSkills).toEqual(["s1"]);
   });
 });

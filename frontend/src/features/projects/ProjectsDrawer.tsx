@@ -213,7 +213,7 @@ export function ProjectsDrawer() {
           </ul>
         </section>
       )}
-      {active && <ProjectSkillBinding project={active} />}
+      {active && <ProjectSkillBinding key={active.id} project={active} />}
     </section>
   );
 }

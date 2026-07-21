@@ -7,14 +7,17 @@ import {
 } from "../../api/skillsApi";
 import { projectSkillBindingQueryKey } from "../../app/queryKeys";
 
+export type BindingErrorKind = "load" | "save" | null;
+
 export interface ProjectSkillBindingController {
   binding: ProjectSkillBinding | undefined;
   loading: boolean;
   refreshing: boolean;
   saving: boolean;
   error: unknown;
+  errorKind: BindingErrorKind;
   save(binding: ProjectSkillBinding): Promise<ProjectSkillBinding>;
-  retry(): void;
+  retry(): Promise<void>;
 }
 
 export function useProjectSkillBinding(projectId: string): ProjectSkillBindingController {
@@ -41,13 +44,27 @@ export function useProjectSkillBinding(projectId: string): ProjectSkillBindingCo
     },
   });
 
+  async function retry(): Promise<void> {
+    if (saveMutation.isError && saveMutation.variables) {
+      const desiredBinding = saveMutation.variables;
+      saveMutation.reset();
+      await saveMutation.mutateAsync(desiredBinding);
+      return;
+    }
+    await bindingQuery.refetch();
+  }
+
+  const error = bindingQuery.error ?? saveMutation.error;
+  const errorKind: BindingErrorKind = bindingQuery.error ? "load" : saveMutation.error ? "save" : null;
+
   return {
     binding: bindingQuery.data,
     loading: bindingQuery.isLoading,
     refreshing: bindingQuery.isFetching && !bindingQuery.isLoading,
     saving: saveMutation.isPending || saveMutation.isPaused,
-    error: bindingQuery.error ?? saveMutation.error,
+    error,
+    errorKind,
     save: saveMutation.mutateAsync,
-    retry: () => void bindingQuery.refetch(),
+    retry,
   };
 }
