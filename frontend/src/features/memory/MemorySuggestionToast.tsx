@@ -1,7 +1,9 @@
 import { useChat } from "../../contexts/ChatContext";
+import { useMemory } from "../../contexts/MemoryContext";
 
 export function MemorySuggestionToast() {
   const chat = useChat();
+  const memory = useMemory();
   const suggestion = chat.pendingMemorySuggestion;
   if (!suggestion) return null;
   return (
@@ -24,13 +26,19 @@ export function MemorySuggestionToast() {
           <button
             className="message-action primary"
             type="button"
+            disabled={memory.clearing || memory.saving}
             onClick={() => void chat.saveMemorySuggestion(suggestion.conflicts.map((conflict) => conflict.id))}
           >
             替换旧记忆
           </button>
         ) : (
-          <button className="message-action primary" type="button" onClick={() => void chat.saveMemorySuggestion()}>
-            保存
+          <button
+            className="message-action primary"
+            type="button"
+            disabled={memory.clearing || memory.saving}
+            onClick={() => void chat.saveMemorySuggestion()}
+          >
+            {memory.saving ? "保存中…" : "保存"}
           </button>
         )}
         <button className="message-action" type="button" onClick={chat.dismissMemorySuggestion}>暂不保存</button>

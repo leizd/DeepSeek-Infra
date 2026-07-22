@@ -47,6 +47,7 @@ vi.mock("../../contexts/ProjectsContext", () => ({
     uploadDocuments: vi.fn(() => Promise.resolve()),
     isRenamingProject: vi.fn(() => false),
     isRemovingProject: vi.fn(() => false),
+    isUploadingProject: vi.fn(() => false),
   }),
 }));
 

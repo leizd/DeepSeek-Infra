@@ -146,6 +146,7 @@ describe("useMemoryController", () => {
     expect(saveResult?.conflicts[0].id).toBe("old-1");
     expect(client.getQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY)).toBe(before);
     expect(listMemoriesMock).toHaveBeenCalledTimes(1);
+    expect(result.current.error).toBe("");
   });
 
   it("tracks concurrent memory removals independently", async () => {
@@ -184,6 +185,100 @@ describe("useMemoryController", () => {
     await act(async () => {
       resolvers.get("m2")?.();
       await second;
+    });
+  });
+
+  it("does not run clear while a memory removal is pending", async () => {
+    let resolveDelete!: () => void;
+    deleteMemoryMock.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveDelete = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useMemoryController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.memories).toHaveLength(2));
+
+    let removal!: Promise<void>;
+    let clearAction!: Promise<void>;
+    act(() => {
+      removal = result.current.remove("m1");
+      clearAction = result.current.clear();
+    });
+
+    await expect(clearAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    expect(clearMemoriesMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.hasPendingWrites).toBe(true));
+
+    await act(async () => {
+      resolveDelete();
+      await removal;
+    });
+  });
+
+  it("does not run clear while a memory save is pending", async () => {
+    let resolveSave!: (value: MemoryEntry) => void;
+    addMemoryMock.mockImplementation(
+      () => new Promise<MemoryEntry>((resolve) => {
+        resolveSave = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useMemoryController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.memories).toHaveLength(2));
+
+    let saveAction!: Promise<MemorySaveResult>;
+    let clearAction!: Promise<void>;
+    act(() => {
+      saveAction = result.current.save({ content: "新记忆" });
+      clearAction = result.current.clear();
+    });
+
+    await expect(clearAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    expect(clearMemoriesMock).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(result.current.saving).toBe(true);
+      expect(result.current.hasPendingWrites).toBe(true);
+    });
+
+    await act(async () => {
+      resolveSave(entry("m3", "新记忆"));
+      await saveAction;
+    });
+  });
+
+  it("blocks remove and save while clear is pending", async () => {
+    let resolveClear!: () => void;
+    clearMemoriesMock.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveClear = () => {
+          serverMemories = [];
+          resolve();
+        };
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useMemoryController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.memories).toHaveLength(2));
+
+    let clearAction!: Promise<void>;
+    let removeAction!: Promise<void>;
+    let saveAction!: Promise<MemorySaveResult>;
+    act(() => {
+      clearAction = result.current.clear();
+      removeAction = result.current.remove("m1");
+      saveAction = result.current.save({ content: "不能并发" });
+    });
+
+    await expect(removeAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    await expect(saveAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    expect(deleteMemoryMock).not.toHaveBeenCalled();
+    expect(addMemoryMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.clearing).toBe(true));
+
+    await act(async () => {
+      resolveClear();
+      await clearAction;
     });
   });
 });

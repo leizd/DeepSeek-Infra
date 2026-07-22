@@ -1,19 +1,19 @@
 {
   "schemaVersion": "a2a-external-peer-evidence.v1",
-  "version": "4.2.3",
-  "commit": "89f674f8",
-  "generatedAt": "2026-07-22T01:20:18Z",
+  "version": "4.2.4",
+  "commit": "0ecde75a",
+  "generatedAt": "2026-07-22T04:23:57Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
-  "gitSha": "89f674f8",
+  "gitSha": "0ecde75a",
   "gitDirty": true,
   "peer": {
     "name": "A2A Interop Peer",
-    "url": "http://127.0.0.1:54923",
-    "endpoint": "http://127.0.0.1:54923/a2a/agents/interop-peer",
+    "url": "http://127.0.0.1:62039",
+    "endpoint": "http://127.0.0.1:62039/a2a/agents/interop-peer",
     "type": "independent-process",
     "protocolVersion": "0.3.0"
   },
@@ -36,23 +36,23 @@
       "detail": "name=A2A Interop Peer protocol=0.3.0",
       "data": {
         "skills": 1,
-        "endpoint": "http://127.0.0.1:54923/a2a/agents/interop-peer"
+        "endpoint": "http://127.0.0.1:62039/a2a/agents/interop-peer"
       }
     },
     {
       "name": "a2a.message_send",
       "status": "pass",
-      "detail": "task=task_8c5e4ff8bc862d4649529e1d state=working",
+      "detail": "task=task_cf0466d93b7113b2bc53dd64 state=working",
       "data": {
-        "taskId": "task_8c5e4ff8bc862d4649529e1d"
+        "taskId": "task_cf0466d93b7113b2bc53dd64"
       }
     },
     {
       "name": "a2a.tasks_get",
       "status": "pass",
-      "detail": "task=task_8c5e4ff8bc862d4649529e1d",
+      "detail": "task=task_cf0466d93b7113b2bc53dd64",
       "data": {
-        "taskId": "task_8c5e4ff8bc862d4649529e1d"
+        "taskId": "task_cf0466d93b7113b2bc53dd64"
       }
     },
     {
@@ -66,7 +66,7 @@
           0,
           1
         ],
-        "taskId": "task_c9688ade8edf5eba05131205",
+        "taskId": "task_35ff04b5916ff1969a66ada0",
         "finalState": "completed"
       }
     },
@@ -81,7 +81,7 @@
           0,
           1
         ],
-        "taskId": "task_c9688ade8edf5eba05131205",
+        "taskId": "task_35ff04b5916ff1969a66ada0",
         "finalState": "completed"
       }
     },
@@ -96,7 +96,7 @@
           0,
           1
         ],
-        "taskId": "task_c9688ade8edf5eba05131205",
+        "taskId": "task_35ff04b5916ff1969a66ada0",
         "finalState": "completed"
       }
     },
@@ -106,15 +106,15 @@
       "detail": "2 tasks listed",
       "data": {
         "taskCount": 2,
-        "taskId": "task_8c5e4ff8bc862d4649529e1d"
+        "taskId": "task_cf0466d93b7113b2bc53dd64"
       }
     },
     {
       "name": "a2a.tasks_cancel",
       "status": "pass",
-      "detail": "task=task_16c4c8ff9c768277b923b9d3 state=canceling",
+      "detail": "task=task_9a87c8b8e8d4bc98d697db45 state=canceling",
       "data": {
-        "taskId": "task_16c4c8ff9c768277b923b9d3",
+        "taskId": "task_9a87c8b8e8d4bc98d697db45",
         "state": "canceling"
       }
     }

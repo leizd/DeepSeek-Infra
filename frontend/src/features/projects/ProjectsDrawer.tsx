@@ -84,6 +84,7 @@ export function ProjectsDrawer() {
   const [renameDraft, setRenameDraft] = useState("");
   if (overlay.activeOverlay !== "projects") return null;
   const active = projects.activeProject;
+  const activeUploading = active ? projects.isUploadingProject(active.id) : false;
 
   return (
     <section className="settings-drawer workspace-drawer" role="dialog" aria-modal="true" aria-label="项目">
@@ -117,60 +118,61 @@ export function ProjectsDrawer() {
         {projects.projects.map((project) => {
           const renaming = projects.isRenamingProject(project.id);
           const removing = projects.isRemovingProject(project.id);
+          const uploading = projects.isUploadingProject(project.id);
           return (
-          <div className={project.id === projects.activeProjectId ? "workspace-item active" : "workspace-item"} key={project.id}>
-            {renamingId === project.id ? (
-              <input
-                className="conversation-rename-input"
-                aria-label="重命名项目"
-                autoFocus
-                value={renameDraft}
-                onChange={(event) => setRenameDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    runUiAction(projects.rename(project.id, renameDraft), {
-                      onSuccess: () => setRenamingId(null),
-                    });
-                  }
-                  if (event.key === "Escape") setRenamingId(null);
-                }}
-                onBlur={() => {
-                  if (!renaming) setRenamingId(null);
-                }}
-              />
-            ) : (
-              <button className="workspace-open" type="button" onClick={() => projects.setActive(project.id === projects.activeProjectId ? "" : project.id)}>
-                <span>{project.name}</span>
-                <small>{project.documents.length} 个文档{project.id === projects.activeProjectId ? " · 已启用" : ""}</small>
-              </button>
-            )}
-            <div className="conversation-item-actions">
-              <button
-                className="conversation-tool"
-                type="button"
-                title="重命名"
-                aria-label={`重命名项目 ${project.name}`}
-                disabled={renaming || removing}
-                onClick={() => { setRenamingId(project.id); setRenameDraft(project.name); }}
-              >
-                ✎
-              </button>
-              <button
-                className="conversation-tool danger"
-                type="button"
-                title="删除"
-                aria-label={`删除项目 ${project.name}`}
-                disabled={removing || renaming}
-                onClick={() => {
-                  if (!window.confirm(`确定删除项目“${project.name}”？`)) return;
-                  runUiAction(projects.remove(project.id));
-                }}
-              >
-                <Icon name="close" />
-              </button>
+            <div className={project.id === projects.activeProjectId ? "workspace-item active" : "workspace-item"} key={project.id}>
+              {renamingId === project.id ? (
+                <input
+                  className="conversation-rename-input"
+                  aria-label="重命名项目"
+                  autoFocus
+                  value={renameDraft}
+                  onChange={(event) => setRenameDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      runUiAction(projects.rename(project.id, renameDraft), {
+                        onSuccess: () => setRenamingId(null),
+                      });
+                    }
+                    if (event.key === "Escape") setRenamingId(null);
+                  }}
+                  onBlur={() => {
+                    if (!renaming) setRenamingId(null);
+                  }}
+                />
+              ) : (
+                <button className="workspace-open" type="button" onClick={() => projects.setActive(project.id === projects.activeProjectId ? "" : project.id)}>
+                  <span>{project.name}</span>
+                  <small>{project.documents.length} 个文档{project.id === projects.activeProjectId ? " · 已启用" : ""}</small>
+                </button>
+              )}
+              <div className="conversation-item-actions">
+                <button
+                  className="conversation-tool"
+                  type="button"
+                  title="重命名"
+                  aria-label={`重命名项目 ${project.name}`}
+                  disabled={renaming || removing || uploading}
+                  onClick={() => { setRenamingId(project.id); setRenameDraft(project.name); }}
+                >
+                  ✎
+                </button>
+                <button
+                  className="conversation-tool danger"
+                  type="button"
+                  title="删除"
+                  aria-label={`删除项目 ${project.name}`}
+                  disabled={removing || renaming || uploading}
+                  onClick={() => {
+                    if (!window.confirm(`确定删除项目“${project.name}”？`)) return;
+                    runUiAction(projects.remove(project.id));
+                  }}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
             </div>
-          </div>
           );
         })}
       </div>
@@ -179,12 +181,12 @@ export function ProjectsDrawer() {
           <div className="project-documents-header">
             <h3>《{active.name}》的文档</h3>
             <label className="message-action project-upload-button">
-              {projects.uploading ? "上传中…" : "上传文档"}
+              {activeUploading ? "上传中…" : "上传文档"}
               <input
                 className="sr-only"
                 type="file"
                 multiple
-                disabled={projects.uploading}
+                disabled={activeUploading}
                 onChange={(event) => {
                   if (event.target.files?.length) runUiAction(projects.uploadDocuments(event.target.files));
                   event.target.value = "";

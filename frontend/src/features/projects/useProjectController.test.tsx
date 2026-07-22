@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PropsWithChildren } from "react";
 
 import type { Project } from "../../api/projectsApi";
+import { mutationKeys } from "../../app/mutationKeys";
 import { PROJECTS_QUERY_KEY } from "../../app/queryKeys";
 
 vi.mock("../../api/projectsApi", async (importOriginal) => {
@@ -287,6 +288,153 @@ describe("useProjectController", () => {
     rejectRename(failure);
     await expect(first).rejects.toBe(failure);
     await expect(duplicate).rejects.toBe(failure);
+  });
+
+  it("keeps binding failures local and preserves them during project recovery", async () => {
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    const bindingMutation = client.getMutationCache().build(client, {
+      mutationKey: mutationKeys.projectBinding.save("p1"),
+      mutationFn: async (_value: unknown) => {
+        throw new Error("绑定保存失败");
+      },
+    });
+    await act(async () => {
+      await bindingMutation.execute(undefined).catch(() => undefined);
+    });
+
+    expect(bindingMutation.state.status).toBe("error");
+    expect(result.current.error).toBe("");
+
+    await act(async () => {
+      await result.current.recover();
+    });
+    expect(client.getMutationCache().findAll({
+      mutationKey: mutationKeys.projectBinding.save("p1"),
+      exact: true,
+    })).toContain(bindingMutation);
+  });
+
+  it("preserves a pending removal and its pending UI state during recovery", async () => {
+    let resolveDelete!: () => void;
+    deleteProjectMock.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveDelete = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let removal!: Promise<void>;
+    act(() => {
+      removal = result.current.remove("p1");
+    });
+    await waitFor(() => expect(result.current.isRemovingProject("p1")).toBe(true));
+
+    await act(async () => {
+      await result.current.recover();
+    });
+    expect(result.current.isRemovingProject("p1")).toBe(true);
+    expect(client.getMutationCache().findAll({
+      mutationKey: mutationKeys.projectList.remove,
+      exact: true,
+      status: "pending",
+    })).toHaveLength(1);
+
+    await act(async () => {
+      resolveDelete();
+      await removal;
+    });
+  });
+
+  it("rejects a conflicting remove while the same project is being renamed", async () => {
+    let resolveRename!: (value: Project) => void;
+    renameProjectMock.mockImplementation(
+      () => new Promise<Project>((resolve) => {
+        resolveRename = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let renameAction!: Promise<void>;
+    let removeAction!: Promise<void>;
+    act(() => {
+      renameAction = result.current.rename("p1", "新名称");
+      removeAction = result.current.remove("p1");
+    });
+    await expect(removeAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    await waitFor(() => expect(renameProjectMock).toHaveBeenCalledTimes(1));
+    expect(deleteProjectMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveRename(project("p1", "新名称"));
+      await renameAction;
+    });
+  });
+
+  it("keeps an upload bound to its original project after the active project changes", async () => {
+    let resolveUpload!: (value: []) => void;
+    uploadProjectFilesMock.mockImplementation(
+      () => new Promise<[]>((resolve) => {
+        resolveUpload = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+    act(() => result.current.setActive("p1"));
+
+    let upload!: Promise<void>;
+    act(() => {
+      upload = result.current.uploadDocuments([new File(["x"], "a.txt")]);
+      result.current.setActive("p2");
+    });
+
+    await waitFor(() => expect(uploadProjectFilesMock).toHaveBeenCalledWith(
+      "p1",
+      [expect.any(File)],
+      { ocrEnabled: true, apiKey: "sk-test" },
+    ));
+    expect(result.current.isUploadingProject("p1")).toBe(true);
+    expect(result.current.isUploadingProject("p2")).toBe(false);
+    expect(result.current.uploading).toBe(false);
+
+    await act(async () => {
+      resolveUpload([]);
+      await upload;
+    });
+  });
+
+  it("blocks deletion while the target project is uploading", async () => {
+    let resolveUpload!: (value: []) => void;
+    uploadProjectFilesMock.mockImplementation(
+      () => new Promise<[]>((resolve) => {
+        resolveUpload = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+    act(() => result.current.setActive("p1"));
+
+    let upload!: Promise<void>;
+    let removal!: Promise<void>;
+    act(() => {
+      upload = result.current.uploadDocuments([new File(["x"], "a.txt")]);
+      removal = result.current.remove("p1");
+    });
+    await expect(removal).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    expect(deleteProjectMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveUpload([]);
+      await upload;
+    });
   });
 
   it("cancels a stale list read before applying a removal", async () => {

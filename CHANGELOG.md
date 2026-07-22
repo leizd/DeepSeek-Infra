@@ -5,6 +5,22 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.2.4] - Mutation Scope and Lifecycle Integrity
+
+### Frontend reliability
+
+- Separates Project list, Project binding, Skill list and Memory list Mutation ownership with exact key matching, so binding failures remain local to the binding component.
+- Makes recovery remove only failed owned mutations, preserving pending, paused and successful MutationCache records and their per-entity UI state.
+- Replaces operation-specific locks with entity lifecycle coordination: identical operations deduplicate, while conflicting Project and Skill operations are rejected without dispatch.
+- Binds upload variables to the initiating project, exposes per-project upload state, and blocks rename, removal and duplicate upload only for that target.
+- Promotes Memory save into MutationCache, treats expected conflicts as successful business outcomes, and makes clear exclusive against all save/remove writes.
+- Adds Hook and real-Chromium contracts for scope isolation, local binding errors, recovery preservation, Project/Skill lifecycle exclusion, stable upload targeting and Memory clear barriers.
+
+### Compatibility
+
+- Keeps the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates and Python fallback.
+- Adds no Provider, ChatContext, attachment-system, offline-persistence, lazy-loading, bundle-budget, visual-system or backend-protocol changes.
+
 ## [4.2.3] - Mutation Dispatch Safety
 
 ### Frontend reliability

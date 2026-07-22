@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "protocol-freeze.v1",
+  "version": "4.2.4",
+  "commit": "0ecde75aa987290d5f8937ddd709e285760d97b6",
+  "generatedAt": "2026-07-22T04:18:47Z",
+  "status": "PASS",
+  "testFile": "tests/test_4_0_protocol_contract.py",
+  "testCount": 5,
+  "checks": {
+    "endpoint_inventory": "PASS",
+    "schema_and_content_types": "PASS",
+    "payload_limits_and_error_codes": "PASS",
+    "fallback_and_business_ownership": "PASS",
+    "binary_magic_DSVRNK01_DSVRSP01": "PASS"
+  },
+  "command": [
+    "D:\\python\\python.exe",
+    "-m",
+    "pytest",
+    "--no-cov",
+    "-o",
+    "addopts=",
+    "-p",
+    "no:cacheprovider",
+    "--basetemp",
+    "D:\\deepseek\\artifacts\\pytest-protocol-contract",
+    "-v",
+    "tests/test_4_0_protocol_contract.py"
+  ]
+}

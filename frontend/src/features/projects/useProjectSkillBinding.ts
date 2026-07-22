@@ -5,6 +5,7 @@ import {
   saveProjectSkillBinding,
   type ProjectSkillBinding,
 } from "../../api/skillsApi";
+import { mutationKeys } from "../../app/mutationKeys";
 import { projectSkillBindingQueryKey } from "../../app/queryKeys";
 
 export type BindingErrorKind = "load" | "save" | null;
@@ -31,7 +32,7 @@ export function useProjectSkillBinding(projectId: string): ProjectSkillBindingCo
   });
 
   const saveMutation = useMutation({
-    mutationKey: [...queryKey, "save"],
+    mutationKey: mutationKeys.projectBinding.save(projectId),
     scope: { id: `project-skill-binding:${projectId}` },
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey });

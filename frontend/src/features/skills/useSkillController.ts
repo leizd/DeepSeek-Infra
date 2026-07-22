@@ -11,9 +11,10 @@ import {
   type Skill,
 } from "../../api/skillsApi";
 import { SKILLS_QUERY_KEY } from "../../app/queryKeys";
-import { mutationKeys } from "../../app/mutationKeys";
+import { mutationKeys, ownsMutationKey, SKILL_LIST_MUTATION_KEYS } from "../../app/mutationKeys";
+import { removeFailedMutations } from "../../app/mutationLifecycle";
 import { latestCacheMutationError, type MutationStateSnapshot } from "../../app/mutationErrors";
-import { useActionLocks } from "../../shared/useActionLocks";
+import { actionLockValue, useEntityActionLocks } from "../../shared/useEntityActionLocks";
 
 export { SKILLS_QUERY_KEY };
 
@@ -40,7 +41,7 @@ function errorText(reason: unknown, fallback: string): string {
 
 export function useSkillController(): SkillController {
   const queryClient = useQueryClient();
-  const runLocked = useActionLocks();
+  const runEntityAction = useEntityActionLocks();
   const skillsQuery = useQuery<Skill[]>({
     queryKey: SKILLS_QUERY_KEY,
     queryFn: ({ signal }) => listSkills({ signal }),
@@ -52,7 +53,7 @@ export function useSkillController(): SkillController {
   );
 
   const createMutation = useMutation({
-    mutationKey: mutationKeys.skills.create,
+    mutationKey: mutationKeys.skillList.create,
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: SKILLS_QUERY_KEY });
     },
@@ -61,7 +62,7 @@ export function useSkillController(): SkillController {
   });
 
   const updateMutation = useMutation({
-    mutationKey: mutationKeys.skills.update,
+    mutationKey: mutationKeys.skillList.update,
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: SKILLS_QUERY_KEY });
     },
@@ -70,15 +71,15 @@ export function useSkillController(): SkillController {
   });
 
   const updatingSkillIds = useMutationState<string>({
-    filters: { mutationKey: mutationKeys.skills.update, status: "pending" },
+    filters: { mutationKey: mutationKeys.skillList.update, exact: true, status: "pending" },
     select: (mutation) => (mutation.state.variables as { skillId?: string } | undefined)?.skillId ?? "",
   });
   const togglingSkillIds = useMutationState<string>({
-    filters: { mutationKey: mutationKeys.skills.toggle, status: "pending" },
+    filters: { mutationKey: mutationKeys.skillList.toggle, exact: true, status: "pending" },
     select: (mutation) => (mutation.state.variables as Skill | undefined)?.skillId ?? "",
   });
   const removingSkillIds = useMutationState<string>({
-    filters: { mutationKey: mutationKeys.skills.remove, status: "pending" },
+    filters: { mutationKey: mutationKeys.skillList.remove, exact: true, status: "pending" },
     select: (mutation) => (mutation.state.variables as string | undefined) ?? "",
   });
   const updatingSkillIdSet = useMemo(() => new Set(updatingSkillIds), [updatingSkillIds]);
@@ -93,19 +94,17 @@ export function useSkillController(): SkillController {
   }, [invalidate]);
 
   const recover = useCallback(async () => {
-    const cache = queryClient.getMutationCache();
-    for (const key of [mutationKeys.skills.create, mutationKeys.skills.update, mutationKeys.skills.toggle, mutationKeys.skills.remove]) {
-      cache.findAll({ mutationKey: key }).forEach((m) => cache.remove(m));
-    }
-    await invalidate();
-  }, [invalidate, queryClient]);
+    removeFailedMutations(queryClient, SKILL_LIST_MUTATION_KEYS);
+    await queryClient.refetchQueries({ queryKey: SKILLS_QUERY_KEY, type: "active" });
+  }, [queryClient]);
 
   const toggle = useCallback(
     async (skill: Skill) => {
-      await runLocked(`skill:toggle:${skill.skillId}`, async () => {
+      const entityKey = `skill:${skill.skillId}`;
+      const result = await runEntityAction(entityKey, "toggle", async () => {
         await queryClient.cancelQueries({ queryKey: SKILLS_QUERY_KEY });
         const mutation = queryClient.getMutationCache().build(queryClient, {
-          mutationKey: mutationKeys.skills.toggle,
+          mutationKey: mutationKeys.skillList.toggle,
           mutationFn: (s: Skill) => setSkillDisabled(s.skillId, !s.disabled),
           onSuccess: (_result, s) => {
             queryClient.setQueryData<Skill[]>(SKILLS_QUERY_KEY, (current) =>
@@ -116,15 +115,17 @@ export function useSkillController(): SkillController {
         });
         return mutation.execute(skill);
       });
+      actionLockValue(result, entityKey, "toggle");
     },
-    [invalidate, queryClient, runLocked],
+    [invalidate, queryClient, runEntityAction],
   );
   const remove = useCallback(
     async (skillId: string) => {
-      await runLocked(`skill:remove:${skillId}`, async () => {
+      const entityKey = `skill:${skillId}`;
+      const result = await runEntityAction(entityKey, "remove", async () => {
         await queryClient.cancelQueries({ queryKey: SKILLS_QUERY_KEY });
         const mutation = queryClient.getMutationCache().build(queryClient, {
-          mutationKey: mutationKeys.skills.remove,
+          mutationKey: mutationKeys.skillList.remove,
           mutationFn: (id: string) => deleteSkill(id),
           onSuccess: (_result, id) => {
             queryClient.setQueryData<Skill[]>(SKILLS_QUERY_KEY, (current) =>
@@ -135,8 +136,9 @@ export function useSkillController(): SkillController {
         });
         return mutation.execute(skillId);
       });
+      actionLockValue(result, entityKey, "remove");
     },
-    [invalidate, queryClient, runLocked],
+    [invalidate, queryClient, runEntityAction],
   );
   const create = useCallback(
     async (draft: SimpleSkillDraft) => {
@@ -146,13 +148,15 @@ export function useSkillController(): SkillController {
   );
   const update = useCallback(
     async (draft: SimpleSkillDraft & { skillId: string }) => {
-      await runLocked(`skill:update:${draft.skillId}`, () => updateMutation.mutateAsync(draft));
+      const entityKey = `skill:${draft.skillId}`;
+      const result = await runEntityAction(entityKey, "update", () => updateMutation.mutateAsync(draft));
+      actionLockValue(result, entityKey, "update");
     },
-    [runLocked, updateMutation],
+    [runEntityAction, updateMutation],
   );
 
   const mutationErrors = useMutationState<MutationStateSnapshot>({
-    filters: { predicate: (mutation) => { const key = mutation.options.mutationKey; return Array.isArray(key) && key.length >= 2 && key[0] === "skills"; } },
+    filters: { predicate: (mutation) => ownsMutationKey(mutation.options.mutationKey, SKILL_LIST_MUTATION_KEYS) },
     select: (mutation) => ({
       status: mutation.state.status,
       error: mutation.state.error,

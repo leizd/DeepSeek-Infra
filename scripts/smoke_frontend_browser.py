@@ -1076,6 +1076,296 @@ async def run_mutation_smoke(base_url: str) -> dict[str, str]:
     return checks
 
 
+async def run_mutation_lifecycle_smoke(base_url: str) -> dict[str, str]:
+    from playwright.async_api import expect
+    from playwright.async_api import async_playwright
+
+    checks: dict[str, str] = {}
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        context = await browser.new_context(service_workers="allow")
+        page_errors: list[str] = []
+
+        await context.add_init_script(
+            """
+            window.__mutationUnhandledRejections = [];
+            window.addEventListener('unhandledrejection', (event) => {
+              window.__mutationUnhandledRejections.push(String(event.reason));
+              event.preventDefault();
+            });
+            """
+        )
+
+        projects = [
+            {"id": "life-a", "name": "生命周期项目A", "documents": [], "createdAt": 1, "updatedAt": 1},
+            {"id": "life-b", "name": "生命周期项目B", "documents": [], "createdAt": 1, "updatedAt": 1},
+        ]
+        project_control = {"failNextList": False}
+        project_delete_calls: dict[str, int] = {}
+        project_delete_started = asyncio.Event()
+        project_delete_release = asyncio.Event()
+        project_rename_started = asyncio.Event()
+        project_rename_release = asyncio.Event()
+
+        async def mock_config(route: Any) -> None:
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "hasServerKey": True,
+                        "hasSearch": False,
+                        "defaultModel": "deepseek-v4-pro",
+                        "models": ["deepseek-v4-pro"],
+                        "modelRoutes": {},
+                        "uploadLimits": {"fileMaxBytes": 200_000_000, "requestMaxBytes": 220_000_000, "maxFiles": 8},
+                        "computerUrl": base_url,
+                        "phoneUrl": base_url,
+                    }
+                ),
+            )
+
+        async def mock_projects(route: Any) -> None:
+            body = route.request.post_data_json or {}
+            action = body.get("action", "list")
+            if action == "list":
+                if project_control["failNextList"]:
+                    project_control["failNextList"] = False
+                    await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "list failed"}))
+                    return
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"projects": projects}))
+                return
+            if action == "create":
+                created = {
+                    "id": "life-created",
+                    "name": str(body.get("name", "新项目")),
+                    "documents": [],
+                    "createdAt": 1,
+                    "updatedAt": 1,
+                }
+                projects.append(created)
+                project_control["failNextList"] = True
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"project": created}))
+                return
+            if action == "rename":
+                project_rename_started.set()
+                await project_rename_release.wait()
+                project_id = str(body.get("id", ""))
+                name = str(body.get("name", ""))
+                for project in projects:
+                    if project["id"] == project_id:
+                        project["name"] = name
+                        await route.fulfill(status=200, content_type="application/json", body=json.dumps({"project": project}))
+                        return
+            if action == "delete":
+                project_id = str(body.get("id", ""))
+                project_delete_calls[project_id] = project_delete_calls.get(project_id, 0) + 1
+                if project_id == "life-b":
+                    project_delete_started.set()
+                    await project_delete_release.wait()
+                projects[:] = [project for project in projects if project["id"] != project_id]
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+                return
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected project action"}))
+
+        binding_patch_calls = {"count": 0}
+
+        async def mock_binding(route: Any) -> None:
+            if route.request.method == "GET":
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"skills": {"enabledSkills": [], "defaultSkill": "", "recentSkills": [], "enabledPacks": []}}),
+                )
+                return
+            binding_patch_calls["count"] += 1
+            await route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "binding failed"}))
+
+        skills = [
+            {
+                "skillId": "life-skill",
+                "name": "生命周期技能",
+                "description": "",
+                "version": "1.0.0",
+                "systemPrompt": "原提示",
+                "builtin": False,
+                "disabled": False,
+                "updatedAt": "",
+            }
+        ]
+        skill_update_started = asyncio.Event()
+        skill_update_release = asyncio.Event()
+        skill_delete_calls = {"count": 0}
+
+        async def mock_skills(route: Any) -> None:
+            body = route.request.post_data_json or {}
+            action = body.get("action", "list")
+            if action == "list":
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "skills": skills}))
+                return
+            if action == "update":
+                skill_update_started.set()
+                await skill_update_release.wait()
+                skills[0]["name"] = str(body.get("patch", {}).get("name", skills[0]["name"]))
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"skill": skills[0]}))
+                return
+            if action == "delete":
+                skill_delete_calls["count"] += 1
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+                return
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected skill action"}))
+
+        upload_started = asyncio.Event()
+        upload_release = asyncio.Event()
+        upload_targets: list[str] = []
+
+        async def mock_project_upload(route: Any) -> None:
+            upload_targets.append(route.request.url)
+            upload_started.set()
+            await upload_release.wait()
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"documents": []}))
+
+        memories = [
+            {"id": "life-memory", "content": "生命周期记忆", "category": "fact", "scope": "global"},
+        ]
+        memory_delete_started = asyncio.Event()
+        memory_delete_release = asyncio.Event()
+        memory_clear_calls = {"count": 0}
+
+        async def mock_memory(route: Any) -> None:
+            if route.request.method == "GET":
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"memories": memories}))
+                return
+            body = route.request.post_data_json or {}
+            if body.get("action") == "deleteById":
+                memory_delete_started.set()
+                await memory_delete_release.wait()
+                memories.clear()
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+                return
+            if body.get("action") == "clear":
+                memory_clear_calls["count"] += 1
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+                return
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected memory action"}))
+
+        await context.route("**/api/config", mock_config)
+        await context.route("**/api/projects", mock_projects)
+        await context.route("**/api/project-files?projectId=*", mock_project_upload)
+        await context.route("**/api/workspace/projects/*/skills", mock_binding)
+        await context.route("**/api/skills", mock_skills)
+        await context.route("**/api/memory**", mock_memory)
+        page = await context.new_page()
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        await page.goto(base_url, wait_until="domcontentloaded")
+
+        await page.get_by_role("button", name="项目", exact=True).click()
+        await page.locator(".workspace-open", has_text="生命周期项目A").click()
+        await page.locator(".project-skill-options label", has_text="生命周期技能").locator("input").click()
+        await page.locator(".project-skill-binding .workspace-error").wait_for()
+        if binding_patch_calls["count"] != 1:
+            raise AssertionError("binding save failure did not reach the binding endpoint exactly once")
+        if await page.locator("section.settings-drawer > .workspace-error").count() != 0:
+            raise AssertionError("binding save error leaked into the project-list error region")
+        checks["mutationScopeIsolation"] = "PASS"
+        checks["bindingErrorRemainsLocal"] = "PASS"
+
+        await page.get_by_role("button", name="重命名项目 生命周期项目A").click()
+        rename_input = page.get_by_role("textbox", name="重命名项目")
+        await rename_input.fill("生命周期项目A-改名")
+        await page.evaluate(
+            """() => {
+              window.confirm = () => true;
+              const input = document.querySelector('input[aria-label="重命名项目"]');
+              const row = input?.closest('.workspace-item');
+              input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+              row?.querySelector('button[aria-label^="删除项目"]')?.click();
+            }"""
+        )
+        await asyncio.wait_for(project_rename_started.wait(), timeout=5)
+        await page.wait_for_timeout(100)
+        if project_delete_calls.get("life-a", 0) != 0:
+            raise AssertionError("project remove raced with an active rename")
+        project_rename_release.set()
+        await rename_input.wait_for(state="detached")
+        checks["projectLifecycleActionsExclusive"] = "PASS"
+
+        upload_input = page.locator(".project-upload-button input")
+        await upload_input.set_input_files({"name": "lifecycle.txt", "mimeType": "text/plain", "buffer": b"lifecycle"})
+        await asyncio.wait_for(upload_started.wait(), timeout=5)
+        project_a_delete = page.get_by_role("button", name="删除项目 生命周期项目A-改名")
+        await expect(project_a_delete).to_be_disabled(timeout=3000)
+        checks["projectUploadBlocksDeletion"] = "PASS"
+        await page.locator(".workspace-open", has_text="生命周期项目B").click()
+        if not upload_targets or "projectId=life-a" not in upload_targets[0]:
+            raise AssertionError(f"upload target changed with active project: {upload_targets}")
+        if await page.locator(".project-upload-button").get_by_text("上传中…").count() != 0:
+            raise AssertionError("project B inherited project A's uploading state")
+        if await page.locator(".project-upload-button input").is_disabled():
+            raise AssertionError("project B upload was disabled by project A's upload")
+        checks["projectUploadTargetStable"] = "PASS"
+        upload_release.set()
+        await page.wait_for_timeout(100)
+
+        await page.locator(".project-create-form input").fill("触发恢复")
+        await page.get_by_role("button", name="创建", exact=True).click()
+        await page.locator("section.settings-drawer > .workspace-error").wait_for()
+        page.once("dialog", lambda dialog: asyncio.create_task(dialog.accept()))
+        await page.get_by_role("button", name="删除项目 生命周期项目B").click()
+        await asyncio.wait_for(project_delete_started.wait(), timeout=5)
+        pending_delete = page.get_by_role("button", name="删除项目 生命周期项目B")
+        await expect(pending_delete).to_be_disabled(timeout=3000)
+        await page.locator("section.settings-drawer > .workspace-error").get_by_role("button", name="重新同步").click()
+        await page.locator("section.settings-drawer > .workspace-error").wait_for(state="detached")
+        if not await pending_delete.is_disabled():
+            raise AssertionError("project recovery removed a pending deletion from MutationCache")
+        checks["recoveryPreservesPendingWork"] = "PASS"
+        project_delete_release.set()
+        await pending_delete.wait_for(state="detached")
+
+        await page.get_by_role("button", name="关闭项目面板").click()
+        await page.get_by_role("button", name="技能", exact=True).click()
+        skill_card = page.locator(".skill-card", has_text="生命周期技能")
+        await skill_card.get_by_role("button", name="编辑").click()
+        await skill_card.get_by_role("textbox", name="技能名称").fill("生命周期技能-改名")
+        await skill_card.evaluate(
+            """card => {
+              window.confirm = () => true;
+              card.querySelector('form')?.requestSubmit();
+              [...card.querySelectorAll('button')].find(button => button.textContent?.trim() === '删除')?.click();
+            }"""
+        )
+        await asyncio.wait_for(skill_update_started.wait(), timeout=5)
+        await page.wait_for_timeout(100)
+        if skill_delete_calls["count"] != 0:
+            raise AssertionError("skill remove raced with an active update")
+        skill_update_release.set()
+        await page.locator(".skill-card", has_text="生命周期技能-改名").wait_for()
+        checks["skillLifecycleActionsExclusive"] = "PASS"
+
+        await page.get_by_role("button", name="关闭技能面板").click()
+        await page.get_by_role("button", name="记忆", exact=True).click()
+        memory_row = page.locator(".workspace-item", has_text="生命周期记忆")
+        await memory_row.get_by_role("button", name="删除这条记忆").click()
+        await asyncio.wait_for(memory_delete_started.wait(), timeout=5)
+        clear_button = page.get_by_role("button", name="全部清空")
+        await expect(clear_button).to_be_disabled(timeout=3000)
+        await clear_button.evaluate("button => { button.removeAttribute('disabled'); button.click(); }")
+        await page.wait_for_timeout(100)
+        if memory_clear_calls["count"] != 0:
+            raise AssertionError("memory clear raced with an active removal")
+        memory_delete_release.set()
+        await memory_row.wait_for(state="detached")
+        checks["memoryClearWriteBarrier"] = "PASS"
+
+        unhandled = await page.evaluate("() => window.__mutationUnhandledRejections")
+        if unhandled or page_errors:
+            raise AssertionError(f"mutation lifecycle smoke reported browser errors: {unhandled + page_errors}")
+        await context.close()
+        await browser.close()
+    return checks
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="write JSON evidence to this path")
@@ -1100,6 +1390,7 @@ def main() -> int:
         checks.update(asyncio.run(run_query_smoke(base_url)))
         checks.update(asyncio.run(run_recovery_smoke(base_url)))
         checks.update(asyncio.run(run_mutation_smoke(base_url)))
+        checks.update(asyncio.run(run_mutation_lifecycle_smoke(base_url)))
         payload = {
             "schemaVersion": 1,
             "version": VERSION,

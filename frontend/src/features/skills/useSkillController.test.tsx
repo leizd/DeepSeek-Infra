@@ -173,4 +173,33 @@ describe("useSkillController", () => {
       await second;
     });
   });
+
+  it("rejects removal while the same skill is being updated", async () => {
+    let resolveUpdate!: (value: Skill) => void;
+    updateSkillPromptMock.mockImplementation(
+      () => new Promise<Skill>((resolve) => {
+        resolveUpdate = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    let updateAction!: Promise<void>;
+    let removeAction!: Promise<void>;
+    act(() => {
+      updateAction = result.current.update({ skillId: "s1", name: "改名", description: "", systemPrompt: "x" });
+      removeAction = result.current.remove("s1");
+    });
+
+    await expect(removeAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    await waitFor(() => expect(updateSkillPromptMock).toHaveBeenCalledTimes(1));
+    expect(deleteSkillMock).not.toHaveBeenCalled();
+    expect(result.current.isUpdatingSkill("s1")).toBe(true);
+
+    await act(async () => {
+      resolveUpdate({ ...skill("s1"), name: "改名" });
+      await updateAction;
+    });
+  });
 });

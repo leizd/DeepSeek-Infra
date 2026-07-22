@@ -22,6 +22,8 @@ vi.mock("../../contexts/MemoryContext", () => ({
     loading: false,
     refreshing: false,
     clearing: false,
+    saving: false,
+    hasPendingWrites: false,
     error: "",
     refresh: refreshMock,
     remove: vi.fn(),
