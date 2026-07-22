@@ -1,0 +1,122 @@
+pageType: content
+background:
+  type: solid
+  color: "$bg"
+notes: 界面实录页：四张当前版本真实截图（Trace 瀑布图 / 多 Agent DAG / RAG 引用回链 / MCP 工具调用），2×2 等宽等高直角排布。
+elements:
+  # ===== 顶部文档轴 =====
+  - elementId: header-meta
+    elementType: text
+    bounds: [48, 16, 300, 14]
+    content:
+      style: "$headerMeta"
+      align: [left, middle]
+      wrap: false
+      text: DEEPSEEK INFRA
+  - elementId: header-page-label
+    elementType: text
+    bounds: [612, 16, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      align: [right, middle]
+      wrap: false
+      text: 实录 · 09 / 13
+  - elementId: header-rule
+    elementType: line
+    bounds: [48, 44, 864, 1]
+    viewBox: [864, 1]
+    points: "0,0.5 864,0.5"
+    border: {style: solid, width: 1, color: "$hairline"}
+  # ===== kicker 与页标题 =====
+  - elementId: kicker
+    elementType: text
+    bounds: [48, 60, 400, 16]
+    content:
+      style: "$kicker"
+      align: [left, middle]
+      wrap: false
+      text: 08 · 界面实录
+  - elementId: page-title
+    elementType: text
+    bounds: [48, 82, 800, 36]
+    content:
+      style: "$pageTitle"
+      align: [left, middle]
+      wrap: false
+      text: 眼见为实——当前版本真实界面
+  # ===== 2×2 截图（直角、contain 保全貌、1px hairline 边框） =====
+  - elementId: shot-trace
+    elementType: image
+    bounds: [48, 126, 410, 170]
+    src: "media/trace-waterfall.png"
+    fit: {mode: cover}
+    crop: {bottom: 0.38}
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: shot-agent-dag
+    elementType: image
+    bounds: [502, 126, 410, 170]
+    src: "media/agent-dag-run.png"
+    fit: {mode: cover}
+    crop: {bottom: 0.38}
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: shot-rag
+    elementType: image
+    bounds: [48, 322, 410, 170]
+    src: "media/rag-citation.png"
+    fit: {mode: cover}
+    crop: {bottom: 0.38}
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: shot-mcp
+    elementType: image
+    bounds: [502, 322, 410, 170]
+    src: "media/mcp-tool-call.png"
+    fit: {mode: cover}
+    crop: {bottom: 0.38}
+    border: {style: solid, width: 1, color: "$hairline"}
+  # ===== 图注（10px，名称 ink 加粗 + 说明 gray） =====
+  - elementId: cap-trace
+    elementType: text
+    bounds: [48, 300, 410, 14]
+    content:
+      fontSize: 10
+      fontFamily: MiSans
+      lineHeight: 1.4
+      align: [left, middle]
+      wrap: false
+      text: |
+        <p><span style="color:$ink"><strong>Trace 瀑布图</strong></span><span style="color:$gray">——每轮请求 run/span 全记录</span></p>
+  - elementId: cap-agent-dag
+    elementType: text
+    bounds: [502, 300, 410, 14]
+    content:
+      fontSize: 10
+      fontFamily: MiSans
+      lineHeight: 1.4
+      align: [left, middle]
+      wrap: false
+      text: |
+        <p><span style="color:$ink"><strong>多 Agent DAG</strong></span><span style="color:$gray">——Planner→Worker→Critic→Synthesizer</span></p>
+  - elementId: cap-rag
+    elementType: text
+    bounds: [48, 496, 410, 14]
+    content:
+      fontSize: 10
+      fontFamily: MiSans
+      lineHeight: 1.4
+      align: [left, middle]
+      wrap: false
+      text: |
+        <p><span style="color:$ink"><strong>RAG 引用回链</strong></span><span style="color:$gray">——检索结果带来源可核验</span></p>
+  - elementId: cap-mcp
+    elementType: text
+    bounds: [502, 496, 410, 14]
+    content:
+      fontSize: 10
+      fontFamily: MiSans
+      lineHeight: 1.4
+      align: [left, middle]
+      wrap: false
+      text: |
+        <p><span style="color:$ink"><strong>MCP 工具调用</strong></span><span style="color:$gray">——17 个本地工具标准协议暴露</span></p>

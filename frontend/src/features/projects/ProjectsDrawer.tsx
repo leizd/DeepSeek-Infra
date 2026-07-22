@@ -5,6 +5,7 @@ import { useFilePreview } from "../../contexts/FilePreviewContext";
 import { useProjects } from "../../contexts/ProjectsContext";
 import { useSkills } from "../../contexts/SkillsContext";
 import { Icon } from "../../shared/ui/Icon";
+import { runUiAction } from "../../shared/runUiAction";
 import { formatBytes } from "../attachments/attachmentMapper";
 import { useProjectSkillBinding } from "./useProjectSkillBinding";
 import type { Project } from "../../api/projectsApi";
@@ -16,14 +17,14 @@ function ProjectSkillBinding({ project }: { project: Project }) {
   const defaultSkill = binding.binding?.defaultSkill ?? "";
 
   function save(nextEnabled: string[], nextDefault: string) {
-    void binding
-      .save({
+    runUiAction(
+      binding.save({
         enabledSkills: nextEnabled,
         defaultSkill: nextDefault,
         recentSkills: binding.binding?.recentSkills ?? [],
         enabledPacks: binding.binding?.enabledPacks ?? [],
-      })
-      .catch(() => undefined);
+      }),
+    );
   }
 
   if (!skills.skills.length) return null;
@@ -33,7 +34,7 @@ function ProjectSkillBinding({ project }: { project: Project }) {
       {binding.error ? (
         <div className="workspace-error" role="alert">
           <span>{binding.error instanceof Error && binding.error.message ? binding.error.message : "绑定加载失败"}</span>
-          <button type="button" onClick={binding.retry}>重试</button>
+          <button type="button" onClick={() => runUiAction(binding.retry())}>重试</button>
         </div>
       ) : binding.loading ? (
         <p className="history-empty">加载绑定中…</p>
@@ -98,7 +99,7 @@ export function ProjectsDrawer() {
         onSubmit={(event) => {
           event.preventDefault();
           if (!name.trim()) return;
-          void projects.create(name).then(() => setName(""));
+          runUiAction(projects.create(name), { onSuccess: () => setName("") });
         }}
       >
         <input value={name} maxLength={60} placeholder="新项目名称" onChange={(event) => setName(event.target.value)} />
@@ -108,12 +109,15 @@ export function ProjectsDrawer() {
       {projects.error && (
         <div className="workspace-error" role="alert">
           <span>{projects.error}</span>
-          <button type="button" onClick={() => void projects.recover()}>重新同步</button>
+          <button type="button" onClick={() => runUiAction(projects.recover())}>重新同步</button>
         </div>
       )}
       <div className="workspace-list">
         {!projects.projects.length && <p className="history-empty">{projects.loading ? "加载中…" : "还没有项目"}</p>}
-        {projects.projects.map((project) => (
+        {projects.projects.map((project) => {
+          const renaming = projects.isRenamingProject(project.id);
+          const removing = projects.isRemovingProject(project.id);
+          return (
           <div className={project.id === projects.activeProjectId ? "workspace-item active" : "workspace-item"} key={project.id}>
             {renamingId === project.id ? (
               <input
@@ -124,12 +128,16 @@ export function ProjectsDrawer() {
                 onChange={(event) => setRenameDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
-                    void projects.rename(project.id, renameDraft);
-                    setRenamingId(null);
+                    event.preventDefault();
+                    runUiAction(projects.rename(project.id, renameDraft), {
+                      onSuccess: () => setRenamingId(null),
+                    });
                   }
                   if (event.key === "Escape") setRenamingId(null);
                 }}
-                onBlur={() => setRenamingId(null)}
+                onBlur={() => {
+                  if (!renaming) setRenamingId(null);
+                }}
               />
             ) : (
               <button className="workspace-open" type="button" onClick={() => projects.setActive(project.id === projects.activeProjectId ? "" : project.id)}>
@@ -143,7 +151,7 @@ export function ProjectsDrawer() {
                 type="button"
                 title="重命名"
                 aria-label={`重命名项目 ${project.name}`}
-                disabled={projects.renamingProjectId === project.id || projects.removingProjectId === project.id}
+                disabled={renaming || removing}
                 onClick={() => { setRenamingId(project.id); setRenameDraft(project.name); }}
               >
                 ✎
@@ -153,14 +161,18 @@ export function ProjectsDrawer() {
                 type="button"
                 title="删除"
                 aria-label={`删除项目 ${project.name}`}
-                disabled={projects.removingProjectId === project.id}
-                onClick={() => void projects.remove(project.id)}
+                disabled={removing || renaming}
+                onClick={() => {
+                  if (!window.confirm(`确定删除项目“${project.name}”？`)) return;
+                  runUiAction(projects.remove(project.id));
+                }}
               >
                 <Icon name="close" />
               </button>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
       {active && (
         <section className="project-documents" aria-label="项目文档">
@@ -174,7 +186,7 @@ export function ProjectsDrawer() {
                 multiple
                 disabled={projects.uploading}
                 onChange={(event) => {
-                  if (event.target.files?.length) void projects.uploadDocuments(event.target.files);
+                  if (event.target.files?.length) runUiAction(projects.uploadDocuments(event.target.files));
                   event.target.value = "";
                 }}
               />

@@ -147,4 +147,43 @@ describe("useMemoryController", () => {
     expect(client.getQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY)).toBe(before);
     expect(listMemoriesMock).toHaveBeenCalledTimes(1);
   });
+
+  it("tracks concurrent memory removals independently", async () => {
+    const resolvers = new Map<string, () => void>();
+    deleteMemoryMock.mockImplementation(
+      (memoryId: string) =>
+        new Promise<void>((resolve) => {
+          resolvers.set(memoryId, () => {
+            serverMemories = serverMemories.filter((item) => item.id !== memoryId);
+            resolve();
+          });
+        }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useMemoryController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.memories).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.remove("m1");
+      second = result.current.remove("m2");
+    });
+    await waitFor(() => {
+      expect(result.current.isRemovingMemory("m1")).toBe(true);
+      expect(result.current.isRemovingMemory("m2")).toBe(true);
+    });
+
+    await act(async () => {
+      resolvers.get("m1")?.();
+      await first;
+    });
+    await waitFor(() => expect(result.current.isRemovingMemory("m1")).toBe(false));
+    expect(result.current.isRemovingMemory("m2")).toBe(true);
+
+    await act(async () => {
+      resolvers.get("m2")?.();
+      await second;
+    });
+  });
 });

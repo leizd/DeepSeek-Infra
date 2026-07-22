@@ -134,4 +134,43 @@ describe("useSkillController", () => {
     expect(client.getQueryData<Skill[]>(SKILLS_QUERY_KEY)?.map((item) => item.skillId)).toEqual(["s1", "s-new"]);
     await waitFor(() => expect(listSkillsMock.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
+
+  it("tracks concurrent skill toggles independently", async () => {
+    const resolvers = new Map<string, () => void>();
+    setSkillDisabledMock.mockImplementation(
+      (skillId: string, disabled: boolean) =>
+        new Promise<void>((resolve) => {
+          resolvers.set(skillId, () => {
+            serverSkills = serverSkills.map((item) => (item.skillId === skillId ? { ...item, disabled } : item));
+            resolve();
+          });
+        }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.toggle(skill("s1"));
+      second = result.current.toggle(skill("s2", true));
+    });
+    await waitFor(() => {
+      expect(result.current.isTogglingSkill("s1")).toBe(true);
+      expect(result.current.isTogglingSkill("s2")).toBe(true);
+    });
+
+    await act(async () => {
+      resolvers.get("s1")?.();
+      await first;
+    });
+    await waitFor(() => expect(result.current.isTogglingSkill("s1")).toBe(false));
+    expect(result.current.isTogglingSkill("s2")).toBe(true);
+
+    await act(async () => {
+      resolvers.get("s2")?.();
+      await second;
+    });
+  });
 });

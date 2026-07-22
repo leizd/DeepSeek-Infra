@@ -1,0 +1,284 @@
+pageType: cover
+background:
+  type: solid
+  color: "$bg"
+elements:
+  # ---- 40px 网格肌理（封面签名工艺，专用色 #082D4F0D）----
+  - elementId: grid-v-01
+    elementType: line
+    bounds: [40, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-02
+    elementType: line
+    bounds: [80, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-03
+    elementType: line
+    bounds: [120, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-04
+    elementType: line
+    bounds: [160, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-05
+    elementType: line
+    bounds: [200, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-06
+    elementType: line
+    bounds: [240, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-07
+    elementType: line
+    bounds: [280, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-08
+    elementType: line
+    bounds: [320, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-09
+    elementType: line
+    bounds: [360, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-10
+    elementType: line
+    bounds: [400, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-11
+    elementType: line
+    bounds: [440, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-12
+    elementType: line
+    bounds: [480, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-13
+    elementType: line
+    bounds: [520, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-14
+    elementType: line
+    bounds: [560, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-15
+    elementType: line
+    bounds: [600, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-16
+    elementType: line
+    bounds: [640, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-17
+    elementType: line
+    bounds: [680, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-18
+    elementType: line
+    bounds: [720, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-19
+    elementType: line
+    bounds: [760, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-20
+    elementType: line
+    bounds: [800, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-21
+    elementType: line
+    bounds: [840, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-22
+    elementType: line
+    bounds: [880, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-v-23
+    elementType: line
+    bounds: [920, 0, 1, 540]
+    viewBox: [1, 540]
+    points: "0.5,0 0.5,540"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-01
+    elementType: line
+    bounds: [0, 40, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-02
+    elementType: line
+    bounds: [0, 80, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-03
+    elementType: line
+    bounds: [0, 120, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-04
+    elementType: line
+    bounds: [0, 160, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-05
+    elementType: line
+    bounds: [0, 200, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-06
+    elementType: line
+    bounds: [0, 240, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-07
+    elementType: line
+    bounds: [0, 280, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-08
+    elementType: line
+    bounds: [0, 320, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-09
+    elementType: line
+    bounds: [0, 360, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-10
+    elementType: line
+    bounds: [0, 400, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-11
+    elementType: line
+    bounds: [0, 440, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-12
+    elementType: line
+    bounds: [0, 480, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  - elementId: grid-h-13
+    elementType: line
+    bounds: [0, 520, 960, 1]
+    viewBox: [960, 1]
+    points: "0,0.5 960,0.5"
+    border: {style: solid, width: 1, color: "#082D4F0D"}
+  # ---- 右侧陶土大斜切（视觉签名，贯穿页高）----
+  - elementId: cover-slash
+    elementType: shape
+    bounds: [780, 0, 120, 540]
+    shapeName: parallelogram
+    fill: {type: solid, color: "$accent"}
+  # ---- 标题区锚点短竖线 ----
+  - elementId: cover-anchor
+    elementType: shape
+    bounds: [48, 210, 4, 62]
+    shapeName: rect
+    fill: {type: solid, color: "$accent"}
+  # ---- 文案区 ----
+  - elementId: cover-kicker
+    elementType: text
+    bounds: [72, 164, 460, 18]
+    content:
+      style: "$kicker"
+      letterSpacing: 3
+      wrap: false
+      align: [left, middle]
+      text: LOCAL-FIRST AGENTIC AI INFRA
+  - elementId: cover-title
+    elementType: text
+    bounds: [72, 204, 620, 74]
+    content:
+      style: "$display"
+      fontSize: 56
+      lineHeight: 1.15
+      wrap: false
+      align: [left, middle]
+      text: DeepSeek Infra
+  - elementId: cover-subtitle
+    elementType: text
+    bounds: [72, 292, 480, 24]
+    content:
+      fontSize: 16
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 本地优先的 Agentic AI 基础设施平台
+  - elementId: cover-lead
+    elementType: text
+    bounds: [72, 336, 640, 50]
+    content:
+      fontSize: 13
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.6
+      align: [left, top]
+      text: |
+        <p>LLM 网关 · 多 Agent DAG 运行时 · 本地 RAG · 工具策略引擎 · 端到端可观测</p>
+        <p>——以 MCP / A2A / OpenAI /v1 标准协议互操作</p>
+  - elementId: cover-meta
+    elementType: text
+    bounds: [72, 480, 560, 22]
+    content:
+      style: "$note"
+      wrap: false
+      align: [left, middle]
+      text: v4.0.3 · Python 3.10+ · MIT License · 数据不出端

@@ -1,0 +1,259 @@
+pageType: content
+background:
+  type: solid
+  color: "$bg"
+elements:
+  # ---- 顶部文档轴 ----
+  - elementId: header-left
+    elementType: text
+    bounds: [48, 13, 320, 18]
+    content:
+      style: "$headerMeta"
+      wrap: false
+      align: [left, middle]
+      text: DEEPSEEK INFRA
+  - elementId: header-right
+    elementType: text
+    bounds: [592, 13, 320, 18]
+    content:
+      style: "$note"
+      wrap: false
+      align: [right, middle]
+      text: 定位 · 02 / 13
+  - elementId: header-rule
+    elementType: line
+    bounds: [48, 44, 864, 1]
+    viewBox: [864, 1]
+    points: "0,0.5 864,0.5"
+    border: {style: solid, width: 1, color: "$hairline"}
+  # ---- kicker + 页标题 ----
+  - elementId: kicker
+    elementType: text
+    bounds: [48, 58, 320, 18]
+    content:
+      style: "$kicker"
+      wrap: false
+      align: [left, middle]
+      text: 01 · 项目定位
+  - elementId: page-title
+    elementType: text
+    bounds: [48, 80, 820, 40]
+    content:
+      style: "$pageTitle"
+      wrap: false
+      align: [left, middle]
+      text: 一套本机后端，把 Agentic AI 的整条链路装进私有工作区
+  # ---- 左区：定位正文（取自 content_brief §1）----
+  - elementId: lead-para
+    elementType: text
+    bounds: [48, 132, 500, 96]
+    content:
+      style: "$body"
+      lineHeight: 1.6
+      align: [left, top]
+      text: |
+        <p>DeepSeek Infra 是本地优先的 Agentic AI 基础设施平台——一套本机 FastAPI 后端，把 LLM 网关、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测与端云模型路由，组装成可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以 MCP / A2A / OpenAI /v1 标准协议对外互操作。</p>
+  # ---- 左区：卖点 01 ----
+  - elementId: sp1-num
+    elementType: text
+    bounds: [48, 246, 44, 36]
+    content:
+      style: "$display"
+      fontSize: 28
+      color: "$accent"
+      wrap: false
+      align: [left, middle]
+      text: "01"
+  - elementId: sp1-title
+    elementType: text
+    bounds: [100, 253, 320, 22]
+    content:
+      fontSize: 14
+      bold: true
+      color: "$ink"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 一套后端，多种形态
+  - elementId: sp1-desc
+    elementType: text
+    bounds: [100, 282, 448, 42]
+    content:
+      fontSize: 11
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p>同一份 Python 后端：桌面内嵌 WebView 本地窗口、</p>
+        <p>打包 Android APK，或作为本机 / 局域网服务启动。</p>
+  # ---- 左区：卖点 02 ----
+  - elementId: sp2-num
+    elementType: text
+    bounds: [48, 336, 44, 36]
+    content:
+      style: "$display"
+      fontSize: 28
+      color: "$accent"
+      wrap: false
+      align: [left, middle]
+      text: "02"
+  - elementId: sp2-title
+    elementType: text
+    bounds: [100, 343, 320, 22]
+    content:
+      fontSize: 14
+      bold: true
+      color: "$ink"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 本地优先，数据不出端
+  - elementId: sp2-desc
+    elementType: text
+    bounds: [100, 372, 448, 42]
+    content:
+      fontSize: 11
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p>对话历史、文件缓存、向量索引、长期记忆、追踪全在本机；</p>
+        <p>DeepSeek / Tavily API Key 可只存环境变量、不落库。</p>
+  # ---- 左区：卖点 03 ----
+  - elementId: sp3-num
+    elementType: text
+    bounds: [48, 426, 44, 36]
+    content:
+      style: "$display"
+      fontSize: 28
+      color: "$accent"
+      wrap: false
+      align: [left, middle]
+      text: "03"
+  - elementId: sp3-title
+    elementType: text
+    bounds: [100, 433, 320, 22]
+    content:
+      fontSize: 14
+      bold: true
+      color: "$ink"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 标准协议互操作 + 可观测
+  - elementId: sp3-desc
+    elementType: text
+    bounds: [100, 462, 448, 42]
+    content:
+      fontSize: 11
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p>OpenAI /v1 · MCP · A2A 三协议齐备，每轮请求生成 trace；</p>
+        <p>/metrics Prometheus 指标 + /healthz · /readyz 探针。</p>
+  # ---- 右区：协议三联清单 ----
+  - elementId: proto-label
+    elementType: text
+    bounds: [620, 132, 292, 18]
+    content:
+      style: "$note"
+      wrap: false
+      align: [left, middle]
+      text: 本机地址 · http://127.0.0.1:8000
+  - elementId: p1-path
+    elementType: text
+    bounds: [620, 156, 292, 26]
+    content:
+      fontSize: 18
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      letterSpacing: 1
+      wrap: false
+      align: [left, middle]
+      text: /v1
+  - elementId: p1-desc
+    elementType: text
+    bounds: [620, 186, 292, 38]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p>OpenAI 兼容网关：任意 SDK 的 base_url 指向本机，</p>
+        <p>流式与非流式齐备。</p>
+  - elementId: p1-sep
+    elementType: line
+    bounds: [620, 234, 292, 1]
+    viewBox: [292, 1]
+    points: "0,0.5 292,0.5"
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: p2-path
+    elementType: text
+    bounds: [620, 252, 292, 26]
+    content:
+      fontSize: 18
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      letterSpacing: 1
+      wrap: false
+      align: [left, middle]
+      text: /mcp
+  - elementId: p2-desc
+    elementType: text
+    bounds: [620, 282, 292, 38]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p>MCP Server：17 个本地工具经 JSON-RPC 2.0 暴露，</p>
+        <p>亦可桥接外部 MCP server。</p>
+  - elementId: p2-sep
+    elementType: line
+    bounds: [620, 330, 292, 1]
+    viewBox: [292, 1]
+    points: "0,0.5 292,0.5"
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: p3-path
+    elementType: text
+    bounds: [620, 348, 292, 26]
+    content:
+      fontSize: 18
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      letterSpacing: 1
+      wrap: false
+      align: [left, middle]
+      text: /a2a
+  - elementId: p3-desc
+    elementType: text
+    bounds: [620, 378, 292, 38]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p>Agent Mesh：每个本地 Agent 暴露 Agent Card，</p>
+        <p>任务生命周期完整，支持跨 Agent 委派。</p>
+  # ---- 底部注记 ----
+  - elementId: proto-note
+    elementType: text
+    bounds: [620, 476, 292, 18]
+    content:
+      style: "$note"
+      wrap: false
+      align: [left, middle]
+      text: 数据仅在你主动发往 DeepSeek / Tavily 时出端。

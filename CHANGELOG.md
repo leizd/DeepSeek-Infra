@@ -5,6 +5,22 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.2.3] - Mutation Dispatch Safety
+
+### Frontend reliability
+
+- Contains every rejected Project, Skill, Memory and project-binding UI action through the shared `runUiAction` dispatch boundary, including failed recovery attempts.
+- Assigns centralized mutation keys and derives per-entity pending state from the full TanStack MutationCache, so concurrent operations remain independently disabled until each settles.
+- Adds synchronous keyed locks for Project rename/remove, Skill update/toggle/remove and Memory removal/clear to suppress duplicate same-entity requests.
+- Preserves the project rename editor and draft after failure, and confirms destructive Project and custom Skill deletion before dispatch.
+- Cancels relevant reads before cache-writing mutations, then invalidates on settlement, preventing delayed stale snapshots from overwriting committed results.
+- Adds hook, component and eight real-Chromium contracts for rejection containment, draft preservation, concurrent pending state, duplicate suppression, destructive confirmation and stale-read cancellation.
+
+### Compatibility
+
+- Keeps the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates, and Python fallback.
+- Adds no provider-lifecycle, ChatContext, attachment-upload, offline-persistence, lazy-loading, bundle-budget, visual-system or backend-protocol changes.
+
 ## [4.2.2] - Query Recovery and Cache Coherence
 
 ### Frontend reliability

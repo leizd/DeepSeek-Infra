@@ -1,7 +1,7 @@
 {
   "version": "4.2.2",
-  "commit": "a7584868b4b8",
-  "generatedAt": "2026-07-21T03:15:53+00:00",
+  "commit": "8ea24876a39e",
+  "generatedAt": "2026-07-21T04:36:56+00:00",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -22,7 +22,7 @@
   },
   "details": {
     "report": {
-      "path": "evals\\reports\\skills-v4.2.2.json",
+      "path": "D:\\deepseek\\evals\\reports\\skills-v4.2.2.json",
       "summary": {
         "scope": "all",
         "skillCount": 18,

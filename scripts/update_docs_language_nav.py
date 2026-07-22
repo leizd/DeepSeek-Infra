@@ -24,10 +24,11 @@ SKIP_DIR_NAMES = {
     "output",
     "target",
 }
-SKIP_FILES = {Path("AGENTS.md")}
+SKIP_FILES = {Path("AGENTS.md"), Path("content_brief.md"), Path("plan.md")}
 SKIP_PREFIXES = {
     ("docs", "evidence"),
     ("evals", "reports"),
+    ("deepseek-infra-deck",),
 }
 
 

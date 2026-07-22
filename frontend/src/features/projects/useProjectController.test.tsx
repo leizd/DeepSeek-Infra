@@ -195,4 +195,130 @@ describe("useProjectController", () => {
     });
     await waitFor(() => expect(result.current.error).toBe(""));
   });
+
+  it("tracks concurrent removals independently", async () => {
+    const resolvers = new Map<string, () => void>();
+    deleteProjectMock.mockImplementation(
+      (projectId: string) =>
+        new Promise<void>((resolve) => {
+          resolvers.set(projectId, () => {
+            serverProjects = serverProjects.filter((item) => item.id !== projectId);
+            resolve();
+          });
+        }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.remove("p1");
+      second = result.current.remove("p2");
+    });
+
+    await waitFor(() => {
+      expect(result.current.isRemovingProject("p1")).toBe(true);
+      expect(result.current.isRemovingProject("p2")).toBe(true);
+    });
+
+    await act(async () => {
+      resolvers.get("p1")?.();
+      await first;
+    });
+    await waitFor(() => expect(result.current.isRemovingProject("p1")).toBe(false));
+    expect(result.current.isRemovingProject("p2")).toBe(true);
+
+    await act(async () => {
+      resolvers.get("p2")?.();
+      await second;
+    });
+    await waitFor(() => expect(result.current.isRemovingProject("p2")).toBe(false));
+  });
+
+  it("suppresses duplicate removal of the same project synchronously", async () => {
+    let resolveDelete!: () => void;
+    deleteProjectMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve;
+        }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let duplicate!: Promise<void>;
+    act(() => {
+      first = result.current.remove("p1");
+      duplicate = result.current.remove("p1");
+    });
+    await waitFor(() => expect(deleteProjectMock).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      resolveDelete();
+      await Promise.all([first, duplicate]);
+    });
+  });
+
+  it("shares the original failure with a duplicate rename call", async () => {
+    let rejectRename!: (reason: Error) => void;
+    renameProjectMock.mockImplementation(
+      () =>
+        new Promise<Project>((_resolve, reject) => {
+          rejectRename = reject;
+        }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let duplicate!: Promise<void>;
+    act(() => {
+      first = result.current.rename("p1", "新名字");
+      duplicate = result.current.rename("p1", "新名字");
+    });
+    await waitFor(() => expect(renameProjectMock).toHaveBeenCalledTimes(1));
+
+    const failure = new Error("rename failed");
+    rejectRename(failure);
+    await expect(first).rejects.toBe(failure);
+    await expect(duplicate).rejects.toBe(failure);
+  });
+
+  it("cancels a stale list read before applying a removal", async () => {
+    const staleSnapshot = [...serverProjects];
+    let resolveStaleRead!: (projects: Project[]) => void;
+    listProjectsMock
+      .mockImplementationOnce(() => Promise.resolve([...serverProjects]))
+      .mockImplementationOnce(
+        () =>
+          new Promise<Project[]>((resolve) => {
+            resolveStaleRead = resolve;
+          }),
+      )
+      .mockImplementation(() => Promise.resolve([...serverProjects]));
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let refreshPromise!: Promise<void>;
+    act(() => {
+      refreshPromise = result.current.refresh();
+    });
+    await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      await result.current.remove("p1");
+      await refreshPromise;
+    });
+    resolveStaleRead(staleSnapshot);
+
+    await waitFor(() => {
+      expect(client.getQueryData<Project[]>(PROJECTS_QUERY_KEY)?.map((item) => item.id)).toEqual(["p2"]);
+    });
+  });
 });

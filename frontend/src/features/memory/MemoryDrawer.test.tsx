@@ -21,10 +21,13 @@ vi.mock("../../contexts/MemoryContext", () => ({
     memories: [],
     loading: false,
     refreshing: false,
+    clearing: false,
     error: "",
     refresh: refreshMock,
     remove: vi.fn(),
     clear: vi.fn(),
+    recover: vi.fn(),
+    isRemovingMemory: vi.fn(() => false),
     save: vi.fn(),
   }),
 }));

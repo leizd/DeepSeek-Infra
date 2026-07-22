@@ -1,6 +1,7 @@
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useMemory } from "../../contexts/MemoryContext";
 import { Icon } from "../../shared/ui/Icon";
+import { runUiAction } from "../../shared/runUiAction";
 
 const CATEGORY_LABELS: Record<string, string> = {
   preference: "偏好",
@@ -34,7 +35,7 @@ export function MemoryDrawer() {
           type="button"
           disabled={!memory.memories.length || memory.clearing}
           onClick={() => {
-            if (window.confirm("确定清空全部长期记忆？")) void memory.clear();
+            if (window.confirm("确定清空全部长期记忆？")) runUiAction(memory.clear());
           }}
         >
           {memory.clearing ? "清空中…" : "全部清空"}
@@ -43,7 +44,7 @@ export function MemoryDrawer() {
       {memory.error && (
         <div className="workspace-error" role="alert">
           <span>{memory.error}</span>
-          <button type="button" onClick={() => void memory.recover()}>重新同步</button>
+          <button type="button" onClick={() => runUiAction(memory.recover())}>重新同步</button>
         </div>
       )}
       <div className="workspace-list">
@@ -60,8 +61,8 @@ export function MemoryDrawer() {
                 type="button"
                 title="删除"
                 aria-label="删除这条记忆"
-                disabled={memory.removingMemoryId === entry.id}
-                onClick={() => void memory.remove(entry.id)}
+                disabled={memory.isRemovingMemory(entry.id)}
+                onClick={() => runUiAction(memory.remove(entry.id))}
               >
                 <Icon name="close" />
               </button>

@@ -1,0 +1,213 @@
+pageType: content
+background:
+  type: solid
+  color: "$bg"
+notes: 版本演进时间线：v3.3.0 ADR-0040 确立 Python-first hybrid 合同，到 v4.0.3 React 聊天纵切片；主线是"可选加速、永不破坏回退"。
+elements:
+  # ---- 顶部文档轴 ----
+  - elementId: header-left
+    elementType: text
+    bounds: [48, 16, 300, 14]
+    content:
+      style: "$headerMeta"
+      align: [left, middle]
+      wrap: false
+      text: DEEPSEEK INFRA
+  - elementId: header-right
+    elementType: text
+    bounds: [612, 16, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      align: [right, middle]
+      wrap: false
+      text: 演进 · 11 / 13
+  - elementId: header-rule
+    elementType: shape
+    bounds: [48, 44, 864, 1]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+
+  # ---- kicker + 页标题 ----
+  - elementId: kicker
+    elementType: text
+    bounds: [48, 60, 400, 16]
+    content:
+      style: "$kicker"
+      align: [left, middle]
+      wrap: false
+      text: 10 · 版本演进
+  - elementId: page-title
+    elementType: text
+    bounds: [48, 82, 864, 36]
+    content:
+      style: "$pageTitle"
+      align: [left, middle]
+      wrap: false
+      text: 从 v3.3 到 v4.0.3——一条「可选加速、永不破坏回退」的路
+
+  # ---- 时间线主轴 ----
+  - elementId: timeline-axis
+    elementType: line
+    bounds: [60, 289, 840, 2]
+    viewBox: [840, 2]
+    points: "0,1 840,1"
+    curve: sharp
+    arrow: [null, arrow]
+    border: {style: solid, width: 1, color: "$structure"}
+
+  # ---- 节点（菱形；当前版本放大 + 信号橙） ----
+  - elementId: node-1
+    elementType: shape
+    bounds: [104, 284, 12, 12]
+    shapeName: diamond
+    fill: {type: solid, color: "$structure"}
+  - elementId: node-2
+    elementType: shape
+    bounds: [229, 284, 12, 12]
+    shapeName: diamond
+    fill: {type: solid, color: "$structure"}
+  - elementId: node-3
+    elementType: shape
+    bounds: [354, 284, 12, 12]
+    shapeName: diamond
+    fill: {type: solid, color: "$structure"}
+  - elementId: node-4
+    elementType: shape
+    bounds: [474, 284, 12, 12]
+    shapeName: diamond
+    fill: {type: solid, color: "$structure"}
+  - elementId: node-5
+    elementType: shape
+    bounds: [599, 284, 12, 12]
+    shapeName: diamond
+    fill: {type: solid, color: "$structure"}
+  - elementId: node-6
+    elementType: shape
+    bounds: [724, 284, 12, 12]
+    shapeName: diamond
+    fill: {type: solid, color: "$structure"}
+  - elementId: node-7
+    elementType: shape
+    bounds: [841, 281, 18, 18]
+    shapeName: diamond
+    fill: {type: solid, color: "$accentStrong"}
+
+  # ---- 节点与标签之间的细 tick ----
+  - elementId: tick-1
+    elementType: shape
+    bounds: [110, 258, 1, 22]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: tick-2
+    elementType: shape
+    bounds: [235, 300, 1, 22]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: tick-3
+    elementType: shape
+    bounds: [360, 258, 1, 22]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: tick-4
+    elementType: shape
+    bounds: [480, 300, 1, 22]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: tick-5
+    elementType: shape
+    bounds: [605, 258, 1, 22]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: tick-6
+    elementType: shape
+    bounds: [730, 300, 1, 22]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: tick-7
+    elementType: shape
+    bounds: [850, 258, 1, 22]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+
+  # ---- 节点标签（上下交替） ----
+  - elementId: label-1
+    elementType: text
+    bounds: [48, 184, 140, 72]
+    content:
+      align: [center, bottom]
+      lineHeight: 1.35
+      text: |
+        <p><span style="font-size:13px;color:$ink;"><strong>v3.3.0</strong></span></p>
+        <p style="margin-top:2px"><span style="font-size:10px;color:$gray;">ADR-0040 确立</span></p>
+        <p><span style="font-size:10px;color:$gray;">Python-first hybrid 合同</span></p>
+  - elementId: label-2
+    elementType: text
+    bounds: [160, 326, 150, 72]
+    content:
+      align: [center, top]
+      lineHeight: 1.35
+      text: |
+        <p><span style="font-size:13px;color:$ink;"><strong>v3.3.2</strong></span></p>
+        <p style="margin-top:2px"><span style="font-size:10px;color:$gray;">覆盖率门禁 90% → 95%</span></p>
+  - elementId: label-3
+    elementType: text
+    bounds: [250, 184, 220, 72]
+    content:
+      align: [center, bottom]
+      lineHeight: 1.35
+      text: |
+        <p><span style="font-size:13px;color:$ink;"><strong>v3.5 – 3.10</strong></span></p>
+        <p style="margin-top:2px"><span style="font-size:10px;color:$gray;">Rust 委托逐版本落地：</span></p>
+        <p><span style="font-size:10px;color:$gray;">Gateway · MCP · RAG · binary · 缓存</span></p>
+  - elementId: label-4
+    elementType: text
+    bounds: [405, 326, 150, 72]
+    content:
+      align: [center, top]
+      lineHeight: 1.35
+      text: |
+        <p><span style="font-size:13px;color:$ink;"><strong>v4.0.0</strong></span></p>
+        <p style="margin-top:2px"><span style="font-size:10px;color:$gray;">Hybrid 稳定版</span></p>
+        <p><span style="font-size:10px;color:$gray;">冻结十端点协议合同</span></p>
+  - elementId: label-5
+    elementType: text
+    bounds: [530, 184, 150, 72]
+    content:
+      align: [center, bottom]
+      lineHeight: 1.35
+      text: |
+        <p><span style="font-size:13px;color:$ink;"><strong>v4.0.1</strong></span></p>
+        <p style="margin-top:2px"><span style="font-size:10px;color:$gray;">前端安全加固：严格 CSP</span></p>
+        <p><span style="font-size:10px;color:$gray;">Key 不落 localStorage</span></p>
+  - elementId: label-6
+    elementType: text
+    bounds: [655, 326, 150, 72]
+    content:
+      align: [center, top]
+      lineHeight: 1.35
+      text: |
+        <p><span style="font-size:13px;color:$ink;"><strong>v4.0.2</strong></span></p>
+        <p style="margin-top:2px"><span style="font-size:10px;color:$gray;">React 19 + TS + Vite</span></p>
+        <p><span style="font-size:10px;color:$gray;">落地 /ui/ 应用</span></p>
+  - elementId: label-7
+    elementType: text
+    bounds: [770, 184, 142, 72]
+    content:
+      align: [center, bottom]
+      lineHeight: 1.35
+      text: |
+        <p><span style="font-size:13px;color:$ink;"><strong>v4.0.3</strong></span></p>
+        <p style="margin-top:2px"><span style="font-size:10px;color:$gray;">React 聊天纵切片</span></p>
+        <p><span style="font-size:10px;color:$gray;">当前版本</span></p>
+
+  # ---- 底部注记 ----
+  - elementId: bottom-note
+    elementType: text
+    bounds: [48, 464, 864, 14]
+    content:
+      style: "$note"
+      align: [left, middle]
+      wrap: false
+      text: 每个 Rust 委托都带 parity 语料与 Python fallback；逐版本记录见 CHANGELOG.md。

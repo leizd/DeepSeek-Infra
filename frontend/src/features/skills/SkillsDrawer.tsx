@@ -4,6 +4,7 @@ import type { SimpleSkillDraft, Skill } from "../../api/skillsApi";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useSkills } from "../../contexts/SkillsContext";
 import { Icon } from "../../shared/ui/Icon";
+import { runUiAction } from "../../shared/runUiAction";
 
 const emptyDraft: SimpleSkillDraft = { name: "", description: "", systemPrompt: "" };
 
@@ -27,7 +28,7 @@ function SkillForm({
         event.preventDefault();
         if (!draft.name.trim() || !draft.systemPrompt.trim()) return;
         setBusy(true);
-        void onSubmit(draft).finally(() => setBusy(false));
+        runUiAction(onSubmit(draft), { onSettled: () => setBusy(false) });
       }}
     >
       <input
@@ -65,8 +66,9 @@ function SkillForm({
 function SkillCard({ skill }: { skill: Skill }) {
   const skills = useSkills();
   const [editing, setEditing] = useState(false);
-  const toggling = skills.togglingSkillId === skill.skillId;
-  const removing = skills.removingSkillId === skill.skillId;
+  const updating = skills.isUpdatingSkill(skill.skillId);
+  const toggling = skills.isTogglingSkill(skill.skillId);
+  const removing = skills.isRemovingSkill(skill.skillId);
   return (
     <li className={skill.disabled ? "skill-card disabled" : "skill-card"}>
       <div className="skill-card-header">
@@ -75,13 +77,21 @@ function SkillCard({ skill }: { skill: Skill }) {
           {skill.description && <p>{skill.description}</p>}
         </div>
         <div className="conversation-item-actions">
-          <button className="message-action" type="button" disabled={toggling || removing} onClick={() => void skills.toggle(skill)}>
+          <button className="message-action" type="button" disabled={toggling || removing || updating} onClick={() => runUiAction(skills.toggle(skill))}>
             {toggling ? "…" : skill.disabled ? "启用" : "禁用"}
           </button>
           {!skill.builtin && (
             <>
-              <button className="message-action" type="button" disabled={removing} onClick={() => setEditing((value) => !value)}>编辑</button>
-              <button className="message-action" type="button" disabled={removing || toggling} onClick={() => void skills.remove(skill.skillId)}>
+              <button className="message-action" type="button" disabled={removing || toggling || updating} onClick={() => setEditing((value) => !value)}>编辑</button>
+              <button
+                className="message-action"
+                type="button"
+                disabled={removing || toggling || updating}
+                onClick={() => {
+                  if (!window.confirm(`确定删除技能“${skill.name}”？`)) return;
+                  runUiAction(skills.remove(skill.skillId));
+                }}
+              >
                 {removing ? "…" : "删除"}
               </button>
             </>
@@ -150,7 +160,7 @@ export function SkillsDrawer() {
       {skills.error && (
         <div className="workspace-error" role="alert">
           <span>{skills.error}</span>
-          <button type="button" onClick={() => void skills.recover()}>重新同步</button>
+          <button type="button" onClick={() => runUiAction(skills.recover())}>重新同步</button>
         </div>
       )}
       <h3 className="workspace-section-title">自定义</h3>

@@ -33,6 +33,9 @@ export function useProjectSkillBinding(projectId: string): ProjectSkillBindingCo
   const saveMutation = useMutation({
     mutationKey: [...queryKey, "save"],
     scope: { id: `project-skill-binding:${projectId}` },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey });
+    },
     mutationFn: (binding: ProjectSkillBinding) =>
       saveProjectSkillBinding(projectId, {
         enabledSkills: binding.enabledSkills,
@@ -40,8 +43,8 @@ export function useProjectSkillBinding(projectId: string): ProjectSkillBindingCo
       }),
     onSuccess: (binding) => {
       queryClient.setQueryData(queryKey, binding);
-      void queryClient.invalidateQueries({ queryKey });
     },
+    onSettled: () => void queryClient.invalidateQueries({ queryKey }),
   });
 
   async function retry(): Promise<void> {

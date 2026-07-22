@@ -1,0 +1,283 @@
+pageType: content
+background:
+  type: solid
+  color: "$bg"
+elements:
+  # ===== 顶部文档轴 =====
+  - elementId: header-doc-axis
+    elementType: text
+    bounds: [48, 16, 300, 14]
+    content:
+      style: "$headerMeta"
+      wrap: false
+      align: [left, middle]
+      text: DEEPSEEK INFRA
+  - elementId: header-page-tag
+    elementType: text
+    bounds: [612, 16, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [right, middle]
+      text: 安全 · 07 / 13
+  - elementId: header-rule
+    elementType: line
+    bounds: [48, 44, 864, 2]
+    viewBox: [864, 2]
+    points: "0,1 864,1"
+    border: {style: solid, width: 1, color: "$hairline"}
+
+  # ===== kicker + 页标题 =====
+  - elementId: kicker
+    elementType: text
+    bounds: [48, 60, 400, 16]
+    content:
+      style: "$kicker"
+      wrap: false
+      align: [left, middle]
+      text: 06 · 安全设计
+  - elementId: page-title
+    elementType: text
+    bounds: [48, 80, 700, 36]
+    content:
+      style: "$pageTitle"
+      wrap: false
+      align: [left, middle]
+      text: 四道纵深防线，逐次生效
+
+  # ===== 左区：纵深防线纵向流图 =====
+  # 顶部：不可信输入标注（accentStrong，本页唯一）
+  - elementId: untrusted-input-box
+    elementType: shape
+    bounds: [164, 130, 280, 26]
+    shapeName: rect
+    fill: {type: solid, color: "$accentStrong"}
+  - elementId: untrusted-input-label
+    elementType: text
+    bounds: [164, 130, 280, 26]
+    content:
+      fontSize: 10
+      bold: true
+      color: "$panel"
+      fontFamily: MiSans
+      wrap: false
+      align: [center, middle]
+      text: 不可信输入：网页 / 文件 / 工具结果
+
+  # 箭头 1（输入 → 防线 01）
+  - elementId: flow-arrow-1
+    elementType: line
+    bounds: [303, 158, 2, 16]
+    viewBox: [2, 16]
+    points: "1,0 1,16"
+    arrow: [null, arrow]
+    border: {style: solid, width: 2, color: "$accent"}
+  - elementId: flow-arrow-note
+    elementType: text
+    bounds: [318, 156, 80, 16]
+    content:
+      fontSize: 10
+      color: "$accent"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 逐次生效
+
+  # 防线 01：Tool Policy Engine
+  - elementId: defense-1-box
+    elementType: shape
+    bounds: [48, 174, 512, 58]
+    shapeName: rect
+    fill: {type: solid, color: "$panel"}
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: defense-1-name
+    elementType: text
+    bounds: [64, 182, 480, 16]
+    content:
+      fontSize: 12
+      bold: true
+      color: "$ink"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: |
+        <p><span style="color:$accent">01</span>　Tool Policy Engine</p>
+  - elementId: defense-1-points
+    elementType: text
+    bounds: [64, 200, 484, 28]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        schema 校验 · 角色能力切片 · SSRF / 路径越界 / 敏感写入拦截 · 人工确认 · .tool-audit 审计
+
+  # 箭头 2
+  - elementId: flow-arrow-2
+    elementType: line
+    bounds: [303, 234, 2, 16]
+    viewBox: [2, 16]
+    points: "1,0 1,16"
+    arrow: [null, arrow]
+    border: {style: solid, width: 2, color: "$accent"}
+
+  # 防线 02：Context Taint Firewall
+  - elementId: defense-2-box
+    elementType: shape
+    bounds: [48, 250, 512, 58]
+    shapeName: rect
+    fill: {type: solid, color: "$panel"}
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: defense-2-name
+    elementType: text
+    bounds: [64, 258, 480, 16]
+    content:
+      fontSize: 12
+      bold: true
+      color: "$ink"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: |
+        <p><span style="color:$accent">02</span>　Context Taint Firewall</p>
+  - elementId: defense-2-points
+    elementType: text
+    bounds: [64, 276, 484, 28]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        来源信任打标 · 注入 / 外泄 / 工具指令扫描 · 污染轮高危工具升级人工确认
+
+  # 箭头 3
+  - elementId: flow-arrow-3
+    elementType: line
+    bounds: [303, 310, 2, 16]
+    viewBox: [2, 16]
+    points: "1,0 1,16"
+    arrow: [null, arrow]
+    border: {style: solid, width: 2, color: "$accent"}
+
+  # 防线 03：执行沙箱
+  - elementId: defense-3-box
+    elementType: shape
+    bounds: [48, 326, 512, 58]
+    shapeName: rect
+    fill: {type: solid, color: "$panel"}
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: defense-3-name
+    elementType: text
+    bounds: [64, 334, 480, 16]
+    content:
+      fontSize: 12
+      bold: true
+      color: "$ink"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: |
+        <p><span style="color:$accent">03</span>　执行沙箱</p>
+  - elementId: defense-3-points
+    elementType: text
+    bounds: [64, 352, 484, 28]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        python_eval 隔离子进程 + 数学 AST + 2s 超时；fetch_url 拒内网、限 2MB
+
+  # 箭头 4
+  - elementId: flow-arrow-4
+    elementType: line
+    bounds: [303, 386, 2, 16]
+    viewBox: [2, 16]
+    points: "1,0 1,16"
+    arrow: [null, arrow]
+    border: {style: solid, width: 2, color: "$accent"}
+
+  # 防线 04：硬拒绝与脱敏
+  - elementId: defense-4-box
+    elementType: shape
+    bounds: [48, 402, 512, 58]
+    shapeName: rect
+    fill: {type: solid, color: "$panel"}
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: defense-4-name
+    elementType: text
+    bounds: [64, 410, 480, 16]
+    content:
+      fontSize: 12
+      bold: true
+      color: "$ink"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: |
+        <p><span style="color:$accent">04</span>　硬拒绝与脱敏</p>
+  - elementId: defense-4-points
+    elementType: text
+    bounds: [64, 428, 484, 28]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        secret_exfiltration_blocked · 导出递归脱敏 Key / token / cookie
+
+  # ===== 右区：威胁 → 缓解 → 验证 映射表 =====
+  - elementId: threat-table-caption
+    elementType: text
+    bounds: [600, 130, 312, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 威胁建模：七类威胁摘录
+  - elementId: threat-table
+    elementType: table
+    bounds: [600, 152, 312, 240]
+    columnWidths: [0.22, 0.46, 0.32]
+    rowHeights: [0.13, 0.174, 0.174, 0.174, 0.174, 0.174]
+    style: "$default"
+    rows:
+      - - text: 威胁
+        - text: 缓解
+        - text: 验证
+      - - text: 提示注入
+        - text: Taint 扫描 + 隔离包装
+        - text: 26 用例对抗评测
+      - - text: 密钥外泄
+        - text: 参数硬拒绝
+        - text: 安全语料实测
+      - - text: SSRF
+        - text: URL + IP 校验拒内网
+        - text: 工具评测门禁
+      - - text: 路径越界
+        - text: evaluate_path_safety
+        - text: 安全语料实测
+      - - text: 供应链
+        - text: pip-audit / bandit / detect-secrets
+        - text: CI 安全扫描
+  - elementId: threat-table-note
+    elementType: text
+    bounds: [600, 400, 312, 56]
+    content:
+      style: "$note"
+      align: [left, top]
+      text: |
+        威胁模型见 docs/THREAT_MODEL.md（七类威胁 → 缓解 → 测试逐条映射）

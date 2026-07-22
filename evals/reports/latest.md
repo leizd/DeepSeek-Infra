@@ -1,15 +1,15 @@
 # Offline Eval Report
 
-- Version: 4.2.2
-- Git SHA: a7584868 (dirty)
-- Generated: 2026-07-21T03:20:07Z
+- Version: 4.2.3
+- Git SHA: 89f674f8 (dirty)
+- Generated: 2026-07-22T01:19:31Z
 - Overall: PASS
 
 | Suite | Metric | Value | Status |
 | --- | --- | ---: | --- |
 | RAG | Recall@5 | 1.0000 | PASS |
 | RAG | Citation Accuracy | 0.8333 | PASS |
-| RAG | MRR | 0.8889 | PASS |
+| RAG | MRR | 0.8750 | PASS |
 | Tool Policy | Pass Rate | 1.0000 | PASS |
 | Tool Policy | Injection Defense Pass Rate | 1.0000 | PASS |
 | Injection | Block Rate | 1.0000 | PASS |

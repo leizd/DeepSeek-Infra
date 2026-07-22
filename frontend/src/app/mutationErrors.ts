@@ -11,3 +11,17 @@ export function latestMutationError(...mutations: MutationErrorState[]): unknown
   }
   return latest?.status === "error" ? latest.error : null;
 }
+
+export interface MutationStateSnapshot {
+  status: string;
+  error: unknown;
+  submittedAt: number;
+}
+
+export function latestCacheMutationError(mutations: readonly MutationStateSnapshot[]): unknown {
+  let latest: MutationStateSnapshot | null = null;
+  for (const m of mutations) {
+    if (!latest || m.submittedAt > latest.submittedAt) latest = m;
+  }
+  return latest?.status === "error" ? latest.error : undefined;
+}

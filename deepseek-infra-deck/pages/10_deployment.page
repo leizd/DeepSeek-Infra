@@ -1,0 +1,111 @@
+pageType: content
+background:
+  type: solid
+  color: "$bg"
+notes: 部署形态页：一张三列表格覆盖七种跑法（桌面 WebView / 手机本机 / 命令行 / 单文件 exe / Android APK / Docker Compose / OpenAI 兼容客户端），底部一行快速开始命令链。
+elements:
+  # ===== 顶部文档轴 =====
+  - elementId: header-meta
+    elementType: text
+    bounds: [48, 16, 300, 14]
+    content:
+      style: "$headerMeta"
+      align: [left, middle]
+      wrap: false
+      text: DEEPSEEK INFRA
+  - elementId: header-page-label
+    elementType: text
+    bounds: [612, 16, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      align: [right, middle]
+      wrap: false
+      text: 部署 · 10 / 13
+  - elementId: header-rule
+    elementType: line
+    bounds: [48, 44, 864, 1]
+    viewBox: [864, 1]
+    points: "0,0.5 864,0.5"
+    border: {style: solid, width: 1, color: "$hairline"}
+  # ===== kicker 与页标题 =====
+  - elementId: kicker
+    elementType: text
+    bounds: [48, 60, 400, 16]
+    content:
+      style: "$kicker"
+      align: [left, middle]
+      wrap: false
+      text: 09 · 部署形态
+  - elementId: page-title
+    elementType: text
+    bounds: [48, 82, 800, 36]
+    content:
+      style: "$pageTitle"
+      align: [left, middle]
+      wrap: false
+      text: 一份后端，七种跑法
+  # ===== 部署形态表（$default 表样，细线无厚框） =====
+  - elementId: deploy-table
+    elementType: table
+    bounds: [48, 130, 864, 322]
+    columnWidths: [0.24, 0.34, 0.42]
+    rowHeights: [0.1, 0.1286, 0.1286, 0.1286, 0.1286, 0.1286, 0.1286, 0.1284]
+    style: "$default"
+    rows:
+      - - text: 形态
+        - text: 启动方式
+        - text: 要点
+      - - text: 桌面应用窗口（推荐）
+        - text: "launch.bat / launch.sh（pywebview）"
+          color: "$structure"
+        - text: "desktop=1 token 自动认证，不跳浏览器"
+      - - text: 手机本机
+        - text: "Termux / Pydroid 运行 launch_mobile.py"
+          color: "$structure"
+        - text: "默认 127.0.0.1:8000，--lan 开放局域网"
+      - - text: 命令行服务
+        - text: "python app.py"
+          color: "$structure"
+        - text: "打印 Computer / Phone 带 token 地址"
+      - - text: 单文件 exe
+        - text: "scripts/build_exe.py → DeepSeekInfra.exe"
+          color: "$structure"
+        - text: 面向无 Python 环境的电脑
+      - - text: Android APK
+        - text: "gradle :app:assembleDebug"
+          color: "$structure"
+        - text: "Chaquopy 打包 Python 后端 + 内置 WebView"
+      - - text: Docker Compose
+        - text: "docker compose up -d"
+          color: "$structure"
+        - text: "python:3.12-slim · 非 root · HEALTHCHECK · 单 /data 卷持久化"
+      - - text: OpenAI 兼容客户端
+        - text: "SDK base_url → 127.0.0.1:8000/v1"
+          color: "$structure"
+        - text: "支持流式；启用 Ollama 多出 ollama/<模型>"
+  # ===== 快速开始 =====
+  - elementId: quickstart-label
+    elementType: text
+    bounds: [48, 466, 200, 14]
+    content:
+      fontSize: 11
+      color: "$accent"
+      fontFamily: MiSans
+      bold: true
+      letterSpacing: 2
+      align: [left, middle]
+      wrap: false
+      text: 快速开始
+  - elementId: quickstart-cmd
+    elementType: text
+    bounds: [48, 486, 864, 16]
+    content:
+      fontSize: 11
+      color: "$structure"
+      fontFamily: MiSans
+      letterSpacing: 1
+      align: [left, middle]
+      wrap: false
+      text: "cp .env.example .env → 填 DEEPSEEK_API_KEY → docker compose up -d → curl http://127.0.0.1:8000/healthz"

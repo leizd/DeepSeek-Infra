@@ -770,6 +770,312 @@ async def run_recovery_smoke(base_url: str) -> dict[str, str]:
     return checks
 
 
+async def run_mutation_smoke(base_url: str) -> dict[str, str]:
+    from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api import expect
+    from playwright.async_api import async_playwright
+
+    checks: dict[str, str] = {}
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+
+        async def mock_config(route: Any) -> None:
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "hasServerKey": True,
+                        "hasSearch": False,
+                        "defaultModel": "deepseek-v4-pro",
+                        "models": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                        "modelRoutes": {},
+                        "uploadLimits": {"fileMaxBytes": 200_000_000, "requestMaxBytes": 220_000_000, "maxFiles": 8},
+                        "computerUrl": base_url,
+                        "phoneUrl": base_url,
+                    }
+                ),
+            )
+
+        async def tracked_page(context: Any, page_errors: list[str]) -> Any:
+            await context.add_init_script(
+                """
+                window.__mutationUnhandledRejections = [];
+                window.addEventListener('unhandledrejection', (event) => {
+                  window.__mutationUnhandledRejections.push(String(event.reason));
+                  event.preventDefault();
+                });
+                """
+            )
+            page = await context.new_page()
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            return page
+
+        projects_state = [
+            {"id": "p-a", "name": "项目A", "documents": [], "createdAt": 1, "updatedAt": 1},
+            {"id": "p-b", "name": "项目B", "documents": [], "createdAt": 1, "updatedAt": 1},
+            {"id": "p-confirm", "name": "确认项目", "documents": [], "createdAt": 1, "updatedAt": 1},
+        ]
+        project_delete_started = {"p-a": asyncio.Event(), "p-b": asyncio.Event()}
+        project_delete_release = {"p-a": asyncio.Event(), "p-b": asyncio.Event()}
+        project_delete_calls: dict[str, int] = {}
+        project_control = {"failCreate": True, "failRename": True, "failNextList": False}
+
+        async def mock_projects(route: Any) -> None:
+            try:
+                body = route.request.post_data_json or {}
+            except (json.JSONDecodeError, TypeError):
+                body = {}
+            action = body.get("action", "list")
+            if action == "list":
+                if project_control["failNextList"]:
+                    project_control["failNextList"] = False
+                    await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "list failed"}))
+                    return
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"projects": projects_state}))
+                return
+            if action == "create" and project_control["failCreate"]:
+                project_control["failCreate"] = False
+                await route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "create failed"}))
+                return
+            if action == "rename" and project_control["failRename"]:
+                project_control["failRename"] = False
+                await route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "rename failed"}))
+                return
+            if action == "delete":
+                project_id = str(body.get("id", ""))
+                project_delete_calls[project_id] = project_delete_calls.get(project_id, 0) + 1
+                if project_id in project_delete_started:
+                    project_delete_started[project_id].set()
+                    await project_delete_release[project_id].wait()
+                projects_state[:] = [project for project in projects_state if project["id"] != project_id]
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+                return
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected project action"}))
+
+        skills_state = [
+            {"skillId": "s-a", "name": "Skill A", "description": "", "version": "1.0.0", "builtin": False, "disabled": False},
+            {"skillId": "s-b", "name": "Skill B", "description": "", "version": "1.0.0", "builtin": False, "disabled": False},
+        ]
+        skill_toggle_started = {"s-a": asyncio.Event(), "s-b": asyncio.Event()}
+        skill_toggle_release = {"s-a": asyncio.Event(), "s-b": asyncio.Event()}
+        skill_toggle_calls: dict[str, int] = {}
+
+        async def mock_skills(route: Any) -> None:
+            try:
+                body = route.request.post_data_json or {}
+            except (json.JSONDecodeError, TypeError):
+                body = {}
+            action = body.get("action", "list")
+            if action == "list":
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "skills": skills_state}))
+                return
+            if action in {"disable", "enable"}:
+                skill_id = str(body.get("skillId", ""))
+                skill_toggle_calls[skill_id] = skill_toggle_calls.get(skill_id, 0) + 1
+                skill_toggle_started[skill_id].set()
+                await skill_toggle_release[skill_id].wait()
+                for skill in skills_state:
+                    if skill["skillId"] == skill_id:
+                        skill["disabled"] = action == "disable"
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+                return
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected skill action"}))
+
+        memories_state = [
+            {"id": "m-a", "content": "记忆A", "category": "fact", "scope": "global"},
+            {"id": "m-b", "content": "记忆B", "category": "fact", "scope": "global"},
+        ]
+        memory_delete_started = {"m-a": asyncio.Event(), "m-b": asyncio.Event()}
+        memory_delete_release = {"m-a": asyncio.Event(), "m-b": asyncio.Event()}
+
+        async def mock_memory(route: Any) -> None:
+            if route.request.method == "GET":
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"memories": memories_state}))
+                return
+            body = route.request.post_data_json or {}
+            if body.get("action") == "deleteById":
+                memory_id = str(body.get("id", ""))
+                memory_delete_started[memory_id].set()
+                await memory_delete_release[memory_id].wait()
+                memories_state[:] = [memory for memory in memories_state if memory["id"] != memory_id]
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+                return
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected memory action"}))
+
+        context = await browser.new_context(service_workers="allow")
+        page_errors: list[str] = []
+        await context.route("**/api/config", mock_config)
+        await context.route("**/api/projects", mock_projects)
+        await context.route("**/api/skills", mock_skills)
+        await context.route("**/api/memory**", mock_memory)
+        page = await tracked_page(context, page_errors)
+        await page.goto(base_url, wait_until="domcontentloaded")
+
+        await page.get_by_role("button", name="项目", exact=True).click()
+        await page.locator(".project-create-form input").fill("失败项目")
+        await page.get_by_role("button", name="创建", exact=True).click()
+        await page.locator(".workspace-error").wait_for()
+        if await page.locator(".project-create-form input").input_value() != "失败项目":
+            raise AssertionError("failed project creation cleared its draft")
+
+        project_control["failNextList"] = True
+        await page.get_by_role("button", name="重新同步").click()
+        await page.wait_for_timeout(100)
+        await page.get_by_role("button", name="重新同步").click()
+        await page.locator(".workspace-error").wait_for(state="detached")
+        unhandled = await page.evaluate("() => window.__mutationUnhandledRejections")
+        if unhandled or page_errors:
+            raise AssertionError(f"mutation or recovery rejection escaped the UI: {unhandled + page_errors}")
+        checks["workspaceMutationRejectionContained"] = "PASS"
+
+        await page.get_by_role("button", name="重命名项目 项目A").click()
+        rename_input = page.get_by_role("textbox", name="重命名项目")
+        await rename_input.fill("失败重命名")
+        await rename_input.press("Enter")
+        await page.locator(".workspace-error").wait_for()
+        if not await rename_input.is_visible() or await rename_input.input_value() != "失败重命名":
+            raise AssertionError("failed project rename closed the editor or lost its draft")
+        checks["failedRenameDraftPreserved"] = "PASS"
+        await rename_input.press("Escape")
+
+        confirm_button = page.get_by_role("button", name="删除项目 确认项目")
+        dialog_waiter = asyncio.create_task(page.wait_for_event("dialog"))
+        confirm_click = asyncio.create_task(confirm_button.click())
+        dialog = await dialog_waiter
+        if dialog.message != "确定删除项目“确认项目”？":
+            raise AssertionError(f"unexpected project confirmation text: {dialog.message}")
+        await dialog.dismiss()
+        await confirm_click
+        await page.wait_for_timeout(50)
+        if project_delete_calls.get("p-confirm", 0) != 0:
+            raise AssertionError("dismissed project deletion reached the backend")
+        checks["destructiveMutationConfirmation"] = "PASS"
+
+        for project_id, project_name in (("p-a", "项目A"), ("p-b", "项目B")):
+            page.once("dialog", lambda pending_dialog: asyncio.create_task(pending_dialog.accept()))
+            await page.get_by_role("button", name=f"删除项目 {project_name}").click()
+            await asyncio.wait_for(project_delete_started[project_id].wait(), timeout=5)
+        project_a_delete = page.get_by_role("button", name="删除项目 项目A")
+        project_b_delete = page.get_by_role("button", name="删除项目 项目B")
+        await expect(project_a_delete).to_be_disabled(timeout=3000)
+        await expect(project_b_delete).to_be_disabled(timeout=3000)
+        project_delete_release["p-a"].set()
+        await project_a_delete.wait_for(state="detached")
+        if not await project_b_delete.is_disabled():
+            raise AssertionError("second project delete button re-enabled while still pending")
+        project_delete_release["p-b"].set()
+        await project_b_delete.wait_for(state="detached")
+        checks["concurrentProjectPendingTracked"] = "PASS"
+
+        await page.get_by_role("button", name="关闭项目面板").click()
+        await page.get_by_role("button", name="技能", exact=True).click()
+        skill_a = page.locator(".skill-card", has_text="Skill A")
+        skill_b = page.locator(".skill-card", has_text="Skill B")
+        await skill_a.get_by_role("button", name="禁用").evaluate("button => { button.click(); button.click(); }")
+        await asyncio.wait_for(skill_toggle_started["s-a"].wait(), timeout=5)
+        await skill_b.get_by_role("button", name="禁用").click()
+        await asyncio.wait_for(skill_toggle_started["s-b"].wait(), timeout=5)
+        if skill_toggle_calls.get("s-a") != 1:
+            raise AssertionError(f"duplicate skill toggle sent {skill_toggle_calls.get('s-a', 0)} requests")
+        checks["duplicateMutationSuppressed"] = "PASS"
+        await expect(skill_a.get_by_role("button", name="…")).to_be_disabled(timeout=3000)
+        await expect(skill_b.get_by_role("button", name="…")).to_be_disabled(timeout=3000)
+        skill_toggle_release["s-a"].set()
+        await skill_a.get_by_role("button", name="启用").wait_for()
+        if not await skill_b.get_by_role("button", name="…").is_disabled():
+            raise AssertionError("second skill toggle button re-enabled while still pending")
+        skill_toggle_release["s-b"].set()
+        await skill_b.get_by_role("button", name="启用").wait_for()
+        checks["concurrentSkillPendingTracked"] = "PASS"
+
+        await page.get_by_role("button", name="关闭技能面板").click()
+        await page.get_by_role("button", name="记忆", exact=True).click()
+        memory_a = page.locator(".workspace-item", has_text="记忆A")
+        memory_b = page.locator(".workspace-item", has_text="记忆B")
+        await memory_a.get_by_role("button", name="删除这条记忆").click()
+        await memory_b.get_by_role("button", name="删除这条记忆").click()
+        await asyncio.wait_for(memory_delete_started["m-a"].wait(), timeout=5)
+        await asyncio.wait_for(memory_delete_started["m-b"].wait(), timeout=5)
+        await expect(memory_a.get_by_role("button", name="删除这条记忆")).to_be_disabled(timeout=3000)
+        await expect(memory_b.get_by_role("button", name="删除这条记忆")).to_be_disabled(timeout=3000)
+        memory_delete_release["m-a"].set()
+        await memory_a.wait_for(state="detached")
+        if not await memory_b.get_by_role("button", name="删除这条记忆").is_disabled():
+            raise AssertionError("second memory delete button re-enabled while still pending")
+        memory_delete_release["m-b"].set()
+        await memory_b.wait_for(state="detached")
+        checks["concurrentMemoryPendingTracked"] = "PASS"
+        await context.close()
+
+        stale_projects = [
+            {"id": "p-stale", "name": "待删除项目", "documents": [], "createdAt": 1, "updatedAt": 1},
+            {"id": "p-keep", "name": "保留项目", "documents": [], "createdAt": 1, "updatedAt": 1},
+        ]
+        stale_list_started = asyncio.Event()
+        stale_list_release = asyncio.Event()
+        stale_control = {"holdNextList": False}
+
+        async def mock_stale_projects(route: Any) -> None:
+            body = route.request.post_data_json or {}
+            action = body.get("action", "list")
+            if action == "list":
+                snapshot = [dict(project) for project in stale_projects]
+                if stale_control["holdNextList"]:
+                    stale_control["holdNextList"] = False
+                    stale_list_started.set()
+                    await stale_list_release.wait()
+                    try:
+                        await route.fulfill(status=200, content_type="application/json", body=json.dumps({"projects": snapshot}))
+                    except PlaywrightError:
+                        pass
+                    return
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"projects": snapshot}))
+                return
+            if action == "create":
+                created = {"id": "p-new", "name": str(body.get("name", "新项目")), "documents": [], "createdAt": 1, "updatedAt": 1}
+                stale_projects.append(created)
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"project": created}))
+                return
+            if action == "delete":
+                project_id = str(body.get("id", ""))
+                stale_projects[:] = [project for project in stale_projects if project["id"] != project_id]
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+                return
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected project action"}))
+
+        stale_context = await browser.new_context(service_workers="allow")
+        stale_page_errors: list[str] = []
+        await stale_context.route("**/api/config", mock_config)
+        await stale_context.route("**/api/projects", mock_stale_projects)
+        await stale_context.route("**/api/skills", mock_skills)
+        await stale_context.route("**/api/memory**", mock_memory)
+        stale_page = await tracked_page(stale_context, stale_page_errors)
+        await stale_page.goto(base_url, wait_until="domcontentloaded")
+        await stale_page.get_by_role("button", name="项目", exact=True).click()
+        await stale_page.get_by_role("button", name="删除项目 待删除项目").wait_for()
+
+        stale_control["holdNextList"] = True
+        await stale_page.locator(".project-create-form input").fill("触发后台读取")
+        await stale_page.get_by_role("button", name="创建", exact=True).click()
+        await asyncio.wait_for(stale_list_started.wait(), timeout=5)
+        stale_page.once("dialog", lambda pending_dialog: asyncio.create_task(pending_dialog.accept()))
+        await stale_page.get_by_role("button", name="删除项目 待删除项目").click()
+        await stale_page.get_by_role("button", name="删除项目 待删除项目").wait_for(state="detached")
+        stale_list_release.set()
+        await stale_page.wait_for_timeout(200)
+        if await stale_page.get_by_role("button", name="删除项目 待删除项目").count() != 0:
+            raise AssertionError("cancelled stale project list restored deleted data")
+        stale_unhandled = await stale_page.evaluate("() => window.__mutationUnhandledRejections")
+        if stale_unhandled or stale_page_errors:
+            raise AssertionError(f"stale-read smoke reported browser errors: {stale_unhandled + stale_page_errors}")
+        checks["staleReadCannotOverwriteMutation"] = "PASS"
+        await stale_context.close()
+
+        await browser.close()
+    return checks
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="write JSON evidence to this path")
@@ -793,6 +1099,7 @@ def main() -> int:
         checks = asyncio.run(run_browser(base_url, trace_id))
         checks.update(asyncio.run(run_query_smoke(base_url)))
         checks.update(asyncio.run(run_recovery_smoke(base_url)))
+        checks.update(asyncio.run(run_mutation_smoke(base_url)))
         payload = {
             "schemaVersion": 1,
             "version": VERSION,

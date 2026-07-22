@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.2.2-blue)
+![版本](https://img.shields.io/badge/version-4.2.3-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.2.2 Query Recovery & Cache Coherence:** The 4.2.x Query series finale. Failed operations now recover for real — newest-error selection plus `recover()` resync instead of blind retries; binding saves replay their last desired state and stay isolated per project; chat memory writes land in the Memory Query cache instantly; the legacy skill-binding channel is gone; and query retries only fire on transient failures (AbortError/4xx never, 408/429/5xx once). Six new browser contracts lock recovery and coherence. The frozen 4.0 runtime contract is unchanged: Python remains default and authoritative, all Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.2.2 notes](docs/releases/4.2.2.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+> **4.2.3 Mutation Dispatch Safety:** Workspace actions now contain rejected Promises, track every concurrently pending entity, and suppress duplicate same-entity writes with synchronous locks. Failed project renames preserve their draft; destructive project and custom-skill deletion requires confirmation; cache-writing mutations cancel stale reads before committing. Eight new Chromium checks cover rejection containment, failed drafts, concurrent Project/Skill/Memory state, duplicate suppression, stale-read cancellation, and confirmations. The frozen 4.0 runtime contract is unchanged: Python remains default and authoritative, all Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.2.3 notes](docs/releases/4.2.3.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
-**4.2.2 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.2.2 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
+**4.2.3 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.2.3 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
 
 ## 30 秒概览
 
