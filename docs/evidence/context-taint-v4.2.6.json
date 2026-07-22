@@ -1,0 +1,208 @@
+{
+  "version": "4.2.6",
+  "commit": "987aed2c",
+  "generatedAt": "2026-07-22T07:09:34Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "webInjectionScanned": "PASS",
+    "fileInjectionScanned": "PASS",
+    "mediaTranscriptInjectionScanned": "PASS",
+    "toolDirectiveRecognized": "PASS",
+    "ragSourceClassified": "PASS",
+    "taintedTurnEscalation": "PASS",
+    "riskDiagnosticsPresent": "PASS"
+  },
+  "details": {
+    "webInjection": {
+      "enabled": true,
+      "tainted": true,
+      "riskLevel": "medium",
+      "untrustedChars": 83,
+      "untrustedSegments": 1,
+      "injectionHits": 2,
+      "exfiltrationHits": 0,
+      "toolDirectiveHits": 0,
+      "escalatedTools": [
+        "fetch_url",
+        "suggest_memory",
+        "create_reminder",
+        "forget_memory",
+        "browser_click",
+        "browser_type_text",
+        "browser_select",
+        "browser_download"
+      ],
+      "recommendedAction": "confirm_sensitive_tools",
+      "sources": {
+        "trusted_system": 20,
+        "untrusted_web": 83
+      },
+      "segments": [
+        {
+          "source": "trusted_system",
+          "trust": "trusted",
+          "chars": 20,
+          "injectionHits": 0,
+          "exfiltrationHits": 0,
+          "toolDirectiveHits": 0
+        },
+        {
+          "source": "untrusted_web",
+          "trust": "untrusted",
+          "chars": 83,
+          "injectionHits": 2,
+          "exfiltrationHits": 0,
+          "toolDirectiveHits": 0
+        }
+      ]
+    },
+    "fileInjection": {
+      "enabled": true,
+      "tainted": true,
+      "riskLevel": "high",
+      "untrustedChars": 137,
+      "untrustedSegments": 1,
+      "injectionHits": 2,
+      "exfiltrationHits": 1,
+      "toolDirectiveHits": 0,
+      "escalatedTools": [
+        "fetch_url",
+        "suggest_memory",
+        "create_reminder",
+        "forget_memory",
+        "browser_click",
+        "browser_type_text",
+        "browser_select",
+        "browser_download"
+      ],
+      "recommendedAction": "confirm_sensitive_tools",
+      "sources": {
+        "trusted_user": 8,
+        "untrusted_file": 137
+      },
+      "segments": [
+        {
+          "source": "trusted_user",
+          "trust": "trusted",
+          "chars": 8,
+          "injectionHits": 0,
+          "exfiltrationHits": 0,
+          "toolDirectiveHits": 0
+        },
+        {
+          "source": "untrusted_file",
+          "trust": "untrusted",
+          "chars": 137,
+          "injectionHits": 2,
+          "exfiltrationHits": 1,
+          "toolDirectiveHits": 0
+        }
+      ]
+    },
+    "mediaTranscriptInjection": {
+      "enabled": true,
+      "tainted": true,
+      "riskLevel": "medium",
+      "untrustedChars": 150,
+      "untrustedSegments": 1,
+      "injectionHits": 2,
+      "exfiltrationHits": 0,
+      "toolDirectiveHits": 0,
+      "escalatedTools": [
+        "fetch_url",
+        "suggest_memory",
+        "create_reminder",
+        "forget_memory",
+        "browser_click",
+        "browser_type_text",
+        "browser_select",
+        "browser_download"
+      ],
+      "recommendedAction": "confirm_sensitive_tools",
+      "sources": {
+        "untrusted_media": 150
+      },
+      "segments": [
+        {
+          "source": "untrusted_media",
+          "trust": "untrusted",
+          "chars": 150,
+          "injectionHits": 2,
+          "exfiltrationHits": 0,
+          "toolDirectiveHits": 0
+        }
+      ]
+    },
+    "toolDirective": {
+      "enabled": true,
+      "tainted": true,
+      "riskLevel": "high",
+      "untrustedChars": 120,
+      "untrustedSegments": 1,
+      "injectionHits": 0,
+      "exfiltrationHits": 0,
+      "toolDirectiveHits": 2,
+      "escalatedTools": [
+        "fetch_url",
+        "suggest_memory",
+        "create_reminder",
+        "forget_memory",
+        "browser_click",
+        "browser_type_text",
+        "browser_select",
+        "browser_download"
+      ],
+      "recommendedAction": "confirm_sensitive_tools",
+      "sources": {
+        "untrusted_web": 120
+      },
+      "segments": [
+        {
+          "source": "untrusted_web",
+          "trust": "untrusted",
+          "chars": 120,
+          "injectionHits": 0,
+          "exfiltrationHits": 0,
+          "toolDirectiveHits": 2
+        }
+      ]
+    },
+    "ragSource": {
+      "enabled": true,
+      "tainted": false,
+      "riskLevel": "none",
+      "untrustedChars": 108,
+      "untrustedSegments": 1,
+      "injectionHits": 0,
+      "exfiltrationHits": 0,
+      "toolDirectiveHits": 0,
+      "escalatedTools": [],
+      "recommendedAction": "none",
+      "sources": {
+        "untrusted_rag": 108
+      },
+      "segments": [
+        {
+          "source": "untrusted_rag",
+          "trust": "untrusted",
+          "chars": 108,
+          "injectionHits": 0,
+          "exfiltrationHits": 0,
+          "toolDirectiveHits": 0
+        }
+      ]
+    },
+    "taintedTurnEscalation": {
+      "action": "needs_confirmation",
+      "reasons": [
+        "taint_escalated_confirmation"
+      ],
+      "taintEscalated": true
+    }
+  }
+}

@@ -51,7 +51,7 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     ) else "FAIL"
     checks["skillCreateEditDelete"] = "PASS" if _contains_all(
         drawer + controller,
-        ("skills.create(draft)", "skills.update({ ...draft", "skills.remove(skill.skillId)", "createSkill", "updateSkillPrompt", "deleteSkill"),
+        ("onSubmit={skills.create}", "onCommitted={() => setCreating(false)}", "skills.update({ ...draft", "skills.remove(skill.skillId)", "createSkill", "updateSkillPrompt", "deleteSkill"),
     ) else "FAIL"
     checks["skillApiActions"] = "PASS" if _contains_all(
         api,

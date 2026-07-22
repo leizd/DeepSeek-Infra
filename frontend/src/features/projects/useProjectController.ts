@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -16,13 +16,17 @@ import {
   PROJECT_LIST_MUTATION_KEYS,
 } from "../../app/mutationKeys";
 import {
+  isLifecycleMutationMeta,
   isMutationActive,
   removeFailedMutations,
   type LifecycleMutationMeta,
   useMutationActivity,
 } from "../../app/mutationLifecycle";
 import { PROJECTS_QUERY_KEY } from "../../app/queryKeys";
-import { latestCacheMutationError, type MutationStateSnapshot } from "../../app/mutationErrors";
+import {
+  latestUnresolvedLifecycleError,
+  type LifecycleMutationSnapshot,
+} from "../../app/mutationErrors";
 import { useSettings } from "../../contexts/SettingsContext";
 import { useActionCoordination } from "../../shared/useActionCoordination";
 import { useEntityActionLocks } from "../../shared/useEntityActionLocks";
@@ -112,6 +116,8 @@ export function useProjectController(): ProjectController {
   const runEntityAction = useEntityActionLocks();
   const { coordinationError, resolveAction, clearCoordinationError } = useActionCoordination();
   const [activeProjectId, setActiveProjectId] = useState(storedActiveProject);
+  const activeProjectIdRef = useRef(activeProjectId);
+  const activeSelectionRevisionRef = useRef(0);
 
   const projectsQuery = useQuery<Project[]>({
     queryKey: PROJECTS_QUERY_KEY,
@@ -125,6 +131,8 @@ export function useProjectController(): ProjectController {
   );
 
   const setActive = useCallback((projectId: string) => {
+    activeSelectionRevisionRef.current += 1;
+    activeProjectIdRef.current = projectId;
     setActiveProjectId(projectId);
     if (typeof window !== "undefined") {
       if (projectId) window.localStorage.setItem(ACTIVE_PROJECT_KEY, projectId);
@@ -192,6 +200,7 @@ export function useProjectController(): ProjectController {
   const create = useCallback(
     async (name: string) => {
       const normalizedName = name.trim();
+      const selectionRevision = activeSelectionRevisionRef.current;
       const entityKey = "project-list:create";
       const operation = "create";
       const result = await runEntityAction(entityKey, operation, normalizedName, async () => {
@@ -204,7 +213,7 @@ export function useProjectController(): ProjectController {
           mutationFn: (desiredName: string) => createProject(desiredName),
           onSuccess: (project) => {
             queryClient.setQueryData<Project[]>(PROJECTS_QUERY_KEY, (current) => [...(current ?? []), project]);
-            setActive(project.id);
+            if (activeSelectionRevisionRef.current === selectionRevision) setActive(project.id);
           },
           onSettled: () => void invalidate(),
         });
@@ -231,7 +240,7 @@ export function useProjectController(): ProjectController {
             queryClient.setQueryData<Project[]>(PROJECTS_QUERY_KEY, (current) =>
               (current ?? []).filter((project) => project.id !== id),
             );
-            if (activeProjectId === id) setActive("");
+            if (activeProjectIdRef.current === id) setActive("");
           },
           onSettled: () => void invalidate(),
         });
@@ -239,7 +248,7 @@ export function useProjectController(): ProjectController {
       });
       resolveAction(result, entityKey, operation);
     },
-    [activeProjectId, invalidate, queryClient, resolveAction, runEntityAction, setActive],
+    [invalidate, queryClient, resolveAction, runEntityAction, setActive],
   );
   const rename = useCallback(
     async (projectId: string, name: string) => {
@@ -309,18 +318,19 @@ export function useProjectController(): ProjectController {
     };
   }, [activeProject]);
 
-  const mutationErrors = useMutationState<MutationStateSnapshot>({
+  const mutationErrors = useMutationState<LifecycleMutationSnapshot>({
     filters: { predicate: (mutation) => ownsMutationKey(mutation.options.mutationKey, PROJECT_LIST_MUTATION_KEYS) },
     select: (mutation) => ({
       status: mutation.state.status,
       error: mutation.state.error,
       submittedAt: mutation.state.submittedAt,
+      meta: isLifecycleMutationMeta(mutation.options.meta) ? mutation.options.meta : undefined,
     }),
   });
 
   const firstError =
     projectsQuery.error
-    ?? latestCacheMutationError(mutationErrors);
+    ?? latestUnresolvedLifecycleError(mutationErrors);
 
   return {
     projects,

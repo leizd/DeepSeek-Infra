@@ -109,6 +109,35 @@ describe("useProjectController", () => {
     expect(client.getQueryData<Project[]>(PROJECTS_QUERY_KEY)?.map((item) => item.id)).toContain("p-new");
   });
 
+  it("does not replace a project selected while creation is pending", async () => {
+    let resolveCreate!: (value: Project) => void;
+    createProjectMock.mockImplementation(
+      (name) => new Promise<Project>((resolve) => {
+        resolveCreate = (value) => {
+          serverProjects.push(project(value.id, name));
+          resolve(value);
+        };
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let creation!: Promise<void>;
+    act(() => {
+      creation = result.current.create("项目 C");
+    });
+    await waitFor(() => expect(createProjectMock).toHaveBeenCalledTimes(1));
+    act(() => result.current.setActive("p2"));
+
+    await act(async () => {
+      resolveCreate(project("p3", "项目 C"));
+      await creation;
+    });
+    expect(result.current.activeProjectId).toBe("p2");
+    expect(window.localStorage.getItem("deepseek-infra.active-project")).toBe("p2");
+  });
+
   it("updates the cache after rename and filters it after delete", async () => {
     const client = createTestQueryClient();
     const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
@@ -159,6 +188,36 @@ describe("useProjectController", () => {
     expect(result.current.activeProject).toBeNull();
   });
 
+  it("does not clear a newer selection when deletion of the old active project completes", async () => {
+    let resolveDelete!: () => void;
+    deleteProjectMock.mockImplementation(
+      (projectId) => new Promise<void>((resolve) => {
+        resolveDelete = () => {
+          serverProjects = serverProjects.filter((item) => item.id !== projectId);
+          resolve();
+        };
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+    act(() => result.current.setActive("p1"));
+
+    let removal!: Promise<void>;
+    act(() => {
+      removal = result.current.remove("p1");
+    });
+    await waitFor(() => expect(deleteProjectMock).toHaveBeenCalledWith("p1"));
+    act(() => result.current.setActive("p2"));
+
+    await act(async () => {
+      resolveDelete();
+      await removal;
+    });
+    expect(result.current.activeProjectId).toBe("p2");
+    expect(window.localStorage.getItem("deepseek-infra.active-project")).toBe("p2");
+  });
+
   it("repairs a stale activeProjectId restored from localStorage", async () => {
     window.localStorage.setItem("deepseek-infra.active-project", "deleted-project");
     const client = createTestQueryClient();
@@ -170,8 +229,15 @@ describe("useProjectController", () => {
     expect(window.localStorage.getItem("deepseek-infra.active-project")).toBeNull();
   });
 
-  it("clears a stale mutation error after a newer successful action and recover", async () => {
-    createProjectMock.mockRejectedValueOnce(new Error("创建失败")).mockRejectedValueOnce(new Error("又失败"));
+  it("clears a stale mutation error after a newer success on the same entity and recover", async () => {
+    createProjectMock
+      .mockRejectedValueOnce(new Error("创建失败"))
+      .mockImplementationOnce(async (name) => {
+        const created = project("p-success", name);
+        serverProjects.push(created);
+        return created;
+      })
+      .mockRejectedValueOnce(new Error("又失败"));
     const client = createTestQueryClient();
     const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
     await waitFor(() => expect(result.current.projects).toHaveLength(2));
@@ -182,7 +248,7 @@ describe("useProjectController", () => {
     await waitFor(() => expect(result.current.error).toBe("创建失败"));
 
     await act(async () => {
-      await result.current.rename("p1", "新名字");
+      await result.current.create("成功项目");
     });
     await waitFor(() => expect(result.current.error).toBe(""));
 
@@ -193,6 +259,59 @@ describe("useProjectController", () => {
 
     await act(async () => {
       await result.current.recover();
+    });
+    await waitFor(() => expect(result.current.error).toBe(""));
+  });
+
+  it("keeps a late project failure visible after another project succeeds", async () => {
+    let rejectDelete!: (reason: Error) => void;
+    deleteProjectMock.mockImplementation(
+      () => new Promise<void>((_resolve, reject) => {
+        rejectDelete = reject;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let removal!: Promise<void>;
+    act(() => {
+      removal = result.current.remove("p1");
+    });
+    await waitFor(() => expect(deleteProjectMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await result.current.rename("p2", "代码 v2");
+    });
+    act(() => rejectDelete(new Error("删除 A 失败")));
+    await act(async () => {
+      await removal.catch(() => undefined);
+    });
+
+    await waitFor(() => expect(result.current.error).toBe("删除 A 失败"));
+  });
+
+  it("clears a coordination conflict when the blocking mutation settles", async () => {
+    let resolveRename!: (value: Project) => void;
+    renameProjectMock.mockImplementation(
+      () => new Promise<Project>((resolve) => {
+        resolveRename = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let renameAction!: Promise<void>;
+    act(() => {
+      renameAction = result.current.rename("p1", "等待名称");
+    });
+    await waitFor(() => expect(renameProjectMock).toHaveBeenCalledTimes(1));
+    await expect(result.current.remove("p1")).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    await waitFor(() => expect(result.current.error).toContain("正在重命名"));
+
+    await act(async () => {
+      resolveRename(project("p1", "等待名称"));
+      await renameAction;
     });
     await waitFor(() => expect(result.current.error).toBe(""));
   });

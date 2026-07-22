@@ -81,7 +81,7 @@ def test_upgrade_from_310_needs_no_forced_migration_and_keeps_python_default(
     assert {"embedding", "embedding_blob", "embedding_dimensions", "embedding_format"} <= columns
     assert rust_config.load_rust_flags() == rust_config.RustComponentFlags(False, False, False, False)
     assert rust_config.rust_rag_vector_transport() == "json"
-    assert server.create_app().version == "4.2.5"
+    assert server.create_app().version == "4.2.6"
 
     monkeypatch.setattr(
         semantic_cache,
@@ -127,7 +127,7 @@ def test_402_to_403_adds_only_the_isolated_react_chat_slice() -> None:
     protocol = json.loads((ROOT / "release/4_0_protocol_contract.json").read_text(encoding="utf-8"))
     notes = (ROOT / "docs/releases/4.0.3.md").read_text(encoding="utf-8")
 
-    assert server.create_app().version == "4.2.5"
+    assert server.create_app().version == "4.2.6"
     assert runtime["target_version"] == "4.0.0"
     assert runtime["architecture"] == "python_first_hybrid"
     assert runtime["default_sidecar_deployment"] is False

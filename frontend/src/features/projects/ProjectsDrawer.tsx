@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useFilePreview } from "../../contexts/FilePreviewContext";
@@ -88,6 +88,7 @@ export function ProjectsDrawer() {
   const [name, setName] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const renameDraftRef = useRef("");
   if (overlay.activeOverlay !== "projects") return null;
   const active = projects.activeProject;
   const activeUploading = active ? projects.isUploadingProject(active.id) : false;
@@ -106,7 +107,12 @@ export function ProjectsDrawer() {
         onSubmit={(event) => {
           event.preventDefault();
           if (!name.trim()) return;
-          runUiAction(projects.create(name), { onSuccess: () => setName("") });
+          const submittedName = name;
+          runUiAction(projects.create(submittedName), {
+            onSuccess: () => setName((current) =>
+              current.trim() === submittedName.trim() ? "" : current,
+            ),
+          });
         }}
       >
         <input value={name} maxLength={60} placeholder="新项目名称" onChange={(event) => setName(event.target.value)} />
@@ -133,12 +139,20 @@ export function ProjectsDrawer() {
                   aria-label="重命名项目"
                   autoFocus
                   value={renameDraft}
-                  onChange={(event) => setRenameDraft(event.target.value)}
+                  onChange={(event) => {
+                    renameDraftRef.current = event.target.value;
+                    setRenameDraft(event.target.value);
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
                       event.preventDefault();
-                      runUiAction(projects.rename(project.id, renameDraft), {
-                        onSuccess: () => setRenamingId(null),
+                      const submittedProjectId = project.id;
+                      const submittedDraft = renameDraft;
+                      runUiAction(projects.rename(submittedProjectId, submittedDraft), {
+                        onSuccess: () => {
+                          if (renameDraftRef.current.trim() !== submittedDraft.trim()) return;
+                          setRenamingId((current) => current === submittedProjectId ? null : current);
+                        },
                       });
                     }
                     if (event.key === "Escape") setRenamingId(null);
@@ -160,7 +174,11 @@ export function ProjectsDrawer() {
                   title="重命名"
                   aria-label={`重命名项目 ${project.name}`}
                   disabled={renaming || removing || uploading}
-                  onClick={() => { setRenamingId(project.id); setRenameDraft(project.name); }}
+                  onClick={() => {
+                    setRenamingId(project.id);
+                    renameDraftRef.current = project.name;
+                    setRenameDraft(project.name);
+                  }}
                 >
                   ✎
                 </button>

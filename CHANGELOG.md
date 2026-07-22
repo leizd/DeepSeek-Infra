@@ -5,6 +5,22 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.2.6] - Mutation Completion Reconciliation
+
+### Frontend reliability
+
+- Preserves the user's latest active-project selection when an older create or delete request completes.
+- Guards Project create/rename drafts and Skill create/edit forms with submitted-intent and generation checks, so stale completion callbacks cannot clear or close newer work.
+- Gives pending Memory suggestions stable IDs and reconciles save/conflict results only against the suggestion that initiated them.
+- Stores coordination failures structurally and expires them automatically when the blocking lifecycle Mutation settles; project-binding retry/refetch also clears stale conflicts.
+- Reconciles Mutation failures per entity, so another entity's later success cannot hide a late failure while a success on the same entity resolves its older error.
+- Adds Hook/component contracts and eight real-Chromium checks for latest-intent completion, coordination recovery and late concurrent failures.
+
+### Compatibility
+
+- Keeps the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates and Python fallback.
+- Adds no dependency, backend protocol, Query persistence, Provider lifecycle change, lazy loading, attachment migration, visual redesign or bundle-budget increase.
+
 ## [4.2.5] - Mutation Intent and Remount Continuity
 
 ### Frontend reliability

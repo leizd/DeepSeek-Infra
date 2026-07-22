@@ -13,12 +13,16 @@ import { MEMORIES_QUERY_KEY } from "../../app/queryKeys";
 import { MEMORY_LIST_MUTATION_KEYS, mutationKeys, ownsMutationKey } from "../../app/mutationKeys";
 import { stableIntentKey } from "../../app/mutationIntents";
 import {
+  isLifecycleMutationMeta,
   isMutationActive,
   removeFailedMutations,
   type LifecycleMutationMeta,
   useMutationActivity,
 } from "../../app/mutationLifecycle";
-import { latestCacheMutationError, type MutationStateSnapshot } from "../../app/mutationErrors";
+import {
+  latestUnresolvedLifecycleError,
+  type LifecycleMutationSnapshot,
+} from "../../app/mutationErrors";
 import { useActionCoordination } from "../../shared/useActionCoordination";
 import { useMemoryWriteBarrier } from "./useMemoryWriteBarrier";
 
@@ -217,16 +221,17 @@ export function useMemoryController(): MemoryController {
     [invalidate, queryClient, resolveAction, runWrite],
   );
 
-  const mutationErrors = useMutationState<MutationStateSnapshot>({
+  const mutationErrors = useMutationState<LifecycleMutationSnapshot>({
     filters: { predicate: (mutation) => ownsMutationKey(mutation.options.mutationKey, MEMORY_LIST_MUTATION_KEYS) },
     select: (mutation) => ({
       status: mutation.state.status,
       error: mutation.state.error,
       submittedAt: mutation.state.submittedAt,
+      meta: isLifecycleMutationMeta(mutation.options.meta) ? mutation.options.meta : undefined,
     }),
   });
 
-  const firstError = memoriesQuery.error ?? latestCacheMutationError(mutationErrors);
+  const firstError = memoriesQuery.error ?? latestUnresolvedLifecycleError(mutationErrors);
 
   return {
     memories: memoriesQuery.data ?? [],

@@ -60,7 +60,8 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     checks["createCustomSkill"] = "PASS" if _contains_all(
         drawer + controller + api,
         (
-            "skills.create(draft)",
+            "onSubmit={skills.create}",
+            "onCommitted={() => setCreating(false)}",
             "createSkill",
             'action: "create"',
             "buildSimpleSkillConfig(draft)",

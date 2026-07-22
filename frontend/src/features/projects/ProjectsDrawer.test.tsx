@@ -17,6 +17,12 @@ const testProject: Project = {
   updatedAt: 1,
 };
 
+const secondProject: Project = {
+  ...testProject,
+  id: "p2",
+  name: "第二项目",
+};
+
 vi.mock("../../contexts/OverlayContext", () => ({
   useOverlay: () => ({ activeOverlay: "projects", closeOverlay: vi.fn() }),
 }));
@@ -31,7 +37,7 @@ vi.mock("../../contexts/SkillsContext", () => ({
 
 vi.mock("../../contexts/ProjectsContext", () => ({
   useProjects: () => ({
-    projects: [testProject],
+    projects: [testProject, secondProject],
     activeProjectId: "",
     activeProject: null,
     loading: false,
@@ -98,6 +104,45 @@ describe("ProjectsDrawer mutation dispatch", () => {
 
     await waitFor(() => expect(renameMock).toHaveBeenCalledWith("p1", "修正后的名称"));
     expect(screen.getByRole("textbox", { name: "重命名项目" })).toHaveProperty("value", "修正后的名称");
+  });
+
+  it("does not clear a newer project name draft when creation completes", async () => {
+    let resolveCreate!: () => void;
+    createMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveCreate = resolve;
+    }));
+    render(<ProjectsDrawer />);
+
+    const input = screen.getByPlaceholderText("新项目名称");
+    fireEvent.change(input, { target: { value: "项目 A" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(createMock).toHaveBeenCalledWith("项目 A"));
+    fireEvent.change(input, { target: { value: "项目 B" } });
+    resolveCreate();
+
+    await waitFor(() => expect(input).toHaveProperty("value", "项目 B"));
+  });
+
+  it("does not close another project's rename editor when an old rename completes", async () => {
+    let resolveRename!: () => void;
+    renameMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveRename = resolve;
+    }));
+    render(<ProjectsDrawer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "重命名项目 原项目" }));
+    const firstInput = screen.getByRole("textbox", { name: "重命名项目" });
+    fireEvent.change(firstInput, { target: { value: "项目 A 新名称" } });
+    fireEvent.keyDown(firstInput, { key: "Enter" });
+    await waitFor(() => expect(renameMock).toHaveBeenCalledWith("p1", "项目 A 新名称"));
+
+    fireEvent.click(screen.getByRole("button", { name: "重命名项目 第二项目" }));
+    expect(screen.getByRole("textbox", { name: "重命名项目" })).toHaveProperty("value", "第二项目");
+    resolveRename();
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "重命名项目" })).toHaveProperty("value", "第二项目");
+    });
   });
 
   it("requires confirmation before deleting a project", async () => {

@@ -12,14 +12,18 @@ import {
 } from "../../api/skillsApi";
 import { SKILLS_QUERY_KEY } from "../../app/queryKeys";
 import { mutationKeys, ownsMutationKey, SKILL_LIST_MUTATION_KEYS } from "../../app/mutationKeys";
-import { stableIntentKey } from "../../app/mutationIntents";
+import { skillDraftIntent } from "../../app/mutationIntents";
 import {
+  isLifecycleMutationMeta,
   isMutationActive,
   removeFailedMutations,
   type LifecycleMutationMeta,
   useMutationActivity,
 } from "../../app/mutationLifecycle";
-import { latestCacheMutationError, type MutationStateSnapshot } from "../../app/mutationErrors";
+import {
+  latestUnresolvedLifecycleError,
+  type LifecycleMutationSnapshot,
+} from "../../app/mutationErrors";
 import { useActionCoordination } from "../../shared/useActionCoordination";
 import { useEntityActionLocks } from "../../shared/useEntityActionLocks";
 
@@ -44,14 +48,6 @@ export interface SkillController {
 
 function errorText(reason: unknown, fallback: string): string {
   return reason instanceof Error && reason.message ? reason.message : fallback;
-}
-
-function skillDraftIntent(draft: SimpleSkillDraft): string {
-  return stableIntentKey({
-    name: draft.name.trim(),
-    description: draft.description.trim(),
-    systemPrompt: draft.systemPrompt,
-  });
 }
 
 function skillMutationMeta(
@@ -214,17 +210,18 @@ export function useSkillController(): SkillController {
     [invalidate, queryClient, resolveAction, runEntityAction],
   );
 
-  const mutationErrors = useMutationState<MutationStateSnapshot>({
+  const mutationErrors = useMutationState<LifecycleMutationSnapshot>({
     filters: { predicate: (mutation) => ownsMutationKey(mutation.options.mutationKey, SKILL_LIST_MUTATION_KEYS) },
     select: (mutation) => ({
       status: mutation.state.status,
       error: mutation.state.error,
       submittedAt: mutation.state.submittedAt,
+      meta: isLifecycleMutationMeta(mutation.options.meta) ? mutation.options.meta : undefined,
     }),
   });
 
   const firstError =
-    skillsQuery.error ?? latestCacheMutationError(mutationErrors);
+    skillsQuery.error ?? latestUnresolvedLifecycleError(mutationErrors);
 
   return {
     skills: skillsQuery.data ?? [],

@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.2.5-blue)
+![版本](https://img.shields.io/badge/version-4.2.6-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.2.5 Mutation Intent & Remount Continuity:** Workspace writes now distinguish operations from normalized user intent, so only identical payloads deduplicate and conflicting drafts are never reported as saved. Every lifecycle Mutation carries owner/entity/operation/intent metadata; pending and paused create, upload, clear and binding work remains visible after the Workspace Provider unmounts on a Trace route. Coordination conflicts surface specific user-facing errors, Project/Skill creation is protected from same-frame duplicates, Memory intents are normalized, and binding failures survive remount for retry. Eight new Chromium checks cover intent identity, conflict visibility and route-remount continuity. The frozen 4.0 runtime contract is unchanged. See [the 4.2.5 notes](docs/releases/4.2.5.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+> **4.2.6 Mutation Completion Reconciliation:** 异步完成回调现在尊重等待期间产生的最新用户意图：Project 创建或删除不会抢回/清空新的活动项目，Project 与 Skill 表单不会被旧请求清空或关闭，Memory 建议以稳定 ID 隔离完成结果。协调冲突会随阻塞 Mutation 结束自动消失，Project、Skill 与 Memory 的失败按实体归并，因此另一个实体的成功不会遮住晚到错误。八项新 Chromium 检查覆盖最新选择、草稿隔离、建议隔离、协调恢复与并发错误。冻结的 4.0 运行时合同保持不变。参见 [4.2.6 发布说明](docs/releases/4.2.6.md)、[前端边界](docs/FRONTEND_MODULES.md)、[升级指南](docs/UPGRADING_TO_4_0.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
 
-**4.2.5 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.2.5 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
+**4.2.6 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.2.6 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
 
 ## 30 秒概览
 

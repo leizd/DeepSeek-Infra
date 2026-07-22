@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import platform
+import re
 import sys
 import threading
 import time
@@ -1388,10 +1389,18 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
 
         projects = [
             {"id": "intent-project", "name": "连续性项目", "documents": [], "createdAt": 1, "updatedAt": 1},
+            {"id": "latest-project", "name": "最新选择项目", "documents": [], "createdAt": 1, "updatedAt": 1},
+            {"id": "late-project", "name": "晚到失败项目", "documents": [], "createdAt": 1, "updatedAt": 1},
         ]
         project_create_started = asyncio.Event()
         project_create_release = asyncio.Event()
         project_create_calls = {"count": 0}
+        project_delete_started = asyncio.Event()
+        project_delete_release = asyncio.Event()
+        late_delete_started = asyncio.Event()
+        late_delete_release = asyncio.Event()
+        project_rename_started = asyncio.Event()
+        project_rename_release = asyncio.Event()
 
         async def mock_config(route: Any) -> None:
             await route.fulfill(
@@ -1430,6 +1439,33 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
                 }
                 projects.append(created)
                 await route.fulfill(status=200, content_type="application/json", body=json.dumps({"project": created}))
+                return
+            if action == "delete":
+                project_id = str(body.get("id", ""))
+                if project_id == "intent-created":
+                    project_delete_started.set()
+                    await project_delete_release.wait()
+                    projects[:] = [project for project in projects if project["id"] != project_id]
+                    await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+                    return
+                if project_id == "late-project":
+                    late_delete_started.set()
+                    await late_delete_release.wait()
+                    await route.fulfill(
+                        status=500,
+                        content_type="application/json",
+                        body=json.dumps({"error": "晚到的删除失败"}),
+                    )
+                    return
+            if action == "rename":
+                project_id = str(body.get("id", ""))
+                name = str(body.get("name", ""))
+                if project_id == "late-project" and name == "旧请求名称":
+                    project_rename_started.set()
+                    await project_rename_release.wait()
+                current = next(project for project in projects if project["id"] == project_id)
+                current["name"] = name
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"project": current}))
                 return
             await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected project action"}))
 
@@ -1514,6 +1550,8 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         memory_clear_started = asyncio.Event()
         memory_clear_release = asyncio.Event()
         memory_clear_calls = {"count": 0}
+        memory_save_started = asyncio.Event()
+        memory_save_release = asyncio.Event()
 
         async def mock_memory(route: Any) -> None:
             if route.request.method == "GET":
@@ -1527,7 +1565,40 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
                 memories.clear()
                 await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
                 return
+            if body.get("action") == "add":
+                memory_save_started.set()
+                await memory_save_release.wait()
+                saved = {
+                    "id": "saved-suggestion-a",
+                    "content": str(body.get("content", "")),
+                    "category": str(body.get("category", "fact")),
+                    "scope": str(body.get("scope", "global")),
+                }
+                memories.append(saved)
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"ok": True, "memory": saved}),
+                )
+                return
             await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected memory action"}))
+
+        chat_calls = {"count": 0}
+
+        async def mock_chat(route: Any) -> None:
+            chat_calls["count"] += 1
+            suggestion = "记忆建议 A" if chat_calls["count"] == 1 else "记忆建议 B"
+            body = "\n".join(
+                [
+                    json.dumps({"type": "memory_suggestion", "content": suggestion, "category": "fact", "scope": "global"}),
+                    json.dumps({"type": "done", "content": ""}),
+                    "",
+                ]
+            )
+            await route.fulfill(status=200, headers={"Content-Type": "application/x-ndjson"}, body=body)
+
+        async def mock_title(route: Any) -> None:
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"title": "连续性"}))
 
         await context.route("**/api/config", mock_config)
         await context.route("**/api/projects", mock_projects)
@@ -1535,6 +1606,8 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         await context.route("**/api/skills", mock_skills)
         await context.route("**/api/workspace/projects/*/skills", mock_binding)
         await context.route("**/api/memory**", mock_memory)
+        await context.route("**/api/chat", mock_chat)
+        await context.route("**/api/title", mock_title)
         page = await context.new_page()
         page.on("pageerror", lambda error: page_errors.append(str(error)))
         await page.goto(base_url, wait_until="domcontentloaded")
@@ -1559,8 +1632,24 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
             raise AssertionError(f"duplicate project create escaped intent lock: {project_create_calls}")
         checks["mutationIntentIdentity"] = "PASS"
         checks["projectCreateDuplicateSuppressed"] = "PASS"
+        await project_form.locator("input").fill("等待创建时的新草稿")
+        await page.locator(".workspace-open", has_text="最新选择项目").click()
         project_create_release.set()
-        await page.locator(".workspace-open", has_text="重复意图项目").wait_for()
+        created_row = page.locator(".workspace-item", has_text="重复意图项目")
+        await created_row.wait_for()
+        await expect(project_form.locator("input")).to_have_value("等待创建时的新草稿")
+        latest_row = page.locator(".workspace-item", has_text="最新选择项目")
+        await expect(latest_row).to_have_class(re.compile(r"\bactive\b"))
+        checks["workspaceDraftLatestIntentWins"] = "PASS"
+
+        await created_row.locator(".workspace-open").click()
+        await created_row.get_by_role("button", name="删除项目 重复意图项目").click()
+        await asyncio.wait_for(project_delete_started.wait(), timeout=5)
+        await latest_row.locator(".workspace-open").click()
+        project_delete_release.set()
+        await created_row.wait_for(state="detached")
+        await expect(latest_row).to_have_class(re.compile(r"\bactive\b"))
+        checks["projectSelectionLatestIntentWins"] = "PASS"
 
         await page.locator(".workspace-open", has_text="连续性项目").click()
         upload_input = page.locator(".project-upload-button input")
@@ -1586,6 +1675,36 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         checks["coordinationConflictVisible"] = "PASS"
         upload_release.set()
         await page.locator(".project-upload-button", has_text="上传文档").wait_for()
+        await page.locator("section.settings-drawer > .workspace-error").wait_for(state="detached")
+        checks["coordinationErrorAutoClears"] = "PASS"
+
+        late_row = page.locator(".workspace-item", has_text="晚到失败项目")
+        await late_row.get_by_role("button", name="重命名项目 晚到失败项目").click()
+        late_rename_input = page.get_by_role("textbox", name="重命名项目")
+        await late_rename_input.fill("旧请求名称")
+        await late_rename_input.press("Enter")
+        await asyncio.wait_for(project_rename_started.wait(), timeout=5)
+        await latest_row.get_by_role("button", name="重命名项目 最新选择项目").click()
+        await expect(page.get_by_role("textbox", name="重命名项目")).to_have_value("最新选择项目")
+        project_rename_release.set()
+        await page.locator(".workspace-open", has_text="旧请求名称").wait_for()
+        await expect(page.get_by_role("textbox", name="重命名项目")).to_have_value("最新选择项目")
+        checks["renameCompletionIsolation"] = "PASS"
+        await page.get_by_role("textbox", name="重命名项目").press("Escape")
+
+        late_row = page.locator(".workspace-item", has_text="旧请求名称")
+        await late_row.get_by_role("button", name="删除项目 旧请求名称").click()
+        await asyncio.wait_for(late_delete_started.wait(), timeout=5)
+        await latest_row.get_by_role("button", name="重命名项目 最新选择项目").click()
+        latest_rename_input = page.get_by_role("textbox", name="重命名项目")
+        await latest_rename_input.fill("最新项目成功")
+        await latest_rename_input.press("Enter")
+        await page.locator(".workspace-open", has_text="最新项目成功").wait_for()
+        late_delete_release.set()
+        await page.locator("section.settings-drawer > .workspace-error", has_text="晚到的删除失败").wait_for()
+        checks["lateConcurrentFailureVisible"] = "PASS"
+        await page.locator("section.settings-drawer > .workspace-error").get_by_role("button", name="重新同步").click()
+        await page.locator("section.settings-drawer > .workspace-error").wait_for(state="detached")
 
         await page.get_by_role("button", name="关闭项目面板").click()
         await page.get_by_role("button", name="技能", exact=True).click()
@@ -1599,8 +1718,16 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         if skill_create_calls["count"] != 1:
             raise AssertionError(f"duplicate skill create escaped intent lock: {skill_create_calls}")
         checks["skillCreateDuplicateSuppressed"] = "PASS"
+        await skill_form.get_by_role("button", name="取消").click()
+        await page.get_by_role("button", name="新建技能").click()
+        reopened_skill_form = page.locator(".skill-form")
+        await reopened_skill_form.get_by_role("textbox", name="技能名称").fill("等待旧请求时的新技能")
+        await reopened_skill_form.get_by_role("textbox", name="技能提示词").fill("新提示")
         skill_create_release.set()
         await page.locator(".skill-card", has_text="重复技能").wait_for()
+        await expect(reopened_skill_form.get_by_role("textbox", name="技能名称")).to_have_value("等待旧请求时的新技能")
+        checks["skillFormCompletionIsolation"] = "PASS"
+        await reopened_skill_form.get_by_role("button", name="取消").click()
 
         await page.get_by_role("button", name="关闭技能面板").click()
         await page.get_by_role("button", name="记忆", exact=True).click()
@@ -1617,6 +1744,19 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         await page.get_by_text("还没有长期记忆").wait_for()
 
         await page.get_by_role("button", name="关闭记忆面板").click()
+        await page.locator("#reactPromptInput").fill("触发记忆建议 A")
+        await page.locator("button.send-button").click()
+        suggestion_toast = page.locator(".memory-suggestion-toast")
+        await suggestion_toast.get_by_text("记忆建议 A", exact=True).wait_for()
+        await suggestion_toast.get_by_role("button", name="保存", exact=True).click()
+        await asyncio.wait_for(memory_save_started.wait(), timeout=5)
+        await page.locator("#reactPromptInput").fill("触发记忆建议 B")
+        await page.locator("button.send-button").click()
+        await suggestion_toast.get_by_text("记忆建议 B", exact=True).wait_for()
+        memory_save_release.set()
+        await expect(suggestion_toast.get_by_text("记忆建议 B", exact=True)).to_be_visible()
+        checks["memorySuggestionCompletionIsolation"] = "PASS"
+
         await page.get_by_role("button", name="项目", exact=True).click()
         binding_checkbox = page.locator(".project-skill-options label", has_text="连续性技能").locator("input")
         if await binding_checkbox.count() == 0:
@@ -1629,6 +1769,14 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         await page.locator(".project-skill-binding h3", has_text="保存中").wait_for()
         await expect(page.locator(".project-skill-options label", has_text="连续性技能").locator("input")).to_be_disabled()
         checks["bindingStateSurvivesRemount"] = "PASS"
+        remounted_binding_checkbox = page.locator(".project-skill-options label", has_text="连续性技能").locator("input")
+        await remounted_binding_checkbox.evaluate("input => input.removeAttribute('disabled')")
+        await remounted_binding_checkbox.click()
+        binding_error = page.locator(".project-skill-binding .workspace-error")
+        await binding_error.wait_for()
+        await binding_error.get_by_role("button", name="重试").click()
+        await binding_error.wait_for(state="detached")
+        checks["bindingCoordinationRecovery"] = "PASS"
         binding_save_release.set()
         await page.locator(".project-skill-binding h3", has_text="项目技能").wait_for()
 

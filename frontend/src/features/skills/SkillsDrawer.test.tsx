@@ -7,6 +7,7 @@ import type { Skill } from "../../api/skillsApi";
 
 const createMock = vi.fn<() => Promise<void>>();
 const removeMock = vi.fn<() => Promise<void>>();
+const updateMock = vi.fn<() => Promise<void>>();
 
 const testSkill: Skill = {
   skillId: "s1",
@@ -28,10 +29,11 @@ vi.mock("../../contexts/SkillsContext", () => ({
     skills: [testSkill],
     loading: false,
     refreshing: false,
+    creating: false,
     error: "",
     create: createMock,
     remove: removeMock,
-    update: vi.fn(() => Promise.resolve()),
+    update: updateMock,
     toggle: vi.fn(() => Promise.resolve()),
     recover: vi.fn(() => Promise.resolve()),
     isUpdatingSkill: vi.fn(() => false),
@@ -45,6 +47,7 @@ import { SkillsDrawer } from "./SkillsDrawer";
 beforeEach(() => {
   createMock.mockResolvedValue(undefined);
   removeMock.mockResolvedValue(undefined);
+  updateMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -88,5 +91,49 @@ describe("SkillsDrawer mutation dispatch", () => {
 
     expect(confirm).toHaveBeenCalledWith("确定删除技能“自定义技能”？");
     expect(removeMock).toHaveBeenCalledWith("s1");
+  });
+
+  it("does not close a newly reopened create form when an old submission completes", async () => {
+    let resolveCreate!: () => void;
+    createMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveCreate = resolve;
+    }));
+    render(<SkillsDrawer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "新建技能" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "技能名称" }), { target: { value: "技能 A" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "技能提示词" }), { target: { value: "提示 A" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建技能" }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(screen.getByRole("button", { name: "新建技能" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "技能名称" }), { target: { value: "技能 B" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "技能提示词" }), { target: { value: "提示 B" } });
+    resolveCreate();
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "技能名称" })).toHaveProperty("value", "技能 B");
+    });
+  });
+
+  it("keeps a draft edited after submission when the old save completes", async () => {
+    let resolveUpdate!: () => void;
+    updateMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveUpdate = resolve;
+    }));
+    render(<SkillsDrawer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    const nameInput = screen.getByRole("textbox", { name: "技能名称" });
+    fireEvent.change(nameInput, { target: { value: "已提交名称" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    fireEvent.change(nameInput, { target: { value: "等待提交的新名称" } });
+    resolveUpdate();
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "技能名称" })).toHaveProperty("value", "等待提交的新名称");
+    });
   });
 });

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { SimpleSkillDraft, Skill } from "../../api/skillsApi";
+import { skillDraftIntent } from "../../app/mutationIntents";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useSkills } from "../../contexts/SkillsContext";
 import { Icon } from "../../shared/ui/Icon";
@@ -13,25 +14,54 @@ function SkillForm({
   submitLabel,
   active = false,
   onSubmit,
+  onCommitted,
   onCancel,
 }: {
   initial: SimpleSkillDraft;
   submitLabel: string;
   active?: boolean;
   onSubmit(draft: SimpleSkillDraft): Promise<void>;
+  onCommitted(): void;
   onCancel(): void;
 }) {
   const [draft, setDraft] = useState(initial);
   const [busy, setBusy] = useState(false);
+  const draftRef = useRef(initial);
+  const generationRef = useRef(0);
   const pending = busy || active;
+
+  useEffect(() => () => {
+    generationRef.current += 1;
+  }, []);
+
+  function updateDraft(next: SimpleSkillDraft): void {
+    draftRef.current = next;
+    setDraft(next);
+  }
+
   return (
     <form
       className="skill-form"
       onSubmit={(event) => {
         event.preventDefault();
         if (!draft.name.trim() || !draft.systemPrompt.trim()) return;
+        const submittedDraft = draftRef.current;
+        const submittedIntent = skillDraftIntent(submittedDraft);
+        const generation = ++generationRef.current;
         setBusy(true);
-        runUiAction(onSubmit(draft), { onSettled: () => setBusy(false) });
+        runUiAction(onSubmit(submittedDraft), {
+          onSuccess: () => {
+            if (
+              generationRef.current === generation
+              && skillDraftIntent(draftRef.current) === submittedIntent
+            ) {
+              onCommitted();
+            }
+          },
+          onSettled: () => {
+            if (generationRef.current === generation) setBusy(false);
+          },
+        });
       }}
     >
       <input
@@ -39,14 +69,14 @@ function SkillForm({
         placeholder="技能名称"
         maxLength={120}
         value={draft.name}
-        onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+        onChange={(event) => updateDraft({ ...draftRef.current, name: event.target.value })}
       />
       <input
         aria-label="技能描述"
         placeholder="一句话描述（可选）"
         maxLength={600}
         value={draft.description}
-        onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+        onChange={(event) => updateDraft({ ...draftRef.current, description: event.target.value })}
       />
       <textarea
         aria-label="技能提示词"
@@ -54,13 +84,22 @@ function SkillForm({
         rows={5}
         maxLength={20_000}
         value={draft.systemPrompt}
-        onChange={(event) => setDraft((current) => ({ ...current, systemPrompt: event.target.value }))}
+        onChange={(event) => updateDraft({ ...draftRef.current, systemPrompt: event.target.value })}
       />
       <div className="message-edit-actions">
         <button className="message-action primary" type="submit" disabled={pending || !draft.name.trim() || !draft.systemPrompt.trim()}>
           {pending ? `${submitLabel}中…` : submitLabel}
         </button>
-        <button className="message-action" type="button" onClick={onCancel}>取消</button>
+        <button
+          className="message-action"
+          type="button"
+          onClick={() => {
+            generationRef.current += 1;
+            onCancel();
+          }}
+        >
+          取消
+        </button>
       </div>
     </form>
   );
@@ -106,10 +145,8 @@ function SkillCard({ skill }: { skill: Skill }) {
           initial={{ name: skill.name, description: skill.description, systemPrompt: skill.systemPrompt }}
           submitLabel="保存"
           active={updating}
-          onSubmit={async (draft) => {
-            await skills.update({ ...draft, skillId: skill.skillId });
-            setEditing(false);
-          }}
+          onSubmit={(draft) => skills.update({ ...draft, skillId: skill.skillId })}
+          onCommitted={() => setEditing(false)}
           onCancel={() => setEditing(false)}
         />
       )}
@@ -155,10 +192,8 @@ export function SkillsDrawer() {
           initial={emptyDraft}
           submitLabel="创建技能"
           active={skills.creating}
-          onSubmit={async (draft) => {
-            await skills.create(draft);
-            setCreating(false);
-          }}
+          onSubmit={skills.create}
+          onCommitted={() => setCreating(false)}
           onCancel={() => setCreating(false)}
         />
       )}

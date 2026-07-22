@@ -36,10 +36,10 @@ const OPERATION_LABELS: Record<string, string> = {
 function conflictMessage(entityKey: string, operation: string, activeOperation: string): string {
   const active = OPERATION_LABELS[activeOperation] ?? activeOperation;
   const requested = OPERATION_LABELS[operation] ?? operation;
+  if (entityKey.startsWith("project-binding:")) return `项目技能绑定正在${active}，完成后才能${requested}。`;
   if (entityKey.startsWith("project:")) return `该项目正在${active}，完成后才能${requested}。`;
   if (entityKey.startsWith("skill:")) return `该技能正在${active}，完成后才能${requested}。`;
   if (entityKey.startsWith("memory")) return `长期记忆正在${active}，请稍后再${requested}。`;
-  if (entityKey.startsWith("project-binding:")) return `项目技能绑定正在${active}，完成后才能${requested}。`;
   if (entityKey === "project-list:create") return `项目正在${active}，完成后才能${requested}。`;
   if (entityKey === "skill-list:create") return `技能正在${active}，完成后才能${requested}。`;
   return `相关操作正在${active}，完成后才能${requested}。`;

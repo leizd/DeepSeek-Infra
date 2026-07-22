@@ -119,6 +119,39 @@ describe("useProjectSkillBinding", () => {
     expect(client.getQueryData<ProjectSkillBinding>(projectSkillBindingQueryKey("p1"))?.enabledSkills).toEqual(["a"]);
   });
 
+  it("clears a binding coordination conflict through retry/refetch", async () => {
+    fetchBindingMock.mockResolvedValue(binding([]));
+    let resolveSave!: (value: ProjectSkillBinding) => void;
+    saveBindingMock.mockImplementation(
+      () => new Promise<ProjectSkillBinding>((resolve) => {
+        resolveSave = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectSkillBinding("p1"), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let saveAction!: Promise<ProjectSkillBinding>;
+    act(() => {
+      saveAction = result.current.save(binding(["a"]));
+    });
+    await waitFor(() => expect(result.current.saving).toBe(true));
+    await expect(result.current.save(binding(["b"]))).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+    });
+    await waitFor(() => expect(result.current.error).toContain("正在保存"));
+
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(result.current.error).toBeNull();
+
+    await act(async () => {
+      resolveSave(binding(["a"]));
+      await saveAction;
+    });
+  });
+
   it("restores binding saving state after remount without resubmitting", async () => {
     fetchBindingMock.mockResolvedValue(binding([]));
     let resolveSave!: (value: ProjectSkillBinding) => void;

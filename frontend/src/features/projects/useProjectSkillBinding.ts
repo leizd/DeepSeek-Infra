@@ -55,7 +55,7 @@ function latestBindingMutation(
 export function useProjectSkillBinding(projectId: string): ProjectSkillBindingController {
   const queryClient = useQueryClient();
   const runEntityAction = useEntityActionLocks();
-  const { coordinationError, resolveAction } = useActionCoordination();
+  const { coordinationError, resolveAction, clearCoordinationError } = useActionCoordination();
   const queryKey = projectSkillBindingQueryKey(projectId);
   const mutationKey = mutationKeys.projectBinding.save(projectId);
   const entityKey = `project-binding:${projectId}`;
@@ -111,6 +111,7 @@ export function useProjectSkillBinding(projectId: string): ProjectSkillBindingCo
   }, [entityKey, mutationKey, projectId, queryClient, queryKey, resolveAction, runEntityAction]);
 
   async function retry(): Promise<void> {
+    clearCoordinationError();
     const latestMutation = queryClient.getMutationCache().findAll({ mutationKey, exact: true })
       .sort((left, right) => right.state.submittedAt - left.state.submittedAt)[0];
     if (latestMutation?.state.status === "error" && latestMutation.state.variables) {

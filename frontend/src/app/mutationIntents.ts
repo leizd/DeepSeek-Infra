@@ -13,3 +13,15 @@ function normalizeIntentValue(value: unknown): unknown {
 export function stableIntentKey(value: unknown): string {
   return JSON.stringify(normalizeIntentValue(value));
 }
+
+export function skillDraftIntent(draft: {
+  name: string;
+  description: string;
+  systemPrompt: string;
+}): string {
+  return stableIntentKey({
+    name: draft.name.trim(),
+    description: draft.description.trim(),
+    systemPrompt: draft.systemPrompt,
+  });
+}

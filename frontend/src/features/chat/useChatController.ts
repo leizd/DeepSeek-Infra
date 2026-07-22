@@ -52,6 +52,7 @@ function isAbortError(reason: unknown): boolean {
 }
 
 export interface PendingMemorySuggestion {
+  id: string;
   content: string;
   category: string;
   scope: string;
@@ -108,7 +109,13 @@ export function useChatController() {
           if (event.type === "done" || event.type === "error") terminalReceived = true;
           if (event.type === "memory_suggestion") {
             const suggestion = normalizeMemorySuggestion(event.payload);
-            if (suggestion) setPendingMemorySuggestion({ ...suggestion, conflicts: [] });
+            if (suggestion) {
+              setPendingMemorySuggestion({
+                id: createId("memory-suggestion"),
+                ...suggestion,
+                conflicts: [],
+              });
+            }
           }
         }
         if (!terminalReceived) {
@@ -323,10 +330,13 @@ export function useChatController() {
           replaceIds,
         });
         if (!result.saved) {
-          setPendingMemorySuggestion({ ...suggestion, conflicts: result.conflicts });
+          setPendingMemorySuggestion((current) => current?.id === suggestion.id
+            ? { ...current, conflicts: result.conflicts }
+            : current,
+          );
           return;
         }
-        setPendingMemorySuggestion(null);
+        setPendingMemorySuggestion((current) => current?.id === suggestion.id ? null : current);
         dispatch({ type: "noticeSet", notice: "已保存到长期记忆" });
       } catch (reason) {
         dispatch({ type: "noticeSet", notice: errorMessage(reason) });
