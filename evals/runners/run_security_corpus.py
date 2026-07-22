@@ -23,6 +23,7 @@ if str(RUNNERS_DIR) not in sys.path:
 import run_injection_adversarial  # noqa: E402
 import run_tool_eval  # noqa: E402
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 from deepseek_infra.infra.evaluation import harness  # noqa: E402
 
 SCHEMA_VERSION = "security-corpus-report.v1"
@@ -131,6 +132,7 @@ def build_security_report(
         "schemaVersion": SCHEMA_VERSION,
         "version": version,
         "commit": commit,
+        **evidence_revision(REPO_ROOT),
         "generatedAt": generated_at or utc_now(),
         "environment": build_environment(),
         "status": status,

@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 
 EPSILON = 1e-9
 
@@ -140,6 +141,7 @@ def compare_reports(
         "schemaVersion": "offline-eval-compare.v1",
         "version": version,
         "commit": _report_sha(current),
+        **evidence_revision(REPO_ROOT),
         "generatedAt": generated_at or utc_now(),
         "environment": build_environment(),
         "status": status,

@@ -32,6 +32,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from deepseek_infra.infra.evaluation import harness  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 from deepseek_infra.infra.gateway import semantic_cache  # noqa: E402
 from deepseek_infra.infra.rag import local_rag  # noqa: E402
 
@@ -227,6 +228,7 @@ def _build_compare_evidence(hash_report: dict[str, Any], onnx_report: dict[str, 
         "schemaVersion": "semantic-cache-onnx-evidence.v1",
         "version": _app_version(),
         "commit": _git_sha(),
+        **evidence_revision(REPO_ROOT),
         "suite": "semantic-cache-onnx",
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "environment": {"os": platform.system(), "python": platform.python_version(), "ci": False},

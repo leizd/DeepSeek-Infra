@@ -28,6 +28,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 from deepseek_infra.infra.evaluation import agent_recording, harness  # noqa: E402
 
 SCHEMA_VERSION = "agent-eval-report.v1"
@@ -158,6 +159,7 @@ def build_agent_report(
         "schemaVersion": SCHEMA_VERSION,
         "version": version,
         "commit": git_sha(),
+        **evidence_revision(REPO_ROOT),
         "generatedAt": generated_at or utc_now(),
         "environment": build_environment(),
         "status": "WARNING" if warning_list else "PASS",

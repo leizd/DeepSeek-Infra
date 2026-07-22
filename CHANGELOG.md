@@ -5,6 +5,21 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.2.8] - Exact-Merge Evidence Assembly
+
+### Release trust
+
+- Introduces a schema-v2 Evidence Source Context captured once per workflow and downloaded by every producer, binding all reports to the exact clean `GITHUB_SHA` plus repository, run, attempt, event and ref identity.
+- Replaces post-hoc provenance stamping with producer-owned Evidence metadata and one typed `EvidenceSpec` inventory shared by generation, preflight, manifest construction, assembly and documentation tests.
+- Uploads producer-isolated artifacts, then performs a fail-closed assembly that rejects missing ownership, path collisions, revision drift, CI identity mismatch, non-PASS reports and stale-version Evidence.
+- Publishes a detached SHA-256 for the final Evidence manifest and exposes candidate versus exact-merge tiers without weakening GA requirements.
+- Builds the real release ZIP from the assembled exact-merge Evidence and verifies archive byte identity, checksums, revision binding, exclusions and the absence of unlisted current-version Evidence before upload.
+
+### Compatibility
+
+- Keeps the 4.2.7 frontend behavior and the frozen 4.0 protocol unchanged; this release adds no product feature, frontend dependency, Provider lifecycle, Query persistence, lazy-loading, offline-persistence or bundle-budget change.
+- Concludes the 4.2.x release line with an auditable exact-merge Evidence chain.
+
 ## [4.2.7] - Evidence Provenance and Blocker Attribution
 
 ### Frontend reliability

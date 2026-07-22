@@ -10,6 +10,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision, load_source_context
+
 from deepseek_infra.core.config import APP_VERSION, GENERATED_DIR
 from deepseek_infra.core.utils import utc_now_iso
 from deepseek_infra.infra.tool_runtime.generated_files import resolve_generated_file, store_generated_file
@@ -104,6 +106,7 @@ def release_evidence_payload(*, checks: dict[str, str], version: str = APP_VERSI
     return {
         "version": version,
         "commit": git_commit(),
+        **evidence_revision(),
         "generatedAt": utc_now_iso(),
         "environment": {"os": platform.system() or platform.platform(), "python": platform.python_version(), "ci": bool(_env_ci())},
         "status": status,
@@ -120,6 +123,9 @@ def write_release_evidence(path: Path, payload: dict[str, Any]) -> Path:
 
 
 def git_commit() -> str:
+    context = load_source_context()
+    if context is not None:
+        return str(context["testedRevision"])
     try:
         completed = subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], check=False, capture_output=True, text=True)
     except OSError:

@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.2.7-blue)
+![版本](https://img.shields.io/badge/version-4.2.8-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.2.7 Evidence Provenance & Blocker Attribution:** 协调冲突现在记录精确的阻塞生命周期，包括跨实体 Memory 屏障，并只在该 blocker 真正结束时过期；同一项目的删除与技能绑定保存双向互斥。统一 Evidence 生成器先从干净工作树捕获候选提交，所有报告共享这一只读上下文，严格 preflight 再校验 PASS、revision、CI 身份和逐文件 SHA-256 清单。冻结的 4.0 运行时合同保持不变。参见 [4.2.7 发布说明](docs/releases/4.2.7.md)、[前端边界](docs/FRONTEND_MODULES.md)、[升级指南](docs/UPGRADING_TO_4_0.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
+> **4.2.8 Exact-Merge Evidence Assembly:** CI 在工作流起点捕获唯一的 schema-v2 Evidence Source Context，各 producer 直接写入同一 provenance，并以隔离 Artifact 交给最终装配作业。装配会拒绝缺失、路径冲突、所有权错误、revision/CI 身份漂移和非 PASS 报告；真实发布 ZIP 随后再次验证 Evidence 字节、清单摘要、排除项和候选提交。4.2.7 的前端行为与冻结的 4.0 运行时合同均保持不变。参见 [4.2.8 发布说明](docs/releases/4.2.8.md)、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
 
-**4.2.7 validation:** after committing the release candidate, run `python scripts/generate_release_evidence.py --version 4.2.7`; it requires a clean tree, generates the shared source context and checksum manifest, and runs `python scripts/preflight_release.py --version 4.2.7 --ga --provenance-strict`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
+**4.2.8 validation:** candidate producers may be exercised locally from a clean commit, but GA publication uses CI's `evidence-context` → isolated producer Artifacts → `evidence-assembly` → `release-package` chain. The downloadable `release-evidence-v4.2.8` Artifact and real ZIP are both bound to the exact merge SHA and verified before upload.
 
 ## 30 秒概览
 

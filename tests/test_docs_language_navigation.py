@@ -58,5 +58,5 @@ def test_readme_roadmap_is_a_standalone_document() -> None:
 def test_english_entry_documents_are_present() -> None:
     readme = (ROOT / "README.en.md").read_text(encoding="utf-8")
     roadmap = (ROOT / "ROADMAP.en.md").read_text(encoding="utf-8")
-    assert "## 4.2.7 at a glance" in readme
+    assert "## 4.2.8 at a glance" in readme
     assert "## Next frontend slices" in roadmap

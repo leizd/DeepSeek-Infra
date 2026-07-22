@@ -19,6 +19,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
+
 
 def app_version() -> str:
     from deepseek_infra.core.config import settings
@@ -248,10 +250,12 @@ def run_ga_smoke(root: Path) -> tuple[dict[str, str], dict[str, Any]]:
 
 def build_evidence(checks: dict[str, str], details: dict[str, Any], *, version: str) -> dict[str, Any]:
     status = "PASS" if all(value == "PASS" for value in checks.values()) else "FAIL"
+    revision = evidence_revision(REPO_ROOT)
     return {
         "schemaVersion": "ga-smoke.v1",
         "version": version,
-        "commit": git_short_sha(),
+        "commit": revision["testedRevision"],
+        **revision,
         "generatedAt": utc_now(),
         "environment": {"os": platform.platform(), "python": platform.python_version(), "ci": bool(os.environ.get("CI"))},
         "status": status,

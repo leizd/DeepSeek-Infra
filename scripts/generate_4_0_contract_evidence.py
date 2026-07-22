@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 
 CONTRACTS: dict[str, dict[str, Any]] = {
     "upgrade": {
@@ -99,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         "schemaVersion": contract["schema"],
         "version": APP_VERSION,
         "commit": _commit(),
+        **evidence_revision(ROOT),
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "status": "PASS" if passed else "FAIL",
         "testFile": contract["test"],

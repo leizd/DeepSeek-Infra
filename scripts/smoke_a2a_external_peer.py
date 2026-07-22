@@ -29,6 +29,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts._smoke_common import SmokeFailure, bearer_headers, join_url, jsonrpc, request_json, rpc_result  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 
 SCHEMA_VERSION = "a2a-external-peer-evidence.v1"
 THIRD_PARTY_SCHEMA_VERSION = "a2a-third-party-peer-evidence.v1"
@@ -334,14 +335,16 @@ def run_smoke(peer_url: str, *, timeout_seconds: int, max_events: int, message: 
 def build_evidence(steps: list[dict[str, Any]], *, peer: dict[str, Any], peer_type: str) -> dict[str, Any]:
     checks = checks_from_steps(steps)
     failed = [step for step in steps if step.get("status") == "fail"]
+    revision = evidence_revision(REPO_ROOT)
     return {
         "schemaVersion": schema_version_for_peer_type(peer_type),
         "version": app_version(),
-        "commit": git_value("rev-parse", "--short", "HEAD") or "unknown",
+        "commit": revision["testedRevision"],
+        **revision,
         "generatedAt": utc_now(),
         "environment": build_environment(),
-        "gitSha": git_value("rev-parse", "--short", "HEAD") or "unknown",
-        "gitDirty": bool(git_value("status", "--short")),
+        "gitSha": revision["testedRevision"],
+        "gitDirty": revision["sourceTreeDirty"],
         "peer": {
             "name": peer.get("name") or "external-peer",
             "url": peer.get("url") or "",

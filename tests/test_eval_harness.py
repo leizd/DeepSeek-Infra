@@ -243,8 +243,17 @@ def test_offline_eval_suite_injection_hard_gate_fails_suite() -> None:
 def test_offline_eval_suite_main_writes_latest_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runner = _load_offline_suite_runner()
     monkeypatch.setattr(runner, "run_all", lambda args: (*_suite_reports(), None))
-    monkeypatch.setattr(runner, "git_sha", lambda: "abc1234")
-    monkeypatch.setattr(runner, "git_dirty", lambda: False)
+    monkeypatch.setattr(
+        runner,
+        "evidence_revision",
+        lambda _root: {
+            "testedRevision": "abc1234",
+            "sourceRevision": "abc1234",
+            "sourceTreeDirty": False,
+            "releaseRevision": None,
+            "ciRevision": None,
+        },
+    )
 
     json_path = tmp_path / "latest.json"
     markdown_path = tmp_path / "latest.md"

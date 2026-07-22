@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 
 
 def _coverage(path: Path) -> dict[str, Any]:
@@ -55,6 +56,7 @@ def main() -> int:
         "schemaVersion": "python-coverage-stability.v1",
         "version": APP_VERSION,
         "commit": _commit(),
+        **evidence_revision(ROOT),
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "status": "PASS" if passed else "FAIL",
         "ciGatePercent": 95.0,

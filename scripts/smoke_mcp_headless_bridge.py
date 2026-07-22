@@ -27,6 +27,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts._smoke_common import SmokeFailure, join_url, jsonrpc, request_json, resolve_token, rpc_result, service_base_from_endpoint  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 
 SCHEMA_VERSION = "headless-mcp-bridge-evidence.v1"
 DEFAULT_EVIDENCE_PATH = REPO_ROOT / "docs" / "evidence" / "headless-mcp-bridge.json"
@@ -243,14 +244,16 @@ def run_smoke(mcp_url: str, *, token: str, timeout_seconds: int) -> list[dict[st
 
 def build_evidence(steps: list[dict[str, Any]], *, mcp_url: str, auth_mode: str) -> dict[str, Any]:
     failed = [step for step in steps if step.get("status") == "fail"]
+    revision = evidence_revision(REPO_ROOT)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "version": app_version(),
-        "commit": git_value("rev-parse", "--short", "HEAD") or "unknown",
+        "commit": revision["testedRevision"],
+        **revision,
         "generatedAt": utc_now(),
         "environment": build_environment(),
-        "gitSha": git_value("rev-parse", "--short", "HEAD") or "unknown",
-        "gitDirty": bool(git_value("status", "--short")),
+        "gitSha": revision["testedRevision"],
+        "gitDirty": revision["sourceTreeDirty"],
         "status": "FAIL" if failed else "PASS",
         "transport": {
             "server": "embedded-or-local-http",
