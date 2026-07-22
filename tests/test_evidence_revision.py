@@ -81,6 +81,7 @@ def test_capture_source_context_rejects_dirty_tree(tmp_path: Path, monkeypatch) 
         return "candidate123" if args == ("rev-parse", "HEAD") else " M source.py"
 
     monkeypatch.setattr(revision_module, "_git", fake_git)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
     try:
         revision_module.capture_source_context(tmp_path, "4.2.8", generator="test")
     except ValueError as exc:

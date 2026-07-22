@@ -832,6 +832,21 @@ def test_preflight_ga_checks_pass(tmp_path: Path) -> None:
     assert preflight.main(["--root", str(root), "--version", "3.0.0", "--ga", "--json"]) == 0
 
 
+def test_ga_release_manifest_accepts_version_parameterized_path(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    manifest = tmp_path / "deepseek_infra" / "infra" / "diagnostics" / "release_manifest.py"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        'GA = {"gaEvidence": f"docs/evidence/ga-v{version}.json"}\n',
+        encoding="utf-8",
+    )
+
+    result = preflight.check_ga_release_manifest(tmp_path, preflight.APP_VERSION)
+
+    assert result.status == "pass"
+    assert result.data["checked"][1] == 'f"docs/evidence/ga-v{version}.json"'
+
+
 def test_preflight_ga_fails_on_missing_evidence(tmp_path: Path) -> None:
     preflight = _load_preflight()
     root = _skeleton(tmp_path, "3.0.0")

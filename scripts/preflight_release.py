@@ -420,11 +420,15 @@ def check_ga_evidence_index(root: Path, version: str) -> CheckResult:
 
 def check_ga_release_manifest(root: Path, version: str) -> CheckResult:
     text = _read(root / "deepseek_infra" / "infra" / "diagnostics" / "release_manifest.py")
-    dynamic_path = 'f"docs/evidence/ga-v{APP_VERSION}.json"'
+    dynamic_paths = (
+        'f"docs/evidence/ga-v{APP_VERSION}.json"',
+        'f"docs/evidence/ga-v{version}.json"',
+    )
     literal_path = f"docs/evidence/ga-v{version}.json"
     missing = ["gaEvidence"] if "gaEvidence" not in text else []
-    if dynamic_path not in text and literal_path not in text:
-        missing.append(f"{dynamic_path} or {literal_path}")
+    matched_path = next((path for path in (*dynamic_paths, literal_path) if path in text), "")
+    if not matched_path:
+        missing.append(" or ".join((*dynamic_paths, literal_path)))
     evidence_manifest_path = f"docs/evidence/evidence-manifest-v{version}.json"
     if _version_tuple(version) >= (4, 2, 7) and version == APP_VERSION and evidence_manifest_path not in DEFAULT_EVIDENCE_PATHS:
         missing.append(evidence_manifest_path)
@@ -435,7 +439,7 @@ def check_ga_release_manifest(root: Path, version: str) -> CheckResult:
         STATUS_PASS,
         "release manifest includes gaEvidence",
         {
-            "checked": ["gaEvidence", dynamic_path if dynamic_path in text else literal_path]
+            "checked": ["gaEvidence", matched_path]
             + ([evidence_manifest_path] if _version_tuple(version) >= (4, 2, 7) else []),
         },
     )
