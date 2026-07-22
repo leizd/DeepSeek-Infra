@@ -9,32 +9,33 @@ import {
 import {
   actionLockValue,
   EntityActionConflictError,
+  type ActionBlocker,
   type EntityActionLockResult,
 } from "./useEntityActionLocks";
 
 export interface CoordinationFailure {
-  entityKey: string;
+  requestedEntityKey: string;
   requestedOperation: string;
-  activeOperation: string;
+  blocker: ActionBlocker;
   message: string;
 }
 
 export function useActionCoordination() {
   const [coordinationFailure, setCoordinationFailure] = useState<CoordinationFailure | null>(null);
-  const activeEntityKeys = useMutationState<string>({
+  const activeLifecycleIds = useMutationState<string>({
     filters: {
       predicate: (mutation) =>
         isMutationActive(mutation.state) && isLifecycleMutationMeta(mutation.options.meta),
     },
     select: (mutation) => isLifecycleMutationMeta(mutation.options.meta)
-      ? mutation.options.meta.entityKey
+      ? mutation.options.meta.lifecycleId
       : "",
   });
 
   useEffect(() => {
     if (!coordinationFailure) return;
-    if (!activeEntityKeys.includes(coordinationFailure.entityKey)) setCoordinationFailure(null);
-  }, [activeEntityKeys, coordinationFailure]);
+    if (!activeLifecycleIds.includes(coordinationFailure.blocker.lifecycleId)) setCoordinationFailure(null);
+  }, [activeLifecycleIds, coordinationFailure]);
 
   const resolveAction = useCallback(<T,>(
     result: EntityActionLockResult<T>,
@@ -48,9 +49,9 @@ export function useActionCoordination() {
     } catch (reason) {
       if (reason instanceof EntityActionConflictError) {
         setCoordinationFailure({
-          entityKey: reason.entityKey,
-          requestedOperation: reason.operation,
-          activeOperation: reason.activeOperation,
+          requestedEntityKey: reason.requestedEntityKey,
+          requestedOperation: reason.requestedOperation,
+          blocker: reason.blocker,
           message: reason.message,
         });
       }

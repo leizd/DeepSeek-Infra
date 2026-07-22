@@ -10,7 +10,7 @@ import { formatBytes } from "../attachments/attachmentMapper";
 import { useProjectSkillBinding } from "./useProjectSkillBinding";
 import type { Project } from "../../api/projectsApi";
 
-function ProjectSkillBinding({ project }: { project: Project }) {
+function ProjectSkillBinding({ project, projectRemoving }: { project: Project; projectRemoving: boolean }) {
   const skills = useSkills();
   const binding = useProjectSkillBinding(project.id);
   const enabled = binding.binding?.enabledSkills ?? [];
@@ -52,7 +52,7 @@ function ProjectSkillBinding({ project }: { project: Project }) {
                 <input
                   type="checkbox"
                   checked={enabled.includes(skill.skillId)}
-                  disabled={skill.disabled || binding.saving}
+                  disabled={skill.disabled || binding.saving || binding.projectRemoving || projectRemoving}
                   onChange={(event) => {
                     const next = event.target.checked
                       ? [...enabled, skill.skillId]
@@ -66,7 +66,11 @@ function ProjectSkillBinding({ project }: { project: Project }) {
           </div>
           <label className="project-default-skill">
             <span>默认技能</span>
-            <select value={defaultSkill} disabled={binding.saving} onChange={(event) => save(enabled, event.target.value)}>
+            <select
+              value={defaultSkill}
+              disabled={binding.saving || binding.projectRemoving || projectRemoving}
+              onChange={(event) => save(enabled, event.target.value)}
+            >
               <option value="">无</option>
               {enabled.map((skillId) => (
                 <option key={skillId} value={skillId}>
@@ -131,6 +135,7 @@ export function ProjectsDrawer() {
           const renaming = projects.isRenamingProject(project.id);
           const removing = projects.isRemovingProject(project.id);
           const uploading = projects.isUploadingProject(project.id);
+          const bindingSaving = projects.isProjectBindingSaving(project.id);
           return (
             <div className={project.id === projects.activeProjectId ? "workspace-item active" : "workspace-item"} key={project.id}>
               {renamingId === project.id ? (
@@ -187,7 +192,7 @@ export function ProjectsDrawer() {
                   type="button"
                   title="删除"
                   aria-label={`删除项目 ${project.name}`}
-                  disabled={removing || renaming || uploading}
+                  disabled={removing || renaming || uploading || bindingSaving}
                   onClick={() => {
                     if (!window.confirm(`确定删除项目“${project.name}”？`)) return;
                     runUiAction(projects.remove(project.id));
@@ -251,7 +256,13 @@ export function ProjectsDrawer() {
           </ul>
         </section>
       )}
-      {active && <ProjectSkillBinding key={active.id} project={active} />}
+      {active && (
+        <ProjectSkillBinding
+          key={active.id}
+          project={active}
+          projectRemoving={projects.isRemovingProject(active.id)}
+        />
+      )}
     </section>
   );
 }

@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from deepseek_infra.core.errors import AppError  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 from deepseek_infra.infra.gateway import semantic_cache  # noqa: E402
 from deepseek_infra.infra.gateway.request_preparation import (  # noqa: E402
     prepare_gateway_request,
@@ -47,7 +48,7 @@ from deepseek_infra.infra.rag.document_preparation import (  # noqa: E402
 from deepseek_infra.infra.rust_core import policy_client, rag_client, transport, vector_binary  # noqa: E402
 from deepseek_infra.infra.tool_runtime.tool_policy import evaluate_path_safety, evaluate_url_safety  # noqa: E402
 
-VERSION = "4.2.6"
+VERSION = "4.2.7"
 SCHEMA_VERSION = "rust-sidecar-performance.v3"
 BUILD_COMMAND = [
     "cargo",
@@ -1632,7 +1633,7 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
     report = {
         "schemaVersion": SCHEMA_VERSION,
         "version": VERSION,
-        "commit": machine["commitSha"],
+        **evidence_revision(ROOT),
         "status": "PASS",
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "informationalOnly": True,

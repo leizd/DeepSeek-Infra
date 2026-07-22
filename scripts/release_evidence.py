@@ -2,33 +2,29 @@
 
 from __future__ import annotations
 
-import subprocess
+import os
+import platform
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.config import APP_VERSION
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision
 
 
 def git_commit(root: Path) -> str:
-    completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=root,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    value = completed.stdout.strip()
-    return value if completed.returncode == 0 and value else "unknown"
+    """Compatibility accessor backed by the shared Evidence source context."""
+    block = evidence_revision(root)
+    return str(block.get("testedRevision") or block.get("sourceRevision") or "unknown")
 
 
 def stamp_release_report(report: dict[str, Any], *, root: Path) -> dict[str, Any]:
     stamped = dict(report)
     stamped.update(
         version=APP_VERSION,
-        commit=git_commit(root),
+        **evidence_revision(root),
         status="PASS" if report.get("ok") is True else "FAIL",
         generatedAt=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        environment={"os": platform.platform(), "python": platform.python_version(), "ci": bool(os.environ.get("CI"))},
     )
     return stamped

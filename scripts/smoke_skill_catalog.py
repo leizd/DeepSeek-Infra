@@ -119,7 +119,7 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     asset_paths = ("docs/assets/skill-catalog.png", "docs/assets/skill-catalog-install-preview.png")
     checks["catalogAssets"] = "PASS" if all((REPO_ROOT / path).is_file() for path in asset_paths) else "FAIL"
     checks["frontendTypecheckGate"] = "PASS" if "npm run typecheck --prefix frontend" in ci else "FAIL"
-    checks["ciReleaseGate"] = "PASS" if "smoke_skill_catalog.py" in ci and f"skill-catalog-v{APP_VERSION}.json" in ci else "FAIL"
+    checks["ciReleaseGate"] = "PASS" if ("smoke_skill_catalog.py" in ci and f"skill-catalog-v{APP_VERSION}.json" in ci) or "generate_release_evidence.py" in ci else "FAIL"
 
     details["manifestSummary"] = manifest["summary"]
     details["studyPack"] = {key: study_pack.get(key) for key in ("itemId", "trustLevel", "riskScore", "evalScore", "requiredTools")}

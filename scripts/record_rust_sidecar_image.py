@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
-from scripts.release_evidence import git_commit  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 
 
 def main() -> int:
@@ -36,7 +36,7 @@ def main() -> int:
     payload = {
         "schemaVersion": "rust-sidecar-image.v1",
         "version": APP_VERSION,
-        "commit": git_commit(ROOT),
+        **evidence_revision(ROOT),
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "status": "PASS" if passed else "FAIL",
         "tag": args.tag,

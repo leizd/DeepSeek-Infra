@@ -14,6 +14,7 @@ function snapshot(
 ): LifecycleMutationSnapshot {
   const meta: LifecycleMutationMeta = {
     owner: "project-list",
+    lifecycleId: `lifecycle-${submittedAt}`,
     entityKey,
     operation: "rename",
     intentKey: String(submittedAt),

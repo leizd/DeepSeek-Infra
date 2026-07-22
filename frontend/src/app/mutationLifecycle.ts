@@ -8,6 +8,7 @@ export type LifecycleMutationOwner =
 
 export interface LifecycleMutationMeta extends Record<string, unknown> {
   owner: LifecycleMutationOwner;
+  lifecycleId: string;
   entityKey: string;
   operation: string;
   intentKey: string;
@@ -17,9 +18,15 @@ export function isLifecycleMutationMeta(value: unknown): value is LifecycleMutat
   if (!value || typeof value !== "object") return false;
   const meta = value as Partial<LifecycleMutationMeta>;
   return typeof meta.owner === "string"
+    && typeof meta.lifecycleId === "string"
     && typeof meta.entityKey === "string"
     && typeof meta.operation === "string"
     && typeof meta.intentKey === "string";
+}
+
+export function createLifecycleId(): string {
+  return globalThis.crypto?.randomUUID?.()
+    ?? `lifecycle-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 export function isMutationActive(state: { status: string; isPaused: boolean }): boolean {

@@ -1311,11 +1311,21 @@ async def run_mutation_lifecycle_smoke(base_url: str) -> dict[str, str]:
         await page.locator(".project-create-form input").fill("触发恢复")
         await page.get_by_role("button", name="创建", exact=True).click()
         await page.locator("section.settings-drawer > .workspace-error").wait_for()
+        await page.locator(".workspace-open", has_text="生命周期项目B").click()
         page.once("dialog", lambda dialog: asyncio.create_task(dialog.accept()))
         await page.get_by_role("button", name="删除项目 生命周期项目B").click()
         await asyncio.wait_for(project_delete_started.wait(), timeout=5)
         pending_delete = page.get_by_role("button", name="删除项目 生命周期项目B")
         await expect(pending_delete).to_be_disabled(timeout=3000)
+        binding_calls_before_delete = binding_patch_calls["count"]
+        deletion_blocked_binding = page.locator(
+            ".project-skill-options label", has_text="生命周期技能"
+        ).locator("input")
+        await deletion_blocked_binding.evaluate("input => { input.removeAttribute('disabled'); input.click(); }")
+        await page.wait_for_timeout(100)
+        if binding_patch_calls["count"] != binding_calls_before_delete:
+            raise AssertionError("project binding save raced with an active deletion")
+        checks["projectDeletionBlocksBinding"] = "PASS"
         await page.locator("section.settings-drawer > .workspace-error").get_by_role("button", name="重新同步").click()
         await page.locator("section.settings-drawer > .workspace-error").wait_for(state="detached")
         if not await pending_delete.is_disabled():
@@ -1350,13 +1360,18 @@ async def run_mutation_lifecycle_smoke(base_url: str) -> dict[str, str]:
         await memory_row.get_by_role("button", name="删除这条记忆").click()
         await asyncio.wait_for(memory_delete_started.wait(), timeout=5)
         clear_button = page.get_by_role("button", name="全部清空")
-        await expect(clear_button).to_be_disabled(timeout=3000)
-        await clear_button.evaluate("button => { button.removeAttribute('disabled'); button.click(); }")
-        await page.wait_for_timeout(100)
+        await clear_button.click()
+        memory_coordination_error = page.locator("section.settings-drawer > .workspace-error")
+        await memory_coordination_error.wait_for()
+        await expect(memory_coordination_error).to_contain_text("长期记忆正在删除")
         if memory_clear_calls["count"] != 0:
             raise AssertionError("memory clear raced with an active removal")
+        checks["crossEntityBlockerAttributed"] = "PASS"
+        checks["crossEntityConflictPersists"] = "PASS"
         memory_delete_release.set()
         await memory_row.wait_for(state="detached")
+        await memory_coordination_error.wait_for(state="detached")
+        checks["exactBlockerSettlementClears"] = "PASS"
         checks["memoryClearWriteBarrier"] = "PASS"
 
         unhandled = await page.evaluate("() => window.__mutationUnhandledRejections")
@@ -1768,6 +1783,9 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         await page.get_by_role("button", name="项目", exact=True).click()
         await page.locator(".project-skill-binding h3", has_text="保存中").wait_for()
         await expect(page.locator(".project-skill-options label", has_text="连续性技能").locator("input")).to_be_disabled()
+        binding_project_row = page.locator(".workspace-item", has_text="连续性项目")
+        await expect(binding_project_row.get_by_role("button", name="删除项目 连续性项目")).to_be_disabled()
+        checks["projectBindingBlocksDeletion"] = "PASS"
         checks["bindingStateSurvivesRemount"] = "PASS"
         remounted_binding_checkbox = page.locator(".project-skill-options label", has_text="连续性技能").locator("input")
         await remounted_binding_checkbox.evaluate("input => input.removeAttribute('disabled')")

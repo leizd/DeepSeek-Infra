@@ -51,11 +51,12 @@ function errorText(reason: unknown, fallback: string): string {
 }
 
 function skillMutationMeta(
+  lifecycleId: string,
   entityKey: string,
   operation: string,
   intentKey: string,
 ): LifecycleMutationMeta {
-  return { owner: "skill-list", entityKey, operation, intentKey };
+  return { owner: "skill-list", lifecycleId, entityKey, operation, intentKey };
 }
 
 export function useSkillController(): SkillController {
@@ -120,10 +121,10 @@ export function useSkillController(): SkillController {
       const entityKey = `skill:${skill.skillId}`;
       const operation = "toggle";
       const intentKey = String(!skill.disabled);
-      const result = await runEntityAction(entityKey, operation, intentKey, async () => {
+      const result = await runEntityAction(entityKey, operation, intentKey, async (lifecycleId) => {
         const mutation = queryClient.getMutationCache().build(queryClient, {
           mutationKey: mutationKeys.skillList.toggle,
-          meta: skillMutationMeta(entityKey, operation, intentKey),
+          meta: skillMutationMeta(lifecycleId, entityKey, operation, intentKey),
           onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: SKILLS_QUERY_KEY });
           },
@@ -146,10 +147,10 @@ export function useSkillController(): SkillController {
       const entityKey = `skill:${skillId}`;
       const operation = "remove";
       const intentKey = skillId;
-      const result = await runEntityAction(entityKey, operation, intentKey, async () => {
+      const result = await runEntityAction(entityKey, operation, intentKey, async (lifecycleId) => {
         const mutation = queryClient.getMutationCache().build(queryClient, {
           mutationKey: mutationKeys.skillList.remove,
-          meta: skillMutationMeta(entityKey, operation, intentKey),
+          meta: skillMutationMeta(lifecycleId, entityKey, operation, intentKey),
           onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: SKILLS_QUERY_KEY });
           },
@@ -172,10 +173,10 @@ export function useSkillController(): SkillController {
       const entityKey = "skill-list:create";
       const operation = "create";
       const intentKey = skillDraftIntent(draft);
-      const result = await runEntityAction(entityKey, operation, intentKey, async () => {
+      const result = await runEntityAction(entityKey, operation, intentKey, async (lifecycleId) => {
         const mutation = queryClient.getMutationCache().build(queryClient, {
           mutationKey: mutationKeys.skillList.create,
-          meta: skillMutationMeta(entityKey, operation, intentKey),
+          meta: skillMutationMeta(lifecycleId, entityKey, operation, intentKey),
           onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: SKILLS_QUERY_KEY });
           },
@@ -193,10 +194,10 @@ export function useSkillController(): SkillController {
       const entityKey = `skill:${draft.skillId}`;
       const operation = "update";
       const intentKey = skillDraftIntent(draft);
-      const result = await runEntityAction(entityKey, operation, intentKey, async () => {
+      const result = await runEntityAction(entityKey, operation, intentKey, async (lifecycleId) => {
         const mutation = queryClient.getMutationCache().build(queryClient, {
           mutationKey: mutationKeys.skillList.update,
-          meta: skillMutationMeta(entityKey, operation, intentKey),
+          meta: skillMutationMeta(lifecycleId, entityKey, operation, intentKey),
           onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: SKILLS_QUERY_KEY });
           },

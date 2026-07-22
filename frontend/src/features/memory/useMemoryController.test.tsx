@@ -239,7 +239,14 @@ describe("useMemoryController", () => {
       clearAction = result.current.clear();
     });
 
-    await expect(clearAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    await expect(clearAction).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      requestedEntityKey: "memory-list:clear",
+      blocker: {
+        entityKey: "memory:m1",
+        operation: "remove",
+      },
+    });
     expect(clearMemoriesMock).not.toHaveBeenCalled();
     await waitFor(() => expect(result.current.hasPendingWrites).toBe(true));
 
@@ -267,7 +274,13 @@ describe("useMemoryController", () => {
       clearAction = result.current.clear();
     });
 
-    await expect(clearAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    await expect(clearAction).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      blocker: {
+        entityKey: expect.stringMatching(/^memory-save:/),
+        operation: "save",
+      },
+    });
     expect(clearMemoriesMock).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(result.current.saving).toBe(true);
@@ -303,8 +316,15 @@ describe("useMemoryController", () => {
       saveAction = result.current.save({ content: "不能并发" });
     });
 
-    await expect(removeAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
-    await expect(saveAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    await expect(removeAction).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      requestedEntityKey: "memory:m1",
+      blocker: { entityKey: "memory-list:clear", operation: "clear" },
+    });
+    await expect(saveAction).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      blocker: { entityKey: "memory-list:clear", operation: "clear" },
+    });
     expect(deleteMemoryMock).not.toHaveBeenCalled();
     expect(addMemoryMock).not.toHaveBeenCalled();
     await waitFor(() => expect(result.current.clearing).toBe(true));

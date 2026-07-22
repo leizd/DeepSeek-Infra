@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -54,6 +56,7 @@ from deepseek_infra.infra.diagnostics.runtime_doctor import (  # noqa: E402
     STATUS_WARN,
     CheckResult,
 )
+from deepseek_infra.infra.diagnostics.evidence_manifest import validate_evidence_manifest  # noqa: E402
 
 
 def _read(path: Path) -> str:
@@ -416,13 +419,19 @@ def check_ga_release_manifest(root: Path, version: str) -> CheckResult:
     missing = ["gaEvidence"] if "gaEvidence" not in text else []
     if dynamic_path not in text and literal_path not in text:
         missing.append(f"{dynamic_path} or {literal_path}")
+    evidence_manifest_path = 'f"docs/evidence/evidence-manifest-v{APP_VERSION}.json"'
+    if _version_tuple(version) >= (4, 2, 7) and evidence_manifest_path not in text:
+        missing.append(evidence_manifest_path)
     if missing:
         return CheckResult("ga_release_manifest", STATUS_FAIL, "release manifest missing GA evidence fields", {"missing": missing})
     return CheckResult(
         "ga_release_manifest",
         STATUS_PASS,
         "release manifest includes gaEvidence",
-        {"checked": ["gaEvidence", dynamic_path if dynamic_path in text else literal_path]},
+        {
+            "checked": ["gaEvidence", dynamic_path if dynamic_path in text else literal_path]
+            + ([evidence_manifest_path] if _version_tuple(version) >= (4, 2, 7) else []),
+        },
     )
 
 
@@ -1136,6 +1145,16 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
         required.extend(["traceChunkDeferred", "traceRouteProviderIsolation"])
     if _version_tuple(version) >= (4, 1, 1):
         required.append("traceRetryRecovery")
+    if _version_tuple(version) >= (4, 2, 7):
+        required.extend(
+            [
+                "crossEntityBlockerAttributed",
+                "crossEntityConflictPersists",
+                "exactBlockerSettlementClears",
+                "projectBindingBlocksDeletion",
+                "projectDeletionBlocksBinding",
+            ]
+        )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(
@@ -1956,8 +1975,8 @@ def _check_evidence_metadata(name: str, data: dict[str, Any], path: Path) -> Che
     """
     required = ("version", "generatedAt", "environment", "status")
     missing = [key for key in required if not data.get(key)]
-    if not (data.get("sourceRevision") or data.get("commit")):
-        missing.append("sourceRevision|commit")
+    if not (data.get("testedRevision") or data.get("sourceRevision") or data.get("commit")):
+        missing.append("testedRevision|sourceRevision|commit")
     if missing:
         return CheckResult(
             f"evidence_metadata:{name}",
@@ -1976,7 +1995,53 @@ def _check_evidence_metadata(name: str, data: dict[str, Any], path: Path) -> Che
     return None
 
 
-def run_preflight(root: Path, version: str, *, ga: bool = False) -> list[CheckResult]:
+def _git_head(root: Path) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    revision = completed.stdout.strip()
+    return revision if completed.returncode == 0 and revision else "unknown"
+
+
+def check_evidence_provenance(root: Path, version: str, expected_revision: str = "") -> CheckResult:
+    revision = expected_revision or _git_head(root)
+    errors = validate_evidence_manifest(
+        root,
+        version=version,
+        expected_revision=revision,
+        github_sha=os.environ.get("GITHUB_SHA") or None,
+    )
+    if errors:
+        return CheckResult(
+            "evidence_provenance",
+            STATUS_FAIL,
+            "; ".join(errors),
+            {"expectedRevision": revision, "errors": errors},
+        )
+    return CheckResult(
+        "evidence_provenance",
+        STATUS_PASS,
+        f"all required evidence is bound to clean revision {revision}",
+        {"expectedRevision": revision},
+    )
+
+
+def run_preflight(
+    root: Path,
+    version: str,
+    *,
+    ga: bool = False,
+    provenance_strict: bool = False,
+    expected_revision: str = "",
+) -> list[CheckResult]:
     results = [
         check_readme_badge(root, version),
         check_changelog_entry(root, version),
@@ -2029,6 +2094,8 @@ def run_preflight(root: Path, version: str, *, ga: bool = False) -> list[CheckRe
                 check_ga_release_exclusions(root),
             ]
         )
+    if provenance_strict:
+        results.append(check_evidence_provenance(root, version, expected_revision))
     return results
 
 
@@ -2056,6 +2123,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--version", default="", help="Expected version. Defaults to settings.app_version.")
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help="Project root to check.")
     parser.add_argument("--ga", action="store_true", help="Run GA release gates for v3.0 Personal AI Runtime.")
+    parser.add_argument(
+        "--provenance-strict",
+        action="store_true",
+        help="Require checksummed evidence from one known, clean tested revision.",
+    )
+    parser.add_argument(
+        "--expected-revision",
+        default="",
+        help="Candidate SHA expected in strict evidence. Defaults to the current Git HEAD.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable JSON summary.")
     return parser.parse_args(argv)
 
@@ -2067,7 +2144,13 @@ def main(argv: list[str] | None = None) -> int:
         from deepseek_infra.core.config import settings
 
         version = settings.app_version
-    results = run_preflight(args.root.resolve(), version, ga=bool(args.ga))
+    results = run_preflight(
+        args.root.resolve(),
+        version,
+        ga=bool(args.ga),
+        provenance_strict=bool(args.provenance_strict),
+        expected_revision=args.expected_revision,
+    )
     if args.json:
         print(dump_json(results, version))
     else:

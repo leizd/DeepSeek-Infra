@@ -7,6 +7,7 @@ import type { PropsWithChildren } from "react";
 
 import type { Project } from "../../api/projectsApi";
 import { mutationKeys } from "../../app/mutationKeys";
+import type { LifecycleMutationMeta } from "../../app/mutationLifecycle";
 import { PROJECTS_QUERY_KEY } from "../../app/queryKeys";
 
 vi.mock("../../api/projectsApi", async (importOriginal) => {
@@ -643,6 +644,43 @@ describe("useProjectController", () => {
     await act(async () => {
       resolveUpload([]);
       await upload;
+    });
+  });
+
+  it("attributes project deletion conflicts to the matching binding save", async () => {
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+    let releaseBinding!: () => void;
+    const meta: LifecycleMutationMeta = {
+      owner: "project-binding",
+      lifecycleId: "binding-save-p1",
+      entityKey: "project-binding:p1",
+      operation: "save",
+      intentKey: "binding-a",
+    };
+    const mutation = client.getMutationCache().build(client, {
+      mutationKey: mutationKeys.projectBinding.save("p1"),
+      meta,
+      mutationFn: () => new Promise<void>((resolve) => { releaseBinding = resolve; }),
+    });
+    const bindingAction = mutation.execute(undefined);
+    await waitFor(() => expect(result.current.isProjectBindingSaving("p1")).toBe(true));
+
+    await expect(result.current.remove("p1")).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      requestedEntityKey: "project:p1",
+      blocker: {
+        lifecycleId: "binding-save-p1",
+        entityKey: "project-binding:p1",
+        operation: "save",
+      },
+    });
+    expect(deleteProjectMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseBinding();
+      await bindingAction;
     });
   });
 

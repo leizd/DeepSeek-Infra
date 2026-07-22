@@ -33,7 +33,7 @@ export function MemoryDrawer() {
         <button
           className="message-action danger"
           type="button"
-          disabled={!memory.memories.length || memory.clearing || memory.hasPendingWrites}
+          disabled={!memory.memories.length || memory.clearing}
           onClick={() => {
             if (window.confirm("确定清空全部长期记忆？")) runUiAction(memory.clear());
           }}

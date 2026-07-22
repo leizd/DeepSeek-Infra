@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.2.6-blue)
+![版本](https://img.shields.io/badge/version-4.2.7-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.2.6 Mutation Completion Reconciliation:** 异步完成回调现在尊重等待期间产生的最新用户意图：Project 创建或删除不会抢回/清空新的活动项目，Project 与 Skill 表单不会被旧请求清空或关闭，Memory 建议以稳定 ID 隔离完成结果。协调冲突会随阻塞 Mutation 结束自动消失，Project、Skill 与 Memory 的失败按实体归并，因此另一个实体的成功不会遮住晚到错误。八项新 Chromium 检查覆盖最新选择、草稿隔离、建议隔离、协调恢复与并发错误。冻结的 4.0 运行时合同保持不变。参见 [4.2.6 发布说明](docs/releases/4.2.6.md)、[前端边界](docs/FRONTEND_MODULES.md)、[升级指南](docs/UPGRADING_TO_4_0.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
+> **4.2.7 Evidence Provenance & Blocker Attribution:** 协调冲突现在记录精确的阻塞生命周期，包括跨实体 Memory 屏障，并只在该 blocker 真正结束时过期；同一项目的删除与技能绑定保存双向互斥。统一 Evidence 生成器先从干净工作树捕获候选提交，所有报告共享这一只读上下文，严格 preflight 再校验 PASS、revision、CI 身份和逐文件 SHA-256 清单。冻结的 4.0 运行时合同保持不变。参见 [4.2.7 发布说明](docs/releases/4.2.7.md)、[前端边界](docs/FRONTEND_MODULES.md)、[升级指南](docs/UPGRADING_TO_4_0.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
 
-**4.2.6 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.2.6 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
+**4.2.7 validation:** after committing the release candidate, run `python scripts/generate_release_evidence.py --version 4.2.7`; it requires a clean tree, generates the shared source context and checksum manifest, and runs `python scripts/preflight_release.py --version 4.2.7 --ga --provenance-strict`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
 
 ## 30 秒概览
 

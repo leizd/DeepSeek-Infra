@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 
 WORKSPACE_CRATES = (
     "deepseek-core",
@@ -150,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     payload: dict[str, Any] = {
         "schemaVersion": "rust-coverage.v1",
         "version": APP_VERSION,
-        "commit": _git_commit(),
+        **evidence_revision(ROOT),
         "generatedAt": generated_at,
         "status": "PASS" if passed else "FAIL",
         "threshold": {"metric": "line", "minimumPercent": args.threshold},

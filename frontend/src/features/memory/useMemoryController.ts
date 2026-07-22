@@ -74,11 +74,12 @@ export function memorySaveIntent(input: MemorySaveInput): string {
 }
 
 function memoryMutationMeta(
+  lifecycleId: string,
   entityKey: string,
   operation: string,
   intentKey: string,
 ): LifecycleMutationMeta {
-  return { owner: "memory-list", entityKey, operation, intentKey };
+  return { owner: "memory-list", lifecycleId, entityKey, operation, intentKey };
 }
 
 export function useMemoryController(): MemoryController {
@@ -137,10 +138,10 @@ export function useMemoryController(): MemoryController {
       const entityKey = `memory:${memoryId}`;
       const operation = "remove";
       const intentKey = memoryId;
-      const result = await runWrite(entityKey, operation, intentKey, async () => {
+      const result = await runWrite(entityKey, operation, intentKey, async (lifecycleId) => {
         const mutation = queryClient.getMutationCache().build(queryClient, {
           mutationKey: mutationKeys.memoryList.remove,
-          meta: memoryMutationMeta(entityKey, operation, intentKey),
+          meta: memoryMutationMeta(lifecycleId, entityKey, operation, intentKey),
           onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: MEMORIES_QUERY_KEY });
           },
@@ -163,10 +164,10 @@ export function useMemoryController(): MemoryController {
     const entityKey = "memory-list:clear";
     const operation = "clear";
     const intentKey = "clear";
-    const result = await runClear(async () => {
+    const result = await runClear(async (lifecycleId) => {
       const mutation = queryClient.getMutationCache().build(queryClient, {
         mutationKey: mutationKeys.memoryList.clear,
-        meta: memoryMutationMeta(entityKey, operation, intentKey),
+        meta: memoryMutationMeta(lifecycleId, entityKey, operation, intentKey),
         onMutate: async () => {
           await queryClient.cancelQueries({ queryKey: MEMORIES_QUERY_KEY });
         },
@@ -186,10 +187,10 @@ export function useMemoryController(): MemoryController {
       const intentKey = memorySaveIntent(input);
       const entityKey = `memory-save:${intentKey}`;
       const operation = "save";
-      const result = await runWrite(entityKey, operation, intentKey, async () => {
+      const result = await runWrite(entityKey, operation, intentKey, async (lifecycleId) => {
         const mutation = queryClient.getMutationCache().build(queryClient, {
           mutationKey: mutationKeys.memoryList.save,
-          meta: memoryMutationMeta(entityKey, operation, intentKey),
+          meta: memoryMutationMeta(lifecycleId, entityKey, operation, intentKey),
           onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: MEMORIES_QUERY_KEY });
           },

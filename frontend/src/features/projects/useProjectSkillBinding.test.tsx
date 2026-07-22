@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PropsWithChildren } from "react";
 
 import type { ProjectSkillBinding } from "../../api/skillsApi";
+import type { LifecycleMutationMeta } from "../../app/mutationLifecycle";
+import { mutationKeys } from "../../app/mutationKeys";
 import { projectSkillBindingQueryKey } from "../../app/queryKeys";
 
 vi.mock("../../api/skillsApi", async (importOriginal) => {
@@ -183,6 +185,44 @@ describe("useProjectSkillBinding", () => {
     await act(async () => {
       resolveSave(desired);
       await saveAction;
+    });
+  });
+
+  it("blocks binding saves while the matching project is being deleted", async () => {
+    fetchBindingMock.mockResolvedValue(binding([]));
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectSkillBinding("p1"), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let releaseRemoval!: () => void;
+    const meta: LifecycleMutationMeta = {
+      owner: "project-list",
+      lifecycleId: "project-remove-p1",
+      entityKey: "project:p1",
+      operation: "remove",
+      intentKey: "p1",
+    };
+    const mutation = client.getMutationCache().build(client, {
+      mutationKey: mutationKeys.projectList.remove,
+      meta,
+      mutationFn: () => new Promise<void>((resolve) => { releaseRemoval = resolve; }),
+    });
+    const removalAction = mutation.execute(undefined);
+    await waitFor(() => expect(result.current.projectRemoving).toBe(true));
+
+    await expect(result.current.save(binding(["s1"]))).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      requestedEntityKey: "project-binding:p1",
+      blocker: {
+        lifecycleId: "project-remove-p1",
+        entityKey: "project:p1",
+        operation: "remove",
+      },
+    });
+    expect(saveBindingMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseRemoval();
+      await removalAction;
     });
   });
 

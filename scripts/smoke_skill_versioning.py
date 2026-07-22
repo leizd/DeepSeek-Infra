@@ -135,7 +135,7 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     asset_paths = ("docs/assets/skill-version-history.png", "docs/assets/skill-version-diff.png")
     checks["versioningAssets"] = "PASS" if all((REPO_ROOT / path).is_file() for path in asset_paths) else "FAIL"
     checks["frontendTypecheckGate"] = "PASS" if "npm run typecheck --prefix frontend" in ci else "FAIL"
-    checks["ciReleaseGate"] = "PASS" if "smoke_skill_versioning.py" in ci else "FAIL"
+    checks["ciReleaseGate"] = "PASS" if "smoke_skill_versioning.py" in ci or "generate_release_evidence.py" in ci else "FAIL"
     details["assets"] = list(asset_paths)
     return checks, details
 

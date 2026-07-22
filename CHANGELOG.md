@@ -5,6 +5,27 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.2.7] - Evidence Provenance and Blocker Attribution
+
+### Frontend reliability
+
+- Carries an exact blocker through lifecycle conflicts, including a stable `lifecycleId`, the blocking entity, operation, intent and whether it came from a local lock or MutationCache.
+- Keeps cross-entity coordination errors visible until that exact lifecycle settles; a later Mutation on the same entity cannot prolong an obsolete message.
+- Coordinates project deletion with project-binding saves in both directions while leaving project rename and upload independent from binding edits.
+- Adds Hook, component and real-Chromium contracts for Memory blocker attribution, exact conflict expiry and project/binding dependency state.
+
+### Release trust
+
+- Adds a clean-tree release Evidence generator that captures one shared tested revision before any report is written.
+- Adds strict provenance preflight checks for version, PASS status, known tested revision, clean source state and CI-to-`GITHUB_SHA` identity.
+- Adds a per-file SHA-256 Evidence manifest and verifies required membership, duplicate paths, missing files, byte sizes and checksums.
+- Keeps candidate Evidence and final CI Artifact Evidence distinct, avoiding self-referential release revision claims.
+
+### Compatibility
+
+- Keeps the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates and Python fallback.
+- Adds no frontend dependency, backend protocol, Provider lifecycle, Query persistence, lazy loading or bundle-budget change.
+
 ## [4.2.6] - Mutation Completion Reconciliation
 
 ### Frontend reliability

@@ -9,12 +9,20 @@ import {
 import { mutationKeys } from "../../app/mutationKeys";
 import { stableIntentKey } from "../../app/mutationIntents";
 import {
+  activeLifecycleMutation,
+  isLifecycleMutationMeta,
+  isMutationActive,
   type LifecycleMutationMeta,
   useMutationActivity,
 } from "../../app/mutationLifecycle";
 import { projectSkillBindingQueryKey } from "../../app/queryKeys";
 import { useActionCoordination } from "../../shared/useActionCoordination";
-import { useEntityActionLocks } from "../../shared/useEntityActionLocks";
+import {
+  activeLocalAction,
+  lifecycleMutationBlocker,
+  useEntityActionLocks,
+  type EntityActionLockResult,
+} from "../../shared/useEntityActionLocks";
 
 export type BindingErrorKind = "load" | "save" | null;
 
@@ -23,6 +31,7 @@ export interface ProjectSkillBindingController {
   loading: boolean;
   refreshing: boolean;
   saving: boolean;
+  projectRemoving: boolean;
   error: unknown;
   errorKind: BindingErrorKind;
   save(binding: ProjectSkillBinding): Promise<ProjectSkillBinding>;
@@ -77,13 +86,42 @@ export function useProjectSkillBinding(projectId: string): ProjectSkillBindingCo
     }),
   });
   const latestSave = useMemo(() => latestBindingMutation(saveMutations), [saveMutations]);
+  const removingProjectIds = useMutationState<string>({
+    filters: {
+      predicate: (mutation) =>
+        isMutationActive(mutation.state)
+        && isLifecycleMutationMeta(mutation.options.meta)
+        && mutation.options.meta.owner === "project-list"
+        && mutation.options.meta.operation === "remove",
+    },
+    select: (mutation) => isLifecycleMutationMeta(mutation.options.meta)
+      ? mutation.options.meta.entityKey.slice("project:".length)
+      : "",
+  });
+  const projectRemoving = removingProjectIds.includes(projectId);
 
   const save = useCallback(async (binding: ProjectSkillBinding): Promise<ProjectSkillBinding> => {
     const operation = "save";
     const intentKey = bindingIntent(binding);
-    const result = await runEntityAction(entityKey, operation, intentKey, async () => {
+    const localRemovalBlocker = activeLocalAction(
+      queryClient,
+      (blocker) => blocker.entityKey === `project:${projectId}` && blocker.operation === "remove",
+    );
+    const removalBlocker = activeLifecycleMutation(
+      queryClient,
+      (meta) => meta.owner === "project-list"
+        && meta.entityKey === `project:${projectId}`
+        && meta.operation === "remove",
+    );
+    const result: EntityActionLockResult<ProjectSkillBinding> = localRemovalBlocker || removalBlocker
+      ? {
+          status: "conflict",
+          blocker: localRemovalBlocker ?? lifecycleMutationBlocker(removalBlocker!),
+        }
+      : await runEntityAction(entityKey, operation, intentKey, async (lifecycleId) => {
       const meta: LifecycleMutationMeta = {
         owner: "project-binding",
+        lifecycleId,
         entityKey,
         operation,
         intentKey,
@@ -106,7 +144,7 @@ export function useProjectSkillBinding(projectId: string): ProjectSkillBindingCo
         onSettled: () => void queryClient.invalidateQueries({ queryKey }),
       });
       return mutation.execute(binding);
-    });
+      });
     return resolveAction(result, entityKey, operation);
   }, [entityKey, mutationKey, projectId, queryClient, queryKey, resolveAction, runEntityAction]);
 
@@ -130,6 +168,7 @@ export function useProjectSkillBinding(projectId: string): ProjectSkillBindingCo
     loading: bindingQuery.isLoading,
     refreshing: bindingQuery.isFetching && !bindingQuery.isLoading,
     saving: saveActivity.active,
+    projectRemoving,
     error,
     errorKind,
     save,

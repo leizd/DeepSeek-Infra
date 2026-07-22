@@ -8,6 +8,7 @@ import type { Project } from "../../api/projectsApi";
 const createMock = vi.fn<() => Promise<void>>();
 const renameMock = vi.fn<() => Promise<void>>();
 const removeMock = vi.fn<() => Promise<void>>();
+const isProjectBindingSavingMock = vi.fn(() => false);
 
 const testProject: Project = {
   id: "p1",
@@ -53,6 +54,7 @@ vi.mock("../../contexts/ProjectsContext", () => ({
     uploadDocuments: vi.fn(() => Promise.resolve()),
     isRenamingProject: vi.fn(() => false),
     isRemovingProject: vi.fn(() => false),
+    isProjectBindingSaving: isProjectBindingSavingMock,
     isUploadingProject: vi.fn(() => false),
   }),
 }));
@@ -156,5 +158,13 @@ describe("ProjectsDrawer mutation dispatch", () => {
 
     expect(confirm).toHaveBeenCalledWith("确定删除项目“原项目”？");
     expect(removeMock).toHaveBeenCalledWith("p1");
+  });
+
+  it("disables deletion while the matching project binding is saving", () => {
+    isProjectBindingSavingMock.mockImplementation((projectId?: string) => projectId === "p1");
+    render(<ProjectsDrawer />);
+
+    expect((screen.getByRole("button", { name: "删除项目 原项目" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "删除项目 第二项目" }) as HTMLButtonElement).disabled).toBe(false);
   });
 });

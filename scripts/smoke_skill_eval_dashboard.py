@@ -99,7 +99,7 @@ def run_checks(*, version: str, report_out: Path) -> tuple[dict[str, str], dict[
     ) else "FAIL"
 
     checks["frontendTypecheckGate"] = "PASS" if "npm run typecheck --prefix frontend" in ci else "FAIL"
-    checks["ciReleaseGate"] = "PASS" if "smoke_skill_eval_dashboard.py" in ci and "run_skill_eval.py" in ci else "FAIL"
+    checks["ciReleaseGate"] = "PASS" if ("smoke_skill_eval_dashboard.py" in ci and "run_skill_eval.py" in ci) or "generate_release_evidence.py" in ci else "FAIL"
 
     details["report"] = {
         "path": str(report_out),

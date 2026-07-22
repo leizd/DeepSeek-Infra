@@ -1,25 +1,71 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useRef } from "react";
 
-import { activeLifecycleMutation } from "../app/mutationLifecycle";
+import {
+  activeLifecycleMutation,
+  createLifecycleId,
+  type LifecycleMutationMeta,
+} from "../app/mutationLifecycle";
+
+export interface ActionBlocker {
+  lifecycleId: string;
+  entityKey: string;
+  operation: string;
+  intentKey?: string;
+  source: "local-lock" | "mutation-cache";
+}
+
+interface LocalActionLock extends ActionBlocker {
+  owner: symbol;
+  promise: Promise<unknown>;
+}
+
+const localActionLocks = new WeakMap<QueryClient, Map<string, LocalActionLock>>();
+
+function localLocksFor(queryClient: QueryClient): Map<string, LocalActionLock> {
+  const existing = localActionLocks.get(queryClient);
+  if (existing) return existing;
+  const created = new Map<string, LocalActionLock>();
+  localActionLocks.set(queryClient, created);
+  return created;
+}
+
+export function activeLocalAction(
+  queryClient: QueryClient,
+  predicate: (blocker: ActionBlocker) => boolean,
+): ActionBlocker | undefined {
+  return [...localLocksFor(queryClient).values()].find(predicate);
+}
 
 export type EntityActionLockResult<T> =
   | { status: "executed"; value: T }
   | { status: "deduplicated"; value: T }
-  | { status: "conflict"; activeOperation: string };
+  | { status: "conflict"; blocker: ActionBlocker };
 
 export class EntityActionConflictError extends Error {
-  readonly entityKey: string;
-  readonly operation: string;
+  readonly requestedEntityKey: string;
+  readonly requestedOperation: string;
+  readonly blocker: ActionBlocker;
   readonly activeOperation: string;
 
-  constructor(entityKey: string, operation: string, activeOperation: string) {
-    super(conflictMessage(entityKey, operation, activeOperation));
+  constructor(requestedEntityKey: string, requestedOperation: string, blocker: ActionBlocker) {
+    super(conflictMessage(blocker.entityKey, requestedOperation, blocker.operation));
     this.name = "EntityActionConflictError";
-    this.entityKey = entityKey;
-    this.operation = operation;
-    this.activeOperation = activeOperation;
+    this.requestedEntityKey = requestedEntityKey;
+    this.requestedOperation = requestedOperation;
+    this.blocker = blocker;
+    this.activeOperation = blocker.operation;
   }
+}
+
+export function lifecycleMutationBlocker(meta: LifecycleMutationMeta): ActionBlocker {
+  return {
+    lifecycleId: meta.lifecycleId,
+    entityKey: meta.entityKey,
+    operation: meta.operation,
+    intentKey: meta.intentKey,
+    source: "mutation-cache",
+  };
 }
 
 const OPERATION_LABELS: Record<string, string> = {
@@ -51,39 +97,49 @@ export function actionLockValue<T>(
   operation: string,
 ): T {
   if (result.status === "conflict") {
-    throw new EntityActionConflictError(entityKey, operation, result.activeOperation);
+    throw new EntityActionConflictError(entityKey, operation, result.blocker);
   }
   return result.value;
 }
 
 export function useEntityActionLocks() {
   const queryClient = useQueryClient();
-  const locks = useRef(new Map<string, { operation: string; intentKey: string; promise: Promise<unknown> }>());
+  const owner = useRef(Symbol("entity-action-lock"));
 
   return useCallback(
     async <T,>(
       entityKey: string,
       operation: string,
       intentKey: string,
-      action: () => Promise<T>,
+      action: (lifecycleId: string) => Promise<T>,
     ): Promise<EntityActionLockResult<T>> => {
-      const existing = locks.current.get(entityKey);
+      const locks = localLocksFor(queryClient);
+      const existing = locks.get(entityKey);
       if (existing) {
-        if (existing.operation !== operation || existing.intentKey !== intentKey) {
-          return { status: "conflict", activeOperation: existing.operation };
+        if (existing.owner !== owner.current || existing.operation !== operation || existing.intentKey !== intentKey) {
+          return { status: "conflict", blocker: existing };
         }
         return { status: "deduplicated", value: await existing.promise as T };
       }
 
       const cached = activeLifecycleMutation(queryClient, (meta) => meta.entityKey === entityKey);
-      if (cached) return { status: "conflict", activeOperation: cached.operation };
+      if (cached) return { status: "conflict", blocker: lifecycleMutationBlocker(cached) };
 
-      const promise = action();
-      locks.current.set(entityKey, { operation, intentKey, promise });
+      const lifecycleId = createLifecycleId();
+      const promise = action(lifecycleId);
+      locks.set(entityKey, {
+        lifecycleId,
+        entityKey,
+        operation,
+        intentKey,
+        source: "local-lock",
+        owner: owner.current,
+        promise,
+      });
       try {
         return { status: "executed", value: await promise };
       } finally {
-        if (locks.current.get(entityKey)?.promise === promise) locks.current.delete(entityKey);
+        if (locks.get(entityKey)?.promise === promise) locks.delete(entityKey);
       }
     },
     [queryClient],
