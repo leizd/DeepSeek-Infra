@@ -5,6 +5,23 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.2.5] - Mutation Intent and Remount Continuity
+
+### Frontend reliability
+
+- Separates an entity operation from its normalized user intent, so only identical payloads share a Promise; mismatched rename, upload, Skill draft and target-state submissions are rejected instead of reported as successful.
+- Adds lifecycle metadata (`owner`, `entityKey`, `operation`, `intentKey`) to every Project, Skill, Memory and project-binding write in MutationCache.
+- Derives create, clear, binding-save and per-entity active state from all pending or paused cache mutations, preserving UI state across Workspace route unmount and remount.
+- Surfaces coordination conflicts through controller-owned user-visible errors with operation-specific messages; recovery and the next successful action clear them.
+- Protects Project and Skill creation from same-frame duplicate submission and normalizes Memory save intents across whitespace, defaults, object key order and replacement-ID order.
+- Restores project-binding save activity and failures after remount, including retry with the latest failed variables.
+- Adds 14 Hook contracts and eight real-Chromium checks for intent identity, conflict visibility, duplicate creation and Workspace remount continuity.
+
+### Compatibility
+
+- Keeps the frozen 4.0 protocol, Python-first runtime ownership, opt-in Rust delegates and Python fallback.
+- Adds no dependency, backend protocol, Query persistence, Provider expansion, lazy loading, attachment migration, visual redesign or bundle-budget change.
+
 ## [4.2.4] - Mutation Scope and Lifecycle Integrity
 
 ### Frontend reliability

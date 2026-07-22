@@ -290,6 +290,96 @@ describe("useProjectController", () => {
     await expect(duplicate).rejects.toBe(failure);
   });
 
+  it("suppresses a same-frame duplicate project creation", async () => {
+    let resolveCreate!: (value: Project) => void;
+    createProjectMock.mockImplementation(
+      () => new Promise<Project>((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let duplicate!: Promise<void>;
+    act(() => {
+      first = result.current.create("新项目");
+      duplicate = result.current.create(" 新项目 ");
+    });
+    await waitFor(() => expect(createProjectMock).toHaveBeenCalledTimes(1));
+    expect(result.current.creating).toBe(true);
+
+    await act(async () => {
+      resolveCreate(project("p-new", "新项目"));
+      await Promise.all([first, duplicate]);
+    });
+  });
+
+  it("rejects a different rename intent visibly and recover clears the coordination error", async () => {
+    let resolveRename!: (value: Project) => void;
+    renameProjectMock.mockImplementation(
+      () => new Promise<Project>((resolve) => {
+        resolveRename = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let different!: Promise<void>;
+    act(() => {
+      first = result.current.rename("p1", "项目甲");
+      different = result.current.rename("p1", "项目乙");
+    });
+    await expect(different).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      activeOperation: "rename",
+    });
+    expect(renameProjectMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.error).toContain("正在重命名"));
+
+    await act(async () => {
+      await result.current.recover();
+    });
+    expect(result.current.error).toBe("");
+
+    await act(async () => {
+      resolveRename(project("p1", "项目甲"));
+      await first;
+    });
+  });
+
+  it("does not reuse an upload promise for a different file batch", async () => {
+    let resolveUpload!: (value: []) => void;
+    uploadProjectFilesMock.mockImplementation(
+      () => new Promise<[]>((resolve) => {
+        resolveUpload = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.projects).toHaveLength(2));
+    act(() => result.current.setActive("p1"));
+
+    const firstFile = new File(["a"], "a.txt", { lastModified: 1 });
+    const secondFile = new File(["b"], "b.txt", { lastModified: 2 });
+    let first!: Promise<void>;
+    let different!: Promise<void>;
+    act(() => {
+      first = result.current.uploadDocuments([firstFile]);
+      different = result.current.uploadDocuments([secondFile]);
+    });
+    await expect(different).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    expect(uploadProjectFilesMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveUpload([]);
+      await first;
+    });
+  });
+
   it("keeps binding failures local and preserves them during project recovery", async () => {
     const client = createTestQueryClient();
     const { result } = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
@@ -434,6 +524,72 @@ describe("useProjectController", () => {
     await act(async () => {
       resolveUpload([]);
       await upload;
+    });
+  });
+
+  it("restores a pending upload after remount and does not send it again", async () => {
+    let resolveUpload!: (value: []) => void;
+    uploadProjectFilesMock.mockImplementation(
+      () => new Promise<[]>((resolve) => {
+        resolveUpload = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const firstHook = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(firstHook.result.current.projects).toHaveLength(2));
+    act(() => firstHook.result.current.setActive("p1"));
+    const file = new File(["a"], "a.txt", { lastModified: 1 });
+
+    let upload!: Promise<void>;
+    act(() => {
+      upload = firstHook.result.current.uploadDocuments([file]);
+    });
+    await waitFor(() => expect(firstHook.result.current.isUploadingProject("p1")).toBe(true));
+    firstHook.unmount();
+
+    const remounted = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(remounted.result.current.isUploadingProject("p1")).toBe(true));
+    await expect(remounted.result.current.uploadDocuments([file])).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      activeOperation: "upload",
+    });
+    expect(uploadProjectFilesMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveUpload([]);
+      await upload;
+    });
+  });
+
+  it("prevents a pending project removal from being submitted again after remount", async () => {
+    let resolveDelete!: () => void;
+    deleteProjectMock.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveDelete = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const firstHook = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(firstHook.result.current.projects).toHaveLength(2));
+
+    let removal!: Promise<void>;
+    act(() => {
+      removal = firstHook.result.current.remove("p1");
+    });
+    await waitFor(() => expect(firstHook.result.current.isRemovingProject("p1")).toBe(true));
+    firstHook.unmount();
+
+    const remounted = renderHook(() => useProjectController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(remounted.result.current.isRemovingProject("p1")).toBe(true));
+    await expect(remounted.result.current.remove("p1")).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      activeOperation: "remove",
+    });
+    expect(deleteProjectMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveDelete();
+      await removal;
     });
   });
 

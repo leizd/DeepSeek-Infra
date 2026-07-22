@@ -1,40 +1,60 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef } from "react";
 
+import { activeLifecycleMutation } from "../../app/mutationLifecycle";
 import type { EntityActionLockResult } from "../../shared/useEntityActionLocks";
+import { useEntityActionLocks } from "../../shared/useEntityActionLocks";
 
 export function useMemoryWriteBarrier() {
-  const writes = useRef(new Map<string, Promise<unknown>>());
-  const clear = useRef<Promise<unknown> | null>(null);
+  const queryClient = useQueryClient();
+  const runEntityAction = useEntityActionLocks();
+  const writes = useRef(new Map<string, string>());
+  const clear = useRef(false);
 
   const runWrite = useCallback(
-    async <T,>(operationKey: string, action: () => Promise<T>): Promise<EntityActionLockResult<T>> => {
-      if (clear.current) return { status: "conflict" };
-      const existing = writes.current.get(operationKey);
-      if (existing) return { status: "deduplicated", value: await existing as T };
+    async <T,>(
+      entityKey: string,
+      operation: string,
+      intentKey: string,
+      action: () => Promise<T>,
+    ): Promise<EntityActionLockResult<T>> => {
+      const cachedClear = activeLifecycleMutation(
+        queryClient,
+        (meta) => meta.owner === "memory-list" && meta.operation === "clear",
+      );
+      if (clear.current || cachedClear) return { status: "conflict", activeOperation: "clear" };
 
-      const promise = action();
-      writes.current.set(operationKey, promise);
-      try {
-        return { status: "executed", value: await promise };
-      } finally {
-        if (writes.current.get(operationKey) === promise) writes.current.delete(operationKey);
-      }
+      return runEntityAction(entityKey, operation, intentKey, async () => {
+        writes.current.set(entityKey, operation);
+        try {
+          return await action();
+        } finally {
+          writes.current.delete(entityKey);
+        }
+      });
     },
-    [],
+    [queryClient, runEntityAction],
   );
 
   const runClear = useCallback(async <T,>(action: () => Promise<T>): Promise<EntityActionLockResult<T>> => {
-    if (clear.current) return { status: "deduplicated", value: await clear.current as T };
-    if (writes.current.size) return { status: "conflict" };
-
-    const promise = action();
-    clear.current = promise;
-    try {
-      return { status: "executed", value: await promise };
-    } finally {
-      if (clear.current === promise) clear.current = null;
+    const localWrite = writes.current.values().next().value as string | undefined;
+    const cachedWrite = activeLifecycleMutation(
+      queryClient,
+      (meta) => meta.owner === "memory-list" && meta.operation !== "clear",
+    );
+    if (localWrite || cachedWrite) {
+      return { status: "conflict", activeOperation: localWrite ?? cachedWrite?.operation ?? "save" };
     }
-  }, []);
+
+    return runEntityAction("memory-list:clear", "clear", "clear", async () => {
+      clear.current = true;
+      try {
+        return await action();
+      } finally {
+        clear.current = false;
+      }
+    });
+  }, [queryClient, runEntityAction]);
 
   return { runWrite, runClear };
 }

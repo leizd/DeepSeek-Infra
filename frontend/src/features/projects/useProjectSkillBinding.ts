@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useMemo } from "react";
+import { useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   fetchProjectSkillBinding,
@@ -6,7 +7,14 @@ import {
   type ProjectSkillBinding,
 } from "../../api/skillsApi";
 import { mutationKeys } from "../../app/mutationKeys";
+import { stableIntentKey } from "../../app/mutationIntents";
+import {
+  type LifecycleMutationMeta,
+  useMutationActivity,
+} from "../../app/mutationLifecycle";
 import { projectSkillBindingQueryKey } from "../../app/queryKeys";
+import { useActionCoordination } from "../../shared/useActionCoordination";
+import { useEntityActionLocks } from "../../shared/useEntityActionLocks";
 
 export type BindingErrorKind = "load" | "save" | null;
 
@@ -21,9 +29,36 @@ export interface ProjectSkillBindingController {
   retry(): Promise<void>;
 }
 
+interface BindingMutationSnapshot {
+  status: string;
+  error: unknown;
+  variables: unknown;
+  submittedAt: number;
+}
+
+function bindingIntent(binding: ProjectSkillBinding): string {
+  return stableIntentKey({
+    enabledSkills: [...binding.enabledSkills].sort(),
+    defaultSkill: binding.defaultSkill,
+  });
+}
+
+function latestBindingMutation(
+  mutations: readonly BindingMutationSnapshot[],
+): BindingMutationSnapshot | undefined {
+  return mutations.reduce<BindingMutationSnapshot | undefined>(
+    (current, mutation) => !current || mutation.submittedAt > current.submittedAt ? mutation : current,
+    undefined,
+  );
+}
+
 export function useProjectSkillBinding(projectId: string): ProjectSkillBindingController {
   const queryClient = useQueryClient();
+  const runEntityAction = useEntityActionLocks();
+  const { coordinationError, resolveAction } = useActionCoordination();
   const queryKey = projectSkillBindingQueryKey(projectId);
+  const mutationKey = mutationKeys.projectBinding.save(projectId);
+  const entityKey = `project-binding:${projectId}`;
 
   const bindingQuery = useQuery<ProjectSkillBinding>({
     queryKey,
@@ -31,44 +66,72 @@ export function useProjectSkillBinding(projectId: string): ProjectSkillBindingCo
     queryFn: ({ signal }) => fetchProjectSkillBinding(projectId, { signal }),
   });
 
-  const saveMutation = useMutation({
-    mutationKey: mutationKeys.projectBinding.save(projectId),
-    scope: { id: `project-skill-binding:${projectId}` },
-    onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey });
-    },
-    mutationFn: (binding: ProjectSkillBinding) =>
-      saveProjectSkillBinding(projectId, {
-        enabledSkills: binding.enabledSkills,
-        defaultSkill: binding.defaultSkill,
-      }),
-    onSuccess: (binding) => {
-      queryClient.setQueryData(queryKey, binding);
-    },
-    onSettled: () => void queryClient.invalidateQueries({ queryKey }),
+  const saveActivity = useMutationActivity(mutationKey);
+  const saveMutations = useMutationState<BindingMutationSnapshot>({
+    filters: { mutationKey, exact: true },
+    select: (mutation) => ({
+      status: mutation.state.status,
+      error: mutation.state.error,
+      variables: mutation.state.variables,
+      submittedAt: mutation.state.submittedAt,
+    }),
   });
+  const latestSave = useMemo(() => latestBindingMutation(saveMutations), [saveMutations]);
+
+  const save = useCallback(async (binding: ProjectSkillBinding): Promise<ProjectSkillBinding> => {
+    const operation = "save";
+    const intentKey = bindingIntent(binding);
+    const result = await runEntityAction(entityKey, operation, intentKey, async () => {
+      const meta: LifecycleMutationMeta = {
+        owner: "project-binding",
+        entityKey,
+        operation,
+        intentKey,
+      };
+      const mutation = queryClient.getMutationCache().build(queryClient, {
+        mutationKey,
+        meta,
+        scope: { id: `project-skill-binding:${projectId}` },
+        onMutate: async () => {
+          await queryClient.cancelQueries({ queryKey });
+        },
+        mutationFn: (value: ProjectSkillBinding) =>
+          saveProjectSkillBinding(projectId, {
+            enabledSkills: value.enabledSkills,
+            defaultSkill: value.defaultSkill,
+          }),
+        onSuccess: (savedBinding) => {
+          queryClient.setQueryData(queryKey, savedBinding);
+        },
+        onSettled: () => void queryClient.invalidateQueries({ queryKey }),
+      });
+      return mutation.execute(binding);
+    });
+    return resolveAction(result, entityKey, operation);
+  }, [entityKey, mutationKey, projectId, queryClient, queryKey, resolveAction, runEntityAction]);
 
   async function retry(): Promise<void> {
-    if (saveMutation.isError && saveMutation.variables) {
-      const desiredBinding = saveMutation.variables;
-      saveMutation.reset();
-      await saveMutation.mutateAsync(desiredBinding);
+    const latestMutation = queryClient.getMutationCache().findAll({ mutationKey, exact: true })
+      .sort((left, right) => right.state.submittedAt - left.state.submittedAt)[0];
+    if (latestMutation?.state.status === "error" && latestMutation.state.variables) {
+      await save(latestMutation.state.variables as ProjectSkillBinding);
       return;
     }
     await bindingQuery.refetch();
   }
 
-  const error = bindingQuery.error ?? saveMutation.error;
-  const errorKind: BindingErrorKind = bindingQuery.error ? "load" : saveMutation.error ? "save" : null;
+  const latestSaveError = latestSave?.status === "error" ? latestSave.error : null;
+  const error = coordinationError || bindingQuery.error || latestSaveError;
+  const errorKind: BindingErrorKind = bindingQuery.error ? "load" : error ? "save" : null;
 
   return {
     binding: bindingQuery.data,
     loading: bindingQuery.isLoading,
     refreshing: bindingQuery.isFetching && !bindingQuery.isLoading,
-    saving: saveMutation.isPending || saveMutation.isPaused,
+    saving: saveActivity.active,
     error,
     errorKind,
-    save: saveMutation.mutateAsync,
+    save,
     retry,
   };
 }

@@ -11,16 +11,19 @@ const emptyDraft: SimpleSkillDraft = { name: "", description: "", systemPrompt: 
 function SkillForm({
   initial,
   submitLabel,
+  active = false,
   onSubmit,
   onCancel,
 }: {
   initial: SimpleSkillDraft;
   submitLabel: string;
+  active?: boolean;
   onSubmit(draft: SimpleSkillDraft): Promise<void>;
   onCancel(): void;
 }) {
   const [draft, setDraft] = useState(initial);
   const [busy, setBusy] = useState(false);
+  const pending = busy || active;
   return (
     <form
       className="skill-form"
@@ -54,8 +57,8 @@ function SkillForm({
         onChange={(event) => setDraft((current) => ({ ...current, systemPrompt: event.target.value }))}
       />
       <div className="message-edit-actions">
-        <button className="message-action primary" type="submit" disabled={busy || !draft.name.trim() || !draft.systemPrompt.trim()}>
-          {submitLabel}
+        <button className="message-action primary" type="submit" disabled={pending || !draft.name.trim() || !draft.systemPrompt.trim()}>
+          {pending ? `${submitLabel}中…` : submitLabel}
         </button>
         <button className="message-action" type="button" onClick={onCancel}>取消</button>
       </div>
@@ -102,6 +105,7 @@ function SkillCard({ skill }: { skill: Skill }) {
         <SkillForm
           initial={{ name: skill.name, description: skill.description, systemPrompt: skill.systemPrompt }}
           submitLabel="保存"
+          active={updating}
           onSubmit={async (draft) => {
             await skills.update({ ...draft, skillId: skill.skillId });
             setEditing(false);
@@ -150,6 +154,7 @@ export function SkillsDrawer() {
         <SkillForm
           initial={emptyDraft}
           submitLabel="创建技能"
+          active={skills.creating}
           onSubmit={async (draft) => {
             await skills.create(draft);
             setCreating(false);

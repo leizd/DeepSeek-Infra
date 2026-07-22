@@ -1,8 +1,8 @@
 {
   "schemaVersion": "security-corpus-report.v1",
-  "version": "4.2.4",
-  "commit": "0ecde75a",
-  "generatedAt": "2026-07-22T04:17:57Z",
+  "version": "4.2.5",
+  "commit": "dd8dd96c",
+  "generatedAt": "2026-07-22T06:21:45Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -84,7 +84,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.068,
+        "latencyMs": 0.061,
         "suite": "prompt_injection"
       },
       {
@@ -97,7 +97,7 @@
         "injectionHits": 1,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.023,
+        "latencyMs": 0.021,
         "suite": "prompt_injection"
       },
       {
@@ -110,7 +110,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.042,
+        "latencyMs": 0.038,
         "suite": "prompt_injection"
       },
       {
@@ -123,7 +123,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.03,
+        "latencyMs": 0.027,
         "suite": "prompt_injection"
       },
       {
@@ -136,7 +136,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.029,
+        "latencyMs": 0.026,
         "suite": "prompt_injection"
       },
       {
@@ -149,7 +149,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 2,
-        "latencyMs": 0.031,
+        "latencyMs": 0.027,
         "suite": "prompt_injection"
       }
     ],
@@ -164,7 +164,7 @@
           "ssrf_blocked:private or local ip is not allowed: 169.254.169.254"
         ],
         "passed": true,
-        "latencyMs": 0.091,
+        "latencyMs": 0.08,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -178,7 +178,7 @@
           "ssrf_blocked:local host is not allowed"
         ],
         "passed": true,
-        "latencyMs": 0.028,
+        "latencyMs": 0.027,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -192,7 +192,7 @@
           "path_blocked:fileId contains illegal characters"
         ],
         "passed": true,
-        "latencyMs": 0.012,
+        "latencyMs": 0.01,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -206,7 +206,7 @@
           "path_blocked:projectId path traversal"
         ],
         "passed": true,
-        "latencyMs": 0.009,
+        "latencyMs": 0.008,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -220,7 +220,7 @@
           "secret_exfiltration_blocked"
         ],
         "passed": true,
-        "latencyMs": 0.047,
+        "latencyMs": 0.043,
         "suite": "tool_policy_attacks",
         "category": "secret_exfiltration"
       },
@@ -250,7 +250,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.044,
+        "latencyMs": 0.045,
         "suite": "benign_false_positive"
       },
       {
@@ -263,7 +263,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.041,
+        "latencyMs": 0.038,
         "suite": "benign_false_positive"
       },
       {
@@ -276,7 +276,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.04,
+        "latencyMs": 0.036,
         "suite": "benign_false_positive"
       },
       {
@@ -289,7 +289,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.036,
+        "latencyMs": 0.034,
         "suite": "benign_false_positive"
       }
     ]

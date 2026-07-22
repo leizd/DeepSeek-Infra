@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.2.4-blue)
+![版本](https://img.shields.io/badge/version-4.2.5-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.2.4 Mutation Scope & Lifecycle Integrity:** Project-list, project-binding, skill-list and memory-list mutations now have explicit ownership scopes, so binding failures remain local and global recovery removes only failed work. Project and Skill lifecycle actions are mutually exclusive per entity; uploads retain their original project target and block rename/removal for that project. Memory save is now a first-class Mutation, while clear acts as an exclusive write barrier across save/remove work. Eight new Chromium checks cover scope isolation, recovery preservation, lifecycle conflicts, stable upload ownership and the Memory barrier. The frozen 4.0 runtime contract is unchanged: Python remains default and authoritative, all Rust delegates remain opt-in, and Python fallback is preserved. See [the 4.2.4 notes](docs/releases/4.2.4.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+> **4.2.5 Mutation Intent & Remount Continuity:** Workspace writes now distinguish operations from normalized user intent, so only identical payloads deduplicate and conflicting drafts are never reported as saved. Every lifecycle Mutation carries owner/entity/operation/intent metadata; pending and paused create, upload, clear and binding work remains visible after the Workspace Provider unmounts on a Trace route. Coordination conflicts surface specific user-facing errors, Project/Skill creation is protected from same-frame duplicates, Memory intents are normalized, and binding failures survive remount for retry. Eight new Chromium checks cover intent identity, conflict visibility and route-remount continuity. The frozen 4.0 runtime contract is unchanged. See [the 4.2.5 notes](docs/releases/4.2.5.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
-**4.2.4 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.2.4 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
+**4.2.5 validation:** run `npm ci --prefix frontend`, `npm run check --prefix frontend`, `python -m pytest tests/test_server_failure_paths.py tests/test_server_integration.py`, `python scripts/smoke_release.py --offline`, `python scripts/run_rust_coverage.py --threshold 80`, and `python scripts/preflight_release.py --version 4.2.5 --ga`. Tag and GitHub Release publication remain a separate exact-merge-commit step.
 
 ## 30 秒概览
 

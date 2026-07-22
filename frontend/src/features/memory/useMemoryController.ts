@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   addMemory,
@@ -11,9 +11,15 @@ import {
 } from "../../api/memoryApi";
 import { MEMORIES_QUERY_KEY } from "../../app/queryKeys";
 import { MEMORY_LIST_MUTATION_KEYS, mutationKeys, ownsMutationKey } from "../../app/mutationKeys";
-import { removeFailedMutations } from "../../app/mutationLifecycle";
+import { stableIntentKey } from "../../app/mutationIntents";
+import {
+  isMutationActive,
+  removeFailedMutations,
+  type LifecycleMutationMeta,
+  useMutationActivity,
+} from "../../app/mutationLifecycle";
 import { latestCacheMutationError, type MutationStateSnapshot } from "../../app/mutationErrors";
-import { actionLockValue } from "../../shared/useEntityActionLocks";
+import { useActionCoordination } from "../../shared/useActionCoordination";
 import { useMemoryWriteBarrier } from "./useMemoryWriteBarrier";
 
 export { MEMORIES_QUERY_KEY };
@@ -23,7 +29,7 @@ export interface MemorySaveResult {
   conflicts: readonly { id: string; content: string; reason: string }[];
 }
 
-interface MemorySaveInput {
+export interface MemorySaveInput {
   content: string;
   category?: string;
   scope?: string;
@@ -54,9 +60,27 @@ function errorText(reason: unknown, fallback: string): string {
   return reason instanceof Error && reason.message ? reason.message : fallback;
 }
 
+export function memorySaveIntent(input: MemorySaveInput): string {
+  return stableIntentKey({
+    content: input.content.trim(),
+    category: input.category ?? "fact",
+    scope: input.scope ?? "global",
+    replaceIds: [...(input.replaceIds ?? [])].sort(),
+  });
+}
+
+function memoryMutationMeta(
+  entityKey: string,
+  operation: string,
+  intentKey: string,
+): LifecycleMutationMeta {
+  return { owner: "memory-list", entityKey, operation, intentKey };
+}
+
 export function useMemoryController(): MemoryController {
   const queryClient = useQueryClient();
   const { runWrite, runClear } = useMemoryWriteBarrier();
+  const { coordinationError, resolveAction, clearCoordinationError } = useActionCoordination();
 
   const memoriesQuery = useQuery<MemoryEntry[]>({
     queryKey: MEMORIES_QUERY_KEY,
@@ -68,46 +92,15 @@ export function useMemoryController(): MemoryController {
     [queryClient],
   );
 
-  const clearMutation = useMutation({
-    mutationKey: mutationKeys.memoryList.clear,
-    onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: MEMORIES_QUERY_KEY });
-    },
-    mutationFn: () => clearMemories(),
-    onSuccess: () => {
-      queryClient.setQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY, []);
-    },
-    onSettled: () => void invalidate(),
-  });
-
-  const saveMutation = useMutation<MemorySaveOutcome, unknown, MemorySaveInput>({
-    mutationKey: mutationKeys.memoryList.save,
-    onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: MEMORIES_QUERY_KEY });
-    },
-    mutationFn: async (input) => {
-      try {
-        return { saved: true, entry: await addMemory(input), conflicts: [] };
-      } catch (reason) {
-        if (reason instanceof MemoryConflictError) return { saved: false, conflicts: reason.conflicts };
-        throw reason;
-      }
-    },
-    onSuccess: (outcome, input) => {
-      if (!outcome.saved) return;
-      queryClient.setQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY, (current) => {
-        if (!current) return current;
-        const replaced = new Set(input.replaceIds ?? []);
-        return [...current.filter((entry) => entry.id !== outcome.entry.id && !replaced.has(entry.id)), outcome.entry];
-      });
-    },
-    onSettled: (outcome) => {
-      if (outcome?.saved) void invalidate();
-    },
-  });
+  const clearActivity = useMutationActivity(mutationKeys.memoryList.clear);
+  const saveActivity = useMutationActivity(mutationKeys.memoryList.save);
 
   const removingMemoryIds = useMutationState<string>({
-    filters: { mutationKey: mutationKeys.memoryList.remove, exact: true, status: "pending" },
+    filters: {
+      mutationKey: mutationKeys.memoryList.remove,
+      exact: true,
+      predicate: (mutation) => isMutationActive(mutation.state),
+    },
     select: (mutation) => (mutation.state.variables as string | undefined) ?? "",
   });
   const removingMemoryIdSet = useMemo(() => new Set(removingMemoryIds), [removingMemoryIds]);
@@ -115,14 +108,9 @@ export function useMemoryController(): MemoryController {
     (memoryId: string) => removingMemoryIdSet.has(memoryId),
     [removingMemoryIdSet],
   );
-  const savingMutations = useMutationState<number>({
-    filters: { mutationKey: mutationKeys.memoryList.save, exact: true, status: "pending" },
-    select: () => 1,
-  });
   const pendingWriteMutations = useMutationState<number>({
     filters: {
-      status: "pending",
-      predicate: (mutation) => ownsMutationKey(
+      predicate: (mutation) => isMutationActive(mutation.state) && ownsMutationKey(
         mutation.options.mutationKey,
         [mutationKeys.memoryList.save, mutationKeys.memoryList.remove],
       ),
@@ -135,17 +123,23 @@ export function useMemoryController(): MemoryController {
   }, [invalidate]);
 
   const recover = useCallback(async () => {
+    clearCoordinationError();
     removeFailedMutations(queryClient, MEMORY_LIST_MUTATION_KEYS);
     await queryClient.refetchQueries({ queryKey: MEMORIES_QUERY_KEY, type: "active" });
-  }, [queryClient]);
+  }, [clearCoordinationError, queryClient]);
 
   const remove = useCallback(
     async (memoryId: string) => {
-      const operationKey = `remove:${memoryId}`;
-      const result = await runWrite(operationKey, async () => {
-        await queryClient.cancelQueries({ queryKey: MEMORIES_QUERY_KEY });
+      const entityKey = `memory:${memoryId}`;
+      const operation = "remove";
+      const intentKey = memoryId;
+      const result = await runWrite(entityKey, operation, intentKey, async () => {
         const mutation = queryClient.getMutationCache().build(queryClient, {
           mutationKey: mutationKeys.memoryList.remove,
+          meta: memoryMutationMeta(entityKey, operation, intentKey),
+          onMutate: async () => {
+            await queryClient.cancelQueries({ queryKey: MEMORIES_QUERY_KEY });
+          },
           mutationFn: (id: string) => deleteMemory(id),
           onSuccess: (_result, id) => {
             queryClient.setQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY, (current) =>
@@ -156,24 +150,71 @@ export function useMemoryController(): MemoryController {
         });
         return mutation.execute(memoryId);
       });
-      actionLockValue(result, "memory", operationKey);
+      resolveAction(result, entityKey, operation);
     },
-    [invalidate, queryClient, runWrite],
+    [invalidate, queryClient, resolveAction, runWrite],
   );
 
   const clear = useCallback(async () => {
-    const result = await runClear(() => clearMutation.mutateAsync());
-    actionLockValue(result, "memory", "clear");
-  }, [clearMutation, runClear]);
+    const entityKey = "memory-list:clear";
+    const operation = "clear";
+    const intentKey = "clear";
+    const result = await runClear(async () => {
+      const mutation = queryClient.getMutationCache().build(queryClient, {
+        mutationKey: mutationKeys.memoryList.clear,
+        meta: memoryMutationMeta(entityKey, operation, intentKey),
+        onMutate: async () => {
+          await queryClient.cancelQueries({ queryKey: MEMORIES_QUERY_KEY });
+        },
+        mutationFn: () => clearMemories(),
+        onSuccess: () => {
+          queryClient.setQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY, []);
+        },
+        onSettled: () => void invalidate(),
+      });
+      return mutation.execute(undefined);
+    });
+    resolveAction(result, entityKey, operation);
+  }, [invalidate, queryClient, resolveAction, runClear]);
 
   const save = useCallback(
     async (input: MemorySaveInput): Promise<MemorySaveResult> => {
-      const operationKey = `save:${JSON.stringify(input)}`;
-      const result = await runWrite(operationKey, () => saveMutation.mutateAsync(input));
-      const outcome = actionLockValue(result, "memory", "save");
+      const intentKey = memorySaveIntent(input);
+      const entityKey = `memory-save:${intentKey}`;
+      const operation = "save";
+      const result = await runWrite(entityKey, operation, intentKey, async () => {
+        const mutation = queryClient.getMutationCache().build(queryClient, {
+          mutationKey: mutationKeys.memoryList.save,
+          meta: memoryMutationMeta(entityKey, operation, intentKey),
+          onMutate: async () => {
+            await queryClient.cancelQueries({ queryKey: MEMORIES_QUERY_KEY });
+          },
+          mutationFn: async (value: MemorySaveInput): Promise<MemorySaveOutcome> => {
+            try {
+              return { saved: true, entry: await addMemory(value), conflicts: [] };
+            } catch (reason) {
+              if (reason instanceof MemoryConflictError) return { saved: false, conflicts: reason.conflicts };
+              throw reason;
+            }
+          },
+          onSuccess: (outcome, value) => {
+            if (!outcome.saved) return;
+            queryClient.setQueryData<MemoryEntry[]>(MEMORIES_QUERY_KEY, (current) => {
+              if (!current) return current;
+              const replaced = new Set(value.replaceIds ?? []);
+              return [...current.filter((entry) => entry.id !== outcome.entry.id && !replaced.has(entry.id)), outcome.entry];
+            });
+          },
+          onSettled: (outcome) => {
+            if (outcome?.saved) void invalidate();
+          },
+        });
+        return mutation.execute(input);
+      });
+      const outcome = resolveAction(result, entityKey, operation);
       return { saved: outcome.saved, conflicts: outcome.conflicts };
     },
-    [runWrite, saveMutation],
+    [invalidate, queryClient, resolveAction, runWrite],
   );
 
   const mutationErrors = useMutationState<MutationStateSnapshot>({
@@ -191,10 +232,10 @@ export function useMemoryController(): MemoryController {
     memories: memoriesQuery.data ?? [],
     loading: memoriesQuery.isLoading,
     refreshing: memoriesQuery.isFetching && !memoriesQuery.isLoading,
-    clearing: clearMutation.isPending,
-    saving: savingMutations.length > 0,
+    clearing: clearActivity.active,
+    saving: saveActivity.active,
     hasPendingWrites: pendingWriteMutations.length > 0,
-    error: firstError ? errorText(firstError, "记忆操作失败") : "",
+    error: coordinationError || (firstError ? errorText(firstError, "记忆操作失败") : ""),
     refresh,
     recover,
     remove,

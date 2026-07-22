@@ -174,6 +174,89 @@ describe("useSkillController", () => {
     });
   });
 
+  it("suppresses a same-frame duplicate skill creation", async () => {
+    let resolveCreate!: (value: Skill) => void;
+    createSkillMock.mockImplementation(
+      () => new Promise<Skill>((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+    const draft = { name: "新技能", description: "说明", systemPrompt: "提示词" };
+
+    let first!: Promise<void>;
+    let duplicate!: Promise<void>;
+    act(() => {
+      first = result.current.create(draft);
+      duplicate = result.current.create({ ...draft });
+    });
+    await waitFor(() => expect(createSkillMock).toHaveBeenCalledTimes(1));
+    expect(result.current.creating).toBe(true);
+
+    await act(async () => {
+      resolveCreate({ ...skill("s-new"), name: draft.name });
+      await Promise.all([first, duplicate]);
+    });
+  });
+
+  it("does not reuse an update promise for a different skill draft", async () => {
+    let resolveUpdate!: (value: Skill) => void;
+    updateSkillPromptMock.mockImplementation(
+      () => new Promise<Skill>((resolve) => {
+        resolveUpdate = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let different!: Promise<void>;
+    act(() => {
+      first = result.current.update({ skillId: "s1", name: "草稿甲", description: "", systemPrompt: "x" });
+      different = result.current.update({ skillId: "s1", name: "草稿乙", description: "", systemPrompt: "x" });
+    });
+    await expect(different).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      activeOperation: "update",
+    });
+    expect(updateSkillPromptMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.error).toContain("正在保存"));
+
+    await act(async () => {
+      resolveUpdate({ ...skill("s1"), name: "草稿甲" });
+      await first;
+    });
+  });
+
+  it("does not reuse a toggle promise for a different target state", async () => {
+    let resolveToggle!: () => void;
+    setSkillDisabledMock.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveToggle = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let different!: Promise<void>;
+    act(() => {
+      first = result.current.toggle(skill("s1", false));
+      different = result.current.toggle(skill("s1", true));
+    });
+    await expect(different).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    expect(setSkillDisabledMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveToggle();
+      await first;
+    });
+  });
+
   it("rejects removal while the same skill is being updated", async () => {
     let resolveUpdate!: (value: Skill) => void;
     updateSkillPromptMock.mockImplementation(

@@ -1366,6 +1366,280 @@ async def run_mutation_lifecycle_smoke(base_url: str) -> dict[str, str]:
     return checks
 
 
+async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
+    from playwright.async_api import expect
+    from playwright.async_api import async_playwright
+
+    checks: dict[str, str] = {}
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        context = await browser.new_context(service_workers="allow")
+        page_errors: list[str] = []
+        await context.add_init_script(
+            """
+            window.__continuityUnhandledRejections = [];
+            window.addEventListener('unhandledrejection', (event) => {
+              window.__continuityUnhandledRejections.push(String(event.reason));
+              event.preventDefault();
+            });
+            window.confirm = () => true;
+            """
+        )
+
+        projects = [
+            {"id": "intent-project", "name": "连续性项目", "documents": [], "createdAt": 1, "updatedAt": 1},
+        ]
+        project_create_started = asyncio.Event()
+        project_create_release = asyncio.Event()
+        project_create_calls = {"count": 0}
+
+        async def mock_config(route: Any) -> None:
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "hasServerKey": True,
+                        "hasSearch": False,
+                        "defaultModel": "deepseek-v4-pro",
+                        "models": ["deepseek-v4-pro"],
+                        "modelRoutes": {},
+                        "uploadLimits": {"fileMaxBytes": 200_000_000, "requestMaxBytes": 220_000_000, "maxFiles": 8},
+                        "computerUrl": base_url,
+                        "phoneUrl": base_url,
+                    }
+                ),
+            )
+
+        async def mock_projects(route: Any) -> None:
+            body = route.request.post_data_json or {}
+            action = body.get("action", "list")
+            if action == "list":
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"projects": projects}))
+                return
+            if action == "create":
+                project_create_calls["count"] += 1
+                project_create_started.set()
+                await project_create_release.wait()
+                created = {
+                    "id": "intent-created",
+                    "name": str(body.get("name", "意图项目")),
+                    "documents": [],
+                    "createdAt": 1,
+                    "updatedAt": 1,
+                }
+                projects.append(created)
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"project": created}))
+                return
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected project action"}))
+
+        upload_started = asyncio.Event()
+        upload_release = asyncio.Event()
+        upload_calls: list[str] = []
+
+        async def mock_upload(route: Any) -> None:
+            upload_calls.append(route.request.url)
+            upload_started.set()
+            await upload_release.wait()
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"documents": []}))
+
+        skills = [
+            {
+                "skillId": "intent-skill",
+                "name": "连续性技能",
+                "description": "",
+                "version": "1.0.0",
+                "systemPrompt": "提示",
+                "builtin": False,
+                "disabled": False,
+                "updatedAt": "",
+            }
+        ]
+        skill_create_started = asyncio.Event()
+        skill_create_release = asyncio.Event()
+        skill_create_calls = {"count": 0}
+
+        async def mock_skills(route: Any) -> None:
+            body = route.request.post_data_json or {}
+            action = body.get("action", "list")
+            if action == "list":
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"skills": skills}))
+                return
+            if action == "create":
+                skill_create_calls["count"] += 1
+                skill_create_started.set()
+                await skill_create_release.wait()
+                config = body.get("skill", {})
+                created = {
+                    "skillId": "intent-created-skill",
+                    "name": str(config.get("name", "重复技能")),
+                    "description": str(config.get("description", "")),
+                    "version": "1.0.0",
+                    "systemPrompt": str(config.get("systemPrompt", "提示")),
+                    "builtin": False,
+                    "disabled": False,
+                    "updatedAt": "",
+                }
+                skills.append(created)
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"skill": created}))
+                return
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected skill action"}))
+
+        binding_save_started = asyncio.Event()
+        binding_save_release = asyncio.Event()
+        binding_state: dict[str, Any] = {"enabledSkills": [], "defaultSkill": ""}
+
+        async def mock_binding(route: Any) -> None:
+            if route.request.method == "GET":
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"skills": {**binding_state, "recentSkills": [], "enabledPacks": []}}),
+                )
+                return
+            binding_save_started.set()
+            await binding_save_release.wait()
+            body = route.request.post_data_json or {}
+            binding_state.update({
+                "enabledSkills": body.get("enabledSkills", []),
+                "defaultSkill": body.get("defaultSkill", ""),
+            })
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"skills": {**binding_state, "recentSkills": [], "enabledPacks": []}}),
+            )
+
+        memories = [{"id": "intent-memory", "content": "连续性记忆", "category": "fact", "scope": "global"}]
+        memory_clear_started = asyncio.Event()
+        memory_clear_release = asyncio.Event()
+        memory_clear_calls = {"count": 0}
+
+        async def mock_memory(route: Any) -> None:
+            if route.request.method == "GET":
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"memories": memories}))
+                return
+            body = route.request.post_data_json or {}
+            if body.get("action") == "clear":
+                memory_clear_calls["count"] += 1
+                memory_clear_started.set()
+                await memory_clear_release.wait()
+                memories.clear()
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+                return
+            await route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "unexpected memory action"}))
+
+        await context.route("**/api/config", mock_config)
+        await context.route("**/api/projects", mock_projects)
+        await context.route("**/api/project-files?projectId=*", mock_upload)
+        await context.route("**/api/skills", mock_skills)
+        await context.route("**/api/workspace/projects/*/skills", mock_binding)
+        await context.route("**/api/memory**", mock_memory)
+        page = await context.new_page()
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        await page.goto(base_url, wait_until="domcontentloaded")
+
+        async def navigate_workspace(path: str) -> None:
+            await page.evaluate(
+                """path => {
+                  window.history.pushState({}, '', path);
+                  window.dispatchEvent(new PopStateEvent('popstate'));
+                }""",
+                path,
+            )
+            await page.wait_for_function("path => window.location.pathname === path", arg=path)
+
+        await page.get_by_role("button", name="项目", exact=True).click()
+        project_form = page.locator(".project-create-form")
+        await project_form.locator("input").fill("重复意图项目")
+        await project_form.evaluate("form => { form.requestSubmit(); form.requestSubmit(); }")
+        await asyncio.wait_for(project_create_started.wait(), timeout=5)
+        await page.wait_for_timeout(100)
+        if project_create_calls["count"] != 1:
+            raise AssertionError(f"duplicate project create escaped intent lock: {project_create_calls}")
+        checks["mutationIntentIdentity"] = "PASS"
+        checks["projectCreateDuplicateSuppressed"] = "PASS"
+        project_create_release.set()
+        await page.locator(".workspace-open", has_text="重复意图项目").wait_for()
+
+        await page.locator(".workspace-open", has_text="连续性项目").click()
+        upload_input = page.locator(".project-upload-button input")
+        await upload_input.set_input_files({"name": "first.txt", "mimeType": "text/plain", "buffer": b"first"})
+        await asyncio.wait_for(upload_started.wait(), timeout=5)
+        await navigate_workspace("/trace/mutation-continuity")
+        await page.locator(".settings-drawer").wait_for(state="detached")
+        await navigate_workspace("/")
+        await page.get_by_role("button", name="项目", exact=True).click()
+        await page.locator(".project-upload-button", has_text="上传中…").wait_for()
+        project_row = page.locator(".workspace-item", has_text="连续性项目")
+        await expect(project_row.get_by_role("button", name="重命名项目 连续性项目")).to_be_disabled()
+        await expect(project_row.get_by_role("button", name="删除项目 连续性项目")).to_be_disabled()
+        checks["workspaceMutationSurvivesRemount"] = "PASS"
+
+        remounted_upload = page.locator(".project-upload-button input")
+        await remounted_upload.evaluate("input => input.removeAttribute('disabled')")
+        await remounted_upload.set_input_files({"name": "different.txt", "mimeType": "text/plain", "buffer": b"different"})
+        await page.locator("section.settings-drawer > .workspace-error").wait_for()
+        if len(upload_calls) != 1:
+            raise AssertionError(f"different upload intent was reported as sent: {upload_calls}")
+        checks["differentIntentNotReportedAsSuccess"] = "PASS"
+        checks["coordinationConflictVisible"] = "PASS"
+        upload_release.set()
+        await page.locator(".project-upload-button", has_text="上传文档").wait_for()
+
+        await page.get_by_role("button", name="关闭项目面板").click()
+        await page.get_by_role("button", name="技能", exact=True).click()
+        await page.get_by_role("button", name="新建技能").click()
+        skill_form = page.locator(".skill-form")
+        await skill_form.get_by_role("textbox", name="技能名称").fill("重复技能")
+        await skill_form.get_by_role("textbox", name="技能提示词").fill("重复提示")
+        await skill_form.evaluate("form => { form.requestSubmit(); form.requestSubmit(); }")
+        await asyncio.wait_for(skill_create_started.wait(), timeout=5)
+        await page.wait_for_timeout(100)
+        if skill_create_calls["count"] != 1:
+            raise AssertionError(f"duplicate skill create escaped intent lock: {skill_create_calls}")
+        checks["skillCreateDuplicateSuppressed"] = "PASS"
+        skill_create_release.set()
+        await page.locator(".skill-card", has_text="重复技能").wait_for()
+
+        await page.get_by_role("button", name="关闭技能面板").click()
+        await page.get_by_role("button", name="记忆", exact=True).click()
+        await page.get_by_role("button", name="全部清空").click()
+        await asyncio.wait_for(memory_clear_started.wait(), timeout=5)
+        await navigate_workspace("/trace/memory-continuity")
+        await navigate_workspace("/")
+        await page.get_by_role("button", name="记忆", exact=True).click()
+        await expect(page.get_by_role("button", name="清空中…")).to_be_disabled()
+        if memory_clear_calls["count"] != 1:
+            raise AssertionError("memory clear was resubmitted after Workspace remount")
+        checks["memoryClearStateSurvivesRemount"] = "PASS"
+        memory_clear_release.set()
+        await page.get_by_text("还没有长期记忆").wait_for()
+
+        await page.get_by_role("button", name="关闭记忆面板").click()
+        await page.get_by_role("button", name="项目", exact=True).click()
+        binding_checkbox = page.locator(".project-skill-options label", has_text="连续性技能").locator("input")
+        if await binding_checkbox.count() == 0:
+            await page.locator(".workspace-open", has_text="连续性项目").click()
+        await binding_checkbox.click()
+        await asyncio.wait_for(binding_save_started.wait(), timeout=5)
+        await navigate_workspace("/trace/binding-continuity")
+        await navigate_workspace("/")
+        await page.get_by_role("button", name="项目", exact=True).click()
+        await page.locator(".project-skill-binding h3", has_text="保存中").wait_for()
+        await expect(page.locator(".project-skill-options label", has_text="连续性技能").locator("input")).to_be_disabled()
+        checks["bindingStateSurvivesRemount"] = "PASS"
+        binding_save_release.set()
+        await page.locator(".project-skill-binding h3", has_text="项目技能").wait_for()
+
+        unhandled = await page.evaluate("() => window.__continuityUnhandledRejections")
+        if unhandled or page_errors:
+            raise AssertionError(f"mutation continuity smoke reported browser errors: {unhandled + page_errors}")
+        await context.close()
+        await browser.close()
+    return checks
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="write JSON evidence to this path")
@@ -1391,6 +1665,7 @@ def main() -> int:
         checks.update(asyncio.run(run_recovery_smoke(base_url)))
         checks.update(asyncio.run(run_mutation_smoke(base_url)))
         checks.update(asyncio.run(run_mutation_lifecycle_smoke(base_url)))
+        checks.update(asyncio.run(run_mutation_continuity_smoke(base_url)))
         payload = {
             "schemaVersion": 1,
             "version": VERSION,

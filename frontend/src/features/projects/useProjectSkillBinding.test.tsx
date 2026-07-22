@@ -83,27 +83,18 @@ describe("useProjectSkillBinding", () => {
     });
   });
 
-  it("serializes concurrent saves for the same project scope", async () => {
+  it("rejects a different binding intent while the first save is pending", async () => {
     let serverBinding = binding([]);
     fetchBindingMock.mockImplementation(() => Promise.resolve(serverBinding));
-    const order: string[] = [];
     let resolveFirst!: (value: ProjectSkillBinding) => void;
-    saveBindingMock
-      .mockImplementationOnce(
-        () =>
-          new Promise<ProjectSkillBinding>((resolve) => {
-            resolveFirst = (value) => {
-              order.push("first");
-              serverBinding = value;
-              resolve(value);
-            };
-          }),
-      )
-      .mockImplementationOnce((_projectId, input) => {
-        order.push("second");
-        serverBinding = binding(input.enabledSkills);
-        return Promise.resolve(serverBinding);
-      });
+    saveBindingMock.mockImplementation(
+      () => new Promise<ProjectSkillBinding>((resolve) => {
+        resolveFirst = (value) => {
+          serverBinding = value;
+          resolve(value);
+        };
+      }),
+    );
 
     const client = createTestQueryClient();
     const { result } = renderHook(() => useProjectSkillBinding("p1"), { wrapper: wrapperFor(client) });
@@ -116,17 +107,50 @@ describe("useProjectSkillBinding", () => {
       secondPromise = result.current.save(binding(["b"]));
     });
 
+    await expect(secondPromise).rejects.toMatchObject({ name: "EntityActionConflictError" });
     await waitFor(() => expect(result.current.saving).toBe(true));
     expect(saveBindingMock).toHaveBeenCalledTimes(1);
 
     resolveFirst(binding(["a"]));
     await act(async () => {
       await firstPromise;
-      await secondPromise;
     });
 
-    expect(order).toEqual(["first", "second"]);
-    expect(client.getQueryData<ProjectSkillBinding>(projectSkillBindingQueryKey("p1"))?.enabledSkills).toEqual(["b"]);
+    expect(client.getQueryData<ProjectSkillBinding>(projectSkillBindingQueryKey("p1"))?.enabledSkills).toEqual(["a"]);
+  });
+
+  it("restores binding saving state after remount without resubmitting", async () => {
+    fetchBindingMock.mockResolvedValue(binding([]));
+    let resolveSave!: (value: ProjectSkillBinding) => void;
+    saveBindingMock.mockImplementation(
+      () => new Promise<ProjectSkillBinding>((resolve) => {
+        resolveSave = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const firstHook = renderHook(() => useProjectSkillBinding("p1"), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(firstHook.result.current.loading).toBe(false));
+    const desired = binding(["s1"], "s1");
+
+    let saveAction!: Promise<ProjectSkillBinding>;
+    act(() => {
+      saveAction = firstHook.result.current.save(desired);
+    });
+    await waitFor(() => expect(firstHook.result.current.saving).toBe(true));
+    firstHook.unmount();
+
+    const remounted = renderHook(() => useProjectSkillBinding("p1"), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(remounted.result.current.saving).toBe(true));
+    await expect(remounted.result.current.save(desired)).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      activeOperation: "save",
+    });
+    expect(saveBindingMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveSave(desired);
+      await saveAction;
+    });
   });
 
   it("surfaces fetch errors with a retry path", async () => {
@@ -144,7 +168,7 @@ describe("useProjectSkillBinding", () => {
     expect(result.current.errorKind).toBeNull();
   });
 
-  it("retries a failed save with the last desired binding", async () => {
+  it("restores a failed save after remount and retries the last desired binding", async () => {
     let serverBinding = binding([]);
     fetchBindingMock.mockImplementation(() => Promise.resolve(serverBinding));
     saveBindingMock
@@ -154,19 +178,23 @@ describe("useProjectSkillBinding", () => {
         return Promise.resolve(serverBinding);
       });
     const client = createTestQueryClient();
-    const { result } = renderHook(() => useProjectSkillBinding("p1"), { wrapper: wrapperFor(client) });
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    const firstHook = renderHook(() => useProjectSkillBinding("p1"), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(firstHook.result.current.loading).toBe(false));
 
     await act(async () => {
-      await result.current.save(binding(["s1"], "s1")).catch(() => undefined);
+      await firstHook.result.current.save(binding(["s1"], "s1")).catch(() => undefined);
     });
-    await waitFor(() => expect(result.current.error).toBeTruthy());
-    expect(result.current.errorKind).toBe("save");
+    await waitFor(() => expect(firstHook.result.current.error).toBeTruthy());
+    firstHook.unmount();
+
+    const remounted = renderHook(() => useProjectSkillBinding("p1"), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(remounted.result.current.error).toBeTruthy());
+    expect(remounted.result.current.errorKind).toBe("save");
 
     await act(async () => {
-      await result.current.retry();
+      await remounted.result.current.retry();
     });
-    await waitFor(() => expect(result.current.error).toBeNull());
+    await waitFor(() => expect(remounted.result.current.error).toBeNull());
     expect(saveBindingMock).toHaveBeenLastCalledWith("p1", { enabledSkills: ["s1"], defaultSkill: "s1" });
     expect(client.getQueryData<ProjectSkillBinding>(projectSkillBindingQueryKey("p1"))?.enabledSkills).toEqual(["s1"]);
   });

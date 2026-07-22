@@ -149,6 +149,39 @@ describe("useMemoryController", () => {
     expect(result.current.error).toBe("");
   });
 
+  it("deduplicates semantically identical normalized memory saves", async () => {
+    let resolveSave!: (value: MemoryEntry) => void;
+    addMemoryMock.mockImplementation(
+      () => new Promise<MemoryEntry>((resolve) => {
+        resolveSave = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useMemoryController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.memories).toHaveLength(2));
+
+    let first!: Promise<MemorySaveResult>;
+    let duplicate!: Promise<MemorySaveResult>;
+    act(() => {
+      first = result.current.save({ content: "  同一记忆  ", replaceIds: ["m2", "m1"] });
+      duplicate = result.current.save({
+        content: "同一记忆",
+        category: "fact",
+        scope: "global",
+        replaceIds: ["m1", "m2"],
+      });
+    });
+    await waitFor(() => expect(addMemoryMock).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      resolveSave(entry("m3", "同一记忆"));
+      await expect(Promise.all([first, duplicate])).resolves.toEqual([
+        { saved: true, conflicts: [] },
+        { saved: true, conflicts: [] },
+      ]);
+    });
+  });
+
   it("tracks concurrent memory removals independently", async () => {
     const resolvers = new Map<string, () => void>();
     deleteMemoryMock.mockImplementation(
@@ -275,6 +308,38 @@ describe("useMemoryController", () => {
     expect(deleteMemoryMock).not.toHaveBeenCalled();
     expect(addMemoryMock).not.toHaveBeenCalled();
     await waitFor(() => expect(result.current.clearing).toBe(true));
+
+    await act(async () => {
+      resolveClear();
+      await clearAction;
+    });
+  });
+
+  it("restores clearing state after remount and blocks a second clear", async () => {
+    let resolveClear!: () => void;
+    clearMemoriesMock.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveClear = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const firstHook = renderHook(() => useMemoryController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(firstHook.result.current.memories).toHaveLength(2));
+
+    let clearAction!: Promise<void>;
+    act(() => {
+      clearAction = firstHook.result.current.clear();
+    });
+    await waitFor(() => expect(firstHook.result.current.clearing).toBe(true));
+    firstHook.unmount();
+
+    const remounted = renderHook(() => useMemoryController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(remounted.result.current.clearing).toBe(true));
+    await expect(remounted.result.current.clear()).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      activeOperation: "clear",
+    });
+    expect(clearMemoriesMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       resolveClear();

@@ -33,7 +33,13 @@ function ProjectSkillBinding({ project }: { project: Project }) {
       <h3>项目技能{binding.saving ? "（保存中…）" : binding.refreshing ? "（同步中…）" : ""}</h3>
       {binding.error ? (
         <div className="workspace-error" role="alert">
-          <span>{binding.error instanceof Error && binding.error.message ? binding.error.message : "绑定加载失败"}</span>
+          <span>{
+            typeof binding.error === "string"
+              ? binding.error
+              : binding.error instanceof Error && binding.error.message
+                ? binding.error.message
+                : "绑定加载失败"
+          }</span>
           <button type="button" onClick={() => runUiAction(binding.retry())}>重试</button>
         </div>
       ) : binding.loading ? (

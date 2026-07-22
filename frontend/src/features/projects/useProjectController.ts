@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   createProject,
@@ -15,11 +15,17 @@ import {
   ownsMutationKey,
   PROJECT_LIST_MUTATION_KEYS,
 } from "../../app/mutationKeys";
-import { removeFailedMutations } from "../../app/mutationLifecycle";
+import {
+  isMutationActive,
+  removeFailedMutations,
+  type LifecycleMutationMeta,
+  useMutationActivity,
+} from "../../app/mutationLifecycle";
 import { PROJECTS_QUERY_KEY } from "../../app/queryKeys";
 import { latestCacheMutationError, type MutationStateSnapshot } from "../../app/mutationErrors";
 import { useSettings } from "../../contexts/SettingsContext";
-import { actionLockValue, useEntityActionLocks } from "../../shared/useEntityActionLocks";
+import { useActionCoordination } from "../../shared/useActionCoordination";
+import { useEntityActionLocks } from "../../shared/useEntityActionLocks";
 
 const ACTIVE_PROJECT_KEY = "deepseek-infra.active-project";
 
@@ -85,10 +91,26 @@ function errorText(reason: unknown, fallback: string): string {
   return reason instanceof Error && reason.message ? reason.message : fallback;
 }
 
+function uploadIntent(files: readonly File[]): string {
+  return files
+    .map((file) => `${file.name}:${file.size}:${file.lastModified}`)
+    .sort()
+    .join("|");
+}
+
+function projectMutationMeta(
+  entityKey: string,
+  operation: string,
+  intentKey: string,
+): LifecycleMutationMeta {
+  return { owner: "project-list", entityKey, operation, intentKey };
+}
+
 export function useProjectController(): ProjectController {
   const settings = useSettings();
   const queryClient = useQueryClient();
   const runEntityAction = useEntityActionLocks();
+  const { coordinationError, resolveAction, clearCoordinationError } = useActionCoordination();
   const [activeProjectId, setActiveProjectId] = useState(storedActiveProject);
 
   const projectsQuery = useQuery<Project[]>({
@@ -115,39 +137,30 @@ export function useProjectController(): ProjectController {
     if (!projects.some((project) => project.id === activeProjectId)) setActive("");
   }, [projects, projectsQuery.isSuccess, activeProjectId, setActive]);
 
-  const createMutation = useMutation({
-    mutationKey: mutationKeys.projectList.create,
-    onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: PROJECTS_QUERY_KEY });
-    },
-    mutationFn: (name: string) => createProject(name.trim()),
-    onSuccess: (project) => {
-      queryClient.setQueryData<Project[]>(PROJECTS_QUERY_KEY, (current) => [...(current ?? []), project]);
-      setActive(project.id);
-    },
-    onSettled: () => void invalidate(),
-  });
-
-  const uploadMutation = useMutation({
-    mutationKey: mutationKeys.projectList.upload,
-    mutationFn: ({ projectId, files, apiKey }: ProjectUploadVariables) =>
-      uploadProjectFiles(projectId, files, {
-        ocrEnabled: true,
-        apiKey,
-      }),
-    onSettled: () => void invalidate(),
-  });
+  const createActivity = useMutationActivity(mutationKeys.projectList.create);
 
   const renamingProjectIds = useMutationState<string>({
-    filters: { mutationKey: mutationKeys.projectList.rename, exact: true, status: "pending" },
+    filters: {
+      mutationKey: mutationKeys.projectList.rename,
+      exact: true,
+      predicate: (mutation) => isMutationActive(mutation.state),
+    },
     select: (mutation) => (mutation.state.variables as { projectId?: string } | undefined)?.projectId ?? "",
   });
   const removingProjectIds = useMutationState<string>({
-    filters: { mutationKey: mutationKeys.projectList.remove, exact: true, status: "pending" },
+    filters: {
+      mutationKey: mutationKeys.projectList.remove,
+      exact: true,
+      predicate: (mutation) => isMutationActive(mutation.state),
+    },
     select: (mutation) => (mutation.state.variables as string | undefined) ?? "",
   });
   const uploadingProjectIds = useMutationState<string>({
-    filters: { mutationKey: mutationKeys.projectList.upload, exact: true, status: "pending" },
+    filters: {
+      mutationKey: mutationKeys.projectList.upload,
+      exact: true,
+      predicate: (mutation) => isMutationActive(mutation.state),
+    },
     select: (mutation) => (mutation.state.variables as ProjectUploadVariables | undefined)?.projectId ?? "",
   });
   const renamingProjectIdSet = useMemo(() => new Set(renamingProjectIds), [renamingProjectIds]);
@@ -171,23 +184,48 @@ export function useProjectController(): ProjectController {
   }, [invalidate]);
 
   const recover = useCallback(async () => {
+    clearCoordinationError();
     removeFailedMutations(queryClient, PROJECT_LIST_MUTATION_KEYS);
     await queryClient.refetchQueries({ queryKey: PROJECTS_QUERY_KEY, type: "active" });
-  }, [queryClient]);
+  }, [clearCoordinationError, queryClient]);
 
   const create = useCallback(
     async (name: string) => {
-      await createMutation.mutateAsync(name);
+      const normalizedName = name.trim();
+      const entityKey = "project-list:create";
+      const operation = "create";
+      const result = await runEntityAction(entityKey, operation, normalizedName, async () => {
+        const mutation = queryClient.getMutationCache().build(queryClient, {
+          mutationKey: mutationKeys.projectList.create,
+          meta: projectMutationMeta(entityKey, operation, normalizedName),
+          onMutate: async () => {
+            await queryClient.cancelQueries({ queryKey: PROJECTS_QUERY_KEY });
+          },
+          mutationFn: (desiredName: string) => createProject(desiredName),
+          onSuccess: (project) => {
+            queryClient.setQueryData<Project[]>(PROJECTS_QUERY_KEY, (current) => [...(current ?? []), project]);
+            setActive(project.id);
+          },
+          onSettled: () => void invalidate(),
+        });
+        return mutation.execute(normalizedName);
+      });
+      resolveAction(result, entityKey, operation);
     },
-    [createMutation],
+    [invalidate, queryClient, resolveAction, runEntityAction, setActive],
   );
   const remove = useCallback(
     async (projectId: string) => {
       const entityKey = `project:${projectId}`;
-      const result = await runEntityAction(entityKey, "remove", async () => {
-        await queryClient.cancelQueries({ queryKey: PROJECTS_QUERY_KEY });
+      const operation = "remove";
+      const intentKey = projectId;
+      const result = await runEntityAction(entityKey, operation, intentKey, async () => {
         const mutation = queryClient.getMutationCache().build(queryClient, {
           mutationKey: mutationKeys.projectList.remove,
+          meta: projectMutationMeta(entityKey, operation, intentKey),
+          onMutate: async () => {
+            await queryClient.cancelQueries({ queryKey: PROJECTS_QUERY_KEY });
+          },
           mutationFn: (id: string) => deleteProject(id),
           onSuccess: (_result, id) => {
             queryClient.setQueryData<Project[]>(PROJECTS_QUERY_KEY, (current) =>
@@ -199,17 +237,22 @@ export function useProjectController(): ProjectController {
         });
         return mutation.execute(projectId);
       });
-      actionLockValue(result, entityKey, "remove");
+      resolveAction(result, entityKey, operation);
     },
-    [activeProjectId, invalidate, queryClient, runEntityAction, setActive],
+    [activeProjectId, invalidate, queryClient, resolveAction, runEntityAction, setActive],
   );
   const rename = useCallback(
     async (projectId: string, name: string) => {
       const entityKey = `project:${projectId}`;
-      const result = await runEntityAction(entityKey, "rename", async () => {
-        await queryClient.cancelQueries({ queryKey: PROJECTS_QUERY_KEY });
+      const operation = "rename";
+      const intentKey = name.trim();
+      const result = await runEntityAction(entityKey, operation, intentKey, async () => {
         const mutation = queryClient.getMutationCache().build(queryClient, {
           mutationKey: mutationKeys.projectList.rename,
+          meta: projectMutationMeta(entityKey, operation, intentKey),
+          onMutate: async () => {
+            await queryClient.cancelQueries({ queryKey: PROJECTS_QUERY_KEY });
+          },
           mutationFn: ({ projectId: id, name: n }: { projectId: string; name: string }) => renameProject(id, n.trim()),
           onSuccess: (updated) => {
             queryClient.setQueryData<Project[]>(PROJECTS_QUERY_KEY, (current) =>
@@ -218,11 +261,11 @@ export function useProjectController(): ProjectController {
           },
           onSettled: () => void invalidate(),
         });
-        return mutation.execute({ projectId, name });
+        return mutation.execute({ projectId, name: intentKey });
       });
-      actionLockValue(result, entityKey, "rename");
+      resolveAction(result, entityKey, operation);
     },
-    [invalidate, queryClient, runEntityAction],
+    [invalidate, queryClient, resolveAction, runEntityAction],
   );
   const uploadDocuments = useCallback(
     async (fileInput: Iterable<File>) => {
@@ -230,16 +273,26 @@ export function useProjectController(): ProjectController {
       const projectId = activeProjectId;
       if (!files.length || !projectId) return;
       const entityKey = `project:${projectId}`;
-      const result = await runEntityAction(entityKey, "upload", () =>
-        uploadMutation.mutateAsync({
-          projectId,
-          files,
-          apiKey: settings.apiKey.trim() || undefined,
-        }),
-      );
-      actionLockValue(result, entityKey, "upload");
+      const operation = "upload";
+      const intentKey = uploadIntent(files);
+      const variables = {
+        projectId,
+        files,
+        apiKey: settings.apiKey.trim() || undefined,
+      };
+      const result = await runEntityAction(entityKey, operation, intentKey, async () => {
+        const mutation = queryClient.getMutationCache().build(queryClient, {
+          mutationKey: mutationKeys.projectList.upload,
+          meta: projectMutationMeta(entityKey, operation, intentKey),
+          mutationFn: ({ projectId: id, files: selectedFiles, apiKey }: ProjectUploadVariables) =>
+            uploadProjectFiles(id, selectedFiles, { ocrEnabled: true, apiKey }),
+          onSettled: () => void invalidate(),
+        });
+        return mutation.execute(variables);
+      });
+      resolveAction(result, entityKey, operation);
     },
-    [activeProjectId, runEntityAction, settings.apiKey, uploadMutation],
+    [activeProjectId, invalidate, queryClient, resolveAction, runEntityAction, settings.apiKey],
   );
 
   const activeProject = useMemo(
@@ -276,8 +329,8 @@ export function useProjectController(): ProjectController {
     loading: projectsQuery.isLoading,
     refreshing: projectsQuery.isFetching && !projectsQuery.isLoading,
     uploading: isUploadingProject(activeProjectId),
-    creating: createMutation.isPending,
-    error: firstError ? errorText(firstError, "项目操作失败") : "",
+    creating: createActivity.active,
+    error: coordinationError || (firstError ? errorText(firstError, "项目操作失败") : ""),
     refresh,
     recover,
     create,
