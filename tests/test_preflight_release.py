@@ -2056,6 +2056,35 @@ def test_frontend_browser_evidence_requires_lazy_runtime_continuity_checks_from_
     assert preflight.check_frontend_browser_evidence(tmp_path, "4.3.1").status == "pass"
 
 
+def test_frontend_browser_evidence_requires_build_handoff_checks_from_4_3_2(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    evidence = tmp_path / "docs" / "evidence"
+    evidence.mkdir(parents=True)
+    path = evidence / "frontend-browser-v4.3.2.json"
+    source = Path(preflight.__file__).read_text(encoding="utf-8")
+    required = set(re.findall(
+        r'"([A-Za-z0-9]+)"',
+        source[source.index("def check_frontend_browser_evidence"):source.index("def check_frontend_bundle_evidence")],
+    ))
+    required -= {"frontend_browser_evidence", "PASS", "chromium", "status", "browser"}
+    payload: dict[str, Any] = {
+        "version": "4.3.2",
+        "commit": "abc1234",
+        "generatedAt": "2026-07-23T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": "PASS",
+        "browser": "chromium",
+        "checks": {name: "PASS" for name in required if name != "controllerHandshakeRequired"},
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.3.2")
+    assert result.status == "fail"
+    assert "controllerHandshakeRequired" in result.detail
+    payload["checks"]["controllerHandshakeRequired"] = "PASS"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert preflight.check_frontend_browser_evidence(tmp_path, "4.3.2").status == "pass"
+
+
 def test_frontend_bundle_evidence_requires_workspace_budgets_from_4_3_0(tmp_path: Path) -> None:
     preflight = _load_preflight()
     evidence = tmp_path / "docs" / "evidence"
@@ -2137,3 +2166,52 @@ def test_frontend_bundle_evidence_requires_layered_offline_manifest_from_4_3_1(t
     payload["checks"]["workspaceRecoveryChunksDeferred"] = "PASS"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert preflight.check_frontend_bundle_evidence(tmp_path, "4.3.1").status == "pass"
+
+
+def test_frontend_bundle_evidence_requires_immutable_identity_from_4_3_2(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    evidence = tmp_path / "docs" / "evidence"
+    evidence.mkdir(parents=True)
+    path = evidence / "frontend-bundle-v4.3.2.json"
+    required = {
+        "tracePageDynamicEntry",
+        "traceDetailDynamicEntry",
+        "traceImplementationDeferred",
+        "traceCssDeferred",
+        "workspaceProjectsDynamicEntry",
+        "workspaceSkillsDynamicEntry",
+        "workspaceMemoryDynamicEntry",
+        "workspaceSettingsDynamicEntry",
+        "workspaceUtilitiesDynamicEntry",
+        "workspaceOptionalCssDeferred",
+        "initialBundleReducedFrom428",
+        "initialBundleBudget",
+        "initialCssBudget",
+        "optionalFeatureChunkBudget",
+        "workspaceOfflineAssetManifest",
+        "workspacePrimaryWarmLayer",
+        "workspaceRecoveryChunksDeferred",
+        "routeOptionalChunksSeparated",
+        "immutableWorkerBuildIdentity",
+        "workerManifestIdentityBound",
+    }
+    payload: dict[str, Any] = {
+        "version": "4.3.2",
+        "commit": "abc1234",
+        "generatedAt": "2026-07-23T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": "PASS",
+        "workspaceBuildId": "0123456789abcdef",
+        "workspaceAssetSetDigest": "a" * 64,
+        "workspaceImmutableManifest": "static/ui/workspace-assets-0123456789abcdef.json",
+        "workspaceWorker": "static/ui/sw-0123456789abcdef.js",
+        "workspaceRootWorker": "static/ui/sw-root-0123456789abcdef.js",
+        "checks": {name: "PASS" for name in required if name != "workerManifestIdentityBound"},
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = preflight.check_frontend_bundle_evidence(tmp_path, "4.3.2")
+    assert result.status == "fail"
+    assert "workerManifestIdentityBound" in result.detail
+    payload["checks"]["workerManifestIdentityBound"] = "PASS"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert preflight.check_frontend_bundle_evidence(tmp_path, "4.3.2").status == "pass"

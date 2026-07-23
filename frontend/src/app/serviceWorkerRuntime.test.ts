@@ -13,6 +13,11 @@ const BUILD_C = "cccccccccccccccc";
 const DIGEST_C = "c".repeat(64);
 const MANIFEST_URL = `https://example.test/ui/workspace-assets-${BUILD_C}.json`;
 
+function metadataPath(shell: string, key: string): string {
+  const prefix = shell === "/" ? "/__deepseek_workspace_metadata__/" : "/ui/__deepseek_workspace_metadata__/";
+  return `${prefix}${encodeURIComponent(key)}`;
+}
+
 class FakeCache {
   readonly entries = new Map<string, Response>();
   putHook: (() => Promise<void>) | null = null;
@@ -46,6 +51,7 @@ class FakeCache {
 
 class FakeCacheStorage {
   readonly stores = new Map<string, FakeCache>();
+  keysHook: (() => Promise<void> | void) | null = null;
 
   constructor(private readonly fetchMock: FetchMock) {}
 
@@ -59,7 +65,25 @@ class FakeCacheStorage {
   }
 
   async keys(): Promise<string[]> {
-    return [...this.stores.keys()];
+    const keys = [...this.stores.keys()];
+    if (this.keysHook) {
+      const hook = this.keysHook;
+      this.keysHook = null;
+      await hook();
+    }
+    return keys;
+  }
+
+  async match(
+    request: RequestLike,
+    options: { cacheName?: string } = {},
+  ): Promise<Response | undefined> {
+    if (options.cacheName) return this.stores.get(options.cacheName)?.match(request);
+    for (const cache of this.stores.values()) {
+      const response = await cache.match(request);
+      if (response) return response;
+    }
+    return undefined;
   }
 
   async delete(name: string): Promise<boolean> {
@@ -204,7 +228,7 @@ async function seedBuilds(
   shell: string,
 ) {
   const history = await harness.caches.open(historyName);
-  await history.put("builds", new Response(JSON.stringify([BUILD_C, BUILD_A])));
+  await history.put(metadataPath(shell, "builds"), new Response(JSON.stringify([BUILD_C, BUILD_A])));
   const current = await harness.caches.open(`${prefix}${BUILD_C}`);
   const previous = await harness.caches.open(`${prefix}${BUILD_A}`);
   await current.put(shell, new Response("shell-c"));
@@ -259,6 +283,24 @@ describe.each(WORKERS)("$name immutable runtime", ({ name, prefix, history, shel
     expect(searchedChunk.type).toBe("error");
   });
 
+  it("does not recreate a previous cache deleted after the cache-key snapshot", async () => {
+    const fetchMock = vi.fn(() => Promise.reject(new TypeError("offline")));
+    const harness = await workerHarness(name, fetchMock);
+    await seedBuilds(harness, prefix, history, shell);
+    harness.caches.keysHook = () => {
+      harness.caches.stores.delete(`${prefix}${BUILD_A}`);
+    };
+
+    const response = await harness.fetch({
+      method: "GET",
+      mode: "cors",
+      url: "https://example.test/ui/assets/LegacyChunk-abcdefgh.js",
+    });
+
+    expect(response.type).toBe("error");
+    expect(harness.caches.stores.has(`${prefix}${BUILD_A}`)).toBe(false);
+  });
+
   it("waits for a successful navigation response to reach the current cache", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(new Response("network-shell")));
     const harness = await workerHarness(name, fetchMock);
@@ -296,6 +338,28 @@ describe.each(WORKERS)("$name immutable runtime", ({ name, prefix, history, shel
     });
     const harness = await workerHarness(name, fetchMock);
     await expect(harness.lifecycle("install")).rejects.toThrow("identity mismatch");
+  });
+
+  it("clears a rejected manifest promise so the same worker lifecycle can recover", async () => {
+    let manifestAttempts = 0;
+    const fetchMock = vi.fn((request: RequestLike) => {
+      const url = new URL(typeof request === "string" ? request : request.url, "https://example.test");
+      if (url.href === MANIFEST_URL) {
+        manifestAttempts += 1;
+        if (manifestAttempts === 1) return Promise.reject(new TypeError("temporary manifest outage"));
+        return Promise.resolve(new Response(JSON.stringify(workspaceManifest())));
+      }
+      return Promise.resolve(new Response("asset"));
+    });
+    const harness = await workerHarness(name, fetchMock);
+    const message = {
+      type: "cache_workspace_primary",
+      buildId: BUILD_C,
+      assetSetDigest: DIGEST_C,
+    };
+    await expect(harness.message(message)).rejects.toThrow("temporary manifest outage");
+    await expect(harness.message(message)).resolves.toBeUndefined();
+    expect(manifestAttempts).toBe(2);
   });
 
   it("deduplicates warmup, skips cached assets, and resumes only missing failures", async () => {
@@ -339,12 +403,42 @@ describe.each(WORKERS)("$name immutable runtime", ({ name, prefix, history, shel
     expect(laterSkills).toHaveLength(2);
 
     const metadata = await harness.caches.open(history);
-    const marker = await metadata.match(`warmup:${BUILD_C}`);
+    const marker = await metadata.match(metadataPath(shell, `warmup:${BUILD_C}`));
     expect(await marker?.json()).toEqual(expect.objectContaining({
       buildId: BUILD_C,
       assetSetDigest: DIGEST_C,
       offlinePrimaryComplete: true,
     }));
+  });
+
+  it("invalidates a warmup completion marker bound to a different asset digest", async () => {
+    const fetchMock = vi.fn((request: RequestLike) => {
+      const url = new URL(typeof request === "string" ? request : request.url, "https://example.test");
+      if (url.href === MANIFEST_URL) {
+        return Promise.resolve(new Response(JSON.stringify(workspaceManifest())));
+      }
+      return Promise.resolve(new Response(url.pathname));
+    });
+    const harness = await workerHarness(name, fetchMock);
+    const metadata = await harness.caches.open(history);
+    await metadata.put(metadataPath(shell, `warmup:${BUILD_C}`), new Response(JSON.stringify({
+      buildId: BUILD_C,
+      assetSetDigest: "d".repeat(64),
+      offlinePrimaryComplete: true,
+    })));
+    await harness.message({
+      type: "cache_workspace_primary",
+      buildId: BUILD_C,
+      assetSetDigest: DIGEST_C,
+    });
+    const marker = await metadata.match(metadataPath(shell, `warmup:${BUILD_C}`));
+    expect(await marker?.json()).toEqual(expect.objectContaining({
+      assetSetDigest: DIGEST_C,
+      offlinePrimaryComplete: true,
+    }));
+    expect(fetchMock.mock.calls.some(([request]) =>
+      String(typeof request === "string" ? request : request.url).includes("ProjectsFeature")
+    )).toBe(true);
   });
 
   it("retains active client leases across A-B-C and prunes A after close and expiry", async () => {
@@ -357,8 +451,8 @@ describe.each(WORKERS)("$name immutable runtime", ({ name, prefix, history, shel
     });
     const harness = await workerHarness(name, fetchMock);
     const metadata = await harness.caches.open(history);
-    await metadata.put("builds", new Response(JSON.stringify([BUILD_C, BUILD_B, BUILD_A])));
-    await metadata.put("leases", new Response(JSON.stringify({
+    await metadata.put(metadataPath(shell, "builds"), new Response(JSON.stringify([BUILD_C, BUILD_B, BUILD_A])));
+    await metadata.put(metadataPath(shell, "leases"), new Response(JSON.stringify({
       "client-a": { clientId: "client-a", buildId: BUILD_A, lastSeenAt: 0 },
     })));
     await harness.caches.open(`${prefix}${BUILD_C}`);

@@ -1219,6 +1219,19 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
                 "recoveryChunksDeferred",
             ]
         )
+    if _version_tuple(version) >= (4, 3, 2):
+        required.extend(
+            [
+                "immutableWorkerBuildIdentity",
+                "workerManifestIdentityBound",
+                "controllerHandshakeRequired",
+                "wrongWorkerWarmupRejected",
+                "warmupDeduplicatedAcrossTabs",
+                "warmupResumesMissingAssets",
+                "activeClientCacheLeaseRetained",
+                "expiredClientCacheLeasePruned",
+            ]
+        )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(
@@ -1265,6 +1278,33 @@ def check_frontend_bundle_evidence(root: Path, version: str) -> CheckResult:
             "Frontend bundle evidence version or status does not match the release",
             {"version": data.get("version"), "expected": version, "status": data.get("status")},
         )
+    if _version_tuple(version) >= (4, 3, 2):
+        build_id = data.get("workspaceBuildId")
+        asset_digest = data.get("workspaceAssetSetDigest")
+        immutable_manifest = data.get("workspaceImmutableManifest")
+        worker = data.get("workspaceWorker")
+        root_worker = data.get("workspaceRootWorker")
+        if (
+            not isinstance(build_id, str)
+            or re.fullmatch(r"[0-9a-f]{16}", build_id) is None
+            or not isinstance(asset_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", asset_digest) is None
+            or immutable_manifest != f"static/ui/workspace-assets-{build_id}.json"
+            or worker != f"static/ui/sw-{build_id}.js"
+            or root_worker != f"static/ui/sw-root-{build_id}.js"
+        ):
+            return CheckResult(
+                "frontend_bundle_evidence",
+                STATUS_FAIL,
+                "Frontend bundle evidence has inconsistent immutable build identity",
+                {
+                    "buildId": build_id,
+                    "assetSetDigest": asset_digest,
+                    "immutableManifest": immutable_manifest,
+                    "worker": worker,
+                    "rootWorker": root_worker,
+                },
+            )
     checks = data.get("checks")
     check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
     required = [
@@ -1295,6 +1335,13 @@ def check_frontend_bundle_evidence(root: Path, version: str) -> CheckResult:
                 "workspacePrimaryWarmLayer",
                 "workspaceRecoveryChunksDeferred",
                 "routeOptionalChunksSeparated",
+            ]
+        )
+    if _version_tuple(version) >= (4, 3, 2):
+        required.extend(
+            [
+                "immutableWorkerBuildIdentity",
+                "workerManifestIdentityBound",
             ]
         )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]

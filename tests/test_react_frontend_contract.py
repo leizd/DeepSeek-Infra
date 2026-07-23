@@ -13,7 +13,7 @@ def read(path: str) -> str:
 
 def test_react_frontend_is_an_isolated_versioned_build() -> None:
     package = json.loads(read("frontend/package.json"))
-    assert package["version"] == "4.3.1"
+    assert package["version"] == "4.3.2"
     assert package["engines"]["node"] == ">=22.12.0"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test"] == "vitest run"
@@ -232,9 +232,23 @@ def test_workspace_release_gates_cover_demand_loading_budgets_and_browser_behavi
         assert f'"{check}"' in browser
         assert f'"{check}"' in preflight
     for check in (
+        "immutableWorkerBuildIdentity",
+        "workerManifestIdentityBound",
+        "controllerHandshakeRequired",
+        "wrongWorkerWarmupRejected",
+        "warmupDeduplicatedAcrossTabs",
+        "warmupResumesMissingAssets",
+        "activeClientCacheLeaseRetained",
+        "expiredClientCacheLeasePruned",
+    ):
+        assert f'checks["{check}"] = "PASS"' in browser
+        assert f'"{check}"' in preflight
+    for check in (
         "workspacePrimaryWarmLayer",
         "workspaceRecoveryChunksDeferred",
         "routeOptionalChunksSeparated",
+        "immutableWorkerBuildIdentity",
+        "workerManifestIdentityBound",
     ):
         assert f'"{check}": "PASS"' in bundle
         assert f'"{check}"' in preflight

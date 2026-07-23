@@ -5,11 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.3.1。
+适用版本：v4.3.2。
 
 ## Runtime ownership
 
-4.0.8 完成 Legacy Frontend Retirement；4.0.9 将最后一个独立原生界面 Trace Viewer 迁入 React。4.1.0 将 Workspace Provider 下沉到聊天路由，并按需加载 Trace 路由与 Diagnostics 共享详情。4.2.2–4.2.7 建立共享加载边界、Mutation 所有权、并发状态、最新 intent 与精确 blocker；4.2.8 再把这些行为绑定到 exact-merge Evidence 装配。4.3.0 将 Workspace 可选界面改为按意图预取、按打开状态挂载；4.3.1 进一步保证跨 lazy Provider 的 Memory 写屏障、真实且隔离的单次 chunk 恢复，以及当前构建优先的离线升级。以上均不改变聊天关键 Provider、后端协议和冻结 4.0 runtime contract。`/` 与 `/trace/:traceId` 只返回 `frontend/` 的 React + TypeScript + Vite 构建，`/ui/` 作为兼容别名返回同一构建。生成产物位于 gitignored `static/ui/`，不得手工修改。
+4.0.8 完成 Legacy Frontend Retirement；4.0.9 将最后一个独立原生界面 Trace Viewer 迁入 React。4.1.0 将 Workspace Provider 下沉到聊天路由，并按需加载 Trace 路由与 Diagnostics 共享详情。4.2.2–4.2.7 建立共享加载边界、Mutation 所有权、并发状态、最新 intent 与精确 blocker；4.2.8 再把这些行为绑定到 exact-merge Evidence 装配。4.3.0 将 Workspace 可选界面改为按意图预取、按打开状态挂载；4.3.1 保证跨 lazy Provider 的 Memory 写屏障、真实且隔离的 chunk 恢复及当前构建优先的离线升级；4.3.2 再将页面、Worker、Manifest 与 Cache 绑定到不可变构建身份，并以 Client Build Lease 保护跨多次部署的旧标签页。以上均不改变聊天关键 Provider、后端协议和冻结 4.0 runtime contract。`/` 与 `/trace/:traceId` 只返回 `frontend/` 的 React + TypeScript + Vite 构建，`/ui/` 作为兼容别名返回同一构建。生成产物位于 gitignored `static/ui/`，不得手工修改。
 
 服务端不再提供旧前端路由或环境变量回滚。`static/ui/index.html` 缺失时，本地启动、Android、PyInstaller、Docker、发布 ZIP、release smoke 与 preflight 都会硬失败，并提示运行 `scripts/build_frontend.py`。
 
@@ -48,7 +48,11 @@
 - `/ui/sw.js` and `/ui/manifest.webmanifest` remain build-local aliases for `/ui/` clients.
 - Source files live under `frontend/public/`; root files under `static/` are not allowed.
 
-The Vite build writes `workspace-assets.json` with a build ID plus disjoint `core`, `offlinePrimary`, `recovery` and `routeOptional` lists. The root worker precaches Core; the page requests primary Workspace warmup only at idle and skips it for Save-Data/slow-2g/2g, while the worker limits cache population to three requests. Offline navigation, the manifest and un-hashed metadata use only the current build Cache. The previous Cache is consulted solely for exact hashed asset requests from an unrefreshed old page; search parameters are never ignored. Share Target posts to `/share-target`, then redirects into the root SPA.
+Before bundling, Vite derives an immutable `buildId` from the version, exact source revision and build-configuration version. Formal CI uses `GITHUB_SHA`; dirty local builds include a deterministic frontend source digest. The build then emits matching index metadata, `workspace-assets-<buildId>.json`, `sw-<buildId>.js` and `sw-root-<buildId>.js`, plus a stable `workspace-assets.json` latest pointer. `assetSetDigest` separately covers the emitted page/assets, canonical manifest and Worker templates.
+
+The page registers the build-scoped Worker with `updateViaCache: "none"` and uses MessageChannel against `navigator.serviceWorker.controller`; only a matching, cache-ready controller receives `offlinePrimary` warmup. Warmup remains disabled for Save-Data/slow-2g/2g, is deduplicated across tabs, skips exact hits, retries only missing files after partial failure and never includes Recovery/route-optional chunks.
+
+Each controlled page reports its own build on controller changes, visible-state return and a 60-second heartbeat. The Worker retains the current build, the previous build and every active/recent Client Build Lease. Activation claims and requests leases before pruning; old exact hash assets remain available through repeated deployments, while stable metadata and query-altered requests never cross Cache boundaries. Share Target posts to `/share-target`, then redirects into the root SPA.
 
 ## Retained static surface
 
@@ -60,4 +64,4 @@ Legacy retirement does not remove static assets with independent consumers:
 | `static/vendor/inter/` | Self-hosted font assets |
 | `static/vendor/katex/` | Self-hosted vendor assets kept for compatible document rendering |
 
-`tests/test_frontend_runtime_contract.py` prevents both the retired legacy entry and standalone Trace Viewer files from returning. React component tests, Service Worker behavior tests, the Vite bundle contract and the Chromium evidence gate additionally lock cold-load deferral, preload/query separation, cross-Provider Memory exclusion, truthful and isolated chunk recovery, lazy Mutation continuity, four-layer offline inventory, adaptive warmup, two-build Cache ordering and the existing Trace/Mutation safety contracts.
+`tests/test_frontend_runtime_contract.py` prevents both the retired legacy entry and standalone Trace Viewer files from returning. React component tests, Service Worker behavior tests, the Vite bundle contract and the Chromium evidence gate additionally lock cold-load deferral, preload/query separation, cross-Provider Memory exclusion, truthful and isolated chunk recovery, immutable identity matching, controller-only warmup, resumable multi-tab caching, A→B→C Lease retention/pruning and the existing Trace/Mutation safety contracts.
