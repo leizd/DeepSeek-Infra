@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./app/App";
+import { scheduleWorkspaceOfflineWarmup } from "./app/workspaceOfflineWarmup";
 import "./shared/styles/app.css";
 import "./shared/styles/workspace-drawer-frame.css";
 
@@ -27,9 +28,7 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
       .register(atRoot ? "/sw.js" : "/ui/sw.js", { scope: atRoot ? "/" : "/ui/" })
       .then(() => navigator.serviceWorker.ready)
       .then((registration) => {
-        window.setTimeout(() => {
-          registration.active?.postMessage({ type: "cache_optional_workspace" });
-        }, 0);
+        scheduleWorkspaceOfflineWarmup(registration, navigator, window);
       })
       .catch(() => undefined);
   });

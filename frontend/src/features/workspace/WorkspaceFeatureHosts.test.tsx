@@ -5,7 +5,11 @@ import type { ComponentType, PropsWithChildren } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { OverlayName } from "../../contexts/OverlayContext";
-import type { WorkspaceFeature, WorkspaceFeatureModule } from "./workspaceFeatureRegistry";
+import type {
+  FeatureRecoveryState,
+  WorkspaceFeature,
+  WorkspaceFeatureModule,
+} from "./workspaceFeatureRegistry";
 
 const mocks = vi.hoisted(() => ({
   activeOverlay: null as OverlayName,
@@ -13,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   loadSkillsRuntime: vi.fn(),
   retryFeature: vi.fn(),
   retrySkillsRuntime: vi.fn(),
+  featureRecoveryState: "retry-available" as FeatureRecoveryState,
+  skillsRecoveryState: "retry-available" as FeatureRecoveryState,
 }));
 
 vi.mock("../../contexts/OverlayContext", () => ({
@@ -43,6 +49,8 @@ vi.mock("./workspaceFeatureRegistry", () => ({
   loadWorkspaceSkillsRuntime: () => mocks.loadSkillsRuntime(),
   retryWorkspaceFeature: (feature: WorkspaceFeature) => mocks.retryFeature(feature),
   retryWorkspaceSkillsRuntime: () => mocks.retrySkillsRuntime(),
+  workspaceFeatureRecoveryState: () => mocks.featureRecoveryState,
+  workspaceSkillsRuntimeRecoveryState: () => mocks.skillsRecoveryState,
 }));
 
 import { WorkspaceOverlayHost } from "./WorkspaceFeatureHosts";
@@ -67,6 +75,10 @@ beforeEach(() => {
   mocks.loadSkillsRuntime.mockReset();
   mocks.retryFeature.mockReset();
   mocks.retrySkillsRuntime.mockReset();
+  mocks.retryFeature.mockReturnValue(true);
+  mocks.retrySkillsRuntime.mockReturnValue(true);
+  mocks.featureRecoveryState = "retry-available";
+  mocks.skillsRecoveryState = "retry-available";
   mocks.loadSkillsRuntime.mockResolvedValue({
     default: ({ children }: PropsWithChildren) => children,
   } satisfies { default: ComponentType<PropsWithChildren> });
@@ -141,6 +153,77 @@ describe("WorkspaceOverlayHost", () => {
     expect(await screen.findByText("Memory panel")).toBeTruthy();
     expect(mocks.retryFeature).toHaveBeenCalledWith("memory");
     view.unmount();
+    errorSpy.mockRestore();
+  });
+
+  it("offers refresh instead of a fake third request when the retry import also fails", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.activeOverlay = "memory";
+    mocks.loadFeature.mockRejectedValue(new Error("Failed to fetch dynamically imported module"));
+    mocks.retryFeature.mockImplementation(() => {
+      mocks.featureRecoveryState = "reload-required";
+      return true;
+    });
+    render(<WorkspaceOverlayHost />);
+
+    expect(await screen.findByRole("button", { name: "重试" })).toBeTruthy();
+    await act(async () => {
+      screen.getByRole("button", { name: "重试" }).click();
+    });
+    expect(await screen.findByRole("button", { name: "刷新应用" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
+    expect(mocks.loadFeature).toHaveBeenCalledTimes(2);
+    errorSpy.mockRestore();
+  });
+
+  it("retries a Projects feature without resetting its loaded Skills runtime", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.activeOverlay = "projects";
+    let retryReady = false;
+    mocks.loadFeature.mockImplementation(() => retryReady
+      ? Promise.resolve(panel("Projects panel"))
+      : Promise.reject(new Error("Failed to fetch dynamically imported module")));
+    mocks.retryFeature.mockImplementation(() => {
+      retryReady = true;
+      return true;
+    });
+    render(<WorkspaceOverlayHost />);
+
+    await screen.findByRole("button", { name: "重试" });
+    await act(async () => {
+      screen.getByRole("button", { name: "重试" }).click();
+    });
+    expect(await screen.findByText("Projects panel")).toBeTruthy();
+    expect(mocks.retryFeature).toHaveBeenCalledWith("projects");
+    expect(mocks.retrySkillsRuntime).not.toHaveBeenCalled();
+    expect(mocks.loadSkillsRuntime).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
+  });
+
+  it("retries the Skills runtime without consuming the Projects feature retry", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.activeOverlay = "projects";
+    let retryReady = false;
+    mocks.loadSkillsRuntime.mockImplementation(() => retryReady
+      ? Promise.resolve({
+        default: ({ children }: PropsWithChildren) => children,
+      } satisfies { default: ComponentType<PropsWithChildren> })
+      : Promise.reject(new Error("Failed to fetch dynamically imported module")));
+    mocks.retrySkillsRuntime.mockImplementation(() => {
+      retryReady = true;
+      return true;
+    });
+    mocks.loadFeature.mockResolvedValue(panel("Projects panel"));
+    render(<WorkspaceOverlayHost />);
+
+    await screen.findByRole("button", { name: "重试" });
+    await act(async () => {
+      screen.getByRole("button", { name: "重试" }).click();
+    });
+    expect(await screen.findByText("Projects panel")).toBeTruthy();
+    expect(mocks.retrySkillsRuntime).toHaveBeenCalledTimes(1);
+    expect(mocks.retryFeature).not.toHaveBeenCalled();
+    expect(mocks.loadFeature).toHaveBeenCalledTimes(1);
     errorSpy.mockRestore();
   });
 });

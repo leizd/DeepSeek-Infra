@@ -11,6 +11,9 @@ import {
   loadWorkspaceFeature,
   loadWorkspaceSkillsRuntime,
   retryWorkspaceFeature,
+  retryWorkspaceSkillsRuntime,
+  workspaceFeatureRecoveryState,
+  workspaceSkillsRuntimeRecoveryState,
   type WorkspaceFeature,
 } from "./workspaceFeatureRegistry";
 
@@ -43,9 +46,12 @@ function WorkspaceFeatureSlot({
       key={`${feature}:${retryGeneration}`}
       feature={feature}
       onClose={onClose}
+      onReload={() => window.location.reload()}
+      recoveryState={() => workspaceFeatureRecoveryState(feature)}
       onRetry={() => {
-        retryWorkspaceFeature(feature);
-        setRetryGeneration((current) => current + 1);
+        if (retryWorkspaceFeature(feature)) {
+          setRetryGeneration((current) => current + 1);
+        }
       }}
     >
       <Suspense fallback={<WorkspaceDrawerLoading feature={feature} />}>
@@ -79,9 +85,12 @@ export function WorkspaceOverlayHost() {
       key={`skills-runtime:${runtimeRetryGeneration}`}
       feature={feature}
       onClose={overlay.closeOverlay}
+      onReload={() => window.location.reload()}
+      recoveryState={workspaceSkillsRuntimeRecoveryState}
       onRetry={() => {
-        retryWorkspaceFeature(feature);
-        setRuntimeRetryGeneration((current) => current + 1);
+        if (retryWorkspaceSkillsRuntime()) {
+          setRuntimeRetryGeneration((current) => current + 1);
+        }
       }}
     >
       <Suspense fallback={<WorkspaceDrawerLoading feature={feature} />}>

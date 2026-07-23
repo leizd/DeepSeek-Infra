@@ -311,12 +311,60 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             }""",
             timeout=15_000,
         )
+        cached_recovery = await page.evaluate(
+            """async () => {
+              const manifest = await fetch('/ui/workspace-assets.json').then((response) => response.json());
+              const cached = new Set();
+              for (const name of await caches.keys()) {
+                const cache = await caches.open(name);
+                for (const request of await cache.keys()) cached.add(new URL(request.url).pathname);
+              }
+              return manifest.recovery.filter((path) => cached.has(path));
+            }"""
+        )
+        if cached_recovery:
+            raise AssertionError(f"recovery chunks entered normal Workspace warmup: {cached_recovery}")
+        checks["recoveryChunksDeferred"] = "PASS"
+
+        build_cache = await page.evaluate(
+            """async () => {
+              const manifest = await fetch('/ui/workspace-assets.json').then((response) => response.json());
+              const currentId = manifest.buildId;
+              const currentName = `deepseek-react-root-${currentId}`;
+              const previousName = 'deepseek-react-root-browser-previous';
+              const previous = await caches.open(previousName);
+              await previous.put('/', new Response('<html><body>previous-shell</body></html>', {
+                headers: { 'content-type': 'text/html' },
+              }));
+              await previous.put('/ui/workspace-assets.json', new Response(JSON.stringify({
+                buildId: 'browser-previous',
+                core: [],
+                offlinePrimary: [],
+                recovery: [],
+                routeOptional: [],
+              }), { headers: { 'content-type': 'application/json' } }));
+              await previous.put(
+                '/ui/assets/LegacyChunk-abcdefgh.js',
+                new Response('export const legacy = true', { headers: { 'content-type': 'application/javascript' } }),
+              );
+              const history = await caches.open('deepseek-workspace-root-build-history');
+              await history.put('builds', new Response(JSON.stringify([currentId, 'browser-previous'])));
+              return { currentId, currentName, previousName };
+            }"""
+        )
 
         offline_page = await context.new_page()
         offline_response = await offline_page.goto(base_url, wait_until="networkidle")
         if offline_response is None or offline_response.status != 200:
             raise AssertionError("React page did not load before the offline check")
         await offline_page.locator("#reactPromptInput").wait_for()
+        await offline_page.evaluate(
+            """async ({ currentId }) => {
+              const history = await caches.open('deepseek-workspace-root-build-history');
+              await history.put('builds', new Response(JSON.stringify([currentId, 'browser-previous'])));
+            }""",
+            {"currentId": build_cache["currentId"]},
+        )
         await context.set_offline(True)
         await offline_page.reload(wait_until="domcontentloaded", timeout=15_000)
         await offline_page.locator("#reactPromptInput").wait_for(timeout=10_000)
@@ -329,6 +377,26 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         if not any("/ui/assets/" in href for href in offline_style["sheets"]):
             raise AssertionError(f"offline React stylesheet missing from cache: {offline_style}")
         checks["offlineRefresh"] = "PASS"
+        offline_build = await offline_page.evaluate(
+            """async () => {
+              const manifest = await fetch('/ui/workspace-assets.json').then((response) => response.json());
+              const legacy = await fetch('/ui/assets/LegacyChunk-abcdefgh.js').then((response) => response.text());
+              const searched = await fetch('/ui/assets/LegacyChunk-abcdefgh.js?wrong-build=1')
+                .then(
+                  async (response) => ({ status: response.status, text: await response.text() }),
+                  () => ({ status: 0, text: '' }),
+                );
+              return { buildId: manifest.buildId, legacy, searched };
+            }"""
+        )
+        if offline_build["buildId"] != build_cache["currentId"]:
+            raise AssertionError(f"offline metadata came from the wrong build: {offline_build}")
+        if offline_build["legacy"] != "export const legacy = true":
+            raise AssertionError(f"previous build hash chunk was unavailable: {offline_build}")
+        if offline_build["searched"]["text"] == "export const legacy = true":
+            raise AssertionError(f"query-insensitive cache match crossed builds: {offline_build}")
+        checks["currentBuildShellWinsOffline"] = "PASS"
+        checks["previousBuildChunkStillAvailable"] = "PASS"
         await offline_page.get_by_role("button", name="技能", exact=True).click()
         await offline_page.get_by_role("heading", name="技能", exact=True).wait_for(timeout=10_000)
         checks["offlineUnopenedFeatureAvailable"] = "PASS"
@@ -343,6 +411,40 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             raise AssertionError(f"browser reported CSP errors: {csp_errors}")
         checks["noCspConsoleErrors"] = "PASS"
         await context.set_offline(False)
+
+        for effective_type, check_name, save_data in (
+            ("4g", "optionalWarmRespectsSaveData", True),
+            ("2g", "optionalWarmRespects2G", False),
+        ):
+            constrained = await browser.new_context(service_workers="allow")
+            await constrained.add_init_script(
+                """() => {
+                  Object.defineProperty(navigator, 'connection', {
+                    configurable: true,
+                    value: {
+                      effectiveType: __EFFECTIVE_TYPE__,
+                      saveData: __SAVE_DATA__,
+                    },
+                  });
+                  window.__workspaceIdleRequested = false;
+                  window.requestIdleCallback = (callback) => {
+                    window.__workspaceIdleRequested = true;
+                    callback();
+                    return 1;
+                  };
+                }"""
+                .replace("__EFFECTIVE_TYPE__", json.dumps(effective_type))
+                .replace("__SAVE_DATA__", json.dumps(save_data)),
+            )
+            constrained_page = await constrained.new_page()
+            await constrained_page.goto(base_url, wait_until="load")
+            await constrained_page.evaluate("() => navigator.serviceWorker.ready")
+            await constrained_page.wait_for_timeout(100)
+            idle_requested = await constrained_page.evaluate("() => window.__workspaceIdleRequested")
+            if idle_requested:
+                raise AssertionError(f"Workspace warmup scheduled on constrained connection {effective_type}")
+            checks[check_name] = "PASS"
+            await constrained.close()
         await browser.close()
     return checks
 
@@ -1776,6 +1878,12 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         checks["memoryClearStateSurvivesRemount"] = "PASS"
         memory_clear_release.set()
         await page.get_by_text("还没有长期记忆").wait_for()
+        memories.append({
+            "id": "barrier-memory",
+            "content": "跨 Provider 屏障记忆",
+            "category": "fact",
+            "scope": "global",
+        })
 
         await page.get_by_role("button", name="关闭记忆面板").click()
         await page.locator("#reactPromptInput").fill("触发记忆建议 A")
@@ -1787,9 +1895,30 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         await page.locator("#reactPromptInput").fill("触发记忆建议 B")
         await page.locator("button.send-button").click()
         await suggestion_toast.get_by_text("记忆建议 B", exact=True).wait_for()
+        await page.wait_for_timeout(30_100)
+        await page.get_by_role("button", name="记忆", exact=True).click()
+        await page.get_by_text("跨 Provider 屏障记忆", exact=True).wait_for()
+        page.once("dialog", lambda pending_dialog: asyncio.create_task(pending_dialog.accept()))
+        await page.get_by_role("button", name="全部清空").click()
+        memory_coordination_error = page.locator("section.settings-drawer > .workspace-error")
+        await memory_coordination_error.wait_for()
+        await expect(memory_coordination_error).to_contain_text("长期记忆正在保存")
+        if memory_clear_calls["count"] != 1:
+            raise AssertionError("lazy Memory clear raced with the root MemoryProvider save")
+        checks["memoryBarrierCrossProvider"] = "PASS"
+        await page.get_by_role("button", name="关闭记忆面板").click()
+        await page.get_by_role("button", name="记忆", exact=True).click()
+        await page.get_by_text("跨 Provider 屏障记忆", exact=True).wait_for()
+        page.once("dialog", lambda pending_dialog: asyncio.create_task(pending_dialog.accept()))
+        await page.get_by_role("button", name="全部清空").click()
+        await page.locator("section.settings-drawer > .workspace-error", has_text="长期记忆正在保存").wait_for()
+        if memory_clear_calls["count"] != 1:
+            raise AssertionError("Memory blocker disappeared after lazy provider remount")
+        checks["memoryBarrierSurvivesLazyRemount"] = "PASS"
         memory_save_release.set()
         await expect(suggestion_toast.get_by_text("记忆建议 B", exact=True)).to_be_visible()
         checks["memorySuggestionCompletionIsolation"] = "PASS"
+        await page.get_by_role("button", name="关闭记忆面板").click()
 
         await page.get_by_role("button", name="项目", exact=True).click()
         await page.get_by_role("heading", name="项目", exact=True).wait_for()
@@ -2001,12 +2130,54 @@ async def run_demand_loading_smoke(base_url: str) -> dict[str, str]:
             raise AssertionError(
                 f"Workspace chunk failure UI missing: requests={project_chunk_requests}, resources={resources}, body={body[:500]!r}"
             )
+        runtime_requests_before_retry = await failure_page.evaluate(
+            r"""() => performance.getEntriesByType('resource')
+              .filter((entry) => /\/ui\/assets\/SkillsRuntimeBoundary-/.test(entry.name)).length"""
+        )
         await failure_page.get_by_role("button", name="重试", exact=True).click()
         await failure_page.get_by_role("heading", name="项目", exact=True).wait_for(timeout=10_000)
         if project_chunk_requests != 2:
             raise AssertionError(f"Workspace chunk retry count was {project_chunk_requests}, expected 2")
         checks["workspaceChunkFailureContained"] = "PASS"
+        checks["chunkRetryProducesNewRequest"] = "PASS"
+        runtime_requests = await failure_page.evaluate(
+            r"""() => performance.getEntriesByType('resource')
+              .filter((entry) => /\/ui\/assets\/SkillsRuntimeBoundary-/.test(entry.name)).length"""
+        )
+        if runtime_requests != runtime_requests_before_retry:
+            raise AssertionError(
+                f"Feature recovery reset the loaded Skills runtime: {runtime_requests_before_retry} -> {runtime_requests}"
+            )
+        checks["featureRuntimeRecoveryIsolated"] = "PASS"
         await failure_context.close()
+
+        exhaustion_counters = {"skills": 0, "memory": 0}
+        exhaustion_context = await browser.new_context(service_workers="block")
+        await install_api_routes(exhaustion_context, exhaustion_counters)
+        exhausted_requests = 0
+
+        async def fail_project_chunk_always(route: Any) -> None:
+            nonlocal exhausted_requests
+            exhausted_requests += 1
+            await route.fulfill(
+                status=503,
+                content_type="application/javascript",
+                body="throw new Error('simulated exhausted Workspace recovery')",
+            )
+
+        await exhaustion_context.route("**/ui/assets/ProjectsFeature-*.js", fail_project_chunk_always)
+        exhaustion_page = await exhaustion_context.new_page()
+        await exhaustion_page.goto(base_url, wait_until="networkidle")
+        await exhaustion_page.get_by_role("button", name="项目", exact=True).evaluate("button => button.click()")
+        await exhaustion_page.get_by_role("button", name="重试", exact=True).wait_for(timeout=10_000)
+        await exhaustion_page.get_by_role("button", name="重试", exact=True).click()
+        await exhaustion_page.get_by_role("button", name="刷新应用", exact=True).wait_for(timeout=10_000)
+        if await exhaustion_page.get_by_role("button", name="重试", exact=True).count():
+            raise AssertionError("exhausted Workspace recovery still offered a fake retry")
+        if exhausted_requests != 2:
+            raise AssertionError(f"Workspace recovery requested {exhausted_requests} chunks, expected exactly 2")
+        checks["chunkRetryExhaustionTruthful"] = "PASS"
+        await exhaustion_context.close()
         await browser.close()
 
     return checks

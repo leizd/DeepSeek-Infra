@@ -44,10 +44,22 @@ async function cacheCore() {
   await cache.addAll([SHELL_URL, ASSET_MANIFEST_URL, ...manifest.core]);
 }
 
-async function cacheOptional() {
+async function cacheWithConcurrency(cache, urls, limit = 3) {
+  let next = 0;
+  async function worker() {
+    while (next < urls.length) {
+      const url = urls[next];
+      next += 1;
+      await cache.add(url).catch(() => undefined);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, urls.length) }, () => worker()));
+}
+
+async function cacheWorkspacePrimary() {
   const manifest = await loadAssetManifest();
   const cache = await caches.open(buildCacheName(manifest.buildId));
-  await Promise.allSettled(manifest.optional.map((url) => cache.add(url)));
+  await cacheWithConcurrency(cache, manifest.offlinePrimary || []);
 }
 
 self.addEventListener("install", (event) => {
@@ -71,41 +83,77 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(networkFirst(event.request));
     return;
   }
-  event.respondWith(staleWhileRevalidate(event.request));
+  event.respondWith(cacheFirstByBuild(event.request));
 });
 
-async function currentCache() {
-  const manifest = await loadAssetManifest();
-  return caches.open(buildCacheName(manifest.buildId));
+async function retainedBuildIds() {
+  const metadata = await caches.open(BUILD_HISTORY_CACHE);
+  const response = await metadata.match("builds");
+  const history = response ? await response.json().catch(() => []) : [];
+  return Array.isArray(history) ? history.filter((item) => typeof item === "string") : [];
+}
+
+async function currentBuildId() {
+  try {
+    return (await loadAssetManifest()).buildId;
+  } catch {
+    return (await retainedBuildIds())[0];
+  }
+}
+
+async function currentBuildCache() {
+  const buildId = await currentBuildId();
+  if (!buildId) throw new Error("current Workspace build is unavailable");
+  return caches.open(buildCacheName(buildId));
+}
+
+function isHashedAsset(pathname) {
+  return /-[A-Za-z0-9_-]{8,}\.(?:css|js|mjs|png|svg|webp|woff2?)$/i.test(pathname);
+}
+
+async function matchRuntimeAsset(request) {
+  const currentId = await currentBuildId();
+  if (!currentId) return undefined;
+  const current = await caches.open(buildCacheName(currentId));
+  const currentMatch = await current.match(request);
+  if (currentMatch) return currentMatch;
+
+  const url = new URL(request.url);
+  if (url.pathname === ASSET_MANIFEST_URL || !isHashedAsset(url.pathname)) return undefined;
+  for (const buildId of await retainedBuildIds()) {
+    if (buildId === currentId) continue;
+    const previousMatch = await (await caches.open(buildCacheName(buildId))).match(request);
+    if (previousMatch) return previousMatch;
+  }
+  return undefined;
 }
 
 async function networkFirst(request) {
   try {
     const response = await fetch(request);
-    if (response.ok) (await currentCache()).put(SHELL_URL, response.clone());
+    if (response.ok) await (await currentBuildCache()).put(SHELL_URL, response.clone());
     return response;
   } catch {
-    return (await caches.match(SHELL_URL)) || Response.error();
+    return (await (await currentBuildCache()).match(SHELL_URL)) || Response.error();
   }
 }
 
-async function staleWhileRevalidate(request) {
-  const cached = await caches.match(request, { ignoreSearch: true });
-  const refresh = fetch(request).then(async (response) => {
-    if (response.ok) await (await currentCache()).put(request, response.clone());
+async function cacheFirstByBuild(request) {
+  const cached = await matchRuntimeAsset(request);
+  if (cached) return cached;
+  try {
+    const response = await fetch(request);
+    if (response.ok) await (await currentBuildCache()).put(request, response.clone());
     return response;
-  });
-  if (cached) {
-    refresh.catch(() => undefined);
-    return cached;
+  } catch {
+    return Response.error();
   }
-  return refresh.catch(() => caches.match(request, { ignoreSearch: true }));
 }
 
 self.addEventListener("message", (event) => {
   const data = event.data || {};
-  if (data.type === "cache_optional_workspace") {
-    event.waitUntil(cacheOptional());
+  if (data.type === "cache_workspace_primary") {
+    event.waitUntil(cacheWorkspacePrimary());
     return;
   }
   if (data.type !== "show_reminder") return;

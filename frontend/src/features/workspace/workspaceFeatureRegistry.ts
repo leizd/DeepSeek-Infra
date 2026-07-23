@@ -15,6 +15,8 @@ export interface WorkspaceFeatureModule {
   default: ComponentType;
 }
 
+export type FeatureRecoveryState = "initial" | "retry-available" | "reload-required";
+
 export type WorkspaceFeatureLoaders = Record<
   WorkspaceFeature,
   () => Promise<WorkspaceFeatureModule>
@@ -56,39 +58,36 @@ const workspaceFeatureRetryLoaders = {
   activity: () => import("../activity/ActivityFeature?workspace-retry"),
 } satisfies WorkspaceFeatureLoaders;
 
-const workspaceFeatureRecoveryLoaders = {
-  settings: () => import("../settings/ConnectionSettingsFeature?workspace-recovery"),
-  projects: () => import("../projects/ProjectsFeature?workspace-recovery"),
-  skills: () => import("../skills/SkillsFeature?workspace-recovery"),
-  memory: () => import("../memory/MemoryFeature?workspace-recovery"),
-  reminders: () => import("../reminders/RemindersFeature?workspace-recovery"),
-  diagnostics: () => import("../diagnostics/DiagnosticsFeature?workspace-recovery"),
-  "file-preview": () => import("../file-reader/FilePreviewFeature?workspace-recovery"),
-  "image-lightbox": () => import("../file-reader/ImageLightboxFeature?workspace-recovery"),
-  activity: () => import("../activity/ActivityFeature?workspace-recovery"),
-} satisfies WorkspaceFeatureLoaders;
-
 export function createWorkspaceFeatureRegistry(
   loaders: WorkspaceFeatureLoaders,
   retryLoaders: WorkspaceFeatureLoaders = loaders,
-  recoveryLoaders: WorkspaceFeatureLoaders = retryLoaders,
 ) {
   const pending = new Map<WorkspaceFeature, Promise<WorkspaceFeatureModule>>();
-  const attempts = new Map<WorkspaceFeature, number>();
+  const retryGenerations = new Map<WorkspaceFeature, 0 | 1>();
+  const recoveryStates = new Map<WorkspaceFeature, FeatureRecoveryState>();
 
   function load(feature: WorkspaceFeature): Promise<WorkspaceFeatureModule> {
     const existing = pending.get(feature);
     if (existing) return existing;
-    const attempt = attempts.get(feature) ?? 0;
-    const selectedLoaders = attempt === 0 ? loaders : attempt === 1 ? retryLoaders : recoveryLoaders;
+    const generation = retryGenerations.get(feature) ?? 0;
+    const selectedLoaders = generation === 0 ? loaders : retryLoaders;
     const request = selectedLoaders[feature]();
     pending.set(feature, request);
     void request.catch(() => {
       if (pending.get(feature) === request) {
         pending.delete(feature);
+        recoveryStates.set(feature, generation === 0 ? "retry-available" : "reload-required");
       }
     });
     return request;
+  }
+
+  function retry(feature: WorkspaceFeature): boolean {
+    if (recoveryStates.get(feature) !== "retry-available") return false;
+    pending.delete(feature);
+    retryGenerations.set(feature, 1);
+    recoveryStates.set(feature, "initial");
+    return true;
   }
 
   return {
@@ -97,13 +96,13 @@ export function createWorkspaceFeatureRegistry(
       return load(feature).then(
         () => undefined,
         () => {
-          attempts.set(feature, (attempts.get(feature) ?? 0) + 1);
+          retry(feature);
         },
       );
     },
-    retry(feature: WorkspaceFeature): void {
-      pending.delete(feature);
-      attempts.set(feature, (attempts.get(feature) ?? 0) + 1);
+    retry,
+    recoveryState(feature: WorkspaceFeature): FeatureRecoveryState {
+      return recoveryStates.get(feature) ?? "initial";
     },
   };
 }
@@ -111,38 +110,46 @@ export function createWorkspaceFeatureRegistry(
 const registry = createWorkspaceFeatureRegistry(
   workspaceFeatureLoaders,
   workspaceFeatureRetryLoaders,
-  workspaceFeatureRecoveryLoaders,
 );
 
 let skillsRuntimePromise: Promise<{ default: ComponentType<PropsWithChildren> }> | null = null;
-let skillsRuntimeRetryGeneration = 0;
+let skillsRuntimeRetryGeneration: 0 | 1 = 0;
+let skillsRuntimeRecoveryState: FeatureRecoveryState = "initial";
 
 export function loadWorkspaceSkillsRuntime(): Promise<{ default: ComponentType<PropsWithChildren> }> {
   if (skillsRuntimePromise) return skillsRuntimePromise;
   const request = skillsRuntimeRetryGeneration === 0
     ? import("../skills/SkillsRuntimeBoundary")
-    : skillsRuntimeRetryGeneration === 1
-      ? import("../skills/SkillsRuntimeBoundary?workspace-retry")
-      : import("../skills/SkillsRuntimeBoundary?workspace-recovery");
+    : import("../skills/SkillsRuntimeBoundary?workspace-retry");
   skillsRuntimePromise = request;
   void request.catch(() => {
     if (skillsRuntimePromise === request) {
       skillsRuntimePromise = null;
+      skillsRuntimeRecoveryState = skillsRuntimeRetryGeneration === 0
+        ? "retry-available"
+        : "reload-required";
     }
   });
   return request;
 }
 
-export function retryWorkspaceSkillsRuntime(): void {
+export function workspaceSkillsRuntimeRecoveryState(): FeatureRecoveryState {
+  return skillsRuntimeRecoveryState;
+}
+
+export function retryWorkspaceSkillsRuntime(): boolean {
+  if (skillsRuntimeRecoveryState !== "retry-available") return false;
   skillsRuntimePromise = null;
-  skillsRuntimeRetryGeneration += 1;
+  skillsRuntimeRetryGeneration = 1;
+  skillsRuntimeRecoveryState = "initial";
+  return true;
 }
 
 function preloadWorkspaceSkillsRuntime(): Promise<void> {
   return loadWorkspaceSkillsRuntime().then(
     () => undefined,
     () => {
-      skillsRuntimeRetryGeneration += 1;
+      retryWorkspaceSkillsRuntime();
     },
   );
 }
@@ -156,7 +163,10 @@ export function preloadWorkspaceFeature(feature: WorkspaceFeature): Promise<void
     () => undefined,
   );
 }
-export function retryWorkspaceFeature(feature: WorkspaceFeature): void {
-  registry.retry(feature);
-  if (feature === "projects" || feature === "skills") retryWorkspaceSkillsRuntime();
+export function workspaceFeatureRecoveryState(feature: WorkspaceFeature): FeatureRecoveryState {
+  return registry.recoveryState(feature);
+}
+
+export function retryWorkspaceFeature(feature: WorkspaceFeature): boolean {
+  return registry.retry(feature);
 }

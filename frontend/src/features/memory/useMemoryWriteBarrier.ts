@@ -1,15 +1,28 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useRef } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
 
 import { activeLifecycleMutation } from "../../app/mutationLifecycle";
 import type { ActionBlocker, EntityActionLockResult } from "../../shared/useEntityActionLocks";
 import { lifecycleMutationBlocker, useEntityActionLocks } from "../../shared/useEntityActionLocks";
 
+interface MemoryBarrierState {
+  writes: Map<string, ActionBlocker>;
+  clear: ActionBlocker | null;
+}
+
+const memoryBarrierStates = new WeakMap<QueryClient, MemoryBarrierState>();
+
+function memoryBarrierState(queryClient: QueryClient): MemoryBarrierState {
+  const existing = memoryBarrierStates.get(queryClient);
+  if (existing) return existing;
+  const created = { writes: new Map<string, ActionBlocker>(), clear: null };
+  memoryBarrierStates.set(queryClient, created);
+  return created;
+}
+
 export function useMemoryWriteBarrier() {
   const queryClient = useQueryClient();
   const runEntityAction = useEntityActionLocks();
-  const writes = useRef(new Map<string, ActionBlocker>());
-  const clear = useRef<ActionBlocker | null>(null);
 
   const runWrite = useCallback(
     async <T,>(
@@ -18,29 +31,33 @@ export function useMemoryWriteBarrier() {
       intentKey: string,
       action: (lifecycleId: string) => Promise<T>,
     ): Promise<EntityActionLockResult<T>> => {
+      const barrier = memoryBarrierState(queryClient);
       const cachedClear = activeLifecycleMutation(
         queryClient,
         (meta) => meta.owner === "memory-list" && meta.operation === "clear",
       );
-      if (clear.current || cachedClear) {
+      if (barrier.clear || cachedClear) {
         return {
           status: "conflict",
-          blocker: clear.current ?? lifecycleMutationBlocker(cachedClear!),
+          blocker: barrier.clear ?? lifecycleMutationBlocker(cachedClear!),
         };
       }
 
       return runEntityAction(entityKey, operation, intentKey, async (lifecycleId) => {
-        writes.current.set(entityKey, {
+        const blocker: ActionBlocker = {
           lifecycleId,
           entityKey,
           operation,
           intentKey,
           source: "local-lock",
-        });
+        };
+        barrier.writes.set(entityKey, blocker);
         try {
           return await action(lifecycleId);
         } finally {
-          writes.current.delete(entityKey);
+          if (barrier.writes.get(entityKey)?.lifecycleId === lifecycleId) {
+            barrier.writes.delete(entityKey);
+          }
         }
       });
     },
@@ -48,7 +65,8 @@ export function useMemoryWriteBarrier() {
   );
 
   const runClear = useCallback(async <T,>(action: (lifecycleId: string) => Promise<T>): Promise<EntityActionLockResult<T>> => {
-    const localWrite = writes.current.values().next().value as ActionBlocker | undefined;
+    const barrier = memoryBarrierState(queryClient);
+    const localWrite = barrier.writes.values().next().value as ActionBlocker | undefined;
     const cachedWrite = activeLifecycleMutation(
       queryClient,
       (meta) => meta.owner === "memory-list" && meta.operation !== "clear",
@@ -61,17 +79,18 @@ export function useMemoryWriteBarrier() {
     }
 
     return runEntityAction("memory-list:clear", "clear", "clear", async (lifecycleId) => {
-      clear.current = {
+      const blocker: ActionBlocker = {
         lifecycleId,
         entityKey: "memory-list:clear",
         operation: "clear",
         intentKey: "clear",
         source: "local-lock",
       };
+      barrier.clear = blocker;
       try {
         return await action(lifecycleId);
       } finally {
-        clear.current = null;
+        if (barrier.clear?.lifecycleId === lifecycleId) barrier.clear = null;
       }
     });
   }, [queryClient, runEntityAction]);

@@ -1,6 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
-import type { WorkspaceFeature } from "./workspaceFeatureRegistry";
+import type { FeatureRecoveryState, WorkspaceFeature } from "./workspaceFeatureRegistry";
 
 const FEATURE_LABELS: Record<WorkspaceFeature, string> = {
   settings: "连接设置",
@@ -19,6 +19,8 @@ interface WorkspaceFeatureBoundaryProps {
   feature: WorkspaceFeature;
   onClose(): void;
   onRetry(): void;
+  onReload(): void;
+  recoveryState(): FeatureRecoveryState;
 }
 
 interface WorkspaceFeatureBoundaryState {
@@ -41,7 +43,10 @@ export class WorkspaceFeatureBoundary extends Component<
 
   render() {
     if (!this.state.error) return this.props.children;
-    const chunkFailure = /dynamically imported|loading chunk|importing a module|fetch/i.test(this.state.error.message);
+    const chunkFailure = /chunkloaderror|loading chunk|dynamically imported module|importing a module script failed|error loading dynamically imported module/i.test(
+      `${this.state.error.name} ${this.state.error.message}`,
+    );
+    const canRetry = chunkFailure && this.props.recoveryState() === "retry-available";
     return (
       <section className="settings-drawer workspace-drawer workspace-feature-error" role="alertdialog" aria-modal="true">
         <div className="drawer-heading">
@@ -51,10 +56,18 @@ export class WorkspaceFeatureBoundary extends Component<
           </div>
         </div>
         <p className="workspace-feature-error-message">
-          {chunkFailure ? "可重试加载；如果应用刚刚更新，请刷新页面后再试。" : this.state.error.message}
+          {canRetry
+            ? "可使用一次独立的恢复请求重新加载。"
+            : chunkFailure
+              ? "恢复请求仍未能加载当前功能，请刷新应用后再试。"
+              : this.state.error.message}
         </p>
         <div className="workspace-feature-error-actions">
-          <button type="button" onClick={this.props.onRetry}>重试</button>
+          {canRetry ? (
+            <button type="button" onClick={this.props.onRetry}>重试</button>
+          ) : (
+            <button type="button" onClick={this.props.onReload}>刷新应用</button>
+          )}
           <button type="button" onClick={this.props.onClose}>关闭</button>
         </div>
       </section>

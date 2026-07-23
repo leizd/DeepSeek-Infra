@@ -75,5 +75,5 @@ def test_ci_and_docs_wire_the_gateway_parity_contract() -> None:
 
     assert "gateway-request-parity:" in workflow
     assert "python scripts/check_gateway_request_parity.py" in workflow
-    assert "docs/evidence/gateway-request-parity-v4.3.0.json" in workflow
+    assert "docs/evidence/gateway-request-parity-v4.3.1.json" in workflow
     assert documentation.is_file()
