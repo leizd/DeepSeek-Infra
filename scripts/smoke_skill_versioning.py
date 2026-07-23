@@ -110,7 +110,7 @@ def run_checks(runtime_root: Path) -> tuple[dict[str, str], dict[str, Any]]:
     routes = _read("deepseek_infra/web/routes/skills.py")
     drawer = _read("frontend/src/features/skills/SkillsDrawer.tsx")
     skills_api = _read("frontend/src/api/skillsApi.ts")
-    styles = _read("frontend/src/shared/styles/app.css")
+    styles = _read("frontend/src/features/skills/skills.css")
     ci = _read(".github/workflows/ci.yml")
 
     checks["versioningApiActions"] = "PASS" if _contains_all(

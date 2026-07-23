@@ -37,7 +37,7 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
 def run_checks(*, version: str, report_out: Path) -> tuple[dict[str, str], dict[str, Any]]:
     drawer = _read("frontend/src/features/skills/SkillsDrawer.tsx")
     skills_api = _read("frontend/src/api/skillsApi.ts")
-    styles = _read("frontend/src/shared/styles/app.css")
+    styles = _read("frontend/src/features/skills/skills.css")
     routes = _read("deepseek_infra/web/routes/skills.py")
     runner = _read("evals/runners/run_skill_eval.py")
     ci = _read(".github/workflows/ci.yml")
