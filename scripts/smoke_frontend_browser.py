@@ -596,7 +596,7 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             raise AssertionError("active build A lease did not preserve its lazy chunk through build C")
         checks["activeClientCacheLeaseRetained"] = "PASS"
         await lease_page.close()
-        await page.wait_for_timeout(200)
+        await page.wait_for_timeout(1_000)
 
         await page.evaluate(
             """async ({ currentId, buildA }) => {
@@ -611,27 +611,35 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             }""",
             lease_state,
         )
-        await page.wait_for_function(
-            """async ({ buildA }) => {
-              const buildCaches = (await caches.keys())
-                .filter((name) => name.startsWith('deepseek-react-root-'));
-              return !buildCaches.includes(`deepseek-react-root-${buildA}`)
-                && buildCaches.length <= 2;
-            }""",
-            arg=lease_state,
-            timeout=10_000,
-        )
         remaining_cache_state = await page.evaluate(
-            """async () => {
-              const metadata = await caches.open('deepseek-workspace-root-build-history');
-              const historyResponse = await metadata.match('/__deepseek_workspace_metadata__/builds');
-              const leaseResponse = await metadata.match('/__deepseek_workspace_metadata__/leases');
-              return {
-                caches: (await caches.keys()).filter((name) => name.startsWith('deepseek-react-root-')),
-                history: historyResponse ? await historyResponse.json() : [],
-                leases: leaseResponse ? await leaseResponse.json() : {},
-              };
-            }"""
+            """async ({ buildA }) => {
+              const deadline = Date.now() + 10_000;
+              let stableSince = 0;
+              let state = {};
+              while (Date.now() < deadline) {
+                const metadata = await caches.open('deepseek-workspace-root-build-history');
+                const historyResponse = await metadata.match('/__deepseek_workspace_metadata__/builds');
+                const leaseResponse = await metadata.match('/__deepseek_workspace_metadata__/leases');
+                state = {
+                  caches: (await caches.keys()).filter((name) => name.startsWith('deepseek-react-root-')),
+                  history: historyResponse ? await historyResponse.json() : [],
+                  leases: leaseResponse ? await leaseResponse.json() : {},
+                };
+                const expiredBuildAbsent = !state.caches.includes(`deepseek-react-root-${buildA}`)
+                  && !state.history.includes(buildA)
+                  && !Object.values(state.leases).some((lease) => lease.buildId === buildA);
+                const stable = expiredBuildAbsent && state.caches.length <= 2;
+                if (stable) {
+                  stableSince ||= Date.now();
+                  if (Date.now() - stableSince >= 500) return state;
+                } else {
+                  stableSince = 0;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 50));
+              }
+              throw new Error(`expired cache lease did not stabilize: ${JSON.stringify(state)}`);
+            }""",
+            lease_state,
         )
         if len(remaining_cache_state["caches"]) > 2:
             raise AssertionError(f"unleased build caches exceeded current plus previous: {remaining_cache_state}")
