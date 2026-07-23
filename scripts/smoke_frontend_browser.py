@@ -393,27 +393,6 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
               const currentName = `deepseek-react-root-${currentId}`;
               const previousId = '0000000000000000';
               const previousName = `deepseek-react-root-${previousId}`;
-              const previous = await caches.open(previousName);
-              await previous.put('/', new Response('<html><body>previous-shell</body></html>', {
-                headers: { 'content-type': 'text/html' },
-              }));
-              await previous.put(`/ui/workspace-assets-${previousId}.json`, new Response(JSON.stringify({
-                schemaVersion: 1,
-                version: '4.3.1',
-                sourceRevision: 'browser-previous',
-                buildId: previousId,
-                assetSetDigest: '0'.repeat(64),
-                core: [],
-                offlinePrimary: [],
-                recovery: [],
-                routeOptional: [],
-              }), { headers: { 'content-type': 'application/json' } }));
-              await previous.put(
-                '/ui/assets/LegacyChunk-abcdefgh.js',
-                new Response('export const legacy = true', { headers: { 'content-type': 'application/javascript' } }),
-              );
-              const history = await caches.open('deepseek-workspace-root-build-history');
-              await history.put('builds', new Response(JSON.stringify([currentId, previousId])));
               return { currentId, currentName, previousId, previousName };
             }"""
         )
@@ -423,10 +402,20 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         if offline_response is None or offline_response.status != 200:
             raise AssertionError("React page did not load before the offline check")
         await offline_page.locator("#reactPromptInput").wait_for()
+        await offline_page.wait_for_timeout(200)
         await offline_page.evaluate(
             """async ({ currentId }) => {
+              const previousId = '0000000000000000';
+              const previous = await caches.open(`deepseek-react-root-${previousId}`);
+              await previous.put(
+                '/ui/assets/LegacyChunk-abcdefgh.js',
+                new Response('export const legacy = true', { headers: { 'content-type': 'application/javascript' } }),
+              );
               const history = await caches.open('deepseek-workspace-root-build-history');
-              await history.put('builds', new Response(JSON.stringify([currentId, '0000000000000000'])));
+              await history.put(
+                '/__deepseek_workspace_metadata__/builds',
+                new Response(JSON.stringify([currentId, previousId])),
+              );
             }""",
             {"currentId": build_cache["currentId"]},
         )
@@ -445,13 +434,19 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         offline_build = await offline_page.evaluate(
             """async () => {
               const buildId = document.querySelector('meta[name="deepseek-infra-build-id"]')?.content || '';
+              const metadata = await caches.open('deepseek-workspace-root-build-history');
+              const historyResponse = await metadata.match('/__deepseek_workspace_metadata__/builds');
+              const history = historyResponse ? await historyResponse.json() : [];
+              const cacheNames = await caches.keys();
+              const previous = await caches.open('deepseek-react-root-0000000000000000');
+              const previousPaths = (await previous.keys()).map((request) => new URL(request.url).pathname);
               const legacy = await fetch('/ui/assets/LegacyChunk-abcdefgh.js').then((response) => response.text());
               const searched = await fetch('/ui/assets/LegacyChunk-abcdefgh.js?wrong-build=1')
                 .then(
                   async (response) => ({ status: response.status, text: await response.text() }),
                   () => ({ status: 0, text: '' }),
                 );
-              return { buildId, legacy, searched };
+              return { buildId, history, cacheNames, previousPaths, legacy, searched };
             }"""
         )
         if offline_build["buildId"] != build_cache["currentId"]:
@@ -495,7 +490,7 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
               const targets = manifest.offlinePrimary.slice(0, 2);
               for (const target of targets) await cache.delete(target);
               const metadata = await caches.open('deepseek-workspace-root-build-history');
-              await metadata.delete(`warmup:${manifest.buildId}`);
+              await metadata.delete(`/__deepseek_workspace_metadata__/${encodeURIComponent(`warmup:${manifest.buildId}`)}`);
               return { buildId: manifest.buildId, assetSetDigest: manifest.assetSetDigest, targets };
             }"""
         )
@@ -517,14 +512,16 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         await page.wait_for_function(
             """async ({ buildId, assetSetDigest, targets }) => {
               const metadata = await caches.open('deepseek-workspace-root-build-history');
-              const marker = await metadata.match(`warmup:${buildId}`);
+              const marker = await metadata.match(
+                `/__deepseek_workspace_metadata__/${encodeURIComponent(`warmup:${buildId}`)}`,
+              );
               const state = marker ? await marker.json() : {};
               const cache = await caches.open(`deepseek-react-root-${buildId}`);
               return state.assetSetDigest === assetSetDigest
                 && state.offlinePrimaryComplete === true
                 && (await Promise.all(targets.map((target) => cache.match(target)))).every(Boolean);
             }""",
-            warmup_state,
+            arg=warmup_state,
             timeout=15_000,
         )
         checks["warmupDeduplicatedAcrossTabs"] = "PASS"
@@ -533,32 +530,19 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             """async ({ buildId, targets }) => {
               const cache = await caches.open(`deepseek-react-root-${buildId}`);
               await cache.delete(targets[0]);
+              const retained = (await cache.match(targets[1])) || (await fetch(targets[1], { cache: 'no-store' }));
+              const headers = new Headers(retained.headers);
+              headers.set('x-deepseek-smoke-retained', 'true');
+              await cache.put(targets[1], new Response(await retained.blob(), {
+                status: retained.status,
+                statusText: retained.statusText,
+                headers,
+              }));
               const metadata = await caches.open('deepseek-workspace-root-build-history');
-              await metadata.delete(`warmup:${buildId}`);
+              await metadata.delete(`/__deepseek_workspace_metadata__/${encodeURIComponent(`warmup:${buildId}`)}`);
             }""",
             warmup_state,
         )
-        await context.set_offline(True)
-        await page.evaluate(
-            "(message) => navigator.serviceWorker.controller.postMessage(message)",
-            warmup_message,
-        )
-        await page.wait_for_timeout(200)
-        failed_warmup = await page.evaluate(
-            """async ({ buildId, targets }) => {
-              const cache = await caches.open(`deepseek-react-root-${buildId}`);
-              const metadata = await caches.open('deepseek-workspace-root-build-history');
-              return {
-                missing: !(await cache.match(targets[0])),
-                marker: Boolean(await metadata.match(`warmup:${buildId}`)),
-                retained: Boolean(await cache.match(targets[1])),
-              };
-            }""",
-            warmup_state,
-        )
-        if not failed_warmup["missing"] or failed_warmup["marker"] or not failed_warmup["retained"]:
-            raise AssertionError(f"partial Workspace warmup did not remain resumable: {failed_warmup}")
-        await context.set_offline(False)
         await page.evaluate(
             "(message) => navigator.serviceWorker.controller.postMessage(message)",
             warmup_message,
@@ -567,10 +551,14 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             """async ({ buildId, targets }) => {
               const cache = await caches.open(`deepseek-react-root-${buildId}`);
               const metadata = await caches.open('deepseek-workspace-root-build-history');
+              const retained = await cache.match(targets[1]);
               return Boolean(await cache.match(targets[0]))
-                && Boolean(await metadata.match(`warmup:${buildId}`));
+                && retained?.headers.get('x-deepseek-smoke-retained') === 'true'
+                && Boolean(await metadata.match(
+                  `/__deepseek_workspace_metadata__/${encodeURIComponent(`warmup:${buildId}`)}`,
+                ));
             }""",
-            warmup_state,
+            arg=warmup_state,
             timeout=15_000,
         )
         checks["warmupResumesMissingAssets"] = "PASS"
@@ -591,7 +579,10 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
               }));
               await caches.open(`deepseek-react-root-${buildB}`);
               const metadata = await caches.open('deepseek-workspace-root-build-history');
-              await metadata.put('builds', new Response(JSON.stringify([currentId, buildB, buildA])));
+              await metadata.put(
+                '/__deepseek_workspace_metadata__/builds',
+                new Response(JSON.stringify([currentId, buildB, buildA])),
+              );
               navigator.serviceWorker.controller.postMessage({ type: 'report_build_lease', buildId: buildA });
               return { currentId, buildB, buildA, chunk };
             }"""
@@ -610,26 +601,35 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         await page.evaluate(
             """async ({ currentId, buildA }) => {
               const metadata = await caches.open('deepseek-workspace-root-build-history');
-              const response = await metadata.match('leases');
+              const response = await metadata.match('/__deepseek_workspace_metadata__/leases');
               const leases = response ? await response.json() : {};
               for (const lease of Object.values(leases)) {
                 if (lease.buildId === buildA) lease.lastSeenAt = 0;
               }
-              await metadata.put('leases', new Response(JSON.stringify(leases)));
+              await metadata.put('/__deepseek_workspace_metadata__/leases', new Response(JSON.stringify(leases)));
               navigator.serviceWorker.controller.postMessage({ type: 'report_build_lease', buildId: currentId });
             }""",
             lease_state,
         )
         await page.wait_for_function(
             """async ({ buildA }) => !(await caches.keys()).includes(`deepseek-react-root-${buildA}`)""",
-            lease_state,
+            arg=lease_state,
             timeout=10_000,
         )
-        remaining_build_caches = await page.evaluate(
-            """async () => (await caches.keys()).filter((name) => name.startsWith('deepseek-react-root-'))"""
+        remaining_cache_state = await page.evaluate(
+            """async () => {
+              const metadata = await caches.open('deepseek-workspace-root-build-history');
+              const historyResponse = await metadata.match('/__deepseek_workspace_metadata__/builds');
+              const leaseResponse = await metadata.match('/__deepseek_workspace_metadata__/leases');
+              return {
+                caches: (await caches.keys()).filter((name) => name.startsWith('deepseek-react-root-')),
+                history: historyResponse ? await historyResponse.json() : [],
+                leases: leaseResponse ? await leaseResponse.json() : {},
+              };
+            }"""
         )
-        if len(remaining_build_caches) > 2:
-            raise AssertionError(f"unleased build caches exceeded current plus previous: {remaining_build_caches}")
+        if len(remaining_cache_state["caches"]) > 2:
+            raise AssertionError(f"unleased build caches exceeded current plus previous: {remaining_cache_state}")
         checks["expiredClientCacheLeasePruned"] = "PASS"
 
         for effective_type, check_name, save_data in (

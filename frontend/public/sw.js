@@ -4,6 +4,7 @@ const SHELL_URL = "/ui/";
 const WORKER_BUILD_ID = "__DEEPSEEK_WORKER_BUILD_ID__";
 const WORKER_ASSET_SET_DIGEST = "__DEEPSEEK_WORKER_ASSET_SET_DIGEST__";
 const ASSET_MANIFEST_URL = "__DEEPSEEK_WORKER_MANIFEST_URL__";
+const METADATA_PATH_PREFIX = "/ui/__deepseek_workspace_metadata__/";
 const LEASE_TIMEOUT_MS = 10 * 60 * 1000;
 const LEASE_RECONCILE_DELAY_MS = 1000;
 const BUILD_ID_PATTERN = /^[0-9a-f]{16}$/;
@@ -11,6 +12,8 @@ const ASSET_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 
 let manifestPromise;
 const warmupTasks = new Map();
+const pruningBuildIds = new Set();
+let leaseMutationTask = Promise.resolve();
 
 function loadAssetManifest() {
   if (!manifestPromise) {
@@ -44,13 +47,16 @@ function buildCacheName(buildId) {
 
 async function metadataJson(key, fallback) {
   const metadata = await caches.open(BUILD_HISTORY_CACHE);
-  const response = await metadata.match(key);
+  const response = await metadata.match(`${METADATA_PATH_PREFIX}${encodeURIComponent(key)}`);
   return response ? response.json().catch(() => fallback) : fallback;
 }
 
 async function putMetadataJson(key, value) {
   const metadata = await caches.open(BUILD_HISTORY_CACHE);
-  await metadata.put(key, new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } }));
+  await metadata.put(
+    `${METADATA_PATH_PREFIX}${encodeURIComponent(key)}`,
+    new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } }),
+  );
 }
 
 async function buildHistory() {
@@ -81,7 +87,7 @@ async function activeClientIds() {
   return new Set(matched.map((client) => client.id));
 }
 
-async function protectedBuildIds() {
+async function protectedBuildIds(persistLeases = false) {
   const history = await buildHistory();
   const previous = history.find((buildId) => buildId !== WORKER_BUILD_ID);
   const protectedIds = new Set([WORKER_BUILD_ID]);
@@ -104,21 +110,29 @@ async function protectedBuildIds() {
       retainedLeases[clientId] = lease;
     }
   }
-  await putMetadataJson("leases", retainedLeases);
+  if (persistLeases) await putMetadataJson("leases", retainedLeases);
   return protectedIds;
 }
 
 async function pruneBuildCaches() {
-  const protectedIds = await protectedBuildIds();
+  const protectedIds = await protectedBuildIds(true);
   const keys = await caches.keys();
-  await Promise.all(
-    keys
-      .filter((key) => key.startsWith(CACHE_PREFIX))
-      .filter((key) => ![...protectedIds].some((buildId) => key === buildCacheName(buildId)))
-      .map((key) => caches.delete(key)),
-  );
   const history = await buildHistory();
   await putMetadataJson("builds", history.filter((buildId) => protectedIds.has(buildId)));
+  const obsolete = keys
+    .filter((key) => key.startsWith(CACHE_PREFIX))
+    .map((key) => key.slice(CACHE_PREFIX.length))
+    .filter((buildId) => !protectedIds.has(buildId));
+  obsolete.forEach((buildId) => pruningBuildIds.add(buildId));
+  await Promise.all(obsolete.map((buildId) => caches.delete(buildCacheName(buildId))));
+}
+
+function reconcileClientLease(clientId, buildId) {
+  leaseMutationTask = leaseMutationTask
+    .catch(() => undefined)
+    .then(() => recordClientLease(clientId, buildId))
+    .then(() => pruneBuildCaches());
+  return leaseMutationTask;
 }
 
 async function cacheCore() {
@@ -137,7 +151,7 @@ async function cacheMissingWithConcurrency(cache, urls, limit = 3) {
       next += 1;
       if (await cache.match(url)) continue;
       try {
-        const response = await fetch(url);
+        const response = await fetch(url, { cache: "no-store" });
         if (!response.ok) {
           complete = false;
           continue;
@@ -236,9 +250,12 @@ async function matchRuntimeAsset(request) {
 
   const url = new URL(request.url);
   if (!isHashedAsset(url.pathname)) return undefined;
+  const availableCaches = new Set(await caches.keys());
   for (const buildId of await retainedBuildIds()) {
-    if (buildId === WORKER_BUILD_ID) continue;
-    const previousMatch = await (await caches.open(buildCacheName(buildId))).match(request);
+    if (buildId === WORKER_BUILD_ID || pruningBuildIds.has(buildId)) continue;
+    const cacheName = buildCacheName(buildId);
+    if (!availableCaches.has(cacheName)) continue;
+    const previousMatch = await (await caches.open(cacheName)).match(request);
     if (previousMatch) return previousMatch;
   }
   return undefined;
@@ -285,8 +302,7 @@ self.addEventListener("message", (event) => {
     return;
   }
   if (data.type === "report_build_lease") {
-    const update = recordClientLease(event.source?.id, data.buildId).then(() => pruneBuildCaches());
-    event.waitUntil(update);
+    event.waitUntil(reconcileClientLease(event.source?.id, data.buildId));
     return;
   }
   if (

@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.3.1-blue)
+![版本](https://img.shields.io/badge/version-4.3.2-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.3.1 Lazy Runtime Continuity & Offline Upgrade Safety：** 根级 Memory 保存与按需挂载的 Drawer 删除/清空现在共享 `QueryClient` 级屏障；每个 Workspace chunk 只提供一次真实的独立重试，失败耗尽后明确要求刷新；Service Worker 离线导航只返回当前构建 Shell，上一构建仅服务未刷新旧页面请求的精确 hash chunk。离线清单分为 Core、Workspace 主层、Recovery 与独立路由层，并在空闲、非 Save-Data/2G 时以有限并发预热。参见 [4.3.1 发布说明](docs/releases/4.3.1.md)、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
+> **4.3.2 Immutable Build Identity & Multi-Tab Cache Handoff：** 页面、Service Worker、不可变 Manifest 与 Cache 现在共享同一个构建期 `buildId`，并以独立 `assetSetDigest` 验证产物集合。页面只与实际 controller 握手后预热；并发标签页复用可恢复预热任务，活动旧页面通过 Client Build Lease 保留自己的精确 hash 资源。参见 [4.3.2 发布说明](docs/releases/4.3.2.md)、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
 
-**4.3.1 validation:** Hook/组件测试锁定跨 Provider Memory blocker 与恢复隔离；Service Worker 行为测试锁定当前/上一构建 Cache 顺序、精确匹配及导航写入落盘；Vite 合同验证四层清单且保持 4.3.0 的 Bundle 预算；真实 Chromium Evidence 覆盖真实重试、耗尽 UI、离线两代兼容与受限网络不预热。GA 产物继续使用 4.2.8 exact-merge Evidence 装配链。
+**4.3.2 validation:** 构建合同锁定 clean/dirty source revision、页面/Worker/Manifest 身份一致性与不可变 Worker URL；Service Worker 测试覆盖 Manifest 错配拒绝、失败重取、跨标签页预热去重、缺失资源续传以及 A→B→C Lease 保留/过期清理；真实 Chromium Evidence 验证 controller 握手、错误版本预热拒绝和活动旧 Cache 交接。Bundle 预算与 4.2.8 exact-merge Evidence 装配链保持不变。
 
 ## 30 秒概览
 

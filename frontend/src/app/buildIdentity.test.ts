@@ -55,12 +55,26 @@ describe("frontend build identity", () => {
   it("changes the dirty source digest for index and worker-only edits", () => {
     const { frontend } = temporaryFrontend();
     const initial = digestFrontendSources(frontend);
+    const initialBuild = createFrontendBuildIdentity({
+      version: "4.3.2",
+      sourceRevision: `head-dirty-${initial}`,
+    }).buildId;
     writeFileSync(resolve(frontend, "index.html"), "<main>two</main>\n", "utf8");
     const indexChanged = digestFrontendSources(frontend);
+    const indexBuild = createFrontendBuildIdentity({
+      version: "4.3.2",
+      sourceRevision: `head-dirty-${indexChanged}`,
+    }).buildId;
     writeFileSync(resolve(frontend, "public", "sw.js"), "const worker = 'two';\n", "utf8");
     const workerChanged = digestFrontendSources(frontend);
+    const workerBuild = createFrontendBuildIdentity({
+      version: "4.3.2",
+      sourceRevision: `head-dirty-${workerChanged}`,
+    }).buildId;
     expect(indexChanged).not.toBe(initial);
     expect(workerChanged).not.toBe(indexChanged);
+    expect(indexBuild).not.toBe(initialBuild);
+    expect(workerBuild).not.toBe(indexBuild);
   });
 
   it("uses GITHUB_SHA for formal builds and marks local dirty builds", () => {

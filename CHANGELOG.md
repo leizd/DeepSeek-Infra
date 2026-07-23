@@ -5,6 +5,25 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.3.2] - Immutable Build Identity and Multi-Tab Cache Handoff
+
+### Immutable build identity
+
+- Stamps every frontend build from the release version, exact source revision and build-configuration version, including an honest dirty-source digest for local builds.
+- Emits matching page metadata, `sw-<buildId>.js`, `sw-root-<buildId>.js` and `workspace-assets-<buildId>.json`; the worker rejects a mismatched manifest and the stable manifest remains only a latest-release pointer.
+- Separates the immutable source `buildId` from an `assetSetDigest` that covers the emitted page/assets, canonical Workspace manifest and Service Worker templates.
+
+### Controller handoff and offline retention
+
+- Requires a MessageChannel identity handshake with `navigator.serviceWorker.controller` before primary warmup, and reports the page's own build lease on load, controller changes, visibility return and heartbeat.
+- Deduplicates concurrent tab warmups, skips exact cache hits, resumes only missing assets after partial failure and invalidates completion markers when the asset digest changes.
+- Retains the current, previous and all actively leased build Caches across repeated deployments; cleanup runs only after claim/lease reconciliation and removes closed expired leases without interrupting old lazy pages.
+
+### Compatibility
+
+- Changes no backend API, dependency, Provider ownership, product workflow, offline Mutation behavior or bundle budget.
+- Preserves all 4.3.1 runtime-continuity gates and the 4.2.8 exact-merge Evidence assembly chain.
+
 ## [4.3.1] - Lazy Runtime Continuity and Offline Upgrade Safety
 
 ### Frontend continuity
