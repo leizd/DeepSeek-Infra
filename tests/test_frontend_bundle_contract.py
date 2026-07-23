@@ -31,6 +31,14 @@ FEATURES = {
     "image-lightbox": "src/features/file-reader/ImageLightboxFeature.tsx",
     "activity": "src/features/activity/ActivityFeature.tsx",
 }
+BUILD_ID = "0123456789abcdef"
+ASSET_SET_DIGEST = "a" * 64
+
+
+def _write_offline_manifest(output: Path, payload: dict[str, object]) -> None:
+    encoded = json.dumps(payload)
+    (output / "workspace-assets.json").write_text(encoded, encoding="utf-8")
+    (output / f"workspace-assets-{BUILD_ID}.json").write_text(encoded, encoding="utf-8")
 
 
 def _bundle(root: Path, *, leak: bool = False, initial_size: int = 100) -> None:
@@ -39,6 +47,24 @@ def _bundle(root: Path, *, leak: bool = False, initial_size: int = 100) -> None:
     manifest_dir = output / ".vite"
     assets.mkdir(parents=True)
     manifest_dir.mkdir()
+    (root / "frontend").mkdir()
+    (root / "frontend/package.json").write_text(json.dumps({"version": "4.3.2"}), encoding="utf-8")
+    (output / "index.html").write_text(
+        f'<meta name="deepseek-infra-build-id" content="{BUILD_ID}" />'
+        '<meta name="deepseek-infra-source-revision" content="test-revision" />',
+        encoding="utf-8",
+    )
+    for worker_name in (f"sw-{BUILD_ID}.js", f"sw-root-{BUILD_ID}.js"):
+        (output / worker_name).write_text(
+            "\n".join(
+                (
+                    f'const WORKER_BUILD_ID = "{BUILD_ID}";',
+                    f'const WORKER_ASSET_SET_DIGEST = "{ASSET_SET_DIGEST}";',
+                    f'const ASSET_MANIFEST_URL = "/ui/workspace-assets-{BUILD_ID}.json";',
+                )
+            ),
+            encoding="utf-8",
+        )
     entry_source = "Category summary" if leak else "w" * initial_size
     (assets / "index.js").write_text(entry_source, encoding="utf-8")
     (assets / "shared.js").write_text("shared", encoding="utf-8")
@@ -78,17 +104,19 @@ def _bundle(root: Path, *, leak: bool = False, initial_size: int = 100) -> None:
         manifest[key] = {"file": f"assets/{js_name}", "isDynamicEntry": True, "css": [f"assets/{css_name}"]}
         offline_primary.extend([f"/ui/assets/{js_name}", f"/ui/assets/{css_name}"])
     (manifest_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    (output / "workspace-assets.json").write_text(
-        json.dumps(
-            {
-                "buildId": "test-build",
-                "core": ["/ui/assets/index.js", "/ui/assets/shared.js", "/ui/assets/index.css"],
-                "offlinePrimary": offline_primary,
-                "recovery": ["/ui/assets/recovery.js"],
-                "routeOptional": ["/ui/assets/TracePage.js", "/ui/assets/TraceDetailView.js", "/ui/assets/trace.css"],
-            }
-        ),
-        encoding="utf-8",
+    _write_offline_manifest(
+        output,
+        {
+            "schemaVersion": 1,
+            "version": "4.3.2",
+            "sourceRevision": "test-revision",
+            "buildId": BUILD_ID,
+            "assetSetDigest": ASSET_SET_DIGEST,
+            "core": ["/ui/assets/index.js", "/ui/assets/shared.js", "/ui/assets/index.css"],
+            "offlinePrimary": offline_primary,
+            "recovery": ["/ui/assets/recovery.js"],
+            "routeOptional": ["/ui/assets/TracePage.js", "/ui/assets/TraceDetailView.js", "/ui/assets/trace.css"],
+        },
     )
 
 
@@ -129,7 +157,7 @@ def test_bundle_contract_rejects_primary_asset_missing_from_offline_manifest(tmp
     offline_path = tmp_path / "static/ui/workspace-assets.json"
     offline = json.loads(offline_path.read_text(encoding="utf-8"))
     offline["offlinePrimary"].remove("/ui/assets/skills.js")
-    offline_path.write_text(json.dumps(offline), encoding="utf-8")
+    _write_offline_manifest(offline_path.parent, offline)
     with pytest.raises(AssertionError, match="offline manifest is missing primary assets"):
         checker.check_bundle(tmp_path)
 
@@ -140,7 +168,7 @@ def test_bundle_contract_rejects_recovery_assets_in_primary_warmup(tmp_path: Pat
     offline_path = tmp_path / "static/ui/workspace-assets.json"
     offline = json.loads(offline_path.read_text(encoding="utf-8"))
     offline["offlinePrimary"].append(offline["recovery"].pop())
-    offline_path.write_text(json.dumps(offline), encoding="utf-8")
+    _write_offline_manifest(offline_path.parent, offline)
     with pytest.raises(AssertionError, match="no on-demand recovery assets"):
         checker.check_bundle(tmp_path)
 

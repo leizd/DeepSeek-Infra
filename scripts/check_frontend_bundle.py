@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -127,6 +128,40 @@ def _load_offline_manifest(root: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("buildId"), str):
         raise AssertionError("Workspace offline asset manifest has no buildId")
+    build_id = payload["buildId"]
+    if payload.get("schemaVersion") != 1 or not re.fullmatch(r"[0-9a-f]{16}", build_id):
+        raise AssertionError("Workspace offline asset manifest has invalid build identity")
+    if not isinstance(payload.get("version"), str) or not payload["version"]:
+        raise AssertionError("Workspace offline asset manifest has no version")
+    if not isinstance(payload.get("sourceRevision"), str) or not payload["sourceRevision"]:
+        raise AssertionError("Workspace offline asset manifest has no sourceRevision")
+    asset_set_digest = payload.get("assetSetDigest")
+    if not isinstance(asset_set_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", asset_set_digest):
+        raise AssertionError("Workspace offline asset manifest has invalid assetSetDigest")
+    immutable_path = path.with_name(f"workspace-assets-{build_id}.json")
+    if not immutable_path.is_file() or immutable_path.read_bytes() != path.read_bytes():
+        raise AssertionError("Workspace immutable manifest does not match the current pointer")
+    output = root / "static" / "ui"
+    index_source = (output / "index.html").read_text(encoding="utf-8")
+    index_build = re.search(r'<meta name="deepseek-infra-build-id" content="([^"]+)"', index_source)
+    if not index_build or index_build.group(1) != build_id:
+        raise AssertionError("Frontend index buildId does not match the Workspace manifest")
+    index_revision = re.search(r'<meta name="deepseek-infra-source-revision" content="([^"]+)"', index_source)
+    if not index_revision or index_revision.group(1) != payload["sourceRevision"]:
+        raise AssertionError("Frontend index sourceRevision does not match the Workspace manifest")
+    for worker_name in (f"sw-{build_id}.js", f"sw-root-{build_id}.js"):
+        worker_path = output / worker_name
+        if not worker_path.is_file():
+            raise AssertionError(f"Build-scoped Service Worker is missing: {worker_name}")
+        worker = worker_path.read_text(encoding="utf-8")
+        if f'const WORKER_BUILD_ID = "{build_id}"' not in worker:
+            raise AssertionError(f"{worker_name} does not embed the manifest buildId")
+        if f'const WORKER_ASSET_SET_DIGEST = "{asset_set_digest}"' not in worker:
+            raise AssertionError(f"{worker_name} does not embed the manifest assetSetDigest")
+        if f'const ASSET_MANIFEST_URL = "/ui/workspace-assets-{build_id}.json"' not in worker:
+            raise AssertionError(f"{worker_name} is not pinned to its immutable manifest")
+    if (output / "sw.js").exists() or (output / "sw-root.js").exists():
+        raise AssertionError("Mutable Service Worker filenames must not be emitted")
     asset_groups = ("core", "offlinePrimary", "recovery", "routeOptional")
     for field in asset_groups:
         values = payload.get(field)
@@ -223,6 +258,8 @@ def check_bundle(root: Path) -> dict[str, Any]:
         raise AssertionError("Trace CSS must remain feature-owned and deferred")
 
     offline = _load_offline_manifest(root)
+    if offline["version"] != _frontend_version(root):
+        raise AssertionError("Workspace offline manifest version does not match frontend/package.json")
     expected_primary = {
         f"/ui/{_asset_name(feature_entry)}"
         for feature_entry in feature_entries.values()
@@ -276,6 +313,11 @@ def check_bundle(root: Path) -> dict[str, Any]:
         "workspaceFeatureChunks": feature_chunks,
         "workspaceOfflineManifest": OFFLINE_MANIFEST_PATH.as_posix(),
         "workspaceBuildId": offline["buildId"],
+        "workspaceSourceRevision": offline["sourceRevision"],
+        "workspaceAssetSetDigest": offline["assetSetDigest"],
+        "workspaceImmutableManifest": f"static/ui/workspace-assets-{offline['buildId']}.json",
+        "workspaceWorker": f"static/ui/sw-{offline['buildId']}.js",
+        "workspaceRootWorker": f"static/ui/sw-root-{offline['buildId']}.js",
         "tracePageChunk": trace_page_asset.relative_to(root).as_posix(),
         "tracePageBytes": trace_page_asset.stat().st_size,
         "traceDetailChunk": trace_detail_asset.relative_to(root).as_posix(),
@@ -293,6 +335,8 @@ def check_bundle(root: Path) -> dict[str, Any]:
             "initialCssBudget": "PASS",
             "optionalFeatureChunkBudget": "PASS",
             "workspaceOfflineAssetManifest": "PASS",
+            "immutableWorkerBuildIdentity": "PASS",
+            "workerManifestIdentityBound": "PASS",
             "workspacePrimaryWarmLayer": "PASS",
             "workspaceRecoveryChunksDeferred": "PASS",
             "routeOptionalChunksSeparated": "PASS",

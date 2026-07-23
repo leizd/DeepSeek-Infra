@@ -244,13 +244,15 @@ def test_resolve_static_file_always_uses_react_frontend(tmp_path: Path) -> None:
 def test_resolve_static_file_maps_root_sw_and_manifest_to_react_build(tmp_path: Path) -> None:
     react = tmp_path / "ui"
     react.mkdir()
-    react_sw = react / "sw-root.js"
+    build_id = "0123456789abcdef"
+    react_sw = react / f"sw-root-{build_id}.js"
     react_sw.write_text("// react root sw", encoding="utf-8")
     react_manifest = react / "manifest-root.webmanifest"
     react_manifest.write_text("{}", encoding="utf-8")
 
     with patch.object(server, "STATIC_DIR", tmp_path):
-        assert server.resolve_static_file("/sw.js") == react_sw
+        assert server.resolve_static_file(f"/sw-{build_id}.js") == react_sw
+        assert server.resolve_static_file("/sw-invalid.js") is None
         assert server.resolve_static_file("/manifest.webmanifest") == react_manifest
 
 

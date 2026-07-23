@@ -174,13 +174,19 @@ def test_workspace_demand_loading_has_one_registry_and_deferred_providers() -> N
     assert "SkillsProvider" not in providers
     assert "WorkspaceOverlayHost" in chat
     assert "ContextualFeatureHost" in chat
-    assert "scheduleWorkspaceOfflineWarmup" in main
+    assert "startWorkspaceServiceWorkerRuntime" in main
     warmup = read("frontend/src/app/workspaceOfflineWarmup.ts")
-    assert 'postMessage({ type: "cache_workspace_primary" })' in warmup
+    registration = read("frontend/src/app/serviceWorkerRegistration.ts")
+    assert 'type: "cache_workspace_primary"' in warmup
+    assert 'type: "get_build_identity"' in registration
+    assert 'type: "report_build_lease"' in registration
+    assert "container.controller" in registration
+    assert "updateViaCache: \"none\"" in registration
     assert '"slow-2g", "2g"' in warmup
     assert "connection?.saveData" in warmup
     assert "requestIdleCallback" in warmup
-    assert '"workspace-assets.json"' in vite
+    assert "`workspace-assets-${identity.buildId}.json`" in vite
+    assert "`sw-${identity.buildId}.js`" in vite
 
 
 def test_workspace_release_gates_cover_demand_loading_budgets_and_browser_behavior() -> None:
