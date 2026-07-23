@@ -255,7 +255,7 @@ async function matchRuntimeAsset(request) {
     if (buildId === WORKER_BUILD_ID || pruningBuildIds.has(buildId)) continue;
     const cacheName = buildCacheName(buildId);
     if (!availableCaches.has(cacheName)) continue;
-    const previousMatch = await (await caches.open(cacheName)).match(request);
+    const previousMatch = await caches.match(request, { cacheName });
     if (previousMatch) return previousMatch;
   }
   return undefined;

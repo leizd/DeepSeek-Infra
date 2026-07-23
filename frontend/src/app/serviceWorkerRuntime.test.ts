@@ -51,6 +51,7 @@ class FakeCache {
 
 class FakeCacheStorage {
   readonly stores = new Map<string, FakeCache>();
+  keysHook: (() => Promise<void> | void) | null = null;
 
   constructor(private readonly fetchMock: FetchMock) {}
 
@@ -64,7 +65,25 @@ class FakeCacheStorage {
   }
 
   async keys(): Promise<string[]> {
-    return [...this.stores.keys()];
+    const keys = [...this.stores.keys()];
+    if (this.keysHook) {
+      const hook = this.keysHook;
+      this.keysHook = null;
+      await hook();
+    }
+    return keys;
+  }
+
+  async match(
+    request: RequestLike,
+    options: { cacheName?: string } = {},
+  ): Promise<Response | undefined> {
+    if (options.cacheName) return this.stores.get(options.cacheName)?.match(request);
+    for (const cache of this.stores.values()) {
+      const response = await cache.match(request);
+      if (response) return response;
+    }
+    return undefined;
   }
 
   async delete(name: string): Promise<boolean> {
@@ -262,6 +281,24 @@ describe.each(WORKERS)("$name immutable runtime", ({ name, prefix, history, shel
       url: "https://example.test/ui/assets/LegacyChunk-abcdefgh.js?build=wrong",
     });
     expect(searchedChunk.type).toBe("error");
+  });
+
+  it("does not recreate a previous cache deleted after the cache-key snapshot", async () => {
+    const fetchMock = vi.fn(() => Promise.reject(new TypeError("offline")));
+    const harness = await workerHarness(name, fetchMock);
+    await seedBuilds(harness, prefix, history, shell);
+    harness.caches.keysHook = () => {
+      harness.caches.stores.delete(`${prefix}${BUILD_A}`);
+    };
+
+    const response = await harness.fetch({
+      method: "GET",
+      mode: "cors",
+      url: "https://example.test/ui/assets/LegacyChunk-abcdefgh.js",
+    });
+
+    expect(response.type).toBe("error");
+    expect(harness.caches.stores.has(`${prefix}${BUILD_A}`)).toBe(false);
   });
 
   it("waits for a successful navigation response to reach the current cache", async () => {
