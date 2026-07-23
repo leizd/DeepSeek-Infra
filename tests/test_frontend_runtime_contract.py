@@ -49,7 +49,8 @@ def test_react_root_pwa_sources_are_owned_by_frontend_build() -> None:
     assert "limit = 3" in root_worker
     assert "manifest.recovery" not in root_worker
     assert "await (await currentBuildCache()).put(SHELL_URL, response.clone())" in root_worker
-    assert "caches.match(" not in root_worker
+    assert "await caches.match(request, { cacheName })" in root_worker
+    assert "await caches.match(request)" not in root_worker
     assert "ignoreSearch" not in root_worker
     assert 'url.pathname.startsWith("/api/")' in root_worker
     assert '"start_url": "/"' in root_manifest
