@@ -612,7 +612,12 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             lease_state,
         )
         await page.wait_for_function(
-            """async ({ buildA }) => !(await caches.keys()).includes(`deepseek-react-root-${buildA}`)""",
+            """async ({ buildA }) => {
+              const buildCaches = (await caches.keys())
+                .filter((name) => name.startsWith('deepseek-react-root-'));
+              return !buildCaches.includes(`deepseek-react-root-${buildA}`)
+                && buildCaches.length <= 2;
+            }""",
             arg=lease_state,
             timeout=10_000,
         )
