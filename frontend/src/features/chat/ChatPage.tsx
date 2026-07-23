@@ -7,18 +7,11 @@ import { useOverlay } from "../../contexts/OverlayContext";
 import { useSettings } from "../../contexts/SettingsContext";
 import { useOnlineStatus } from "../../shared/useOnlineStatus";
 import { Composer } from "../composer/Composer";
-import { ActivityDrawer } from "../activity/ActivityDrawer";
-import { DiagnosticsDrawer } from "../diagnostics/DiagnosticsDrawer";
-import { FilePreviewDrawer } from "../file-reader/FilePreviewDrawer";
-import { ImageLightbox } from "../file-reader/ImageLightbox";
 import { HistoryDrawer } from "../history/HistoryDrawer";
-import { MemoryDrawer } from "../memory/MemoryDrawer";
 import { MemorySuggestionToast } from "../memory/MemorySuggestionToast";
-import { ProjectsDrawer } from "../projects/ProjectsDrawer";
-import { RemindersDrawer } from "../reminders/RemindersDrawer";
-import { ConnectionSettingsDrawer } from "../settings/ConnectionSettingsDrawer";
-import { SkillsDrawer } from "../skills/SkillsDrawer";
 import { useReminderPolling } from "../reminders/useReminderPolling";
+import { ContextualFeatureHost, WorkspaceOverlayHost } from "../workspace/WorkspaceFeatureHosts";
+import { preloadWorkspaceFeature } from "../workspace/workspaceFeatureRegistry";
 import { MessageList } from "./MessageList";
 import { Icon } from "../../shared/ui/Icon";
 
@@ -26,7 +19,7 @@ function transferHasFiles(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
 }
 
-export function ChatPage() {
+function ChatWorkspace() {
   const chat = useChat();
   const overlay = useOverlay();
   const settings = useSettings();
@@ -105,8 +98,7 @@ export function ChatPage() {
   }, [attachments]);
 
   return (
-    <main className="chat-app-shell">
-      <HistoryDrawer />
+    <>
       <section className="chat-workspace">
         <header className="chat-topbar">
           <button className="topbar-icon history-trigger" type="button" aria-label="打开历史" onClick={() => overlay.openOverlay("history")}><Icon name="menu" /></button>
@@ -118,7 +110,15 @@ export function ChatPage() {
             </span>
           </div>
           <div className="topbar-actions">
-            <button className="topbar-icon" type="button" aria-label="连接设置" onClick={() => overlay.openOverlay("settings")}><Icon name="settings" /></button>
+            <button
+              className="topbar-icon"
+              type="button"
+              aria-label="连接设置"
+              onPointerEnter={() => void preloadWorkspaceFeature("settings")}
+              onFocus={() => void preloadWorkspaceFeature("settings")}
+              onTouchStart={() => void preloadWorkspaceFeature("settings")}
+              onClick={() => overlay.openOverlay("settings")}
+            ><Icon name="settings" /></button>
           </div>
         </header>
         <MessageList messages={chat.messages} onSuggestion={setSuggestedPrompt} />
@@ -135,16 +135,21 @@ export function ChatPage() {
           <div>松开以上传附件</div>
         </div>
       )}
-      {overlay.activeOverlay && <button className="overlay-backdrop" type="button" aria-label="关闭浮层" onClick={overlay.closeOverlay} />}
-      <ConnectionSettingsDrawer />
-      <ProjectsDrawer />
-      <SkillsDrawer />
-      <MemoryDrawer />
-      <RemindersDrawer />
-      <DiagnosticsDrawer />
-      <FilePreviewDrawer />
-      <ImageLightbox />
-      <ActivityDrawer />
+    </>
+  );
+}
+
+export function ChatPage() {
+  const overlay = useOverlay();
+  return (
+    <main className="chat-app-shell">
+      <HistoryDrawer />
+      <ChatWorkspace />
+      {overlay.activeOverlay && (
+        <button className="overlay-backdrop" type="button" aria-label="关闭浮层" onClick={overlay.closeOverlay} />
+      )}
+      <WorkspaceOverlayHost />
+      <ContextualFeatureHost />
       <MemorySuggestionToast />
     </main>
   );

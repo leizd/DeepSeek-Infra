@@ -1,0 +1,16 @@
+.overlay-backdrop { position: fixed; z-index: 40; inset: 0; border: 0; background: rgba(37, 37, 37, 0.28); }
+.settings-drawer { position: fixed; z-index: 50; top: 0; right: 0; width: min(440px, 100vw); height: 100vh; padding: 28px; overflow-y: auto; border-left: 1px solid var(--hair); background: var(--paper); }
+.drawer-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.drawer-heading h2 { margin: 8px 0 0; font-family: var(--serif); font-weight: 700; font-size: 1.8rem; letter-spacing: -0.03em; }
+.drawer-heading button, .mobile-close { width: 34px; height: 34px; border: 1px solid var(--hairw); color: var(--ink); background: var(--paper); font-size: 1.2rem; }
+.drawer-heading button:hover, .mobile-close:hover { border-color: var(--ink); }
+.workspace-drawer-loading { display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--weak); }
+.workspace-loading-spinner { width: 28px; height: 28px; border: 2px solid var(--hairw); border-top-color: var(--ink); border-radius: 50% !important; animation: route-loading-spin 800ms linear infinite; }
+.workspace-feature-error-actions { display: flex; gap: 8px; margin-top: 20px; }
+.workspace-feature-error-message { margin: 24px 0; padding: 12px 13px; border-left: 2px solid var(--green); background: var(--quote); font-size: 0.78rem; line-height: 1.55; }
+.workspace-feature-error-actions button { min-height: 34px; padding: 7px 14px; border: 1px solid var(--hairw); color: var(--ink); background: var(--paper); }
+.workspace-feature-error-actions button:hover { border-color: var(--ink); }
+
+@media (max-width: 640px) {
+  .settings-drawer { padding: 22px 18px; }
+}

@@ -1,21 +1,58 @@
-const CACHE_NAME = "deepseek-react-ui-v1";
+const CACHE_PREFIX = "deepseek-react-ui-";
+const BUILD_HISTORY_CACHE = "deepseek-workspace-ui-build-history";
 const SHELL_URL = "/ui/";
+const ASSET_MANIFEST_URL = "/ui/workspace-assets.json";
+
+let manifestPromise;
+
+function loadAssetManifest() {
+  if (!manifestPromise) {
+    manifestPromise = fetch(ASSET_MANIFEST_URL, { cache: "no-store" }).then((response) => {
+      if (!response.ok) throw new Error(`workspace asset manifest returned ${response.status}`);
+      return response.json();
+    });
+  }
+  return manifestPromise;
+}
+
+function buildCacheName(buildId) {
+  return `${CACHE_PREFIX}${buildId}`;
+}
+
+async function rememberBuild(buildId) {
+  const metadata = await caches.open(BUILD_HISTORY_CACHE);
+  const previous = await metadata.match("builds");
+  const history = previous ? await previous.json().catch(() => []) : [];
+  const retained = [buildId, ...history.filter((item) => item !== buildId)].slice(0, 2);
+  await metadata.put("builds", new Response(JSON.stringify(retained), { headers: { "content-type": "application/json" } }));
+  const keys = await caches.keys();
+  await Promise.all(
+    keys
+      .filter((key) => key.startsWith(CACHE_PREFIX) && !retained.some((item) => key === buildCacheName(item)))
+      .map((key) => caches.delete(key)),
+  );
+}
+
+async function cacheCore() {
+  const manifest = await loadAssetManifest();
+  const cache = await caches.open(buildCacheName(manifest.buildId));
+  await cache.addAll([SHELL_URL, ASSET_MANIFEST_URL, ...manifest.core]);
+}
+
+async function cacheOptional() {
+  const manifest = await loadAssetManifest();
+  const cache = await caches.open(buildCacheName(manifest.buildId));
+  await Promise.allSettled(manifest.optional.map((url) => cache.add(url)));
+}
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil(cacheCore().then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) =>
-        Promise.all(
-          keys
-            .filter((key) => key.startsWith("deepseek-react-ui-") && key !== CACHE_NAME)
-            .map((key) => caches.delete(key)),
-        ),
-      )
+    loadAssetManifest()
+      .then((manifest) => rememberBuild(manifest.buildId))
       .then(() => self.clients.claim()),
   );
 });
@@ -31,13 +68,15 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(staleWhileRevalidate(event.request));
 });
 
+async function currentCache() {
+  const manifest = await loadAssetManifest();
+  return caches.open(buildCacheName(manifest.buildId));
+}
+
 async function networkFirst(request) {
   try {
     const response = await fetch(request);
-    if (response.ok) {
-      const cache = await caches.open(CACHE_NAME);
-      await cache.put(SHELL_URL, response.clone());
-    }
+    if (response.ok) (await currentCache()).put(SHELL_URL, response.clone());
     return response;
   } catch {
     return (await caches.match(SHELL_URL)) || Response.error();
@@ -45,10 +84,9 @@ async function networkFirst(request) {
 }
 
 async function staleWhileRevalidate(request) {
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request, { ignoreSearch: true });
+  const cached = await caches.match(request, { ignoreSearch: true });
   const refresh = fetch(request).then(async (response) => {
-    if (response.ok) await cache.put(request, response.clone());
+    if (response.ok) await (await currentCache()).put(request, response.clone());
     return response;
   });
   if (cached) {
@@ -60,6 +98,10 @@ async function staleWhileRevalidate(request) {
 
 self.addEventListener("message", (event) => {
   const data = event.data || {};
+  if (data.type === "cache_optional_workspace") {
+    event.waitUntil(cacheOptional());
+    return;
+  }
   if (data.type !== "show_reminder") return;
   event.waitUntil(
     self.registration.showNotification(data.title || "DeepSeek 提醒", {

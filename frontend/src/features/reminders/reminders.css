@@ -1,0 +1,8 @@
+.skill-form { display: grid; gap: 8px; margin: 12px 0; }
+.skill-form input, .skill-form textarea { width: 100%; padding: 10px 11px; border: 1px solid var(--hairw); outline: none; color: var(--ink); background: var(--paper); font-size: 0.78rem; }
+.skill-form input:focus, .skill-form textarea:focus { border-color: var(--ink); }
+.skill-form textarea { resize: vertical; line-height: 1.55; }
+.memory-item { padding: 10px 9px; }
+.memory-entry small { color: var(--weak); font-size: 0.66rem; }
+.memory-entry p { margin: 5px 0 0; color: var(--ink); font-size: 0.8rem; line-height: 1.55; }
+.credential-note { margin: 24px 0; padding: 12px 13px; border: 0; border-left: 2px solid var(--green); color: var(--ink); background: var(--quote); font-size: 0.78rem; line-height: 1.55; }

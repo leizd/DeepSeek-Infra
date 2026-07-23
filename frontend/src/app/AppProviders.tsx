@@ -10,7 +10,6 @@ import { MemoryProvider } from "../contexts/MemoryContext";
 import { OverlayProvider } from "../contexts/OverlayContext";
 import { ProjectsProvider } from "../contexts/ProjectsContext";
 import { SettingsProvider } from "../contexts/SettingsContext";
-import { SkillsProvider } from "../contexts/SkillsContext";
 import { queryClient } from "./queryClient";
 
 export function AppProviders({ children }: PropsWithChildren) {
@@ -19,19 +18,17 @@ export function AppProviders({ children }: PropsWithChildren) {
       <SettingsProvider>
         <OverlayProvider>
           <ProjectsProvider>
-            <SkillsProvider>
-              <MemoryProvider>
-                <ChatProvider>
-                  <AttachmentsProvider>
-                    <FilePreviewProvider>
-                      <ActivityProvider>
-                        <DiagnosticsProvider>{children}</DiagnosticsProvider>
-                      </ActivityProvider>
-                    </FilePreviewProvider>
-                  </AttachmentsProvider>
-                </ChatProvider>
-              </MemoryProvider>
-            </SkillsProvider>
+            <MemoryProvider>
+              <ChatProvider>
+                <AttachmentsProvider>
+                  <FilePreviewProvider>
+                    <ActivityProvider>
+                      <DiagnosticsProvider>{children}</DiagnosticsProvider>
+                    </ActivityProvider>
+                  </FilePreviewProvider>
+                </AttachmentsProvider>
+              </ChatProvider>
+            </MemoryProvider>
           </ProjectsProvider>
         </OverlayProvider>
       </SettingsProvider>

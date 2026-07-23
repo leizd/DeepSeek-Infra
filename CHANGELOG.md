@@ -5,6 +5,25 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.3.0] - Workspace Demand Loading
+
+### Frontend performance
+
+- Adds one typed Workspace feature registry for Settings, Projects, Skills, Memory, Reminders, Diagnostics, file preview, image lightbox and Activity, with deduplicated intent preload and active-surface-only mounting.
+- Demand-mounts the Skills runtime and list queries, while keeping Memory write support available to Chat and deferring the Memory list query until its drawer opens.
+- Splits feature-owned CSS from the initial stylesheet and enforces release budgets: initial entry <= 390,000 bytes, at least 8% below the 4.2.8 baseline, initial CSS <= 28,000 bytes and every optional chunk <= 90,000 bytes.
+
+### Recovery and offline behavior
+
+- Contains optional chunk failures in a local Workspace boundary with explicit retry/close controls and cache-safe recovery imports.
+- Generates a build-scoped Workspace asset inventory; the Service Worker precaches the core shell, warms optional chunks after load and keeps the current plus previous build for offline upgrades.
+- Extends real-Chromium evidence across cold-load deferral, intent preload without data fetch, drawer query timing, latest-selection wins, chunk retry, mutation continuity and offline reopen.
+
+### Compatibility
+
+- Keeps chat-critical Providers mounted, preserves Query/Mutation continuity, and changes no backend protocol, dependency, Python/Rust ownership boundary or frozen 4.0 runtime contract.
+- Retains the 4.2.8 exact-merge Evidence assembly and release-package verification chain for formal GA proof.
+
 ## [4.2.8] - Exact-Merge Evidence Assembly
 
 ### Release trust

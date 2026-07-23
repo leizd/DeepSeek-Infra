@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.2.8-blue)
+![版本](https://img.shields.io/badge/version-4.3.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.2.8 Exact-Merge Evidence Assembly:** CI 在工作流起点捕获唯一的 schema-v2 Evidence Source Context，各 producer 直接写入同一 provenance，并以隔离 Artifact 交给最终装配作业。装配会拒绝缺失、路径冲突、所有权错误、revision/CI 身份漂移和非 PASS 报告；真实发布 ZIP 随后再次验证 Evidence 字节、清单摘要、排除项和候选提交。4.2.7 的前端行为与冻结的 4.0 运行时合同均保持不变。参见 [4.2.8 发布说明](docs/releases/4.2.8.md)、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
+> **4.3.0 Workspace Demand Loading:** Workspace 的 Settings、Projects、Skills、Memory、Reminders、Diagnostics、文件预览、图片灯箱与 Activity 现在通过统一 feature registry 按意图预取、按打开状态挂载；首屏不再启动 Skills/Memory 列表查询，也不携带可选功能 CSS。局部加载失败可在抽屉内重试，Service Worker 会在首屏稳定后缓存可选 chunk，并保留当前与上一构建以支持离线升级。聊天关键 Provider、Mutation 连续性、后端协议与冻结的 4.0 运行时合同保持不变。参见 [4.3.0 发布说明](docs/releases/4.3.0.md)、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
 
-**4.2.8 validation:** candidate producers may be exercised locally from a clean commit, but GA publication uses CI's `evidence-context` → isolated producer Artifacts → `evidence-assembly` → `release-package` chain. The downloadable `release-evidence-v4.2.8` Artifact and real ZIP are both bound to the exact merge SHA and verified before upload.
+**4.3.0 validation:** Vite manifest checks enforce an initial entry no larger than 390,000 bytes, at least 8% below the 4.2.8 baseline, initial CSS no larger than 28,000 bytes and optional chunks no larger than 90,000 bytes. Real Chromium evidence verifies cold-load deferral, intent preload, query timing, latest-drawer wins, local retry, mutation continuity and offline reopen. GA artifacts still use the 4.2.8 exact-merge Evidence assembly chain.
 
 ## 30 秒概览
 

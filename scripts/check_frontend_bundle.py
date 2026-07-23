@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that route-level frontend code remains outside the initial workspace bundle."""
+"""Verify Workspace demand-loading, budgets, and offline chunk inventory."""
 
 from __future__ import annotations
 
@@ -19,11 +19,28 @@ if str(ROOT) not in sys.path:
 from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 
 MANIFEST_PATH = Path("static/ui/.vite/manifest.json")
+OFFLINE_MANIFEST_PATH = Path("static/ui/workspace-assets.json")
 ENTRY_KEY = "index.html"
 TRACE_PAGE_KEY = "src/features/trace/TracePage.tsx"
 TRACE_DETAIL_KEY = "src/features/trace/TraceDetailView.tsx"
 TRACE_MARKERS = ("Category summary", "Span tree", "trace-primary-grid")
-MAX_INITIAL_BYTES = 450_000
+WORKSPACE_FEATURE_KEYS = {
+    "settings": "src/features/settings/ConnectionSettingsFeature.tsx",
+    "projects": "src/features/projects/ProjectsFeature.tsx",
+    "skills": "src/features/skills/SkillsFeature.tsx",
+    "memory": "src/features/memory/MemoryFeature.tsx",
+    "reminders": "src/features/reminders/RemindersFeature.tsx",
+    "diagnostics": "src/features/diagnostics/DiagnosticsFeature.tsx",
+    "file-preview": "src/features/file-reader/FilePreviewFeature.tsx",
+    "image-lightbox": "src/features/file-reader/ImageLightboxFeature.tsx",
+    "activity": "src/features/activity/ActivityFeature.tsx",
+}
+UTILITY_FEATURES = ("reminders", "diagnostics", "file-preview", "image-lightbox", "activity")
+BASELINE_428_INITIAL_BYTES = 425_914
+MAX_INITIAL_BYTES = 390_000
+MAX_INITIAL_CSS_BYTES = 28_000
+MAX_OPTIONAL_CHUNK_BYTES = 90_000
+MINIMUM_REDUCTION_PERCENT = 8
 
 
 def _entry(manifest: dict[str, Any], key: str) -> dict[str, Any]:
@@ -43,6 +60,85 @@ def _asset(root: Path, entry: dict[str, Any]) -> Path:
     return path
 
 
+def _asset_name(entry: dict[str, Any]) -> str:
+    name = entry.get("file")
+    if not isinstance(name, str) or not name:
+        raise AssertionError("Vite manifest entry has no output file")
+    return name
+
+
+def _initial_graph_keys(manifest: dict[str, Any]) -> set[str]:
+    visited: set[str] = set()
+
+    def visit(key: str) -> None:
+        if key in visited:
+            return
+        visited.add(key)
+        entry = _entry(manifest, key)
+        for dependency in entry.get("imports") or []:
+            if isinstance(dependency, str):
+                visit(dependency)
+
+    visit(ENTRY_KEY)
+    return visited
+
+
+def _css_assets(root: Path, entry: dict[str, Any]) -> list[Path]:
+    assets: list[Path] = []
+    for name in entry.get("css") or []:
+        if not isinstance(name, str):
+            continue
+        path = root / "static" / "ui" / name
+        if not path.is_file():
+            raise AssertionError(f"CSS output is missing {name}")
+        assets.append(path)
+    return assets
+
+
+def _entry_graph_css(
+    root: Path,
+    manifest: dict[str, Any],
+    key: str,
+    *,
+    stop_keys: frozenset[str] = frozenset(),
+) -> list[Path]:
+    visited: set[str] = set()
+    assets: dict[str, Path] = {}
+
+    def visit(current: str) -> None:
+        if current in visited or current in stop_keys:
+            return
+        visited.add(current)
+        entry = _entry(manifest, current)
+        for asset in _css_assets(root, entry):
+            assets[asset.as_posix()] = asset
+        for dependency in entry.get("imports") or []:
+            if isinstance(dependency, str):
+                visit(dependency)
+
+    visit(key)
+    return list(assets.values())
+
+
+def _load_offline_manifest(root: Path) -> dict[str, Any]:
+    path = root / OFFLINE_MANIFEST_PATH
+    if not path.is_file():
+        raise AssertionError("Workspace offline asset manifest is missing")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("buildId"), str):
+        raise AssertionError("Workspace offline asset manifest has no buildId")
+    for field in ("core", "optional"):
+        values = payload.get(field)
+        if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+            raise AssertionError(f"Workspace offline asset manifest has invalid {field} assets")
+        for value in values:
+            if not (root / "static" / "ui" / value.removeprefix("/ui/")).is_file():
+                raise AssertionError(f"Workspace offline asset manifest references missing output {value}")
+    if set(payload["core"]) & set(payload["optional"]):
+        raise AssertionError("Workspace offline core and optional assets overlap")
+    return payload
+
+
 def check_bundle(root: Path) -> dict[str, Any]:
     manifest_path = root / MANIFEST_PATH
     if not manifest_path.is_file():
@@ -52,26 +148,46 @@ def check_bundle(root: Path) -> dict[str, Any]:
         raise AssertionError("Vite manifest root must be an object")
 
     entry = _entry(manifest, ENTRY_KEY)
-    trace_page = _entry(manifest, TRACE_PAGE_KEY)
-    trace_detail = _entry(manifest, TRACE_DETAIL_KEY)
     dynamic_imports = entry.get("dynamicImports")
     if not isinstance(dynamic_imports, list):
         raise AssertionError("frontend entry does not declare dynamic imports")
-    missing = [key for key in (TRACE_PAGE_KEY, TRACE_DETAIL_KEY) if key not in dynamic_imports]
-    if missing:
-        raise AssertionError(f"Trace dynamic entries are missing from the workspace entry: {', '.join(missing)}")
+    missing_features = [key for key in WORKSPACE_FEATURE_KEYS.values() if key not in dynamic_imports]
+    if missing_features:
+        raise AssertionError(f"Workspace dynamic entries are missing: {', '.join(missing_features)}")
+
+    feature_entries: dict[str, dict[str, Any]] = {}
+    feature_assets: dict[str, Path] = {}
+    for feature, key in WORKSPACE_FEATURE_KEYS.items():
+        feature_entry = _entry(manifest, key)
+        if feature_entry.get("isDynamicEntry") is not True:
+            raise AssertionError(f"Workspace feature must remain dynamic: {feature}")
+        feature_entries[feature] = feature_entry
+        feature_assets[feature] = _asset(root, feature_entry)
+
+    trace_page = _entry(manifest, TRACE_PAGE_KEY)
+    trace_detail = _entry(manifest, TRACE_DETAIL_KEY)
+    if TRACE_PAGE_KEY not in dynamic_imports:
+        raise AssertionError("Trace page is missing from the workspace dynamic imports")
     if trace_page.get("isDynamicEntry") is not True or trace_detail.get("isDynamicEntry") is not True:
         raise AssertionError("Trace page and detail view must remain dynamic entries")
 
     entry_asset = _asset(root, entry)
     trace_page_asset = _asset(root, trace_page)
     trace_detail_asset = _asset(root, trace_detail)
-    if len({entry_asset.name, trace_page_asset.name, trace_detail_asset.name}) != 3:
-        raise AssertionError("Trace outputs were merged into the initial workspace bundle")
     if entry_asset.stat().st_size > MAX_INITIAL_BYTES:
+        raise AssertionError(f"initial frontend bundle exceeds budget: {entry_asset.stat().st_size} > {MAX_INITIAL_BYTES}")
+    reduction_percent = 100 * (BASELINE_428_INITIAL_BYTES - entry_asset.stat().st_size) / BASELINE_428_INITIAL_BYTES
+    if reduction_percent < MINIMUM_REDUCTION_PERCENT:
         raise AssertionError(
-            f"initial frontend bundle exceeds budget: {entry_asset.stat().st_size} > {MAX_INITIAL_BYTES}"
+            f"initial frontend bundle reduction is {reduction_percent:.2f}%, expected at least {MINIMUM_REDUCTION_PERCENT}%"
         )
+
+    initial_graph_keys = _initial_graph_keys(manifest)
+    initial_graph_assets = [_asset(root, _entry(manifest, key)) for key in initial_graph_keys]
+    entry_css = _entry_graph_css(root, manifest, ENTRY_KEY)
+    initial_css_bytes = sum(path.stat().st_size for path in entry_css)
+    if initial_css_bytes > MAX_INITIAL_CSS_BYTES:
+        raise AssertionError(f"initial frontend CSS exceeds budget: {initial_css_bytes} > {MAX_INITIAL_CSS_BYTES}")
 
     entry_source = entry_asset.read_text(encoding="utf-8")
     detail_source = trace_detail_asset.read_text(encoding="utf-8")
@@ -82,31 +198,87 @@ def check_bundle(root: Path) -> dict[str, Any]:
     if missing_markers:
         raise AssertionError(f"Trace detail chunk is missing expected markers: {', '.join(missing_markers)}")
 
-    entry_css = set(entry.get("css") or [])
-    trace_css = set(trace_detail.get("css") or [])
-    if not trace_css:
-        raise AssertionError("Trace detail chunk has no owned CSS output")
-    if entry_css & trace_css:
-        raise AssertionError("Trace CSS is included in the initial workspace stylesheet")
-    for name in trace_css:
-        if not (root / "static" / "ui" / str(name)).is_file():
-            raise AssertionError(f"Trace CSS output is missing {name}")
+    entry_css_names = {path.relative_to(root / "static" / "ui").as_posix() for path in entry_css}
+    workspace_css_names: set[str] = set()
+    feature_css_names: dict[str, list[str]] = {}
+    for feature, key in WORKSPACE_FEATURE_KEYS.items():
+        css_assets = _entry_graph_css(root, manifest, key, stop_keys=frozenset({ENTRY_KEY}))
+        if not css_assets:
+            raise AssertionError(f"Workspace feature has no owned CSS output: {feature}")
+        feature_css_names[feature] = sorted(path.relative_to(root / "static" / "ui").as_posix() for path in css_assets)
+        workspace_css_names.update(feature_css_names[feature])
+    if entry_css_names & workspace_css_names:
+        raise AssertionError("Optional Workspace CSS is included in the initial stylesheet")
 
+    trace_css = {
+        path.relative_to(root / "static" / "ui").as_posix()
+        for path in _css_assets(root, trace_detail)
+    }
+    if not trace_css or entry_css_names & trace_css:
+        raise AssertionError("Trace CSS must remain feature-owned and deferred")
+
+    offline = _load_offline_manifest(root)
+    expected_optional = {
+        f"/ui/{_asset_name(feature_entry)}"
+        for feature_entry in feature_entries.values()
+    }
+    expected_optional.update(f"/ui/{name}" for name in workspace_css_names)
+    missing_offline = sorted(expected_optional - set(offline["optional"]))
+    if missing_offline:
+        raise AssertionError(f"Workspace offline manifest is missing optional assets: {', '.join(missing_offline)}")
+    optional_js = [
+        root / "static" / "ui" / name.removeprefix("/ui/")
+        for name in offline["optional"]
+        if name.endswith(".js")
+    ]
+    oversized = [path for path in optional_js if path.stat().st_size > MAX_OPTIONAL_CHUNK_BYTES]
+    if oversized:
+        raise AssertionError(f"optional frontend chunk exceeds budget: {oversized[0].name}")
+
+    feature_chunks = {
+        feature: {
+            "path": asset.relative_to(root).as_posix(),
+            "bytes": asset.stat().st_size,
+            "css": feature_css_names[feature],
+        }
+        for feature, asset in feature_assets.items()
+    }
     return {
+        "baseline428InitialBytes": BASELINE_428_INITIAL_BYTES,
+        "minimumReductionPercent": MINIMUM_REDUCTION_PERCENT,
         "initialEntry": entry_asset.relative_to(root).as_posix(),
         "initialBytes": entry_asset.stat().st_size,
+        "initialGraphBytes": sum(path.stat().st_size for path in initial_graph_assets),
+        "initialReductionPercent": round(reduction_percent, 2),
         "initialBundleBudgetBytes": MAX_INITIAL_BYTES,
+        "initialCss": sorted(entry_css_names),
+        "initialCssBytes": initial_css_bytes,
+        "initialCssBudgetBytes": MAX_INITIAL_CSS_BYTES,
+        "optionalChunkBudgetBytes": MAX_OPTIONAL_CHUNK_BYTES,
+        "workspaceFeatureChunks": feature_chunks,
+        "workspaceOfflineManifest": OFFLINE_MANIFEST_PATH.as_posix(),
+        "workspaceBuildId": offline["buildId"],
         "tracePageChunk": trace_page_asset.relative_to(root).as_posix(),
         "tracePageBytes": trace_page_asset.stat().st_size,
         "traceDetailChunk": trace_detail_asset.relative_to(root).as_posix(),
         "traceDetailBytes": trace_detail_asset.stat().st_size,
         "traceCss": sorted(trace_css),
         "checks": {
+            "workspaceProjectsDynamicEntry": "PASS",
+            "workspaceSkillsDynamicEntry": "PASS",
+            "workspaceMemoryDynamicEntry": "PASS",
+            "workspaceSettingsDynamicEntry": "PASS",
+            "workspaceUtilitiesDynamicEntry": "PASS",
+            "workspaceOptionalCssDeferred": "PASS",
+            "initialBundleReducedFrom428": "PASS",
+            "initialBundleBudget": "PASS",
+            "initialCssBudget": "PASS",
+            "optionalFeatureChunkBudget": "PASS",
+            "workspaceOfflineAssetManifest": "PASS",
             "tracePageDynamicEntry": "PASS",
             "traceDetailDynamicEntry": "PASS",
             "traceImplementationDeferred": "PASS",
             "traceCssDeferred": "PASS",
-            "initialBundleBudget": "PASS",
         },
     }
 

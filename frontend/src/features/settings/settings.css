@@ -1,0 +1,14 @@
+.credential-note { margin: 24px 0; padding: 12px 13px; border: 0; border-left: 2px solid var(--green); color: var(--ink); background: var(--quote); font-size: 0.78rem; line-height: 1.55; }
+.credential-field { display: block; margin: 18px 0; }
+.credential-field span { display: block; margin-bottom: 8px; color: var(--ink); font-size: 0.78rem; font-weight: 700; }
+.credential-field input { width: 100%; padding: 12px; border: 1px solid var(--hairw); outline: none; color: var(--ink); background: var(--paper); }
+.credential-field input:focus { border-color: var(--ink); }
+.show-key-toggle { display: flex; gap: 8px; align-items: center; color: var(--weak); font-size: 0.76rem; }
+.connection-status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 24px 0; }
+.connection-status-grid div { padding: 12px; border: 1px solid var(--hairw); color: var(--ink); background: var(--paper); font-size: 0.75rem; }
+.drawer-done { width: 100%; padding: 11px; border: 0; color: var(--paper); background: var(--ink); font-weight: 400; }
+.drawer-done:hover { background: var(--green); }
+
+@media (max-width: 640px) {
+  .connection-status-grid { grid-template-columns: 1fr; }
+}

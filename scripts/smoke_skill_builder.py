@@ -30,7 +30,7 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     drawer = _read("frontend/src/features/skills/SkillsDrawer.tsx")
     controller = _read("frontend/src/features/skills/useSkillController.ts")
     api = _read("frontend/src/api/skillsApi.ts")
-    styles = _read("frontend/src/shared/styles/app.css")
+    styles = _read("frontend/src/features/skills/skills.css")
     routes = _read("deepseek_infra/web/routes/skills.py")
     ci = _read(".github/workflows/ci.yml")
 
