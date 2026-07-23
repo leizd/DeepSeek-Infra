@@ -37,7 +37,13 @@ def test_react_root_pwa_sources_are_owned_by_frontend_build() -> None:
     assert 'register(atRoot ? "/sw.js" : "/ui/sw.js"' in main
     assert 'const CACHE_PREFIX = "deepseek-react-root-' in root_worker
     assert 'const ASSET_MANIFEST_URL = "/ui/workspace-assets.json"' in root_worker
-    assert 'data.type === "cache_optional_workspace"' in root_worker
+    assert 'data.type === "cache_workspace_primary"' in root_worker
+    assert "manifest.offlinePrimary || []" in root_worker
+    assert "limit = 3" in root_worker
+    assert "manifest.recovery" not in root_worker
+    assert "await (await currentBuildCache()).put(SHELL_URL, response.clone())" in root_worker
+    assert "caches.match(" not in root_worker
+    assert "ignoreSearch" not in root_worker
     assert 'url.pathname.startsWith("/api/")' in root_worker
     assert '"start_url": "/"' in root_manifest
     assert '"scope": "/"' in root_manifest

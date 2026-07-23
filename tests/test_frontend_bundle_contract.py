@@ -46,6 +46,7 @@ def _bundle(root: Path, *, leak: bool = False, initial_size: int = 100) -> None:
     (assets / "TraceDetailView.js").write_text("Category summary Span tree trace-primary-grid", encoding="utf-8")
     (assets / "index.css").write_text("body{}", encoding="utf-8")
     (assets / "trace.css").write_text(".trace-primary-grid{}", encoding="utf-8")
+    (assets / "recovery.js").write_text("recovery", encoding="utf-8")
 
     dynamic_imports = [*FEATURES.values(), "src/features/trace/TracePage.tsx"]
     manifest: dict[str, object] = {
@@ -68,21 +69,23 @@ def _bundle(root: Path, *, leak: bool = False, initial_size: int = 100) -> None:
             "css": ["assets/trace.css"],
         },
     }
-    optional = ["/ui/assets/TracePage.js", "/ui/assets/TraceDetailView.js", "/ui/assets/trace.css"]
+    offline_primary: list[str] = []
     for feature, key in FEATURES.items():
         js_name = f"{feature}.js"
         css_name = f"{feature}.css"
         (assets / js_name).write_text(feature, encoding="utf-8")
         (assets / css_name).write_text(f".{feature}{{}}", encoding="utf-8")
         manifest[key] = {"file": f"assets/{js_name}", "isDynamicEntry": True, "css": [f"assets/{css_name}"]}
-        optional.extend([f"/ui/assets/{js_name}", f"/ui/assets/{css_name}"])
+        offline_primary.extend([f"/ui/assets/{js_name}", f"/ui/assets/{css_name}"])
     (manifest_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (output / "workspace-assets.json").write_text(
         json.dumps(
             {
                 "buildId": "test-build",
                 "core": ["/ui/assets/index.js", "/ui/assets/shared.js", "/ui/assets/index.css"],
-                "optional": optional,
+                "offlinePrimary": offline_primary,
+                "recovery": ["/ui/assets/recovery.js"],
+                "routeOptional": ["/ui/assets/TracePage.js", "/ui/assets/TraceDetailView.js", "/ui/assets/trace.css"],
             }
         ),
         encoding="utf-8",
@@ -120,14 +123,25 @@ def test_bundle_contract_rejects_missing_workspace_dynamic_entry(tmp_path: Path)
         checker.check_bundle(tmp_path)
 
 
-def test_bundle_contract_rejects_optional_asset_missing_from_offline_manifest(tmp_path: Path) -> None:
+def test_bundle_contract_rejects_primary_asset_missing_from_offline_manifest(tmp_path: Path) -> None:
     checker = _load_checker()
     _bundle(tmp_path)
     offline_path = tmp_path / "static/ui/workspace-assets.json"
     offline = json.loads(offline_path.read_text(encoding="utf-8"))
-    offline["optional"].remove("/ui/assets/skills.js")
+    offline["offlinePrimary"].remove("/ui/assets/skills.js")
     offline_path.write_text(json.dumps(offline), encoding="utf-8")
-    with pytest.raises(AssertionError, match="offline manifest is missing optional assets"):
+    with pytest.raises(AssertionError, match="offline manifest is missing primary assets"):
+        checker.check_bundle(tmp_path)
+
+
+def test_bundle_contract_rejects_recovery_assets_in_primary_warmup(tmp_path: Path) -> None:
+    checker = _load_checker()
+    _bundle(tmp_path)
+    offline_path = tmp_path / "static/ui/workspace-assets.json"
+    offline = json.loads(offline_path.read_text(encoding="utf-8"))
+    offline["offlinePrimary"].append(offline["recovery"].pop())
+    offline_path.write_text(json.dumps(offline), encoding="utf-8")
+    with pytest.raises(AssertionError, match="no on-demand recovery assets"):
         checker.check_bundle(tmp_path)
 
 

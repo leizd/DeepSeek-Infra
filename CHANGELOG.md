@@ -5,6 +5,24 @@
 <!-- docs-language-switcher:end -->
 
 
+## [4.3.1] - Lazy Runtime Continuity and Offline Upgrade Safety
+
+### Frontend continuity
+
+- Shares the Memory save/remove/clear barrier at `QueryClient` scope, so the root write Provider and lazy list Provider keep exact lifecycle blockers across drawer remounts without waiting for MutationCache metadata.
+- Replaces unlimited fixed-identity chunk recovery with one truthful retry request. A second chunk failure offers refresh/close, render and business failures do not masquerade as recoverable imports, and Feature and Skills Runtime recovery remain independent.
+
+### Offline upgrades and warmup
+
+- Makes the current build Cache authoritative for navigation, shell metadata and exact asset matches, while allowing the previous Cache to serve only exact old hash chunks still requested by an unrefreshed page.
+- Splits the offline inventory into `core`, `offlinePrimary`, `recovery` and `routeOptional`; only the primary Workspace layer warms during idle time, Save-Data/2G skip warmup, recovery entries remain failure-driven, and Service Worker cache concurrency is capped at three.
+- Extends Hook, component, Service Worker, bundle, preflight and real-Chromium contracts across cross-Provider Memory exclusion, retry exhaustion, recovery isolation, two-build offline ordering and adaptive warmup.
+
+### Compatibility
+
+- Changes no backend protocol, dependency, Provider decomposition, ChatContext ownership, offline Mutation persistence, product workflow or bundle budget.
+- Retains the frozen 4.0 runtime contract and the 4.2.8 exact-merge Evidence assembly chain.
+
 ## [4.3.0] - Workspace Demand Loading
 
 ### Frontend performance

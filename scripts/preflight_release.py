@@ -1204,6 +1204,21 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
                 "offlineUnopenedFeatureAvailable",
             ]
         )
+    if _version_tuple(version) >= (4, 3, 1):
+        required.extend(
+            [
+                "memoryBarrierCrossProvider",
+                "memoryBarrierSurvivesLazyRemount",
+                "chunkRetryProducesNewRequest",
+                "chunkRetryExhaustionTruthful",
+                "featureRuntimeRecoveryIsolated",
+                "currentBuildShellWinsOffline",
+                "previousBuildChunkStillAvailable",
+                "optionalWarmRespectsSaveData",
+                "optionalWarmRespects2G",
+                "recoveryChunksDeferred",
+            ]
+        )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(
@@ -1272,6 +1287,14 @@ def check_frontend_bundle_evidence(root: Path, version: str) -> CheckResult:
                 "initialCssBudget",
                 "optionalFeatureChunkBudget",
                 "workspaceOfflineAssetManifest",
+            ]
+        )
+    if _version_tuple(version) >= (4, 3, 1):
+        required.extend(
+            [
+                "workspacePrimaryWarmLayer",
+                "workspaceRecoveryChunksDeferred",
+                "routeOptionalChunksSeparated",
             ]
         )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]

@@ -56,7 +56,7 @@ def test_evidence_revision_uses_one_shared_source_context(tmp_path: Path, monkey
     context_path.write_text(
         """{
   "schemaVersion": 1,
-  "version": "4.3.0",
+  "version": "4.3.1",
   "testedRevision": "candidate123",
   "sourceTreeDirty": false,
   "capturedAt": "2026-07-22T10:00:00Z",
@@ -83,7 +83,7 @@ def test_capture_source_context_rejects_dirty_tree(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(revision_module, "_git", fake_git)
     monkeypatch.delenv("GITHUB_SHA", raising=False)
     try:
-        revision_module.capture_source_context(tmp_path, "4.3.0", generator="test")
+        revision_module.capture_source_context(tmp_path, "4.3.1", generator="test")
     except ValueError as exc:
         assert "clean source tree" in str(exc)
     else:
@@ -110,11 +110,11 @@ def test_capture_schema_v2_context_binds_github_identity(tmp_path: Path, monkeyp
     monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
     monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
 
-    context = revision_module.capture_source_context(tmp_path, "4.3.0", generator="test")
+    context = revision_module.capture_source_context(tmp_path, "4.3.1", generator="test")
 
     assert context == {
         "schemaVersion": 2,
-        "version": "4.3.0",
+        "version": "4.3.1",
         "testedRevision": revision,
         "sourceTreeDirty": False,
         "capturedAt": context["capturedAt"],
@@ -125,7 +125,7 @@ def test_capture_schema_v2_context_binds_github_identity(tmp_path: Path, monkeyp
         "eventName": "push",
         "ref": "refs/heads/main",
     }
-    assert revision_module.validate_source_context(context, version="4.3.0", expected_revision=revision) == []
+    assert revision_module.validate_source_context(context, version="4.3.1", expected_revision=revision) == []
 
 
 def test_capture_source_context_rejects_github_checkout_mismatch(tmp_path: Path, monkeypatch) -> None:
@@ -137,7 +137,7 @@ def test_capture_source_context_rejects_github_checkout_mismatch(tmp_path: Path,
     monkeypatch.setenv("GITHUB_SHA", "b" * 40)
 
     try:
-        revision_module.capture_source_context(tmp_path, "4.3.0", generator="test")
+        revision_module.capture_source_context(tmp_path, "4.3.1", generator="test")
     except ValueError as exc:
         assert "does not match" in str(exc)
     else:

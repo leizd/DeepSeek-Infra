@@ -13,7 +13,7 @@ def read(path: str) -> str:
 
 def test_react_frontend_is_an_isolated_versioned_build() -> None:
     package = json.loads(read("frontend/package.json"))
-    assert package["version"] == "4.3.0"
+    assert package["version"] == "4.3.1"
     assert package["engines"]["node"] == ">=22.12.0"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test"] == "vitest run"
@@ -174,7 +174,12 @@ def test_workspace_demand_loading_has_one_registry_and_deferred_providers() -> N
     assert "SkillsProvider" not in providers
     assert "WorkspaceOverlayHost" in chat
     assert "ContextualFeatureHost" in chat
-    assert 'postMessage({ type: "cache_optional_workspace" })' in main
+    assert "scheduleWorkspaceOfflineWarmup" in main
+    warmup = read("frontend/src/app/workspaceOfflineWarmup.ts")
+    assert 'postMessage({ type: "cache_workspace_primary" })' in warmup
+    assert '"slow-2g", "2g"' in warmup
+    assert "connection?.saveData" in warmup
+    assert "requestIdleCallback" in warmup
     assert '"workspace-assets.json"' in vite
 
 
@@ -204,4 +209,26 @@ def test_workspace_release_gates_cover_demand_loading_budgets_and_browser_behavi
         "offlineUnopenedFeatureAvailable",
     ):
         assert f'checks["{check}"] = "PASS"' in browser
+        assert f'"{check}"' in preflight
+    for check in (
+        "memoryBarrierCrossProvider",
+        "memoryBarrierSurvivesLazyRemount",
+        "chunkRetryProducesNewRequest",
+        "chunkRetryExhaustionTruthful",
+        "featureRuntimeRecoveryIsolated",
+        "currentBuildShellWinsOffline",
+        "previousBuildChunkStillAvailable",
+        "recoveryChunksDeferred",
+    ):
+        assert f'checks["{check}"] = "PASS"' in browser
+        assert f'"{check}"' in preflight
+    for check in ("optionalWarmRespectsSaveData", "optionalWarmRespects2G"):
+        assert f'"{check}"' in browser
+        assert f'"{check}"' in preflight
+    for check in (
+        "workspacePrimaryWarmLayer",
+        "workspaceRecoveryChunksDeferred",
+        "routeOptionalChunksSeparated",
+    ):
+        assert f'"{check}": "PASS"' in bundle
         assert f'"{check}"' in preflight

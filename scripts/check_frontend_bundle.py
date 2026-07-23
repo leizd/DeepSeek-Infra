@@ -127,15 +127,20 @@ def _load_offline_manifest(root: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("buildId"), str):
         raise AssertionError("Workspace offline asset manifest has no buildId")
-    for field in ("core", "optional"):
+    asset_groups = ("core", "offlinePrimary", "recovery", "routeOptional")
+    for field in asset_groups:
         values = payload.get(field)
         if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
             raise AssertionError(f"Workspace offline asset manifest has invalid {field} assets")
         for value in values:
             if not (root / "static" / "ui" / value.removeprefix("/ui/")).is_file():
                 raise AssertionError(f"Workspace offline asset manifest references missing output {value}")
-    if set(payload["core"]) & set(payload["optional"]):
-        raise AssertionError("Workspace offline core and optional assets overlap")
+    seen: set[str] = set()
+    for field in asset_groups:
+        overlap = seen & set(payload[field])
+        if overlap:
+            raise AssertionError(f"Workspace offline asset groups overlap at {sorted(overlap)[0]}")
+        seen.update(payload[field])
     return payload
 
 
@@ -218,17 +223,30 @@ def check_bundle(root: Path) -> dict[str, Any]:
         raise AssertionError("Trace CSS must remain feature-owned and deferred")
 
     offline = _load_offline_manifest(root)
-    expected_optional = {
+    expected_primary = {
         f"/ui/{_asset_name(feature_entry)}"
         for feature_entry in feature_entries.values()
     }
-    expected_optional.update(f"/ui/{name}" for name in workspace_css_names)
-    missing_offline = sorted(expected_optional - set(offline["optional"]))
+    expected_primary.update(f"/ui/{name}" for name in workspace_css_names)
+    missing_offline = sorted(expected_primary - set(offline["offlinePrimary"]))
     if missing_offline:
-        raise AssertionError(f"Workspace offline manifest is missing optional assets: {', '.join(missing_offline)}")
+        raise AssertionError(f"Workspace offline manifest is missing primary assets: {', '.join(missing_offline)}")
+    if not offline["recovery"]:
+        raise AssertionError("Workspace offline manifest has no on-demand recovery assets")
+    if any("workspace-retry" in value for value in offline["offlinePrimary"]):
+        raise AssertionError("Workspace recovery chunks must not enter the primary warmup layer")
+    expected_route_optional = {
+        f"/ui/{_asset_name(trace_page)}",
+        f"/ui/{_asset_name(trace_detail)}",
+        *(f"/ui/{name}" for name in trace_css),
+    }
+    missing_routes = sorted(expected_route_optional - set(offline["routeOptional"]))
+    if missing_routes:
+        raise AssertionError(f"Workspace offline manifest is missing route-optional assets: {', '.join(missing_routes)}")
     optional_js = [
         root / "static" / "ui" / name.removeprefix("/ui/")
-        for name in offline["optional"]
+        for field in ("offlinePrimary", "recovery", "routeOptional")
+        for name in offline[field]
         if name.endswith(".js")
     ]
     oversized = [path for path in optional_js if path.stat().st_size > MAX_OPTIONAL_CHUNK_BYTES]
@@ -275,6 +293,9 @@ def check_bundle(root: Path) -> dict[str, Any]:
             "initialCssBudget": "PASS",
             "optionalFeatureChunkBudget": "PASS",
             "workspaceOfflineAssetManifest": "PASS",
+            "workspacePrimaryWarmLayer": "PASS",
+            "workspaceRecoveryChunksDeferred": "PASS",
+            "routeOptionalChunksSeparated": "PASS",
             "tracePageDynamicEntry": "PASS",
             "traceDetailDynamicEntry": "PASS",
             "traceImplementationDeferred": "PASS",

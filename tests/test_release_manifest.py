@@ -34,7 +34,7 @@ def test_build_manifest_has_required_fields(tmp_path: Path) -> None:
         parity_counts={"gateway": 68, "mcp": 105},
         architecture_decision_sha256="aa" * 32,
         protocol_contract_sha256="bb" * 32,
-        rust_sidecar_image_tag="deepseek-rust-gateway:4.3.0",
+        rust_sidecar_image_tag="deepseek-rust-gateway:4.3.1",
         rust_sidecar_image_digest="sha256:1234",
     )
     assert manifest["schemaVersion"] == release_manifest.SCHEMA_VERSION
@@ -75,20 +75,20 @@ def test_build_manifest_has_required_fields(tmp_path: Path) -> None:
     assert manifest["protocolContractSha256"] == "bb" * 32
     assert manifest["archiveSha256"] == "deadbeef"
     assert manifest["rustSidecarImage"] == {
-        "tag": "deepseek-rust-gateway:4.3.0",
+        "tag": "deepseek-rust-gateway:4.3.1",
         "digest": "sha256:1234",
     }
     assert manifest["runtimeDefaults"]["authoritativeRuntime"] == "python"
     assert manifest["runtimeDefaults"]["defaultCompose"] == "python-only"
     expected_evidence = (
-        *evidence_paths("4.3.0"),
-        "docs/evidence/evidence-source-context-v4.3.0.json",
-        "docs/evidence/evidence-manifest-v4.3.0.json",
-        "docs/evidence/evidence-manifest-v4.3.0.json.sha256",
+        *evidence_paths("4.3.1"),
+        "docs/evidence/evidence-source-context-v4.3.1.json",
+        "docs/evidence/evidence-manifest-v4.3.1.json",
+        "docs/evidence/evidence-manifest-v4.3.1.json.sha256",
     )
     assert tuple(manifest["evidence"]) == expected_evidence
     assert manifest["evidenceManifest"] == {}
-    assert manifest["gaEvidence"] == "docs/evidence/ga-v4.3.0.json"
+    assert manifest["gaEvidence"] == "docs/evidence/ga-v4.3.1.json"
     assert manifest["qualityGates"]["mcpProtocolParity"] == "PASS"
     assert manifest["qualityGates"]["ragDocumentPreparationParity"] == "PASS"
     assert manifest["qualityGates"]["rustSidecarPerformance"] == "PASS"

@@ -57,12 +57,29 @@ describe("workspace feature registry", () => {
     expect(loader).toHaveBeenCalledTimes(2);
   });
 
-  it("creates a new import after an explicit retry", async () => {
-    const loader = vi.fn(() => Promise.resolve({ default: () => null }));
-    const registry = createWorkspaceFeatureRegistry(loadersWith(loader));
-    await registry.load("memory");
-    registry.retry("memory");
-    await registry.load("memory");
-    expect(loader).toHaveBeenCalledTimes(2);
+  it("uses one unique retry import and then requires reload", async () => {
+    const initial = vi.fn(() => Promise.reject(new Error("initial chunk offline")));
+    const retry = vi.fn(() => Promise.reject(new Error("retry chunk offline")));
+    const registry = createWorkspaceFeatureRegistry(loadersWith(initial), loadersWith(retry));
+
+    await expect(registry.load("memory")).rejects.toThrow("initial chunk offline");
+    expect(registry.recoveryState("memory")).toBe("retry-available");
+    expect(registry.retry("memory")).toBe(true);
+    await expect(registry.load("memory")).rejects.toThrow("retry chunk offline");
+    expect(registry.recoveryState("memory")).toBe("reload-required");
+    expect(registry.retry("memory")).toBe(false);
+    expect(initial).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consume one feature retry when another feature fails", async () => {
+    const initial = vi.fn(() => Promise.reject(new Error("chunk offline")));
+    const retry = vi.fn(() => Promise.resolve({ default: () => null }));
+    const registry = createWorkspaceFeatureRegistry(loadersWith(initial), loadersWith(retry));
+
+    await expect(registry.load("projects")).rejects.toThrow("chunk offline");
+    expect(registry.retry("projects")).toBe(true);
+    expect(registry.recoveryState("skills")).toBe("initial");
+    expect(registry.retry("skills")).toBe(false);
   });
 });
