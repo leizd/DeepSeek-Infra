@@ -284,6 +284,66 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
               }
             }"""
         )
+        immutable_identity = await page.evaluate(
+            """async () => {
+              const pageBuildId = document.querySelector('meta[name="deepseek-infra-build-id"]')?.content || '';
+              const pageRevision = document.querySelector('meta[name="deepseek-infra-source-revision"]')?.content || '';
+              const pointer = await fetch('/ui/workspace-assets.json', { cache: 'no-store' }).then((response) => response.json());
+              const immutableResponse = await fetch(`/ui/workspace-assets-${pageBuildId}.json`, { cache: 'no-store' });
+              const immutable = await immutableResponse.json();
+              const workerSource = await fetch(`/sw-${pageBuildId}.js`, { cache: 'no-store' }).then((response) => response.text());
+              const workerIdentity = await new Promise((resolve, reject) => {
+                const controller = navigator.serviceWorker.controller;
+                if (!controller) return reject(new Error('current page has no controlling worker'));
+                const channel = new MessageChannel();
+                const timer = setTimeout(() => reject(new Error('worker identity handshake timeout')), 5000);
+                channel.port1.onmessage = (event) => {
+                  clearTimeout(timer);
+                  resolve(event.data);
+                };
+                controller.postMessage({ type: 'get_build_identity' }, [channel.port2]);
+              });
+              navigator.serviceWorker.controller.postMessage({
+                type: 'cache_workspace_primary',
+                buildId: 'ffffffffffffffff',
+                assetSetDigest: 'f'.repeat(64),
+              });
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              const cacheNames = await caches.keys();
+              return {
+                pageBuildId,
+                pageRevision,
+                pointer,
+                immutable,
+                workerSource,
+                workerIdentity,
+                wrongBuildCacheCreated: cacheNames.includes('deepseek-react-root-ffffffffffffffff'),
+              };
+            }"""
+        )
+        identity = immutable_identity
+        if (
+            not re.fullmatch(r"[0-9a-f]{16}", identity["pageBuildId"])
+            or identity["pointer"] != identity["immutable"]
+            or identity["pointer"]["buildId"] != identity["pageBuildId"]
+            or identity["pointer"]["sourceRevision"] != identity["pageRevision"]
+            or identity["workerIdentity"]["buildId"] != identity["pageBuildId"]
+            or identity["workerIdentity"]["assetSetDigest"] != identity["pointer"]["assetSetDigest"]
+            or not identity["workerIdentity"]["cacheReady"]
+        ):
+            raise AssertionError(f"page, worker and immutable manifest identities diverged: {identity}")
+        if (
+            f'const WORKER_BUILD_ID = "{identity["pageBuildId"]}"' not in identity["workerSource"]
+            or f'/ui/workspace-assets-{identity["pageBuildId"]}.json' not in identity["workerSource"]
+        ):
+            raise AssertionError("build-scoped root worker does not embed its immutable identity")
+        if identity["wrongBuildCacheCreated"]:
+            raise AssertionError("worker accepted a warmup request for the wrong page build")
+        checks["immutableWorkerBuildIdentity"] = "PASS"
+        checks["workerManifestIdentityBound"] = "PASS"
+        checks["controllerHandshakeRequired"] = "PASS"
+        checks["wrongWorkerWarmupRejected"] = "PASS"
+
         cached_paths = await page.evaluate(
             """async () => {
               const names = await caches.keys();
@@ -331,13 +391,18 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
               const manifest = await fetch('/ui/workspace-assets.json').then((response) => response.json());
               const currentId = manifest.buildId;
               const currentName = `deepseek-react-root-${currentId}`;
-              const previousName = 'deepseek-react-root-browser-previous';
+              const previousId = '0000000000000000';
+              const previousName = `deepseek-react-root-${previousId}`;
               const previous = await caches.open(previousName);
               await previous.put('/', new Response('<html><body>previous-shell</body></html>', {
                 headers: { 'content-type': 'text/html' },
               }));
-              await previous.put('/ui/workspace-assets.json', new Response(JSON.stringify({
-                buildId: 'browser-previous',
+              await previous.put(`/ui/workspace-assets-${previousId}.json`, new Response(JSON.stringify({
+                schemaVersion: 1,
+                version: '4.3.1',
+                sourceRevision: 'browser-previous',
+                buildId: previousId,
+                assetSetDigest: '0'.repeat(64),
                 core: [],
                 offlinePrimary: [],
                 recovery: [],
@@ -348,8 +413,8 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
                 new Response('export const legacy = true', { headers: { 'content-type': 'application/javascript' } }),
               );
               const history = await caches.open('deepseek-workspace-root-build-history');
-              await history.put('builds', new Response(JSON.stringify([currentId, 'browser-previous'])));
-              return { currentId, currentName, previousName };
+              await history.put('builds', new Response(JSON.stringify([currentId, previousId])));
+              return { currentId, currentName, previousId, previousName };
             }"""
         )
 
@@ -361,7 +426,7 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         await offline_page.evaluate(
             """async ({ currentId }) => {
               const history = await caches.open('deepseek-workspace-root-build-history');
-              await history.put('builds', new Response(JSON.stringify([currentId, 'browser-previous'])));
+              await history.put('builds', new Response(JSON.stringify([currentId, '0000000000000000'])));
             }""",
             {"currentId": build_cache["currentId"]},
         )
@@ -379,14 +444,14 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         checks["offlineRefresh"] = "PASS"
         offline_build = await offline_page.evaluate(
             """async () => {
-              const manifest = await fetch('/ui/workspace-assets.json').then((response) => response.json());
+              const buildId = document.querySelector('meta[name="deepseek-infra-build-id"]')?.content || '';
               const legacy = await fetch('/ui/assets/LegacyChunk-abcdefgh.js').then((response) => response.text());
               const searched = await fetch('/ui/assets/LegacyChunk-abcdefgh.js?wrong-build=1')
                 .then(
                   async (response) => ({ status: response.status, text: await response.text() }),
                   () => ({ status: 0, text: '' }),
                 );
-              return { buildId: manifest.buildId, legacy, searched };
+              return { buildId, legacy, searched };
             }"""
         )
         if offline_build["buildId"] != build_cache["currentId"]:
@@ -411,6 +476,161 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             raise AssertionError(f"browser reported CSP errors: {csp_errors}")
         checks["noCspConsoleErrors"] = "PASS"
         await context.set_offline(False)
+
+        await context.add_init_script(
+            """() => {
+              Object.defineProperty(navigator, 'connection', {
+                configurable: true,
+                value: { effectiveType: '4g', saveData: true },
+              });
+            }"""
+        )
+        warmup_peer = await context.new_page()
+        await warmup_peer.goto(base_url, wait_until="networkidle")
+        await warmup_peer.evaluate("() => navigator.serviceWorker.ready")
+        warmup_state = await page.evaluate(
+            """async () => {
+              const manifest = await fetch('/ui/workspace-assets.json', { cache: 'no-store' }).then((response) => response.json());
+              const cache = await caches.open(`deepseek-react-root-${manifest.buildId}`);
+              const targets = manifest.offlinePrimary.slice(0, 2);
+              for (const target of targets) await cache.delete(target);
+              const metadata = await caches.open('deepseek-workspace-root-build-history');
+              await metadata.delete(`warmup:${manifest.buildId}`);
+              return { buildId: manifest.buildId, assetSetDigest: manifest.assetSetDigest, targets };
+            }"""
+        )
+        warmup_message = {
+            "type": "cache_workspace_primary",
+            "buildId": warmup_state["buildId"],
+            "assetSetDigest": warmup_state["assetSetDigest"],
+        }
+        await asyncio.gather(
+            page.evaluate(
+                "(message) => navigator.serviceWorker.controller.postMessage(message)",
+                warmup_message,
+            ),
+            warmup_peer.evaluate(
+                "(message) => navigator.serviceWorker.controller.postMessage(message)",
+                warmup_message,
+            ),
+        )
+        await page.wait_for_function(
+            """async ({ buildId, assetSetDigest, targets }) => {
+              const metadata = await caches.open('deepseek-workspace-root-build-history');
+              const marker = await metadata.match(`warmup:${buildId}`);
+              const state = marker ? await marker.json() : {};
+              const cache = await caches.open(`deepseek-react-root-${buildId}`);
+              return state.assetSetDigest === assetSetDigest
+                && state.offlinePrimaryComplete === true
+                && (await Promise.all(targets.map((target) => cache.match(target)))).every(Boolean);
+            }""",
+            warmup_state,
+            timeout=15_000,
+        )
+        checks["warmupDeduplicatedAcrossTabs"] = "PASS"
+
+        await page.evaluate(
+            """async ({ buildId, targets }) => {
+              const cache = await caches.open(`deepseek-react-root-${buildId}`);
+              await cache.delete(targets[0]);
+              const metadata = await caches.open('deepseek-workspace-root-build-history');
+              await metadata.delete(`warmup:${buildId}`);
+            }""",
+            warmup_state,
+        )
+        await context.set_offline(True)
+        await page.evaluate(
+            "(message) => navigator.serviceWorker.controller.postMessage(message)",
+            warmup_message,
+        )
+        await page.wait_for_timeout(200)
+        failed_warmup = await page.evaluate(
+            """async ({ buildId, targets }) => {
+              const cache = await caches.open(`deepseek-react-root-${buildId}`);
+              const metadata = await caches.open('deepseek-workspace-root-build-history');
+              return {
+                missing: !(await cache.match(targets[0])),
+                marker: Boolean(await metadata.match(`warmup:${buildId}`)),
+                retained: Boolean(await cache.match(targets[1])),
+              };
+            }""",
+            warmup_state,
+        )
+        if not failed_warmup["missing"] or failed_warmup["marker"] or not failed_warmup["retained"]:
+            raise AssertionError(f"partial Workspace warmup did not remain resumable: {failed_warmup}")
+        await context.set_offline(False)
+        await page.evaluate(
+            "(message) => navigator.serviceWorker.controller.postMessage(message)",
+            warmup_message,
+        )
+        await page.wait_for_function(
+            """async ({ buildId, targets }) => {
+              const cache = await caches.open(`deepseek-react-root-${buildId}`);
+              const metadata = await caches.open('deepseek-workspace-root-build-history');
+              return Boolean(await cache.match(targets[0]))
+                && Boolean(await metadata.match(`warmup:${buildId}`));
+            }""",
+            warmup_state,
+            timeout=15_000,
+        )
+        checks["warmupResumesMissingAssets"] = "PASS"
+        await warmup_peer.close()
+
+        lease_page = await context.new_page()
+        await lease_page.goto(base_url, wait_until="networkidle")
+        await lease_page.evaluate("() => navigator.serviceWorker.ready")
+        lease_state = await lease_page.evaluate(
+            """async () => {
+              const currentId = document.querySelector('meta[name="deepseek-infra-build-id"]')?.content || '';
+              const buildB = '1111111111111111';
+              const buildA = '2222222222222222';
+              const chunk = '/ui/assets/LeasedFeature-abcdefgh.js';
+              const cacheA = await caches.open(`deepseek-react-root-${buildA}`);
+              await cacheA.put(chunk, new Response('leased-a-chunk', {
+                headers: { 'content-type': 'application/javascript' },
+              }));
+              await caches.open(`deepseek-react-root-${buildB}`);
+              const metadata = await caches.open('deepseek-workspace-root-build-history');
+              await metadata.put('builds', new Response(JSON.stringify([currentId, buildB, buildA])));
+              navigator.serviceWorker.controller.postMessage({ type: 'report_build_lease', buildId: buildA });
+              return { currentId, buildB, buildA, chunk };
+            }"""
+        )
+        await lease_page.wait_for_timeout(200)
+        leased_chunk = await lease_page.evaluate(
+            """async ({ chunk }) => fetch(chunk).then((response) => response.text())""",
+            lease_state,
+        )
+        if leased_chunk != "leased-a-chunk":
+            raise AssertionError("active build A lease did not preserve its lazy chunk through build C")
+        checks["activeClientCacheLeaseRetained"] = "PASS"
+        await lease_page.close()
+        await page.wait_for_timeout(200)
+
+        await page.evaluate(
+            """async ({ currentId, buildA }) => {
+              const metadata = await caches.open('deepseek-workspace-root-build-history');
+              const response = await metadata.match('leases');
+              const leases = response ? await response.json() : {};
+              for (const lease of Object.values(leases)) {
+                if (lease.buildId === buildA) lease.lastSeenAt = 0;
+              }
+              await metadata.put('leases', new Response(JSON.stringify(leases)));
+              navigator.serviceWorker.controller.postMessage({ type: 'report_build_lease', buildId: currentId });
+            }""",
+            lease_state,
+        )
+        await page.wait_for_function(
+            """async ({ buildA }) => !(await caches.keys()).includes(`deepseek-react-root-${buildA}`)""",
+            lease_state,
+            timeout=10_000,
+        )
+        remaining_build_caches = await page.evaluate(
+            """async () => (await caches.keys()).filter((name) => name.startsWith('deepseek-react-root-'))"""
+        )
+        if len(remaining_build_caches) > 2:
+            raise AssertionError(f"unleased build caches exceeded current plus previous: {remaining_build_caches}")
+        checks["expiredClientCacheLeasePruned"] = "PASS"
 
         for effective_type, check_name, save_data in (
             ("4g", "optionalWarmRespectsSaveData", True),
