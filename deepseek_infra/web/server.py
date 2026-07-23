@@ -1051,8 +1051,8 @@ def resolve_static_file(raw_path: str) -> Path | None:
         return None
     if parts == ["ui"]:
         return frontend_index_path()
-    if parts == ["sw.js"]:
-        react_sw = STATIC_DIR / "ui" / "sw-root.js"
+    if len(parts) == 1 and re.fullmatch(r"sw-([0-9a-f]{16})\.js", parts[0]):
+        react_sw = STATIC_DIR / "ui" / f"sw-root-{parts[0][3:]}"
         return react_sw if react_sw.is_file() else None
     if parts == ["manifest.webmanifest"]:
         react_manifest = STATIC_DIR / "ui" / "manifest-root.webmanifest"

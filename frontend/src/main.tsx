@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./app/App";
-import { scheduleWorkspaceOfflineWarmup } from "./app/workspaceOfflineWarmup";
+import { startWorkspaceServiceWorkerRuntime } from "./app/serviceWorkerRegistration";
 import "./shared/styles/app.css";
 import "./shared/styles/workspace-drawer-frame.css";
 
@@ -23,13 +23,12 @@ createRoot(root).render(
 
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    const atRoot = !window.location.pathname.startsWith("/ui/");
-    navigator.serviceWorker
-      .register(atRoot ? "/sw.js" : "/ui/sw.js", { scope: atRoot ? "/" : "/ui/" })
-      .then(() => navigator.serviceWorker.ready)
-      .then((registration) => {
-        scheduleWorkspaceOfflineWarmup(registration, navigator, window);
-      })
-      .catch(() => undefined);
+    void startWorkspaceServiceWorkerRuntime({
+      container: navigator.serviceWorker,
+      navigatorValue: navigator,
+      windowValue: window,
+      documentValue: document,
+      pageBuildId: __APP_BUILD_ID__,
+    }).catch(() => undefined);
   });
 }

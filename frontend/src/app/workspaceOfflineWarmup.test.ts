@@ -2,16 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 
 import { scheduleWorkspaceOfflineWarmup } from "./workspaceOfflineWarmup";
 
-function registration(postMessage = vi.fn()) {
-  return { active: { postMessage } };
-}
+const identity = {
+  type: "build_identity" as const,
+  buildId: "0123456789abcdef",
+  assetSetDigest: "a".repeat(64),
+  cacheReady: true,
+};
 
 describe("Workspace offline warmup", () => {
   it("does not warm on Save-Data connections", () => {
     const postMessage = vi.fn();
     const requestIdleCallback = vi.fn();
     expect(scheduleWorkspaceOfflineWarmup(
-      registration(postMessage),
+      { postMessage },
+      identity,
       { connection: { saveData: true, effectiveType: "4g" } },
       { requestIdleCallback, setTimeout: vi.fn() },
     )).toBe(false);
@@ -23,7 +27,8 @@ describe("Workspace offline warmup", () => {
     const postMessage = vi.fn();
     const requestIdleCallback = vi.fn();
     expect(scheduleWorkspaceOfflineWarmup(
-      registration(postMessage),
+      { postMessage },
+      identity,
       { connection: { effectiveType } },
       { requestIdleCallback, setTimeout: vi.fn() },
     )).toBe(false);
@@ -39,13 +44,36 @@ describe("Workspace offline warmup", () => {
       return 1;
     });
     expect(scheduleWorkspaceOfflineWarmup(
-      registration(postMessage),
+      { postMessage },
+      identity,
       { connection: { effectiveType: "4g" } },
       { requestIdleCallback, setTimeout: vi.fn() },
     )).toBe(true);
     expect(requestIdleCallback).toHaveBeenCalledWith(expect.any(Function), { timeout: 5000 });
     expect(postMessage).not.toHaveBeenCalled();
     idleCallback?.();
-    expect(postMessage).toHaveBeenCalledWith({ type: "cache_workspace_primary" });
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "cache_workspace_primary",
+      buildId: identity.buildId,
+      assetSetDigest: identity.assetSetDigest,
+    });
+  });
+
+  it("does not post to a controller that stopped controlling the page while idle", () => {
+    const postMessage = vi.fn();
+    let idleCallback: (() => void) | undefined;
+    const requestIdleCallback = vi.fn((callback: () => void) => {
+      idleCallback = callback;
+      return 1;
+    });
+    expect(scheduleWorkspaceOfflineWarmup(
+      { postMessage },
+      identity,
+      {},
+      { requestIdleCallback, setTimeout: vi.fn() },
+      () => false,
+    )).toBe(true);
+    idleCallback?.();
+    expect(postMessage).not.toHaveBeenCalled();
   });
 });

@@ -32,11 +32,18 @@ def test_react_root_pwa_sources_are_owned_by_frontend_build() -> None:
     root_worker = read("frontend/public/sw-root.js")
     root_manifest = read("frontend/public/manifest-root.webmanifest")
     main = read("frontend/src/main.tsx")
+    registration = read("frontend/src/app/serviceWorkerRegistration.ts")
 
     assert '<link rel="manifest" href="/manifest.webmanifest" />' in index
-    assert 'register(atRoot ? "/sw.js" : "/ui/sw.js"' in main
+    assert "startWorkspaceServiceWorkerRuntime" in main
+    assert "`/sw-${pageBuildId}.js`" in registration
+    assert "`/ui/sw-${pageBuildId}.js`" in registration
+    assert 'updateViaCache: "none"' in registration
+    assert "container.controller" in registration
     assert 'const CACHE_PREFIX = "deepseek-react-root-' in root_worker
-    assert 'const ASSET_MANIFEST_URL = "/ui/workspace-assets.json"' in root_worker
+    assert 'const WORKER_BUILD_ID = "__DEEPSEEK_WORKER_BUILD_ID__"' in root_worker
+    assert 'const ASSET_MANIFEST_URL = "__DEEPSEEK_WORKER_MANIFEST_URL__"' in root_worker
+    assert "manifest.buildId !== WORKER_BUILD_ID" in root_worker
     assert 'data.type === "cache_workspace_primary"' in root_worker
     assert "manifest.offlinePrimary || []" in root_worker
     assert "limit = 3" in root_worker

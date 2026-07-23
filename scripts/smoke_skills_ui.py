@@ -87,10 +87,11 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     checks["reactPwaOwnership"] = "PASS" if _contains_all(
         main + root_worker,
         (
-            'register(atRoot ? "/sw.js" : "/ui/sw.js"',
+            "startWorkspaceServiceWorkerRuntime",
             'const CACHE_PREFIX = "deepseek-react-root-',
-            'const ASSET_MANIFEST_URL = "/ui/workspace-assets.json"',
-            "staleWhileRevalidate",
+            'const WORKER_BUILD_ID = "__DEEPSEEK_WORKER_BUILD_ID__"',
+            'const ASSET_MANIFEST_URL = "__DEEPSEEK_WORKER_MANIFEST_URL__"',
+            "cacheFirstByBuild",
         ),
     ) else "FAIL"
     checks["frontendTypecheckGate"] = "PASS" if _contains_all(

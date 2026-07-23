@@ -12,8 +12,15 @@ interface WarmupWindow {
   setTimeout(callback: () => void, timeout: number): number;
 }
 
-interface WarmupRegistration {
-  active: { postMessage(message: unknown): void } | null;
+interface WarmupController {
+  postMessage(message: unknown): void;
+}
+
+export interface WorkerBuildIdentity {
+  type: "build_identity";
+  buildId: string;
+  assetSetDigest: string;
+  cacheReady: boolean;
 }
 
 export function shouldWarmWorkspaceAssets(navigatorValue: object): boolean {
@@ -22,17 +29,28 @@ export function shouldWarmWorkspaceAssets(navigatorValue: object): boolean {
   return !["slow-2g", "2g"].includes(connection?.effectiveType?.toLowerCase() ?? "");
 }
 
-export function warmWorkspaceAssets(registration: WarmupRegistration): void {
-  registration.active?.postMessage({ type: "cache_workspace_primary" });
+export function warmWorkspaceAssets(
+  controller: WarmupController,
+  identity: WorkerBuildIdentity,
+): void {
+  controller.postMessage({
+    type: "cache_workspace_primary",
+    buildId: identity.buildId,
+    assetSetDigest: identity.assetSetDigest,
+  });
 }
 
 export function scheduleWorkspaceOfflineWarmup(
-  registration: WarmupRegistration,
+  controller: WarmupController,
+  identity: WorkerBuildIdentity,
   navigatorValue: object,
   windowValue: WarmupWindow,
+  controllerIsCurrent: () => boolean = () => true,
 ): boolean {
   if (!shouldWarmWorkspaceAssets(navigatorValue)) return false;
-  const warm = () => warmWorkspaceAssets(registration);
+  const warm = () => {
+    if (controllerIsCurrent()) warmWorkspaceAssets(controller, identity);
+  };
   if (windowValue.requestIdleCallback) {
     windowValue.requestIdleCallback(warm, { timeout: 5000 });
   } else {
