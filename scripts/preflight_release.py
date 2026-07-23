@@ -1189,6 +1189,21 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
                 "projectDeletionBlocksBinding",
             ]
         )
+    if _version_tuple(version) >= (4, 3, 0):
+        required.extend(
+            [
+                "workspaceOptionalChunksDeferred",
+                "workspaceFeatureLoadsOnDemand",
+                "workspaceFeaturePreloadsOnIntent",
+                "preloadDoesNotStartQueries",
+                "skillsQueryDeferred",
+                "memoryListQueryDeferred",
+                "latestOverlayWinsDuringLoad",
+                "lazyMutationSurvivesClose",
+                "workspaceChunkFailureContained",
+                "offlineUnopenedFeatureAvailable",
+            ]
+        )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(
@@ -1237,12 +1252,28 @@ def check_frontend_bundle_evidence(root: Path, version: str) -> CheckResult:
         )
     checks = data.get("checks")
     check_status = {str(k): str(v).upper() for k, v in checks.items()} if isinstance(checks, dict) else {}
-    required = (
+    required = [
         "tracePageDynamicEntry",
         "traceDetailDynamicEntry",
         "traceImplementationDeferred",
         "traceCssDeferred",
-    )
+    ]
+    if _version_tuple(version) >= (4, 3, 0):
+        required.extend(
+            [
+                "workspaceProjectsDynamicEntry",
+                "workspaceSkillsDynamicEntry",
+                "workspaceMemoryDynamicEntry",
+                "workspaceSettingsDynamicEntry",
+                "workspaceUtilitiesDynamicEntry",
+                "workspaceOptionalCssDeferred",
+                "initialBundleReducedFrom428",
+                "initialBundleBudget",
+                "initialCssBudget",
+                "optionalFeatureChunkBudget",
+                "workspaceOfflineAssetManifest",
+            ]
+        )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(

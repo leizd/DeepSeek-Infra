@@ -16,8 +16,8 @@ vi.mock("../../contexts/OverlayContext", () => ({
   }),
 }));
 
-vi.mock("../../contexts/MemoryContext", () => ({
-  useMemory: () => ({
+vi.mock("../../contexts/MemoryListContext", () => ({
+  useMemoryList: () => ({
     memories: [],
     loading: false,
     refreshing: false,

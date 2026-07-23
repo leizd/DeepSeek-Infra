@@ -1,5 +1,5 @@
 import { useOverlay } from "../../contexts/OverlayContext";
-import { useMemory } from "../../contexts/MemoryContext";
+import { useMemoryList } from "../../contexts/MemoryListContext";
 import { Icon } from "../../shared/ui/Icon";
 import { runUiAction } from "../../shared/runUiAction";
 
@@ -12,7 +12,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export function MemoryDrawer() {
   const overlay = useOverlay();
-  const memory = useMemory();
+  const memory = useMemoryList();
   const open = overlay.activeOverlay === "memory";
 
   if (!open) return null;

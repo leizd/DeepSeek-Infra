@@ -32,7 +32,14 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
     api = _read("frontend/src/api/skillsApi.ts")
     projects = _read("frontend/src/features/projects/ProjectsDrawer.tsx")
     history = _read("frontend/src/features/history/HistoryDrawer.tsx")
-    styles = _read("frontend/src/shared/styles/app.css")
+    skill_feature = _read("frontend/src/features/skills/SkillsFeature.tsx")
+    styles = "\n".join(
+        (
+            _read("frontend/src/shared/styles/workspace-drawer-frame.css"),
+            _read("frontend/src/features/workspace/workspace-optional.css"),
+            _read("frontend/src/features/skills/skills.css"),
+        )
+    )
     main = _read("frontend/src/main.tsx")
     root_worker = _read("frontend/public/sw-root.js")
     ci = _read(".github/workflows/ci.yml")
@@ -66,12 +73,25 @@ def run_checks() -> tuple[dict[str, str], dict[str, Any]]:
         ('activeOverlay !== "skills"', "overlay.closeOverlay", 'role="dialog"', 'aria-modal="true"'),
     ) else "FAIL"
     checks["skillPanelStyles"] = "PASS" if _contains_all(
-        styles,
-        (".workspace-drawer", ".workspace-toolbar", ".skill-list", ".skill-card", ".skill-form"),
+        styles + skill_feature,
+        (
+            ".settings-drawer",
+            ".workspace-toolbar",
+            ".skill-list",
+            ".skill-card",
+            ".skill-form",
+            'import "../workspace/workspace-optional.css"',
+            'import "./skills.css"',
+        ),
     ) else "FAIL"
     checks["reactPwaOwnership"] = "PASS" if _contains_all(
         main + root_worker,
-        ('register(atRoot ? "/sw.js" : "/ui/sw.js"', 'const CACHE_NAME = "deepseek-react-root-', "staleWhileRevalidate"),
+        (
+            'register(atRoot ? "/sw.js" : "/ui/sw.js"',
+            'const CACHE_PREFIX = "deepseek-react-root-',
+            'const ASSET_MANIFEST_URL = "/ui/workspace-assets.json"',
+            "staleWhileRevalidate",
+        ),
     ) else "FAIL"
     checks["frontendTypecheckGate"] = "PASS" if _contains_all(
         ci,

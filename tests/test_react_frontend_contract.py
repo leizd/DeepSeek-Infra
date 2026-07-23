@@ -13,7 +13,7 @@ def read(path: str) -> str:
 
 def test_react_frontend_is_an_isolated_versioned_build() -> None:
     package = json.loads(read("frontend/package.json"))
-    assert package["version"] == "4.2.8"
+    assert package["version"] == "4.3.0"
     assert package["engines"]["node"] == ">=22.12.0"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test"] == "vitest run"
@@ -140,4 +140,68 @@ def test_browser_gate_covers_react_chat_trace_history_stop_and_spa_fallback() ->
     assert "projects/example" in smoke
     assert 'get_by_role("heading", name="Waterfall")' in smoke
     for check in ("reactOnlyRoot", "legacyRouteRetired", "rootSpaDeepLink", "reactTraceRouteRefresh", "traceChunkDeferred", "traceRouteProviderIsolation", "reactChatVerticalSlice", "reactHistoryPersistence", "reactStopGeneration"):
+        assert f'"{check}"' in preflight
+
+
+def test_workspace_demand_loading_has_one_registry_and_deferred_providers() -> None:
+    registry = read("frontend/src/features/workspace/workspaceFeatureRegistry.ts")
+    hosts = read("frontend/src/features/workspace/WorkspaceFeatureHosts.tsx")
+    providers = read("frontend/src/app/AppProviders.tsx")
+    chat = read("frontend/src/features/chat/ChatPage.tsx")
+    memory = read("frontend/src/contexts/MemoryContext.tsx")
+    memory_list = read("frontend/src/contexts/MemoryListContext.tsx")
+    main = read("frontend/src/main.tsx")
+    vite = read("frontend/vite.config.ts")
+
+    for feature in (
+        "settings",
+        "projects",
+        "skills",
+        "memory",
+        "reminders",
+        "diagnostics",
+        "file-preview",
+        "image-lightbox",
+        "activity",
+    ):
+        assert f'"{feature}"' in registry
+    assert "preloadWorkspaceFeature" in registry
+    assert "retryWorkspaceFeature" in registry
+    assert "WorkspaceFeatureBoundary" in hosts
+    assert "SkillsRuntimeBoundary" in hosts
+    assert "MemoryListProvider" not in memory
+    assert "MemoryListProvider" in memory_list
+    assert "SkillsProvider" not in providers
+    assert "WorkspaceOverlayHost" in chat
+    assert "ContextualFeatureHost" in chat
+    assert 'postMessage({ type: "cache_optional_workspace" })' in main
+    assert '"workspace-assets.json"' in vite
+
+
+def test_workspace_release_gates_cover_demand_loading_budgets_and_browser_behavior() -> None:
+    bundle = read("scripts/check_frontend_bundle.py")
+    browser = read("scripts/smoke_frontend_browser.py")
+    preflight = read("scripts/preflight_release.py")
+
+    for contract in (
+        "BASELINE_428_INITIAL_BYTES = 425_914",
+        "MAX_INITIAL_BYTES = 390_000",
+        "MAX_INITIAL_CSS_BYTES = 28_000",
+        "MAX_OPTIONAL_CHUNK_BYTES = 90_000",
+        "MINIMUM_REDUCTION_PERCENT = 8",
+    ):
+        assert contract in bundle
+    for check in (
+        "workspaceOptionalChunksDeferred",
+        "workspaceFeatureLoadsOnDemand",
+        "workspaceFeaturePreloadsOnIntent",
+        "preloadDoesNotStartQueries",
+        "skillsQueryDeferred",
+        "memoryListQueryDeferred",
+        "latestOverlayWinsDuringLoad",
+        "lazyMutationSurvivesClose",
+        "workspaceChunkFailureContained",
+        "offlineUnopenedFeatureAvailable",
+    ):
+        assert f'checks["{check}"] = "PASS"' in browser
         assert f'"{check}"' in preflight

@@ -1,15 +1,15 @@
 import { createContext, useContext, type PropsWithChildren } from "react";
 
-import { useMemoryController, type MemoryController } from "../features/memory/useMemoryController";
+import { useMemoryWriteController, type MemoryWriteController } from "../features/memory/useMemoryWriteController";
 
-const MemoryContext = createContext<MemoryController | null>(null);
+const MemoryContext = createContext<MemoryWriteController | null>(null);
 
 export function MemoryProvider({ children }: PropsWithChildren) {
-  const value = useMemoryController();
+  const value = useMemoryWriteController();
   return <MemoryContext.Provider value={value}>{children}</MemoryContext.Provider>;
 }
 
-export function useMemory(): MemoryController {
+export function useMemory(): MemoryWriteController {
   const value = useContext(MemoryContext);
   if (!value) throw new Error("useMemory must be used inside MemoryProvider");
   return value;

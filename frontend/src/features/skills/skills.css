@@ -1,0 +1,11 @@
+.skill-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.skill-card { padding: 12px; border: 1px solid var(--hairw); background: var(--paper); }
+.skill-card.disabled { opacity: 0.6; }
+.skill-card-header { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; }
+.skill-card-header strong { color: var(--ink); font-family: var(--serif); font-size: 0.86rem; }
+.skill-card-header p { margin: 4px 0 0; color: var(--weak); font-size: 0.72rem; }
+.skill-card-header .conversation-item-actions { flex-shrink: 0; }
+.skill-form { display: grid; gap: 8px; margin: 12px 0; }
+.skill-form input, .skill-form textarea { width: 100%; padding: 10px 11px; border: 1px solid var(--hairw); outline: none; color: var(--ink); background: var(--paper); font-size: 0.78rem; }
+.skill-form input:focus, .skill-form textarea:focus { border-color: var(--ink); }
+.skill-form textarea { resize: vertical; line-height: 1.55; }

@@ -1966,3 +1966,101 @@ def test_frontend_bundle_evidence_requires_all_decomposition_checks(tmp_path: Pa
     result = preflight.check_frontend_bundle_evidence(tmp_path, "4.1.0")
     assert result.status == "fail"
     assert "traceCssDeferred" in result.detail
+
+
+def test_frontend_browser_evidence_requires_workspace_demand_loading_checks_from_4_3_0(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    evidence = tmp_path / "docs" / "evidence"
+    evidence.mkdir(parents=True)
+    path = evidence / "frontend-browser-v4.3.0.json"
+    required = {
+        "cspHeader",
+        "reactOnlyRoot",
+        "legacyRouteRetired",
+        "uploadCancel",
+        "rootSpaDeepLink",
+        "reactChatVerticalSlice",
+        "reactHistoryPersistence",
+        "reactStopGeneration",
+        "completeAppShell",
+        "offlineRefresh",
+        "noCspConsoleErrors",
+        "reactTraceRouteRefresh",
+        "traceChunkDeferred",
+        "traceRouteProviderIsolation",
+        "traceRetryRecovery",
+        "crossEntityBlockerAttributed",
+        "crossEntityConflictPersists",
+        "exactBlockerSettlementClears",
+        "projectBindingBlocksDeletion",
+        "projectDeletionBlocksBinding",
+        "workspaceOptionalChunksDeferred",
+        "workspaceFeatureLoadsOnDemand",
+        "workspaceFeaturePreloadsOnIntent",
+        "preloadDoesNotStartQueries",
+        "skillsQueryDeferred",
+        "memoryListQueryDeferred",
+        "latestOverlayWinsDuringLoad",
+        "lazyMutationSurvivesClose",
+        "workspaceChunkFailureContained",
+        "offlineUnopenedFeatureAvailable",
+    }
+    payload: dict[str, Any] = {
+        "version": "4.3.0",
+        "commit": "abc1234",
+        "generatedAt": "2026-07-23T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": "PASS",
+        "browser": "chromium",
+        "checks": {name: "PASS" for name in required if name != "preloadDoesNotStartQueries"},
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.3.0")
+    assert result.status == "fail"
+    assert "preloadDoesNotStartQueries" in result.detail
+
+    payload["checks"]["preloadDoesNotStartQueries"] = "PASS"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert preflight.check_frontend_browser_evidence(tmp_path, "4.3.0").status == "pass"
+
+
+def test_frontend_bundle_evidence_requires_workspace_budgets_from_4_3_0(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    evidence = tmp_path / "docs" / "evidence"
+    evidence.mkdir(parents=True)
+    path = evidence / "frontend-bundle-v4.3.0.json"
+    required = {
+        "tracePageDynamicEntry",
+        "traceDetailDynamicEntry",
+        "traceImplementationDeferred",
+        "traceCssDeferred",
+        "workspaceProjectsDynamicEntry",
+        "workspaceSkillsDynamicEntry",
+        "workspaceMemoryDynamicEntry",
+        "workspaceSettingsDynamicEntry",
+        "workspaceUtilitiesDynamicEntry",
+        "workspaceOptionalCssDeferred",
+        "initialBundleReducedFrom428",
+        "initialBundleBudget",
+        "initialCssBudget",
+        "optionalFeatureChunkBudget",
+        "workspaceOfflineAssetManifest",
+    }
+    payload: dict[str, Any] = {
+        "version": "4.3.0",
+        "commit": "abc1234",
+        "generatedAt": "2026-07-23T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": "PASS",
+        "checks": {name: "PASS" for name in required if name != "initialBundleBudget"},
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = preflight.check_frontend_bundle_evidence(tmp_path, "4.3.0")
+    assert result.status == "fail"
+    assert "initialBundleBudget" in result.detail
+
+    payload["checks"]["initialBundleBudget"] = "PASS"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert preflight.check_frontend_bundle_evidence(tmp_path, "4.3.0").status == "pass"

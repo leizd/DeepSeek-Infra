@@ -35,7 +35,9 @@ def test_react_root_pwa_sources_are_owned_by_frontend_build() -> None:
 
     assert '<link rel="manifest" href="/manifest.webmanifest" />' in index
     assert 'register(atRoot ? "/sw.js" : "/ui/sw.js"' in main
-    assert 'const CACHE_NAME = "deepseek-react-root-' in root_worker
+    assert 'const CACHE_PREFIX = "deepseek-react-root-' in root_worker
+    assert 'const ASSET_MANIFEST_URL = "/ui/workspace-assets.json"' in root_worker
+    assert 'data.type === "cache_optional_workspace"' in root_worker
     assert 'url.pathname.startsWith("/api/")' in root_worker
     assert '"start_url": "/"' in root_manifest
     assert '"scope": "/"' in root_manifest

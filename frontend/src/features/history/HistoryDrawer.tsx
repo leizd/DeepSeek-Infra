@@ -2,6 +2,15 @@ import { useChat } from "../../contexts/ChatContext";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { ConversationList } from "./ConversationList";
 import { Icon } from "../../shared/ui/Icon";
+import { preloadWorkspaceFeature, type WorkspaceFeature } from "../workspace/workspaceFeatureRegistry";
+
+function intentPreload(feature: WorkspaceFeature) {
+  return {
+    onPointerEnter: () => void preloadWorkspaceFeature(feature),
+    onFocus: () => void preloadWorkspaceFeature(feature),
+    onTouchStart: () => void preloadWorkspaceFeature(feature),
+  };
+}
 
 export function HistoryDrawer() {
   const chat = useChat();
@@ -25,10 +34,10 @@ export function HistoryDrawer() {
         <span className="swap"><span className="a">新对话</span><span className="b">↗</span></span>
       </button>
       <div className="workspace-nav">
-        <button type="button" onClick={() => overlay.openOverlay("projects")}>项目</button>
-        <button type="button" onClick={() => overlay.openOverlay("skills")}>技能</button>
-        <button type="button" onClick={() => overlay.openOverlay("memory")}>记忆</button>
-        <button type="button" onClick={() => overlay.openOverlay("reminders")}>提醒</button>
+        <button type="button" {...intentPreload("projects")} onClick={() => overlay.openOverlay("projects")}>项目</button>
+        <button type="button" {...intentPreload("skills")} onClick={() => overlay.openOverlay("skills")}>技能</button>
+        <button type="button" {...intentPreload("memory")} onClick={() => overlay.openOverlay("memory")}>记忆</button>
+        <button type="button" {...intentPreload("reminders")} onClick={() => overlay.openOverlay("reminders")}>提醒</button>
       </div>
       <ConversationList />
       <div className="history-footer">

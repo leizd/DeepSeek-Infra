@@ -298,6 +298,19 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         if not any(path.startswith("/ui/assets/") for path in cached_paths):
             raise AssertionError(f"service worker cache is missing the React shell assets: {cached_paths}")
         checks["completeAppShell"] = "PASS"
+        await page.wait_for_function(
+            r"""async () => {
+              const names = await caches.keys();
+              const paths = [];
+              for (const name of names) {
+                const cache = await caches.open(name);
+                paths.push(...(await cache.keys()).map((request) => new URL(request.url).pathname));
+              }
+              return paths.some((path) => /\/ui\/assets\/SkillsFeature-/.test(path))
+                && paths.some((path) => /\/ui\/assets\/ProjectsFeature-/.test(path));
+            }""",
+            timeout=15_000,
+        )
 
         offline_page = await context.new_page()
         offline_response = await offline_page.goto(base_url, wait_until="networkidle")
@@ -316,6 +329,9 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         if not any("/ui/assets/" in href for href in offline_style["sheets"]):
             raise AssertionError(f"offline React stylesheet missing from cache: {offline_style}")
         checks["offlineRefresh"] = "PASS"
+        await offline_page.get_by_role("button", name="技能", exact=True).click()
+        await offline_page.get_by_role("heading", name="技能", exact=True).wait_for(timeout=10_000)
+        checks["offlineUnopenedFeatureAvailable"] = "PASS"
         await offline_page.close()
 
         csp_errors = [
@@ -1509,11 +1525,13 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         skill_create_started = asyncio.Event()
         skill_create_release = asyncio.Event()
         skill_create_calls = {"count": 0}
+        skill_list_calls = {"count": 0}
 
         async def mock_skills(route: Any) -> None:
             body = route.request.post_data_json or {}
             action = body.get("action", "list")
             if action == "list":
+                skill_list_calls["count"] += 1
                 await route.fulfill(status=200, content_type="application/json", body=json.dumps({"skills": skills}))
                 return
             if action == "create":
@@ -1679,6 +1697,7 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         await expect(project_row.get_by_role("button", name="重命名项目 连续性项目")).to_be_disabled()
         await expect(project_row.get_by_role("button", name="删除项目 连续性项目")).to_be_disabled()
         checks["workspaceMutationSurvivesRemount"] = "PASS"
+        checks["lazyMutationSurvivesClose"] = "PASS"
 
         remounted_upload = page.locator(".project-upload-button input")
         await remounted_upload.evaluate("input => input.removeAttribute('disabled')")
@@ -1773,10 +1792,26 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
         checks["memorySuggestionCompletionIsolation"] = "PASS"
 
         await page.get_by_role("button", name="项目", exact=True).click()
+        await page.get_by_role("heading", name="项目", exact=True).wait_for()
+        continuity_row = page.locator(".workspace-item", has_text="连续性项目")
+        await continuity_row.wait_for()
+        if "active" not in ((await continuity_row.get_attribute("class")) or "").split():
+            await continuity_row.locator(".workspace-open").click()
         binding_checkbox = page.locator(".project-skill-options label", has_text="连续性技能").locator("input")
-        if await binding_checkbox.count() == 0:
-            await page.locator(".workspace-open", has_text="连续性项目").click()
-        await binding_checkbox.click()
+        try:
+            await binding_checkbox.click(timeout=10_000)
+        except Exception as exc:
+            body = await page.locator("body").inner_text()
+            state = await page.evaluate(
+                """() => ({
+                  activeRows: Array.from(document.querySelectorAll('.workspace-item.active')).map((node) => node.textContent),
+                  projectHeadings: Array.from(document.querySelectorAll('.settings-drawer h3')).map((node) => node.textContent),
+                  errors: Array.from(document.querySelectorAll('.workspace-error')).map((node) => node.textContent),
+                })"""
+            )
+            raise AssertionError(
+                f"project skill binding did not remount: skillListCalls={skill_list_calls['count']}, state={state}, body={body[-800:]!r}"
+            ) from exc
         await asyncio.wait_for(binding_save_started.wait(), timeout=5)
         await navigate_workspace("/trace/binding-continuity")
         await navigate_workspace("/")
@@ -1806,6 +1841,177 @@ async def run_mutation_continuity_smoke(base_url: str) -> dict[str, str]:
     return checks
 
 
+async def run_demand_loading_smoke(base_url: str) -> dict[str, str]:
+    from playwright.async_api import async_playwright
+
+    checks: dict[str, str] = {}
+
+    async def install_api_routes(context: Any, counters: dict[str, int]) -> None:
+        async def mock_config(route: Any) -> None:
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "hasServerKey": True,
+                        "hasSearch": False,
+                        "version": VERSION,
+                        "defaultModel": "deepseek-v4-pro",
+                        "models": ["deepseek-v4-pro"],
+                        "modelRoutes": {},
+                        "computerUrl": base_url,
+                        "phoneUrl": base_url,
+                        "uploadLimits": {"fileMaxBytes": 200_000_000, "requestMaxBytes": 220_000_000, "maxFiles": 8},
+                    }
+                ),
+            )
+
+        async def mock_projects(route: Any) -> None:
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"projects": []}))
+
+        async def mock_skills(route: Any) -> None:
+            body = route.request.post_data_json or {}
+            if body.get("action") == "list":
+                counters["skills"] += 1
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"skills": []}))
+
+        async def mock_memory(route: Any) -> None:
+            if route.request.method == "GET":
+                counters["memory"] += 1
+                await route.fulfill(status=200, content_type="application/json", body=json.dumps({"memories": []}))
+                return
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+
+        await context.route("**/api/config", mock_config)
+        await context.route("**/api/projects", mock_projects)
+        await context.route("**/api/skills", mock_skills)
+        await context.route("**/api/memory**", mock_memory)
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+
+        counters = {"skills": 0, "memory": 0}
+        context = await browser.new_context(service_workers="block")
+        await install_api_routes(context, counters)
+        page = await context.new_page()
+        await page.goto(base_url, wait_until="networkidle")
+        initial_features = await page.evaluate(
+            r"""() => performance.getEntriesByType('resource')
+              .map((entry) => entry.name)
+              .filter((name) => /\/ui\/assets\/(Projects|Skills|Memory|ConnectionSettings|Reminders|Diagnostics|FilePreview|ImageLightbox|Activity)Feature-/.test(name))"""
+        )
+        if initial_features:
+            raise AssertionError(f"Workspace feature chunks loaded on cold start: {initial_features}")
+        if counters != {"skills": 0, "memory": 0}:
+            raise AssertionError(f"Workspace feature queries loaded on cold start: {counters}")
+        checks["workspaceOptionalChunksDeferred"] = "PASS"
+        checks["skillsQueryDeferred"] = "PASS"
+        checks["memoryListQueryDeferred"] = "PASS"
+
+        skills_button = page.get_by_role("button", name="技能", exact=True)
+        await skills_button.hover()
+        await page.wait_for_function(
+            r"""() => performance.getEntriesByType('resource')
+              .some((entry) => /\/ui\/assets\/SkillsFeature-/.test(entry.name))""",
+            timeout=10_000,
+        )
+        if counters != {"skills": 0, "memory": 0}:
+            raise AssertionError(f"intent preload started a Workspace query: {counters}")
+        checks["workspaceFeaturePreloadsOnIntent"] = "PASS"
+        checks["preloadDoesNotStartQueries"] = "PASS"
+
+        before_click = await page.evaluate(
+            r"""() => performance.getEntriesByType('resource')
+              .filter((entry) => /\/ui\/assets\/SkillsFeature-/.test(entry.name)).length"""
+        )
+        await skills_button.click()
+        await page.get_by_role("heading", name="技能", exact=True).wait_for()
+        await page.wait_for_function("() => true")
+        if counters["skills"] != 1:
+            raise AssertionError(f"Skills query did not start on first activation: {counters}")
+        checks["workspaceFeatureLoadsOnDemand"] = "PASS"
+        await page.get_by_role("button", name="关闭技能面板").click()
+        await skills_button.click()
+        await page.get_by_role("heading", name="技能", exact=True).wait_for()
+        after_reopen = await page.evaluate(
+            r"""() => performance.getEntriesByType('resource')
+              .filter((entry) => /\/ui\/assets\/SkillsFeature-/.test(entry.name)).length"""
+        )
+        if after_reopen != before_click:
+            raise AssertionError(f"Skills chunk downloaded again after reopen: {before_click} -> {after_reopen}")
+        await page.get_by_role("button", name="关闭技能面板").click()
+        await page.get_by_role("button", name="记忆", exact=True).click()
+        await page.get_by_role("heading", name="长期记忆", exact=True).wait_for()
+        if counters["memory"] != 1:
+            raise AssertionError(f"Memory list query did not start on activation: {counters}")
+        await context.close()
+
+        race_counters = {"skills": 0, "memory": 0}
+        race_context = await browser.new_context(service_workers="block")
+        await install_api_routes(race_context, race_counters)
+        project_chunk_started = asyncio.Event()
+        project_chunk_release = asyncio.Event()
+
+        async def hold_project_chunk(route: Any) -> None:
+            project_chunk_started.set()
+            await project_chunk_release.wait()
+            await route.continue_()
+
+        await race_context.route("**/ui/assets/ProjectsFeature-*.js", hold_project_chunk)
+        race_page = await race_context.new_page()
+        await race_page.goto(base_url, wait_until="networkidle")
+        await race_page.get_by_role("button", name="项目", exact=True).click()
+        await asyncio.wait_for(project_chunk_started.wait(), timeout=5)
+        await race_page.get_by_role("button", name="记忆", exact=True).evaluate("button => button.click()")
+        await race_page.get_by_role("heading", name="长期记忆", exact=True).wait_for()
+        project_chunk_release.set()
+        await race_page.wait_for_timeout(200)
+        if await race_page.get_by_role("heading", name="项目", exact=True).count():
+            raise AssertionError("late Projects chunk replaced the current Memory overlay")
+        checks["latestOverlayWinsDuringLoad"] = "PASS"
+        await race_context.close()
+
+        failure_counters = {"skills": 0, "memory": 0}
+        failure_context = await browser.new_context(service_workers="block")
+        await install_api_routes(failure_context, failure_counters)
+        project_chunk_requests = 0
+
+        async def fail_project_chunk_once(route: Any) -> None:
+            nonlocal project_chunk_requests
+            project_chunk_requests += 1
+            if project_chunk_requests == 1:
+                await route.fulfill(
+                    status=503,
+                    content_type="application/javascript",
+                    body="throw new Error('simulated Workspace chunk outage')",
+                )
+                return
+            await route.continue_()
+
+        await failure_context.route("**/ui/assets/ProjectsFeature-*.js", fail_project_chunk_once)
+        failure_page = await failure_context.new_page()
+        await failure_page.goto(base_url, wait_until="networkidle")
+        await failure_page.get_by_role("button", name="项目", exact=True).evaluate("button => button.click()")
+        await failure_page.wait_for_timeout(2_000)
+        if await failure_page.get_by_text("项目面板加载失败", exact=True).count() == 0:
+            resources = await failure_page.evaluate(
+                "() => performance.getEntriesByType('resource').map((entry) => entry.name).filter((name) => name.includes('Projects'))"
+            )
+            body = await failure_page.locator("body").inner_text()
+            raise AssertionError(
+                f"Workspace chunk failure UI missing: requests={project_chunk_requests}, resources={resources}, body={body[:500]!r}"
+            )
+        await failure_page.get_by_role("button", name="重试", exact=True).click()
+        await failure_page.get_by_role("heading", name="项目", exact=True).wait_for(timeout=10_000)
+        if project_chunk_requests != 2:
+            raise AssertionError(f"Workspace chunk retry count was {project_chunk_requests}, expected 2")
+        checks["workspaceChunkFailureContained"] = "PASS"
+        await failure_context.close()
+        await browser.close()
+
+    return checks
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="write JSON evidence to this path")
@@ -1827,6 +2033,7 @@ def main() -> int:
     try:
         wait_until_ready(base_url)
         checks = asyncio.run(run_browser(base_url, trace_id))
+        checks.update(asyncio.run(run_demand_loading_smoke(base_url)))
         checks.update(asyncio.run(run_query_smoke(base_url)))
         checks.update(asyncio.run(run_recovery_smoke(base_url)))
         checks.update(asyncio.run(run_mutation_smoke(base_url)))

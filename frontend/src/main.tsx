@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./app/App";
 import "./shared/styles/app.css";
+import "./shared/styles/workspace-drawer-frame.css";
 
 const root = document.getElementById("root");
 
@@ -24,6 +25,12 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
     const atRoot = !window.location.pathname.startsWith("/ui/");
     navigator.serviceWorker
       .register(atRoot ? "/sw.js" : "/ui/sw.js", { scope: atRoot ? "/" : "/ui/" })
+      .then(() => navigator.serviceWorker.ready)
+      .then((registration) => {
+        window.setTimeout(() => {
+          registration.active?.postMessage({ type: "cache_optional_workspace" });
+        }, 0);
+      })
       .catch(() => undefined);
   });
 }
