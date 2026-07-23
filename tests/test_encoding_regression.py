@@ -10,7 +10,7 @@ from scripts import preflight_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "4.2.7"
+VERSION = "4.2.8"
 
 
 def read_text(rel: str) -> str:
@@ -55,16 +55,21 @@ class EncodingRegressionTests(unittest.TestCase):
         ci = read_text(".github/workflows/ci.yml")
         frontend = read_text("frontend/index.html")
 
-        self.assertIn("version-4.2.7-blue", readme)
-        self.assertIn('app_version: str = "4.2.7"', config)
-        self.assertIn("deepseek-infra:4.2.7", dockerfile)
-        self.assertIn('org.opencontainers.image.version="4.2.7"', dockerfile)
-        self.assertIn('versionName "4.2.7"', build_gradle)
-        self.assertIn("versionCode 400022", build_gradle)
-        self.assertIn('<meta name="deepseek-infra-version" content="4.2.7" />', frontend)
-        self.assertIn("## [4.2.7] - Evidence Provenance and Blocker Attribution", changelog)
+        self.assertIn("version-4.2.8-blue", readme)
+        self.assertIn('app_version: str = "4.2.8"', config)
+        self.assertIn("deepseek-infra:4.2.8", dockerfile)
+        self.assertIn('org.opencontainers.image.version="4.2.8"', dockerfile)
+        self.assertIn('versionName "4.2.8"', build_gradle)
+        self.assertIn("versionCode 400023", build_gradle)
+        self.assertIn('<meta name="deepseek-infra-version" content="4.2.8" />', frontend)
+        self.assertIn("## [4.2.8] - Exact-Merge Evidence Assembly", changelog)
         self.assertIn("Personal AI Runtime GA", readme)
-        self.assertIn("python scripts/generate_release_evidence.py --version 4.2.7", ci)
+        self.assertIn("python scripts/generate_release_evidence.py --version 4.2.8", ci)
+        self.assertIn("evidence-context:", ci)
+        self.assertIn("evidence-assembly:", ci)
+        self.assertIn("release-package:", ci)
+        self.assertIn("name: release-evidence-v4.2.8", ci)
+        self.assertNotIn("scripts/release.py --version 4.2.8 --dry-run", ci)
 
     def test_release_docs_are_registered(self) -> None:
         readme = read_text("README.md")
@@ -84,17 +89,17 @@ class EncodingRegressionTests(unittest.TestCase):
             "docs/DEPLOYMENT.md",
             "docs/DEMO_3_0.md",
             "docs/EVIDENCE_INDEX.md",
-            "docs/releases/4.2.7.md",
+            "docs/releases/4.2.8.md",
         ):
             self.assertTrue((ROOT / rel).is_file(), rel)
             self.assertIn(rel, readme)
 
-        self.assertIn("docs/evidence/ga-v4.2.7.json", evidence_index)
-        self.assertIn("docs/evidence/ga-v{APP_VERSION}.json", manifest)
+        self.assertIn("docs/evidence/ga-v4.2.8.json", evidence_index)
+        self.assertIn("evidence_paths(APP_VERSION)", manifest)
         self.assertIn("gaEvidence", manifest)
 
     def test_release_doc_headers_are_readable(self) -> None:
-        header = "\u9002\u7528\u7248\u672c\uff1av4.2.7\u3002"
+        header = "\u9002\u7528\u7248\u672c\uff1av4.2.8\u3002"
         for rel in ("docs/IMPLEMENTATION_STATUS.md", "evals/README.md"):
             self.assertIn(header, read_text(rel))
 
@@ -103,8 +108,8 @@ class EncodingRegressionTests(unittest.TestCase):
 
         index = read_text("docs/EVIDENCE_INDEX.md")
         required = required_evidence_paths(VERSION)
-        self.assertIn("docs/evidence/ga-v4.2.7.json", required)
-        self.assertIn("docs/evidence/frontend-browser-v4.2.7.json", required)
+        self.assertIn("docs/evidence/ga-v4.2.8.json", required)
+        self.assertIn("docs/evidence/frontend-browser-v4.2.8.json", required)
         for rel in required:
             self.assertIn(rel, index, rel)
 

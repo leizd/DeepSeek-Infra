@@ -56,7 +56,13 @@ from deepseek_infra.infra.diagnostics.runtime_doctor import (  # noqa: E402
     STATUS_WARN,
     CheckResult,
 )
-from deepseek_infra.infra.diagnostics.evidence_manifest import validate_evidence_manifest  # noqa: E402
+from deepseek_infra.core.config import APP_VERSION  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_inventory import evidence_paths  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_manifest import (  # noqa: E402
+    validate_evidence_manifest,
+    validate_manifest_checksum,
+)
+from deepseek_infra.infra.diagnostics.release_manifest import DEFAULT_EVIDENCE_PATHS  # noqa: E402
 
 
 def _read(path: Path) -> str:
@@ -414,13 +420,17 @@ def check_ga_evidence_index(root: Path, version: str) -> CheckResult:
 
 def check_ga_release_manifest(root: Path, version: str) -> CheckResult:
     text = _read(root / "deepseek_infra" / "infra" / "diagnostics" / "release_manifest.py")
-    dynamic_path = 'f"docs/evidence/ga-v{APP_VERSION}.json"'
+    dynamic_paths = (
+        'f"docs/evidence/ga-v{APP_VERSION}.json"',
+        'f"docs/evidence/ga-v{version}.json"',
+    )
     literal_path = f"docs/evidence/ga-v{version}.json"
     missing = ["gaEvidence"] if "gaEvidence" not in text else []
-    if dynamic_path not in text and literal_path not in text:
-        missing.append(f"{dynamic_path} or {literal_path}")
-    evidence_manifest_path = 'f"docs/evidence/evidence-manifest-v{APP_VERSION}.json"'
-    if _version_tuple(version) >= (4, 2, 7) and evidence_manifest_path not in text:
+    matched_path = next((path for path in (*dynamic_paths, literal_path) if path in text), "")
+    if not matched_path:
+        missing.append(" or ".join((*dynamic_paths, literal_path)))
+    evidence_manifest_path = f"docs/evidence/evidence-manifest-v{version}.json"
+    if _version_tuple(version) >= (4, 2, 7) and version == APP_VERSION and evidence_manifest_path not in DEFAULT_EVIDENCE_PATHS:
         missing.append(evidence_manifest_path)
     if missing:
         return CheckResult("ga_release_manifest", STATUS_FAIL, "release manifest missing GA evidence fields", {"missing": missing})
@@ -429,9 +439,33 @@ def check_ga_release_manifest(root: Path, version: str) -> CheckResult:
         STATUS_PASS,
         "release manifest includes gaEvidence",
         {
-            "checked": ["gaEvidence", dynamic_path if dynamic_path in text else literal_path]
+            "checked": ["gaEvidence", matched_path]
             + ([evidence_manifest_path] if _version_tuple(version) >= (4, 2, 7) else []),
         },
+    )
+
+
+def check_evidence_inventory_alignment(version: str) -> CheckResult:
+    expected = (
+        *evidence_paths(version),
+        f"docs/evidence/evidence-source-context-v{version}.json",
+        f"docs/evidence/evidence-manifest-v{version}.json",
+        f"docs/evidence/evidence-manifest-v{version}.json.sha256",
+    )
+    if version != APP_VERSION:
+        return CheckResult("evidence_inventory", STATUS_PASS, "historical version inventory is not re-expanded", {"version": version})
+    if tuple(DEFAULT_EVIDENCE_PATHS) != expected:
+        return CheckResult(
+            "evidence_inventory",
+            STATUS_FAIL,
+            "release manifest inventory differs from centralized EvidenceSpec inventory",
+            {"expected": list(expected), "actual": list(DEFAULT_EVIDENCE_PATHS)},
+        )
+    return CheckResult(
+        "evidence_inventory",
+        STATUS_PASS,
+        f"release manifest and Evidence manifest share {len(expected)} inventory paths",
+        {"paths": list(expected)},
     )
 
 
@@ -2013,12 +2047,14 @@ def _git_head(root: Path) -> str:
 
 def check_evidence_provenance(root: Path, version: str, expected_revision: str = "") -> CheckResult:
     revision = expected_revision or _git_head(root)
-    errors = validate_evidence_manifest(
+    manifest_path = root / "docs" / "evidence" / f"evidence-manifest-v{version}.json"
+    errors = validate_manifest_checksum(manifest_path)
+    errors.extend(validate_evidence_manifest(
         root,
         version=version,
         expected_revision=revision,
         github_sha=os.environ.get("GITHUB_SHA") or None,
-    )
+    ))
     if errors:
         return CheckResult(
             "evidence_provenance",
@@ -2082,6 +2118,7 @@ def run_preflight(
         check_skill_security_evidence(root, version),
         check_skill_catalog_evidence(root, version),
         check_gui_interop_evidence(root),
+        check_evidence_inventory_alignment(version),
     ]
     if ga:
         results.extend(

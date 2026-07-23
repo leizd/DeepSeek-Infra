@@ -5,24 +5,25 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.2.7-blue)
+![Version](https://img.shields.io/badge/version-4.2.8-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.2.7 at a glance
+## 4.2.8 at a glance
 
-- Coordination conflicts identify the exact blocking lifecycle, including cross-entity Memory barriers, and expire only when that blocker settles.
-- Project deletion and project-binding saves block one another for the same project without coupling rename or upload work.
-- One clean Evidence Source Context binds every release report to the candidate revision that was actually tested.
-- Strict provenance preflight verifies PASS status, clean source identity, CI revision binding and a per-file SHA-256 Evidence manifest.
+- CI captures one schema-v2 Evidence Source Context and gives the same immutable exact-merge identity to every producer.
+- Each producer writes its own provenance into an isolated Artifact; the final assembly rejects missing files, collisions, ownership drift, non-PASS reports and revision or CI mismatches.
+- A detached SHA-256 protects the assembled Evidence manifest, and the release manifest records its revision, entry count and digest.
+- The real release ZIP is rebuilt from assembled Evidence and rechecked for byte identity, revision binding, exclusions and unlisted current-version reports.
+- The 4.2.7 frontend behavior and frozen 4.0 runtime contracts remain unchanged.
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.2.7 release notes](docs/releases/4.2.7.md), [frontend boundaries](docs/FRONTEND_MODULES.md), [upgrade guidance](docs/UPGRADING_TO_4_0.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.2.8 release notes](docs/releases/4.2.8.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -82,7 +83,7 @@ npm run check --prefix frontend
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.2.7 --ga
+python scripts/preflight_release.py --version 4.2.8 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

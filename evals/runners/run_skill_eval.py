@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 from deepseek_infra.infra.skills import eval as skill_eval  # noqa: E402
 from scripts.smoke_skills import patch_runtime  # noqa: E402
 
@@ -39,13 +40,14 @@ def build_report(
     baseline_path: str = "",
 ) -> dict[str, Any]:
     baseline = _load_json(baseline_path)
-    return skill_eval.build_skill_eval_report(
+    report = skill_eval.build_skill_eval_report(
         version=version,
         scope=scope,
         skill_id=skill_id,
         pack_id=pack_id,
         baseline=baseline,
     )
+    return {**report, **evidence_revision(REPO_ROOT)}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

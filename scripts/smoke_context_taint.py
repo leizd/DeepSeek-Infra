@@ -20,6 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
+
 
 def git_short_sha() -> str:
     result = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, check=False, capture_output=True, text=True)
@@ -167,9 +169,11 @@ def run_smoke() -> tuple[dict[str, str], dict[str, Any]]:
 
 def build_evidence(checks: dict[str, str], details: dict[str, Any]) -> dict[str, Any]:
     status = "PASS" if all(value == "PASS" for value in checks.values()) else "FAIL"
+    revision = evidence_revision(REPO_ROOT)
     return {
         "version": app_version(),
-        "commit": git_short_sha(),
+        "commit": revision["testedRevision"],
+        **revision,
         "generatedAt": utc_now(),
         "environment": {"os": platform.platform(), "python": platform.python_version(), "ci": bool(os.environ.get("CI"))},
         "status": status,

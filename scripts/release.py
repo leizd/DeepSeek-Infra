@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from deepseek_infra.infra.diagnostics import release_manifest  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_manifest import sha256_of as evidence_sha256_of  # noqa: E402
 
 # Runtime data / caches: excluded from the zip AND safe to delete with --clean-workspace.
 EXCLUDED_DIRS = {
@@ -216,6 +217,18 @@ def rust_sidecar_image(root: Path, version: str) -> tuple[str, str]:
     )
 
 
+def evidence_manifest_summary(root: Path, version: str) -> dict[str, object]:
+    path = root / "docs" / "evidence" / f"evidence-manifest-v{version}.json"
+    data = _read_json(path)
+    artifacts = data.get("artifacts")
+    return {
+        "path": path.relative_to(root).as_posix(),
+        "sha256": evidence_sha256_of(path) if path.is_file() else "",
+        "artifactCount": len(artifacts) if isinstance(artifacts, list) else 0,
+        "testedRevision": str(data.get("testedRevision") or "unknown"),
+    }
+
+
 def clean_workspace(root: Path) -> list[Path]:
     removed: list[Path] = []
     for directory_name in EXCLUDED_DIRS:
@@ -346,6 +359,7 @@ def main() -> int:
             protocol_contract_sha256=file_sha256(root / "release" / "4_0_protocol_contract.json"),
             rust_sidecar_image_tag=args.rust_sidecar_image_tag or measured_image_tag,
             rust_sidecar_image_digest=args.rust_sidecar_image_digest or measured_image_digest,
+            evidence_manifest=evidence_manifest_summary(root, version),
         )
         release_manifest.write_manifest(archive_path, manifest)
     print(archive_path)

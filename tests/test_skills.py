@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -12,6 +14,15 @@ from deepseek_infra.infra.skills import eval as skill_eval
 from deepseek_infra.infra.skills import evidence, permissions, registry
 from deepseek_infra.infra.skills import versioning as skill_versioning
 from deepseek_infra.infra.skills.runner import run_skill
+
+
+def _skill_eval_runner_module() -> ModuleType:
+    path = Path(__file__).resolve().parents[1] / "evals" / "runners" / "run_skill_eval.py"
+    spec = importlib.util.spec_from_file_location("skill_eval_runner_test_module", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _custom_skill() -> dict[str, object]:
@@ -120,6 +131,23 @@ def test_skill_eval_report_scores_skills_and_packs(tmp_settings: Path, monkeypat
     assert report["checks"]["packLevelEval"] == "PASS"
     assert any(item["packId"] == "pack_code" for item in report["packResults"])
     assert report["caseResults"][0]["metrics"]["toolPolicyPass"] is True
+
+
+def test_skill_eval_runner_attaches_evidence_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_skill_eval = _skill_eval_runner_module()
+    revision = {
+        "testedRevision": "abc1234def",
+        "sourceRevision": "abc1234def",
+        "sourceTreeDirty": False,
+        "sourceContext": {"schemaVersion": 1, "revision": "abc1234def"},
+        "ciRevision": "merge123",
+    }
+    monkeypatch.setattr(run_skill_eval.skill_eval, "build_skill_eval_report", lambda **_: {"status": "PASS", "testedRevision": "stale"})
+    monkeypatch.setattr(run_skill_eval, "evidence_revision", lambda _: revision)
+
+    report = run_skill_eval.build_report(version="test")
+
+    assert {key: report[key] for key in revision} == revision
 
 
 def test_skill_eval_synthetic_media_skill_gets_temp_media_fixture(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:

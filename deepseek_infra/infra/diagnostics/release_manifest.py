@@ -22,8 +22,9 @@ from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.config import APP_VERSION
+from deepseek_infra.infra.diagnostics.evidence_inventory import evidence_paths
 
-SCHEMA_VERSION = "release-manifest.v2"
+SCHEMA_VERSION = "release-manifest.v3"
 _CHUNK = 1024 * 1024
 
 
@@ -40,76 +41,10 @@ def utc_now() -> str:
 
 
 DEFAULT_EVIDENCE_PATHS = (
-    "docs/evidence/headless-mcp-bridge.json",
-    "docs/evidence/a2a-external-peer.json",
-    "docs/evidence/a2a-third-party-peer.json",
-    "docs/evidence/edge-router-smoke.json",
-    f"docs/evidence/edge-router-v{APP_VERSION}.json",
-    "docs/evidence/continue-dev-mcp.json",
-    "docs/evidence/openai-compatible-sdks.json",
-    f"docs/evidence/ga-v{APP_VERSION}.json",
-    f"docs/evidence/workspace-v{APP_VERSION}.json",
-    f"docs/evidence/media-v{APP_VERSION}.json",
-    f"docs/evidence/browser-v{APP_VERSION}.json",
-    f"docs/evidence/frontend-browser-v{APP_VERSION}.json",
-    f"docs/evidence/frontend-bundle-v{APP_VERSION}.json",
-    f"docs/evidence/automation-v{APP_VERSION}.json",
-    f"docs/evidence/skills-v{APP_VERSION}.json",
-    f"docs/evidence/skills-ui-v{APP_VERSION}.json",
-    f"docs/evidence/skill-builder-v{APP_VERSION}.json",
-    f"docs/evidence/skill-packs-v{APP_VERSION}.json",
-    f"docs/evidence/skill-eval-dashboard-v{APP_VERSION}.json",
-    f"docs/evidence/skill-versioning-v{APP_VERSION}.json",
-    f"docs/evidence/skill-analytics-v{APP_VERSION}.json",
-    f"docs/evidence/skill-security-v{APP_VERSION}.json",
-    f"docs/evidence/skill-catalog-v{APP_VERSION}.json",
-    f"docs/evidence/context-taint-v{APP_VERSION}.json",
-    f"docs/evidence/semantic-cache-onnx-v{APP_VERSION}.json",
-    f"docs/evidence/gateway-request-parity-v{APP_VERSION}.json",
-    f"docs/evidence/mcp-protocol-parity-v{APP_VERSION}.json",
-    f"docs/evidence/rag-parity-v{APP_VERSION}.json",
-    f"docs/evidence/rag-document-preparation-parity-v{APP_VERSION}.json",
-    f"docs/evidence/rag-vector-binary-parity-v{APP_VERSION}.json",
-    f"docs/evidence/rust-sidecar-performance-v{APP_VERSION}.json",
-    f"docs/evidence/rust-coverage-v{APP_VERSION}.json",
-    f"docs/evidence/python-coverage-stability-v{APP_VERSION}.json",
-    f"docs/evidence/rust-sidecar-image-v{APP_VERSION}.json",
-    f"docs/evidence/hybrid-runtime-e2e-v{APP_VERSION}.json",
-    f"docs/evidence/upgrade-rollback-v{APP_VERSION}.json",
-    f"docs/evidence/protocol-contract-v{APP_VERSION}.json",
+    *evidence_paths(APP_VERSION),
     f"docs/evidence/evidence-source-context-v{APP_VERSION}.json",
     f"docs/evidence/evidence-manifest-v{APP_VERSION}.json",
-    "evals/reports/latest.json",
-    "evals/reports/agent-latest.json",
-    "evals/reports/baseline-compare-latest.json",
-    "evals/reports/security-latest.json",
-    f"evals/reports/skills-v{APP_VERSION}.json",
-    f"evals/reports/media-v{APP_VERSION}.json",
-    f"evals/reports/browser-v{APP_VERSION}.json",
-    f"evals/reports/automation-v{APP_VERSION}.json",
-    "docs/EVIDENCE_INDEX.md",
-    "docs/releases/4.2.7.md",
-    "docs/releases/4.2.6.md",
-    "docs/releases/4.2.4.md",
-    "docs/releases/4.2.3.md",
-    "docs/releases/4.2.2.md",
-    "docs/releases/4.2.1.md",
-    "docs/releases/4.2.0.md",
-    "docs/releases/4.1.1.md",
-    "docs/releases/4.1.0.md",
-    "docs/releases/4.0.3.md",
-    "docs/releases/4.0.1.md",
-    "docs/UPGRADING_TO_4_0.md",
-    "docs/4_0_SUPPORT_POLICY.md",
-    "release/4_0_runtime_decision.json",
-    "release/4_0_protocol_contract.json",
-    "docs/RUST_CANDIDATE_AUDIT_3_4.md",
-    "docs/GATEWAY_REQUEST_PREPARATION_PARITY.md",
-    "docs/MCP_PROTOCOL_PREPARATION_PARITY.md",
-    "docs/RAG_DOCUMENT_PREPARATION_PARITY.md",
-    "docs/RUST_SIDECAR_PERFORMANCE.md",
-    "docs/RAG_VECTOR_BINARY_TRANSPORT.md",
-    "docs/SEMANTIC_CACHE_BINARY_EMBEDDINGS.md",
+    f"docs/evidence/evidence-manifest-v{APP_VERSION}.json.sha256",
 )
 
 DEFAULT_QUALITY_GATES = {
@@ -170,6 +105,7 @@ def build_manifest(
     protocol_contract_sha256: str = "",
     rust_sidecar_image_tag: str = "",
     rust_sidecar_image_digest: str = "",
+    evidence_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     evidence_paths = list(evidence) if evidence is not None else list(DEFAULT_EVIDENCE_PATHS)
     ga_evidence = next((path for path in evidence_paths if path.startswith("docs/evidence/ga-v")), f"docs/evidence/ga-v{version}.json")
@@ -203,6 +139,7 @@ def build_manifest(
         "evalReport": eval_report,
         "agentReport": agent_report,
         "gaEvidence": ga_evidence,
+        "evidenceManifest": dict(evidence_manifest or {}),
         "evidence": evidence_paths,
         "artifact": artifact.name,
         "sha256": sha256,

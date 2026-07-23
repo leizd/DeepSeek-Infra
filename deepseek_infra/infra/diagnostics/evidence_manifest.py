@@ -7,43 +7,16 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-
-REQUIRED_EVIDENCE_TEMPLATES = (
-    "docs/evidence/headless-mcp-bridge.json",
-    "docs/evidence/a2a-external-peer.json",
-    "docs/evidence/ga-v{version}.json",
-    "docs/evidence/workspace-v{version}.json",
-    "docs/evidence/edge-router-v{version}.json",
-    "docs/evidence/media-v{version}.json",
-    "docs/evidence/browser-v{version}.json",
-    "docs/evidence/frontend-browser-v{version}.json",
-    "docs/evidence/frontend-bundle-v{version}.json",
-    "docs/evidence/automation-v{version}.json",
-    "docs/evidence/skills-v{version}.json",
-    "docs/evidence/skills-ui-v{version}.json",
-    "docs/evidence/skill-builder-v{version}.json",
-    "docs/evidence/skill-packs-v{version}.json",
-    "docs/evidence/skill-eval-dashboard-v{version}.json",
-    "docs/evidence/skill-versioning-v{version}.json",
-    "docs/evidence/skill-analytics-v{version}.json",
-    "docs/evidence/skill-security-v{version}.json",
-    "docs/evidence/skill-catalog-v{version}.json",
-    "docs/evidence/context-taint-v{version}.json",
-    "docs/evidence/upgrade-rollback-v{version}.json",
-    "docs/evidence/protocol-contract-v{version}.json",
-    "evals/reports/latest.json",
-    "evals/reports/agent-latest.json",
-    "evals/reports/baseline-compare-latest.json",
-    "evals/reports/security-latest.json",
-    "evals/reports/media-v{version}.json",
-    "evals/reports/browser-v{version}.json",
-    "evals/reports/automation-v{version}.json",
-    "evals/reports/skills-v{version}.json",
+from deepseek_infra.infra.diagnostics.evidence_inventory import (
+    evidence_paths,
+    evidence_spec_by_path,
 )
+from deepseek_infra.infra.diagnostics.evidence_revision import validate_source_context
 
 
 def required_evidence_paths(version: str) -> tuple[str, ...]:
-    return tuple(template.format(version=version) for template in REQUIRED_EVIDENCE_TEMPLATES)
+    """Compatibility name backed by the centralized Evidence inventory."""
+    return evidence_paths(version)
 
 
 def sha256_of(path: Path) -> str:
@@ -70,19 +43,22 @@ def build_evidence_manifest(
     source_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     artifacts: list[dict[str, Any]] = []
+    specs = evidence_spec_by_path(version)
     for rel in artifact_paths:
         path = root / rel
         data = _load_object(path)
-        artifacts.append(
-            {
-                "path": rel,
-                "sha256": sha256_of(path),
-                "bytes": path.stat().st_size,
-                "status": data.get("status"),
-            }
-        )
+        entry = {
+            "path": rel,
+            "sha256": sha256_of(path),
+            "bytes": path.stat().st_size,
+            "status": data.get("status"),
+        }
+        spec = specs.get(rel)
+        if spec is not None:
+            entry.update(producer=spec.producer, tier=spec.tier)
+        artifacts.append(entry)
     manifest = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "version": version,
         "testedRevision": tested_revision,
         "sourceTreeDirty": False,
@@ -96,6 +72,30 @@ def build_evidence_manifest(
 def write_evidence_manifest(path: Path, manifest: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def manifest_checksum_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".sha256")
+
+
+def write_manifest_checksum(path: Path) -> Path:
+    target = manifest_checksum_path(path)
+    target.write_text(f"{sha256_of(path)}  {path.name}\n", encoding="utf-8")
+    return target
+
+
+def validate_manifest_checksum(path: Path, checksum_path: Path | None = None) -> list[str]:
+    target = checksum_path or manifest_checksum_path(path)
+    if not path.is_file():
+        return [f"missing evidence manifest: {path}"]
+    if not target.is_file():
+        return [f"missing detached evidence manifest checksum: {target}"]
+    fields = target.read_text(encoding="utf-8").strip().split()
+    if len(fields) < 2 or fields[1] != path.name:
+        return ["invalid detached evidence manifest checksum format"]
+    if fields[0].lower() != sha256_of(path).lower():
+        return ["evidence manifest detached checksum mismatch"]
+    return []
 
 
 def validate_evidence_manifest(
@@ -115,8 +115,8 @@ def validate_evidence_manifest(
         return [f"invalid evidence manifest: {exc}"]
 
     errors: list[str] = []
-    if manifest.get("schemaVersion") != 1:
-        errors.append("evidence manifest schemaVersion must be 1")
+    if manifest.get("schemaVersion") not in (1, 2):
+        errors.append("evidence manifest schemaVersion must be 1 or 2")
     if manifest.get("version") != version:
         errors.append(f"evidence manifest version {manifest.get('version')!r} does not match {version!r}")
     if expected_revision == "unknown" or not expected_revision:
@@ -130,20 +130,13 @@ def validate_evidence_manifest(
         errors.append("evidence manifest sourceContext must be present")
         source_context = {}
     else:
-        if source_context.get("version") != version:
-            errors.append("evidence manifest sourceContext version mismatch")
-        if source_context.get("testedRevision") != expected_revision:
-            errors.append("evidence manifest sourceContext revision mismatch")
-        if source_context.get("sourceTreeDirty") is not False:
-            errors.append("evidence manifest sourceContext must describe a clean tree")
-        for key in ("capturedAt", "generator"):
-            if not source_context.get(key):
-                errors.append(f"evidence manifest sourceContext missing {key}")
+        errors.extend(validate_source_context(source_context, version=version, expected_revision=expected_revision))
 
     raw_artifacts = manifest.get("artifacts")
     if not isinstance(raw_artifacts, list):
         return [*errors, "evidence manifest artifacts must be a list"]
     entries: dict[str, dict[str, Any]] = {}
+    specs = evidence_spec_by_path(version)
     for index, raw in enumerate(raw_artifacts):
         if not isinstance(raw, dict) or not isinstance(raw.get("path"), str):
             errors.append(f"evidence manifest artifact {index} is invalid")
@@ -188,6 +181,12 @@ def validate_evidence_manifest(
             errors.append(f"evidence sourceTreeDirty is not false: {rel}")
         if data.get("sourceContext") != source_context:
             errors.append(f"evidence sourceContext mismatch: {rel}")
+        spec = specs.get(rel)
+        if spec is not None:
+            if entry.get("producer") != spec.producer:
+                errors.append(f"evidence producer mismatch: {rel}")
+            if entry.get("tier") != spec.tier:
+                errors.append(f"evidence tier mismatch: {rel}")
         if github_sha and data.get("ciRevision") != github_sha:
             errors.append(f"evidence ciRevision does not match GITHUB_SHA: {rel}")
     return errors

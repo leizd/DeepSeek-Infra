@@ -28,6 +28,7 @@ import run_injection_adversarial  # noqa: E402
 import run_rag_eval  # noqa: E402
 import run_tool_eval  # noqa: E402
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 from deepseek_infra.infra.evaluation import harness  # noqa: E402
 from deepseek_infra.infra.rag import local_rag  # noqa: E402
 
@@ -139,6 +140,7 @@ def build_suite_report(
         "schemaVersion": SCHEMA_VERSION,
         "version": version,
         "commit": sha,
+        **evidence_revision(REPO_ROOT),
         "generatedAt": generated_at or utc_now(),
         "environment": build_environment(),
         "gitSha": sha,
@@ -314,14 +316,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.strict and not args.include_agent:
         parser.error("--strict requires --include-agent so Agent Eval participates in the hard gate")
     rag, tool_policy, injection, agent = run_all(args)
+    revision = evidence_revision(REPO_ROOT)
     report = build_suite_report(
         rag,
         tool_policy,
         injection,
         agent,
         version=APP_VERSION,
-        sha=git_sha(),
-        dirty=git_dirty(),
+        sha=str(revision["testedRevision"]),
+        dirty=bool(revision["sourceTreeDirty"]),
         paths=default_paths(args),
         strict=bool(args.strict),
     )
