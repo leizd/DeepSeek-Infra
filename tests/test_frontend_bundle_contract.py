@@ -48,7 +48,7 @@ def _bundle(root: Path, *, leak: bool = False, initial_size: int = 100) -> None:
     assets.mkdir(parents=True)
     manifest_dir.mkdir()
     (root / "frontend").mkdir()
-    (root / "frontend/package.json").write_text(json.dumps({"version": "4.3.3"}), encoding="utf-8")
+    (root / "frontend/package.json").write_text(json.dumps({"version": "4.3.4"}), encoding="utf-8")
     (output / "index.html").write_text(
         f'<meta name="deepseek-infra-build-id" content="{BUILD_ID}" />'
         '<meta name="deepseek-infra-source-revision" content="test-revision" />',
@@ -113,7 +113,7 @@ def _bundle(root: Path, *, leak: bool = False, initial_size: int = 100) -> None:
         output,
         {
             "schemaVersion": 1,
-            "version": "4.3.3",
+            "version": "4.3.4",
             "sourceRevision": "test-revision",
             "buildId": BUILD_ID,
             "assetSetDigest": ASSET_SET_DIGEST,

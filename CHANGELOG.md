@@ -4,6 +4,26 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.3.4] - Reload Transaction Integrity and Page-Lifecycle Recovery
+
+### Serialized activation and bounded update checks
+
+- Serializes every build activation into one single-flight transaction, so staging, consent, the synchronous persistence flush, Worker activation and the final reload cannot interleave or double-activate across checks or tabs.
+- Bounds each update check with a timeout and lets a newer discovered target supersede any pending result, so a stalled or stale check can never block or resurrect a replaced build.
+- Makes update deferral phase-safe: deferring records the decision without leaving half-applied activation state, and a later check resumes from a clean store snapshot.
+
+### Page-lifecycle persistence and atomic submission
+
+- Flushes Composer drafts and conversation state on `pagehide`, `visibilitychange` and `beforeunload`, so closing, hiding or reloading a tab never loses unsent text.
+- Scopes Composer draft keys to both conversation and project, isolating drafts between projects that share conversation views; the browser smoke draft-key contract is aligned with the project-scoped keys.
+- Commits message submission atomically through `tryStartMessage`/`peek`/`commit`: a submission either completes with its draft cleanup or leaves the draft untouched.
+
+### Compatibility
+
+- Adds no runtime dependency and changes no backend API, offline Mutation persistence, Provider ownership or bundle budget.
+- Preserves 4.3.3 staged discovery/quiescent reload, 4.3.2 immutable identity/Client Lease retention, 4.3.1 lazy continuity and the 4.2.8 exact-merge Evidence chain.
+
+
 ## [4.3.3] - Update Discovery and Quiescent Reload
 
 ### Staged update discovery

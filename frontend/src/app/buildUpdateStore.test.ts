@@ -22,7 +22,7 @@ const BUILD_C = "cccccccccccccccc";
 function deployedBuild(buildId = BUILD_B): DeployedBuild {
   return {
     schemaVersion: 1,
-    version: buildId === BUILD_C ? "4.3.4" : "4.3.3",
+    version: buildId === BUILD_C ? "4.3.5" : "4.3.4",
     sourceRevision: `revision-${buildId.slice(0, 8)}`,
     buildId,
     assetSetDigest: buildId[0].repeat(64),

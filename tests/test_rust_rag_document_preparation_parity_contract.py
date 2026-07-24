@@ -96,4 +96,4 @@ def test_contract_sources_and_ci_wiring_exist() -> None:
     assert "sqlite" not in rust_source.lower()
     assert '"/rag/documents/prepare"' in gateway_source
     assert "rag-document-preparation-parity:" in workflow
-    assert "docs/evidence/rag-document-preparation-parity-v4.3.3.json" in workflow
+    assert "docs/evidence/rag-document-preparation-parity-v4.3.4.json" in workflow

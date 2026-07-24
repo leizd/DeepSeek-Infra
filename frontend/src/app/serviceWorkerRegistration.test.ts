@@ -146,7 +146,7 @@ describe("build-scoped service worker registration", () => {
     );
     const build: DeployedBuild = {
       schemaVersion: 1,
-      version: "4.3.3",
+      version: "4.3.4",
       sourceRevision: "revision-b",
       buildId: BUILD_B,
       assetSetDigest: DIGEST_B,
