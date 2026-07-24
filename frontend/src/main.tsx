@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./app/App";
 import { buildUpdateStore } from "./app/buildUpdateStore";
+import { startPageLifecyclePersistence } from "./app/pageLifecycle";
 import { startWorkspaceServiceWorkerRuntime } from "./app/serviceWorkerRegistration";
 import "./shared/styles/app.css";
 import "./shared/styles/workspace-drawer-frame.css";
@@ -21,6 +22,8 @@ createRoot(root).render(
     </BrowserRouter>
   </StrictMode>,
 );
+
+startPageLifecyclePersistence({ windowValue: window, documentValue: document });
 
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
