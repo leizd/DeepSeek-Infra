@@ -152,7 +152,7 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         await page.locator("#reactPromptInput").fill("Browser draft survives reload")
         await page.wait_for_function(
             """() => {
-              const raw = sessionStorage.getItem('deepseek:composer-draft:new');
+              const raw = sessionStorage.getItem('deepseek:composer-draft:new:');
               return raw && JSON.parse(raw).text === 'Browser draft survives reload';
             }"""
         )
@@ -162,7 +162,7 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             raise AssertionError("Composer draft did not restore from sessionStorage")
         await page.locator("#reactPromptInput").fill("")
         await page.wait_for_function(
-            "() => sessionStorage.getItem('deepseek:composer-draft:new') === null"
+            "() => sessionStorage.getItem('deepseek:composer-draft:new:') === null"
         )
         checks["composerDraftRestored"] = "PASS"
 
