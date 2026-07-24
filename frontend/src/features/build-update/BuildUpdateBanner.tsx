@@ -154,7 +154,13 @@ export function BuildUpdateBanner() {
       </div>
       <div className="build-update-actions" style={actionsStyle}>
         {snapshot.phase === "error" && (
-          <button style={buttonStyle} type="button" onClick={() => void buildUpdateStore.checkForUpdate()}>重试</button>
+          <button
+            style={buttonStyle}
+            type="button"
+            onClick={() => void buildUpdateStore.checkForUpdate({ reason: "manual", force: true })}
+          >
+            重试
+          </button>
         )}
         {snapshot.phase !== "activating" && (
           <button style={buttonStyle} type="button" onClick={() => buildUpdateStore.defer()}>稍后</button>

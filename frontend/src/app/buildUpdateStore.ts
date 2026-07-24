@@ -10,6 +10,7 @@ const BUILD_ID_PATTERN = /^[0-9a-f]{16}$/;
 const ASSET_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const SOURCE_REVISION_PATTERN = /^[0-9A-Za-z._-]{7,160}$/;
 const UPDATE_INTERVAL_MS = 5 * 60_000;
+const CHECK_TIMEOUT_MS = 12_000;
 
 export interface DeployedBuild {
   schemaVersion: 1;
@@ -67,6 +68,13 @@ interface BroadcastChannelLike {
   removeEventListener(type: "message", listener: EventListener): void;
 }
 
+export type BuildUpdateCheckReason = "startup" | "interval" | "online" | "visible" | "manual";
+
+export interface BuildUpdateCheckOptions {
+  reason?: BuildUpdateCheckReason;
+  force?: boolean;
+}
+
 export interface BuildUpdateEnvironment {
   fetchValue: typeof fetch;
   windowValue: Pick<
@@ -75,6 +83,7 @@ export interface BuildUpdateEnvironment {
   >;
   documentValue: Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">;
   createBroadcastChannel?: (name: string) => BroadcastChannelLike;
+  checkTimeoutMs?: number;
 }
 
 function validDeployedBuild(value: unknown): value is DeployedBuild {
@@ -156,10 +165,12 @@ export class BuildUpdateStore {
     environment.windowValue.addEventListener("online", this.onOnline);
     environment.documentValue.addEventListener("visibilitychange", this.onVisibility);
     this.intervalHandle = environment.windowValue.setInterval(() => {
-      if (environment.documentValue.visibilityState === "visible") void this.checkForUpdate();
+      if (environment.documentValue.visibilityState === "visible") {
+        void this.checkForUpdate({ reason: "interval" });
+      }
     }, UPDATE_INTERVAL_MS);
     this.unsubscribeBlockers = subscribeReloadBlockers(this.onBlockersChanged);
-    void this.checkForUpdate();
+    void this.checkForUpdate({ reason: "startup" });
     return () => {
       this.stop();
     };
@@ -196,11 +207,13 @@ export class BuildUpdateStore {
   }
 
   private onOnline: EventListener = () => {
-    void this.checkForUpdate();
+    void this.checkForUpdate({ reason: "online", force: true });
   };
 
   private onVisibility: EventListener = () => {
-    if (this.environment?.documentValue.visibilityState === "visible") void this.checkForUpdate();
+    if (this.environment?.documentValue.visibilityState === "visible") {
+      void this.checkForUpdate({ reason: "visible" });
+    }
   };
 
   private onBroadcastMessage: EventListener = (event) => {
@@ -225,15 +238,25 @@ export class BuildUpdateStore {
     void this.activateWhenReady();
   };
 
-  async checkForUpdate(): Promise<DeployedBuild | null> {
-    if (this.checkPromise) return this.checkPromise;
+  async checkForUpdate(options: BuildUpdateCheckOptions = {}): Promise<DeployedBuild | null> {
     const environment = this.environment;
     if (!environment || this.stopped) return null;
+    if (this.checkPromise) {
+      if (!options.force) return this.checkPromise;
+      // 手动或 online 恢复的检查可以替换一个挂起的请求；旧请求的
+      // catch/finally 通过 sequence 与 controller 身份判定，不会清理新请求。
+      this.checkSequence += 1;
+      this.checkController?.abort();
+      this.checkController = null;
+      this.checkPromise = null;
+    }
     const previous = this.snapshot;
     const sequence = ++this.checkSequence;
     const controller = new AbortController();
     this.checkController = controller;
     this.publish({ phase: "checking", error: undefined });
+    const timeoutMs = environment.checkTimeoutMs ?? CHECK_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     this.checkPromise = (async () => {
       try {
         const response = await environment.fetchValue("/ui/workspace-assets.json", {
@@ -289,17 +312,22 @@ export class BuildUpdateStore {
         }
         return build;
       } catch (reason) {
-        if (sequence !== this.checkSequence || this.stopped || controller.signal.aborted) return null;
+        if (sequence !== this.checkSequence || this.stopped) return null;
+        // 相同 sequence 下的 abort 只会来自检查超时；stop()/force 替换
+        // 都会先推进 sequence。
+        const timedOut = controller.signal.aborted;
         if (this.target) {
+          // 已确认的 target 不因检查失败或超时而降级。
           this.publish({ phase: previous.phase === "checking" ? "available" : previous.phase, error: undefined });
         } else if (previous.phase === "current") {
           this.publish({ phase: "current", error: undefined });
         } else {
-          this.publish({ phase: "error", error: errorMessage(reason) });
+          this.publish({ phase: "error", error: timedOut ? "检查更新超时" : errorMessage(reason) });
         }
         return null;
       } finally {
-        if (sequence === this.checkSequence) {
+        clearTimeout(timer);
+        if (this.checkController === controller) {
           this.checkPromise = null;
           this.checkController = null;
         }
