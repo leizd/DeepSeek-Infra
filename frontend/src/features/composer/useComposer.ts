@@ -24,8 +24,8 @@ export function useComposer() {
   const projects = useProjects();
   const online = useOnlineStatus();
   const conversationId = chat.state.currentConversationId ?? NEW_CONVERSATION_DRAFT_ID;
-  const projectId = projects.activeProject?.id;
-  const [value, setValueState] = useState(() => loadComposerDraft(conversationId)?.text ?? "");
+  const projectId = projects.activeProject?.id ?? null;
+  const [value, setValueState] = useState(() => loadComposerDraft({ conversationId, projectId })?.text ?? "");
   const draftRef = useRef({ conversationId, projectId, text: value });
   const persistedTextRef = useRef(value);
 
@@ -33,7 +33,7 @@ export function useComposer() {
     const draft = draftRef.current;
     const saved = draft.text
       ? saveComposerDraft({ ...draft, updatedAt: Date.now() })
-      : clearComposerDraft(draft.conversationId);
+      : clearComposerDraft({ conversationId: draft.conversationId, projectId: draft.projectId });
     if (!saved) {
       setReloadBlocker({
         id: "composer-draft",
@@ -51,7 +51,7 @@ export function useComposer() {
     draftRef.current = { ...draftRef.current, text: next };
     setValueState(next);
     if (!next) {
-      if (clearComposerDraft(draftRef.current.conversationId)) {
+      if (clearComposerDraft({ conversationId: draftRef.current.conversationId, projectId: draftRef.current.projectId })) {
         persistedTextRef.current = "";
         clearReloadBlocker("composer-draft");
       } else {
@@ -73,12 +73,10 @@ export function useComposer() {
   }, []);
 
   useEffect(() => {
-    if (draftRef.current.conversationId === conversationId) {
-      draftRef.current = { ...draftRef.current, projectId };
-      return;
-    }
+    const current = draftRef.current;
+    if (current.conversationId === conversationId && current.projectId === projectId) return;
     flushDraft();
-    const restored = loadComposerDraft(conversationId)?.text ?? "";
+    const restored = loadComposerDraft({ conversationId, projectId })?.text ?? "";
     draftRef.current = { conversationId, projectId, text: restored };
     persistedTextRef.current = restored;
     setValueState(restored);
@@ -101,7 +99,6 @@ export function useComposer() {
 
   function submit() {
     const content = value.trim();
-    if (chat.state.requestStatus === "streaming") return;
     if (!online) {
       chat.notify("当前处于离线模式，不能发送消息");
       return;
@@ -114,15 +111,23 @@ export function useComposer() {
       chat.notify("请先移除识别失败的文件");
       return;
     }
-    const ready = attachments.consumeReadyAttachments();
-    if (!content && !ready.length && !chat.quoteDraft) return;
+    // 缺 Key 只打开设置页，不触碰消息与附件，文本和附件原样保留。
     if (!settings.apiKey.trim() && !settings.runtime?.hasServerKey) {
       overlay.openOverlay("settings");
-      void chat.sendMessage(content, { attachments: ready });
       return;
     }
+    // 先只读快照，确认消息被接受后才提交消费附件、清空草稿。
+    const ready = attachments.peekReadyAttachments();
+    const result = chat.tryStartMessage(content, {
+      attachments: ready.map((entry) => entry.attachment),
+      online,
+    });
+    if (!result.accepted) {
+      if (result.reason === "missing-key") overlay.openOverlay("settings");
+      return;
+    }
+    attachments.commitReadyAttachments(ready.map((entry) => entry.id));
     setValue("");
-    void chat.sendMessage(content, { attachments: ready });
   }
 
   function onSubmit(event: FormEvent) {

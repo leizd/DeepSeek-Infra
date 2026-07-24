@@ -51,6 +51,10 @@ function isAbortError(reason: unknown): boolean {
     : reason instanceof Error && reason.name === "AbortError";
 }
 
+export type MessageSubmissionResult =
+  | { accepted: true; conversationId: string }
+  | { accepted: false; reason: "missing-key" | "busy" | "empty" | "offline" };
+
 export interface PendingMemorySuggestion {
   id: string;
   content: string;
@@ -70,6 +74,8 @@ export function useChatController() {
   );
   const stateRef = useRef(state);
   stateRef.current = state;
+  // 同步接受守卫：dispatch 尚未反映到 state 前，同一 tick 的重复提交直接拒绝。
+  const submissionGuardRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const outputPauseGateRef = useRef<ReturnType<typeof createOutputPauseGate> | null>(null);
   if (!outputPauseGateRef.current) outputPauseGateRef.current = createOutputPauseGate();
@@ -185,20 +191,28 @@ export function useChatController() {
     waitUntilResumed,
   });
 
-  const sendMessage = useCallback(
-    async (input: string, options: { attachments?: readonly Attachment[] } = {}) => {
+  const tryStartMessage = useCallback(
+    (input: string, options: { attachments?: readonly Attachment[]; online?: boolean } = {}): MessageSubmissionResult => {
+      if (options.online === false) return { accepted: false, reason: "offline" };
+      const attachments = options.attachments ?? [];
       if (settings.agentMode) {
-        await agentRun.sendAgentMessage(input, options);
-        return;
+        if (!input.trim() && !attachments.length) return { accepted: false, reason: "empty" };
+        if (state.requestStatus === "streaming" || submissionGuardRef.current) return { accepted: false, reason: "busy" };
+        if (!hasBackendKey()) return { accepted: false, reason: "missing-key" };
+        submissionGuardRef.current = true;
+        void agentRun.sendAgentMessage(input, { attachments })
+          .finally(() => {
+            submissionGuardRef.current = false;
+          });
+        return { accepted: true, conversationId: state.currentConversationId ?? "" };
       }
       const quotedContent = quoteAwareContent(input.trim(), quoteDraft);
-      const attachments = options.attachments ?? [];
-      if ((!quotedContent && !attachments.length) || state.requestStatus === "streaming") return;
-      if (!hasBackendKey()) {
-        dispatch({ type: "noticeSet", notice: "请先在连接设置中输入 DeepSeek API Key" });
-        return;
-      }
+      if (!quotedContent && !attachments.length) return { accepted: false, reason: "empty" };
+      if (state.requestStatus === "streaming" || submissionGuardRef.current) return { accepted: false, reason: "busy" };
+      if (!hasBackendKey()) return { accepted: false, reason: "missing-key" };
 
+      // 接受即冻结项目上下文，异步流式阶段不再读取项目状态。
+      submissionGuardRef.current = true;
       const existingMessages = selectCurrentMessages(state);
       const projectContext = projects.chatContext();
       const newUserMessage = applyProjectContext(userMessage(quotedContent, attachments), projectContext);
@@ -220,10 +234,27 @@ export function useChatController() {
         thinkingEnabled: settings.thinkingEnabled,
       });
 
-      const finished = await streamIntoMessage(assistantMessage, payload);
-      await maybeGenerateTitle(conversationId, firstTurn, newUserMessage.content, finished?.content ?? "");
+      void (async () => {
+        try {
+          const finished = await streamIntoMessage(assistantMessage, payload);
+          await maybeGenerateTitle(conversationId, firstTurn, newUserMessage.content, finished?.content ?? "");
+        } finally {
+          submissionGuardRef.current = false;
+        }
+      })();
+      return { accepted: true, conversationId };
     },
     [agentRun, hasBackendKey, maybeCreateReminder, maybeGenerateTitle, projects, quoteDraft, requestSettings, settings, state, streamIntoMessage],
+  );
+
+  const sendMessage = useCallback(
+    async (input: string, options: { attachments?: readonly Attachment[] } = {}) => {
+      const result = tryStartMessage(input, options);
+      if (!result.accepted && result.reason === "missing-key") {
+        dispatch({ type: "noticeSet", notice: "请先在连接设置中输入 DeepSeek API Key" });
+      }
+    },
+    [tryStartMessage],
   );
 
   const editAndResend = useCallback(
@@ -377,6 +408,7 @@ export function useChatController() {
     pendingMemorySuggestion,
     quoteDraft,
     sendMessage,
+    tryStartMessage,
     editAndResend,
     regenerate,
     continueGeneration,

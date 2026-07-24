@@ -100,17 +100,18 @@ describe("attachmentQueueReducer", () => {
     expect(state.items[0]).toMatchObject({ status: "uploading", progress: 0, error: undefined });
   });
 
-  it("inFlightDiscarded drops uploading items, readyConsumed drops ready items", () => {
+  it("inFlightDiscarded drops uploading items, readyCommitted drops only committed ready items", () => {
     const items: PendingAttachment[] = [
       uploadingItem("1", "a.txt"),
       { ...uploadingItem("2", "b.txt"), status: "ready", attachment: { name: "b.txt" } },
       { ...uploadingItem("3", "c.txt"), status: "error", error: "x" },
+      { ...uploadingItem("4", "d.txt"), status: "ready", attachment: { name: "d.txt" } },
     ];
     const discarded = attachmentQueueReducer(stateWith(items), { type: "inFlightDiscarded" });
-    expect(discarded.items.map((item) => item.id)).toEqual(["2", "3"]);
+    expect(discarded.items.map((item) => item.id)).toEqual(["2", "3", "4"]);
     expect(discarded.uploading).toBe(false);
-    const consumed = attachmentQueueReducer(discarded, { type: "readyConsumed" });
-    expect(consumed.items.map((item) => item.id)).toEqual(["3"]);
+    const committed = attachmentQueueReducer(discarded, { type: "readyCommitted", ids: ["2"] });
+    expect(committed.items.map((item) => item.id)).toEqual(["3", "4"]);
   });
 
   it("itemRemoved and cleared reset the queue", () => {

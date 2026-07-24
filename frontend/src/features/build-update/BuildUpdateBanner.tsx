@@ -137,7 +137,7 @@ export function BuildUpdateBanner() {
     : snapshot.phase === "checking" || snapshot.phase === "installing" || snapshot.phase === "available"
       ? "正在准备 DeepSeek Infra 新构建"
       : snapshot.phase === "activating"
-        ? "正在验证新构建"
+        ? "正在切换版本，请勿关闭页面"
         : snapshot.phase === "error"
           ? "新构建准备失败"
           : "DeepSeek Infra 新构建已准备好";
@@ -154,9 +154,17 @@ export function BuildUpdateBanner() {
       </div>
       <div className="build-update-actions" style={actionsStyle}>
         {snapshot.phase === "error" && (
-          <button style={buttonStyle} type="button" onClick={() => void buildUpdateStore.checkForUpdate()}>重试</button>
+          <button
+            style={buttonStyle}
+            type="button"
+            onClick={() => void buildUpdateStore.checkForUpdate({ reason: "manual", force: true })}
+          >
+            重试
+          </button>
         )}
-        <button style={buttonStyle} type="button" onClick={() => buildUpdateStore.defer()}>稍后</button>
+        {snapshot.phase !== "activating" && (
+          <button style={buttonStyle} type="button" onClick={() => buildUpdateStore.defer()}>稍后</button>
+        )}
         <button
           className="primary"
           style={{

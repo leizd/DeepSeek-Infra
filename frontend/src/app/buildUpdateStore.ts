@@ -10,6 +10,7 @@ const BUILD_ID_PATTERN = /^[0-9a-f]{16}$/;
 const ASSET_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const SOURCE_REVISION_PATTERN = /^[0-9A-Za-z._-]{7,160}$/;
 const UPDATE_INTERVAL_MS = 5 * 60_000;
+const CHECK_TIMEOUT_MS = 12_000;
 
 export interface DeployedBuild {
   schemaVersion: 1;
@@ -46,6 +47,13 @@ export type BuildUpdateMessage =
   | { type: "build_staged"; buildId: string }
   | { type: "build_activated"; buildId: string };
 
+export type ActivationStage =
+  | "revalidating"
+  | "flushing"
+  | "worker-activation-requested"
+  | "controller-verified"
+  | "reload-issued";
+
 export interface BuildUpdateDriver {
   stage(build: DeployedBuild): Promise<WorkerBuildIdentity>;
   activate(build: DeployedBuild): Promise<WorkerBuildIdentity>;
@@ -60,6 +68,13 @@ interface BroadcastChannelLike {
   removeEventListener(type: "message", listener: EventListener): void;
 }
 
+export type BuildUpdateCheckReason = "startup" | "interval" | "online" | "visible" | "manual";
+
+export interface BuildUpdateCheckOptions {
+  reason?: BuildUpdateCheckReason;
+  force?: boolean;
+}
+
 export interface BuildUpdateEnvironment {
   fetchValue: typeof fetch;
   windowValue: Pick<
@@ -68,6 +83,7 @@ export interface BuildUpdateEnvironment {
   >;
   documentValue: Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">;
   createBroadcastChannel?: (name: string) => BroadcastChannelLike;
+  checkTimeoutMs?: number;
 }
 
 function validDeployedBuild(value: unknown): value is DeployedBuild {
@@ -105,6 +121,11 @@ export class BuildUpdateStore {
   private checkSequence = 0;
   private target: DeployedBuild | null = null;
   private targetGeneration = 0;
+  private activationTask: Promise<void> | null = null;
+  private activationGeneration = 0;
+  private activationStage: ActivationStage | null = null;
+  private reloadIssued = false;
+  private activatedBroadcastFor: string | null = null;
   private autoActivate = false;
   private stopped = false;
   private unsubscribeBlockers: (() => void) | null = null;
@@ -144,10 +165,12 @@ export class BuildUpdateStore {
     environment.windowValue.addEventListener("online", this.onOnline);
     environment.documentValue.addEventListener("visibilitychange", this.onVisibility);
     this.intervalHandle = environment.windowValue.setInterval(() => {
-      if (environment.documentValue.visibilityState === "visible") void this.checkForUpdate();
+      if (environment.documentValue.visibilityState === "visible") {
+        void this.checkForUpdate({ reason: "interval" });
+      }
     }, UPDATE_INTERVAL_MS);
     this.unsubscribeBlockers = subscribeReloadBlockers(this.onBlockersChanged);
-    void this.checkForUpdate();
+    void this.checkForUpdate({ reason: "startup" });
     return () => {
       this.stop();
     };
@@ -161,6 +184,11 @@ export class BuildUpdateStore {
     this.checkPromise = null;
     this.target = null;
     this.targetGeneration += 1;
+    this.activationTask = null;
+    this.activationGeneration += 1;
+    this.activationStage = null;
+    this.reloadIssued = false;
+    this.activatedBroadcastFor = null;
     this.autoActivate = false;
     const environment = this.environment;
     if (environment) {
@@ -179,11 +207,13 @@ export class BuildUpdateStore {
   }
 
   private onOnline: EventListener = () => {
-    void this.checkForUpdate();
+    void this.checkForUpdate({ reason: "online", force: true });
   };
 
   private onVisibility: EventListener = () => {
-    if (this.environment?.documentValue.visibilityState === "visible") void this.checkForUpdate();
+    if (this.environment?.documentValue.visibilityState === "visible") {
+      void this.checkForUpdate({ reason: "visible" });
+    }
   };
 
   private onBroadcastMessage: EventListener = (event) => {
@@ -205,18 +235,28 @@ export class BuildUpdateStore {
   private onBlockersChanged = (): void => {
     if (!this.autoActivate || getReloadBlockerSnapshot().length) return;
     this.autoActivate = false;
-    void this.activate();
+    void this.activateWhenReady();
   };
 
-  async checkForUpdate(): Promise<DeployedBuild | null> {
-    if (this.checkPromise) return this.checkPromise;
+  async checkForUpdate(options: BuildUpdateCheckOptions = {}): Promise<DeployedBuild | null> {
     const environment = this.environment;
     if (!environment || this.stopped) return null;
+    if (this.checkPromise) {
+      if (!options.force) return this.checkPromise;
+      // 手动或 online 恢复的检查可以替换一个挂起的请求；旧请求的
+      // catch/finally 通过 sequence 与 controller 身份判定，不会清理新请求。
+      this.checkSequence += 1;
+      this.checkController?.abort();
+      this.checkController = null;
+      this.checkPromise = null;
+    }
     const previous = this.snapshot;
     const sequence = ++this.checkSequence;
     const controller = new AbortController();
     this.checkController = controller;
     this.publish({ phase: "checking", error: undefined });
+    const timeoutMs = environment.checkTimeoutMs ?? CHECK_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     this.checkPromise = (async () => {
       try {
         const response = await environment.fetchValue("/ui/workspace-assets.json", {
@@ -272,17 +312,22 @@ export class BuildUpdateStore {
         }
         return build;
       } catch (reason) {
-        if (sequence !== this.checkSequence || this.stopped || controller.signal.aborted) return null;
+        if (sequence !== this.checkSequence || this.stopped) return null;
+        // 相同 sequence 下的 abort 只会来自检查超时；stop()/force 替换
+        // 都会先推进 sequence。
+        const timedOut = controller.signal.aborted;
         if (this.target) {
+          // 已确认的 target 不因检查失败或超时而降级。
           this.publish({ phase: previous.phase === "checking" ? "available" : previous.phase, error: undefined });
         } else if (previous.phase === "current") {
           this.publish({ phase: "current", error: undefined });
         } else {
-          this.publish({ phase: "error", error: errorMessage(reason) });
+          this.publish({ phase: "error", error: timedOut ? "检查更新超时" : errorMessage(reason) });
         }
         return null;
       } finally {
-        if (sequence === this.checkSequence) {
+        clearTimeout(timer);
+        if (this.checkController === controller) {
           this.checkPromise = null;
           this.checkController = null;
         }
@@ -316,23 +361,55 @@ export class BuildUpdateStore {
 
   defer(): void {
     this.autoActivate = false;
+    if (
+      this.activationTask
+      && (this.activationStage === "worker-activation-requested"
+        || this.activationStage === "controller-verified"
+        || this.activationStage === "reload-issued")
+    ) {
+      // activate_build 已发出，事务不可撤销：不能伪装成已取消。
+      return;
+    }
+    if (this.activationTask) {
+      // 尚在复检或持久化阶段，取消这次激活事务。
+      this.activationGeneration += 1;
+    }
     this.publish({ deferred: true });
   }
 
-  async activateWhenReady(): Promise<void> {
+  activateWhenReady(): Promise<void> {
+    if (this.activationTask) {
+      return this.activationTask;
+    }
     if (getReloadBlockerSnapshot().length) {
       this.autoActivate = true;
       this.publish({ phase: "blocked", deferred: false });
-      return;
+      return Promise.resolve();
     }
-    await this.activate();
+    const generation = ++this.activationGeneration;
+    const task = this.runActivation(generation).finally(() => {
+      if (this.activationTask === task) {
+        this.activationTask = null;
+        this.activationStage = null;
+      }
+    });
+    this.activationTask = task;
+    return task;
   }
 
-  private async activate(): Promise<void> {
+  private activationCurrent(generation: number, target: DeployedBuild): boolean {
+    return generation === this.activationGeneration
+      && this.target?.buildId === target.buildId
+      && this.target.assetSetDigest === target.assetSetDigest;
+  }
+
+  private async runActivation(generation: number): Promise<void> {
     const target = this.target;
     const driver = this.driver;
     if (!target || !driver) return;
+    this.activationStage = "revalidating";
     const confirmed = await this.checkForUpdate();
+    if (!this.activationCurrent(generation, target)) return;
     if (!confirmed || confirmed.buildId !== target.buildId || confirmed.assetSetDigest !== target.assetSetDigest) {
       return;
     }
@@ -342,6 +419,7 @@ export class BuildUpdateStore {
       this.publish({ phase: "blocked" });
       return;
     }
+    this.activationStage = "flushing";
     if (!flushReloadPersistence()) {
       this.publish({ phase: "error", error: "本地状态保存失败，已取消重新加载" });
       return;
@@ -352,21 +430,24 @@ export class BuildUpdateStore {
       return;
     }
     this.publish({ phase: "activating", error: undefined, deferred: false });
+    this.activationStage = "worker-activation-requested";
     try {
       const identity = await driver.activate(target);
-      const stillCurrent = this.target?.buildId === target.buildId
-        && this.target.assetSetDigest === target.assetSetDigest;
+      if (!this.activationCurrent(generation, target)) return;
       if (
-        !stillCurrent
-        || identity.buildId !== target.buildId
+        identity.buildId !== target.buildId
         || identity.assetSetDigest !== target.assetSetDigest
         || !identity.cacheReady
       ) {
         this.publish({ phase: "error", error: "新 Worker 身份或缓存状态不匹配" });
         return;
       }
+      this.activationStage = "controller-verified";
       this.publish({ controllerBuildId: identity.buildId });
-      this.channel?.postMessage({ type: "build_activated", buildId: identity.buildId });
+      if (this.activatedBroadcastFor !== identity.buildId) {
+        this.activatedBroadcastFor = identity.buildId;
+        this.channel?.postMessage({ type: "build_activated", buildId: identity.buildId });
+      }
       if (getReloadBlockerSnapshot().length) {
         this.publish({ phase: "reload-required" });
         return;
@@ -379,8 +460,12 @@ export class BuildUpdateStore {
         this.publish({ phase: "reload-required" });
         return;
       }
+      if (this.reloadIssued) return;
+      this.reloadIssued = true;
+      this.activationStage = "reload-issued";
       driver.reload();
     } catch (reason) {
+      if (!this.activationCurrent(generation, target)) return;
       this.publish({ phase: "error", error: errorMessage(reason) });
     }
   }
