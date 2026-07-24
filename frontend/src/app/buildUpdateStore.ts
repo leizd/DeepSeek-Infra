@@ -46,6 +46,13 @@ export type BuildUpdateMessage =
   | { type: "build_staged"; buildId: string }
   | { type: "build_activated"; buildId: string };
 
+export type ActivationStage =
+  | "revalidating"
+  | "flushing"
+  | "worker-activation-requested"
+  | "controller-verified"
+  | "reload-issued";
+
 export interface BuildUpdateDriver {
   stage(build: DeployedBuild): Promise<WorkerBuildIdentity>;
   activate(build: DeployedBuild): Promise<WorkerBuildIdentity>;
@@ -107,6 +114,7 @@ export class BuildUpdateStore {
   private targetGeneration = 0;
   private activationTask: Promise<void> | null = null;
   private activationGeneration = 0;
+  private activationStage: ActivationStage | null = null;
   private reloadIssued = false;
   private activatedBroadcastFor: string | null = null;
   private autoActivate = false;
@@ -167,6 +175,7 @@ export class BuildUpdateStore {
     this.targetGeneration += 1;
     this.activationTask = null;
     this.activationGeneration += 1;
+    this.activationStage = null;
     this.reloadIssued = false;
     this.activatedBroadcastFor = null;
     this.autoActivate = false;
@@ -324,6 +333,19 @@ export class BuildUpdateStore {
 
   defer(): void {
     this.autoActivate = false;
+    if (
+      this.activationTask
+      && (this.activationStage === "worker-activation-requested"
+        || this.activationStage === "controller-verified"
+        || this.activationStage === "reload-issued")
+    ) {
+      // activate_build 已发出，事务不可撤销：不能伪装成已取消。
+      return;
+    }
+    if (this.activationTask) {
+      // 尚在复检或持久化阶段，取消这次激活事务。
+      this.activationGeneration += 1;
+    }
     this.publish({ deferred: true });
   }
 
@@ -340,6 +362,7 @@ export class BuildUpdateStore {
     const task = this.runActivation(generation).finally(() => {
       if (this.activationTask === task) {
         this.activationTask = null;
+        this.activationStage = null;
       }
     });
     this.activationTask = task;
@@ -356,6 +379,7 @@ export class BuildUpdateStore {
     const target = this.target;
     const driver = this.driver;
     if (!target || !driver) return;
+    this.activationStage = "revalidating";
     const confirmed = await this.checkForUpdate();
     if (!this.activationCurrent(generation, target)) return;
     if (!confirmed || confirmed.buildId !== target.buildId || confirmed.assetSetDigest !== target.assetSetDigest) {
@@ -367,6 +391,7 @@ export class BuildUpdateStore {
       this.publish({ phase: "blocked" });
       return;
     }
+    this.activationStage = "flushing";
     if (!flushReloadPersistence()) {
       this.publish({ phase: "error", error: "本地状态保存失败，已取消重新加载" });
       return;
@@ -377,6 +402,7 @@ export class BuildUpdateStore {
       return;
     }
     this.publish({ phase: "activating", error: undefined, deferred: false });
+    this.activationStage = "worker-activation-requested";
     try {
       const identity = await driver.activate(target);
       if (!this.activationCurrent(generation, target)) return;
@@ -388,6 +414,7 @@ export class BuildUpdateStore {
         this.publish({ phase: "error", error: "新 Worker 身份或缓存状态不匹配" });
         return;
       }
+      this.activationStage = "controller-verified";
       this.publish({ controllerBuildId: identity.buildId });
       if (this.activatedBroadcastFor !== identity.buildId) {
         this.activatedBroadcastFor = identity.buildId;
@@ -407,6 +434,7 @@ export class BuildUpdateStore {
       }
       if (this.reloadIssued) return;
       this.reloadIssued = true;
+      this.activationStage = "reload-issued";
       driver.reload();
     } catch (reason) {
       if (!this.activationCurrent(generation, target)) return;
