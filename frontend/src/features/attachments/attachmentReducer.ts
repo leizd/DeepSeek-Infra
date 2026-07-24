@@ -40,7 +40,7 @@ export type AttachmentQueueAction =
   | { type: "batchFailed"; error: string }
   | { type: "itemRemoved"; id: string }
   | { type: "inFlightDiscarded" }
-  | { type: "readyConsumed" }
+  | { type: "readyCommitted"; ids: readonly string[] }
   | { type: "cleared" };
 
 function isInFlight(item: PendingAttachment): boolean {
@@ -136,11 +136,24 @@ export function attachmentQueueReducer(
       return { ...state, items: state.items.filter((item) => item.id !== action.id) };
     case "inFlightDiscarded":
       return { uploading: false, items: state.items.filter((item) => !isInFlight(item)) };
-    case "readyConsumed":
-      return { ...state, items: state.items.filter((item) => item.status !== "ready") };
+    case "readyCommitted": {
+      const committed = new Set(action.ids);
+      return { ...state, items: state.items.filter((item) => !(item.status === "ready" && committed.has(item.id))) };
+    }
     case "cleared":
       return initialAttachmentQueueState;
   }
+}
+
+export interface ReadyAttachmentEntry {
+  id: string;
+  attachment: Attachment;
+}
+
+export function selectReadyAttachmentEntries(state: AttachmentQueueState): ReadyAttachmentEntry[] {
+  return state.items
+    .filter((item) => item.status === "ready" && item.attachment)
+    .map((item) => ({ id: item.id, attachment: item.attachment as Attachment }));
 }
 
 export function selectReadyAttachments(state: AttachmentQueueState): Attachment[] {

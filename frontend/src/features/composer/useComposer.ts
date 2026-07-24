@@ -99,7 +99,6 @@ export function useComposer() {
 
   function submit() {
     const content = value.trim();
-    if (chat.state.requestStatus === "streaming") return;
     if (!online) {
       chat.notify("当前处于离线模式，不能发送消息");
       return;
@@ -112,15 +111,23 @@ export function useComposer() {
       chat.notify("请先移除识别失败的文件");
       return;
     }
-    const ready = attachments.consumeReadyAttachments();
-    if (!content && !ready.length && !chat.quoteDraft) return;
+    // 缺 Key 只打开设置页，不触碰消息与附件，文本和附件原样保留。
     if (!settings.apiKey.trim() && !settings.runtime?.hasServerKey) {
       overlay.openOverlay("settings");
-      void chat.sendMessage(content, { attachments: ready });
       return;
     }
+    // 先只读快照，确认消息被接受后才提交消费附件、清空草稿。
+    const ready = attachments.peekReadyAttachments();
+    const result = chat.tryStartMessage(content, {
+      attachments: ready.map((entry) => entry.attachment),
+      online,
+    });
+    if (!result.accepted) {
+      if (result.reason === "missing-key") overlay.openOverlay("settings");
+      return;
+    }
+    attachments.commitReadyAttachments(ready.map((entry) => entry.id));
     setValue("");
-    void chat.sendMessage(content, { attachments: ready });
   }
 
   function onSubmit(event: FormEvent) {

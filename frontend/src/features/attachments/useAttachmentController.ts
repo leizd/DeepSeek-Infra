@@ -24,9 +24,10 @@ import {
   attachmentQueueReducer,
   initialAttachmentQueueState,
   selectHasErrors,
-  selectReadyAttachments,
+  selectReadyAttachmentEntries,
   type AttachmentQueueState,
   type PendingAttachment,
+  type ReadyAttachmentEntry,
 } from "./attachmentReducer";
 import { createImagePreviews } from "./imagePreview";
 
@@ -40,7 +41,8 @@ export interface AttachmentController {
   removeItem(id: string): void;
   retryWithOcr(id: string): void;
   clear(): void;
-  consumeReadyAttachments(): Attachment[];
+  peekReadyAttachments(): ReadyAttachmentEntry[];
+  commitReadyAttachments(ids: readonly string[]): void;
 }
 
 function pendingItem(file: File): PendingAttachment {
@@ -191,13 +193,18 @@ export function useAttachmentController(): AttachmentController {
     dispatch({ type: "cleared" });
   }, []);
 
-  const consumeReadyAttachments = useCallback(() => {
-    const ready = selectReadyAttachments(state);
+  const peekReadyAttachments = useCallback(
+    () => selectReadyAttachmentEntries(state),
+    [state],
+  );
+
+  const commitReadyAttachments = useCallback((ids: readonly string[]) => {
+    if (!ids.length) return;
+    const committed = new Set(ids);
     for (const item of state.items) {
-      if (item.status === "ready") filesRef.current.delete(item.id);
+      if (item.status === "ready" && committed.has(item.id)) filesRef.current.delete(item.id);
     }
-    if (ready.length) dispatch({ type: "readyConsumed" });
-    return ready;
+    dispatch({ type: "readyCommitted", ids });
   }, [state]);
 
   return useMemo(
@@ -211,8 +218,9 @@ export function useAttachmentController(): AttachmentController {
       removeItem,
       retryWithOcr,
       clear,
-      consumeReadyAttachments,
+      peekReadyAttachments,
+      commitReadyAttachments,
     }),
-    [state, addFiles, addReadyAttachments, cancelUpload, removeItem, retryWithOcr, clear, consumeReadyAttachments],
+    [state, addFiles, addReadyAttachments, cancelUpload, removeItem, retryWithOcr, clear, peekReadyAttachments, commitReadyAttachments],
   );
 }
