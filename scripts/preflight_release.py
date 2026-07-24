@@ -1232,6 +1232,19 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
                 "expiredClientCacheLeasePruned",
             ]
         )
+    if _version_tuple(version) >= (4, 3, 3):
+        required.extend(
+            [
+                "stableBuildDiscovery",
+                "cacheControlContracts",
+                "composerDraftRestored",
+                "updateConsentRequired",
+                "reloadBlockerPreventsActivation",
+                "controllerVerifiedBeforeReload",
+                "supersededBuildRejected",
+                "crossTabReloadNotForced",
+            ]
+        )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(
@@ -1342,6 +1355,14 @@ def check_frontend_bundle_evidence(root: Path, version: str) -> CheckResult:
             [
                 "immutableWorkerBuildIdentity",
                 "workerManifestIdentityBound",
+            ]
+        )
+    if _version_tuple(version) >= (4, 3, 3):
+        required.extend(
+            [
+                "stableBuildDiscoveryRuntime",
+                "stagedWorkerActivationProtocol",
+                "reloadCoordinationRuntime",
             ]
         )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]

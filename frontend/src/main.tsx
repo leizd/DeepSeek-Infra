@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./app/App";
+import { buildUpdateStore } from "./app/buildUpdateStore";
 import { startWorkspaceServiceWorkerRuntime } from "./app/serviceWorkerRegistration";
 import "./shared/styles/app.css";
 import "./shared/styles/workspace-drawer-frame.css";
@@ -29,6 +30,11 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
       windowValue: window,
       documentValue: document,
       pageBuildId: __APP_BUILD_ID__,
+      buildUpdates: buildUpdateStore,
+      fetchValue: window.fetch.bind(window),
+      createBroadcastChannel: "BroadcastChannel" in window
+        ? (name) => new BroadcastChannel(name)
+        : undefined,
     }).catch(() => undefined);
   });
 }

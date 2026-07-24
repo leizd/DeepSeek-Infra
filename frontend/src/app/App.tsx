@@ -2,6 +2,7 @@ import { lazy, Suspense, type ReactNode } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
 
 import { ChatPage } from "../features/chat/ChatPage";
+import { BuildUpdateBanner } from "../features/build-update/BuildUpdateBanner";
 import { AppProviders } from "./AppProviders";
 import { NotFoundPage } from "./NotFoundPage";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
@@ -40,11 +41,14 @@ function TraceRoute() {
 
 export function App() {
   return (
-    <Routes>
-      <Route path="/" element={<WorkspaceRoute />} />
-      <Route path="/ui/" element={<WorkspaceRoute />} />
-      <Route path="/trace/:traceId" element={<TraceRoute />} />
-      <Route path="*" element={<NotFoundPage />} />
-    </Routes>
+    <>
+      <BuildUpdateBanner />
+      <Routes>
+        <Route path="/" element={<WorkspaceRoute />} />
+        <Route path="/ui/" element={<WorkspaceRoute />} />
+        <Route path="/trace/:traceId" element={<TraceRoute />} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </>
   );
 }

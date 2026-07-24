@@ -68,6 +68,8 @@ export function useChatController() {
     undefined,
     () => createInitialChatState(loadPersistedConversationState()),
   );
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const abortControllerRef = useRef<AbortController | null>(null);
   const outputPauseGateRef = useRef<ReturnType<typeof createOutputPauseGate> | null>(null);
   if (!outputPauseGateRef.current) outputPauseGateRef.current = createOutputPauseGate();
@@ -76,16 +78,19 @@ export function useChatController() {
   const [quoteDraft, setQuoteDraft] = useState<QuoteDraft | null>(null);
   const waitUntilResumed = useCallback(() => outputPauseGateRef.current?.waitUntilResumed() ?? Promise.resolve(), []);
 
+  const flushConversationPersistence = useCallback(() => {
+    const current = stateRef.current;
+    savePersistedConversationState({
+      schemaVersion: 1,
+      currentConversationId: current.currentConversationId,
+      conversations: current.conversations,
+    });
+  }, []);
+
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      savePersistedConversationState({
-        schemaVersion: 1,
-        currentConversationId: state.currentConversationId,
-        conversations: state.conversations,
-      });
-    }, 120);
+    const timer = window.setTimeout(flushConversationPersistence, 120);
     return () => window.clearTimeout(timer);
-  }, [state.conversations, state.currentConversationId]);
+  }, [flushConversationPersistence, state.conversations, state.currentConversationId]);
 
   const requestSettings = useCallback((): ChatRequestSettings => ({
     apiKey: settings.apiKey,
@@ -392,5 +397,6 @@ export function useChatController() {
     dismissMemorySuggestion,
     quoteMessage,
     clearQuote,
+    flushConversationPersistence,
   };
 }

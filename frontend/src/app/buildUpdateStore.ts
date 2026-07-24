@@ -1,0 +1,409 @@
+import {
+  flushReloadPersistence,
+  getReloadBlockerSnapshot,
+  subscribeReloadBlockers,
+  type ReloadBlocker,
+} from "./reloadBlockers";
+import type { WorkerBuildIdentity } from "./workspaceOfflineWarmup";
+
+const BUILD_ID_PATTERN = /^[0-9a-f]{16}$/;
+const ASSET_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+const SOURCE_REVISION_PATTERN = /^[0-9A-Za-z._-]{7,160}$/;
+const UPDATE_INTERVAL_MS = 5 * 60_000;
+
+export interface DeployedBuild {
+  schemaVersion: 1;
+  version: string;
+  sourceRevision: string;
+  buildId: string;
+  assetSetDigest: string;
+}
+
+export type BuildUpdatePhase =
+  | "current"
+  | "checking"
+  | "available"
+  | "installing"
+  | "ready"
+  | "blocked"
+  | "activating"
+  | "reload-required"
+  | "error";
+
+export interface BuildUpdateSnapshot {
+  phase: BuildUpdatePhase;
+  pageBuildId: string;
+  controllerBuildId?: string;
+  targetBuildId?: string;
+  targetVersion?: string;
+  targetAssetSetDigest?: string;
+  error?: string;
+  deferred?: boolean;
+}
+
+export type BuildUpdateMessage =
+  | { type: "build_available"; buildId: string; version: string }
+  | { type: "build_staged"; buildId: string }
+  | { type: "build_activated"; buildId: string };
+
+export interface BuildUpdateDriver {
+  stage(build: DeployedBuild): Promise<WorkerBuildIdentity>;
+  activate(build: DeployedBuild): Promise<WorkerBuildIdentity>;
+  discard?(build: DeployedBuild): Promise<void>;
+  reload(): void;
+}
+
+interface BroadcastChannelLike {
+  postMessage(message: BuildUpdateMessage): void;
+  close(): void;
+  addEventListener(type: "message", listener: EventListener): void;
+  removeEventListener(type: "message", listener: EventListener): void;
+}
+
+export interface BuildUpdateEnvironment {
+  fetchValue: typeof fetch;
+  windowValue: Pick<
+    Window,
+    "addEventListener" | "removeEventListener" | "setInterval" | "clearInterval"
+  >;
+  documentValue: Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">;
+  createBroadcastChannel?: (name: string) => BroadcastChannelLike;
+}
+
+function validDeployedBuild(value: unknown): value is DeployedBuild {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<DeployedBuild>;
+  return candidate.schemaVersion === 1
+    && typeof candidate.version === "string"
+    && candidate.version.length > 0
+    && candidate.version.length <= 32
+    && typeof candidate.sourceRevision === "string"
+    && SOURCE_REVISION_PATTERN.test(candidate.sourceRevision)
+    && typeof candidate.buildId === "string"
+    && BUILD_ID_PATTERN.test(candidate.buildId)
+    && typeof candidate.assetSetDigest === "string"
+    && ASSET_DIGEST_PATTERN.test(candidate.assetSetDigest);
+}
+
+export function parseDeployedBuild(value: unknown): DeployedBuild | null {
+  return validDeployedBuild(value) ? value : null;
+}
+
+function errorMessage(reason: unknown): string {
+  return reason instanceof Error && reason.message ? reason.message : "检查更新失败";
+}
+
+export class BuildUpdateStore {
+  private snapshot: BuildUpdateSnapshot;
+  private readonly listeners = new Set<() => void>();
+  private environment: BuildUpdateEnvironment | null = null;
+  private driver: BuildUpdateDriver | null = null;
+  private channel: BroadcastChannelLike | null = null;
+  private intervalHandle: number | null = null;
+  private checkPromise: Promise<DeployedBuild | null> | null = null;
+  private checkController: AbortController | null = null;
+  private checkSequence = 0;
+  private target: DeployedBuild | null = null;
+  private targetGeneration = 0;
+  private autoActivate = false;
+  private stopped = false;
+  private unsubscribeBlockers: (() => void) | null = null;
+
+  constructor(readonly pageBuildId: string) {
+    this.snapshot = { phase: "current", pageBuildId };
+  }
+
+  getSnapshot = (): BuildUpdateSnapshot => this.snapshot;
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  private publish(patch: Partial<BuildUpdateSnapshot>): void {
+    this.snapshot = { ...this.snapshot, ...patch };
+    this.listeners.forEach((listener) => listener());
+  }
+
+  configure(environment: BuildUpdateEnvironment, driver: BuildUpdateDriver): () => void {
+    this.stop();
+    this.stopped = false;
+    this.environment = environment;
+    this.driver = driver;
+    this.publish({
+      phase: "current",
+      controllerBuildId: undefined,
+      targetBuildId: undefined,
+      targetVersion: undefined,
+      targetAssetSetDigest: undefined,
+      error: undefined,
+      deferred: false,
+    });
+    this.channel = environment.createBroadcastChannel?.("deepseek-build-updates") ?? null;
+    this.channel?.addEventListener("message", this.onBroadcastMessage);
+    environment.windowValue.addEventListener("online", this.onOnline);
+    environment.documentValue.addEventListener("visibilitychange", this.onVisibility);
+    this.intervalHandle = environment.windowValue.setInterval(() => {
+      if (environment.documentValue.visibilityState === "visible") void this.checkForUpdate();
+    }, UPDATE_INTERVAL_MS);
+    this.unsubscribeBlockers = subscribeReloadBlockers(this.onBlockersChanged);
+    void this.checkForUpdate();
+    return () => {
+      this.stop();
+    };
+  }
+
+  stop(): void {
+    this.stopped = true;
+    this.checkSequence += 1;
+    this.checkController?.abort();
+    this.checkController = null;
+    this.checkPromise = null;
+    this.target = null;
+    this.targetGeneration += 1;
+    this.autoActivate = false;
+    const environment = this.environment;
+    if (environment) {
+      environment.windowValue.removeEventListener("online", this.onOnline);
+      environment.documentValue.removeEventListener("visibilitychange", this.onVisibility);
+      if (this.intervalHandle !== null) environment.windowValue.clearInterval(this.intervalHandle);
+    }
+    this.intervalHandle = null;
+    this.channel?.removeEventListener("message", this.onBroadcastMessage);
+    this.channel?.close();
+    this.channel = null;
+    this.unsubscribeBlockers?.();
+    this.unsubscribeBlockers = null;
+    this.environment = null;
+    this.driver = null;
+  }
+
+  private onOnline: EventListener = () => {
+    void this.checkForUpdate();
+  };
+
+  private onVisibility: EventListener = () => {
+    if (this.environment?.documentValue.visibilityState === "visible") void this.checkForUpdate();
+  };
+
+  private onBroadcastMessage: EventListener = (event) => {
+    const message = (event as MessageEvent<BuildUpdateMessage>).data;
+    if (!message || !BUILD_ID_PATTERN.test(message.buildId) || message.buildId === this.pageBuildId) return;
+    if (message.type === "build_available" || message.type === "build_staged") {
+      void this.checkForUpdate();
+      return;
+    }
+    if (message.type === "build_activated") {
+      if (this.target?.buildId === message.buildId) {
+        this.publish({ phase: "reload-required", controllerBuildId: message.buildId, deferred: false });
+      } else {
+        void this.checkForUpdate();
+      }
+    }
+  };
+
+  private onBlockersChanged = (): void => {
+    if (!this.autoActivate || getReloadBlockerSnapshot().length) return;
+    this.autoActivate = false;
+    void this.activate();
+  };
+
+  async checkForUpdate(): Promise<DeployedBuild | null> {
+    if (this.checkPromise) return this.checkPromise;
+    const environment = this.environment;
+    if (!environment || this.stopped) return null;
+    const previous = this.snapshot;
+    const sequence = ++this.checkSequence;
+    const controller = new AbortController();
+    this.checkController = controller;
+    this.publish({ phase: "checking", error: undefined });
+    this.checkPromise = (async () => {
+      try {
+        const response = await environment.fetchValue("/ui/workspace-assets.json", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`检查更新失败（HTTP ${response.status}）`);
+        const build = parseDeployedBuild(await response.json());
+        if (sequence !== this.checkSequence || this.stopped) return null;
+        if (!build) throw new Error("服务器构建指针格式无效");
+        if (build.buildId === this.pageBuildId) {
+          if (this.target) {
+            this.target = null;
+            this.targetGeneration += 1;
+          }
+          this.publish({
+            phase: "current",
+            targetBuildId: undefined,
+            targetVersion: undefined,
+            targetAssetSetDigest: undefined,
+            error: undefined,
+            deferred: false,
+          });
+          return build;
+        }
+        const changed = this.target?.buildId !== build.buildId
+          || this.target.assetSetDigest !== build.assetSetDigest;
+        if (changed || previous.phase === "error") {
+          const superseded = changed ? this.target : null;
+          this.target = build;
+          this.targetGeneration += 1;
+          if (superseded) void this.driver?.discard?.(superseded);
+          this.publish({
+            phase: "available",
+            targetBuildId: build.buildId,
+            targetVersion: build.version,
+            targetAssetSetDigest: build.assetSetDigest,
+            error: undefined,
+            deferred: false,
+          });
+          if (changed) {
+            this.channel?.postMessage({
+              type: "build_available",
+              buildId: build.buildId,
+              version: build.version,
+            });
+          }
+          void this.stage(build, this.targetGeneration);
+        } else if (previous.phase !== "checking") {
+          this.publish({ phase: previous.phase, error: previous.error });
+        } else {
+          this.publish({ phase: "available", error: undefined });
+        }
+        return build;
+      } catch (reason) {
+        if (sequence !== this.checkSequence || this.stopped || controller.signal.aborted) return null;
+        if (this.target) {
+          this.publish({ phase: previous.phase === "checking" ? "available" : previous.phase, error: undefined });
+        } else if (previous.phase === "current") {
+          this.publish({ phase: "current", error: undefined });
+        } else {
+          this.publish({ phase: "error", error: errorMessage(reason) });
+        }
+        return null;
+      } finally {
+        if (sequence === this.checkSequence) {
+          this.checkPromise = null;
+          this.checkController = null;
+        }
+      }
+    })();
+    return this.checkPromise;
+  }
+
+  private async stage(build: DeployedBuild, generation: number): Promise<void> {
+    const driver = this.driver;
+    if (!driver) return;
+    this.publish({ phase: "installing" });
+    try {
+      const identity = await driver.stage(build);
+      if (
+        generation !== this.targetGeneration
+        || this.target?.buildId !== build.buildId
+        || identity.buildId !== build.buildId
+        || identity.assetSetDigest !== build.assetSetDigest
+        || !identity.cacheReady
+      ) {
+        return;
+      }
+      this.publish({ phase: "ready", error: undefined });
+      this.channel?.postMessage({ type: "build_staged", buildId: build.buildId });
+    } catch (reason) {
+      if (generation !== this.targetGeneration) return;
+      this.publish({ phase: "error", error: errorMessage(reason) });
+    }
+  }
+
+  defer(): void {
+    this.autoActivate = false;
+    this.publish({ deferred: true });
+  }
+
+  async activateWhenReady(): Promise<void> {
+    if (getReloadBlockerSnapshot().length) {
+      this.autoActivate = true;
+      this.publish({ phase: "blocked", deferred: false });
+      return;
+    }
+    await this.activate();
+  }
+
+  private async activate(): Promise<void> {
+    const target = this.target;
+    const driver = this.driver;
+    if (!target || !driver) return;
+    const confirmed = await this.checkForUpdate();
+    if (!confirmed || confirmed.buildId !== target.buildId || confirmed.assetSetDigest !== target.assetSetDigest) {
+      return;
+    }
+    const blockers = getReloadBlockerSnapshot();
+    if (blockers.length) {
+      this.autoActivate = true;
+      this.publish({ phase: "blocked" });
+      return;
+    }
+    if (!flushReloadPersistence()) {
+      this.publish({ phase: "error", error: "本地状态保存失败，已取消重新加载" });
+      return;
+    }
+    if (getReloadBlockerSnapshot().length) {
+      this.autoActivate = true;
+      this.publish({ phase: "blocked" });
+      return;
+    }
+    this.publish({ phase: "activating", error: undefined, deferred: false });
+    try {
+      const identity = await driver.activate(target);
+      const stillCurrent = this.target?.buildId === target.buildId
+        && this.target.assetSetDigest === target.assetSetDigest;
+      if (
+        !stillCurrent
+        || identity.buildId !== target.buildId
+        || identity.assetSetDigest !== target.assetSetDigest
+        || !identity.cacheReady
+      ) {
+        this.publish({ phase: "error", error: "新 Worker 身份或缓存状态不匹配" });
+        return;
+      }
+      this.publish({ controllerBuildId: identity.buildId });
+      this.channel?.postMessage({ type: "build_activated", buildId: identity.buildId });
+      if (getReloadBlockerSnapshot().length) {
+        this.publish({ phase: "reload-required" });
+        return;
+      }
+      if (!flushReloadPersistence()) {
+        this.publish({ phase: "reload-required", error: "本地状态保存失败，请重试" });
+        return;
+      }
+      if (getReloadBlockerSnapshot().length) {
+        this.publish({ phase: "reload-required" });
+        return;
+      }
+      driver.reload();
+    } catch (reason) {
+      this.publish({ phase: "error", error: errorMessage(reason) });
+    }
+  }
+
+  noteControllerIdentity(identity: WorkerBuildIdentity): void {
+    this.publish({ controllerBuildId: identity.buildId });
+    if (identity.buildId === this.pageBuildId) return;
+    if (
+      this.target
+      && identity.buildId === this.target.buildId
+      && identity.assetSetDigest === this.target.assetSetDigest
+      && identity.cacheReady
+    ) {
+      this.publish({ phase: "reload-required" });
+      return;
+    }
+    void this.checkForUpdate();
+  }
+
+  blockers(): readonly ReloadBlocker[] {
+    return getReloadBlockerSnapshot();
+  }
+}
+
+const compiledPageBuildId = typeof __APP_BUILD_ID__ === "string" ? __APP_BUILD_ID__ : "0000000000000000";
+export const buildUpdateStore = new BuildUpdateStore(compiledPageBuildId);

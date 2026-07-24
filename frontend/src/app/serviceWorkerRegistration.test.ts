@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { startWorkspaceServiceWorkerRuntime } from "./serviceWorkerRegistration";
+import { createBuildUpdateDriver, startWorkspaceServiceWorkerRuntime } from "./serviceWorkerRegistration";
+import type { DeployedBuild } from "./buildUpdateStore";
 
 const BUILD_A = "aaaaaaaaaaaaaaaa";
 const BUILD_B = "bbbbbbbbbbbbbbbb";
@@ -31,7 +32,7 @@ function runtimeWindow(pathname = "/") {
   const intervals = new Map<number, () => void>();
   let idleCallback: (() => void) | undefined;
   return {
-    location: { pathname },
+    location: { pathname, reload: vi.fn() },
     requestIdleCallback: vi.fn((callback: () => void) => {
       idleCallback = callback;
       return nextHandle++;
@@ -105,6 +106,73 @@ function channelFactory(): MessageChannel {
 }
 
 describe("build-scoped service worker registration", () => {
+  it("stages a matching waiting worker and activates it only through the exact build message", async () => {
+    channels.length = 0;
+    const workerA = {
+      ...controller(BUILD_A, DIGEST_A),
+      scriptURL: `https://example.test/sw-${BUILD_A}.js`,
+    };
+    const serviceWorkers = container(workerA);
+    const workerB = {
+      scriptURL: `https://example.test/sw-${BUILD_B}.js`,
+      state: "installed",
+      postMessage: vi.fn((message: unknown, transfer?: Transferable[]) => {
+        const request = message as { type?: string };
+        if (request.type === "get_build_identity") {
+          const channel = transfer?.[0] as unknown as FakeMessageChannel["port2"] | undefined;
+          channels.find((candidate) => candidate.port2 === channel)?.respond({
+            type: "build_identity",
+            buildId: BUILD_B,
+            assetSetDigest: DIGEST_B,
+            cacheReady: true,
+          });
+        }
+        if (request.type === "activate_build") {
+          serviceWorkers.controller = workerB;
+          serviceWorkers.dispatch("controllerchange");
+        }
+      }),
+    };
+    serviceWorkers.register.mockResolvedValue({
+      waiting: workerB,
+      active: workerA,
+    });
+    const windowValue = runtimeWindow();
+    const driver = createBuildUpdateDriver(
+      serviceWorkers,
+      windowValue,
+      true,
+      channelFactory,
+    );
+    const build: DeployedBuild = {
+      schemaVersion: 1,
+      version: "4.3.3",
+      sourceRevision: "revision-b",
+      buildId: BUILD_B,
+      assetSetDigest: DIGEST_B,
+    };
+
+    await expect(driver.stage(build)).resolves.toMatchObject({
+      buildId: BUILD_B,
+      assetSetDigest: DIGEST_B,
+      cacheReady: true,
+    });
+    await expect(driver.activate(build)).resolves.toMatchObject({ buildId: BUILD_B });
+    expect(workerB.postMessage).toHaveBeenCalledWith({
+      type: "activate_build",
+      buildId: BUILD_B,
+      assetSetDigest: DIGEST_B,
+    });
+    expect(serviceWorkers.register).toHaveBeenCalledWith(`/sw-${BUILD_B}.js`, {
+      scope: "/",
+      updateViaCache: "none",
+    });
+    expect(serviceWorkers.register).toHaveBeenCalledTimes(1);
+
+    driver.reload();
+    expect(windowValue.location.reload).toHaveBeenCalledTimes(1);
+  });
+
   it("does not warm page B through worker A, then warms once after controllerchange to B", async () => {
     channels.length = 0;
     const workerA = controller(BUILD_A, DIGEST_A);

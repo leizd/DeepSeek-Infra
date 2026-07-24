@@ -14,6 +14,7 @@ let manifestPromise;
 const warmupTasks = new Map();
 const pruningBuildIds = new Set();
 let leaseMutationTask = Promise.resolve();
+let activationRequested = false;
 
 function loadAssetManifest() {
   if (!manifestPromise) {
@@ -200,8 +201,13 @@ function cacheWorkspacePrimary() {
   return task;
 }
 
+async function installWorker() {
+  await cacheCore();
+  if (!self.registration.active) await self.skipWaiting();
+}
+
 self.addEventListener("install", (event) => {
-  event.waitUntil(cacheCore().then(() => self.skipWaiting()));
+  event.waitUntil(installWorker());
 });
 
 async function activateWorker() {
@@ -303,6 +309,26 @@ self.addEventListener("message", (event) => {
   }
   if (data.type === "report_build_lease") {
     event.waitUntil(reconcileClientLease(event.source?.id, data.buildId));
+    return;
+  }
+  if (data.type === "activate_build") {
+    const activation = (async () => {
+      if (
+        activationRequested
+        || data.buildId !== WORKER_BUILD_ID
+        || data.assetSetDigest !== WORKER_ASSET_SET_DIGEST
+      ) {
+        return;
+      }
+      await loadAssetManifest();
+      const cache = await currentBuildCache();
+      const cacheReady = Boolean(await cache.match(SHELL_URL))
+        && Boolean(await cache.match(ASSET_MANIFEST_URL));
+      if (!cacheReady) return;
+      activationRequested = true;
+      await self.skipWaiting();
+    })();
+    event.waitUntil(activation);
     return;
   }
   if (

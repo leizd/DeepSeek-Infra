@@ -22,7 +22,19 @@ def test_http_headers_json_body_and_port_fallbacks(monkeypatch: pytest.MonkeyPat
     assert api.headers["X-Frame-Options"] == "SAMEORIGIN" and api.headers["Cache-Control"] == "no-store"
     static = Response()
     http_utils.apply_common_headers(static, "/index.html")
-    assert static.headers["X-Frame-Options"] == "DENY" and static.headers["Cache-Control"] == "no-cache"
+    assert static.headers["X-Frame-Options"] == "DENY" and static.headers["Cache-Control"] == "no-store"
+    assert http_utils.frontend_cache_control("/ui/workspace-assets.json") == "no-store"
+    assert http_utils.frontend_cache_control("/ui/workspace-assets-0123456789abcdef.json") == (
+        "public, max-age=31536000, immutable"
+    )
+    assert http_utils.frontend_cache_control("/sw-0123456789abcdef.js") == "public, max-age=31536000, immutable"
+    assert http_utils.frontend_cache_control("/ui/sw-root-0123456789abcdef.js") == (
+        "public, max-age=31536000, immutable"
+    )
+    assert http_utils.frontend_cache_control("/ui/assets/index-a1B2c3D4.js") == (
+        "public, max-age=31536000, immutable"
+    )
+    assert http_utils.frontend_cache_control("/vendor/katex/katex.min.js") == "no-cache"
     assert http_utils.json_response({"ok": True}, status=201).status_code == 201
 
     request = cast(Any, SimpleNamespace(headers={"Content-Length": "0"}, body=lambda: None))

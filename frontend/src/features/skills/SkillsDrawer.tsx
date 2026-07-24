@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { SimpleSkillDraft, Skill } from "../../api/skillsApi";
 import { skillDraftIntent } from "../../app/mutationIntents";
+import { clearReloadBlocker, setReloadBlocker } from "../../app/reloadBlockers";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useSkills } from "../../contexts/SkillsContext";
 import { Icon } from "../../shared/ui/Icon";
@@ -16,6 +17,7 @@ function SkillForm({
   onSubmit,
   onCommitted,
   onCancel,
+  blockerId,
 }: {
   initial: SimpleSkillDraft;
   submitLabel: string;
@@ -23,16 +25,28 @@ function SkillForm({
   onSubmit(draft: SimpleSkillDraft): Promise<void>;
   onCommitted(): void;
   onCancel(): void;
+  blockerId: string;
 }) {
   const [draft, setDraft] = useState(initial);
   const [busy, setBusy] = useState(false);
   const draftRef = useRef(initial);
   const generationRef = useRef(0);
   const pending = busy || active;
+  const dirty = skillDraftIntent(draft) !== skillDraftIntent(initial);
 
   useEffect(() => () => {
     generationRef.current += 1;
   }, []);
+
+  useEffect(() => {
+    setReloadBlocker({
+      id: blockerId,
+      label: "技能表单尚未保存",
+      kind: "unsaved",
+      active: dirty,
+    });
+    return () => clearReloadBlocker(blockerId);
+  }, [blockerId, dirty]);
 
   function updateDraft(next: SimpleSkillDraft): void {
     draftRef.current = next;
@@ -148,6 +162,7 @@ function SkillCard({ skill }: { skill: Skill }) {
           onSubmit={(draft) => skills.update({ ...draft, skillId: skill.skillId })}
           onCommitted={() => setEditing(false)}
           onCancel={() => setEditing(false)}
+          blockerId={`skill-form-${skill.skillId}`}
         />
       )}
     </li>
@@ -195,6 +210,7 @@ export function SkillsDrawer() {
           onSubmit={skills.create}
           onCommitted={() => setCreating(false)}
           onCancel={() => setCreating(false)}
+          blockerId="skill-form-new"
         />
       )}
       {skills.error && (

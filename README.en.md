@@ -5,27 +5,29 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.3.2-blue)
+![Version](https://img.shields.io/badge/version-4.3.3-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.3.2 at a glance
+## 4.3.3 at a glance
 
-- Vite stamps an immutable `buildId` from the release version, source revision and build-configuration version. A separate `assetSetDigest` proves the emitted page, assets, manifest schema and worker templates.
-- Every page registers `sw-<buildId>.js`; each worker embeds its identity and loads only `workspace-assets-<buildId>.json`. The stable manifest is only a current-release pointer.
-- Warmup waits for a MessageChannel handshake with `navigator.serviceWorker.controller`. A page controlled by the wrong build reports its own lease but never sends that worker another build's warmup request.
-- Primary warmup is build-deduplicated, skips exact cache hits, resumes only missing assets after partial failure and binds its completion marker to the asset digest.
-- Active Client Build Leases preserve older exact-hash chunks across A→B→C deployments. Closed, expired clients are pruned while the current and immediately previous build remain retained.
-- Existing 4.3.1 continuity behavior and 4.3.0 entry, CSS and optional chunk budgets remain unchanged.
+- The client discovers deployments through the stable no-store Workspace pointer on startup, visibility and online recovery, a visible five-minute interval, and manual checks.
+- Upgrade workers install and verify their Core Cache but remain waiting. Exact `buildId` plus `assetSetDigest` consent is required before activation; first installation remains automatic.
+- Reload waits for chat/Agent output, all React Query writes, uploads, unsent attachments, quotes, Composer drafts, and Workspace form drafts to become quiescent.
+- Composer drafts are isolated per conversation in `sessionStorage`, and conversation plus draft persistence is flushed synchronously before activation.
+- Reload occurs only after the new controller confirms the target identity, digest, and cache readiness. A superseded B target cannot overwrite or activate after C is discovered.
+- Tabs coordinate availability and activation through `BroadcastChannel`, but only the initiating tab reloads itself.
+- `index.html` and the stable pointer are no-store; build-scoped manifests, workers, and hashed assets are one-year immutable.
+- Existing 4.3.2 immutable identity and Client Build Leases, 4.3.1 continuity behavior, and 4.3.0 bundle budgets remain unchanged.
 - The 4.2.8 exact-merge Evidence assembly remains the release-trust foundation.
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.3.2 release notes](docs/releases/4.3.2.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.3.3 release notes](docs/releases/4.3.3.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -85,7 +87,7 @@ npm run check --prefix frontend
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.3.2 --ga
+python scripts/preflight_release.py --version 4.3.3 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.
