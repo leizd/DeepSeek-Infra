@@ -4,6 +4,26 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.3.3] - Update Discovery and Quiescent Reload
+
+### Staged update discovery
+
+- Checks the stable `workspace-assets.json` deployment pointer at startup, on visibility/online recovery, every five minutes while visible and on explicit request, with no-store fetches, strict identity validation, request deduplication and stale-target rejection.
+- Keeps upgrade Workers waiting after their verified Core Cache install. Only an exact `activate_build` message bound to the target `buildId` and `assetSetDigest` may request activation; first install remains automatic.
+- Coordinates build availability and activation state across tabs with `BroadcastChannel` while leaving every non-initiating tab in control of its own reload.
+
+### Quiescent reload safety
+
+- Adds an external build-update state store and a compact, non-modal update banner with explicit defer, retry and consent actions.
+- Blocks activation while chat or Agent output, React Query mutations, uploads, ready attachments, quotes, Composer drafts or Workspace forms are active.
+- Persists Composer drafts per conversation in `sessionStorage`, synchronously flushes draft and conversation state before activation, and reloads only after the new controller identity, digest and Cache readiness are verified.
+- Gives `index.html` and the stable deployment pointer `no-store`, while build-scoped manifests, Workers and hashed assets receive one-year immutable caching.
+
+### Compatibility
+
+- Adds no runtime dependency and changes no backend API, offline Mutation persistence, Provider ownership or bundle budget.
+- Preserves 4.3.2 immutable identity/Client Lease retention, 4.3.1 lazy continuity and the 4.2.8 exact-merge Evidence chain.
+
 
 ## [4.3.2] - Immutable Build Identity and Multi-Tab Cache Handoff
 

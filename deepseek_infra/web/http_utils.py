@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from http.cookies import SimpleCookie
 from typing import Any
@@ -16,6 +17,27 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import clean_filename, local_ip
 
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
+IMMUTABLE_FRONTEND_CACHE_CONTROL = "public, max-age=31536000, immutable"
+_BUILD_SCOPED_FRONTEND_PATH = re.compile(
+    r"^/(?:ui/)?(?:sw(?:-root)?-[0-9a-f]{16}\.js|workspace-assets-[0-9a-f]{16}\.json)$"
+)
+_HASHED_FRONTEND_ASSET_PATH = re.compile(
+    r"^/ui/assets/.+-[A-Za-z0-9_-]{8,}\.(?:css|js|mjs|png|svg|webp|woff2?)$",
+    re.IGNORECASE,
+)
+
+
+def frontend_cache_control(path: str, content_type: str = "") -> str:
+    """Return the explicit cache contract for API and frontend resources."""
+    if path.startswith("/api/"):
+        return "no-store"
+    if path in {"/index.html", "/ui/index.html", "/ui/workspace-assets.json"}:
+        return "no-store"
+    if content_type.lower().startswith("text/html"):
+        return "no-store"
+    if _BUILD_SCOPED_FRONTEND_PATH.fullmatch(path) or _HASHED_FRONTEND_ASSET_PATH.fullmatch(path):
+        return IMMUTABLE_FRONTEND_CACHE_CONTROL
+    return "no-cache"
 
 
 def apply_common_headers(response: Response, path: str) -> None:
@@ -47,7 +69,7 @@ def apply_common_headers(response: Response, path: str) -> None:
             "frame-ancestors 'none'"
         )
         response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Cache-Control"] = "no-store" if path.startswith("/api/") else "no-cache"
+    response.headers["Cache-Control"] = frontend_cache_control(path, response.headers.get("Content-Type", ""))
 
 
 def json_response(data: dict[str, Any], status: int = 200, headers: dict[str, str] | None = None) -> JSONResponse:

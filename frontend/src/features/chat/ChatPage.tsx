@@ -6,6 +6,8 @@ import { useChat } from "../../contexts/ChatContext";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useSettings } from "../../contexts/SettingsContext";
 import { useOnlineStatus } from "../../shared/useOnlineStatus";
+import { buildUpdateStore } from "../../app/buildUpdateStore";
+import { ReloadReadiness } from "../build-update/BuildUpdateBanner";
 import { Composer } from "../composer/Composer";
 import { HistoryDrawer } from "../history/HistoryDrawer";
 import { MemorySuggestionToast } from "../memory/MemorySuggestionToast";
@@ -100,6 +102,7 @@ function ChatWorkspace() {
   return (
     <>
       <section className="chat-workspace">
+        <ReloadReadiness />
         <header className="chat-topbar">
           <button className="topbar-icon history-trigger" type="button" aria-label="打开历史" onClick={() => overlay.openOverlay("history")}><Icon name="menu" /></button>
           <div className="topbar-title">
@@ -110,6 +113,12 @@ function ChatWorkspace() {
             </span>
           </div>
           <div className="topbar-actions">
+            <button
+              className="topbar-icon"
+              type="button"
+              aria-label="检查更新"
+              onClick={() => void buildUpdateStore.checkForUpdate()}
+            ><Icon name="refresh" /></button>
             <button
               className="topbar-icon"
               type="button"

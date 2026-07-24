@@ -48,7 +48,7 @@ def _bundle(root: Path, *, leak: bool = False, initial_size: int = 100) -> None:
     assets.mkdir(parents=True)
     manifest_dir.mkdir()
     (root / "frontend").mkdir()
-    (root / "frontend/package.json").write_text(json.dumps({"version": "4.3.2"}), encoding="utf-8")
+    (root / "frontend/package.json").write_text(json.dumps({"version": "4.3.3"}), encoding="utf-8")
     (output / "index.html").write_text(
         f'<meta name="deepseek-infra-build-id" content="{BUILD_ID}" />'
         '<meta name="deepseek-infra-source-revision" content="test-revision" />',
@@ -61,11 +61,16 @@ def _bundle(root: Path, *, leak: bool = False, initial_size: int = 100) -> None:
                     f'const WORKER_BUILD_ID = "{BUILD_ID}";',
                     f'const WORKER_ASSET_SET_DIGEST = "{ASSET_SET_DIGEST}";',
                     f'const ASSET_MANIFEST_URL = "/ui/workspace-assets-{BUILD_ID}.json";',
+                    "if (!self.registration.active) await self.skipWaiting();",
+                    'if (data.type === "activate_build") {',
+                    "  if (data.assetSetDigest !== WORKER_ASSET_SET_DIGEST) return;",
+                    "}",
                 )
             ),
             encoding="utf-8",
         )
-    entry_source = "Category summary" if leak else "w" * initial_size
+    update_markers = "/ui/workspace-assets.json deepseek-build-updates activate_build composer-draft"
+    entry_source = "Category summary" if leak else ("w" * initial_size) + update_markers
     (assets / "index.js").write_text(entry_source, encoding="utf-8")
     (assets / "shared.js").write_text("shared", encoding="utf-8")
     (assets / "TracePage.js").write_text("trace page", encoding="utf-8")
@@ -108,7 +113,7 @@ def _bundle(root: Path, *, leak: bool = False, initial_size: int = 100) -> None:
         output,
         {
             "schemaVersion": 1,
-            "version": "4.3.2",
+            "version": "4.3.3",
             "sourceRevision": "test-revision",
             "buildId": BUILD_ID,
             "assetSetDigest": ASSET_SET_DIGEST,
@@ -127,6 +132,9 @@ def test_bundle_contract_accepts_workspace_demand_loading(tmp_path: Path) -> Non
     assert report["checks"]["workspaceProjectsDynamicEntry"] == "PASS"
     assert report["checks"]["workspaceOptionalCssDeferred"] == "PASS"
     assert report["checks"]["workspaceOfflineAssetManifest"] == "PASS"
+    assert report["checks"]["stableBuildDiscoveryRuntime"] == "PASS"
+    assert report["checks"]["stagedWorkerActivationProtocol"] == "PASS"
+    assert report["checks"]["reloadCoordinationRuntime"] == "PASS"
     assert report["initialBundleBudgetBytes"] == 390_000
     assert report["initialCssBudgetBytes"] == 28_000
     assert report["optionalChunkBudgetBytes"] == 90_000

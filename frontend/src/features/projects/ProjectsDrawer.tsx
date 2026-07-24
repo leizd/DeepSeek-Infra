@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { clearReloadBlocker, setReloadBlocker } from "../../app/reloadBlockers";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useFilePreview } from "../../contexts/FilePreviewContext";
 import { useProjects } from "../../contexts/ProjectsContext";
@@ -93,6 +94,20 @@ export function ProjectsDrawer() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const renameDraftRef = useRef("");
+  const renamedProject = renamingId ? projects.projects.find((project) => project.id === renamingId) : undefined;
+  const hasProjectDraft = Boolean(name.trim())
+    || Boolean(renamedProject && renameDraft.trim() !== renamedProject.name.trim());
+
+  useEffect(() => {
+    setReloadBlocker({
+      id: "project-form-draft",
+      label: "项目表单尚未保存",
+      kind: "unsaved",
+      active: overlay.activeOverlay === "projects" && hasProjectDraft,
+    });
+    return () => clearReloadBlocker("project-form-draft");
+  }, [hasProjectDraft, overlay.activeOverlay]);
+
   if (overlay.activeOverlay !== "projects") return null;
   const active = projects.activeProject;
   const activeUploading = active ? projects.isUploadingProject(active.id) : false;

@@ -36,8 +36,9 @@ def test_react_root_pwa_sources_are_owned_by_frontend_build() -> None:
 
     assert '<link rel="manifest" href="/manifest.webmanifest" />' in index
     assert "startWorkspaceServiceWorkerRuntime" in main
-    assert "`/sw-${pageBuildId}.js`" in registration
-    assert "`/ui/sw-${pageBuildId}.js`" in registration
+    assert "if (!BUILD_ID_PATTERN.test(buildId))" in registration
+    assert "`/sw-${buildId}.js`" in registration
+    assert "`/ui/sw-${buildId}.js`" in registration
     assert 'updateViaCache: "none"' in registration
     assert "container.controller" in registration
     assert 'const CACHE_PREFIX = "deepseek-react-root-' in root_worker

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { createReminder, deleteReminder, listReminders, type Reminder } from "../../api/remindersApi";
+import { clearReloadBlocker, setReloadBlocker } from "../../app/reloadBlockers";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { Icon } from "../../shared/ui/Icon";
 
@@ -23,6 +24,8 @@ export function RemindersDrawer() {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [dueAt, setDueAt] = useState(() => toLocalInputValue(new Date(Date.now() + 3_600_000)));
+  const initialDueAtRef = useRef(dueAt);
+  const hasFormDraft = Boolean(title.trim() || content.trim() || dueAt !== initialDueAtRef.current);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -36,6 +39,16 @@ export function RemindersDrawer() {
   useEffect(() => {
     if (open) void refresh();
   }, [open, refresh]);
+
+  useEffect(() => {
+    setReloadBlocker({
+      id: "reminder-form-draft",
+      label: "提醒表单尚未保存",
+      kind: "unsaved",
+      active: open && hasFormDraft,
+    });
+    return () => clearReloadBlocker("reminder-form-draft");
+  }, [hasFormDraft, open]);
 
   if (!open) return null;
   return (

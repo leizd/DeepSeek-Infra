@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.3.2-blue)
+![版本](https://img.shields.io/badge/version-4.3.3-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.3.2 Immutable Build Identity & Multi-Tab Cache Handoff：** 页面、Service Worker、不可变 Manifest 与 Cache 现在共享同一个构建期 `buildId`，并以独立 `assetSetDigest` 验证产物集合。页面只与实际 controller 握手后预热；并发标签页复用可恢复预热任务，活动旧页面通过 Client Build Lease 保留自己的精确 hash 资源。参见 [4.3.2 发布说明](docs/releases/4.3.2.md)、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
+> **4.3.3 Update Discovery & Quiescent Reload：** 前端会从稳定部署指针发现新构建，将升级 Worker 保持在 waiting 状态，并在用户明确同意、所有运行与草稿阻塞器清空、对话/Composer 状态同步落盘且新 controller 身份与 Core Cache 验证通过后才重新加载。跨标签页共享“有更新/已激活”事实，但不会强制其他标签页刷新。参见 [4.3.3 发布说明](docs/releases/4.3.3.md)、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
 
-**4.3.2 validation:** 构建合同锁定 clean/dirty source revision、页面/Worker/Manifest 身份一致性与不可变 Worker URL；Service Worker 测试覆盖 Manifest 错配拒绝、失败重取、跨标签页预热去重、缺失资源续传以及 A→B→C Lease 保留/过期清理；真实 Chromium Evidence 验证 controller 握手、错误版本预热拒绝和活动旧 Cache 交接。Bundle 预算与 4.2.8 exact-merge Evidence 装配链保持不变。
+**4.3.3 validation:** 单元与真实 Chromium Evidence 覆盖启动/可见/联网/周期/手动发现、no-store 与 immutable 缓存契约、升级需同意、流式与写操作阻塞、Composer 草稿恢复、B→C 目标替换、controller 验证后单次刷新，以及其他标签页不被强制刷新。4.3.2 构建身份/Lease、现有 Bundle 预算与 4.2.8 exact-merge Evidence 装配链保持不变。
 
 ## 30 秒概览
 

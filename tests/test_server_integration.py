@@ -582,11 +582,32 @@ class ServerIntegrationTests(unittest.TestCase):
     def test_cache_headers_differ_for_api_and_static_routes(self) -> None:
         api_status, _, api_response = self.request_raw("GET", "/api/config")
         static_status, _, static_response = self.request_raw("GET", "/vendor/katex/katex.min.js")
+        index_status, _, index_response = self.request_raw("GET", "/")
+        pointer_status, pointer_data, pointer_response = self.request_raw("GET", "/ui/workspace-assets.json")
+        pointer = json.loads(pointer_data.decode("utf-8"))
+        build_id = str(pointer["buildId"])
+        immutable_paths = [
+            f"/ui/workspace-assets-{build_id}.json",
+            f"/sw-{build_id}.js",
+            str(cast(list[str], pointer["core"])[0]),
+        ]
 
         self.assertEqual(api_status, 200)
         self.assertEqual(static_status, 200)
+        self.assertEqual(index_status, 200)
+        self.assertEqual(pointer_status, 200)
         self.assertEqual(api_response.getheader("Cache-Control"), "no-store")
         self.assertEqual(static_response.getheader("Cache-Control"), "no-cache")
+        self.assertEqual(index_response.getheader("Cache-Control"), "no-store")
+        self.assertEqual(pointer_response.getheader("Cache-Control"), "no-store")
+        for path in immutable_paths:
+            with self.subTest(path=path):
+                immutable_status, _, immutable_response = self.request_raw("GET", path)
+                self.assertEqual(immutable_status, 200)
+                self.assertEqual(
+                    immutable_response.getheader("Cache-Control"),
+                    "public, max-age=31536000, immutable",
+                )
         self.assertEqual(static_response.getheader("X-Frame-Options"), "DENY")
         csp = static_response.getheader("Content-Security-Policy") or ""
         self.assertIn("default-src 'self'", csp)

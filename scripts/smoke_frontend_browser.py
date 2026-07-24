@@ -149,6 +149,23 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             raise AssertionError(f"React assets are not served from static/ui: {asset_urls}")
         checks["reactOnlyRoot"] = "PASS"
 
+        await page.locator("#reactPromptInput").fill("Browser draft survives reload")
+        await page.wait_for_function(
+            """() => {
+              const raw = sessionStorage.getItem('deepseek:composer-draft:new');
+              return raw && JSON.parse(raw).text === 'Browser draft survives reload';
+            }"""
+        )
+        await page.reload(wait_until="networkidle")
+        await page.locator("#reactPromptInput").wait_for()
+        if await page.locator("#reactPromptInput").input_value() != "Browser draft survives reload":
+            raise AssertionError("Composer draft did not restore from sessionStorage")
+        await page.locator("#reactPromptInput").fill("")
+        await page.wait_for_function(
+            "() => sessionStorage.getItem('deepseek:composer-draft:new') === null"
+        )
+        checks["composerDraftRestored"] = "PASS"
+
         await page.locator("#reactPromptInput").fill("Run the React browser smoke")
         await page.locator("button.send-button").click()
         await page.get_by_text("Browser smoke reply", exact=True).last.wait_for(timeout=10_000)
@@ -343,6 +360,28 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         checks["workerManifestIdentityBound"] = "PASS"
         checks["controllerHandshakeRequired"] = "PASS"
         checks["wrongWorkerWarmupRejected"] = "PASS"
+
+        pointer_response = await context.request.get(f"{base_url}ui/workspace-assets.json")
+        immutable_response = await context.request.get(
+            f"{base_url}ui/workspace-assets-{identity['pageBuildId']}.json"
+        )
+        worker_response = await context.request.get(f"{base_url}sw-{identity['pageBuildId']}.js")
+        core_response = await context.request.get(f"{base_url}{identity['pointer']['core'][0].removeprefix('/')}")
+        cache_headers = {
+            "index": (await response.header_value("cache-control")) or "",
+            "pointer": pointer_response.headers.get("cache-control", ""),
+            "manifest": immutable_response.headers.get("cache-control", ""),
+            "worker": worker_response.headers.get("cache-control", ""),
+            "core": core_response.headers.get("cache-control", ""),
+        }
+        immutable_cache = "public, max-age=31536000, immutable"
+        if (
+            cache_headers["index"] != "no-store"
+            or cache_headers["pointer"] != "no-store"
+            or any(cache_headers[name] != immutable_cache for name in ("manifest", "worker", "core"))
+        ):
+            raise AssertionError(f"frontend cache policy diverged: {cache_headers}")
+        checks["cacheControlContracts"] = "PASS"
 
         cached_paths = await page.evaluate(
             """async () => {
@@ -678,6 +717,244 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
                 raise AssertionError(f"Workspace warmup scheduled on constrained connection {effective_type}")
             checks[check_name] = "PASS"
             await constrained.close()
+
+        await page.goto(base_url, wait_until="networkidle")
+        await page.locator("#reactPromptInput").wait_for()
+        update_peer = await context.new_page()
+        await update_peer.goto(base_url, wait_until="networkidle")
+        await update_peer.locator("#reactPromptInput").wait_for()
+        await update_peer.evaluate("() => { window.__updatePeerMarker = 'alive'; }")
+
+        current_build = identity["pageBuildId"]
+        current_digest = identity["pointer"]["assetSetDigest"]
+        targets = {
+            "bbbbbbbbbbbbbbbb": "b" * 64,
+            "cccccccccccccccc": "c" * 64,
+        }
+        target_manifests = {
+            build_id: {
+                **identity["pointer"],
+                "version": f"{VERSION}-smoke-{build_id[0]}",
+                "sourceRevision": f"browser-smoke-{build_id[0]}",
+                "buildId": build_id,
+                "assetSetDigest": digest,
+            }
+            for build_id, digest in targets.items()
+        }
+        target_workers = {
+            build_id: identity["workerSource"]
+            .replace(current_build, build_id)
+            .replace(current_digest, digest)
+            for build_id, digest in targets.items()
+        }
+        deployed_target = {"buildId": "bbbbbbbbbbbbbbbb"}
+
+        async def mock_deployed_build(route: Any) -> None:
+            manifest = target_manifests[deployed_target["buildId"]]
+            await route.fulfill(
+                status=200,
+                headers={"Content-Type": "application/json", "Cache-Control": "no-store"},
+                body=json.dumps(manifest),
+            )
+
+        async def mock_update_worker(route: Any) -> None:
+            path = urlsplit(route.request.url).path
+            match = re.fullmatch(r"/sw-([0-9a-f]{16})\.js", path)
+            build_id = match.group(1) if match else ""
+            source = target_workers.get(build_id)
+            if source is None:
+                await route.fallback()
+                return
+            await route.fulfill(
+                status=200,
+                headers={
+                    "Content-Type": "application/javascript",
+                    "Cache-Control": "public, max-age=31536000, immutable",
+                    "Service-Worker-Allowed": "/",
+                },
+                body=source,
+            )
+
+        async def mock_update_manifest(route: Any) -> None:
+            path = urlsplit(route.request.url).path
+            match = re.fullmatch(r"/ui/workspace-assets-([0-9a-f]{16})\.json", path)
+            build_id = match.group(1) if match else ""
+            manifest = target_manifests.get(build_id)
+            if manifest is None:
+                await route.fallback()
+                return
+            await route.fulfill(
+                status=200,
+                headers={
+                    "Content-Type": "application/json",
+                    "Cache-Control": "public, max-age=31536000, immutable",
+                },
+                body=json.dumps(manifest),
+            )
+
+        await context.route("**/ui/workspace-assets.json", mock_deployed_build)
+        await context.route(re.compile(r".*/sw-[0-9a-f]{16}\.js$"), mock_update_worker)
+        await context.route(
+            re.compile(r".*/ui/workspace-assets-[0-9a-f]{16}\.json$"),
+            mock_update_manifest,
+        )
+
+        await page.get_by_role("button", name="检查更新").click()
+        await page.get_by_text("bbbbbbbbbbbbbbbb", exact=False).wait_for(timeout=15_000)
+        await page.wait_for_function(
+            """() => {
+              const banner = document.querySelector('.build-update-banner');
+              const button = Array.from(banner?.querySelectorAll('button') || [])
+                .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
+              return Boolean(banner?.textContent?.includes('bbbbbbbbbbbbbbbb') && button && !button.disabled);
+            }""",
+            timeout=15_000,
+        )
+        try:
+            await update_peer.get_by_text("bbbbbbbbbbbbbbbb", exact=False).wait_for(timeout=15_000)
+        except Exception as error:
+            peer_state = await update_peer.evaluate(
+                """async () => ({
+                  text: document.querySelector('.build-update-banner')?.textContent || '',
+                  controller: navigator.serviceWorker.controller?.scriptURL || '',
+                  visibility: document.visibilityState,
+                  registrations: (await navigator.serviceWorker.getRegistrations()).map((registration) => ({
+                    scope: registration.scope,
+                    active: registration.active?.scriptURL || '',
+                    waiting: registration.waiting?.scriptURL || '',
+                    installing: registration.installing?.scriptURL || '',
+                  })),
+                })"""
+            )
+            raise AssertionError(f"peer did not receive staged build B: {peer_state}") from error
+
+        async def controller_identity(target_page: Any) -> dict[str, Any]:
+            return await target_page.evaluate(
+                """async () => new Promise((resolve, reject) => {
+                  const controller = navigator.serviceWorker.controller;
+                  if (!controller) return reject(new Error('missing controller'));
+                  const channel = new MessageChannel();
+                  const timer = setTimeout(() => reject(new Error('identity timeout')), 5000);
+                  channel.port1.onmessage = (event) => {
+                    clearTimeout(timer);
+                    resolve(event.data);
+                  };
+                  controller.postMessage({ type: 'get_build_identity' }, [channel.port2]);
+                })"""
+            )
+
+        before_consent = await controller_identity(page)
+        if before_consent["buildId"] != current_build:
+            raise AssertionError(f"staged build activated without consent: {before_consent}")
+        staged_b = await page.evaluate(
+            """async () => {
+              const registration = await navigator.serviceWorker.getRegistration('/');
+              return {
+                controller: navigator.serviceWorker.controller?.scriptURL || '',
+                active: registration?.active?.scriptURL || '',
+                waiting: registration?.waiting?.scriptURL || '',
+                installing: registration?.installing?.scriptURL || '',
+              };
+            }"""
+        )
+        if not staged_b["waiting"].endswith("/sw-bbbbbbbbbbbbbbbb.js"):
+            raise AssertionError(f"build B did not remain waiting before consent: {staged_b!r}")
+        checks["stableBuildDiscovery"] = "PASS"
+        checks["updateConsentRequired"] = "PASS"
+
+        deployed_target["buildId"] = "cccccccccccccccc"
+        await page.get_by_role("button", name="检查更新").click()
+        await page.get_by_text("cccccccccccccccc", exact=False).wait_for(timeout=15_000)
+        try:
+            await page.wait_for_function(
+                """() => {
+                  const banner = document.querySelector('.build-update-banner');
+                  const button = Array.from(banner?.querySelectorAll('button') || [])
+                    .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
+                  return Boolean(banner?.textContent?.includes('cccccccccccccccc') && button && !button.disabled);
+                }""",
+                timeout=15_000,
+            )
+        except Exception as error:
+            staged_state = await page.evaluate(
+                """async () => ({
+                  text: document.querySelector('.build-update-banner')?.textContent || '',
+                  frames: Array.from(document.querySelectorAll('iframe')).map((frame) => ({
+                    src: frame.src,
+                    controller: (() => {
+                      try {
+                        return frame.contentWindow?.navigator.serviceWorker?.controller?.scriptURL || '';
+                      } catch (error) {
+                        return String(error);
+                      }
+                    })(),
+                  })),
+                  registrations: (await navigator.serviceWorker.getRegistrations()).map((registration) => ({
+                    scope: registration.scope,
+                    active: registration.active?.scriptURL || '',
+                    waiting: registration.waiting?.scriptURL || '',
+                    installing: registration.installing?.scriptURL || '',
+                  })),
+                })"""
+            )
+            raise AssertionError(f"newer target C was not ready: {staged_state}") from error
+        await update_peer.get_by_text("cccccccccccccccc", exact=False).wait_for(timeout=15_000)
+        superseded_state = await page.evaluate(
+            """async () => {
+              const root = await navigator.serviceWorker.getRegistration('/');
+              return {
+                controller: navigator.serviceWorker.controller?.scriptURL || '',
+                rootWaiting: root?.waiting?.scriptURL || '',
+              };
+            }"""
+        )
+        if (
+            not superseded_state["controller"].endswith(f"/sw-{current_build}.js")
+            or not superseded_state["rootWaiting"].endswith("/sw-cccccccccccccccc.js")
+        ):
+            raise AssertionError(f"newer target did not supersede the staged build: {superseded_state}")
+        checks["supersededBuildRejected"] = "PASS"
+
+        stop_requested.clear()
+        stop_release.clear()
+        await page.locator("button.new-chat-button").click()
+        await page.locator("#reactPromptInput").fill("Stop the React stream")
+        await page.locator("button.send-button").click()
+        await asyncio.wait_for(stop_requested.wait(), timeout=5)
+        await page.get_by_text("正在生成回复", exact=False).wait_for(timeout=10_000)
+        await page.get_by_role("button", name="完成后更新").click()
+        await page.wait_for_timeout(200)
+        blocked_identity = await controller_identity(page)
+        if blocked_identity["buildId"] != current_build:
+            raise AssertionError(f"reload blocker allowed early activation: {blocked_identity}")
+        checks["reloadBlockerPreventsActivation"] = "PASS"
+
+        main_navigations: list[str] = []
+        page.on(
+            "framenavigated",
+            lambda frame: main_navigations.append(frame.url) if frame == page.main_frame else None,
+        )
+        async with page.expect_navigation(wait_until="domcontentloaded", timeout=20_000):
+            await page.locator("button.stop-button").click()
+            stop_release.set()
+        await page.locator("#reactPromptInput").wait_for(timeout=10_000)
+        activated_identity = await controller_identity(page)
+        if activated_identity["buildId"] != "cccccccccccccccc" or not activated_identity["cacheReady"]:
+            raise AssertionError(f"reload happened without the verified target controller: {activated_identity}")
+        if len(main_navigations) != 1:
+            raise AssertionError(f"update activation reloaded the initiating tab {len(main_navigations)} times")
+        checks["controllerVerifiedBeforeReload"] = "PASS"
+
+        await update_peer.wait_for_timeout(500)
+        peer_marker = await update_peer.evaluate("() => window.__updatePeerMarker")
+        peer_identity = await controller_identity(update_peer)
+        if peer_marker != "alive" or peer_identity["buildId"] != "cccccccccccccccc":
+            raise AssertionError(
+                f"peer tab was reloaded or missed controller handoff: marker={peer_marker!r}, identity={peer_identity}"
+            )
+        await update_peer.get_by_text("cccccccccccccccc", exact=False).wait_for(timeout=10_000)
+        checks["crossTabReloadNotForced"] = "PASS"
+        await update_peer.close()
         await browser.close()
     return checks
 

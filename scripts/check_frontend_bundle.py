@@ -160,6 +160,12 @@ def _load_offline_manifest(root: Path) -> dict[str, Any]:
             raise AssertionError(f"{worker_name} does not embed the manifest assetSetDigest")
         if f'const ASSET_MANIFEST_URL = "/ui/workspace-assets-{build_id}.json"' not in worker:
             raise AssertionError(f"{worker_name} is not pinned to its immutable manifest")
+        if (
+            "if (!self.registration.active) await self.skipWaiting();" not in worker
+            or 'data.type === "activate_build"' not in worker
+            or "data.assetSetDigest !== WORKER_ASSET_SET_DIGEST" not in worker
+        ):
+            raise AssertionError(f"{worker_name} does not implement staged, digest-bound activation")
     if (output / "sw.js").exists() or (output / "sw-root.js").exists():
         raise AssertionError("Mutable Service Worker filenames must not be emitted")
     asset_groups = ("core", "offlinePrimary", "recovery", "routeOptional")
@@ -237,6 +243,17 @@ def check_bundle(root: Path) -> dict[str, Any]:
         raise AssertionError(f"Trace implementation leaked into the initial bundle: {', '.join(leaked)}")
     if missing_markers:
         raise AssertionError(f"Trace detail chunk is missing expected markers: {', '.join(missing_markers)}")
+    update_markers = (
+        "/ui/workspace-assets.json",
+        "deepseek-build-updates",
+        "activate_build",
+        "composer-draft",
+    )
+    missing_update_markers = [marker for marker in update_markers if marker not in entry_source]
+    if missing_update_markers:
+        raise AssertionError(
+            f"initial frontend entry is missing update coordination markers: {', '.join(missing_update_markers)}"
+        )
 
     entry_css_names = {path.relative_to(root / "static" / "ui").as_posix() for path in entry_css}
     workspace_css_names: set[str] = set()
@@ -337,6 +354,9 @@ def check_bundle(root: Path) -> dict[str, Any]:
             "workspaceOfflineAssetManifest": "PASS",
             "immutableWorkerBuildIdentity": "PASS",
             "workerManifestIdentityBound": "PASS",
+            "stableBuildDiscoveryRuntime": "PASS",
+            "stagedWorkerActivationProtocol": "PASS",
+            "reloadCoordinationRuntime": "PASS",
             "workspacePrimaryWarmLayer": "PASS",
             "workspaceRecoveryChunksDeferred": "PASS",
             "routeOptionalChunksSeparated": "PASS",

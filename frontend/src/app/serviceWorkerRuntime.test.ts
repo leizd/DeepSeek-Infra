@@ -99,6 +99,7 @@ interface WorkerHarness {
   caches: FakeCacheStorage;
   fetchMock: FetchMock;
   clients: Array<{ id: string; postMessage: ReturnType<typeof vi.fn> }>;
+  skipWaiting: ReturnType<typeof vi.fn>;
   fetch(request: { method: string; mode: string; url: string }): Promise<Response>;
   lifecycle(name: "install" | "activate"): Promise<void>;
   message(data: unknown, sourceId?: string, ports?: Array<{ postMessage(message: unknown): void }>): Promise<void>;
@@ -107,7 +108,7 @@ interface WorkerHarness {
 function workspaceManifest(overrides: Record<string, unknown> = {}) {
   return {
     schemaVersion: 1,
-    version: "4.3.2",
+    version: "4.3.3",
     sourceRevision: "test-revision",
     buildId: BUILD_C,
     assetSetDigest: DIGEST_C,
@@ -125,6 +126,7 @@ function workspaceManifest(overrides: Record<string, unknown> = {}) {
 async function workerHarness(
   workerName: "sw.js" | "sw-root.js",
   fetchMock: FetchMock,
+  registrationActive = false,
 ): Promise<WorkerHarness> {
   const source = readFileSync(
     fileURLToPath(new URL(`../../public/${workerName}`, import.meta.url)),
@@ -136,6 +138,7 @@ async function workerHarness(
   const listeners = new Map<string, (event: never) => void>();
   const caches = new FakeCacheStorage(fetchMock);
   const clients: Array<{ id: string; postMessage: ReturnType<typeof vi.fn> }> = [];
+  const skipWaiting = vi.fn(() => Promise.resolve());
   const self = {
     location: { origin: "https://example.test" },
     addEventListener: (name: string, listener: (event: never) => void) => listeners.set(name, listener),
@@ -144,8 +147,11 @@ async function workerHarness(
       matchAll: vi.fn(() => Promise.resolve(clients)),
       openWindow: vi.fn(),
     },
-    registration: { showNotification: vi.fn() },
-    skipWaiting: vi.fn(() => Promise.resolve()),
+    registration: {
+      active: registrationActive ? {} : null,
+      showNotification: vi.fn(),
+    },
+    skipWaiting,
   };
   runInNewContext(source, {
     Date,
@@ -182,6 +188,7 @@ async function workerHarness(
     caches,
     fetchMock,
     clients,
+    skipWaiting,
     async fetch(request) {
       let responsePromise: Promise<Response> | undefined;
       listeners.get("fetch")?.({
@@ -242,6 +249,55 @@ async function seedBuilds(
 }
 
 describe.each(WORKERS)("$name immutable runtime", ({ name, prefix, history, shell }) => {
+  it("activates the first install immediately after the core cache is ready", async () => {
+    const fetchMock = vi.fn((request: RequestLike) => {
+      const url = new URL(typeof request === "string" ? request : request.url, "https://example.test");
+      if (url.href === MANIFEST_URL) {
+        return Promise.resolve(new Response(JSON.stringify(workspaceManifest())));
+      }
+      return Promise.resolve(new Response(url.pathname));
+    });
+    const harness = await workerHarness(name, fetchMock);
+
+    await harness.lifecycle("install");
+
+    expect(harness.skipWaiting).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps upgrades waiting until a matching ready build is explicitly activated", async () => {
+    const fetchMock = vi.fn((request: RequestLike) => {
+      const url = new URL(typeof request === "string" ? request : request.url, "https://example.test");
+      if (url.href === MANIFEST_URL) {
+        return Promise.resolve(new Response(JSON.stringify(workspaceManifest())));
+      }
+      return Promise.resolve(new Response(url.pathname));
+    });
+    const harness = await workerHarness(name, fetchMock, true);
+    await harness.lifecycle("install");
+    expect(harness.skipWaiting).not.toHaveBeenCalled();
+
+    await harness.message({
+      type: "activate_build",
+      buildId: BUILD_B,
+      assetSetDigest: DIGEST_C,
+    });
+    await harness.message({
+      type: "activate_build",
+      buildId: BUILD_C,
+      assetSetDigest: "d".repeat(64),
+    });
+    expect(harness.skipWaiting).not.toHaveBeenCalled();
+
+    const request = {
+      type: "activate_build",
+      buildId: BUILD_C,
+      assetSetDigest: DIGEST_C,
+    };
+    await harness.message(request);
+    await harness.message(request);
+    expect(harness.skipWaiting).toHaveBeenCalledTimes(1);
+  });
+
   it("returns the current shell offline while preserving exact leased hash chunks", async () => {
     const fetchMock = vi.fn(() => Promise.reject(new TypeError("offline")));
     const harness = await workerHarness(name, fetchMock);

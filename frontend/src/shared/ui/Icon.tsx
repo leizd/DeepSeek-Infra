@@ -6,6 +6,7 @@ export type IconName =
   | "check"
   | "error"
   | "plus"
+  | "refresh"
   | "search"
   | "attach";
 
@@ -21,6 +22,7 @@ const PATHS: Record<IconName, string[]> = {
   check: ["M2.8 8.5 6 11.7 13.2 4.3"],
   error: ["M8 14a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z", "M8 4.8v3.4", "M8 11h.01"],
   plus: ["M8 3v10", "M3 8h10"],
+  refresh: ["M12.5 5.5A5 5 0 1 0 13 9", "M12.5 2.5v3h-3"],
   search: ["M7 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z", "M10.2 10.2l3.3 3.3"],
   attach: [
     "M12.8 6.2 7.6 11.4a2.12 2.12 0 0 1-3-3l5-5a3.54 3.54 0 0 1 5 5l-5.3 5.3a4.95 4.95 0 0 1-7-7l5-5",
