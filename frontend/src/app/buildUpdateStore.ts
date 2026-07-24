@@ -105,6 +105,10 @@ export class BuildUpdateStore {
   private checkSequence = 0;
   private target: DeployedBuild | null = null;
   private targetGeneration = 0;
+  private activationTask: Promise<void> | null = null;
+  private activationGeneration = 0;
+  private reloadIssued = false;
+  private activatedBroadcastFor: string | null = null;
   private autoActivate = false;
   private stopped = false;
   private unsubscribeBlockers: (() => void) | null = null;
@@ -161,6 +165,10 @@ export class BuildUpdateStore {
     this.checkPromise = null;
     this.target = null;
     this.targetGeneration += 1;
+    this.activationTask = null;
+    this.activationGeneration += 1;
+    this.reloadIssued = false;
+    this.activatedBroadcastFor = null;
     this.autoActivate = false;
     const environment = this.environment;
     if (environment) {
@@ -205,7 +213,7 @@ export class BuildUpdateStore {
   private onBlockersChanged = (): void => {
     if (!this.autoActivate || getReloadBlockerSnapshot().length) return;
     this.autoActivate = false;
-    void this.activate();
+    void this.activateWhenReady();
   };
 
   async checkForUpdate(): Promise<DeployedBuild | null> {
@@ -319,20 +327,37 @@ export class BuildUpdateStore {
     this.publish({ deferred: true });
   }
 
-  async activateWhenReady(): Promise<void> {
+  activateWhenReady(): Promise<void> {
+    if (this.activationTask) {
+      return this.activationTask;
+    }
     if (getReloadBlockerSnapshot().length) {
       this.autoActivate = true;
       this.publish({ phase: "blocked", deferred: false });
-      return;
+      return Promise.resolve();
     }
-    await this.activate();
+    const generation = ++this.activationGeneration;
+    const task = this.runActivation(generation).finally(() => {
+      if (this.activationTask === task) {
+        this.activationTask = null;
+      }
+    });
+    this.activationTask = task;
+    return task;
   }
 
-  private async activate(): Promise<void> {
+  private activationCurrent(generation: number, target: DeployedBuild): boolean {
+    return generation === this.activationGeneration
+      && this.target?.buildId === target.buildId
+      && this.target.assetSetDigest === target.assetSetDigest;
+  }
+
+  private async runActivation(generation: number): Promise<void> {
     const target = this.target;
     const driver = this.driver;
     if (!target || !driver) return;
     const confirmed = await this.checkForUpdate();
+    if (!this.activationCurrent(generation, target)) return;
     if (!confirmed || confirmed.buildId !== target.buildId || confirmed.assetSetDigest !== target.assetSetDigest) {
       return;
     }
@@ -354,11 +379,9 @@ export class BuildUpdateStore {
     this.publish({ phase: "activating", error: undefined, deferred: false });
     try {
       const identity = await driver.activate(target);
-      const stillCurrent = this.target?.buildId === target.buildId
-        && this.target.assetSetDigest === target.assetSetDigest;
+      if (!this.activationCurrent(generation, target)) return;
       if (
-        !stillCurrent
-        || identity.buildId !== target.buildId
+        identity.buildId !== target.buildId
         || identity.assetSetDigest !== target.assetSetDigest
         || !identity.cacheReady
       ) {
@@ -366,7 +389,10 @@ export class BuildUpdateStore {
         return;
       }
       this.publish({ controllerBuildId: identity.buildId });
-      this.channel?.postMessage({ type: "build_activated", buildId: identity.buildId });
+      if (this.activatedBroadcastFor !== identity.buildId) {
+        this.activatedBroadcastFor = identity.buildId;
+        this.channel?.postMessage({ type: "build_activated", buildId: identity.buildId });
+      }
       if (getReloadBlockerSnapshot().length) {
         this.publish({ phase: "reload-required" });
         return;
@@ -379,8 +405,11 @@ export class BuildUpdateStore {
         this.publish({ phase: "reload-required" });
         return;
       }
+      if (this.reloadIssued) return;
+      this.reloadIssued = true;
       driver.reload();
     } catch (reason) {
+      if (!this.activationCurrent(generation, target)) return;
       this.publish({ phase: "error", error: errorMessage(reason) });
     }
   }
