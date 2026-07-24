@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.3.3-blue)
+![版本](https://img.shields.io/badge/version-4.3.4-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.3.3 Update Discovery & Quiescent Reload：** 前端会从稳定部署指针发现新构建，将升级 Worker 保持在 waiting 状态，并在用户明确同意、所有运行与草稿阻塞器清空、对话/Composer 状态同步落盘且新 controller 身份与 Core Cache 验证通过后才重新加载。跨标签页共享“有更新/已激活”事实，但不会强制其他标签页刷新。参见 [4.3.3 发布说明](docs/releases/4.3.3.md)、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
+> **4.3.4 Reload Transaction Integrity & Page-Lifecycle Recovery：** 升级激活被串行化为 Single-Flight 事务，更新检查带超时且可被更新目标替换，defer 不再残留半成品激活状态。页面在 pagehide/visibilitychange/beforeunload 时同步落盘 Composer 草稿与会话状态；草稿按会话+项目双作用域隔离；消息提交经 tryStartMessage/peek/commit 原子化，要么连同草稿清理一起完成，要么完全不触动草稿。参见 [4.3.4 发布说明](docs/releases/4.3.4.md)、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
 
-**4.3.3 validation:** 单元与真实 Chromium Evidence 覆盖启动/可见/联网/周期/手动发现、no-store 与 immutable 缓存契约、升级需同意、流式与写操作阻塞、Composer 草稿恢复、B→C 目标替换、controller 验证后单次刷新，以及其他标签页不被强制刷新。4.3.2 构建身份/Lease、现有 Bundle 预算与 4.2.8 exact-merge Evidence 装配链保持不变。
+**4.3.4 validation:** 前端单元与合同测试覆盖激活事务串行化、更新检查超时/目标替换、defer 阶段安全、pagehide/visibilitychange/beforeunload 同步落盘、会话+项目双作用域草稿隔离、消息提交原子化（tryStartMessage/peek/commit）以及真实 Chromium smoke 的项目作用域草稿键。4.3.3 发现/静默重载、4.3.2 构建身份/Lease、现有 Bundle 预算与 4.2.8 exact-merge Evidence 装配链保持不变。
 
 ## 30 秒概览
 

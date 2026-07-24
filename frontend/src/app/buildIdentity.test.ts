@@ -41,11 +41,11 @@ afterEach(() => {
 describe("frontend build identity", () => {
   it("is stable for one source revision and configuration", () => {
     const first = createFrontendBuildIdentity({
-      version: "4.3.3",
+      version: "4.3.4",
       sourceRevision: "revision-a",
     });
     const second = createFrontendBuildIdentity({
-      version: "4.3.3",
+      version: "4.3.4",
       sourceRevision: "revision-a",
     });
     expect(first).toEqual(second);
@@ -56,19 +56,19 @@ describe("frontend build identity", () => {
     const { frontend } = temporaryFrontend();
     const initial = digestFrontendSources(frontend);
     const initialBuild = createFrontendBuildIdentity({
-      version: "4.3.3",
+      version: "4.3.4",
       sourceRevision: `head-dirty-${initial}`,
     }).buildId;
     writeFileSync(resolve(frontend, "index.html"), "<main>two</main>\n", "utf8");
     const indexChanged = digestFrontendSources(frontend);
     const indexBuild = createFrontendBuildIdentity({
-      version: "4.3.3",
+      version: "4.3.4",
       sourceRevision: `head-dirty-${indexChanged}`,
     }).buildId;
     writeFileSync(resolve(frontend, "public", "sw.js"), "const worker = 'two';\n", "utf8");
     const workerChanged = digestFrontendSources(frontend);
     const workerBuild = createFrontendBuildIdentity({
-      version: "4.3.3",
+      version: "4.3.4",
       sourceRevision: `head-dirty-${workerChanged}`,
     }).buildId;
     expect(indexChanged).not.toBe(initial);
@@ -91,7 +91,7 @@ describe("frontend build identity", () => {
     writeFileSync(resolve(frontend, "index.html"), "<main>dirty</main>\n", "utf8");
     const dirty = resolveFrontendSourceRevision(repository, frontend, {});
     expect(dirty).toMatch(new RegExp(`^${head}-dirty-[0-9a-f]{16}$`));
-    expect(createFrontendBuildIdentity({ version: "4.3.3", sourceRevision: dirty }).buildId)
-      .not.toBe(createFrontendBuildIdentity({ version: "4.3.3", sourceRevision: head }).buildId);
+    expect(createFrontendBuildIdentity({ version: "4.3.4", sourceRevision: dirty }).buildId)
+      .not.toBe(createFrontendBuildIdentity({ version: "4.3.4", sourceRevision: head }).buildId);
   });
 });
