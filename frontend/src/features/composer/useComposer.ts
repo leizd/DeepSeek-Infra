@@ -24,8 +24,8 @@ export function useComposer() {
   const projects = useProjects();
   const online = useOnlineStatus();
   const conversationId = chat.state.currentConversationId ?? NEW_CONVERSATION_DRAFT_ID;
-  const projectId = projects.activeProject?.id;
-  const [value, setValueState] = useState(() => loadComposerDraft(conversationId)?.text ?? "");
+  const projectId = projects.activeProject?.id ?? null;
+  const [value, setValueState] = useState(() => loadComposerDraft({ conversationId, projectId })?.text ?? "");
   const draftRef = useRef({ conversationId, projectId, text: value });
   const persistedTextRef = useRef(value);
 
@@ -33,7 +33,7 @@ export function useComposer() {
     const draft = draftRef.current;
     const saved = draft.text
       ? saveComposerDraft({ ...draft, updatedAt: Date.now() })
-      : clearComposerDraft(draft.conversationId);
+      : clearComposerDraft({ conversationId: draft.conversationId, projectId: draft.projectId });
     if (!saved) {
       setReloadBlocker({
         id: "composer-draft",
@@ -51,7 +51,7 @@ export function useComposer() {
     draftRef.current = { ...draftRef.current, text: next };
     setValueState(next);
     if (!next) {
-      if (clearComposerDraft(draftRef.current.conversationId)) {
+      if (clearComposerDraft({ conversationId: draftRef.current.conversationId, projectId: draftRef.current.projectId })) {
         persistedTextRef.current = "";
         clearReloadBlocker("composer-draft");
       } else {
@@ -73,12 +73,10 @@ export function useComposer() {
   }, []);
 
   useEffect(() => {
-    if (draftRef.current.conversationId === conversationId) {
-      draftRef.current = { ...draftRef.current, projectId };
-      return;
-    }
+    const current = draftRef.current;
+    if (current.conversationId === conversationId && current.projectId === projectId) return;
     flushDraft();
-    const restored = loadComposerDraft(conversationId)?.text ?? "";
+    const restored = loadComposerDraft({ conversationId, projectId })?.text ?? "";
     draftRef.current = { conversationId, projectId, text: restored };
     persistedTextRef.current = restored;
     setValueState(restored);
