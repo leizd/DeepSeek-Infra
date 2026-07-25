@@ -26,6 +26,10 @@
 
 - Checkpoint serialization marks killed generations as interrupted (preserving partial content and reasoning) so restored sessions offer 继续生成 instead of masquerading as in-flight; agent runs are reconciled against server status on restore — re-subscribed when alive, settled when terminal, marked interrupted only when the run is gone, and otherwise resumable via 恢复 Agent Run without re-spending tokens.
 
+### BFCache runtime resync
+
+- `pageshow.persisted` restores now re-check the deployed build, re-handshake the service worker, re-report the page build lease and retry failed persistence without duplicating timers, channels or listeners — and never auto-reload, auto-activate a waiting worker or resume paid model requests.
+
 
 ## [4.3.4] - Reload Transaction Integrity and Page-Lifecycle Recovery
 

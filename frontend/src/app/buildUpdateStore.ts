@@ -71,7 +71,7 @@ interface BroadcastChannelLike {
   removeEventListener(type: "message", listener: EventListener): void;
 }
 
-export type BuildUpdateCheckReason = "startup" | "interval" | "online" | "visible" | "manual";
+export type BuildUpdateCheckReason = "startup" | "interval" | "online" | "visible" | "manual" | "bfcache";
 
 export interface BuildUpdateCheckOptions {
   reason?: BuildUpdateCheckReason;

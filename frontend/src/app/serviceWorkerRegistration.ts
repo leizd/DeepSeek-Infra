@@ -7,11 +7,14 @@ import {
   type BuildUpdateStore,
   type DeployedBuild,
 } from "./buildUpdateStore";
+import { recordFlushReport } from "./persistenceHealth";
+import { flushReloadPersistence } from "./reloadBlockers";
 
 const BUILD_ID_PATTERN = /^[0-9a-f]{16}$/;
 const ASSET_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const HANDSHAKE_TIMEOUT_MS = 5000;
 const LEASE_HEARTBEAT_MS = 60_000;
+const LEASE_HEARTBEAT_DEAD_MS = 2 * LEASE_HEARTBEAT_MS;
 
 interface WorkerControllerLike {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -46,6 +49,8 @@ interface RuntimeWindowLike {
   clearTimeout(handle: number): void;
   setInterval(callback: () => void, timeout: number): number;
   clearInterval(handle: number): void;
+  addEventListener(type: "pageshow", listener: EventListener): void;
+  removeEventListener(type: "pageshow", listener: EventListener): void;
 }
 
 interface RuntimeDocumentLike {
@@ -65,6 +70,12 @@ interface StartServiceWorkerOptions {
   buildUpdates?: BuildUpdateStore;
   fetchValue?: typeof fetch;
   createBroadcastChannel?: BuildUpdateEnvironment["createBroadcastChannel"];
+  nowValue?: () => number;
+}
+
+export interface WorkspaceServiceWorkerRuntime {
+  dispose(): void;
+  resyncAfterBfcache(): Promise<void>;
 }
 
 function validWorkerIdentity(value: unknown): value is WorkerBuildIdentity {
@@ -322,7 +333,8 @@ export async function startWorkspaceServiceWorkerRuntime({
   buildUpdates,
   fetchValue,
   createBroadcastChannel,
-}: StartServiceWorkerOptions): Promise<() => void> {
+  nowValue = Date.now,
+}: StartServiceWorkerOptions): Promise<WorkspaceServiceWorkerRuntime> {
   const atRoot = !windowValue.location.pathname.startsWith("/ui/");
   await container.register(
     workerUrl(atRoot, pageBuildId),
@@ -335,12 +347,20 @@ export async function startWorkspaceServiceWorkerRuntime({
   let disposed = false;
   let warmupScheduled = false;
   let handshakeSequence = 0;
+  let heartbeatHandle: number | null = null;
+  let lastLeaseReportAt = nowValue();
+  let resyncInFlight: Promise<void> | null = null;
+
+  const reportLease = (controller: WorkerControllerLike): void => {
+    reportPageBuildLease(controller, pageBuildId);
+    lastLeaseReportAt = nowValue();
+  };
 
   const inspectController = async () => {
     const sequence = ++handshakeSequence;
     const controller = container.controller;
     if (!controller || disposed) return;
-    reportPageBuildLease(controller, pageBuildId);
+    reportLease(controller);
     const identity = await requestWorkerBuildIdentity(
       controller,
       windowValue,
@@ -378,16 +398,82 @@ export async function startWorkspaceServiceWorkerRuntime({
   const onVisibilityChange: EventListener = () => {
     if (documentValue.visibilityState !== "visible") return;
     const controller = container.controller;
-    if (controller) reportPageBuildLease(controller, pageBuildId);
+    if (controller) reportLease(controller);
+  };
+
+  const startHeartbeat = (): void => {
+    heartbeatHandle = windowValue.setInterval(() => {
+      const controller = container.controller;
+      if (controller) reportLease(controller);
+    }, LEASE_HEARTBEAT_MS);
+  };
+
+  /**
+   * BFCache 恢复后的运行时重同步。页面被冻结期间，心跳计时器、部署构建
+   * 检查和 Worker 握手结果都可能已经过期，因此按固定顺序逐步恢复：
+   * 重试持久化并刷新健康状态、强制检查部署构建（只发现，绝不激活
+   * 等待中的 Worker 或 reload）、重新握手当前 Worker、补报页面构建
+   * 租约；最后，若心跳疑似死亡（超过两个心跳周期未上报租约），仅当
+   * 心跳句柄真的丢失时才重建——绝不创建第二个计时器、第二个
+   * BroadcastChannel 或第二个监听器。每一步独立吞错，单步失败不得
+   * 中断后续步骤；恢复期间的并发 pageshow 共享同一个 in-flight 任务。
+   */
+  const resyncAfterBfcache = (): Promise<void> => {
+    if (disposed) return Promise.resolve();
+    if (resyncInFlight) return resyncInFlight;
+    const task = (async () => {
+      const heartbeatAppearsDead = nowValue() - lastLeaseReportAt > LEASE_HEARTBEAT_DEAD_MS;
+      try {
+        recordFlushReport(flushReloadPersistence());
+      } catch {
+        // 持久化重试失败不得中断后续重同步步骤。
+      }
+      try {
+        await buildUpdates?.checkForUpdate({ reason: "bfcache", force: true });
+      } catch {
+        // 构建检查失败不得阻断握手与租约补报。
+      }
+      const controller = container.controller;
+      if (controller && !disposed) {
+        try {
+          const identity = await requestWorkerBuildIdentity(
+            controller,
+            windowValue,
+            createMessageChannel,
+            handshakeTimeoutMs,
+          );
+          if (identity) buildUpdates?.noteControllerIdentity(identity);
+        } catch {
+          // 握手失败仍要补报租约。
+        }
+        try {
+          reportLease(controller);
+        } catch {
+          // 租约补报失败不影响计时器恢复。
+        }
+      }
+      if (heartbeatAppearsDead && heartbeatHandle === null && !disposed) {
+        startHeartbeat();
+      }
+    })();
+    resyncInFlight = task;
+    const clearInFlight = (): void => {
+      if (resyncInFlight === task) resyncInFlight = null;
+    };
+    task.then(clearInFlight, clearInFlight);
+    return task;
+  };
+
+  const onPageShow: EventListener = (event) => {
+    if ((event as PageTransitionEvent).persisted !== true) return;
+    void resyncAfterBfcache();
   };
 
   container.addEventListener("controllerchange", onControllerChange);
   container.addEventListener("message", onWorkerMessage);
   documentValue.addEventListener("visibilitychange", onVisibilityChange);
-  const heartbeat = windowValue.setInterval(() => {
-    const controller = container.controller;
-    if (controller) reportPageBuildLease(controller, pageBuildId);
-  }, LEASE_HEARTBEAT_MS);
+  windowValue.addEventListener("pageshow", onPageShow);
+  startHeartbeat();
 
   const stopBuildUpdates = buildUpdates && fetchValue
     ? buildUpdates.configure(
@@ -402,13 +488,20 @@ export async function startWorkspaceServiceWorkerRuntime({
     : () => undefined;
   await inspectController();
 
-  return () => {
-    disposed = true;
-    handshakeSequence += 1;
-    container.removeEventListener("controllerchange", onControllerChange);
-    container.removeEventListener("message", onWorkerMessage);
-    documentValue.removeEventListener("visibilitychange", onVisibilityChange);
-    windowValue.clearInterval(heartbeat);
-    stopBuildUpdates();
+  return {
+    dispose() {
+      disposed = true;
+      handshakeSequence += 1;
+      container.removeEventListener("controllerchange", onControllerChange);
+      container.removeEventListener("message", onWorkerMessage);
+      documentValue.removeEventListener("visibilitychange", onVisibilityChange);
+      windowValue.removeEventListener("pageshow", onPageShow);
+      if (heartbeatHandle !== null) {
+        windowValue.clearInterval(heartbeatHandle);
+        heartbeatHandle = null;
+      }
+      stopBuildUpdates();
+    },
+    resyncAfterBfcache,
   };
 }
