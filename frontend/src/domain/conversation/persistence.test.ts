@@ -1,13 +1,63 @@
 import { describe, expect, it } from "vitest";
 
-import { conversationStorageKeys, loadPersistedConversationState, savePersistedConversationState, type StorageLike } from "./persistence";
+import type { ChatMessage } from "../chat/types";
+import type { Conversation } from "./types";
+import { checkpointMessage, INTERRUPTED_CHECKPOINT_NOTE } from "./checkpoint";
+import {
+  conversationStorageKeys,
+  estimateCheckpointBytes,
+  loadPersistedConversationState,
+  savePersistedConversationState,
+  sessionSnapshotKey,
+  type StorageLike,
+} from "./persistence";
 
 class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>();
+  failOnSet: ((key: string) => boolean) | null = null;
+  corruptOnSet: ((key: string) => boolean) | null = null;
   getItem(key: string) { return this.values.get(key) ?? null; }
-  setItem(key: string, value: string) { this.values.set(key, value); }
+  setItem(key: string, value: string) {
+    if (this.failOnSet?.(key)) throw new Error("setItem failed");
+    this.values.set(key, this.corruptOnSet?.(key) ? `${value}#corrupted` : value);
+  }
   removeItem(key: string) { this.values.delete(key); }
 }
+
+function makeConversation(id: string, content: string): Conversation {
+  return {
+    id,
+    title: `会话 ${id}`,
+    messages: [{
+      id: `${id}-message`,
+      role: "user",
+      content,
+      reasoning: "",
+      createdAt: 100,
+      phase: "done",
+      streaming: false,
+      attachments: [],
+      timeline: [],
+      systemNotes: [],
+    }],
+    model: "deepseek-v4-pro",
+    thinkingEnabled: false,
+    createdAt: 100,
+    updatedAt: 200,
+  };
+}
+
+function makeState(currentConversationId: string | null, conversations: Conversation[]) {
+  return { schemaVersion: 1 as const, currentConversationId, conversations };
+}
+
+const LEGACY_CONVERSATION = {
+  id: "legacy-1",
+  title: "Legacy",
+  messages: [{ id: "legacy-message-1", role: "user", content: "旧消息", createdAt: 100 }],
+  createdAt: 100,
+  updatedAt: 200,
+};
 
 describe("conversation persistence", () => {
   it("migrates legacy messages without dropping activity, diagnostics, preview, or interruption", () => {
@@ -78,7 +128,278 @@ describe("conversation persistence", () => {
     const storage = new MemoryStorage();
     const state = loadPersistedConversationState(storage);
     savePersistedConversationState(state, storage);
-    expect(storage.values.has(conversationStorageKeys.conversations)).toBe(true);
+    expect(storage.values.has(sessionSnapshotKey(1))).toBe(true);
     expect([...storage.values.keys()].some((key) => /api-key|tavily-key/i.test(key))).toBe(false);
+  });
+});
+
+describe("conversation persistence journal", () => {
+  it("round-trips the committed state through the V2 checkpoint", () => {
+    const storage = new MemoryStorage();
+    const state = makeState("alpha", [makeConversation("alpha", "持久化内容")]);
+
+    expect(savePersistedConversationState(state, storage)).toEqual({ ok: true, revision: "1" });
+
+    const loaded = loadPersistedConversationState(storage);
+    expect(loaded.currentConversationId).toBe("alpha");
+    expect(loaded.conversations.map((conversation) => conversation.id)).toEqual(["alpha"]);
+    expect(loaded.conversations[0]?.messages[0]?.content).toBe("持久化内容");
+  });
+
+  it("returns monotonic revisions across commits", () => {
+    const storage = new MemoryStorage();
+    expect(savePersistedConversationState(makeState("alpha", [makeConversation("alpha", "一")]), storage))
+      .toEqual({ ok: true, revision: "1" });
+    expect(savePersistedConversationState(makeState("alpha", [makeConversation("alpha", "二")]), storage))
+      .toEqual({ ok: true, revision: "2" });
+  });
+
+  it("fails without touching head or legacy keys when the snapshot write throws", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(conversationStorageKeys.conversations, JSON.stringify([LEGACY_CONVERSATION]));
+    storage.setItem(conversationStorageKeys.currentConversation, "legacy-1");
+    const state = makeState("alpha", [makeConversation("alpha", "新状态")]);
+    storage.failOnSet = (key) => key === sessionSnapshotKey(1);
+
+    const result = savePersistedConversationState(state, storage);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toBe(`setItem failed (~${estimateCheckpointBytes(state)} bytes)`);
+    expect(storage.getItem(conversationStorageKeys.sessionHead)).toBeNull();
+    expect(storage.getItem(conversationStorageKeys.conversations)).not.toBeNull();
+    expect(storage.getItem(conversationStorageKeys.currentConversation)).toBe("legacy-1");
+    const loaded = loadPersistedConversationState(storage);
+    expect(loaded.currentConversationId).toBe("legacy-1");
+    expect(loaded.conversations.map((conversation) => conversation.id)).toEqual(["legacy-1"]);
+  });
+
+  it("reports verification-failed when the snapshot read-back differs from what was written", () => {
+    const storage = new MemoryStorage();
+    storage.corruptOnSet = (key) => key.startsWith("deepseek-infra.session.v2.snapshot.");
+
+    const result = savePersistedConversationState(makeState("alpha", [makeConversation("alpha", "内容")]), storage);
+
+    expect(result).toMatchObject({ ok: false, code: "verification-failed" });
+    if (result.ok) return;
+    expect(result.message).toContain(`(~${estimateCheckpointBytes(makeState("alpha", [makeConversation("alpha", "内容")]))} bytes)`);
+    expect(storage.getItem(conversationStorageKeys.sessionHead)).toBeNull();
+  });
+
+  it("keeps loading the previous generation when the head write throws", () => {
+    const storage = new MemoryStorage();
+    const first = makeState("alpha", [makeConversation("alpha", "第一代")]);
+    expect(savePersistedConversationState(first, storage)).toEqual({ ok: true, revision: "1" });
+
+    storage.failOnSet = (key) => key === conversationStorageKeys.sessionHead;
+    const second = makeState("beta", [makeConversation("beta", "第二代")]);
+    const result = savePersistedConversationState(second, storage);
+
+    expect(result.ok).toBe(false);
+    expect(storage.getItem(conversationStorageKeys.sessionHead)).toBe("1");
+    const loaded = loadPersistedConversationState(storage);
+    // currentConversationId 与 conversations 必须来自同一份旧 generation，不得混合。
+    expect(loaded.currentConversationId).toBe("alpha");
+    expect(loaded.conversations.map((conversation) => conversation.id)).toEqual(["alpha"]);
+    expect(loaded.conversations[0]?.messages[0]?.content).toBe("第一代");
+  });
+
+  it("falls back to generation N-1 when the head snapshot is corrupt", () => {
+    const storage = new MemoryStorage();
+    savePersistedConversationState(makeState("alpha", [makeConversation("alpha", "第一代")]), storage);
+    savePersistedConversationState(makeState("beta", [makeConversation("beta", "第二代")]), storage);
+    storage.setItem(sessionSnapshotKey(2), "garbage{{{");
+
+    const loaded = loadPersistedConversationState(storage);
+
+    expect(loaded.currentConversationId).toBe("alpha");
+    expect(loaded.conversations.map((conversation) => conversation.id)).toEqual(["alpha"]);
+    expect(loaded.conversations[0]?.messages[0]?.content).toBe("第一代");
+  });
+
+  it("deletes legacy keys only after the first verified V2 commit", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(conversationStorageKeys.conversations, JSON.stringify([LEGACY_CONVERSATION]));
+    storage.setItem(conversationStorageKeys.currentConversation, "legacy-1");
+    storage.setItem(conversationStorageKeys.legacyMessages, JSON.stringify([{ id: "lm-1", role: "user", content: "更旧", createdAt: 50 }]));
+
+    // 首次提交失败：legacy 键必须原样保留。
+    storage.failOnSet = (key) => key === sessionSnapshotKey(1);
+    const failed = savePersistedConversationState(makeState("alpha", [makeConversation("alpha", "新")]), storage);
+    expect(failed.ok).toBe(false);
+    expect(storage.values.has(conversationStorageKeys.conversations)).toBe(true);
+    expect(storage.getItem(conversationStorageKeys.currentConversation)).toBe("legacy-1");
+
+    // 首次提交成功：legacy conversations / currentConversation 键被移除，
+    // v1 读取器此刻已找不到任何 legacy 会话数据；legacyMessages 永不删除。
+    storage.failOnSet = null;
+    const committed = savePersistedConversationState(makeState("alpha", [makeConversation("alpha", "新")]), storage);
+    expect(committed).toEqual({ ok: true, revision: "1" });
+    expect(storage.values.has(conversationStorageKeys.conversations)).toBe(false);
+    expect(storage.values.has(conversationStorageKeys.currentConversation)).toBe(false);
+    expect(storage.values.has(conversationStorageKeys.legacyMessages)).toBe(true);
+  });
+
+  it("retains only the latest two snapshots", () => {
+    const storage = new MemoryStorage();
+    savePersistedConversationState(makeState("alpha", [makeConversation("alpha", "一")]), storage);
+    savePersistedConversationState(makeState("alpha", [makeConversation("alpha", "二")]), storage);
+    savePersistedConversationState(makeState("alpha", [makeConversation("alpha", "三")]), storage);
+
+    expect(storage.values.has(sessionSnapshotKey(1))).toBe(false);
+    expect(storage.values.has(sessionSnapshotKey(2))).toBe(true);
+    expect(storage.values.has(sessionSnapshotKey(3))).toBe(true);
+    expect(storage.getItem(conversationStorageKeys.sessionHead)).toBe("3");
+  });
+});
+
+function makeAssistantMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: "assistant-1",
+    role: "assistant",
+    content: "写到一半",
+    reasoning: "想到一半",
+    createdAt: 150,
+    phase: "answering",
+    streaming: true,
+    attachments: [],
+    timeline: [],
+    systemNotes: [],
+    ...overrides,
+  };
+}
+
+function conversationWith(id: string, messages: readonly ChatMessage[]): Conversation {
+  return {
+    id,
+    title: `会话 ${id}`,
+    messages,
+    model: "deepseek-v4-pro",
+    thinkingEnabled: false,
+    createdAt: 100,
+    updatedAt: 200,
+  };
+}
+
+describe("checkpointMessage honest interruption", () => {
+  it("marks a streaming mid-answering message as interrupted through save+load, preserving partial output", () => {
+    const storage = new MemoryStorage();
+    const user = makeConversation("alpha", "问题").messages[0];
+    const state = makeState("alpha", [conversationWith("alpha", [user, makeAssistantMessage()])]);
+
+    expect(savePersistedConversationState(state, storage)).toEqual({ ok: true, revision: "1" });
+
+    const loaded = loadPersistedConversationState(storage);
+    const recovered = loaded.conversations[0]?.messages[1];
+    expect(recovered).toMatchObject({
+      streaming: false,
+      phase: "interrupted",
+      interrupted: true,
+      content: "写到一半",
+      reasoning: "想到一半",
+    });
+    expect(recovered?.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
+    // interrupted === true ⇒ 恢复后的会话可走"继续生成"入口。
+
+    // 重复保存加载后的状态：系统说明仍然只出现一次（按精确串去重）。
+    expect(savePersistedConversationState(loaded, storage)).toEqual({ ok: true, revision: "2" });
+    const reloaded = loadPersistedConversationState(storage);
+    const again = reloaded.conversations[0]?.messages[1];
+    expect(again).toMatchObject({ streaming: false, phase: "interrupted", interrupted: true });
+    expect(again?.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
+  });
+
+  it("normalizes thinking/searching/tool phases but never mislabels completed or user messages", () => {
+    for (const phase of ["thinking", "searching", "tool", "answering"] as const) {
+      const checkpointed = checkpointMessage(makeAssistantMessage({ phase, streaming: false }));
+      expect(checkpointed).toMatchObject({ streaming: false, phase: "interrupted", interrupted: true });
+      expect(checkpointed.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
+    }
+
+    for (const phase of ["idle", "done", "error", "interrupted"] as const) {
+      const settled = makeAssistantMessage({ phase, streaming: false, interrupted: phase === "interrupted" });
+      const checkpointed = checkpointMessage(settled);
+      expect(checkpointed.phase).toBe(phase);
+      expect(checkpointed.streaming).toBe(false);
+      expect(checkpointed.systemNotes).toEqual([]);
+      if (phase !== "interrupted") expect(checkpointed.interrupted).not.toBe(true);
+    }
+
+    const user = makeConversation("alpha", "用户消息").messages[0];
+    expect(checkpointMessage(user)).toEqual({ ...user, streaming: false });
+  });
+
+  it("normalizes legacy-shaped in-flight data (phase answering, streaming false) at load", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(conversationStorageKeys.conversations, JSON.stringify([{
+      id: "legacy-1",
+      title: "Legacy",
+      messages: [{
+        id: "assistant-1",
+        role: "assistant",
+        content: "半截回答",
+        reasoning: "半截推理",
+        phase: "answering",
+        streaming: false,
+        interrupted: false,
+        createdAt: 100,
+      }],
+      createdAt: 100,
+      updatedAt: 200,
+    }]));
+
+    const state = loadPersistedConversationState(storage);
+    const message = state.conversations[0]?.messages[0];
+    expect(message).toMatchObject({
+      streaming: false,
+      phase: "interrupted",
+      interrupted: true,
+      content: "半截回答",
+      reasoning: "半截推理",
+    });
+    expect(message?.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
+  });
+
+  it("never locally interrupts an active agent run; its id and cursor survive save+load", () => {
+    const storage = new MemoryStorage();
+    const agentMessage = makeAssistantMessage({
+      id: "assistant-run",
+      phase: "agent",
+      agentRunId: "run_x",
+      agentRunStatus: "running",
+      agentRunLastEventIndex: 41,
+    });
+    const state = makeState("alpha", [conversationWith("alpha", [agentMessage])]);
+
+    expect(savePersistedConversationState(state, storage)).toEqual({ ok: true, revision: "1" });
+    const loaded = loadPersistedConversationState(storage);
+    const recovered = loaded.conversations[0]?.messages[0];
+    expect(recovered).toMatchObject({
+      agentRunId: "run_x",
+      agentRunStatus: "running",
+      agentRunLastEventIndex: 41,
+      phase: "agent",
+      streaming: false,
+    });
+    expect(recovered?.interrupted).not.toBe(true);
+    expect(recovered?.systemNotes).toEqual([]);
+  });
+
+  it("exempts an active run even in an in-flight phase, but checkpoints a terminal one like any other", () => {
+    const active = checkpointMessage(makeAssistantMessage({
+      phase: "answering",
+      agentRunId: "run_x",
+      agentRunStatus: "running",
+    }));
+    expect(active).toMatchObject({ phase: "answering", streaming: false });
+    expect(active.interrupted).not.toBe(true);
+
+    const terminal = checkpointMessage(makeAssistantMessage({
+      phase: "answering",
+      agentRunId: "run_x",
+      agentRunStatus: "failed",
+    }));
+    expect(terminal).toMatchObject({ phase: "interrupted", streaming: false, interrupted: true });
+    expect(terminal.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
   });
 });

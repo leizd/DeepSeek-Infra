@@ -134,6 +134,11 @@ function AssistantActions({ message, speech }: { message: ChatMessage; speech: S
           继续生成
         </button>
       )}
+      {message.agentRunId && message.agentRunStatus === "orphaned" && (
+        <button className="message-action" type="button" disabled={busy} onClick={() => void chat.resumeAgentRun(message.id)}>
+          恢复 Agent Run
+        </button>
+      )}
       <CopyButton text={message.content} label="复制" />
       <button className="message-action" type="button" disabled={busy} onClick={() => void chat.regenerate(message.id)}>
         重新生成

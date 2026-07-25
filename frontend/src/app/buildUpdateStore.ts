@@ -1,9 +1,12 @@
 import {
   flushReloadPersistence,
   getReloadBlockerSnapshot,
+  getReloadFlusherFailureLabel,
   subscribeReloadBlockers,
+  type PersistenceFlushReport,
   type ReloadBlocker,
 } from "./reloadBlockers";
+import { recordFlushReport } from "./persistenceHealth";
 import type { WorkerBuildIdentity } from "./workspaceOfflineWarmup";
 
 const BUILD_ID_PATTERN = /^[0-9a-f]{16}$/;
@@ -68,7 +71,7 @@ interface BroadcastChannelLike {
   removeEventListener(type: "message", listener: EventListener): void;
 }
 
-export type BuildUpdateCheckReason = "startup" | "interval" | "online" | "visible" | "manual";
+export type BuildUpdateCheckReason = "startup" | "interval" | "online" | "visible" | "manual" | "bfcache";
 
 export interface BuildUpdateCheckOptions {
   reason?: BuildUpdateCheckReason;
@@ -107,6 +110,13 @@ export function parseDeployedBuild(value: unknown): DeployedBuild | null {
 
 function errorMessage(reason: unknown): string {
   return reason instanceof Error && reason.message ? reason.message : "检查更新失败";
+}
+
+function describeFlushFailures(report: PersistenceFlushReport): string {
+  const labels = report.failedIds
+    .map((id) => getReloadFlusherFailureLabel(id))
+    .filter((label): label is string => Boolean(label));
+  return labels.length ? labels.join("、") : "本地状态保存失败";
 }
 
 export class BuildUpdateStore {
@@ -420,8 +430,10 @@ export class BuildUpdateStore {
       return;
     }
     this.activationStage = "flushing";
-    if (!flushReloadPersistence()) {
-      this.publish({ phase: "error", error: "本地状态保存失败，已取消重新加载" });
+    const flushReport = flushReloadPersistence();
+    recordFlushReport(flushReport);
+    if (!flushReport.ok) {
+      this.publish({ phase: "error", error: `${describeFlushFailures(flushReport)}，已取消重新加载` });
       return;
     }
     if (getReloadBlockerSnapshot().length) {
@@ -452,8 +464,10 @@ export class BuildUpdateStore {
         this.publish({ phase: "reload-required" });
         return;
       }
-      if (!flushReloadPersistence()) {
-        this.publish({ phase: "reload-required", error: "本地状态保存失败，请重试" });
+      const finalFlushReport = flushReloadPersistence();
+      recordFlushReport(finalFlushReport);
+      if (!finalFlushReport.ok) {
+        this.publish({ phase: "reload-required", error: `${describeFlushFailures(finalFlushReport)}，请重试` });
         return;
       }
       if (getReloadBlockerSnapshot().length) {

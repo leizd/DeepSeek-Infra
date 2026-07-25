@@ -5,28 +5,28 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.3.4-blue)
+![Version](https://img.shields.io/badge/version-4.3.5-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.3.4 at a glance
+## 4.3.5 at a glance
 
-- Every update activation runs as one serialized single-flight transaction: staging, consent, synchronous persistence flush, Worker activation and the single reload cannot interleave or double-activate.
-- Each update check is bounded by a timeout, and a newer discovered target supersedes any pending result, so a stalled or stale check can never resurrect a replaced build.
-- Deferring an update is phase-safe: the decision is recorded without half-applied activation state, and the next check resumes from a clean snapshot.
-- Composer drafts and conversation state flush synchronously on `pagehide`, `visibilitychange` and `beforeunload`, so closing, hiding or reloading a tab never loses unsent text.
-- Composer drafts are scoped per conversation and per project in `sessionStorage`, isolating drafts between projects that share conversation views.
-- Message submission commits atomically through `tryStartMessage`/`peek`/`commit`: a submission either completes with its draft cleanup or leaves the draft untouched.
-- Existing 4.3.3 discovery/quiescent reload, 4.3.2 immutable identity and Client Build Leases, 4.3.1 continuity behavior, and 4.3.0 bundle budgets remain unchanged.
+- The root `VERSION` file is the canonical release identity: CI derives evidence paths, artifact names and Docker tags from it, and a `release-version` gate job enforces cross-surface consistency first.
+- Persistence flushers report per-source outcomes with reason codes, `beforeunload` blocks exit on a just-failed flush, and the update banner names the failing source with a `重新保存` retry.
+- Composer drafts migrate losslessly — write and verify the scoped key before deleting the old one — and an in-memory draft repository retains text across conversation/project switches even when storage fails.
+- Conversation state commits as a journaled snapshot → verify → head transaction retaining generations N and N-1, with corrupt-head fallback and legacy keys removed only after a verified commit.
+- Killed generations reload as honestly `interrupted` with partial content preserved and `继续生成` available; agent runs reconcile against server status on restore without replaying requests or re-spending tokens.
+- BFCache restores resynchronize persistence retries, build re-checks, service-worker handshake, lease reporting and timers — no auto-reload, no waiting-worker activation, no duplicate listeners.
+- Existing 4.3.4 activation-transaction/page-lifecycle persistence, 4.3.3 discovery/quiescent reload, 4.3.2 immutable identity and Client Build Leases, 4.3.1 continuity behavior, and 4.3.0 bundle budgets remain unchanged.
 - The 4.2.8 exact-merge Evidence assembly remains the release-trust foundation.
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.3.4 release notes](docs/releases/4.3.4.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.3.5 release notes](docs/releases/4.3.5.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -86,7 +86,7 @@ npm run check --prefix frontend
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.3.4 --ga
+python scripts/preflight_release.py --version 4.3.5 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

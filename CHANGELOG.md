@@ -4,6 +4,38 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.3.5] - Durable Checkpoints and Recovery Integrity
+
+### Canonical release identity
+
+- Derives CI evidence paths, artifact names and Docker tags from the root `VERSION` file and enforces cross-surface consistency with `scripts/check_release_version.py`.
+
+### Diagnosable persistence checkpoints
+
+- Flushers report per-source outcomes (`quota-exceeded` / `storage-unavailable` / `verification-failed` / `unknown`); `beforeunload` blocks exit on a just-failed flush, `pagehide` records the failure with the last successful revision, and the update banner names the failing source with a retry action.
+
+### Lossless composer drafts
+
+- Legacy draft migration writes and verifies the scoped key before deleting the old one, and an in-memory draft repository retains text across project/conversation switches even when sessionStorage writes fail; stale-scope saves can no longer overwrite the active scope.
+
+### Journaled conversation checkpoints
+
+- Conversation state commits as a versioned generation journal (snapshot → verify → head) retaining the last two generations; a failed or torn write never damages the last committed checkpoint, corrupt heads fall back to the previous generation, and legacy keys are removed only after a verified commit.
+
+### Honest interruption recovery
+
+- Checkpoint serialization marks killed generations as interrupted (preserving partial content and reasoning) so restored sessions offer 继续生成 instead of masquerading as in-flight; agent runs are reconciled against server status on restore — re-subscribed when alive, settled when terminal, marked interrupted only when the run is gone, and otherwise resumable via 恢复 Agent Run without re-spending tokens.
+
+### BFCache runtime resync
+
+- `pageshow.persisted` restores now re-check the deployed build, re-handshake the service worker, re-report the page build lease and retry failed persistence without duplicating timers, channels or listeners — and never auto-reload, auto-activate a waiting worker or resume paid model requests.
+
+### Compatibility
+
+- Adds no runtime dependency and changes no backend API, offline Mutation persistence, Provider ownership or bundle budget.
+- Preserves 4.3.4 single-flight activation transactions and page-lifecycle persistence, 4.3.3 staged discovery/quiescent reload, 4.3.2 immutable identity/Client Lease retention, 4.3.1 lazy continuity and the 4.2.8 exact-merge Evidence chain.
+
+
 ## [4.3.4] - Reload Transaction Integrity and Page-Lifecycle Recovery
 
 ### Serialized activation and bounded update checks

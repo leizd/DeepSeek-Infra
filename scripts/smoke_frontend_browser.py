@@ -181,7 +181,12 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         checks["uploadCancel"] = "PASS"
 
         await page.wait_for_function(
-            """() => (localStorage.getItem('deepseek-infra.conversations') || '').includes('Browser smoke reply')"""
+            """() => {
+              const head = localStorage.getItem('deepseek-infra.session.v2.head');
+              if (!head) return false;
+              const raw = localStorage.getItem(`deepseek-infra.session.v2.snapshot.${head}`);
+              return Boolean(raw && raw.includes('Browser smoke reply'));
+            }"""
         )
         await page.reload(wait_until="networkidle")
         await page.get_by_text("Browser smoke reply", exact=True).last.wait_for(timeout=10_000)
@@ -801,15 +806,30 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
 
         await page.get_by_role("button", name="检查更新").click()
         await page.get_by_text("bbbbbbbbbbbbbbbb", exact=False).wait_for(timeout=15_000)
-        await page.wait_for_function(
-            """() => {
-              const banner = document.querySelector('.build-update-banner');
-              const button = Array.from(banner?.querySelectorAll('button') || [])
-                .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
-              return Boolean(banner?.textContent?.includes('bbbbbbbbbbbbbbbb') && button && !button.disabled);
-            }""",
-            timeout=15_000,
-        )
+        try:
+            await page.wait_for_function(
+                """() => {
+                  const banner = document.querySelector('.build-update-banner');
+                  const button = Array.from(banner?.querySelectorAll('button') || [])
+                    .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
+                  return Boolean(banner?.textContent?.includes('bbbbbbbbbbbbbbbb') && button && !button.disabled);
+                }""",
+                timeout=30_000,
+            )
+        except Exception as error:
+            staged_b_state = await page.evaluate(
+                """async () => ({
+                  text: document.querySelector('.build-update-banner')?.textContent || '',
+                  controller: navigator.serviceWorker.controller?.scriptURL || '',
+                  registrations: (await navigator.serviceWorker.getRegistrations()).map((registration) => ({
+                    scope: registration.scope,
+                    active: registration.active?.scriptURL || '',
+                    waiting: registration.waiting?.scriptURL || '',
+                    installing: registration.installing?.scriptURL || '',
+                  })),
+                })"""
+            )
+            raise AssertionError(f"staged build B was not ready: {staged_b_state}") from error
         try:
             await update_peer.get_by_text("bbbbbbbbbbbbbbbb", exact=False).wait_for(timeout=15_000)
         except Exception as error:
@@ -873,7 +893,7 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
                     .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
                   return Boolean(banner?.textContent?.includes('cccccccccccccccc') && button && !button.disabled);
                 }""",
-                timeout=15_000,
+                timeout=30_000,
             )
         except Exception as error:
             staged_state = await page.evaluate(
@@ -922,7 +942,21 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         await page.locator("button.send-button").click()
         await asyncio.wait_for(stop_requested.wait(), timeout=5)
         await page.get_by_text("正在生成回复", exact=False).wait_for(timeout=10_000)
-        await page.get_by_role("button", name="完成后更新").click()
+        try:
+            await page.get_by_role("button", name="完成后更新").click(timeout=15_000)
+        except Exception as error:
+            banner_state = await page.evaluate(
+                """() => {
+                  const banner = document.querySelector('.build-update-banner');
+                  const primary = banner?.querySelector('button.primary');
+                  return {
+                    bannerText: banner?.textContent || '',
+                    primaryDisabled: primary?.disabled ?? null,
+                    primaryLabel: primary?.textContent || '',
+                  };
+                }"""
+            )
+            raise AssertionError(f"完成后更新 button was not clickable: {banner_state}") from error
         await page.wait_for_timeout(200)
         blocked_identity = await controller_identity(page)
         if blocked_identity["buildId"] != current_build:
@@ -2693,6 +2727,504 @@ async def run_demand_loading_smoke(base_url: str) -> dict[str, str]:
     return checks
 
 
+async def run_durable_checkpoint_smoke(base_url: str) -> dict[str, str]:
+    """Exercise the v4.3.5 durable checkpoint and recovery contracts in a real browser."""
+    from playwright.async_api import async_playwright
+
+    checks: dict[str, str] = {}
+    canonical_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+    config_payload = {
+        "hasServerKey": True,
+        "hasSearch": False,
+        "version": VERSION,
+        "defaultModel": "deepseek-v4-pro",
+        "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+        "modelRoutes": {},
+        "computerUrl": base_url,
+        "phoneUrl": base_url,
+        "uploadLimits": {"fileMaxBytes": 200_000_000, "requestMaxBytes": 220_000_000, "maxFiles": 8},
+    }
+
+    async def mock_config(route: Any) -> None:
+        await route.fulfill(status=200, content_type="application/json", body=json.dumps(config_payload))
+
+    async def mock_chat(route: Any) -> None:
+        body = "\n".join(
+            [
+                json.dumps({"type": "content", "text": "检查点冒烟回复"}),
+                json.dumps({"type": "done", "content": "检查点冒烟回复", "model": "deepseek-v4-pro", "usage": {}}),
+                "",
+            ]
+        )
+        await route.fulfill(status=200, headers={"Content-Type": "application/x-ndjson"}, body=body)
+
+    async def mock_title(route: Any) -> None:
+        await route.fulfill(status=200, content_type="application/json", body=json.dumps({"title": "检查点冒烟"}))
+
+    def checkpoint_snapshot(generation: int, conversation_id: str, messages: list[dict[str, Any]], title: str) -> str:
+        return json.dumps(
+            {
+                "schemaVersion": 2,
+                "generation": generation,
+                "savedAt": 1700000000000,
+                "currentConversationId": conversation_id,
+                "conversations": [
+                    {
+                        "id": conversation_id,
+                        "title": title,
+                        "createdAt": 1,
+                        "updatedAt": 2,
+                        "messages": messages,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+    def seed_storage_script(entries: dict[str, str]) -> str:
+        return "".join(
+            f"localStorage.setItem({json.dumps(key)}, {json.dumps(value, ensure_ascii=False)});"
+            for key, value in entries.items()
+        )
+
+    # 只拦截 localStorage 的会话 checkpoint 键：conversation 让整份提交失败，head 只让指针推进失败。
+    storage_failure_init = """
+window.__checkpointSmokeFailures = { conversation: false, head: false };
+{
+  const originalSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    const flags = window.__checkpointSmokeFailures || {};
+    const name = String(key);
+    const failConversation = flags.conversation && name.startsWith('deepseek-infra.session.v2.');
+    const failHead = flags.head && name === 'deepseek-infra.session.v2.head';
+    if (this === window.localStorage && (failConversation || failHead)) {
+      throw new DOMException('simulated smoke storage failure', 'QuotaExceededError');
+    }
+    return originalSetItem.call(this, key, value);
+  };
+}
+"""
+
+    draft_failure_init = """
+{
+  const originalSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    if (this === window.sessionStorage && String(key).startsWith('deepseek:composer-draft:')) {
+      throw new DOMException('simulated smoke draft failure', 'QuotaExceededError');
+    }
+    return originalSetItem.call(this, key, value);
+  };
+}
+"""
+
+    legacy_draft_text = "旧版草稿在迁移失败时必须保留"
+    legacy_draft_init = (
+        """
+{
+  const legacyKey = 'deepseek:composer-draft:new';
+  if (!sessionStorage.getItem('__checkpointSmokeSeeded')) {
+    sessionStorage.setItem(legacyKey, JSON.stringify({
+      conversationId: 'new',
+      text: """
+        + json.dumps(legacy_draft_text, ensure_ascii=False)
+        + """,
+      updatedAt: 1700000000000,
+    }));
+    sessionStorage.setItem('__checkpointSmokeSeeded', '1');
+  }
+  const originalSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    if (this === window.sessionStorage && String(key) === 'deepseek:composer-draft:new:') {
+      throw new DOMException('simulated scoped draft write failure', 'QuotaExceededError');
+    }
+    return originalSetItem.call(this, key, value);
+  };
+}
+"""
+    )
+
+    beforeunload_probe = """
+() => {
+  const event = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+"""
+
+    registration_snapshot = """
+async () => (await navigator.serviceWorker.getRegistrations()).map((registration) => ({
+  scope: registration.scope,
+  active: registration.active?.scriptURL || '',
+}))
+"""
+
+    async with async_playwright() as playwright:
+        api_headers = {"Authorization": f"Bearer {settings.auth.token}"} if settings.auth.enabled else {}
+        api_context = await playwright.request.new_context(extra_http_headers=api_headers)
+        try:
+            real_config_response = await api_context.get(f"{base_url}api/config")
+            if real_config_response.status != 200:
+                raise AssertionError(f"/api/config returned HTTP {real_config_response.status} for the canonical version probe")
+            real_config = await real_config_response.json()
+        finally:
+            await api_context.dispose()
+        if real_config.get("version") != canonical_version:
+            raise AssertionError(
+                f"/api/config reports version {real_config.get('version')!r}, repo VERSION is {canonical_version!r}"
+            )
+
+        browser = await playwright.chromium.launch(headless=True)
+
+        context = await browser.new_context(service_workers="allow")
+        await context.add_init_script(storage_failure_init)
+        await context.route("**/api/config", mock_config)
+        await context.route("**/api/chat", mock_chat)
+        await context.route("**/api/title", mock_title)
+        page = await context.new_page()
+        await page.goto(base_url, wait_until="networkidle")
+        await page.locator("#reactPromptInput").wait_for()
+
+        meta_version = await page.evaluate(
+            """() => document.querySelector('meta[name="deepseek-infra-version"]')?.content || ''"""
+        )
+        if meta_version != canonical_version:
+            raise AssertionError(f"served page version meta is {meta_version!r}, repo VERSION is {canonical_version!r}")
+        checks["canonicalReleaseVersion"] = "PASS"
+
+        await page.evaluate("() => { window.__checkpointSmokeFailures.conversation = true; }")
+        await page.locator("#reactPromptInput").fill("制造一次失败的会话保存")
+        await page.locator("button.send-button").click()
+        banner = page.locator(".build-update-banner")
+        await banner.wait_for(timeout=10_000)
+        await banner.get_by_text("对话记录保存失败", exact=True).wait_for(timeout=10_000)
+        banner_text = await banner.inner_text()
+        if "unknown" in banner_text.lower():
+            raise AssertionError(f"flush failure banner fell back to a generic message: {banner_text!r}")
+        if not await banner.get_by_role("button", name="重新保存").count():
+            raise AssertionError(f"flush failure banner is missing the 重新保存 retry action: {banner_text!r}")
+        checks["flushFailureIdentified"] = "PASS"
+
+        blocked = await page.evaluate(beforeunload_probe)
+        if not blocked:
+            raise AssertionError("beforeunload was not blocked immediately after a failed persistence flush")
+        await page.evaluate("() => { window.__checkpointSmokeFailures.conversation = false; }")
+        await page.wait_for_timeout(400)
+        allowed = await page.evaluate(beforeunload_probe)
+        if allowed:
+            raise AssertionError("beforeunload stayed blocked with healthy storage and no active reload blockers")
+        checks["beforeUnloadBlocksFailedFlush"] = "PASS"
+
+        head_value = await page.evaluate("() => localStorage.getItem('deepseek-infra.session.v2.head')")
+        if not head_value or not head_value.isdigit():
+            raise AssertionError(f"healthy flush never committed a session head: {head_value!r}")
+        snapshot_state = await page.evaluate(
+            """(head) => {
+              const key = `deepseek-infra.session.v2.snapshot.${head}`;
+              const raw = localStorage.getItem(key);
+              if (!raw) return { ok: false, reason: `snapshot missing: ${key}` };
+              try {
+                const parsed = JSON.parse(raw);
+                return {
+                  ok: parsed.schemaVersion === 2
+                    && parsed.generation === Number(head)
+                    && Array.isArray(parsed.conversations),
+                  reason: '',
+                };
+              } catch (error) {
+                return { ok: false, reason: String(error) };
+              }
+            }""",
+            head_value,
+        )
+        if not snapshot_state["ok"]:
+            raise AssertionError(f"committed checkpoint snapshot is unusable: {snapshot_state}")
+        if await page.evaluate("() => localStorage.getItem('deepseek-infra.conversations') !== null"):
+            raise AssertionError("legacy conversations key survived a verified v2 checkpoint commit")
+        await page.evaluate("() => { window.__checkpointSmokeFailures.head = true; }")
+        await page.locator("#reactPromptInput").fill("原子性第二条消息")
+        await page.locator("button.send-button").click()
+        expected_generation = int(head_value) + 1
+        await page.wait_for_function(
+            "(generation) => localStorage.getItem(`deepseek-infra.session.v2.snapshot.${generation}`) !== null",
+            arg=expected_generation,
+            timeout=10_000,
+        )
+        await page.wait_for_timeout(300)
+        head_after = await page.evaluate("() => localStorage.getItem('deepseek-infra.session.v2.head')")
+        if head_after != head_value:
+            raise AssertionError(f"torn head write moved the checkpoint head: {head_value!r} -> {head_after!r}")
+        # head 失败保持开启并重载：旧文档的 pagehide flush 同样无法推进 head，
+        # 撕裂的 N+1 代不会被“自愈”提交，恢复结果必须停留在已核验的第 N 代。
+        await page.reload(wait_until="networkidle")
+        await page.locator("#reactPromptInput").wait_for()
+        try:
+            await page.get_by_text("检查点冒烟回复", exact=True).wait_for(timeout=10_000)
+        except Exception as error:
+            restored_state = await page.evaluate(
+                """() => {
+                  const storage = {};
+                  for (let i = 0; i < localStorage.length; i += 1) {
+                    const key = localStorage.key(i);
+                    if (key.startsWith('deepseek-infra.session') || key.startsWith('deepseek-infra.conversations')) {
+                      const value = localStorage.getItem(key) || '';
+                      storage[key] = value.length > 200 ? `${value.slice(0, 200)}…(${value.length})` : value;
+                    }
+                  }
+                  return { storage, chat: document.querySelector('.chat-messages')?.textContent || '' };
+                }"""
+            )
+            raise AssertionError(f"committed generation was not restored after reload: {restored_state}") from error
+        if await page.get_by_text("原子性第二条消息", exact=False).count() != 0:
+            raise AssertionError("uncommitted generation leaked into the restored session")
+        checks["conversationCheckpointAtomic"] = "PASS"
+        await context.close()
+
+        draft_context = await browser.new_context(service_workers="allow")
+        await draft_context.add_init_script(legacy_draft_init)
+        await draft_context.route("**/api/config", mock_config)
+        draft_page = await draft_context.new_page()
+        await draft_page.goto(base_url, wait_until="networkidle")
+        await draft_page.locator("#reactPromptInput").wait_for()
+        await draft_page.wait_for_function(
+            "(expected) => document.querySelector('#reactPromptInput').value === expected",
+            arg=legacy_draft_text,
+            timeout=10_000,
+        )
+        await draft_page.reload(wait_until="networkidle")
+        await draft_page.locator("#reactPromptInput").wait_for()
+        restored_draft = await draft_page.locator("#reactPromptInput").input_value()
+        legacy_kept = await draft_page.evaluate("() => sessionStorage.getItem('deepseek:composer-draft:new') !== null")
+        scoped_written = await draft_page.evaluate("() => sessionStorage.getItem('deepseek:composer-draft:new:') !== null")
+        if restored_draft != legacy_draft_text or not legacy_kept or scoped_written:
+            raise AssertionError(
+                "legacy draft migration was not lossless: "
+                f"restored={restored_draft!r}, legacyKept={legacy_kept}, scopedWritten={scoped_written}"
+            )
+        checks["legacyDraftMigrationLossless"] = "PASS"
+        await draft_context.close()
+
+        scope_context = await browser.new_context(service_workers="allow")
+        await scope_context.add_init_script(draft_failure_init)
+        await scope_context.route("**/api/config", mock_config)
+        await scope_context.route("**/api/chat", mock_chat)
+        await scope_context.route("**/api/title", mock_title)
+        scope_page = await scope_context.new_page()
+        await scope_page.goto(base_url, wait_until="networkidle")
+        await scope_page.locator("#reactPromptInput").wait_for()
+        await scope_page.locator("#reactPromptInput").fill("作用域切换的第一条消息")
+        await scope_page.locator("button.send-button").click()
+        await scope_page.get_by_text("检查点冒烟回复", exact=True).wait_for(timeout=10_000)
+        scope_draft_text = "切走再切回仍然保留的草稿"
+        await scope_page.locator("#reactPromptInput").fill(scope_draft_text)
+        await scope_page.wait_for_timeout(400)
+        await scope_page.locator("button.new-chat-button").click()
+        await scope_page.wait_for_function(
+            "() => document.querySelector('#reactPromptInput').value === ''",
+            timeout=5_000,
+        )
+        await scope_page.locator(".conversation-open").first.click()
+        await scope_page.wait_for_function(
+            "(expected) => document.querySelector('#reactPromptInput').value === expected",
+            arg=scope_draft_text,
+            timeout=5_000,
+        )
+        persisted_drafts = await scope_page.evaluate(
+            "() => Object.keys(sessionStorage).filter((key) => key.startsWith('deepseek:composer-draft:')).length"
+        )
+        if persisted_drafts != 0:
+            raise AssertionError(f"draft unexpectedly reached failing sessionStorage: {persisted_drafts} keys")
+        checks["scopeSwitchDraftRetained"] = "PASS"
+        await scope_context.close()
+
+        fallback_messages = [
+            {"id": "u7", "role": "user", "content": "回退世代用户消息", "createdAt": 1},
+            {"id": "a7", "role": "assistant", "content": "回退世代助手回复", "createdAt": 2},
+        ]
+        fallback_context = await browser.new_context(service_workers="allow")
+        await fallback_context.add_init_script(
+            seed_storage_script(
+                {
+                    "deepseek-infra.session.v2.head": "5",
+                    "deepseek-infra.session.v2.snapshot.5": '{"schemaVersion":2,"generation":5,"conversations":[corrupt',
+                    "deepseek-infra.session.v2.snapshot.4": checkpoint_snapshot(
+                        4, "conv-fallback", fallback_messages, "回退会话"
+                    ),
+                }
+            )
+        )
+        await fallback_context.route("**/api/config", mock_config)
+        fallback_page = await fallback_context.new_page()
+        await fallback_page.goto(base_url, wait_until="networkidle")
+        await fallback_page.locator("#reactPromptInput").wait_for()
+        await fallback_page.get_by_text("回退世代助手回复", exact=True).wait_for(timeout=10_000)
+        checks["checkpointFallbackRecovered"] = "PASS"
+        await fallback_context.close()
+
+        interrupted_messages = [
+            {"id": "u8", "role": "user", "content": "中断恢复用户消息", "createdAt": 1},
+            {
+                "id": "a8",
+                "role": "assistant",
+                "content": "生成到一半的回答",
+                "createdAt": 2,
+                "phase": "answering",
+                "streaming": True,
+            },
+        ]
+        interrupted_context = await browser.new_context(service_workers="allow")
+        await interrupted_context.add_init_script(
+            seed_storage_script(
+                {
+                    "deepseek-infra.session.v2.head": "1",
+                    "deepseek-infra.session.v2.snapshot.1": checkpoint_snapshot(
+                        1, "conv-interrupted", interrupted_messages, "中断会话"
+                    ),
+                }
+            )
+        )
+        await interrupted_context.route("**/api/config", mock_config)
+        interrupted_page = await interrupted_context.new_page()
+        await interrupted_page.goto(base_url, wait_until="networkidle")
+        await interrupted_page.locator("#reactPromptInput").wait_for()
+        await interrupted_page.get_by_text("生成到一半的回答", exact=True).wait_for(timeout=10_000)
+        await interrupted_page.get_by_role("button", name="继续生成").wait_for(timeout=10_000)
+        await interrupted_page.get_by_text("生成已由用户停止", exact=False).wait_for(timeout=10_000)
+        interrupted_notes = await interrupted_page.locator(
+            "p.system-note", has_text="页面关闭或刷新时生成被中断。"
+        ).count()
+        if interrupted_notes != 1:
+            raise AssertionError(f"interrupted checkpoint note rendered {interrupted_notes} times, expected 1")
+        if await interrupted_page.locator(".stream-dot").count() != 0:
+            raise AssertionError("restored interrupted message still renders an in-flight stream indicator")
+        if await interrupted_page.locator("button.stop-button").count() != 0:
+            raise AssertionError("restored interrupted message still renders a stop-generation button")
+        if await interrupted_page.get_by_text("正在回答", exact=True).count() != 0:
+            raise AssertionError("restored interrupted message still claims to be answering")
+        checks["interruptedStreamRecoveredHonestly"] = "PASS"
+        await interrupted_context.close()
+
+        agent_requests: list[dict[str, str]] = []
+
+        async def mock_agent_runs(route: Any) -> None:
+            method = route.request.method
+            path = urlsplit(route.request.url).path
+            agent_requests.append({"method": method, "path": path})
+            if method == "GET" and path == "/api/agent-runs/run-smoke-missing":
+                await route.fulfill(
+                    status=404,
+                    content_type="application/json",
+                    body=json.dumps({"error": "agent run not found"}),
+                )
+                return
+            await route.fulfill(
+                status=500,
+                content_type="application/json",
+                body=json.dumps({"error": "unexpected agent run call"}),
+            )
+
+        agent_messages = [
+            {"id": "u9", "role": "user", "content": "代理对账用户消息", "createdAt": 1},
+            {
+                "id": "a9",
+                "role": "assistant",
+                "content": "Agent 半截输出",
+                "createdAt": 2,
+                "phase": "answering",
+                "agentRunId": "run-smoke-missing",
+                "agentRunStatus": "running",
+            },
+        ]
+        agent_context = await browser.new_context(service_workers="allow")
+        await agent_context.add_init_script(
+            seed_storage_script(
+                {
+                    "deepseek-infra.session.v2.head": "1",
+                    "deepseek-infra.session.v2.snapshot.1": checkpoint_snapshot(
+                        1, "conv-agent", agent_messages, "代理会话"
+                    ),
+                }
+            )
+        )
+        await agent_context.route("**/api/config", mock_config)
+        await agent_context.route("**/api/agent-runs**", mock_agent_runs)
+        agent_page = await agent_context.new_page()
+        await agent_page.goto(base_url, wait_until="networkidle")
+        await agent_page.locator("#reactPromptInput").wait_for()
+        await agent_page.get_by_role("button", name="继续生成").wait_for(timeout=10_000)
+        await agent_page.get_by_text("生成已由用户停止", exact=False).wait_for(timeout=10_000)
+        if await agent_page.get_by_role("button", name="恢复 Agent Run").count() != 0:
+            raise AssertionError("a missing agent run must settle as interrupted, not orphaned")
+        status_gets = [r for r in agent_requests if r["method"] == "GET" and r["path"] == "/api/agent-runs/run-smoke-missing"]
+        if len(status_gets) != 1:
+            raise AssertionError(f"restored agent run was not reconciled with exactly one read-only GET: {agent_requests}")
+        replayed_posts = [r for r in agent_requests if r["method"] == "POST"]
+        if replayed_posts:
+            raise AssertionError(f"restore replayed paid agent work: {replayed_posts}")
+        if any(r["path"].endswith("/stream") for r in agent_requests):
+            raise AssertionError(f"missing agent run still attached a stream: {agent_requests}")
+        checks["agentRunReconciledWithoutReplay"] = "PASS"
+        await agent_context.close()
+
+        bfcache_context = await browser.new_context(service_workers="allow")
+        await bfcache_context.route("**/api/config", mock_config)
+        bfcache_page = await bfcache_context.new_page()
+        pointer_hits: list[str] = []
+        bfcache_page.on(
+            "request",
+            lambda request: pointer_hits.append(request.url)
+            if urlsplit(request.url).path == "/ui/workspace-assets.json"
+            else None,
+        )
+        await bfcache_page.goto(base_url, wait_until="networkidle")
+        await bfcache_page.locator("#reactPromptInput").wait_for()
+        await bfcache_page.evaluate(
+            """async () => {
+              await navigator.serviceWorker.ready;
+              if (!navigator.serviceWorker.controller) {
+                await new Promise((resolve, reject) => {
+                  const timer = setTimeout(() => reject(new Error('service worker control timeout')), 10000);
+                  navigator.serviceWorker.addEventListener('controllerchange', () => { clearTimeout(timer); resolve(); }, { once: true });
+                });
+              }
+            }"""
+        )
+        await bfcache_page.wait_for_timeout(500)
+        baseline_pointer_hits = len(pointer_hits)
+        if baseline_pointer_hits == 0:
+            raise AssertionError("startup build check never fetched /ui/workspace-assets.json")
+        navigations: list[str] = []
+        bfcache_page.on(
+            "framenavigated",
+            lambda frame: navigations.append(frame.url) if frame == bfcache_page.main_frame else None,
+        )
+        await bfcache_page.evaluate("() => { window.__bfcacheSmokeMarker = 'alive'; }")
+        registrations_before = await bfcache_page.evaluate(registration_snapshot)
+        if len(registrations_before) != 1:
+            raise AssertionError(f"expected exactly one service worker registration per build, got {registrations_before}")
+        await bfcache_page.evaluate("() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))")
+        deadline = time.monotonic() + 10
+        while len(pointer_hits) <= baseline_pointer_hits and time.monotonic() < deadline:
+            await bfcache_page.wait_for_timeout(100)
+        if len(pointer_hits) <= baseline_pointer_hits:
+            raise AssertionError("persisted pageshow did not force a fresh build re-check of /ui/workspace-assets.json")
+        await bfcache_page.wait_for_timeout(300)
+        if navigations:
+            raise AssertionError(f"bfcache resync navigated or reloaded the page: {navigations}")
+        if await bfcache_page.evaluate("() => window.__bfcacheSmokeMarker") != "alive":
+            raise AssertionError("bfcache resync reloaded the page (marker lost)")
+        registrations_after = await bfcache_page.evaluate(registration_snapshot)
+        if registrations_after != registrations_before:
+            raise AssertionError(
+                f"bfcache resync duplicated service worker registrations: {registrations_before} -> {registrations_after}"
+            )
+        checks["bfcacheRuntimeResynchronized"] = "PASS"
+        await bfcache_context.close()
+
+        await browser.close()
+    return checks
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="write JSON evidence to this path")
@@ -2720,6 +3252,7 @@ def main() -> int:
         checks.update(asyncio.run(run_mutation_smoke(base_url)))
         checks.update(asyncio.run(run_mutation_lifecycle_smoke(base_url)))
         checks.update(asyncio.run(run_mutation_continuity_smoke(base_url)))
+        checks.update(asyncio.run(run_durable_checkpoint_smoke(base_url)))
         payload = {
             "schemaVersion": 1,
             "version": VERSION,

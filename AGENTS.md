@@ -29,6 +29,7 @@ node --check static/vendor/katex/katex.min.js
 - Node 22.12+ is required for the Vite frontend; CI uses Node 24 and the committed `frontend/package-lock.json`.
 - No API key or network needed for tests or evals — everything is offline.
 - Single test: `pytest tests/test_mcp.py::test_name`. Run fast subset: `pytest -m "not integration and not slow"`.
+- `VERSION` at repo root is the canonical release version; `python scripts/check_release_version.py` enforces cross-surface consistency (CI gate job `release-version`).
 
 ### Tooling quirks
 
@@ -53,6 +54,8 @@ python evals/runners/compare_eval_baseline.py --strict --baseline evals/baseline
 ### Security scan (CI `security` job)
 
 ```bash
+npm audit --prefix frontend --audit-level=high --json > artifacts/npm-audit.json
+python scripts/check_npm_audit.py artifacts/npm-audit.json  # high/critical gate; documented GHSA exceptions only
 pip-audit -r requirements.txt -r requirements-dev.txt
 bandit -r deepseek_infra --severity-level high -q          # only HIGH; medium is reviewed (docs/THREAT_MODEL.md)
 detect-secrets scan --baseline .secrets.baseline           # ALWAYS pass --baseline; test fixtures contain deliberate fake keys

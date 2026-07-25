@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { startPageLifecyclePersistence, type PageLifecycleEnvironment } from "./pageLifecycle";
 import {
+  getPersistenceHealthSnapshot,
+  resetPersistenceHealthForTests,
+} from "./persistenceHealth";
+import {
   registerReloadFlusher,
   resetReloadCoordinationForTests,
   setReloadBlocker,
@@ -47,6 +51,7 @@ function beforeUnloadEvent(): BeforeUnloadEvent {
 
 afterEach(() => {
   resetReloadCoordinationForTests();
+  resetPersistenceHealthForTests();
 });
 
 describe("page lifecycle persistence", () => {
@@ -129,6 +134,90 @@ describe("page lifecycle persistence", () => {
     expect(flush).toHaveBeenCalledTimes(1);
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(event.returnValue).not.toBe("");
+
+    unregister();
+    stop();
+  });
+
+  it("blocks beforeunload when the flush itself fails, even with no blockers registered", () => {
+    const runtime = environment();
+    const unregister = registerReloadFlusher("conversation", () => {
+      throw new Error("storage unavailable");
+    });
+    const stop = startPageLifecyclePersistence(runtime.value);
+
+    const event = beforeUnloadEvent();
+    // 异常必须被吞进报告里，绝不能逃成未捕获错误。
+    expect(() => runtime.windowTarget.dispatch("beforeunload", event)).not.toThrow();
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(event.returnValue).toBe("");
+
+    const health = getPersistenceHealthSnapshot();
+    expect(health.healthy).toBe(false);
+    expect(health.failedIds).toEqual(["conversation"]);
+    expect(health.lastErrors.conversation).toEqual({ code: "unknown", message: "storage unavailable" });
+
+    unregister();
+    stop();
+  });
+
+  it("does not block beforeunload when the flush reports per-flusher failures but a retry recovered", () => {
+    const runtime = environment();
+    let failing = true;
+    const unregister = registerReloadFlusher("conversation", () => (
+      failing ? { ok: false as const, code: "quota-exceeded" as const, message: "storage full" } : { ok: true as const }
+    ));
+    const stop = startPageLifecyclePersistence(runtime.value);
+
+    const blockedEvent = beforeUnloadEvent();
+    runtime.windowTarget.dispatch("beforeunload", blockedEvent);
+    expect(blockedEvent.preventDefault).toHaveBeenCalledTimes(1);
+
+    failing = false;
+    const clearEvent = beforeUnloadEvent();
+    runtime.windowTarget.dispatch("beforeunload", clearEvent);
+    expect(clearEvent.preventDefault).not.toHaveBeenCalled();
+    expect(getPersistenceHealthSnapshot().healthy).toBe(true);
+
+    unregister();
+    stop();
+  });
+
+  it("records pagehide flush failures while retaining the last successful revision", () => {
+    const runtime = environment();
+    let failing = false;
+    const flush = vi.fn(() => (failing
+      ? { ok: false as const, code: "quota-exceeded" as const, message: "storage full" }
+      : { ok: true as const, revision: "rev-1" }));
+    const unregister = registerReloadFlusher("conversation", flush);
+    const stop = startPageLifecyclePersistence(runtime.value);
+
+    runtime.windowTarget.dispatch("pagehide", new Event("pagehide"));
+    expect(getPersistenceHealthSnapshot().healthy).toBe(true);
+    expect(getPersistenceHealthSnapshot().lastSuccessRevision).toEqual({ conversation: "rev-1" });
+
+    failing = true;
+    runtime.windowTarget.dispatch("pagehide", new Event("pagehide"));
+    const health = getPersistenceHealthSnapshot();
+    expect(health.healthy).toBe(false);
+    expect(health.failedIds).toEqual(["conversation"]);
+    expect(health.lastFailureAt).toEqual(expect.any(Number));
+    // 最后成功 revision 不得被失败覆盖。
+    expect(health.lastSuccessRevision).toEqual({ conversation: "rev-1" });
+
+    unregister();
+    stop();
+  });
+
+  it("records hidden visibilitychange flushes into persistence health", () => {
+    const runtime = environment();
+    const unregister = registerReloadFlusher("conversation", () => ({ ok: true, revision: "rev-9" }));
+    const stop = startPageLifecyclePersistence(runtime.value);
+
+    runtime.documentValue.visibilityState = "hidden";
+    runtime.documentTarget.dispatch("visibilitychange", new Event("visibilitychange"));
+
+    expect(getPersistenceHealthSnapshot().lastSuccessRevision).toEqual({ conversation: "rev-9" });
 
     unregister();
     stop();

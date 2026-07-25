@@ -4,7 +4,9 @@ import {
   clearComposerDraft,
   composerDraftStorageKey,
   loadComposerDraft,
+  migrateLegacyDraft,
   saveComposerDraft,
+  type ComposerDraft,
   type SessionStorageLike,
 } from "./composerDraftPersistence";
 
@@ -23,6 +25,72 @@ class MemorySessionStorage implements SessionStorageLike {
     this.values.delete(key);
   }
 }
+
+/** 包装一个可用存储，但 setItem 一律抛出指定错误。 */
+class FailingWriteStorage implements SessionStorageLike {
+  constructor(
+    private readonly inner: SessionStorageLike,
+    private readonly error: unknown,
+  ) {}
+
+  getItem(key: string): string | null {
+    return this.inner.getItem(key);
+  }
+
+  setItem(): void {
+    throw this.error;
+  }
+
+  removeItem(key: string): void {
+    this.inner.removeItem(key);
+  }
+}
+
+/** 读写全部抛错：浏览器把存储整体禁用。 */
+class DisabledStorage implements SessionStorageLike {
+  getItem(): string | null {
+    throw new Error("storage disabled");
+  }
+
+  setItem(): void {
+    throw new Error("storage disabled");
+  }
+
+  removeItem(): void {
+    throw new Error("storage disabled");
+  }
+}
+
+/** 指定键的回读被篡改：写入看似成功，读回来的内容却不一致。 */
+class MismatchReadbackStorage implements SessionStorageLike {
+  private readonly values = new Map<string, string>();
+
+  constructor(private readonly mismatchedKey: string) {}
+
+  getItem(key: string): string | null {
+    const value = this.values.get(key) ?? null;
+    if (key === this.mismatchedKey && value !== null) {
+      const parsed = JSON.parse(value) as { text: string };
+      return JSON.stringify({ ...parsed, text: `${parsed.text} (tampered)` });
+    }
+    return value;
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+
+  removeItem(key: string): void {
+    this.values.delete(key);
+  }
+}
+
+const draftA: ComposerDraft = {
+  conversationId: "conversation-a",
+  projectId: null,
+  text: "draft",
+  updatedAt: 42,
+};
 
 describe("composer draft persistence", () => {
   it("scopes drafts by conversation and project, restoring each project independently", () => {
@@ -169,12 +237,127 @@ describe("composer draft persistence", () => {
   });
 
   it("treats an empty draft as safe when session storage is unavailable", () => {
-    expect(clearComposerDraft({ conversationId: "conversation-a", projectId: null }, null)).toBe(true);
+    expect(clearComposerDraft({ conversationId: "conversation-a", projectId: null }, null)).toEqual({ ok: true });
     expect(saveComposerDraft({
       conversationId: "conversation-a",
       projectId: null,
       text: "unsaved",
       updatedAt: 1,
-    }, null)).toBe(false);
+    }, null)).toMatchObject({ ok: false, code: "storage-unavailable" });
+  });
+});
+
+describe("composer draft failure codes", () => {
+  it("returns the updatedAt revision on a successful save", () => {
+    expect(saveComposerDraft(draftA, new MemorySessionStorage())).toEqual({ ok: true, revision: "42" });
+  });
+
+  it("maps QuotaExceededError to quota-exceeded, including legacy quota signals", () => {
+    expect(saveComposerDraft(draftA, new FailingWriteStorage(
+      new MemorySessionStorage(),
+      new DOMException("full", "QuotaExceededError"),
+    ))).toMatchObject({ ok: false, code: "quota-exceeded" });
+    // Firefox 旧式错误名。
+    expect(saveComposerDraft(draftA, new FailingWriteStorage(
+      new MemorySessionStorage(),
+      { name: "NS_ERROR_DOM_QUOTA_REACHED", message: "quota" },
+    ))).toMatchObject({ ok: false, code: "quota-exceeded" });
+    // 旧数值 code 22。
+    expect(saveComposerDraft(draftA, new FailingWriteStorage(
+      new MemorySessionStorage(),
+      { name: "Error", code: 22 },
+    ))).toMatchObject({ ok: false, code: "quota-exceeded" });
+  });
+
+  it("maps SecurityError to storage-unavailable", () => {
+    expect(saveComposerDraft(draftA, new FailingWriteStorage(
+      new MemorySessionStorage(),
+      new DOMException("denied", "SecurityError"),
+    ))).toMatchObject({ ok: false, code: "storage-unavailable" });
+  });
+
+  it("treats a write failure with unreadable storage as storage-unavailable", () => {
+    expect(saveComposerDraft(draftA, new DisabledStorage()))
+      .toMatchObject({ ok: false, code: "storage-unavailable" });
+    expect(clearComposerDraft(
+      { conversationId: "conversation-a", projectId: null },
+      new DisabledStorage(),
+    )).toMatchObject({ ok: false, code: "storage-unavailable" });
+  });
+
+  it("keeps unknown for unrecognized write failures when reads still work", () => {
+    expect(saveComposerDraft(draftA, new FailingWriteStorage(new MemorySessionStorage(), new Error("boom"))))
+      .toMatchObject({ ok: false, code: "unknown", message: "boom" });
+  });
+
+  it("reports verification-failed when the read-back does not match the written draft", () => {
+    const scope = { conversationId: "conversation-a", projectId: null };
+    const storage = new MismatchReadbackStorage(composerDraftStorageKey(scope));
+    expect(saveComposerDraft({ ...scope, text: "draft", updatedAt: 9 }, storage))
+      .toMatchObject({ ok: false, code: "verification-failed" });
+  });
+});
+
+describe("lossless legacy migration", () => {
+  const legacyKey = "deepseek:composer-draft:conversation-a";
+
+  it("writes and verifies the scoped key before deleting the legacy key", () => {
+    const storage = new MemorySessionStorage();
+    storage.setItem(legacyKey, JSON.stringify({
+      conversationId: "conversation-a",
+      projectId: "project-a",
+      text: "legacy draft",
+      updatedAt: 7,
+    }));
+
+    expect(migrateLegacyDraft("conversation-a", storage)).toEqual({ ok: true, revision: "7" });
+    expect(storage.getItem(legacyKey)).toBeNull();
+    const scopedKey = composerDraftStorageKey({ conversationId: "conversation-a", projectId: "project-a" });
+    expect(JSON.parse(storage.getItem(scopedKey) ?? "null")).toMatchObject({
+      conversationId: "conversation-a",
+      projectId: "project-a",
+      text: "legacy draft",
+    });
+  });
+
+  it("keeps the legacy key and still loads the draft when the migration write throws", () => {
+    const inner = new MemorySessionStorage();
+    inner.setItem(legacyKey, JSON.stringify({
+      conversationId: "conversation-a",
+      projectId: null,
+      text: "keep me",
+      updatedAt: 3,
+    }));
+    const storage = new FailingWriteStorage(inner, new DOMException("full", "QuotaExceededError"));
+
+    expect(migrateLegacyDraft("conversation-a", storage)).toMatchObject({ ok: false, code: "quota-exceeded" });
+    // 旧键必须原样保留。
+    expect(storage.getItem(legacyKey)).not.toBeNull();
+    // 草稿仍可从旧键加载。
+    expect(loadComposerDraft({ conversationId: "conversation-a", projectId: null }, storage)?.text).toBe("keep me");
+    expect(storage.getItem(legacyKey)).not.toBeNull();
+  });
+
+  it("keeps the legacy key when the read-back does not match the migrated draft", () => {
+    const scopedKey = composerDraftStorageKey({ conversationId: "conversation-a", projectId: "project-a" });
+    const storage = new MismatchReadbackStorage(scopedKey);
+    storage.setItem(legacyKey, JSON.stringify({
+      conversationId: "conversation-a",
+      projectId: "project-a",
+      text: "legacy",
+      updatedAt: 5,
+    }));
+
+    expect(migrateLegacyDraft("conversation-a", storage)).toMatchObject({ ok: false, code: "verification-failed" });
+    expect(storage.getItem(legacyKey)).not.toBeNull();
+  });
+
+  it("cleans up unparseable legacy content exactly once without a draft to lose", () => {
+    const storage = new MemorySessionStorage();
+    storage.setItem(legacyKey, "{");
+
+    expect(migrateLegacyDraft("conversation-a", storage)).toEqual({ ok: true });
+    expect(storage.getItem(legacyKey)).toBeNull();
+    expect(migrateLegacyDraft("conversation-a", storage)).toBeNull();
   });
 });

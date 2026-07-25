@@ -11,12 +11,25 @@ env:
   EVIDENCE_CONTEXT_PATH: artifacts/evidence-context/evidence-source-context.json
 
 jobs:
+  release-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check release version consistency
+        run: python scripts/check_release_version.py --strict-branch
+
   evidence-context:
+    needs: release-version
     runs-on: ubuntu-latest
     outputs:
       tested-revision: ${{ steps.context.outputs.revision }}
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -24,7 +37,7 @@ jobs:
         name: Capture exact-merge Evidence context
         run: >-
           python scripts/capture_evidence_context.py
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --out "$EVIDENCE_CONTEXT_PATH"
       - uses: actions/upload-artifact@v4
         with:
@@ -33,6 +46,7 @@ jobs:
           if-no-files-found: error
 
   test:
+    needs: release-version
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -67,12 +81,16 @@ jobs:
       - run: node --check static/vendor/katex/katex.min.js
 
   frontend:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -89,11 +107,11 @@ jobs:
       - run: npm run typecheck --prefix frontend
       - run: npm test --prefix frontend
       - run: npm run build --prefix frontend
-      - run: python scripts/check_frontend_bundle.py --out docs/evidence/frontend-bundle-v4.3.4.json
+      - run: python scripts/check_frontend_bundle.py --out docs/evidence/frontend-bundle-v$RELEASE_VERSION.json
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer frontend
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-frontend
       - uses: actions/upload-artifact@v4
@@ -106,16 +124,20 @@ jobs:
           name: react-frontend
           path: |
             static/ui
-            docs/evidence/frontend-bundle-v4.3.4.json
+            docs/evidence/frontend-bundle-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
 
   frontend-browser:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -133,11 +155,11 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt
       - run: python -m playwright install --with-deps chromium
-      - run: python scripts/smoke_frontend_browser.py --out docs/evidence/frontend-browser-v4.3.4.json
+      - run: python scripts/smoke_frontend_browser.py --out docs/evidence/frontend-browser-v$RELEASE_VERSION.json
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer frontend-browser
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-frontend-browser
       - uses: actions/upload-artifact@v4
@@ -149,10 +171,11 @@ jobs:
         if: always()
         with:
           name: frontend-browser-smoke
-          path: docs/evidence/frontend-browser-v4.3.4.json
+          path: docs/evidence/frontend-browser-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
 
   security:
+    needs: release-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -167,18 +190,28 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install pip-audit bandit detect-secrets
       - run: npm ci --prefix frontend
-      - run: npm audit --prefix frontend --audit-level=high
+      - name: npm audit (high; documented exceptions gated)
+        run: |
+          mkdir -p artifacts
+          status=0
+          npm audit --prefix frontend --audit-level=high --json > artifacts/npm-audit.json || status=$?
+          if [ "$status" -gt 1 ]; then cat artifacts/npm-audit.json; exit "$status"; fi
+          python scripts/check_npm_audit.py artifacts/npm-audit.json
       - run: pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt
       - run: bandit -r deepseek_infra --severity-level high -q
       - run: detect-secrets scan --baseline .secrets.baseline
 
   eval:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -193,14 +226,14 @@ jobs:
       - run: python evals/runners/run_security_corpus.py --strict --out evals/reports/security-latest.json --markdown evals/reports/security-latest.md
       - run: python evals/runners/compare_eval_baseline.py --strict --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json --agent-baseline evals/baselines/agent-v2.2.8.json --out evals/reports/baseline-compare-latest.json
       - run: python evals/runners/run_agent_eval.py --report-dir evals/reports --strict
-      - run: python evals/runners/run_skill_eval.py --out evals/reports/skills-v4.3.4.json --strict
-      - run: python evals/runners/run_media_eval.py --out evals/reports/media-v4.3.4.json --strict
-      - run: python evals/runners/run_browser_eval.py --out evals/reports/browser-v4.3.4.json --strict --version 4.3.4
-      - run: python evals/runners/run_automation_eval.py --out evals/reports/automation-v4.3.4.json --strict --version 4.3.4
+      - run: python evals/runners/run_skill_eval.py --out evals/reports/skills-v$RELEASE_VERSION.json --strict
+      - run: python evals/runners/run_media_eval.py --out evals/reports/media-v$RELEASE_VERSION.json --strict
+      - run: python evals/runners/run_browser_eval.py --out evals/reports/browser-v$RELEASE_VERSION.json --strict --version $RELEASE_VERSION
+      - run: python evals/runners/run_automation_eval.py --out evals/reports/automation-v$RELEASE_VERSION.json --strict --version $RELEASE_VERSION
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer eval
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-eval
       - uses: actions/upload-artifact@v4
@@ -219,12 +252,13 @@ jobs:
             evals/reports/baseline-compare-latest.json
             evals/reports/security-latest.json
             evals/reports/security-latest.md
-            evals/reports/skills-v4.3.4.json
-            evals/reports/media-v4.3.4.json
-            evals/reports/browser-v4.3.4.json
-            evals/reports/automation-v4.3.4.json
+            evals/reports/skills-v${{ env.RELEASE_VERSION }}.json
+            evals/reports/media-v${{ env.RELEASE_VERSION }}.json
+            evals/reports/browser-v${{ env.RELEASE_VERSION }}.json
+            evals/reports/automation-v${{ env.RELEASE_VERSION }}.json
 
   docker:
+    needs: release-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -232,12 +266,16 @@ jobs:
       - run: cp .env.example .env && docker compose config
 
   rust-docker:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -246,20 +284,20 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build Rust sidecar image
-        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:4.3.4 .
+        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:$RELEASE_VERSION .
       - name: Record Rust sidecar image identity
         run: >-
           python scripts/record_rust_sidecar_image.py
-          --tag deepseek-rust-gateway:4.3.4
-          --out docs/evidence/rust-sidecar-image-v4.3.4.json
+          --tag deepseek-rust-gateway:$RELEASE_VERSION
+          --out docs/evidence/rust-sidecar-image-v$RELEASE_VERSION.json
       - name: Run Rust sidecar
-        run: docker run --detach --name deepseek-rust-gateway --publish 127.0.0.1:8787:8787 deepseek-rust-gateway:4.3.4
+        run: docker run --detach --name deepseek-rust-gateway --publish 127.0.0.1:8787:8787 deepseek-rust-gateway:$RELEASE_VERSION
       - name: Smoke test Rust sidecar
         run: python scripts/smoke_rust_sidecar.py --base-url http://127.0.0.1:8787
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer rust-docker
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-rust-docker
       - uses: actions/upload-artifact@v4
@@ -275,19 +313,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rust-sidecar-image
-          path: docs/evidence/rust-sidecar-image-v4.3.4.json
+          path: docs/evidence/rust-sidecar-image-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
       - name: Stop Rust sidecar
         if: always()
         run: docker rm --force deepseek-rust-gateway || true
 
   hybrid-runtime-e2e:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -303,11 +345,11 @@ jobs:
             -f docker-compose.hybrid-test.yml \
             up --detach --build
       - name: Run hybrid runtime smoke tests
-        run: python scripts/smoke_hybrid_runtime.py --json > docs/evidence/hybrid-runtime-e2e-v4.3.4.json
+        run: python scripts/smoke_hybrid_runtime.py --json > docs/evidence/hybrid-runtime-e2e-v$RELEASE_VERSION.json
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer hybrid-runtime-e2e
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-hybrid-runtime-e2e
       - uses: actions/upload-artifact@v4
@@ -320,7 +362,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hybrid-runtime-e2e
-          path: docs/evidence/hybrid-runtime-e2e-v4.3.4.json
+          path: docs/evidence/hybrid-runtime-e2e-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
       - name: Show hybrid runtime logs
         if: failure()
@@ -338,12 +380,16 @@ jobs:
             down --volumes --remove-orphans || true
 
   rag-parity:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -364,11 +410,11 @@ jobs:
           python scripts/check_rag_parity.py \
             --base-url http://127.0.0.1:8787 \
             --strict \
-            --report docs/evidence/rag-parity-v4.3.4.json
+            --report docs/evidence/rag-parity-v$RELEASE_VERSION.json
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer rag-parity
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-rag-parity
       - uses: actions/upload-artifact@v4
@@ -384,19 +430,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rag-parity-report
-          path: docs/evidence/rag-parity-v4.3.4.json
+          path: docs/evidence/rag-parity-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: warn
       - name: Stop Rust RAG parity sidecar
         if: always()
         run: docker rm --force deepseek-rust-rag-parity || true
 
   rag-vector-binary-parity:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -417,11 +467,11 @@ jobs:
           python scripts/check_rag_vector_binary_parity.py \
             --base-url http://127.0.0.1:8787 \
             --strict \
-            --report docs/evidence/rag-vector-binary-parity-v4.3.4.json
+            --report docs/evidence/rag-vector-binary-parity-v$RELEASE_VERSION.json
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer rag-vector-binary-parity
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-rag-vector-binary-parity
       - uses: actions/upload-artifact@v4
@@ -437,19 +487,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rag-vector-binary-parity
-          path: docs/evidence/rag-vector-binary-parity-v4.3.4.json
+          path: docs/evidence/rag-vector-binary-parity-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
       - name: Stop Rust binary vector parity sidecar
         if: always()
         run: docker rm --force deepseek-rust-rag-vector-binary-parity || true
 
   gateway-request-parity:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -470,11 +524,11 @@ jobs:
           python scripts/check_gateway_request_parity.py \
             --base-url http://127.0.0.1:8787 \
             --strict \
-            --report docs/evidence/gateway-request-parity-v4.3.4.json
+            --report docs/evidence/gateway-request-parity-v$RELEASE_VERSION.json
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer gateway-request-parity
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-gateway-request-parity
       - uses: actions/upload-artifact@v4
@@ -490,19 +544,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gateway-request-parity-report
-          path: docs/evidence/gateway-request-parity-v4.3.4.json
+          path: docs/evidence/gateway-request-parity-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: warn
       - name: Stop Rust Gateway request parity sidecar
         if: always()
         run: docker rm --force deepseek-rust-gateway-request-parity || true
 
   mcp-protocol-parity:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -523,11 +581,11 @@ jobs:
           python scripts/check_mcp_protocol_parity.py \
             --base-url http://127.0.0.1:8787 \
             --strict \
-            --report docs/evidence/mcp-protocol-parity-v4.3.4.json
+            --report docs/evidence/mcp-protocol-parity-v$RELEASE_VERSION.json
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer mcp-protocol-parity
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-mcp-protocol-parity
       - uses: actions/upload-artifact@v4
@@ -543,19 +601,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mcp-protocol-parity-report
-          path: docs/evidence/mcp-protocol-parity-v4.3.4.json
+          path: docs/evidence/mcp-protocol-parity-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: warn
       - name: Stop Rust MCP protocol parity sidecar
         if: always()
         run: docker rm --force deepseek-rust-mcp-protocol-parity || true
 
   rag-document-preparation-parity:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -576,11 +638,11 @@ jobs:
           python scripts/check_rag_document_preparation_parity.py \
             --base-url http://127.0.0.1:8787 \
             --strict \
-            --report docs/evidence/rag-document-preparation-parity-v4.3.4.json
+            --report docs/evidence/rag-document-preparation-parity-v$RELEASE_VERSION.json
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer rag-document-preparation-parity
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-rag-document-preparation-parity
       - uses: actions/upload-artifact@v4
@@ -596,19 +658,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rag-document-preparation-parity-report
-          path: docs/evidence/rag-document-preparation-parity-v4.3.4.json
+          path: docs/evidence/rag-document-preparation-parity-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: warn
       - name: Stop Rust RAG document preparation parity sidecar
         if: always()
         run: docker rm --force deepseek-rust-rag-document-preparation-parity || true
 
   release-readiness:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -626,12 +692,12 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt
       - run: python -m playwright install --with-deps chromium
-      - run: python scripts/generate_release_evidence.py --version 4.3.4
+      - run: python scripts/generate_release_evidence.py --version $RELEASE_VERSION
       - run: python scripts/doctor.py --offline
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer release-readiness
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-release-readiness
       - uses: actions/upload-artifact@v4
@@ -641,6 +707,7 @@ jobs:
           if-no-files-found: error
 
   docs:
+    needs: release-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -648,6 +715,7 @@ jobs:
       - run: python scripts/check_doc_links.py
 
   rust:
+    needs: release-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -659,12 +727,17 @@ jobs:
       - run: cargo test --manifest-path rust/Cargo.toml --all
 
   rust-coverage:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+      CARGO_LLVM_COV_VERSION: "0.6.21"
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -675,18 +748,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: llvm-tools-preview
-      - run: cargo install cargo-llvm-cov --locked --version 0.6.21
+      - run: cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
       - name: Enforce Rust workspace line coverage
         run: >-
           python scripts/run_rust_coverage.py
           --threshold 80
           --artifact-out artifacts/rust-coverage.json
           --lcov-out artifacts/rust-coverage.lcov
-          --evidence-out docs/evidence/rust-coverage-v4.3.4.json
+          --evidence-out docs/evidence/rust-coverage-v$RELEASE_VERSION.json
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer rust-coverage
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-rust-coverage
       - uses: actions/upload-artifact@v4
@@ -702,17 +775,21 @@ jobs:
           path: |
             artifacts/rust-coverage.json
             artifacts/rust-coverage.lcov
-            docs/evidence/rust-coverage-v4.3.4.json
+            docs/evidence/rust-coverage-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
 
   rust-sidecar-performance:
-    needs: evidence-context
+    needs:
+      - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: evidence-source-context
@@ -733,11 +810,11 @@ jobs:
           --concurrency 1,8,32
           --timeout 45
           --artifact-out artifacts/rust-sidecar-performance.json
-          --evidence-out docs/evidence/rust-sidecar-performance-v4.3.4.json
+          --evidence-out docs/evidence/rust-sidecar-performance-v$RELEASE_VERSION.json
       - run: >-
           python scripts/prepare_evidence_artifact.py
           --producer rust-sidecar-performance
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --context "$EVIDENCE_CONTEXT_PATH"
           --out artifacts/evidence-producer-rust-sidecar-performance
       - uses: actions/upload-artifact@v4
@@ -752,7 +829,7 @@ jobs:
           name: rust-sidecar-performance
           path: |
             artifacts/rust-sidecar-performance.json
-            docs/evidence/rust-sidecar-performance-v4.3.4.json
+            docs/evidence/rust-sidecar-performance-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
 
   evidence-assembly:
@@ -773,12 +850,15 @@ jobs:
       - rag-vector-binary-parity
       - rust-coverage
       - rust-sidecar-performance
+      - release-version
     runs-on: ubuntu-latest
     steps:
       - name: Require every upstream Evidence gate
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
         run: exit 1
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -796,12 +876,12 @@ jobs:
           python scripts/assemble_release_evidence.py
           --downloads-root artifacts/downloaded
           --context "$EVIDENCE_CONTEXT_PATH"
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --github-sha "$GITHUB_SHA"
           --out release-evidence
       - uses: actions/upload-artifact@v4
         with:
-          name: release-evidence-v4.3.4
+          name: release-evidence-v${{ env.RELEASE_VERSION }}
           path: release-evidence
           if-no-files-found: error
 
@@ -809,9 +889,12 @@ jobs:
     needs:
       - evidence-assembly
       - evidence-context
+      - release-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -822,7 +905,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - uses: actions/download-artifact@v4
         with:
-          name: release-evidence-v4.3.4
+          name: release-evidence-v${{ env.RELEASE_VERSION }}
           path: artifacts/release-evidence
       - uses: actions/download-artifact@v4
         with:
@@ -835,36 +918,38 @@ jobs:
         run: |
           cp -R artifacts/release-evidence/docs/evidence/. docs/evidence/
           cp -R artifacts/release-evidence/evals/reports/. evals/reports/
+      - name: Require canonical release note
+        run: python scripts/check_release_version.py --require-release-note
       - name: Run strict exact-merge preflight
         run: >-
           python scripts/preflight_release.py
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --ga
           --provenance-strict
           --expected-revision "$GITHUB_SHA"
-          --json > artifacts/preflight-v4.3.4.json
+          --json > artifacts/preflight-v$RELEASE_VERSION.json
       - name: Build real release ZIP and manifests
         run: >-
           python scripts/release.py
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --skip-frontend-build
       - name: Reverify packaged Evidence bytes
         run: >-
           python scripts/verify_release_package.py
-          --archive dist/deepseek-infra-4.3.4.zip
-          --release-manifest dist/deepseek-infra-4.3.4.zip.manifest.json
+          --archive dist/deepseek-infra-$RELEASE_VERSION.zip
+          --release-manifest dist/deepseek-infra-$RELEASE_VERSION.zip.manifest.json
           --evidence-root artifacts/release-evidence
-          --version 4.3.4
+          --version $RELEASE_VERSION
           --expected-revision "$GITHUB_SHA"
-          --out artifacts/preflight-v4.3.4.json
+          --out artifacts/preflight-v$RELEASE_VERSION.json
       - uses: actions/upload-artifact@v4
         with:
-          name: deepseek-infra-release-v4.3.4
+          name: deepseek-infra-release-v${{ env.RELEASE_VERSION }}
           path: |
-            dist/deepseek-infra-4.3.4.zip
-            dist/deepseek-infra-4.3.4.zip.sha256
-            dist/deepseek-infra-4.3.4.zip.manifest.json
-            artifacts/preflight-v4.3.4.json
+            dist/deepseek-infra-${{ env.RELEASE_VERSION }}.zip
+            dist/deepseek-infra-${{ env.RELEASE_VERSION }}.zip.sha256
+            dist/deepseek-infra-${{ env.RELEASE_VERSION }}.zip.manifest.json
+            artifacts/preflight-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
 
   rc-readiness:
@@ -890,6 +975,7 @@ jobs:
       - rust-sidecar-performance
       - evidence-assembly
       - release-package
+      - release-version
     runs-on: ubuntu-latest
     env:
       RC_CI_TEST: ${{ needs.test.result }}

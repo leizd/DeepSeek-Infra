@@ -5,6 +5,7 @@ import {
   agentRunStreamUrl,
   confirmAgentPlan,
   createAgentRun,
+  getAgentRun,
   isActiveRunStatus,
   normalizeAgentPlanItem,
   normalizeAgentPreset,
@@ -39,6 +40,18 @@ describe("createAgentRun", () => {
     expect(body).toMatchObject({ confirmPlan: true, agentPreset: "full", conversationId: "c1", messageId: "m1" });
     expect(result.runId).toBe("run_abc");
     expect(result.run.plan[0]).toMatchObject({ id: "researcher", task: "查资料" });
+  });
+});
+
+describe("getAgentRun", () => {
+  it("fetches a single run with a read-only GET and normalizes it", async () => {
+    const { client, fetchImpl } = fakeClient({ ok: true, run: { runId: "run_9", status: "running", nextIndex: 41 } });
+    const run = await getAgentRun("run_9", client);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe("/api/agent-runs/run_9");
+    expect(init.method ?? "GET").toBe("GET");
+    expect(init.body).toBeUndefined();
+    expect(run).toMatchObject({ runId: "run_9", status: "running", nextIndex: 41 });
   });
 });
 

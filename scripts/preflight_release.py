@@ -1245,6 +1245,21 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
                 "crossTabReloadNotForced",
             ]
         )
+    if _version_tuple(version) >= (4, 3, 5):
+        required.extend(
+            [
+                "canonicalReleaseVersion",
+                "flushFailureIdentified",
+                "beforeUnloadBlocksFailedFlush",
+                "legacyDraftMigrationLossless",
+                "scopeSwitchDraftRetained",
+                "conversationCheckpointAtomic",
+                "checkpointFallbackRecovered",
+                "interruptedStreamRecoveredHonestly",
+                "agentRunReconciledWithoutReplay",
+                "bfcacheRuntimeResynchronized",
+            ]
+        )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(

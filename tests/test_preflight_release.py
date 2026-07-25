@@ -2114,6 +2114,61 @@ def test_frontend_browser_evidence_requires_quiescent_reload_checks_from_4_3_3(t
     assert preflight.check_frontend_browser_evidence(tmp_path, "4.3.3").status == "pass"
 
 
+def test_frontend_browser_evidence_requires_durable_checkpoint_checks_from_4_3_5(tmp_path: Path) -> None:
+    preflight = _load_preflight()
+    evidence = tmp_path / "docs" / "evidence"
+    evidence.mkdir(parents=True)
+    path = evidence / "frontend-browser-v4.3.5.json"
+    source = Path(preflight.__file__).read_text(encoding="utf-8")
+    required = set(re.findall(
+        r'"([A-Za-z0-9]+)"',
+        source[source.index("def check_frontend_browser_evidence"):source.index("def check_frontend_bundle_evidence")],
+    ))
+    required -= {"frontend_browser_evidence", "PASS", "chromium", "status", "browser"}
+    durable_checks = {
+        "canonicalReleaseVersion",
+        "flushFailureIdentified",
+        "beforeUnloadBlocksFailedFlush",
+        "legacyDraftMigrationLossless",
+        "scopeSwitchDraftRetained",
+        "conversationCheckpointAtomic",
+        "checkpointFallbackRecovered",
+        "interruptedStreamRecoveredHonestly",
+        "agentRunReconciledWithoutReplay",
+        "bfcacheRuntimeResynchronized",
+    }
+    assert durable_checks <= required
+    payload: dict[str, Any] = {
+        "version": "4.3.5",
+        "commit": "abc1234",
+        "generatedAt": "2026-07-25T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": "PASS",
+        "browser": "chromium",
+        "checks": {name: "PASS" for name in required if name != "conversationCheckpointAtomic"},
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = preflight.check_frontend_browser_evidence(tmp_path, "4.3.5")
+    assert result.status == "fail"
+    assert "conversationCheckpointAtomic" in result.detail
+    payload["checks"]["conversationCheckpointAtomic"] = "PASS"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert preflight.check_frontend_browser_evidence(tmp_path, "4.3.5").status == "pass"
+
+    legacy_path = evidence / "frontend-browser-v4.3.3.json"
+    legacy_payload: dict[str, Any] = {
+        "version": "4.3.3",
+        "commit": "abc1234",
+        "generatedAt": "2026-07-25T00:00:00Z",
+        "environment": {"os": "Linux", "python": "3.12", "ci": True},
+        "status": "PASS",
+        "browser": "chromium",
+        "checks": {name: "PASS" for name in required if name not in durable_checks},
+    }
+    legacy_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+    assert preflight.check_frontend_browser_evidence(tmp_path, "4.3.3").status == "pass"
+
+
 def test_frontend_bundle_evidence_requires_workspace_budgets_from_4_3_0(tmp_path: Path) -> None:
     preflight = _load_preflight()
     evidence = tmp_path / "docs" / "evidence"

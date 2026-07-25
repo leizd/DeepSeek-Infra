@@ -1,5 +1,6 @@
 import { applyStreamEvent, resetAssistantMessage } from "./streamReducer";
 import type { ChatMessage, ChatStreamEvent } from "./types";
+import { appendSystemNoteOnce, INTERRUPTED_CHECKPOINT_NOTE } from "../conversation/checkpoint";
 import {
   createConversation,
   replaceConversationMessages,
@@ -43,6 +44,8 @@ export type ChatAction =
   | { type: "continuationStarted"; messageId: string }
   | { type: "agentStreamAttached"; messageId: string }
   | { type: "agentStreamSettled"; messageId: string }
+  | { type: "agentRunMissing"; messageId: string }
+  | { type: "agentRunOrphaned"; messageId: string }
   | { type: "conversationTitleUpdated"; conversationId: string; title: string }
   | { type: "conversationRenamed"; conversationId: string; title: string; updatedAt: number }
   | { type: "conversationFavoriteToggled"; conversationId: string; updatedAt: number }
@@ -206,6 +209,27 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const next = replaceMessage(state, action.messageId, (message) => ({
         ...message,
         streaming: activeStatuses.has(message.agentRunStatus ?? "") ? message.streaming : false,
+      }));
+      return { ...next, requestStatus: "idle", activeAssistantId: null };
+    }
+    case "agentRunMissing": {
+      // 服务器上已不存在该 run：本地诚实地标记为中断，交给"继续生成"兜底。
+      const next = replaceMessage(state, action.messageId, (message) => ({
+        ...message,
+        phase: "interrupted",
+        streaming: false,
+        interrupted: true,
+        agentRunStatus: "cancelled",
+        systemNotes: appendSystemNoteOnce(message.systemNotes, INTERRUPTED_CHECKPOINT_NOTE),
+      }));
+      return { ...next, requestStatus: "idle", activeAssistantId: null };
+    }
+    case "agentRunOrphaned": {
+      // run 状态未知（查询失败或流无法重连）：停止本地 streaming，露出"恢复 Agent Run"入口。
+      const next = replaceMessage(state, action.messageId, (message) => ({
+        ...message,
+        streaming: false,
+        agentRunStatus: "orphaned",
       }));
       return { ...next, requestStatus: "idle", activeAssistantId: null };
     }

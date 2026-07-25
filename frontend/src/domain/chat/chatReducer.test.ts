@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { INTERRUPTED_CHECKPOINT_NOTE } from "../conversation/checkpoint";
 import { chatReducer, createInitialChatState } from "./chatReducer";
 import { createAssistantMessage } from "./streamReducer";
 import type { ChatMessage } from "./types";
@@ -166,5 +167,51 @@ describe("chatReducer", () => {
     const target = continued.conversations[0]?.messages.find((message) => message.id === "assistant-2");
     expect(target).toMatchObject({ streaming: true, interrupted: false });
     expect(continued).toMatchObject({ requestStatus: "streaming", activeAssistantId: "assistant-2" });
+  });
+
+  function agentRunState() {
+    const initial = createInitialChatState({ schemaVersion: 1, currentConversationId: null, conversations: [] });
+    const started = chatReducer(initial, {
+      type: "requestStarted",
+      conversationId: "conversation-1",
+      userMessage: userMessage(),
+      assistantMessage: createAssistantMessage("assistant-1"),
+      model: "m",
+      thinkingEnabled: false,
+    });
+    return chatReducer(started, {
+      type: "streamEventReceived",
+      messageId: "assistant-1",
+      event: { type: "run_status", status: "running", runId: "run_1" },
+    });
+  }
+
+  it("agentRunMissing marks the message interrupted with a deduped checkpoint note", () => {
+    const once = chatReducer(agentRunState(), { type: "agentRunMissing", messageId: "assistant-1" });
+    const message = once.conversations[0]?.messages[1];
+    expect(message).toMatchObject({
+      phase: "interrupted",
+      streaming: false,
+      interrupted: true,
+      agentRunStatus: "cancelled",
+    });
+    expect(message?.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
+    expect(once).toMatchObject({ requestStatus: "idle", activeAssistantId: null });
+
+    const twice = chatReducer(once, { type: "agentRunMissing", messageId: "assistant-1" });
+    expect(twice.conversations[0]?.messages[1]?.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
+  });
+
+  it("agentRunOrphaned stops streaming and exposes the orphaned status without touching content", () => {
+    const state = chatReducer(agentRunState(), {
+      type: "streamEventReceived",
+      messageId: "assistant-1",
+      event: { type: "content", text: "半截" },
+    });
+    const orphaned = chatReducer(state, { type: "agentRunOrphaned", messageId: "assistant-1" });
+    const message = orphaned.conversations[0]?.messages[1];
+    expect(message).toMatchObject({ streaming: false, agentRunStatus: "orphaned", content: "半截" });
+    expect(message?.interrupted).not.toBe(true);
+    expect(orphaned).toMatchObject({ requestStatus: "idle", activeAssistantId: null });
   });
 });
