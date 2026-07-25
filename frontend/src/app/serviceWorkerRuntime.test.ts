@@ -108,7 +108,7 @@ interface WorkerHarness {
 function workspaceManifest(overrides: Record<string, unknown> = {}) {
   return {
     schemaVersion: 1,
-    version: "4.3.5",
+    version: "4.3.6",
     sourceRevision: "test-revision",
     buildId: BUILD_C,
     assetSetDigest: DIGEST_C,

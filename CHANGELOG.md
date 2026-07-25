@@ -4,6 +4,13 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.3.6] - Cross-Tab Checkpoint Arbitration and Bounded Storage
+
+### Canonical release identity
+
+- Advances the canonical `VERSION` surface to 4.3.6; all CI evidence paths, artifact names and Docker tags continue to derive from `$RELEASE_VERSION`.
+
+
 ## [4.3.5] - Durable Checkpoints and Recovery Integrity
 
 ### Canonical release identity

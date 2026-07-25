@@ -166,7 +166,7 @@ describe("build-scoped service worker registration", () => {
     );
     const build: DeployedBuild = {
       schemaVersion: 1,
-      version: "4.3.5",
+      version: "4.3.6",
       sourceRevision: "revision-b",
       buildId: BUILD_B,
       assetSetDigest: DIGEST_B,
@@ -286,7 +286,7 @@ describe("build-scoped service worker registration", () => {
 function deployedBuild(buildId: string, assetSetDigest: string): DeployedBuild {
   return {
     schemaVersion: 1,
-    version: "4.3.5",
+    version: "4.3.6",
     sourceRevision: `revision-${buildId.slice(0, 8)}`,
     buildId,
     assetSetDigest,
