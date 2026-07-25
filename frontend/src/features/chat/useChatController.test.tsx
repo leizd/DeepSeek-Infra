@@ -233,21 +233,26 @@ describe("useChatController persistence flush reporting", () => {
 
     const flush = result.current.flushConversationPersistence();
 
-    expect(flush).toEqual({ ok: false, code: "unknown", message: "quota exceeded" });
+    expect(flush).toMatchObject({ ok: false, code: "unknown" });
+    if (flush.ok) throw new Error("expected flush to fail");
+    expect(flush.message).toMatch(/^quota exceeded \(~\d+ bytes\)$/);
     expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]);
     expect(getPersistenceHealthSnapshot().healthy).toBe(false);
     setItem.mockRestore();
   });
 
   it("captures debounced save failures into health without an uncaught error", async () => {
+    const quotaError = new Error("quota exceeded");
+    quotaError.name = "QuotaExceededError";
     const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("quota exceeded");
+      throw quotaError;
     });
     renderHook(() => useChatController());
 
     // 防抖保存（120ms）在后台触发；异常若逃逸，vitest 会按未捕获错误失败。
     await waitFor(() => expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]));
     expect(getPersistenceHealthSnapshot().healthy).toBe(false);
+    expect(getPersistenceHealthSnapshot().lastErrors.conversation?.code).toBe("quota-exceeded");
     setItem.mockRestore();
   });
 });

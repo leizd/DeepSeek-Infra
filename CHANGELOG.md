@@ -18,6 +18,10 @@
 
 - Legacy draft migration writes and verifies the scoped key before deleting the old one, and an in-memory draft repository retains text across project/conversation switches even when sessionStorage writes fail; stale-scope saves can no longer overwrite the active scope.
 
+### Journaled conversation checkpoints
+
+- Conversation state commits as a versioned generation journal (snapshot → verify → head) retaining the last two generations; a failed or torn write never damages the last committed checkpoint, corrupt heads fall back to the previous generation, and legacy keys are removed only after a verified commit.
+
 
 ## [4.3.4] - Reload Transaction Integrity and Page-Lifecycle Recovery
 

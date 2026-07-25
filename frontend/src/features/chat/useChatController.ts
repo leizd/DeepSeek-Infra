@@ -88,23 +88,26 @@ export function useChatController() {
 
   const flushConversationPersistence = useCallback((): PersistenceFlushResult => {
     const current = stateRef.current;
+    let result: PersistenceFlushResult;
     try {
-      savePersistedConversationState({
+      // 透传带 revision / 失败码的结果；save 内部不再抛错，try/catch 仅作兜底。
+      result = savePersistedConversationState({
         schemaVersion: 1,
         currentConversationId: current.currentConversationId,
         conversations: current.conversations,
       });
-      return { ok: true };
     } catch (reason) {
       // 防抖保存和生命周期 flush 都不允许把存储异常抛成未捕获错误。
-      const result: PersistenceFlushResult = {
+      result = {
         ok: false,
         code: "unknown",
         message: reason instanceof Error && reason.message ? reason.message : "对话记录保存失败",
       };
-      recordFlushReport({ ok: false, results: { conversation: result }, failedIds: ["conversation"] });
-      return result;
     }
+    if (!result.ok) {
+      recordFlushReport({ ok: false, results: { conversation: result }, failedIds: ["conversation"] });
+    }
+    return result;
   }, []);
 
   useEffect(() => {
