@@ -29,6 +29,7 @@ node --check static/vendor/katex/katex.min.js
 - Node 22.12+ is required for the Vite frontend; CI uses Node 24 and the committed `frontend/package-lock.json`.
 - No API key or network needed for tests or evals — everything is offline.
 - Single test: `pytest tests/test_mcp.py::test_name`. Run fast subset: `pytest -m "not integration and not slow"`.
+- `VERSION` at repo root is the canonical release version; `python scripts/check_release_version.py` enforces cross-surface consistency (CI gate job `release-version`).
 
 ### Tooling quirks
 

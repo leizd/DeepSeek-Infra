@@ -4,6 +4,13 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.3.5] - Durable Checkpoints and Recovery Integrity
+
+### Canonical release identity
+
+- Derives CI evidence paths, artifact names and Docker tags from the root `VERSION` file and enforces cross-surface consistency with `scripts/check_release_version.py`.
+
+
 ## [4.3.4] - Reload Transaction Integrity and Page-Lifecycle Recovery
 
 ### Serialized activation and bounded update checks

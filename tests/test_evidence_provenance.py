@@ -10,9 +10,9 @@ from deepseek_infra.infra.diagnostics.evidence_manifest import (
 )
 
 
-VERSION = "4.3.4"
+VERSION = "4.3.5"
 REVISION = "candidate123"
-EVIDENCE = "docs/evidence/sample-v4.3.4.json"
+EVIDENCE = "docs/evidence/sample-v4.3.5.json"
 
 
 def _source_context() -> dict[str, object]:
