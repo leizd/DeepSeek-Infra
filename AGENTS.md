@@ -54,6 +54,8 @@ python evals/runners/compare_eval_baseline.py --strict --baseline evals/baseline
 ### Security scan (CI `security` job)
 
 ```bash
+npm audit --prefix frontend --audit-level=high --json > artifacts/npm-audit.json
+python scripts/check_npm_audit.py artifacts/npm-audit.json  # high/critical gate; documented GHSA exceptions only
 pip-audit -r requirements.txt -r requirements-dev.txt
 bandit -r deepseek_infra --severity-level high -q          # only HIGH; medium is reviewed (docs/THREAT_MODEL.md)
 detect-secrets scan --baseline .secrets.baseline           # ALWAYS pass --baseline; test fixtures contain deliberate fake keys

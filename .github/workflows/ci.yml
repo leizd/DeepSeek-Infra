@@ -190,7 +190,13 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install pip-audit bandit detect-secrets
       - run: npm ci --prefix frontend
-      - run: npm audit --prefix frontend --audit-level=high
+      - name: npm audit (high; documented exceptions gated)
+        run: |
+          mkdir -p artifacts
+          status=0
+          npm audit --prefix frontend --audit-level=high --json > artifacts/npm-audit.json || status=$?
+          if [ "$status" -gt 1 ]; then cat artifacts/npm-audit.json; exit "$status"; fi
+          python scripts/check_npm_audit.py artifacts/npm-audit.json
       - run: pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt
       - run: bandit -r deepseek_infra --severity-level high -q
       - run: detect-secrets scan --baseline .secrets.baseline
