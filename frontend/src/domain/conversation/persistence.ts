@@ -7,6 +7,7 @@ import {
 } from "../../app/persistenceErrors";
 import type { PersistenceFlushResult } from "../../app/reloadBlockers";
 import { createId } from "../../shared/createId";
+import { checkpointMessage } from "./checkpoint";
 import { createConversation, sortConversations } from "./reducer";
 import { DEFAULT_MODEL, migrateLegacyConversation, migrateLegacyMessage } from "./migration";
 import type { Conversation, PersistedConversationState } from "./types";
@@ -65,7 +66,9 @@ function readHeadGeneration(storage: StorageLike): number {
 function normalizeConversations(value: unknown[]): Conversation[] {
   return value
     .map(migrateLegacyConversation)
-    .filter((conversation): conversation is NonNullable<typeof conversation> => Boolean(conversation));
+    .filter((conversation): conversation is NonNullable<typeof conversation> => Boolean(conversation))
+    // 防御性 checkpoint：旧版本写入的"假进行中"消息在加载时同样诚实恢复。
+    .map((conversation) => ({ ...conversation, messages: conversation.messages.map(checkpointMessage) }));
 }
 
 function selectCurrentConversationId(
@@ -120,7 +123,7 @@ export function loadPersistedConversationState(storage: StorageLike | null = bro
       .map(migrateLegacyMessage)
       .filter((message): message is ChatMessage => Boolean(message));
     if (messages.length) {
-      conversations = [createConversation(createId("legacy-conversation"), messages, DEFAULT_MODEL, true)];
+      conversations = [createConversation(createId("legacy-conversation"), messages.map(checkpointMessage), DEFAULT_MODEL, true)];
     }
   }
 
@@ -134,7 +137,7 @@ function normalizeForCommit(state: PersistedConversationState): Conversation[] {
     .filter((conversation) => conversation.messages.length)
     .map((conversation) => ({
       ...conversation,
-      messages: conversation.messages.slice(-80).map((message) => ({ ...message, streaming: false })),
+      messages: conversation.messages.slice(-80).map(checkpointMessage),
     }));
 }
 

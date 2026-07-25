@@ -22,6 +22,10 @@
 
 - Conversation state commits as a versioned generation journal (snapshot → verify → head) retaining the last two generations; a failed or torn write never damages the last committed checkpoint, corrupt heads fall back to the previous generation, and legacy keys are removed only after a verified commit.
 
+### Honest interruption recovery
+
+- Checkpoint serialization marks killed generations as interrupted (preserving partial content and reasoning) so restored sessions offer 继续生成 instead of masquerading as in-flight; agent runs are reconciled against server status on restore — re-subscribed when alive, settled when terminal, marked interrupted only when the run is gone, and otherwise resumable via 恢复 Agent Run without re-spending tokens.
+
 
 ## [4.3.4] - Reload Transaction Integrity and Page-Lifecycle Recovery
 

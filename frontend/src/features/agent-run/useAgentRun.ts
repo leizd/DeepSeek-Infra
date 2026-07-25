@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject } from "react";
 
-import { confirmAgentPlan, createAgentRun, isActiveRunStatus, rerunAgentPhase, type AgentPlanItem } from "../../api/agentRunApi";
+import {
+  confirmAgentPlan,
+  createAgentRun,
+  getAgentRun,
+  isActiveRunStatus,
+  rerunAgentPhase,
+  resumeAgentRun,
+  type AgentPlanItem,
+  type AgentRun,
+} from "../../api/agentRunApi";
+import { ApiError } from "../../api/httpClient";
 import { createAssistantMessage } from "../../domain/chat/streamReducer";
 import { applyProjectContext, buildChatPayload, type ChatRequestSettings } from "../../domain/chat/requestBuilder";
 import { selectCurrentMessages } from "../../domain/chat/selectors";
@@ -61,7 +71,7 @@ export function useAgentRun(params: AgentRunHookParams) {
   }, [requestSettings]);
 
   const attachStream = useCallback(
-    async (assistantMessage: ChatMessage, runId: string, after: number): Promise<string> => {
+    async (assistantMessage: ChatMessage, runId: string, after: number, onFailure?: (reason: unknown) => void): Promise<string> => {
       const controller = new AbortController();
       abortControllerRef.current = controller;
       let lastStatus = assistantMessage.agentRunStatus ?? "created";
@@ -90,6 +100,8 @@ export function useAgentRun(params: AgentRunHookParams) {
       } catch (reason) {
         if (controller.signal.aborted || isAbortError(reason)) {
           dispatch({ type: "requestStopped", messageId: assistantMessage.id });
+        } else if (onFailure) {
+          onFailure(reason);
         } else {
           dispatch({ type: "requestFailed", messageId: assistantMessage.id, error: errorMessage(reason) });
         }
@@ -190,6 +202,57 @@ export function useAgentRun(params: AgentRunHookParams) {
     [attachStream, dispatch, runtimePayload, state.requestStatus],
   );
 
+  const reconcileRestoredRun = useCallback(
+    async (conversationId: string, candidate: ChatMessage): Promise<void> => {
+      const runId = candidate.agentRunId;
+      if (!runId) return;
+      dispatch({ type: "openConversation", conversationId });
+      // 只读对账：先问服务器 run 的真实状态，绝不新建 run、绝不重放已付 token。
+      let run: AgentRun;
+      try {
+        run = await getAgentRun(runId);
+      } catch (reason) {
+        if (reason instanceof ApiError && reason.status === 404) {
+          dispatch({ type: "agentRunMissing", messageId: candidate.id });
+        } else {
+          dispatch({ type: "agentRunOrphaned", messageId: candidate.id });
+        }
+        return;
+      }
+      if (isActiveRunStatus(run.status)) {
+        dispatch({ type: "agentStreamAttached", messageId: candidate.id });
+        void attachStream(candidate, runId, candidate.agentRunLastEventIndex ?? -1, () => {
+          dispatch({ type: "agentRunOrphaned", messageId: candidate.id });
+        });
+        return;
+      }
+      // 终态：只把服务器结论映射到消息上，不重新执行任何内容。
+      if (run.status === "done") {
+        dispatch({
+          type: "streamEventReceived",
+          messageId: candidate.id,
+          event: { type: "done", content: run.finalAnswer || undefined },
+        });
+        return;
+      }
+      if (run.status === "failed") {
+        const detail = typeof run.diagnostics.error === "string" ? run.diagnostics.error.trim() : "";
+        dispatch({
+          type: "streamEventReceived",
+          messageId: candidate.id,
+          event: { type: "error", error: detail || "Agent Run 已失败" },
+        });
+        return;
+      }
+      dispatch({
+        type: "streamEventReceived",
+        messageId: candidate.id,
+        event: { type: "run_status", status: run.status, runId },
+      });
+    },
+    [attachStream, dispatch],
+  );
+
   const resumedRef = useRef(false);
   useEffect(() => {
     if (resumedRef.current) return;
@@ -203,13 +266,47 @@ export function useAgentRun(params: AgentRunHookParams) {
             message.role === "assistant" && message.agentRunId && isActiveRunStatus(message.agentRunStatus),
         );
       if (candidate?.agentRunId) {
-        dispatch({ type: "openConversation", conversationId: conversation.id });
-        dispatch({ type: "agentStreamAttached", messageId: candidate.id });
-        void attachStream(candidate, candidate.agentRunId, candidate.agentRunLastEventIndex ?? -1);
+        void reconcileRestoredRun(conversation.id, candidate);
         return;
       }
     }
-  }, [attachStream, dispatch, state.conversations, state.requestStatus]);
+  }, [dispatch, reconcileRestoredRun, state.conversations, state.requestStatus]);
 
-  return { sendAgentMessage, confirmPlan, rerunPhase, attachStream };
+  const resumeRun = useCallback(
+    async (messageId: string): Promise<void> => {
+      if (state.requestStatus === "streaming") return;
+      const message = selectCurrentMessages(state).find((item) => item.id === messageId && item.role === "assistant");
+      const runId = message?.agentRunId;
+      if (!message || !runId || message.agentRunStatus !== "orphaned") return;
+      // 先只读确认服务器状态：run 仍活跃时直接重连流，只有非活跃才 POST resume，
+      // 避免对仍在运行的 run 触发 409；任何路径都不新建 run。
+      let run: AgentRun;
+      try {
+        run = await getAgentRun(runId);
+      } catch (reason) {
+        if (reason instanceof ApiError && reason.status === 404) {
+          dispatch({ type: "agentRunMissing", messageId });
+        } else {
+          dispatch({ type: "noticeSet", notice: errorMessage(reason) });
+        }
+        return;
+      }
+      if (!isActiveRunStatus(run.status)) {
+        try {
+          await resumeAgentRun(runId, { payload: runtimePayload() });
+        } catch (reason) {
+          // 保持 orphaned 状态，"恢复 Agent Run"按钮可再次尝试。
+          dispatch({ type: "noticeSet", notice: errorMessage(reason) });
+          return;
+        }
+      }
+      dispatch({ type: "agentStreamAttached", messageId });
+      void attachStream(message, runId, message.agentRunLastEventIndex ?? -1, () => {
+        dispatch({ type: "agentRunOrphaned", messageId });
+      });
+    },
+    [attachStream, dispatch, runtimePayload, state],
+  );
+
+  return { sendAgentMessage, confirmPlan, rerunPhase, attachStream, resumeRun };
 }

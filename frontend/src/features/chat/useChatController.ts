@@ -431,6 +431,7 @@ export function useChatController() {
     continueGeneration,
     confirmAgentPlan: agentRun.confirmPlan,
     rerunAgentPhase: agentRun.rerunPhase,
+    resumeAgentRun: agentRun.resumeRun,
     stopGeneration,
     pauseOutput,
     resumeOutput,

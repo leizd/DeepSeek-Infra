@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import type { ChatMessage } from "../chat/types";
 import type { Conversation } from "./types";
+import { checkpointMessage, INTERRUPTED_CHECKPOINT_NOTE } from "./checkpoint";
 import {
   conversationStorageKeys,
   estimateCheckpointBytes,
@@ -248,5 +250,156 @@ describe("conversation persistence journal", () => {
     expect(storage.values.has(sessionSnapshotKey(2))).toBe(true);
     expect(storage.values.has(sessionSnapshotKey(3))).toBe(true);
     expect(storage.getItem(conversationStorageKeys.sessionHead)).toBe("3");
+  });
+});
+
+function makeAssistantMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: "assistant-1",
+    role: "assistant",
+    content: "写到一半",
+    reasoning: "想到一半",
+    createdAt: 150,
+    phase: "answering",
+    streaming: true,
+    attachments: [],
+    timeline: [],
+    systemNotes: [],
+    ...overrides,
+  };
+}
+
+function conversationWith(id: string, messages: readonly ChatMessage[]): Conversation {
+  return {
+    id,
+    title: `会话 ${id}`,
+    messages,
+    model: "deepseek-v4-pro",
+    thinkingEnabled: false,
+    createdAt: 100,
+    updatedAt: 200,
+  };
+}
+
+describe("checkpointMessage honest interruption", () => {
+  it("marks a streaming mid-answering message as interrupted through save+load, preserving partial output", () => {
+    const storage = new MemoryStorage();
+    const user = makeConversation("alpha", "问题").messages[0];
+    const state = makeState("alpha", [conversationWith("alpha", [user, makeAssistantMessage()])]);
+
+    expect(savePersistedConversationState(state, storage)).toEqual({ ok: true, revision: "1" });
+
+    const loaded = loadPersistedConversationState(storage);
+    const recovered = loaded.conversations[0]?.messages[1];
+    expect(recovered).toMatchObject({
+      streaming: false,
+      phase: "interrupted",
+      interrupted: true,
+      content: "写到一半",
+      reasoning: "想到一半",
+    });
+    expect(recovered?.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
+    // interrupted === true ⇒ 恢复后的会话可走"继续生成"入口。
+
+    // 重复保存加载后的状态：系统说明仍然只出现一次（按精确串去重）。
+    expect(savePersistedConversationState(loaded, storage)).toEqual({ ok: true, revision: "2" });
+    const reloaded = loadPersistedConversationState(storage);
+    const again = reloaded.conversations[0]?.messages[1];
+    expect(again).toMatchObject({ streaming: false, phase: "interrupted", interrupted: true });
+    expect(again?.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
+  });
+
+  it("normalizes thinking/searching/tool phases but never mislabels completed or user messages", () => {
+    for (const phase of ["thinking", "searching", "tool", "answering"] as const) {
+      const checkpointed = checkpointMessage(makeAssistantMessage({ phase, streaming: false }));
+      expect(checkpointed).toMatchObject({ streaming: false, phase: "interrupted", interrupted: true });
+      expect(checkpointed.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
+    }
+
+    for (const phase of ["idle", "done", "error", "interrupted"] as const) {
+      const settled = makeAssistantMessage({ phase, streaming: false, interrupted: phase === "interrupted" });
+      const checkpointed = checkpointMessage(settled);
+      expect(checkpointed.phase).toBe(phase);
+      expect(checkpointed.streaming).toBe(false);
+      expect(checkpointed.systemNotes).toEqual([]);
+      if (phase !== "interrupted") expect(checkpointed.interrupted).not.toBe(true);
+    }
+
+    const user = makeConversation("alpha", "用户消息").messages[0];
+    expect(checkpointMessage(user)).toEqual({ ...user, streaming: false });
+  });
+
+  it("normalizes legacy-shaped in-flight data (phase answering, streaming false) at load", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(conversationStorageKeys.conversations, JSON.stringify([{
+      id: "legacy-1",
+      title: "Legacy",
+      messages: [{
+        id: "assistant-1",
+        role: "assistant",
+        content: "半截回答",
+        reasoning: "半截推理",
+        phase: "answering",
+        streaming: false,
+        interrupted: false,
+        createdAt: 100,
+      }],
+      createdAt: 100,
+      updatedAt: 200,
+    }]));
+
+    const state = loadPersistedConversationState(storage);
+    const message = state.conversations[0]?.messages[0];
+    expect(message).toMatchObject({
+      streaming: false,
+      phase: "interrupted",
+      interrupted: true,
+      content: "半截回答",
+      reasoning: "半截推理",
+    });
+    expect(message?.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
+  });
+
+  it("never locally interrupts an active agent run; its id and cursor survive save+load", () => {
+    const storage = new MemoryStorage();
+    const agentMessage = makeAssistantMessage({
+      id: "assistant-run",
+      phase: "agent",
+      agentRunId: "run_x",
+      agentRunStatus: "running",
+      agentRunLastEventIndex: 41,
+    });
+    const state = makeState("alpha", [conversationWith("alpha", [agentMessage])]);
+
+    expect(savePersistedConversationState(state, storage)).toEqual({ ok: true, revision: "1" });
+    const loaded = loadPersistedConversationState(storage);
+    const recovered = loaded.conversations[0]?.messages[0];
+    expect(recovered).toMatchObject({
+      agentRunId: "run_x",
+      agentRunStatus: "running",
+      agentRunLastEventIndex: 41,
+      phase: "agent",
+      streaming: false,
+    });
+    expect(recovered?.interrupted).not.toBe(true);
+    expect(recovered?.systemNotes).toEqual([]);
+  });
+
+  it("exempts an active run even in an in-flight phase, but checkpoints a terminal one like any other", () => {
+    const active = checkpointMessage(makeAssistantMessage({
+      phase: "answering",
+      agentRunId: "run_x",
+      agentRunStatus: "running",
+    }));
+    expect(active).toMatchObject({ phase: "answering", streaming: false });
+    expect(active.interrupted).not.toBe(true);
+
+    const terminal = checkpointMessage(makeAssistantMessage({
+      phase: "answering",
+      agentRunId: "run_x",
+      agentRunStatus: "failed",
+    }));
+    expect(terminal).toMatchObject({ phase: "interrupted", streaming: false, interrupted: true });
+    expect(terminal.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
   });
 });
