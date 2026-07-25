@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
-import { clearReloadBlocker, registerReloadFlusher, setReloadBlocker } from "../../app/reloadBlockers";
+import {
+  clearReloadBlocker,
+  registerReloadFlusher,
+  setReloadBlocker,
+  type PersistenceFlushResult,
+} from "../../app/reloadBlockers";
 import { useAttachments } from "../../contexts/AttachmentsContext";
 import { useChat } from "../../contexts/ChatContext";
 import { useProjects } from "../../contexts/ProjectsContext";
@@ -29,7 +34,7 @@ export function useComposer() {
   const draftRef = useRef({ conversationId, projectId, text: value });
   const persistedTextRef = useRef(value);
 
-  const flushDraft = useCallback(() => {
+  const flushDraft = useCallback((): PersistenceFlushResult => {
     const draft = draftRef.current;
     const saved = draft.text
       ? saveComposerDraft({ ...draft, updatedAt: Date.now() })
@@ -41,10 +46,12 @@ export function useComposer() {
         kind: "unsaved",
         active: true,
       });
-      return;
+      // 具体的错误码（quota-exceeded 等）由后续提交细分，这里先归 unknown。
+      return { ok: false, code: "unknown", message: "消息草稿保存失败" };
     }
     persistedTextRef.current = draft.text;
     clearReloadBlocker("composer-draft");
+    return { ok: true };
   }, []);
 
   const setValue = useCallback((next: string) => {
@@ -89,7 +96,7 @@ export function useComposer() {
   }, [flushDraft, value]);
 
   useEffect(() => {
-    const unregister = registerReloadFlusher("composer-draft", flushDraft);
+    const unregister = registerReloadFlusher("composer-draft", flushDraft, { failureLabel: "草稿保存失败" });
     return () => {
       flushDraft();
       unregister();

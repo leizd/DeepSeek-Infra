@@ -16,6 +16,8 @@ import { selectCurrentMessages } from "../../domain/chat/selectors";
 import { applyStreamEvent, createAssistantMessage, resetAssistantMessage } from "../../domain/chat/streamReducer";
 import type { Attachment, ChatMessage, ChatRequestPayload, QuoteDraft } from "../../domain/chat/types";
 import { loadPersistedConversationState, savePersistedConversationState } from "../../domain/conversation/persistence";
+import { recordFlushReport } from "../../app/persistenceHealth";
+import type { PersistenceFlushResult } from "../../app/reloadBlockers";
 import { createId } from "../../shared/createId";
 import { useMemory } from "../../contexts/MemoryContext";
 import { useSettings } from "../../contexts/SettingsContext";
@@ -84,13 +86,25 @@ export function useChatController() {
   const [quoteDraft, setQuoteDraft] = useState<QuoteDraft | null>(null);
   const waitUntilResumed = useCallback(() => outputPauseGateRef.current?.waitUntilResumed() ?? Promise.resolve(), []);
 
-  const flushConversationPersistence = useCallback(() => {
+  const flushConversationPersistence = useCallback((): PersistenceFlushResult => {
     const current = stateRef.current;
-    savePersistedConversationState({
-      schemaVersion: 1,
-      currentConversationId: current.currentConversationId,
-      conversations: current.conversations,
-    });
+    try {
+      savePersistedConversationState({
+        schemaVersion: 1,
+        currentConversationId: current.currentConversationId,
+        conversations: current.conversations,
+      });
+      return { ok: true };
+    } catch (reason) {
+      // 防抖保存和生命周期 flush 都不允许把存储异常抛成未捕获错误。
+      const result: PersistenceFlushResult = {
+        ok: false,
+        code: "unknown",
+        message: reason instanceof Error && reason.message ? reason.message : "对话记录保存失败",
+      };
+      recordFlushReport({ ok: false, results: { conversation: result }, failedIds: ["conversation"] });
+      return result;
+    }
   }, []);
 
   useEffect(() => {

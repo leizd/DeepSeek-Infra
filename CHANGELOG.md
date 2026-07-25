@@ -10,6 +10,10 @@
 
 - Derives CI evidence paths, artifact names and Docker tags from the root `VERSION` file and enforces cross-surface consistency with `scripts/check_release_version.py`.
 
+### Diagnosable persistence checkpoints
+
+- Flushers report per-source outcomes (`quota-exceeded` / `storage-unavailable` / `verification-failed` / `unknown`); `beforeunload` blocks exit on a just-failed flush, `pagehide` records the failure with the last successful revision, and the update banner names the failing source with a retry action.
+
 
 ## [4.3.4] - Reload Transaction Integrity and Page-Lifecycle Recovery
 

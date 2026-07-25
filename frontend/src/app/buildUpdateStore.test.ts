@@ -8,6 +8,10 @@ import {
   type DeployedBuild,
 } from "./buildUpdateStore";
 import {
+  getPersistenceHealthSnapshot,
+  resetPersistenceHealthForTests,
+} from "./persistenceHealth";
+import {
   clearReloadBlocker,
   registerReloadFlusher,
   resetReloadCoordinationForTests,
@@ -110,6 +114,7 @@ function response(build: DeployedBuild): Response {
 
 afterEach(() => {
   resetReloadCoordinationForTests();
+  resetPersistenceHealthForTests();
 });
 
 describe("deployed build validation", () => {
@@ -317,7 +322,36 @@ describe("quiescent activation", () => {
     await vi.waitFor(() => expect(store.getSnapshot().phase).toBe("ready"));
     const unregister = registerReloadFlusher("broken", () => {
       throw new Error("quota exceeded");
+    }, { failureLabel: "对话记录保存失败" });
+
+    await store.activateWhenReady();
+
+    expect(store.getSnapshot()).toMatchObject({
+      phase: "error",
+      error: "对话记录保存失败，已取消重新加载",
     });
+    expect(activate).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    const health = getPersistenceHealthSnapshot();
+    expect(health.healthy).toBe(false);
+    expect(health.failedIds).toEqual(["broken"]);
+    unregister();
+    stop();
+  });
+
+  it("falls back to the generic message when a failed flusher has no failure label", async () => {
+    const target = deployedBuild(BUILD_B);
+    const runtime = environment(
+      vi.fn(() => Promise.resolve(response(target))) as unknown as typeof fetch,
+    );
+    const store = new BuildUpdateStore(BUILD_A);
+    const stop = store.configure(runtime.value, {
+      stage: vi.fn(() => Promise.resolve(identity(target))),
+      activate: vi.fn(),
+      reload: vi.fn(),
+    });
+    await vi.waitFor(() => expect(store.getSnapshot().phase).toBe("ready"));
+    const unregister = registerReloadFlusher("broken", () => ({ ok: false, code: "unknown", message: "nope" }));
 
     await store.activateWhenReady();
 
@@ -325,8 +359,69 @@ describe("quiescent activation", () => {
       phase: "error",
       error: "本地状态保存失败，已取消重新加载",
     });
-    expect(activate).not.toHaveBeenCalled();
+    unregister();
+    stop();
+  });
+
+  it("joins multiple failure labels in activation order when several flushers fail", async () => {
+    const target = deployedBuild(BUILD_B);
+    const runtime = environment(
+      vi.fn(() => Promise.resolve(response(target))) as unknown as typeof fetch,
+    );
+    const store = new BuildUpdateStore(BUILD_A);
+    const stop = store.configure(runtime.value, {
+      stage: vi.fn(() => Promise.resolve(identity(target))),
+      activate: vi.fn(),
+      reload: vi.fn(),
+    });
+    await vi.waitFor(() => expect(store.getSnapshot().phase).toBe("ready"));
+    const unregisterDraft = registerReloadFlusher("composer-draft", () => {
+      throw new Error("quota exceeded");
+    }, { failureLabel: "草稿保存失败" });
+    const unregisterConversation = registerReloadFlusher("conversation", () => {
+      throw new Error("quota exceeded");
+    }, { failureLabel: "对话记录保存失败" });
+
+    await store.activateWhenReady();
+
+    expect(store.getSnapshot()).toMatchObject({
+      phase: "error",
+      error: "草稿保存失败、对话记录保存失败，已取消重新加载",
+    });
+    unregisterDraft();
+    unregisterConversation();
+    stop();
+  });
+
+  it("marks reload-required with the flusher label when the final flush fails after activation", async () => {
+    const target = deployedBuild(BUILD_B);
+    const runtime = environment(
+      vi.fn(() => Promise.resolve(response(target))) as unknown as typeof fetch,
+    );
+    const activate = vi.fn(() => Promise.resolve(identity(target)));
+    const reload = vi.fn();
+    const store = new BuildUpdateStore(BUILD_A);
+    const stop = store.configure(runtime.value, {
+      stage: vi.fn(() => Promise.resolve(identity(target))),
+      activate,
+      reload,
+    });
+    await vi.waitFor(() => expect(store.getSnapshot().phase).toBe("ready"));
+    let calls = 0;
+    const unregister = registerReloadFlusher("conversation", () => {
+      calls += 1;
+      if (calls > 1) throw new Error("disk gone");
+    }, { failureLabel: "对话记录保存失败" });
+
+    await store.activateWhenReady();
+
+    expect(store.getSnapshot()).toMatchObject({
+      phase: "reload-required",
+      error: "对话记录保存失败，请重试",
+    });
+    expect(activate).toHaveBeenCalledTimes(1);
     expect(reload).not.toHaveBeenCalled();
+    expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]);
     unregister();
     stop();
   });

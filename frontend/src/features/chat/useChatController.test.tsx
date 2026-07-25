@@ -45,6 +45,10 @@ vi.mock("../reminders/useReminderPolling", () => ({
 }));
 
 import { useChatController, type MessageSubmissionResult } from "./useChatController";
+import {
+  getPersistenceHealthSnapshot,
+  resetPersistenceHealthForTests,
+} from "../../app/persistenceHealth";
 
 function suggestionStream(content: string): AsyncGenerator<ChatStreamEvent> {
   return (async function* stream() {
@@ -68,6 +72,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  resetPersistenceHealthForTests();
 });
 
 async function receiveSuggestion(
@@ -216,5 +221,33 @@ describe("useChatController tryStartMessage atomic acceptance", () => {
     expect(retry).toMatchObject({ accepted: true });
     await waitFor(() => expect(result.current.state.requestStatus).not.toBe("streaming"));
     expect(result.current.messages.filter((message) => message.role === "user")).toHaveLength(2);
+  });
+});
+
+describe("useChatController persistence flush reporting", () => {
+  it("returns a failed result and records health instead of throwing from flushConversationPersistence", () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota exceeded");
+    });
+    const { result } = renderHook(() => useChatController());
+
+    const flush = result.current.flushConversationPersistence();
+
+    expect(flush).toEqual({ ok: false, code: "unknown", message: "quota exceeded" });
+    expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]);
+    expect(getPersistenceHealthSnapshot().healthy).toBe(false);
+    setItem.mockRestore();
+  });
+
+  it("captures debounced save failures into health without an uncaught error", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota exceeded");
+    });
+    renderHook(() => useChatController());
+
+    // 防抖保存（120ms）在后台触发；异常若逃逸，vitest 会按未捕获错误失败。
+    await waitFor(() => expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]));
+    expect(getPersistenceHealthSnapshot().healthy).toBe(false);
+    setItem.mockRestore();
   });
 });

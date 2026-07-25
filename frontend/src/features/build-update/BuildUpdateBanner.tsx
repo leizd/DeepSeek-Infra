@@ -3,9 +3,16 @@ import { useIsMutating } from "@tanstack/react-query";
 
 import { buildUpdateStore } from "../../app/buildUpdateStore";
 import {
+  getPersistenceHealthSnapshot,
+  recordFlushReport,
+  subscribePersistenceHealth,
+} from "../../app/persistenceHealth";
+import {
   clearReloadBlocker,
   getReloadBlockerSnapshot,
+  getReloadFlusherFailureLabel,
   registerReloadFlusher,
+  retryFailedFlushers,
   setReloadBlocker,
   subscribeReloadBlockers,
 } from "../../app/reloadBlockers";
@@ -104,7 +111,9 @@ function useReloadReadiness(): void {
   }, [chat.quoteDraft]);
 
   useEffect(
-    () => registerReloadFlusher("conversation", chat.flushConversationPersistence),
+    () => registerReloadFlusher("conversation", chat.flushConversationPersistence, {
+      failureLabel: "对话记录保存失败",
+    }),
     [chat.flushConversationPersistence],
   );
 
@@ -122,37 +131,59 @@ export function BuildUpdateBanner() {
     getReloadBlockerSnapshot,
     getReloadBlockerSnapshot,
   );
-  const blockerLabels = blockers.map((blocker) => blocker.label);
-  const hidden = snapshot.phase === "current"
+  const health = useSyncExternalStore(
+    subscribePersistenceHealth,
+    getPersistenceHealthSnapshot,
+    getPersistenceHealthSnapshot,
+  );
+  const failedLabels = health.failedIds.map((id) => getReloadFlusherFailureLabel(id) ?? id);
+  const persistenceFailed = !health.healthy;
+  const updateHidden = snapshot.phase === "current"
     || snapshot.deferred
     || !snapshot.targetBuildId;
-  if (hidden) return null;
+  // 持久化失败本身也值得一条横幅：即使当前没有待更新的构建，
+  // 也要让用户知道本地状态没写进去并给出重试入口。
+  if (updateHidden && !persistenceFailed) return null;
 
+  const blockerLabels = blockers.map((blocker) => blocker.label);
   const blocked = blockerLabels.length > 0;
   const ready = snapshot.phase === "ready"
     || snapshot.phase === "blocked"
     || snapshot.phase === "reload-required";
-  const title = blocked
-    ? "更新已准备好，完成以下操作后可以重新加载"
-    : snapshot.phase === "checking" || snapshot.phase === "installing" || snapshot.phase === "available"
-      ? "正在准备 DeepSeek Infra 新构建"
-      : snapshot.phase === "activating"
-        ? "正在切换版本，请勿关闭页面"
-        : snapshot.phase === "error"
-          ? "新构建准备失败"
-          : "DeepSeek Infra 新构建已准备好";
+  const title = updateHidden
+    ? "本地状态保存失败，请重试"
+    : blocked
+      ? "更新已准备好，完成以下操作后可以重新加载"
+      : snapshot.phase === "checking" || snapshot.phase === "installing" || snapshot.phase === "available"
+        ? "正在准备 DeepSeek Infra 新构建"
+        : snapshot.phase === "activating"
+          ? "正在切换版本，请勿关闭页面"
+          : snapshot.phase === "error"
+            ? "新构建准备失败"
+            : "DeepSeek Infra 新构建已准备好";
 
   return (
     <aside className="build-update-banner" style={bannerStyle} aria-live="polite">
       <div className="build-update-copy" style={copyStyle}>
         <strong>{title}</strong>
         <span style={detailStyle}>
-          {blockerLabels.length
-            ? blockerLabels.join(" · ")
-            : snapshot.error || `版本 ${snapshot.targetVersion ?? "new"} · ${snapshot.targetBuildId}`}
+          {failedLabels.length
+            ? failedLabels.join(" · ")
+            : blockerLabels.length
+              ? blockerLabels.join(" · ")
+              : snapshot.error || `版本 ${snapshot.targetVersion ?? "new"} · ${snapshot.targetBuildId}`}
         </span>
       </div>
       <div className="build-update-actions" style={actionsStyle}>
+        {persistenceFailed && (
+          <button
+            style={buttonStyle}
+            type="button"
+            onClick={() => recordFlushReport(retryFailedFlushers([...health.failedIds]))}
+          >
+            重新保存
+          </button>
+        )}
         {snapshot.phase === "error" && (
           <button
             style={buttonStyle}
