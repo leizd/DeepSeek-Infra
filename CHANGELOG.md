@@ -14,6 +14,10 @@
 
 - Flushers report per-source outcomes (`quota-exceeded` / `storage-unavailable` / `verification-failed` / `unknown`); `beforeunload` blocks exit on a just-failed flush, `pagehide` records the failure with the last successful revision, and the update banner names the failing source with a retry action.
 
+### Lossless composer drafts
+
+- Legacy draft migration writes and verifies the scoped key before deleting the old one, and an in-memory draft repository retains text across project/conversation switches even when sessionStorage writes fail; stale-scope saves can no longer overwrite the active scope.
+
 
 ## [4.3.4] - Reload Transaction Integrity and Page-Lifecycle Recovery
 
