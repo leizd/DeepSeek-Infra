@@ -92,6 +92,7 @@ class EncodingRegressionTests(unittest.TestCase):
             "docs/DEMO_3_0.md",
             "docs/EVIDENCE_INDEX.md",
             "docs/releases/4.3.4.md",
+            "docs/releases/4.3.5.md",
         ):
             self.assertTrue((ROOT / rel).is_file(), rel)
             self.assertIn(rel, readme)

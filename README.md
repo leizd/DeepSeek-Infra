@@ -10,9 +10,9 @@
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.3.4 Reload Transaction Integrity & Page-Lifecycle Recovery：** 升级激活被串行化为 Single-Flight 事务，更新检查带超时且可被更新目标替换，defer 不再残留半成品激活状态。页面在 pagehide/visibilitychange/beforeunload 时同步落盘 Composer 草稿与会话状态；草稿按会话+项目双作用域隔离；消息提交经 tryStartMessage/peek/commit 原子化，要么连同草稿清理一起完成，要么完全不触动草稿。参见 [4.3.4 发布说明](docs/releases/4.3.4.md)、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
+> **4.3.5 Durable Checkpoints & Recovery Integrity：** 版本身份收敛到根目录 VERSION 单一事实源，CI 派生证据路径/产物名/Docker 标签并由 check_release_version.py 门禁跨表面一致性。持久化 flush 按来源报告结果码（quota-exceeded/storage-unavailable/verification-failed/unknown），beforeunload 在 flush 刚失败时阻止退出，更新横幅点名失败来源（对话记录保存失败/草稿保存失败）并提供「重新保存」。Composer 旧草稿先写入并验证新作用域键再删除旧键，内存草稿仓库跨会话/项目切换保底且过期作用域无法覆盖当前作用域；会话状态以 generation journal（快照→验证→head，保留 N 与 N-1）原子提交，损坏 head 自动回退。被页面关闭打断的生成诚实标记 interrupted 并保留部分内容与「继续生成」，Agent Run 恢复时与服务器对账（重连/结算/interrupted/orphaned+「恢复 Agent Run」），绝不重放付费请求。BFCache 恢复后重同步持久化重试、构建检查、SW 握手、Lease 上报与定时器，不自动 reload、不重复注册。参见 [4.3.5 发布说明](docs/releases/4.3.5.md)（上一版 [4.3.4](docs/releases/4.3.4.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)、[前端边界](docs/FRONTEND_MODULES.md)和[支持策略](docs/4_0_SUPPORT_POLICY.md)。
 
-**4.3.4 validation:** 前端单元与合同测试覆盖激活事务串行化、更新检查超时/目标替换、defer 阶段安全、pagehide/visibilitychange/beforeunload 同步落盘、会话+项目双作用域草稿隔离、消息提交原子化（tryStartMessage/peek/commit）以及真实 Chromium smoke 的项目作用域草稿键。4.3.3 发现/静默重载、4.3.2 构建身份/Lease、现有 Bundle 预算与 4.2.8 exact-merge Evidence 装配链保持不变。
+**4.3.5 validation:** 前端单元与合同测试覆盖 flush 结果归因、beforeunload 阻止失败退出、迁移验证后删除、跨作用域内存草稿、generation journal 原子提交/回退、中断诚实恢复、Agent Run 重连不复放、BFCache 重同步单飞不重复注册；真实 Chromium smoke 新增 10 个检查键（canonicalReleaseVersion、flushFailureIdentified、beforeUnloadBlocksFailedFlush、legacyDraftMigrationLossless、scopeSwitchDraftRetained、conversationCheckpointAtomic、checkpointFallbackRecovered、interruptedStreamRecoveredHonestly、agentRunReconciledWithoutReplay、bfcacheRuntimeResynchronized）；check_release_version.py 版本一致性门禁先行。4.3.4 重载事务、4.3.3 发现/静默重载、4.3.2 构建身份/Lease、现有 Bundle 预算与 4.2.8 exact-merge Evidence 装配链保持不变。
 
 ## 30 秒概览
 

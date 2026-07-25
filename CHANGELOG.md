@@ -30,6 +30,11 @@
 
 - `pageshow.persisted` restores now re-check the deployed build, re-handshake the service worker, re-report the page build lease and retry failed persistence without duplicating timers, channels or listeners — and never auto-reload, auto-activate a waiting worker or resume paid model requests.
 
+### Compatibility
+
+- Adds no runtime dependency and changes no backend API, offline Mutation persistence, Provider ownership or bundle budget.
+- Preserves 4.3.4 single-flight activation transactions and page-lifecycle persistence, 4.3.3 staged discovery/quiescent reload, 4.3.2 immutable identity/Client Lease retention, 4.3.1 lazy continuity and the 4.2.8 exact-merge Evidence chain.
+
 
 ## [4.3.4] - Reload Transaction Integrity and Page-Lifecycle Recovery
 
