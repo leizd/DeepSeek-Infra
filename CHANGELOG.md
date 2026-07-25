@@ -10,6 +10,10 @@
 
 - Advances the canonical `VERSION` surface to 4.3.6; all CI evidence paths, artifact names and Docker tags continue to derive from `$RELEASE_VERSION`.
 
+### Partitioned conversation checkpoints
+
+- Conversation persistence moves from whole-store V2 snapshots to per-conversation V3 shards (write → digest-verify → head), so editing one conversation serializes only that conversation; per-conversation retention and idle orphan GC keep cleanup O(1) regardless of save count, and the tab's current-conversation selection leaves shared state for sessionStorage.
+
 
 ## [4.3.5] - Durable Checkpoints and Recovery Integrity
 
