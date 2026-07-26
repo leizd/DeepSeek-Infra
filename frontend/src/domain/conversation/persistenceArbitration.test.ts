@@ -5,15 +5,19 @@ import type { ChatMessage } from "../chat/types";
 import type { Conversation } from "./types";
 import {
   CONVERSATION_CHECKPOINT_LOCK_NAME,
+  CONVERSATION_TOMBSTONE_LIMITS,
   conversationStorageKeys,
   createConversationPersistenceAdapter,
   runIdleCheckpointGc,
   sessionConflictKeyV3,
   sessionHeadKeyV3,
   sessionSnapshotKeyV3,
+  sessionTombstoneKeyV3,
   type ConversationCommitNotice,
   type ConversationConflictPointer,
   type ConversationConflictSignal,
+  type ConversationDeleteNotice,
+  type ConversationRecoverySignal,
   type LockRequestOptions,
   type LocksLike,
   type SaveConversationOptions,
@@ -26,10 +30,11 @@ const TAB_B = "bbbb0002";
 class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>();
   failOnSet: ((key: string) => boolean) | null = null;
+  corruptOnSet: ((key: string) => boolean) | null = null;
   getItem(key: string) { return this.values.get(key) ?? null; }
   setItem(key: string, value: string) {
     if (this.failOnSet?.(key)) throw new Error("setItem failed");
-    this.values.set(key, value);
+    this.values.set(key, this.corruptOnSet?.(key) ? `${value}#corrupted` : value);
   }
   removeItem(key: string) { this.values.delete(key); }
   get length(): number { return this.values.size; }
@@ -45,6 +50,20 @@ class FakeMutex implements LocksLike {
     const run = this.tail.then(callback);
     this.tail = run.catch(() => undefined);
     return run;
+  }
+}
+
+/** 闸门锁：release 前所有锁请求都排队等待，用于精确控制仲裁时序。 */
+class GatedMutex implements LocksLike {
+  private open!: () => void;
+  private readonly gate = new Promise<void>((resolve) => {
+    this.open = resolve;
+  });
+  request<T>(_name: string, _options: LockRequestOptions, callback: () => T | Promise<T>): Promise<T> {
+    return this.gate.then(callback);
+  }
+  release(): void {
+    this.open();
   }
 }
 
@@ -109,6 +128,8 @@ function snapshotKeys(storage: MemoryStorage, conversationId: string): string[] 
 interface Recorder {
   commits: ConversationCommitNotice[];
   conflicts: ConversationConflictSignal[];
+  deletes: ConversationDeleteNotice[];
+  recoveries: ConversationRecoverySignal[];
   options: SaveConversationOptions;
 }
 
@@ -116,11 +137,15 @@ function makeRecorder(): Recorder {
   const recorder: Recorder = {
     commits: [],
     conflicts: [],
+    deletes: [],
+    recoveries: [],
     options: {},
   };
   recorder.options = {
     onCommit: (notice) => recorder.commits.push(notice),
     onConflict: (signal) => recorder.conflicts.push(signal),
+    onDelete: (notice) => recorder.deletes.push(notice),
+    onRecovery: (signal) => recorder.recoveries.push(signal),
   };
   return recorder;
 }
@@ -460,5 +485,255 @@ describe("cross-tab checkpoint arbitration", () => {
     expect(readHead(storage, "beta")).toMatchObject({ revision: `2.${TAB_A}`, writerId: TAB_A });
     expect(readPointer(storage, "beta")).toMatchObject({ revision: `3.${TAB_B}`, sharedRevision: `2.${TAB_A}` });
     expect(adapterB.readConflictBranch("beta", storage)?.conversation.messages.at(-1)?.content).toBe("B 的修改");
+  });
+});
+
+describe("conversation deletion tombstones", () => {
+  it("a stale tab's commit is refused: tombstone intact, head stays deleted, content survives as a recovery copy", async () => {
+    const storage = new MemoryStorage();
+    const adapterA = createConversationPersistenceAdapter();
+    const adapterB = createConversationPersistenceAdapter();
+    const sessionA = makeSession(TAB_A);
+    const sessionB = makeSession(TAB_B);
+
+    adapterA.save(makeState("alpha", [makeConversation("alpha", "初版")]), storage, sessionA);
+    const loadedB = adapterB.load(storage, sessionB);
+    // B 完全没收到删除通知（通道消息丢失），本地 base 仍是 1.tabA。
+    const stale = editConversation(loadedB.conversations[0] as Conversation, "B 的修改");
+
+    const recorderA = makeRecorder();
+    const deleted = await adapterA.deleteConversationArbitrated("alpha", storage, sessionA, recorderA.options);
+    expect(deleted).toMatchObject({ ok: true });
+    expect(recorderA.deletes).toEqual([{ conversationId: "alpha", writerId: TAB_A }]);
+    expect(storage.getItem(sessionHeadKeyV3("alpha"))).toBeNull();
+    expect(JSON.parse(storage.getItem(sessionTombstoneKeyV3("alpha")) ?? "null")).toMatchObject({
+      conversationId: "alpha",
+      deletedRevision: `2.${TAB_A}`,
+      parentRevision: `1.${TAB_A}`,
+      writerId: TAB_A,
+    });
+
+    const recorderB = makeRecorder();
+    const resultB = adapterB.save(makeState("alpha", [stale]), storage, sessionB, recorderB.options);
+
+    // 过期 base 的提交被拒绝：head 绝不重写，tombstone 原样保留。
+    expect(resultB).toMatchObject({ ok: true });
+    expect(storage.getItem(sessionHeadKeyV3("alpha"))).toBeNull();
+    expect(storage.getItem(sessionTombstoneKeyV3("alpha"))).not.toBeNull();
+    // 本地内容物化为新 id 的恢复副本，并作为自己的分片提交。
+    expect(recorderB.recoveries).toHaveLength(1);
+    const copy = recorderB.recoveries[0]?.copy as Conversation;
+    expect(recorderB.recoveries[0]?.conversationId).toBe("alpha");
+    expect(copy.id).not.toBe("alpha");
+    expect(copy.title).toBe("会话 alpha（恢复副本）");
+    expect(copy.messages.at(-1)?.content).toBe("B 的修改");
+    expect(readHead(storage, copy.id)).toMatchObject({ revision: `1.${TAB_B}`, writerId: TAB_B });
+    expect(recorderB.commits).toEqual([expect.objectContaining({ conversationId: copy.id, revision: `1.${TAB_B}` })]);
+    // 原 cid 在后续加载中绝不复活；恢复副本正常加载。
+    const reloaded = adapterB.load(storage, sessionB);
+    expect(reloaded.conversations.map((conversation) => conversation.id)).toEqual([copy.id]);
+    // 适配器已丢弃原 cid：后续 flush 对 alpha 不再有任何写入。
+    const setSpy = vi.spyOn(storage, "setItem");
+    const followUp = adapterB.save(makeState(copy.id, [copy]), storage, sessionB, recorderB.options);
+    expect(followUp).toMatchObject({ ok: true });
+    expect(setSpy.mock.calls.filter(([key]) => key.includes("alpha"))).toEqual([]);
+  });
+
+  it("delete-vs-edit race: the arbitrated delete lands first, the dirty commit is refused into a recovery copy", async () => {
+    const storage = new MemoryStorage();
+    const mutex = new FakeMutex();
+    const adapterA = createConversationPersistenceAdapter({ locks: mutex });
+    const adapterB = createConversationPersistenceAdapter({ locks: mutex });
+    const sessionA = makeSession(TAB_A);
+    const sessionB = makeSession(TAB_B);
+
+    adapterA.save(makeState("alpha", [makeConversation("alpha", "初版")]), storage, sessionA);
+    const loadedB = adapterB.load(storage, sessionB);
+    const dirty = editConversation(loadedB.conversations[0] as Conversation, "B 的修改");
+
+    const recorderA = makeRecorder();
+    const recorderB = makeRecorder();
+    const [deleteResult, saveResult] = await Promise.all([
+      adapterA.deleteConversationArbitrated("alpha", storage, sessionA, recorderA.options),
+      adapterB.saveArbitrated(() => makeState("alpha", [dirty]), storage, sessionB, recorderB.options),
+    ]);
+
+    // 两个操作都经过排他锁；A 的删除先进入临界区。
+    expect(mutex.names).toEqual([CONVERSATION_CHECKPOINT_LOCK_NAME, CONVERSATION_CHECKPOINT_LOCK_NAME]);
+    expect(deleteResult).toMatchObject({ ok: true });
+    expect(saveResult).toMatchObject({ ok: true });
+    // A 的删除成立：head 已删，tombstone 记录被删的 head revision。
+    expect(storage.getItem(sessionHeadKeyV3("alpha"))).toBeNull();
+    expect(JSON.parse(storage.getItem(sessionTombstoneKeyV3("alpha")) ?? "null")).toMatchObject({
+      conversationId: "alpha",
+      deletedRevision: `2.${TAB_A}`,
+      parentRevision: `1.${TAB_A}`,
+      writerId: TAB_A,
+    });
+    // B 的内容以独立副本幸存。
+    expect(recorderB.recoveries).toHaveLength(1);
+    const copy = recorderB.recoveries[0]?.copy as Conversation;
+    expect(copy.id).not.toBe("alpha");
+    expect(copy.messages.at(-1)?.content).toBe("B 的修改");
+    expect(storage.getItem(sessionHeadKeyV3(copy.id))).not.toBeNull();
+  });
+
+  it("a failed tombstone write keeps head and committability; a later retry succeeds", async () => {
+    const storage = new MemoryStorage();
+    const adapterA = createConversationPersistenceAdapter();
+    const sessionA = makeSession(TAB_A);
+    const alpha = makeConversation("alpha", "初版");
+    adapterA.save(makeState("alpha", [alpha]), storage, sessionA);
+
+    storage.failOnSet = (key) => key.startsWith(conversationStorageKeys.v3TombstonePrefix);
+    const recorderA = makeRecorder();
+    const failed = await adapterA.deleteConversationArbitrated("alpha", storage, sessionA, recorderA.options);
+
+    expect(failed.ok).toBe(false);
+    if (failed.ok) return;
+    expect(failed.message).toContain("会话 alpha");
+    // head 与已提交映射原样保留，会话未广播删除。
+    expect(readHead(storage, "alpha")).toMatchObject({ revision: `1.${TAB_A}` });
+    expect(storage.getItem(sessionTombstoneKeyV3("alpha"))).toBeNull();
+    expect(recorderA.deletes).toEqual([]);
+
+    storage.failOnSet = null;
+    const retried = await adapterA.deleteConversationArbitrated("alpha", storage, sessionA, recorderA.options);
+    expect(retried).toMatchObject({ ok: true });
+    expect(recorderA.deletes).toEqual([{ conversationId: "alpha", writerId: TAB_A }]);
+    expect(storage.getItem(sessionTombstoneKeyV3("alpha"))).not.toBeNull();
+    expect(storage.getItem(sessionHeadKeyV3("alpha"))).toBeNull();
+  });
+
+  it("a corrupted tombstone read-back reports verification-failed and keeps the head", async () => {
+    const storage = new MemoryStorage();
+    const adapterA = createConversationPersistenceAdapter();
+    const sessionA = makeSession(TAB_A);
+    adapterA.save(makeState("alpha", [makeConversation("alpha", "初版")]), storage, sessionA);
+
+    storage.corruptOnSet = (key) => key.startsWith(conversationStorageKeys.v3TombstonePrefix);
+    const result = await adapterA.deleteConversationArbitrated("alpha", storage, sessionA);
+
+    expect(result).toMatchObject({ ok: false, code: "verification-failed" });
+    expect(readHead(storage, "alpha")).toMatchObject({ revision: `1.${TAB_A}` });
+  });
+
+  it("a sync flush commits a pending tombstone lock-free while the arbitrated delete is still queued", async () => {
+    const storage = new MemoryStorage();
+    const gated = new GatedMutex();
+    const adapterA = createConversationPersistenceAdapter({ locks: gated });
+    const sessionA = makeSession(TAB_A);
+    const alpha = makeConversation("alpha", "初版");
+    adapterA.save(makeState("alpha", [alpha]), storage, sessionA);
+
+    const recorder = makeRecorder();
+    // 仲裁删除排在闸门之后：此刻 tombstone 尚未提交。
+    const pendingDelete = adapterA.deleteConversationArbitrated("alpha", storage, sessionA, recorder.options);
+    expect(storage.getItem(sessionTombstoneKeyV3("alpha"))).toBeNull();
+
+    // pagehide：同步 flush（state 仍含 alpha）先以无锁同等检查提交 pending tombstone。
+    const flush = adapterA.save(makeState("alpha", [alpha]), storage, sessionA, recorder.options);
+    expect(flush).toMatchObject({ ok: true });
+    expect(storage.getItem(sessionTombstoneKeyV3("alpha"))).not.toBeNull();
+    expect(storage.getItem(sessionHeadKeyV3("alpha"))).toBeNull();
+    expect(recorder.deletes).toEqual([{ conversationId: "alpha", writerId: TAB_A }]);
+    // 删除方自身的残留状态绝不物化恢复副本。
+    expect(recorder.recoveries).toEqual([]);
+
+    gated.release();
+    await expect(pendingDelete).resolves.toMatchObject({ ok: true });
+    // 幂等：删除通知只发一次。
+    expect(recorder.deletes).toHaveLength(1);
+  });
+});
+
+describe("tombstone GC", () => {
+  class NoEnumStorage implements StorageLike {
+    private readonly values = new Map<string, string>();
+    getItem(key: string) { return this.values.get(key) ?? null; }
+    setItem(key: string, value: string) { this.values.set(key, value); }
+    removeItem(key: string) { this.values.delete(key); }
+  }
+
+  function seedTombstone(storage: StorageLike, conversationId: string, deletedAt: number, writerId = TAB_A): void {
+    storage.setItem(sessionTombstoneKeyV3(conversationId), JSON.stringify({
+      conversationId,
+      deletedAt,
+      deletedRevision: `2.${writerId}`,
+      parentRevision: `1.${writerId}`,
+      writerId,
+    }));
+  }
+
+  function seedLease(storage: StorageLike, tabId: string, lastSeen: number): void {
+    storage.setItem(`${conversationStorageKeys.v3TabPrefix}${tabId}`, JSON.stringify({ tabId, firstSeen: lastSeen, lastSeen }));
+  }
+
+  it("keeps tombstones inside the retention window and under the cap", () => {
+    const storage = new MemoryStorage();
+    seedTombstone(storage, "alpha", Date.now());
+
+    expect(runIdleCheckpointGc(storage, 8)).toBe(0);
+    expect(storage.getItem(sessionTombstoneKeyV3("alpha"))).not.toBeNull();
+  });
+
+  it("collects an expired tombstone once every live lease postdates its deletedAt", () => {
+    const storage = new MemoryStorage();
+    const now = Date.now();
+    seedTombstone(storage, "alpha", now - CONVERSATION_TOMBSTONE_LIMITS.retentionMs - 1000);
+    seedTombstone(storage, "beta", now - 1000); // 保留窗口内：不回收
+    seedLease(storage, TAB_B, now - 60_000); // 活跃租约，lastSeen 晚于两份 tombstone
+
+    expect(runIdleCheckpointGc(storage, 8)).toBe(1);
+    expect(storage.getItem(sessionTombstoneKeyV3("alpha"))).toBeNull();
+    expect(storage.getItem(sessionTombstoneKeyV3("beta"))).not.toBeNull();
+  });
+
+  it("a stale lease does not block collection", () => {
+    const storage = new MemoryStorage();
+    const now = Date.now();
+    seedTombstone(storage, "alpha", now - CONVERSATION_TOMBSTONE_LIMITS.retentionMs - 1000);
+    seedLease(storage, TAB_B, now - CONVERSATION_TOMBSTONE_LIMITS.tabLeaseStaleMs - 1000);
+
+    expect(runIdleCheckpointGc(storage, 8)).toBe(1);
+    expect(storage.getItem(sessionTombstoneKeyV3("alpha"))).toBeNull();
+  });
+
+  it("cap overflow evicts oldest first, but only tombstones every live lease has seen", () => {
+    const now = Date.now();
+    // 51 份（超出上限 1 份），活跃租约晚于全部 deletedAt：仅最旧的一份被回收。
+    const storage = new MemoryStorage();
+    for (let index = 0; index <= 50; index += 1) seedTombstone(storage, `c${index}`, now - 60_000 + index);
+    seedLease(storage, TAB_B, now - 30_000);
+    expect(runIdleCheckpointGc(storage, 8)).toBe(1);
+    expect(storage.getItem(sessionTombstoneKeyV3("c0"))).toBeNull();
+    expect(storage.getItem(sessionTombstoneKeyV3("c1"))).not.toBeNull();
+
+    // 活跃租约早于待淘汰 tombstone 的 deletedAt：一份也不回收。
+    const blocked = new MemoryStorage();
+    for (let index = 0; index <= 50; index += 1) seedTombstone(blocked, `c${index}`, now - 1000 + index);
+    seedLease(blocked, TAB_B, now - 2000);
+    expect(runIdleCheckpointGc(blocked, 8)).toBe(0);
+    expect(blocked.getItem(sessionTombstoneKeyV3("c0"))).not.toBeNull();
+  });
+
+  it("respects the per-run budget across tombstone collections", () => {
+    const storage = new MemoryStorage();
+    const deletedAt = Date.now() - CONVERSATION_TOMBSTONE_LIMITS.retentionMs - 1000;
+    seedTombstone(storage, "alpha", deletedAt);
+    seedTombstone(storage, "beta", deletedAt);
+    seedTombstone(storage, "gamma", deletedAt);
+
+    expect(runIdleCheckpointGc(storage, 2)).toBe(2);
+    expect(runIdleCheckpointGc(storage, 2)).toBe(1);
+    expect(runIdleCheckpointGc(storage, 2)).toBe(0);
+  });
+
+  it("keeps every tombstone when the storage cannot enumerate keys", () => {
+    const storage = new NoEnumStorage();
+    seedTombstone(storage, "alpha", Date.now() - CONVERSATION_TOMBSTONE_LIMITS.retentionMs - 1000);
+
+    expect(runIdleCheckpointGc(storage, 8)).toBe(0);
+    expect(storage.getItem(sessionTombstoneKeyV3("alpha"))).not.toBeNull();
   });
 });

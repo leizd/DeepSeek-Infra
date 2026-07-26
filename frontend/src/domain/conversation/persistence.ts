@@ -9,7 +9,7 @@ import type { PersistenceFlushResult } from "../../app/reloadBlockers";
 import { getTabId } from "../../app/tabIdentity";
 import { createId } from "../../shared/createId";
 import { checkpointMessage } from "./checkpoint";
-import { createConversation, sortConversations } from "./reducer";
+import { copyConversation, createConversation, sortConversations } from "./reducer";
 import { DEFAULT_MODEL, migrateLegacyConversation, migrateLegacyMessage } from "./migration";
 import type { Conversation, PersistedConversationState } from "./types";
 
@@ -74,10 +74,36 @@ export interface ConversationDeleteNotice {
   writerId: string;
 }
 
+/**
+ * 删除 tombstone（`session.v3.tombstone.<cid>`）：先于 UI 移除耐久落盘，
+ * deletedRevision 形如 "<headSeq+1>.<tabId>"；任何过期 base 的提交一律拒绝。
+ */
+export interface ConversationTombstone {
+  conversationId: string;
+  deletedAt: number;
+  deletedRevision: string;
+  parentRevision: string | null;
+  writerId: string;
+}
+
+/** tombstone 保留窗口 / 数量上限 / 标签页租约过期时间（租约超过该窗口未触碰即视为不活跃）。 */
+export const CONVERSATION_TOMBSTONE_LIMITS = {
+  retentionMs: 30 * 24 * 60 * 60 * 1000,
+  maxCount: 50,
+  tabLeaseStaleMs: 5 * 60 * 1000,
+} as const;
+
+/** 提交被 tombstone 拒绝后，本地内容物化为新 id 恢复副本（已作为自己的分片提交）的带外通知。 */
+export interface ConversationRecoverySignal {
+  conversationId: string;
+  copy: Conversation;
+}
+
 export interface SaveConversationOptions {
   onCommit?: (notice: ConversationCommitNotice) => void;
   onConflict?: (signal: ConversationConflictSignal) => void;
   onDelete?: (notice: ConversationDeleteNotice) => void;
+  onRecovery?: (signal: ConversationRecoverySignal) => void;
 }
 
 export interface LockRequestOptions {
@@ -91,10 +117,11 @@ export interface LocksLike {
 
 export const CONVERSATION_CHECKPOINT_LOCK_NAME = "deepseek-conversation-checkpoint";
 
-/** 远端提交对账结果：reload = 干净副本已换成共享 head；stale = 本地脏，下次提交走冲突路径。 */
+/** 远端提交对账结果：reload = 干净副本已换成共享 head；stale = 本地脏，下次提交走冲突/恢复路径；deleted = 远端已删除且本地干净，调用方移除 state。 */
 export type ReconcileRemoteOutcome =
   | { kind: "reload"; conversation: Conversation }
   | { kind: "stale" }
+  | { kind: "deleted" }
   | { kind: "noop" };
 
 /**
@@ -122,12 +149,21 @@ export interface ConversationPersistenceAdapter {
     session?: StorageLike | null,
     options?: SaveConversationOptions,
   ): Promise<PersistenceFlushResult>;
-  /** 处理远端提交广播：本地干净则换入共享 head 内容；本地脏则保持，待下次提交走冲突路径。 */
+  /** 处理远端提交/删除广播：本地干净则换入共享 head（reload）或按删除移除（deleted）；本地脏则保持（stale）。 */
   reconcileRemoteCommit(
     conversationId: string,
     local: Conversation | undefined,
     storage?: StorageLike | null,
   ): ReconcileRemoteOutcome;
+  /** 删除会话：先在仲裁临界区耐久提交 tombstone，成功才由调用方移除 UI 状态。 */
+  deleteConversationArbitrated(
+    conversationId: string,
+    storage?: StorageLike | null,
+    session?: StorageLike | null,
+    options?: SaveConversationOptions,
+  ): Promise<PersistenceFlushResult>;
+  /** 触碰（active=true）或移除（active=false）本标签页租约，供 tombstone GC 判断活跃标签页。 */
+  setTabLease(active: boolean, storage?: StorageLike | null, session?: StorageLike | null): void;
   readSharedConversation(
     conversationId: string,
     storage?: StorageLike | null,
@@ -152,7 +188,7 @@ export const conversationStorageKeys = {
   v3SnapshotPrefix: "deepseek-infra.session.v3.snapshot.",
   v3ConflictPrefix: "deepseek-infra.session.v3.conflict.",
   v3TombstonePrefix: "deepseek-infra.session.v3.tombstone.",
-  v3RecoveryPrefix: "deepseek-infra.session.v3.recovery.",
+  v3TabPrefix: "deepseek-infra.session.v3.tab.",
 } as const;
 
 const V2_SNAPSHOT_PREFIX = "deepseek-infra.session.v2.snapshot.";
@@ -175,10 +211,6 @@ export function sessionConflictKeyV3(conversationId: string): string {
 
 export function sessionTombstoneKeyV3(conversationId: string): string {
   return `${conversationStorageKeys.v3TombstonePrefix}${conversationId}`;
-}
-
-export function sessionRecoveryKeyV3(tabId: string): string {
-  return `${conversationStorageKeys.v3RecoveryPrefix}${tabId}`;
 }
 
 export interface StorageLike {
@@ -349,6 +381,27 @@ export function parseV3ConflictPointer(raw: string | null): ConversationConflict
   }
 }
 
+/** 读取 JSON 对象上的数值字段（tombstone.deletedAt / 租约 lastSeen）；损坏一律按 0（保守保留）。 */
+function readJsonNumber(raw: string | null, field: string): number {
+  if (!raw) return 0;
+  try {
+    const value = (JSON.parse(raw) as Record<string, unknown> | null)?.[field];
+    return typeof value === "number" ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** 触碰本标签页租约（best-effort）：每次提交与回到前台时刷新。 */
+function writeTabLease(storage: StorageLike, tabId: string): void {
+  const now = Date.now();
+  try {
+    storage.setItem(`${conversationStorageKeys.v3TabPrefix}${tabId}`, JSON.stringify({ tabId, firstSeen: now, lastSeen: now }));
+  } catch {
+    // 租约只影响 tombstone GC 的保守度，写入失败无害。
+  }
+}
+
 /**
  * 读取指定 revision 的 V3 会话快照。版本、归属、revision、digest 任何一步
  * 不一致都返回 null，由调用方回退 parentRevision——绝不返回半个分片。
@@ -450,25 +503,10 @@ function normalizeConversationForCommit(conversation: Conversation): Conversatio
   };
 }
 
-function normalizeForCommit(state: PersistedConversationState): Conversation[] {
-  return sortConversations(state.conversations)
-    .filter((conversation) => conversation.messages.length)
-    .map(normalizeConversationForCommit);
-}
-
 /** 估算单个会话序列化后的 UTF-8 字节数，用于分片失败结果里的负载提示。 */
 export function estimateConversationBytes(conversation: Conversation): number {
   try {
     return new TextEncoder().encode(JSON.stringify(normalizeConversationForCommit(conversation))).length;
-  } catch {
-    return 0;
-  }
-}
-
-/** 估算整份 state 规范化后的 UTF-8 字节数（存储整体不可用时的负载提示）。 */
-export function estimateCheckpointBytes(state: PersistedConversationState): number {
-  try {
-    return new TextEncoder().encode(JSON.stringify(normalizeForCommit(state))).length;
   } catch {
     return 0;
   }
@@ -486,34 +524,8 @@ function shardFailure(failure: PersistenceFlushFailure, conversationId: string, 
  * 冲突分支写入/核验/指针落盘失败：本地修改此刻只存在于内存，按
  * `write-conflict` 失败上报（数据面临风险，进入健康/横幅链路）。
  */
-function conflictWriteFailure(error: unknown, conversationId: string, bytes: number): PersistenceFlushFailure {
-  return withSizeHint(
-    { ok: false, code: "write-conflict", message: `会话 ${conversationId}：冲突分支写入失败：${classifyStorageError(error).message}` },
-    bytes,
-  );
-}
-
-function conflictVerificationFailure(conversationId: string, bytes: number): PersistenceFlushFailure {
-  return withSizeHint(
-    { ok: false, code: "write-conflict", message: `会话 ${conversationId}：冲突分支写入后回读核验失败` },
-    bytes,
-  );
-}
-
-function storedCheckpointMatches(stored: string | null, conversationId: string, revision: string, digest: string): boolean {
-  if (!stored) return false;
-  try {
-    const parsed = JSON.parse(stored) as Partial<ConversationCheckpointV3> | null;
-    return Boolean(
-      parsed
-      && parsed.schemaVersion === 3
-      && parsed.conversationId === conversationId
-      && parsed.revision === revision
-      && parsed.digest === digest,
-    );
-  } catch {
-    return false;
-  }
+function conflictFailure(reason: string, conversationId: string, bytes: number): PersistenceFlushFailure {
+  return withSizeHint({ ok: false, code: "write-conflict", message: `会话 ${conversationId}：冲突分支${reason}` }, bytes);
 }
 
 function collectStaleSnapshots(storage: StorageLike, conversationId: string, keep: ReadonlySet<string>, budget: number): void {
@@ -546,7 +558,9 @@ function parseSnapshotKey(key: string): { conversationId: string; revision: stri
 /**
  * 空闲孤儿 GC：扫描所有 V3 快照，删除不被所属会话 head / parentRevision /
  * 冲突指针引用的快照（崩溃/失败写入的残留），单次最多 budget 份，返回删除数。
- * 存储不支持枚举时直接返回 0。
+ * 同一份预算内继续回收 tombstone：仅当每个未过期标签页租约的 lastSeen 都晚于
+ * tombstone.deletedAt（所有活跃标签页 provably 见过删除），且已超出保留窗口
+ * 或数量上限（最旧先回收）时才删除；存储不支持枚举时全部保守保留。
  */
 export function runIdleCheckpointGc(storage: StorageLike, budget = 4): number {
   const snapshotKeys = enumerateKeysWithPrefix(storage, conversationStorageKeys.v3SnapshotPrefix);
@@ -581,6 +595,32 @@ export function runIdleCheckpointGc(storage: StorageLike, budget = 4): number {
       // 单次失败跳过即可，下一轮空闲 GC 会重试。
     }
   }
+  const tombstoneKeys = enumerateKeysWithPrefix(storage, conversationStorageKeys.v3TombstonePrefix);
+  if (!tombstoneKeys?.length) return removed;
+  const { retentionMs, maxCount, tabLeaseStaleMs } = CONVERSATION_TOMBSTONE_LIMITS;
+  const now = Date.now();
+  const entries: { key: string; deletedAt: number }[] = [];
+  for (const key of tombstoneKeys) {
+    const deletedAt = readJsonNumber(safeGetItem(storage, key), "deletedAt");
+    if (deletedAt) entries.push({ key, deletedAt });
+  }
+  entries.sort((left, right) => left.deletedAt - right.deletedAt);
+  let live: number[] | null = null;
+  for (let index = 0; index < entries.length; index += 1) {
+    if (removed >= budget) break;
+    const entry = entries[index] as { key: string; deletedAt: number };
+    if (index >= entries.length - maxCount && now - entry.deletedAt <= retentionMs) continue;
+    live ??= (enumerateKeysWithPrefix(storage, conversationStorageKeys.v3TabPrefix) ?? [])
+      .map((key) => readJsonNumber(safeGetItem(storage, key), "lastSeen"))
+      .filter((lastSeen) => now - lastSeen < tabLeaseStaleMs);
+    if (!live.every((lastSeen) => lastSeen > entry.deletedAt)) continue;
+    try {
+      storage.removeItem(entry.key);
+      removed += 1;
+    } catch {
+      // 下一轮空闲 GC 会重试。
+    }
+  }
   return removed;
 }
 
@@ -609,6 +649,10 @@ export function createConversationPersistenceAdapter(
    */
   const lastCommitted = new Map<string, Conversation>();
   const lastCommittedRevision = new Map<string, string>();
+  /** Controller 已请求但尚未耐久提交的删除（pagehide 同步 flush 会先提交它们）。 */
+  const pendingTombstones = new Set<string>();
+  /** 本标签页已知被删除的会话：提交一律跳过（删除方自身状态 / 已物化过恢复副本）。 */
+  const tombstonedRefused = new Set<string>();
   let lastHeadRevision: string | null = null;
   let idleGcScheduled = false;
 
@@ -676,7 +720,7 @@ export function createConversationPersistenceAdapter(
    * 提交单个会话分片（跨标签页仲裁版）：先重读共享 head，与适配器本地 base
    * （本标签页上次提交推进到的 head revision）比较——
    * - base 与共享 head 一致（或 head 缺失，按首次写入）→ 既有协议：snapshot
-   *   写入 → 回读核验 digest + revision → head 推进；
+   *   写入 → 回读核验 → head 推进；
    * - 不一致 → 绝不覆盖：本地分支写为冲突快照（revision = 共享 head 序号 + 1
    *   并内嵌本标签页 tabId，永与胜方 head revision 不撞；parentRevision =
    *   本地 base），回读核验后才写入/替换冲突指针（指针永远指向已确认落盘的
@@ -697,6 +741,9 @@ export function createConversationPersistenceAdapter(
     const sharedRevision = head?.revision ?? null;
     const localBase = lastCommittedRevision.get(conversation.id) ?? null;
     const conflicted = head !== null && sharedRevision !== localBase;
+    const fail = (error: unknown): PersistenceFlushFailure => conflicted
+      ? conflictFailure(`写入失败：${classifyStorageError(error).message}`, conversation.id, bytes)
+      : shardFailure(classifyStorageError(error), conversation.id, bytes);
     const revision = `${revisionSeq(sharedRevision) + 1}.${tabId}`;
     const parentRevision = conflicted ? localBase : sharedRevision;
     let serialized: string;
@@ -719,31 +766,21 @@ export function createConversationPersistenceAdapter(
       };
       serialized = JSON.stringify(checkpoint);
     } catch (error) {
-      return conflicted
-        ? conflictWriteFailure(error, conversation.id, bytes)
-        : shardFailure(classifyStorageError(error), conversation.id, bytes);
+      return fail(error);
     }
     const snapshotKey = sessionSnapshotKeyV3(conversation.id, revision);
     try {
       storage.setItem(snapshotKey, serialized);
+      // 回读核验：字节级比对刚写入的快照，任何损坏都视为整份不可用。
+      if (storage.getItem(snapshotKey) !== serialized) {
+        return conflicted
+          ? conflictFailure("写入后回读核验失败", conversation.id, bytes)
+          : shardFailure(verificationFailure("快照写入后回读核验失败"), conversation.id, bytes);
+      }
     } catch (error) {
-      return conflicted
-        ? conflictWriteFailure(error, conversation.id, bytes)
-        : shardFailure(classifyStorageError(error), conversation.id, bytes);
+      return fail(error);
     }
-    let stored: string | null;
-    try {
-      stored = storage.getItem(snapshotKey);
-    } catch (error) {
-      return conflicted
-        ? conflictWriteFailure(error, conversation.id, bytes)
-        : shardFailure(classifyStorageError(error), conversation.id, bytes);
-    }
-    if (!storedCheckpointMatches(stored, conversation.id, revision, digest)) {
-      return conflicted
-        ? conflictVerificationFailure(conversation.id, bytes)
-        : shardFailure(verificationFailure("快照写入后回读核验失败"), conversation.id, bytes);
-    }
+    writeTabLease(storage, tabId);
     if (conflicted && head) {
       // 分支快照已确认落盘，此刻才允许写入/替换冲突指针；上一份被替换掉的
       // 分支失去指针保护，由保留/空闲 GC 回收。
@@ -757,7 +794,7 @@ export function createConversationPersistenceAdapter(
       try {
         storage.setItem(sessionConflictKeyV3(conversation.id), JSON.stringify(pointer));
       } catch (error) {
-        return conflictWriteFailure(error, conversation.id, bytes);
+        return fail(error);
       }
       return { ok: true, kind: "conflict", revision, savedAt, baseRevision: localBase, sharedRevision: head.revision };
     }
@@ -782,52 +819,76 @@ export function createConversationPersistenceAdapter(
   }
 
   /**
-   * 硬删除一个已从 state 消失的会话：head + 冲突指针 + 至多 2 份快照
-   * （tombstone 语义由下一提交接管，此处保持与整存时代 observable-equal
-   * 的删除行为）。全部删除成功才返回 true。
+   * 提交删除 tombstone：写 tombstone 键 → 回读核验 → 有界删除 head / 冲突指针 /
+   * ≤2 份快照。已存在 tombstone 时幂等跳过重写（不重复发删除通知）。成功后本
+   * 标签页不再为该 cid 提交（含删除方自身的残留状态），写 / 核验失败返回映射
+   * 失败结果，head 与已提交映射原样保留，会话可继续提交或重试删除。
    */
-  function deleteConversationShard(storage: StorageLike, conversationId: string): boolean {
-    const knownRevision = lastCommittedRevision.get(conversationId);
-    let removedSnapshots = 0;
-    let failed = false;
-    try {
-      storage.removeItem(sessionHeadKeyV3(conversationId));
-    } catch {
-      failed = true;
-    }
-    try {
-      storage.removeItem(sessionConflictKeyV3(conversationId));
-    } catch {
-      failed = true;
-    }
-    if (knownRevision) {
+  function commitTombstone(
+    storage: StorageLike,
+    conversationId: string,
+    tabId: string,
+    options?: SaveConversationOptions,
+  ): PersistenceFlushFailure | null {
+    const key = sessionTombstoneKeyV3(conversationId);
+    const fresh = safeGetItem(storage, key) === null;
+    if (fresh) {
+      const parentRevision = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)))?.revision
+        ?? lastCommittedRevision.get(conversationId)
+        ?? null;
+      const serialized = JSON.stringify({
+        conversationId,
+        deletedAt: Date.now(),
+        deletedRevision: `${revisionSeq(parentRevision) + 1}.${tabId}`,
+        parentRevision,
+        writerId: tabId,
+      } satisfies ConversationTombstone);
       try {
-        storage.removeItem(sessionSnapshotKeyV3(conversationId, knownRevision));
-        removedSnapshots += 1;
+        storage.setItem(key, serialized);
+        if (storage.getItem(key) !== serialized) {
+          return shardFailure(verificationFailure("tombstone 核验失败"), conversationId, 0);
+        }
+      } catch (error) {
+        return shardFailure(classifyStorageError(error), conversationId, 0);
+      }
+      writeTabLease(storage, tabId);
+    }
+    deleteConversationShard(storage, conversationId);
+    tombstonedRefused.add(conversationId);
+    // 删除通知在分片清理之后才发出：接收端对账时 head 必已消失。
+    if (fresh) options?.onDelete?.({ conversationId, writerId: tabId });
+    return null;
+  }
+
+  /**
+   * 删除 tombstone 之后清理会话分片：head + 冲突指针 + 至多 2 份快照。
+   * 全部删除成功才移除已提交映射；失败则保留映射（残留键不被 tombstone
+   * 遮挡的加载路径引用，空闲 GC 与后续删除会再次尝试）。
+   */
+  function deleteConversationShard(storage: StorageLike, conversationId: string): void {
+    let failed = false;
+    const drop = (key: string): void => {
+      try {
+        storage.removeItem(key);
       } catch {
         failed = true;
       }
+    };
+    const knownRevision = lastCommittedRevision.get(conversationId);
+    drop(sessionHeadKeyV3(conversationId));
+    drop(sessionConflictKeyV3(conversationId));
+    if (knownRevision) drop(sessionSnapshotKeyV3(conversationId, knownRevision));
+    let removed = knownRevision ? 1 : 0;
+    for (const key of enumerateKeysWithPrefix(storage, sessionSnapshotKeyV3(conversationId, "")) ?? []) {
+      if (removed >= 2) break;
+      if (key === sessionSnapshotKeyV3(conversationId, knownRevision ?? "")) continue;
+      drop(key);
+      removed += 1;
     }
-    const prefix = sessionSnapshotKeyV3(conversationId, "");
-    const keys = enumerateKeysWithPrefix(storage, prefix);
-    if (keys) {
-      for (const key of keys) {
-        if (removedSnapshots >= 2) break;
-        if (knownRevision && key === sessionSnapshotKeyV3(conversationId, knownRevision)) continue;
-        try {
-          storage.removeItem(key);
-          removedSnapshots += 1;
-        } catch {
-          failed = true;
-        }
-      }
-    }
-    // 删除失败则保留适配器记录，下一次 flush 重试。
     if (!failed) {
       lastCommitted.delete(conversationId);
       lastCommittedRevision.delete(conversationId);
     }
-    return !failed;
   }
 
   /**
@@ -836,8 +897,13 @@ export function createConversationPersistenceAdapter(
    * 与 4.3.5 的"先验证后删除"同规）。legacyMessages 永不删除（与 4.3.5 语义一致）。
    */
   function cleanupMigratedKeys(storage: StorageLike): void {
+    const legacyKeys = [
+      conversationStorageKeys.sessionHead,
+      conversationStorageKeys.conversations,
+      conversationStorageKeys.currentConversation,
+    ];
     let hasMigratedKeys = false;
-    for (const key of [conversationStorageKeys.sessionHead, conversationStorageKeys.conversations, conversationStorageKeys.currentConversation]) {
+    for (const key of legacyKeys) {
       try {
         if (storage.getItem(key) !== null) hasMigratedKeys = true;
       } catch {
@@ -853,12 +919,7 @@ export function createConversationPersistenceAdapter(
       hasMigratedKeys = true;
     }
     if (!hasMigratedKeys) return;
-    for (const key of [
-      conversationStorageKeys.sessionHead,
-      conversationStorageKeys.conversations,
-      conversationStorageKeys.currentConversation,
-      ...v2SnapshotKeys,
-    ]) {
+    for (const key of [...legacyKeys, ...v2SnapshotKeys]) {
       try {
         storage.removeItem(key);
       } catch {
@@ -879,15 +940,17 @@ export function createConversationPersistenceAdapter(
       }
     };
     const requestIdle = (globalThis as { requestIdleCallback?: (callback: () => void) => void }).requestIdleCallback;
-    if (typeof requestIdle === "function") requestIdle(run);
-    else setTimeout(run, 0);
+    requestIdle?.(run) ?? setTimeout(run, 0);
   }
 
   /**
    * 以会话为分片提交会话状态：
-   *   删除已从 state 消失的会话分片 → 逐个脏会话仲裁提交（重读共享 head →
-   *   一致推进 / 不一致写冲突分支）→ 有界保留 GC → 全部脏分片成功后清理
-   *   V2 / legacy 键 → 调度一次空闲孤儿 GC。
+   *   待提交 tombstone 优先（Controller 请求的删除；pagehide 同步 flush 也在此
+   *   以无锁同等检查提交）→ 逐个脏会话仲裁提交（重读共享 head → 一致推进 /
+   *   不一致写冲突分支；被 tombstone 拒绝的会话物化为新 id 恢复副本并随本次
+   *   flush 提交）→ 有界保留 GC → 全部脏分片成功后清理 V2 / legacy 键 →
+   *   调度一次空闲孤儿 GC。删除只经 tombstone 通道（deleteConversationArbitrated
+   *   登记待删标记），state 收缩本身绝不删除分片。
    * 当前会话选中只写入本标签页的 sessionStorage，绝不进入 V3 共享键。
    * 冲突分支耐久写入仍算 {ok:true}（数据安全，经 onConflict 带外上报）；
    * 冲突分支写失败返回 write-conflict（数据面临风险）。
@@ -899,20 +962,34 @@ export function createConversationPersistenceAdapter(
     session: StorageLike | null = browserSessionStorage(),
     options?: SaveConversationOptions,
   ): PersistenceFlushResult {
-    if (!storage) return withSizeHint(storageUnavailableFailure("localStorage 不可用"), estimateCheckpointBytes(state));
+    if (!storage) return storageUnavailableFailure(`localStorage 不可用 (~${JSON.stringify(state).length} bytes)`);
     const tabId = getTabId(session);
     writeTabSelection(session, state.currentConversationId);
 
-    const present = new Set(state.conversations.map((conversation) => conversation.id));
-    for (const conversationId of [...lastCommitted.keys()]) {
-      if (!present.has(conversationId) && deleteConversationShard(storage, conversationId)) {
-        options?.onDelete?.({ conversationId, writerId: tabId });
-      }
+    // 待提交 tombstone 优先（Controller 请求的删除；pagehide 同步 flush 也在此提交）。
+    for (const conversationId of pendingTombstones) {
+      const failure = commitTombstone(storage, conversationId, tabId, options);
+      if (failure) return failure; // 保留待删标记，下一轮 flush 重试。
+      pendingTombstones.delete(conversationId);
     }
 
-    for (const conversation of state.conversations) {
-      if (!conversation.messages.length) continue;
-      if (lastCommitted.get(conversation.id) === conversation) continue;
+    // 工作队列：被 tombstone 拒绝的会话物化为恢复副本后入队，走同一条提交路径。
+    const queue = [...state.conversations];
+    for (const conversation of queue) {
+      if (!conversation.messages.length
+        || lastCommitted.get(conversation.id) === conversation
+        || tombstonedRefused.has(conversation.id)) continue;
+      // tombstone 守卫：本地 base 早于删除（或根本没收到删除通知）的提交一律拒绝，
+      // head / 快照绝不重写；cid 移出已提交映射，本地内容以新 id 恢复副本幸存。
+      if (safeGetItem(storage, sessionTombstoneKeyV3(conversation.id)) !== null) {
+        tombstonedRefused.add(conversation.id);
+        lastCommitted.delete(conversation.id);
+        lastCommittedRevision.delete(conversation.id);
+        const copy = copyConversation(conversation, "（恢复副本）");
+        queue.push(copy);
+        options?.onRecovery?.({ conversationId: conversation.id, copy });
+        continue;
+      }
       const outcome = commitConversationShard(storage, conversation, tabId);
       if (!outcome.ok) return outcome;
       // 冲突提交后 base 跟进胜方 head，下一次提交在胜方之上推进。
@@ -939,21 +1016,60 @@ export function createConversationPersistenceAdapter(
     return lastHeadRevision ? { ok: true, revision: lastHeadRevision } : { ok: true };
   }
 
-  async function saveArbitrated(
+  /** 在排他锁内执行 fn；锁缺失或锁子系统自身失败时退化为无锁执行（同等检查在 fn 内）。 */
+  async function arbitrate<T>(fn: () => T): Promise<T> {
+    const locks = adapterOptions.locks === undefined ? detectNavigatorLocks() : adapterOptions.locks;
+    if (!locks) return fn();
+    try {
+      return await locks.request(CONVERSATION_CHECKPOINT_LOCK_NAME, { mode: "exclusive" }, fn);
+    } catch {
+      return fn();
+    }
+  }
+
+  function saveArbitrated(
     getState: () => PersistedConversationState,
     storage: StorageLike | null = browserStorage(),
     session: StorageLike | null = browserSessionStorage(),
     options?: SaveConversationOptions,
   ): Promise<PersistenceFlushResult> {
-    const locks = adapterOptions.locks === undefined ? detectNavigatorLocks() : adapterOptions.locks;
-    if (!locks) return save(getState(), storage, session, options);
+    return arbitrate(() => save(getState(), storage, session, options));
+  }
+
+  /**
+   * Controller 删除入口：先在仲裁临界区耐久提交 tombstone（锁缺失退化无锁同等
+   * 检查），成功才由调用方移除 UI 状态；失败即取消待删标记，会话保留可重试。
+   * pagehide 同步 flush 可能先于此承诺解决提交同一 tombstone（幂等，通知仅一次）。
+   */
+  async function deleteConversationArbitrated(
+    conversationId: string,
+    storage: StorageLike | null = browserStorage(),
+    session: StorageLike | null = browserSessionStorage(),
+    options?: SaveConversationOptions,
+  ): Promise<PersistenceFlushResult> {
+    if (!storage) return storageUnavailableFailure("localStorage 不可用");
+    const tabId = getTabId(session);
+    pendingTombstones.add(conversationId);
+    return arbitrate(() => {
+      const failure = commitTombstone(storage, conversationId, tabId, options);
+      pendingTombstones.delete(conversationId);
+      return failure ?? { ok: true };
+    });
+  }
+
+  function setTabLease(
+    active: boolean,
+    storage: StorageLike | null = browserStorage(),
+    session: StorageLike | null = browserSessionStorage(),
+  ): void {
+    if (active && storage) {
+      writeTabLease(storage, getTabId(session));
+      return;
+    }
     try {
-      return await locks.request(CONVERSATION_CHECKPOINT_LOCK_NAME, { mode: "exclusive" }, () =>
-        save(getState(), storage, session, options),
-      );
+      storage?.removeItem(`${conversationStorageKeys.v3TabPrefix}${getTabId(session)}`);
     } catch {
-      // 锁子系统自身失败（而非存储失败）：退化为无锁提交，兄弟检测仍保证不覆盖。
-      return save(getState(), storage, session, options);
+      // best-effort：未删除的租约过期后自然不再阻挡 GC。
     }
   }
 
@@ -964,12 +1080,15 @@ export function createConversationPersistenceAdapter(
   ): ReconcileRemoteOutcome {
     if (!storage) return { kind: "noop" };
     const head = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
-    if (!head) return { kind: "noop" };
-    if (lastCommittedRevision.get(conversationId) === head.revision) return { kind: "noop" };
-    if (local && lastCommitted.get(conversationId) !== local) {
-      // 本地有未提交修改：base 已落后于共享 head，下一次提交自然进入冲突
-      // 分支路径（revision 内嵌 tabId，远端 head 绝不会被误认作本地 base）。
-      return { kind: "stale" };
+    if (head && lastCommittedRevision.get(conversationId) === head.revision) return { kind: "noop" };
+    // 本地有未提交修改：保持内容，下次提交走冲突 / 恢复副本路径（绝不静默丢弃）。
+    if (local && lastCommitted.get(conversationId) !== local) return { kind: "stale" };
+    if (!head) {
+      // head 缺失且 tombstone 在案：远端已删除，本地干净 ⇒ 调用方移除 state。
+      if (safeGetItem(storage, sessionTombstoneKeyV3(conversationId)) === null) return { kind: "noop" };
+      lastCommitted.delete(conversationId);
+      lastCommittedRevision.delete(conversationId);
+      return { kind: "deleted" };
     }
     const conversation = loadV3SnapshotConversation(storage, conversationId, head.revision)
       ?? (head.parentRevision ? loadV3SnapshotConversation(storage, conversationId, head.parentRevision) : null);
@@ -1019,6 +1138,8 @@ export function createConversationPersistenceAdapter(
   function reset(): void {
     lastCommitted.clear();
     lastCommittedRevision.clear();
+    pendingTombstones.clear();
+    tombstonedRefused.clear();
     lastHeadRevision = null;
     idleGcScheduled = false;
   }
@@ -1028,6 +1149,8 @@ export function createConversationPersistenceAdapter(
     save,
     saveArbitrated,
     reconcileRemoteCommit,
+    deleteConversationArbitrated,
+    setTabLease,
     readSharedConversation,
     readConflictBranch,
     clearConflict,

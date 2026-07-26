@@ -1,7 +1,8 @@
 /**
  * 跨标签页会话失效通道：BroadcastChannel `deepseek-conversation-sync`。
- * 每次成功提交（走锁或无锁）广播 conversation_committed；删除会话广播
- * conversation_deleted（由后续提交的 tombstone 工作消费，当前仅入档 schema）。
+ * 每次成功提交（走锁或无锁）广播 conversation_committed；删除会话在 tombstone
+ * 耐久落盘后广播 conversation_deleted（接收端本地干净则移除，本地脏则保留内容，
+ * 下次提交被 tombstone 拒绝时物化为恢复副本）。
  * BroadcastChannel 缺失时退化为无操作通道；工厂可注入，便于测试。
  */
 

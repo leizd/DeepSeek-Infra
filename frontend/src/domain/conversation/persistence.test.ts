@@ -7,6 +7,7 @@ import { checkpointMessage, INTERRUPTED_CHECKPOINT_NOTE } from "./checkpoint";
 import {
   checkpointDigest,
   conversationStorageKeys,
+  createConversationPersistenceAdapter,
   estimateConversationBytes,
   loadPersistedConversationState,
   resetConversationPersistenceForTests,
@@ -416,25 +417,35 @@ describe("V3 sharded commits", () => {
       expect(result.ok).toBe(true);
     }
 
-    // 每次提交恒为 2 次 setItem（snapshot + head）与至多 2 次 removeItem（保留 GC）。
-    expect(setSpy.mock.calls.length).toBe(20_000);
+    // 每次提交恒为 2 次分片写入（snapshot + head；租约触碰不计入分片成本）与至多 2 次 removeItem（保留 GC）。
+    const shardWrites = setSpy.mock.calls.filter(([key]) => !key.startsWith(conversationStorageKeys.v3TabPrefix));
+    expect(shardWrites.length).toBe(20_000);
     expect(removeSpy.mock.calls.length).toBeLessThanOrEqual(20_000);
     expect(v3SnapshotKeys(storage, "alpha").length).toBeLessThanOrEqual(2);
     setSpy.mockRestore();
     removeSpy.mockRestore();
   });
 
-  it("hard-deletes the shard of a conversation removed from state", () => {
+  it("commits a tombstone before deleting the shard of a conversation", async () => {
     const storage = new MemoryStorage();
     const session = makeSession();
+    const adapter = createConversationPersistenceAdapter();
     const alpha = makeConversation("alpha", "一");
     const beta = makeConversation("beta", "二");
-    savePersistedConversationState(makeState("alpha", [alpha, beta]), storage, session);
+    adapter.save(makeState("alpha", [alpha, beta]), storage, session);
     expect(storage.getItem(sessionHeadKeyV3("beta"))).not.toBeNull();
 
-    const result = savePersistedConversationState(makeState("alpha", [alpha]), storage, session);
+    const result = await adapter.deleteConversationArbitrated("beta", storage, session);
 
     expect(result.ok).toBe(true);
+    // 删除先落 tombstone（含被删 head 的 parentRevision），再删 head 与快照。
+    const tombstone = JSON.parse(storage.getItem(sessionTombstoneKeyV3("beta")) ?? "null") as Record<string, unknown> | null;
+    expect(tombstone).toMatchObject({
+      conversationId: "beta",
+      deletedRevision: `2.${TEST_TAB_ID}`,
+      parentRevision: `1.${TEST_TAB_ID}`,
+      writerId: TEST_TAB_ID,
+    });
     expect(storage.getItem(sessionHeadKeyV3("beta"))).toBeNull();
     expect(v3SnapshotKeys(storage, "beta")).toEqual([]);
     const loaded = loadPersistedConversationState(storage, session);

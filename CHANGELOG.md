@@ -19,6 +19,10 @@
 
 - Conversation commits run inside an exclusive Web Lock (with an equivalent lock-free sibling-detection fallback) that re-reads the shared head before writing: a stale tab can never overwrite a newer revision, its branch is preserved as a per-conversation conflict copy recoverable as an independent conversation, and a BroadcastChannel invalidates clean remote copies without ever switching the tab you are looking at.
 
+### Tombstoned conversation deletion
+
+- Deleting a conversation commits a tombstone before touching UI state, so a stale tab can never resurrect the id — its edits survive only as a new recovery copy; tombstones are retained for a bounded window/count and are garbage-collected only after every live tab lease has provably seen the deletion.
+
 
 ## [4.3.5] - Durable Checkpoints and Recovery Integrity
 

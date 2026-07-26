@@ -22,10 +22,12 @@ import {
   type SaveConversationOptions,
   type StorageLike,
 } from "../../domain/conversation/persistence";
-import type { Conversation, PersistedConversationState } from "../../domain/conversation/types";
+import type { PersistedConversationState } from "../../domain/conversation/types";
+import { copyConversation } from "../../domain/conversation/reducer";
 import { recordFlushReport } from "../../app/persistenceHealth";
 import type { PersistenceFlushResult } from "../../app/reloadBlockers";
-import { createConversationSyncChannel, type ConversationSyncChannel } from "../../app/conversationSync";
+import type { PersistenceFlushFailure } from "../../app/persistenceErrors";
+import { createConversationSyncChannel, type ConversationSyncChannel, type ConversationSyncMessage } from "../../app/conversationSync";
 import { getTabId } from "../../app/tabIdentity";
 import { createId } from "../../shared/createId";
 import { useMemory } from "../../contexts/MemoryContext";
@@ -60,6 +62,15 @@ function isAbortError(reason: unknown): boolean {
   return reason instanceof DOMException
     ? reason.name === "AbortError"
     : reason instanceof Error && reason.name === "AbortError";
+}
+
+/** flush 异常统一映射为 unknown 失败结果（防抖提交与生命周期 flush 共用）。 */
+function flushFailureResult(reason: unknown): PersistenceFlushFailure {
+  return {
+    ok: false,
+    code: "unknown",
+    message: reason instanceof Error && reason.message ? reason.message : "对话记录保存失败",
+  };
 }
 
 export type MessageSubmissionResult =
@@ -116,13 +127,19 @@ export function useChatController(options: ChatControllerOptions = {}) {
   const [conflict, setConflict] = useState<ConversationConflictSignal | null>(null);
   const waitUntilResumed = useCallback(() => outputPauseGateRef.current?.waitUntilResumed() ?? Promise.resolve(), []);
 
-  // 提交 / 删除 / 冲突回调：提交与删除广播到跨标签页通道，冲突信号换上 notice 条。
+  // 提交 / 删除 / 冲突 / 恢复副本回调：提交与删除广播到跨标签页通道，冲突信号换上 notice 条，
+  // 恢复副本（本地修改在其他标签页删除后幸存）换入 state 并提示。
   const saveCallbacksRef = useRef<SaveConversationOptions | null>(null);
   if (!saveCallbacksRef.current) {
     saveCallbacksRef.current = {
       onCommit: (notice) => syncChannel.post({ type: "conversation_committed", ...notice }),
       onDelete: (notice) => syncChannel.post({ type: "conversation_deleted", ...notice }),
       onConflict: (signal) => setConflict(signal),
+      onRecovery: ({ conversationId, copy }) => {
+        dispatch({ type: "conversationSynced", conversation: copy });
+        dispatch({ type: "deleteConversation", conversationId });
+        dispatch({ type: "noticeSet", notice: "远端已删除，已保留为恢复副本" });
+      },
     };
   }
 
@@ -149,11 +166,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
       result = persistence.save(readPersistedState(), undefined, options.session, saveCallbacksRef.current ?? undefined);
     } catch (reason) {
       // 防抖保存和生命周期 flush 都不允许把存储异常抛成未捕获错误。
-      result = {
-        ok: false,
-        code: "unknown",
-        message: reason instanceof Error && reason.message ? reason.message : "对话记录保存失败",
-      };
+      result = flushFailureResult(reason);
     }
     recordFailedResult(result);
     return result;
@@ -173,11 +186,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
     flight.running = true;
     void persistence
       .saveArbitrated(readPersistedState, undefined, options.session, saveCallbacksRef.current ?? undefined)
-      .catch((reason: unknown): PersistenceFlushResult => ({
-        ok: false,
-        code: "unknown",
-        message: reason instanceof Error && reason.message ? reason.message : "对话记录保存失败",
-      }))
+      .catch((reason: unknown): PersistenceFlushResult => flushFailureResult(reason))
       .then((result) => {
         recordFailedResult(result);
         flight.running = false;
@@ -195,37 +204,54 @@ export function useChatController(options: ChatControllerOptions = {}) {
 
   // 跨标签页同步：订阅一次（卸载时清理）。远端提交到达时——本标签页对该会话
   // 干净则换入共享 head；本地脏则保持，等下次提交走冲突路径；绝不切换当前
-  // 选中会话，流式中的会话延迟到流结束后再同步。
-  const deferredSyncRef = useRef(new Set<string>());
-  const reconcileRemoteConversation = useCallback(
-    (conversationId: string) => {
+  // 选中会话，流式中的会话延迟到流结束后再同步。远端删除到达时——本地干净则
+  // 移除（选中回退保持既有 UX）；本地脏则保留内容，下次提交被 tombstone 拒绝时
+  // 自动物化为恢复副本。
+  const deferredSyncRef = useRef(new Set<ConversationSyncMessage>());
+  const handleSyncMessage = useCallback(
+    (message: ConversationSyncMessage) => {
+      const conversationId = message.conversationId;
       const local = stateRef.current.conversations.find((conversation) => conversation.id === conversationId);
       const outcome = persistence.reconcileRemoteCommit(conversationId, local);
+      // 远端删除且本地干净 ⇒ deleted：移除（选中回退保持既有 UX）；本地脏 ⇒ stale：
+      // 保留内容，下次提交被 tombstone 拒绝时自动物化为恢复副本。
       if (outcome.kind === "reload") dispatch({ type: "conversationSynced", conversation: outcome.conversation });
+      else if (outcome.kind === "deleted") dispatch({ type: "deleteConversation", conversationId });
     },
     [persistence],
   );
 
   useEffect(() => {
     const ownTabId = getTabId(options.session);
-    return syncChannel.subscribe((message) => {
+    // 标签页租约：回到前台刷新，pagehide 尽力移除（tombstone GC 的活跃证据）。
+    const onLeaseEvent = (event: Event): void => {
+      if (event.type === "pagehide" || document.visibilityState === "visible") {
+        persistence.setTabLease(event.type !== "pagehide", undefined, options.session);
+      }
+    };
+    document.addEventListener("visibilitychange", onLeaseEvent);
+    window.addEventListener("pagehide", onLeaseEvent);
+    const unsubscribe = syncChannel.subscribe((message) => {
       if (message.writerId === ownTabId) return;
-      // conversation_deleted 由后续提交的 tombstone 工作消费，本提交仅入档 schema。
-      if (message.type !== "conversation_committed") return;
       if (stateRef.current.requestStatus === "streaming") {
-        deferredSyncRef.current.add(message.conversationId);
+        deferredSyncRef.current.add(message);
         return;
       }
-      reconcileRemoteConversation(message.conversationId);
+      handleSyncMessage(message);
     });
-  }, [syncChannel, reconcileRemoteConversation, options.session]);
+    return () => {
+      unsubscribe();
+      document.removeEventListener("visibilitychange", onLeaseEvent);
+      window.removeEventListener("pagehide", onLeaseEvent);
+    };
+  }, [syncChannel, handleSyncMessage, persistence, options.session]);
 
   useEffect(() => {
     if (state.requestStatus !== "idle" || !deferredSyncRef.current.size) return;
     const pending = [...deferredSyncRef.current];
     deferredSyncRef.current.clear();
-    pending.forEach(reconcileRemoteConversation);
-  }, [state.requestStatus, reconcileRemoteConversation]);
+    pending.forEach(handleSyncMessage);
+  }, [state.requestStatus, handleSyncMessage]);
 
   // 冲突解决 - 查看最新：换入共享 head 内容并清除冲突指针。本地分支在指针
   // 清除前一直受 GC 保护，解决后由保留/空闲 GC 回收。
@@ -246,17 +272,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
     if (!conflict) return;
     const branch = persistence.readConflictBranch(conflict.conversationId);
     if (branch) {
-      const now = Date.now();
-      const copy: Conversation = {
-        ...branch.conversation,
-        id: createId("conversation"),
-        title: `${branch.conversation.title}（冲突副本）`,
-        customTitle: true,
-        favorite: false,
-        createdAt: now,
-        updatedAt: now,
-      };
-      dispatch({ type: "conversationSynced", conversation: copy });
+      dispatch({ type: "conversationSynced", conversation: copyConversation(branch.conversation, "（冲突副本）") });
     }
     persistence.clearConflict(conflict.conversationId);
     setConflict(null);
@@ -565,6 +581,27 @@ export function useChatController(options: ChatControllerOptions = {}) {
     setQuoteDraft(null);
   }, [state.currentConversationId]);
 
+  // 删除会话：先在仲裁临界区耐久提交 tombstone，成功才移除 UI 状态；失败则
+  // 会话保留，经 flush 失败链路记录健康状态并在 notice 条提示。流式期间保持
+  // 既有行为（reducer 同样拒绝删除）。
+  const deleteConversation = useCallback(
+    (conversationId: string) => {
+      if (stateRef.current.requestStatus === "streaming") return;
+      void persistence
+        // saveCallbacksRef 在首次渲染即初始化，此处必然非空。
+        .deleteConversationArbitrated(conversationId, undefined, options.session, saveCallbacksRef.current!)
+        .then((result) => {
+          if (result.ok) {
+            dispatch({ type: "deleteConversation", conversationId });
+            return;
+          }
+          recordFailedResult(result);
+          dispatch({ type: "noticeSet", notice: result.message });
+        });
+    },
+    [persistence, options.session, recordFailedResult],
+  );
+
   return {
     state,
     messages: selectCurrentMessages(state),
@@ -587,7 +624,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
     resumeOutput,
     newConversation: () => dispatch({ type: "newConversation" }),
     openConversation: (conversationId: string) => dispatch({ type: "openConversation", conversationId }),
-    deleteConversation: (conversationId: string) => dispatch({ type: "deleteConversation", conversationId }),
+    deleteConversation,
     renameConversation: (conversationId: string, title: string) =>
       dispatch({ type: "conversationRenamed", conversationId, title, updatedAt: Date.now() }),
     toggleFavorite: (conversationId: string) => dispatch({ type: "conversationFavoriteToggled", conversationId, updatedAt: Date.now() }),

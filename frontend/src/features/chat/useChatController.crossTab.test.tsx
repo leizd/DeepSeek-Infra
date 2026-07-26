@@ -54,7 +54,10 @@ import {
   createConversationPersistenceAdapter,
   sessionConflictKeyV3,
   sessionHeadKeyV3,
+  sessionTombstoneKeyV3,
   type ConversationPersistenceAdapter,
+  type LockRequestOptions,
+  type LocksLike,
   type StorageLike,
 } from "../../domain/conversation/persistence";
 import type { Conversation } from "../../domain/conversation/types";
@@ -99,6 +102,25 @@ function createChannelPair() {
     },
   });
   return { channelA: make(listenersA, listenersB), channelB: make(listenersB, listenersA), posted };
+}
+
+/** 闸门锁：release 前所有锁请求都排队等待，用于精确控制仲裁时序。 */
+class GatedLock implements LocksLike {
+  private open!: () => void;
+  private readonly gate = new Promise<void>((resolve) => {
+    this.open = resolve;
+  });
+  request<T>(_name: string, _options: LockRequestOptions, callback: () => T | Promise<T>): Promise<T> {
+    return this.gate.then(callback);
+  }
+  release(): void {
+    this.open();
+  }
+}
+
+/** 排空微任务队列（删除流程经 promise 链落地）。 */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function makeMessage(id: string, content: string): ChatMessage {
@@ -221,25 +243,163 @@ describe("cross-tab conversation sync", () => {
     ]);
   });
 
-  it("posts conversation_deleted on delete; the receiving tab ignores it (tombstone work is a later commit)", async () => {
+  it("commits a tombstone before removing locally; a clean receiver drops the conversation", async () => {
     seedConversations([makeConversation("alpha", "一"), makeConversation("beta", "二")]);
     const a = mountTab(tabA);
     const b = mountTab(tabB);
 
-    act(() => {
+    await act(async () => {
       a.result.current.deleteConversation("beta");
-    });
-    act(() => {
-      a.result.current.flushConversationPersistence();
+      await settle();
     });
 
+    // tombstone 先于 UI 移除耐久落盘：记录被删 head 的 parentRevision。
+    expect(JSON.parse(window.localStorage.getItem(sessionTombstoneKeyV3("beta")) ?? "null")).toMatchObject({
+      conversationId: "beta",
+      deletedRevision: `2.${TAB_A}`,
+      parentRevision: `1.${TAB_A}`,
+      writerId: TAB_A,
+    });
+    expect(window.localStorage.getItem(sessionHeadKeyV3("beta"))).toBeNull();
     expect(bus.posted).toEqual([
       { type: "conversation_deleted", conversationId: "beta", writerId: TAB_A },
     ]);
-    expect(window.localStorage.getItem(sessionHeadKeyV3("beta"))).toBeNull();
-    // 接收端当前不做本地删除（tombstone 由后续提交落地），但绝不崩溃、绝不切换选中。
-    expect(b.result.current.state.conversations.some((conversation) => conversation.id === "beta")).toBe(true);
+    // 删除方 UI 移除（选中回退保持既有 UX）。
+    expect(a.result.current.state.conversations.map((conversation) => conversation.id)).toEqual(["alpha"]);
+    expect(a.result.current.state.currentConversationId).toBe("alpha");
+    // 干净接收端同样移除，且绝不切换自己正在看的会话。
+    expect(b.result.current.state.conversations.map((conversation) => conversation.id)).toEqual(["alpha"]);
     expect(b.result.current.state.currentConversationId).toBe("alpha");
+  });
+
+  it("keeps the conversation in the UI when the tombstone write fails", async () => {
+    seedConversations([makeConversation("alpha", "一"), makeConversation("beta", "二")]);
+    const a = mountTab(tabA);
+
+    const originalSet = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")?.value as (
+      this: Storage,
+      key: string,
+      value: string,
+    ) => void;
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key.startsWith(conversationStorageKeys.v3TombstonePrefix)) throw new Error("disk full");
+      originalSet.call(this, key, value);
+    });
+
+    await act(async () => {
+      a.result.current.deleteConversation("beta");
+      await settle();
+    });
+
+    // 会话保留在 UI，head 完好，未广播删除；失败经 flush 链路记录并提示。
+    expect(a.result.current.state.conversations.some((conversation) => conversation.id === "beta")).toBe(true);
+    expect(window.localStorage.getItem(sessionHeadKeyV3("beta"))).not.toBeNull();
+    expect(window.localStorage.getItem(sessionTombstoneKeyV3("beta"))).toBeNull();
+    expect(bus.posted).toEqual([]);
+    expect(a.result.current.state.notice).toContain("会话 beta");
+    expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]);
+    setItem.mockRestore();
+
+    // 恢复后重试成功。
+    await act(async () => {
+      a.result.current.deleteConversation("beta");
+      await settle();
+    });
+    expect(a.result.current.state.conversations.some((conversation) => conversation.id === "beta")).toBe(false);
+    expect(window.localStorage.getItem(sessionTombstoneKeyV3("beta"))).not.toBeNull();
+  });
+
+  it("removes the conversation from the UI only after the tombstone is durably written", async () => {
+    const gated = new GatedLock();
+    const rigA: TabRig = {
+      adapter: createConversationPersistenceAdapter({ locks: gated }),
+      session: makeSession(TAB_A),
+      channel: bus.channelA,
+    };
+    rigA.adapter.save(
+      { schemaVersion: 1, currentConversationId: "beta", conversations: [makeConversation("alpha", "一"), makeConversation("beta", "二")] },
+      window.localStorage,
+      rigA.session,
+    );
+    const a = mountTab(rigA);
+
+    act(() => {
+      a.result.current.deleteConversation("beta");
+    });
+    // 锁未放行：tombstone 未落盘，UI 原样保留。
+    expect(window.localStorage.getItem(sessionTombstoneKeyV3("beta"))).toBeNull();
+    expect(a.result.current.state.conversations.some((conversation) => conversation.id === "beta")).toBe(true);
+
+    await act(async () => {
+      gated.release();
+      await settle();
+    });
+    // tombstone 耐久后才移除 UI。
+    expect(window.localStorage.getItem(sessionTombstoneKeyV3("beta"))).not.toBeNull();
+    expect(window.localStorage.getItem(sessionHeadKeyV3("beta"))).toBeNull();
+    expect(a.result.current.state.conversations.some((conversation) => conversation.id === "beta")).toBe(false);
+  });
+
+  it("a dirty receiver keeps the content and materializes a recovery copy on next commit", async () => {
+    seedConversations([makeConversation("alpha", "一"), makeConversation("beta", "二")]);
+    const a = mountTab(tabA);
+    const b = mountTab(tabB);
+
+    // B 对 beta 有未提交修改（重命名产生脏对象，NO_AUTOSAVE 下不会落盘）。
+    act(() => {
+      b.result.current.renameConversation("beta", "B 的标题");
+    });
+    await act(async () => {
+      a.result.current.deleteConversation("beta");
+      await settle();
+    });
+
+    // 本地脏 ⇒ 保留内容，绝不静默丢弃。
+    expect(b.result.current.state.conversations.find((conversation) => conversation.id === "beta")?.title).toBe("B 的标题");
+
+    act(() => {
+      b.result.current.flushConversationPersistence();
+    });
+
+    // 下一次提交被 tombstone 拒绝：原 cid 移除，内容以恢复副本幸存并提示。
+    expect(b.result.current.state.conversations.some((conversation) => conversation.id === "beta")).toBe(false);
+    const copy = b.result.current.state.conversations.find((conversation) => conversation.title === "B 的标题（恢复副本）");
+    expect(copy).toBeTruthy();
+    expect(copy?.id).not.toBe("beta");
+    expect(b.result.current.state.notice).toContain("恢复副本");
+    expect(window.localStorage.getItem(sessionHeadKeyV3("beta"))).toBeNull();
+    expect(window.localStorage.getItem(sessionTombstoneKeyV3("beta"))).not.toBeNull();
+    expect(window.localStorage.getItem(sessionHeadKeyV3(copy?.id as string))).not.toBeNull();
+  });
+
+  it("a stale tab that missed the delete entirely is refused on commit and keeps a recovery copy", async () => {
+    // B 的通道丢弃所有消息（模拟完全没收到删除通知的标签页）。
+    const blackhole: ConversationSyncChannel = { post: () => undefined, subscribe: () => () => undefined };
+    const rigB: TabRig = { adapter: createConversationPersistenceAdapter(), session: makeSession(TAB_B), channel: blackhole };
+    seedConversations([makeConversation("alpha", "初版")]);
+    const b = mountTab(rigB);
+    const a = mountTab(tabA);
+
+    act(() => {
+      b.result.current.renameConversation("alpha", "B 的标题");
+    });
+    await act(async () => {
+      a.result.current.deleteConversation("alpha");
+      await settle();
+    });
+
+    act(() => {
+      b.result.current.flushConversationPersistence();
+    });
+
+    expect(b.result.current.state.conversations.some((conversation) => conversation.id === "alpha")).toBe(false);
+    const copy = b.result.current.state.conversations.find((conversation) => conversation.title === "B 的标题（恢复副本）");
+    expect(copy).toBeTruthy();
+    expect(b.result.current.state.notice).toContain("恢复副本");
+    expect(window.localStorage.getItem(sessionHeadKeyV3("alpha"))).toBeNull();
+    // 原 cid 在后续加载中绝不复活。
+    const reloaded = rigB.adapter.load(window.localStorage, rigB.session);
+    expect(reloaded.conversations.map((conversation) => conversation.id)).toEqual([copy?.id]);
   });
 
   it("reloads a clean remote-committed conversation without ever switching selection", async () => {
