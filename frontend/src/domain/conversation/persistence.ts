@@ -110,6 +110,37 @@ export interface ConversationCompactionSignal {
   removedPreviewBytes: number;
 }
 
+/**
+ * 页面退出应急胶囊（`session.v3.recovery.<tabId>`）：Web Locks / 异步提交在
+ * pagehide / beforeunload 里无法 await，同步 flush 之后仍然脏的会话以每标签页
+ * 一键值同步落盘。胶囊绝不推进任何共享 head；下一次启动在写锁内对账（干净补交 /
+ * 冲突或已删除物化为确定性恢复副本），处理后删除——每份胶囊至多生效一次。
+ */
+export interface RecoveryCapsule {
+  schemaVersion: 1;
+  tabId: string;
+  /** 单个脏会话的 base（常见情形）；多脏时以 baseRevisions 逐会话记录。 */
+  baseRevision: string | null;
+  baseRevisions?: Record<string, string | null>;
+  savedAt: number;
+  dirtyConversations: Conversation[];
+}
+
+/** 胶囊对账后补交落盘的一条会话：previous 是对账前本地已提交对象（identity 比较用）。 */
+export interface RecoveryCapsuleCommit {
+  conversationId: string;
+  conversation: Conversation;
+  revision: string;
+  previous: Conversation | null;
+}
+
+/** 启动胶囊对账结果：补交落盘的会话、物化的恢复副本、未能耐久落盘的失败（胶囊保留）。 */
+export interface RecoveryReconcileOutcome {
+  committed: RecoveryCapsuleCommit[];
+  recovered: Conversation[];
+  failed: PersistenceFlushFailure[];
+}
+
 export interface SaveConversationOptions {
   onCommit?: (notice: ConversationCommitNotice) => void;
   onConflict?: (signal: ConversationConflictSignal) => void;
@@ -178,6 +209,30 @@ export interface ConversationPersistenceAdapter {
   ): Promise<PersistenceFlushResult>;
   /** 触碰（active=true）或移除（active=false）本标签页租约，供 tombstone GC 判断活跃标签页。 */
   setTabLease(active: boolean, storage?: StorageLike | null, session?: StorageLike | null): void;
+  /**
+   * 页面退出应急胶囊：以当前仍处于脏状态的会话同步写本标签页胶囊键；脏集合为空
+   * （flush 成功）时改为移除胶囊键。绝不推进任何共享 head；写入失败返回失败结果
+   * （由调用方经 persistenceHealth 记录），任何路径都不抛异常。
+   */
+  writeRecoveryCapsule(
+    state: PersistedConversationState,
+    storage?: StorageLike | null,
+    session?: StorageLike | null,
+  ): PersistenceFlushFailure | null;
+  /**
+   * 启动胶囊对账（排他写锁内）：先处理本标签页胶囊（崩溃/杀死但会话恢复），再在
+   * 预算内回收属主租约缺失或已过期的孤儿胶囊；活租约胶囊留给属主（BFCache 恢复
+   * 时属主经胶囊保鲜规则自行清理）。逐条目——head 缺失（无 tombstone）或
+   * head.revision === base ⇒ 作为正常分片提交补交；head 已推进或 cid 已被
+   * tombstone 覆盖 ⇒ 以确定性 id `<cid>.recovered.<tabId>` 物化恢复副本。
+   * 全部条目耐久处理后删除胶囊键；任一条目失败则保留胶囊（下次启动幂等重试，
+   * digest / 副本 head 检查保证重处理收敛而非重复）。
+   */
+  reconcileRecoveryCapsules(
+    storage?: StorageLike | null,
+    session?: StorageLike | null,
+    options?: SaveConversationOptions,
+  ): Promise<RecoveryReconcileOutcome>;
   readSharedConversation(
     conversationId: string,
     storage?: StorageLike | null,
@@ -203,6 +258,7 @@ export const conversationStorageKeys = {
   v3ConflictPrefix: "deepseek-infra.session.v3.conflict.",
   v3TombstonePrefix: "deepseek-infra.session.v3.tombstone.",
   v3TabPrefix: "deepseek-infra.session.v3.tab.",
+  v3RecoveryPrefix: "deepseek-infra.session.v3.recovery.",
 } as const;
 
 const V2_SNAPSHOT_PREFIX = "deepseek-infra.session.v2.snapshot.";
@@ -225,6 +281,10 @@ export function sessionConflictKeyV3(conversationId: string): string {
 
 export function sessionTombstoneKeyV3(conversationId: string): string {
   return `${conversationStorageKeys.v3TombstonePrefix}${conversationId}`;
+}
+
+export function sessionRecoveryKeyV3(tabId: string): string {
+  return `${conversationStorageKeys.v3RecoveryPrefix}${tabId}`;
 }
 
 export interface StorageLike {
@@ -403,6 +463,43 @@ function readJsonNumber(raw: string | null, field: string): number {
     return typeof value === "number" ? value : 0;
   } catch {
     return 0;
+  }
+}
+
+/** 恢复副本的确定性 id：同一胶囊重处理指向同一分片，收敛而非重复。 */
+export function recoveredCopyIdV3(conversationId: string, capsuleTabId: string): string {
+  return `${conversationId}.recovered.${capsuleTabId}`;
+}
+
+/** 单次启动对账回收孤儿胶囊的数量上限（本标签页胶囊不占预算）。 */
+export const FOREIGN_RECOVERY_CAPSULE_BUDGET = 4;
+
+/** 解析 `session.v3.recovery.<tabId>` 胶囊；任何字段非法都返回 null（按无有效条目处理）。 */
+export function parseRecoveryCapsule(raw: string | null): RecoveryCapsule | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const capsule = parsed as Partial<RecoveryCapsule>;
+    if (capsule.schemaVersion !== 1) return null;
+    if (typeof capsule.tabId !== "string" || !capsule.tabId) return null;
+    if (!Array.isArray(capsule.dirtyConversations)) return null;
+    const baseRevisions: Record<string, string | null> = {};
+    if (capsule.baseRevisions && typeof capsule.baseRevisions === "object") {
+      for (const [key, value] of Object.entries(capsule.baseRevisions)) {
+        baseRevisions[key] = typeof value === "string" && value ? value : null;
+      }
+    }
+    return {
+      schemaVersion: 1,
+      tabId: capsule.tabId,
+      baseRevision: typeof capsule.baseRevision === "string" && capsule.baseRevision ? capsule.baseRevision : null,
+      ...(capsule.baseRevisions && typeof capsule.baseRevisions === "object" ? { baseRevisions } : {}),
+      savedAt: typeof capsule.savedAt === "number" ? capsule.savedAt : 0,
+      dirtyConversations: capsule.dirtyConversations as Conversation[],
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -1027,6 +1124,9 @@ export function createConversationPersistenceAdapter(
    * 配额耗尽先按 level 1 / level 2 渐进压缩重试同一提交（成功经 onCompaction
    * 带外上报）；全部级别仍超限返回 storage-pressure，旧 head 原样保留。
    * 任何路径都不抛异常，失败以 PersistenceFlushResult 返回并附估算负载大小。
+   * 提交落地后顺手做胶囊保鲜：脏集合被正常提交耗尽 ⇒ 移除本标签页应急胶囊；
+   *   只有部分会话提交成功 ⇒ 以剩余脏集合重写既有胶囊（无胶囊则不新建——
+   *   进行中的保存失败走健康/横幅链路，胶囊只在页面退出时写入）。
    */
   function save(
     state: PersistedConversationState,
@@ -1037,6 +1137,17 @@ export function createConversationPersistenceAdapter(
     if (!storage) return storageUnavailableFailure(`localStorage 不可用 (~${JSON.stringify(state).length} bytes)`);
     const tabId = getTabId(session);
     writeTabSelection(session, state.currentConversationId);
+    const result = saveShards(state, storage, tabId, options);
+    refreshRecoveryCapsule(storage, tabId, state);
+    return result;
+  }
+
+  function saveShards(
+    state: PersistedConversationState,
+    storage: StorageLike,
+    tabId: string,
+    options?: SaveConversationOptions,
+  ): PersistenceFlushResult {
 
     // 待提交 tombstone 优先（Controller 请求的删除；pagehide 同步 flush 也在此提交）。
     for (const conversationId of pendingTombstones) {
@@ -1220,6 +1331,249 @@ export function createConversationPersistenceAdapter(
     lastCommittedRevision.set(conversationId, revision);
   }
 
+  /** 当前仍处于脏状态的会话：identity 未登记为已提交、非空、未被 tombstone 拒绝。 */
+  function collectDirtyConversations(state: PersistedConversationState): Conversation[] {
+    return state.conversations.filter((conversation) =>
+      conversation.messages.length > 0
+      && lastCommitted.get(conversation.id) !== conversation
+      && !tombstonedRefused.has(conversation.id));
+  }
+
+  /**
+   * 序列化并写入本标签页应急胶囊：单脏记 baseRevision，多脏逐会话记 baseRevisions。
+   * 写失败返回归类失败结果（绝不抛出）；胶囊绝不触碰任何共享 head。
+   */
+  function writeCapsuleRecord(storage: StorageLike, tabId: string, dirty: Conversation[]): PersistenceFlushFailure | null {
+    const bases = Object.fromEntries(dirty.map((conversation) => [conversation.id, lastCommittedRevision.get(conversation.id) ?? null]));
+    const capsule: RecoveryCapsule = {
+      schemaVersion: 1,
+      tabId,
+      baseRevision: dirty.length === 1 ? bases[dirty[0]?.id ?? ""] ?? null : null,
+      ...(dirty.length > 1 ? { baseRevisions: bases } : {}),
+      savedAt: Date.now(),
+      dirtyConversations: dirty,
+    };
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(capsule);
+    } catch (error) {
+      return classifyStorageError(error);
+    }
+    try {
+      storage.setItem(sessionRecoveryKeyV3(tabId), serialized);
+      return null;
+    } catch (error) {
+      const classified = classifyStorageError(error);
+      return withSizeHint({ ...classified, message: `恢复胶囊写入失败：${classified.message}` }, serialized.length);
+    }
+  }
+
+  /**
+   * 胶囊保鲜（best-effort）：仅在胶囊键存在时动手——脏集合耗尽 ⇒ 移除；
+   * 部分提交 ⇒ 以剩余脏重写。写 / 删失败留下过期胶囊，下次启动对账时收敛。
+   */
+  function refreshRecoveryCapsule(storage: StorageLike, tabId: string, state: PersistedConversationState): void {
+    const key = sessionRecoveryKeyV3(tabId);
+    if (safeGetItem(storage, key) === null) return;
+    const dirty = collectDirtyConversations(state);
+    if (!dirty.length) {
+      try {
+        storage.removeItem(key);
+      } catch {
+        // 残留胶囊重处理时收敛，无害。
+      }
+      return;
+    }
+    writeCapsuleRecord(storage, tabId, dirty);
+  }
+
+  function writeRecoveryCapsule(
+    state: PersistedConversationState,
+    storage: StorageLike | null = browserStorage(),
+    session: StorageLike | null = browserSessionStorage(),
+  ): PersistenceFlushFailure | null {
+    if (!storage) return null; // 存储不可用：flush 本身已按 storage-unavailable 上报。
+    const tabId = getTabId(session);
+    const dirty = collectDirtyConversations(state);
+    if (!dirty.length) {
+      // flush 成功 ⇒ 空集合 ⇒ 移除胶囊键；删失败留下过期胶囊，对账时收敛。
+      try {
+        storage.removeItem(sessionRecoveryKeyV3(tabId));
+      } catch {
+        // best-effort。
+      }
+      return null;
+    }
+    return writeCapsuleRecord(storage, tabId, dirty);
+  }
+
+  /**
+   * 对账单个胶囊条目（调用方已持有排他锁）。返回 true 表示条目已耐久处理
+   * （补交落盘 / 副本落盘 / 收敛跳过）；提交失败返回 false 并记入 outcome.failed，
+   * 胶囊因此保留，下次启动幂等重试。
+   */
+  function reconcileCapsuleEntry(
+    storage: StorageLike,
+    tabId: string,
+    capsule: RecoveryCapsule,
+    entry: Conversation,
+    outcome: RecoveryReconcileOutcome,
+    options?: SaveConversationOptions,
+  ): boolean {
+    const migrated = migrateLegacyConversation(entry);
+    // 无法迁移的条目本就无法加载，按已处理（绝不阻塞其余条目与胶囊删除）。
+    if (!migrated) return true;
+    const conversation: Conversation = { ...migrated, messages: migrated.messages.map(checkpointMessage) };
+    const conversationId = conversation.id;
+    const base = capsule.baseRevisions?.[conversationId] ?? capsule.baseRevision ?? null;
+    const previous = lastCommitted.get(conversationId) ?? null;
+    const head = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
+    const tombstoned = safeGetItem(storage, sessionTombstoneKeyV3(conversationId)) !== null;
+
+    const registerCommitted = (revision: string): void => {
+      lastCommitted.set(conversationId, conversation);
+      lastCommittedRevision.set(conversationId, revision);
+    };
+
+    if (!tombstoned) {
+      // 收敛检查：head 内容已与胶囊条目一致（此前的补交已落地，或他人提交了
+      // 完全相同的内容）⇒ 不重复提交，按已补交登记。
+      if (head?.digest) {
+        let entryDigest: string | null = null;
+        try {
+          entryDigest = checkpointDigest(JSON.stringify(normalizeConversationForCommit(conversation)));
+        } catch {
+          entryDigest = null;
+        }
+        if (entryDigest && entryDigest === head.digest) {
+          registerCommitted(head.revision);
+          outcome.committed.push({ conversationId, conversation, revision: head.revision, previous });
+          return true;
+        }
+      }
+      // 干净路径：共享 head 缺失（无 tombstone）或仍停留在 base ⇒ 作为正常分片提交补交。
+      if (!head || head.revision === base) {
+        if (base) lastCommittedRevision.set(conversationId, base);
+        else lastCommittedRevision.delete(conversationId);
+        const committed = commitConversationShard(storage, conversation, tabId);
+        if (!committed.ok) {
+          outcome.failed.push(committed);
+          return false;
+        }
+        registerCommitted(committed.kind === "conflict" ? committed.sharedRevision : committed.revision);
+        options?.onCommit?.({ conversationId, revision: committed.revision, writerId: tabId, savedAt: committed.savedAt });
+        // 锁退化期间 head 被并发推进：分支已耐久落盘，按冲突信号带外上报（数据安全）。
+        if (committed.kind === "conflict") {
+          options?.onConflict?.({
+            conversationId,
+            title: conversation.title,
+            revision: committed.revision,
+            baseRevision: committed.baseRevision,
+            sharedRevision: committed.sharedRevision,
+            writerId: tabId,
+            savedAt: committed.savedAt,
+          });
+          return true;
+        }
+        outcome.committed.push({ conversationId, conversation, revision: committed.revision, previous });
+        return true;
+      }
+    }
+
+    // head 已被兄弟标签页推进，或 cid 已被 tombstone 覆盖 ⇒ 以确定性 id 物化
+    // 恢复副本（标题加"（恢复副本）"后缀），作为它自己的分片提交。
+    const copy: Conversation = {
+      ...conversation,
+      id: recoveredCopyIdV3(conversationId, capsule.tabId),
+      title: `${conversation.title}（恢复副本）`,
+      customTitle: true,
+      favorite: false,
+    };
+    // 同一胶囊重处理：副本 head 已存在 ⇒ 此前的对账已提交它，登记映射并收敛（at most once）。
+    const copyHead = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(copy.id)));
+    if (copyHead) {
+      lastCommitted.set(copy.id, copy);
+      lastCommittedRevision.set(copy.id, copyHead.revision);
+      outcome.recovered.push(copy);
+      return true;
+    }
+    lastCommittedRevision.delete(copy.id);
+    const copyCommit = commitConversationShard(storage, copy, tabId);
+    if (!copyCommit.ok) {
+      outcome.failed.push(copyCommit);
+      return false;
+    }
+    lastCommitted.set(copy.id, copy);
+    lastCommittedRevision.set(copy.id, copyCommit.kind === "conflict" ? copyCommit.sharedRevision : copyCommit.revision);
+    options?.onCommit?.({ conversationId: copy.id, revision: copyCommit.revision, writerId: tabId, savedAt: copyCommit.savedAt });
+    outcome.recovered.push(copy);
+    return true;
+  }
+
+  /** 处理一份胶囊的全部条目；全部耐久处理后才删除胶囊键（at most once 的另一半）。 */
+  function reconcileCapsule(
+    storage: StorageLike,
+    tabId: string,
+    key: string,
+    capsule: RecoveryCapsule,
+    outcome: RecoveryReconcileOutcome,
+    options?: SaveConversationOptions,
+  ): void {
+    let allHandled = true;
+    for (const entry of capsule.dirtyConversations) {
+      if (!reconcileCapsuleEntry(storage, tabId, capsule, entry, outcome, options)) allHandled = false;
+    }
+    if (!allHandled) return;
+    try {
+      storage.removeItem(key);
+    } catch {
+      // 删除失败：胶囊重处理时经 digest / 副本 head 检查收敛。
+    }
+  }
+
+  function reconcileRecoveryCapsules(
+    storage: StorageLike | null = browserStorage(),
+    session: StorageLike | null = browserSessionStorage(),
+    options?: SaveConversationOptions,
+  ): Promise<RecoveryReconcileOutcome> {
+    const outcome: RecoveryReconcileOutcome = { committed: [], recovered: [], failed: [] };
+    if (!storage) return Promise.resolve(outcome);
+    const tabId = getTabId(session);
+    return arbitrate(() => {
+      // 本标签页胶囊（崩溃/杀死但会话恢复，sessionStorage 幸存）：无租约条件直接对账。
+      const ownKey = sessionRecoveryKeyV3(tabId);
+      const own = parseRecoveryCapsule(safeGetItem(storage, ownKey));
+      if (own) reconcileCapsule(storage, tabId, ownKey, own, outcome, options);
+      // 孤儿胶囊（属主已崩溃的新标签页拿不到原 tabId）：仅当属主租约缺失或
+      // 已过期（>5min 未触碰，与 tombstone 租约同规）才回收；活租约留给属主
+      // （BFCache 恢复情形，属主经胶囊保鲜规则自行清理）。预算有界，剩余下轮再收。
+      const keys = enumerateKeysWithPrefix(storage, conversationStorageKeys.v3RecoveryPrefix) ?? [];
+      const now = Date.now();
+      let budget = FOREIGN_RECOVERY_CAPSULE_BUDGET;
+      for (const key of keys) {
+        if (budget <= 0) break;
+        if (key === ownKey) continue;
+        const ownerTabId = key.slice(conversationStorageKeys.v3RecoveryPrefix.length);
+        if (!ownerTabId) continue;
+        const leaseLastSeen = readJsonNumber(safeGetItem(storage, `${conversationStorageKeys.v3TabPrefix}${ownerTabId}`), "lastSeen");
+        if (leaseLastSeen && now - leaseLastSeen <= CONVERSATION_TOMBSTONE_LIMITS.tabLeaseStaleMs) continue;
+        budget -= 1;
+        const capsule = parseRecoveryCapsule(safeGetItem(storage, key));
+        // 无法解析的胶囊没有任何可读条目，按"零条目已处理"删除，绝不反复重扫。
+        if (!capsule) {
+          try {
+            storage.removeItem(key);
+          } catch {
+            // 下轮启动重试删除。
+          }
+          continue;
+        }
+        reconcileCapsule(storage, tabId, key, capsule, outcome, options);
+      }
+      return outcome;
+    });
+  }
+
   function reset(): void {
     lastCommitted.clear();
     lastCommittedRevision.clear();
@@ -1241,6 +1595,8 @@ export function createConversationPersistenceAdapter(
     readConflictBranch,
     clearConflict,
     adoptRemoteConversation,
+    writeRecoveryCapsule,
+    reconcileRecoveryCapsules,
     reset,
   };
 }

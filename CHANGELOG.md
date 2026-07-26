@@ -35,6 +35,10 @@
 
 - Quota exhaustion now degrades deterministically instead of failing: rebuildable image previews are stripped first (names, types, sizes, fileIds and all text preserved), oversized timeline raw payloads are bounded second, and every compaction is recorded on the checkpoint (`level`, `removedPreviewBytes`) — user message bodies are never touched, heads are never deleted on failure, and a persistent failure surfaces export/cleanup guidance instead of losing data.
 
+### Uncommitted-tab recovery capsules
+
+- Page exits write a synchronous per-tab recovery capsule for anything the normal flush could not commit; the next session reconciles it inside the write lock — clean content is committed in place, conflicting or tombstoned content returns as a deterministic recovery copy — and orphaned capsules from crashed tabs are reclaimed once their lease is dead, each capsule exactly once.
+
 
 ## [4.3.5] - Durable Checkpoints and Recovery Integrity
 

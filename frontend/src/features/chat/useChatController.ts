@@ -196,8 +196,41 @@ export function useChatController(options: ChatControllerOptions = {}) {
       result = flushFailureResult(reason);
     }
     recordFailedResult(result);
+    // 页面退出应急胶囊：同步 flush 之后仍然脏的会话落入本标签页胶囊键（flush
+    // 成功 ⇒ 空集合 ⇒ 移除胶囊键）；下次启动在写锁内对账。胶囊写失败同样只
+    // 记录健康状态，绝不抛出——此刻页面可能正在销毁。
+    const capsuleFailure = persistence.writeRecoveryCapsule(readPersistedState(), undefined, options.session);
+    if (capsuleFailure) {
+      recordFlushReport({ ok: false, results: { conversation: capsuleFailure }, failedIds: ["conversation"] });
+    }
     return result;
   }, [persistence, readPersistedState, recordFailedResult, options.session, cancelAutosaveTimer]);
+
+  // 启动胶囊对账（排他写锁内）：本标签页胶囊（崩溃/杀死但会话恢复）与租约已死的
+  // 孤儿胶囊在此补交/物化——干净内容作为正常分片提交补交并换入 state（本地副本
+  // 自加载起未被触碰才换入）；冲突或已删除内容以确定性 id 物化恢复副本并经
+  // notice 条提示。对账按胶囊键幂等收敛，StrictMode 双跑绝不重复提交。
+  useEffect(() => {
+    void persistence
+      .reconcileRecoveryCapsules(undefined, options.session, saveCallbacksRef.current ?? undefined)
+      .then((outcome) => {
+        for (const committed of outcome.committed) {
+          const local = stateRef.current.conversations.find((conversation) => conversation.id === committed.conversationId);
+          if (local && local !== committed.previous) continue;
+          dispatch({ type: "conversationSynced", conversation: committed.conversation });
+        }
+        if (outcome.recovered.length) {
+          for (const copy of outcome.recovered) {
+            dispatch({ type: "conversationSynced", conversation: copy });
+          }
+          dispatch({ type: "noticeSet", notice: "检测到上次未保存的会话内容，已保留为恢复副本" });
+        }
+        for (const failure of outcome.failed) {
+          recordFlushReport({ ok: false, results: { conversation: failure }, failedIds: ["conversation"] });
+        }
+      })
+      .catch(() => undefined); // 对账绝不把异常抛成未捕获错误。
+  }, [persistence, options.session]);
 
   // 防抖（普通）提交走排他 Web Lock 临界区；锁缺失时适配器内部退化为无锁
   // 路径（同样的兄弟检测）。单-flight：流式期间高频触发只保留最新一次，
