@@ -49,6 +49,7 @@ export type ChatAction =
   | { type: "conversationTitleUpdated"; conversationId: string; title: string }
   | { type: "conversationRenamed"; conversationId: string; title: string; updatedAt: number }
   | { type: "conversationFavoriteToggled"; conversationId: string; updatedAt: number }
+  | { type: "conversationSynced"; conversation: Conversation }
   | { type: "noticeSet"; notice: string }
   | { type: "noticeCleared" };
 
@@ -257,6 +258,21 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           withFavoriteToggled(conversation, action.updatedAt),
         ),
       };
+    case "conversationSynced": {
+      // 跨标签页同步/冲突解决换入整份会话：按 id 替换或插入，绝不触碰
+      // currentConversationId（用户正在看的标签页不允许被换走）。流式期间
+      // 拒绝换入，由调用方（Controller）延迟到流结束后再同步。
+      if (state.requestStatus === "streaming") return state;
+      const exists = state.conversations.some((conversation) => conversation.id === action.conversation.id);
+      const conversations = sortConversations(
+        exists
+          ? state.conversations.map((conversation) =>
+              conversation.id === action.conversation.id ? action.conversation : conversation,
+            )
+          : [action.conversation, ...state.conversations],
+      );
+      return { ...state, conversations };
+    }
     case "noticeSet":
       return { ...state, notice: action.notice };
     case "noticeCleared":

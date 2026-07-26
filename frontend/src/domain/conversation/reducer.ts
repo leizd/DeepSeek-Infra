@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../chat/types";
 import type { Conversation } from "./types";
+import { createId } from "../../shared/createId";
 
 const TITLE_MAX_LENGTH = 28;
 
@@ -48,6 +49,20 @@ export function sortConversations(conversations: readonly Conversation[]): Conve
   return [...conversations]
     .sort((left, right) => Number(right.favorite ?? false) - Number(left.favorite ?? false) || right.updatedAt - left.updatedAt)
     .slice(0, 60);
+}
+
+/** 物化一份独立副本（冲突 / 恢复副本）：新 id、标题加后缀、不继承收藏。 */
+export function copyConversation(conversation: Conversation, suffix: string): Conversation {
+  const now = Date.now();
+  return {
+    ...conversation,
+    id: createId("conversation"),
+    title: `${conversation.title}${suffix}`,
+    customTitle: true,
+    favorite: false,
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 export function withRenamedTitle(conversation: Conversation, title: string, now: number): Conversation {

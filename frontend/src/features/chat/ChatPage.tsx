@@ -131,7 +131,13 @@ function ChatWorkspace() {
           </div>
         </header>
         <MessageList messages={chat.messages} onSuggestion={setSuggestedPrompt} />
-        {chat.state.notice && (
+        {chat.conflict ? (
+          <div className="chat-notice">
+            另一个标签页已更新会话「{chat.conflict.title}」，本地修改已保存为冲突副本。
+            <button className="message-action primary" type="button" onClick={chat.resolveConflictByReload}>查看最新</button>
+            <button className="message-action" type="button" onClick={chat.resolveConflictByCopy}>保留副本</button>
+          </div>
+        ) : chat.state.notice && (
           <button className="chat-notice" type="button" onClick={chat.clearNotice}>{chat.state.notice}<span><Icon name="close" /></span></button>
         )}
         <div className="composer-zone">

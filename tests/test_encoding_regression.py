@@ -10,7 +10,7 @@ from scripts import preflight_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "4.3.5"
+VERSION = "4.3.6"
 
 
 def read_text(rel: str) -> str:
@@ -55,14 +55,14 @@ class EncodingRegressionTests(unittest.TestCase):
         ci = read_text(".github/workflows/ci.yml")
         frontend = read_text("frontend/index.html")
 
-        self.assertIn("version-4.3.5-blue", readme)
-        self.assertIn('app_version: str = "4.3.5"', config)
-        self.assertIn("deepseek-infra:4.3.5", dockerfile)
-        self.assertIn('org.opencontainers.image.version="4.3.5"', dockerfile)
-        self.assertIn('versionName "4.3.5"', build_gradle)
-        self.assertIn("versionCode 400029", build_gradle)
-        self.assertIn('<meta name="deepseek-infra-version" content="4.3.5" />', frontend)
-        self.assertIn("## [4.3.5] - Durable Checkpoints and Recovery Integrity", changelog)
+        self.assertIn("version-4.3.6-blue", readme)
+        self.assertIn('app_version: str = "4.3.6"', config)
+        self.assertIn("deepseek-infra:4.3.6", dockerfile)
+        self.assertIn('org.opencontainers.image.version="4.3.6"', dockerfile)
+        self.assertIn('versionName "4.3.6"', build_gradle)
+        self.assertIn("versionCode 400030", build_gradle)
+        self.assertIn('<meta name="deepseek-infra-version" content="4.3.6" />', frontend)
+        self.assertIn("## [4.3.6] - Cross-Tab Checkpoint Arbitration and Bounded Storage", changelog)
         self.assertIn("Personal AI Runtime GA", readme)
         self.assertIn("python scripts/generate_release_evidence.py --version $RELEASE_VERSION", ci)
         self.assertIn("evidence-context:", ci)
@@ -70,7 +70,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("release-package:", ci)
         self.assertIn("RELEASE_VERSION=$(cat VERSION)", ci)
         self.assertIn("name: release-evidence-v${{ env.RELEASE_VERSION }}", ci)
-        self.assertNotIn("release-evidence-v4.3.5", ci)
+        self.assertNotIn("release-evidence-v4.3.6", ci)
         self.assertNotIn("scripts/release.py --version $RELEASE_VERSION --dry-run", ci)
 
     def test_release_docs_are_registered(self) -> None:
@@ -93,16 +93,17 @@ class EncodingRegressionTests(unittest.TestCase):
             "docs/EVIDENCE_INDEX.md",
             "docs/releases/4.3.4.md",
             "docs/releases/4.3.5.md",
+            "docs/releases/4.3.6.md",
         ):
             self.assertTrue((ROOT / rel).is_file(), rel)
             self.assertIn(rel, readme)
 
-        self.assertIn("docs/evidence/ga-v4.3.5.json", evidence_index)
+        self.assertIn("docs/evidence/ga-v4.3.6.json", evidence_index)
         self.assertIn("evidence_paths(APP_VERSION)", manifest)
         self.assertIn("gaEvidence", manifest)
 
     def test_release_doc_headers_are_readable(self) -> None:
-        header = "\u9002\u7528\u7248\u672c\uff1av4.3.5\u3002"
+        header = "\u9002\u7528\u7248\u672c\uff1av4.3.6\u3002"
         for rel in ("docs/IMPLEMENTATION_STATUS.md", "evals/README.md"):
             self.assertIn(header, read_text(rel))
 
@@ -111,8 +112,8 @@ class EncodingRegressionTests(unittest.TestCase):
 
         index = read_text("docs/EVIDENCE_INDEX.md")
         required = required_evidence_paths(VERSION)
-        self.assertIn("docs/evidence/ga-v4.3.5.json", required)
-        self.assertIn("docs/evidence/frontend-browser-v4.3.5.json", required)
+        self.assertIn("docs/evidence/ga-v4.3.6.json", required)
+        self.assertIn("docs/evidence/frontend-browser-v4.3.6.json", required)
         for rel in required:
             self.assertIn(rel, index, rel)
 

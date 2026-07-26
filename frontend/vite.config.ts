@@ -205,6 +205,20 @@ export default defineConfig({
     emptyOutDir: true,
     manifest: true,
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        // Stable vendor runtime in its own core chunk: the entry asset stays lean and
+        // the vendor hash survives app-only releases (immutable-asset friendly).
+        manualChunks(id: string) {
+          const normalized = id.replaceAll("\\", "/");
+          if (
+            /node_modules\/(react|react-dom|scheduler|react-router|react-router-dom|@tanstack)\//.test(normalized)
+          ) {
+            return "vendor";
+          }
+        },
+      },
+    },
   },
   server: {
     port: 5173,

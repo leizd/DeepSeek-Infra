@@ -4,6 +4,51 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.3.6] - Cross-Tab Checkpoint Arbitration and Bounded Storage
+
+### Canonical release identity
+
+- Advances the canonical `VERSION` surface to 4.3.6; all CI evidence paths, artifact names and Docker tags continue to derive from `$RELEASE_VERSION`.
+
+### Partitioned conversation checkpoints
+
+- Conversation persistence moves from whole-store V2 snapshots to per-conversation V3 shards (write → digest-verify → head), so editing one conversation serializes only that conversation; per-conversation retention and idle orphan GC keep cleanup O(1) regardless of save count, and the tab's current-conversation selection leaves shared state for sessionStorage.
+
+
+### Cross-tab checkpoint arbitration
+
+- Conversation commits run inside an exclusive Web Lock (with an equivalent lock-free sibling-detection fallback) that re-reads the shared head before writing: a stale tab can never overwrite a newer revision, its branch is preserved as a per-conversation conflict copy recoverable as an independent conversation, and a BroadcastChannel invalidates clean remote copies without ever switching the tab you are looking at.
+
+### Tombstoned conversation deletion
+
+- Deleting a conversation commits a tombstone before touching UI state, so a stale tab can never resurrect the id — its edits survive only as a new recovery copy; tombstones are retained for a bounded window/count and are garbage-collected only after every live tab lease has provably seen the deletion.
+
+### Per-tab conversation selection
+
+- The current-conversation selection is tab-local UI state in sessionStorage: switching conversations no longer schedules a shared checkpoint, remote commits and deletions never move the tab you are looking at, and deleting the viewed conversation only falls back locally.
+
+### Streaming checkpoint backpressure
+
+- Persistence scheduling now coalesces normal edits over 300ms, throttles in-flight streaming to one commit per second with a trailing edge, and commits immediately on stream completion, deletion, page-hide and build-update activation — so long streams no longer hammer synchronous localStorage while terminal state is always durable.
+
+### Bounded storage pressure
+
+- Quota exhaustion now degrades deterministically instead of failing: rebuildable image previews are stripped first (names, types, sizes, fileIds and all text preserved), oversized timeline raw payloads are bounded second, and every compaction is recorded on the checkpoint (`level`, `removedPreviewBytes`) — user message bodies are never touched, heads are never deleted on failure, and a persistent failure surfaces export/cleanup guidance instead of losing data.
+
+### Uncommitted-tab recovery capsules
+
+- Page exits write a synchronous per-tab recovery capsule for anything the normal flush could not commit; the next session reconciles it inside the write lock — clean content is committed in place, conflicting or tombstoned content returns as a deterministic recovery copy — and orphaned capsules from crashed tabs are reclaimed once their lease is dead, each capsule exactly once.
+
+### Vendor runtime chunk
+
+- The vendor runtime (react/react-dom/react-router/tanstack) splits into a separate cacheable core chunk via Vite `manualChunks`: the entry asset drops from 390KB to 157KB and the vendor hash survives app-only releases for immutable-asset caching, while bundle budgets are unchanged.
+
+### Compatibility
+
+- Adds no runtime dependency and changes no backend API, offline Mutation persistence, Provider ownership or bundle budget.
+- Preserves 4.3.5 durable checkpoints and recovery integrity, 4.3.4 single-flight activation transactions and page-lifecycle persistence, 4.3.3 staged discovery/quiescent reload, 4.3.2 immutable identity/Client Lease retention, 4.3.1 lazy continuity and the 4.2.8 exact-merge Evidence chain.
+
+
 ## [4.3.5] - Durable Checkpoints and Recovery Integrity
 
 ### Canonical release identity

@@ -9,7 +9,13 @@ export type PersistenceFlushResult =
   | { ok: true; revision?: string }
   | {
       ok: false;
-      code: "quota-exceeded" | "storage-unavailable" | "verification-failed" | "unknown";
+      code:
+        | "quota-exceeded"
+        | "storage-unavailable"
+        | "verification-failed"
+        | "write-conflict"
+        | "storage-pressure"
+        | "unknown";
       message: string;
     };
 

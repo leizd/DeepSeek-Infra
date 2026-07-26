@@ -214,4 +214,30 @@ describe("chatReducer", () => {
     expect(message?.interrupted).not.toBe(true);
     expect(orphaned).toMatchObject({ requestStatus: "idle", activeAssistantId: null });
   });
+
+  it("conversationSynced replaces an existing conversation without touching selection or notice", () => {
+    const idle = { ...conversationState(), requestStatus: "idle" as const, notice: "保留我" };
+    const original = idle.conversations[0];
+    const replacement = { ...original, title: "远端版本", updatedAt: original.updatedAt + 1000 };
+    const synced = chatReducer(idle, { type: "conversationSynced", conversation: replacement });
+    expect(synced.conversations.find((conversation) => conversation.id === replacement.id)).toBe(replacement);
+    expect(synced.currentConversationId).toBe(idle.currentConversationId);
+    expect(synced.notice).toBe("保留我");
+  });
+
+  it("conversationSynced inserts an unknown conversation without switching selection", () => {
+    const idle = { ...conversationState(), requestStatus: "idle" as const };
+    const remote = { ...idle.conversations[0], id: "remote-1", title: "远端新会话", updatedAt: 9999 };
+    const synced = chatReducer(idle, { type: "conversationSynced", conversation: remote });
+    expect(synced.conversations.some((conversation) => conversation.id === "remote-1")).toBe(true);
+    expect(synced.conversations.some((conversation) => conversation.id === "conversation-1")).toBe(true);
+    expect(synced.currentConversationId).toBe("conversation-1");
+  });
+
+  it("conversationSynced refuses to swap messages mid-stream", () => {
+    const streaming = conversationState();
+    const original = streaming.conversations[0];
+    const replacement = { ...original, title: "远端版本" };
+    expect(chatReducer(streaming, { type: "conversationSynced", conversation: replacement })).toBe(streaming);
+  });
 });

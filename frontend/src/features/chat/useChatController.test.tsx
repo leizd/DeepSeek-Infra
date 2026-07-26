@@ -49,6 +49,11 @@ import {
   getPersistenceHealthSnapshot,
   resetPersistenceHealthForTests,
 } from "../../app/persistenceHealth";
+import {
+  conversationStorageKeys,
+  resetConversationPersistenceForTests,
+  sessionSnapshotKey,
+} from "../../domain/conversation/persistence";
 
 function suggestionStream(content: string): AsyncGenerator<ChatStreamEvent> {
   return (async function* stream() {
@@ -62,6 +67,8 @@ function suggestionStream(content: string): AsyncGenerator<ChatStreamEvent> {
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
+  resetConversationPersistenceForTests();
   streamChatMock.mockReset();
   memorySaveMock.mockReset();
   settingsStub.apiKey = "sk-test";
@@ -224,8 +231,27 @@ describe("useChatController tryStartMessage atomic acceptance", () => {
   });
 });
 
+/** 向 localStorage 播种一份 V2 journal，使 hook 初始 state 带出一个待分片的脏会话。 */
+function seedV2Journal(): void {
+  window.localStorage.setItem(sessionSnapshotKey(1), JSON.stringify({
+    schemaVersion: 2,
+    generation: 1,
+    savedAt: 1000,
+    currentConversationId: "c1",
+    conversations: [{
+      id: "c1",
+      title: "旧会话",
+      messages: [{ id: "m1", role: "user", content: "你好", createdAt: 100 }],
+      createdAt: 100,
+      updatedAt: 200,
+    }],
+  }));
+  window.localStorage.setItem(conversationStorageKeys.sessionHead, "1");
+}
+
 describe("useChatController persistence flush reporting", () => {
   it("returns a failed result and records health instead of throwing from flushConversationPersistence", () => {
+    seedV2Journal();
     const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("quota exceeded");
     });
@@ -235,13 +261,14 @@ describe("useChatController persistence flush reporting", () => {
 
     expect(flush).toMatchObject({ ok: false, code: "unknown" });
     if (flush.ok) throw new Error("expected flush to fail");
-    expect(flush.message).toMatch(/^quota exceeded \(~\d+ bytes\)$/);
+    expect(flush.message).toMatch(/^会话 c1：quota exceeded \(~\d+ bytes\)$/);
     expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]);
     expect(getPersistenceHealthSnapshot().healthy).toBe(false);
     setItem.mockRestore();
   });
 
   it("captures debounced save failures into health without an uncaught error", async () => {
+    seedV2Journal();
     const quotaError = new Error("quota exceeded");
     quotaError.name = "QuotaExceededError";
     const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
@@ -250,9 +277,11 @@ describe("useChatController persistence flush reporting", () => {
     renderHook(() => useChatController());
 
     // 防抖保存（120ms）在后台触发；异常若逃逸，vitest 会按未捕获错误失败。
+    // 配额错误先走 level 1 / level 2 压缩重试（此 fixture 无可压缩内容），
+    // 全部级别仍超限时按 storage-pressure 收束。
     await waitFor(() => expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]));
     expect(getPersistenceHealthSnapshot().healthy).toBe(false);
-    expect(getPersistenceHealthSnapshot().lastErrors.conversation?.code).toBe("quota-exceeded");
+    expect(getPersistenceHealthSnapshot().lastErrors.conversation?.code).toBe("storage-pressure");
     setItem.mockRestore();
   });
 });

@@ -1,7 +1,8 @@
 import type { PersistenceFlushReport } from "./reloadBlockers";
+import type { PersistenceFailureCode } from "./persistenceErrors";
 
 export interface PersistenceFlusherError {
-  code: "quota-exceeded" | "storage-unavailable" | "verification-failed" | "unknown";
+  code: PersistenceFailureCode;
   message: string;
 }
 

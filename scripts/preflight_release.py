@@ -1260,6 +1260,21 @@ def check_frontend_browser_evidence(root: Path, version: str) -> CheckResult:
                 "bfcacheRuntimeResynchronized",
             ]
         )
+    if _version_tuple(version) >= (4, 3, 6):
+        required.extend(
+            [
+                "crossTabDisjointWritesPreserved",
+                "sameConversationConflictDetected",
+                "staleWriterCannotAdvanceHead",
+                "conflictBranchRecoverable",
+                "deletedConversationNotResurrected",
+                "tabSelectionRemainsIndependent",
+                "checkpointCleanupRemainsConstantTime",
+                "streamCheckpointRateBounded",
+                "storagePressureCompactionLossless",
+                "recoveryCapsuleReconciledOnce",
+            ]
+        )
     missing_or_failed = [name for name in required if check_status.get(name) != "PASS"]
     if missing_or_failed:
         return CheckResult(
