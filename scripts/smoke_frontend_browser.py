@@ -182,10 +182,14 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
 
         await page.wait_for_function(
             """() => {
-              const head = localStorage.getItem('deepseek-infra.session.v2.head');
-              if (!head) return false;
-              const raw = localStorage.getItem(`deepseek-infra.session.v2.snapshot.${head}`);
-              return Boolean(raw && raw.includes('Browser smoke reply'));
+              for (let i = 0; i < localStorage.length; i += 1) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('deepseek-infra.session.v3.snapshot.')) {
+                  const raw = localStorage.getItem(key);
+                  if (raw && raw.includes('Browser smoke reply')) return true;
+                }
+              }
+              return false;
             }"""
         )
         await page.reload(wait_until="networkidle")
@@ -2796,8 +2800,8 @@ window.__checkpointSmokeFailures = { conversation: false, head: false };
   Storage.prototype.setItem = function (key, value) {
     const flags = window.__checkpointSmokeFailures || {};
     const name = String(key);
-    const failConversation = flags.conversation && name.startsWith('deepseek-infra.session.v2.');
-    const failHead = flags.head && name === 'deepseek-infra.session.v2.head';
+    const failConversation = flags.conversation && name.startsWith('deepseek-infra.session.v3.');
+    const failHead = flags.head && name.startsWith('deepseek-infra.session.v3.head.');
     if (this === window.localStorage && (failConversation || failHead)) {
       throw new DOMException('simulated smoke storage failure', 'QuotaExceededError');
     }
@@ -2915,45 +2919,79 @@ async () => (await navigator.serviceWorker.getRegistrations()).map((registration
             raise AssertionError("beforeunload stayed blocked with healthy storage and no active reload blockers")
         checks["beforeUnloadBlocksFailedFlush"] = "PASS"
 
-        head_value = await page.evaluate("() => localStorage.getItem('deepseek-infra.session.v2.head')")
-        if not head_value or not head_value.isdigit():
-            raise AssertionError(f"healthy flush never committed a session head: {head_value!r}")
+        head_state = await page.evaluate(
+            """() => {
+              const heads = [];
+              for (let i = 0; i < localStorage.length; i += 1) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('deepseek-infra.session.v3.head.')) {
+                  heads.push({ key, value: localStorage.getItem(key) });
+                }
+              }
+              if (heads.length !== 1) return { ok: false, reason: `expected exactly one v3 head, found ${heads.length}` };
+              const conversationId = heads[0].key.slice('deepseek-infra.session.v3.head.'.length);
+              try {
+                const head = JSON.parse(heads[0].value);
+                return { ok: Boolean(head && typeof head.revision === 'string'), conversationId, head };
+              } catch (error) {
+                return { ok: false, reason: String(error) };
+              }
+            }"""
+        )
+        if not head_state["ok"]:
+            raise AssertionError(f"healthy flush never committed a v3 session head: {head_state}")
+        conversation_id = head_state["conversationId"]
+        head_revision = head_state["head"]["revision"]
         snapshot_state = await page.evaluate(
-            """(head) => {
-              const key = `deepseek-infra.session.v2.snapshot.${head}`;
+            """({ conversationId, revision }) => {
+              const key = `deepseek-infra.session.v3.snapshot.${conversationId}.${revision}`;
               const raw = localStorage.getItem(key);
               if (!raw) return { ok: false, reason: `snapshot missing: ${key}` };
               try {
                 const parsed = JSON.parse(raw);
                 return {
-                  ok: parsed.schemaVersion === 2
-                    && parsed.generation === Number(head)
-                    && Array.isArray(parsed.conversations),
+                  ok: parsed.schemaVersion === 3
+                    && parsed.revision === revision
+                    && parsed.conversation
+                    && Array.isArray(parsed.conversation.messages)
+                    && raw.includes('检查点冒烟回复'),
                   reason: '',
                 };
               } catch (error) {
                 return { ok: false, reason: String(error) };
               }
             }""",
-            head_value,
+            {"conversationId": conversation_id, "revision": head_revision},
         )
         if not snapshot_state["ok"]:
             raise AssertionError(f"committed checkpoint snapshot is unusable: {snapshot_state}")
         if await page.evaluate("() => localStorage.getItem('deepseek-infra.conversations') !== null"):
-            raise AssertionError("legacy conversations key survived a verified v2 checkpoint commit")
+            raise AssertionError("legacy conversations key survived a verified v3 checkpoint commit")
         await page.evaluate("() => { window.__checkpointSmokeFailures.head = true; }")
         await page.locator("#reactPromptInput").fill("原子性第二条消息")
         await page.locator("button.send-button").click()
-        expected_generation = int(head_value) + 1
         await page.wait_for_function(
-            "(generation) => localStorage.getItem(`deepseek-infra.session.v2.snapshot.${generation}`) !== null",
-            arg=expected_generation,
+            """({ conversationId, revision }) => {
+              const prefix = `deepseek-infra.session.v3.snapshot.${conversationId}.`;
+              for (let i = 0; i < localStorage.length; i += 1) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith(prefix) && !key.endsWith(`.${revision}`)) return true;
+              }
+              return false;
+            }""",
+            arg={"conversationId": conversation_id, "revision": head_revision},
             timeout=10_000,
         )
         await page.wait_for_timeout(300)
-        head_after = await page.evaluate("() => localStorage.getItem('deepseek-infra.session.v2.head')")
-        if head_after != head_value:
-            raise AssertionError(f"torn head write moved the checkpoint head: {head_value!r} -> {head_after!r}")
+        head_after = await page.evaluate(
+            """(key) => {
+              const raw = localStorage.getItem(key);
+              try { return JSON.parse(raw)?.revision || null; } catch (error) { return null; }
+            }""",
+            f"deepseek-infra.session.v3.head.{conversation_id}",
+        )
+        if head_after != head_revision:
+            raise AssertionError(f"torn head write moved the checkpoint head: {head_revision!r} -> {head_after!r}")
         # head 失败保持开启并重载：旧文档的 pagehide flush 同样无法推进 head，
         # 撕裂的 N+1 代不会被“自愈”提交，恢复结果必须停留在已核验的第 N 代。
         await page.reload(wait_until="networkidle")
