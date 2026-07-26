@@ -7,10 +7,13 @@ import asyncio
 import json
 import os
 import platform
+import random
 import re
+import struct
 import sys
 import threading
 import time
+import zlib
 import urllib.request
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
@@ -2992,12 +2995,34 @@ async () => (await navigator.serviceWorker.getRegistrations()).map((registration
         )
         if head_after != head_revision:
             raise AssertionError(f"torn head write moved the checkpoint head: {head_revision!r} -> {head_after!r}")
-        # head 失败保持开启并重载：旧文档的 pagehide flush 同样无法推进 head，
-        # 撕裂的 N+1 代不会被“自愈”提交，恢复结果必须停留在已核验的第 N 代。
+        # 撕裂瞬间仍是 4.3.5 契约：快照已核验落盘、head 停在第 N 代。记下撕裂代际的
+        # revision（快照键后缀），供重载后核验对账收敛到同一代。
+        torn_revisions = await page.evaluate(
+            """({ conversationId, headRevision }) => {
+              const prefix = `deepseek-infra.session.v3.snapshot.${conversationId}.`;
+              const revisions = [];
+              for (let i = 0; i < localStorage.length; i += 1) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith(prefix) && !key.endsWith(`.${headRevision}`)) {
+                  revisions.push(key.slice(prefix.length));
+                }
+              }
+              return revisions;
+            }""",
+            {"conversationId": conversation_id, "headRevision": head_revision},
+        )
+        if len(torn_revisions) != 1:
+            raise AssertionError(f"expected exactly one torn snapshot generation: {torn_revisions}")
+        torn_revision = torn_revisions[0]
+        # 4.3.6 起，pagehide 应急胶囊带着这份"快照已核验落盘"的脏会话退出；下次启动
+        # 在写锁内对账，把同一 revision 的 head 补齐（每份胶囊至多生效一次）。恢复
+        # 结果因此推进到已核验的第 N+1 代——内容必须是当时已耐久落盘的完整会话。
         await page.reload(wait_until="networkidle")
         await page.locator("#reactPromptInput").wait_for()
         try:
-            await page.get_by_text("检查点冒烟回复", exact=True).wait_for(timeout=10_000)
+            await page.get_by_text("原子性第二条消息", exact=True).wait_for(timeout=10_000)
+            if await page.get_by_text("检查点冒烟回复", exact=True).count() != 2:
+                raise AssertionError("restored conversation does not contain exactly the two committed replies")
         except Exception as error:
             restored_state = await page.evaluate(
                 """() => {
@@ -3012,9 +3037,28 @@ async () => (await navigator.serviceWorker.getRegistrations()).map((registration
                   return { storage, chat: document.querySelector('.chat-messages')?.textContent || '' };
                 }"""
             )
-            raise AssertionError(f"committed generation was not restored after reload: {restored_state}") from error
-        if await page.get_by_text("原子性第二条消息", exact=False).count() != 0:
-            raise AssertionError("uncommitted generation leaked into the restored session")
+            raise AssertionError(f"capsule-reconciled generation was not restored after reload: {restored_state}") from error
+        healed_head = await page.evaluate(
+            """(key) => {
+              const raw = localStorage.getItem(key);
+              try { return JSON.parse(raw)?.revision || null; } catch (error) { return null; }
+            }""",
+            f"deepseek-infra.session.v3.head.{conversation_id}",
+        )
+        if healed_head != torn_revision:
+            raise AssertionError(f"capsule reconcile healed to an unexpected generation: {torn_revision!r} -> {healed_head!r}")
+        capsules_left = await page.evaluate(
+            """() => {
+              let count = 0;
+              for (let i = 0; i < localStorage.length; i += 1) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('deepseek-infra.session.v3.recovery.')) count += 1;
+              }
+              return count;
+            }"""
+        )
+        if capsules_left != 0:
+            raise AssertionError(f"recovery capsule survived a successful startup reconcile: {capsules_left} left")
         checks["conversationCheckpointAtomic"] = "PASS"
         await context.close()
 
@@ -3263,6 +3307,774 @@ async () => (await navigator.serviceWorker.getRegistrations()).map((registration
     return checks
 
 
+async def run_cross_tab_checkpoint_smoke(base_url: str) -> dict[str, str]:
+    """Exercise the v4.3.6 cross-tab checkpoint persistence contracts in a real browser."""
+    from playwright.async_api import FilePayload
+    from playwright.async_api import async_playwright
+
+    checks: dict[str, str] = {}
+    reply_text = "检查点冒烟回复"
+    v3_head_prefix = "deepseek-infra.session.v3.head."
+    v3_snapshot_prefix = "deepseek-infra.session.v3.snapshot."
+    v3_recovery_prefix = "deepseek-infra.session.v3.recovery."
+    tab_selection_key = "deepseek-infra.current-conversation.v3"
+
+    config_payload = {
+        "hasServerKey": True,
+        "hasSearch": False,
+        "version": VERSION,
+        "defaultModel": "deepseek-v4-pro",
+        "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+        "modelRoutes": {},
+        "computerUrl": base_url,
+        "phoneUrl": base_url,
+        "uploadLimits": {"fileMaxBytes": 200_000_000, "requestMaxBytes": 220_000_000, "maxFiles": 8},
+    }
+
+    async def mock_config(route: Any) -> None:
+        await route.fulfill(status=200, content_type="application/json", body=json.dumps(config_payload))
+
+    async def mock_chat(route: Any) -> None:
+        body = "\n".join(
+            [
+                json.dumps({"type": "content", "text": reply_text}),
+                json.dumps({"type": "done", "content": reply_text, "model": "deepseek-v4-pro", "usage": {}}),
+                "",
+            ]
+        )
+        await route.fulfill(status=200, headers={"Content-Type": "application/x-ndjson"}, body=body)
+
+    async def mock_title(route: Any) -> None:
+        await route.fulfill(status=200, content_type="application/json", body=json.dumps({"title": "检查点冒烟"}))
+
+    # 会话级 head 阻断（每页面 window 独立）：window.__staleSmokeBlockedHeadCid 指向的会话，
+    # 其 head 键写入抛 QuotaExceededError——快照照常落盘，head 永远推不进。
+    # 该标签页因此恒为 stale 写入者：冲突路径（分支快照 + 冲突指针，不碰 head）与
+    # tombstone 拒绝路径（恢复副本写新 cid 的 head，不受阻断）都不受注入影响，全程无需
+    # 解除开关，时序完全确定。
+    stale_failure_init = """
+{
+  const originalSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    const blocked = window.__staleSmokeBlockedHeadCid || '';
+    if (blocked && this === window.localStorage && String(key) === 'deepseek-infra.session.v3.head.' + blocked) {
+      throw new DOMException('simulated smoke storage failure', 'QuotaExceededError');
+    }
+    return originalSetItem.call(this, key, value);
+  };
+}
+"""
+
+    # 只拦 head / snapshot 键（恢复胶囊键放行）：提交必然失败，pagehide 只能写胶囊。
+    capsule_failure_init = """
+{
+  const originalSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    if (window.__capsuleSmokeFailCheckpoint && this === window.localStorage) {
+      const name = String(key);
+      if (name.startsWith('deepseek-infra.session.v3.snapshot.') || name.startsWith('deepseek-infra.session.v3.head.')) {
+        throw new DOMException('simulated smoke storage failure', 'QuotaExceededError');
+      }
+    }
+    return originalSetItem.call(this, key, value);
+  };
+}
+"""
+
+    # 存储压力注入：写入值只要含 data:image 预览就抛 QuotaExceededError，触发压缩重试链。
+    quota_failure_init = """
+{
+  const originalSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    if (this === window.localStorage && String(value).includes('data:image')) {
+      throw new DOMException('simulated smoke quota pressure', 'QuotaExceededError');
+    }
+    return originalSetItem.call(this, key, value);
+  };
+}
+"""
+
+    # 慢速流探针：fetch 拦截 /api/chat，用真实 ReadableStream 每 500ms 吐一个增量；
+    # 同时给所有 V3 快照键的 setItem 调用打上 performance.now() 时间戳。
+    stream_chunks = ["流式", "节流", "冒烟", "校验", "片段", "回复", "完成"]
+    stream_full_text = "".join(stream_chunks)
+    stream_probe_init = (
+        """
+window.__v3StreamStartAt = 0;
+window.__v3StreamDoneAt = 0;
+window.__v3SnapshotWriteTimes = [];
+{
+  const originalSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    if (this === window.localStorage && String(key).startsWith('deepseek-infra.session.v3.snapshot.')) {
+      window.__v3SnapshotWriteTimes.push(performance.now());
+    }
+    return originalSetItem.call(this, key, value);
+  };
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = String(typeof input === 'string' ? input : (input && input.url) || '');
+    if (!url.includes('/api/chat')) return originalFetch(input, init);
+    window.__v3StreamStartAt = performance.now();
+    const chunks = """
+        + json.dumps(stream_chunks, ensure_ascii=False)
+        + """;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        let index = 0;
+        const push = () => {
+          if (index < chunks.length) {
+            controller.enqueue(encoder.encode(JSON.stringify({ type: 'content', text: chunks[index] }) + '\\n'));
+            index += 1;
+            setTimeout(push, 500);
+            return;
+          }
+          window.__v3StreamDoneAt = performance.now();
+          controller.enqueue(encoder.encode(JSON.stringify({ type: 'done', content: chunks.join(''), model: 'deepseek-v4-pro', usage: {} }) + '\\n'));
+          controller.close();
+        };
+        setTimeout(push, 500);
+      },
+    });
+    return Promise.resolve(new Response(stream, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } }));
+  };
+}
+"""
+    )
+
+    # 找到 head 快照同时包含 user_text 且回复至少出现 min_replies 次的会话分片：
+    # 回复次数把"结算提交"（含本轮回复）与"流式中的中间提交"（不含本轮回复）区分开。
+    settled_head_js = """
+({ userText, reply, minReplies }) => {
+  const headPrefix = 'deepseek-infra.session.v3.head.';
+  const snapshotPrefix = 'deepseek-infra.session.v3.snapshot.';
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith(headPrefix)) continue;
+    let head = null;
+    try { head = JSON.parse(localStorage.getItem(key) || ''); } catch (error) { continue; }
+    if (!head || typeof head.revision !== 'string') continue;
+    const conversationId = key.slice(headPrefix.length);
+    const raw = localStorage.getItem(`${snapshotPrefix}${conversationId}.${head.revision}`);
+    if (!raw || !raw.includes(userText)) continue;
+    if (raw.split(reply).length - 1 < minReplies) continue;
+    return { conversationId, revision: head.revision, writerId: head.writerId || '' };
+  }
+  return null;
+}
+"""
+
+    read_heads_js = """
+() => {
+  const headPrefix = 'deepseek-infra.session.v3.head.';
+  const heads = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith(headPrefix)) continue;
+    try {
+      const head = JSON.parse(localStorage.getItem(key) || '');
+      if (head && typeof head.revision === 'string') {
+        heads.push({ conversationId: key.slice(headPrefix.length), revision: head.revision, writerId: head.writerId || '' });
+      }
+    } catch (error) {}
+  }
+  return heads;
+}
+"""
+
+    keys_with_prefix_js = """
+(prefix) => {
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(prefix)) keys.push(key);
+  }
+  return keys;
+}
+"""
+
+    read_head_js = """
+(conversationId) => {
+  const raw = localStorage.getItem(`deepseek-infra.session.v3.head.${conversationId}`);
+  try { return raw ? JSON.parse(raw) : null; } catch (error) { return null; }
+}
+"""
+
+    read_conflict_js = """
+(conversationId) => {
+  const raw = localStorage.getItem(`deepseek-infra.session.v3.conflict.${conversationId}`);
+  try { return raw ? JSON.parse(raw) : null; } catch (error) { return null; }
+}
+"""
+
+    # 按标题后缀 + 内容标记定位一个分片（冲突副本 / 恢复副本的 id 不可预知）。
+    suffixed_head_js = """
+({ suffix, marker }) => {
+  const headPrefix = 'deepseek-infra.session.v3.head.';
+  const snapshotPrefix = 'deepseek-infra.session.v3.snapshot.';
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith(headPrefix)) continue;
+    let head = null;
+    try { head = JSON.parse(localStorage.getItem(key) || ''); } catch (error) { continue; }
+    if (!head || typeof head.revision !== 'string') continue;
+    const conversationId = key.slice(headPrefix.length);
+    const raw = localStorage.getItem(`${snapshotPrefix}${conversationId}.${head.revision}`);
+    if (!raw || !raw.includes(marker)) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      const title = parsed && parsed.conversation && typeof parsed.conversation.title === 'string'
+        ? parsed.conversation.title
+        : '';
+      if (title.endsWith(suffix)) return { conversationId, revision: head.revision, title };
+    } catch (error) {}
+  }
+  return null;
+}
+"""
+
+    def noisy_png_payload(size: int = 512, seed: int = 20260726) -> bytes:
+        """生成确定性的随机噪声 PNG（纯标准库编码），噪声在任何尺寸下都压不出小 JPEG。"""
+        rng = random.Random(seed)
+        raw = bytearray()
+        for _row in range(size):
+            raw.append(0)
+            raw.extend(rng.randbytes(size * 3))
+
+        def chunk(tag: bytes, data: bytes) -> bytes:
+            return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+        ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(bytes(raw))) + chunk(b"IEND", b"")
+
+    async def send_message(page: Any, text: str) -> None:
+        await page.locator("#reactPromptInput").fill(text)
+        await page.locator("button.send-button").click()
+
+    async def wait_settled_head(page: Any, user_text: str, min_replies: int) -> dict[str, str]:
+        handle = await page.wait_for_function(
+            settled_head_js,
+            arg={"userText": user_text, "reply": reply_text, "minReplies": min_replies},
+            timeout=15_000,
+        )
+        value = await handle.json_value()
+        if not isinstance(value, dict) or not value.get("conversationId"):
+            raise AssertionError(f"settled checkpoint head containing {user_text!r} never appeared")
+        return value
+
+    async def read_heads(page: Any) -> list[dict[str, str]]:
+        heads = await page.evaluate(read_heads_js)
+        return list(heads) if isinstance(heads, list) else []
+
+    def revision_seq(revision: str) -> int:
+        seq, _, _ = revision.partition(".")
+        return int(seq) if seq.isdigit() else 0
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+
+        # ---- 1. crossTabDisjointWritesPreserved：同一 context 两个标签页写互不相同的会话分片 ----
+        disjoint_context = await browser.new_context(service_workers="allow")
+        await disjoint_context.route("**/api/config", mock_config)
+        await disjoint_context.route("**/api/chat", mock_chat)
+        await disjoint_context.route("**/api/title", mock_title)
+        page_a = await disjoint_context.new_page()
+        await page_a.goto(base_url, wait_until="networkidle")
+        await page_a.locator("#reactPromptInput").wait_for()
+        await send_message(page_a, "标签页甲的第一条消息")
+        head_a1 = await wait_settled_head(page_a, "标签页甲的第一条消息", 1)
+        conversation_a = head_a1["conversationId"]
+
+        page_b = await disjoint_context.new_page()
+        await page_b.goto(base_url, wait_until="networkidle")
+        await page_b.locator("#reactPromptInput").wait_for()
+        await page_b.get_by_text("标签页甲的第一条消息", exact=True).wait_for(timeout=10_000)
+        await page_b.locator("button.new-chat-button").click()
+        await send_message(page_b, "标签页乙的第一条消息")
+        head_b1 = await wait_settled_head(page_b, "标签页乙的第一条消息", 1)
+        conversation_b = head_b1["conversationId"]
+        heads_after_pair = await read_heads(page_a)
+        if conversation_a == conversation_b or len(heads_after_pair) != 2:
+            raise AssertionError(f"disjoint tab writes did not produce two shards: {heads_after_pair}")
+
+        await send_message(page_a, "标签页甲的第二条消息")
+        head_a2 = await wait_settled_head(page_a, "标签页甲的第二条消息", 2)
+        await send_message(page_b, "标签页乙的第二条消息")
+        head_b2 = await wait_settled_head(page_b, "标签页乙的第二条消息", 2)
+        heads_final = await read_heads(page_a)
+        if len(heads_final) != 2:
+            raise AssertionError(f"further edits leaked an extra shard: {heads_final}")
+        if head_a2["conversationId"] != conversation_a or head_b2["conversationId"] != conversation_b:
+            raise AssertionError(f"further edits landed on the wrong shard: {head_a2} vs {head_b2}")
+        if revision_seq(head_a2["revision"]) <= revision_seq(head_a1["revision"]):
+            raise AssertionError(f"tab A head did not advance: {head_a1} -> {head_a2}")
+        if revision_seq(head_b2["revision"]) <= revision_seq(head_b1["revision"]):
+            raise AssertionError(f"tab B head did not advance: {head_b1} -> {head_b2}")
+        checks["crossTabDisjointWritesPreserved"] = "PASS"
+        await disjoint_context.close()
+
+        # ---- 2/3/4. 冲突检测、stale 写入者不得推进 head、冲突分支可物化为副本 ----
+        conflict_context = await browser.new_context(service_workers="allow")
+        await conflict_context.add_init_script(stale_failure_init)
+        await conflict_context.route("**/api/config", mock_config)
+        await conflict_context.route("**/api/chat", mock_chat)
+        await conflict_context.route("**/api/title", mock_title)
+        page_a = await conflict_context.new_page()
+        await page_a.goto(base_url, wait_until="networkidle")
+        await page_a.locator("#reactPromptInput").wait_for()
+        await send_message(page_a, "跨标签页冲突基础消息")
+        base_head = await wait_settled_head(page_a, "跨标签页冲突基础消息", 1)
+        conflict_cid = base_head["conversationId"]
+
+        page_b = await conflict_context.new_page()
+        await page_b.goto(base_url, wait_until="networkidle")
+        await page_b.locator("#reactPromptInput").wait_for()
+        await page_b.get_by_text("跨标签页冲突基础消息", exact=True).wait_for(timeout=10_000)
+        # 只阻断 B 页面对该会话的 head 写入：B 的编辑永远推不进共享 head（恒为 stale
+        # 写入者），但冲突分支 / 副本分片的写入不受影响——全程无需解除阻断，无时序竞态。
+        await page_b.evaluate(
+            "(conversationId) => { window.__staleSmokeBlockedHeadCid = conversationId; }", conflict_cid
+        )
+        await send_message(page_b, "stale 编辑一")
+        await page_b.get_by_text(reply_text, exact=True).nth(1).wait_for(timeout=10_000)
+
+        await send_message(page_a, "胜者编辑")
+        winner_head = await wait_settled_head(page_a, "胜者编辑", 2)
+        if winner_head["conversationId"] != conflict_cid:
+            raise AssertionError(f"winner edit landed on a different shard: {winner_head}")
+        winner_revision = winner_head["revision"]
+
+        # B 的第二次编辑：防抖提交在排他锁内重读共享 head → 过期 base → 写冲突分支 +
+        # 冲突指针（冲突路径根本不写 head）；紧随的结算提交 base 已跟进胜方，试图推进
+        # head 时被注入阻断——共享 head 因此确定性停在胜方 revision。
+        await send_message(page_b, "stale 编辑二")
+        notice = page_b.locator(".chat-notice", has_text="本地修改已保存为冲突副本")
+        await notice.wait_for(timeout=10_000)
+        pointer_handle = await page_b.wait_for_function(read_conflict_js, arg=conflict_cid, timeout=10_000)
+        pointer = await pointer_handle.json_value()
+        if not isinstance(pointer, dict) or not pointer.get("revision"):
+            raise AssertionError(f"conflict pointer never materialized for {conflict_cid}: {pointer}")
+        if pointer.get("sharedRevision") != winner_revision:
+            raise AssertionError(f"conflict pointer does not name the winning head: {pointer} vs {winner_revision!r}")
+        branch_raw = await page_b.evaluate(
+            """({ conversationId, revision }) =>
+              localStorage.getItem(`deepseek-infra.session.v3.snapshot.${conversationId}.${revision}`) || ''""",
+            {"conversationId": conflict_cid, "revision": pointer["revision"]},
+        )
+        if "stale 编辑一" not in branch_raw or "stale 编辑二" not in branch_raw:
+            raise AssertionError(f"conflict branch snapshot lost stale edits: {branch_raw[:200]!r}")
+        checks["sameConversationConflictDetected"] = "PASS"
+
+        head_after_conflict = await page_b.evaluate(read_head_js, conflict_cid)
+        if not isinstance(head_after_conflict, dict) or head_after_conflict.get("revision") != winner_revision:
+            raise AssertionError(f"stale writer moved the shared head: {winner_revision!r} -> {head_after_conflict}")
+        checks["staleWriterCannotAdvanceHead"] = "PASS"
+
+        await page_b.get_by_role("button", name="保留副本").click()
+        copy_handle = await page_b.wait_for_function(
+            suffixed_head_js, arg={"suffix": "（冲突副本）", "marker": "stale 编辑一"}, timeout=10_000
+        )
+        conflict_copy = await copy_handle.json_value()
+        if not isinstance(conflict_copy, dict) or conflict_copy.get("conversationId") in (None, conflict_cid):
+            raise AssertionError(f"conflict branch was not materialized as an independent copy: {conflict_copy}")
+        await page_b.wait_for_function(
+            "(conversationId) => localStorage.getItem(`deepseek-infra.session.v3.conflict.${conversationId}`) === null",
+            arg=conflict_cid,
+            timeout=10_000,
+        )
+        await page_a.reload(wait_until="networkidle")
+        await page_a.locator("#reactPromptInput").wait_for()
+        await page_b.reload(wait_until="networkidle")
+        await page_b.locator("#reactPromptInput").wait_for()
+        for reloaded in (page_a, page_b):
+            await reloaded.locator(".conversation-open").nth(1).wait_for(timeout=10_000)
+            if await reloaded.locator(".conversation-open").count() != 2:
+                raise AssertionError("original conversation and conflict copy did not both survive a reload")
+        await page_b.locator(".conversation-open", has_text="（冲突副本）").click()
+        await page_b.get_by_text("stale 编辑一", exact=True).wait_for(timeout=10_000)
+        checks["conflictBranchRecoverable"] = "PASS"
+        await conflict_context.close()
+
+        # ---- 5. deletedConversationNotResurrected：tombstone 拒绝过期写入，内容物化为恢复副本 ----
+        tombstone_context = await browser.new_context(service_workers="allow")
+        await tombstone_context.add_init_script(stale_failure_init)
+        await tombstone_context.route("**/api/config", mock_config)
+        await tombstone_context.route("**/api/chat", mock_chat)
+        await tombstone_context.route("**/api/title", mock_title)
+        page_a = await tombstone_context.new_page()
+        await page_a.goto(base_url, wait_until="networkidle")
+        await page_a.locator("#reactPromptInput").wait_for()
+        await send_message(page_a, "墓碑守卫基础消息")
+        tombstone_head = await wait_settled_head(page_a, "墓碑守卫基础消息", 1)
+        tombstone_cid = tombstone_head["conversationId"]
+
+        page_b = await tombstone_context.new_page()
+        await page_b.goto(base_url, wait_until="networkidle")
+        await page_b.locator("#reactPromptInput").wait_for()
+        await page_b.get_by_text("墓碑守卫基础消息", exact=True).wait_for(timeout=10_000)
+        # 与冲突场景同一注入：B 页面推不进该会话的 head，过期编辑只能滞留本地。
+        await page_b.evaluate(
+            "(conversationId) => { window.__staleSmokeBlockedHeadCid = conversationId; }", tombstone_cid
+        )
+        await send_message(page_b, "墓碑过期编辑一")
+        await page_b.get_by_text(reply_text, exact=True).nth(1).wait_for(timeout=10_000)
+
+        await page_a.locator("button.conversation-tool.danger").first.click()
+        await page_a.wait_for_function(
+            """(conversationId) =>
+              localStorage.getItem(`deepseek-infra.session.v3.tombstone.${conversationId}`) !== null
+              && localStorage.getItem(`deepseek-infra.session.v3.head.${conversationId}`) === null""",
+            arg=tombstone_cid,
+            timeout=10_000,
+        )
+        baseline_shards = await page_a.evaluate(keys_with_prefix_js, f"{v3_snapshot_prefix}{tombstone_cid}.")
+
+        # B 的下一次保存撞上 tombstone：原 cid 绝不复活（head 阻断之外还有 tombstone 守卫），
+        # 本地内容以新 id 恢复副本落盘——副本的 head 不属于被阻断的 cid，写入不受注入影响。
+        await send_message(page_b, "墓碑过期编辑二")
+        recovery_notice = page_b.locator(".chat-notice", has_text="远端已删除，已保留为恢复副本")
+        await recovery_notice.wait_for(timeout=10_000)
+        recovered_handle = await page_b.wait_for_function(
+            suffixed_head_js, arg={"suffix": "（恢复副本）", "marker": "墓碑过期编辑一"}, timeout=10_000
+        )
+        recovered = await recovered_handle.json_value()
+        if not isinstance(recovered, dict) or recovered.get("conversationId") in (None, tombstone_cid):
+            raise AssertionError(f"stale content was not materialized as a recovery copy: {recovered}")
+        if await page_b.evaluate(
+            "(conversationId) => localStorage.getItem(`deepseek-infra.session.v3.tombstone.${conversationId}`) === null",
+            tombstone_cid,
+        ):
+            raise AssertionError("tombstone disappeared after a refused stale write")
+        shards_after = await page_b.evaluate(keys_with_prefix_js, f"{v3_snapshot_prefix}{tombstone_cid}.")
+        if not set(shards_after) <= set(baseline_shards) or await page_b.evaluate(read_head_js, tombstone_cid) is not None:
+            raise AssertionError(
+                f"refused stale write resurrected shard state: head resurrected, snapshots {baseline_shards} -> {shards_after}"
+            )
+        await page_a.reload(wait_until="networkidle")
+        await page_a.locator("#reactPromptInput").wait_for()
+        await page_b.reload(wait_until="networkidle")
+        await page_b.locator("#reactPromptInput").wait_for()
+        for reloaded in (page_a, page_b):
+            await reloaded.locator(".conversation-open").first.wait_for(timeout=10_000)
+            if await reloaded.locator(".conversation-open").count() != 1:
+                raise AssertionError("deleted conversation resurfaced in the history list after reload")
+            if await reloaded.locator(".conversation-open", has_text="（恢复副本）").count() != 1:
+                raise AssertionError("recovery copy missing from the history list after reload")
+        heads_after_delete = await read_heads(page_a)
+        if len(heads_after_delete) != 1 or heads_after_delete[0]["conversationId"] != recovered["conversationId"]:
+            raise AssertionError(f"deleted conversation left a live head behind: {heads_after_delete}")
+        checks["deletedConversationNotResurrected"] = "PASS"
+        await tombstone_context.close()
+
+        # ---- 6. tabSelectionRemainsIndependent：远端提交与本地切换都不跨标签页劫持选中 ----
+        selection_context = await browser.new_context(service_workers="allow")
+        await selection_context.route("**/api/config", mock_config)
+        await selection_context.route("**/api/chat", mock_chat)
+        await selection_context.route("**/api/title", mock_title)
+        page_a = await selection_context.new_page()
+        await page_a.goto(base_url, wait_until="networkidle")
+        await page_a.locator("#reactPromptInput").wait_for()
+        await send_message(page_a, "会话一的种子消息")
+        first_head = await wait_settled_head(page_a, "会话一的种子消息", 1)
+        conversation_one = first_head["conversationId"]
+        await page_a.locator("button.new-chat-button").click()
+        await send_message(page_a, "会话二的种子消息")
+        second_head = await wait_settled_head(page_a, "会话二的种子消息", 1)
+        conversation_two = second_head["conversationId"]
+
+        page_b = await selection_context.new_page()
+        await page_b.goto(base_url, wait_until="networkidle")
+        await page_b.locator("#reactPromptInput").wait_for()
+        await page_b.locator(".conversation-open").nth(1).wait_for(timeout=10_000)
+        await page_b.locator(".conversation-open").nth(1).click()
+        await page_b.wait_for_function(
+            "(expected) => sessionStorage.getItem('deepseek-infra.current-conversation.v3') === expected",
+            arg=conversation_one,
+            timeout=10_000,
+        )
+        await page_b.get_by_text("会话一的种子消息", exact=True).wait_for(timeout=10_000)
+
+        await send_message(page_a, "远端提交不应劫持选中")
+        await wait_settled_head(page_a, "远端提交不应劫持选中", 2)
+        # 等 B 确实处理完广播（会话二的历史条目变为 4 条）再断言选中未被换走。
+        await page_b.wait_for_function(
+            """() => Array.from(document.querySelectorAll('.conversation-open small'))
+              .some((element) => (element.textContent || '').includes('4 条'))""",
+            timeout=10_000,
+        )
+        b_selection = await page_b.evaluate(f"() => sessionStorage.getItem({json.dumps(tab_selection_key)})")
+        if b_selection != conversation_one:
+            raise AssertionError(f"remote commit hijacked tab B selection: {b_selection!r} != {conversation_one!r}")
+        b_visible = await page_b.locator(".message-list").inner_text()
+        if "会话一的种子消息" not in b_visible or "远端提交不应劫持选中" in b_visible:
+            raise AssertionError("remote commit switched the conversation tab B is viewing")
+        a_selection_before = await page_a.evaluate(f"() => sessionStorage.getItem({json.dumps(tab_selection_key)})")
+        if a_selection_before != conversation_two:
+            raise AssertionError(f"tab A lost its own selection: {a_selection_before!r} != {conversation_two!r}")
+
+        await page_b.locator(".conversation-open").nth(0).click()
+        await page_b.wait_for_function(
+            "(expected) => sessionStorage.getItem('deepseek-infra.current-conversation.v3') === expected",
+            arg=conversation_two,
+            timeout=10_000,
+        )
+        await page_b.get_by_text("远端提交不应劫持选中", exact=True).wait_for(timeout=10_000)
+        a_selection_after = await page_a.evaluate(f"() => sessionStorage.getItem({json.dumps(tab_selection_key)})")
+        a_visible = await page_a.locator(".message-list").inner_text()
+        if a_selection_after != conversation_two or "远端提交不应劫持选中" not in a_visible:
+            raise AssertionError("tab B local switch leaked into tab A selection or view")
+        checks["tabSelectionRemainsIndependent"] = "PASS"
+        await selection_context.close()
+
+        # ---- 7. checkpointCleanupRemainsConstantTime：连发 12 条，快照数量保持有界 ----
+        cleanup_context = await browser.new_context(service_workers="allow")
+        await cleanup_context.route("**/api/config", mock_config)
+        await cleanup_context.route("**/api/chat", mock_chat)
+        await cleanup_context.route("**/api/title", mock_title)
+        cleanup_page = await cleanup_context.new_page()
+        await cleanup_page.goto(base_url, wait_until="networkidle")
+        await cleanup_page.locator("#reactPromptInput").wait_for()
+        cleanup_cid = ""
+        snapshot_counts: list[int] = []
+        for turn in range(1, 13):
+            burst_text = f"突发消息 {turn:02d}"
+            await send_message(cleanup_page, burst_text)
+            burst_head = await wait_settled_head(cleanup_page, burst_text, turn)
+            cleanup_cid = burst_head["conversationId"]
+            shard_keys = await cleanup_page.evaluate(keys_with_prefix_js, f"{v3_snapshot_prefix}{cleanup_cid}.")
+            snapshot_counts.append(len(shard_keys))
+        final_cleanup_head = await cleanup_page.evaluate(read_head_js, cleanup_cid)
+        if not isinstance(final_cleanup_head, dict):
+            raise AssertionError(f"cleanup conversation lost its head after the burst: {cleanup_cid}")
+        if revision_seq(str(final_cleanup_head.get("revision") or "")) < 12:
+            raise AssertionError(f"burst did not produce at least 12 commits: {final_cleanup_head}")
+        if max(snapshot_counts) > 6 or snapshot_counts[-1] > 4:
+            raise AssertionError(f"snapshot retention grew unboundedly across 12 commits: {snapshot_counts}")
+        checks["checkpointCleanupRemainsConstantTime"] = "PASS"
+        await cleanup_context.close()
+
+        # ---- 8. streamCheckpointRateBounded：慢速流期间快照写入被 1Hz 节流 ----
+        stream_context = await browser.new_context(service_workers="allow")
+        await stream_context.add_init_script(stream_probe_init)
+        await stream_context.route("**/api/config", mock_config)
+        await stream_context.route("**/api/title", mock_title)
+        stream_page = await stream_context.new_page()
+        await stream_page.goto(base_url, wait_until="networkidle")
+        await stream_page.locator("#reactPromptInput").wait_for()
+        await send_message(stream_page, "流式节流冒烟消息")
+        await stream_page.get_by_text(stream_full_text, exact=False).wait_for(timeout=15_000)
+        # 完整文本在最后一个内容增量时就已渲染，必须显式等 done 落地（done 在最后一个
+        # 增量之后再隔 500ms 才入队），否则探针会在流仍在进行时被读取。
+        await stream_page.wait_for_function("() => window.__v3StreamDoneAt > 0", timeout=15_000)
+        await stream_page.wait_for_function(
+            """(fullText) => {
+              const doneAt = window.__v3StreamDoneAt || 0;
+              const writes = window.__v3SnapshotWriteTimes || [];
+              if (!writes.some((moment) => moment > doneAt)) return false;
+              const headPrefix = 'deepseek-infra.session.v3.head.';
+              const snapshotPrefix = 'deepseek-infra.session.v3.snapshot.';
+              for (let i = 0; i < localStorage.length; i += 1) {
+                const key = localStorage.key(i);
+                if (!key || !key.startsWith(headPrefix)) continue;
+                let head = null;
+                try { head = JSON.parse(localStorage.getItem(key) || ''); } catch (error) { continue; }
+                if (!head || typeof head.revision !== 'string') continue;
+                const conversationId = key.slice(headPrefix.length);
+                const raw = localStorage.getItem(`${snapshotPrefix}${conversationId}.${head.revision}`);
+                if (raw && raw.includes(fullText)) return true;
+              }
+              return false;
+            }""",
+            arg=stream_full_text,
+            timeout=15_000,
+        )
+        probe = await stream_page.evaluate(
+            """() => ({
+              start: window.__v3StreamStartAt || 0,
+              done: window.__v3StreamDoneAt || 0,
+              writes: window.__v3SnapshotWriteTimes || [],
+            })"""
+        )
+        stream_duration = float(probe["done"]) - float(probe["start"])
+        if not 3_000 <= stream_duration <= 6_000:
+            raise AssertionError(f"slow stream mock did not span ~3.5s of streaming: {probe}")
+        write_times = [float(moment) for moment in probe["writes"]]
+        during_stream = [moment for moment in write_times if moment <= float(probe["done"])]
+        after_done = [moment for moment in write_times if moment > float(probe["done"])]
+        streaming_budget = int(stream_duration // 1000) + (1 if stream_duration % 1000 else 0) + 1
+        if len(during_stream) > streaming_budget:
+            raise AssertionError(
+                f"streaming throttle wrote {len(during_stream)} snapshots in {stream_duration:.0f}ms (budget {streaming_budget})"
+            )
+        if not 1 <= len(after_done) <= 2:
+            raise AssertionError(f"settle flush did not add exactly one snapshot write after done: {probe}")
+        checks["streamCheckpointRateBounded"] = "PASS"
+        await stream_context.close()
+
+        # ---- 9. storagePressureCompactionLossless：配额压力下 level 1 压缩且内容无损 ----
+        png_bytes = noisy_png_payload()
+
+        async def mock_file_text(route: Any) -> None:
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "files": [
+                            {
+                                "name": "smoke-noise.png",
+                                "type": "image/png",
+                                "kind": "image",
+                                "size": len(png_bytes),
+                                "text": "噪声图片识别文本",
+                            }
+                        ],
+                        "errors": [],
+                    }
+                ),
+            )
+
+        compaction_context = await browser.new_context(service_workers="allow")
+        await compaction_context.add_init_script(quota_failure_init)
+        await compaction_context.route("**/api/config", mock_config)
+        await compaction_context.route("**/api/chat", mock_chat)
+        await compaction_context.route("**/api/title", mock_title)
+        await compaction_context.route("**/api/file-text", mock_file_text)
+        compaction_page = await compaction_context.new_page()
+        await compaction_page.goto(base_url, wait_until="networkidle")
+        await compaction_page.locator("#reactPromptInput").wait_for()
+        upload_file: FilePayload = {"name": "smoke-noise.png", "mimeType": "image/png", "buffer": png_bytes}
+        await compaction_page.locator('input[type="file"]').set_input_files(files=upload_file)
+        await compaction_page.locator(".attachment-item.ready img.attachment-thumb").wait_for(timeout=15_000)
+        await send_message(compaction_page, "存储压力压缩冒烟消息")
+        compaction_snapshot = None
+        compaction_deadline = time.monotonic() + 15
+        while time.monotonic() < compaction_deadline:
+            compaction_snapshot = await compaction_page.evaluate(
+                """({ userText, reply }) => {
+                  const headPrefix = 'deepseek-infra.session.v3.head.';
+                  const snapshotPrefix = 'deepseek-infra.session.v3.snapshot.';
+                  for (let i = 0; i < localStorage.length; i += 1) {
+                    const key = localStorage.key(i);
+                    if (!key || !key.startsWith(headPrefix)) continue;
+                    let head = null;
+                    try { head = JSON.parse(localStorage.getItem(key) || ''); } catch (error) { continue; }
+                    if (!head || typeof head.revision !== 'string') continue;
+                    const conversationId = key.slice(headPrefix.length);
+                    const raw = localStorage.getItem(`${snapshotPrefix}${conversationId}.${head.revision}`);
+                    if (!raw || !raw.includes(userText) || !raw.includes(reply)) continue;
+                    try {
+                      const parsed = JSON.parse(raw);
+                      if (parsed && parsed.compaction) {
+                        return { compaction: parsed.compaction, conversation: parsed.conversation, hasDataImage: raw.includes('data:image') };
+                      }
+                    } catch (error) {}
+                  }
+                  return null;
+                }""",
+                {"userText": "存储压力压缩冒烟消息", "reply": reply_text},
+            )
+            if compaction_snapshot:
+                break
+            await compaction_page.wait_for_timeout(200)
+        if not compaction_snapshot:
+            raise AssertionError("storage-pressure commit never landed a compacted checkpoint")
+        compaction = compaction_snapshot["compaction"]
+        if compaction.get("level") != 1 or compaction.get("reason") != "storage-pressure" or not compaction.get("removedPreviewBytes"):
+            raise AssertionError(f"unexpected compaction record: {compaction}")
+        if compaction_snapshot["hasDataImage"]:
+            raise AssertionError("compacted checkpoint still embeds a data:image preview")
+        compaction_messages = compaction_snapshot["conversation"]["messages"]
+        compaction_user = next((message for message in compaction_messages if message.get("role") == "user"), None)
+        if not compaction_user or compaction_user.get("content") != "存储压力压缩冒烟消息":
+            raise AssertionError(f"compaction corrupted the user message text: {compaction_user}")
+        compaction_attachments = compaction_user.get("attachments") or []
+        if len(compaction_attachments) != 1:
+            raise AssertionError(f"compaction dropped the attachment: {compaction_attachments}")
+        compacted_attachment = compaction_attachments[0]
+        if compacted_attachment.get("name") != "smoke-noise.png" or compacted_attachment.get("size") != len(png_bytes):
+            raise AssertionError(f"compaction lost attachment metadata: {compacted_attachment}")
+        if compacted_attachment.get("thumbnail") or compacted_attachment.get("imagePreview"):
+            raise AssertionError("compaction kept a strippable preview payload")
+        if not any(message.get("role") == "assistant" and reply_text in str(message.get("content") or "") for message in compaction_messages):
+            raise AssertionError("compaction lost the assistant reply text")
+        checks["storagePressureCompactionLossless"] = "PASS"
+        await compaction_context.close()
+
+        # ---- 10. recoveryCapsuleReconciledOnce：pagehide 胶囊在下次启动恰好对账一次 ----
+        capsule_context = await browser.new_context(service_workers="allow")
+        await capsule_context.add_init_script(capsule_failure_init)
+        await capsule_context.route("**/api/config", mock_config)
+        await capsule_context.route("**/api/chat", mock_chat)
+        await capsule_context.route("**/api/title", mock_title)
+        page_a = await capsule_context.new_page()
+        await page_a.goto(base_url, wait_until="networkidle")
+        await page_a.locator("#reactPromptInput").wait_for()
+        await page_a.evaluate("() => { window.__capsuleSmokeFailCheckpoint = true; }")
+        await send_message(page_a, "胶囊冒烟消息")
+        await page_a.get_by_text(reply_text, exact=True).wait_for(timeout=10_000)
+        if await read_heads(page_a):
+            raise AssertionError("failure injection did not block checkpoint commits before pagehide")
+        await page_a.evaluate("() => window.dispatchEvent(new PageTransitionEvent('pagehide'))")
+        capsules = await page_a.evaluate(
+            """() => {
+              const prefix = 'deepseek-infra.session.v3.recovery.';
+              const capsules = [];
+              for (let i = 0; i < localStorage.length; i += 1) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith(prefix)) capsules.push({ key, raw: localStorage.getItem(key) || '' });
+              }
+              return capsules;
+            }"""
+        )
+        if len(capsules) != 1 or "胶囊冒烟消息" not in capsules[0]["raw"]:
+            raise AssertionError(f"pagehide did not persist exactly one dirty recovery capsule: {capsules}")
+        capsule_owner = capsules[0]["key"][len(v3_recovery_prefix):]
+        try:
+            capsule_parsed = json.loads(capsules[0]["raw"])
+        except json.JSONDecodeError as error:
+            raise AssertionError(f"recovery capsule is not parseable: {capsules[0]['raw'][:200]!r}") from error
+        if capsule_parsed.get("tabId") != capsule_owner or len(capsule_parsed.get("dirtyConversations") or []) != 1:
+            raise AssertionError(f"recovery capsule is malformed: {capsule_parsed}")
+
+        page_b = await capsule_context.new_page()
+        await page_b.goto(base_url, wait_until="networkidle")
+        await page_b.locator("#reactPromptInput").wait_for()
+        await page_b.wait_for_function(
+            """() => {
+              let heads = 0;
+              let capsules = 0;
+              for (let i = 0; i < localStorage.length; i += 1) {
+                const key = localStorage.key(i);
+                if (!key) continue;
+                if (key.startsWith('deepseek-infra.session.v3.head.')) heads += 1;
+                if (key.startsWith('deepseek-infra.session.v3.recovery.')) capsules += 1;
+              }
+              return heads === 1 && capsules === 0;
+            }""",
+            timeout=15_000,
+        )
+        await page_b.locator(".conversation-open").first.click()
+        await page_b.get_by_text("胶囊冒烟消息", exact=True).wait_for(timeout=10_000)
+        await page_b.get_by_text(reply_text, exact=True).wait_for(timeout=10_000)
+        await page_b.reload(wait_until="networkidle")
+        await page_b.locator("#reactPromptInput").wait_for()
+        await page_b.locator(".conversation-open").first.wait_for(timeout=10_000)
+        heads_reloaded = await read_heads(page_b)
+        capsules_reloaded = await page_b.evaluate(keys_with_prefix_js, v3_recovery_prefix)
+        recovered_keys = await page_b.evaluate(keys_with_prefix_js, f"{v3_head_prefix}{capsule_parsed['dirtyConversations'][0]['id']}.recovered.")
+        if len(heads_reloaded) != 1 or capsules_reloaded or recovered_keys:
+            raise AssertionError(
+                f"capsule reconcile was not exactly-once: heads={heads_reloaded}, capsules={capsules_reloaded}, recovered={recovered_keys}"
+            )
+        checks["recoveryCapsuleReconciledOnce"] = "PASS"
+        await capsule_context.close()
+
+        await browser.close()
+    return checks
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="write JSON evidence to this path")
@@ -3291,6 +4103,7 @@ def main() -> int:
         checks.update(asyncio.run(run_mutation_lifecycle_smoke(base_url)))
         checks.update(asyncio.run(run_mutation_continuity_smoke(base_url)))
         checks.update(asyncio.run(run_durable_checkpoint_smoke(base_url)))
+        checks.update(asyncio.run(run_cross_tab_checkpoint_smoke(base_url)))
         payload = {
             "schemaVersion": 1,
             "version": VERSION,
