@@ -15,9 +15,18 @@ import {
 import { selectCurrentMessages } from "../../domain/chat/selectors";
 import { applyStreamEvent, createAssistantMessage, resetAssistantMessage } from "../../domain/chat/streamReducer";
 import type { Attachment, ChatMessage, ChatRequestPayload, QuoteDraft } from "../../domain/chat/types";
-import { loadPersistedConversationState, savePersistedConversationState } from "../../domain/conversation/persistence";
+import {
+  createConversationPersistenceAdapter,
+  type ConversationConflictSignal,
+  type ConversationPersistenceAdapter,
+  type SaveConversationOptions,
+  type StorageLike,
+} from "../../domain/conversation/persistence";
+import type { Conversation, PersistedConversationState } from "../../domain/conversation/types";
 import { recordFlushReport } from "../../app/persistenceHealth";
 import type { PersistenceFlushResult } from "../../app/reloadBlockers";
+import { createConversationSyncChannel, type ConversationSyncChannel } from "../../app/conversationSync";
+import { getTabId } from "../../app/tabIdentity";
 import { createId } from "../../shared/createId";
 import { useMemory } from "../../contexts/MemoryContext";
 import { useSettings } from "../../contexts/SettingsContext";
@@ -65,14 +74,33 @@ export interface PendingMemorySuggestion {
   conflicts: readonly { id: string; content: string; reason: string }[];
 }
 
-export function useChatController() {
+export interface ChatControllerOptions {
+  /** 测试注入：每标签页一个持久化适配器（独立的本地 base 与脏检测）。 */
+  persistence?: ConversationPersistenceAdapter;
+  /** 测试注入：跨标签页同步通道。 */
+  syncChannel?: ConversationSyncChannel;
+  /** 测试注入：模拟另一标签页的 sessionStorage（决定 tabId 与选中态）；缺省用浏览器 sessionStorage。 */
+  session?: StorageLike | null;
+  /** 防抖提交间隔（毫秒），测试可调大以改用显式 flush 驱动。 */
+  autosaveDebounceMs?: number;
+}
+
+export function useChatController(options: ChatControllerOptions = {}) {
   const settings = useSettings();
   const projects = useProjects();
   const memory = useMemory();
+  // 每标签页一个持久化适配器实例：本地 base 与脏检测是标签页级状态，
+  // 这是跨标签页仲裁（重读共享 head、兄弟检测）的前提。
+  const persistenceRef = useRef<ConversationPersistenceAdapter | null>(null);
+  if (!persistenceRef.current) persistenceRef.current = options.persistence ?? createConversationPersistenceAdapter();
+  const persistence = persistenceRef.current;
+  const syncChannelRef = useRef<ConversationSyncChannel | null>(null);
+  if (!syncChannelRef.current) syncChannelRef.current = options.syncChannel ?? createConversationSyncChannel();
+  const syncChannel = syncChannelRef.current;
   const [state, dispatch] = useReducer(
     chatReducer,
     undefined,
-    () => createInitialChatState(loadPersistedConversationState()),
+    () => createInitialChatState(persistence.load(undefined, options.session)),
   );
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -84,18 +112,41 @@ export function useChatController() {
   const [outputPaused, setOutputPaused] = useState(false);
   const [pendingMemorySuggestion, setPendingMemorySuggestion] = useState<PendingMemorySuggestion | null>(null);
   const [quoteDraft, setQuoteDraft] = useState<QuoteDraft | null>(null);
+  // 未解决的跨标签页写入冲突（本地分支已耐久保存为冲突副本）。
+  const [conflict, setConflict] = useState<ConversationConflictSignal | null>(null);
   const waitUntilResumed = useCallback(() => outputPauseGateRef.current?.waitUntilResumed() ?? Promise.resolve(), []);
 
-  const flushConversationPersistence = useCallback((): PersistenceFlushResult => {
+  // 提交 / 删除 / 冲突回调：提交与删除广播到跨标签页通道，冲突信号换上 notice 条。
+  const saveCallbacksRef = useRef<SaveConversationOptions | null>(null);
+  if (!saveCallbacksRef.current) {
+    saveCallbacksRef.current = {
+      onCommit: (notice) => syncChannel.post({ type: "conversation_committed", ...notice }),
+      onDelete: (notice) => syncChannel.post({ type: "conversation_deleted", ...notice }),
+      onConflict: (signal) => setConflict(signal),
+    };
+  }
+
+  const readPersistedState = useCallback((): PersistedConversationState => {
     const current = stateRef.current;
+    return {
+      schemaVersion: 1,
+      currentConversationId: current.currentConversationId,
+      conversations: current.conversations,
+    };
+  }, []);
+
+  const recordFailedResult = useCallback((result: PersistenceFlushResult) => {
+    if (!result.ok) {
+      recordFlushReport({ ok: false, results: { conversation: result }, failedIds: ["conversation"] });
+    }
+  }, []);
+
+  const flushConversationPersistence = useCallback((): PersistenceFlushResult => {
     let result: PersistenceFlushResult;
     try {
-      // 透传带 revision / 失败码的结果；save 内部不再抛错，try/catch 仅作兜底。
-      result = savePersistedConversationState({
-        schemaVersion: 1,
-        currentConversationId: current.currentConversationId,
-        conversations: current.conversations,
-      });
+      // 无锁同步路径（pagehide / beforeunload 必须同步完成）：与走锁路径完全
+      // 相同的"重读共享 head + 比较 base"检查，并发冲突退化为冲突分支。
+      result = persistence.save(readPersistedState(), undefined, options.session, saveCallbacksRef.current ?? undefined);
     } catch (reason) {
       // 防抖保存和生命周期 flush 都不允许把存储异常抛成未捕获错误。
       result = {
@@ -104,16 +155,112 @@ export function useChatController() {
         message: reason instanceof Error && reason.message ? reason.message : "对话记录保存失败",
       };
     }
-    if (!result.ok) {
-      recordFlushReport({ ok: false, results: { conversation: result }, failedIds: ["conversation"] });
-    }
+    recordFailedResult(result);
     return result;
-  }, []);
+  }, [persistence, readPersistedState, recordFailedResult, options.session]);
+
+  // 防抖（普通）提交走排他 Web Lock 临界区；锁缺失时适配器内部退化为无锁
+  // 路径（同样的兄弟检测）。单-flight：流式期间高频触发只保留最新一次，
+  // 避免锁请求排队造成 head 反复重写。
+  const arbitratedFlightRef = useRef({ running: false, queued: false });
+  const arbitratedFlushRef = useRef<() => void>(() => undefined);
+  arbitratedFlushRef.current = () => {
+    const flight = arbitratedFlightRef.current;
+    if (flight.running) {
+      flight.queued = true;
+      return;
+    }
+    flight.running = true;
+    void persistence
+      .saveArbitrated(readPersistedState, undefined, options.session, saveCallbacksRef.current ?? undefined)
+      .catch((reason: unknown): PersistenceFlushResult => ({
+        ok: false,
+        code: "unknown",
+        message: reason instanceof Error && reason.message ? reason.message : "对话记录保存失败",
+      }))
+      .then((result) => {
+        recordFailedResult(result);
+        flight.running = false;
+        if (flight.queued) {
+          flight.queued = false;
+          arbitratedFlushRef.current();
+        }
+      });
+  };
 
   useEffect(() => {
-    const timer = window.setTimeout(flushConversationPersistence, 120);
+    const timer = window.setTimeout(() => arbitratedFlushRef.current(), options.autosaveDebounceMs ?? 120);
     return () => window.clearTimeout(timer);
-  }, [flushConversationPersistence, state.conversations, state.currentConversationId]);
+  }, [state.conversations, state.currentConversationId, options.autosaveDebounceMs]);
+
+  // 跨标签页同步：订阅一次（卸载时清理）。远端提交到达时——本标签页对该会话
+  // 干净则换入共享 head；本地脏则保持，等下次提交走冲突路径；绝不切换当前
+  // 选中会话，流式中的会话延迟到流结束后再同步。
+  const deferredSyncRef = useRef(new Set<string>());
+  const reconcileRemoteConversation = useCallback(
+    (conversationId: string) => {
+      const local = stateRef.current.conversations.find((conversation) => conversation.id === conversationId);
+      const outcome = persistence.reconcileRemoteCommit(conversationId, local);
+      if (outcome.kind === "reload") dispatch({ type: "conversationSynced", conversation: outcome.conversation });
+    },
+    [persistence],
+  );
+
+  useEffect(() => {
+    const ownTabId = getTabId(options.session);
+    return syncChannel.subscribe((message) => {
+      if (message.writerId === ownTabId) return;
+      // conversation_deleted 由后续提交的 tombstone 工作消费，本提交仅入档 schema。
+      if (message.type !== "conversation_committed") return;
+      if (stateRef.current.requestStatus === "streaming") {
+        deferredSyncRef.current.add(message.conversationId);
+        return;
+      }
+      reconcileRemoteConversation(message.conversationId);
+    });
+  }, [syncChannel, reconcileRemoteConversation, options.session]);
+
+  useEffect(() => {
+    if (state.requestStatus !== "idle" || !deferredSyncRef.current.size) return;
+    const pending = [...deferredSyncRef.current];
+    deferredSyncRef.current.clear();
+    pending.forEach(reconcileRemoteConversation);
+  }, [state.requestStatus, reconcileRemoteConversation]);
+
+  // 冲突解决 - 查看最新：换入共享 head 内容并清除冲突指针。本地分支在指针
+  // 清除前一直受 GC 保护，解决后由保留/空闲 GC 回收。
+  const resolveConflictByReload = useCallback(() => {
+    if (!conflict) return;
+    const shared = persistence.readSharedConversation(conflict.conversationId);
+    if (shared) {
+      persistence.adoptRemoteConversation(conflict.conversationId, shared.conversation, shared.revision);
+      dispatch({ type: "conversationSynced", conversation: shared.conversation });
+    }
+    persistence.clearConflict(conflict.conversationId);
+    setConflict(null);
+  }, [conflict, persistence]);
+
+  // 冲突解决 - 保留副本：冲突分支物化为独立会话（新 id、标题加"（冲突副本）"
+  // 后缀），作为它自己的分片提交，然后清除冲突指针。
+  const resolveConflictByCopy = useCallback(() => {
+    if (!conflict) return;
+    const branch = persistence.readConflictBranch(conflict.conversationId);
+    if (branch) {
+      const now = Date.now();
+      const copy: Conversation = {
+        ...branch.conversation,
+        id: createId("conversation"),
+        title: `${branch.conversation.title}（冲突副本）`,
+        customTitle: true,
+        favorite: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+      dispatch({ type: "conversationSynced", conversation: copy });
+    }
+    persistence.clearConflict(conflict.conversationId);
+    setConflict(null);
+  }, [conflict, persistence]);
 
   const requestSettings = useCallback((): ChatRequestSettings => ({
     apiKey: settings.apiKey,
@@ -424,6 +571,9 @@ export function useChatController() {
     outputPaused,
     pendingMemorySuggestion,
     quoteDraft,
+    conflict,
+    resolveConflictByReload,
+    resolveConflictByCopy,
     sendMessage,
     tryStartMessage,
     editAndResend,

@@ -41,6 +41,107 @@ interface ConversationHeadV3 {
   digest: string;
 }
 
+/**
+ * V3 冲突指针（`session.v3.conflict.<cid>`）：本地分支被拒绝推进 head 时，
+ * 指向已核验落盘的冲突分支快照。每个会话至多一个未解决冲突；解决（查看
+ * 最新 / 保留副本）后清除，分支快照随 GC 回收。
+ */
+export interface ConversationConflictPointer {
+  revision: string;
+  baseRevision: string | null;
+  sharedRevision: string;
+  writerId: string;
+  savedAt: number;
+}
+
+/** 一次成功提交（推进 head 或写入冲突分支）的带外通知，用于跨标签页广播。 */
+export interface ConversationCommitNotice {
+  conversationId: string;
+  revision: string;
+  writerId: string;
+  savedAt: number;
+}
+
+/** 冲突信号：冲突分支已耐久写入（数据安全），但共享 head 由其他标签页持有。 */
+export interface ConversationConflictSignal extends ConversationCommitNotice {
+  title: string;
+  baseRevision: string | null;
+  sharedRevision: string;
+}
+
+export interface ConversationDeleteNotice {
+  conversationId: string;
+  writerId: string;
+}
+
+export interface SaveConversationOptions {
+  onCommit?: (notice: ConversationCommitNotice) => void;
+  onConflict?: (signal: ConversationConflictSignal) => void;
+  onDelete?: (notice: ConversationDeleteNotice) => void;
+}
+
+export interface LockRequestOptions {
+  mode: "exclusive" | "shared";
+}
+
+/** Web Locks API 的最小结构子集，测试可注入互斥锁实现。 */
+export interface LocksLike {
+  request<T>(name: string, options: LockRequestOptions, callback: () => T | Promise<T>): Promise<T>;
+}
+
+export const CONVERSATION_CHECKPOINT_LOCK_NAME = "deepseek-conversation-checkpoint";
+
+/** 远端提交对账结果：reload = 干净副本已换成共享 head；stale = 本地脏，下次提交走冲突路径。 */
+export type ReconcileRemoteOutcome =
+  | { kind: "reload"; conversation: Conversation }
+  | { kind: "stale" }
+  | { kind: "noop" };
+
+/**
+ * 会话持久化适配器。每个标签页一个实例：本地 base（`lastCommittedRevision`）
+ * 与脏检测（`lastCommitted` 对象 identity）都是每标签页状态。模块级导出
+ * 函数委托给一个共享默认实例（测试与遗留调用方），Controller 持有自己的实例。
+ */
+export interface ConversationPersistenceAdapter {
+  load(storage?: StorageLike | null, session?: StorageLike | null): PersistedConversationState;
+  save(
+    state: PersistedConversationState,
+    storage?: StorageLike | null,
+    session?: StorageLike | null,
+    options?: SaveConversationOptions,
+  ): PersistenceFlushResult;
+  /**
+   * 仲裁提交：可用时在排他 Web Lock 临界区内执行与 save 完全相同的检查；
+   * 锁缺失（或锁子系统自身报错）时退化为无锁提交——无锁路径做同样的
+   * "重读共享 head + 比较 base"，并发冲突退化为冲突分支，绝不静默覆盖。
+   * `getState` 在临界区内调用，保证拿到的是最新 state。
+   */
+  saveArbitrated(
+    getState: () => PersistedConversationState,
+    storage?: StorageLike | null,
+    session?: StorageLike | null,
+    options?: SaveConversationOptions,
+  ): Promise<PersistenceFlushResult>;
+  /** 处理远端提交广播：本地干净则换入共享 head 内容；本地脏则保持，待下次提交走冲突路径。 */
+  reconcileRemoteCommit(
+    conversationId: string,
+    local: Conversation | undefined,
+    storage?: StorageLike | null,
+  ): ReconcileRemoteOutcome;
+  readSharedConversation(
+    conversationId: string,
+    storage?: StorageLike | null,
+  ): { conversation: Conversation; revision: string } | null;
+  readConflictBranch(
+    conversationId: string,
+    storage?: StorageLike | null,
+  ): { pointer: ConversationConflictPointer; conversation: Conversation } | null;
+  clearConflict(conversationId: string, storage?: StorageLike | null): void;
+  /** 把换入的远端会话登记为已提交（identity + base），避免紧接着的 flush 重写它。 */
+  adoptRemoteConversation(conversationId: string, conversation: Conversation, revision: string): void;
+  reset(): void;
+}
+
 export const conversationStorageKeys = {
   conversations: "deepseek-infra.conversations",
   currentConversation: "deepseek-infra.current-conversation",
@@ -49,6 +150,7 @@ export const conversationStorageKeys = {
   currentConversationV3: "deepseek-infra.current-conversation.v3",
   v3HeadPrefix: "deepseek-infra.session.v3.head.",
   v3SnapshotPrefix: "deepseek-infra.session.v3.snapshot.",
+  v3ConflictPrefix: "deepseek-infra.session.v3.conflict.",
   v3TombstonePrefix: "deepseek-infra.session.v3.tombstone.",
   v3RecoveryPrefix: "deepseek-infra.session.v3.recovery.",
 } as const;
@@ -65,6 +167,10 @@ export function sessionHeadKeyV3(conversationId: string): string {
 
 export function sessionSnapshotKeyV3(conversationId: string, revision: string): string {
   return `${conversationStorageKeys.v3SnapshotPrefix}${conversationId}.${revision}`;
+}
+
+export function sessionConflictKeyV3(conversationId: string): string {
+  return `${conversationStorageKeys.v3ConflictPrefix}${conversationId}`;
 }
 
 export function sessionTombstoneKeyV3(conversationId: string): string {
@@ -222,6 +328,27 @@ function parseV3Head(raw: string | null): ConversationHeadV3 | null {
   }
 }
 
+/** 解析 `session.v3.conflict.<cid>` 指针；任何字段非法都返回 null（按无冲突处理）。 */
+export function parseV3ConflictPointer(raw: string | null): ConversationConflictPointer | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const pointer = parsed as Partial<ConversationConflictPointer>;
+    if (typeof pointer.revision !== "string" || !pointer.revision) return null;
+    if (typeof pointer.sharedRevision !== "string" || !pointer.sharedRevision) return null;
+    return {
+      revision: pointer.revision,
+      baseRevision: typeof pointer.baseRevision === "string" && pointer.baseRevision ? pointer.baseRevision : null,
+      sharedRevision: pointer.sharedRevision,
+      writerId: typeof pointer.writerId === "string" ? pointer.writerId : "",
+      savedAt: typeof pointer.savedAt === "number" ? pointer.savedAt : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 读取指定 revision 的 V3 会话快照。版本、归属、revision、digest 任何一步
  * 不一致都返回 null，由调用方回退 parentRevision——绝不返回半个分片。
@@ -253,15 +380,20 @@ function loadV3SnapshotConversation(storage: StorageLike, conversationId: string
   return { ...conversation, messages: conversation.messages.map(checkpointMessage) };
 }
 
+interface V3LoadedConversation {
+  conversation: Conversation;
+  headRevision: string;
+}
+
 /**
  * 枚举所有 V3 head，逐会话回读：head.revision 快照优先，损坏/缺失时回退
  * parentRevision。遇到 tombstone 的会话直接跳过（写入方在后续提交落地）。
  * 存储不支持枚举时返回 null，调用方继续走 V2 / legacy 读取链。
  */
-function loadV3Conversations(storage: StorageLike): Conversation[] | null {
+function loadV3Conversations(storage: StorageLike): V3LoadedConversation[] | null {
   const headKeys = enumerateKeysWithPrefix(storage, conversationStorageKeys.v3HeadPrefix);
   if (!headKeys?.length) return null;
-  const conversations: Conversation[] = [];
+  const conversations: V3LoadedConversation[] = [];
   for (const headKey of headKeys) {
     const conversationId = headKey.slice(conversationStorageKeys.v3HeadPrefix.length);
     if (!conversationId) continue;
@@ -270,7 +402,7 @@ function loadV3Conversations(storage: StorageLike): Conversation[] | null {
     if (!head) continue;
     const conversation = loadV3SnapshotConversation(storage, conversationId, head.revision)
       ?? (head.parentRevision ? loadV3SnapshotConversation(storage, conversationId, head.parentRevision) : null);
-    if (conversation) conversations.push(conversation);
+    if (conversation) conversations.push({ conversation, headRevision: head.revision });
   }
   return conversations.length ? conversations : null;
 }
@@ -309,45 +441,6 @@ function resolveTabSelection(
   const selected = selectCurrentConversationId(conversations, candidate);
   if (selected) writeTabSelection(session, selected);
   return selected;
-}
-
-export function loadPersistedConversationState(
-  storage: StorageLike | null = browserStorage(),
-  session: StorageLike | null = browserSessionStorage(),
-): PersistedConversationState {
-  if (!storage) return { schemaVersion: 1, currentConversationId: null, conversations: [] };
-  // V3 分片优先；其后依次为 V2 journal（迁移读取器，保持原逻辑）与 legacy 键。
-  const sharded = loadV3Conversations(storage);
-  if (sharded) {
-    const conversations = sortConversations(sharded);
-    return { schemaVersion: 1, currentConversationId: resolveTabSelection(session, conversations, null), conversations };
-  }
-  const head = readHeadGeneration(storage);
-  for (const generation of [head, head - 1]) {
-    if (generation < 1) continue;
-    const checkpoint = loadCheckpoint(storage, generation);
-    if (checkpoint) {
-      return {
-        schemaVersion: 1,
-        currentConversationId: resolveTabSelection(session, checkpoint.conversations, checkpoint.currentConversationId),
-        conversations: checkpoint.conversations,
-      };
-    }
-  }
-  let conversations = normalizeConversations(parseArray(safeGetItem(storage, conversationStorageKeys.conversations)));
-
-  if (!conversations.length) {
-    const messages = parseArray(safeGetItem(storage, conversationStorageKeys.legacyMessages))
-      .map(migrateLegacyMessage)
-      .filter((message): message is ChatMessage => Boolean(message));
-    if (messages.length) {
-      conversations = [createConversation(createId("legacy-conversation"), messages.map(checkpointMessage), DEFAULT_MODEL, true)];
-    }
-  }
-
-  conversations = sortConversations(conversations);
-  const requestedId = safeGetItem(storage, conversationStorageKeys.currentConversation);
-  return { schemaVersion: 1, currentConversationId: resolveTabSelection(session, conversations, requestedId), conversations };
 }
 
 function normalizeConversationForCommit(conversation: Conversation): Conversation {
@@ -390,22 +483,22 @@ function shardFailure(failure: PersistenceFlushFailure, conversationId: string, 
 }
 
 /**
- * 持久化适配器状态。chat reducer 只替换发生变化的会话对象（其余保持对象
- * identity），因此 identity 对比即可圈出脏分片：一次会话变更只序列化该会话。
+ * 冲突分支写入/核验/指针落盘失败：本地修改此刻只存在于内存，按
+ * `write-conflict` 失败上报（数据面临风险，进入健康/横幅链路）。
  */
-const lastCommitted = new Map<string, Conversation>();
-const lastCommittedRevision = new Map<string, string>();
-let lastHeadRevision: string | null = null;
-let idleGcScheduled = false;
-
-export function resetConversationPersistenceForTests(): void {
-  lastCommitted.clear();
-  lastCommittedRevision.clear();
-  lastHeadRevision = null;
-  idleGcScheduled = false;
+function conflictWriteFailure(error: unknown, conversationId: string, bytes: number): PersistenceFlushFailure {
+  return withSizeHint(
+    { ok: false, code: "write-conflict", message: `会话 ${conversationId}：冲突分支写入失败：${classifyStorageError(error).message}` },
+    bytes,
+  );
 }
 
-type ShardCommitResult = { ok: true; revision: string } | PersistenceFlushFailure;
+function conflictVerificationFailure(conversationId: string, bytes: number): PersistenceFlushFailure {
+  return withSizeHint(
+    { ok: false, code: "write-conflict", message: `会话 ${conversationId}：冲突分支写入后回读核验失败` },
+    bytes,
+  );
+}
 
 function storedCheckpointMatches(stored: string | null, conversationId: string, revision: string, digest: string): boolean {
   if (!stored) return false;
@@ -421,75 +514,6 @@ function storedCheckpointMatches(stored: string | null, conversationId: string, 
   } catch {
     return false;
   }
-}
-
-/**
- * 提交单个会话分片：snapshot 写入 → 回读核验 digest + revision → head 推进。
- * head 推进之前的任何失败都不动已提交的上一份 checkpoint；head 写失败则
- * 快照成为孤儿，由保留/空闲 GC 回收。任何路径都不抛异常。
- */
-function commitConversationShard(storage: StorageLike, conversation: Conversation, tabId: string): ShardCommitResult {
-  const bytes = estimateConversationBytes(conversation);
-  let headRaw: string | null;
-  try {
-    headRaw = storage.getItem(sessionHeadKeyV3(conversation.id));
-  } catch (error) {
-    return shardFailure(classifyStorageError(error), conversation.id, bytes);
-  }
-  const head = parseV3Head(headRaw);
-  const parentRevision = head?.revision ?? null;
-  const revision = `${revisionSeq(parentRevision) + 1}.${tabId}`;
-  let serialized: string;
-  let digest: string;
-  let savedAt = 0;
-  try {
-    const normalized = normalizeConversationForCommit(conversation);
-    const payload = JSON.stringify(normalized);
-    digest = checkpointDigest(payload);
-    savedAt = Date.now();
-    const checkpoint: ConversationCheckpointV3 = {
-      schemaVersion: 3,
-      conversationId: conversation.id,
-      revision,
-      parentRevision,
-      writerId: tabId,
-      savedAt,
-      digest,
-      conversation: normalized,
-    };
-    serialized = JSON.stringify(checkpoint);
-  } catch (error) {
-    return shardFailure(classifyStorageError(error), conversation.id, bytes);
-  }
-  const snapshotKey = sessionSnapshotKeyV3(conversation.id, revision);
-  try {
-    storage.setItem(snapshotKey, serialized);
-  } catch (error) {
-    return shardFailure(classifyStorageError(error), conversation.id, bytes);
-  }
-  let stored: string | null;
-  try {
-    stored = storage.getItem(snapshotKey);
-  } catch (error) {
-    return shardFailure(classifyStorageError(error), conversation.id, bytes);
-  }
-  if (!storedCheckpointMatches(stored, conversation.id, revision, digest)) {
-    return shardFailure(verificationFailure("快照写入后回读核验失败"), conversation.id, bytes);
-  }
-  try {
-    storage.setItem(sessionHeadKeyV3(conversation.id), JSON.stringify({
-      revision,
-      parentRevision,
-      writerId: tabId,
-      savedAt,
-      digest,
-    } satisfies ConversationHeadV3));
-  } catch (error) {
-    return shardFailure(classifyStorageError(error), conversation.id, bytes);
-  }
-  // 保留式 GC：有界 O(1)——最多删除 2 份既非当前也非 parentRevision 的旧快照。
-  collectStaleSnapshots(storage, conversation.id, new Set(parentRevision ? [revision, parentRevision] : [revision]), 2);
-  return { ok: true, revision };
 }
 
 function collectStaleSnapshots(storage: StorageLike, conversationId: string, keep: ReadonlySet<string>, budget: number): void {
@@ -509,85 +533,6 @@ function collectStaleSnapshots(storage: StorageLike, conversationId: string, kee
   }
 }
 
-/**
- * 硬删除一个已从 state 消失的会话：head + 至多 2 份快照（tombstone 语义由
- * 下一提交接管，此处保持与整存时代 observable-equal 的删除行为）。
- */
-function deleteConversationShard(storage: StorageLike, conversationId: string): void {
-  const knownRevision = lastCommittedRevision.get(conversationId);
-  let removedSnapshots = 0;
-  let failed = false;
-  try {
-    storage.removeItem(sessionHeadKeyV3(conversationId));
-  } catch {
-    failed = true;
-  }
-  if (knownRevision) {
-    try {
-      storage.removeItem(sessionSnapshotKeyV3(conversationId, knownRevision));
-      removedSnapshots += 1;
-    } catch {
-      failed = true;
-    }
-  }
-  const prefix = sessionSnapshotKeyV3(conversationId, "");
-  const keys = enumerateKeysWithPrefix(storage, prefix);
-  if (keys) {
-    for (const key of keys) {
-      if (removedSnapshots >= 2) break;
-      if (knownRevision && key === sessionSnapshotKeyV3(conversationId, knownRevision)) continue;
-      try {
-        storage.removeItem(key);
-        removedSnapshots += 1;
-      } catch {
-        failed = true;
-      }
-    }
-  }
-  // 删除失败则保留适配器记录，下一次 flush 重试。
-  if (!failed) {
-    lastCommitted.delete(conversationId);
-    lastCommittedRevision.delete(conversationId);
-  }
-}
-
-/**
- * 首个所有脏分片都提交成功的 flush 之后，才删除 V2 head / snapshot 与 legacy
- * conversations / currentConversation 键（此刻它们的内容已核验落入 V3，
- * 与 4.3.5 的"先验证后删除"同规）。legacyMessages 永不删除（与 4.3.5 语义一致）。
- */
-function cleanupMigratedKeys(storage: StorageLike): void {
-  let hasMigratedKeys = false;
-  for (const key of [conversationStorageKeys.sessionHead, conversationStorageKeys.conversations, conversationStorageKeys.currentConversation]) {
-    try {
-      if (storage.getItem(key) !== null) hasMigratedKeys = true;
-    } catch {
-      return; // 连读都失败时不做任何删除。
-    }
-  }
-  let v2SnapshotKeys = enumerateKeysWithPrefix(storage, V2_SNAPSHOT_PREFIX);
-  if (v2SnapshotKeys === null) {
-    // 不支持枚举：V2 最多保留 head 与 head-1 两份，按此兜底。
-    const head = readHeadGeneration(storage);
-    v2SnapshotKeys = [head, head - 1].filter((generation) => generation >= 1).map(sessionSnapshotKey);
-  } else if (v2SnapshotKeys.length) {
-    hasMigratedKeys = true;
-  }
-  if (!hasMigratedKeys) return;
-  for (const key of [
-    conversationStorageKeys.sessionHead,
-    conversationStorageKeys.conversations,
-    conversationStorageKeys.currentConversation,
-    ...v2SnapshotKeys,
-  ]) {
-    try {
-      storage.removeItem(key);
-    } catch {
-      // 残留键只会让旧读取器看到过期数据，V3 提交本身已完成。
-    }
-  }
-}
-
 /** 解析 `session.v3.snapshot.<conversationId>.<seq>.<tabId>`；形状不符返回 null。 */
 function parseSnapshotKey(key: string): { conversationId: string; revision: string } | null {
   const rest = key.slice(conversationStorageKeys.v3SnapshotPrefix.length);
@@ -599,8 +544,8 @@ function parseSnapshotKey(key: string): { conversationId: string; revision: stri
 }
 
 /**
- * 空闲孤儿 GC：扫描所有 V3 快照，删除不被所属会话 head / parentRevision
- * 引用的快照（崩溃/失败写入的残留），单次最多 budget 份，返回删除数。
+ * 空闲孤儿 GC：扫描所有 V3 快照，删除不被所属会话 head / parentRevision /
+ * 冲突指针引用的快照（崩溃/失败写入的残留），单次最多 budget 份，返回删除数。
  * 存储不支持枚举时直接返回 0。
  */
 export function runIdleCheckpointGc(storage: StorageLike, budget = 4): number {
@@ -616,6 +561,9 @@ export function runIdleCheckpointGc(storage: StorageLike, budget = 4): number {
         keep.add(head.revision);
         if (head.parentRevision) keep.add(head.parentRevision);
       }
+      // 未解决冲突指向的分支快照在解决前受保护，与 current/previous 同规。
+      const conflict = parseV3ConflictPointer(safeGetItem(storage, sessionConflictKeyV3(conversationId)));
+      if (conflict) keep.add(conflict.revision);
       keepByConversation.set(conversationId, keep);
     }
     return keep;
@@ -636,56 +584,484 @@ export function runIdleCheckpointGc(storage: StorageLike, budget = 4): number {
   return removed;
 }
 
-function scheduleIdleCheckpointGc(storage: StorageLike): void {
-  if (idleGcScheduled) return;
-  idleGcScheduled = true;
-  const run = (): void => {
-    idleGcScheduled = false;
-    try {
-      runIdleCheckpointGc(storage);
-    } catch {
-      // 空闲 GC 永远不允许抛出。
-    }
+function detectNavigatorLocks(): LocksLike | null {
+  const nav = (globalThis as { navigator?: { locks?: Partial<LocksLike> } }).navigator;
+  const locks = nav?.locks;
+  const request = locks?.request;
+  if (!locks || typeof request !== "function") return null;
+  const bound = request.bind(locks) as LocksLike["request"];
+  return {
+    request: (name, options, callback) => bound(name, options, callback),
   };
-  const requestIdle = (globalThis as { requestIdleCallback?: (callback: () => void) => void }).requestIdleCallback;
-  if (typeof requestIdle === "function") requestIdle(run);
-  else setTimeout(run, 0);
 }
 
-/**
- * 以会话为分片提交会话状态：
- *   删除已从 state 消失的会话分片 → 逐个脏会话 snapshot 写入 → 回读核验
- *   → head 推进 → 有界保留 GC → 全部脏分片成功后清理 V2 / legacy 键
- *   → 调度一次空闲孤儿 GC。
- * 当前会话选中只写入本标签页的 sessionStorage，绝不进入 V3 共享键。
- * 任何路径都不抛异常，失败以 PersistenceFlushResult 返回并附估算负载大小。
- */
+export interface ConversationPersistenceAdapterOptions {
+  /** 显式注入锁实现（测试互斥锁）；null 强制无锁路径；缺省则运行时探测 navigator.locks。 */
+  locks?: LocksLike | null;
+}
+
+export function createConversationPersistenceAdapter(
+  adapterOptions: ConversationPersistenceAdapterOptions = {},
+): ConversationPersistenceAdapter {
+  /**
+   * 持久化适配器状态。chat reducer 只替换发生变化的会话对象（其余保持对象
+   * identity），因此 identity 对比即可圈出脏分片：一次会话变更只序列化该会话。
+   */
+  const lastCommitted = new Map<string, Conversation>();
+  const lastCommittedRevision = new Map<string, string>();
+  let lastHeadRevision: string | null = null;
+  let idleGcScheduled = false;
+
+  function load(storage: StorageLike | null = browserStorage(), session: StorageLike | null = browserSessionStorage()): PersistedConversationState {
+    if (!storage) return { schemaVersion: 1, currentConversationId: null, conversations: [] };
+    // V3 分片优先；其后依次为 V2 journal（迁移读取器，保持原逻辑）与 legacy 键。
+    const sharded = loadV3Conversations(storage);
+    if (sharded) {
+      const conversations = sortConversations(sharded.map((entry) => entry.conversation));
+      const headRevisionById = new Map(sharded.map((entry) => [entry.conversation.id, entry.headRevision]));
+      // V3 加载的分片内容与共享 head 一致：按"已提交"登记（identity + base），
+      // 第二个打开的标签页因此不会重写共享 head，更不会在仲裁下制造伪冲突。
+      // 只对进入 state 的会话登记（sortConversations 有数量上限），避免把被
+      // 截断的会话误判为"本地已删除"。V2 / legacy 加载不登记——那些内容尚未
+      // 落入 V3，必须按脏提交完成迁移。
+      for (const conversation of conversations) {
+        const headRevision = headRevisionById.get(conversation.id);
+        if (!headRevision) continue;
+        lastCommitted.set(conversation.id, conversation);
+        lastCommittedRevision.set(conversation.id, headRevision);
+      }
+      return { schemaVersion: 1, currentConversationId: resolveTabSelection(session, conversations, null), conversations };
+    }
+    const head = readHeadGeneration(storage);
+    for (const generation of [head, head - 1]) {
+      if (generation < 1) continue;
+      const checkpoint = loadCheckpoint(storage, generation);
+      if (checkpoint) {
+        return {
+          schemaVersion: 1,
+          currentConversationId: resolveTabSelection(session, checkpoint.conversations, checkpoint.currentConversationId),
+          conversations: checkpoint.conversations,
+        };
+      }
+    }
+    let conversations = normalizeConversations(parseArray(safeGetItem(storage, conversationStorageKeys.conversations)));
+
+    if (!conversations.length) {
+      const messages = parseArray(safeGetItem(storage, conversationStorageKeys.legacyMessages))
+        .map(migrateLegacyMessage)
+        .filter((message): message is ChatMessage => Boolean(message));
+      if (messages.length) {
+        conversations = [createConversation(createId("legacy-conversation"), messages.map(checkpointMessage), DEFAULT_MODEL, true)];
+      }
+    }
+
+    conversations = sortConversations(conversations);
+    const requestedId = safeGetItem(storage, conversationStorageKeys.currentConversation);
+    return { schemaVersion: 1, currentConversationId: resolveTabSelection(session, conversations, requestedId), conversations };
+  }
+
+  type ShardCommitOutcome =
+    | { ok: true; kind: "head"; revision: string; savedAt: number }
+    | {
+        ok: true;
+        kind: "conflict";
+        revision: string;
+        savedAt: number;
+        baseRevision: string | null;
+        sharedRevision: string;
+      }
+    | PersistenceFlushFailure;
+
+  /**
+   * 提交单个会话分片（跨标签页仲裁版）：先重读共享 head，与适配器本地 base
+   * （本标签页上次提交推进到的 head revision）比较——
+   * - base 与共享 head 一致（或 head 缺失，按首次写入）→ 既有协议：snapshot
+   *   写入 → 回读核验 digest + revision → head 推进；
+   * - 不一致 → 绝不覆盖：本地分支写为冲突快照（revision = 共享 head 序号 + 1
+   *   并内嵌本标签页 tabId，永与胜方 head revision 不撞；parentRevision =
+   *   本地 base），回读核验后才写入/替换冲突指针（指针永远指向已确认落盘的
+   *   分支，每个会话至多一个未解决冲突）。
+   * 无锁路径执行完全相同的"重读 + 比较"：revision 内嵌 tabId，其他标签页
+   * 写入的 head 必然被识别为兄弟分支，并发提交退化为冲突副本而不是静默的
+   * last-write-wins。任何路径都不抛异常。
+   */
+  function commitConversationShard(storage: StorageLike, conversation: Conversation, tabId: string): ShardCommitOutcome {
+    const bytes = estimateConversationBytes(conversation);
+    let headRaw: string | null;
+    try {
+      headRaw = storage.getItem(sessionHeadKeyV3(conversation.id));
+    } catch (error) {
+      return shardFailure(classifyStorageError(error), conversation.id, bytes);
+    }
+    const head = parseV3Head(headRaw);
+    const sharedRevision = head?.revision ?? null;
+    const localBase = lastCommittedRevision.get(conversation.id) ?? null;
+    const conflicted = head !== null && sharedRevision !== localBase;
+    const revision = `${revisionSeq(sharedRevision) + 1}.${tabId}`;
+    const parentRevision = conflicted ? localBase : sharedRevision;
+    let serialized: string;
+    let digest: string;
+    let savedAt = 0;
+    try {
+      const normalized = normalizeConversationForCommit(conversation);
+      const payload = JSON.stringify(normalized);
+      digest = checkpointDigest(payload);
+      savedAt = Date.now();
+      const checkpoint: ConversationCheckpointV3 = {
+        schemaVersion: 3,
+        conversationId: conversation.id,
+        revision,
+        parentRevision,
+        writerId: tabId,
+        savedAt,
+        digest,
+        conversation: normalized,
+      };
+      serialized = JSON.stringify(checkpoint);
+    } catch (error) {
+      return conflicted
+        ? conflictWriteFailure(error, conversation.id, bytes)
+        : shardFailure(classifyStorageError(error), conversation.id, bytes);
+    }
+    const snapshotKey = sessionSnapshotKeyV3(conversation.id, revision);
+    try {
+      storage.setItem(snapshotKey, serialized);
+    } catch (error) {
+      return conflicted
+        ? conflictWriteFailure(error, conversation.id, bytes)
+        : shardFailure(classifyStorageError(error), conversation.id, bytes);
+    }
+    let stored: string | null;
+    try {
+      stored = storage.getItem(snapshotKey);
+    } catch (error) {
+      return conflicted
+        ? conflictWriteFailure(error, conversation.id, bytes)
+        : shardFailure(classifyStorageError(error), conversation.id, bytes);
+    }
+    if (!storedCheckpointMatches(stored, conversation.id, revision, digest)) {
+      return conflicted
+        ? conflictVerificationFailure(conversation.id, bytes)
+        : shardFailure(verificationFailure("快照写入后回读核验失败"), conversation.id, bytes);
+    }
+    if (conflicted && head) {
+      // 分支快照已确认落盘，此刻才允许写入/替换冲突指针；上一份被替换掉的
+      // 分支失去指针保护，由保留/空闲 GC 回收。
+      const pointer: ConversationConflictPointer = {
+        revision,
+        baseRevision: localBase,
+        sharedRevision: head.revision,
+        writerId: tabId,
+        savedAt,
+      };
+      try {
+        storage.setItem(sessionConflictKeyV3(conversation.id), JSON.stringify(pointer));
+      } catch (error) {
+        return conflictWriteFailure(error, conversation.id, bytes);
+      }
+      return { ok: true, kind: "conflict", revision, savedAt, baseRevision: localBase, sharedRevision: head.revision };
+    }
+    try {
+      storage.setItem(sessionHeadKeyV3(conversation.id), JSON.stringify({
+        revision,
+        parentRevision,
+        writerId: tabId,
+        savedAt,
+        digest,
+      } satisfies ConversationHeadV3));
+    } catch (error) {
+      return shardFailure(classifyStorageError(error), conversation.id, bytes);
+    }
+    // 保留式 GC：有界 O(1)——最多删除 2 份既非当前、也非 parentRevision、
+    // 也非冲突指针引用分支的旧快照。
+    const keep = new Set(parentRevision ? [revision, parentRevision] : [revision]);
+    const conflict = parseV3ConflictPointer(safeGetItem(storage, sessionConflictKeyV3(conversation.id)));
+    if (conflict) keep.add(conflict.revision);
+    collectStaleSnapshots(storage, conversation.id, keep, 2);
+    return { ok: true, kind: "head", revision, savedAt };
+  }
+
+  /**
+   * 硬删除一个已从 state 消失的会话：head + 冲突指针 + 至多 2 份快照
+   * （tombstone 语义由下一提交接管，此处保持与整存时代 observable-equal
+   * 的删除行为）。全部删除成功才返回 true。
+   */
+  function deleteConversationShard(storage: StorageLike, conversationId: string): boolean {
+    const knownRevision = lastCommittedRevision.get(conversationId);
+    let removedSnapshots = 0;
+    let failed = false;
+    try {
+      storage.removeItem(sessionHeadKeyV3(conversationId));
+    } catch {
+      failed = true;
+    }
+    try {
+      storage.removeItem(sessionConflictKeyV3(conversationId));
+    } catch {
+      failed = true;
+    }
+    if (knownRevision) {
+      try {
+        storage.removeItem(sessionSnapshotKeyV3(conversationId, knownRevision));
+        removedSnapshots += 1;
+      } catch {
+        failed = true;
+      }
+    }
+    const prefix = sessionSnapshotKeyV3(conversationId, "");
+    const keys = enumerateKeysWithPrefix(storage, prefix);
+    if (keys) {
+      for (const key of keys) {
+        if (removedSnapshots >= 2) break;
+        if (knownRevision && key === sessionSnapshotKeyV3(conversationId, knownRevision)) continue;
+        try {
+          storage.removeItem(key);
+          removedSnapshots += 1;
+        } catch {
+          failed = true;
+        }
+      }
+    }
+    // 删除失败则保留适配器记录，下一次 flush 重试。
+    if (!failed) {
+      lastCommitted.delete(conversationId);
+      lastCommittedRevision.delete(conversationId);
+    }
+    return !failed;
+  }
+
+  /**
+   * 首个所有脏分片都提交成功的 flush 之后，才删除 V2 head / snapshot 与 legacy
+   * conversations / currentConversation 键（此刻它们的内容已核验落入 V3，
+   * 与 4.3.5 的"先验证后删除"同规）。legacyMessages 永不删除（与 4.3.5 语义一致）。
+   */
+  function cleanupMigratedKeys(storage: StorageLike): void {
+    let hasMigratedKeys = false;
+    for (const key of [conversationStorageKeys.sessionHead, conversationStorageKeys.conversations, conversationStorageKeys.currentConversation]) {
+      try {
+        if (storage.getItem(key) !== null) hasMigratedKeys = true;
+      } catch {
+        return; // 连读都失败时不做任何删除。
+      }
+    }
+    let v2SnapshotKeys = enumerateKeysWithPrefix(storage, V2_SNAPSHOT_PREFIX);
+    if (v2SnapshotKeys === null) {
+      // 不支持枚举：V2 最多保留 head 与 head-1 两份，按此兜底。
+      const head = readHeadGeneration(storage);
+      v2SnapshotKeys = [head, head - 1].filter((generation) => generation >= 1).map(sessionSnapshotKey);
+    } else if (v2SnapshotKeys.length) {
+      hasMigratedKeys = true;
+    }
+    if (!hasMigratedKeys) return;
+    for (const key of [
+      conversationStorageKeys.sessionHead,
+      conversationStorageKeys.conversations,
+      conversationStorageKeys.currentConversation,
+      ...v2SnapshotKeys,
+    ]) {
+      try {
+        storage.removeItem(key);
+      } catch {
+        // 残留键只会让旧读取器看到过期数据，V3 提交本身已完成。
+      }
+    }
+  }
+
+  function scheduleIdleCheckpointGc(storage: StorageLike): void {
+    if (idleGcScheduled) return;
+    idleGcScheduled = true;
+    const run = (): void => {
+      idleGcScheduled = false;
+      try {
+        runIdleCheckpointGc(storage);
+      } catch {
+        // 空闲 GC 永远不允许抛出。
+      }
+    };
+    const requestIdle = (globalThis as { requestIdleCallback?: (callback: () => void) => void }).requestIdleCallback;
+    if (typeof requestIdle === "function") requestIdle(run);
+    else setTimeout(run, 0);
+  }
+
+  /**
+   * 以会话为分片提交会话状态：
+   *   删除已从 state 消失的会话分片 → 逐个脏会话仲裁提交（重读共享 head →
+   *   一致推进 / 不一致写冲突分支）→ 有界保留 GC → 全部脏分片成功后清理
+   *   V2 / legacy 键 → 调度一次空闲孤儿 GC。
+   * 当前会话选中只写入本标签页的 sessionStorage，绝不进入 V3 共享键。
+   * 冲突分支耐久写入仍算 {ok:true}（数据安全，经 onConflict 带外上报）；
+   * 冲突分支写失败返回 write-conflict（数据面临风险）。
+   * 任何路径都不抛异常，失败以 PersistenceFlushResult 返回并附估算负载大小。
+   */
+  function save(
+    state: PersistedConversationState,
+    storage: StorageLike | null = browserStorage(),
+    session: StorageLike | null = browserSessionStorage(),
+    options?: SaveConversationOptions,
+  ): PersistenceFlushResult {
+    if (!storage) return withSizeHint(storageUnavailableFailure("localStorage 不可用"), estimateCheckpointBytes(state));
+    const tabId = getTabId(session);
+    writeTabSelection(session, state.currentConversationId);
+
+    const present = new Set(state.conversations.map((conversation) => conversation.id));
+    for (const conversationId of [...lastCommitted.keys()]) {
+      if (!present.has(conversationId) && deleteConversationShard(storage, conversationId)) {
+        options?.onDelete?.({ conversationId, writerId: tabId });
+      }
+    }
+
+    for (const conversation of state.conversations) {
+      if (!conversation.messages.length) continue;
+      if (lastCommitted.get(conversation.id) === conversation) continue;
+      const outcome = commitConversationShard(storage, conversation, tabId);
+      if (!outcome.ok) return outcome;
+      // 冲突提交后 base 跟进胜方 head，下一次提交在胜方之上推进。
+      lastCommitted.set(conversation.id, conversation);
+      lastCommittedRevision.set(conversation.id, outcome.kind === "conflict" ? outcome.sharedRevision : outcome.revision);
+      lastHeadRevision = outcome.revision;
+      options?.onCommit?.({ conversationId: conversation.id, revision: outcome.revision, writerId: tabId, savedAt: outcome.savedAt });
+      if (outcome.kind === "conflict") {
+        options?.onConflict?.({
+          conversationId: conversation.id,
+          title: conversation.title,
+          revision: outcome.revision,
+          baseRevision: outcome.baseRevision,
+          sharedRevision: outcome.sharedRevision,
+          writerId: tabId,
+          savedAt: outcome.savedAt,
+        });
+      }
+    }
+
+    // 此刻 state 中所有会话都已核验落入 V3，才允许清理 V2 / legacy 键。
+    cleanupMigratedKeys(storage);
+    scheduleIdleCheckpointGc(storage);
+    return lastHeadRevision ? { ok: true, revision: lastHeadRevision } : { ok: true };
+  }
+
+  async function saveArbitrated(
+    getState: () => PersistedConversationState,
+    storage: StorageLike | null = browserStorage(),
+    session: StorageLike | null = browserSessionStorage(),
+    options?: SaveConversationOptions,
+  ): Promise<PersistenceFlushResult> {
+    const locks = adapterOptions.locks === undefined ? detectNavigatorLocks() : adapterOptions.locks;
+    if (!locks) return save(getState(), storage, session, options);
+    try {
+      return await locks.request(CONVERSATION_CHECKPOINT_LOCK_NAME, { mode: "exclusive" }, () =>
+        save(getState(), storage, session, options),
+      );
+    } catch {
+      // 锁子系统自身失败（而非存储失败）：退化为无锁提交，兄弟检测仍保证不覆盖。
+      return save(getState(), storage, session, options);
+    }
+  }
+
+  function reconcileRemoteCommit(
+    conversationId: string,
+    local: Conversation | undefined,
+    storage: StorageLike | null = browserStorage(),
+  ): ReconcileRemoteOutcome {
+    if (!storage) return { kind: "noop" };
+    const head = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
+    if (!head) return { kind: "noop" };
+    if (lastCommittedRevision.get(conversationId) === head.revision) return { kind: "noop" };
+    if (local && lastCommitted.get(conversationId) !== local) {
+      // 本地有未提交修改：base 已落后于共享 head，下一次提交自然进入冲突
+      // 分支路径（revision 内嵌 tabId，远端 head 绝不会被误认作本地 base）。
+      return { kind: "stale" };
+    }
+    const conversation = loadV3SnapshotConversation(storage, conversationId, head.revision)
+      ?? (head.parentRevision ? loadV3SnapshotConversation(storage, conversationId, head.parentRevision) : null);
+    if (!conversation) return { kind: "noop" };
+    lastCommitted.set(conversationId, conversation);
+    lastCommittedRevision.set(conversationId, head.revision);
+    return { kind: "reload", conversation };
+  }
+
+  function readSharedConversation(
+    conversationId: string,
+    storage: StorageLike | null = browserStorage(),
+  ): { conversation: Conversation; revision: string } | null {
+    if (!storage) return null;
+    const head = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
+    if (!head) return null;
+    const conversation = loadV3SnapshotConversation(storage, conversationId, head.revision)
+      ?? (head.parentRevision ? loadV3SnapshotConversation(storage, conversationId, head.parentRevision) : null);
+    return conversation ? { conversation, revision: head.revision } : null;
+  }
+
+  function readConflictBranch(
+    conversationId: string,
+    storage: StorageLike | null = browserStorage(),
+  ): { pointer: ConversationConflictPointer; conversation: Conversation } | null {
+    if (!storage) return null;
+    const pointer = parseV3ConflictPointer(safeGetItem(storage, sessionConflictKeyV3(conversationId)));
+    if (!pointer) return null;
+    const conversation = loadV3SnapshotConversation(storage, conversationId, pointer.revision);
+    return conversation ? { pointer, conversation } : null;
+  }
+
+  function clearConflict(conversationId: string, storage: StorageLike | null = browserStorage()): void {
+    if (!storage) return;
+    try {
+      storage.removeItem(sessionConflictKeyV3(conversationId));
+    } catch {
+      // 残留指针只会让分支多受保护一轮 GC，无害。
+    }
+  }
+
+  function adoptRemoteConversation(conversationId: string, conversation: Conversation, revision: string): void {
+    lastCommitted.set(conversationId, conversation);
+    lastCommittedRevision.set(conversationId, revision);
+  }
+
+  function reset(): void {
+    lastCommitted.clear();
+    lastCommittedRevision.clear();
+    lastHeadRevision = null;
+    idleGcScheduled = false;
+  }
+
+  return {
+    load,
+    save,
+    saveArbitrated,
+    reconcileRemoteCommit,
+    readSharedConversation,
+    readConflictBranch,
+    clearConflict,
+    adoptRemoteConversation,
+    reset,
+  };
+}
+
+const defaultAdapter = createConversationPersistenceAdapter();
+
+export function loadPersistedConversationState(
+  storage: StorageLike | null = browserStorage(),
+  session: StorageLike | null = browserSessionStorage(),
+): PersistedConversationState {
+  return defaultAdapter.load(storage, session);
+}
+
 export function savePersistedConversationState(
   state: PersistedConversationState,
   storage: StorageLike | null = browserStorage(),
   session: StorageLike | null = browserSessionStorage(),
+  options?: SaveConversationOptions,
 ): PersistenceFlushResult {
-  if (!storage) return withSizeHint(storageUnavailableFailure("localStorage 不可用"), estimateCheckpointBytes(state));
-  const tabId = getTabId(session);
-  writeTabSelection(session, state.currentConversationId);
+  return defaultAdapter.save(state, storage, session, options);
+}
 
-  const present = new Set(state.conversations.map((conversation) => conversation.id));
-  for (const conversationId of [...lastCommitted.keys()]) {
-    if (!present.has(conversationId)) deleteConversationShard(storage, conversationId);
-  }
+/** 通过默认适配器读取冲突分支（冲突快照经 digest 核验；损坏返回 null）。 */
+export function readConflictBranch(
+  conversationId: string,
+  storage: StorageLike | null = browserStorage(),
+): { pointer: ConversationConflictPointer; conversation: Conversation } | null {
+  return defaultAdapter.readConflictBranch(conversationId, storage);
+}
 
-  for (const conversation of state.conversations) {
-    if (!conversation.messages.length) continue;
-    if (lastCommitted.get(conversation.id) === conversation) continue;
-    const result = commitConversationShard(storage, conversation, tabId);
-    if (!result.ok) return result;
-    lastCommitted.set(conversation.id, conversation);
-    lastCommittedRevision.set(conversation.id, result.revision);
-    lastHeadRevision = result.revision;
-  }
-
-  // 此刻 state 中所有会话都已核验落入 V3，才允许清理 V2 / legacy 键。
-  cleanupMigratedKeys(storage);
-  scheduleIdleCheckpointGc(storage);
-  return lastHeadRevision ? { ok: true, revision: lastHeadRevision } : { ok: true };
+export function resetConversationPersistenceForTests(): void {
+  defaultAdapter.reset();
 }

@@ -672,9 +672,10 @@ describe("checkpointMessage honest interruption", () => {
     expect(recovered?.systemNotes).toEqual([INTERRUPTED_CHECKPOINT_NOTE]);
     // interrupted === true ⇒ 恢复后的会话可走"继续生成"入口。
 
-    // 重复保存加载后的状态：系统说明仍然只出现一次（按精确串去重）。
+    // 重复保存加载后的状态：V3 加载的分片已按"已提交"登记（内容与共享 head
+    // 一致），没有脏分片可写，revision 不再空转推进；系统说明仍然只出现一次。
     const reloadedState = makeState(loaded.currentConversationId, [...loaded.conversations]);
-    expect(savePersistedConversationState(reloadedState, storage, session)).toEqual({ ok: true, revision: `2.${TEST_TAB_ID}` });
+    expect(savePersistedConversationState(reloadedState, storage, session)).toEqual({ ok: true, revision: `1.${TEST_TAB_ID}` });
     const reloaded = loadPersistedConversationState(storage, session);
     const again = reloaded.conversations[0]?.messages[1];
     expect(again).toMatchObject({ streaming: false, phase: "interrupted", interrupted: true });

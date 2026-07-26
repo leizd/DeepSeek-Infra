@@ -15,6 +15,11 @@
 - Conversation persistence moves from whole-store V2 snapshots to per-conversation V3 shards (write → digest-verify → head), so editing one conversation serializes only that conversation; per-conversation retention and idle orphan GC keep cleanup O(1) regardless of save count, and the tab's current-conversation selection leaves shared state for sessionStorage.
 
 
+### Cross-tab checkpoint arbitration
+
+- Conversation commits run inside an exclusive Web Lock (with an equivalent lock-free sibling-detection fallback) that re-reads the shared head before writing: a stale tab can never overwrite a newer revision, its branch is preserved as a per-conversation conflict copy recoverable as an independent conversation, and a BroadcastChannel invalidates clean remote copies without ever switching the tab you are looking at.
+
+
 ## [4.3.5] - Durable Checkpoints and Recovery Integrity
 
 ### Canonical release identity
