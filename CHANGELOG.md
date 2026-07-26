@@ -27,6 +27,10 @@
 
 - The current-conversation selection is tab-local UI state in sessionStorage: switching conversations no longer schedules a shared checkpoint, remote commits and deletions never move the tab you are looking at, and deleting the viewed conversation only falls back locally.
 
+### Streaming checkpoint backpressure
+
+- Persistence scheduling now coalesces normal edits over 300ms, throttles in-flight streaming to one commit per second with a trailing edge, and commits immediately on stream completion, deletion, page-hide and build-update activation — so long streams no longer hammer synchronous localStorage while terminal state is always durable.
+
 
 ## [4.3.5] - Durable Checkpoints and Recovery Integrity
 

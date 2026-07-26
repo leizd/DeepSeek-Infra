@@ -37,6 +37,7 @@ import { createOutputPauseGate } from "../activity/outputPause";
 import { useAgentRun } from "../agent-run/useAgentRun";
 import { detectReminderFromText } from "../reminders/reminderParse";
 import { ensureNotificationPermission } from "../reminders/useReminderPolling";
+import { decideCheckpointDelay } from "./checkpointSchedule";
 import { quoteAwareContent } from "./messageActions";
 
 function userMessage(content: string, attachments: readonly Attachment[]): ChatMessage {
@@ -92,7 +93,10 @@ export interface ChatControllerOptions {
   syncChannel?: ConversationSyncChannel;
   /** 测试注入：模拟另一标签页的 sessionStorage（决定 tabId 与选中态）；缺省用浏览器 sessionStorage。 */
   session?: StorageLike | null;
-  /** 防抖提交间隔（毫秒），测试可调大以改用显式 flush 驱动。 */
+  /**
+   * 测试注入：以固定防抖覆盖自动保存调度（普通 300ms 合并 / 流式 1s 节流 /
+   * 结算即时提交全部停用），便于测试用显式 flush 精确驱动提交。
+   */
   autosaveDebounceMs?: number;
 }
 
@@ -158,7 +162,23 @@ export function useChatController(options: ChatControllerOptions = {}) {
     }
   }, []);
 
+  // 自动保存调度状态：待决定时器句柄（生命周期 flush 须可取消）、上次提交
+  // 时刻（流式节流锚点）、上一渲染的流式标记（识别 streaming→idle 结算跃迁）。
+  const autosaveTimerRef = useRef<number | null>(null);
+  const lastCommitAtRef = useRef(Date.now());
+  const wasStreamingRef = useRef(false);
+  const cancelAutosaveTimer = useCallback(() => {
+    if (autosaveTimerRef.current !== null) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+  }, []);
+
   const flushConversationPersistence = useCallback((): PersistenceFlushResult => {
+    // 生命周期 flush（pagehide / beforeunload / 构建更新激活）：取消待决的
+    // 防抖/节流定时器并由本次同步 flush 接管提交——立即提交全部脏状态，绝不双提交。
+    cancelAutosaveTimer();
+    lastCommitAtRef.current = Date.now();
     let result: PersistenceFlushResult;
     try {
       // 无锁同步路径（pagehide / beforeunload 必须同步完成）：与走锁路径完全
@@ -170,7 +190,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
     }
     recordFailedResult(result);
     return result;
-  }, [persistence, readPersistedState, recordFailedResult, options.session]);
+  }, [persistence, readPersistedState, recordFailedResult, options.session, cancelAutosaveTimer]);
 
   // 防抖（普通）提交走排他 Web Lock 临界区；锁缺失时适配器内部退化为无锁
   // 路径（同样的兄弟检测）。单-flight：流式期间高频触发只保留最新一次，
@@ -203,10 +223,38 @@ export function useChatController(options: ChatControllerOptions = {}) {
     persistence.persistSelection(state.currentConversationId, options.session);
   }, [persistence, state.currentConversationId, options.session]);
 
+  // 自动保存调度：普通编辑 300ms 尾随合并；流式进行中锚定上次提交时刻的 1s
+  // 节流（尾随边界提交，尾部增量不丢）；流式结算（done / error / 中断 ⇒
+  // streaming→idle 跃迁）立即提交并绕过待决定时器。effect 清理保证卸载后
+  // 定时器绝不触发。测试注入 autosaveDebounceMs 时退回固定防抖。
   useEffect(() => {
-    const timer = window.setTimeout(() => arbitratedFlushRef.current(), options.autosaveDebounceMs ?? 120);
-    return () => window.clearTimeout(timer);
-  }, [state.conversations, options.autosaveDebounceMs]);
+    const streamingActive = state.requestStatus === "streaming";
+    const justSettled = wasStreamingRef.current && !streamingActive;
+    wasStreamingRef.current = streamingActive;
+    const decision = options.autosaveDebounceMs !== undefined
+      ? options.autosaveDebounceMs
+      : decideCheckpointDelay({
+        streamingActive,
+        justSettled,
+        lastCommitAt: lastCommitAtRef.current,
+        now: Date.now(),
+      });
+    if (decision === "immediate") {
+      lastCommitAtRef.current = Date.now();
+      arbitratedFlushRef.current();
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      if (autosaveTimerRef.current === timer) autosaveTimerRef.current = null;
+      lastCommitAtRef.current = Date.now();
+      arbitratedFlushRef.current();
+    }, decision);
+    autosaveTimerRef.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (autosaveTimerRef.current === timer) autosaveTimerRef.current = null;
+    };
+  }, [state.conversations, state.requestStatus, options.autosaveDebounceMs]);
 
   // 跨标签页同步：订阅一次（卸载时清理）。远端提交到达时——本标签页对该会话
   // 干净则换入共享 head；本地脏则保持，等下次提交走冲突路径；绝不切换当前
