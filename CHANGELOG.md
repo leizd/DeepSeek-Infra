@@ -23,6 +23,10 @@
 
 - Deleting a conversation commits a tombstone before touching UI state, so a stale tab can never resurrect the id — its edits survive only as a new recovery copy; tombstones are retained for a bounded window/count and are garbage-collected only after every live tab lease has provably seen the deletion.
 
+### Per-tab conversation selection
+
+- The current-conversation selection is tab-local UI state in sessionStorage: switching conversations no longer schedules a shared checkpoint, remote commits and deletions never move the tab you are looking at, and deleting the viewed conversation only falls back locally.
+
 
 ## [4.3.5] - Durable Checkpoints and Recovery Integrity
 

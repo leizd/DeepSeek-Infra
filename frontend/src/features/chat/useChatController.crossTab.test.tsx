@@ -637,3 +637,181 @@ describe("cross-tab conversation sync", () => {
     expect(after).toBe(before);
   });
 });
+
+describe("per-tab conversation selection", () => {
+  it("switching selection never schedules a shard save; only the tab sessionStorage key is written", async () => {
+    seedConversations([makeConversation("alpha", "一"), makeConversation("beta", "二")]);
+    const saveArbitrated = vi.spyOn(tabA.adapter, "saveArbitrated");
+    const localWrites: string[] = [];
+    const originalSet = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")?.value as (
+      this: Storage,
+      key: string,
+      value: string,
+    ) => void;
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key: string, value: string) {
+      if (this === window.localStorage) localWrites.push(key);
+      originalSet.call(this, key, value);
+    });
+    // 短防抖挂载：任何被调度的分片保存都会在 60ms 窗口内现形。
+    const a = renderHook(() => useChatController({
+      persistence: tabA.adapter,
+      syncChannel: tabA.channel,
+      session: tabA.session,
+      autosaveDebounceMs: 10,
+    }));
+
+    // 挂载首轮防抖提交落地：无脏分片，共享存储零写入。
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+    expect(saveArbitrated).toHaveBeenCalledTimes(1);
+    saveArbitrated.mockClear();
+    localWrites.length = 0;
+
+    act(() => {
+      a.result.current.openConversation("beta");
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+
+    // 选中切换不调度分片保存、不广播、不写任何共享键；只有本标签页 sessionStorage 的选中键更新。
+    expect(saveArbitrated).not.toHaveBeenCalled();
+    expect(bus.posted).toEqual([]);
+    expect(localWrites).toEqual([]);
+    expect(a.result.current.state.currentConversationId).toBe("beta");
+    expect(tabA.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("beta");
+
+    // 切回同样只更新选中键。
+    act(() => {
+      a.result.current.openConversation("alpha");
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+    expect(saveArbitrated).not.toHaveBeenCalled();
+    expect(bus.posted).toEqual([]);
+    expect(localWrites).toEqual([]);
+    expect(a.result.current.state.currentConversationId).toBe("alpha");
+    expect(tabA.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
+    setItem.mockRestore();
+  });
+
+  it("two tabs hold independent selections across remote commits and deletes", async () => {
+    seedConversations([makeConversation("alpha", "一"), makeConversation("beta", "二")]);
+    const a = mountTab(tabA);
+    const b = mountTab(tabB);
+
+    act(() => {
+      a.result.current.openConversation("alpha");
+      b.result.current.openConversation("beta");
+    });
+    expect(a.result.current.state.currentConversationId).toBe("alpha");
+    expect(b.result.current.state.currentConversationId).toBe("beta");
+    expect(tabA.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
+    expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("beta");
+    // 选中切换不进入跨标签页通道。
+    expect(bus.posted).toEqual([]);
+
+    // 远端提交到达：B 的 alpha 数据刷新，但 B 的选中不被拽走。
+    streamChatMock.mockImplementationOnce(() => doneStream());
+    await act(async () => {
+      await a.result.current.sendMessage("A 的补充");
+    });
+    act(() => {
+      a.result.current.flushConversationPersistence();
+    });
+    expect(b.result.current.state.currentConversationId).toBe("beta");
+    expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("beta");
+    expect(a.result.current.state.currentConversationId).toBe("alpha");
+
+    // A 删除自己正在看的 alpha：A 本地回退到 beta；B 看的是 beta，选中纹丝不动。
+    await act(async () => {
+      a.result.current.deleteConversation("alpha");
+      await settle();
+    });
+    expect(a.result.current.state.currentConversationId).toBe("beta");
+    expect(b.result.current.state.currentConversationId).toBe("beta");
+    expect(tabA.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("beta");
+    expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("beta");
+    // B 全程没有广播过任何东西。
+    expect(bus.posted.length).toBeGreaterThan(0);
+    expect(bus.posted.every((message) => message.writerId === TAB_A)).toBe(true);
+  });
+
+  it("deleting the viewed conversation falls back locally on the deleting tab and on a clean receiver viewing it", async () => {
+    seedConversations([makeConversation("alpha", "一"), makeConversation("beta", "二")]);
+    const a = mountTab(tabA);
+    const b = mountTab(tabB);
+
+    act(() => {
+      a.result.current.openConversation("beta");
+      b.result.current.openConversation("beta");
+    });
+    await act(async () => {
+      a.result.current.deleteConversation("beta");
+      await settle();
+    });
+
+    // 删除方本地回退到下一个会话；干净接收方看的是同一会话，也只在本地回退。
+    expect(a.result.current.state.currentConversationId).toBe("alpha");
+    expect(b.result.current.state.currentConversationId).toBe("alpha");
+    expect(b.result.current.state.conversations.map((conversation) => conversation.id)).toEqual(["alpha"]);
+    expect(tabA.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
+    expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
+    // 接收方绝不回广播：通道里只有删除方的一条删除通知。
+    expect(bus.posted).toEqual([{ type: "conversation_deleted", conversationId: "beta", writerId: TAB_A }]);
+
+    // 删除仅剩的会话：两个标签页都回退到新对话（null），选中键随之移除。
+    await act(async () => {
+      a.result.current.deleteConversation("alpha");
+      await settle();
+    });
+    expect(a.result.current.state.currentConversationId).toBeNull();
+    expect(b.result.current.state.currentConversationId).toBeNull();
+    expect(tabA.session.getItem(conversationStorageKeys.currentConversationV3)).toBeNull();
+    expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBeNull();
+  });
+
+  it("a receiver viewing a different conversation keeps its selection when another conversation is deleted", async () => {
+    seedConversations([makeConversation("alpha", "一"), makeConversation("beta", "二"), makeConversation("gamma", "三")]);
+    const a = mountTab(tabA);
+    const b = mountTab(tabB);
+
+    act(() => {
+      b.result.current.openConversation("gamma");
+    });
+    await act(async () => {
+      a.result.current.deleteConversation("alpha");
+      await settle();
+    });
+
+    // A 看的是被删的 alpha，本地回退到下一个会话；B 看的是 gamma，选中与其余会话都不受影响。
+    expect(a.result.current.state.currentConversationId).toBe("beta");
+    expect(b.result.current.state.currentConversationId).toBe("gamma");
+    expect(b.result.current.state.conversations.map((conversation) => conversation.id)).toEqual(["beta", "gamma"]);
+    expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("gamma");
+  });
+
+  it("a remote commit for the conversation this tab views refreshes data without moving the selection", async () => {
+    seedConversations([makeConversation("alpha", "一"), makeConversation("beta", "二")]);
+    const a = mountTab(tabA);
+    const b = mountTab(tabB);
+
+    act(() => {
+      b.result.current.openConversation("alpha");
+    });
+    streamChatMock.mockImplementationOnce(() => doneStream());
+    await act(async () => {
+      await a.result.current.sendMessage("远端新消息");
+    });
+    act(() => {
+      a.result.current.flushConversationPersistence();
+    });
+
+    const alpha = b.result.current.state.conversations.find((conversation) => conversation.id === "alpha");
+    expect(alpha?.messages.some((message) => message.content === "远端新消息")).toBe(true);
+    expect(b.result.current.state.currentConversationId).toBe("alpha");
+    expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
+  });
+});

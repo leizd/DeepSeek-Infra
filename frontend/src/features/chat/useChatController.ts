@@ -197,10 +197,16 @@ export function useChatController(options: ChatControllerOptions = {}) {
       });
   };
 
+  // 当前会话选中是纯标签页 UI 状态：只写本标签页 sessionStorage（best-effort，
+  // 失败静默降级），绝不因此调度共享 checkpoint 提交——分片保存只跟随会话内容变化。
+  useEffect(() => {
+    persistence.persistSelection(state.currentConversationId, options.session);
+  }, [persistence, state.currentConversationId, options.session]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => arbitratedFlushRef.current(), options.autosaveDebounceMs ?? 120);
     return () => window.clearTimeout(timer);
-  }, [state.conversations, state.currentConversationId, options.autosaveDebounceMs]);
+  }, [state.conversations, options.autosaveDebounceMs]);
 
   // 跨标签页同步：订阅一次（卸载时清理）。远端提交到达时——本标签页对该会话
   // 干净则换入共享 head；本地脏则保持，等下次提交走冲突路径；绝不切换当前

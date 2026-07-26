@@ -622,6 +622,45 @@ describe("tab current-conversation selection", () => {
     session.setItem(conversationStorageKeys.currentConversationV3, "missing");
     expect(loadPersistedConversationState(storage, session).currentConversationId).toBe("beta");
   });
+
+  it("treats a selection-only change as a clean save: no shared V3 keys written", () => {
+    const adapter = createConversationPersistenceAdapter();
+    const storage = new MemoryStorage();
+    const session = makeSession();
+    const alpha = makeConversation("alpha", "一");
+    const beta = { ...makeConversation("beta", "二"), updatedAt: 300 };
+    adapter.save(makeState("alpha", [alpha, beta]), storage, session);
+    const keysBefore = [...storage.values.keys()];
+
+    // 仅选中变化（会话对象 identity 未变）：共享存储一个键都不动，只更新 sessionStorage 选中键。
+    const result = adapter.save(makeState("beta", [alpha, beta]), storage, session);
+
+    expect(result.ok).toBe(true);
+    expect([...storage.values.keys()]).toEqual(keysBefore);
+    expect(session.getItem(conversationStorageKeys.currentConversationV3)).toBe("beta");
+  });
+
+  it("persistSelection writes only the tab session key and degrades silently when sessionStorage fails", () => {
+    const adapter = createConversationPersistenceAdapter();
+    const session = makeSession();
+    adapter.persistSelection("alpha", session);
+    expect(session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
+    // null 选中（新对话）移除选中键。
+    adapter.persistSelection(null, session);
+    expect(session.getItem(conversationStorageKeys.currentConversationV3)).toBeNull();
+
+    // sessionStorage 不可用时静默降级，绝不抛出。
+    const brokenSession: StorageLike = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("denied");
+      },
+      removeItem: () => {
+        throw new Error("denied");
+      },
+    };
+    expect(() => adapter.persistSelection("alpha", brokenSession)).not.toThrow();
+  });
 });
 
 describe("storage-unavailable handling", () => {

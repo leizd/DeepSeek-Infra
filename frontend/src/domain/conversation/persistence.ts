@@ -155,6 +155,8 @@ export interface ConversationPersistenceAdapter {
     local: Conversation | undefined,
     storage?: StorageLike | null,
   ): ReconcileRemoteOutcome;
+  /** 持久化本标签页的当前会话选中（sessionStorage，best-effort）；选中是纯标签页 UI 状态，绝不进入共享键。 */
+  persistSelection(conversationId: string | null, session?: StorageLike | null): void;
   /** 删除会话：先在仲裁临界区耐久提交 tombstone，成功才由调用方移除 UI 状态。 */
   deleteConversationArbitrated(
     conversationId: string,
@@ -1073,6 +1075,10 @@ export function createConversationPersistenceAdapter(
     }
   }
 
+  function persistSelection(conversationId: string | null, session: StorageLike | null = browserSessionStorage()): void {
+    writeTabSelection(session, conversationId);
+  }
+
   function reconcileRemoteCommit(
     conversationId: string,
     local: Conversation | undefined,
@@ -1149,6 +1155,7 @@ export function createConversationPersistenceAdapter(
     save,
     saveArbitrated,
     reconcileRemoteCommit,
+    persistSelection,
     deleteConversationArbitrated,
     setTabLease,
     readSharedConversation,
