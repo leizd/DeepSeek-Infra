@@ -39,6 +39,15 @@
 
 - Page exits write a synchronous per-tab recovery capsule for anything the normal flush could not commit; the next session reconciles it inside the write lock — clean content is committed in place, conflicting or tombstoned content returns as a deterministic recovery copy — and orphaned capsules from crashed tabs are reclaimed once their lease is dead, each capsule exactly once.
 
+### Vendor runtime chunk
+
+- The vendor runtime (react/react-dom/react-router/tanstack) splits into a separate cacheable core chunk via Vite `manualChunks`: the entry asset drops from 390KB to 157KB and the vendor hash survives app-only releases for immutable-asset caching, while bundle budgets are unchanged.
+
+### Compatibility
+
+- Adds no runtime dependency and changes no backend API, offline Mutation persistence, Provider ownership or bundle budget.
+- Preserves 4.3.5 durable checkpoints and recovery integrity, 4.3.4 single-flight activation transactions and page-lifecycle persistence, 4.3.3 staged discovery/quiescent reload, 4.3.2 immutable identity/Client Lease retention, 4.3.1 lazy continuity and the 4.2.8 exact-merge Evidence chain.
+
 
 ## [4.3.5] - Durable Checkpoints and Recovery Integrity
 
