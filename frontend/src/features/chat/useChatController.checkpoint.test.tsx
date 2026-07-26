@@ -49,7 +49,7 @@ import {
   EDIT_COALESCE_MS,
   STREAM_COMMIT_INTERVAL_MS,
 } from "./checkpointSchedule";
-import { resetPersistenceHealthForTests } from "../../app/persistenceHealth";
+import { resetPersistenceHealthForTests, getPersistenceHealthSnapshot } from "../../app/persistenceHealth";
 import { TAB_ID_STORAGE_KEY } from "../../app/tabIdentity";
 import {
   conversationStorageKeys,
@@ -500,5 +500,88 @@ describe("useChatController checkpoint scheduling", () => {
     unmount();
     await advance(10_000);
     expect(saveArbitrated).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("useChatController storage-pressure notices", () => {
+  const BIG_PREVIEW = `data:image/png;base64,${"A".repeat(64 * 1024)}`;
+
+  function richConversation(id: string): Conversation {
+    return {
+      ...makeConversation(id, "正文"),
+      messages: [{
+        ...makeMessage(`${id}-message`, "正文"),
+        attachments: [{ name: "photo.png", type: "image/png", size: 65_536, fileId: "file-1", preview: BIG_PREVIEW }],
+      }],
+    };
+  }
+
+  /** 在 jsdom localStorage 上模拟配额：predicate 命中时抛 QuotaExceededError。 */
+  function installQuotaSpy(predicate: (key: string, value: string) => boolean) {
+    const originalSet = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")?.value as (
+      this: Storage,
+      key: string,
+      value: string,
+    ) => void;
+    return vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key: string, value: string) {
+      if (this === window.localStorage && predicate(key, value)) {
+        throw Object.assign(new Error("quota"), { name: "QuotaExceededError" });
+      }
+      originalSet.call(this, key, value);
+    });
+  }
+
+  it("surfaces a one-time notice when a commit succeeds with preview compaction", async () => {
+    const rig = makeRig();
+    seed(rig, [richConversation("alpha")]);
+    const { result } = mount(rig);
+    await advance(EDIT_COALESCE_MS);
+
+    // 含 data: 预览负载的快照写入超限 → 原始提交失败，level-1 压缩重试成功。
+    const setSpy = installQuotaSpy((key, value) => key.startsWith(conversationStorageKeys.v3SnapshotPrefix) && value.includes("data:"));
+    act(() => {
+      result.current.renameConversation("alpha", "改名");
+    });
+    await advance(EDIT_COALESCE_MS);
+    setSpy.mockRestore();
+
+    expect(result.current.state.notice).toBe("存储空间不足，已压缩图片预览，全部文字内容保留");
+    const committed = rig.adapter.readSharedConversation("alpha")?.conversation;
+    expect(committed?.title).toBe("改名");
+    expect(committed?.messages[0]?.content).toBe("正文");
+    expect(committed?.messages[0]?.attachments[0]).toMatchObject({ name: "photo.png", type: "image/png", fileId: "file-1" });
+    expect(committed?.messages[0]?.attachments[0]?.preview).toBeUndefined();
+    expect(getPersistenceHealthSnapshot().healthy).toBe(true);
+  });
+
+  it("surfaces export/cleanup guidance and the failure banner path when quota survives every compaction level", async () => {
+    const rig = makeRig();
+    seed(rig, [makeConversation("alpha", "一")]);
+    const { result } = mount(rig);
+    await advance(EDIT_COALESCE_MS);
+
+    // 所有快照写入都超限：level 0 → 1 → 2 渐进重试后仍失败。
+    const setSpy = installQuotaSpy((key) => key.startsWith(conversationStorageKeys.v3SnapshotPrefix));
+    act(() => {
+      result.current.renameConversation("alpha", "写不进去");
+    });
+    await advance(EDIT_COALESCE_MS);
+
+    expect(result.current.state.notice).toBe("存储空间不足，请导出或清理旧会话后重试");
+    const health = getPersistenceHealthSnapshot();
+    expect(health.healthy).toBe(false);
+    expect(health.lastErrors.conversation?.code).toBe("storage-pressure");
+    // 旧 head 原样：共享内容仍是 "一"，会话未被静默删除。
+    expect(rig.adapter.readSharedConversation("alpha")?.conversation.messages[0]?.content).toBe("一");
+
+    // 释放空间后：下一次 flush 成功提交，会话内容不丢。
+    setSpy.mockRestore();
+    let flush: ReturnType<typeof result.current.flushConversationPersistence> | undefined;
+    act(() => {
+      flush = result.current.flushConversationPersistence();
+    });
+    expect(flush).toMatchObject({ ok: true });
+    expect(rig.adapter.readSharedConversation("alpha")?.conversation.title).toBe("写不进去");
   });
 });

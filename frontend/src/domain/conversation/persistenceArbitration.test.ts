@@ -14,6 +14,8 @@ import {
   sessionSnapshotKeyV3,
   sessionTombstoneKeyV3,
   type ConversationCommitNotice,
+  type ConversationCheckpointV3,
+  type ConversationCompactionSignal,
   type ConversationConflictPointer,
   type ConversationConflictSignal,
   type ConversationDeleteNotice,
@@ -31,8 +33,10 @@ class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>();
   failOnSet: ((key: string) => boolean) | null = null;
   corruptOnSet: ((key: string) => boolean) | null = null;
+  quotaOnSet: ((key: string, value: string) => boolean) | null = null;
   getItem(key: string) { return this.values.get(key) ?? null; }
   setItem(key: string, value: string) {
+    if (this.quotaOnSet?.(key, value)) throw Object.assign(new Error("setItem failed: quota"), { name: "QuotaExceededError" });
     if (this.failOnSet?.(key)) throw new Error("setItem failed");
     this.values.set(key, this.corruptOnSet?.(key) ? `${value}#corrupted` : value);
   }
@@ -130,6 +134,7 @@ interface Recorder {
   conflicts: ConversationConflictSignal[];
   deletes: ConversationDeleteNotice[];
   recoveries: ConversationRecoverySignal[];
+  compactions: ConversationCompactionSignal[];
   options: SaveConversationOptions;
 }
 
@@ -139,6 +144,7 @@ function makeRecorder(): Recorder {
     conflicts: [],
     deletes: [],
     recoveries: [],
+    compactions: [],
     options: {},
   };
   recorder.options = {
@@ -146,6 +152,7 @@ function makeRecorder(): Recorder {
     onConflict: (signal) => recorder.conflicts.push(signal),
     onDelete: (notice) => recorder.deletes.push(notice),
     onRecovery: (signal) => recorder.recoveries.push(signal),
+    onCompaction: (signal) => recorder.compactions.push(signal),
   };
   return recorder;
 }
@@ -485,6 +492,50 @@ describe("cross-tab checkpoint arbitration", () => {
     expect(readHead(storage, "beta")).toMatchObject({ revision: `2.${TAB_A}`, writerId: TAB_A });
     expect(readPointer(storage, "beta")).toMatchObject({ revision: `3.${TAB_B}`, sharedRevision: `2.${TAB_A}` });
     expect(adapterB.readConflictBranch("beta", storage)?.conversation.messages.at(-1)?.content).toBe("B 的修改");
+  });
+
+  it("a quota-hit conflict commit retries with level-1 compaction: branch lands compacted, shared head untouched", () => {
+    const storage = new MemoryStorage();
+    const adapterA = createConversationPersistenceAdapter();
+    const adapterB = createConversationPersistenceAdapter();
+    const sessionA = makeSession(TAB_A);
+    const sessionB = makeSession(TAB_B);
+
+    adapterA.save(makeState("alpha", [makeConversation("alpha", "初版")]), storage, sessionA);
+    const loadedB = adapterB.load(storage, sessionB);
+    const base = loadedB.conversations[0] as Conversation;
+    adapterA.save(makeState("alpha", [editConversation(base, "A 的修改")]), storage, sessionA);
+
+    // B 的本地修改带大预览；配额只容得下剥离预览后的快照（含 data: 负载的写入一律拒绝）。
+    const bigPreview = `data:image/png;base64,${"A".repeat(32 * 1024)}`;
+    const dirty: Conversation = {
+      ...base,
+      messages: [...base.messages, {
+        ...makeMessage("alpha-b-attachment", "B 的修改"),
+        attachments: [{ name: "photo.png", type: "image/png", size: 32_768, fileId: "file-9", preview: bigPreview }],
+      }],
+      updatedAt: base.updatedAt + 1,
+    };
+    storage.quotaOnSet = (key, value) => key.startsWith(conversationStorageKeys.v3SnapshotPrefix) && value.includes("data:");
+
+    const recorderB = makeRecorder();
+    const result = adapterB.save(makeState("alpha", [dirty]), storage, sessionB, recorderB.options);
+
+    // 冲突分支以 level-1 压缩落盘：共享 head 不动，指针指向已核验分支。
+    expect(result).toMatchObject({ ok: true });
+    expect(readHead(storage, "alpha")).toMatchObject({ revision: `2.${TAB_A}`, writerId: TAB_A });
+    expect(readPointer(storage, "alpha")).toMatchObject({ revision: `3.${TAB_B}`, sharedRevision: `2.${TAB_A}` });
+    const branchCheckpoint = JSON.parse(storage.getItem(sessionSnapshotKeyV3("alpha", `3.${TAB_B}`)) ?? "{}") as ConversationCheckpointV3;
+    expect(branchCheckpoint.compaction?.level).toBe(1);
+    expect(branchCheckpoint.compaction?.reason).toBe("storage-pressure");
+    expect(branchCheckpoint.compaction?.removedPreviewBytes).toBeGreaterThan(0);
+    // 分支内容保留：附件元信息在、预览剥离、正文不动；冲突与压缩信号各发一次。
+    const branch = adapterB.readConflictBranch("alpha", storage)?.conversation;
+    expect(branch?.messages.at(-1)?.content).toBe("B 的修改");
+    expect(branch?.messages.at(-1)?.attachments[0]).toMatchObject({ name: "photo.png", type: "image/png", fileId: "file-9" });
+    expect(branch?.messages.at(-1)?.attachments[0]?.preview).toBeUndefined();
+    expect(recorderB.conflicts).toHaveLength(1);
+    expect(recorderB.compactions).toEqual([expect.objectContaining({ conversationId: "alpha", level: 1 })]);
   });
 });
 

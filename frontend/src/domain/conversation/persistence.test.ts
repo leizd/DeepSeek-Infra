@@ -5,6 +5,11 @@ import type { ChatMessage } from "../chat/types";
 import type { Conversation } from "./types";
 import { checkpointMessage, INTERRUPTED_CHECKPOINT_NOTE } from "./checkpoint";
 import {
+  compactConversationForStorage,
+  PREVIEW_COMPACTION_MIN_BYTES,
+  TIMELINE_RAW_PAYLOAD_CAP_BYTES,
+} from "./compaction";
+import {
   checkpointDigest,
   conversationStorageKeys,
   createConversationPersistenceAdapter,
@@ -19,6 +24,7 @@ import {
   sessionTombstoneKeyV3,
   type ConversationCheckpointV2,
   type ConversationCheckpointV3,
+  type ConversationCompactionSignal,
   type StorageLike,
 } from "./persistence";
 
@@ -28,9 +34,11 @@ class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>();
   failOnSet: ((key: string) => boolean) | null = null;
   corruptOnSet: ((key: string) => boolean) | null = null;
+  quotaOnSet: ((key: string, value: string) => boolean) | null = null;
   enumerationEnabled = true;
   getItem(key: string) { return this.values.get(key) ?? null; }
   setItem(key: string, value: string) {
+    if (this.quotaOnSet?.(key, value)) throw Object.assign(new Error("setItem failed: quota"), { name: "QuotaExceededError" });
     if (this.failOnSet?.(key)) throw new Error("setItem failed");
     this.values.set(key, this.corruptOnSet?.(key) ? `${value}#corrupted` : value);
   }
@@ -840,5 +848,224 @@ describe("tab identity", () => {
   it("honors a pre-seeded tab id", () => {
     const session = makeSession("0badf00d");
     expect(getTabId(session)).toBe("0badf00d");
+  });
+});
+
+
+describe("storage-pressure compaction", () => {
+  const BIG_PREVIEW = `data:image/png;base64,${"A".repeat(64 * 1024)}`;
+  const BIG_PAYLOAD_BLOB = "P".repeat(32 * 1024);
+  const PREVIEW_BYTES = new TextEncoder().encode(BIG_PREVIEW).length;
+  const PAYLOAD_BYTES = new TextEncoder().encode(JSON.stringify({ blob: BIG_PAYLOAD_BLOB })).length;
+
+  function richConversation(id: string): Conversation {
+    return {
+      id,
+      title: `会话 ${id}`,
+      messages: [
+        {
+          ...makeMessage(`${id}-user`, "用户正文一字不动"),
+          attachments: [{
+            id: "att-1",
+            name: "photo.png",
+            type: "image/png",
+            kind: "image",
+            size: 65_536,
+            fileId: "file-1",
+            preview: BIG_PREVIEW,
+            text: "图片 OCR 文本",
+          }],
+        },
+        {
+          ...makeAssistantMessage({ id: `${id}-assistant`, content: "助手正文也不动", phase: "done", streaming: false }),
+          timeline: [
+            { type: "agent", id: "step-1", status: "done", output: "可见输出", payload: { blob: BIG_PAYLOAD_BLOB } },
+            { type: "text", text: "小步骤", payload: { small: true } },
+          ],
+        },
+      ],
+      model: "deepseek-v4-pro",
+      thinkingEnabled: false,
+      createdAt: 100,
+      updatedAt: 200,
+    };
+  }
+
+  /** 模拟真实配额：序列化快照超过 limit 字节的写入抛 QuotaExceededError。 */
+  function quotaAbove(storage: MemoryStorage, limitBytes: number): void {
+    storage.quotaOnSet = (key, value) => key.startsWith(conversationStorageKeys.v3SnapshotPrefix) && value.length > limitBytes;
+  }
+
+  function readCheckpoint(storage: MemoryStorage, conversationId: string, revision: string): ConversationCheckpointV3 {
+    return JSON.parse(storage.getItem(sessionSnapshotKeyV3(conversationId, revision)) ?? "{}") as ConversationCheckpointV3;
+  }
+
+  it("keeps data: previews and records no compaction when the first write fits (4.3.5 contract)", () => {
+    const storage = new MemoryStorage();
+    const session = makeSession();
+
+    expect(savePersistedConversationState(makeState("alpha", [richConversation("alpha")]), storage, session))
+      .toEqual({ ok: true, revision: `1.${TEST_TAB_ID}` });
+
+    const checkpoint = readCheckpoint(storage, "alpha", `1.${TEST_TAB_ID}`);
+    expect(checkpoint.compaction).toBeUndefined();
+    expect(checkpoint.conversation.messages[0]?.attachments[0]?.preview).toBe(BIG_PREVIEW);
+    expect(checkpoint.conversation.messages[1]?.timeline[0]?.payload).toEqual({ blob: BIG_PAYLOAD_BLOB });
+  });
+
+  it("retries with level-1 compaction on quota: previews stripped, metadata + bodies intact, head advanced, notice surfaced", () => {
+    const adapter = createConversationPersistenceAdapter();
+    const storage = new MemoryStorage();
+    const session = makeSession();
+    quotaAbove(storage, 40_000); // 原始快照（~100KB）超限，剥离预览后（~33KB）通过。
+
+    const compactions: ConversationCompactionSignal[] = [];
+    const result = adapter.save(makeState("alpha", [richConversation("alpha")]), storage, session, {
+      onCompaction: (signal) => compactions.push(signal),
+    });
+
+    expect(result).toEqual({ ok: true, revision: `1.${TEST_TAB_ID}` });
+    const head = JSON.parse(storage.getItem(sessionHeadKeyV3("alpha")) ?? "{}") as Record<string, unknown>;
+    expect(head.revision).toBe(`1.${TEST_TAB_ID}`);
+
+    const checkpoint = readCheckpoint(storage, "alpha", `1.${TEST_TAB_ID}`);
+    expect(checkpoint.digest).toBe(checkpointDigest(JSON.stringify(checkpoint.conversation)));
+    expect(checkpoint.compaction).toEqual({ level: 1, removedPreviewBytes: PREVIEW_BYTES, reason: "storage-pressure" });
+
+    // 附件元信息完整，预览负载已剥离。
+    const attachment = checkpoint.conversation.messages[0]?.attachments[0];
+    expect(attachment).toMatchObject({ id: "att-1", name: "photo.png", type: "image/png", size: 65_536, fileId: "file-1", text: "图片 OCR 文本" });
+    expect(attachment?.preview).toBeUndefined();
+    // 消息正文逐字节不动；level 1 不触碰 timeline。
+    expect(checkpoint.conversation.messages[0]?.content).toBe("用户正文一字不动");
+    expect(checkpoint.conversation.messages[1]?.content).toBe("助手正文也不动");
+    expect(checkpoint.conversation.messages[1]?.timeline[0]?.payload).toEqual({ blob: BIG_PAYLOAD_BLOB });
+
+    expect(compactions).toEqual([{ conversationId: "alpha", revision: `1.${TEST_TAB_ID}`, level: 1, removedPreviewBytes: PREVIEW_BYTES }]);
+  });
+
+  it("escalates to level 2 when quota persists: oversized timeline raw payloads capped, visible state preserved", () => {
+    const adapter = createConversationPersistenceAdapter();
+    const storage = new MemoryStorage();
+    const session = makeSession();
+    quotaAbove(storage, 10_000); // level 1（~33KB）仍超限，level 2（~2KB）通过。
+    expect(PAYLOAD_BYTES).toBeGreaterThan(TIMELINE_RAW_PAYLOAD_CAP_BYTES);
+
+    const compactions: ConversationCompactionSignal[] = [];
+    const result = adapter.save(makeState("alpha", [richConversation("alpha")]), storage, session, {
+      onCompaction: (signal) => compactions.push(signal),
+    });
+
+    expect(result).toEqual({ ok: true, revision: `1.${TEST_TAB_ID}` });
+    const checkpoint = readCheckpoint(storage, "alpha", `1.${TEST_TAB_ID}`);
+    expect(checkpoint.digest).toBe(checkpointDigest(JSON.stringify(checkpoint.conversation)));
+    expect(checkpoint.compaction).toEqual({ level: 2, removedPreviewBytes: PREVIEW_BYTES, reason: "storage-pressure" });
+
+    const steps = checkpoint.conversation.messages[1]?.timeline ?? [];
+    // 超大原始 payload 以有界标记替换；step 的最终状态与可见输出完整保留。
+    expect(steps[0]?.payload).toEqual({ compacted: true, originalBytes: PAYLOAD_BYTES });
+    expect(steps[0]).toMatchObject({ type: "agent", id: "step-1", status: "done", output: "可见输出" });
+    // 低于上限的 payload 不动。
+    expect(steps[1]?.payload).toEqual({ small: true });
+    expect(compactions).toEqual([{ conversationId: "alpha", revision: `1.${TEST_TAB_ID}`, level: 2, removedPreviewBytes: PREVIEW_BYTES }]);
+  });
+
+  it("returns storage-pressure when every level still exceeds quota: old head/snapshot untouched, nothing deleted, freed retry commits", () => {
+    const adapter = createConversationPersistenceAdapter();
+    const storage = new MemoryStorage();
+    const session = makeSession();
+    const base = richConversation("alpha");
+    expect(adapter.save(makeState("alpha", [base]), storage, session)).toEqual({ ok: true, revision: `1.${TEST_TAB_ID}` });
+
+    const edited: Conversation = { ...base, messages: [...base.messages, makeMessage("alpha-edit", "新增一条")], updatedAt: 300 };
+    quotaAbove(storage, 0); // 所有快照写入都超限。
+    const compactions: ConversationCompactionSignal[] = [];
+    const failed = adapter.save(makeState("alpha", [edited]), storage, session, {
+      onCompaction: (signal) => compactions.push(signal),
+    });
+
+    expect(failed.ok).toBe(false);
+    if (failed.ok) return;
+    expect(failed.code).toBe("storage-pressure");
+    expect(failed.message).toContain("会话 alpha");
+    expect(compactions).toEqual([]);
+
+    // 旧 head 与旧快照原样保留：加载仍返回上一修订，新内容未撕裂写入。
+    const head = JSON.parse(storage.getItem(sessionHeadKeyV3("alpha")) ?? "{}") as Record<string, unknown>;
+    expect(head.revision).toBe(`1.${TEST_TAB_ID}`);
+    expect(v3SnapshotKeys(storage, "alpha")).toEqual([sessionSnapshotKeyV3("alpha", `1.${TEST_TAB_ID}`)]);
+    const loaded = adapter.load(storage, session);
+    expect(loaded.conversations[0]?.messages[0]?.content).toBe("用户正文一字不动");
+    expect(loaded.conversations[0]?.messages.some((message) => message.content === "新增一条")).toBe(false);
+
+    // 释放空间后：同一编辑的下次提交按原始形态成功，无需压缩。
+    storage.quotaOnSet = null;
+    const retried = adapter.save(makeState("alpha", [edited]), storage, session, {
+      onCompaction: (signal) => compactions.push(signal),
+    });
+    expect(retried).toEqual({ ok: true, revision: `2.${TEST_TAB_ID}` });
+    expect(compactions).toEqual([]);
+    const reloaded = adapter.load(storage, session);
+    expect(reloaded.conversations[0]?.messages.some((message) => message.content === "新增一条")).toBe(true);
+    expect(reloaded.conversations[0]?.messages[0]?.attachments[0]?.preview).toBe(BIG_PREVIEW);
+  });
+
+  it("compactConversationForStorage is deterministic: same conversation + level ⇒ same output and byte counts", () => {
+    const conversation = richConversation("alpha");
+    for (const level of [1, 2]) {
+      const first = compactConversationForStorage(conversation, level);
+      const second = compactConversationForStorage(conversation, level);
+      expect(first.removedPreviewBytes).toBe(second.removedPreviewBytes);
+      expect(first.conversation).toEqual(second.conversation);
+      expect(JSON.stringify(first.conversation)).toBe(JSON.stringify(second.conversation));
+    }
+
+    const level1 = compactConversationForStorage(conversation, 1);
+    expect(level1.removedPreviewBytes).toBe(PREVIEW_BYTES);
+    expect(level1.conversation.messages[0]?.attachments[0]?.preview).toBeUndefined();
+    // level 1 不触碰 timeline，level 2 是其超集（预览同样剥离，仅超大 payload 被设上限）。
+    expect(level1.conversation.messages[1]?.timeline[0]?.payload).toEqual({ blob: BIG_PAYLOAD_BLOB });
+    const level2 = compactConversationForStorage(conversation, 2);
+    expect(level2.removedPreviewBytes).toBe(PREVIEW_BYTES);
+    expect(level2.conversation.messages[1]?.timeline[0]?.payload).toEqual({ compacted: true, originalBytes: PAYLOAD_BYTES });
+    expect(level2.conversation.messages[1]?.timeline[1]?.payload).toEqual({ small: true });
+    // 正文与附件元信息在任何级别都不动。
+    expect(level2.conversation.messages[0]?.content).toBe("用户正文一字不动");
+    expect(level2.conversation.messages[1]?.content).toBe("助手正文也不动");
+    // 低于剥离阈值的小预览保留。
+    expect(PREVIEW_COMPACTION_MIN_BYTES).toBeGreaterThan(0);
+    const smallPreview: Conversation = {
+      ...conversation,
+      messages: [{ ...conversation.messages[0] as ChatMessage, attachments: [{ name: "icon.png", preview: "data:image/png;base64,tiny" }] }],
+    };
+    expect(compactConversationForStorage(smallPreview, 2).conversation.messages[0]?.attachments[0]?.preview)
+      .toBe("data:image/png;base64,tiny");
+    // 无可压缩内容：返回原对象（identity 保持，不影响脏检测）。
+    const plain = makeConversation("plain", "无预览");
+    expect(compactConversationForStorage(plain, 2).conversation).toBe(plain);
+  });
+
+  it("compaction metadata survives the save→load round-trip; compacted conversations load and render normally", () => {
+    const adapter = createConversationPersistenceAdapter();
+    const storage = new MemoryStorage();
+    const session = makeSession();
+    quotaAbove(storage, 10_000); // level 2 落盘。
+
+    const saved = adapter.save(makeState("alpha", [richConversation("alpha")]), storage, session);
+    expect(saved).toEqual({ ok: true, revision: `1.${TEST_TAB_ID}` });
+
+    const loaded = adapter.load(storage, session);
+    const conversation = loaded.conversations[0];
+    expect(conversation?.messages[0]?.content).toBe("用户正文一字不动");
+    expect(conversation?.messages[1]?.content).toBe("助手正文也不动");
+    // 加载容忍缺失预览：名称 / 类型 / 大小 / fileId / 文本完整（MessageItem 回退到名称 + 类型渲染）。
+    const attachment = conversation?.messages[0]?.attachments[0];
+    expect(attachment).toMatchObject({ name: "photo.png", type: "image/png", kind: "image", size: 65_536, fileId: "file-1", text: "图片 OCR 文本" });
+    expect(attachment?.preview).toBeUndefined();
+    expect(conversation?.messages[1]?.timeline[0]?.output).toBe("可见输出");
+
+    // 压缩记录仍在磁盘上的 checkpoint 信封里（加载不重写快照）。
+    const checkpoint = readCheckpoint(storage, "alpha", `1.${TEST_TAB_ID}`);
+    expect(checkpoint.compaction).toEqual({ level: 2, removedPreviewBytes: PREVIEW_BYTES, reason: "storage-pressure" });
   });
 });

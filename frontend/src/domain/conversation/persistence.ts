@@ -9,6 +9,7 @@ import type { PersistenceFlushResult } from "../../app/reloadBlockers";
 import { getTabId } from "../../app/tabIdentity";
 import { createId } from "../../shared/createId";
 import { checkpointMessage } from "./checkpoint";
+import { compactConversationForStorage, type CheckpointCompaction } from "./compaction";
 import { copyConversation, createConversation, sortConversations } from "./reducer";
 import { DEFAULT_MODEL, migrateLegacyConversation, migrateLegacyMessage } from "./migration";
 import type { Conversation, PersistedConversationState } from "./types";
@@ -30,6 +31,8 @@ export interface ConversationCheckpointV3 {
   savedAt: number;
   digest: string;
   conversation: Conversation;
+  /** 存储压力降级落盘的压缩记录（级别 + 剥离的预览字节数）；仅压缩重试成功时存在。 */
+  compaction?: CheckpointCompaction;
 }
 
 /** V3 head 键值：指向当前快照 revision，并保留 parentRevision 作为回退。 */
@@ -99,11 +102,20 @@ export interface ConversationRecoverySignal {
   copy: Conversation;
 }
 
+/** 一次带压缩成功的提交（存储压力降级落盘）的带外信号：压缩级别 + 实际剥离的预览字节数。 */
+export interface ConversationCompactionSignal {
+  conversationId: string;
+  revision: string;
+  level: number;
+  removedPreviewBytes: number;
+}
+
 export interface SaveConversationOptions {
   onCommit?: (notice: ConversationCommitNotice) => void;
   onConflict?: (signal: ConversationConflictSignal) => void;
   onDelete?: (notice: ConversationDeleteNotice) => void;
   onRecovery?: (signal: ConversationRecoverySignal) => void;
+  onCompaction?: (signal: ConversationCompactionSignal) => void;
 }
 
 export interface LockRequestOptions {
@@ -707,7 +719,7 @@ export function createConversationPersistenceAdapter(
   }
 
   type ShardCommitOutcome =
-    | { ok: true; kind: "head"; revision: string; savedAt: number }
+    | { ok: true; kind: "head"; revision: string; savedAt: number; compaction?: CheckpointCompaction }
     | {
         ok: true;
         kind: "conflict";
@@ -715,8 +727,15 @@ export function createConversationPersistenceAdapter(
         savedAt: number;
         baseRevision: string | null;
         sharedRevision: string;
+        compaction?: CheckpointCompaction;
       }
     | PersistenceFlushFailure;
+
+  /** 单次提交尝试的结果：失败额外携带 quota 标记（配额失败才触发压缩重试）。 */
+  type ShardCommitAttempt =
+    | { ok: true; kind: "head"; revision: string; savedAt: number }
+    | { ok: true; kind: "conflict"; revision: string; savedAt: number; baseRevision: string | null; sharedRevision: string }
+    | { ok: false; quota: boolean; failure: PersistenceFlushFailure };
 
   /**
    * 提交单个会话分片（跨标签页仲裁版）：先重读共享 head，与适配器本地 base
@@ -730,6 +749,10 @@ export function createConversationPersistenceAdapter(
    * 无锁路径执行完全相同的"重读 + 比较"：revision 内嵌 tabId，其他标签页
    * 写入的 head 必然被识别为兄弟分支，并发提交退化为冲突副本而不是静默的
    * last-write-wins。任何路径都不抛异常。
+   * 配额耗尽（quota-exceeded）时不直接失败，而是以同一 revision 渐进重试：
+   * 原始写入 → level 1（剥离可重建的大图预览，附件元信息与全部文本保留）→
+   * level 2（再为超大 timeline 原始 payload 设上限）→ 仍失败则以
+   * storage-pressure 收束：旧 head / 旧快照原样保留，绝不静默删数据换空间。
    */
   function commitConversationShard(storage: StorageLike, conversation: Conversation, tabId: string): ShardCommitOutcome {
     const bytes = estimateConversationBytes(conversation);
@@ -743,81 +766,126 @@ export function createConversationPersistenceAdapter(
     const sharedRevision = head?.revision ?? null;
     const localBase = lastCommittedRevision.get(conversation.id) ?? null;
     const conflicted = head !== null && sharedRevision !== localBase;
-    const fail = (error: unknown): PersistenceFlushFailure => conflicted
-      ? conflictFailure(`写入失败：${classifyStorageError(error).message}`, conversation.id, bytes)
-      : shardFailure(classifyStorageError(error), conversation.id, bytes);
     const revision = `${revisionSeq(sharedRevision) + 1}.${tabId}`;
     const parentRevision = conflicted ? localBase : sharedRevision;
-    let serialized: string;
-    let digest: string;
-    let savedAt = 0;
-    try {
-      const normalized = normalizeConversationForCommit(conversation);
-      const payload = JSON.stringify(normalized);
-      digest = checkpointDigest(payload);
-      savedAt = Date.now();
-      const checkpoint: ConversationCheckpointV3 = {
-        schemaVersion: 3,
-        conversationId: conversation.id,
-        revision,
-        parentRevision,
-        writerId: tabId,
-        savedAt,
-        digest,
-        conversation: normalized,
+    // 失败形状与 4.3.6 前完全一致；quota 标记单独携带，供外层决定是否升级压缩级别。
+    const fail = (error: unknown): { quota: boolean; failure: PersistenceFlushFailure } => {
+      const classified = classifyStorageError(error);
+      return {
+        quota: classified.code === "quota-exceeded",
+        failure: conflicted
+          ? conflictFailure(`写入失败：${classified.message}`, conversation.id, bytes)
+          : shardFailure(classified, conversation.id, bytes),
       };
-      serialized = JSON.stringify(checkpoint);
-    } catch (error) {
-      return fail(error);
-    }
-    const snapshotKey = sessionSnapshotKeyV3(conversation.id, revision);
-    try {
-      storage.setItem(snapshotKey, serialized);
-      // 回读核验：字节级比对刚写入的快照，任何损坏都视为整份不可用。
-      if (storage.getItem(snapshotKey) !== serialized) {
-        return conflicted
-          ? conflictFailure("写入后回读核验失败", conversation.id, bytes)
-          : shardFailure(verificationFailure("快照写入后回读核验失败"), conversation.id, bytes);
-      }
-    } catch (error) {
-      return fail(error);
-    }
-    writeTabLease(storage, tabId);
-    if (conflicted && head) {
-      // 分支快照已确认落盘，此刻才允许写入/替换冲突指针；上一份被替换掉的
-      // 分支失去指针保护，由保留/空闲 GC 回收。
-      const pointer: ConversationConflictPointer = {
-        revision,
-        baseRevision: localBase,
-        sharedRevision: head.revision,
-        writerId: tabId,
-        savedAt,
-      };
+    };
+
+    /**
+     * 单次提交尝试（snapshot 写入 → 回读核验 → head / 冲突指针推进）。
+     * candidate 是本次落盘的会话形态：level 0 为原始会话，更高 level 为
+     * compactConversationForStorage 的确定性压缩结果；compaction 非空时写入
+     * checkpoint 信封（digest 只覆盖会话负载，不受信封字段影响）。revision
+     * 跨尝试不变，重试覆写同一快照键。
+     */
+    const attempt = (candidate: Conversation, compaction?: CheckpointCompaction): ShardCommitAttempt => {
+      let serialized: string;
+      let digest: string;
+      let savedAt = 0;
       try {
-        storage.setItem(sessionConflictKeyV3(conversation.id), JSON.stringify(pointer));
+        const normalized = normalizeConversationForCommit(candidate);
+        const payload = JSON.stringify(normalized);
+        digest = checkpointDigest(payload);
+        savedAt = Date.now();
+        const checkpoint: ConversationCheckpointV3 = {
+          schemaVersion: 3,
+          conversationId: conversation.id,
+          revision,
+          parentRevision,
+          writerId: tabId,
+          savedAt,
+          digest,
+          conversation: normalized,
+        };
+        if (compaction) checkpoint.compaction = compaction;
+        serialized = JSON.stringify(checkpoint);
       } catch (error) {
-        return fail(error);
+        return { ok: false, ...fail(error) };
       }
-      return { ok: true, kind: "conflict", revision, savedAt, baseRevision: localBase, sharedRevision: head.revision };
+      const snapshotKey = sessionSnapshotKeyV3(conversation.id, revision);
+      try {
+        storage.setItem(snapshotKey, serialized);
+        // 回读核验：字节级比对刚写入的快照，任何损坏都视为整份不可用。
+        if (storage.getItem(snapshotKey) !== serialized) {
+          return {
+            ok: false,
+            quota: false,
+            failure: conflicted
+              ? conflictFailure("写入后回读核验失败", conversation.id, bytes)
+              : shardFailure(verificationFailure("快照写入后回读核验失败"), conversation.id, bytes),
+          };
+        }
+      } catch (error) {
+        return { ok: false, ...fail(error) };
+      }
+      writeTabLease(storage, tabId);
+      if (conflicted && head) {
+        // 分支快照已确认落盘，此刻才允许写入/替换冲突指针；上一份被替换掉的
+        // 分支失去指针保护，由保留/空闲 GC 回收。
+        const pointer: ConversationConflictPointer = {
+          revision,
+          baseRevision: localBase,
+          sharedRevision: head.revision,
+          writerId: tabId,
+          savedAt,
+        };
+        try {
+          storage.setItem(sessionConflictKeyV3(conversation.id), JSON.stringify(pointer));
+        } catch (error) {
+          return { ok: false, ...fail(error) };
+        }
+        return { ok: true, kind: "conflict", revision, savedAt, baseRevision: localBase, sharedRevision: head.revision };
+      }
+      try {
+        storage.setItem(sessionHeadKeyV3(conversation.id), JSON.stringify({
+          revision,
+          parentRevision,
+          writerId: tabId,
+          savedAt,
+          digest,
+        } satisfies ConversationHeadV3));
+      } catch (error) {
+        // head 推进只在非冲突路径到达，失败形状与 4.3.6 前一致（shardFailure）。
+        return { ok: false, ...fail(error) };
+      }
+      // 保留式 GC：有界 O(1)——最多删除 2 份既非当前、也非 parentRevision、
+      // 也非冲突指针引用分支的旧快照。
+      const keep = new Set(parentRevision ? [revision, parentRevision] : [revision]);
+      const conflict = parseV3ConflictPointer(safeGetItem(storage, sessionConflictKeyV3(conversation.id)));
+      if (conflict) keep.add(conflict.revision);
+      collectStaleSnapshots(storage, conversation.id, keep, 2);
+      return { ok: true, kind: "head", revision, savedAt };
+    };
+
+    // 配额降级的确定性重试链：只有 quota-exceeded 才进入下一级，其余失败原样返回。
+    let lastQuotaFailure: PersistenceFlushFailure | null = null;
+    for (const level of [0, 1, 2]) {
+      const compacted = level === 0
+        ? { conversation, removedPreviewBytes: 0 }
+        : compactConversationForStorage(conversation, level);
+      const compaction: CheckpointCompaction | undefined = level === 0
+        ? undefined
+        : { level, removedPreviewBytes: compacted.removedPreviewBytes, reason: "storage-pressure" };
+      const outcome = attempt(compacted.conversation, compaction);
+      if (outcome.ok) {
+        if (!compaction) return outcome;
+        return { ...outcome, compaction };
+      }
+      if (!outcome.quota) return outcome.failure;
+      lastQuotaFailure = outcome.failure;
     }
-    try {
-      storage.setItem(sessionHeadKeyV3(conversation.id), JSON.stringify({
-        revision,
-        parentRevision,
-        writerId: tabId,
-        savedAt,
-        digest,
-      } satisfies ConversationHeadV3));
-    } catch (error) {
-      return shardFailure(classifyStorageError(error), conversation.id, bytes);
-    }
-    // 保留式 GC：有界 O(1)——最多删除 2 份既非当前、也非 parentRevision、
-    // 也非冲突指针引用分支的旧快照。
-    const keep = new Set(parentRevision ? [revision, parentRevision] : [revision]);
-    const conflict = parseV3ConflictPointer(safeGetItem(storage, sessionConflictKeyV3(conversation.id)));
-    if (conflict) keep.add(conflict.revision);
-    collectStaleSnapshots(storage, conversation.id, keep, 2);
-    return { ok: true, kind: "head", revision, savedAt };
+    // 全部压缩级别仍超限：storage-pressure 收束（message 沿用最后一次配额失败的描述）。
+    const finalFailure = lastQuotaFailure
+      ?? shardFailure({ ok: false, code: "quota-exceeded", message: "存储配额耗尽" }, conversation.id, bytes);
+    return { ...finalFailure, code: "storage-pressure" };
   }
 
   /**
@@ -956,6 +1024,8 @@ export function createConversationPersistenceAdapter(
    * 当前会话选中只写入本标签页的 sessionStorage，绝不进入 V3 共享键。
    * 冲突分支耐久写入仍算 {ok:true}（数据安全，经 onConflict 带外上报）；
    * 冲突分支写失败返回 write-conflict（数据面临风险）。
+   * 配额耗尽先按 level 1 / level 2 渐进压缩重试同一提交（成功经 onCompaction
+   * 带外上报）；全部级别仍超限返回 storage-pressure，旧 head 原样保留。
    * 任何路径都不抛异常，失败以 PersistenceFlushResult 返回并附估算负载大小。
    */
   function save(
@@ -999,6 +1069,15 @@ export function createConversationPersistenceAdapter(
       lastCommittedRevision.set(conversation.id, outcome.kind === "conflict" ? outcome.sharedRevision : outcome.revision);
       lastHeadRevision = outcome.revision;
       options?.onCommit?.({ conversationId: conversation.id, revision: outcome.revision, writerId: tabId, savedAt: outcome.savedAt });
+      // 存储压力下带压缩成功的提交：一次性带外上报（预览已剥离，全部文字保留）。
+      if (outcome.compaction) {
+        options?.onCompaction?.({
+          conversationId: conversation.id,
+          revision: outcome.revision,
+          level: outcome.compaction.level,
+          removedPreviewBytes: outcome.compaction.removedPreviewBytes,
+        });
+      }
       if (outcome.kind === "conflict") {
         options?.onConflict?.({
           conversationId: conversation.id,

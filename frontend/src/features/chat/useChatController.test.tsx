@@ -277,9 +277,11 @@ describe("useChatController persistence flush reporting", () => {
     renderHook(() => useChatController());
 
     // 防抖保存（120ms）在后台触发；异常若逃逸，vitest 会按未捕获错误失败。
+    // 配额错误先走 level 1 / level 2 压缩重试（此 fixture 无可压缩内容），
+    // 全部级别仍超限时按 storage-pressure 收束。
     await waitFor(() => expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]));
     expect(getPersistenceHealthSnapshot().healthy).toBe(false);
-    expect(getPersistenceHealthSnapshot().lastErrors.conversation?.code).toBe("quota-exceeded");
+    expect(getPersistenceHealthSnapshot().lastErrors.conversation?.code).toBe("storage-pressure");
     setItem.mockRestore();
   });
 });

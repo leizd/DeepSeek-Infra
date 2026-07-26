@@ -31,6 +31,10 @@
 
 - Persistence scheduling now coalesces normal edits over 300ms, throttles in-flight streaming to one commit per second with a trailing edge, and commits immediately on stream completion, deletion, page-hide and build-update activation — so long streams no longer hammer synchronous localStorage while terminal state is always durable.
 
+### Bounded storage pressure
+
+- Quota exhaustion now degrades deterministically instead of failing: rebuildable image previews are stripped first (names, types, sizes, fileIds and all text preserved), oversized timeline raw payloads are bounded second, and every compaction is recorded on the checkpoint (`level`, `removedPreviewBytes`) — user message bodies are never touched, heads are never deleted on failure, and a persistent failure surfaces export/cleanup guidance instead of losing data.
+
 
 ## [4.3.5] - Durable Checkpoints and Recovery Integrity
 

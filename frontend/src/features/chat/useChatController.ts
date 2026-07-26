@@ -131,8 +131,8 @@ export function useChatController(options: ChatControllerOptions = {}) {
   const [conflict, setConflict] = useState<ConversationConflictSignal | null>(null);
   const waitUntilResumed = useCallback(() => outputPauseGateRef.current?.waitUntilResumed() ?? Promise.resolve(), []);
 
-  // 提交 / 删除 / 冲突 / 恢复副本回调：提交与删除广播到跨标签页通道，冲突信号换上 notice 条，
-  // 恢复副本（本地修改在其他标签页删除后幸存）换入 state 并提示。
+  // 提交 / 删除 / 冲突 / 恢复副本 / 压缩回调：提交与删除广播到跨标签页通道，冲突信号换上 notice 条，
+  // 恢复副本（本地修改在其他标签页删除后幸存）换入 state 并提示，存储压力下的压缩成功一次性提示。
   const saveCallbacksRef = useRef<SaveConversationOptions | null>(null);
   if (!saveCallbacksRef.current) {
     saveCallbacksRef.current = {
@@ -143,6 +143,9 @@ export function useChatController(options: ChatControllerOptions = {}) {
         dispatch({ type: "conversationSynced", conversation: copy });
         dispatch({ type: "deleteConversation", conversationId });
         dispatch({ type: "noticeSet", notice: "远端已删除，已保留为恢复副本" });
+      },
+      onCompaction: () => {
+        dispatch({ type: "noticeSet", notice: "存储空间不足，已压缩图片预览，全部文字内容保留" });
       },
     };
   }
@@ -159,6 +162,10 @@ export function useChatController(options: ChatControllerOptions = {}) {
   const recordFailedResult = useCallback((result: PersistenceFlushResult) => {
     if (!result.ok) {
       recordFlushReport({ ok: false, results: { conversation: result }, failedIds: ["conversation"] });
+      if (result.code === "storage-pressure") {
+        // 渐进压缩重试后仍超限：除失败横幅外，引导使用既有导出 / 清理入口释放空间（无新 UI）。
+        dispatch({ type: "noticeSet", notice: "存储空间不足，请导出或清理旧会话后重试" });
+      }
     }
   }, []);
 
