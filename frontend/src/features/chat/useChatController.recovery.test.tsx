@@ -206,8 +206,16 @@ beforeEach(() => {
   settingsStub.runtime = null;
   settingsStub.agentMode = false;
   bus = createChannelPair();
-  tabA = { adapter: createConversationPersistenceAdapter(), session: makeSession(TAB_A), channel: bus.channelA };
-  tabB = { adapter: createConversationPersistenceAdapter(), session: makeSession(TAB_B), channel: bus.channelB };
+  tabA = {
+    adapter: createConversationPersistenceAdapter({ identity: { writerSessionId: TAB_A, documentInstanceId: "doc-a" } }),
+    session: makeSession(TAB_A),
+    channel: bus.channelA,
+  };
+  tabB = {
+    adapter: createConversationPersistenceAdapter({ identity: { writerSessionId: TAB_B, documentInstanceId: "doc-b" } }),
+    session: makeSession(TAB_B),
+    channel: bus.channelB,
+  };
 });
 
 afterEach(() => {
@@ -235,16 +243,20 @@ describe("uncommitted-tab recovery capsules", () => {
     expect(flush).toMatchObject({ ok: false });
     expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]);
     const capsule = parseRecoveryCapsule(window.localStorage.getItem(sessionRecoveryKeyV3(TAB_A)));
-    expect(capsule).toMatchObject({ schemaVersion: 1, tabId: TAB_A, baseRevision: `1.${TAB_A}` });
-    expect(capsule?.baseRevisions).toBeUndefined();
-    expect(capsule?.dirtyConversations.map((conversation) => conversation.id)).toEqual(["alpha"]);
-    expect(capsule?.dirtyConversations[0]?.title).toBe("A 的未提交标题");
+    expect(capsule).toMatchObject({ schemaVersion: 2, writerSessionId: TAB_A });
+    expect(capsule?.entries.map((entry) => entry.conversationId)).toEqual(["alpha"]);
+    expect(capsule?.entries[0]?.baseRevision).toBe(`1.${TAB_A}`);
+    expect(capsule?.entries[0]?.conversation.title).toBe("A 的未提交标题");
     // 胶囊绝不推进共享 head。
     expect(headOf("alpha")).toMatchObject({ revision: `1.${TAB_A}` });
     a.unmount();
 
     // 下一次会话（浏览器 session restore：同 tabId，新适配器）：锁内对账，干净补交。
-    const rigA2: TabRig = { adapter: createConversationPersistenceAdapter(), session: tabA.session, channel: bus.channelA };
+    const rigA2: TabRig = {
+      adapter: createConversationPersistenceAdapter({ identity: { writerSessionId: TAB_A, documentInstanceId: "doc-a-restored" } }),
+      session: tabA.session,
+      channel: bus.channelA,
+    };
     const a2 = mountTab(rigA2);
     await act(async () => {
       await settle();
@@ -304,13 +316,17 @@ describe("uncommitted-tab recovery capsules", () => {
     expect(headOf("alpha")).toMatchObject({ revision: `2.${TAB_A}` });
 
     // B 会话恢复（同 tabId，新适配器）：head 已推进 ⇒ 确定性恢复副本。
-    const rigB2: TabRig = { adapter: createConversationPersistenceAdapter(), session: tabB.session, channel: bus.channelB };
+    const rigB2: TabRig = {
+      adapter: createConversationPersistenceAdapter({ identity: { writerSessionId: TAB_B, documentInstanceId: "doc-b-restored" } }),
+      session: tabB.session,
+      channel: bus.channelB,
+    };
     const b2 = mountTab(rigB2);
     await act(async () => {
       await settle();
     });
 
-    const copyId = recoveredCopyIdV3("alpha", TAB_B);
+    const copyId = recoveredCopyIdV3("alpha", TAB_B, 1);
     const copy = b2.result.current.state.conversations.find((conversation) => conversation.id === copyId);
     expect(copy).toBeTruthy();
     expect(copy?.title).toBe("B 的未提交标题（恢复副本）");
@@ -322,7 +338,11 @@ describe("uncommitted-tab recovery capsules", () => {
     b2.unmount();
 
     // exactly once：再次对账（胶囊已删）⇒ 只有一份恢复副本，id 稳定。
-    const rigB3: TabRig = { adapter: createConversationPersistenceAdapter(), session: tabB.session, channel: bus.channelB };
+    const rigB3: TabRig = {
+      adapter: createConversationPersistenceAdapter({ identity: { writerSessionId: TAB_B, documentInstanceId: "doc-b-retry" } }),
+      session: tabB.session,
+      channel: bus.channelB,
+    };
     const b3 = mountTab(rigB3);
     await act(async () => {
       await settle();
@@ -356,13 +376,17 @@ describe("uncommitted-tab recovery capsules", () => {
     expect(window.localStorage.getItem(sessionHeadKeyV3("alpha"))).toBeNull();
 
     // B 会话恢复（同 tabId，新适配器）：tombstone 覆盖 ⇒ 恢复副本路径。
-    const rigB2: TabRig = { adapter: createConversationPersistenceAdapter(), session: tabB.session, channel: bus.channelB };
+    const rigB2: TabRig = {
+      adapter: createConversationPersistenceAdapter({ identity: { writerSessionId: TAB_B, documentInstanceId: "doc-b-tombstone" } }),
+      session: tabB.session,
+      channel: bus.channelB,
+    };
     const b2 = mountTab(rigB2);
     await act(async () => {
       await settle();
     });
 
-    const copyId = recoveredCopyIdV3("alpha", TAB_B);
+    const copyId = recoveredCopyIdV3("alpha", TAB_B, 1);
     const copy = b2.result.current.state.conversations.find((conversation) => conversation.id === copyId);
     expect(copy).toBeTruthy();
     expect(copy?.title).toBe("B 的未提交标题（恢复副本）");

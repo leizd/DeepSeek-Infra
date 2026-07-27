@@ -25,6 +25,10 @@ const TAB_A = "aaaa0001";
 const TAB_B = "bbbb0002";
 const TAB_C = "cccc0003";
 
+function adapterFor(writerSessionId: string, documentInstanceId = `document-${writerSessionId}`) {
+  return createConversationPersistenceAdapter({ identity: { writerSessionId, documentInstanceId } });
+}
+
 class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>();
   failOnSet: ((key: string) => boolean) | null = null;
@@ -129,7 +133,7 @@ function makeDirty(
 describe("recovery capsule write + freshness", () => {
   it("a failed pagehide flush leaves a capsule with the dirty conversations and their per-cid bases", () => {
     const storage = new MemoryStorage();
-    const adapter = createConversationPersistenceAdapter();
+    const adapter = adapterFor(TAB_A);
     const session = makeSession(TAB_A);
     const alpha = makeConversation("alpha", "初版");
     adapter.save(makeState("alpha", [alpha]), storage, session);
@@ -145,9 +149,10 @@ describe("recovery capsule write + freshness", () => {
     expect(failure).toBeNull();
 
     const capsule = parseRecoveryCapsule(storage.getItem(sessionRecoveryKeyV3(TAB_A)));
-    expect(capsule).toMatchObject({ schemaVersion: 1, tabId: TAB_A, baseRevision: null });
-    expect(capsule?.baseRevisions).toEqual({ alpha: `1.${TAB_A}`, gamma: null });
-    expect(capsule?.dirtyConversations.map((conversation) => conversation.id)).toEqual(["alpha", "gamma"]);
+    expect(capsule).toMatchObject({ schemaVersion: 2, writerSessionId: TAB_A, sequence: 1 });
+    expect(Object.fromEntries(capsule?.entries.map((entry) => [entry.conversationId, entry.baseRevision]) ?? []))
+      .toEqual({ alpha: `1.${TAB_A}`, gamma: null });
+    expect(capsule?.entries.map((entry) => entry.conversationId)).toEqual(["alpha", "gamma"]);
     expect(capsule?.savedAt).toBeGreaterThan(0);
     // 胶囊绝不推进任何共享 head。
     expect(readHead(storage, "alpha")).toMatchObject({ revision: `1.${TAB_A}` });
@@ -156,21 +161,20 @@ describe("recovery capsule write + freshness", () => {
 
   it("a single dirty conversation is recorded with baseRevision only", () => {
     const storage = new MemoryStorage();
-    const adapter = createConversationPersistenceAdapter();
+    const adapter = adapterFor(TAB_A);
     const session = makeSession(TAB_A);
     const dirty = makeDirty(adapter, storage, session, makeConversation("alpha", "初版"), "脏");
 
     expect(adapter.writeRecoveryCapsule(makeState("alpha", [dirty]), storage, session)).toBeNull();
 
     const capsule = parseRecoveryCapsule(storage.getItem(sessionRecoveryKeyV3(TAB_A)));
-    expect(capsule?.baseRevision).toBe(`1.${TAB_A}`);
-    expect(capsule?.baseRevisions).toBeUndefined();
-    expect(capsule?.dirtyConversations).toHaveLength(1);
+    expect(capsule?.entries[0]?.baseRevision).toBe(`1.${TAB_A}`);
+    expect(capsule?.entries).toHaveLength(1);
   });
 
   it("a fully successful flush leaves no capsule key, and removes a stale one", () => {
     const storage = new MemoryStorage();
-    const adapter = createConversationPersistenceAdapter();
+    const adapter = adapterFor(TAB_A);
     const session = makeSession(TAB_A);
     const alpha = makeConversation("alpha", "初版");
     adapter.save(makeState("alpha", [alpha]), storage, session);
@@ -185,7 +189,7 @@ describe("recovery capsule write + freshness", () => {
 
   it("a normal successful commit that drains the dirty set removes this tab's capsule", () => {
     const storage = new MemoryStorage();
-    const adapter = createConversationPersistenceAdapter();
+    const adapter = adapterFor(TAB_A);
     const session = makeSession(TAB_A);
     const dirty = makeDirty(adapter, storage, session, makeConversation("alpha", "初版"), "待提交");
     // 页面退出写过胶囊（BFCache 恢复后胶囊仍在）。
@@ -201,7 +205,7 @@ describe("recovery capsule write + freshness", () => {
 
   it("a partially successful commit rewrites the capsule with the remainder", () => {
     const storage = new MemoryStorage();
-    const adapter = createConversationPersistenceAdapter();
+    const adapter = adapterFor(TAB_A);
     const session = makeSession(TAB_A);
     const alpha = makeConversation("alpha", "一");
     const beta = makeConversation("beta", "二");
@@ -218,14 +222,13 @@ describe("recovery capsule write + freshness", () => {
 
     expect(readHead(storage, "alpha")).toMatchObject({ revision: `2.${TAB_A}` });
     const capsule = parseRecoveryCapsule(storage.getItem(sessionRecoveryKeyV3(TAB_A)));
-    expect(capsule?.dirtyConversations.map((conversation) => conversation.id)).toEqual(["beta"]);
-    expect(capsule?.baseRevision).toBe(`1.${TAB_A}`);
-    expect(capsule?.baseRevisions).toBeUndefined();
+    expect(capsule?.entries.map((entry) => entry.conversationId)).toEqual(["beta"]);
+    expect(capsule?.entries[0]?.baseRevision).toBe(`1.${TAB_A}`);
   });
 
   it("a mid-session save failure does not create a capsule (page-exit only)", () => {
     const storage = new MemoryStorage();
-    const adapter = createConversationPersistenceAdapter();
+    const adapter = adapterFor(TAB_A);
     const session = makeSession(TAB_A);
     const dirty = makeDirty(adapter, storage, session, makeConversation("alpha", "初版"), "脏");
 
@@ -239,7 +242,7 @@ describe("recovery capsule write + freshness", () => {
 
   it("returns a classified failure instead of throwing when the capsule write itself fails", () => {
     const storage = new MemoryStorage();
-    const adapter = createConversationPersistenceAdapter();
+    const adapter = adapterFor(TAB_A);
     const session = makeSession(TAB_A);
     const dirty = makeDirty(adapter, storage, session, makeConversation("alpha", "初版"), "脏");
 
@@ -258,7 +261,7 @@ describe("recovery capsule write + freshness", () => {
 describe("startup capsule reconcile", () => {
   it("reconciles a clean capsule in place: head advances, content identical, capsule deleted", async () => {
     const storage = new MemoryStorage();
-    const writer = createConversationPersistenceAdapter();
+    const writer = adapterFor(TAB_B, "writer-b");
     const sessionB = makeSession(TAB_B);
     const dirty = makeDirty(writer, storage, sessionB, makeConversation("alpha", "初版"), "崩溃前的修改");
     expect(writer.writeRecoveryCapsule(makeState("alpha", [dirty]), storage, sessionB)).toBeNull();
@@ -266,7 +269,7 @@ describe("startup capsule reconcile", () => {
     seedLease(storage, TAB_B, Date.now());
 
     // 会话恢复：同 tabId 的新适配器（浏览器 session restore 后的重启）。
-    const reloaded = createConversationPersistenceAdapter();
+    const reloaded = adapterFor(TAB_B, "reloaded-b");
     const recorder = makeRecorder();
     const outcome = await reloaded.reconcileRecoveryCapsules(storage, sessionB, recorder.options);
 
@@ -285,12 +288,12 @@ describe("startup capsule reconcile", () => {
 
   it("commits a never-before-committed capsule conversation as its first shard", async () => {
     const storage = new MemoryStorage();
-    const writer = createConversationPersistenceAdapter();
+    const writer = adapterFor(TAB_B, "writer-b");
     const sessionB = makeSession(TAB_B);
     const fresh = makeConversation("gamma", "只存在于胶囊里");
     expect(writer.writeRecoveryCapsule(makeState("gamma", [fresh]), storage, sessionB)).toBeNull();
 
-    const reloaded = createConversationPersistenceAdapter();
+    const reloaded = adapterFor(TAB_B, "reloaded-b");
     const outcome = await reloaded.reconcileRecoveryCapsules(storage, sessionB);
 
     expect(outcome.committed).toHaveLength(1);
@@ -301,9 +304,9 @@ describe("startup capsule reconcile", () => {
 
   it("a moved head turns the capsule into a deterministic recovery copy, converging on reprocess", async () => {
     const storage = new MemoryStorage();
-    const adapterA = createConversationPersistenceAdapter();
+    const adapterA = adapterFor(TAB_A);
     const sessionA = makeSession(TAB_A);
-    const writer = createConversationPersistenceAdapter();
+    const writer = adapterFor(TAB_B, "writer-b");
     const sessionB = makeSession(TAB_B);
     const alpha0 = makeConversation("alpha", "初版");
     adapterA.save(makeState("alpha", [alpha0]), storage, sessionA);
@@ -316,10 +319,10 @@ describe("startup capsule reconcile", () => {
     expect(readHead(storage, "alpha")).toMatchObject({ revision: `2.${TAB_A}` });
 
     // 崩溃的 B 会话恢复（同 tabId 新适配器）：物化确定性恢复副本。
-    const reloadedB = createConversationPersistenceAdapter();
+    const reloadedB = adapterFor(TAB_B, "reloaded-b");
     const outcome = await reloadedB.reconcileRecoveryCapsules(storage, sessionB);
 
-    const copyId = recoveredCopyIdV3("alpha", TAB_B);
+    const copyId = recoveredCopyIdV3("alpha", TAB_B, 1);
     expect(outcome.failed).toEqual([]);
     expect(outcome.committed).toEqual([]);
     expect(outcome.recovered).toHaveLength(1);
@@ -334,7 +337,7 @@ describe("startup capsule reconcile", () => {
     // 同一胶囊重处理（模拟副本已提交但胶囊删除前属主再次死亡）：收敛，绝不重复。
     storage.setItem(sessionRecoveryKeyV3(TAB_B), capsuleRaw);
     storage.removeItem(`${conversationStorageKeys.v3TabPrefix}${TAB_B}`); // 属主已死：租约缺失，孤儿回收。
-    const third = createConversationPersistenceAdapter();
+    const third = adapterFor(TAB_C);
     const reprocessed = await third.reconcileRecoveryCapsules(storage, makeSession(TAB_C));
     expect(reprocessed.recovered).toHaveLength(1);
     expect(reprocessed.recovered[0]?.id).toBe(copyId);
@@ -349,9 +352,9 @@ describe("startup capsule reconcile", () => {
 
   it("a tombstoned conversation becomes a recovery copy; no head/snapshot for the tombstoned id", async () => {
     const storage = new MemoryStorage();
-    const adapterA = createConversationPersistenceAdapter();
+    const adapterA = adapterFor(TAB_A);
     const sessionA = makeSession(TAB_A);
-    const writer = createConversationPersistenceAdapter();
+    const writer = adapterFor(TAB_B, "writer-b");
     const sessionB = makeSession(TAB_B);
     adapterA.save(makeState("alpha", [makeConversation("alpha", "初版"), makeConversation("beta", "二")]), storage, sessionA);
     const loadedB = writer.load(storage, sessionB);
@@ -361,10 +364,10 @@ describe("startup capsule reconcile", () => {
     const deleted = await adapterA.deleteConversationArbitrated("alpha", storage, sessionA);
     expect(deleted).toMatchObject({ ok: true });
 
-    const reloadedB = createConversationPersistenceAdapter();
+    const reloadedB = adapterFor(TAB_B, "reloaded-b");
     const outcome = await reloadedB.reconcileRecoveryCapsules(storage, sessionB);
 
-    const copyId = recoveredCopyIdV3("alpha", TAB_B);
+    const copyId = recoveredCopyIdV3("alpha", TAB_B, 1);
     expect(outcome.recovered).toHaveLength(1);
     expect(outcome.recovered[0]).toMatchObject({ id: copyId, title: "会话 alpha（恢复副本）" });
     // tombstoned id 绝不复活：无 head、无快照，tombstone 原样保留。
@@ -379,14 +382,14 @@ describe("startup capsule reconcile", () => {
 
   it("keeps the capsule for retry when an entry cannot be committed, and the retry converges", async () => {
     const storage = new MemoryStorage();
-    const writer = createConversationPersistenceAdapter();
+    const writer = adapterFor(TAB_B, "writer-b");
     const sessionB = makeSession(TAB_B);
     const dirty = makeDirty(writer, storage, sessionB, makeConversation("alpha", "初版"), "崩溃前的修改");
     expect(writer.writeRecoveryCapsule(makeState("alpha", [dirty]), storage, sessionB)).toBeNull();
 
     // 对账时存储仍不可写：条目未耐久 ⇒ 胶囊保留，失败进入 outcome。
     storage.failOnSet = (key) => key.startsWith(conversationStorageKeys.v3SnapshotPrefix);
-    const reloaded = createConversationPersistenceAdapter();
+    const reloaded = adapterFor(TAB_B, "reloaded-b");
     const blocked = await reloaded.reconcileRecoveryCapsules(storage, sessionB);
     expect(blocked.failed).toHaveLength(1);
     expect(blocked.committed).toEqual([]);
@@ -395,7 +398,7 @@ describe("startup capsule reconcile", () => {
 
     // 存储恢复后重试：幂等补交，胶囊删除。
     storage.failOnSet = null;
-    const retry = await createConversationPersistenceAdapter().reconcileRecoveryCapsules(storage, sessionB);
+    const retry = await adapterFor(TAB_B, "retry-b").reconcileRecoveryCapsules(storage, sessionB);
     expect(retry.failed).toEqual([]);
     expect(retry.committed).toHaveLength(1);
     expect(readHead(storage, "alpha")).toMatchObject({ revision: `2.${TAB_B}` });
@@ -404,19 +407,19 @@ describe("startup capsule reconcile", () => {
 
   it("an already-committed capsule entry converges by digest instead of duplicating", async () => {
     const storage = new MemoryStorage();
-    const writer = createConversationPersistenceAdapter();
+    const writer = adapterFor(TAB_B, "writer-b");
     const sessionB = makeSession(TAB_B);
     const dirty = makeDirty(writer, storage, sessionB, makeConversation("alpha", "初版"), "崩溃前的修改");
     expect(writer.writeRecoveryCapsule(makeState("alpha", [dirty]), storage, sessionB)).toBeNull();
     const capsuleRaw = storage.getItem(sessionRecoveryKeyV3(TAB_B)) as string;
 
     // 第一次对账补交落地，但胶囊删除前标签页再次死亡：胶囊原样残留。
-    const first = await createConversationPersistenceAdapter().reconcileRecoveryCapsules(storage, sessionB);
+    const first = await adapterFor(TAB_B, "first-b").reconcileRecoveryCapsules(storage, sessionB);
     expect(first.committed).toHaveLength(1);
     storage.setItem(sessionRecoveryKeyV3(TAB_B), capsuleRaw);
 
     // 重处理：head 内容已与胶囊一致（digest 收敛），绝不重复提交、绝不物化副本。
-    const second = await createConversationPersistenceAdapter().reconcileRecoveryCapsules(storage, sessionB);
+    const second = await adapterFor(TAB_B, "second-b").reconcileRecoveryCapsules(storage, sessionB);
     expect(second.recovered).toEqual([]);
     expect(second.committed).toHaveLength(1);
     expect(second.committed[0]).toMatchObject({ conversationId: "alpha", revision: `2.${TAB_B}` });
@@ -429,12 +432,12 @@ describe("startup capsule reconcile", () => {
 describe("foreign (orphaned) capsules", () => {
   it("reclaims a capsule whose owner lease is absent", async () => {
     const storage = new MemoryStorage();
-    const writer = createConversationPersistenceAdapter();
+    const writer = adapterFor(TAB_B, "orphan-b");
     const fresh = makeConversation("gamma", "孤儿内容");
     expect(writer.writeRecoveryCapsule(makeState("gamma", [fresh]), storage, makeSession(TAB_B))).toBeNull();
 
     // 新标签页（新 tabId）：属主租约缺失 ⇒ 回收孤儿胶囊。
-    const reclaimer = createConversationPersistenceAdapter();
+    const reclaimer = adapterFor(TAB_C, "reclaimer-c");
     const outcome = await reclaimer.reconcileRecoveryCapsules(storage, makeSession(TAB_C));
 
     expect(outcome.committed).toHaveLength(1);
@@ -445,12 +448,12 @@ describe("foreign (orphaned) capsules", () => {
 
   it("reclaims a capsule whose owner lease is stale", async () => {
     const storage = new MemoryStorage();
-    const writer = createConversationPersistenceAdapter();
+    const writer = adapterFor(TAB_B, "orphan-b");
     const fresh = makeConversation("gamma", "孤儿内容");
     expect(writer.writeRecoveryCapsule(makeState("gamma", [fresh]), storage, makeSession(TAB_B))).toBeNull();
     seedLease(storage, TAB_B, Date.now() - CONVERSATION_TOMBSTONE_LIMITS.tabLeaseStaleMs - 1000);
 
-    const outcome = await createConversationPersistenceAdapter().reconcileRecoveryCapsules(storage, makeSession(TAB_C));
+    const outcome = await adapterFor(TAB_C, "reclaimer-c").reconcileRecoveryCapsules(storage, makeSession(TAB_C));
 
     expect(outcome.committed).toHaveLength(1);
     expect(readHead(storage, "gamma")).toMatchObject({ revision: `1.${TAB_C}` });
@@ -459,25 +462,31 @@ describe("foreign (orphaned) capsules", () => {
 
   it("leaves a capsule with a LIVE owner lease to its owner (BFCache restore case)", async () => {
     const storage = new MemoryStorage();
-    const writer = createConversationPersistenceAdapter();
+    const writer = adapterFor(TAB_B, "owner-b");
     const fresh = makeConversation("gamma", "属主还活着");
     expect(writer.writeRecoveryCapsule(makeState("gamma", [fresh]), storage, makeSession(TAB_B))).toBeNull();
     seedLease(storage, TAB_B, Date.now());
 
-    const outcome = await createConversationPersistenceAdapter().reconcileRecoveryCapsules(storage, makeSession(TAB_C));
+    const outcome = await adapterFor(TAB_C, "observer-c").reconcileRecoveryCapsules(storage, makeSession(TAB_C));
 
     expect(outcome).toEqual({ committed: [], recovered: [], failed: [] });
     expect(storage.getItem(sessionRecoveryKeyV3(TAB_B))).not.toBeNull();
     expect(storage.getItem(sessionHeadKeyV3("gamma"))).toBeNull();
   });
 
-  it("deletes an unparseable foreign capsule instead of rescanning it forever", async () => {
+  it("quarantines an unparseable foreign capsule instead of deleting it silently", async () => {
     const storage = new MemoryStorage();
     storage.setItem(sessionRecoveryKeyV3(TAB_B), "garbage{{{");
 
-    const outcome = await createConversationPersistenceAdapter().reconcileRecoveryCapsules(storage, makeSession(TAB_C));
+    const outcome = await adapterFor(TAB_C, "observer-c").reconcileRecoveryCapsules(storage, makeSession(TAB_C));
 
-    expect(outcome).toEqual({ committed: [], recovered: [], failed: [] });
+    expect(outcome).toMatchObject({
+      committed: [],
+      recovered: [],
+      failed: [expect.objectContaining({ code: "verification-failed" })],
+    });
     expect(storage.getItem(sessionRecoveryKeyV3(TAB_B))).toBeNull();
+    expect([...storage.values.keys()].some((key) => key.startsWith(`${conversationStorageKeys.v3QuarantinePrefix}capsule.${TAB_B}.`)))
+      .toBe(true);
   });
 });

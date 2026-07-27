@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 1,
+  "version": "4.3.7",
+  "testedRevision": "0554896304a41f2cf3a6612f1408196e006d07d9",
+  "sourceRevision": "0554896304a41f2cf3a6612f1408196e006d07d9",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-07-27T03:33:18.379254+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "baseline428InitialBytes": 425914,
+  "minimumReductionPercent": 8,
+  "initialEntry": "static/ui/assets/index-B2MZWI-I.js",
+  "initialBytes": 181050,
+  "initialGraphBytes": 470186,
+  "initialReductionPercent": 57.49,
+  "initialBundleBudgetBytes": 390000,
+  "initialCss": [
+    "assets/index-DoDlcT0k.css"
+  ],
+  "initialCssBytes": 27975,
+  "initialCssBudgetBytes": 28000,
+  "optionalChunkBudgetBytes": 90000,
+  "workspaceFeatureChunks": {
+    "settings": {
+      "path": "static/ui/assets/ConnectionSettingsFeature-DdtO8vpw.js",
+      "bytes": 151,
+      "css": [
+        "assets/ConnectionSettingsDrawer-4oDVp73n.css"
+      ]
+    },
+    "projects": {
+      "path": "static/ui/assets/ProjectsFeature-Q4IOJdYR.js",
+      "bytes": 172,
+      "css": [
+        "assets/ProjectsDrawer-Cut3XB7_.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    },
+    "skills": {
+      "path": "static/ui/assets/SkillsFeature-Cg1Ww2jZ.js",
+      "bytes": 168,
+      "css": [
+        "assets/SkillsDrawer-CGhTe0Du.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    },
+    "memory": {
+      "path": "static/ui/assets/MemoryFeature-DoyluJnH.js",
+      "bytes": 277,
+      "css": [
+        "assets/MemoryDrawer-CiI9qPE0.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    },
+    "reminders": {
+      "path": "static/ui/assets/RemindersFeature-DUn2qxYm.js",
+      "bytes": 174,
+      "css": [
+        "assets/RemindersDrawer-CXATuoE7.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    },
+    "diagnostics": {
+      "path": "static/ui/assets/DiagnosticsFeature-CFzbCD_h.js",
+      "bytes": 178,
+      "css": [
+        "assets/DiagnosticsDrawer-CjdUL9PP.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    },
+    "file-preview": {
+      "path": "static/ui/assets/FilePreviewFeature-yAFAOGHt.js",
+      "bytes": 172,
+      "css": [
+        "assets/file-preview-C5BNpLOj.css"
+      ]
+    },
+    "image-lightbox": {
+      "path": "static/ui/assets/ImageLightboxFeature-f31HYxG5.js",
+      "bytes": 170,
+      "css": [
+        "assets/file-preview-C5BNpLOj.css"
+      ]
+    },
+    "activity": {
+      "path": "static/ui/assets/ActivityFeature-oWgLQ4PM.js",
+      "bytes": 153,
+      "css": [
+        "assets/activity-DdwW0kWG.css"
+      ]
+    }
+  },
+  "workspaceOfflineManifest": "static/ui/workspace-assets.json",
+  "workspaceBuildId": "846532d1c7b5810a",
+  "workspaceSourceRevision": "0554896304a41f2cf3a6612f1408196e006d07d9-dirty-90505d446553a2a0",
+  "workspaceAssetSetDigest": "afd8ae140011eaa8d947390e5c369646d98b548bc7e3da26e3eb77c893745cb1",
+  "workspaceImmutableManifest": "static/ui/workspace-assets-846532d1c7b5810a.json",
+  "workspaceWorker": "static/ui/sw-846532d1c7b5810a.js",
+  "workspaceRootWorker": "static/ui/sw-root-846532d1c7b5810a.js",
+  "tracePageChunk": "static/ui/assets/TracePage-CHCXspGm.js",
+  "tracePageBytes": 777,
+  "traceDetailChunk": "static/ui/assets/TraceDetailView-BwJBvWP2.js",
+  "traceDetailBytes": 10977,
+  "traceCss": [
+    "assets/TraceDetailView-DRm3eTNC.css"
+  ],
+  "checks": {
+    "workspaceProjectsDynamicEntry": "PASS",
+    "workspaceSkillsDynamicEntry": "PASS",
+    "workspaceMemoryDynamicEntry": "PASS",
+    "workspaceSettingsDynamicEntry": "PASS",
+    "workspaceUtilitiesDynamicEntry": "PASS",
+    "workspaceOptionalCssDeferred": "PASS",
+    "initialBundleReducedFrom428": "PASS",
+    "initialBundleBudget": "PASS",
+    "initialCssBudget": "PASS",
+    "optionalFeatureChunkBudget": "PASS",
+    "workspaceOfflineAssetManifest": "PASS",
+    "immutableWorkerBuildIdentity": "PASS",
+    "workerManifestIdentityBound": "PASS",
+    "stableBuildDiscoveryRuntime": "PASS",
+    "stagedWorkerActivationProtocol": "PASS",
+    "reloadCoordinationRuntime": "PASS",
+    "workspacePrimaryWarmLayer": "PASS",
+    "workspaceRecoveryChunksDeferred": "PASS",
+    "routeOptionalChunksSeparated": "PASS",
+    "tracePageDynamicEntry": "PASS",
+    "traceDetailDynamicEntry": "PASS",
+    "traceImplementationDeferred": "PASS",
+    "traceCssDeferred": "PASS"
+  }
+}

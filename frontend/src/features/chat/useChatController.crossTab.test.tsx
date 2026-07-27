@@ -104,6 +104,13 @@ function createChannelPair() {
   return { channelA: make(listenersA, listenersB), channelB: make(listenersB, listenersA), posted };
 }
 
+function postedConversationMessages(): Extract<ConversationSyncMessage, { type: "conversation_committed" | "conversation_deleted" }>[] {
+  return bus.posted.filter(
+    (message): message is Extract<ConversationSyncMessage, { type: "conversation_committed" | "conversation_deleted" }> =>
+      message.type === "conversation_committed" || message.type === "conversation_deleted",
+  );
+}
+
 /** 闸门锁：release 前所有锁请求都排队等待，用于精确控制仲裁时序。 */
 class GatedLock implements LocksLike {
   private open!: () => void;
@@ -209,8 +216,16 @@ beforeEach(() => {
   settingsStub.runtime = null;
   settingsStub.agentMode = false;
   bus = createChannelPair();
-  tabA = { adapter: createConversationPersistenceAdapter(), session: makeSession(TAB_A), channel: bus.channelA };
-  tabB = { adapter: createConversationPersistenceAdapter(), session: makeSession(TAB_B), channel: bus.channelB };
+  tabA = {
+    adapter: createConversationPersistenceAdapter({ identity: { writerSessionId: TAB_A, documentInstanceId: "doc-a" } }),
+    session: makeSession(TAB_A),
+    channel: bus.channelA,
+  };
+  tabB = {
+    adapter: createConversationPersistenceAdapter({ identity: { writerSessionId: TAB_B, documentInstanceId: "doc-b" } }),
+    session: makeSession(TAB_B),
+    channel: bus.channelB,
+  };
 });
 
 afterEach(() => {
@@ -220,6 +235,52 @@ afterEach(() => {
 });
 
 describe("cross-tab conversation sync", () => {
+  it("rotates a duplicated writer claim without losing tab continuity or ignoring peer commits", async () => {
+    const duplicatedWriter = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const rigA: TabRig = {
+      adapter: createConversationPersistenceAdapter({
+        identity: { writerSessionId: duplicatedWriter, documentInstanceId: "document-a" },
+      }),
+      session: makeSession(TAB_A),
+      channel: bus.channelA,
+    };
+    const rigB: TabRig = {
+      adapter: createConversationPersistenceAdapter({
+        identity: { writerSessionId: duplicatedWriter, documentInstanceId: "document-b" },
+      }),
+      session: makeSession(TAB_B),
+      channel: bus.channelB,
+    };
+    rigA.adapter.save(
+      { schemaVersion: 1, currentConversationId: "alpha", conversations: [makeConversation("alpha", "初版")] },
+      window.localStorage,
+      rigA.session,
+    );
+    const a = mountTab(rigA);
+    const b = mountTab(rigB);
+    await act(settle);
+
+    const identityA = rigA.adapter.getReplicaIdentity(rigA.session);
+    const identityB = rigB.adapter.getReplicaIdentity(rigB.session);
+    expect(identityA.writerSessionId).toBe(duplicatedWriter);
+    expect(identityB.writerSessionId).not.toBe(duplicatedWriter);
+    expect(identityA.tabContinuityId).toBe(TAB_A);
+    expect(identityB.tabContinuityId).toBe(TAB_B);
+    expect(bus.posted.some((message) => message.type === "writer_claim_ack")).toBe(true);
+
+    streamChatMock.mockImplementationOnce(() => doneStream());
+    await act(async () => {
+      await a.result.current.sendMessage("不能被重复身份过滤");
+    });
+    await act(async () => {
+      a.result.current.flushConversationPersistence();
+      await settle();
+    });
+    expect(b.result.current.state.conversations
+      .find((value) => value.id === "alpha")
+      ?.messages.some((value) => value.content === "不能被重复身份过滤")).toBe(true);
+  });
+
   it("posts conversation_committed to the channel on every successful commit", async () => {
     seedConversations([makeConversation("alpha", "初版")]);
     const a = mountTab(tabA);
@@ -233,7 +294,7 @@ describe("cross-tab conversation sync", () => {
       a.result.current.flushConversationPersistence();
     });
 
-    expect(bus.posted).toEqual([
+    expect(postedConversationMessages()).toEqual([
       expect.objectContaining({
         type: "conversation_committed",
         conversationId: "alpha",
@@ -261,7 +322,7 @@ describe("cross-tab conversation sync", () => {
       writerId: TAB_A,
     });
     expect(window.localStorage.getItem(sessionHeadKeyV3("beta"))).toBeNull();
-    expect(bus.posted).toEqual([
+    expect(postedConversationMessages()).toEqual([
       { type: "conversation_deleted", conversationId: "beta", writerId: TAB_A },
     ]);
     // 删除方 UI 移除（选中回退保持既有 UX）。
@@ -295,7 +356,7 @@ describe("cross-tab conversation sync", () => {
     expect(a.result.current.state.conversations.some((conversation) => conversation.id === "beta")).toBe(true);
     expect(window.localStorage.getItem(sessionHeadKeyV3("beta"))).not.toBeNull();
     expect(window.localStorage.getItem(sessionTombstoneKeyV3("beta"))).toBeNull();
-    expect(bus.posted).toEqual([]);
+    expect(postedConversationMessages()).toEqual([]);
     expect(a.result.current.state.notice).toContain("会话 beta");
     expect(getPersistenceHealthSnapshot().failedIds).toEqual(["conversation"]);
     setItem.mockRestore();
@@ -312,7 +373,10 @@ describe("cross-tab conversation sync", () => {
   it("removes the conversation from the UI only after the tombstone is durably written", async () => {
     const gated = new GatedLock();
     const rigA: TabRig = {
-      adapter: createConversationPersistenceAdapter({ locks: gated }),
+      adapter: createConversationPersistenceAdapter({
+        locks: gated,
+        identity: { writerSessionId: TAB_A, documentInstanceId: "doc-a-gated" },
+      }),
       session: makeSession(TAB_A),
       channel: bus.channelA,
     };
@@ -375,7 +439,11 @@ describe("cross-tab conversation sync", () => {
   it("a stale tab that missed the delete entirely is refused on commit and keeps a recovery copy", async () => {
     // B 的通道丢弃所有消息（模拟完全没收到删除通知的标签页）。
     const blackhole: ConversationSyncChannel = { post: () => undefined, subscribe: () => () => undefined };
-    const rigB: TabRig = { adapter: createConversationPersistenceAdapter(), session: makeSession(TAB_B), channel: blackhole };
+    const rigB: TabRig = {
+      adapter: createConversationPersistenceAdapter({ identity: { writerSessionId: TAB_B, documentInstanceId: "doc-b-blackhole" } }),
+      session: makeSession(TAB_B),
+      channel: blackhole,
+    };
     seedConversations([makeConversation("alpha", "初版")]);
     const b = mountTab(rigB);
     const a = mountTab(tabA);
@@ -491,8 +559,8 @@ describe("cross-tab conversation sync", () => {
     seedConversations([makeConversation("alpha", "初版")]);
     const { b } = await produceConflict();
 
-    act(() => {
-      b.result.current.resolveConflictByCopy();
+    await act(async () => {
+      await b.result.current.resolveConflictByCopy();
     });
 
     expect(b.result.current.conflict).toBeNull();
@@ -515,8 +583,8 @@ describe("cross-tab conversation sync", () => {
     seedConversations([makeConversation("alpha", "初版")]);
     const { b } = await produceConflict();
 
-    act(() => {
-      b.result.current.resolveConflictByReload();
+    await act(async () => {
+      await b.result.current.resolveConflictByReload();
     });
 
     expect(b.result.current.conflict).toBeNull();
@@ -677,7 +745,7 @@ describe("per-tab conversation selection", () => {
 
     // 选中切换不调度分片保存、不广播、不写任何共享键；只有本标签页 sessionStorage 的选中键更新。
     expect(saveArbitrated).not.toHaveBeenCalled();
-    expect(bus.posted).toEqual([]);
+    expect(postedConversationMessages()).toEqual([]);
     expect(localWrites).toEqual([]);
     expect(a.result.current.state.currentConversationId).toBe("beta");
     expect(tabA.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("beta");
@@ -690,7 +758,7 @@ describe("per-tab conversation selection", () => {
       await new Promise((resolve) => setTimeout(resolve, 60));
     });
     expect(saveArbitrated).not.toHaveBeenCalled();
-    expect(bus.posted).toEqual([]);
+    expect(postedConversationMessages()).toEqual([]);
     expect(localWrites).toEqual([]);
     expect(a.result.current.state.currentConversationId).toBe("alpha");
     expect(tabA.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
@@ -711,7 +779,7 @@ describe("per-tab conversation selection", () => {
     expect(tabA.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
     expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("beta");
     // 选中切换不进入跨标签页通道。
-    expect(bus.posted).toEqual([]);
+    expect(postedConversationMessages()).toEqual([]);
 
     // 远端提交到达：B 的 alpha 数据刷新，但 B 的选中不被拽走。
     streamChatMock.mockImplementationOnce(() => doneStream());
@@ -736,7 +804,9 @@ describe("per-tab conversation selection", () => {
     expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("beta");
     // B 全程没有广播过任何东西。
     expect(bus.posted.length).toBeGreaterThan(0);
-    expect(bus.posted.every((message) => message.writerId === TAB_A)).toBe(true);
+    expect(bus.posted
+      .filter((message) => message.type === "conversation_committed" || message.type === "conversation_deleted")
+      .every((message) => message.writerId === TAB_A)).toBe(true);
   });
 
   it("deleting the viewed conversation falls back locally on the deleting tab and on a clean receiver viewing it", async () => {
@@ -760,7 +830,7 @@ describe("per-tab conversation selection", () => {
     expect(tabA.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
     expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
     // 接收方绝不回广播：通道里只有删除方的一条删除通知。
-    expect(bus.posted).toEqual([{ type: "conversation_deleted", conversationId: "beta", writerId: TAB_A }]);
+    expect(postedConversationMessages()).toEqual([{ type: "conversation_deleted", conversationId: "beta", writerId: TAB_A }]);
 
     // 删除仅剩的会话：两个标签页都回退到新对话（null），选中键随之移除。
     await act(async () => {

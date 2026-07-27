@@ -80,6 +80,7 @@ tests/tmp/
 tmp_tests/
 /design-qa.md
 .codex-remote-attachments/
+graphify-out/
 
 # Rust build artifacts
 rust/target/
