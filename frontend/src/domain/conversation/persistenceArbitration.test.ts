@@ -503,6 +503,11 @@ describe("cross-tab checkpoint arbitration", () => {
     const clean = adapterB.reconcileRemoteCommit("alpha", localAlpha, storage);
     expect(clean.kind).toBe("reload");
     if (clean.kind === "reload") expect(clean.conversation.messages.at(-1)?.content).toBe("A 改 alpha");
+    // 若适配器先登记了远端 revision、React 仍持有加载时的旧干净 identity，
+    // 重试必须再次 reload；不能仅因 revision 已登记而永久 noop。
+    const retriedClean = adapterB.reconcileRemoteCommit("alpha", localAlpha, storage);
+    expect(retriedClean.kind).toBe("reload");
+    if (retriedClean.kind === "reload") expect(retriedClean.conversation.messages.at(-1)?.content).toBe("A 改 alpha");
 
     const dirty = adapterB.reconcileRemoteCommit("beta", dirtyBeta, storage);
     expect(dirty.kind).toBe("stale");
