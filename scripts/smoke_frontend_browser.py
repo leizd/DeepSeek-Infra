@@ -3446,7 +3446,9 @@ async def run_cross_tab_checkpoint_smoke(base_url: str) -> dict[str, str]:
         const candidate = localStorage.key(index);
         if (candidate && candidate.startsWith(proposalPrefix)) proposals += 1;
       }
-      if (proposals < 2) throw new Error('waiting for sibling Proposal');
+      // 被动观测：不阻断 head 写入。胞兄弟 Proposal 落盘时序不确定，阻断 throw
+      // 会把单次提交变成无可恢复的永久失败（autosave 无重试机制）。最终收敛与冲突
+      // 账本由下方探针 wait_for_function 核验。
     }
     return originalSetItem.call(this, key, value);
   };
