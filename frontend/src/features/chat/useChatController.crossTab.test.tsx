@@ -886,19 +886,20 @@ describe("per-tab conversation selection", () => {
     expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
     expect(reconcileB).toHaveBeenCalledTimes(1);
 
-    // storage 事件若晚于同 revision 的广播到达，不得再启动回退对账。
+    // 同 revision 的通知仍保留一次幂等复核，确保“适配器已登记但 dispatch 未换入”
+    // 的窗口最终收敛；已经换入的正常路径只会得到 noop。
     const headKey = sessionHeadKeyV3("alpha");
-    vi.useFakeTimers();
     act(() => {
       window.dispatchEvent(new StorageEvent("storage", {
         key: headKey,
         newValue: window.localStorage.getItem(headKey),
         storageArea: window.localStorage,
       }));
-      vi.advanceTimersByTime(1_000);
     });
-    vi.useRealTimers();
-    expect(reconcileB).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1_050));
+    });
+    expect(reconcileB).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to the durable Head storage event when the broadcast channel misses a commit", async () => {
@@ -930,6 +931,15 @@ describe("per-tab conversation selection", () => {
     act(() => {
       a.result.current.flushConversationPersistence();
     });
+    const staleAlpha = b.result.current.state.conversations.find((conversation) => conversation.id === "alpha");
+    expect(staleAlpha?.messages.some((message) => message.content === "仅由 Head 事件同步")).toBe(false);
+    // 精确模拟 main CI 证据：适配器已读取并登记新 revision，但 React 尚未应用
+    // 返回的 reload。下一次耐久通知必须能用旧的干净对象再次得到 reload。
+    const ignoredReload = tabB.adapter.reconcileRemoteCommit("alpha", staleAlpha, window.localStorage);
+    expect(ignoredReload.kind).toBe("reload");
+    expect(b.result.current.state.conversations
+      .find((conversation) => conversation.id === "alpha")
+      ?.messages.some((message) => message.content === "仅由 Head 事件同步")).toBe(false);
     const headKey = sessionHeadKeyV3("alpha");
     act(() => {
       window.dispatchEvent(new StorageEvent("storage", {

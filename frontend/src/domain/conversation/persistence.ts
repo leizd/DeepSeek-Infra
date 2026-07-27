@@ -1047,6 +1047,10 @@ export function createConversationPersistenceAdapter(
    */
   const lastCommitted = new Map<string, Conversation>();
   const lastCommittedRevision = new Map<string, string>();
+  // React dispatch 与持久化对账并非同一原子步骤：记住所有曾登记为已提交的对象
+  // identity，允许通知重试识别“旧但干净”的 React 对象，同时继续拒绝真正的
+  // 本地编辑对象。WeakSet 不延长历史会话对象的生命周期。
+  let committedIdentities = new WeakSet<Conversation>();
   const localConflictBranches = new Map<string, LocalConflictBranchState>();
   const degradedHeads = new Map<string, { advertisedRevision: string; loadedRevision: string }>();
   const lastProposalKey = new Map<string, string>();
@@ -1059,6 +1063,12 @@ export function createConversationPersistenceAdapter(
   let idleGcScheduled = false;
   let identity: ReplicaIdentity | null = null;
   let capsuleSequence = 0;
+
+  function registerCommittedIdentity(conversationId: string, conversation: Conversation, revision: string): void {
+    lastCommitted.set(conversationId, conversation);
+    lastCommittedRevision.set(conversationId, revision);
+    committedIdentities.add(conversation);
+  }
 
   function getReplicaIdentity(session: StorageLike | null = browserSessionStorage()): ReplicaIdentity {
     identity ??= createReplicaIdentity(session, adapterOptions.legacyWriterFromContinuity
@@ -1107,8 +1117,7 @@ export function createConversationPersistenceAdapter(
         const localBranch = localConflictBranches.get(conversation.id);
         const headRevision = localBranch?.branchRevision ?? shard?.loadedRevision;
         if (!headRevision) continue;
-        lastCommitted.set(conversation.id, conversation);
-        lastCommittedRevision.set(conversation.id, headRevision);
+        registerCommittedIdentity(conversation.id, conversation, headRevision);
         if (shard?.degraded) {
           degradedHeads.set(conversation.id, {
             advertisedRevision: shard.advertisedRevision,
@@ -1849,6 +1858,7 @@ export function createConversationPersistenceAdapter(
     for (const conversation of queue) {
       if (!conversation.messages.length
         || lastCommitted.get(conversation.id) === conversation
+        || committedIdentities.has(conversation)
         || tombstonedRefused.has(conversation.id)) continue;
       // tombstone 守卫：本地 base 早于删除（或根本没收到删除通知）的提交一律拒绝，
       // head / 快照绝不重写；cid 移出已提交映射，本地内容以新 id 恢复副本幸存。
@@ -1877,8 +1887,7 @@ export function createConversationPersistenceAdapter(
       const outcome = commitConversationShard(storage, conversation, writerSessionId, mode);
       if (!outcome.ok) return outcome;
       // 冲突分支登记自己的 branch revision；绝不冒充共享 Head 的干净副本。
-      lastCommitted.set(conversation.id, conversation);
-      lastCommittedRevision.set(conversation.id, outcome.revision);
+      registerCommittedIdentity(conversation.id, conversation, outcome.revision);
       lastHeadRevision = outcome.revision;
       options?.onCommit?.({ conversationId: conversation.id, revision: outcome.revision, writerId: writerSessionId, savedAt: outcome.savedAt });
       // 存储压力下带压缩成功的提交：一次性带外上报（预览已剥离，全部文字保留）。
@@ -2052,12 +2061,15 @@ export function createConversationPersistenceAdapter(
   ): ReconcileRemoteOutcome {
     if (!storage) return { kind: "noop" };
     const head = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
-    if (head && lastCommittedRevision.get(conversationId) === head.revision) return { kind: "noop" };
     // 已隔离的本地冲突分支即使刚刚完成一次耐久提交，也只相对 branch revision
     // 是“干净”的；它绝不能因胜方后续广播而换入共享 Head、丢失分支内容。
     if (localConflictBranches.has(conversationId)) return { kind: "stale" };
-    // 本地有未提交修改：保持内容，下次提交走冲突 / 恢复副本路径（绝不静默丢弃）。
-    if (local && lastCommitted.get(conversationId) !== local) return { kind: "stale" };
+    const committed = lastCommitted.get(conversationId);
+    // 未被登记过的不同对象才是真正的本地修改。若 local 是历史已提交 identity，
+    // 说明适配器曾先换入新 revision、但 React dispatch 尚未反映；通知重试必须
+    // 继续 reload，不能把这个旧干净对象误判为脏或因 revision 相同直接 noop。
+    if (local && committed !== local && !committedIdentities.has(local)) return { kind: "stale" };
+    if (head && lastCommittedRevision.get(conversationId) === head.revision && committed === local) return { kind: "noop" };
     if (!head) {
       // head 缺失且 tombstone 在案：远端已删除，本地干净 ⇒ 调用方移除 state。
       if (safeGetItem(storage, sessionTombstoneKeyV3(conversationId)) === null) return { kind: "noop" };
@@ -2071,8 +2083,7 @@ export function createConversationPersistenceAdapter(
     const loadedRevision = loadV3SnapshotConversation(storage, conversationId, head.revision)
       ? head.revision
       : head.parentRevision as string;
-    lastCommitted.set(conversationId, conversation);
-    lastCommittedRevision.set(conversationId, loadedRevision);
+    registerCommittedIdentity(conversationId, conversation, loadedRevision);
     return { kind: "reload", conversation };
   }
 
@@ -2230,8 +2241,7 @@ export function createConversationPersistenceAdapter(
         ? loadV3SnapshotConversation(storage, copyId, verifiedHead.revision)
         : null;
       if (!verified) return verificationFailure("冲突副本 Head 或 Digest 核验失败");
-      lastCommitted.set(copyId, verified);
-      lastCommittedRevision.set(copyId, verifiedHead?.revision as string);
+      registerCommittedIdentity(copyId, verified, verifiedHead?.revision as string);
       if (!finalizeConflictRecord(storage, record, "resolved-copy")) {
         return verificationFailure("冲突副本已提交，但原分支释放标记核验失败");
       }
@@ -2251,8 +2261,7 @@ export function createConversationPersistenceAdapter(
       if (!record) return verificationFailure("冲突记录不存在或已损坏");
       const shared = readSharedConversation(conversationId, storage);
       if (!shared) return verificationFailure("共享 Head 核验失败");
-      lastCommitted.set(conversationId, shared.conversation);
-      lastCommittedRevision.set(conversationId, shared.revision);
+      registerCommittedIdentity(conversationId, shared.conversation, shared.revision);
       if (!finalizeConflictRecord(storage, record, "discarded")) {
         return verificationFailure("共享 Head 已读取，但冲突丢弃标记核验失败");
       }
@@ -2262,8 +2271,7 @@ export function createConversationPersistenceAdapter(
   }
 
   function adoptRemoteConversation(conversationId: string, conversation: Conversation, revision: string): void {
-    lastCommitted.set(conversationId, conversation);
-    lastCommittedRevision.set(conversationId, revision);
+    registerCommittedIdentity(conversationId, conversation, revision);
   }
 
   /** 当前仍处于脏状态的会话：identity 未登记为已提交、非空、未被 tombstone 拒绝。 */
@@ -2271,6 +2279,7 @@ export function createConversationPersistenceAdapter(
     return state.conversations.filter((conversation) =>
       conversation.messages.length > 0
       && lastCommitted.get(conversation.id) !== conversation
+      && !committedIdentities.has(conversation)
       && !tombstonedRefused.has(conversation.id));
   }
 
@@ -2398,8 +2407,7 @@ export function createConversationPersistenceAdapter(
     const tombstoned = safeGetItem(storage, sessionTombstoneKeyV3(conversationId)) !== null;
 
     const registerCommitted = (revision: string): void => {
-      lastCommitted.set(conversationId, conversation);
-      lastCommittedRevision.set(conversationId, revision);
+      registerCommittedIdentity(conversationId, conversation, revision);
     };
 
     if (!tombstoned) {
@@ -2465,8 +2473,7 @@ export function createConversationPersistenceAdapter(
         outcome.failed.push(conflictFailure("恢复副本 Head 与胶囊摘要不一致", conversationId, estimateConversationBytes(copy)));
         return false;
       }
-      lastCommitted.set(copy.id, copy);
-      lastCommittedRevision.set(copy.id, copyHead.revision);
+      registerCommittedIdentity(copy.id, copy, copyHead.revision);
       outcome.recovered.push(copy);
       return true;
     }
@@ -2476,8 +2483,7 @@ export function createConversationPersistenceAdapter(
       outcome.failed.push(copyCommit);
       return false;
     }
-    lastCommitted.set(copy.id, copy);
-    lastCommittedRevision.set(copy.id, copyCommit.revision);
+    registerCommittedIdentity(copy.id, copy, copyCommit.revision);
     options?.onCommit?.({ conversationId: copy.id, revision: copyCommit.revision, writerId: writerSessionId, savedAt: copyCommit.savedAt });
     outcome.recovered.push(copy);
     return true;
@@ -2579,6 +2585,7 @@ export function createConversationPersistenceAdapter(
   function reset(): void {
     lastCommitted.clear();
     lastCommittedRevision.clear();
+    committedIdentities = new WeakSet<Conversation>();
     localConflictBranches.clear();
     degradedHeads.clear();
     lastProposalKey.clear();

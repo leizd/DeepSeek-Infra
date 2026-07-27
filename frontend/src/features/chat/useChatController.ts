@@ -325,8 +325,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
   // 延迟到流结束后再同步。远端删除到达时，本地干净则移除（选中回退保持既有
   // UX）；本地脏则保留内容，下次提交被 tombstone 拒绝时自动物化为恢复副本。
   const deferredSyncRef = useRef(new Set<string>());
-  const storageSyncTimersRef = useRef(new Map<string, number>());
-  const broadcastRevisionRef = useRef(new Map<string, string | null>());
+  const syncRetryTimersRef = useRef(new Map<string, number>());
   const handleSyncConversation = useCallback(
     (conversationId: string) => {
       const local = stateRef.current.conversations.find((conversation) => conversation.id === conversationId);
@@ -345,6 +344,15 @@ export function useChatController(options: ChatControllerOptions = {}) {
     }
     handleSyncConversation(conversationId);
   }, [handleSyncConversation]);
+  const scheduleSyncRetry = useCallback((conversationId: string) => {
+    const previous = syncRetryTimersRef.current.get(conversationId);
+    if (previous !== undefined) window.clearTimeout(previous);
+    const timer = window.setTimeout(() => {
+      syncRetryTimersRef.current.delete(conversationId);
+      requestSyncConversation(conversationId);
+    }, STORAGE_SYNC_FALLBACK_MS);
+    syncRetryTimersRef.current.set(conversationId, timer);
+  }, [requestSyncConversation]);
 
   useEffect(() => {
     let ownIdentity = persistence.getReplicaIdentity(options.session);
@@ -381,16 +389,10 @@ export function useChatController(options: ChatControllerOptions = {}) {
         return;
       }
       if (message.writerId === ownIdentity.writerSessionId) return;
-      broadcastRevisionRef.current.set(
-        message.conversationId,
-        message.type === "conversation_committed" ? message.revision : null,
-      );
-      const fallbackTimer = storageSyncTimersRef.current.get(message.conversationId);
-      if (fallbackTimer !== undefined) {
-        window.clearTimeout(fallbackTimer);
-        storageSyncTimersRef.current.delete(message.conversationId);
-      }
       requestSyncConversation(message.conversationId);
+      // 收到通知不等于 React 已完成换入；dispatch 与适配器登记之间可能被打断。
+      // 保留一次幂等延迟复核，storage 事件只负责合并同一会话的计时器。
+      scheduleSyncRetry(message.conversationId);
     });
     syncChannel.post({ type: "writer_claim", ...ownIdentity });
     return () => {
@@ -398,7 +400,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
       document.removeEventListener("visibilitychange", onLeaseEvent);
       window.removeEventListener("pagehide", onLeaseEvent);
     };
-  }, [syncChannel, requestSyncConversation, persistence, options.session]);
+  }, [syncChannel, requestSyncConversation, scheduleSyncRetry, persistence, options.session]);
 
   useEffect(() => {
     const onStorage = (event: StorageEvent): void => {
@@ -406,34 +408,15 @@ export function useChatController(options: ChatControllerOptions = {}) {
       if (!key?.startsWith(conversationStorageKeys.v3HeadPrefix)) return;
       const conversationId = key.slice(conversationStorageKeys.v3HeadPrefix.length);
       if (!conversationId) return;
-      let revision: string | null = null;
-      try {
-        const head = event.newValue ? JSON.parse(event.newValue) as { revision?: unknown } : null;
-        revision = typeof head?.revision === "string" ? head.revision : null;
-      } catch {
-        // 损坏 Head 仍交给持久化对账（会安全 noop / 降级），不在事件层解释。
-      }
-      if (broadcastRevisionRef.current.has(conversationId)
-        && broadcastRevisionRef.current.get(conversationId) === revision) {
-        broadcastRevisionRef.current.delete(conversationId);
-        return;
-      }
-      const previous = storageSyncTimersRef.current.get(conversationId);
-      if (previous !== undefined) window.clearTimeout(previous);
-      const timer = window.setTimeout(() => {
-        storageSyncTimersRef.current.delete(conversationId);
-        requestSyncConversation(conversationId);
-      }, STORAGE_SYNC_FALLBACK_MS);
-      storageSyncTimersRef.current.set(conversationId, timer);
+      scheduleSyncRetry(conversationId);
     };
     window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener("storage", onStorage);
-      storageSyncTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-      storageSyncTimersRef.current.clear();
-      broadcastRevisionRef.current.clear();
+      syncRetryTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      syncRetryTimersRef.current.clear();
     };
-  }, [requestSyncConversation]);
+  }, [scheduleSyncRetry]);
 
   useEffect(() => {
     if (state.requestStatus !== "idle" || !deferredSyncRef.current.size) return;
