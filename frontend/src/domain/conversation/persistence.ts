@@ -960,6 +960,7 @@ export function createConversationPersistenceAdapter(
   const localConflictBranches = new Map<string, LocalConflictBranchState>();
   const degradedHeads = new Map<string, { advertisedRevision: string; loadedRevision: string }>();
   const lastProposalKey = new Map<string, string>();
+  const lastSettledProposalFingerprint = new Map<string, string>();
   /** Controller 已请求但尚未耐久提交的删除（pagehide 同步 flush 会先提交它们）。 */
   const pendingTombstones = new Set<string>();
   /** 本标签页已知被删除的会话：提交一律跳过（删除方自身状态 / 已物化过恢复副本）。 */
@@ -1200,6 +1201,135 @@ export function createConversationPersistenceAdapter(
       || left.writerSessionId.localeCompare(right.writerSessionId));
   }
 
+  function proposalFingerprint(proposals: LockFreeProposal[]): string {
+    return proposals.map((proposal) =>
+      `${proposal.revision}\u0000${proposal.writerSessionId}\u0000${proposal.digest}`).join("\u0001");
+  }
+
+  /**
+   * 对同一 parent 的可见 Proposal 做幂等最终仲裁。首次提交后还会在下一个
+   * macrotask 再执行一次：跨 renderer 的 localStorage 可见性可能晚于同步
+   * setItem 返回，只有再次收集才能把各自先看到自己的真正并发提交收敛为
+   * 同一个 Head，并为所有负方补齐 Conflict Ledger。
+   */
+  function settleLockFreeProposal(
+    storage: StorageLike,
+    ownProposal: LockFreeProposal,
+    bytes = 0,
+  ): ShardCommitAttempt {
+    const {
+      conversationId,
+      parentRevision,
+      revision,
+      savedAt,
+      writerSessionId,
+    } = ownProposal;
+    const proposals = siblingProposals(storage, conversationId, parentRevision);
+    const winner = proposals[0];
+    if (!winner) {
+      return { ok: false, quota: false, failure: verificationFailure("没有可验证的 Proposal") };
+    }
+    const currentHead = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
+    const currentIsParent = currentHead?.revision === parentRevision;
+    const currentIsSibling = currentHead?.parentRevision === parentRevision
+      && revisionSeq(currentHead.revision) === revisionSeq(winner.revision);
+    if ((currentHead === null && parentRevision === null) || currentIsParent || currentIsSibling) {
+      const winnerCheckpoint = loadV3Checkpoint(storage, conversationId, winner.revision);
+      if (!winnerCheckpoint) {
+        return { ok: false, quota: false, failure: verificationFailure("Winner 快照核验失败") };
+      }
+      try {
+        storage.setItem(sessionHeadKeyV3(conversationId), JSON.stringify({
+          revision: winner.revision,
+          parentRevision,
+          writerId: winner.writerSessionId,
+          savedAt: winner.savedAt,
+          digest: winner.digest,
+        } satisfies ConversationHeadV3));
+      } catch (error) {
+        const failure = classifyStorageError(error);
+        return {
+          ok: false,
+          quota: failure.code === "quota-exceeded",
+          failure: shardFailure(failure, conversationId, bytes),
+        };
+      }
+      for (const loser of proposals.slice(1)) {
+        const ledger = writeConflictLedger(
+          storage,
+          conversationId,
+          loser.revision,
+          null,
+          parentRevision,
+          winner.revision,
+          loser.writerSessionId,
+          loser.savedAt,
+        );
+        if ("ok" in ledger) return { ok: false, quota: false, failure: ledger };
+        if (loser.writerSessionId === writerSessionId) {
+          localConflictBranches.set(conversationId, {
+            conversationId,
+            conflictId: ledger.conflictId,
+            branchRevision: loser.revision,
+            baseRevision: parentRevision,
+            sharedRevision: winner.revision,
+            status: "editing-branch",
+          });
+        }
+      }
+      writeTabLease(storage, writerSessionId);
+      lastSettledProposalFingerprint.set(conversationId, proposalFingerprint(proposals));
+      if (winner.revision === revision) {
+        return { ok: true, kind: "head", revision, savedAt };
+      }
+      const own = durableConflictBranches(storage, conversationId)
+        .find((branch) => branch.branchRevision === revision && branch.writerSessionId === writerSessionId);
+      return {
+        ok: true,
+        kind: "conflict",
+        revision,
+        savedAt,
+        baseRevision: parentRevision,
+        sharedRevision: winner.revision,
+        conflictId: own?.conflictId ?? conflictIdFor(conversationId, writerSessionId, revision),
+      };
+    }
+    // Head 已经离开同胞层级：旧 Proposal 只能成为隔离分支，绝不回退或覆盖 Head。
+    if (currentHead) {
+      const ledger = writeConflictLedger(
+        storage,
+        conversationId,
+        revision,
+        null,
+        parentRevision,
+        currentHead.revision,
+        writerSessionId,
+        savedAt,
+      );
+      if ("ok" in ledger) return { ok: false, quota: false, failure: ledger };
+      localConflictBranches.set(conversationId, {
+        conversationId,
+        conflictId: ledger.conflictId,
+        branchRevision: revision,
+        baseRevision: parentRevision,
+        sharedRevision: currentHead.revision,
+        status: "editing-branch",
+      });
+      writeTabLease(storage, writerSessionId);
+      lastSettledProposalFingerprint.set(conversationId, proposalFingerprint(proposals));
+      return {
+        ok: true,
+        kind: "conflict",
+        revision,
+        savedAt,
+        baseRevision: parentRevision,
+        sharedRevision: currentHead.revision,
+        conflictId: ledger.conflictId,
+      };
+    }
+    return { ok: false, quota: false, failure: verificationFailure("Proposal 仲裁期间共享 Head 消失") };
+  }
+
   /**
    * 提交单个会话分片（跨标签页仲裁版）：先重读共享 head，与适配器本地 base
    * （本标签页上次提交推进到的 head revision）比较——
@@ -1380,104 +1510,9 @@ export function createConversationPersistenceAdapter(
         } catch (error) {
           return { ok: false, ...fail(error) };
         }
-        const proposals = siblingProposals(storage, conversation.id, localBase);
-        const winner = proposals[0];
-        if (!winner) {
-          return { ok: false, quota: false, failure: verificationFailure("没有可验证的 Proposal") };
-        }
-        const currentHead = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversation.id)));
-        const currentIsParent = currentHead?.revision === localBase;
-        const currentIsSibling = currentHead?.parentRevision === localBase
-          && revisionSeq(currentHead.revision) === revisionSeq(winner.revision);
-        if ((currentHead === null && localBase === null) || currentIsParent || currentIsSibling) {
-          const winnerCheckpoint = loadV3Checkpoint(storage, conversation.id, winner.revision);
-          if (!winnerCheckpoint) {
-            return { ok: false, quota: false, failure: verificationFailure("Winner 快照核验失败") };
-          }
-          try {
-            storage.setItem(sessionHeadKeyV3(conversation.id), JSON.stringify({
-              revision: winner.revision,
-              parentRevision: localBase,
-              writerId: winner.writerSessionId,
-              savedAt: winner.savedAt,
-              digest: winner.digest,
-            } satisfies ConversationHeadV3));
-          } catch (error) {
-            return { ok: false, ...fail(error) };
-          }
-          for (const loser of proposals.slice(1)) {
-            const ledger = writeConflictLedger(
-              storage,
-              conversation.id,
-              loser.revision,
-              null,
-              localBase,
-              winner.revision,
-              loser.writerSessionId,
-              loser.savedAt,
-            );
-            if ("ok" in ledger) return { ok: false, quota: false, failure: ledger };
-            if (loser.writerSessionId === writerSessionId) {
-              localConflictBranches.set(conversation.id, {
-                conversationId: conversation.id,
-                conflictId: ledger.conflictId,
-                branchRevision: loser.revision,
-                baseRevision: localBase,
-                sharedRevision: winner.revision,
-                status: "editing-branch",
-              });
-            }
-          }
-          retirePreviousProposal();
-          writeTabLease(storage, writerSessionId);
-          if (winner.revision === revision) {
-            return { ok: true, kind: "head", revision, savedAt };
-          }
-          const own = durableConflictBranches(storage, conversation.id)
-            .find((branch) => branch.branchRevision === revision && branch.writerSessionId === writerSessionId);
-          return {
-            ok: true,
-            kind: "conflict",
-            revision,
-            savedAt,
-            baseRevision: localBase,
-            sharedRevision: winner.revision,
-            conflictId: own?.conflictId ?? conflictIdFor(conversation.id, writerSessionId, revision),
-          };
-        }
-        // Head 已经离开同胞层级：旧 Proposal 只能成为隔离分支，绝不回退或覆盖 Head。
-        if (currentHead) {
-          const ledger = writeConflictLedger(
-            storage,
-            conversation.id,
-            revision,
-            null,
-            localBase,
-            currentHead.revision,
-            writerSessionId,
-            savedAt,
-          );
-          if ("ok" in ledger) return { ok: false, quota: false, failure: ledger };
-          localConflictBranches.set(conversation.id, {
-            conversationId: conversation.id,
-            conflictId: ledger.conflictId,
-            branchRevision: revision,
-            baseRevision: localBase,
-            sharedRevision: currentHead.revision,
-            status: "editing-branch",
-          });
-          retirePreviousProposal();
-          writeTabLease(storage, writerSessionId);
-          return {
-            ok: true,
-            kind: "conflict",
-            revision,
-            savedAt,
-            baseRevision: localBase,
-            sharedRevision: currentHead.revision,
-            conflictId: ledger.conflictId,
-          };
-        }
+        const settlement = settleLockFreeProposal(storage, proposal, bytes);
+        if (settlement.ok) retirePreviousProposal();
+        return settlement;
       }
       try {
         storage.setItem(sessionHeadKeyV3(conversation.id), JSON.stringify({
@@ -1828,6 +1863,55 @@ export function createConversationPersistenceAdapter(
     }
   }
 
+  function settlePendingLockFreeProposals(
+    storage: StorageLike,
+    writerSessionId: string,
+    options?: SaveConversationOptions,
+  ): PersistenceFlushResult {
+    for (const [conversationId, proposalKey] of lastProposalKey) {
+      const proposal = parseProposal(safeGetItem(storage, proposalKey));
+      if (!proposal || proposal.writerSessionId !== writerSessionId) continue;
+      const visible = siblingProposals(storage, conversationId, proposal.parentRevision);
+      if (proposalFingerprint(visible) === lastSettledProposalFingerprint.get(conversationId)) continue;
+      const previousConflictId = localConflictBranches.get(conversationId)?.conflictId;
+      const committed = lastCommitted.get(conversationId);
+      const settlement = settleLockFreeProposal(
+        storage,
+        proposal,
+        committed ? estimateConversationBytes(committed) : 0,
+      );
+      if (!settlement.ok) return settlement.failure;
+      if (settlement.kind !== "conflict" || settlement.conflictId === previousConflictId) continue;
+      options?.onConflict?.({
+        conversationId,
+        conflictId: settlement.conflictId,
+        title: committed?.title ?? "",
+        revision: settlement.revision,
+        baseRevision: settlement.baseRevision,
+        sharedRevision: settlement.sharedRevision,
+        writerId: writerSessionId,
+        savedAt: settlement.savedAt,
+      });
+    }
+    return { ok: true };
+  }
+
+  function schedulePendingLockFreeSettlement(
+    storage: StorageLike,
+    writerSessionId: string,
+    options?: SaveConversationOptions,
+  ): void {
+    // 跨 renderer 的 localStorage 发布可能晚于同步 setItem 返回。提交 Promise 不被
+    // 这段最终仲裁阻塞（避免拖住 autosave single-flight）；0ms 与 25ms 两次有界
+    // 重扫只在 Proposal 集合真的增长时写入，失败通过既有健康通道上报。
+    const settle = (): void => {
+      const result = settlePendingLockFreeProposals(storage, writerSessionId, options);
+      if (!result.ok) options?.onWarning?.(result);
+    };
+    globalThis.setTimeout(settle, 0);
+    globalThis.setTimeout(settle, 25);
+  }
+
   function saveArbitrated(
     getState: () => PersistedConversationState,
     storage: StorageLike | null = browserStorage(),
@@ -1848,7 +1932,11 @@ export function createConversationPersistenceAdapter(
         healDegradedHeads(storage, options);
         return run("exclusive");
       },
-      () => run("proposal"),
+      () => {
+        const result = run("proposal");
+        if (result.ok) schedulePendingLockFreeSettlement(storage, writerSessionId, options);
+        return result;
+      },
     );
   }
 
@@ -2428,6 +2516,7 @@ export function createConversationPersistenceAdapter(
     localConflictBranches.clear();
     degradedHeads.clear();
     lastProposalKey.clear();
+    lastSettledProposalFingerprint.clear();
     pendingTombstones.clear();
     tombstonedRefused.clear();
     lastHeadRevision = null;

@@ -42,6 +42,50 @@ class MemoryStorage implements StorageLike {
   key(index: number): string | null { return [...this.values.keys()][index] ?? null; }
 }
 
+/**
+ * 模拟 Chromium 不同 renderer 的 localStorage 可见性：写入方可立即回读自己的
+ * Proposal，但同一同步提交栈的枚举只看见最后一次本地写；两个提交返回后才发布
+ * 全部 Proposal。两个 Writer 因此会先各自推进 Head，随后必须靠最终仲裁收敛。
+ */
+class DelayedProposalStorage extends MemoryStorage {
+  private readonly pendingProposals = new Map<string, string>();
+  private lastPendingProposal: string | null = null;
+
+  override getItem(key: string): string | null {
+    return this.pendingProposals.get(key) ?? super.getItem(key);
+  }
+
+  override setItem(key: string, value: string): void {
+    if (!key.startsWith(conversationStorageKeys.v3ProposalPrefix)) {
+      super.setItem(key, value);
+      return;
+    }
+    this.pendingProposals.set(key, value);
+    this.lastPendingProposal = key;
+    globalThis.queueMicrotask(() => {
+      const pending = this.pendingProposals.get(key);
+      if (pending === undefined) return;
+      this.pendingProposals.delete(key);
+      this.values.set(key, pending);
+      if (this.lastPendingProposal === key) this.lastPendingProposal = null;
+    });
+  }
+
+  override get length(): number {
+    return this.visibleKeys().length;
+  }
+
+  override key(index: number): string | null {
+    return this.visibleKeys()[index] ?? null;
+  }
+
+  private visibleKeys(): string[] {
+    const keys = [...this.values.keys()];
+    if (this.lastPendingProposal && !this.values.has(this.lastPendingProposal)) keys.push(this.lastPendingProposal);
+    return keys;
+  }
+}
+
 class Mutex implements LocksLike {
   private tail: Promise<unknown> = Promise.resolve();
   request<T>(_name: string, _options: LockRequestOptions, callback: () => T | Promise<T>): Promise<T> {
@@ -251,6 +295,35 @@ describe("4.3.7 replica convergence", () => {
     expect(storage.getItem(sessionSnapshotKeyV3("alpha", `2.${WRITER_B}`))).not.toBeNull();
     expect(a.listConflictBranches("alpha", storage)).toEqual([
       expect.objectContaining({ branchRevision: `2.${WRITER_B}`, writerSessionId: WRITER_B }),
+    ]);
+    expect(a.readSharedConversation("alpha", storage)?.revision).toBe(`2.${WRITER_A}`);
+    expect(b.readSharedConversation("alpha", storage)?.revision).toBe(`2.${WRITER_A}`);
+  });
+
+  it("reconciles sibling proposals that become visible only after both lock-free commits", async () => {
+    const storage = new DelayedProposalStorage();
+    const a = adapter(WRITER_A, null);
+    const b = adapter(WRITER_B, null);
+    const sessionA = session("aaaa0001");
+    const sessionB = session("bbbb0002");
+    const initial = conversation("alpha", "base");
+    a.save(state([initial]), storage, sessionA);
+    const baseB = b.load(storage, sessionB).conversations[0] as Conversation;
+
+    const [resultA, resultB] = await Promise.all([
+      a.saveArbitrated(() => state([edit(initial, "proposal-a")]), storage, sessionA),
+      b.saveArbitrated(() => state([edit(baseB, "proposal-b")]), storage, sessionB),
+    ]);
+
+    expect(resultA.ok).toBe(true);
+    expect(resultB.ok).toBe(true);
+    expect(head(storage, "alpha")).toMatchObject({ revision: `2.${WRITER_A}`, writerId: WRITER_A });
+    expect(storage.getItem(sessionSnapshotKeyV3("alpha", `2.${WRITER_A}`))).not.toBeNull();
+    // B 在自己的 Proposal 尚未公开时已看见 A 的临时 Head，因此 revision 序号
+    // 可以更高；parent 仍是共同 base，最终仲裁必须把它保留为负方分支。
+    expect(storage.getItem(sessionSnapshotKeyV3("alpha", `3.${WRITER_B}`))).not.toBeNull();
+    expect(a.listConflictBranches("alpha", storage)).toEqual([
+      expect.objectContaining({ branchRevision: `3.${WRITER_B}`, writerSessionId: WRITER_B }),
     ]);
     expect(a.readSharedConversation("alpha", storage)?.revision).toBe(`2.${WRITER_A}`);
     expect(b.readSharedConversation("alpha", storage)?.revision).toBe(`2.${WRITER_A}`);

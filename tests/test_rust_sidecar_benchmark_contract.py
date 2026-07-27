@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from benchmarks import bench_rust_sidecar_release as benchmark
+from deepseek_infra.core.config import APP_VERSION
 from deepseek_infra.infra.rag.document_preparation import prepare_rag_document
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,10 @@ TIMING_FIELDS = {
     "pythonValidationUs",
     "totalDelegateUs",
 }
+
+
+def test_benchmark_version_follows_release_version() -> None:
+    assert benchmark.VERSION == APP_VERSION == (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def _layer() -> dict[str, Any]:
