@@ -4,6 +4,7 @@ import { TAB_ID_STORAGE_KEY } from "../../app/tabIdentity";
 import type { ChatMessage } from "../chat/types";
 import type { Conversation } from "./types";
 import {
+  CONVERSATION_CHECKPOINT_ORPHAN_GRACE_MS,
   CONVERSATION_CHECKPOINT_LOCK_NAME,
   CONVERSATION_TOMBSTONE_LIMITS,
   conversationStorageKeys,
@@ -419,9 +420,13 @@ describe("cross-tab checkpoint arbitration", () => {
     expect(result).toMatchObject({ ok: false, code: "write-conflict" });
     expect(readHead(storage, "alpha")).toMatchObject({ revision: `2.${TAB_A}`, writerId: TAB_A });
     // 分支快照已核验落盘但无指针引用 → 成为孤儿，由空闲 GC 回收。
-    expect(snapshotKeys(storage, "alpha")).toContain(sessionSnapshotKeyV3("alpha", `3.${TAB_B}`));
+    const branchKey = sessionSnapshotKeyV3("alpha", `3.${TAB_B}`);
+    expect(snapshotKeys(storage, "alpha")).toContain(branchKey);
+    const checkpoint = JSON.parse(storage.getItem(branchKey) as string) as ConversationCheckpointV3;
+    checkpoint.savedAt = Date.now() - CONVERSATION_CHECKPOINT_ORPHAN_GRACE_MS - 1;
+    storage.setItem(branchKey, JSON.stringify(checkpoint));
     expect(runIdleCheckpointGc(storage)).toBeGreaterThanOrEqual(1);
-    expect(snapshotKeys(storage, "alpha")).not.toContain(sessionSnapshotKeyV3("alpha", `3.${TAB_B}`));
+    expect(snapshotKeys(storage, "alpha")).not.toContain(branchKey);
   });
 
   it("conflict-pointed snapshots survive retention and idle GC until resolved", () => {
@@ -451,6 +456,9 @@ describe("cross-tab checkpoint arbitration", () => {
 
     // 解决（清除指针）后，下一轮 GC 在预算内回收分支。
     adapterB.clearConflict("alpha", storage);
+    const checkpoint = JSON.parse(storage.getItem(branchKey) as string) as ConversationCheckpointV3;
+    checkpoint.savedAt = Date.now() - CONVERSATION_CHECKPOINT_ORPHAN_GRACE_MS - 1;
+    storage.setItem(branchKey, JSON.stringify(checkpoint));
     expect(runIdleCheckpointGc(storage, 8)).toBe(1);
     expect(storage.values.has(branchKey)).toBe(false);
     expect(readPointer(storage, "alpha")).toBeNull();

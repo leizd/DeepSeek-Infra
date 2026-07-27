@@ -49,6 +49,44 @@ interface ConversationHeadV3 {
   digest: string;
 }
 
+/** Web Locks 不可用时发布的候选提交；快照经 digest 核验后才参与仲裁。 */
+interface LockFreeProposal {
+  schemaVersion: 1;
+  conversationId: string;
+  parentRevision: string | null;
+  revision: string;
+  logicalSequence: number;
+  savedAt: number;
+  writerSessionId: string;
+  digest: string;
+}
+
+function parseLockFreeProposal(raw: string | null): LockFreeProposal | null {
+  if (!raw) return null;
+  try {
+    const proposal = JSON.parse(raw) as Partial<LockFreeProposal>;
+    if (proposal.schemaVersion !== 1
+      || typeof proposal.conversationId !== "string" || !proposal.conversationId
+      || typeof proposal.revision !== "string" || !proposal.revision
+      || typeof proposal.logicalSequence !== "number"
+      || typeof proposal.savedAt !== "number"
+      || typeof proposal.writerSessionId !== "string" || !proposal.writerSessionId
+      || typeof proposal.digest !== "string" || !proposal.digest) return null;
+    return {
+      schemaVersion: 1,
+      conversationId: proposal.conversationId,
+      parentRevision: typeof proposal.parentRevision === "string" && proposal.parentRevision ? proposal.parentRevision : null,
+      revision: proposal.revision,
+      logicalSequence: proposal.logicalSequence,
+      savedAt: proposal.savedAt,
+      writerSessionId: proposal.writerSessionId,
+      digest: proposal.digest,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** 4.3.6 单指针读取兼容层；4.3.7 的真实所有权由 DurableConflictBranch 账本承担。 */
 export interface ConversationConflictPointer {
   revision: string;
@@ -130,6 +168,12 @@ export const CONVERSATION_TOMBSTONE_LIMITS = {
   maxCount: 50,
   tabLeaseStaleMs: 5 * 60 * 1000,
 } as const;
+
+/**
+ * localStorage 的跨 renderer 操作不是一笔事务。快照写入成功到 Proposal 发布之间
+ * 必须留出短暂保护窗口，避免另一个标签页的 GC 把尚未被引用的新快照误判为孤儿。
+ */
+export const CONVERSATION_CHECKPOINT_ORPHAN_GRACE_MS = 60 * 1000;
 
 /** 提交被 tombstone 拒绝后，本地内容物化为新 id 恢复副本（已作为自己的分片提交）的带外通知。 */
 export interface ConversationRecoverySignal {
@@ -829,14 +873,27 @@ function conflictFailure(reason: string, conversationId: string, bytes: number):
   return withSizeHint({ ok: false, code: "write-conflict", message: `会话 ${conversationId}：冲突分支${reason}` }, bytes);
 }
 
-function collectStaleSnapshots(storage: StorageLike, conversationId: string, keep: ReadonlySet<string>, budget: number): void {
+function collectStaleSnapshots(
+  storage: StorageLike,
+  conversationId: string,
+  keep: ReadonlySet<string>,
+  budget: number,
+  currentWriterSessionId: string,
+): void {
   const prefix = sessionSnapshotKeyV3(conversationId, "");
   const keys = enumerateKeysWithPrefix(storage, prefix);
   if (!keys) return; // 存储不支持枚举时静默跳过。
+  const protectedRevisions = new Set(keep);
+  protectLockFreeProposalSnapshots(storage, conversationId, protectedRevisions);
+  const snapshotGcNow = Date.now();
   let remaining = budget;
   for (const key of keys) {
     if (remaining <= 0) return;
-    if (keep.has(key.slice(prefix.length))) continue;
+    const revision = key.slice(prefix.length);
+    const revisionWriterSessionId = revision.slice(revision.indexOf(".") + 1);
+    if (protectedRevisions.has(revision)
+      || (revisionWriterSessionId !== currentWriterSessionId
+        && isRecentVerifiedCheckpoint(storage, conversationId, revision, snapshotGcNow))) continue;
     try {
       storage.removeItem(key);
       remaining -= 1;
@@ -857,8 +914,38 @@ function parseSnapshotKey(key: string): { conversationId: string; revision: stri
 }
 
 /**
+ * Proposal 只有在键、信封与快照 digest 三者一致时才保护快照；损坏或伪造的
+ * Proposal 不得让孤儿快照永久逃过 GC。
+ */
+function protectLockFreeProposalSnapshots(storage: StorageLike, conversationId: string, keep: Set<string>): void {
+  const keys = enumerateKeysWithPrefix(storage, `${conversationStorageKeys.v3ProposalPrefix}${conversationId}.`);
+  if (!keys) return;
+  for (const key of keys) {
+    const proposal = parseLockFreeProposal(safeGetItem(storage, key));
+    if (!proposal
+      || proposal.conversationId !== conversationId
+      || key !== sessionProposalKeyV3(conversationId, proposal.parentRevision, proposal.revision)) continue;
+    const checkpoint = loadV3Checkpoint(storage, conversationId, proposal.revision);
+    if (checkpoint?.digest === proposal.digest) keep.add(proposal.revision);
+  }
+}
+
+function isRecentVerifiedCheckpoint(
+  storage: StorageLike,
+  conversationId: string,
+  revision: string,
+  now: number,
+): boolean {
+  const checkpoint = loadV3Checkpoint(storage, conversationId, revision);
+  if (!checkpoint) return false;
+  const age = now - checkpoint.savedAt;
+  return age >= -CONVERSATION_CHECKPOINT_ORPHAN_GRACE_MS && age <= CONVERSATION_CHECKPOINT_ORPHAN_GRACE_MS;
+}
+
+/**
  * 空闲孤儿 GC：扫描所有 V3 快照，删除不被所属会话 head / parentRevision /
- * 冲突指针引用的快照（崩溃/失败写入的残留），单次最多 budget 份，返回删除数。
+ * 冲突指针 / 可验证 Proposal 引用且已超过发布宽限期的快照（崩溃/失败写入
+ * 的残留），单次最多 budget 份，返回删除数。
  * 同一份预算内继续回收 tombstone：仅当每个未过期标签页租约的 lastSeen 都晚于
  * tombstone.deletedAt（所有活跃标签页 provably 见过删除），且已超出保留窗口
  * 或数量上限（最旧先回收）时才删除；存储不支持枚举时全部保守保留。
@@ -866,6 +953,7 @@ function parseSnapshotKey(key: string): { conversationId: string; revision: stri
 export function runIdleCheckpointGc(storage: StorageLike, budget = 4): number {
   const snapshotKeys = enumerateKeysWithPrefix(storage, conversationStorageKeys.v3SnapshotPrefix);
   if (!snapshotKeys) return 0;
+  const snapshotGcNow = Date.now();
   const keepByConversation = new Map<string, Set<string>>();
   const keepSetFor = (conversationId: string): Set<string> => {
     let keep = keepByConversation.get(conversationId);
@@ -882,6 +970,7 @@ export function runIdleCheckpointGc(storage: StorageLike, budget = 4): number {
       for (const branch of durableConflictBranches(storage, conversationId)) {
         protectConflictChain(storage, keep, branch);
       }
+      protectLockFreeProposalSnapshots(storage, conversationId, keep);
       keepByConversation.set(conversationId, keep);
     }
     return keep;
@@ -891,7 +980,8 @@ export function runIdleCheckpointGc(storage: StorageLike, budget = 4): number {
     if (removed >= budget) break;
     const parsed = parseSnapshotKey(key);
     if (!parsed) continue;
-    if (keepSetFor(parsed.conversationId).has(parsed.revision)) continue;
+    if (keepSetFor(parsed.conversationId).has(parsed.revision)
+      || isRecentVerifiedCheckpoint(storage, parsed.conversationId, parsed.revision, snapshotGcNow)) continue;
     try {
       storage.removeItem(key);
       removed += 1;
@@ -1084,17 +1174,6 @@ export function createConversationPersistenceAdapter(
       }
     | { ok: false; quota: boolean; failure: PersistenceFlushFailure };
 
-  interface LockFreeProposal {
-    schemaVersion: 1;
-    conversationId: string;
-    parentRevision: string | null;
-    revision: string;
-    logicalSequence: number;
-    savedAt: number;
-    writerSessionId: string;
-    digest: string;
-  }
-
   function conflictIdFor(conversationId: string, writerSessionId: string, firstRevision: string): string {
     return checkpointDigest(`${conversationId}\u0000${writerSessionId}\u0000${firstRevision}`);
   }
@@ -1156,32 +1235,6 @@ export function createConversationPersistenceAdapter(
     return branch;
   }
 
-  function parseProposal(raw: string | null): LockFreeProposal | null {
-    if (!raw) return null;
-    try {
-      const proposal = JSON.parse(raw) as Partial<LockFreeProposal>;
-      if (proposal.schemaVersion !== 1
-        || typeof proposal.conversationId !== "string" || !proposal.conversationId
-        || typeof proposal.revision !== "string" || !proposal.revision
-        || typeof proposal.logicalSequence !== "number"
-        || typeof proposal.savedAt !== "number"
-        || typeof proposal.writerSessionId !== "string" || !proposal.writerSessionId
-        || typeof proposal.digest !== "string" || !proposal.digest) return null;
-      return {
-        schemaVersion: 1,
-        conversationId: proposal.conversationId,
-        parentRevision: typeof proposal.parentRevision === "string" && proposal.parentRevision ? proposal.parentRevision : null,
-        revision: proposal.revision,
-        logicalSequence: proposal.logicalSequence,
-        savedAt: proposal.savedAt,
-        writerSessionId: proposal.writerSessionId,
-        digest: proposal.digest,
-      };
-    } catch {
-      return null;
-    }
-  }
-
   function siblingProposals(storage: StorageLike, conversationId: string, parentRevision: string | null): LockFreeProposal[] {
     const keys = enumerateKeysWithPrefix(
       storage,
@@ -1189,7 +1242,7 @@ export function createConversationPersistenceAdapter(
     ) ?? [];
     const proposals: LockFreeProposal[] = [];
     for (const key of keys) {
-      const proposal = parseProposal(safeGetItem(storage, key));
+      const proposal = parseLockFreeProposal(safeGetItem(storage, key));
       if (!proposal || proposal.conversationId !== conversationId || proposal.parentRevision !== parentRevision) continue;
       const checkpoint = loadV3Checkpoint(storage, conversationId, proposal.revision);
       if (!checkpoint || checkpoint.digest !== proposal.digest) continue;
@@ -1511,7 +1564,17 @@ export function createConversationPersistenceAdapter(
           return { ok: false, ...fail(error) };
         }
         const settlement = settleLockFreeProposal(storage, proposal, bytes);
-        if (settlement.ok) retirePreviousProposal();
+        if (settlement.ok) {
+          retirePreviousProposal();
+        } else {
+          // 同步提交失败不会安排后续仲裁；撤销 Proposal，使已写快照在发布
+          // 宽限期后恢复为可回收孤儿，而不是被一个永不重试的意图永久保护。
+          try {
+            storage.removeItem(proposalKey);
+          } catch {
+            // 残留 Proposal 最多延迟 GC；失败结果已通过健康通道上报。
+          }
+        }
         return settlement;
       }
       try {
@@ -1535,7 +1598,7 @@ export function createConversationPersistenceAdapter(
       for (const branch of durableConflictBranches(storage, conversation.id)) {
         protectConflictChain(storage, keep, branch);
       }
-      collectStaleSnapshots(storage, conversation.id, keep, 2);
+      collectStaleSnapshots(storage, conversation.id, keep, 2, writerSessionId);
       return { ok: true, kind: "head", revision, savedAt };
     };
 
@@ -1869,7 +1932,7 @@ export function createConversationPersistenceAdapter(
     options?: SaveConversationOptions,
   ): PersistenceFlushResult {
     for (const [conversationId, proposalKey] of lastProposalKey) {
-      const proposal = parseProposal(safeGetItem(storage, proposalKey));
+      const proposal = parseLockFreeProposal(safeGetItem(storage, proposalKey));
       if (!proposal || proposal.writerSessionId !== writerSessionId) continue;
       const visible = siblingProposals(storage, conversationId, proposal.parentRevision);
       if (proposalFingerprint(visible) === lastSettledProposalFingerprint.get(conversationId)) continue;
@@ -2078,6 +2141,9 @@ export function createConversationPersistenceAdapter(
       } else {
         storage.removeItem(sessionConflictKeyV3(branch.conversationId));
       }
+      // 分支已解决后 Proposal 不再是待仲裁意图；否则它会在 Ledger 释放后
+      // 继续保护同一快照，使已解决分支无法由空闲 GC 回收。
+      storage.removeItem(sessionProposalKeyV3(branch.conversationId, branch.baseRevision, branch.branchRevision));
       if (localConflictBranches.get(branch.conversationId)?.conflictId === branch.conflictId) {
         localConflictBranches.delete(branch.conversationId);
       }
