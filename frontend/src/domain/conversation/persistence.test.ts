@@ -12,7 +12,7 @@ import {
 import {
   checkpointDigest,
   conversationStorageKeys,
-  createConversationPersistenceAdapter,
+  createConversationPersistenceAdapter as createBasePersistenceAdapter,
   estimateConversationBytes,
   loadPersistedConversationState,
   resetConversationPersistenceForTests,
@@ -26,9 +26,17 @@ import {
   type ConversationCheckpointV3,
   type ConversationCompactionSignal,
   type StorageLike,
+  type ConversationPersistenceAdapterOptions,
 } from "./persistence";
 
 const TEST_TAB_ID = "deadbeef";
+
+function createConversationPersistenceAdapter(options: ConversationPersistenceAdapterOptions = {}) {
+  return createBasePersistenceAdapter({
+    ...options,
+    identity: options.identity ?? { writerSessionId: TEST_TAB_ID, documentInstanceId: "document-deadbeef" },
+  });
+}
 
 class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>();

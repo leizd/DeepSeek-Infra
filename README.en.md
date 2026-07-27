@@ -5,21 +5,21 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.3.6-blue)
+![Version](https://img.shields.io/badge/version-4.3.7-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.3.6 at a glance
+## 4.3.7 at a glance
 
-- Conversation persistence is partitioned into per-conversation V3 shards — digest-verified head/snapshot keys, `<seq>.<tabId>` revisions with parent chains — so editing one conversation serializes only that conversation, and retention plus a budgeted idle orphan GC keep cleanup O(1).
-- Commits run inside an exclusive Web Lock with an equivalent lock-free fallback; the shared head is re-read in the critical section, so a stale tab can never overwrite — its branch survives as a conflict copy recoverable as an independent `（冲突副本）` conversation, and sync invalidations never switch the viewed conversation.
-- Deletions commit a bounded tombstone (30 days / 50 entries, GC'd only after every live tab lease has seen the deletion) before touching UI; stale tabs cannot resurrect the id — their edits survive only as a deterministic `（恢复副本）`.
-- Current-conversation selection is per-tab sessionStorage state; switching it never schedules a shared commit.
-- Save scheduling coalesces edits over 300ms, throttles streaming to 1Hz with a trailing edge, and commits immediately on stream done/error/interrupted, deletion, page-hide and build-update activation.
-- Quota exhaustion degrades deterministically — strip rebuildable image previews, cap oversized raw payloads, record compaction metadata — user bodies are never touched, and failures keep the old head with export/cleanup guidance.
+- Conflicted conversations enter an isolated branch: continued edits advance only the branch chain and can never advance the shared Head. An indexed durable ledger retains every concurrent loser until the user explicitly resolves it.
+- “Keep copy” commits and digest-verifies a stable independent copy before releasing the selected branch; crash retries converge without duplicate copies. “View latest” discards only the selected conflict.
+- Per-document UUID writer identity is separate from tab-selection continuity. BroadcastChannel writer claims rotate duplicates so revisions, leases, capsules and peer filtering cannot collide.
+- Without Web Locks, immutable proposals preserve all sibling snapshots and choose one deterministic canonical Head. A lock callback that has started is never rerun after an error.
+- Degraded Heads self-heal to a verified parent under exclusive arbitration, corrupt data is quarantined, and a known base can never resurrect an id after its Head and tombstone disappear.
+- Recovery Capsule V2 adds per-entry and whole-capsule digests, write-back verification, deterministic pressure compaction, quarantine and resolved markers while preserving every message body byte.
 - Page exits write a per-tab recovery capsule that startup reconciles exactly once inside the write lock; crashed tabs' capsules are reclaimed once their lease dies.
 - The vendor runtime (react/react-dom/react-router/tanstack) splits into a cacheable core chunk via Vite `manualChunks`, cutting the entry asset from 390KB to 157KB while bundle budgets stay unchanged.
 - Compatibility: 4.3.5 durable checkpoints and recovery integrity, 4.3.4 activation-transaction/page-lifecycle persistence, 4.3.3 discovery/quiescent reload, 4.3.2 immutable identity and Client Build Leases, and 4.3.1 lazy continuity remain unchanged; the 4.2.8 exact-merge Evidence assembly remains the release-trust foundation.
@@ -27,7 +27,7 @@ DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.3.6 release notes](docs/releases/4.3.6.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.3.7 release notes](docs/releases/4.3.7.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -87,7 +87,7 @@ npm run check --prefix frontend
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.3.6 --ga
+python scripts/preflight_release.py --version 4.3.7 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

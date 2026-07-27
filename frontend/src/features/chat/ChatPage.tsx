@@ -133,9 +133,9 @@ function ChatWorkspace() {
         <MessageList messages={chat.messages} onSuggestion={setSuggestedPrompt} />
         {chat.conflict ? (
           <div className="chat-notice">
-            另一个标签页已更新会话「{chat.conflict.title}」，本地修改已保存为冲突副本。
-            <button className="message-action primary" type="button" onClick={chat.resolveConflictByReload}>查看最新</button>
-            <button className="message-action" type="button" onClick={chat.resolveConflictByCopy}>保留副本</button>
+            会话「{chat.conflict.title}」当前属于隔离冲突分支（共 {chat.conflictCount} 个待处理），继续编辑不会覆盖共享版本。
+            <button className="message-action primary" type="button" disabled={chat.resolvingConflict} onClick={chat.resolveConflictByReload}>查看最新</button>
+            <button className="message-action" type="button" disabled={chat.resolvingConflict} onClick={chat.resolveConflictByCopy}>保留副本</button>
           </div>
         ) : chat.state.notice && (
           <button className="chat-notice" type="button" onClick={chat.clearNotice}>{chat.state.notice}<span><Icon name="close" /></span></button>

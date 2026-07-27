@@ -20,6 +20,17 @@ export type ConversationSyncMessage =
       type: "conversation_deleted";
       conversationId: string;
       writerId: string;
+    }
+  | {
+      type: "writer_claim";
+      writerSessionId: string;
+      documentInstanceId: string;
+    }
+  | {
+      type: "writer_claim_ack";
+      writerSessionId: string;
+      documentInstanceId: string;
+      targetDocumentInstanceId: string;
     };
 
 /** BroadcastChannel 的最小结构子集，测试可注入假实现。 */
@@ -41,19 +52,38 @@ export interface ConversationSyncChannel {
 export function parseConversationSyncMessage(data: unknown): ConversationSyncMessage | null {
   if (!data || typeof data !== "object") return null;
   const message = data as Partial<ConversationSyncMessage> & { type?: unknown };
-  if (typeof message.conversationId !== "string" || !message.conversationId) return null;
-  if (typeof message.writerId !== "string" || !message.writerId) return null;
+  if (message.type === "writer_claim") {
+    const claim = message as Partial<Extract<ConversationSyncMessage, { type: "writer_claim" }>>;
+    if (typeof claim.writerSessionId !== "string" || !claim.writerSessionId
+      || typeof claim.documentInstanceId !== "string" || !claim.documentInstanceId) return null;
+    return { type: "writer_claim", writerSessionId: claim.writerSessionId, documentInstanceId: claim.documentInstanceId };
+  }
+  if (message.type === "writer_claim_ack") {
+    const ack = message as Partial<Extract<ConversationSyncMessage, { type: "writer_claim_ack" }>>;
+    if (typeof ack.writerSessionId !== "string" || !ack.writerSessionId
+      || typeof ack.documentInstanceId !== "string" || !ack.documentInstanceId
+      || typeof ack.targetDocumentInstanceId !== "string" || !ack.targetDocumentInstanceId) return null;
+    return {
+      type: "writer_claim_ack",
+      writerSessionId: ack.writerSessionId,
+      documentInstanceId: ack.documentInstanceId,
+      targetDocumentInstanceId: ack.targetDocumentInstanceId,
+    };
+  }
+  const record = data as Record<string, unknown>;
+  if (typeof record.conversationId !== "string" || !record.conversationId) return null;
+  if (typeof record.writerId !== "string" || !record.writerId) return null;
   if (message.type === "conversation_deleted") {
-    return { type: "conversation_deleted", conversationId: message.conversationId, writerId: message.writerId };
+    return { type: "conversation_deleted", conversationId: record.conversationId, writerId: record.writerId };
   }
   if (message.type === "conversation_committed") {
-    if (typeof message.revision !== "string" || !message.revision) return null;
+    if (typeof record.revision !== "string" || !record.revision) return null;
     return {
       type: "conversation_committed",
-      conversationId: message.conversationId,
-      revision: message.revision,
-      writerId: message.writerId,
-      savedAt: typeof message.savedAt === "number" ? message.savedAt : 0,
+      conversationId: record.conversationId,
+      revision: record.revision,
+      writerId: record.writerId,
+      savedAt: typeof record.savedAt === "number" ? record.savedAt : 0,
     };
   }
   return null;

@@ -50,6 +50,22 @@ describe("parseConversationSyncMessage", () => {
       conversationId: "c1",
       writerId: "deadbeef",
     })).toEqual({ type: "conversation_deleted", conversationId: "c1", writerId: "deadbeef" });
+    expect(parseConversationSyncMessage({
+      type: "writer_claim",
+      writerSessionId: "writer-1",
+      documentInstanceId: "document-1",
+    })).toEqual({ type: "writer_claim", writerSessionId: "writer-1", documentInstanceId: "document-1" });
+    expect(parseConversationSyncMessage({
+      type: "writer_claim_ack",
+      writerSessionId: "writer-1",
+      documentInstanceId: "document-1",
+      targetDocumentInstanceId: "document-2",
+    })).toEqual({
+      type: "writer_claim_ack",
+      writerSessionId: "writer-1",
+      documentInstanceId: "document-1",
+      targetDocumentInstanceId: "document-2",
+    });
   });
 
   it("rejects malformed payloads", () => {
@@ -59,6 +75,7 @@ describe("parseConversationSyncMessage", () => {
     expect(parseConversationSyncMessage({ type: "conversation_committed", conversationId: "c1", revision: "", writerId: "w" })).toBeNull();
     expect(parseConversationSyncMessage({ type: "conversation_deleted", conversationId: "", writerId: "w" })).toBeNull();
     expect(parseConversationSyncMessage({ type: "mystery", conversationId: "c1", writerId: "w" })).toBeNull();
+    expect(parseConversationSyncMessage({ type: "writer_claim", writerSessionId: "w" })).toBeNull();
   });
 });
 

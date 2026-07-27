@@ -6,7 +6,12 @@ import {
   type PersistenceFlushFailure,
 } from "../../app/persistenceErrors";
 import type { PersistenceFlushResult } from "../../app/reloadBlockers";
-import { getTabId } from "../../app/tabIdentity";
+import {
+  createReplicaIdentity,
+  getTabId,
+  type ReplicaIdentity,
+  type ReplicaIdentityOverrides,
+} from "../../app/tabIdentity";
 import { createId } from "../../shared/createId";
 import { checkpointMessage } from "./checkpoint";
 import { compactConversationForStorage, type CheckpointCompaction } from "./compaction";
@@ -44,17 +49,46 @@ interface ConversationHeadV3 {
   digest: string;
 }
 
-/**
- * V3 冲突指针（`session.v3.conflict.<cid>`）：本地分支被拒绝推进 head 时，
- * 指向已核验落盘的冲突分支快照。每个会话至多一个未解决冲突；解决（查看
- * 最新 / 保留副本）后清除，分支快照随 GC 回收。
- */
+/** 4.3.6 单指针读取兼容层；4.3.7 的真实所有权由 DurableConflictBranch 账本承担。 */
 export interface ConversationConflictPointer {
   revision: string;
   baseRevision: string | null;
   sharedRevision: string;
   writerId: string;
   savedAt: number;
+}
+
+export type DurableConflictStatus = "pending" | "resolved-copy" | "discarded";
+
+/** 每个失败副本一条不可覆盖的耐久记录。 */
+export interface DurableConflictBranch {
+  schemaVersion: 1;
+  conflictId: string;
+  conversationId: string;
+  branchRevision: string;
+  parentBranchRevision: string | null;
+  baseRevision: string | null;
+  sharedRevision: string;
+  writerSessionId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: DurableConflictStatus;
+}
+
+export interface LocalConflictBranchState {
+  conversationId: string;
+  conflictId: string;
+  branchRevision: string;
+  baseRevision: string | null;
+  sharedRevision: string;
+  status: "pending" | "editing-branch" | "materializing-copy" | "discarding";
+}
+
+export interface LoadedConversationShard {
+  conversation: Conversation;
+  advertisedRevision: string;
+  loadedRevision: string;
+  degraded: boolean;
 }
 
 /** 一次成功提交（推进 head 或写入冲突分支）的带外通知，用于跨标签页广播。 */
@@ -67,6 +101,7 @@ export interface ConversationCommitNotice {
 
 /** 冲突信号：冲突分支已耐久写入（数据安全），但共享 head 由其他标签页持有。 */
 export interface ConversationConflictSignal extends ConversationCommitNotice {
+  conflictId: string;
   title: string;
   baseRevision: string | null;
   sharedRevision: string;
@@ -110,20 +145,22 @@ export interface ConversationCompactionSignal {
   removedPreviewBytes: number;
 }
 
-/**
- * 页面退出应急胶囊（`session.v3.recovery.<tabId>`）：Web Locks / 异步提交在
- * pagehide / beforeunload 里无法 await，同步 flush 之后仍然脏的会话以每标签页
- * 一键值同步落盘。胶囊绝不推进任何共享 head；下一次启动在写锁内对账（干净补交 /
- * 冲突或已删除物化为确定性恢复副本），处理后删除——每份胶囊至多生效一次。
- */
-export interface RecoveryCapsule {
-  schemaVersion: 1;
-  tabId: string;
-  /** 单个脏会话的 base（常见情形）；多脏时以 baseRevisions 逐会话记录。 */
+export interface RecoveryCapsuleEntry {
+  conversationId: string;
   baseRevision: string | null;
-  baseRevisions?: Record<string, string | null>;
+  digest: string;
+  conversation: Conversation;
+  compaction?: CheckpointCompaction;
+}
+
+/** 页面退出应急胶囊 V2：逐条目摘要 + 整体摘要，写后必须逐字节回读核验。 */
+export interface RecoveryCapsule {
+  schemaVersion: 2;
+  writerSessionId: string;
+  sequence: number;
   savedAt: number;
-  dirtyConversations: Conversation[];
+  digest: string;
+  entries: RecoveryCapsuleEntry[];
 }
 
 /** 胶囊对账后补交落盘的一条会话：previous 是对账前本地已提交对象（identity 比较用）。 */
@@ -147,6 +184,9 @@ export interface SaveConversationOptions {
   onDelete?: (notice: ConversationDeleteNotice) => void;
   onRecovery?: (signal: ConversationRecoverySignal) => void;
   onCompaction?: (signal: ConversationCompactionSignal) => void;
+  /** 生命周期同步 flush 无法取得排他锁；该模式只允许写 Recovery Capsule。 */
+  lifecycle?: boolean;
+  onWarning?: (failure: PersistenceFlushFailure) => void;
 }
 
 export interface LockRequestOptions {
@@ -240,8 +280,24 @@ export interface ConversationPersistenceAdapter {
   readConflictBranch(
     conversationId: string,
     storage?: StorageLike | null,
-  ): { pointer: ConversationConflictPointer; conversation: Conversation } | null;
-  clearConflict(conversationId: string, storage?: StorageLike | null): void;
+    conflictId?: string,
+  ): { pointer: ConversationConflictPointer; branch: DurableConflictBranch; conversation: Conversation } | null;
+  listConflictBranches(conversationId?: string, storage?: StorageLike | null): DurableConflictBranch[];
+  clearConflict(conversationId: string, storage?: StorageLike | null, conflictId?: string): void;
+  resolveConflictByCopyArbitrated(
+    conversationId: string,
+    conflictId: string,
+    storage?: StorageLike | null,
+    session?: StorageLike | null,
+    options?: SaveConversationOptions,
+  ): Promise<{ ok: true; copy: Conversation } | PersistenceFlushFailure>;
+  resolveConflictByReloadArbitrated(
+    conversationId: string,
+    conflictId: string,
+    storage?: StorageLike | null,
+  ): Promise<{ ok: true; conversation: Conversation; revision: string } | PersistenceFlushFailure>;
+  getReplicaIdentity(session?: StorageLike | null): ReplicaIdentity;
+  rotateWriterIdentity(session?: StorageLike | null): ReplicaIdentity;
   /** 把换入的远端会话登记为已提交（identity + base），避免紧接着的 flush 重写它。 */
   adoptRemoteConversation(conversationId: string, conversation: Conversation, revision: string): void;
   reset(): void;
@@ -256,9 +312,13 @@ export const conversationStorageKeys = {
   v3HeadPrefix: "deepseek-infra.session.v3.head.",
   v3SnapshotPrefix: "deepseek-infra.session.v3.snapshot.",
   v3ConflictPrefix: "deepseek-infra.session.v3.conflict.",
+  v3ConflictIndexPrefix: "deepseek-infra.session.v3.conflict-index.",
+  v3ProposalPrefix: "deepseek-infra.session.v3.proposal.",
   v3TombstonePrefix: "deepseek-infra.session.v3.tombstone.",
   v3TabPrefix: "deepseek-infra.session.v3.tab.",
   v3RecoveryPrefix: "deepseek-infra.session.v3.recovery.",
+  v3RecoveryResolvedPrefix: "deepseek-infra.session.v3.recovery-resolved.",
+  v3QuarantinePrefix: "deepseek-infra.session.v3.quarantine.",
 } as const;
 
 const V2_SNAPSHOT_PREFIX = "deepseek-infra.session.v2.snapshot.";
@@ -275,16 +335,24 @@ export function sessionSnapshotKeyV3(conversationId: string, revision: string): 
   return `${conversationStorageKeys.v3SnapshotPrefix}${conversationId}.${revision}`;
 }
 
-export function sessionConflictKeyV3(conversationId: string): string {
-  return `${conversationStorageKeys.v3ConflictPrefix}${conversationId}`;
+export function sessionConflictKeyV3(conversationId: string, conflictId?: string): string {
+  return `${conversationStorageKeys.v3ConflictPrefix}${conversationId}${conflictId ? `.${conflictId}` : ""}`;
+}
+
+export function sessionConflictIndexKeyV3(conversationId: string): string {
+  return `${conversationStorageKeys.v3ConflictIndexPrefix}${conversationId}`;
+}
+
+export function sessionProposalKeyV3(conversationId: string, parentRevision: string | null, revision: string): string {
+  return `${conversationStorageKeys.v3ProposalPrefix}${conversationId}.${parentRevision ?? "root"}.${revision}`;
 }
 
 export function sessionTombstoneKeyV3(conversationId: string): string {
   return `${conversationStorageKeys.v3TombstonePrefix}${conversationId}`;
 }
 
-export function sessionRecoveryKeyV3(tabId: string): string {
-  return `${conversationStorageKeys.v3RecoveryPrefix}${tabId}`;
+export function sessionRecoveryKeyV3(writerSessionId: string): string {
+  return `${conversationStorageKeys.v3RecoveryPrefix}${writerSessionId}`;
 }
 
 export interface StorageLike {
@@ -455,6 +523,54 @@ export function parseV3ConflictPointer(raw: string | null): ConversationConflict
   }
 }
 
+export function parseDurableConflictBranch(raw: string | null): DurableConflictBranch | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const branch = parsed as Partial<DurableConflictBranch>;
+    if (branch.schemaVersion !== 1
+      || typeof branch.conflictId !== "string" || !branch.conflictId
+      || typeof branch.conversationId !== "string" || !branch.conversationId
+      || typeof branch.branchRevision !== "string" || !branch.branchRevision
+      || typeof branch.sharedRevision !== "string" || !branch.sharedRevision
+      || typeof branch.writerSessionId !== "string" || !branch.writerSessionId
+      || !["pending", "resolved-copy", "discarded"].includes(branch.status ?? "")) return null;
+    return {
+      schemaVersion: 1,
+      conflictId: branch.conflictId,
+      conversationId: branch.conversationId,
+      branchRevision: branch.branchRevision,
+      parentBranchRevision: typeof branch.parentBranchRevision === "string" && branch.parentBranchRevision
+        ? branch.parentBranchRevision
+        : null,
+      baseRevision: typeof branch.baseRevision === "string" && branch.baseRevision ? branch.baseRevision : null,
+      sharedRevision: branch.sharedRevision,
+      writerSessionId: branch.writerSessionId,
+      createdAt: typeof branch.createdAt === "number" ? branch.createdAt : 0,
+      updatedAt: typeof branch.updatedAt === "number" ? branch.updatedAt : 0,
+      status: branch.status as DurableConflictStatus,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseConflictIndex(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const ids = Array.isArray(parsed)
+      ? parsed
+      : (parsed && typeof parsed === "object" ? (parsed as { conflictIds?: unknown }).conflictIds : null);
+    return Array.isArray(ids)
+      ? [...new Set(ids.filter((value): value is string => typeof value === "string" && Boolean(value)))]
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 /** 读取 JSON 对象上的数值字段（tombstone.deletedAt / 租约 lastSeen）；损坏一律按 0（保守保留）。 */
 function readJsonNumber(raw: string | null, field: string): number {
   if (!raw) return 0;
@@ -467,8 +583,8 @@ function readJsonNumber(raw: string | null, field: string): number {
 }
 
 /** 恢复副本的确定性 id：同一胶囊重处理指向同一分片，收敛而非重复。 */
-export function recoveredCopyIdV3(conversationId: string, capsuleTabId: string): string {
-  return `${conversationId}.recovered.${capsuleTabId}`;
+export function recoveredCopyIdV3(conversationId: string, writerSessionId: string, sequence?: number): string {
+  return `${conversationId}.recovered.${writerSessionId}${sequence === undefined ? "" : `.${sequence}`}`;
 }
 
 /** 单次启动对账回收孤儿胶囊的数量上限（本标签页胶囊不占预算）。 */
@@ -481,22 +597,49 @@ export function parseRecoveryCapsule(raw: string | null): RecoveryCapsule | null
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return null;
     const capsule = parsed as Partial<RecoveryCapsule>;
-    if (capsule.schemaVersion !== 1) return null;
-    if (typeof capsule.tabId !== "string" || !capsule.tabId) return null;
-    if (!Array.isArray(capsule.dirtyConversations)) return null;
-    const baseRevisions: Record<string, string | null> = {};
-    if (capsule.baseRevisions && typeof capsule.baseRevisions === "object") {
-      for (const [key, value] of Object.entries(capsule.baseRevisions)) {
-        baseRevisions[key] = typeof value === "string" && value ? value : null;
+    if (capsule.schemaVersion !== 2
+      || typeof capsule.writerSessionId !== "string" || !capsule.writerSessionId
+      || typeof capsule.sequence !== "number" || capsule.sequence < 1
+      || typeof capsule.savedAt !== "number"
+      || typeof capsule.digest !== "string" || !capsule.digest
+      || !Array.isArray(capsule.entries)) return null;
+    const entries: RecoveryCapsuleEntry[] = [];
+    for (const value of capsule.entries) {
+      if (!value || typeof value !== "object") return null;
+      const entry = value as Partial<RecoveryCapsuleEntry>;
+      if (typeof entry.conversationId !== "string" || !entry.conversationId
+        || typeof entry.digest !== "string" || !entry.digest
+        || !entry.conversation || typeof entry.conversation !== "object") return null;
+      let payload: string;
+      try {
+        payload = JSON.stringify(entry.conversation);
+      } catch {
+        return null;
       }
+      if (checkpointDigest(payload) !== entry.digest) return null;
+      entries.push({
+        conversationId: entry.conversationId,
+        baseRevision: typeof entry.baseRevision === "string" && entry.baseRevision ? entry.baseRevision : null,
+        digest: entry.digest,
+        conversation: entry.conversation as Conversation,
+        ...(entry.compaction ? { compaction: entry.compaction } : {}),
+      });
     }
+    const unsigned = JSON.stringify({
+      schemaVersion: 2,
+      writerSessionId: capsule.writerSessionId,
+      sequence: capsule.sequence,
+      savedAt: capsule.savedAt,
+      entries,
+    });
+    if (checkpointDigest(unsigned) !== capsule.digest) return null;
     return {
-      schemaVersion: 1,
-      tabId: capsule.tabId,
-      baseRevision: typeof capsule.baseRevision === "string" && capsule.baseRevision ? capsule.baseRevision : null,
-      ...(capsule.baseRevisions && typeof capsule.baseRevisions === "object" ? { baseRevisions } : {}),
-      savedAt: typeof capsule.savedAt === "number" ? capsule.savedAt : 0,
-      dirtyConversations: capsule.dirtyConversations as Conversation[],
+      schemaVersion: 2,
+      writerSessionId: capsule.writerSessionId,
+      sequence: capsule.sequence,
+      savedAt: capsule.savedAt,
+      digest: capsule.digest,
+      entries,
     };
   } catch {
     return null;
@@ -517,7 +660,7 @@ function writeTabLease(storage: StorageLike, tabId: string): void {
  * 读取指定 revision 的 V3 会话快照。版本、归属、revision、digest 任何一步
  * 不一致都返回 null，由调用方回退 parentRevision——绝不返回半个分片。
  */
-function loadV3SnapshotConversation(storage: StorageLike, conversationId: string, revision: string): Conversation | null {
+function loadV3Checkpoint(storage: StorageLike, conversationId: string, revision: string): ConversationCheckpointV3 | null {
   const raw = safeGetItem(storage, sessionSnapshotKeyV3(conversationId, revision));
   if (!raw) return null;
   let checkpoint: Partial<ConversationCheckpointV3> | null;
@@ -541,12 +684,21 @@ function loadV3SnapshotConversation(storage: StorageLike, conversationId: string
   }
   const conversation = migrateLegacyConversation(checkpoint.conversation);
   if (!conversation) return null;
-  return { ...conversation, messages: conversation.messages.map(checkpointMessage) };
+  return {
+    schemaVersion: 3,
+    conversationId,
+    revision,
+    parentRevision: typeof checkpoint.parentRevision === "string" && checkpoint.parentRevision ? checkpoint.parentRevision : null,
+    writerId: typeof checkpoint.writerId === "string" ? checkpoint.writerId : "",
+    savedAt: typeof checkpoint.savedAt === "number" ? checkpoint.savedAt : 0,
+    digest: checkpoint.digest,
+    conversation: { ...conversation, messages: conversation.messages.map(checkpointMessage) },
+    ...(checkpoint.compaction ? { compaction: checkpoint.compaction } : {}),
+  };
 }
 
-interface V3LoadedConversation {
-  conversation: Conversation;
-  headRevision: string;
+function loadV3SnapshotConversation(storage: StorageLike, conversationId: string, revision: string): Conversation | null {
+  return loadV3Checkpoint(storage, conversationId, revision)?.conversation ?? null;
 }
 
 /**
@@ -554,21 +706,59 @@ interface V3LoadedConversation {
  * parentRevision。遇到 tombstone 的会话直接跳过（写入方在后续提交落地）。
  * 存储不支持枚举时返回 null，调用方继续走 V2 / legacy 读取链。
  */
-function loadV3Conversations(storage: StorageLike): V3LoadedConversation[] | null {
+function loadV3Conversations(storage: StorageLike): LoadedConversationShard[] | null {
   const headKeys = enumerateKeysWithPrefix(storage, conversationStorageKeys.v3HeadPrefix);
   if (!headKeys?.length) return null;
-  const conversations: V3LoadedConversation[] = [];
+  const conversations: LoadedConversationShard[] = [];
   for (const headKey of headKeys) {
     const conversationId = headKey.slice(conversationStorageKeys.v3HeadPrefix.length);
     if (!conversationId) continue;
     if (safeGetItem(storage, sessionTombstoneKeyV3(conversationId)) !== null) continue;
     const head = parseV3Head(safeGetItem(storage, headKey));
     if (!head) continue;
-    const conversation = loadV3SnapshotConversation(storage, conversationId, head.revision)
-      ?? (head.parentRevision ? loadV3SnapshotConversation(storage, conversationId, head.parentRevision) : null);
-    if (conversation) conversations.push({ conversation, headRevision: head.revision });
+    const advertised = loadV3SnapshotConversation(storage, conversationId, head.revision);
+    const parent = !advertised && head.parentRevision
+      ? loadV3SnapshotConversation(storage, conversationId, head.parentRevision)
+      : null;
+    const conversation = advertised ?? parent;
+    if (conversation) {
+      conversations.push({
+        conversation,
+        advertisedRevision: head.revision,
+        loadedRevision: advertised ? head.revision : head.parentRevision as string,
+        degraded: !advertised,
+      });
+    }
   }
   return conversations.length ? conversations : null;
+}
+
+function durableConflictBranches(storage: StorageLike, conversationId?: string): DurableConflictBranch[] {
+  const branches: DurableConflictBranch[] = [];
+  const conversationIds = conversationId
+    ? [conversationId]
+    : (enumerateKeysWithPrefix(storage, conversationStorageKeys.v3ConflictIndexPrefix) ?? [])
+      .map((key) => key.slice(conversationStorageKeys.v3ConflictIndexPrefix.length))
+      .filter(Boolean);
+  for (const id of conversationIds) {
+    const conflictIds = parseConflictIndex(safeGetItem(storage, sessionConflictIndexKeyV3(id)));
+    for (const conflictId of conflictIds) {
+      const branch = parseDurableConflictBranch(safeGetItem(storage, sessionConflictKeyV3(id, conflictId)));
+      if (branch?.status === "pending") branches.push(branch);
+    }
+  }
+  return branches.sort((left, right) => left.createdAt - right.createdAt || left.conflictId.localeCompare(right.conflictId));
+}
+
+function protectConflictChain(storage: StorageLike, keep: Set<string>, branch: DurableConflictBranch): void {
+  let revision: string | null = branch.branchRevision;
+  for (let depth = 0; revision && depth < 128; depth += 1) {
+    if (keep.has(revision)) break;
+    keep.add(revision);
+    const checkpoint = loadV3Checkpoint(storage, branch.conversationId, revision);
+    revision = checkpoint?.parentRevision ?? null;
+    if (revision === branch.baseRevision) break;
+  }
 }
 
 function readTabSelection(session: StorageLike | null): string | null {
@@ -689,6 +879,9 @@ export function runIdleCheckpointGc(storage: StorageLike, budget = 4): number {
       // 未解决冲突指向的分支快照在解决前受保护，与 current/previous 同规。
       const conflict = parseV3ConflictPointer(safeGetItem(storage, sessionConflictKeyV3(conversationId)));
       if (conflict) keep.add(conflict.revision);
+      for (const branch of durableConflictBranches(storage, conversationId)) {
+        protectConflictChain(storage, keep, branch);
+      }
       keepByConversation.set(conversationId, keep);
     }
     return keep;
@@ -749,6 +942,10 @@ function detectNavigatorLocks(): LocksLike | null {
 export interface ConversationPersistenceAdapterOptions {
   /** 显式注入锁实现（测试互斥锁）；null 强制无锁路径；缺省则运行时探测 navigator.locks。 */
   locks?: LocksLike | null;
+  /** 仅供确定性测试；生产默认始终为每个适配器文档实例生成 UUID。 */
+  identity?: ReplicaIdentityOverrides;
+  /** 仅供遗留的模块级测试适配器；Controller 永不启用。 */
+  legacyWriterFromContinuity?: boolean;
 }
 
 export function createConversationPersistenceAdapter(
@@ -760,30 +957,73 @@ export function createConversationPersistenceAdapter(
    */
   const lastCommitted = new Map<string, Conversation>();
   const lastCommittedRevision = new Map<string, string>();
+  const localConflictBranches = new Map<string, LocalConflictBranchState>();
+  const degradedHeads = new Map<string, { advertisedRevision: string; loadedRevision: string }>();
+  const lastProposalKey = new Map<string, string>();
   /** Controller 已请求但尚未耐久提交的删除（pagehide 同步 flush 会先提交它们）。 */
   const pendingTombstones = new Set<string>();
   /** 本标签页已知被删除的会话：提交一律跳过（删除方自身状态 / 已物化过恢复副本）。 */
   const tombstonedRefused = new Set<string>();
   let lastHeadRevision: string | null = null;
   let idleGcScheduled = false;
+  let identity: ReplicaIdentity | null = null;
+  let capsuleSequence = 0;
+
+  function getReplicaIdentity(session: StorageLike | null = browserSessionStorage()): ReplicaIdentity {
+    identity ??= createReplicaIdentity(session, adapterOptions.legacyWriterFromContinuity
+      ? { ...adapterOptions.identity, writerSessionId: adapterOptions.identity?.writerSessionId ?? getTabId(session) }
+      : adapterOptions.identity);
+    return identity;
+  }
+
+  function rotateWriterIdentity(session: StorageLike | null = browserSessionStorage()): ReplicaIdentity {
+    const previous = getReplicaIdentity(session);
+    identity = createReplicaIdentity(session, { documentInstanceId: previous.documentInstanceId });
+    return identity;
+  }
 
   function load(storage: StorageLike | null = browserStorage(), session: StorageLike | null = browserSessionStorage()): PersistedConversationState {
     if (!storage) return { schemaVersion: 1, currentConversationId: null, conversations: [] };
     // V3 分片优先；其后依次为 V2 journal（迁移读取器，保持原逻辑）与 legacy 键。
     const sharded = loadV3Conversations(storage);
     if (sharded) {
-      const conversations = sortConversations(sharded.map((entry) => entry.conversation));
-      const headRevisionById = new Map(sharded.map((entry) => [entry.conversation.id, entry.headRevision]));
+      const restoredById = new Map(sharded.map((entry) => [entry.conversation.id, entry.conversation]));
+      const pending = durableConflictBranches(storage);
+      const ownWriterSessionId = getReplicaIdentity(session).writerSessionId;
+      for (const branch of pending) {
+        if (branch.writerSessionId !== ownWriterSessionId) continue;
+        const branchConversation = loadV3SnapshotConversation(storage, branch.conversationId, branch.branchRevision);
+        if (!branchConversation || localConflictBranches.has(branch.conversationId)) continue;
+        restoredById.set(branch.conversationId, branchConversation);
+        localConflictBranches.set(branch.conversationId, {
+          conversationId: branch.conversationId,
+          conflictId: branch.conflictId,
+          branchRevision: branch.branchRevision,
+          baseRevision: branch.baseRevision,
+          sharedRevision: branch.sharedRevision,
+          status: "editing-branch",
+        });
+      }
+      const conversations = sortConversations([...restoredById.values()]);
+      const shardById = new Map(sharded.map((entry) => [entry.conversation.id, entry]));
       // V3 加载的分片内容与共享 head 一致：按"已提交"登记（identity + base），
       // 第二个打开的标签页因此不会重写共享 head，更不会在仲裁下制造伪冲突。
       // 只对进入 state 的会话登记（sortConversations 有数量上限），避免把被
       // 截断的会话误判为"本地已删除"。V2 / legacy 加载不登记——那些内容尚未
       // 落入 V3，必须按脏提交完成迁移。
       for (const conversation of conversations) {
-        const headRevision = headRevisionById.get(conversation.id);
+        const shard = shardById.get(conversation.id);
+        const localBranch = localConflictBranches.get(conversation.id);
+        const headRevision = localBranch?.branchRevision ?? shard?.loadedRevision;
         if (!headRevision) continue;
         lastCommitted.set(conversation.id, conversation);
         lastCommittedRevision.set(conversation.id, headRevision);
+        if (shard?.degraded) {
+          degradedHeads.set(conversation.id, {
+            advertisedRevision: shard.advertisedRevision,
+            loadedRevision: shard.loadedRevision,
+          });
+        }
       }
       return { schemaVersion: 1, currentConversationId: resolveTabSelection(session, conversations, null), conversations };
     }
@@ -824,6 +1064,7 @@ export function createConversationPersistenceAdapter(
         savedAt: number;
         baseRevision: string | null;
         sharedRevision: string;
+        conflictId: string;
         compaction?: CheckpointCompaction;
       }
     | PersistenceFlushFailure;
@@ -831,8 +1072,133 @@ export function createConversationPersistenceAdapter(
   /** 单次提交尝试的结果：失败额外携带 quota 标记（配额失败才触发压缩重试）。 */
   type ShardCommitAttempt =
     | { ok: true; kind: "head"; revision: string; savedAt: number }
-    | { ok: true; kind: "conflict"; revision: string; savedAt: number; baseRevision: string | null; sharedRevision: string }
+    | {
+        ok: true;
+        kind: "conflict";
+        revision: string;
+        savedAt: number;
+        baseRevision: string | null;
+        sharedRevision: string;
+        conflictId: string;
+      }
     | { ok: false; quota: boolean; failure: PersistenceFlushFailure };
+
+  interface LockFreeProposal {
+    schemaVersion: 1;
+    conversationId: string;
+    parentRevision: string | null;
+    revision: string;
+    logicalSequence: number;
+    savedAt: number;
+    writerSessionId: string;
+    digest: string;
+  }
+
+  function conflictIdFor(conversationId: string, writerSessionId: string, firstRevision: string): string {
+    return checkpointDigest(`${conversationId}\u0000${writerSessionId}\u0000${firstRevision}`);
+  }
+
+  function writeConflictLedger(
+    storage: StorageLike,
+    conversationId: string,
+    revision: string,
+    parentBranchRevision: string | null,
+    baseRevision: string | null,
+    sharedRevision: string,
+    writerSessionId: string,
+    savedAt: number,
+    preferredConflictId?: string,
+  ): DurableConflictBranch | PersistenceFlushFailure {
+    const existing = preferredConflictId
+      ? parseDurableConflictBranch(safeGetItem(storage, sessionConflictKeyV3(conversationId, preferredConflictId)))
+      : null;
+    const conflictId = preferredConflictId ?? conflictIdFor(conversationId, writerSessionId, revision);
+    const branch: DurableConflictBranch = {
+      schemaVersion: 1,
+      conflictId,
+      conversationId,
+      branchRevision: revision,
+      parentBranchRevision,
+      baseRevision,
+      sharedRevision,
+      writerSessionId,
+      createdAt: existing?.createdAt ?? savedAt,
+      updatedAt: savedAt,
+      status: "pending",
+    };
+    const serialized = JSON.stringify(branch);
+    const pointer: ConversationConflictPointer = {
+      revision,
+      baseRevision,
+      sharedRevision,
+      writerId: writerSessionId,
+      savedAt,
+    };
+    try {
+      storage.setItem(sessionConflictKeyV3(conversationId, conflictId), serialized);
+      if (storage.getItem(sessionConflictKeyV3(conversationId, conflictId)) !== serialized) {
+        return conflictFailure("账本写入后回读核验失败", conversationId, 0);
+      }
+      // 兼容 4.3.6 读取器，同时为 index 写入失败的极窄窗口保留快照保护。
+      storage.setItem(sessionConflictKeyV3(conversationId), JSON.stringify(pointer));
+      const ids = parseConflictIndex(safeGetItem(storage, sessionConflictIndexKeyV3(conversationId)));
+      if (!ids.includes(conflictId)) ids.push(conflictId);
+      const indexSerialized = JSON.stringify({ schemaVersion: 1, conflictIds: ids });
+      storage.setItem(sessionConflictIndexKeyV3(conversationId), indexSerialized);
+      if (storage.getItem(sessionConflictIndexKeyV3(conversationId)) !== indexSerialized) {
+        return conflictFailure("索引写入后回读核验失败", conversationId, 0);
+      }
+    } catch (error) {
+      const failure = classifyStorageError(error);
+      return conflictFailure(`账本写入失败：${failure.message}`, conversationId, 0);
+    }
+    return branch;
+  }
+
+  function parseProposal(raw: string | null): LockFreeProposal | null {
+    if (!raw) return null;
+    try {
+      const proposal = JSON.parse(raw) as Partial<LockFreeProposal>;
+      if (proposal.schemaVersion !== 1
+        || typeof proposal.conversationId !== "string" || !proposal.conversationId
+        || typeof proposal.revision !== "string" || !proposal.revision
+        || typeof proposal.logicalSequence !== "number"
+        || typeof proposal.savedAt !== "number"
+        || typeof proposal.writerSessionId !== "string" || !proposal.writerSessionId
+        || typeof proposal.digest !== "string" || !proposal.digest) return null;
+      return {
+        schemaVersion: 1,
+        conversationId: proposal.conversationId,
+        parentRevision: typeof proposal.parentRevision === "string" && proposal.parentRevision ? proposal.parentRevision : null,
+        revision: proposal.revision,
+        logicalSequence: proposal.logicalSequence,
+        savedAt: proposal.savedAt,
+        writerSessionId: proposal.writerSessionId,
+        digest: proposal.digest,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function siblingProposals(storage: StorageLike, conversationId: string, parentRevision: string | null): LockFreeProposal[] {
+    const keys = enumerateKeysWithPrefix(
+      storage,
+      `${conversationStorageKeys.v3ProposalPrefix}${conversationId}.${parentRevision ?? "root"}.`,
+    ) ?? [];
+    const proposals: LockFreeProposal[] = [];
+    for (const key of keys) {
+      const proposal = parseProposal(safeGetItem(storage, key));
+      if (!proposal || proposal.conversationId !== conversationId || proposal.parentRevision !== parentRevision) continue;
+      const checkpoint = loadV3Checkpoint(storage, conversationId, proposal.revision);
+      if (!checkpoint || checkpoint.digest !== proposal.digest) continue;
+      proposals.push(proposal);
+    }
+    return proposals.sort((left, right) =>
+      left.logicalSequence - right.logicalSequence
+      || left.savedAt - right.savedAt
+      || left.writerSessionId.localeCompare(right.writerSessionId));
+  }
 
   /**
    * 提交单个会话分片（跨标签页仲裁版）：先重读共享 head，与适配器本地 base
@@ -851,7 +1217,12 @@ export function createConversationPersistenceAdapter(
    * level 2（再为超大 timeline 原始 payload 设上限）→ 仍失败则以
    * storage-pressure 收束：旧 head / 旧快照原样保留，绝不静默删数据换空间。
    */
-  function commitConversationShard(storage: StorageLike, conversation: Conversation, tabId: string): ShardCommitOutcome {
+  function commitConversationShard(
+    storage: StorageLike,
+    conversation: Conversation,
+    writerSessionId: string,
+    mode: "exclusive" | "proposal" = "exclusive",
+  ): ShardCommitOutcome {
     const bytes = estimateConversationBytes(conversation);
     let headRaw: string | null;
     try {
@@ -862,9 +1233,13 @@ export function createConversationPersistenceAdapter(
     const head = parseV3Head(headRaw);
     const sharedRevision = head?.revision ?? null;
     const localBase = lastCommittedRevision.get(conversation.id) ?? null;
-    const conflicted = head !== null && sharedRevision !== localBase;
-    const revision = `${revisionSeq(sharedRevision) + 1}.${tabId}`;
-    const parentRevision = conflicted ? localBase : sharedRevision;
+    if (!head && localBase && !localConflictBranches.has(conversation.id)) {
+      return conflictFailure("共享 Head 已缺失，拒绝复活原会话 ID", conversation.id, bytes);
+    }
+    const activeBranch = localConflictBranches.get(conversation.id);
+    const conflicted = Boolean(activeBranch) || (head !== null && sharedRevision !== localBase);
+    const revision = `${Math.max(revisionSeq(sharedRevision), revisionSeq(activeBranch?.branchRevision ?? null)) + 1}.${writerSessionId}`;
+    const parentRevision = activeBranch?.branchRevision ?? (conflicted ? localBase : sharedRevision);
     // 失败形状与 4.3.6 前完全一致；quota 标记单独携带，供外层决定是否升级压缩级别。
     const fail = (error: unknown): { quota: boolean; failure: PersistenceFlushFailure } => {
       const classified = classifyStorageError(error);
@@ -897,7 +1272,7 @@ export function createConversationPersistenceAdapter(
           conversationId: conversation.id,
           revision,
           parentRevision,
-          writerId: tabId,
+          writerId: writerSessionId,
           savedAt,
           digest,
           conversation: normalized,
@@ -909,43 +1284,206 @@ export function createConversationPersistenceAdapter(
       }
       const snapshotKey = sessionSnapshotKeyV3(conversation.id, revision);
       try {
-        storage.setItem(snapshotKey, serialized);
-        // 回读核验：字节级比对刚写入的快照，任何损坏都视为整份不可用。
-        if (storage.getItem(snapshotKey) !== serialized) {
-          return {
-            ok: false,
-            quota: false,
-            failure: conflicted
-              ? conflictFailure("写入后回读核验失败", conversation.id, bytes)
-              : shardFailure(verificationFailure("快照写入后回读核验失败"), conversation.id, bytes),
-          };
+        const existingRaw = storage.getItem(snapshotKey);
+        if (existingRaw !== null) {
+          const existing = loadV3Checkpoint(storage, conversation.id, revision);
+          if (!existing || existing.digest !== digest) {
+            return {
+              ok: false,
+              quota: false,
+              failure: conflictFailure("不可变快照 revision 发生碰撞", conversation.id, bytes),
+            };
+          }
+          serialized = existingRaw;
+          savedAt = existing.savedAt;
+          digest = existing.digest;
+        } else {
+          storage.setItem(snapshotKey, serialized);
+          // 回读核验：字节级比对刚写入的快照，任何损坏都视为整份不可用。
+          if (storage.getItem(snapshotKey) !== serialized) {
+            return {
+              ok: false,
+              quota: false,
+              failure: conflicted
+                ? conflictFailure("写入后回读核验失败", conversation.id, bytes)
+                : shardFailure(verificationFailure("快照写入后回读核验失败"), conversation.id, bytes),
+            };
+          }
         }
       } catch (error) {
         return { ok: false, ...fail(error) };
       }
-      writeTabLease(storage, tabId);
-      if (conflicted && head) {
-        // 分支快照已确认落盘，此刻才允许写入/替换冲突指针；上一份被替换掉的
-        // 分支失去指针保护，由保留/空闲 GC 回收。
-        const pointer: ConversationConflictPointer = {
+      if (activeBranch || (mode === "exclusive" && conflicted && head)) {
+        const ledger = writeConflictLedger(
+          storage,
+          conversation.id,
           revision,
-          baseRevision: localBase,
-          sharedRevision: head.revision,
-          writerId: tabId,
+          activeBranch?.branchRevision ?? null,
+          activeBranch?.baseRevision ?? localBase,
+          head?.revision ?? activeBranch?.sharedRevision ?? "",
+          writerSessionId,
           savedAt,
+          activeBranch?.conflictId,
+        );
+        if ("ok" in ledger) return { ok: false, quota: false, failure: ledger };
+        localConflictBranches.set(conversation.id, {
+          conversationId: conversation.id,
+          conflictId: ledger.conflictId,
+          branchRevision: revision,
+          baseRevision: ledger.baseRevision,
+          sharedRevision: ledger.sharedRevision,
+          status: "editing-branch",
+        });
+        writeTabLease(storage, writerSessionId);
+        return {
+          ok: true,
+          kind: "conflict",
+          revision,
+          savedAt,
+          baseRevision: ledger.baseRevision,
+          sharedRevision: ledger.sharedRevision,
+          conflictId: ledger.conflictId,
+        };
+      }
+      if (mode === "proposal") {
+        const proposal: LockFreeProposal = {
+          schemaVersion: 1,
+          conversationId: conversation.id,
+          parentRevision: localBase,
+          revision,
+          logicalSequence: revisionSeq(revision),
+          savedAt,
+          writerSessionId,
+          digest,
+        };
+        const proposalKey = sessionProposalKeyV3(conversation.id, localBase, revision);
+        const proposalSerialized = JSON.stringify(proposal);
+        const retirePreviousProposal = (): void => {
+          const previousKey = lastProposalKey.get(conversation.id);
+          lastProposalKey.set(conversation.id, proposalKey);
+          if (!previousKey || previousKey === proposalKey) return;
+          try {
+            storage.removeItem(previousKey);
+          } catch {
+            // 已有 Head / Ledger 是真相来源；残留 Proposal 只增加后续扫描成本。
+          }
         };
         try {
-          storage.setItem(sessionConflictKeyV3(conversation.id), JSON.stringify(pointer));
+          const existing = storage.getItem(proposalKey);
+          if (existing !== null && existing !== proposalSerialized) {
+            return { ok: false, quota: false, failure: conflictFailure("Proposal 键发生碰撞", conversation.id, bytes) };
+          }
+          storage.setItem(proposalKey, proposalSerialized);
+          if (storage.getItem(proposalKey) !== proposalSerialized) {
+            return { ok: false, quota: false, failure: verificationFailure("Proposal 写入后回读核验失败") };
+          }
         } catch (error) {
           return { ok: false, ...fail(error) };
         }
-        return { ok: true, kind: "conflict", revision, savedAt, baseRevision: localBase, sharedRevision: head.revision };
+        const proposals = siblingProposals(storage, conversation.id, localBase);
+        const winner = proposals[0];
+        if (!winner) {
+          return { ok: false, quota: false, failure: verificationFailure("没有可验证的 Proposal") };
+        }
+        const currentHead = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversation.id)));
+        const currentIsParent = currentHead?.revision === localBase;
+        const currentIsSibling = currentHead?.parentRevision === localBase
+          && revisionSeq(currentHead.revision) === revisionSeq(winner.revision);
+        if ((currentHead === null && localBase === null) || currentIsParent || currentIsSibling) {
+          const winnerCheckpoint = loadV3Checkpoint(storage, conversation.id, winner.revision);
+          if (!winnerCheckpoint) {
+            return { ok: false, quota: false, failure: verificationFailure("Winner 快照核验失败") };
+          }
+          try {
+            storage.setItem(sessionHeadKeyV3(conversation.id), JSON.stringify({
+              revision: winner.revision,
+              parentRevision: localBase,
+              writerId: winner.writerSessionId,
+              savedAt: winner.savedAt,
+              digest: winner.digest,
+            } satisfies ConversationHeadV3));
+          } catch (error) {
+            return { ok: false, ...fail(error) };
+          }
+          for (const loser of proposals.slice(1)) {
+            const ledger = writeConflictLedger(
+              storage,
+              conversation.id,
+              loser.revision,
+              null,
+              localBase,
+              winner.revision,
+              loser.writerSessionId,
+              loser.savedAt,
+            );
+            if ("ok" in ledger) return { ok: false, quota: false, failure: ledger };
+            if (loser.writerSessionId === writerSessionId) {
+              localConflictBranches.set(conversation.id, {
+                conversationId: conversation.id,
+                conflictId: ledger.conflictId,
+                branchRevision: loser.revision,
+                baseRevision: localBase,
+                sharedRevision: winner.revision,
+                status: "editing-branch",
+              });
+            }
+          }
+          retirePreviousProposal();
+          writeTabLease(storage, writerSessionId);
+          if (winner.revision === revision) {
+            return { ok: true, kind: "head", revision, savedAt };
+          }
+          const own = durableConflictBranches(storage, conversation.id)
+            .find((branch) => branch.branchRevision === revision && branch.writerSessionId === writerSessionId);
+          return {
+            ok: true,
+            kind: "conflict",
+            revision,
+            savedAt,
+            baseRevision: localBase,
+            sharedRevision: winner.revision,
+            conflictId: own?.conflictId ?? conflictIdFor(conversation.id, writerSessionId, revision),
+          };
+        }
+        // Head 已经离开同胞层级：旧 Proposal 只能成为隔离分支，绝不回退或覆盖 Head。
+        if (currentHead) {
+          const ledger = writeConflictLedger(
+            storage,
+            conversation.id,
+            revision,
+            null,
+            localBase,
+            currentHead.revision,
+            writerSessionId,
+            savedAt,
+          );
+          if ("ok" in ledger) return { ok: false, quota: false, failure: ledger };
+          localConflictBranches.set(conversation.id, {
+            conversationId: conversation.id,
+            conflictId: ledger.conflictId,
+            branchRevision: revision,
+            baseRevision: localBase,
+            sharedRevision: currentHead.revision,
+            status: "editing-branch",
+          });
+          retirePreviousProposal();
+          writeTabLease(storage, writerSessionId);
+          return {
+            ok: true,
+            kind: "conflict",
+            revision,
+            savedAt,
+            baseRevision: localBase,
+            sharedRevision: currentHead.revision,
+            conflictId: ledger.conflictId,
+          };
+        }
       }
       try {
         storage.setItem(sessionHeadKeyV3(conversation.id), JSON.stringify({
           revision,
           parentRevision,
-          writerId: tabId,
+          writerId: writerSessionId,
           savedAt,
           digest,
         } satisfies ConversationHeadV3));
@@ -953,11 +1491,15 @@ export function createConversationPersistenceAdapter(
         // head 推进只在非冲突路径到达，失败形状与 4.3.6 前一致（shardFailure）。
         return { ok: false, ...fail(error) };
       }
+      writeTabLease(storage, writerSessionId);
       // 保留式 GC：有界 O(1)——最多删除 2 份既非当前、也非 parentRevision、
       // 也非冲突指针引用分支的旧快照。
       const keep = new Set(parentRevision ? [revision, parentRevision] : [revision]);
       const conflict = parseV3ConflictPointer(safeGetItem(storage, sessionConflictKeyV3(conversation.id)));
       if (conflict) keep.add(conflict.revision);
+      for (const branch of durableConflictBranches(storage, conversation.id)) {
+        protectConflictChain(storage, keep, branch);
+      }
       collectStaleSnapshots(storage, conversation.id, keep, 2);
       return { ok: true, kind: "head", revision, savedAt };
     };
@@ -1043,12 +1585,15 @@ export function createConversationPersistenceAdapter(
     };
     const knownRevision = lastCommittedRevision.get(conversationId);
     drop(sessionHeadKeyV3(conversationId));
-    drop(sessionConflictKeyV3(conversationId));
-    if (knownRevision) drop(sessionSnapshotKeyV3(conversationId, knownRevision));
+    const protectedRevisions = new Set(durableConflictBranches(storage, conversationId).flatMap((branch) =>
+      branch.parentBranchRevision ? [branch.branchRevision, branch.parentBranchRevision] : [branch.branchRevision]));
+    if (knownRevision && !protectedRevisions.has(knownRevision)) drop(sessionSnapshotKeyV3(conversationId, knownRevision));
     let removed = knownRevision ? 1 : 0;
     for (const key of enumerateKeysWithPrefix(storage, sessionSnapshotKeyV3(conversationId, "")) ?? []) {
       if (removed >= 2) break;
       if (key === sessionSnapshotKeyV3(conversationId, knownRevision ?? "")) continue;
+      const revision = key.slice(sessionSnapshotKeyV3(conversationId, "").length);
+      if (protectedRevisions.has(revision)) continue;
       drop(key);
       removed += 1;
     }
@@ -1110,6 +1655,42 @@ export function createConversationPersistenceAdapter(
     requestIdle?.(run) ?? setTimeout(run, 0);
   }
 
+  /** 仅在排他仲裁内修复“Head 广告损坏、parent 有效”的降级链。 */
+  function healDegradedHeads(storage: StorageLike, options?: SaveConversationOptions): void {
+    for (const [conversationId, degraded] of degradedHeads) {
+      const current = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
+      if (!current || current.revision !== degraded.advertisedRevision) {
+        degradedHeads.delete(conversationId);
+        continue;
+      }
+      const loaded = loadV3Checkpoint(storage, conversationId, degraded.loadedRevision);
+      if (!loaded) continue;
+      const quarantineKey = `${conversationStorageKeys.v3QuarantinePrefix}head.${conversationId}.${degraded.advertisedRevision}`;
+      try {
+        const quarantine = JSON.stringify({
+          schemaVersion: 1,
+          kind: "corrupt-head-snapshot",
+          conversationId,
+          advertisedRevision: degraded.advertisedRevision,
+          recoveredRevision: degraded.loadedRevision,
+          quarantinedAt: Date.now(),
+        });
+        storage.setItem(quarantineKey, quarantine);
+        storage.setItem(sessionHeadKeyV3(conversationId), JSON.stringify({
+          revision: loaded.revision,
+          parentRevision: loaded.parentRevision,
+          writerId: loaded.writerId,
+          savedAt: loaded.savedAt,
+          digest: loaded.digest,
+        } satisfies ConversationHeadV3));
+        degradedHeads.delete(conversationId);
+        options?.onWarning?.(verificationFailure(`会话 ${conversationId} 的损坏 Head 已回退并修复`));
+      } catch {
+        // 保留 degraded 标记和有效 parent 的 GC 保护，下次排他提交继续尝试。
+      }
+    }
+  }
+
   /**
    * 以会话为分片提交会话状态：
    *   待提交 tombstone 优先（Controller 请求的删除；pagehide 同步 flush 也在此
@@ -1135,23 +1716,32 @@ export function createConversationPersistenceAdapter(
     options?: SaveConversationOptions,
   ): PersistenceFlushResult {
     if (!storage) return storageUnavailableFailure(`localStorage 不可用 (~${JSON.stringify(state).length} bytes)`);
-    const tabId = getTabId(session);
+    const writerSessionId = getReplicaIdentity(session).writerSessionId;
     writeTabSelection(session, state.currentConversationId);
-    const result = saveShards(state, storage, tabId, options);
-    refreshRecoveryCapsule(storage, tabId, state);
+    // pagehide / beforeunload 无法同步取得 Web Lock：绝不伪装成已仲裁，也不碰共享 Head。
+    if (options?.lifecycle) return { ok: true };
+    const result = saveShards(
+      state,
+      storage,
+      writerSessionId,
+      options,
+      adapterOptions.legacyWriterFromContinuity ? "exclusive" : "proposal",
+    );
+    refreshRecoveryCapsule(storage, writerSessionId, state);
     return result;
   }
 
   function saveShards(
     state: PersistedConversationState,
     storage: StorageLike,
-    tabId: string,
+    writerSessionId: string,
     options?: SaveConversationOptions,
+    mode: "exclusive" | "proposal" = "exclusive",
   ): PersistenceFlushResult {
 
     // 待提交 tombstone 优先（Controller 请求的删除；pagehide 同步 flush 也在此提交）。
     for (const conversationId of pendingTombstones) {
-      const failure = commitTombstone(storage, conversationId, tabId, options);
+      const failure = commitTombstone(storage, conversationId, writerSessionId, options);
       if (failure) return failure; // 保留待删标记，下一轮 flush 重试。
       pendingTombstones.delete(conversationId);
     }
@@ -1173,13 +1763,26 @@ export function createConversationPersistenceAdapter(
         options?.onRecovery?.({ conversationId: conversation.id, copy });
         continue;
       }
-      const outcome = commitConversationShard(storage, conversation, tabId);
+      // Tombstone 可能早已按保留策略被 GC；只要本地见过 base 而共享 Head 缺失，
+      // 原 ID 就不再具备创建权，只能物化恢复副本。
+      if (lastCommittedRevision.has(conversation.id)
+        && !localConflictBranches.has(conversation.id)
+        && parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversation.id))) === null) {
+        tombstonedRefused.add(conversation.id);
+        lastCommitted.delete(conversation.id);
+        lastCommittedRevision.delete(conversation.id);
+        const copy = copyConversation(conversation, "（恢复副本）");
+        queue.push(copy);
+        options?.onRecovery?.({ conversationId: conversation.id, copy });
+        continue;
+      }
+      const outcome = commitConversationShard(storage, conversation, writerSessionId, mode);
       if (!outcome.ok) return outcome;
-      // 冲突提交后 base 跟进胜方 head，下一次提交在胜方之上推进。
+      // 冲突分支登记自己的 branch revision；绝不冒充共享 Head 的干净副本。
       lastCommitted.set(conversation.id, conversation);
-      lastCommittedRevision.set(conversation.id, outcome.kind === "conflict" ? outcome.sharedRevision : outcome.revision);
+      lastCommittedRevision.set(conversation.id, outcome.revision);
       lastHeadRevision = outcome.revision;
-      options?.onCommit?.({ conversationId: conversation.id, revision: outcome.revision, writerId: tabId, savedAt: outcome.savedAt });
+      options?.onCommit?.({ conversationId: conversation.id, revision: outcome.revision, writerId: writerSessionId, savedAt: outcome.savedAt });
       // 存储压力下带压缩成功的提交：一次性带外上报（预览已剥离，全部文字保留）。
       if (outcome.compaction) {
         options?.onCompaction?.({
@@ -1192,11 +1795,12 @@ export function createConversationPersistenceAdapter(
       if (outcome.kind === "conflict") {
         options?.onConflict?.({
           conversationId: conversation.id,
+          conflictId: outcome.conflictId,
           title: conversation.title,
           revision: outcome.revision,
           baseRevision: outcome.baseRevision,
           sharedRevision: outcome.sharedRevision,
-          writerId: tabId,
+          writerId: writerSessionId,
           savedAt: outcome.savedAt,
         });
       }
@@ -1208,14 +1812,19 @@ export function createConversationPersistenceAdapter(
     return lastHeadRevision ? { ok: true, revision: lastHeadRevision } : { ok: true };
   }
 
-  /** 在排他锁内执行 fn；锁缺失或锁子系统自身失败时退化为无锁执行（同等检查在 fn 内）。 */
-  async function arbitrate<T>(fn: () => T): Promise<T> {
+  /** 锁系统失败才走 Proposal；回调已开始后抛错必须原样传播，绝不执行第二遍。 */
+  async function arbitrate<T>(exclusive: () => T | Promise<T>, proposalFallback: () => T | Promise<T>): Promise<T> {
     const locks = adapterOptions.locks === undefined ? detectNavigatorLocks() : adapterOptions.locks;
-    if (!locks) return fn();
+    if (!locks) return proposalFallback();
+    let callbackStarted = false;
     try {
-      return await locks.request(CONVERSATION_CHECKPOINT_LOCK_NAME, { mode: "exclusive" }, fn);
-    } catch {
-      return fn();
+      return await locks.request(CONVERSATION_CHECKPOINT_LOCK_NAME, { mode: "exclusive" }, () => {
+        callbackStarted = true;
+        return exclusive();
+      });
+    } catch (error) {
+      if (callbackStarted) throw error;
+      return proposalFallback();
     }
   }
 
@@ -1225,7 +1834,22 @@ export function createConversationPersistenceAdapter(
     session: StorageLike | null = browserSessionStorage(),
     options?: SaveConversationOptions,
   ): Promise<PersistenceFlushResult> {
-    return arbitrate(() => save(getState(), storage, session, options));
+    if (!storage) return Promise.resolve(storageUnavailableFailure("localStorage 不可用"));
+    const writerSessionId = getReplicaIdentity(session).writerSessionId;
+    const run = (mode: "exclusive" | "proposal"): PersistenceFlushResult => {
+      const state = getState();
+      writeTabSelection(session, state.currentConversationId);
+      const result = saveShards(state, storage, writerSessionId, options, mode);
+      refreshRecoveryCapsule(storage, writerSessionId, state);
+      return result;
+    };
+    return arbitrate(
+      () => {
+        healDegradedHeads(storage, options);
+        return run("exclusive");
+      },
+      () => run("proposal"),
+    );
   }
 
   /**
@@ -1240,13 +1864,14 @@ export function createConversationPersistenceAdapter(
     options?: SaveConversationOptions,
   ): Promise<PersistenceFlushResult> {
     if (!storage) return storageUnavailableFailure("localStorage 不可用");
-    const tabId = getTabId(session);
+    const writerSessionId = getReplicaIdentity(session).writerSessionId;
     pendingTombstones.add(conversationId);
-    return arbitrate(() => {
-      const failure = commitTombstone(storage, conversationId, tabId, options);
+    const commit = () => {
+      const failure = commitTombstone(storage, conversationId, writerSessionId, options);
       pendingTombstones.delete(conversationId);
       return failure ?? { ok: true };
-    });
+    };
+    return arbitrate(commit, commit);
   }
 
   function setTabLease(
@@ -1255,11 +1880,11 @@ export function createConversationPersistenceAdapter(
     session: StorageLike | null = browserSessionStorage(),
   ): void {
     if (active && storage) {
-      writeTabLease(storage, getTabId(session));
+      writeTabLease(storage, getReplicaIdentity(session).writerSessionId);
       return;
     }
     try {
-      storage?.removeItem(`${conversationStorageKeys.v3TabPrefix}${getTabId(session)}`);
+      storage?.removeItem(`${conversationStorageKeys.v3TabPrefix}${getReplicaIdentity(session).writerSessionId}`);
     } catch {
       // best-effort：未删除的租约过期后自然不再阻挡 GC。
     }
@@ -1277,6 +1902,9 @@ export function createConversationPersistenceAdapter(
     if (!storage) return { kind: "noop" };
     const head = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
     if (head && lastCommittedRevision.get(conversationId) === head.revision) return { kind: "noop" };
+    // 已隔离的本地冲突分支即使刚刚完成一次耐久提交，也只相对 branch revision
+    // 是“干净”的；它绝不能因胜方后续广播而换入共享 Head、丢失分支内容。
+    if (localConflictBranches.has(conversationId)) return { kind: "stale" };
     // 本地有未提交修改：保持内容，下次提交走冲突 / 恢复副本路径（绝不静默丢弃）。
     if (local && lastCommitted.get(conversationId) !== local) return { kind: "stale" };
     if (!head) {
@@ -1289,8 +1917,11 @@ export function createConversationPersistenceAdapter(
     const conversation = loadV3SnapshotConversation(storage, conversationId, head.revision)
       ?? (head.parentRevision ? loadV3SnapshotConversation(storage, conversationId, head.parentRevision) : null);
     if (!conversation) return { kind: "noop" };
+    const loadedRevision = loadV3SnapshotConversation(storage, conversationId, head.revision)
+      ? head.revision
+      : head.parentRevision as string;
     lastCommitted.set(conversationId, conversation);
-    lastCommittedRevision.set(conversationId, head.revision);
+    lastCommittedRevision.set(conversationId, loadedRevision);
     return { kind: "reload", conversation };
   }
 
@@ -1301,29 +1932,179 @@ export function createConversationPersistenceAdapter(
     if (!storage) return null;
     const head = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
     if (!head) return null;
-    const conversation = loadV3SnapshotConversation(storage, conversationId, head.revision)
-      ?? (head.parentRevision ? loadV3SnapshotConversation(storage, conversationId, head.parentRevision) : null);
-    return conversation ? { conversation, revision: head.revision } : null;
+    const advertised = loadV3SnapshotConversation(storage, conversationId, head.revision);
+    const parent = !advertised && head.parentRevision
+      ? loadV3SnapshotConversation(storage, conversationId, head.parentRevision)
+      : null;
+    const conversation = advertised ?? parent;
+    return conversation ? { conversation, revision: advertised ? head.revision : head.parentRevision as string } : null;
   }
 
   function readConflictBranch(
     conversationId: string,
     storage: StorageLike | null = browserStorage(),
-  ): { pointer: ConversationConflictPointer; conversation: Conversation } | null {
+    conflictId?: string,
+  ): { pointer: ConversationConflictPointer; branch: DurableConflictBranch; conversation: Conversation } | null {
     if (!storage) return null;
-    const pointer = parseV3ConflictPointer(safeGetItem(storage, sessionConflictKeyV3(conversationId)));
-    if (!pointer) return null;
-    const conversation = loadV3SnapshotConversation(storage, conversationId, pointer.revision);
-    return conversation ? { pointer, conversation } : null;
+    const branch = durableConflictBranches(storage, conversationId)
+      .find((candidate) => !conflictId || candidate.conflictId === conflictId);
+    if (!branch) return null;
+    const conversation = loadV3SnapshotConversation(storage, conversationId, branch.branchRevision);
+    if (!conversation) return null;
+    return {
+      branch,
+      pointer: {
+        revision: branch.branchRevision,
+        baseRevision: branch.baseRevision,
+        sharedRevision: branch.sharedRevision,
+        writerId: branch.writerSessionId,
+        savedAt: branch.updatedAt,
+      },
+      conversation,
+    };
   }
 
-  function clearConflict(conversationId: string, storage: StorageLike | null = browserStorage()): void {
-    if (!storage) return;
+  function listConflictBranches(conversationId?: string, storage: StorageLike | null = browserStorage()): DurableConflictBranch[] {
+    return storage ? durableConflictBranches(storage, conversationId) : [];
+  }
+
+  function removeConflictRecord(storage: StorageLike, branch: DurableConflictBranch): void {
+    const ids = parseConflictIndex(safeGetItem(storage, sessionConflictIndexKeyV3(branch.conversationId)))
+      .filter((id) => id !== branch.conflictId);
     try {
-      storage.removeItem(sessionConflictKeyV3(conversationId));
+      if (ids.length) {
+        storage.setItem(sessionConflictIndexKeyV3(branch.conversationId), JSON.stringify({ schemaVersion: 1, conflictIds: ids }));
+      } else {
+        storage.removeItem(sessionConflictIndexKeyV3(branch.conversationId));
+      }
+      storage.removeItem(sessionConflictKeyV3(branch.conversationId, branch.conflictId));
+      const next = durableConflictBranches(storage, branch.conversationId)[0];
+      if (next) {
+        storage.setItem(sessionConflictKeyV3(branch.conversationId), JSON.stringify({
+          revision: next.branchRevision,
+          baseRevision: next.baseRevision,
+          sharedRevision: next.sharedRevision,
+          writerId: next.writerSessionId,
+          savedAt: next.updatedAt,
+        } satisfies ConversationConflictPointer));
+      } else {
+        storage.removeItem(sessionConflictKeyV3(branch.conversationId));
+      }
+      if (localConflictBranches.get(branch.conversationId)?.conflictId === branch.conflictId) {
+        localConflictBranches.delete(branch.conversationId);
+      }
     } catch {
-      // 残留指针只会让分支多受保护一轮 GC，无害。
+      // resolved 状态已经耐久；残留索引/记录只会使下一次启动继续完成清理。
     }
+  }
+
+  function finalizeConflictRecord(storage: StorageLike, branch: DurableConflictBranch, status: "resolved-copy" | "discarded"): boolean {
+    const resolved: DurableConflictBranch = { ...branch, status, updatedAt: Date.now() };
+    const serialized = JSON.stringify(resolved);
+    try {
+      storage.setItem(sessionConflictKeyV3(branch.conversationId, branch.conflictId), serialized);
+      if (storage.getItem(sessionConflictKeyV3(branch.conversationId, branch.conflictId)) !== serialized) return false;
+    } catch {
+      return false;
+    }
+    removeConflictRecord(storage, resolved);
+    return true;
+  }
+
+  function clearConflict(
+    conversationId: string,
+    storage: StorageLike | null = browserStorage(),
+    conflictId?: string,
+  ): void {
+    if (!storage) return;
+    const branch = durableConflictBranches(storage, conversationId)
+      .find((candidate) => !conflictId || candidate.conflictId === conflictId);
+    if (branch) removeConflictRecord(storage, branch);
+  }
+
+  function resolveConflictByCopyArbitrated(
+    conversationId: string,
+    conflictId: string,
+    storage: StorageLike | null = browserStorage(),
+    session: StorageLike | null = browserSessionStorage(),
+    options?: SaveConversationOptions,
+  ): Promise<{ ok: true; copy: Conversation } | PersistenceFlushFailure> {
+    if (!storage) return Promise.resolve(storageUnavailableFailure("localStorage 不可用"));
+    const writerSessionId = getReplicaIdentity(session).writerSessionId;
+    const transaction = (mode: "exclusive" | "proposal"): { ok: true; copy: Conversation } | PersistenceFlushFailure => {
+      const record = parseDurableConflictBranch(safeGetItem(storage, sessionConflictKeyV3(conversationId, conflictId)));
+      const copyId = `${conversationId}.conflict.${conflictId}`;
+      if (!record) {
+        const existing = readSharedConversation(copyId, storage);
+        return existing ? { ok: true, copy: existing.conversation } : verificationFailure("冲突记录不存在或已损坏");
+      }
+      const branchConversation = loadV3SnapshotConversation(storage, conversationId, record.branchRevision);
+      if (!branchConversation) return verificationFailure("冲突分支快照核验失败");
+      const copy: Conversation = {
+        ...branchConversation,
+        id: copyId,
+        title: `${branchConversation.title}（冲突副本）`,
+        customTitle: true,
+        favorite: false,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      };
+      let expectedDigest: string;
+      try {
+        expectedDigest = checkpointDigest(JSON.stringify(normalizeConversationForCommit(copy)));
+      } catch (error) {
+        return classifyStorageError(error);
+      }
+      const existingHead = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(copyId)));
+      if (existingHead && existingHead.digest !== expectedDigest) {
+        return conflictFailure("稳定副本 ID 已被不同内容占用", conversationId, estimateConversationBytes(copy));
+      }
+      if (!existingHead) {
+        lastCommittedRevision.delete(copyId);
+        const committed = commitConversationShard(storage, copy, writerSessionId, mode);
+        if (!committed.ok) return committed;
+        if (committed.kind !== "head") return conflictFailure("独立副本未取得自己的 Head", conversationId, estimateConversationBytes(copy));
+        options?.onCommit?.({
+          conversationId: copyId,
+          revision: committed.revision,
+          writerId: writerSessionId,
+          savedAt: committed.savedAt,
+        });
+      }
+      const verifiedHead = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(copyId)));
+      const verified = verifiedHead?.digest === expectedDigest
+        ? loadV3SnapshotConversation(storage, copyId, verifiedHead.revision)
+        : null;
+      if (!verified) return verificationFailure("冲突副本 Head 或 Digest 核验失败");
+      lastCommitted.set(copyId, verified);
+      lastCommittedRevision.set(copyId, verifiedHead?.revision as string);
+      if (!finalizeConflictRecord(storage, record, "resolved-copy")) {
+        return verificationFailure("冲突副本已提交，但原分支释放标记核验失败");
+      }
+      return { ok: true, copy: verified };
+    };
+    return arbitrate(() => transaction("exclusive"), () => transaction("proposal"));
+  }
+
+  function resolveConflictByReloadArbitrated(
+    conversationId: string,
+    conflictId: string,
+    storage: StorageLike | null = browserStorage(),
+  ): Promise<{ ok: true; conversation: Conversation; revision: string } | PersistenceFlushFailure> {
+    if (!storage) return Promise.resolve(storageUnavailableFailure("localStorage 不可用"));
+    const transaction = (): { ok: true; conversation: Conversation; revision: string } | PersistenceFlushFailure => {
+      const record = parseDurableConflictBranch(safeGetItem(storage, sessionConflictKeyV3(conversationId, conflictId)));
+      if (!record) return verificationFailure("冲突记录不存在或已损坏");
+      const shared = readSharedConversation(conversationId, storage);
+      if (!shared) return verificationFailure("共享 Head 核验失败");
+      lastCommitted.set(conversationId, shared.conversation);
+      lastCommittedRevision.set(conversationId, shared.revision);
+      if (!finalizeConflictRecord(storage, record, "discarded")) {
+        return verificationFailure("共享 Head 已读取，但冲突丢弃标记核验失败");
+      }
+      return { ok: true, conversation: shared.conversation, revision: shared.revision };
+    };
+    return arbitrate(transaction, transaction);
   }
 
   function adoptRemoteConversation(conversationId: string, conversation: Conversation, revision: string): void {
@@ -1339,41 +2120,72 @@ export function createConversationPersistenceAdapter(
       && !tombstonedRefused.has(conversation.id));
   }
 
-  /**
-   * 序列化并写入本标签页应急胶囊：单脏记 baseRevision，多脏逐会话记 baseRevisions。
-   * 写失败返回归类失败结果（绝不抛出）；胶囊绝不触碰任何共享 head。
-   */
-  function writeCapsuleRecord(storage: StorageLike, tabId: string, dirty: Conversation[]): PersistenceFlushFailure | null {
-    const bases = Object.fromEntries(dirty.map((conversation) => [conversation.id, lastCommittedRevision.get(conversation.id) ?? null]));
-    const capsule: RecoveryCapsule = {
-      schemaVersion: 1,
-      tabId,
-      baseRevision: dirty.length === 1 ? bases[dirty[0]?.id ?? ""] ?? null : null,
-      ...(dirty.length > 1 ? { baseRevisions: bases } : {}),
+  function buildRecoveryCapsule(
+    writerSessionId: string,
+    sequence: number,
+    dirty: Conversation[],
+    level: 0 | 1 | 2,
+  ): RecoveryCapsule {
+    const entries = dirty.map((conversation): RecoveryCapsuleEntry => {
+      const compacted = level === 0
+        ? { conversation, removedPreviewBytes: 0 }
+        : compactConversationForStorage(conversation, level);
+      const normalized = normalizeConversationForCommit(compacted.conversation);
+      return {
+        conversationId: conversation.id,
+        baseRevision: lastCommittedRevision.get(conversation.id) ?? null,
+        digest: checkpointDigest(JSON.stringify(normalized)),
+        conversation: normalized,
+        ...(level > 0 && compacted.removedPreviewBytes > 0
+          ? { compaction: { level, removedPreviewBytes: compacted.removedPreviewBytes, reason: "storage-pressure" } }
+          : {}),
+      };
+    });
+    const unsigned = {
+      schemaVersion: 2 as const,
+      writerSessionId,
+      sequence,
       savedAt: Date.now(),
-      dirtyConversations: dirty,
+      entries,
     };
-    let serialized: string;
-    try {
-      serialized = JSON.stringify(capsule);
-    } catch (error) {
-      return classifyStorageError(error);
+    return { ...unsigned, digest: checkpointDigest(JSON.stringify(unsigned)) };
+  }
+
+  /** V2 胶囊按原始→两级确定性压缩重试，每次写入都必须逐字节回读。 */
+  function writeCapsuleRecord(storage: StorageLike, writerSessionId: string, dirty: Conversation[]): PersistenceFlushFailure | null {
+    const existing = parseRecoveryCapsule(safeGetItem(storage, sessionRecoveryKeyV3(writerSessionId)));
+    capsuleSequence = Math.max(capsuleSequence + 1, (existing?.sequence ?? 0) + 1);
+    let lastQuotaFailure: PersistenceFlushFailure | null = null;
+    for (const level of [0, 1, 2] as const) {
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(buildRecoveryCapsule(writerSessionId, capsuleSequence, dirty, level));
+      } catch (error) {
+        return classifyStorageError(error);
+      }
+      try {
+        const key = sessionRecoveryKeyV3(writerSessionId);
+        storage.setItem(key, serialized);
+        if (storage.getItem(key) !== serialized) {
+          return withSizeHint(verificationFailure("恢复胶囊写入后回读核验失败"), serialized.length);
+        }
+        return null;
+      } catch (error) {
+        const classified = classifyStorageError(error);
+        const failure = withSizeHint({ ...classified, message: `恢复胶囊写入失败：${classified.message}` }, serialized.length);
+        if (classified.code !== "quota-exceeded") return failure;
+        lastQuotaFailure = failure;
+      }
     }
-    try {
-      storage.setItem(sessionRecoveryKeyV3(tabId), serialized);
-      return null;
-    } catch (error) {
-      const classified = classifyStorageError(error);
-      return withSizeHint({ ...classified, message: `恢复胶囊写入失败：${classified.message}` }, serialized.length);
-    }
+    return { ...(lastQuotaFailure ?? storageUnavailableFailure("恢复胶囊写入失败")), code: "storage-pressure" };
   }
 
   /**
    * 胶囊保鲜（best-effort）：仅在胶囊键存在时动手——脏集合耗尽 ⇒ 移除；
    * 部分提交 ⇒ 以剩余脏重写。写 / 删失败留下过期胶囊，下次启动对账时收敛。
    */
-  function refreshRecoveryCapsule(storage: StorageLike, tabId: string, state: PersistedConversationState): void {
-    const key = sessionRecoveryKeyV3(tabId);
+  function refreshRecoveryCapsule(storage: StorageLike, writerSessionId: string, state: PersistedConversationState): void {
+    const key = sessionRecoveryKeyV3(writerSessionId);
     if (safeGetItem(storage, key) === null) return;
     const dirty = collectDirtyConversations(state);
     if (!dirty.length) {
@@ -1384,7 +2196,7 @@ export function createConversationPersistenceAdapter(
       }
       return;
     }
-    writeCapsuleRecord(storage, tabId, dirty);
+    writeCapsuleRecord(storage, writerSessionId, dirty);
   }
 
   function writeRecoveryCapsule(
@@ -1393,18 +2205,18 @@ export function createConversationPersistenceAdapter(
     session: StorageLike | null = browserSessionStorage(),
   ): PersistenceFlushFailure | null {
     if (!storage) return null; // 存储不可用：flush 本身已按 storage-unavailable 上报。
-    const tabId = getTabId(session);
+    const writerSessionId = getReplicaIdentity(session).writerSessionId;
     const dirty = collectDirtyConversations(state);
     if (!dirty.length) {
       // flush 成功 ⇒ 空集合 ⇒ 移除胶囊键；删失败留下过期胶囊，对账时收敛。
       try {
-        storage.removeItem(sessionRecoveryKeyV3(tabId));
+        storage.removeItem(sessionRecoveryKeyV3(writerSessionId));
       } catch {
         // best-effort。
       }
       return null;
     }
-    return writeCapsuleRecord(storage, tabId, dirty);
+    return writeCapsuleRecord(storage, writerSessionId, dirty);
   }
 
   /**
@@ -1414,18 +2226,19 @@ export function createConversationPersistenceAdapter(
    */
   function reconcileCapsuleEntry(
     storage: StorageLike,
-    tabId: string,
+    writerSessionId: string,
     capsule: RecoveryCapsule,
-    entry: Conversation,
+    entry: RecoveryCapsuleEntry,
     outcome: RecoveryReconcileOutcome,
     options?: SaveConversationOptions,
+    mode: "exclusive" | "proposal" = "exclusive",
   ): boolean {
-    const migrated = migrateLegacyConversation(entry);
+    const migrated = migrateLegacyConversation(entry.conversation);
     // 无法迁移的条目本就无法加载，按已处理（绝不阻塞其余条目与胶囊删除）。
     if (!migrated) return true;
     const conversation: Conversation = { ...migrated, messages: migrated.messages.map(checkpointMessage) };
     const conversationId = conversation.id;
-    const base = capsule.baseRevisions?.[conversationId] ?? capsule.baseRevision ?? null;
+    const base = entry.baseRevision;
     const previous = lastCommitted.get(conversationId) ?? null;
     const head = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
     const tombstoned = safeGetItem(storage, sessionTombstoneKeyV3(conversationId)) !== null;
@@ -1452,25 +2265,26 @@ export function createConversationPersistenceAdapter(
         }
       }
       // 干净路径：共享 head 缺失（无 tombstone）或仍停留在 base ⇒ 作为正常分片提交补交。
-      if (!head || head.revision === base) {
+      if ((!head && base === null) || head?.revision === base) {
         if (base) lastCommittedRevision.set(conversationId, base);
         else lastCommittedRevision.delete(conversationId);
-        const committed = commitConversationShard(storage, conversation, tabId);
+        const committed = commitConversationShard(storage, conversation, writerSessionId, mode);
         if (!committed.ok) {
           outcome.failed.push(committed);
           return false;
         }
-        registerCommitted(committed.kind === "conflict" ? committed.sharedRevision : committed.revision);
-        options?.onCommit?.({ conversationId, revision: committed.revision, writerId: tabId, savedAt: committed.savedAt });
+        registerCommitted(committed.revision);
+        options?.onCommit?.({ conversationId, revision: committed.revision, writerId: writerSessionId, savedAt: committed.savedAt });
         // 锁退化期间 head 被并发推进：分支已耐久落盘，按冲突信号带外上报（数据安全）。
         if (committed.kind === "conflict") {
           options?.onConflict?.({
             conversationId,
+            conflictId: committed.conflictId,
             title: conversation.title,
             revision: committed.revision,
             baseRevision: committed.baseRevision,
             sharedRevision: committed.sharedRevision,
-            writerId: tabId,
+            writerId: writerSessionId,
             savedAt: committed.savedAt,
           });
           return true;
@@ -1484,7 +2298,7 @@ export function createConversationPersistenceAdapter(
     // 恢复副本（标题加"（恢复副本）"后缀），作为它自己的分片提交。
     const copy: Conversation = {
       ...conversation,
-      id: recoveredCopyIdV3(conversationId, capsule.tabId),
+      id: recoveredCopyIdV3(conversationId, capsule.writerSessionId, capsule.sequence),
       title: `${conversation.title}（恢复副本）`,
       customTitle: true,
       favorite: false,
@@ -1492,20 +2306,25 @@ export function createConversationPersistenceAdapter(
     // 同一胶囊重处理：副本 head 已存在 ⇒ 此前的对账已提交它，登记映射并收敛（at most once）。
     const copyHead = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(copy.id)));
     if (copyHead) {
+      const expectedDigest = checkpointDigest(JSON.stringify(normalizeConversationForCommit(copy)));
+      if (copyHead.digest !== expectedDigest) {
+        outcome.failed.push(conflictFailure("恢复副本 Head 与胶囊摘要不一致", conversationId, estimateConversationBytes(copy)));
+        return false;
+      }
       lastCommitted.set(copy.id, copy);
       lastCommittedRevision.set(copy.id, copyHead.revision);
       outcome.recovered.push(copy);
       return true;
     }
     lastCommittedRevision.delete(copy.id);
-    const copyCommit = commitConversationShard(storage, copy, tabId);
+    const copyCommit = commitConversationShard(storage, copy, writerSessionId, mode);
     if (!copyCommit.ok) {
       outcome.failed.push(copyCommit);
       return false;
     }
     lastCommitted.set(copy.id, copy);
-    lastCommittedRevision.set(copy.id, copyCommit.kind === "conflict" ? copyCommit.sharedRevision : copyCommit.revision);
-    options?.onCommit?.({ conversationId: copy.id, revision: copyCommit.revision, writerId: tabId, savedAt: copyCommit.savedAt });
+    lastCommittedRevision.set(copy.id, copyCommit.revision);
+    options?.onCommit?.({ conversationId: copy.id, revision: copyCommit.revision, writerId: writerSessionId, savedAt: copyCommit.savedAt });
     outcome.recovered.push(copy);
     return true;
   }
@@ -1513,21 +2332,51 @@ export function createConversationPersistenceAdapter(
   /** 处理一份胶囊的全部条目；全部耐久处理后才删除胶囊键（at most once 的另一半）。 */
   function reconcileCapsule(
     storage: StorageLike,
-    tabId: string,
+    writerSessionId: string,
     key: string,
     capsule: RecoveryCapsule,
     outcome: RecoveryReconcileOutcome,
     options?: SaveConversationOptions,
+    mode: "exclusive" | "proposal" = "exclusive",
   ): void {
     let allHandled = true;
-    for (const entry of capsule.dirtyConversations) {
-      if (!reconcileCapsuleEntry(storage, tabId, capsule, entry, outcome, options)) allHandled = false;
+    for (const entry of capsule.entries) {
+      if (!reconcileCapsuleEntry(storage, writerSessionId, capsule, entry, outcome, options, mode)) allHandled = false;
     }
     if (!allHandled) return;
+    const markerKey = `${conversationStorageKeys.v3RecoveryResolvedPrefix}${capsule.writerSessionId}.${capsule.sequence}`;
+    const marker = JSON.stringify({
+      schemaVersion: 1,
+      writerSessionId: capsule.writerSessionId,
+      sequence: capsule.sequence,
+      capsuleDigest: capsule.digest,
+      resolvedAt: Date.now(),
+    });
     try {
+      storage.setItem(markerKey, marker);
+      if (storage.getItem(markerKey) !== marker) {
+        outcome.failed.push(verificationFailure("恢复胶囊 resolved marker 核验失败"));
+        return;
+      }
       storage.removeItem(key);
     } catch {
       // 删除失败：胶囊重处理时经 digest / 副本 head 检查收敛。
+    }
+  }
+
+  function quarantineInvalidCapsule(storage: StorageLike, key: string, raw: string, outcome: RecoveryReconcileOutcome): void {
+    const owner = key.slice(conversationStorageKeys.v3RecoveryPrefix.length) || "unknown";
+    const quarantineKey = `${conversationStorageKeys.v3QuarantinePrefix}capsule.${owner}.${Date.now()}`;
+    try {
+      storage.setItem(quarantineKey, raw);
+      if (storage.getItem(quarantineKey) !== raw) {
+        outcome.failed.push(verificationFailure("损坏恢复胶囊 quarantine 核验失败"));
+        return;
+      }
+      storage.removeItem(key);
+      outcome.failed.push(verificationFailure("检测到损坏恢复胶囊，已隔离"));
+    } catch (error) {
+      outcome.failed.push(classifyStorageError(error));
     }
   }
 
@@ -1538,12 +2387,14 @@ export function createConversationPersistenceAdapter(
   ): Promise<RecoveryReconcileOutcome> {
     const outcome: RecoveryReconcileOutcome = { committed: [], recovered: [], failed: [] };
     if (!storage) return Promise.resolve(outcome);
-    const tabId = getTabId(session);
-    return arbitrate(() => {
+    const writerSessionId = getReplicaIdentity(session).writerSessionId;
+    const reconcileAll = (mode: "exclusive" | "proposal"): RecoveryReconcileOutcome => {
       // 本标签页胶囊（崩溃/杀死但会话恢复，sessionStorage 幸存）：无租约条件直接对账。
-      const ownKey = sessionRecoveryKeyV3(tabId);
-      const own = parseRecoveryCapsule(safeGetItem(storage, ownKey));
-      if (own) reconcileCapsule(storage, tabId, ownKey, own, outcome, options);
+      const ownKey = sessionRecoveryKeyV3(writerSessionId);
+      const ownRaw = safeGetItem(storage, ownKey);
+      const own = parseRecoveryCapsule(ownRaw);
+      if (own) reconcileCapsule(storage, writerSessionId, ownKey, own, outcome, options, mode);
+      else if (ownRaw) quarantineInvalidCapsule(storage, ownKey, ownRaw, outcome);
       // 孤儿胶囊（属主已崩溃的新标签页拿不到原 tabId）：仅当属主租约缺失或
       // 已过期（>5min 未触碰，与 tombstone 租约同规）才回收；活租约留给属主
       // （BFCache 恢复情形，属主经胶囊保鲜规则自行清理）。预算有界，剩余下轮再收。
@@ -1553,34 +2404,36 @@ export function createConversationPersistenceAdapter(
       for (const key of keys) {
         if (budget <= 0) break;
         if (key === ownKey) continue;
-        const ownerTabId = key.slice(conversationStorageKeys.v3RecoveryPrefix.length);
-        if (!ownerTabId) continue;
-        const leaseLastSeen = readJsonNumber(safeGetItem(storage, `${conversationStorageKeys.v3TabPrefix}${ownerTabId}`), "lastSeen");
+        const ownerWriterSessionId = key.slice(conversationStorageKeys.v3RecoveryPrefix.length);
+        if (!ownerWriterSessionId) continue;
+        const leaseLastSeen = readJsonNumber(safeGetItem(storage, `${conversationStorageKeys.v3TabPrefix}${ownerWriterSessionId}`), "lastSeen");
         if (leaseLastSeen && now - leaseLastSeen <= CONVERSATION_TOMBSTONE_LIMITS.tabLeaseStaleMs) continue;
         budget -= 1;
-        const capsule = parseRecoveryCapsule(safeGetItem(storage, key));
-        // 无法解析的胶囊没有任何可读条目，按"零条目已处理"删除，绝不反复重扫。
+        const raw = safeGetItem(storage, key);
+        const capsule = parseRecoveryCapsule(raw);
         if (!capsule) {
-          try {
-            storage.removeItem(key);
-          } catch {
-            // 下轮启动重试删除。
-          }
+          if (raw) quarantineInvalidCapsule(storage, key, raw, outcome);
           continue;
         }
-        reconcileCapsule(storage, tabId, key, capsule, outcome, options);
+        reconcileCapsule(storage, writerSessionId, key, capsule, outcome, options, mode);
       }
       return outcome;
-    });
+    };
+    return arbitrate(() => reconcileAll("exclusive"), () => reconcileAll("proposal"));
   }
 
   function reset(): void {
     lastCommitted.clear();
     lastCommittedRevision.clear();
+    localConflictBranches.clear();
+    degradedHeads.clear();
+    lastProposalKey.clear();
     pendingTombstones.clear();
     tombstonedRefused.clear();
     lastHeadRevision = null;
     idleGcScheduled = false;
+    capsuleSequence = 0;
+    identity = null;
   }
 
   return {
@@ -1593,7 +2446,12 @@ export function createConversationPersistenceAdapter(
     setTabLease,
     readSharedConversation,
     readConflictBranch,
+    listConflictBranches,
     clearConflict,
+    resolveConflictByCopyArbitrated,
+    resolveConflictByReloadArbitrated,
+    getReplicaIdentity,
+    rotateWriterIdentity,
     adoptRemoteConversation,
     writeRecoveryCapsule,
     reconcileRecoveryCapsules,
@@ -1601,7 +2459,7 @@ export function createConversationPersistenceAdapter(
   };
 }
 
-const defaultAdapter = createConversationPersistenceAdapter();
+const defaultAdapter = createConversationPersistenceAdapter({ legacyWriterFromContinuity: true });
 
 export function loadPersistedConversationState(
   storage: StorageLike | null = browserStorage(),
@@ -1623,8 +2481,9 @@ export function savePersistedConversationState(
 export function readConflictBranch(
   conversationId: string,
   storage: StorageLike | null = browserStorage(),
-): { pointer: ConversationConflictPointer; conversation: Conversation } | null {
-  return defaultAdapter.readConflictBranch(conversationId, storage);
+  conflictId?: string,
+): { pointer: ConversationConflictPointer; branch: DurableConflictBranch; conversation: Conversation } | null {
+  return defaultAdapter.readConflictBranch(conversationId, storage, conflictId);
 }
 
 export function resetConversationPersistenceForTests(): void {

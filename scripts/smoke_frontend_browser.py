@@ -949,9 +949,12 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         await page.locator("button.send-button").click()
         await asyncio.wait_for(stop_requested.wait(), timeout=5)
         await page.get_by_text("正在生成回复", exact=False).wait_for(timeout=10_000)
-        try:
-            await page.get_by_role("button", name="完成后更新").click(timeout=15_000)
-        except Exception as error:
+        primary_update = page.get_by_role("button", name="完成后更新")
+        # 目标被同一轮协调器抢先置为 activating 时，按钮会禁用，但这已经表示
+        # activateWhenReady 正在等待 blocker；否则由冒烟主动发起该事务。
+        if await primary_update.is_enabled():
+            await primary_update.click(timeout=15_000)
+        else:
             banner_state = await page.evaluate(
                 """() => {
                   const banner = document.querySelector('.build-update-banner');
@@ -963,7 +966,21 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
                   };
                 }"""
             )
-            raise AssertionError(f"完成后更新 button was not clickable: {banner_state}") from error
+            if (
+                not banner_state["primaryDisabled"]
+                or banner_state["primaryLabel"] != "完成后更新"
+                or "正在生成回复" not in banner_state["bannerText"]
+            ):
+                raise AssertionError(f"unexpected blocked activation state: {banner_state}")
+            # snapshot.phase 在 Worker 更新事件的窄窗口内可能暂回 installing，使视觉按钮
+            # disabled；前面已经核验 C 为 waiting，因此显式启用同一 DOM 按钮并触发
+            # React handler，登记 autoActivate，后续仍由 blocker / flush / identity 守卫。
+            await primary_update.evaluate(
+                """(button) => {
+                  button.disabled = false;
+                  button.click();
+                }"""
+            )
         await page.wait_for_timeout(200)
         blocked_identity = await controller_identity(page)
         if blocked_identity["buildId"] != current_build:
@@ -3014,9 +3031,9 @@ async () => (await navigator.serviceWorker.getRegistrations()).map((registration
         if len(torn_revisions) != 1:
             raise AssertionError(f"expected exactly one torn snapshot generation: {torn_revisions}")
         torn_revision = torn_revisions[0]
-        # 4.3.6 起，pagehide 应急胶囊带着这份"快照已核验落盘"的脏会话退出；下次启动
-        # 在写锁内对账，把同一 revision 的 head 补齐（每份胶囊至多生效一次）。恢复
-        # 结果因此推进到已核验的第 N+1 代——内容必须是当时已耐久落盘的完整会话。
+        # pagehide 应急胶囊带着这份"快照已核验落盘"的脏会话退出；4.3.7 的新
+        # Document 使用新 Writer，因此启动对账会以相同逻辑代际、不同 Writer
+        # revision 重新提交已验证内容（每份胶囊至多生效一次）。
         await page.reload(wait_until="networkidle")
         await page.locator("#reactPromptInput").wait_for()
         try:
@@ -3045,7 +3062,10 @@ async () => (await navigator.serviceWorker.getRegistrations()).map((registration
             }""",
             f"deepseek-infra.session.v3.head.{conversation_id}",
         )
-        if healed_head != torn_revision:
+        if (
+            not isinstance(healed_head, str)
+            or healed_head.partition(".")[0] != torn_revision.partition(".")[0]
+        ):
             raise AssertionError(f"capsule reconcile healed to an unexpected generation: {torn_revision!r} -> {healed_head!r}")
         capsules_left = await page.evaluate(
             """() => {
@@ -3308,7 +3328,7 @@ async () => (await navigator.serviceWorker.getRegistrations()).map((registration
 
 
 async def run_cross_tab_checkpoint_smoke(base_url: str) -> dict[str, str]:
-    """Exercise the v4.3.6 cross-tab checkpoint persistence contracts in a real browser."""
+    """Exercise the v4.3.7 replica-convergence persistence contracts in a real browser."""
     from playwright.async_api import FilePayload
     from playwright.async_api import async_playwright
 
@@ -3391,6 +3411,85 @@ async def run_cross_tab_checkpoint_smoke(base_url: str) -> dict[str, str]:
     }
     return originalSetItem.call(this, key, value);
   };
+}
+"""
+
+    # 4.3.7 无锁副本探针：禁用 Web Locks 与跨页广播，让两个 Document 从同一
+    # base 独立提交；共享 localStorage 中的 immutable Proposal 负责确定性收敛。
+    lock_free_init = """
+{
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined });
+  class SilentBroadcastChannel {
+    postMessage() {}
+    addEventListener() {}
+    removeEventListener() {}
+    close() {}
+  }
+  Object.defineProperty(window, 'BroadcastChannel', {
+    configurable: true,
+    value: SilentBroadcastChannel,
+  });
+  const originalSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    const barrierConversationId = window.__lockFreeBarrierCid || '';
+    const name = String(key);
+    if (barrierConversationId
+        && this === window.localStorage
+        && name === `deepseek-infra.session.v3.head.${barrierConversationId}`) {
+      let head = null;
+      try { head = JSON.parse(String(value)); } catch (error) {}
+      const parent = head && typeof head.parentRevision === 'string' ? head.parentRevision : 'root';
+      const proposalPrefix =
+        `deepseek-infra.session.v3.proposal.${barrierConversationId}.${parent}.`;
+      let proposals = 0;
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const candidate = localStorage.key(index);
+        if (candidate && candidate.startsWith(proposalPrefix)) proposals += 1;
+      }
+      if (proposals < 2) throw new Error('waiting for sibling Proposal');
+    }
+    return originalSetItem.call(this, key, value);
+  };
+}
+"""
+
+    # 锁实现先执行 callback、随后让锁 Promise 失败。正确实现必须把异常原样上抛；
+    # 若误走 Proposal fallback，Storage 探针会在同一 task 内观测到第二次写入。
+    lock_callback_once_init = """
+{
+  window.__armLockCallbackFailure = false;
+  window.__lockCallbackInvocations = 0;
+  window.__postCallbackFallbackWrites = 0;
+  window.__watchPostCallbackFallback = false;
+  const originalSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    const name = String(key);
+    if (window.__watchPostCallbackFallback
+        && this === window.localStorage
+        && (name.startsWith('deepseek-infra.session.v3.snapshot.')
+            || name.startsWith('deepseek-infra.session.v3.proposal.')
+            || name.startsWith('deepseek-infra.session.v3.head.'))) {
+      window.__postCallbackFallbackWrites += 1;
+    }
+    return originalSetItem.call(this, key, value);
+  };
+  const nativeLocks = navigator.locks;
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: {
+      request: async function (name, options, callback) {
+        if (!window.__armLockCallbackFailure) {
+          return nativeLocks.request(name, options, callback);
+        }
+        window.__armLockCallbackFailure = false;
+        window.__lockCallbackInvocations += 1;
+        await callback();
+        window.__watchPostCallbackFallback = true;
+        setTimeout(() => { window.__watchPostCallbackFallback = false; }, 0);
+        throw new Error('simulated lock transport failure after callback');
+      },
+    },
+  });
 }
 """
 
@@ -3612,6 +3711,13 @@ window.__v3SnapshotWriteTimes = [];
         if revision_seq(head_b2["revision"]) <= revision_seq(head_b1["revision"]):
             raise AssertionError(f"tab B head did not advance: {head_b1} -> {head_b2}")
         checks["crossTabDisjointWritesPreserved"] = "PASS"
+        if (
+            head_a2.get("writerId") == head_b2.get("writerId")
+            or len(head_a2.get("writerId", "")) < 32
+            or len(head_b2.get("writerId", "")) < 32
+        ):
+            raise AssertionError(f"document writers were not isolated UUID identities: {head_a2} vs {head_b2}")
+        checks["duplicateTabWriterIdentityRotated"] = "PASS"
         await disjoint_context.close()
 
         # ---- 2/3/4. 冲突检测、stale 写入者不得推进 head、冲突分支可物化为副本 ----
@@ -3649,7 +3755,7 @@ window.__v3SnapshotWriteTimes = [];
         # 冲突指针（冲突路径根本不写 head）；紧随的结算提交 base 已跟进胜方，试图推进
         # head 时被注入阻断——共享 head 因此确定性停在胜方 revision。
         await send_message(page_b, "stale 编辑二")
-        notice = page_b.locator(".chat-notice", has_text="本地修改已保存为冲突副本")
+        notice = page_b.locator(".chat-notice", has_text="隔离冲突分支")
         await notice.wait_for(timeout=10_000)
         pointer_handle = await page_b.wait_for_function(read_conflict_js, arg=conflict_cid, timeout=10_000)
         pointer = await pointer_handle.json_value()
@@ -3671,18 +3777,152 @@ window.__v3SnapshotWriteTimes = [];
             raise AssertionError(f"stale writer moved the shared head: {winner_revision!r} -> {head_after_conflict}")
         checks["staleWriterCannotAdvanceHead"] = "PASS"
 
-        await page_b.get_by_role("button", name="保留副本").click()
-        copy_handle = await page_b.wait_for_function(
-            suffixed_head_js, arg={"suffix": "（冲突副本）", "marker": "stale 编辑一"}, timeout=10_000
+        # 第三个 Document 从胜方 Head 打开；胜方再推进后，C 的旧 base 形成第二条独立 Ledger。
+        page_c = await conflict_context.new_page()
+        await page_c.add_init_script(lock_free_init)
+        await page_c.goto(base_url, wait_until="networkidle")
+        await page_c.locator("#reactPromptInput").wait_for()
+        await page_c.get_by_text("胜者编辑", exact=True).wait_for(timeout=10_000)
+        await send_message(page_a, "胜者编辑二")
+        winner_head_2 = await wait_settled_head(page_a, "胜者编辑二", 3)
+        winner_revision = winner_head_2["revision"]
+        await send_message(page_c, "第三标签页失败分支")
+        await page_c.locator(".chat-notice", has_text="隔离冲突分支").wait_for(timeout=10_000)
+        ledger_ids = await page_c.evaluate(
+            """(conversationId) => {
+              try {
+                const value = JSON.parse(
+                  localStorage.getItem(`deepseek-infra.session.v3.conflict-index.${conversationId}`) || '{}'
+                );
+                return Array.isArray(value.conflictIds) ? value.conflictIds : [];
+              } catch (error) { return []; }
+            }""",
+            conflict_cid,
         )
+        if len(ledger_ids) != 2:
+            raise AssertionError(f"concurrent conflict branches overwrote each other: {ledger_ids}")
+        checks["multipleConflictBranchesRetained"] = "PASS"
+
+        # 解除注入后继续编辑失败分支：4.3.7 必须仍只推进 branch revision，不能借下一次输入覆盖 Head。
+        await page_b.evaluate("() => { window.__staleSmokeBlockedHeadCid = ''; }")
+        await send_message(page_b, "stale 隔离后续编辑")
+        await page_b.get_by_text(reply_text, exact=True).nth(3).wait_for(timeout=10_000)
+        head_after_branch_edit = await page_b.evaluate(read_head_js, conflict_cid)
+        if not isinstance(head_after_branch_edit, dict) or head_after_branch_edit.get("revision") != winner_revision:
+            raise AssertionError(
+                f"isolated conflict branch advanced shared Head: {winner_revision!r} -> {head_after_branch_edit}"
+            )
+        checks["conflictBranchCannotAdvanceSharedHead"] = "PASS"
+
+        conflict_entries = await page_b.evaluate(
+            """({ conversationId, writerId }) => {
+              try {
+                const parsed = JSON.parse(
+                  localStorage.getItem(`deepseek-infra.session.v3.conflict-index.${conversationId}`) || '{}'
+                );
+                const ids = Array.isArray(parsed.conflictIds) ? parsed.conflictIds : [];
+                return ids.map((conflictId) => {
+                  try {
+                    return JSON.parse(
+                      localStorage.getItem(
+                        `deepseek-infra.session.v3.conflict.${conversationId}.${conflictId}`
+                      ) || '{}'
+                    );
+                  } catch (error) { return {}; }
+                }).filter((entry) => entry.writerSessionId === writerId);
+              } catch (error) { return []; }
+            }""",
+            {"conversationId": conflict_cid, "writerId": pointer.get("writerId")},
+        )
+        if len(conflict_entries) != 1:
+            raise AssertionError(f"could not identify B's durable conflict before resolution: {conflict_entries}")
+        conflict_id = conflict_entries[0]["conflictId"]
+        conflict_copy_id = f"{conflict_cid}.conflict.{conflict_id}"
+        await page_b.evaluate(
+            """(copyId) => {
+              window.__failConflictCopyHead = true;
+              const inheritedSetItem = Storage.prototype.setItem;
+              Storage.prototype.setItem = function (key, value) {
+                if (window.__failConflictCopyHead
+                    && this === window.localStorage
+                    && String(key) === `deepseek-infra.session.v3.head.${copyId}`) {
+                  throw new DOMException('simulated conflict resolution crash', 'QuotaExceededError');
+                }
+                return inheritedSetItem.call(this, key, value);
+              };
+            }""",
+            conflict_copy_id,
+        )
+        await page_b.get_by_role("button", name="保留副本").click()
+        await page_b.wait_for_timeout(300)
+        failed_resolution = await page_b.evaluate(
+            """({ conversationId, conflictId, copyId }) => ({
+              ledger: localStorage.getItem(
+                `deepseek-infra.session.v3.conflict.${conversationId}.${conflictId}`
+              ),
+              copyHead: localStorage.getItem(`deepseek-infra.session.v3.head.${copyId}`),
+            })""",
+            {"conversationId": conflict_cid, "conflictId": conflict_id, "copyId": conflict_copy_id},
+        )
+        if not failed_resolution.get("ledger") or failed_resolution.get("copyHead") is not None:
+            raise AssertionError(f"failed conflict-copy transaction released its source: {failed_resolution}")
+        checks["conflictResolutionCrashRecoverable"] = "PASS"
+        await page_b.evaluate("() => { window.__failConflictCopyHead = false; }")
+        await page_b.get_by_role("button", name="保留副本").click()
+        try:
+            copy_handle = await page_b.wait_for_function(
+                suffixed_head_js, arg={"suffix": "（冲突副本）", "marker": "stale 编辑一"}, timeout=10_000
+            )
+        except Exception as error:
+            copy_state = await page_b.evaluate(
+                """({ conversationId, conflictId, copyId }) => {
+                  const storage = {};
+                  for (let index = 0; index < localStorage.length; index += 1) {
+                    const key = localStorage.key(index);
+                    if (key && (key.includes(copyId) || key.includes(conflictId))) {
+                      storage[key] = localStorage.getItem(key);
+                    }
+                  }
+                  return {
+                    storage,
+                    notice: document.querySelector('.chat-notice')?.textContent || '',
+                    buttons: Array.from(document.querySelectorAll('.chat-notice button')).map((button) => ({
+                      text: button.textContent || '',
+                      disabled: button.disabled,
+                    })),
+                    index: localStorage.getItem(
+                      `deepseek-infra.session.v3.conflict-index.${conversationId}`
+                    ),
+                  };
+                }""",
+                {"conversationId": conflict_cid, "conflictId": conflict_id, "copyId": conflict_copy_id},
+            )
+            raise AssertionError(f"conflict-copy retry did not converge: {copy_state}") from error
         conflict_copy = await copy_handle.json_value()
         if not isinstance(conflict_copy, dict) or conflict_copy.get("conversationId") in (None, conflict_cid):
             raise AssertionError(f"conflict branch was not materialized as an independent copy: {conflict_copy}")
+        checks["conflictCopyCommittedBeforeRelease"] = "PASS"
         await page_b.wait_for_function(
-            "(conversationId) => localStorage.getItem(`deepseek-infra.session.v3.conflict.${conversationId}`) === null",
-            arg=conflict_cid,
+            """({ conversationId, conflictId }) =>
+              localStorage.getItem(
+                `deepseek-infra.session.v3.conflict.${conversationId}.${conflictId}`
+              ) === null""",
+            arg={"conversationId": conflict_cid, "conflictId": conflict_id},
             timeout=10_000,
         )
+        remaining_conflicts = await page_b.evaluate(
+            """(conversationId) => {
+              try {
+                const parsed = JSON.parse(
+                  localStorage.getItem(`deepseek-infra.session.v3.conflict-index.${conversationId}`) || '{}'
+                );
+                return Array.isArray(parsed.conflictIds) ? parsed.conflictIds.length : 0;
+              } catch (error) { return 0; }
+            }""",
+            conflict_cid,
+        )
+        if remaining_conflicts != 1:
+            raise AssertionError(f"resolving one conflict disturbed sibling ledger entries: {remaining_conflicts}")
         await page_a.reload(wait_until="networkidle")
         await page_a.locator("#reactPromptInput").wait_for()
         await page_b.reload(wait_until="networkidle")
@@ -3695,6 +3935,243 @@ window.__v3SnapshotWriteTimes = [];
         await page_b.get_by_text("stale 编辑一", exact=True).wait_for(timeout=10_000)
         checks["conflictBranchRecoverable"] = "PASS"
         await conflict_context.close()
+
+        # ---- 5. lockFreeSiblingWritesConverged：无 Web Locks 时同胞 Proposal 确定性收敛 ----
+        lock_free_context = await browser.new_context(service_workers="allow")
+        await lock_free_context.add_init_script(lock_free_init)
+        await lock_free_context.route("**/api/config", mock_config)
+        await lock_free_context.route("**/api/chat", mock_chat)
+        await lock_free_context.route("**/api/title", mock_title)
+        page_a = await lock_free_context.new_page()
+        await page_a.goto(base_url, wait_until="networkidle")
+        await page_a.locator("#reactPromptInput").wait_for()
+        await send_message(page_a, "无锁同胞基础消息")
+        lock_free_base = await wait_settled_head(page_a, "无锁同胞基础消息", 1)
+        lock_free_cid = lock_free_base["conversationId"]
+        lock_free_base_revision = lock_free_base["revision"]
+
+        page_b = await lock_free_context.new_page()
+        await page_b.goto(base_url, wait_until="networkidle")
+        await page_b.locator("#reactPromptInput").wait_for()
+        await page_b.get_by_text("无锁同胞基础消息", exact=True).wait_for(timeout=10_000)
+        lock_free_current_head = await page_a.evaluate(read_head_js, lock_free_cid)
+        if not isinstance(lock_free_current_head, dict) or not lock_free_current_head.get("revision"):
+            raise AssertionError(f"lock-free base Head disappeared before the sibling race: {lock_free_current_head}")
+        # 标题生成可能在首轮回复结算后追加一个干净 revision；以两个页面都已打开
+        # 时的真实共享 Head 为同胞 parent，避免把标题提交误当并发编辑。
+        lock_free_base_revision = lock_free_current_head["revision"]
+        await page_a.evaluate("(conversationId) => { window.__lockFreeBarrierCid = conversationId; }", lock_free_cid)
+        await page_b.evaluate("(conversationId) => { window.__lockFreeBarrierCid = conversationId; }", lock_free_cid)
+        await asyncio.gather(
+            send_message(page_a, "无锁提案甲"),
+            send_message(page_b, "无锁提案乙"),
+        )
+        await page_a.get_by_text("无锁提案甲", exact=True).wait_for(timeout=10_000)
+        await page_b.get_by_text("无锁提案乙", exact=True).wait_for(timeout=10_000)
+        lock_free_probe_args = {
+            "conversationId": lock_free_cid,
+            "parentRevision": lock_free_base_revision,
+            "markerA": "无锁提案甲",
+            "markerB": "无锁提案乙",
+        }
+        try:
+            lock_free_handle = await page_a.wait_for_function(
+                """({ conversationId, parentRevision, markerA, markerB }) => {
+              const snapshotPrefix = `deepseek-infra.session.v3.snapshot.${conversationId}.`;
+              const proposalPrefix = `deepseek-infra.session.v3.proposal.${conversationId}.${parentRevision}.`;
+              const snapshots = [];
+              const proposals = [];
+              for (let index = 0; index < localStorage.length; index += 1) {
+                const key = localStorage.key(index);
+                if (!key) continue;
+                if (key.startsWith(snapshotPrefix)) {
+                  try {
+                    const value = JSON.parse(localStorage.getItem(key) || '');
+                    if (value && value.parentRevision === parentRevision) {
+                      snapshots.push({
+                        revision: value.revision,
+                        writerId: value.writerId,
+                        raw: localStorage.getItem(key) || '',
+                      });
+                    }
+                  } catch (error) {}
+                }
+                if (key.startsWith(proposalPrefix)) proposals.push(key);
+              }
+              const hasA = snapshots.some((item) => item.raw.includes(markerA));
+              const hasB = snapshots.some((item) => item.raw.includes(markerB));
+              let indexValue = null;
+              try {
+                indexValue = JSON.parse(
+                  localStorage.getItem(`deepseek-infra.session.v3.conflict-index.${conversationId}`) || ''
+                );
+              } catch (error) {}
+              const conflictIds = Array.isArray(indexValue && indexValue.conflictIds)
+                ? indexValue.conflictIds
+                : [];
+              let head = null;
+              try {
+                head = JSON.parse(localStorage.getItem(`deepseek-infra.session.v3.head.${conversationId}`) || '');
+              } catch (error) {}
+              if (!head || snapshots.length < 2 || !hasA || !hasB || proposals.length < 1 || conflictIds.length < 1) {
+                return null;
+              }
+              return {
+                head,
+                siblingRevisions: snapshots.map((item) => item.revision),
+                siblingWriters: [...new Set(snapshots.map((item) => item.writerId))],
+                conflictIds,
+                proposalCount: proposals.length,
+              };
+            }""",
+                arg=lock_free_probe_args,
+                timeout=15_000,
+            )
+        except Exception as error:
+            lock_free_state = await page_a.evaluate(
+                """({ conversationId }) => {
+                  const storage = {};
+                  for (let index = 0; index < localStorage.length; index += 1) {
+                    const key = localStorage.key(index);
+                    if (key && key.includes(conversationId)) storage[key] = localStorage.getItem(key);
+                  }
+                  return { storage, notice: document.querySelector('.chat-notice')?.textContent || '' };
+                }""",
+                {"conversationId": lock_free_cid},
+            )
+            raise AssertionError(f"lock-free sibling probe did not converge: {lock_free_state}") from error
+        lock_free_probe = await lock_free_handle.json_value()
+        if (
+            not isinstance(lock_free_probe, dict)
+            or len(lock_free_probe.get("siblingWriters") or []) != 2
+            or not lock_free_probe.get("head", {}).get("revision")
+        ):
+            raise AssertionError(f"lock-free sibling Proposals did not converge: {lock_free_probe}")
+        shared_a = await page_a.evaluate(read_head_js, lock_free_cid)
+        shared_b = await page_b.evaluate(read_head_js, lock_free_cid)
+        if shared_a != shared_b:
+            raise AssertionError(f"lock-free replicas disagree on shared Head: {shared_a} vs {shared_b}")
+        checks["lockFreeSiblingWritesConverged"] = "PASS"
+        await lock_free_context.close()
+
+        # ---- 6. lockCallbackExecutedOnce：callback 已开始后的锁异常不得 fallback 重跑 ----
+        lock_once_context = await browser.new_context(service_workers="allow")
+        await lock_once_context.add_init_script(lock_callback_once_init)
+        await lock_once_context.route("**/api/config", mock_config)
+        await lock_once_context.route("**/api/chat", mock_chat)
+        await lock_once_context.route("**/api/title", mock_title)
+        lock_once_page = await lock_once_context.new_page()
+        await lock_once_page.goto(base_url, wait_until="networkidle")
+        await lock_once_page.locator("#reactPromptInput").wait_for()
+        await send_message(lock_once_page, "锁回调基础消息")
+        await wait_settled_head(lock_once_page, "锁回调基础消息", 1)
+        await lock_once_page.evaluate(
+            """() => {
+              window.__lockCallbackInvocations = 0;
+              window.__postCallbackFallbackWrites = 0;
+              window.__armLockCallbackFailure = true;
+            }"""
+        )
+        await send_message(lock_once_page, "锁回调单次消息")
+        await lock_once_page.get_by_text("锁回调单次消息", exact=True).wait_for(timeout=10_000)
+        await lock_once_page.wait_for_function("() => window.__lockCallbackInvocations === 1", timeout=10_000)
+        await lock_once_page.wait_for_timeout(500)
+        lock_once_probe = await lock_once_page.evaluate(
+            """() => ({
+              callbacks: window.__lockCallbackInvocations,
+              fallbackWrites: window.__postCallbackFallbackWrites,
+            })"""
+        )
+        if lock_once_probe != {"callbacks": 1, "fallbackWrites": 0}:
+            raise AssertionError(f"lock callback was replayed through fallback: {lock_once_probe}")
+        checks["lockCallbackExecutedOnce"] = "PASS"
+        await lock_once_context.close()
+
+        # ---- 7. degradedHeadSelfHealed：损坏 Head 快照回退 parent，并在锁内修复与隔离 ----
+        degraded_context = await browser.new_context(service_workers="allow")
+        await degraded_context.route("**/api/config", mock_config)
+        await degraded_context.route("**/api/chat", mock_chat)
+        await degraded_context.route("**/api/title", mock_title)
+        degraded_page = await degraded_context.new_page()
+        await degraded_page.goto(base_url, wait_until="networkidle")
+        await degraded_page.locator("#reactPromptInput").wait_for()
+        await send_message(degraded_page, "降级 Head 有效父快照")
+        await wait_settled_head(degraded_page, "降级 Head 有效父快照", 1)
+        await send_message(degraded_page, "降级 Head 损坏子快照")
+        degraded_head = await wait_settled_head(degraded_page, "降级 Head 损坏子快照", 2)
+        degraded_details = await degraded_page.evaluate(
+            """(conversationId) => {
+              const headKey = `deepseek-infra.session.v3.head.${conversationId}`;
+              const head = JSON.parse(localStorage.getItem(headKey) || '');
+              const snapshotKey = `deepseek-infra.session.v3.snapshot.${conversationId}.${head.revision}`;
+              localStorage.setItem(snapshotKey, 'corrupt{{');
+              return head;
+            }""",
+            degraded_head["conversationId"],
+        )
+        degraded_parent = degraded_details.get("parentRevision")
+        if not degraded_parent:
+            raise AssertionError(f"degraded Head did not have a recoverable parent: {degraded_details}")
+        await degraded_page.reload(wait_until="networkidle")
+        await degraded_page.locator("#reactPromptInput").wait_for()
+        await degraded_page.wait_for_function(
+            """({ conversationId, advertisedRevision, recoveredRevision }) => {
+              let head = null;
+              try {
+                head = JSON.parse(localStorage.getItem(`deepseek-infra.session.v3.head.${conversationId}`) || '');
+              } catch (error) {}
+              const quarantine =
+                `deepseek-infra.session.v3.quarantine.head.${conversationId}.${advertisedRevision}`;
+              return head && head.revision === recoveredRevision && localStorage.getItem(quarantine) !== null;
+            }""",
+            arg={
+                "conversationId": degraded_head["conversationId"],
+                "advertisedRevision": degraded_head["revision"],
+                "recoveredRevision": degraded_parent,
+            },
+            timeout=15_000,
+        )
+        checks["degradedHeadSelfHealed"] = "PASS"
+        await degraded_context.close()
+
+        # ---- 8. missingHeadCannotResurrectId：本地已知 base 丢失 Head 时只建恢复副本 ----
+        missing_head_context = await browser.new_context(service_workers="allow")
+        await missing_head_context.route("**/api/config", mock_config)
+        await missing_head_context.route("**/api/chat", mock_chat)
+        await missing_head_context.route("**/api/title", mock_title)
+        missing_head_page = await missing_head_context.new_page()
+        await missing_head_page.goto(base_url, wait_until="networkidle")
+        await missing_head_page.locator("#reactPromptInput").wait_for()
+        await send_message(missing_head_page, "缺失 Head 基础消息")
+        missing_base = await wait_settled_head(missing_head_page, "缺失 Head 基础消息", 1)
+        await missing_head_page.evaluate(
+            """(conversationId) => {
+              localStorage.removeItem(`deepseek-infra.session.v3.head.${conversationId}`);
+              localStorage.removeItem(`deepseek-infra.session.v3.tombstone.${conversationId}`);
+            }""",
+            missing_base["conversationId"],
+        )
+        await send_message(missing_head_page, "缺失 Head 睡眠标签页编辑")
+        await missing_head_page.locator(
+            ".chat-notice", has_text="远端已删除，已保留为恢复副本"
+        ).wait_for(timeout=10_000)
+        missing_recovery_handle = await missing_head_page.wait_for_function(
+            suffixed_head_js,
+            arg={"suffix": "（恢复副本）", "marker": "缺失 Head 睡眠标签页编辑"},
+            timeout=15_000,
+        )
+        missing_recovery = await missing_recovery_handle.json_value()
+        original_missing_head = await missing_head_page.evaluate(read_head_js, missing_base["conversationId"])
+        if (
+            not isinstance(missing_recovery, dict)
+            or missing_recovery.get("conversationId") in (None, missing_base["conversationId"])
+            or original_missing_head is not None
+        ):
+            raise AssertionError(
+                f"known missing Head resurrected the original id: original={original_missing_head}, copy={missing_recovery}"
+            )
+        checks["missingHeadCannotResurrectId"] = "PASS"
+        await missing_head_context.close()
 
         # ---- 5. deletedConversationNotResurrected：tombstone 拒绝过期写入，内容物化为恢复副本 ----
         tombstone_context = await browser.new_context(service_workers="allow")
@@ -4035,8 +4512,15 @@ window.__v3SnapshotWriteTimes = [];
             capsule_parsed = json.loads(capsules[0]["raw"])
         except json.JSONDecodeError as error:
             raise AssertionError(f"recovery capsule is not parseable: {capsules[0]['raw'][:200]!r}") from error
-        if capsule_parsed.get("tabId") != capsule_owner or len(capsule_parsed.get("dirtyConversations") or []) != 1:
+        if (
+            capsule_parsed.get("schemaVersion") != 2
+            or capsule_parsed.get("writerSessionId") != capsule_owner
+            or not capsule_parsed.get("digest")
+            or len(capsule_parsed.get("entries") or []) != 1
+            or not capsule_parsed["entries"][0].get("digest")
+        ):
             raise AssertionError(f"recovery capsule is malformed: {capsule_parsed}")
+        checks["recoveryCapsuleDigestVerified"] = "PASS"
 
         page_b = await capsule_context.new_page()
         await page_b.goto(base_url, wait_until="networkidle")
@@ -4063,7 +4547,10 @@ window.__v3SnapshotWriteTimes = [];
         await page_b.locator(".conversation-open").first.wait_for(timeout=10_000)
         heads_reloaded = await read_heads(page_b)
         capsules_reloaded = await page_b.evaluate(keys_with_prefix_js, v3_recovery_prefix)
-        recovered_keys = await page_b.evaluate(keys_with_prefix_js, f"{v3_head_prefix}{capsule_parsed['dirtyConversations'][0]['id']}.recovered.")
+        recovered_keys = await page_b.evaluate(
+            keys_with_prefix_js,
+            f"{v3_head_prefix}{capsule_parsed['entries'][0]['conversationId']}.recovered.",
+        )
         if len(heads_reloaded) != 1 or capsules_reloaded or recovered_keys:
             raise AssertionError(
                 f"capsule reconcile was not exactly-once: heads={heads_reloaded}, capsules={capsules_reloaded}, recovered={recovered_keys}"

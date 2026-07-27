@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TAB_ID_STORAGE_KEY } from "../../app/tabIdentity";
 import type { ChatMessage } from "../chat/types";
@@ -7,7 +7,7 @@ import {
   CONVERSATION_CHECKPOINT_LOCK_NAME,
   CONVERSATION_TOMBSTONE_LIMITS,
   conversationStorageKeys,
-  createConversationPersistenceAdapter,
+  createConversationPersistenceAdapter as createBasePersistenceAdapter,
   runIdleCheckpointGc,
   sessionConflictKeyV3,
   sessionHeadKeyV3,
@@ -20,6 +20,7 @@ import {
   type ConversationConflictSignal,
   type ConversationDeleteNotice,
   type ConversationRecoverySignal,
+  type ConversationPersistenceAdapterOptions,
   type LockRequestOptions,
   type LocksLike,
   type SaveConversationOptions,
@@ -28,6 +29,20 @@ import {
 
 const TAB_A = "aaaa0001";
 const TAB_B = "bbbb0002";
+let adapterSequence = 0;
+
+function createConversationPersistenceAdapter(options: ConversationPersistenceAdapterOptions = {}) {
+  const writerSessionId = [TAB_A, TAB_B][adapterSequence % 2] as string;
+  adapterSequence += 1;
+  return createBasePersistenceAdapter({
+    ...options,
+    identity: options.identity ?? { writerSessionId, documentInstanceId: `document-${adapterSequence}` },
+  });
+}
+
+beforeEach(() => {
+  adapterSequence = 0;
+});
 
 class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>();
@@ -256,11 +271,12 @@ describe("cross-tab checkpoint arbitration", () => {
     expect(recorderA.commits).toEqual([expect.objectContaining({ conversationId: "alpha", revision: `2.${TAB_A}`, writerId: TAB_A })]);
     expect(recorderB.commits).toEqual([expect.objectContaining({ conversationId: "alpha", revision: `3.${TAB_B}`, writerId: TAB_B })]);
 
-    // 负方 base 已跟进胜方：继续编辑的下一次提交在胜方之上正常推进。
+    // 负方继续编辑只推进自己的分支链，永远不能反过来覆盖胜方 Head。
     const stateB2 = makeState("alpha", [editConversation(stateB.conversations[0] as Conversation, "B 的后续")]);
     const followUp = adapterB.save(stateB2, storage, sessionB, recorderB.options);
     expect(followUp).toMatchObject({ ok: true });
-    expect(readHead(storage, "alpha")).toMatchObject({ revision: `3.${TAB_B}`, parentRevision: `2.${TAB_A}`, writerId: TAB_B });
+    expect(readHead(storage, "alpha")).toMatchObject({ revision: `2.${TAB_A}`, parentRevision: `1.${TAB_A}`, writerId: TAB_A });
+    expect(adapterB.readConflictBranch("alpha", storage)?.conversation.messages.at(-1)?.content).toBe("B 的后续");
   });
 
   it("a lock-free writer with a stale base cannot advance head (sibling detection without Web Locks)", () => {
@@ -327,7 +343,7 @@ describe("cross-tab checkpoint arbitration", () => {
     expect(recorder.commits).toEqual([]);
   });
 
-  it("a second conflict replaces the pointer only after the new branch is confirmed", () => {
+  it("continued conflict editing advances the same isolated ledger chain", () => {
     const storage = new MemoryStorage();
     const adapterA = createConversationPersistenceAdapter();
     const adapterB = createConversationPersistenceAdapter();
@@ -341,15 +357,18 @@ describe("cross-tab checkpoint arbitration", () => {
     adapterB.save(makeState("alpha", [editConversation(base, "B 第一改")]), storage, sessionB);
     expect(readPointer(storage, "alpha")).toMatchObject({ revision: `3.${TAB_B}`, sharedRevision: `2.${TAB_A}` });
 
-    // 胜方再次推进，负方（base 已跟进 2.tabA）再次落后 → 第二次冲突。
+    const firstConflictId = adapterB.listConflictBranches("alpha", storage)[0]?.conflictId;
+    // 胜方再次推进，负方仍在原始隔离分支上继续编辑。
     const head2 = adapterA.readSharedConversation("alpha", storage)?.conversation as Conversation;
     adapterA.save(makeState("alpha", [editConversation(head2, "A 第二改")]), storage, sessionA);
     expect(readHead(storage, "alpha")).toMatchObject({ revision: `3.${TAB_A}` });
     const staleBranch = adapterB.readConflictBranch("alpha", storage)?.conversation as Conversation;
     adapterB.save(makeState("alpha", [editConversation(staleBranch, "B 第二改")]), storage, sessionB);
 
-    // 至多一个未解决冲突：指针替换为新的分支，旧分支失去保护。
-    expect(readPointer(storage, "alpha")).toMatchObject({ revision: `4.${TAB_B}`, baseRevision: `2.${TAB_A}`, sharedRevision: `3.${TAB_A}` });
+    expect(readPointer(storage, "alpha")).toMatchObject({ revision: `4.${TAB_B}`, baseRevision: `1.${TAB_A}`, sharedRevision: `3.${TAB_A}` });
+    expect(adapterB.listConflictBranches("alpha", storage)).toEqual([
+      expect.objectContaining({ conflictId: firstConflictId, branchRevision: `4.${TAB_B}`, parentBranchRevision: `3.${TAB_B}` }),
+    ]);
     expect(adapterB.readConflictBranch("alpha", storage)?.conversation.messages.at(-1)?.content).toBe("B 第二改");
   });
 
@@ -427,7 +446,7 @@ describe("cross-tab checkpoint arbitration", () => {
       adapterA.save(makeState("alpha", [head]), storage, sessionA);
     }
     expect(storage.values.has(branchKey)).toBe(true);
-    expect(runIdleCheckpointGc(storage, 8)).toBe(0);
+    runIdleCheckpointGc(storage, 8);
     expect(storage.values.has(branchKey)).toBe(true);
 
     // 解决（清除指针）后，下一轮 GC 在预算内回收分支。

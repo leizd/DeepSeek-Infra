@@ -5,11 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.3.6。
+适用版本：v4.3.7。
 
 ## Runtime ownership
 
-4.0.8 完成 Legacy Frontend Retirement；4.0.9 将最后一个独立原生界面 Trace Viewer 迁入 React。4.1.0 将 Workspace Provider 下沉到聊天路由，并按需加载 Trace 路由与 Diagnostics 共享详情。4.2.2–4.2.7 建立共享加载边界、Mutation 所有权、并发状态、最新 intent 与精确 blocker；4.2.8 再把这些行为绑定到 exact-merge Evidence 装配。4.3.0 将 Workspace 可选界面改为按意图预取、按打开状态挂载；4.3.1 保证跨 lazy Provider 的 Memory 写屏障、真实且隔离的 chunk 恢复及当前构建优先的离线升级；4.3.2 将页面、Worker、Manifest 与 Cache 绑定到不可变构建身份，并以 Client Build Lease 保护跨多次部署的旧标签页；4.3.3 增加部署发现、waiting Worker、全局重载阻塞器、草稿同步落盘、controller 验证与跨标签页非强制协调；4.3.4 将升级激活串行化为 Single-Flight 事务，为更新检查加超时与目标替换，保证 defer 阶段安全，在 pagehide/visibilitychange/beforeunload 同步落盘，按会话+项目双作用域隔离 Composer 草稿，并以 tryStartMessage/peek/commit 原子化消息提交；4.3.5 建立唯一版本源(VERSION+CI 派生)、可诊断 flush 报告、无损草稿迁移与内存草稿仓库、会话 generation journal、中断诚实恢复与 Agent Run 对账、BFCache 重同步；4.3.6 将对话持久化分片为 V3 会话级检查点，以 Web Lock 仲裁跨标签页写入并保留冲突副本，删除改为 tombstone，会话选择下沉每标签页，流式保存限频，配额不足确定性降级，页面退出写入 Recovery Capsule。以上均不改变聊天关键 Provider、后端协议和冻结 4.0 runtime contract。`/` 与 `/trace/:traceId` 只返回 `frontend/` 的 React + TypeScript + Vite 构建，`/ui/` 作为兼容别名返回同一构建。生成产物位于 gitignored `static/ui/`，不得手工修改。
+4.0.8 完成 Legacy Frontend Retirement；4.0.9 将最后一个独立原生界面 Trace Viewer 迁入 React。4.1.0 将 Workspace Provider 下沉到聊天路由，并按需加载 Trace 路由与 Diagnostics 共享详情。4.2.2–4.2.7 建立共享加载边界、Mutation 所有权、并发状态、最新 intent 与精确 blocker；4.2.8 再把这些行为绑定到 exact-merge Evidence 装配。4.3.0–4.3.6 依次完成按需加载、升级连续性、不可变构建身份、更新激活事务、可诊断生命周期检查点与 V3 跨标签页分片。4.3.7 将失败副本永久隔离进多分支 Ledger，以事务化 copy/discard 解决冲突，拆分 tab continuity 与 UUID writer identity，通过不可变 Proposal 收敛无锁同胞写入，自愈损坏 Head，并以完整性校验的 Recovery Capsule V2 防止崩溃与过期标签页破坏历史。以上均不改变聊天关键 Provider、后端协议和冻结 4.0 runtime contract。`/` 与 `/trace/:traceId` 只返回 `frontend/` 的 React + TypeScript + Vite 构建，`/ui/` 作为兼容别名返回同一构建。生成产物位于 gitignored `static/ui/`，不得手工修改。
 
 服务端不再提供旧前端路由或环境变量回滚。`static/ui/index.html` 缺失时，本地启动、Android、PyInstaller、Docker、发布 ZIP、release smoke 与 preflight 都会硬失败，并提示运行 `scripts/build_frontend.py`。
 

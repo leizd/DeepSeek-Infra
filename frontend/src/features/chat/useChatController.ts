@@ -23,12 +23,10 @@ import {
   type StorageLike,
 } from "../../domain/conversation/persistence";
 import type { PersistedConversationState } from "../../domain/conversation/types";
-import { copyConversation } from "../../domain/conversation/reducer";
 import { recordFlushReport } from "../../app/persistenceHealth";
 import type { PersistenceFlushResult } from "../../app/reloadBlockers";
 import type { PersistenceFlushFailure } from "../../app/persistenceErrors";
 import { createConversationSyncChannel, type ConversationSyncChannel, type ConversationSyncMessage } from "../../app/conversationSync";
-import { getTabId } from "../../app/tabIdentity";
 import { createId } from "../../shared/createId";
 import { useMemory } from "../../contexts/MemoryContext";
 import { useSettings } from "../../contexts/SettingsContext";
@@ -127,8 +125,23 @@ export function useChatController(options: ChatControllerOptions = {}) {
   const [outputPaused, setOutputPaused] = useState(false);
   const [pendingMemorySuggestion, setPendingMemorySuggestion] = useState<PendingMemorySuggestion | null>(null);
   const [quoteDraft, setQuoteDraft] = useState<QuoteDraft | null>(null);
-  // 未解决的跨标签页写入冲突（本地分支已耐久保存为冲突副本）。
-  const [conflict, setConflict] = useState<ConversationConflictSignal | null>(null);
+  // 所有未解决分支都来自耐久 Ledger；Notice 逐个处理，任何新冲突都不会覆盖旧项。
+  const [conflicts, setConflicts] = useState<ConversationConflictSignal[]>(() =>
+    persistence.listConflictBranches().flatMap((branch) => {
+      const loaded = persistence.readConflictBranch(branch.conversationId, undefined, branch.conflictId);
+      return loaded ? [{
+        conversationId: branch.conversationId,
+        conflictId: branch.conflictId,
+        title: loaded.conversation.title,
+        revision: branch.branchRevision,
+        baseRevision: branch.baseRevision,
+        sharedRevision: branch.sharedRevision,
+        writerId: branch.writerSessionId,
+        savedAt: branch.updatedAt,
+      }] : [];
+    }));
+  const conflict = conflicts[0] ?? null;
+  const [resolvingConflict, setResolvingConflict] = useState(false);
   const waitUntilResumed = useCallback(() => outputPauseGateRef.current?.waitUntilResumed() ?? Promise.resolve(), []);
 
   // 提交 / 删除 / 冲突 / 恢复副本 / 压缩回调：提交与删除广播到跨标签页通道，冲突信号换上 notice 条，
@@ -138,7 +151,14 @@ export function useChatController(options: ChatControllerOptions = {}) {
     saveCallbacksRef.current = {
       onCommit: (notice) => syncChannel.post({ type: "conversation_committed", ...notice }),
       onDelete: (notice) => syncChannel.post({ type: "conversation_deleted", ...notice }),
-      onConflict: (signal) => setConflict(signal),
+      onConflict: (signal) => setConflicts((current) => {
+        const withoutSame = current.filter((item) => item.conflictId !== signal.conflictId);
+        return [...withoutSame, signal].sort((left, right) => left.savedAt - right.savedAt);
+      }),
+      onWarning: (failure) => {
+        recordFlushReport({ ok: false, results: { conversation: failure }, failedIds: ["conversation"] });
+        dispatch({ type: "noticeSet", notice: "检测到损坏的会话检查点，已安全回退并修复" });
+      },
       onRecovery: ({ conversationId, copy }) => {
         dispatch({ type: "conversationSynced", conversation: copy });
         dispatch({ type: "deleteConversation", conversationId });
@@ -301,9 +321,9 @@ export function useChatController(options: ChatControllerOptions = {}) {
   // 选中会话，流式中的会话延迟到流结束后再同步。远端删除到达时——本地干净则
   // 移除（选中回退保持既有 UX）；本地脏则保留内容，下次提交被 tombstone 拒绝时
   // 自动物化为恢复副本。
-  const deferredSyncRef = useRef(new Set<ConversationSyncMessage>());
+  const deferredSyncRef = useRef(new Set<Extract<ConversationSyncMessage, { type: "conversation_committed" | "conversation_deleted" }>>());
   const handleSyncMessage = useCallback(
-    (message: ConversationSyncMessage) => {
+    (message: Extract<ConversationSyncMessage, { type: "conversation_committed" | "conversation_deleted" }>) => {
       const conversationId = message.conversationId;
       const local = stateRef.current.conversations.find((conversation) => conversation.id === conversationId);
       const outcome = persistence.reconcileRemoteCommit(conversationId, local);
@@ -316,7 +336,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
   );
 
   useEffect(() => {
-    const ownTabId = getTabId(options.session);
+    let ownIdentity = persistence.getReplicaIdentity(options.session);
     // 标签页租约：回到前台刷新，pagehide 尽力移除（tombstone GC 的活跃证据）。
     const onLeaseEvent = (event: Event): void => {
       if (event.type === "pagehide" || document.visibilityState === "visible") {
@@ -326,13 +346,37 @@ export function useChatController(options: ChatControllerOptions = {}) {
     document.addEventListener("visibilitychange", onLeaseEvent);
     window.addEventListener("pagehide", onLeaseEvent);
     const unsubscribe = syncChannel.subscribe((message) => {
-      if (message.writerId === ownTabId) return;
+      if (message.type === "writer_claim") {
+        if (message.writerSessionId !== ownIdentity.writerSessionId
+          || message.documentInstanceId === ownIdentity.documentInstanceId) return;
+        if (ownIdentity.documentInstanceId.localeCompare(message.documentInstanceId) < 0) {
+          syncChannel.post({
+            type: "writer_claim_ack",
+            writerSessionId: ownIdentity.writerSessionId,
+            documentInstanceId: ownIdentity.documentInstanceId,
+            targetDocumentInstanceId: message.documentInstanceId,
+          });
+        } else {
+          ownIdentity = persistence.rotateWriterIdentity(options.session);
+          syncChannel.post({ type: "writer_claim", ...ownIdentity });
+        }
+        return;
+      }
+      if (message.type === "writer_claim_ack") {
+        if (message.targetDocumentInstanceId !== ownIdentity.documentInstanceId
+          || message.writerSessionId !== ownIdentity.writerSessionId) return;
+        ownIdentity = persistence.rotateWriterIdentity(options.session);
+        syncChannel.post({ type: "writer_claim", ...ownIdentity });
+        return;
+      }
+      if (message.writerId === ownIdentity.writerSessionId) return;
       if (stateRef.current.requestStatus === "streaming") {
         deferredSyncRef.current.add(message);
         return;
       }
       handleSyncMessage(message);
     });
+    syncChannel.post({ type: "writer_claim", ...ownIdentity });
     return () => {
       unsubscribe();
       document.removeEventListener("visibilitychange", onLeaseEvent);
@@ -347,30 +391,48 @@ export function useChatController(options: ChatControllerOptions = {}) {
     pending.forEach(handleSyncMessage);
   }, [state.requestStatus, handleSyncMessage]);
 
-  // 冲突解决 - 查看最新：换入共享 head 内容并清除冲突指针。本地分支在指针
-  // 清除前一直受 GC 保护，解决后由保留/空闲 GC 回收。
-  const resolveConflictByReload = useCallback(() => {
-    if (!conflict) return;
-    const shared = persistence.readSharedConversation(conflict.conversationId);
-    if (shared) {
-      persistence.adoptRemoteConversation(conflict.conversationId, shared.conversation, shared.revision);
-      dispatch({ type: "conversationSynced", conversation: shared.conversation });
-    }
-    persistence.clearConflict(conflict.conversationId);
-    setConflict(null);
-  }, [conflict, persistence]);
+  const finishConflict = useCallback((conflictId: string) => {
+    setConflicts((current) => current.filter((item) => item.conflictId !== conflictId));
+  }, []);
 
-  // 冲突解决 - 保留副本：冲突分支物化为独立会话（新 id、标题加"（冲突副本）"
-  // 后缀），作为它自己的分片提交，然后清除冲突指针。
-  const resolveConflictByCopy = useCallback(() => {
-    if (!conflict) return;
-    const branch = persistence.readConflictBranch(conflict.conversationId);
-    if (branch) {
-      dispatch({ type: "conversationSynced", conversation: copyConversation(branch.conversation, "（冲突副本）") });
+  // 查看最新与保留副本都由持久化层完成耐久事务，成功后才换 State / 释放 Ledger。
+  const resolveConflictByReload = useCallback(async () => {
+    if (!conflict || resolvingConflict) return;
+    setResolvingConflict(true);
+    try {
+      const result = await persistence.resolveConflictByReloadArbitrated(conflict.conversationId, conflict.conflictId);
+      if (!result.ok) {
+        recordFailedResult(result);
+        return;
+      }
+      dispatch({ type: "conversationSynced", conversation: result.conversation });
+      finishConflict(conflict.conflictId);
+    } finally {
+      setResolvingConflict(false);
     }
-    persistence.clearConflict(conflict.conversationId);
-    setConflict(null);
-  }, [conflict, persistence]);
+  }, [conflict, resolvingConflict, persistence, finishConflict, recordFailedResult]);
+
+  const resolveConflictByCopy = useCallback(async () => {
+    if (!conflict || resolvingConflict) return;
+    setResolvingConflict(true);
+    try {
+      const result = await persistence.resolveConflictByCopyArbitrated(
+        conflict.conversationId,
+        conflict.conflictId,
+        undefined,
+        options.session,
+        saveCallbacksRef.current ?? undefined,
+      );
+      if (!result.ok) {
+        recordFailedResult(result);
+        return;
+      }
+      dispatch({ type: "conversationSynced", conversation: result.copy });
+      finishConflict(conflict.conflictId);
+    } finally {
+      setResolvingConflict(false);
+    }
+  }, [conflict, resolvingConflict, persistence, options.session, finishConflict, recordFailedResult]);
 
   const requestSettings = useCallback((): ChatRequestSettings => ({
     apiKey: settings.apiKey,
@@ -703,6 +765,8 @@ export function useChatController(options: ChatControllerOptions = {}) {
     pendingMemorySuggestion,
     quoteDraft,
     conflict,
+    conflictCount: conflicts.length,
+    resolvingConflict,
     resolveConflictByReload,
     resolveConflictByCopy,
     sendMessage,

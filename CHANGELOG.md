@@ -4,6 +4,20 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.3.7] - Replica Convergence and Durable Conflict Resolution
+
+### Replica convergence
+
+- Splits tab continuity from per-document UUID writer identity and adds BroadcastChannel writer claims, so duplicated sessionStorage state cannot collide leases, recovery capsules, revisions, or peer-message filtering.
+- Replaces the single conflict pointer with an indexed durable conflict ledger. A losing branch enters isolation permanently: continued editing advances only its branch chain and can never advance the shared Head.
+- Makes “保留副本” and “查看最新” transactional. A stable independent copy is committed, digest-verified and reloadable before the selected ledger entry is released; retries converge without duplicate copies.
+- Adds immutable lock-free proposals with deterministic sibling selection. Truly concurrent writers preserve both snapshots and converge on one canonical Head; lock callbacks are never rerun after they start.
+- Self-heals degraded Heads to a verified parent under exclusive arbitration, quarantines corrupt snapshots/capsules, prevents missing-Head resurrection after tombstone GC, and upgrades Recovery Capsule to digest-verified V2 entries with deterministic pressure compaction and resolved markers.
+
+### Release identity
+
+- Advances the canonical `VERSION` surface to 4.3.7 without dependency changes, backend protocol changes, automatic merge/CRDT behavior, forced tab reloads, or bundle-budget increases.
+
 ## [4.3.6] - Cross-Tab Checkpoint Arbitration and Bounded Storage
 
 ### Canonical release identity
