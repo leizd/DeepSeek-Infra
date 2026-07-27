@@ -461,6 +461,9 @@ export class BuildUpdateStore {
         this.channel?.postMessage({ type: "build_activated", buildId: identity.buildId });
       }
       if (getReloadBlockerSnapshot().length) {
+        // blocker 可能在 activate_build 发出后才出现。Worker 接管不可回滚，
+        // 但 blocker 清除后仍应自动续跑最终 flush / reload。
+        this.autoActivate = true;
         this.publish({ phase: "reload-required" });
         return;
       }
@@ -471,6 +474,7 @@ export class BuildUpdateStore {
         return;
       }
       if (getReloadBlockerSnapshot().length) {
+        this.autoActivate = true;
         this.publish({ phase: "reload-required" });
         return;
       }

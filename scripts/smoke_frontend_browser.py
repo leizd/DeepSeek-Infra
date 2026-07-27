@@ -950,37 +950,36 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         await asyncio.wait_for(stop_requested.wait(), timeout=5)
         await page.get_by_text("正在生成回复", exact=False).wait_for(timeout=10_000)
         primary_update = page.get_by_role("button", name="完成后更新")
-        # 目标被同一轮协调器抢先置为 activating 时，按钮会禁用，但这已经表示
-        # activateWhenReady 正在等待 blocker；否则由冒烟主动发起该事务。
+        # 若同一轮协调器已经进入 activating，按钮会 disabled：此时不伪造 DOM
+        # 点击，激活事务会在 controller 验证后观察 blocker 并登记自动续跑。
         if await primary_update.is_enabled():
             await primary_update.click(timeout=15_000)
         else:
             banner_state = await page.evaluate(
-                """() => {
+                """async () => {
                   const banner = document.querySelector('.build-update-banner');
                   const primary = banner?.querySelector('button.primary');
                   return {
                     bannerText: banner?.textContent || '',
                     primaryDisabled: primary?.disabled ?? null,
                     primaryLabel: primary?.textContent || '',
-                  };
+                    controller: navigator.serviceWorker.controller?.scriptURL || '',
+                    registrations: (await navigator.serviceWorker.getRegistrations()).map((registration) => ({
+                      scope: registration.scope,
+                      active: registration.active?.scriptURL || '',
+                      waiting: registration.waiting?.scriptURL || '',
+                      installing: registration.installing?.scriptURL || '',
+                    })),
+                  }
                 }"""
             )
             if (
                 not banner_state["primaryDisabled"]
                 or banner_state["primaryLabel"] != "完成后更新"
                 or "正在生成回复" not in banner_state["bannerText"]
+                or not any(item["waiting"].endswith("/sw-cccccccccccccccc.js") for item in banner_state["registrations"])
             ):
                 raise AssertionError(f"unexpected blocked activation state: {banner_state}")
-            # snapshot.phase 在 Worker 更新事件的窄窗口内可能暂回 installing，使视觉按钮
-            # disabled；前面已经核验 C 为 waiting，因此显式启用同一 DOM 按钮并触发
-            # React handler，登记 autoActivate，后续仍由 blocker / flush / identity 守卫。
-            await primary_update.evaluate(
-                """(button) => {
-                  button.disabled = false;
-                  button.click();
-                }"""
-            )
         await page.wait_for_timeout(200)
         blocked_identity = await controller_identity(page)
         if blocked_identity["buildId"] != current_build:
@@ -992,9 +991,43 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
             "framenavigated",
             lambda frame: main_navigations.append(frame.url) if frame == page.main_frame else None,
         )
-        async with page.expect_navigation(wait_until="domcontentloaded", timeout=20_000):
-            await page.locator("button.stop-button").click()
+        try:
+            # Service Worker 接管触发的是同 URL reload。Playwright 的
+            # expect_navigation(wait_until=...) 会把主 frame 导航与 lifecycle
+            # 事件绑在一起；controllerchange 期间偶尔会观察到前者却漏掉后者，
+            # 从而在已经 reload 的页面上误报超时。先只等待主 frame 导航，随后
+            # 由 React 输入框与 Worker identity 分别核验页面和 controller 就绪。
+            async with page.expect_event(
+                "framenavigated",
+                predicate=lambda frame: frame == page.main_frame,
+                timeout=20_000,
+            ):
+                await page.locator("button.stop-button").click()
+                stop_release.set()
+        except Exception as error:
             stop_release.set()
+            try:
+                activation_state = await page.evaluate(
+                    """async () => ({
+                      url: window.location.href,
+                      bannerText: document.querySelector('.build-update-banner')?.textContent || '',
+                      stopButtonPresent: Boolean(document.querySelector('button.stop-button')),
+                      promptPresent: Boolean(document.querySelector('#reactPromptInput')),
+                      controller: navigator.serviceWorker.controller?.scriptURL || '',
+                      registrations: (await navigator.serviceWorker.getRegistrations()).map((registration) => ({
+                        scope: registration.scope,
+                        active: registration.active?.scriptURL || '',
+                        waiting: registration.waiting?.scriptURL || '',
+                        installing: registration.installing?.scriptURL || '',
+                      })),
+                    })"""
+                )
+            except PlaywrightError as diagnostic_error:
+                activation_state = {"diagnosticError": str(diagnostic_error), "url": page.url}
+            raise AssertionError(
+                "update activation did not navigate the initiating tab: "
+                f"navigations={main_navigations!r}, state={activation_state!r}"
+            ) from error
         await page.locator("#reactPromptInput").wait_for(timeout=10_000)
         activated_identity = await controller_identity(page)
         if activated_identity["buildId"] != "cccccccccccccccc" or not activated_identity["cacheReady"]:
@@ -4572,6 +4605,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    output = None
+    if args.out:
+        output = args.out if args.out.is_absolute() else ROOT / args.out
+        # CI 的 always() artifact 上传不能捡到仓库中上一轮已提交的 PASS
+        # Evidence。每次运行先移除目标；失败分支会写入本次 FAIL 诊断。
+        output.unlink(missing_ok=True)
     trace_id = start_trace(kind="browser_smoke", title="Browser trace smoke")
     if not trace_id:
         raise RuntimeError("tracing is disabled; cannot exercise the routed Trace page")
@@ -4584,15 +4623,40 @@ def main() -> int:
     base_url = f"http://127.0.0.1:{port}/"
     try:
         wait_until_ready(base_url)
-        checks = asyncio.run(run_browser(base_url, trace_id))
-        checks.update(asyncio.run(run_demand_loading_smoke(base_url)))
-        checks.update(asyncio.run(run_query_smoke(base_url)))
-        checks.update(asyncio.run(run_recovery_smoke(base_url)))
-        checks.update(asyncio.run(run_mutation_smoke(base_url)))
-        checks.update(asyncio.run(run_mutation_lifecycle_smoke(base_url)))
-        checks.update(asyncio.run(run_mutation_continuity_smoke(base_url)))
-        checks.update(asyncio.run(run_durable_checkpoint_smoke(base_url)))
-        checks.update(asyncio.run(run_cross_tab_checkpoint_smoke(base_url)))
+        try:
+            checks = asyncio.run(run_browser(base_url, trace_id))
+            checks.update(asyncio.run(run_demand_loading_smoke(base_url)))
+            checks.update(asyncio.run(run_query_smoke(base_url)))
+            checks.update(asyncio.run(run_recovery_smoke(base_url)))
+            checks.update(asyncio.run(run_mutation_smoke(base_url)))
+            checks.update(asyncio.run(run_mutation_lifecycle_smoke(base_url)))
+            checks.update(asyncio.run(run_mutation_continuity_smoke(base_url)))
+            checks.update(asyncio.run(run_durable_checkpoint_smoke(base_url)))
+            checks.update(asyncio.run(run_cross_tab_checkpoint_smoke(base_url)))
+        except Exception as error:
+            payload = {
+                "schemaVersion": 1,
+                "version": VERSION,
+                **evidence_revision(ROOT),
+                "generatedAt": datetime.now(timezone.utc).isoformat(),
+                "environment": {
+                    "os": platform.system(),
+                    "python": platform.python_version(),
+                    "ci": bool(os.getenv("CI")),
+                },
+                "status": "FAIL",
+                "browser": "chromium",
+                "checks": {},
+                "error": {
+                    "type": type(error).__name__,
+                    "message": str(error),
+                },
+            }
+            if output:
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+            raise
         payload = {
             "schemaVersion": 1,
             "version": VERSION,
@@ -4607,8 +4671,7 @@ def main() -> int:
             "browser": "chromium",
             "checks": checks,
         }
-        if args.out:
-            output = args.out if args.out.is_absolute() else ROOT / args.out
+        if output:
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(payload, ensure_ascii=False, indent=2))

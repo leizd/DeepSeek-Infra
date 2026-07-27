@@ -143,6 +143,17 @@ def test_browser_gate_covers_react_chat_trace_history_stop_and_spa_fallback() ->
         assert f'"{check}"' in preflight
 
 
+def test_browser_update_activation_uses_frame_event_and_replaces_stale_evidence() -> None:
+    smoke = read("scripts/smoke_frontend_browser.py")
+    assert 'page.expect_event(\n                "framenavigated"' in smoke
+    assert "expect_navigation(wait_until=\"domcontentloaded\"" not in smoke
+    assert "button.disabled = false" not in smoke
+    assert "unexpected blocked activation state" in smoke
+    assert "output.unlink(missing_ok=True)" in smoke
+    assert '"status": "FAIL"' in smoke
+    assert '"diagnosticError": str(diagnostic_error)' in smoke
+
+
 def test_workspace_demand_loading_has_one_registry_and_deferred_providers() -> None:
     registry = read("frontend/src/features/workspace/workspaceFeatureRegistry.ts")
     hosts = read("frontend/src/features/workspace/WorkspaceFeatureHosts.tsx")
