@@ -154,6 +154,20 @@ def test_browser_update_activation_uses_frame_event_and_replaces_stale_evidence(
     assert '"diagnosticError": str(diagnostic_error)' in smoke
 
 
+def test_browser_cross_tab_selection_gate_targets_exact_revision_with_diagnostics() -> None:
+    smoke = read("scripts/smoke_frontend_browser.py")
+    history = read("frontend/src/features/history/ConversationList.tsx")
+    assert "data-conversation-id={conversation.id}" in history
+    assert "window.__conversationSyncSmokeMessages = []" in smoke
+    assert "message.conversationId === conversationId" in smoke
+    assert "message.revision === revision" in smoke
+    assert "candidate.dataset.conversationId === conversationId" in smoke
+    assert "button?.querySelector('small')?.textContent?.includes('4 条')" in smoke
+    assert "timeout=30_000" in smoke
+    assert "cross-tab selection sync stalled" in smoke
+    assert "targetSnapshotMessageCount" in smoke
+
+
 def test_workspace_demand_loading_has_one_registry_and_deferred_providers() -> None:
     registry = read("frontend/src/features/workspace/workspaceFeatureRegistry.ts")
     hosts = read("frontend/src/features/workspace/WorkspaceFeatureHosts.tsx")

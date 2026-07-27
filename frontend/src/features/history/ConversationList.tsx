@@ -81,6 +81,7 @@ export function ConversationList() {
             ) : (
               <button
                 className="conversation-open"
+                data-conversation-id={conversation.id}
                 type="button"
                 disabled={busy}
                 onClick={() => {
