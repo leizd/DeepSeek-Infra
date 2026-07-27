@@ -865,6 +865,7 @@ describe("per-tab conversation selection", () => {
 
   it("a remote commit for the conversation this tab views refreshes data without moving the selection", async () => {
     seedConversations([makeConversation("alpha", "一"), makeConversation("beta", "二")]);
+    const reconcileB = vi.spyOn(tabB.adapter, "reconcileRemoteCommit");
     const a = mountTab(tabA);
     const b = mountTab(tabB);
 
@@ -883,5 +884,67 @@ describe("per-tab conversation selection", () => {
     expect(alpha?.messages.some((message) => message.content === "远端新消息")).toBe(true);
     expect(b.result.current.state.currentConversationId).toBe("alpha");
     expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("alpha");
+    expect(reconcileB).toHaveBeenCalledTimes(1);
+
+    // storage 事件若晚于同 revision 的广播到达，不得再启动回退对账。
+    const headKey = sessionHeadKeyV3("alpha");
+    vi.useFakeTimers();
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", {
+        key: headKey,
+        newValue: window.localStorage.getItem(headKey),
+        storageArea: window.localStorage,
+      }));
+      vi.advanceTimersByTime(1_000);
+    });
+    vi.useRealTimers();
+    expect(reconcileB).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the durable Head storage event when the broadcast channel misses a commit", async () => {
+    seedConversations([makeConversation("alpha", "一"), makeConversation("beta", "二")]);
+    const silentChannel: ConversationSyncChannel = {
+      post: () => undefined,
+      subscribe: () => () => undefined,
+    };
+    const a = renderHook(() => useChatController({
+      persistence: tabA.adapter,
+      syncChannel: silentChannel,
+      session: tabA.session,
+      autosaveDebounceMs: NO_AUTOSAVE,
+    }));
+    const b = renderHook(() => useChatController({
+      persistence: tabB.adapter,
+      syncChannel: silentChannel,
+      session: tabB.session,
+      autosaveDebounceMs: NO_AUTOSAVE,
+    }));
+    act(() => {
+      b.result.current.openConversation("beta");
+    });
+
+    streamChatMock.mockImplementationOnce(() => doneStream());
+    await act(async () => {
+      await a.result.current.sendMessage("仅由 Head 事件同步");
+    });
+    act(() => {
+      a.result.current.flushConversationPersistence();
+    });
+    const headKey = sessionHeadKeyV3("alpha");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", {
+        key: headKey,
+        newValue: window.localStorage.getItem(headKey),
+        storageArea: window.localStorage,
+      }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1_050));
+    });
+
+    const alpha = b.result.current.state.conversations.find((conversation) => conversation.id === "alpha");
+    expect(alpha?.messages.some((message) => message.content === "仅由 Head 事件同步")).toBe(true);
+    expect(b.result.current.state.currentConversationId).toBe("beta");
+    expect(tabB.session.getItem(conversationStorageKeys.currentConversationV3)).toBe("beta");
   });
 });

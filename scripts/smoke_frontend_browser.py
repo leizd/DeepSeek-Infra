@@ -4306,15 +4306,86 @@ window.__v3SnapshotWriteTimes = [];
             timeout=10_000,
         )
         await page_b.get_by_text("会话一的种子消息", exact=True).wait_for(timeout=10_000)
+        await page_b.evaluate(
+            """() => {
+              window.__conversationSyncSmokeMessages = [];
+              window.__conversationSyncSmokeProbe = new BroadcastChannel('deepseek-conversation-sync');
+              window.__conversationSyncSmokeProbe.addEventListener('message', (event) => {
+                const message = event.data;
+                if (message && typeof message === 'object') {
+                  window.__conversationSyncSmokeMessages.push(message);
+                }
+              });
+            }"""
+        )
 
         await send_message(page_a, "远端提交不应劫持选中")
-        await wait_settled_head(page_a, "远端提交不应劫持选中", 2)
-        # 等 B 确实处理完广播（会话二的历史条目变为 4 条）再断言选中未被换走。
-        await page_b.wait_for_function(
-            """() => Array.from(document.querySelectorAll('.conversation-open small'))
-              .some((element) => (element.textContent || '').includes('4 条'))""",
-            timeout=10_000,
-        )
+        selection_commit = await wait_settled_head(page_a, "远端提交不应劫持选中", 2)
+        expected_selection_revision = selection_commit["revision"]
+        try:
+            # 先等 B 的独立探针收到目标 conversation + revision，再等控制器把同一
+            # 提交反映到目标历史项。这样不会把任意会话的“4 条”误当作同步完成，
+            # 也不会把广播尚未到达的时间计入 React 状态收敛窗口。
+            await page_b.wait_for_function(
+                """({ conversationId, revision }) =>
+                  Array.isArray(window.__conversationSyncSmokeMessages)
+                  && window.__conversationSyncSmokeMessages.some((message) =>
+                    message.type === 'conversation_committed'
+                    && message.conversationId === conversationId
+                    && message.revision === revision)""",
+                arg={"conversationId": conversation_two, "revision": expected_selection_revision},
+                timeout=15_000,
+            )
+            await page_b.wait_for_function(
+                """(conversationId) => {
+                  const button = Array.from(document.querySelectorAll('.conversation-open'))
+                    .find((candidate) => candidate.dataset.conversationId === conversationId);
+                  return Boolean(button?.querySelector('small')?.textContent?.includes('4 条'));
+                }""",
+                arg=conversation_two,
+                timeout=30_000,
+            )
+        except Exception as error:
+            selection_sync_state = await page_b.evaluate(
+                """({ conversationId, expectedRevision, selectionKey }) => {
+                  const headKey = `deepseek-infra.session.v3.head.${conversationId}`;
+                  let head = null;
+                  let snapshot = null;
+                  try {
+                    head = JSON.parse(localStorage.getItem(headKey) || 'null');
+                    if (head && typeof head.revision === 'string') {
+                      snapshot = JSON.parse(
+                        localStorage.getItem(
+                          `deepseek-infra.session.v3.snapshot.${conversationId}.${head.revision}`
+                        ) || 'null'
+                      );
+                    }
+                  } catch (parseError) {}
+                  return {
+                    conversationId,
+                    expectedRevision,
+                    selectedConversationId: sessionStorage.getItem(selectionKey),
+                    visibility: document.visibilityState,
+                    receivedMessages: window.__conversationSyncSmokeMessages || [],
+                    targetHead: head,
+                    targetSnapshotMessageCount: Array.isArray(snapshot?.conversation?.messages)
+                      ? snapshot.conversation.messages.length
+                      : null,
+                    history: Array.from(document.querySelectorAll('.conversation-open')).map((button) => ({
+                      conversationId: button.dataset.conversationId || '',
+                      text: button.textContent || '',
+                      disabled: button.disabled,
+                    })),
+                    visibleMessages: document.querySelector('.message-list')?.textContent || '',
+                  };
+                }""",
+                arg={
+                    "conversationId": conversation_two,
+                    "expectedRevision": expected_selection_revision,
+                    "selectionKey": tab_selection_key,
+                },
+            )
+            raise AssertionError(f"cross-tab selection sync stalled: {selection_sync_state}") from error
         b_selection = await page_b.evaluate(f"() => sessionStorage.getItem({json.dumps(tab_selection_key)})")
         if b_selection != conversation_one:
             raise AssertionError(f"remote commit hijacked tab B selection: {b_selection!r} != {conversation_one!r}")

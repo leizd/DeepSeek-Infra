@@ -16,6 +16,7 @@ import { selectCurrentMessages } from "../../domain/chat/selectors";
 import { applyStreamEvent, createAssistantMessage, resetAssistantMessage } from "../../domain/chat/streamReducer";
 import type { Attachment, ChatMessage, ChatRequestPayload, QuoteDraft } from "../../domain/chat/types";
 import {
+  conversationStorageKeys,
   createConversationPersistenceAdapter,
   type ConversationConflictSignal,
   type ConversationPersistenceAdapter,
@@ -26,7 +27,7 @@ import type { PersistedConversationState } from "../../domain/conversation/types
 import { recordFlushReport } from "../../app/persistenceHealth";
 import type { PersistenceFlushResult } from "../../app/reloadBlockers";
 import type { PersistenceFlushFailure } from "../../app/persistenceErrors";
-import { createConversationSyncChannel, type ConversationSyncChannel, type ConversationSyncMessage } from "../../app/conversationSync";
+import { createConversationSyncChannel, type ConversationSyncChannel } from "../../app/conversationSync";
 import { createId } from "../../shared/createId";
 import { useMemory } from "../../contexts/MemoryContext";
 import { useSettings } from "../../contexts/SettingsContext";
@@ -71,6 +72,8 @@ function flushFailureResult(reason: unknown): PersistenceFlushFailure {
     message: reason instanceof Error && reason.message ? reason.message : "对话记录保存失败",
   };
 }
+
+const STORAGE_SYNC_FALLBACK_MS = 1_000;
 
 export type MessageSubmissionResult =
   | { accepted: true; conversationId: string }
@@ -316,15 +319,16 @@ export function useChatController(options: ChatControllerOptions = {}) {
     };
   }, [state.conversations, state.requestStatus, options.autosaveDebounceMs]);
 
-  // 跨标签页同步：订阅一次（卸载时清理）。远端提交到达时——本标签页对该会话
-  // 干净则换入共享 head；本地脏则保持，等下次提交走冲突路径；绝不切换当前
-  // 选中会话，流式中的会话延迟到流结束后再同步。远端删除到达时——本地干净则
-  // 移除（选中回退保持既有 UX）；本地脏则保留内容，下次提交被 tombstone 拒绝时
-  // 自动物化为恢复副本。
-  const deferredSyncRef = useRef(new Set<Extract<ConversationSyncMessage, { type: "conversation_committed" | "conversation_deleted" }>>());
-  const handleSyncMessage = useCallback(
-    (message: Extract<ConversationSyncMessage, { type: "conversation_committed" | "conversation_deleted" }>) => {
-      const conversationId = message.conversationId;
+  // 跨标签页同步：BroadcastChannel 负责低延迟通知，V3 Head 的 storage 事件作为
+  // 耐久事实源回退。任一通知到达时——本标签页对该会话干净则换入共享 head；
+  // 本地脏则保持，等下次提交走冲突路径；绝不切换当前选中会话。流式中的会话
+  // 延迟到流结束后再同步。远端删除到达时，本地干净则移除（选中回退保持既有
+  // UX）；本地脏则保留内容，下次提交被 tombstone 拒绝时自动物化为恢复副本。
+  const deferredSyncRef = useRef(new Set<string>());
+  const storageSyncTimersRef = useRef(new Map<string, number>());
+  const broadcastRevisionRef = useRef(new Map<string, string | null>());
+  const handleSyncConversation = useCallback(
+    (conversationId: string) => {
       const local = stateRef.current.conversations.find((conversation) => conversation.id === conversationId);
       const outcome = persistence.reconcileRemoteCommit(conversationId, local);
       // 远端删除且本地干净 ⇒ deleted：移除（选中回退保持既有 UX）；本地脏 ⇒ stale：
@@ -334,6 +338,13 @@ export function useChatController(options: ChatControllerOptions = {}) {
     },
     [persistence],
   );
+  const requestSyncConversation = useCallback((conversationId: string) => {
+    if (stateRef.current.requestStatus === "streaming") {
+      deferredSyncRef.current.add(conversationId);
+      return;
+    }
+    handleSyncConversation(conversationId);
+  }, [handleSyncConversation]);
 
   useEffect(() => {
     let ownIdentity = persistence.getReplicaIdentity(options.session);
@@ -370,11 +381,16 @@ export function useChatController(options: ChatControllerOptions = {}) {
         return;
       }
       if (message.writerId === ownIdentity.writerSessionId) return;
-      if (stateRef.current.requestStatus === "streaming") {
-        deferredSyncRef.current.add(message);
-        return;
+      broadcastRevisionRef.current.set(
+        message.conversationId,
+        message.type === "conversation_committed" ? message.revision : null,
+      );
+      const fallbackTimer = storageSyncTimersRef.current.get(message.conversationId);
+      if (fallbackTimer !== undefined) {
+        window.clearTimeout(fallbackTimer);
+        storageSyncTimersRef.current.delete(message.conversationId);
       }
-      handleSyncMessage(message);
+      requestSyncConversation(message.conversationId);
     });
     syncChannel.post({ type: "writer_claim", ...ownIdentity });
     return () => {
@@ -382,14 +398,49 @@ export function useChatController(options: ChatControllerOptions = {}) {
       document.removeEventListener("visibilitychange", onLeaseEvent);
       window.removeEventListener("pagehide", onLeaseEvent);
     };
-  }, [syncChannel, handleSyncMessage, persistence, options.session]);
+  }, [syncChannel, requestSyncConversation, persistence, options.session]);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent): void => {
+      const key = event.key;
+      if (!key?.startsWith(conversationStorageKeys.v3HeadPrefix)) return;
+      const conversationId = key.slice(conversationStorageKeys.v3HeadPrefix.length);
+      if (!conversationId) return;
+      let revision: string | null = null;
+      try {
+        const head = event.newValue ? JSON.parse(event.newValue) as { revision?: unknown } : null;
+        revision = typeof head?.revision === "string" ? head.revision : null;
+      } catch {
+        // 损坏 Head 仍交给持久化对账（会安全 noop / 降级），不在事件层解释。
+      }
+      if (broadcastRevisionRef.current.has(conversationId)
+        && broadcastRevisionRef.current.get(conversationId) === revision) {
+        broadcastRevisionRef.current.delete(conversationId);
+        return;
+      }
+      const previous = storageSyncTimersRef.current.get(conversationId);
+      if (previous !== undefined) window.clearTimeout(previous);
+      const timer = window.setTimeout(() => {
+        storageSyncTimersRef.current.delete(conversationId);
+        requestSyncConversation(conversationId);
+      }, STORAGE_SYNC_FALLBACK_MS);
+      storageSyncTimersRef.current.set(conversationId, timer);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      storageSyncTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      storageSyncTimersRef.current.clear();
+      broadcastRevisionRef.current.clear();
+    };
+  }, [requestSyncConversation]);
 
   useEffect(() => {
     if (state.requestStatus !== "idle" || !deferredSyncRef.current.size) return;
     const pending = [...deferredSyncRef.current];
     deferredSyncRef.current.clear();
-    pending.forEach(handleSyncMessage);
-  }, [state.requestStatus, handleSyncMessage]);
+    pending.forEach(handleSyncConversation);
+  }, [state.requestStatus, handleSyncConversation]);
 
   const finishConflict = useCallback((conflictId: string) => {
     setConflicts((current) => current.filter((item) => item.conflictId !== conflictId));
