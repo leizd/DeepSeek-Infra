@@ -4,6 +4,7 @@ import { TAB_ID_STORAGE_KEY } from "../../app/tabIdentity";
 import type { ChatMessage } from "../chat/types";
 import type { Conversation } from "./types";
 import {
+  CONVERSATION_CHECKPOINT_ORPHAN_GRACE_MS,
   CONVERSATION_CHECKPOINT_LOCK_NAME,
   conversationStorageKeys,
   createConversationPersistenceAdapter,
@@ -298,6 +299,81 @@ describe("4.3.7 replica convergence", () => {
     ]);
     expect(a.readSharedConversation("alpha", storage)?.revision).toBe(`2.${WRITER_A}`);
     expect(b.readSharedConversation("alpha", storage)?.revision).toBe(`2.${WRITER_A}`);
+  });
+
+  it("protects a verified lock-free proposal snapshot while another revision temporarily owns Head", () => {
+    const storage = new MemoryStorage();
+    const writer = adapter(WRITER_A, null);
+    const ownSession = session("aaaa0001");
+    const initial = conversation("alpha", "base");
+    writer.save(state([initial]), storage, ownSession);
+    const baseHead = storage.getItem(sessionHeadKeyV3("alpha")) as string;
+    writer.save(state([edit(initial, "pending-proposal")]), storage, ownSession);
+
+    const snapshotKey = sessionSnapshotKeyV3("alpha", `2.${WRITER_A}`);
+    const checkpoint = JSON.parse(storage.getItem(snapshotKey) as string) as { savedAt: number };
+    checkpoint.savedAt = Date.now() - CONVERSATION_CHECKPOINT_ORPHAN_GRACE_MS - 1;
+    storage.setItem(snapshotKey, JSON.stringify(checkpoint));
+    storage.setItem(sessionHeadKeyV3("alpha"), baseHead);
+
+    expect(runIdleCheckpointGc(storage, 16)).toBe(0);
+    expect(storage.getItem(snapshotKey)).not.toBeNull();
+  });
+
+  it("does not let a digest-mismatched Proposal pin an old orphan snapshot", () => {
+    const storage = new MemoryStorage();
+    const writer = adapter(WRITER_A, null);
+    const ownSession = session("aaaa0001");
+    const initial = conversation("alpha", "base");
+    writer.save(state([initial]), storage, ownSession);
+    const baseHead = storage.getItem(sessionHeadKeyV3("alpha")) as string;
+    writer.save(state([edit(initial, "abandoned-proposal")]), storage, ownSession);
+
+    const proposalKey = sessionProposalKeyV3("alpha", `1.${WRITER_A}`, `2.${WRITER_A}`);
+    const proposal = JSON.parse(storage.getItem(proposalKey) as string) as { digest: string };
+    proposal.digest = "digest-mismatch";
+    storage.setItem(proposalKey, JSON.stringify(proposal));
+    const snapshotKey = sessionSnapshotKeyV3("alpha", `2.${WRITER_A}`);
+    const checkpoint = JSON.parse(storage.getItem(snapshotKey) as string) as { savedAt: number };
+    checkpoint.savedAt = Date.now() - CONVERSATION_CHECKPOINT_ORPHAN_GRACE_MS - 1;
+    storage.setItem(snapshotKey, JSON.stringify(checkpoint));
+    storage.setItem(sessionHeadKeyV3("alpha"), baseHead);
+
+    expect(runIdleCheckpointGc(storage, 16)).toBe(1);
+    expect(storage.getItem(snapshotKey)).toBeNull();
+  });
+
+  it("covers the snapshot-to-Proposal publication gap, then collects an abandoned snapshot after the grace window", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-27T00:00:00Z"));
+      const storage = new MemoryStorage();
+      const writer = adapter(WRITER_A, null);
+      const ownSession = session("aaaa0001");
+      const initial = conversation("alpha", "base");
+      writer.save(state([initial]), storage, ownSession);
+      const baseHead = storage.getItem(sessionHeadKeyV3("alpha")) as string;
+      const proposalKey = sessionProposalKeyV3("alpha", `1.${WRITER_A}`, `2.${WRITER_A}`);
+      const snapshotKey = sessionSnapshotKeyV3("alpha", `2.${WRITER_A}`);
+      let survivedPublicationGap = false;
+
+      storage.beforeSet = (key) => {
+        if (key !== proposalKey) return;
+        storage.beforeSet = null;
+        runIdleCheckpointGc(storage, 16);
+        survivedPublicationGap = storage.getItem(snapshotKey) !== null;
+      };
+      expect(writer.save(state([edit(initial, "pending-proposal")]), storage, ownSession).ok).toBe(true);
+      expect(survivedPublicationGap).toBe(true);
+
+      storage.removeItem(proposalKey);
+      storage.setItem(sessionHeadKeyV3("alpha"), baseHead);
+      vi.advanceTimersByTime(CONVERSATION_CHECKPOINT_ORPHAN_GRACE_MS + 1);
+      expect(runIdleCheckpointGc(storage, 16)).toBe(1);
+      expect(storage.getItem(snapshotKey)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reconciles sibling proposals that become visible only after both lock-free commits", async () => {

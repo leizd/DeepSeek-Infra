@@ -467,6 +467,42 @@ describe("activation transactions", () => {
     stop();
   });
 
+  it("automatically resumes when a blocker appears after worker activation starts", async () => {
+    const target = deployedBuild(BUILD_B);
+    const runtime = environment(
+      vi.fn(() => Promise.resolve(response(target))) as unknown as typeof fetch,
+    );
+    let resolveActivation!: (value: WorkerBuildIdentity) => void;
+    const activate = vi.fn()
+      .mockImplementationOnce(
+        () => new Promise<WorkerBuildIdentity>((resolve) => {
+          resolveActivation = resolve;
+        }),
+      )
+      .mockImplementation(() => Promise.resolve(identity(target)));
+    const reload = vi.fn();
+    const store = new BuildUpdateStore(BUILD_A);
+    const stop = store.configure(runtime.value, {
+      stage: vi.fn(() => Promise.resolve(identity(target))),
+      activate,
+      reload,
+    });
+    await vi.waitFor(() => expect(store.getSnapshot().phase).toBe("ready"));
+
+    const activation = store.activateWhenReady();
+    await vi.waitFor(() => expect(activate).toHaveBeenCalledTimes(1));
+    setReloadBlocker({ id: "stream", label: "streaming", kind: "transient", active: true });
+    resolveActivation(identity(target));
+    await activation;
+    expect(store.getSnapshot().phase).toBe("reload-required");
+    expect(reload).not.toHaveBeenCalled();
+
+    clearReloadBlocker("stream");
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(activate).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
   it("discards a late B activation result after the target moved to C", async () => {
     let current = deployedBuild(BUILD_B);
     const fetchValue = vi.fn(() => Promise.resolve(response(current))) as unknown as typeof fetch;
