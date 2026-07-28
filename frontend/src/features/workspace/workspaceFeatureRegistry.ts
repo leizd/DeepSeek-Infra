@@ -9,7 +9,8 @@ export type WorkspaceFeature =
   | "diagnostics"
   | "file-preview"
   | "image-lightbox"
-  | "activity";
+  | "activity"
+  | "backup-restore";
 
 export interface WorkspaceFeatureModule {
   default: ComponentType;
@@ -32,6 +33,7 @@ export const workspaceFeatureModuleIds = {
   "file-preview": "src/features/file-reader/FilePreviewFeature.tsx",
   "image-lightbox": "src/features/file-reader/ImageLightboxFeature.tsx",
   activity: "src/features/activity/ActivityFeature.tsx",
+  "backup-restore": "src/features/backup-restore/BackupRestoreFeature.tsx",
 } satisfies Record<WorkspaceFeature, string>;
 
 export const workspaceFeatureLoaders = {
@@ -44,6 +46,7 @@ export const workspaceFeatureLoaders = {
   "file-preview": () => import("../file-reader/FilePreviewFeature"),
   "image-lightbox": () => import("../file-reader/ImageLightboxFeature"),
   activity: () => import("../activity/ActivityFeature"),
+  "backup-restore": () => import("../backup-restore/BackupRestoreFeature"),
 } satisfies WorkspaceFeatureLoaders;
 
 const workspaceFeatureRetryLoaders = {
@@ -56,6 +59,7 @@ const workspaceFeatureRetryLoaders = {
   "file-preview": () => import("../file-reader/FilePreviewFeature?workspace-retry"),
   "image-lightbox": () => import("../file-reader/ImageLightboxFeature?workspace-retry"),
   activity: () => import("../activity/ActivityFeature?workspace-retry"),
+  "backup-restore": () => import("../backup-restore/BackupRestoreFeature?workspace-retry"),
 } satisfies WorkspaceFeatureLoaders;
 
 export function createWorkspaceFeatureRegistry(

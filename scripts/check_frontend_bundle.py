@@ -35,8 +35,9 @@ WORKSPACE_FEATURE_KEYS = {
     "file-preview": "src/features/file-reader/FilePreviewFeature.tsx",
     "image-lightbox": "src/features/file-reader/ImageLightboxFeature.tsx",
     "activity": "src/features/activity/ActivityFeature.tsx",
+    "backup-restore": "src/features/backup-restore/BackupRestoreFeature.tsx",
 }
-UTILITY_FEATURES = ("reminders", "diagnostics", "file-preview", "image-lightbox", "activity")
+UTILITY_FEATURES = ("reminders", "diagnostics", "file-preview", "image-lightbox", "activity", "backup-restore")
 BASELINE_428_INITIAL_BYTES = 425_914
 MAX_INITIAL_BYTES = 390_000
 MAX_INITIAL_CSS_BYTES = 28_000

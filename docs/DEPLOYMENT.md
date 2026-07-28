@@ -85,7 +85,14 @@ WantedBy=multi-user.target
 - 模板：[.env.example](../.env.example)（核心变量带注释）；完整清单见 README「环境变量」。
 - 数据目录：`DEEPSEEK_INFRA_ROOT`（优先，`DEEPSEEK_MOBILE_ROOT` 向后兼容；容器内默认 `/data`；裸机默认仓库根目录）。各子目录含义见 README「本地数据与隐私」。
 - 外接 MCP server（v2.2.1）：默认关闭。启用时设置 `MCP_CLIENT_ENABLED=1` 与 `MCP_CLIENT_SERVERS='[{"name":"docs","url":"http://127.0.0.1:9001/mcp"}]'`，只连接可信地址；上线前用 `GET /api/mcp/external/tools` 核对 bridged tools、风险等级和审批要求。v2.2.2 起，Agent 和 `/mcp tools/call` 两条入口都会在外部 MCP executor 内部再次执行 ToolPolicy。
-- 升级：换新镜像 tag 重新 `up -d` 即可；数据目录内的 SQLite schema 由各模块幂等迁移，跨小版本升级无需手工步骤。备份 = 备份 `/data` 卷。
+- 升级：换新镜像 tag 重新 `up -d` 即可；数据目录内的 SQLite schema 由各模块幂等迁移，跨小版本升级无需手工步骤。升级前推荐用“备份与恢复”界面或 `python scripts/backup_workspace.py --out workspace.dsibackup` 生成并校验可移植备份。
+
+### 4.4.0 备份策略
+
+- **在线备份（推荐）**：使用 `.dsibackup`。运行时会收敛写入、通过 SQLite backup API 取一致快照、逐文件校验，并排除 `.env`、`.auth-token`、API Key、缓存、PID 与锁。浏览器对话由当前标签页完成 Flush 和摘要校验后贡献。
+- **恢复**：先运行 `python scripts/restore_workspace.py workspace.dsibackup --inspect`。确认版本、校验、迁移、冲突和空间计划后，再用 `--apply --mode merge`；Apply 会自动创建 pre-restore safety snapshot。
+- **冷备**：必须先完全停止服务，再复制整个 `/data` 卷。直接复制运行中的卷可能得到跨 SQLite / JSON 时间点不一致的内容。
+- `.dsibackup` **完整性可验证但默认未加密**；把它当作完整工作区敏感数据存储。分享用 Export 已脱敏或裁剪，不能用于 Restore。
 
 ## 5. 暴露到局域网 / 公网前必读
 
@@ -114,7 +121,7 @@ DeepSeek Infra is designed for **local-first personal / lab / internal use**. Be
 - **Rate limiting** — IP-based or token-based rate limits on the reverse proxy layer
 - **Request body size limit** — enforce `UPLOAD_MAX_BYTES` and match the reverse proxy's `client_max_body_size`
 - **Audit log rotation** — `.tool-audit/audit.jsonl` grows unbounded; add logrotate or periodic pruning
-- **Backup policy** — the `/data` volume (or `DEEPSEEK_INFRA_ROOT`, with `DEEPSEEK_MOBILE_ROOT` kept for compatibility) contains all user state; back it up regularly
+- **Backup policy** — prefer a verified `.dsibackup` created by the UI or `scripts/backup_workspace.py`; copy `/data` only as a cold backup after the service is fully stopped
 - **External secret manager** — prefer injecting `DEEPSEEK_API_KEY` from a vault/secret store rather than `.env` on disk
 
 These are not built into the runtime itself — they belong at the infrastructure layer around it. Being explicit about this boundary makes the project safer: it doesn't pretend to solve what it doesn't.

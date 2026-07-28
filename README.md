@@ -5,14 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.3.7-blue)
+![版本](https://img.shields.io/badge/version-4.4.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.3.7 Replica Convergence & Durable Conflict Resolution：** 冲突标签页进入永久隔离模式，后续编辑只推进自己的 branch revision，绝不能覆盖共享 Head；单一冲突指针升级为可同时保留任意并发分支的 durable ledger。通知栏显示待处理数量，并逐个执行「查看最新 / 保留副本」耐久事务——独立副本先提交、校验 Head 与 digest、确认可重新加载，最后才释放原分支，崩溃重试不会生成重复副本。无 Web Locks 时使用不可变 Proposal 和固定 winner 顺序收敛，两个真正同时写入的 Snapshot 都会保留；锁回调开始后异常不会重跑。标签页选择连续性与每个真实 Document 的 UUID Writer 身份分离，BroadcastChannel claim 自动旋转重复 Writer。损坏 Head 在排他仲裁中回退并修复到有效 parent，损坏数据进入 quarantine；即使 tombstone 已 GC，持有旧 base 的休眠标签页也只能创建恢复副本。Recovery Capsule V2 增加逐条目/整体 digest、写后回读、确定性存储压力压缩和 resolved marker。参见 [4.3.7 发布说明](docs/releases/4.3.7.md)（上一版 [4.3.6](docs/releases/4.3.6.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[前端边界](docs/FRONTEND_MODULES.md)。
+> **4.4.0 Portable Workspace Backups & Verified Restore：** 分享用 Export 与灾难恢复用 Backup 在类型和 Schema 上严格分离；显式 Contributor 白名单生成确定性 `.dsibackup`，逐文件 SHA-256 校验并永久排除凭据。Restore 先只读 Inspect，再创建安全快照并事务应用；同 ID 不同内容确定性重映射并重写引用，失败回滚。4.3.7 浏览器 Head、冲突账本和可选草稿通过摘要校验进入备份，恢复 Epoch 阻止旧标签页覆盖恢复结果。参见 [4.4.0 发布说明](docs/releases/4.4.0.md)（上一版 [4.3.7](docs/releases/4.3.7.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[前端边界](docs/FRONTEND_MODULES.md)。
 
-**4.3.7 validation:** 前端单元与合同测试（69 文件 / 580 测试）新增覆盖冲突分支隔离、多分支 Ledger、事务化副本、重复 Writer 旋转、真正交错的无锁 Proposal、锁回调一次执行、降级 Head 自愈、missing-Head 防复活，以及 Capsule V2 校验/压缩/quarantine/恰好一次恢复。依赖、后端业务协议、JS/CSS/optional chunk 预算和冻结的 4.0 runtime contract 均未改变。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)。
+
+**4.4.0 validation:** 后端合同覆盖 Manifest、篡改检测、Export 拒绝、路径穿越、只读 Inspect、空工作区保护和确定性项目重映射；前端 69 个测试文件 / 586 项测试、生产构建与既有 Bundle 预算保持通过。
 
 ## 30 秒概览
 

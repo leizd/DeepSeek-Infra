@@ -5,7 +5,54 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.3.7.
+Applicable version: v4.4.0.
+
+## 4.4.0 candidate evidence contract
+
+The following paths are the required CI output contract for 4.4.0. Files that depend on
+exact-merge, Chromium, Rust Docker, or release packaging are produced by their owning
+workflow and are not represented as locally verified until that workflow succeeds.
+
+- `docs/evidence/headless-mcp-bridge.json`
+- `docs/evidence/a2a-external-peer.json`
+- `docs/evidence/ga-v4.4.0.json`
+- `docs/evidence/workspace-v4.4.0.json`
+- `docs/evidence/edge-router-v4.4.0.json`
+- `docs/evidence/media-v4.4.0.json`
+- `docs/evidence/browser-v4.4.0.json`
+- `docs/evidence/automation-v4.4.0.json`
+- `docs/evidence/skills-v4.4.0.json`
+- `docs/evidence/skills-ui-v4.4.0.json`
+- `docs/evidence/skill-builder-v4.4.0.json`
+- `docs/evidence/skill-packs-v4.4.0.json`
+- `docs/evidence/skill-eval-dashboard-v4.4.0.json`
+- `docs/evidence/skill-versioning-v4.4.0.json`
+- `docs/evidence/skill-analytics-v4.4.0.json`
+- `docs/evidence/skill-security-v4.4.0.json`
+- `docs/evidence/skill-catalog-v4.4.0.json`
+- `docs/evidence/context-taint-v4.4.0.json`
+- `docs/evidence/semantic-cache-onnx-v4.4.0.json`
+- `docs/evidence/upgrade-rollback-v4.4.0.json`
+- `docs/evidence/protocol-contract-v4.4.0.json`
+- `docs/evidence/frontend-bundle-v4.4.0.json`
+- `docs/evidence/frontend-browser-v4.4.0.json`
+- `evals/reports/latest.json`
+- `evals/reports/agent-latest.json`
+- `evals/reports/baseline-compare-latest.json`
+- `evals/reports/security-latest.json`
+- `evals/reports/skills-v4.4.0.json`
+- `evals/reports/media-v4.4.0.json`
+- `evals/reports/browser-v4.4.0.json`
+- `evals/reports/automation-v4.4.0.json`
+- `docs/evidence/rust-sidecar-image-v4.4.0.json`
+- `docs/evidence/hybrid-runtime-e2e-v4.4.0.json`
+- `docs/evidence/gateway-request-parity-v4.4.0.json`
+- `docs/evidence/mcp-protocol-parity-v4.4.0.json`
+- `docs/evidence/rag-parity-v4.4.0.json`
+- `docs/evidence/rag-document-preparation-parity-v4.4.0.json`
+- `docs/evidence/rag-vector-binary-parity-v4.4.0.json`
+- `docs/evidence/rust-coverage-v4.4.0.json`
+- `docs/evidence/rust-sidecar-performance-v4.4.0.json`
 
 4.3.7 is the Replica Convergence and Durable Conflict Resolution release. Frontend evidence covers isolated conflict branches, multiple retained Ledger entries, commit-before-release copy transactions, duplicate Writer rotation, deterministic lock-free sibling Proposals, exactly-once lock callbacks, degraded-Head self-healing, missing-Head anti-resurrection, Recovery Capsule digest verification and crash-recoverable resolution. All 4.3.6 V3 checkpoint, tombstone, per-tab selection, streaming backpressure and bounded compaction contracts remain active. The root `VERSION` file is still canonical; CI derives candidate/exact-merge evidence names and Docker tags from `RELEASE_VERSION`, while the 4.2.8 exact-merge chain and frozen 4.0 protocol remain authoritative.
 

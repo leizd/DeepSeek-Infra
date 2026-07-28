@@ -8,6 +8,7 @@ import { useSettings } from "../../contexts/SettingsContext";
 import { useOnlineStatus } from "../../shared/useOnlineStatus";
 import { buildUpdateStore } from "../../app/buildUpdateStore";
 import { ReloadReadiness } from "../build-update/BuildUpdateBanner";
+import { listenForRestoreEpoch } from "../backup-restore/frontendBackup";
 import { Composer } from "../composer/Composer";
 import { HistoryDrawer } from "../history/HistoryDrawer";
 import { MemorySuggestionToast } from "../memory/MemorySuggestionToast";
@@ -29,11 +30,17 @@ function ChatWorkspace() {
   const online = useOnlineStatus();
   const [suggestedPrompt, setSuggestedPrompt] = useState("");
   const [dropActive, setDropActive] = useState(false);
+  const [restoreEpochChanged, setRestoreEpochChanged] = useState(false);
   const dragDepthRef = useRef(0);
   const shareConsumedRef = useRef(false);
   const connected = Boolean(settings.runtime?.hasServerKey || settings.apiKey.trim());
   const conversationId = chat.state.currentConversationId;
   useReminderPolling(chat.notify);
+
+  useEffect(() => listenForRestoreEpoch(() => {
+    chat.flushConversationPersistence();
+    setRestoreEpochChanged(true);
+  }), [chat.flushConversationPersistence]);
 
   useEffect(() => {
     attachments.clear();
@@ -148,6 +155,15 @@ function ChatWorkspace() {
       {dropActive && (
         <div className="drop-overlay" aria-hidden="true">
           <div>松开以上传附件</div>
+        </div>
+      )}
+      {restoreEpochChanged && (
+        <div className="drop-overlay workspace-restored-overlay" role="alertdialog" aria-modal="true" aria-labelledby="workspace-restored-title">
+          <div>
+            <strong id="workspace-restored-title">工作区已在其他标签页恢复</strong>
+            <p>此标签页已停止继续编辑。重新载入后才能使用恢复后的数据。</p>
+            <button className="drawer-done" type="button" onClick={() => window.location.reload()}>重新载入</button>
+          </div>
         </div>
       )}
     </>

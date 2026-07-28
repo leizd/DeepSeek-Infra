@@ -4,6 +4,21 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.0] - Portable Workspace Backups and Verified Restore
+
+### Portable, verified backups
+
+- Adds a typed `restorable-backup` package purpose separate from redacted sharing exports, explicit durable and optional-history Contributor registration, deterministic manifests, per-file SHA-256, Contributor digests, and atomic `.dsibackup` publication.
+- Captures verified 4.3.7 browser Heads, checkpoints, unresolved conflict ledgers and optional drafts without writer identities, leases, recovery capsules, credentials, or tokens.
+- Adds authenticated backup sessions, capability discovery, frontend contribution, finalization, status, download and deletion APIs plus shared-core backup and restore CLIs.
+
+### Transactional restore and archive hardening
+
+- Makes restore a two-step inspect/apply flow. Inspect is staging-only; Apply re-verifies the package, creates a safety snapshot, restores behind a global barrier and rolls back committed Contributors on failure.
+- Deterministically remaps conflicting project and conversation identities, rewrites JSON references, preserves provenance metadata and never defaults to last-write-wins replacement.
+- Rejects traversal, absolute and ambiguous paths, links and special files, case collisions, duplicate or undeclared entries, compression bombs, excessive JSON depth, future schemas and checksum mismatches.
+- Adds a lazy Backup & Restore workspace UI and restore-epoch coordination so stale peer tabs cannot overwrite restored browser state.
+
 ## [4.3.7] - Replica Convergence and Durable Conflict Resolution
 
 ### Replica convergence

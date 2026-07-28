@@ -77,6 +77,34 @@ def test_projects_action_unsupported(client: TestClient) -> None:
     assert resp.status_code == 400
 
 
+def test_backup_session_finalize_download_and_inspect(client: TestClient) -> None:
+    capabilities = client.get("/api/workspace/backups/capabilities")
+    assert capabilities.status_code == 200
+    assert capabilities.json()["purpose"] == "restorable-backup"
+    assert capabilities.json()["encrypted"] is False
+
+    created = client.post(
+        "/api/workspace/backups",
+        json={"mode": "full", "requiresFrontendState": False},
+    )
+    assert created.status_code == 200
+    backup_id = created.json()["backupId"]
+    ready = client.post(f"/api/workspace/backups/{backup_id}/finalize", json={})
+    assert ready.status_code == 200
+    assert ready.json()["phase"] == "ready"
+    downloaded = client.get(f"/api/workspace/backups/{backup_id}/download")
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"].startswith("application/vnd.deepseek-infra.backup")
+
+    inspected = client.post(
+        "/api/workspace/restores/inspect",
+        content=downloaded.content,
+        headers={"Content-Type": "application/vnd.deepseek-infra.backup+zip"},
+    )
+    assert inspected.status_code == 200
+    assert inspected.json()["purpose"] == "restorable-backup"
+
+
 def test_project_files_no_files(client: TestClient) -> None:
     resp = client.post("/api/project-files?projectId=p1")
     assert resp.status_code == 400

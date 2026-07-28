@@ -1,0 +1,57 @@
+.backup-restore-drawer {
+  overflow-y: auto;
+}
+
+.backup-card {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 16px;
+  border: 1px solid var(--hairw);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--paper) 92%, var(--green) 8%);
+}
+
+.backup-card h3,
+.backup-card p {
+  margin: 0;
+}
+
+.backup-card label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.backup-download {
+  text-align: center;
+}
+
+.restore-plan dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.restore-plan dl div {
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--paper);
+}
+
+.restore-plan dt {
+  color: var(--weak);
+  font-size: 12px;
+}
+
+.restore-plan dd {
+  margin: 3px 0 0;
+}
+
+.restore-plan select {
+  width: 100%;
+}
+
+.backup-status {
+  color: var(--weak);
+}

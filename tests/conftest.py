@@ -24,6 +24,7 @@ import deepseek_infra.infra.gateway.scheduler as scheduler
 import deepseek_infra.infra.gateway.semantic_cache as semantic_cache
 import deepseek_infra.infra.tool_runtime.tools as tools
 import deepseek_infra.infra.workspace.artifacts as workspace_artifacts
+import deepseek_infra.infra.workspace.backups as workspace_backups
 import deepseek_infra.infra.workspace.exports as workspace_exports
 import deepseek_infra.infra.workspace.saved_items as workspace_saved_items
 import deepseek_infra.infra.skills.evidence as skill_evidence
@@ -55,6 +56,8 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     browser_downloads_dir = tmp_path / ".browser-downloads"
     browser_profiles_dir = tmp_path / ".browser-profiles"
     automation_dir = tmp_path / ".automation"
+    backups_dir = tmp_path / ".backups"
+    restore_dir = tmp_path / ".restore-staging"
 
     monkeypatch.setattr(config, "FILE_CACHE_DIR", file_cache_dir)
     monkeypatch.setattr(config, "AGENT_RUNS_DIR", agent_runs_dir)
@@ -119,6 +122,8 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_artifacts.legacy_projects, "PROJECTS_DIR", projects_dir)
     monkeypatch.setattr(workspace_saved_items.legacy_projects, "PROJECTS_DIR", projects_dir)
     monkeypatch.setattr(workspace_exports.legacy_projects, "PROJECTS_DIR", projects_dir)
+    monkeypatch.setattr(workspace_backups, "BACKUP_DIR", backups_dir)
+    monkeypatch.setattr(workspace_backups, "RESTORE_DIR", restore_dir)
     skills_dir = tmp_path / ".skills"
     monkeypatch.setattr(config, "SKILLS_DIR", skills_dir)
     monkeypatch.setattr(skill_registry, "SKILLS_DIR", skills_dir)

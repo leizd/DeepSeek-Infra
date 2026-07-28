@@ -1,14 +1,19 @@
 {
   "schemaVersion": "offline-eval-suite.v1",
-  "version": "4.2.6",
-  "commit": "987aed2c",
-  "generatedAt": "2026-07-22T07:32:42Z",
+  "version": "4.4.0",
+  "commit": "7179ea67be33e969a6279ca3d38ae98c1f107493",
+  "testedRevision": "7179ea67be33e969a6279ca3d38ae98c1f107493",
+  "sourceRevision": "7179ea67be33e969a6279ca3d38ae98c1f107493",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-07-28T01:53:42Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
-  "gitSha": "987aed2c",
+  "gitSha": "7179ea67be33e969a6279ca3d38ae98c1f107493",
   "gitDirty": true,
   "status": "PASS",
   "paths": {
@@ -26,10 +31,10 @@
     "recallAt5": 1.0,
     "mrr": 0.8667,
     "citationAccuracy": 0.8333,
-    "keywordCoverage": 0.9167,
+    "keywordCoverage": 0.8333,
     "latency": {
-      "avgMs": 39.19,
-      "p95Ms": 44.12
+      "avgMs": 34.77,
+      "p95Ms": 41.34
     }
   },
   "toolPolicy": {
@@ -38,8 +43,8 @@
     "passRate": 1.0,
     "injectionDefensePassRate": 1.0,
     "latency": {
-      "avgMs": 0.03,
-      "p95Ms": 0.09
+      "avgMs": 0.02,
+      "p95Ms": 0.05
     }
   },
   "injection": {
@@ -71,8 +76,8 @@
       }
     },
     "latency": {
-      "avgMs": 0.04,
-      "p95Ms": 0.06
+      "avgMs": 0.03,
+      "p95Ms": 0.05
     }
   },
   "agent": {

@@ -17,7 +17,7 @@ import {
   type WorkspaceFeature,
 } from "./workspaceFeatureRegistry";
 
-const OVERLAY_FEATURES = new Set<WorkspaceFeature>(["settings", "projects", "skills", "memory", "reminders"]);
+const OVERLAY_FEATURES = new Set<WorkspaceFeature>(["settings", "projects", "skills", "memory", "reminders", "backup-restore"]);
 
 function WorkspaceDrawerLoading({ feature }: { feature: WorkspaceFeature }) {
   return (

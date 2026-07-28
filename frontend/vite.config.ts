@@ -52,6 +52,7 @@ const WORKSPACE_PRIMARY_MODULES = [
   "src/features/file-reader/FilePreviewFeature.tsx",
   "src/features/file-reader/ImageLightboxFeature.tsx",
   "src/features/activity/ActivityFeature.tsx",
+  "src/features/backup-restore/BackupRestoreFeature.tsx",
 ];
 
 function outputFiles(root: string, current = root): string[] {

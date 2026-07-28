@@ -30,6 +30,7 @@ FEATURES = {
     "file-preview": "src/features/file-reader/FilePreviewFeature.tsx",
     "image-lightbox": "src/features/file-reader/ImageLightboxFeature.tsx",
     "activity": "src/features/activity/ActivityFeature.tsx",
+    "backup-restore": "src/features/backup-restore/BackupRestoreFeature.tsx",
 }
 BUILD_ID = "0123456789abcdef"
 ASSET_SET_DIGEST = "a" * 64

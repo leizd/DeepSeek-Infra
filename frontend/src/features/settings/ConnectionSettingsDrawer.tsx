@@ -71,6 +71,7 @@ export function ConnectionSettingsDrawer() {
         启用长期记忆
       </label>
       <button className="message-action" type="button" onClick={() => overlay.openOverlay("memory")}>查看记忆</button>
+      <button className="message-action" type="button" onClick={() => overlay.openOverlay("backup-restore")}>数据备份与恢复</button>
       <div className="connection-status-grid">
         <div><span className={hasGeneration ? "status-ok" : "status-warn"} />普通对话：{hasGeneration ? "可用" : "待配置"}</div>
         <div><span className={hasSearch ? "status-ok" : "status-warn"} />联网搜索：{hasSearch ? "可用" : "未配置"}</div>

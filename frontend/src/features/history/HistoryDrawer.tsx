@@ -38,6 +38,7 @@ export function HistoryDrawer() {
         <button type="button" {...intentPreload("skills")} onClick={() => overlay.openOverlay("skills")}>技能</button>
         <button type="button" {...intentPreload("memory")} onClick={() => overlay.openOverlay("memory")}>记忆</button>
         <button type="button" {...intentPreload("reminders")} onClick={() => overlay.openOverlay("reminders")}>提醒</button>
+        <button type="button" {...intentPreload("backup-restore")} onClick={() => overlay.openOverlay("backup-restore")}>备份与恢复</button>
       </div>
       <ConversationList />
       <div className="history-footer">

@@ -12,6 +12,7 @@ const FEATURE_LABELS: Record<WorkspaceFeature, string> = {
   "file-preview": "文件预览",
   "image-lightbox": "图片预览",
   activity: "活动面板",
+  "backup-restore": "备份与恢复",
 };
 
 interface WorkspaceFeatureBoundaryProps {

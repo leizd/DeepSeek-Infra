@@ -23,6 +23,7 @@ from deepseek_infra.infra.data.projects import (
 )
 from deepseek_infra.infra.skills import analytics as skill_analytics
 from deepseek_infra.infra.workspace import artifacts as workspace_artifacts
+from deepseek_infra.infra.workspace import backups as workspace_backups
 from deepseek_infra.infra.workspace import exports as workspace_exports
 from deepseek_infra.infra.workspace import home as workspace_home
 from deepseek_infra.infra.workspace import projects as workspace_projects
@@ -300,5 +301,76 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
             "Cache-Control": "no-store",
         }
         return Response(content=data, media_type=media_type, headers=headers)
+
+    # ── Restorable backups ─────────────────────────────────────────────────
+
+    @router.get("/api/workspace/backups/capabilities")
+    async def api_workspace_backup_capabilities(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backups.capabilities())
+
+    @router.post("/api/workspace/backups")
+    async def api_workspace_backup_create(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backups.create_session(await read_json_body(request)))
+
+    @router.put("/api/workspace/backups/{backup_id}/frontend-state")
+    async def api_workspace_backup_frontend_state(request: Request, backup_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backups.put_frontend_state(backup_id, await read_json_body(request, max_bytes=64_000_000)))
+
+    @router.post("/api/workspace/backups/{backup_id}/finalize")
+    async def api_workspace_backup_finalize(request: Request, backup_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backups.finalize_session(backup_id))
+
+    @router.get("/api/workspace/backups/{backup_id}")
+    async def api_workspace_backup_get(request: Request, backup_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backups.get_session(backup_id))
+
+    @router.get("/api/workspace/backups/{backup_id}/download")
+    async def api_workspace_backup_download(request: Request, backup_id: str) -> Response:
+        require_api_auth(request)
+        path = workspace_backups.backup_path(backup_id)
+        return Response(
+            content=path.read_bytes(),
+            media_type="application/vnd.deepseek-infra.backup+zip",
+            headers={
+                "Content-Disposition": content_disposition_header("attachment", path.name),
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @router.delete("/api/workspace/backups/{backup_id}")
+    async def api_workspace_backup_delete(request: Request, backup_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response({"ok": True, "deleted": workspace_backups.delete_backup(backup_id)})
+
+    @router.post("/api/workspace/restores/inspect")
+    async def api_workspace_restore_inspect(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        content_type = request.headers.get("Content-Type", "")
+        if "multipart/form-data" in content_type:
+            uploads, _, _ = await deps.read_multipart_files(request)
+            if len(uploads) != 1:
+                raise AppError("Exactly one backup package is required", code=ErrorCode.INVALID_PAYLOAD)
+            upload = uploads[0]
+            raw = upload.get("data")
+            if not isinstance(raw, bytes):
+                raise AppError("Backup upload is invalid", code=ErrorCode.INVALID_PAYLOAD)
+            result = workspace_backups.inspect_archive(raw, filename=str(upload.get("filename") or "workspace.dsibackup"))
+        else:
+            result = workspace_backups.inspect_archive(
+                await request.body(),
+                filename=str(request.headers.get("X-Backup-Filename") or "workspace.dsibackup"),
+            )
+        return json_response(result)
+
+    @router.post("/api/workspace/restores/{restore_id}/apply")
+    async def api_workspace_restore_apply(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request)
+        return json_response(workspace_backups.apply_restore(restore_id, mode=str(payload.get("mode") or "merge")))
 
     return router

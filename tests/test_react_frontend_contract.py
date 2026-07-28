@@ -13,7 +13,7 @@ def read(path: str) -> str:
 
 def test_react_frontend_is_an_isolated_versioned_build() -> None:
     package = json.loads(read("frontend/package.json"))
-    assert package["version"] == "4.3.7"
+    assert package["version"] == "4.4.0"
     assert package["engines"]["node"] == ">=22.12.0"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test"] == "vitest run"
@@ -188,6 +188,7 @@ def test_workspace_demand_loading_has_one_registry_and_deferred_providers() -> N
         "file-preview",
         "image-lightbox",
         "activity",
+        "backup-restore",
     ):
         assert f'"{feature}"' in registry
     assert "preloadWorkspaceFeature" in registry
