@@ -82,7 +82,7 @@ def _lock_file(handle: Any) -> None:
         import msvcrt
 
         handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        getattr(msvcrt, "locking")(handle.fileno(), getattr(msvcrt, "LK_LOCK"), 1)
         return
     import fcntl
 
@@ -94,7 +94,7 @@ def _unlock_file(handle: Any) -> None:
         import msvcrt
 
         handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        getattr(msvcrt, "locking")(handle.fileno(), getattr(msvcrt, "LK_UNLCK"), 1)
         return
     import fcntl
 
