@@ -26,6 +26,10 @@
 .media/
 .projects/
 .reminders/
+.backups/
+.restore-staging/
+.workspace-mutation.lock
+.workspace-generation
 
 # Eval harness: generated reports (keep the dir + .gitkeep + committed release artifacts)
 evals/reports/*

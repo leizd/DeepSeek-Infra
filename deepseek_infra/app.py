@@ -16,6 +16,7 @@ from deepseek_infra.infra.gateway.scheduler import recover_orphans as recover_sc
 from deepseek_infra.web.server import MULTIPART_IMPORT_ERROR, create_server, multipart_module, supported_multipart_module
 from deepseek_infra.core.utils import local_ip, url_with_token
 from deepseek_infra.infra.tool_runtime.search import cleanup_search_cache
+from deepseek_infra.infra.workspace.backups import recover_interrupted_restores
 from deepseek_infra.web.server import redact_sensitive_query
 
 logger = logging.getLogger("deepseek_infra")
@@ -132,6 +133,9 @@ def shutdown_handle(handle: ServerHandle) -> None:
 def ensure_startup_dependencies() -> None:
     if multipart_module is None or not supported_multipart_module(multipart_module):
         raise SystemExit(MULTIPART_IMPORT_ERROR)
+    recovery = recover_interrupted_restores()
+    if recovery["recoveryRequired"]:
+        logger.error("workspace_restore_recovery_required", extra={"restores": recovery["recoveryRequired"]})
 
 
 def register_mimetypes() -> None:

@@ -257,6 +257,8 @@ export type ReconcileRemoteOutcome =
  * 函数委托给一个共享默认实例（测试与遗留调用方），Controller 持有自己的实例。
  */
 export interface ConversationPersistenceAdapter {
+  /** Epoch captured when this document loaded.  It never follows a later active pointer in-place. */
+  getLoadedWorkspaceEpoch(storage?: StorageLike | null): string;
   load(storage?: StorageLike | null, session?: StorageLike | null): PersistedConversationState;
   save(
     state: PersistedConversationState,
@@ -364,6 +366,79 @@ export const conversationStorageKeys = {
   v3RecoveryResolvedPrefix: "deepseek-infra.session.v3.recovery-resolved.",
   v3QuarantinePrefix: "deepseek-infra.session.v3.quarantine.",
 } as const;
+
+export const WORKSPACE_ACTIVE_EPOCH_KEY = "deepseek-infra.workspace.active-epoch";
+export const WORKSPACE_RESTORE_FENCE_KEY = "deepseek-infra.workspace.restore-fence";
+export const DEFAULT_WORKSPACE_EPOCH = "legacy";
+export const WORKSPACE_EPOCH_PREFIX = "deepseek-infra.session.v4.";
+
+const EPOCH_STORAGE_MARKER = Symbol("workspaceEpochStorage");
+const V3_PREFIX_TO_NAME = [
+  [conversationStorageKeys.v3ConflictIndexPrefix, "conflict-index."],
+  [conversationStorageKeys.v3RecoveryResolvedPrefix, "recovery-resolved."],
+  [conversationStorageKeys.v3SnapshotPrefix, "snapshot."],
+  [conversationStorageKeys.v3ConflictPrefix, "conflict."],
+  [conversationStorageKeys.v3ProposalPrefix, "proposal."],
+  [conversationStorageKeys.v3TombstonePrefix, "tombstone."],
+  [conversationStorageKeys.v3RecoveryPrefix, "recovery."],
+  [conversationStorageKeys.v3QuarantinePrefix, "quarantine."],
+  [conversationStorageKeys.v3HeadPrefix, "head."],
+  [conversationStorageKeys.v3TabPrefix, "tab."],
+] as const;
+
+type EpochStorage = StorageLike & {
+  [EPOCH_STORAGE_MARKER]?: { base: StorageLike; epoch: string };
+};
+
+function underlyingStorage(storage: StorageLike): StorageLike {
+  return (storage as EpochStorage)[EPOCH_STORAGE_MARKER]?.base ?? storage;
+}
+
+export function readActiveWorkspaceEpoch(storage: StorageLike): string {
+  const base = underlyingStorage(storage);
+  try {
+    const value = base.getItem(WORKSPACE_ACTIVE_EPOCH_KEY)?.trim();
+    return value || DEFAULT_WORKSPACE_EPOCH;
+  } catch {
+    return DEFAULT_WORKSPACE_EPOCH;
+  }
+}
+
+/** Present the existing V3 adapter with a virtual view backed by one V4 epoch. */
+export function workspaceEpochStorage(storage: StorageLike, epoch: string): StorageLike {
+  const existing = (storage as EpochStorage)[EPOCH_STORAGE_MARKER];
+  if (existing?.epoch === epoch) return storage;
+  const base = existing?.base ?? storage;
+  if (epoch === DEFAULT_WORKSPACE_EPOCH) return base;
+  const physicalPrefix = `${WORKSPACE_EPOCH_PREFIX}${epoch}.`;
+  const mapKey = (key: string): string => {
+    const mapping = V3_PREFIX_TO_NAME.find(([prefix]) => key.startsWith(prefix));
+    return mapping ? `${physicalPrefix}${mapping[1]}${key.slice(mapping[0].length)}` : key;
+  };
+  const unmapKey = (key: string): string | null => {
+    if (!key.startsWith(WORKSPACE_EPOCH_PREFIX)) return key;
+    if (!key.startsWith(physicalPrefix)) return null;
+    const tail = key.slice(physicalPrefix.length);
+    const mapping = V3_PREFIX_TO_NAME.find(([, name]) => tail.startsWith(name));
+    return mapping ? `${mapping[0]}${tail.slice(mapping[1].length)}` : null;
+  };
+  const scoped: EpochStorage = {
+    getItem: (key) => base.getItem(mapKey(key)),
+    setItem: (key, value) => base.setItem(mapKey(key), value),
+    removeItem: (key) => base.removeItem(mapKey(key)),
+    get length() {
+      return base.length;
+    },
+    key: base.key
+      ? (index) => {
+          const key = base.key?.(index);
+          return key === null || key === undefined ? null : unmapKey(key);
+        }
+      : undefined,
+  };
+  Object.defineProperty(scoped, EPOCH_STORAGE_MARKER, { value: { base, epoch } });
+  return scoped;
+}
 
 const V2_SNAPSHOT_PREFIX = "deepseek-infra.session.v2.snapshot.";
 
@@ -1063,6 +1138,53 @@ export function createConversationPersistenceAdapter(
   let idleGcScheduled = false;
   let identity: ReplicaIdentity | null = null;
   let capsuleSequence = 0;
+  let loadedWorkspaceEpoch: string | null = null;
+
+  function getLoadedWorkspaceEpoch(storage: StorageLike | null = browserStorage()): string {
+    if (loadedWorkspaceEpoch) return loadedWorkspaceEpoch;
+    loadedWorkspaceEpoch = storage ? readActiveWorkspaceEpoch(storage) : DEFAULT_WORKSPACE_EPOCH;
+    return loadedWorkspaceEpoch;
+  }
+
+  function scopedStorage(storage: StorageLike): StorageLike {
+    return workspaceEpochStorage(storage, getLoadedWorkspaceEpoch(storage));
+  }
+
+  function restoreFenceFailure(storage: StorageLike): PersistenceFlushFailure | null {
+    const base = underlyingStorage(storage);
+    const loaded = getLoadedWorkspaceEpoch(base);
+    try {
+      if (base.getItem(WORKSPACE_RESTORE_FENCE_KEY) !== null || readActiveWorkspaceEpoch(base) !== loaded) {
+        return { ok: false, code: "restore-fenced", message: "工作区恢复已冻结此标签页，请重新载入" };
+      }
+    } catch {
+      return { ok: false, code: "restore-fenced", message: "无法核验工作区 Epoch，已拒绝写入" };
+    }
+    return null;
+  }
+
+  function guardedMutationStorage(storage: StorageLike): StorageLike {
+    const scoped = scopedStorage(storage);
+    const guard = (): void => {
+      const failure = restoreFenceFailure(storage);
+      if (failure) throw new Error(failure.message);
+    };
+    return {
+      getItem: (key) => scoped.getItem(key),
+      setItem: (key, value) => {
+        guard();
+        scoped.setItem(key, value);
+      },
+      removeItem: (key) => {
+        guard();
+        scoped.removeItem(key);
+      },
+      get length() {
+        return scoped.length;
+      },
+      key: scoped.key ? (index) => scoped.key?.(index) ?? null : undefined,
+    };
+  }
 
   function registerCommittedIdentity(conversationId: string, conversation: Conversation, revision: string): void {
     lastCommitted.set(conversationId, conversation);
@@ -1085,6 +1207,7 @@ export function createConversationPersistenceAdapter(
 
   function load(storage: StorageLike | null = browserStorage(), session: StorageLike | null = browserSessionStorage()): PersistedConversationState {
     if (!storage) return { schemaVersion: 1, currentConversationId: null, conversations: [] };
+    storage = guardedMutationStorage(storage);
     // V3 分片优先；其后依次为 V2 journal（迁移读取器，保持原逻辑）与 legacy 键。
     const sharded = loadV3Conversations(storage);
     if (sharded) {
@@ -1823,6 +1946,9 @@ export function createConversationPersistenceAdapter(
     options?: SaveConversationOptions,
   ): PersistenceFlushResult {
     if (!storage) return storageUnavailableFailure(`localStorage 不可用 (~${JSON.stringify(state).length} bytes)`);
+    const fenced = restoreFenceFailure(storage);
+    if (fenced) return fenced;
+    storage = guardedMutationStorage(storage);
     const writerSessionId = getReplicaIdentity(session).writerSessionId;
     writeTabSelection(session, state.currentConversationId);
     // pagehide / beforeunload 无法同步取得 Web Lock：绝不伪装成已仲裁，也不碰共享 Head。
@@ -1991,6 +2117,9 @@ export function createConversationPersistenceAdapter(
     options?: SaveConversationOptions,
   ): Promise<PersistenceFlushResult> {
     if (!storage) return Promise.resolve(storageUnavailableFailure("localStorage 不可用"));
+    const fenced = restoreFenceFailure(storage);
+    if (fenced) return Promise.resolve(fenced);
+    storage = guardedMutationStorage(storage);
     const writerSessionId = getReplicaIdentity(session).writerSessionId;
     const run = (mode: "exclusive" | "proposal"): PersistenceFlushResult => {
       const state = getState();
@@ -2024,6 +2153,9 @@ export function createConversationPersistenceAdapter(
     options?: SaveConversationOptions,
   ): Promise<PersistenceFlushResult> {
     if (!storage) return storageUnavailableFailure("localStorage 不可用");
+    const fenced = restoreFenceFailure(storage);
+    if (fenced) return fenced;
+    storage = guardedMutationStorage(storage);
     const writerSessionId = getReplicaIdentity(session).writerSessionId;
     pendingTombstones.add(conversationId);
     const commit = () => {
@@ -2039,7 +2171,9 @@ export function createConversationPersistenceAdapter(
     storage: StorageLike | null = browserStorage(),
     session: StorageLike | null = browserSessionStorage(),
   ): void {
+    if (storage) storage = active ? guardedMutationStorage(storage) : scopedStorage(storage);
     if (active && storage) {
+      if (restoreFenceFailure(storage)) return;
       writeTabLease(storage, getReplicaIdentity(session).writerSessionId);
       return;
     }
@@ -2060,6 +2194,7 @@ export function createConversationPersistenceAdapter(
     storage: StorageLike | null = browserStorage(),
   ): ReconcileRemoteOutcome {
     if (!storage) return { kind: "noop" };
+    storage = guardedMutationStorage(storage);
     const head = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
     // 已隔离的本地冲突分支即使刚刚完成一次耐久提交，也只相对 branch revision
     // 是“干净”的；它绝不能因胜方后续广播而换入共享 Head、丢失分支内容。
@@ -2092,6 +2227,7 @@ export function createConversationPersistenceAdapter(
     storage: StorageLike | null = browserStorage(),
   ): { conversation: Conversation; revision: string } | null {
     if (!storage) return null;
+    storage = guardedMutationStorage(storage);
     const head = parseV3Head(safeGetItem(storage, sessionHeadKeyV3(conversationId)));
     if (!head) return null;
     const advertised = loadV3SnapshotConversation(storage, conversationId, head.revision);
@@ -2108,6 +2244,7 @@ export function createConversationPersistenceAdapter(
     conflictId?: string,
   ): { pointer: ConversationConflictPointer; branch: DurableConflictBranch; conversation: Conversation } | null {
     if (!storage) return null;
+    storage = guardedMutationStorage(storage);
     const branch = durableConflictBranches(storage, conversationId)
       .find((candidate) => !conflictId || candidate.conflictId === conflictId);
     if (!branch) return null;
@@ -2127,7 +2264,7 @@ export function createConversationPersistenceAdapter(
   }
 
   function listConflictBranches(conversationId?: string, storage: StorageLike | null = browserStorage()): DurableConflictBranch[] {
-    return storage ? durableConflictBranches(storage, conversationId) : [];
+    return storage ? durableConflictBranches(scopedStorage(storage), conversationId) : [];
   }
 
   function removeConflictRecord(storage: StorageLike, branch: DurableConflictBranch): void {
@@ -2182,6 +2319,8 @@ export function createConversationPersistenceAdapter(
     conflictId?: string,
   ): void {
     if (!storage) return;
+    if (restoreFenceFailure(storage)) return;
+    storage = guardedMutationStorage(storage);
     const branch = durableConflictBranches(storage, conversationId)
       .find((candidate) => !conflictId || candidate.conflictId === conflictId);
     if (branch) removeConflictRecord(storage, branch);
@@ -2195,6 +2334,9 @@ export function createConversationPersistenceAdapter(
     options?: SaveConversationOptions,
   ): Promise<{ ok: true; copy: Conversation } | PersistenceFlushFailure> {
     if (!storage) return Promise.resolve(storageUnavailableFailure("localStorage 不可用"));
+    const fenced = restoreFenceFailure(storage);
+    if (fenced) return Promise.resolve(fenced);
+    storage = guardedMutationStorage(storage);
     const writerSessionId = getReplicaIdentity(session).writerSessionId;
     const transaction = (mode: "exclusive" | "proposal"): { ok: true; copy: Conversation } | PersistenceFlushFailure => {
       const record = parseDurableConflictBranch(safeGetItem(storage, sessionConflictKeyV3(conversationId, conflictId)));
@@ -2256,6 +2398,9 @@ export function createConversationPersistenceAdapter(
     storage: StorageLike | null = browserStorage(),
   ): Promise<{ ok: true; conversation: Conversation; revision: string } | PersistenceFlushFailure> {
     if (!storage) return Promise.resolve(storageUnavailableFailure("localStorage 不可用"));
+    const fenced = restoreFenceFailure(storage);
+    if (fenced) return Promise.resolve(fenced);
+    storage = guardedMutationStorage(storage);
     const transaction = (): { ok: true; conversation: Conversation; revision: string } | PersistenceFlushFailure => {
       const record = parseDurableConflictBranch(safeGetItem(storage, sessionConflictKeyV3(conversationId, conflictId)));
       if (!record) return verificationFailure("冲突记录不存在或已损坏");
@@ -2368,6 +2513,7 @@ export function createConversationPersistenceAdapter(
     session: StorageLike | null = browserSessionStorage(),
   ): PersistenceFlushFailure | null {
     if (!storage) return null; // 存储不可用：flush 本身已按 storage-unavailable 上报。
+    storage = scopedStorage(storage);
     const writerSessionId = getReplicaIdentity(session).writerSessionId;
     const dirty = collectDirtyConversations(state);
     if (!dirty.length) {
@@ -2547,6 +2693,14 @@ export function createConversationPersistenceAdapter(
   ): Promise<RecoveryReconcileOutcome> {
     const outcome: RecoveryReconcileOutcome = { committed: [], recovered: [], failed: [] };
     if (!storage) return Promise.resolve(outcome);
+    const rawStorage = underlyingStorage(storage);
+    const loadedEpoch = getLoadedWorkspaceEpoch(rawStorage);
+    const fenced = restoreFenceFailure(storage);
+    if (fenced) {
+      outcome.failed.push(fenced);
+      return Promise.resolve(outcome);
+    }
+    storage = guardedMutationStorage(storage);
     const writerSessionId = getReplicaIdentity(session).writerSessionId;
     const reconcileAll = (mode: "exclusive" | "proposal"): RecoveryReconcileOutcome => {
       // 本标签页胶囊（崩溃/杀死但会话恢复，sessionStorage 幸存）：无租约条件直接对账。
@@ -2577,6 +2731,40 @@ export function createConversationPersistenceAdapter(
         }
         reconcileCapsule(storage, writerSessionId, key, capsule, outcome, options, mode);
       }
+      // Capsules written by a tab fenced in a previous Workspace Epoch are
+      // never allowed to advance that Epoch or the restored shared Head.  Once
+      // the restore fence is complete, import each entry only through the
+      // active adapter's normal reconciliation path; the inevitable base
+      // mismatch materializes a deterministic "恢复副本".
+      if (typeof rawStorage.length === "number" && typeof rawStorage.key === "function") {
+        const priorCapsules: string[] = [];
+        const activePhysicalPrefix = `${WORKSPACE_EPOCH_PREFIX}${loadedEpoch}.recovery.`;
+        for (let index = 0; index < rawStorage.length; index += 1) {
+          const key = rawStorage.key(index);
+          if (!key) continue;
+          const legacy = loadedEpoch !== DEFAULT_WORKSPACE_EPOCH
+            && key.startsWith(conversationStorageKeys.v3RecoveryPrefix);
+          const priorEpoch = key.startsWith(WORKSPACE_EPOCH_PREFIX)
+            && key.includes(".recovery.")
+            && !key.startsWith(activePhysicalPrefix);
+          if (legacy || priorEpoch) priorCapsules.push(key);
+        }
+        for (const key of priorCapsules.slice(0, FOREIGN_RECOVERY_CAPSULE_BUDGET)) {
+          const raw = safeGetItem(rawStorage, key);
+          const capsule = parseRecoveryCapsule(raw);
+          if (!capsule) continue;
+          let handled = true;
+          for (const entry of capsule.entries) {
+            if (!reconcileCapsuleEntry(storage, writerSessionId, capsule, entry, outcome, options, mode)) handled = false;
+          }
+          if (!handled) continue;
+          try {
+            rawStorage.removeItem(key);
+          } catch {
+            // The deterministic copy head makes a later retry converge.
+          }
+        }
+      }
       return outcome;
     };
     return arbitrate(() => reconcileAll("exclusive"), () => reconcileAll("proposal"));
@@ -2596,9 +2784,11 @@ export function createConversationPersistenceAdapter(
     idleGcScheduled = false;
     capsuleSequence = 0;
     identity = null;
+    loadedWorkspaceEpoch = null;
   }
 
   return {
+    getLoadedWorkspaceEpoch,
     load,
     save,
     saveArbitrated,

@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.0-blue)
+![版本](https://img.shields.io/badge/version-4.4.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.0 Portable Workspace Backups & Verified Restore：** 分享用 Export 与灾难恢复用 Backup 在类型和 Schema 上严格分离；显式 Contributor 白名单生成确定性 `.dsibackup`，逐文件 SHA-256 校验并永久排除凭据。Restore 先只读 Inspect，再创建安全快照并事务应用；同 ID 不同内容确定性重映射并重写引用，失败回滚。4.3.7 浏览器 Head、冲突账本和可选草稿通过摘要校验进入备份，恢复 Epoch 阻止旧标签页覆盖恢复结果。参见 [4.4.0 发布说明](docs/releases/4.4.0.md)（上一版 [4.3.7](docs/releases/4.3.7.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[前端边界](docs/FRONTEND_MODULES.md)。
+> **4.4.1 Crash-Safe Restore Transactions & Replica Fencing：** Restore 先把后端 Contributor 和浏览器副本分别构建到 staging，双方回读核验后写入耐久 commit-intent；浏览器只切换一个 Active Epoch 指针，后端只交换完整目录。旧标签页先冻结并把脏内容保存进旧 Epoch Recovery Capsule，绝不向恢复后的 Head 回写；进程中断后根据前后端 Journal 确定性继续或回滚。引用迁移由 Contributor Schema 声明字段驱动，上传下载改为流式，恢复记录按安全保留策略清理。参见 [4.4.1 发布说明](docs/releases/4.4.1.md)（上一版 [4.4.0](docs/releases/4.4.0.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[前端边界](docs/FRONTEND_MODULES.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)。
 
-**4.4.0 validation:** 后端合同覆盖 Manifest、篡改检测、Export 拒绝、路径穿越、只读 Inspect、空工作区保护和确定性项目重映射；前端 69 个测试文件 / 586 项测试、生产构建与既有 Bundle 预算保持通过。
+**4.4.1 validation:** 后端合同覆盖 Prepare/Commit/Complete/Abort 幂等、目录交换崩溃恢复、Schema 兼容与字段感知重映射、跨进程围栏和流式传输；前端合同覆盖 Epoch 原子切换、旧标签页冻结、逐键回读、恢复 Journal 和不重放付费请求。既有 Bundle 预算不提高。
 
 ## 30 秒概览
 

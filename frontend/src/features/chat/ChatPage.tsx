@@ -8,7 +8,8 @@ import { useSettings } from "../../contexts/SettingsContext";
 import { useOnlineStatus } from "../../shared/useOnlineStatus";
 import { buildUpdateStore } from "../../app/buildUpdateStore";
 import { ReloadReadiness } from "../build-update/BuildUpdateBanner";
-import { listenForRestoreEpoch } from "../backup-restore/frontendBackup";
+import { listenForRestoreEpoch, recoverInterruptedFrontendRestore } from "../backup-restore/frontendBackup";
+import { readFrontendRestoreJournal } from "../../domain/conversation/restorePersistence";
 import { Composer } from "../composer/Composer";
 import { HistoryDrawer } from "../history/HistoryDrawer";
 import { MemorySuggestionToast } from "../memory/MemorySuggestionToast";
@@ -37,10 +38,25 @@ function ChatWorkspace() {
   const conversationId = chat.state.currentConversationId;
   useReminderPolling(chat.notify);
 
-  useEffect(() => listenForRestoreEpoch(() => {
-    chat.flushConversationPersistence();
+  useEffect(() => listenForRestoreEpoch((fence) => {
+    chat.freezeForWorkspaceRestore({
+      previousEpoch: fence.previousEpoch,
+      targetEpoch: fence.targetEpoch,
+    });
     setRestoreEpochChanged(true);
-  }), [chat.flushConversationPersistence]);
+  }), [chat.freezeForWorkspaceRestore]);
+
+  useEffect(() => {
+    void recoverInterruptedFrontendRestore().then((outcome) => {
+      if (outcome === "none" || outcome === "complete") return;
+      const journal = readFrontendRestoreJournal();
+      chat.freezeForWorkspaceRestore({
+        previousEpoch: journal?.previousEpoch ?? "",
+        targetEpoch: journal?.targetEpoch ?? "",
+      });
+      setRestoreEpochChanged(true);
+    });
+  }, [chat.freezeForWorkspaceRestore]);
 
   useEffect(() => {
     attachments.clear();

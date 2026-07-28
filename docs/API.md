@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v2.9.1。
+适用版本：v4.4.1。
 
 默认情况下，所有 `/api/*` 路由都需要本地 token 鉴权。客户端可以发送 `Authorization: Bearer <token>`，也可以使用打开 `/?token=<token>` 后写入的 `auth_token` Cookie。未设置 `AUTH_TOKEN` 时，服务端会把自动生成的 token 保存到本地 `.auth-token`，重启后继续复用。
 
@@ -1006,3 +1006,28 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 ```
 
 用户确认替换后，前端可把冲突项 id 放入 `replaceIds` 重新提交。
+
+## Workspace Backup / Restore Transactions
+
+备份下载使用 `FileResponse` 流式返回；恢复 Inspect 推荐直接发送
+`Content-Type: application/vnd.deepseek-infra.backup+zip` 的文件请求体，并在
+`X-Backup-Filename` 传原文件名。服务端逐块计数和计算 SHA-256，不会先把整个包读入内存。
+
+协调式恢复 API：
+
+| Method | Path | 作用 |
+| --- | --- | --- |
+| `POST` | `/api/workspace/restores/inspect` | 只读校验包、Schema 与迁移计划。 |
+| `POST` | `/api/workspace/restores/{restoreId}/prepare` | 创建 Safety Backup，并构建完整后端 staging。 |
+| `PUT` | `/api/workspace/restores/{restoreId}/frontend-prepared` | 登记浏览器目标 Epoch 的回读摘要。 |
+| `POST` | `/api/workspace/restores/{restoreId}/commit` | 先记录 commit intent；浏览器切换 Epoch 后以 `frontendCommitted=true` 幂等提交后端。 |
+| `POST` | `/api/workspace/restores/{restoreId}/complete` | 核对摘要、标记完成并释放服务端 Fence。 |
+| `POST` | `/api/workspace/restores/{restoreId}/abort` | 幂等回滚已交换 Contributor；不删除 Safety Backup。 |
+| `GET` | `/api/workspace/restores/{restoreId}` | 查询持久事务状态，供浏览器启动恢复。 |
+| `GET` | `/api/workspace/restores` | 列出恢复事务。 |
+| `DELETE` | `/api/workspace/restores/{restoreId}` | 仅删除非活动、非 Fence 引用的记录。 |
+| `POST` | `/api/workspace/restores/cleanup` | 按状态和保留期清理安全可删记录。 |
+
+Restore Fence 活跃时读请求继续；非 Restore Owner 的业务写请求返回 HTTP 423。`commit`、
+`complete` 与 `abort` 可安全重试。浏览器状态存在时，旧
+`/api/workspace/restores/{restoreId}/apply` 会拒绝单阶段提交。

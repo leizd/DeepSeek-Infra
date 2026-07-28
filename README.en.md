@@ -5,27 +5,27 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.4.0-blue)
+![Version](https://img.shields.io/badge/version-4.4.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.4.0 at a glance
+## 4.4.1 at a glance
 
-- Sharing exports and restorable backups now have distinct typed purposes and incompatible schemas.
-- Explicit Contributors snapshot durable workspace data into deterministic `.dsibackup` packages with per-file SHA-256 and Contributor digests; secrets, locks, active tasks and rebuildable indexes are excluded.
-- Restore always starts with a read-only Inspect. Apply re-verifies the package, creates a safety snapshot, commits behind a restore barrier and rolls back on failure.
-- Conflicting identities are deterministically remapped and JSON references are rewritten instead of using last-write-wins replacement.
-- Verified 4.3.7 browser Heads, unresolved conflict branches and optional drafts round-trip through a frontend envelope; restore epochs prevent stale tabs from overwriting restored state.
-- Backup and restore APIs, lazy workspace UI and CLI entry points share the same core implementation.
+- Backend Contributors and browser replicas are fully staged and digest-verified before a durable commit intent is recorded.
+- Browser state lives in Workspace Epoch namespaces; restore commits through one Active Epoch pointer switch, while stale tabs freeze and preserve dirty state as previous-Epoch Recovery Capsules.
+- A durable Restore Fence blocks peer mutations across the Web server, CLI, scheduler, automation, Agent checkpoints, Memory, Skills, Media, and Workspace writers.
+- Contributor directories are prepared completely, fsynced, and exchanged with journaled rollback paths; startup deterministically completes or rolls back interrupted swaps.
+- Contributor-aware schema migration remaps only declared identity and reference fields, leaving user messages, prompts, and artifact contents untouched.
+- Backup upload/download and ZIP extraction are streamed and size-accounted; completed, rolled-back, and recovery-required transactions follow explicit retention rules.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.4.0 release notes](docs/releases/4.4.0.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.4.1 release notes](docs/releases/4.4.1.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 

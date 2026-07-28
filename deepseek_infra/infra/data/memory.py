@@ -14,6 +14,7 @@ from typing import Any
 from deepseek_infra.core.config import MEMORY_CONTEXT_CHAR_BUDGET, MEMORY_DIR, MEMORY_FILE, MEMORY_MAX_ITEMS, MEMORY_RETRIEVE_LIMIT
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import latest_user_query, query_tokens, score_chunk, utc_now_iso
+from deepseek_infra.infra.workspace import mutation_gate
 
 _memory_lock = threading.RLock()
 
@@ -120,15 +121,16 @@ def _save_memories_unlocked(memories: list[dict[str, Any]]) -> None:
         cleaned.append(cleaned_item)
 
     cleaned = cleaned[:MEMORY_MAX_ITEMS]
-    temp_path = MEMORY_FILE.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
-    temp_path.replace(MEMORY_FILE)
-    try:
-        from deepseek_infra.infra.rag import local_rag
+    with mutation_gate.mutation_scope(root=MEMORY_DIR.parent):
+        temp_path = MEMORY_FILE.with_suffix(".tmp")
+        temp_path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_path.replace(MEMORY_FILE)
+        try:
+            from deepseek_infra.infra.rag import local_rag
 
-        local_rag.sync_memories(cleaned)
-    except Exception:
-        pass
+            local_rag.sync_memories(cleaned)
+        except Exception:
+            pass
 
 
 @contextmanager

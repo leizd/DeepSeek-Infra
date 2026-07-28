@@ -13,6 +13,7 @@ from typing import Any, Callable
 from deepseek_infra.core.config import AGENT_RUNS_DIR, AGENT_RUNTIME_AUTO_RESUME, DEFAULT_MODEL
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import latest_user_query, normalize_model_name
+from deepseek_infra.infra.workspace import mutation_gate
 from deepseek_infra.infra.gateway.deepseek_client import RequestCancelled, SearchBudget, validate_deepseek_payload
 from deepseek_infra.infra.agent_runtime.agent_state import (
     completed_node_ids,
@@ -182,22 +183,23 @@ def load_run(run_id: str) -> dict[str, Any]:
 
 
 def write_run(run: dict[str, Any]) -> None:
-    AGENT_RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    path = run_path(str(run.get("runId") or ""))
-    # Use a unique temp file per write. Windows can briefly lock either the
-    # previous target or a shared `.tmp` path, so fixed temp names can fail with
-    # WinError 5 when multiple Agent events are persisted in quick succession.
-    tmp_path = path.with_name(f"{path.name}.{threading.get_ident()}.{secrets.token_urlsafe(6)}.tmp")
-    try:
-        tmp_path.write_text(json.dumps(run, ensure_ascii=False, indent=2), encoding="utf-8")
-        replace_with_retry(tmp_path, path)
-    finally:
+    with mutation_gate.mutation_scope(root=AGENT_RUNS_DIR.parent):
+        AGENT_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        path = run_path(str(run.get("runId") or ""))
+        # Use a unique temp file per write. Windows can briefly lock either the
+        # previous target or a shared `.tmp` path, so fixed temp names can fail with
+        # WinError 5 when multiple Agent events are persisted in quick succession.
+        tmp_path = path.with_name(f"{path.name}.{threading.get_ident()}.{secrets.token_urlsafe(6)}.tmp")
         try:
-            tmp_path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
+            tmp_path.write_text(json.dumps(run, ensure_ascii=False, indent=2), encoding="utf-8")
+            replace_with_retry(tmp_path, path)
+        finally:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
 
 
 def replace_with_retry(source: Path, target: Path, *, delays: tuple[float, ...] = RUN_WRITE_RETRY_DELAYS) -> None:

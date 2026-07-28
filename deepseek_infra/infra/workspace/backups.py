@@ -20,11 +20,13 @@ import time
 import uuid
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal, Protocol
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.workspace import mutation_gate
 
 BACKUP_SCHEMA = "deepseek-workspace-backup.v1"
 FRONTEND_SCHEMA_VERSION = 1
@@ -75,6 +77,18 @@ class BackupContributor(Protocol):  # pragma: no cover - structural typing contr
 
     def apply_restore(self, plan: dict[str, Any], context: "BackupContext") -> None: ...
 
+    def inspect_schema(self, source_version: int) -> dict[str, Any]: ...
+
+    def migrate(self, source: Path, target_version: int) -> Path: ...
+
+    def build_identity_map(self, source: Path, destination: Path) -> dict[str, str]: ...
+
+    def rewrite_references(self, raw: bytes, identity_map: dict[str, str], backup_id: str) -> bytes: ...
+
+    def merge_into_staging(self, plan: dict[str, Any], context: "BackupContext") -> None: ...
+
+    def validate_staging(self, staging: Path, context: "BackupContext") -> list[str]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class BackupContext:
@@ -103,6 +117,52 @@ class DirectoryContributor:
     data_class: BackupDataClass
     restore_policy: RestorePolicy
     path_getter: Callable[[], Path]
+    identity_fields: frozenset[str] = frozenset()
+    reference_fields: frozenset[str] = frozenset()
+    path_fields: frozenset[str] = frozenset()
+
+    def inspect_schema(self, source_version: int) -> dict[str, Any]:
+        if source_version == self.schema_version:
+            return {"compatible": True, "migration": None}
+        return {
+            "compatible": False,
+            "migration": {
+                "contributorId": self.contributor_id,
+                "from": source_version,
+                "to": self.schema_version,
+                "reversible": False,
+            },
+        }
+
+    def migrate(self, source: Path, target_version: int) -> Path:
+        if target_version != self.schema_version:
+            raise AppError(f"{self.contributor_id} has no migration to schema {target_version}", code=ErrorCode.INVALID_REQUEST, status=409)
+        return source
+
+    def build_identity_map(self, source: Path, destination: Path) -> dict[str, str]:
+        source_objects = _json_identity_index(source, self.identity_fields)
+        destination_objects = _json_identity_index(destination, self.identity_fields)
+        return {
+            original_id: source_digest
+            for original_id, source_digest in source_objects.items()
+            if original_id in destination_objects and destination_objects[original_id] != source_digest
+        }
+
+    def rewrite_references(self, raw: bytes, identity_map: dict[str, str], backup_id: str) -> bytes:
+        return _rewrite_typed_json_references(
+            raw,
+            identity_map,
+            backup_id,
+            identity_fields=self.identity_fields,
+            reference_fields=self.reference_fields,
+            path_fields=self.path_fields,
+        )
+
+    def merge_into_staging(self, plan: dict[str, Any], context: BackupContext) -> None:
+        self.apply_restore(plan, context)
+
+    def validate_staging(self, staging: Path, context: BackupContext) -> list[str]:
+        return self.validate(staging, context)
 
     def inventory(self, context: BackupContext) -> dict[str, int]:
         paths = list(self._source_files(context))
@@ -119,10 +179,10 @@ class DirectoryContributor:
             target = root.joinpath(*PurePosixPath(relative).parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             _copy_consistent(source, target)
-            raw = target.read_bytes()
-            file_digest = hashlib.sha256(raw).hexdigest()
+            size = target.stat().st_size
+            file_digest = _sha256_file(target)
             package_path = target.relative_to(staging_dir).as_posix()
-            entry = {"path": package_path, "size": len(raw), "sha256": file_digest}
+            entry = {"path": package_path, "size": size, "sha256": file_digest}
             files.append(entry)
             digest.update(_stable_json(entry))
         return BackupContribution(
@@ -182,20 +242,26 @@ class DirectoryContributor:
                 relative = Path(*remapped_parts)
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
+            is_rewritten_json = item.suffix.casefold() == ".json" and bool(identity_map)
             rewritten = (
-                _rewrite_json_references(item.read_bytes(), identity_map, str(plan.get("sourceBackupId") or ""))
-                if item.suffix.casefold() == ".json" and identity_map
-                else item.read_bytes()
+                self.rewrite_references(item.read_bytes(), identity_map, str(plan.get("sourceBackupId") or ""))
+                if is_rewritten_json
+                else None
             )
             if target.exists():
-                if hashlib.sha256(target.read_bytes()).digest() == hashlib.sha256(rewritten).digest():
+                incoming_digest = hashlib.sha256(rewritten).hexdigest() if rewritten is not None else _sha256_file(item)
+                if _sha256_file(target) == incoming_digest:
                     continue
                 if item.suffix.casefold() == ".json" and mode in {"merge", "project-copy"}:
-                    target.write_bytes(_merge_json_payload(target.read_bytes(), rewritten))
+                    incoming = rewritten if rewritten is not None else item.read_bytes()
+                    target.write_bytes(_merge_json_payload(target.read_bytes(), incoming))
                     continue
                 if mode in {"merge", "project-copy"}:
                     target = _collision_path(target, context)
-            target.write_bytes(rewritten)
+            if rewritten is not None:
+                target.write_bytes(rewritten)
+            else:
+                shutil.copyfile(item, target)
 
     def _source_files(self, context: BackupContext) -> list[tuple[Path, str]]:
         root = self.path_getter()
@@ -263,18 +329,63 @@ def _project_artifact_paths(context: BackupContext) -> set[str]:
 
 
 def _registered_contributors() -> tuple[DirectoryContributor, ...]:
+    project_ids = frozenset({"id", "projectId"})
+    project_refs = frozenset({"projectId", "sourceProjectId", "parentProjectId", "mediaId", "artifactId", "savedId"})
     return (
-        DirectoryContributor("projects", 1, "durable", "merge", lambda: config.PROJECTS_DIR),
+        DirectoryContributor(
+            "projects", 1, "durable", "merge", lambda: config.PROJECTS_DIR,
+            identity_fields=project_ids,
+            reference_fields=project_refs,
+            path_fields=frozenset({"path", "sourcePath", "artifactPath"}),
+        ),
         DirectoryContributor("project-files", 1, "durable", "merge", lambda: config.FILE_CACHE_DIR),
-        DirectoryContributor("artifacts", 1, "durable", "merge", lambda: config.GENERATED_DIR),
-        DirectoryContributor("memory", 1, "durable", "merge", lambda: config.MEMORY_DIR),
-        DirectoryContributor("media", 1, "durable", "merge", lambda: config.MEDIA_DIR),
-        DirectoryContributor("custom-skills-and-packs", 1, "durable", "merge", lambda: config.SKILLS_DIR),
-        DirectoryContributor("automations", 1, "durable", "merge", lambda: config.AUTOMATION_DIR),
-        DirectoryContributor("reminders", 1, "durable", "merge", lambda: config.REMINDERS_DIR),
-        DirectoryContributor("agent-checkpoints", 1, "optional-history", "merge", lambda: config.AGENT_RUNS_DIR),
-        DirectoryContributor("a2a-tasks", 1, "optional-history", "merge", lambda: config.A2A_TASKS_DIR),
-        DirectoryContributor("traces-and-run-history", 1, "optional-history", "merge", lambda: config.TRACE_DIR),
+        DirectoryContributor(
+            "artifacts", 1, "durable", "merge", lambda: config.GENERATED_DIR,
+            identity_fields=frozenset({"artifactId"}),
+            reference_fields=frozenset({"artifactId", "projectId", "mediaId"}),
+            path_fields=frozenset({"path", "sourcePath"}),
+        ),
+        DirectoryContributor(
+            "memory", 1, "durable", "merge", lambda: config.MEMORY_DIR,
+            identity_fields=frozenset({"id"}),
+            reference_fields=frozenset({"projectId", "sourceId"}),
+        ),
+        DirectoryContributor(
+            "media", 1, "durable", "merge", lambda: config.MEDIA_DIR,
+            identity_fields=frozenset({"mediaId"}),
+            reference_fields=frozenset({"mediaId", "projectId", "sourceMediaId"}),
+            path_fields=frozenset({"path", "sourcePath", "thumbnailPath"}),
+        ),
+        DirectoryContributor(
+            "custom-skills-and-packs", 1, "durable", "merge", lambda: config.SKILLS_DIR,
+            identity_fields=frozenset({"skillId", "packId"}),
+            reference_fields=frozenset({"skillId", "packId", "projectId"}),
+        ),
+        DirectoryContributor(
+            "automations", 1, "durable", "merge", lambda: config.AUTOMATION_DIR,
+            identity_fields=frozenset({"automationId"}),
+            reference_fields=frozenset({"automationId", "projectId", "skillId", "packId"}),
+        ),
+        DirectoryContributor(
+            "reminders", 1, "durable", "merge", lambda: config.REMINDERS_DIR,
+            identity_fields=frozenset({"id", "reminderId"}),
+            reference_fields=frozenset({"projectId", "conversationId"}),
+        ),
+        DirectoryContributor(
+            "agent-checkpoints", 1, "optional-history", "merge", lambda: config.AGENT_RUNS_DIR,
+            identity_fields=frozenset({"runId"}),
+            reference_fields=frozenset({"runId", "projectId", "conversationId"}),
+        ),
+        DirectoryContributor(
+            "a2a-tasks", 1, "optional-history", "merge", lambda: config.A2A_TASKS_DIR,
+            identity_fields=frozenset({"taskId"}),
+            reference_fields=frozenset({"taskId", "projectId"}),
+        ),
+        DirectoryContributor(
+            "traces-and-run-history", 1, "optional-history", "merge", lambda: config.TRACE_DIR,
+            identity_fields=frozenset({"traceId", "runId"}),
+            reference_fields=frozenset({"traceId", "runId", "projectId", "conversationId"}),
+        ),
     )
 
 
@@ -333,7 +444,7 @@ def put_frontend_state(backup_id: str, envelope: dict[str, Any]) -> dict[str, An
     return {"ok": True, "backupId": backup_id, "digest": normalized["digest"]}
 
 
-def finalize_session(backup_id: str) -> dict[str, Any]:
+def finalize_session(backup_id: str, *, owner_restore_id: str | None = None) -> dict[str, Any]:
     session = _load_session(backup_id)
     context = _context_from_payload(session["context"])
     frontend_path = _session_dir(backup_id) / "frontend.json"
@@ -341,9 +452,32 @@ def finalize_session(backup_id: str) -> dict[str, Any]:
         raise AppError("Verified frontend state is required", code=ErrorCode.INVALID_REQUEST, status=409)
     with _BARRIER:
         try:
-            session["phase"] = "quiescing"
-            _write_json(_session_dir(backup_id) / "session.json", session)
-            result = _build_archive(backup_id, context, frontend_path if frontend_path.is_file() else None)
+            result: dict[str, Any] | None = None
+            gate_root = BACKUP_DIR.parent
+            for attempt in range(1, 4):
+                session["phase"] = "quiescing"
+                session["snapshotAttempt"] = attempt
+                _write_json(_session_dir(backup_id) / "session.json", session)
+                with mutation_gate.exclusive_gate(gate_root):
+                    mutation_gate.assert_mutation_allowed(owner_restore_id, root=gate_root)
+                    start_generation = mutation_gate.read_generation(gate_root)
+                    for contributor in _selected_contributors(context):
+                        contributor.flush(context)
+                session["phase"] = "snapshotting"
+                _write_json(_session_dir(backup_id) / "session.json", session)
+                candidate = _build_archive(backup_id, context, frontend_path if frontend_path.is_file() else None)
+                with mutation_gate.exclusive_gate(gate_root):
+                    end_generation = mutation_gate.read_generation(gate_root)
+                if start_generation == end_generation:
+                    result = candidate
+                    break
+                Path(str(candidate["path"])).unlink(missing_ok=True)
+            if result is None:
+                raise AppError(
+                    "Workspace changed repeatedly during backup; retry when writes are quieter",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
             session.update(result)
             session["phase"] = "ready"
         except Exception as exc:
@@ -355,14 +489,19 @@ def finalize_session(backup_id: str) -> dict[str, Any]:
     return {"ok": True, **_public_session(session)}
 
 
-def create_backup(payload: dict[str, Any], *, frontend_state: dict[str, Any] | None = None) -> dict[str, Any]:
+def create_backup(
+    payload: dict[str, Any],
+    *,
+    frontend_state: dict[str, Any] | None = None,
+    owner_restore_id: str | None = None,
+) -> dict[str, Any]:
     request = dict(payload)
     request["requiresFrontendState"] = frontend_state is not None
     created = create_session(request)
     backup_id = str(created["backupId"])
     if frontend_state is not None:
         put_frontend_state(backup_id, frontend_state)
-    return finalize_session(backup_id)
+    return finalize_session(backup_id, owner_restore_id=owner_restore_id)
 
 
 def get_session(backup_id: str) -> dict[str, Any]:
@@ -408,11 +547,21 @@ def inspect_archive(source: Path | bytes, *, filename: str = "workspace.dsibacku
         context = _context_from_manifest(manifest)
         operations: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
+        migrations: list[dict[str, Any]] = []
+        compatible = _version_compatible(str(manifest["source"].get("version") or ""), config.APP_VERSION)
         known = {item.contributor_id: item for item in _registered_contributors()}
         for entry in manifest["contributors"]:
             contributor = known.get(str(entry["id"]))
             if contributor is None:
                 raise AppError(f"Unsupported contributor: {entry['id']}", code=ErrorCode.INVALID_PAYLOAD)
+            try:
+                source_schema = int(entry.get("schemaVersion"))
+            except (TypeError, ValueError):
+                source_schema = -1
+            schema = contributor.inspect_schema(source_schema)
+            compatible = compatible and bool(schema["compatible"])
+            if schema["migration"]:
+                migrations.append(schema["migration"])
             source_dir = extracted / "payload" / contributor.contributor_id
             errors = contributor.validate(source_dir, context)
             if errors:
@@ -425,11 +574,11 @@ def inspect_archive(source: Path | bytes, *, filename: str = "workspace.dsibacku
             "restoreId": restore_id,
             "sourceVersion": manifest["source"]["version"],
             "targetVersion": config.APP_VERSION,
-            "compatible": True,
+            "compatible": compatible,
             "purpose": manifest["purpose"],
             "operations": operations,
             "conflicts": conflicts,
-            "migrations": [],
+            "migrations": migrations,
             "warnings": ["Backup is integrity-verified but not encrypted."],
             "estimatedWriteBytes": sum(int(item["size"]) for item in manifest["files"]),
             "requiresFrontendApply": bool(manifest.get("frontend")),
@@ -444,71 +593,434 @@ def inspect_archive(source: Path | bytes, *, filename: str = "workspace.dsibacku
         raise
 
 
-def apply_restore(restore_id: str, *, mode: str = "merge") -> dict[str, Any]:
+def prepare_restore(
+    restore_id: str,
+    *,
+    mode: str = "merge",
+    previous_epoch: str = "legacy",
+    target_epoch: str | None = None,
+    owner_document_id: str = "server",
+) -> dict[str, Any]:
+    """Build and verify every target contributor without touching live data."""
+
     if mode not in {"merge", "project-copy", "replace-empty"}:
         raise AppError("Unsupported restore mode", code=ErrorCode.INVALID_PAYLOAD)
     root = _restore_root(restore_id)
+    journal_path = root / "transaction.json"
+    if journal_path.is_file():
+        existing = _read_json(journal_path)
+        if (
+            existing.get("mode") != mode
+            or (target_epoch and existing.get("targetEpoch") != target_epoch)
+            or existing.get("previousEpoch") != previous_epoch
+        ):
+            raise AppError("Restore retry parameters do not match the durable transaction", code=ErrorCode.INVALID_REQUEST, status=409)
+        return _public_restore(existing, root)
     plan = _read_json(root / "plan.json")
+    if not plan.get("compatible"):
+        raise AppError("Backup schema is not compatible with this version", code=ErrorCode.INVALID_REQUEST, status=409)
     archive = next(root.glob("*.dsibackup"), None)
     if archive is None or _sha256_file(archive) != plan.get("archiveSha256"):
         raise AppError("Backup changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
-    _safe_extract_and_verify(archive, root / "verified")
-    context = _context_from_manifest(plan["manifest"])
-    journal = root / "rollback"
-    applied: list[str] = []
-    known = {item.contributor_id: item for item in _registered_contributors()}
-    identity_map = _restore_identity_map(plan, mode)
-    with _BARRIER:
-        safety = create_backup({"mode": "full", "includeHistory": True, "requiresFrontendState": False})
+
+    target = target_epoch or f"epoch-{uuid.uuid4()}"
+    now = int(time.time() * 1000)
+    fence = {
+        "schemaVersion": 1,
+        "restoreId": restore_id,
+        "previousEpoch": previous_epoch,
+        "targetEpoch": target,
+        "ownerDocumentId": owner_document_id,
+        "phase": "preparing",
+        "createdAt": now,
+        "expiresAt": now + 24 * 60 * 60 * 1000,
+    }
+    gate_root = RESTORE_DIR.parent
+    with mutation_gate.exclusive_gate(gate_root):
+        active = mutation_gate.read_fence(gate_root)
+        if active and active.get("restoreId") != restore_id:
+            raise AppError("Another workspace restore is active", code=ErrorCode.INVALID_REQUEST, status=423)
+        mutation_gate.write_fence(fence, gate_root)
+        transaction: dict[str, Any] = {
+            **fence,
+            "mode": mode,
+            "phase": "preparing",
+            "updatedAt": _utc_iso(),
+            "requiresFrontendApply": bool(plan.get("requiresFrontendApply")),
+            "contributors": [],
+            "identityMap": {},
+        }
+        _write_json(journal_path, transaction)
         try:
+            manifest = _safe_extract_and_verify(archive, root / "verified")
+            context = _context_from_manifest(manifest)
+            identity_map = _restore_identity_map(plan, mode)
+            transaction["identityMap"] = identity_map
+            safety = create_backup(
+                {"mode": "full", "includeHistory": True, "requiresFrontendState": False},
+                owner_restore_id=restore_id,
+            )
+            transaction["safetyBackupId"] = safety["backupId"]
+            _write_json(journal_path, transaction)
+            known = {item.contributor_id: item for item in _registered_contributors()}
+            staged_root = root / "staged"
+            shutil.rmtree(staged_root, ignore_errors=True)
+            staged_root.mkdir(parents=True)
             for operation in plan["operations"]:
                 contributor_id = str(operation["contributorId"])
                 contributor = known[contributor_id]
                 destination = Path(str(operation["destination"]))
+                staged = staged_root / contributor_id
                 if destination.exists():
-                    shutil.copytree(destination, journal / contributor_id)
-                # Record the contributor before applying it so a partial write
-                # from a failing contributor is removed or restored as well.
-                applied.append(contributor_id)
+                    shutil.copytree(destination, staged)
+                else:
+                    staged.mkdir(parents=True)
                 current = dict(operation)
-                current["source"] = str(root / "verified" / "payload" / contributor_id)
-                current["mode"] = mode
-                current["identityMap"] = identity_map
-                current["sourceBackupId"] = str(plan["manifest"].get("backupId") or "")
-                contributor.apply_restore(current, context)
-            marker = {
-                "restoreId": restore_id,
-                "mode": mode,
-                "committedAt": _utc_iso(),
-                "safetyBackupId": safety["backupId"],
-                "restoreEpoch": int(time.time() * 1000),
-            }
-            _write_json(root / "restore-commit.json", marker)
-        except Exception:
-            for contributor_id in reversed(applied):
-                destination = known[contributor_id].path_getter()
-                if destination.exists():
-                    shutil.rmtree(destination)
-                saved = journal / contributor_id
-                if saved.exists():
-                    shutil.copytree(saved, destination)
+                current.update(
+                    {
+                        "source": str(root / "verified" / "payload" / contributor_id),
+                        "destination": str(staged),
+                        "mode": mode,
+                        "identityMap": identity_map,
+                        "sourceBackupId": str(plan["manifest"].get("backupId") or ""),
+                    }
+                )
+                migrated = contributor.migrate(Path(str(current["source"])), contributor.schema_version)
+                current["source"] = str(migrated)
+                contributor.merge_into_staging(current, context)
+                errors = contributor.validate_staging(staged, context)
+                if errors:
+                    raise AppError("; ".join(errors), code=ErrorCode.INVALID_PAYLOAD)
+                _fsync_tree(staged)
+                transaction["contributors"].append(
+                    {
+                        "id": contributor_id,
+                        "destination": str(destination),
+                        "stagedPath": str(staged),
+                        "rollbackPath": str(root / "rollback" / contributor_id),
+                        "hadDestination": destination.exists(),
+                        "prepared": True,
+                        "swapped": False,
+                        "verified": True,
+                        "digest": _tree_digest(staged),
+                        "swapState": "prepared",
+                    }
+                )
+                _write_json(journal_path, transaction)
+            transaction["serverTransactionDigest"] = hashlib.sha256(
+                _stable_json(
+                    {
+                        "restoreId": restore_id,
+                        "mode": mode,
+                        "targetEpoch": target,
+                        "contributors": [
+                            {"id": item["id"], "digest": item["digest"]}
+                            for item in transaction["contributors"]
+                        ],
+                    }
+                )
+            ).hexdigest()
+            transaction["phase"] = "backend-staged"
+            transaction["updatedAt"] = _utc_iso()
+            fence["phase"] = "preparing" if plan.get("requiresFrontendApply") else "commit-intent"
+            mutation_gate.write_fence(fence, gate_root)
+            _write_json(journal_path, transaction)
+        except Exception as exc:
+            transaction["phase"] = "failed"
+            transaction["error"] = str(exc)
+            transaction["updatedAt"] = _utc_iso()
+            _write_json(journal_path, transaction)
+            mutation_gate.clear_fence(restore_id, gate_root)
             raise
+    return _public_restore(transaction, root)
+
+
+def frontend_prepared(restore_id: str, *, digest: str) -> dict[str, Any]:
+    root = _restore_root(restore_id)
+    journal_path = root / "transaction.json"
+    transaction = _read_json(journal_path)
+    if transaction.get("phase") in {"frontend-staged", "commit-intent", "frontend-committed", "backend-committed", "complete"}:
+        if transaction.get("frontendDigest") not in {None, digest}:
+            raise AppError("Frontend restore digest changed", code=ErrorCode.INVALID_REQUEST, status=409)
+        return _public_restore(transaction, root)
+    if transaction.get("phase") != "backend-staged" or not transaction.get("requiresFrontendApply"):
+        raise AppError("Restore is not waiting for frontend staging", code=ErrorCode.INVALID_REQUEST, status=409)
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest.casefold()):
+        raise AppError("Frontend restore digest is invalid", code=ErrorCode.INVALID_PAYLOAD)
+    transaction["frontendDigest"] = digest.casefold()
+    transaction["phase"] = "frontend-staged"
+    transaction["updatedAt"] = _utc_iso()
+    _write_json(journal_path, transaction)
+    _update_server_fence(transaction, "frontend-staged")
+    return _public_restore(transaction, root)
+
+
+def commit_restore(
+    restore_id: str,
+    *,
+    frontend_committed: bool = False,
+    frontend_digest: str | None = None,
+) -> dict[str, Any]:
+    """Persist commit intent, then atomically exchange all staged directories.
+
+    A frontend restore uses two idempotent calls.  The first records commit
+    intent and returns; the owner switches the single active-epoch pointer, then
+    the second call confirms that switch and commits the backend.
+    """
+
+    root = _restore_root(restore_id)
+    journal_path = root / "transaction.json"
+    gate_root = RESTORE_DIR.parent
+    with mutation_gate.exclusive_gate(gate_root):
+        transaction = _read_json(journal_path)
+        phase = str(transaction.get("phase") or "")
+        if phase in {"backend-committed", "complete"}:
+            return _public_restore(transaction, root)
+        requires_frontend = bool(transaction.get("requiresFrontendApply"))
+        if requires_frontend:
+            if frontend_digest and frontend_digest != transaction.get("frontendDigest"):
+                raise AppError("Frontend restore digest does not match staged state", code=ErrorCode.INVALID_REQUEST, status=409)
+            if phase == "frontend-staged":
+                transaction["phase"] = "commit-intent"
+                transaction["commitIntentAt"] = _utc_iso()
+                transaction["updatedAt"] = _utc_iso()
+                _write_json(journal_path, transaction)
+                _update_server_fence(transaction, "commit-intent")
+                if not frontend_committed:
+                    return _public_restore(transaction, root)
+            elif phase != "commit-intent":
+                raise AppError("Restore is not ready to commit", code=ErrorCode.INVALID_REQUEST, status=409)
+            if not frontend_committed:
+                return _public_restore(transaction, root)
+            transaction["phase"] = "frontend-committed"
+            transaction["frontendCommittedAt"] = _utc_iso()
+            _write_json(journal_path, transaction)
+            _update_server_fence(transaction, "frontend-committed")
+        elif phase == "backend-staged":
+            transaction["phase"] = "commit-intent"
+            transaction["commitIntentAt"] = _utc_iso()
+            _write_json(journal_path, transaction)
+            _update_server_fence(transaction, "commit-intent")
+        elif phase not in {"commit-intent", "frontend-committed"}:
+            raise AppError("Restore is not ready to commit", code=ErrorCode.INVALID_REQUEST, status=409)
+
+        try:
+            rollback_root = root / "rollback"
+            rollback_root.mkdir(parents=True, exist_ok=True)
+            for contributor in transaction["contributors"]:
+                destination = Path(str(contributor["destination"]))
+                staged = Path(str(contributor["stagedPath"]))
+                rollback = Path(str(contributor["rollbackPath"]))
+                contributor["swapState"] = "moving-old"
+                _write_json(journal_path, transaction)
+                if bool(contributor["hadDestination"]) and destination.exists():
+                    rollback.parent.mkdir(parents=True, exist_ok=True)
+                    if rollback.exists():
+                        shutil.rmtree(rollback)
+                    os.replace(destination, rollback)
+                    _fsync_directory(destination.parent)
+                contributor["swapState"] = "old-moved"
+                _write_json(journal_path, transaction)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                contributor["swapState"] = "installing-staged"
+                _write_json(journal_path, transaction)
+                os.replace(staged, destination)
+                _fsync_directory(destination.parent)
+                contributor["swapped"] = True
+                contributor["swapState"] = "swapped"
+                _write_json(journal_path, transaction)
+            transaction["phase"] = "backend-committed"
+            transaction["backendCommittedAt"] = _utc_iso()
+            transaction["updatedAt"] = _utc_iso()
+            _write_json(journal_path, transaction)
+            _update_server_fence(transaction, "backend-committed")
+            mutation_gate.bump_generation(gate_root)
+        except Exception:
+            _rollback_transaction(transaction, root)
+            raise
+    return _public_restore(transaction, root)
+
+
+def complete_restore(restore_id: str, *, frontend_digest: str | None = None) -> dict[str, Any]:
+    root = _restore_root(restore_id)
+    journal_path = root / "transaction.json"
+    gate_root = RESTORE_DIR.parent
+    with mutation_gate.exclusive_gate(gate_root):
+        transaction = _read_json(journal_path)
+        if transaction.get("phase") == "complete":
+            return _public_restore(transaction, root)
+        if transaction.get("phase") != "backend-committed":
+            raise AppError("Backend restore is not committed", code=ErrorCode.INVALID_REQUEST, status=409)
+        if transaction.get("requiresFrontendApply") and frontend_digest != transaction.get("frontendDigest"):
+            raise AppError("Frontend completion digest does not match", code=ErrorCode.INVALID_REQUEST, status=409)
+        transaction["phase"] = "complete"
+        transaction["completedAt"] = _utc_iso()
+        transaction["updatedAt"] = _utc_iso()
+        _write_json(journal_path, transaction)
+        mutation_gate.clear_fence(restore_id, gate_root)
+    return _public_restore(transaction, root)
+
+
+def abort_restore(restore_id: str) -> dict[str, Any]:
+    root = _restore_root(restore_id)
+    gate_root = RESTORE_DIR.parent
+    with mutation_gate.exclusive_gate(gate_root):
+        transaction = _read_json(root / "transaction.json")
+        if transaction.get("phase") == "rolled-back":
+            return _public_restore(transaction, root)
+        if transaction.get("phase") == "complete":
+            raise AppError("Completed restore cannot be aborted", code=ErrorCode.INVALID_REQUEST, status=409)
+        _rollback_transaction(transaction, root)
+    return _public_restore(transaction, root)
+
+
+def get_restore(restore_id: str) -> dict[str, Any]:
+    root = _restore_root(restore_id)
+    transaction = root / "transaction.json"
+    return _public_restore(_read_json(transaction) if transaction.is_file() else _read_json(root / "plan.json"), root)
+
+
+def list_restores() -> dict[str, Any]:
+    RESTORE_DIR.mkdir(parents=True, exist_ok=True)
+    restores: list[dict[str, Any]] = []
+    for root in sorted((item for item in RESTORE_DIR.iterdir() if item.is_dir()), key=lambda item: item.name):
+        metadata = root / "transaction.json"
+        if not metadata.is_file():
+            metadata = root / "plan.json"
+        try:
+            restores.append(_public_restore(_read_json(metadata), root, include_frontend=False))
+        except AppError:
+            restores.append({"restoreId": root.name, "phase": "recovery-required", "compatible": False})
+    return {"ok": True, "restores": restores}
+
+
+def delete_restore(restore_id: str) -> bool:
+    root = _restore_root(restore_id)
+    metadata_path = root / "transaction.json"
+    metadata = _read_json(metadata_path) if metadata_path.is_file() else _read_json(root / "plan.json")
+    if metadata.get("phase") not in {"inspected", "complete", "rolled-back", "failed"}:
+        raise AppError("Active restore records cannot be deleted", code=ErrorCode.INVALID_REQUEST, status=409)
+    fence = mutation_gate.read_fence(RESTORE_DIR.parent)
+    if fence and fence.get("restoreId") == restore_id:
+        raise AppError("Restore is still referenced by the active fence", code=ErrorCode.INVALID_REQUEST, status=409)
+    shutil.rmtree(root)
+    return True
+
+
+def cleanup_restores(*, now: float | None = None) -> dict[str, Any]:
+    current = time.time() if now is None else now
+    deleted: list[str] = []
+    for item in list_restores()["restores"]:
+        phase = item.get("phase")
+        if phase not in {"complete", "rolled-back", "failed"}:
+            continue
+        retention_days = 7 if phase == "complete" else 30
+        timestamp = item.get("completedAt") or item.get("rolledBackAt") or item.get("updatedAt") or item.get("createdAt")
+        age = _iso_age_seconds(timestamp, current)
+        if age is None or age < retention_days * 86_400:
+            continue
+        restore_id = str(item["restoreId"])
+        if delete_restore(restore_id):
+            deleted.append(restore_id)
+    return {"ok": True, "deleted": deleted}
+
+
+def recover_interrupted_restores() -> dict[str, Any]:
+    """Reconcile durable journals after a process or machine crash."""
+
+    RESTORE_DIR.mkdir(parents=True, exist_ok=True)
+    recovered: list[str] = []
+    committed: list[str] = []
+    required: list[str] = []
+    for root in sorted((item for item in RESTORE_DIR.iterdir() if item.is_dir()), key=lambda item: item.name):
+        journal_path = root / "transaction.json"
+        if not journal_path.is_file():
+            continue
+        try:
+            transaction = _read_json(journal_path)
+        except AppError:
+            required.append(root.name)
+            mutation_gate.write_fence(
+                {
+                    "schemaVersion": 1,
+                    "restoreId": root.name,
+                    "previousEpoch": "unknown",
+                    "targetEpoch": "unknown",
+                    "ownerDocumentId": "startup-recovery",
+                    "phase": "recovery-required",
+                    "createdAt": int(time.time() * 1000),
+                    "expiresAt": 2**63 - 1,
+                },
+                RESTORE_DIR.parent,
+            )
+            continue
+        phase = str(transaction.get("phase") or "")
+        if phase in {"complete", "rolled-back", "failed", "backend-committed"}:
+            continue
+        try:
+            contributors = transaction.get("contributors")
+            if phase in {"commit-intent", "frontend-committed"} and isinstance(contributors, list) and contributors:
+                all_installed = True
+                for contributor in contributors:
+                    if not isinstance(contributor, dict):
+                        all_installed = False
+                        break
+                    destination = Path(str(contributor.get("destination") or ""))
+                    staged = Path(str(contributor.get("stagedPath") or ""))
+                    if (
+                        not destination.is_dir()
+                        or staged.exists()
+                        or _tree_digest(destination) != contributor.get("digest")
+                    ):
+                        all_installed = False
+                        break
+                if all_installed:
+                    for contributor in contributors:
+                        contributor["swapped"] = True
+                        contributor["swapState"] = "swapped"
+                    transaction["phase"] = "backend-committed"
+                    transaction["backendCommittedAt"] = _utc_iso()
+                    transaction["updatedAt"] = _utc_iso()
+                    _write_json(journal_path, transaction)
+                    _update_server_fence(transaction, "backend-committed")
+                    committed.append(root.name)
+                    continue
+            _rollback_transaction(transaction, root)
+            recovered.append(root.name)
+        except Exception:
+            transaction["phase"] = "recovery-required"
+            transaction["updatedAt"] = _utc_iso()
+            _write_json(journal_path, transaction)
+            _update_server_fence(transaction, "recovery-required")
+            required.append(root.name)
     return {
-        "ok": True,
-        "restoreId": restore_id,
-        "phase": "ready-for-frontend" if plan.get("requiresFrontendApply") else "complete",
-        "applied": applied,
-        "restoredIdentities": [
-            {
-                "originalId": original,
-                "restoredId": restored,
-                "reason": "collision",
-                "sourceBackupId": str(plan["manifest"].get("backupId") or ""),
-            }
-            for original, restored in sorted(identity_map.items())
-        ],
-        "frontend": _read_json(root / "verified" / "frontend" / "state.json") if plan.get("requiresFrontendApply") else None,
-        **marker,
+        "ok": not required,
+        "rolledBack": recovered,
+        "backendCommitted": committed,
+        "recoveryRequired": required,
+    }
+
+
+def apply_restore(restore_id: str, *, mode: str = "merge") -> dict[str, Any]:
+    """Compatibility wrapper for the 4.4.0 single-call restore API."""
+
+    if mode not in {"merge", "project-copy", "replace-empty"}:
+        raise AppError("Unsupported restore mode", code=ErrorCode.INVALID_PAYLOAD)
+    root = _restore_root(restore_id)
+    plan = _read_json(root / "plan.json")
+    if plan.get("requiresFrontendApply"):
+        raise AppError(
+            "Frontend replica acknowledgement is required; use the coordinated restore API",
+            code=ErrorCode.INVALID_REQUEST,
+            status=409,
+        )
+    prepare_restore(restore_id, mode=mode)
+    committed = commit_restore(restore_id)
+    committed = complete_restore(restore_id)
+    return {
+        **committed,
+        "phase": "complete",
+        "restoreEpoch": int(time.time() * 1000),
     }
 
 
@@ -519,7 +1031,6 @@ def _build_archive(backup_id: str, context: BackupContext, frontend_path: Path |
     staging.mkdir(parents=True)
     contributions: list[BackupContribution] = []
     for contributor in _selected_contributors(context):
-        contributor.flush(context)
         contributions.append(contributor.snapshot(staging, context))
     frontend_manifest: dict[str, Any] | None = None
     files = [entry for contribution in contributions for entry in contribution.files]
@@ -527,8 +1038,7 @@ def _build_archive(backup_id: str, context: BackupContext, frontend_path: Path |
         target = staging / "frontend" / "state.json"
         target.parent.mkdir(parents=True)
         shutil.copyfile(frontend_path, target)
-        raw = target.read_bytes()
-        entry = {"path": "frontend/state.json", "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+        entry = {"path": "frontend/state.json", "size": target.stat().st_size, "sha256": _sha256_file(target)}
         files.append(entry)
         envelope = _read_json(target)
         frontend_manifest = {
@@ -591,8 +1101,11 @@ def _build_archive(backup_id: str, context: BackupContext, frontend_path: Path |
             info = zipfile.ZipInfo(path.relative_to(staging).as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o100600 << 16
-            archive.writestr(info, path.read_bytes())
+            with path.open("rb") as source, archive.open(info, "w") as output:
+                shutil.copyfileobj(source, output, length=1024 * 1024)
+    _fsync_file(temporary)
     os.replace(temporary, target)
+    _fsync_directory(target.parent)
     _safe_extract_and_verify(target, session_dir / "verification")
     shutil.rmtree(staging, ignore_errors=True)
     shutil.rmtree(session_dir / "verification", ignore_errors=True)
@@ -609,7 +1122,8 @@ def _safe_extract_and_verify(archive_path: Path, destination: Path) -> dict[str,
     shutil.rmtree(destination, ignore_errors=True)
     destination.mkdir(parents=True)
     seen: set[str] = set()
-    total = 0
+    declared_total = 0
+    actual_total = 0
     with zipfile.ZipFile(archive_path) as archive:
         infos = archive.infolist()
         if len(infos) > MAX_ENTRIES:
@@ -626,8 +1140,8 @@ def _safe_extract_and_verify(archive_path: Path, destination: Path) -> dict[str,
                 raise AppError("Backup contains a link or special file", code=ErrorCode.INVALID_PAYLOAD)
             if info.file_size < 0 or info.file_size > MAX_EXPANDED_BYTES:
                 raise AppError("Backup entry is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
-            total += info.file_size
-            if total > MAX_EXPANDED_BYTES:
+            declared_total += info.file_size
+            if declared_total > MAX_EXPANDED_BYTES:
                 raise AppError("Expanded backup is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
             if info.compress_size == 0 and info.file_size > 0:
                 raise AppError("Suspicious compression ratio", code=ErrorCode.INVALID_PAYLOAD)
@@ -637,7 +1151,13 @@ def _safe_extract_and_verify(archive_path: Path, destination: Path) -> dict[str,
             target.parent.mkdir(parents=True, exist_ok=True)
             if not info.is_dir():
                 with archive.open(info) as source, target.open("wb") as output:
-                    shutil.copyfileobj(source, output)
+                    actual_entry = 0
+                    while chunk := source.read(1024 * 1024):
+                        actual_entry += len(chunk)
+                        actual_total += len(chunk)
+                        if actual_entry > MAX_EXPANDED_BYTES or actual_total > MAX_EXPANDED_BYTES:
+                            raise AppError("Expanded backup is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
+                        output.write(chunk)
     manifest_path = destination / "manifest.json"
     checksum_path = destination / "checksums.sha256"
     if not manifest_path.is_file() or not checksum_path.is_file():
@@ -764,6 +1284,7 @@ def _restore_identity_map(plan: dict[str, Any], mode: str) -> dict[str, str]:
     )
     backup_id = str(plan.get("manifest", {}).get("backupId") or "")
     result: dict[str, str] = {}
+    known = {item.contributor_id: item for item in _registered_contributors()}
     if isinstance(project_operation, dict):
         source = Path(str(project_operation.get("source") or ""))
         destination = Path(str(project_operation.get("destination") or ""))
@@ -777,16 +1298,19 @@ def _restore_identity_map(plan: dict[str, Any], mode: str) -> dict[str, str]:
             continue
         source = Path(str(operation.get("source") or ""))
         destination = Path(str(operation.get("destination") or ""))
-        source_objects = _json_identity_index(source)
-        destination_objects = _json_identity_index(destination)
+        contributor = known.get(str(operation.get("contributorId") or ""))
+        source_objects = (
+            contributor.build_identity_map(source, destination)
+            if contributor
+            else {}
+        )
         for original_id, source_digest in source_objects.items():
-            destination_digest = destination_objects.get(original_id)
-            if destination_digest is not None and destination_digest != source_digest and original_id not in result:
+            if original_id not in result:
                 result[original_id] = _restored_id(original_id, backup_id, source_digest)
     return result
 
 
-_REFERENCE_ID_FIELDS = {
+_REFERENCE_ID_FIELDS = frozenset({
     "id",
     "projectId",
     "conversationId",
@@ -796,10 +1320,10 @@ _REFERENCE_ID_FIELDS = {
     "mediaId",
     "automationId",
     "traceId",
-}
+})
 
 
-def _json_identity_index(root: Path) -> dict[str, str]:
+def _json_identity_index(root: Path, identity_fields: frozenset[str] = _REFERENCE_ID_FIELDS) -> dict[str, str]:
     result: dict[str, str] = {}
     if not root.is_dir():
         return result
@@ -812,7 +1336,7 @@ def _json_identity_index(root: Path) -> dict[str, str]:
         if not isinstance(value, dict):
             return
         encoded = hashlib.sha256(_stable_json(value)).hexdigest()
-        for key in _REFERENCE_ID_FIELDS:
+        for key in identity_fields:
             candidate = value.get(key)
             if isinstance(candidate, str) and candidate:
                 result.setdefault(candidate, encoded)
@@ -840,7 +1364,60 @@ def _tree_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
+def _rewrite_typed_json_references(
+    raw: bytes,
+    identity_map: dict[str, str],
+    backup_id: str,
+    *,
+    identity_fields: frozenset[str],
+    reference_fields: frozenset[str],
+    path_fields: frozenset[str],
+) -> bytes:
+    """Rewrite only fields declared by a contributor schema.
+
+    User messages, prompts, skill bodies, and arbitrary strings are traversed
+    but never modified merely because they happen to contain a colliding id.
+    """
+
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return raw
+
+    def rewrite_path(item: str) -> str:
+        parts = item.replace("\\", "/").split("/")
+        rewritten_parts = [
+            identity_map.get(part, identity_map.get(Path(part).stem, Path(part).stem) + Path(part).suffix)
+            for part in parts
+        ]
+        return "/".join(rewritten_parts)
+
+    def rewrite(item: Any) -> Any:
+        if isinstance(item, list):
+            return [rewrite(value) for value in item]
+        if isinstance(item, dict):
+            result: dict[str, Any] = {}
+            original_id: str | None = None
+            for key, child in item.items():
+                if isinstance(child, str) and key in identity_fields | reference_fields:
+                    if key in identity_fields and child in identity_map:
+                        original_id = child
+                    result[key] = identity_map.get(child, child)
+                elif isinstance(child, str) and key in path_fields:
+                    result[key] = rewrite_path(child)
+                else:
+                    result[key] = rewrite(child)
+            if original_id:
+                result["importedFrom"] = {"originalId": original_id, "sourceBackupId": backup_id}
+            return result
+        return item
+
+    return _stable_json(rewrite(value))
+
+
 def _rewrite_json_references(raw: bytes, identity_map: dict[str, str], backup_id: str) -> bytes:
+    """Legacy test/helper surface; restore contributors never call this."""
+
     try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -848,20 +1425,11 @@ def _rewrite_json_references(raw: bytes, identity_map: dict[str, str], backup_id
 
     def rewrite(item: Any) -> Any:
         if isinstance(item, str):
-            if item in identity_map:
-                return identity_map[item]
-            if "/" in item:
-                parts = item.split("/")
-                rewritten_parts = [
-                    identity_map.get(part, identity_map.get(Path(part).stem, Path(part).stem) + Path(part).suffix)
-                    for part in parts
-                ]
-                return "/".join(rewritten_parts)
-            return item
+            return identity_map.get(item, item)
         if isinstance(item, list):
-            return [rewrite(value) for value in item]
+            return [rewrite(child) for child in item]
         if isinstance(item, dict):
-            result = {key: rewrite(value) for key, value in item.items()}
+            result = {key: rewrite(child) for key, child in item.items()}
             original_id = item.get("id") or item.get("projectId")
             if isinstance(original_id, str) and original_id in identity_map:
                 result["importedFrom"] = {"originalId": original_id, "sourceBackupId": backup_id}
@@ -912,6 +1480,138 @@ def _safe_archive_name(filename: str) -> str:
     if not name.lower().endswith(".dsibackup"):
         name += ".dsibackup"
     return name[:120]
+
+
+def _version_compatible(source: str, target: str) -> bool:
+    def parse(value: str) -> tuple[int, int, int] | None:
+        try:
+            parts = value.split("-", 1)[0].split(".")
+            if len(parts) != 3:
+                return None
+            return int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            return None
+
+    source_version = parse(source)
+    target_version = parse(target)
+    if source_version is None or target_version is None:
+        return False
+    return source_version[0] == target_version[0] and source_version <= target_version
+
+
+def _public_restore(
+    metadata: dict[str, Any],
+    root: Path,
+    *,
+    include_frontend: bool = True,
+) -> dict[str, Any]:
+    identity_map = metadata.get("identityMap")
+    if not isinstance(identity_map, dict):
+        identity_map = {}
+    manifest = metadata.get("manifest")
+    if not isinstance(manifest, dict):
+        try:
+            manifest = _read_json(root / "plan.json").get("manifest", {})
+        except AppError:
+            manifest = {}
+    frontend_path = root / "verified" / "frontend" / "state.json"
+    if not frontend_path.is_file():
+        frontend_path = root / "extracted" / "frontend" / "state.json"
+    result = {
+        "ok": True,
+        **{
+            key: value
+            for key, value in metadata.items()
+            if key not in {"contributors", "identityMap", "manifest", "operations"}
+        },
+        "restoreId": str(metadata.get("restoreId") or root.name),
+        "applied": [
+            item.get("id")
+            for item in metadata.get("contributors", [])
+            if isinstance(item, dict) and item.get("swapped")
+        ],
+        "restoredIdentities": [
+            {
+                "originalId": original,
+                "restoredId": restored,
+                "reason": "collision",
+                "sourceBackupId": str(manifest.get("backupId") or ""),
+            }
+            for original, restored in sorted(identity_map.items())
+            if isinstance(original, str) and isinstance(restored, str)
+        ],
+    }
+    if include_frontend:
+        result["frontend"] = _read_json(frontend_path) if frontend_path.is_file() else None
+    return result
+
+
+def _update_server_fence(transaction: dict[str, Any], phase: str) -> None:
+    gate_root = RESTORE_DIR.parent
+    fence = mutation_gate.read_fence(gate_root)
+    if fence is None or fence.get("restoreId") != transaction.get("restoreId"):
+        fence = {
+            "schemaVersion": 1,
+            "restoreId": transaction["restoreId"],
+            "previousEpoch": transaction.get("previousEpoch", "unknown"),
+            "targetEpoch": transaction.get("targetEpoch", "unknown"),
+            "ownerDocumentId": transaction.get("ownerDocumentId", "server"),
+            "createdAt": transaction.get("createdAt", int(time.time() * 1000)),
+            "expiresAt": transaction.get("expiresAt", 2**63 - 1),
+        }
+    fence["phase"] = phase
+    mutation_gate.write_fence(fence, gate_root)
+
+
+def _rollback_transaction(transaction: dict[str, Any], root: Path) -> None:
+    transaction["phase"] = "aborting"
+    transaction["updatedAt"] = _utc_iso()
+    journal_path = root / "transaction.json"
+    _write_json(journal_path, transaction)
+    contributors = transaction.get("contributors", [])
+    if not isinstance(contributors, list):
+        raise AppError("Restore contributor journal is invalid", code=ErrorCode.INVALID_PAYLOAD)
+    for contributor in reversed(contributors):
+        if not isinstance(contributor, dict):
+            raise AppError("Restore contributor journal is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        destination = Path(str(contributor.get("destination") or ""))
+        rollback = Path(str(contributor.get("rollbackPath") or ""))
+        state = str(contributor.get("swapState") or "")
+        installed = bool(contributor.get("swapped")) or state in {"installing-staged", "swapped"}
+        old_moved = state in {"old-moved", "installing-staged", "swapped"} or rollback.exists()
+        if installed and destination.exists():
+            if destination.is_dir():
+                shutil.rmtree(destination)
+            else:
+                destination.unlink()
+        if bool(contributor.get("hadDestination")) and old_moved and rollback.exists():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(rollback, destination)
+        contributor["swapped"] = False
+        contributor["swapState"] = "rolled-back"
+        _write_json(journal_path, transaction)
+    shutil.rmtree(root / "staged", ignore_errors=True)
+    transaction["phase"] = "rolled-back"
+    transaction["rolledBackAt"] = _utc_iso()
+    transaction["updatedAt"] = _utc_iso()
+    _write_json(journal_path, transaction)
+    mutation_gate.clear_fence(str(transaction["restoreId"]), RESTORE_DIR.parent)
+    mutation_gate.bump_generation(RESTORE_DIR.parent)
+
+
+def _iso_age_seconds(value: Any, now: float) -> float | None:
+    if isinstance(value, (int, float)):
+        timestamp = float(value) / 1000 if value > 10_000_000_000 else float(value)
+        return max(0.0, now - timestamp)
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return max(0.0, now - parsed.timestamp())
 
 
 def _check_json_depth(value: Any, depth: int = 0) -> None:
@@ -993,9 +1693,16 @@ def _stable_json(value: Any) -> bytes:
 
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_bytes(_stable_json(value))
-    os.replace(temporary, path)
+    temporary = path.with_suffix(f"{path.suffix}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            handle.write(_stable_json(value))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -1014,6 +1721,44 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _fsync_file(path: Path) -> None:
+    """Flush a regular file using a writable handle where Windows requires it."""
+
+    try:
+        with path.open("r+b") as handle:
+            os.fsync(handle.fileno())
+    except OSError:
+        # Read-only imported files cannot always be reopened writable.  Their
+        # copy handle has already been closed; keep directory/journal fsync as
+        # the portable durability boundary instead of failing the restore.
+        return
+
+
+def _fsync_directory(path: Path) -> None:
+    """Best-effort directory entry durability (supported on POSIX)."""
+
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_tree(root: Path) -> None:
+    """Flush a prepared contributor before its digest is journaled."""
+
+    for path in sorted((item for item in root.rglob("*") if item.is_file()), key=lambda item: item.as_posix()):
+        _fsync_file(path)
+    for directory in sorted((item for item in root.rglob("*") if item.is_dir()), key=lambda item: len(item.parts), reverse=True):
+        _fsync_directory(directory)
+    _fsync_directory(root)
 
 
 def _copy_consistent(source: Path, target: Path) -> None:

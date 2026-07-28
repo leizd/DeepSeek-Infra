@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from deepseek_infra.core.config import REMINDERS_DIR, REMINDERS_FILE
+from deepseek_infra.infra.workspace import mutation_gate
 from deepseek_infra.core.errors import AppError, ErrorCode
 
 _LOCK = threading.RLock()
@@ -130,7 +131,8 @@ def _read_reminders() -> list[dict[str, Any]]:
 
 
 def _write_reminders(reminders: list[dict[str, Any]]) -> None:
-    REMINDERS_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = REMINDERS_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(reminders, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(REMINDERS_FILE)
+    with mutation_gate.mutation_scope(root=REMINDERS_DIR.parent):
+        REMINDERS_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = REMINDERS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(reminders, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(REMINDERS_FILE)

@@ -12,7 +12,7 @@ import pytest
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError
-from deepseek_infra.infra.workspace import backups
+from deepseek_infra.infra.workspace import backups, mutation_gate
 
 
 def _mutate_archive(source: Path, target: Path, mutate: object) -> None:
@@ -529,3 +529,365 @@ def test_merge_restore_combines_single_file_stores_and_remaps_media_paths(tmp_se
     assert imported["mediaId"] == restored_media_id
     assert imported["path"] == f"objects/{restored_media_id}/source.txt"
     assert (config.MEDIA_DIR / imported["path"]).read_text(encoding="utf-8") == "backup bytes"
+
+
+def test_cross_tier_restore_commit_abort_and_complete_are_idempotent(tmp_settings: Path) -> None:
+    config.MEMORY_DIR.mkdir(parents=True)
+    config.MEMORY_FILE.write_text('[{"id":"backup","content":"from backup"}]', encoding="utf-8")
+    created = backups.create_backup({"mode": "full"}, frontend_state=_frontend_envelope())
+    archive = backups.backup_path(str(created["backupId"]))
+    config.MEMORY_FILE.write_text('[{"id":"local","content":"before restore"}]', encoding="utf-8")
+    before = config.MEMORY_FILE.read_bytes()
+
+    plan = backups.inspect_archive(archive)
+    restore_id = str(plan["restoreId"])
+    prepared = backups.prepare_restore(
+        restore_id,
+        mode="merge",
+        previous_epoch="legacy",
+        target_epoch="epoch-test",
+        owner_document_id="document-test",
+    )
+    assert prepared["phase"] == "backend-staged"
+    assert config.MEMORY_FILE.read_bytes() == before
+    digest = "d" * 64
+    assert backups.frontend_prepared(restore_id, digest=digest)["phase"] == "frontend-staged"
+    assert backups.frontend_prepared(restore_id, digest=digest)["phase"] == "frontend-staged"
+    assert backups.commit_restore(restore_id, frontend_digest=digest)["phase"] == "commit-intent"
+    assert config.MEMORY_FILE.read_bytes() == before
+
+    committed = backups.commit_restore(
+        restore_id,
+        frontend_committed=True,
+        frontend_digest=digest,
+    )
+    assert committed["phase"] == "backend-committed"
+    assert backups.commit_restore(restore_id, frontend_committed=True, frontend_digest=digest)["phase"] == "backend-committed"
+    assert {item["content"] for item in json.loads(config.MEMORY_FILE.read_text(encoding="utf-8"))} == {
+        "before restore",
+        "from backup",
+    }
+    safety_id = str(committed["safetyBackupId"])
+    rolled_back = backups.abort_restore(restore_id)
+    assert rolled_back["phase"] == "rolled-back"
+    assert config.MEMORY_FILE.read_bytes() == before
+    assert backups.backup_path(safety_id).is_file()
+    assert backups.abort_restore(restore_id)["phase"] == "rolled-back"
+
+    second = backups.inspect_archive(archive)
+    second_id = str(second["restoreId"])
+    backups.prepare_restore(second_id, previous_epoch="legacy", target_epoch="epoch-complete")
+    backups.frontend_prepared(second_id, digest=digest)
+    backups.commit_restore(second_id, frontend_digest=digest)
+    backups.commit_restore(second_id, frontend_committed=True, frontend_digest=digest)
+    assert backups.complete_restore(second_id, frontend_digest=digest)["phase"] == "complete"
+    assert backups.complete_restore(second_id, frontend_digest=digest)["phase"] == "complete"
+
+
+def test_startup_recovery_rolls_back_interrupted_directory_exchange(tmp_settings: Path) -> None:
+    config.MEMORY_DIR.mkdir(parents=True)
+    config.MEMORY_FILE.write_text('[{"id":"backup","content":"backup"}]', encoding="utf-8")
+    created = backups.create_backup({"mode": "full"})
+    archive = backups.backup_path(str(created["backupId"]))
+    config.MEMORY_FILE.write_text('[{"id":"local","content":"keep"}]', encoding="utf-8")
+    before = config.MEMORY_FILE.read_bytes()
+    plan = backups.inspect_archive(archive)
+    restore_id = str(plan["restoreId"])
+    backups.prepare_restore(restore_id)
+    root = backups.RESTORE_DIR / restore_id
+    transaction = backups._read_json(root / "transaction.json")
+    memory_entry = next(item for item in transaction["contributors"] if item["id"] == "memory")
+    destination = Path(memory_entry["destination"])
+    rollback = Path(memory_entry["rollbackPath"])
+    rollback.parent.mkdir(parents=True, exist_ok=True)
+    memory_entry["swapState"] = "moving-old"
+    transaction["phase"] = "commit-intent"
+    backups._write_json(root / "transaction.json", transaction)
+    os.replace(destination, rollback)
+    memory_entry["swapState"] = "old-moved"
+    backups._write_json(root / "transaction.json", transaction)
+
+    recovered = backups.recover_interrupted_restores()
+    assert restore_id in recovered["rolledBack"]
+    assert config.MEMORY_FILE.read_bytes() == before
+    assert backups.get_restore(restore_id)["phase"] == "rolled-back"
+
+
+def test_schema_compatibility_and_typed_rewrite_leave_user_content_untouched(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = config.PROJECTS_DIR / "proj-user-text"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text(
+        json.dumps(
+            {
+                "id": "proj-user-text",
+                "projectId": "proj-user-text",
+                "prompt": "proj-user-text",
+                "message": "notes/proj-user-text/body",
+                "sourceRef": {"projectId": "proj-user-text"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    created = backups.create_backup({"mode": "full"})
+    archive = backups.backup_path(str(created["backupId"]))
+    (project / "project.json").write_text('{"id":"proj-user-text","name":"local"}', encoding="utf-8")
+    plan = backups.inspect_archive(archive)
+    restored = backups.apply_restore(str(plan["restoreId"]))
+    restored_id = restored["restoredIdentities"][0]["restoredId"]
+    imported = json.loads((config.PROJECTS_DIR / restored_id / "project.json").read_text(encoding="utf-8"))
+    assert imported["id"] == restored_id
+    assert imported["sourceRef"]["projectId"] == restored_id
+    assert imported["prompt"] == "proj-user-text"
+    assert imported["message"] == "notes/proj-user-text/body"
+
+    original_extract = backups._safe_extract_and_verify
+
+    def future_schema(archive_path: Path, destination: Path) -> dict[str, object]:
+        manifest = original_extract(archive_path, destination)
+        copied = json.loads(json.dumps(manifest))
+        copied["contributors"][0]["schemaVersion"] = 999
+        return copied
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backups, "_safe_extract_and_verify", future_schema)
+        future = backups.inspect_archive(archive)
+    assert future["compatible"] is False
+    assert future["migrations"][0]["from"] == 999
+    with pytest.raises(AppError, match="not compatible"):
+        backups.prepare_restore(str(future["restoreId"]))
+
+
+def test_restore_state_machine_rejects_invalid_transitions_and_digests(tmp_settings: Path) -> None:
+    config.MEMORY_DIR.mkdir(parents=True)
+    config.MEMORY_FILE.write_text('[{"id":"backup","content":"backup"}]', encoding="utf-8")
+    created = backups.create_backup({"mode": "full"}, frontend_state=_frontend_envelope())
+    plan = backups.inspect_archive(backups.backup_path(str(created["backupId"])))
+    restore_id = str(plan["restoreId"])
+
+    with pytest.raises(AppError, match="Unsupported"):
+        backups.prepare_restore(restore_id, mode="unsupported")
+    prepared = backups.prepare_restore(restore_id, target_epoch="epoch-errors")
+    assert backups.get_restore(restore_id)["phase"] == "backend-staged"
+    assert backups.prepare_restore(restore_id, target_epoch="epoch-errors")["serverTransactionDigest"] == prepared["serverTransactionDigest"]
+    with pytest.raises(AppError, match="parameters"):
+        backups.prepare_restore(restore_id, target_epoch="different")
+    with pytest.raises(AppError, match="invalid"):
+        backups.frontend_prepared(restore_id, digest="short")
+    with pytest.raises(AppError, match="not committed"):
+        backups.complete_restore(restore_id)
+    with pytest.raises(AppError, match="acknowledgement"):
+        backups.apply_restore(restore_id)
+
+    digest = "a" * 64
+    backups.frontend_prepared(restore_id, digest=digest)
+    with pytest.raises(AppError, match="changed"):
+        backups.frontend_prepared(restore_id, digest="b" * 64)
+    with pytest.raises(AppError, match="does not match"):
+        backups.commit_restore(restore_id, frontend_digest="c" * 64)
+    assert backups.commit_restore(restore_id, frontend_digest=digest)["phase"] == "commit-intent"
+    assert backups.commit_restore(restore_id, frontend_digest=digest)["phase"] == "commit-intent"
+    with pytest.raises(AppError, match="not committed"):
+        backups.complete_restore(restore_id, frontend_digest=digest)
+    backups.commit_restore(restore_id, frontend_committed=True, frontend_digest=digest)
+    with pytest.raises(AppError, match="digest"):
+        backups.complete_restore(restore_id, frontend_digest="b" * 64)
+    backups.complete_restore(restore_id, frontend_digest=digest)
+    with pytest.raises(AppError, match="cannot be aborted"):
+        backups.abort_restore(restore_id)
+
+
+def test_restore_retention_listing_deletion_and_recovery_required(tmp_settings: Path) -> None:
+    def write_record(restore_id: str, phase: str, updated_at: object) -> Path:
+        root = backups.RESTORE_DIR / restore_id
+        root.mkdir(parents=True)
+        backups._write_json(
+            root / "transaction.json",
+            {
+                "restoreId": restore_id,
+                "phase": phase,
+                "updatedAt": updated_at,
+                "contributors": [],
+                "identityMap": {},
+            },
+        )
+        return root
+
+    old_complete = write_record("restore_oldcomplete", "complete", "2000-01-01T00:00:00+00:00")
+    write_record("restore_recent", "complete", "2999-01-01T00:00:00+00:00")
+    old_rollback = write_record("restore_oldrollback", "rolled-back", 1)
+    active = write_record("restore_active", "backend-staged", "2000-01-01T00:00:00+00:00")
+    broken = backups.RESTORE_DIR / "restore_broken"
+    broken.mkdir(parents=True)
+    (broken / "transaction.json").write_text("{", encoding="utf-8")
+
+    listed = {item["restoreId"]: item for item in backups.list_restores()["restores"]}
+    assert listed["restore_broken"]["phase"] == "recovery-required"
+    with pytest.raises(AppError, match="Active"):
+        backups.delete_restore(active.name)
+
+    fenced = write_record("restore_fenceddelete", "complete", "2000-01-01T00:00:00+00:00")
+    mutation_gate.write_fence(
+        {
+            "schemaVersion": 1,
+            "restoreId": fenced.name,
+            "phase": "complete",
+        },
+        backups.RESTORE_DIR.parent,
+    )
+    with pytest.raises(AppError, match="active fence"):
+        backups.delete_restore(fenced.name)
+    mutation_gate.clear_fence(fenced.name, backups.RESTORE_DIR.parent)
+    assert backups.delete_restore(fenced.name) is True
+
+    cleaned = backups.cleanup_restores(now=2_000_000_000)
+    assert set(cleaned["deleted"]) == {old_complete.name, old_rollback.name}
+    assert not old_complete.exists()
+    assert not old_rollback.exists()
+    assert backups._iso_age_seconds("not-a-date", 1) is None
+    assert backups._iso_age_seconds(object(), 1) is None
+
+
+def test_startup_recovery_finishes_verified_exchange_and_fences_corruption(tmp_settings: Path) -> None:
+    committed_root = backups.RESTORE_DIR / "restore_installed"
+    committed_root.mkdir(parents=True)
+    destination = tmp_settings / "installed-destination"
+    destination.mkdir()
+    (destination / "state.json").write_text('{"ok":true}', encoding="utf-8")
+    transaction = {
+        "restoreId": committed_root.name,
+        "phase": "commit-intent",
+        "previousEpoch": "legacy",
+        "targetEpoch": "target",
+        "ownerDocumentId": "owner",
+        "createdAt": 1,
+        "expiresAt": 2**63 - 1,
+        "contributors": [
+            {
+                "id": "memory",
+                "destination": str(destination),
+                "stagedPath": str(committed_root / "staged" / "memory"),
+                "rollbackPath": str(committed_root / "rollback" / "memory"),
+                "digest": backups._tree_digest(destination),
+                "swapped": False,
+                "swapState": "installing-staged",
+            }
+        ],
+    }
+    backups._write_json(committed_root / "transaction.json", transaction)
+
+    corrupt_root = backups.RESTORE_DIR / "restore_corruptjournal"
+    corrupt_root.mkdir(parents=True)
+    (corrupt_root / "transaction.json").write_text("{", encoding="utf-8")
+    invalid_root = backups.RESTORE_DIR / "restore_invalidcontributor"
+    invalid_root.mkdir(parents=True)
+    backups._write_json(
+        invalid_root / "transaction.json",
+        {
+            "restoreId": invalid_root.name,
+            "phase": "commit-intent",
+            "previousEpoch": "legacy",
+            "targetEpoch": "target",
+            "contributors": ["invalid"],
+        },
+    )
+
+    recovered = backups.recover_interrupted_restores()
+    assert committed_root.name in recovered["backendCommitted"]
+    assert {corrupt_root.name, invalid_root.name} <= set(recovered["recoveryRequired"])
+    assert backups.get_restore(committed_root.name)["phase"] == "backend-committed"
+    fence = mutation_gate.read_fence(backups.RESTORE_DIR.parent)
+    assert fence is not None and fence["phase"] == "recovery-required"
+    mutation_gate.clear_fence(str(fence["restoreId"]), backups.RESTORE_DIR.parent)
+
+
+def test_mutation_gate_fence_generation_and_path_resolution(tmp_settings: Path) -> None:
+    root = tmp_settings
+    assert mutation_gate.read_generation(root) == 0
+    with mutation_gate.exclusive_gate(root):
+        with mutation_gate.exclusive_gate(root):
+            assert mutation_gate.bump_generation(root) == 1
+    assert mutation_gate.read_generation(root) == 1
+    with mutation_gate.mutation_scope(root=root):
+        assert mutation_gate.read_generation(root) == 2
+    assert mutation_gate.read_generation(root) == 3
+
+    fence = {"schemaVersion": 1, "restoreId": "restore-owner", "phase": "preparing"}
+    mutation_gate.write_fence(fence, root)
+    assert mutation_gate.read_fence(root) == fence
+    mutation_gate.assert_mutation_allowed("restore-owner", root)
+    with pytest.raises(AppError, match="fenced"):
+        mutation_gate.assert_mutation_allowed("peer", root)
+    with pytest.raises(AppError, match="another transaction"):
+        mutation_gate.clear_fence("wrong-owner", root)
+    assert mutation_gate.clear_fence("restore-owner", root) is True
+    assert mutation_gate.clear_fence("restore-owner", root) is False
+
+    mutation_gate.fence_path(root).write_text("[]", encoding="utf-8")
+    assert mutation_gate.read_fence(root) is None
+    mutation_gate.fence_path(root).write_text("{", encoding="utf-8")
+    with pytest.raises(AppError, match="unreadable"):
+        mutation_gate.read_fence(root)
+    mutation_gate.fence_path(root).unlink()
+    assert mutation_gate.workspace_root_for_path(config.MEMORY_FILE) == config.MEMORY_DIR.parent
+    arbitrary = tmp_settings / "external" / "item.json"
+    assert mutation_gate.workspace_root_for_path(arbitrary) == arbitrary.parent
+
+
+def test_backup_generation_retry_and_restore_helper_edges(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = backups.create_session({"mode": "full", "requiresFrontendState": False})
+    backup_id = str(created["backupId"])
+    candidates: list[Path] = []
+
+    def candidate(*_args: object) -> dict[str, object]:
+        path = backups.BACKUP_DIR / f"candidate-{len(candidates)}.dsibackup"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+        candidates.append(path)
+        return {"path": str(path), "bytes": 1, "archiveSha256": "x"}
+
+    generations = iter((0, 1, 2, 3, 4, 5))
+    monkeypatch.setattr(backups, "_build_archive", candidate)
+    monkeypatch.setattr(backups.mutation_gate, "read_generation", lambda _root: next(generations))
+    with pytest.raises(AppError, match="changed repeatedly"):
+        backups.finalize_session(backup_id)
+    assert all(not path.exists() for path in candidates)
+
+    raw = b"not-json"
+    assert backups._rewrite_typed_json_references(
+        raw,
+        {"old": "new"},
+        "backup",
+        identity_fields=frozenset({"id"}),
+        reference_fields=frozenset(),
+        path_fields=frozenset(),
+    ) == raw
+    rewritten = json.loads(backups._rewrite_json_references(b'{"id":"old","nested":["old"]}', {"old": "new"}, "backup"))
+    assert rewritten["id"] == "new"
+    assert rewritten["nested"] == ["new"]
+    assert rewritten["importedFrom"]["originalId"] == "old"
+    assert backups._version_compatible("4.4.0", "4.4.1") is True
+    assert backups._version_compatible("4.4", "4.4.1") is False
+    assert backups._version_compatible("future", "4.4.1") is False
+    assert backups._version_compatible("5.0.0", "4.4.1") is False
+    assert backups._iso_age_seconds("2000-01-01T00:00:00", 2_000_000_000) is not None
+
+    plan_only = backups.RESTORE_DIR / "restore_planonly"
+    plan_only.mkdir(parents=True)
+    backups._write_json(plan_only / "plan.json", {"restoreId": plan_only.name, "phase": "inspected"})
+    terminal = backups.RESTORE_DIR / "restore_terminal"
+    terminal.mkdir(parents=True)
+    backups._write_json(terminal / "transaction.json", {"restoreId": terminal.name, "phase": "failed", "contributors": []})
+    listed = {item["restoreId"] for item in backups.list_restores()["restores"]}
+    assert {plan_only.name, terminal.name} <= listed
+    assert backups.recover_interrupted_restores()["recoveryRequired"] == []
+
+    public_root = backups.RESTORE_DIR / "restore_public"
+    public_root.mkdir(parents=True)
+    public = backups._public_restore({"restoreId": public_root.name, "manifest": "invalid"}, public_root)
+    assert public["restoredIdentities"] == []

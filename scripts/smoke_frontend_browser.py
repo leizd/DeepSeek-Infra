@@ -3362,6 +3362,7 @@ async () => (await navigator.serviceWorker.getRegistrations()).map((registration
 
 async def run_cross_tab_checkpoint_smoke(base_url: str) -> dict[str, str]:
     """Exercise the v4.3.7 replica-convergence persistence contracts in a real browser."""
+    from playwright.async_api import Error as PlaywrightError
     from playwright.async_api import FilePayload
     from playwright.async_api import async_playwright
 
@@ -3371,6 +3372,9 @@ async def run_cross_tab_checkpoint_smoke(base_url: str) -> dict[str, str]:
     v3_snapshot_prefix = "deepseek-infra.session.v3.snapshot."
     v3_recovery_prefix = "deepseek-infra.session.v3.recovery."
     tab_selection_key = "deepseek-infra.current-conversation.v3"
+    restore_release = asyncio.Event()
+    restore_requested = asyncio.Event()
+    chat_request_count = 0
 
     config_payload = {
         "hasServerKey": True,
@@ -3388,6 +3392,21 @@ async def run_cross_tab_checkpoint_smoke(base_url: str) -> dict[str, str]:
         await route.fulfill(status=200, content_type="application/json", body=json.dumps(config_payload))
 
     async def mock_chat(route: Any) -> None:
+        nonlocal chat_request_count
+        chat_request_count += 1
+        try:
+            request_data = route.request.post_data_json
+        except (json.JSONDecodeError, TypeError):
+            request_data = {}
+        messages = request_data.get("messages", []) if isinstance(request_data, dict) else []
+        if any(isinstance(message, dict) and message.get("content") == "Fence restore stream" for message in messages):
+            restore_requested.set()
+            await restore_release.wait()
+            try:
+                await route.abort("aborted")
+            except PlaywrightError:
+                pass
+            return
         body = "\n".join(
             [
                 json.dumps({"type": "content", "text": reply_text}),
@@ -4663,6 +4682,77 @@ window.__v3SnapshotWriteTimes = [];
             )
         checks["recoveryCapsuleReconciledOnce"] = "PASS"
         await capsule_context.close()
+
+        # ---- 11. Restore Fence：旧标签页先冻结，只写旧 Epoch 胶囊且不重放请求 ----
+        restore_context = await browser.new_context(service_workers="allow")
+        await restore_context.route("**/api/config", mock_config)
+        await restore_context.route("**/api/chat", mock_chat)
+        await restore_context.route("**/api/title", mock_title)
+        stale_page = await restore_context.new_page()
+        owner_page = await restore_context.new_page()
+        await stale_page.goto(base_url, wait_until="networkidle")
+        await owner_page.goto(base_url, wait_until="networkidle")
+        await stale_page.locator("#reactPromptInput").fill("Fence restore stream")
+        await stale_page.locator("button.send-button").click()
+        await asyncio.wait_for(restore_requested.wait(), timeout=5)
+        requests_at_fence = chat_request_count
+        fence = {
+            "schemaVersion": 1,
+            "restoreId": "restore_browser_smoke",
+            "previousEpoch": "legacy",
+            "targetEpoch": "epoch-browser-smoke",
+            "ownerDocumentId": "owner-browser-smoke",
+            "phase": "preparing",
+            "createdAt": int(time.time() * 1000),
+            "expiresAt": int(time.time() * 1000) + 60_000,
+        }
+        await owner_page.evaluate(
+            """fence => localStorage.setItem('deepseek-infra.workspace.restore-fence', JSON.stringify(fence))""",
+            fence,
+        )
+        await stale_page.locator(".workspace-restored-overlay").wait_for(timeout=10_000)
+        await stale_page.evaluate(
+            """() => {
+              const button = document.querySelector('button.send-button');
+              if (button instanceof HTMLButtonElement) button.click();
+              window.dispatchEvent(new PageTransitionEvent('pagehide'));
+            }"""
+        )
+        await stale_page.wait_for_timeout(500)
+        if chat_request_count != requests_at_fence:
+            raise AssertionError("stale restore-fenced tab issued another paid chat request")
+        capsule = await stale_page.evaluate(
+            """() => {
+              for (let i = 0; i < localStorage.length; i += 1) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('deepseek-infra.session.v3.recovery.')) {
+                  const raw = localStorage.getItem(key) || '';
+                  if (raw.includes('Fence restore stream')) return { key, raw };
+                }
+              }
+              return null;
+            }"""
+        )
+        if not capsule:
+            raise AssertionError("stale restore-fenced tab did not preserve dirty state in the previous Epoch capsule")
+        await owner_page.evaluate(
+            "() => localStorage.setItem('deepseek-infra.workspace.active-epoch', 'epoch-browser-smoke')"
+        )
+        await stale_page.wait_for_timeout(300)
+        target_heads = await stale_page.evaluate(
+            """() => {
+              const prefix = 'deepseek-infra.session.v4.epoch-browser-smoke.head.';
+              return Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i))
+                .filter(key => key && key.startsWith(prefix));
+            }"""
+        )
+        if target_heads:
+            raise AssertionError(f"stale tab advanced restored Epoch heads: {target_heads}")
+        checks["restoreFenceBlocksPeerWrites"] = "PASS"
+        checks["staleTabDoesNotFlushAfterRestore"] = "PASS"
+        checks["noPaidRequestReplayed"] = "PASS"
+        restore_release.set()
+        await restore_context.close()
 
         await browser.close()
     return checks

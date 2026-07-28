@@ -47,6 +47,7 @@ from deepseek_infra.core.config import (
     SCHEDULER_RATE_PER_SECOND,
 )
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.workspace import mutation_gate
 
 # Priorities: lower value = higher precedence (admitted first).
 PRIORITY_INTERACTIVE = 0
@@ -320,17 +321,18 @@ def record_dead_letter(*, kind: str, reason: str, key: str = "", attempts: int =
     if not SCHEDULER_DLQ_ENABLED:
         return
     try:
-        _ensure_dlq_db()
-        with _DLQ_LOCK, _dlq_connect() as conn:
-            conn.execute(
-                f"INSERT INTO {DLQ_TABLE} (id, kind, key, reason, attempts, priority, created_at, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (uuid.uuid4().hex, str(kind), str(key), str(reason), int(attempts), int(priority), time.time(), str(detail)[:1000]),
-            )
-            conn.execute(
-                f"DELETE FROM {DLQ_TABLE} WHERE id NOT IN (SELECT id FROM {DLQ_TABLE} ORDER BY created_at DESC LIMIT ?)",
-                (int(SCHEDULER_DLQ_MAX_ROWS),),
-            )
-    except sqlite3.Error:
+        with mutation_gate.mutation_scope(root=SCHEDULER_DIR.parent):
+            _ensure_dlq_db()
+            with _DLQ_LOCK, _dlq_connect() as conn:
+                conn.execute(
+                    f"INSERT INTO {DLQ_TABLE} (id, kind, key, reason, attempts, priority, created_at, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (uuid.uuid4().hex, str(kind), str(key), str(reason), int(attempts), int(priority), time.time(), str(detail)[:1000]),
+                )
+                conn.execute(
+                    f"DELETE FROM {DLQ_TABLE} WHERE id NOT IN (SELECT id FROM {DLQ_TABLE} ORDER BY created_at DESC LIMIT ?)",
+                    (int(SCHEDULER_DLQ_MAX_ROWS),),
+                )
+    except (sqlite3.Error, AppError):
         return
 
 
@@ -386,19 +388,20 @@ def recover_orphans() -> int:
     cutoff = time.time() - max(1, int(SCHEDULER_ORPHAN_SECONDS))
     orphans: list[tuple[str, str, int]] = []
     try:
-        with _DLQ_LOCK, sqlite3.connect(GATEWAY_REQUEST_QUEUE_DB, timeout=10) as conn:
-            rows = conn.execute(
-                f"SELECT queue_id, kind, attempt_count FROM {REQUEST_QUEUE_TABLE} "
-                "WHERE status IN ('running', 'queued', 'created') AND updated_at < ?",
-                (cutoff,),
-            ).fetchall()
-            orphans = [(str(r[0]), str(r[1]), int(r[2] or 0)) for r in rows]
-            for queue_id, _kind, _attempts in orphans:
-                conn.execute(
-                    f"UPDATE {REQUEST_QUEUE_TABLE} SET status='failed', last_error='recovered_on_startup', updated_at=? WHERE queue_id=?",
-                    (time.time(), queue_id),
-                )
-    except sqlite3.Error:
+        with mutation_gate.mutation_scope(root=SCHEDULER_DIR.parent):
+            with _DLQ_LOCK, sqlite3.connect(GATEWAY_REQUEST_QUEUE_DB, timeout=10) as conn:
+                rows = conn.execute(
+                    f"SELECT queue_id, kind, attempt_count FROM {REQUEST_QUEUE_TABLE} "
+                    "WHERE status IN ('running', 'queued', 'created') AND updated_at < ?",
+                    (cutoff,),
+                ).fetchall()
+                orphans = [(str(r[0]), str(r[1]), int(r[2] or 0)) for r in rows]
+                for queue_id, _kind, _attempts in orphans:
+                    conn.execute(
+                        f"UPDATE {REQUEST_QUEUE_TABLE} SET status='failed', last_error='recovered_on_startup', updated_at=? WHERE queue_id=?",
+                        (time.time(), queue_id),
+                    )
+    except (sqlite3.Error, AppError):
         return 0
     for queue_id, kind, attempts in orphans:
         record_dead_letter(kind=kind or "request", key=queue_id, reason="recovered_on_startup", attempts=attempts)

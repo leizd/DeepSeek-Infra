@@ -9,6 +9,7 @@ from typing import Any
 from deepseek_infra.core.config import BUILTIN_PACKS_DIR, BUILTIN_SKILLS_DIR, SKILLS_DIR
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import utc_now_iso
+from deepseek_infra.infra.workspace import mutation_gate
 from deepseek_infra.infra.skills.pack import (
     PackSchemaError,
     embedded_skill_configs,
@@ -129,12 +130,13 @@ def delete_skill(skill_id: str) -> dict[str, Any]:
     normalized = normalize_skill_id(skill_id)
     path = custom_skill_path(normalized)
     if path.exists():
-        try:
-            path.unlink()
-        except OSError as exc:
-            raise AppError(f"Cannot delete Skill: {exc}", code=ErrorCode.INTERNAL, status=500) from exc
-        disabled_ids = [item for item in disabled_skill_ids() if item != normalized]
-        write_disabled_skill_ids(disabled_ids)
+        with mutation_gate.mutation_scope(root=SKILLS_DIR.parent):
+            try:
+                path.unlink()
+            except OSError as exc:
+                raise AppError(f"Cannot delete Skill: {exc}", code=ErrorCode.INTERNAL, status=500) from exc
+            disabled_ids = [item for item in disabled_skill_ids() if item != normalized]
+            write_disabled_skill_ids(disabled_ids)
         return {"ok": True, "deleted": normalized, "disabled": False}
     if is_builtin_skill(normalized):
         set_skill_disabled(normalized, True)
@@ -230,14 +232,16 @@ def disabled_skill_ids() -> list[str]:
 
 
 def write_disabled_skill_ids(skill_ids: list[str]) -> None:
-    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-    disabled_skills_path().write_text(json.dumps(sorted(set(skill_ids)), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with mutation_gate.mutation_scope(root=SKILLS_DIR.parent):
+        SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+        disabled_skills_path().write_text(json.dumps(sorted(set(skill_ids)), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def write_custom_skill(skill: dict[str, Any]) -> None:
-    custom_skills_dir().mkdir(parents=True, exist_ok=True)
-    path = custom_skill_path(str(skill.get("skillId") or ""))
-    path.write_text(json.dumps(skill, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with mutation_gate.mutation_scope(root=SKILLS_DIR.parent):
+        custom_skills_dir().mkdir(parents=True, exist_ok=True)
+        path = custom_skill_path(str(skill.get("skillId") or ""))
+        path.write_text(json.dumps(skill, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _load_skill_file(path: Path, *, builtin: bool) -> dict[str, Any]:
@@ -367,10 +371,11 @@ def delete_pack(pack_id: str) -> dict[str, Any]:
     normalized = normalize_pack_id(pack_id)
     path = custom_pack_path(normalized)
     if path.exists():
-        try:
-            path.unlink()
-        except OSError as exc:
-            raise AppError(f"Cannot delete Skill Pack: {exc}", code=ErrorCode.INTERNAL, status=500) from exc
+        with mutation_gate.mutation_scope(root=SKILLS_DIR.parent):
+            try:
+                path.unlink()
+            except OSError as exc:
+                raise AppError(f"Cannot delete Skill Pack: {exc}", code=ErrorCode.INTERNAL, status=500) from exc
         return {"ok": True, "deleted": normalized}
     if any(pack["packId"] == normalized for pack in load_builtin_packs()):
         raise AppError("Built-in Skill Packs are read-only; export and re-import as a custom Pack to edit", code=ErrorCode.FORBIDDEN, status=403)
@@ -416,9 +421,10 @@ def custom_pack_path(pack_id: str) -> Path:
 
 
 def write_custom_pack(pack: dict[str, Any]) -> None:
-    custom_packs_dir().mkdir(parents=True, exist_ok=True)
-    path = custom_pack_path(str(pack.get("packId") or ""))
-    path.write_text(json.dumps(pack, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with mutation_gate.mutation_scope(root=SKILLS_DIR.parent):
+        custom_packs_dir().mkdir(parents=True, exist_ok=True)
+        path = custom_pack_path(str(pack.get("packId") or ""))
+        path.write_text(json.dumps(pack, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _pack_manifest_for_storage(pack: dict[str, Any]) -> dict[str, Any]:

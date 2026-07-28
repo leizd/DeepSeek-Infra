@@ -11,6 +11,7 @@ from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.workspace import mutation_gate
 
 PROJECT_ID_RE = re.compile(r"[a-zA-Z0-9_-]{4,64}")
 WORKSPACE_ID_RE = re.compile(r"[a-zA-Z0-9_-]{4,80}")
@@ -180,10 +181,11 @@ def read_json_file(path: Path, default: dict[str, Any] | None = None) -> dict[st
 
 
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(path)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(path)
 
 
 def safe_filename(value: str, default: str = "item") -> str:

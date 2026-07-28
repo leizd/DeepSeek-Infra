@@ -5,11 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.0。
+适用版本：v4.4.1。
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
-> 4.3.7 completes replica convergence: every losing snapshot is indexed in a durable multi-branch conflict ledger; a conflicted tab remains isolated until an explicit transactional copy/discard resolution; per-document UUID writers are separate from tab continuity and defend against duplicate identities through BroadcastChannel claims; lock-free immutable proposals converge true siblings deterministically; degraded Heads self-heal to verified parents; missing Heads cannot resurrect known ids; and digest-verified Recovery Capsule V2 records compact safely, quarantine corruption and resolve exactly once. Dependencies, backend business protocols, provider ownership, bundle budgets and the frozen 4.0 runtime contract remain unchanged.
+> 4.4.1 makes workspace restore a crash-recoverable cross-tier transaction. Browser replicas are staged under a new Workspace Epoch and activated by one verified pointer write; stale tabs freeze before persistence and preserve dirty state only as previous-Epoch recovery copies. Backend Contributors are built in staging, validated, fsynced and exchanged behind a durable cross-process Fence and commit journal. Startup can deterministically finish or roll back an interrupted exchange, future schemas are rejected, declared references are remapped without touching user text, and large backup transfers remain streaming. Password encryption remains intentionally deferred to 4.4.2.
 
 图例：
 

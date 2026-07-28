@@ -14,6 +14,7 @@ export type PersistenceFlushResult =
         | "storage-unavailable"
         | "verification-failed"
         | "write-conflict"
+        | "restore-fenced"
         | "storage-pressure"
         | "unknown";
       message: string;

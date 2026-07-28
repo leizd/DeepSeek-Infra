@@ -89,6 +89,8 @@ from deepseek_infra.infra.rag.files import (
     load_cached_file,
 )
 from deepseek_infra.infra.tool_runtime.generated_files import download_descriptor, resolve_generated_file, save_generated_file_to_downloads
+from deepseek_infra.infra.workspace import mutation_gate
+from deepseek_infra.infra.workspace import backups as workspace_backups
 from deepseek_infra.infra.rag.local_rag import evaluate_recall as evaluate_local_rag_recall
 from deepseek_infra.infra.rag.local_rag import rebuild_index as rebuild_local_rag_index
 from deepseek_infra.infra.rag.local_rag import status as local_rag_status
@@ -378,6 +380,26 @@ def create_app() -> FastAPI:
     api = FastAPI(title="DeepSeek Infra", version=APP_VERSION)
 
     @api.middleware("http")
+    async def workspace_mutation_fence(request: Request, call_next: Any) -> Response:
+        path = request.url.path
+        mutation = request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        restore_protocol = path.startswith("/api/workspace/restores/")
+        backup_protocol = path.startswith("/api/workspace/backups")
+        exempt = restore_protocol or backup_protocol or path == "/api/auth/logout"
+        if mutation and path.startswith("/api/") and not exempt:
+            owner = request.headers.get("X-Workspace-Restore-Id")
+            try:
+                # Keep the async middleware non-blocking: durable writers take
+                # the cross-process gate at their actual mutation boundary.
+                # This early check covers endpoints that have not opened their
+                # backing store yet and returns a uniform 423 response.
+                mutation_gate.assert_mutation_allowed(owner, workspace_backups.RESTORE_DIR.parent)
+            except AppError as exc:
+                return json_response(exc.to_response(), status=exc.status)
+            return await call_next(request)
+        return await call_next(request)
+
+    @api.middleware("http")
     async def security_headers(request: Request, call_next: Any) -> Response:
         response = await call_next(request)
         apply_common_headers(response, request.url.path)
@@ -396,7 +418,7 @@ def create_app() -> FastAPI:
     async def options_route(request: Request, path: str = "") -> Response:
         headers = {
             "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Backup-Filename, X-Workspace-Restore-Id",
         }
         allowed_origin = allowed_cors_origin(request.headers.get("Origin", ""), request_port(request))
         if allowed_origin:

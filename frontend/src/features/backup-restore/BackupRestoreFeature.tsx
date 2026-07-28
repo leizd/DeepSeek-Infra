@@ -1,7 +1,6 @@
 import { useState } from "react";
 
 import {
-  applyWorkspaceRestore,
   backupCapabilities,
   createBackupSession,
   finalizeBackup,
@@ -15,7 +14,7 @@ import { useChat } from "../../contexts/ChatContext";
 import { useOverlay } from "../../contexts/OverlayContext";
 import { useSettings } from "../../contexts/SettingsContext";
 import { Icon } from "../../shared/ui/Icon";
-import { applyFrontendBackupEnvelope, collectFrontendBackupEnvelope } from "./frontendBackup";
+import { applyCoordinatedWorkspaceRestore, collectFrontendBackupEnvelope } from "./frontendBackup";
 import "../workspace/workspace-optional.css";
 import "./backup-restore.css";
 
@@ -49,7 +48,7 @@ export default function BackupRestoreFeature() {
       if (!flush.ok) throw new Error(flush.message);
       const capabilities = await backupCapabilities();
       if (capabilities.purpose !== "restorable-backup") throw new Error("服务端不支持可恢复备份");
-      const envelope = await collectFrontendBackupEnvelope(settings.runtime?.version ?? "4.4.0", includeDrafts);
+      const envelope = await collectFrontendBackupEnvelope(settings.runtime?.version ?? "4.4.1", includeDrafts);
       const created = await createBackupSession({
         mode: "full",
         projectIds: [],
@@ -95,10 +94,7 @@ export default function BackupRestoreFeature() {
     try {
       const flush = chat.flushConversationPersistence();
       if (!flush.ok) throw new Error(`当前标签页尚未安全落盘：${flush.message}`);
-      const restored = await applyWorkspaceRestore(plan.restoreId, restoreMode);
-      if (restored.frontend) {
-        await applyFrontendBackupEnvelope(restored.frontend, restored.restoreEpoch);
-      }
+      await applyCoordinatedWorkspaceRestore(plan.restoreId, restoreMode);
       setMessage("恢复已提交。即将进行一次受控刷新以载入新工作区。");
       window.setTimeout(() => window.location.reload(), 500);
     } catch (reason) {

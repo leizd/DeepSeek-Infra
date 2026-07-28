@@ -89,6 +89,14 @@ def test_workspace_routes_are_registered() -> None:
         "/api/workspace/backups/{backup_id}",
         "/api/workspace/backups/{backup_id}/download",
         "/api/workspace/restores/inspect",
+        "/api/workspace/restores",
+        "/api/workspace/restores/cleanup",
+        "/api/workspace/restores/{restore_id}",
+        "/api/workspace/restores/{restore_id}/prepare",
+        "/api/workspace/restores/{restore_id}/frontend-prepared",
+        "/api/workspace/restores/{restore_id}/commit",
+        "/api/workspace/restores/{restore_id}/complete",
+        "/api/workspace/restores/{restore_id}/abort",
         "/api/workspace/restores/{restore_id}/apply",
     }:
         assert expected in paths

@@ -5,6 +5,13 @@ import {
   type PersistenceFlushFailure,
 } from "../../app/persistenceErrors";
 import type { PersistenceFlushResult } from "../../app/reloadBlockers";
+import {
+  DEFAULT_WORKSPACE_EPOCH,
+  readActiveWorkspaceEpoch,
+  WORKSPACE_EPOCH_PREFIX,
+  WORKSPACE_RESTORE_FENCE_KEY,
+  type StorageLike,
+} from "../../domain/conversation/persistence";
 
 export interface ComposerDraft {
   conversationId: string;
@@ -25,6 +32,32 @@ export interface SessionStorageLike {
 }
 
 const KEY_PREFIX = "deepseek:composer-draft:";
+let loadedDraftEpoch: string | null = null;
+
+function currentDraftEpoch(): string {
+  if (loadedDraftEpoch) return loadedDraftEpoch;
+  try {
+    loadedDraftEpoch = readActiveWorkspaceEpoch(window.localStorage);
+  } catch {
+    loadedDraftEpoch = DEFAULT_WORKSPACE_EPOCH;
+  }
+  return loadedDraftEpoch;
+}
+
+function draftFenceFailure(): PersistenceFlushFailure | null {
+  try {
+    const local = window.localStorage as StorageLike;
+    if (
+      local.getItem(WORKSPACE_RESTORE_FENCE_KEY) !== null
+      || readActiveWorkspaceEpoch(local) !== currentDraftEpoch()
+    ) {
+      return { ok: false, code: "restore-fenced", message: "工作区恢复已冻结此标签页的草稿写入" };
+    }
+  } catch {
+    // Tests and non-browser renderers have no localStorage fence.
+  }
+  return null;
+}
 
 function browserSessionStorage(): SessionStorageLike | null {
   if (typeof window === "undefined") return null;
@@ -36,7 +69,9 @@ function browserSessionStorage(): SessionStorageLike | null {
 }
 
 export function composerDraftStorageKey(scope: ComposerDraftScope): string {
-  return `${KEY_PREFIX}${encodeURIComponent(scope.conversationId)}:${encodeURIComponent(scope.projectId ?? "")}`;
+  const epoch = currentDraftEpoch();
+  const prefix = epoch === DEFAULT_WORKSPACE_EPOCH ? KEY_PREFIX : `${WORKSPACE_EPOCH_PREFIX}${epoch}.draft.`;
+  return `${prefix}${encodeURIComponent(scope.conversationId)}:${encodeURIComponent(scope.projectId ?? "")}`;
 }
 
 function legacyDraftStorageKey(conversationId: string): string {
@@ -115,6 +150,7 @@ export function migrateLegacyDraft(
   conversationId: string,
   storage: SessionStorageLike,
 ): PersistenceFlushResult | null {
+  if (currentDraftEpoch() !== DEFAULT_WORKSPACE_EPOCH) return null;
   const legacyKey = legacyDraftStorageKey(conversationId);
   let raw: string | null;
   try {
@@ -164,6 +200,8 @@ export function saveComposerDraft(
 ): PersistenceFlushResult {
   const revision = String(draft.updatedAt);
   if (!storage) return storageUnavailableFailure("sessionStorage 不可用");
+  const fenced = draftFenceFailure();
+  if (fenced) return fenced;
   const key = composerDraftStorageKey({
     conversationId: draft.conversationId,
     projectId: draft.projectId ?? null,
@@ -200,6 +238,8 @@ export function clearComposerDraft(
   storage: SessionStorageLike | null = browserSessionStorage(),
 ): PersistenceFlushResult {
   if (!storage) return { ok: true };
+  const fenced = draftFenceFailure();
+  if (fenced) return fenced;
   const key = composerDraftStorageKey(scope);
   try {
     storage.removeItem(key);

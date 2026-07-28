@@ -3,6 +3,19 @@ import { httpClient, type HttpClient } from "./httpClient";
 export type WorkspacePackagePurpose = "share-export" | "restorable-backup";
 export type BackupPhase = "preparing" | "quiescing" | "snapshotting" | "verifying" | "ready" | "failed";
 export type RestoreMode = "merge" | "project-copy" | "replace-empty";
+export type RestorePhase =
+  | "inspected"
+  | "preparing"
+  | "backend-staged"
+  | "frontend-staged"
+  | "commit-intent"
+  | "frontend-committed"
+  | "backend-committed"
+  | "complete"
+  | "aborting"
+  | "rolled-back"
+  | "recovery-required"
+  | "failed";
 
 export interface BackupRequest {
   mode: "full" | "project";
@@ -39,9 +52,13 @@ export interface RestorePlan {
 
 export interface RestoreResult {
   restoreId: string;
-  phase: "complete" | "ready-for-frontend";
-  restoreEpoch: number;
-  safetyBackupId: string;
+  phase: RestorePhase | "ready-for-frontend";
+  previousEpoch?: string;
+  targetEpoch?: string;
+  frontendDigest?: string;
+  serverTransactionDigest?: string;
+  safetyBackupId?: string;
+  requiresFrontendApply?: boolean;
   frontend?: FrontendBackupEnvelopeV1 | null;
 }
 
@@ -93,12 +110,59 @@ export function finalizeBackup(backupId: string, client: HttpClient = httpClient
 }
 
 export async function inspectBackup(file: File, client: HttpClient = httpClient): Promise<RestorePlan> {
-  const form = new FormData();
-  form.append("file", file, file.name);
-  const response = await client.request("/api/workspace/restores/inspect", { method: "POST", body: form });
+  const response = await client.request("/api/workspace/restores/inspect", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/vnd.deepseek-infra.backup+zip",
+      "X-Backup-Filename": file.name,
+    },
+    body: file,
+  });
   return response.json() as Promise<RestorePlan>;
 }
 
 export function applyWorkspaceRestore(restoreId: string, mode: RestoreMode, client: HttpClient = httpClient) {
   return client.postJson<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/apply`, { mode });
+}
+
+export function prepareWorkspaceRestore(
+  restoreId: string,
+  request: { mode: RestoreMode; previousEpoch: string; targetEpoch: string; ownerDocumentId: string },
+  client: HttpClient = httpClient,
+) {
+  return client.postJson<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/prepare`, request);
+}
+
+export function markWorkspaceFrontendPrepared(
+  restoreId: string,
+  digest: string,
+  client: HttpClient = httpClient,
+) {
+  return client.json<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/frontend-prepared`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ digest }),
+  });
+}
+
+export function commitWorkspaceRestore(
+  restoreId: string,
+  request: { frontendCommitted: boolean; frontendDigest?: string },
+  client: HttpClient = httpClient,
+) {
+  return client.postJson<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/commit`, request);
+}
+
+export function completeWorkspaceRestore(restoreId: string, frontendDigest?: string, client: HttpClient = httpClient) {
+  return client.postJson<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/complete`, {
+    frontendDigest,
+  });
+}
+
+export function abortWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
+  return client.postJson<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/abort`, {});
+}
+
+export function getWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
+  return client.json<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}`);
 }

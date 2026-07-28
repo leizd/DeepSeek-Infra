@@ -4,6 +4,20 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.1] - Crash-Safe Restore Transactions and Replica Fencing
+
+### Cross-tier restore transaction
+
+- Adds durable Prepare, Frontend Prepared, Commit Intent, Commit, Complete and Abort phases with idempotent APIs and a safety backup that survives rollback.
+- Builds every Contributor in a verified staging directory, then exchanges complete directories under a cross-process mutation gate; startup recovery rolls back interrupted partial exchanges or preserves a fully committed transaction for acknowledgement.
+- Adds real compatibility planning and Contributor-declared identity, reference and path fields, so user messages, prompts, Skill bodies and artifact content are never rewritten by a generic string replacement.
+
+### Browser replica fencing
+
+- Namespaces Heads, snapshots, conflicts, tombstones and Recovery Capsules under one active Workspace Epoch. Restore stages every replica with a new UUID writer and fresh revisions, verifies every write, then commits with one active-pointer switch.
+- Adds durable browser Restore Fence and Journal records. Stale tabs cancel autosave and active requests before saving dirty work only into the previous Epoch capsule; they cannot send, delete, resolve conflicts or advance the restored workspace.
+- Streams backup upload/download paths, retains recovery-required transactions indefinitely, and adds safe list/delete/cleanup APIs without adding encryption, cloud targets, scheduled backups or new bundle budgets.
+
 ## [4.4.0] - Portable Workspace Backups and Verified Restore
 
 ### Portable, verified backups

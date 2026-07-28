@@ -1,22 +1,40 @@
 import {
+  abortWorkspaceRestore,
+  commitWorkspaceRestore,
+  completeWorkspaceRestore,
+  getWorkspaceRestore,
+  markWorkspaceFrontendPrepared,
+  prepareWorkspaceRestore,
+  type FrontendBackupEnvelopeV1,
+  type RestoreMode,
+} from "../../api/workspaceBackupApi";
+import {
   checkpointDigest,
   conversationStorageKeys,
-  createConversationPersistenceAdapter,
   parseDurableConflictBranch,
-  sessionConflictIndexKeyV3,
-  sessionConflictKeyV3,
-  sessionHeadKeyV3,
+  readActiveWorkspaceEpoch,
   sessionSnapshotKeyV3,
+  workspaceEpochStorage,
+  WORKSPACE_ACTIVE_EPOCH_KEY,
+  WORKSPACE_EPOCH_PREFIX,
+  WORKSPACE_RESTORE_FENCE_KEY,
   type ConversationCheckpointV3,
   type StorageLike,
 } from "../../domain/conversation/persistence";
-import type { PersistedConversationState } from "../../domain/conversation/types";
-import type { FrontendBackupEnvelopeV1 } from "../../api/workspaceBackupApi";
-import { saveComposerDraft, type ComposerDraft } from "../composer/composerDraftPersistence";
+import {
+  activateRestoreEpoch,
+  beginWorkspaceRestoreFence,
+  completeFrontendRestore,
+  markServerCommitted,
+  readFrontendRestoreJournal,
+  RESTORE_CHANNEL,
+  rollbackRestoreEpoch,
+  stageRestoreEnvelope,
+  verifyRestoreEpoch,
+  type WorkspaceRestoreFence,
+} from "../../domain/conversation/restorePersistence";
 
-const DRAFT_PREFIX = "deepseek:composer-draft:";
-const RESTORE_EPOCH_KEY = "deepseek-infra.restore-epoch";
-const RESTORE_CHANNEL = "deepseek-infra-workspace-restore";
+const LEGACY_DRAFT_PREFIX = "deepseek:composer-draft:";
 
 function keys(storage: StorageLike, prefix: string): string[] {
   const result: string[] = [];
@@ -53,7 +71,7 @@ function stableValue(value: unknown): unknown {
 async function sha256(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(stableValue(value)));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  return [...new Uint8Array(digest)].map((item) => item.toString(16).padStart(2, "0")).join("");
 }
 
 function verifiedCheckpoint(raw: string | null, conversationId: string, revision: string): ConversationCheckpointV3 | null {
@@ -69,24 +87,26 @@ export async function collectFrontendBackupEnvelope(
   storage: StorageLike = window.localStorage,
   session: StorageLike = window.sessionStorage,
 ): Promise<FrontendBackupEnvelopeV1> {
+  const epoch = readActiveWorkspaceEpoch(storage);
+  const scoped = workspaceEpochStorage(storage, epoch);
   const conversations: FrontendBackupEnvelopeV1["conversations"] = [];
-  for (const headKey of keys(storage, conversationStorageKeys.v3HeadPrefix)) {
+  for (const headKey of keys(scoped, conversationStorageKeys.v3HeadPrefix)) {
     const conversationId = headKey.slice(conversationStorageKeys.v3HeadPrefix.length);
-    const head = parseObject(storage.getItem(headKey));
+    const head = parseObject(scoped.getItem(headKey));
     const revision = typeof head?.revision === "string" ? head.revision : "";
-    const checkpoint = verifiedCheckpoint(storage.getItem(sessionSnapshotKeyV3(conversationId, revision)), conversationId, revision);
+    const checkpoint = verifiedCheckpoint(scoped.getItem(sessionSnapshotKeyV3(conversationId, revision)), conversationId, revision);
     if (!checkpoint || checkpoint.digest !== head?.digest) {
       throw new Error(`会话 ${conversationId} 的共享 Head 未通过摘要校验`);
     }
     const { writerId: _writerId, ...portableCheckpoint } = checkpoint;
     conversations.push({ conversationId, headRevision: revision, checkpoint: portableCheckpoint });
   }
-  const conflicts = keys(storage, conversationStorageKeys.v3ConflictPrefix)
-    .map((key) => parseDurableConflictBranch(storage.getItem(key)))
+  const conflicts = keys(scoped, conversationStorageKeys.v3ConflictPrefix)
+    .map((key) => parseDurableConflictBranch(scoped.getItem(key)))
     .filter((value) => value !== null)
     .flatMap(({ writerSessionId: _writerSessionId, ...branch }) => {
       const checkpoint = verifiedCheckpoint(
-        storage.getItem(sessionSnapshotKeyV3(branch.conversationId, branch.branchRevision)),
+        scoped.getItem(sessionSnapshotKeyV3(branch.conversationId, branch.branchRevision)),
         branch.conversationId,
         branch.branchRevision,
       );
@@ -94,11 +114,14 @@ export async function collectFrontendBackupEnvelope(
       const { writerId: _writerId, ...portableCheckpoint } = checkpoint;
       return [{ branch, checkpoint: portableCheckpoint }];
     });
+  const draftPrefix = epoch === "legacy"
+    ? LEGACY_DRAFT_PREFIX
+    : `${WORKSPACE_EPOCH_PREFIX}${epoch}.draft.`;
   const drafts = includeDrafts
-    ? keys(session, DRAFT_PREFIX).flatMap((key) => {
-      const value = parseObject(session.getItem(key));
-      return value ? [value] : [];
-    })
+    ? keys(session, draftPrefix).flatMap((key) => {
+        const value = parseObject(session.getItem(key));
+        return value ? [value] : [];
+      })
     : undefined;
   const unsigned = {
     schemaVersion: 1 as const,
@@ -111,139 +134,170 @@ export async function collectFrontendBackupEnvelope(
   return { ...unsigned, digest: await sha256(unsigned) };
 }
 
-export async function applyFrontendBackupEnvelope(
-  envelope: FrontendBackupEnvelopeV1,
-  restoreEpoch: number,
+export async function applyCoordinatedWorkspaceRestore(
+  restoreId: string,
+  mode: RestoreMode,
   storage: StorageLike = window.localStorage,
   session: StorageLike = window.sessionStorage,
 ): Promise<{ imported: number; remapped: number }> {
-  const { digest, ...unsigned } = envelope;
-  if (envelope.schemaVersion !== 1 || await sha256(unsigned) !== digest) {
-    throw new Error("浏览器恢复信封摘要无效");
-  }
-  const persistence = createConversationPersistenceAdapter();
-  const existing = persistence.load(storage, session);
-  const imported = [...existing.conversations];
-  const remappedIds = new Map<string, string>();
-  let remapped = 0;
-  for (const entry of envelope.conversations) {
-    const checkpoint = entry.checkpoint as Partial<ConversationCheckpointV3>;
-    if (!checkpoint.conversation || checkpointDigest(JSON.stringify(checkpoint.conversation)) !== checkpoint.digest) {
-      throw new Error(`会话 ${entry.conversationId} 的恢复快照无效`);
-    }
-    const previous = imported.find((conversation) => conversation.id === entry.conversationId);
-    if (previous && checkpointDigest(JSON.stringify(previous)) === checkpoint.digest) continue;
-    const conversation = structuredClone(checkpoint.conversation);
-    if (previous) {
-      conversation.id = `${entry.conversationId}.imported.${String(checkpoint.digest).slice(0, 12)}`;
-      conversation.title = `${conversation.title}（恢复副本）`;
-      remappedIds.set(entry.conversationId, conversation.id);
-      remapped += 1;
-    }
-    imported.push(conversation);
-  }
-  const state: PersistedConversationState = {
-    schemaVersion: 1,
-    currentConversationId: existing.currentConversationId ?? imported[0]?.id ?? null,
-    conversations: imported,
-  };
-  const result = await persistence.saveArbitrated(() => state, storage, session);
-  if (!result.ok) throw new Error(result.message);
-  for (const rawConflict of envelope.conflicts) {
-    if (!rawConflict || typeof rawConflict !== "object") continue;
-    const value = rawConflict as {
-      branch?: Record<string, unknown>;
-      checkpoint?: Partial<ConversationCheckpointV3>;
-    };
-    const branchSource = value.branch;
-    const originalConversationId = typeof branchSource?.conversationId === "string" ? branchSource.conversationId : "";
-    const originalConflictId = typeof branchSource?.conflictId === "string" ? branchSource.conflictId : "";
-    if (!originalConversationId || !originalConflictId || !value.checkpoint?.conversation) continue;
-    const conversationId = remappedIds.get(originalConversationId) ?? originalConversationId;
-    const conversation = structuredClone(value.checkpoint.conversation);
-    conversation.id = conversationId;
-    const digest = checkpointDigest(JSON.stringify(conversation));
-    const branchRevision = typeof branchSource?.branchRevision === "string" ? branchSource.branchRevision : `1.restore-${restoreEpoch}`;
-    const head = parseObject(storage.getItem(sessionHeadKeyV3(conversationId)));
-    const sharedRevision = typeof head?.revision === "string" ? head.revision : branchRevision;
-    const conflictId = checkpointDigest(`${originalConflictId}\0${conversationId}\0${restoreEpoch}`);
-    const checkpoint = {
-      ...value.checkpoint,
-      schemaVersion: 3,
-      conversationId,
-      revision: branchRevision,
-      writerId: "restore",
-      digest,
-      conversation,
-    };
-    const branch = {
-      ...branchSource,
-      schemaVersion: 1,
-      conflictId,
-      conversationId,
-      branchRevision,
-      parentBranchRevision: null,
-      baseRevision: sharedRevision,
-      sharedRevision,
-      writerSessionId: "restore",
-      status: "pending",
-      updatedAt: Date.now(),
-    };
-    storage.setItem(sessionSnapshotKeyV3(conversationId, branchRevision), JSON.stringify(checkpoint));
-    storage.setItem(sessionConflictKeyV3(conversationId, conflictId), JSON.stringify(branch));
-    storage.setItem(sessionConflictKeyV3(conversationId), JSON.stringify({
-      revision: branchRevision,
-      baseRevision: sharedRevision,
-      sharedRevision,
-      writerId: "restore",
-      savedAt: branch.updatedAt,
-    }));
-    const indexKey = sessionConflictIndexKeyV3(conversationId);
-    const index = parseObject(storage.getItem(indexKey));
-    const conflictIds = Array.isArray(index?.conflictIds)
-      ? index.conflictIds.filter((item): item is string => typeof item === "string")
-      : [];
-    if (!conflictIds.includes(conflictId)) conflictIds.push(conflictId);
-    storage.setItem(indexKey, JSON.stringify({ schemaVersion: 1, conflictIds }));
-    if (storage.getItem(sessionConflictKeyV3(conversationId, conflictId)) !== JSON.stringify(branch)) {
-      throw new Error(`冲突 ${originalConflictId} 写入后回读核验失败`);
-    }
-  }
-  for (const rawDraft of envelope.drafts ?? []) {
-    if (!rawDraft || typeof rawDraft !== "object") continue;
-    const value = rawDraft as Partial<ComposerDraft>;
-    if (typeof value.conversationId !== "string" || typeof value.text !== "string" || typeof value.updatedAt !== "number") continue;
-    const restored = saveComposerDraft({
-      conversationId: remappedIds.get(value.conversationId) ?? value.conversationId,
-      projectId: typeof value.projectId === "string" ? value.projectId : null,
-      text: value.text,
-      updatedAt: value.updatedAt,
-    }, session);
-    if (!restored.ok) throw new Error(restored.message);
-  }
-  storage.setItem(RESTORE_EPOCH_KEY, String(restoreEpoch));
+  const ownerDocumentId = globalThis.crypto?.randomUUID?.() ?? `document-${Date.now()}`;
+  const requestedTargetEpoch = `epoch-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+  const { fence } = beginWorkspaceRestoreFence(restoreId, requestedTargetEpoch, ownerDocumentId, storage);
+  const targetEpoch = fence.targetEpoch;
+  let frontendDigest: string | undefined;
+  let serverCompleted = false;
   try {
-    new BroadcastChannel(RESTORE_CHANNEL).postMessage({ type: "restore_epoch_changed", restoreEpoch });
-  } catch {
-    // Storage event remains the fallback for environments without BroadcastChannel.
+    const prepared = await prepareWorkspaceRestore(restoreId, {
+      mode,
+      previousEpoch: fence.previousEpoch,
+      targetEpoch,
+      ownerDocumentId,
+    });
+    let imported = 0;
+    let remapped = 0;
+    if (prepared.frontend) {
+      const staged = await stageRestoreEnvelope(
+        prepared.frontend,
+        {
+          restoreId,
+          targetEpoch,
+          serverTransactionDigest: prepared.serverTransactionDigest ?? "",
+        },
+        storage,
+        session,
+      );
+      imported = staged.stagedHeads;
+      remapped = staged.remapped;
+      frontendDigest = staged.digest;
+      await markWorkspaceFrontendPrepared(restoreId, frontendDigest);
+      await commitWorkspaceRestore(restoreId, { frontendCommitted: false, frontendDigest });
+      activateRestoreEpoch(restoreId, storage);
+      await commitWorkspaceRestore(restoreId, { frontendCommitted: true, frontendDigest });
+      markServerCommitted(restoreId, storage);
+    } else {
+      await commitWorkspaceRestore(restoreId, { frontendCommitted: false });
+    }
+    await completeWorkspaceRestore(restoreId, frontendDigest);
+    serverCompleted = true;
+    completeFrontendRestore(restoreId, storage);
+    return { imported, remapped };
+  } catch (reason) {
+    if (serverCompleted) throw reason;
+    let rolledBack = false;
+    try {
+      const aborted = await abortWorkspaceRestore(restoreId);
+      rolledBack = aborted.phase === "rolled-back";
+    } catch {
+      // Server may be unreachable.  Keep the fence and both journals; startup
+      // recovery must query server state before selecting an epoch.
+    }
+    if (rolledBack) rollbackRestoreEpoch(restoreId, storage);
+    throw reason;
   }
-  return { imported: envelope.conversations.length, remapped };
 }
 
-export function listenForRestoreEpoch(onChanged: (epoch: number) => void): () => void {
+/** Resume an interrupted owner tab deterministically from both journals. */
+export async function recoverInterruptedFrontendRestore(
+  storage: StorageLike = window.localStorage,
+): Promise<"none" | "complete" | "rolled-back" | "fenced"> {
+  const journal = readFrontendRestoreJournal(storage);
+  if (!journal) return "none";
+  if (journal.phase === "complete") {
+    // A renderer can stop after journaling completion but before deleting the
+    // fence key.  Completion is already durable, so finishing this cleanup is
+    // deterministic and does not require another server decision.
+    storage.removeItem(WORKSPACE_RESTORE_FENCE_KEY);
+    return "complete";
+  }
+  let server;
+  try {
+    server = await getWorkspaceRestore(journal.restoreId);
+  } catch {
+    return "fenced";
+  }
+  if (server.phase === "rolled-back" || server.phase === "failed") {
+    rollbackRestoreEpoch(journal.restoreId, storage);
+    return "rolled-back";
+  }
+  if (server.phase === "complete") {
+    await verifyRestoreEpoch(journal.restoreId, storage);
+    if (readActiveWorkspaceEpoch(storage) !== journal.targetEpoch) {
+      storage.setItem(WORKSPACE_ACTIVE_EPOCH_KEY, journal.targetEpoch);
+      if (storage.getItem(WORKSPACE_ACTIVE_EPOCH_KEY) !== journal.targetEpoch) return "fenced";
+    }
+    completeFrontendRestore(journal.restoreId, storage);
+    return "complete";
+  }
+  const frontendDigest = await sha256(journal.entries);
+  if (server.phase === "backend-committed") {
+    if (readActiveWorkspaceEpoch(storage) !== journal.targetEpoch) {
+      storage.setItem(WORKSPACE_ACTIVE_EPOCH_KEY, journal.targetEpoch);
+      if (storage.getItem(WORKSPACE_ACTIVE_EPOCH_KEY) !== journal.targetEpoch) return "fenced";
+    }
+    markServerCommitted(journal.restoreId, storage);
+    await completeWorkspaceRestore(journal.restoreId, journal.entries.length ? frontendDigest : undefined);
+    completeFrontendRestore(journal.restoreId, storage);
+    return "complete";
+  }
+  if (
+    journal.phase === "staged"
+    && ["backend-staged", "frontend-staged", "commit-intent"].includes(server.phase)
+  ) {
+    await verifyRestoreEpoch(journal.restoreId, storage);
+    if (server.phase === "backend-staged") {
+      await markWorkspaceFrontendPrepared(journal.restoreId, frontendDigest);
+    }
+    if (server.phase !== "commit-intent") {
+      await commitWorkspaceRestore(journal.restoreId, { frontendCommitted: false, frontendDigest });
+    }
+    activateRestoreEpoch(journal.restoreId, storage);
+    await commitWorkspaceRestore(journal.restoreId, { frontendCommitted: true, frontendDigest });
+    markServerCommitted(journal.restoreId, storage);
+    await completeWorkspaceRestore(journal.restoreId, frontendDigest);
+    completeFrontendRestore(journal.restoreId, storage);
+    return "complete";
+  }
+  if (server.phase === "commit-intent" && journal.phase === "active-epoch-switched") {
+    await commitWorkspaceRestore(journal.restoreId, {
+      frontendCommitted: true,
+      frontendDigest,
+    });
+    markServerCommitted(journal.restoreId, storage);
+    await completeWorkspaceRestore(journal.restoreId, frontendDigest);
+    completeFrontendRestore(journal.restoreId, storage);
+    return "complete";
+  }
+  return "fenced";
+}
+
+export function listenForRestoreEpoch(onChanged: (fence: WorkspaceRestoreFence) => void): () => void {
   let channel: BroadcastChannel | null = null;
   try {
     channel = new BroadcastChannel(RESTORE_CHANNEL);
     channel.onmessage = (event) => {
-      if (event.data?.type === "restore_epoch_changed" && typeof event.data.restoreEpoch === "number") {
-        onChanged(event.data.restoreEpoch);
-      }
+      if (event.data?.type === "workspace_restore_fence" && event.data.fence) onChanged(event.data.fence);
     };
   } catch {
     channel = null;
   }
   const onStorage = (event: StorageEvent) => {
-    if (event.key === RESTORE_EPOCH_KEY && event.newValue) onChanged(Number(event.newValue));
+    if (event.key === WORKSPACE_RESTORE_FENCE_KEY && event.newValue) {
+      const fence = parseObject(event.newValue) as unknown as WorkspaceRestoreFence | null;
+      if (fence?.restoreId) onChanged(fence);
+      return;
+    }
+    if (event.key === WORKSPACE_ACTIVE_EPOCH_KEY && event.newValue) {
+      onChanged({
+        schemaVersion: 1,
+        restoreId: "external-epoch-change",
+        previousEpoch: "",
+        targetEpoch: event.newValue,
+        ownerDocumentId: "",
+        phase: "commit-intent",
+        createdAt: Date.now(),
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      });
+    }
   };
   window.addEventListener("storage", onStorage);
   return () => {

@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v2.9.1。
+适用版本：v4.4.1。
 
 DeepSeek Infra 的服务形态是一个单进程 FastAPI / ASGI 运行时：`/v1` OpenAI 兼容网关、`/mcp`、`/a2a`、`/api/*` 业务端点，加 `/healthz`·`/readyz`·`/metrics` 运维三件套。所有可写状态（鉴权 token、文件缓存、向量索引、trace、语义缓存、记忆、任务快照）都集中在**一个数据目录**下，由 `DEEPSEEK_INFRA_ROOT`（优先）或 `DEEPSEEK_MOBILE_ROOT`（向后兼容）指定——这也是容器化只需要一个卷的原因。
 
@@ -87,10 +87,11 @@ WantedBy=multi-user.target
 - 外接 MCP server（v2.2.1）：默认关闭。启用时设置 `MCP_CLIENT_ENABLED=1` 与 `MCP_CLIENT_SERVERS='[{"name":"docs","url":"http://127.0.0.1:9001/mcp"}]'`，只连接可信地址；上线前用 `GET /api/mcp/external/tools` 核对 bridged tools、风险等级和审批要求。v2.2.2 起，Agent 和 `/mcp tools/call` 两条入口都会在外部 MCP executor 内部再次执行 ToolPolicy。
 - 升级：换新镜像 tag 重新 `up -d` 即可；数据目录内的 SQLite schema 由各模块幂等迁移，跨小版本升级无需手工步骤。升级前推荐用“备份与恢复”界面或 `python scripts/backup_workspace.py --out workspace.dsibackup` 生成并校验可移植备份。
 
-### 4.4.0 备份策略
+### 4.4.1 备份与崩溃恢复策略
 
-- **在线备份（推荐）**：使用 `.dsibackup`。运行时会收敛写入、通过 SQLite backup API 取一致快照、逐文件校验，并排除 `.env`、`.auth-token`、API Key、缓存、PID 与锁。浏览器对话由当前标签页完成 Flush 和摘要校验后贡献。
-- **恢复**：先运行 `python scripts/restore_workspace.py workspace.dsibackup --inspect`。确认版本、校验、迁移、冲突和空间计划后，再用 `--apply --mode merge`；Apply 会自动创建 pre-restore safety snapshot。
+- **在线备份（推荐）**：使用 `.dsibackup`。运行时在跨进程 Mutation Gate 下记录 Contributor generation，流式复制后再次核对；代际变化会重试。SQLite 使用 backup API，逐文件校验，并排除 `.env`、`.auth-token`、API Key、缓存、PID 与锁。
+- **恢复**：先运行 `python scripts/restore_workspace.py workspace.dsibackup --inspect`。浏览器参与的包必须通过 UI 的协调式 Prepare / Frontend Prepared / Commit / Complete 流程；服务端不会再用旧单调用 API 提前提交浏览器恢复。无浏览器状态的 CLI 包仍可 `--apply --mode merge`。
+- **崩溃恢复**：`.restore-staging/<restoreId>/transaction.json` 记录 Contributor 准备、目录交换和 rollback 路径，`.workspace-restore-fence.json` 阻止普通写入，`.workspace-mutation.lock` 在 Web、CLI 和后台 Worker 间互斥。服务启动时会扫描未完成 Journal；`recovery-required` 记录和对应 Safety Backup 不得自动删除。
 - **冷备**：必须先完全停止服务，再复制整个 `/data` 卷。直接复制运行中的卷可能得到跨 SQLite / JSON 时间点不一致的内容。
 - `.dsibackup` **完整性可验证但默认未加密**；把它当作完整工作区敏感数据存储。分享用 Export 已脱敏或裁剪，不能用于 Restore。
 

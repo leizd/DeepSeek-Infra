@@ -14,7 +14,9 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from deepseek_infra.core.errors import AppError
+from deepseek_infra.infra.workspace import mutation_gate
 import deepseek_infra.web.routes.workspace as workspace_routes
+from deepseek_infra.web import server as server_module
 from deepseek_infra.web.routes.workspace import WorkspaceRouteDeps, create_workspace_router
 
 
@@ -92,7 +94,8 @@ def test_backup_session_finalize_download_and_inspect(client: TestClient) -> Non
     ready = client.post(f"/api/workspace/backups/{backup_id}/finalize", json={})
     assert ready.status_code == 200
     assert ready.json()["phase"] == "ready"
-    downloaded = client.get(f"/api/workspace/backups/{backup_id}/download")
+    with patch.object(Path, "read_bytes", side_effect=AssertionError("backup download must stream")):
+        downloaded = client.get(f"/api/workspace/backups/{backup_id}/download")
     assert downloaded.status_code == 200
     assert downloaded.headers["content-type"].startswith("application/vnd.deepseek-infra.backup")
 
@@ -103,6 +106,144 @@ def test_backup_session_finalize_download_and_inspect(client: TestClient) -> Non
     )
     assert inspected.status_code == 200
     assert inspected.json()["purpose"] == "restorable-backup"
+
+
+def test_backup_stream_upload_stops_at_limit_and_cleans_temporary_file(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workspace_routes.workspace_backups, "MAX_ARCHIVE_BYTES", 1)
+    response = client.post(
+        "/api/workspace/restores/inspect",
+        content=b"xx",
+        headers={
+            "Content-Type": "application/vnd.deepseek-infra.backup+zip",
+            "X-Backup-Filename": "large.dsibackup",
+        },
+    )
+    assert response.status_code == 413
+    upload_dir = workspace_routes.workspace_backups.RESTORE_DIR / ".uploads"
+    assert not upload_dir.exists() or not list(upload_dir.iterdir())
+
+
+def test_restore_transaction_routes_and_legacy_upload(client_with_files: TestClient) -> None:
+    restore_id = "restore-route"
+    result = {"ok": True, "restoreId": restore_id, "phase": "backend-staged"}
+    with (
+        patch.object(workspace_routes.workspace_backups, "inspect_archive", return_value={"ok": True, "restoreId": restore_id}),
+        patch.object(workspace_routes.workspace_backups, "put_frontend_state", return_value={"ok": True}),
+        patch.object(workspace_routes.workspace_backups, "get_session", return_value={"ok": True, "phase": "ready"}),
+        patch.object(workspace_routes.workspace_backups, "delete_backup", return_value=True),
+        patch.object(workspace_routes.workspace_backups, "list_restores", return_value={"ok": True, "restores": [result]}),
+        patch.object(workspace_routes.workspace_backups, "cleanup_restores", return_value={"ok": True, "deleted": []}),
+        patch.object(workspace_routes.workspace_backups, "get_restore", return_value=result),
+        patch.object(workspace_routes.workspace_backups, "delete_restore", return_value=True),
+        patch.object(workspace_routes.workspace_backups, "prepare_restore", return_value=result) as prepare,
+        patch.object(workspace_routes.workspace_backups, "frontend_prepared", return_value={**result, "phase": "frontend-staged"}) as staged,
+        patch.object(workspace_routes.workspace_backups, "commit_restore", return_value={**result, "phase": "backend-committed"}) as commit,
+        patch.object(workspace_routes.workspace_backups, "complete_restore", return_value={**result, "phase": "complete"}) as complete,
+        patch.object(workspace_routes.workspace_backups, "abort_restore", return_value={**result, "phase": "rolled-back"}),
+        patch.object(workspace_routes.workspace_backups, "apply_restore", return_value={**result, "phase": "complete"}) as apply,
+    ):
+        legacy = client_with_files.post(
+            "/api/workspace/restores/inspect",
+            files={"backup": ("backup.dsibackup", b"data", "application/octet-stream")},
+        )
+        assert legacy.status_code == 200
+        assert client_with_files.put("/api/workspace/backups/backup_route/frontend-state", json={"schemaVersion": 1}).status_code == 200
+        assert client_with_files.get("/api/workspace/backups/backup_route").json()["phase"] == "ready"
+        assert client_with_files.delete("/api/workspace/backups/backup_route").json()["deleted"] is True
+        assert client_with_files.get("/api/workspace/restores").json()["restores"]
+        assert client_with_files.post("/api/workspace/restores/cleanup").status_code == 200
+        assert client_with_files.get(f"/api/workspace/restores/{restore_id}").status_code == 200
+        assert client_with_files.delete(f"/api/workspace/restores/{restore_id}").json()["deleted"] is True
+        prepared = client_with_files.post(
+            f"/api/workspace/restores/{restore_id}/prepare",
+            json={
+                "mode": "project-copy",
+                "previousEpoch": "old",
+                "targetEpoch": "new",
+                "ownerDocumentId": "document",
+            },
+        )
+        assert prepared.status_code == 200
+        prepare.assert_called_once_with(
+            restore_id,
+            mode="project-copy",
+            previous_epoch="old",
+            target_epoch="new",
+            owner_document_id="document",
+        )
+        assert client_with_files.put(
+            f"/api/workspace/restores/{restore_id}/frontend-prepared",
+            json={"digest": "d" * 64},
+        ).status_code == 200
+        staged.assert_called_once_with(restore_id, digest="d" * 64)
+        assert client_with_files.post(
+            f"/api/workspace/restores/{restore_id}/commit",
+            json={"frontendCommitted": True, "frontendDigest": "d" * 64},
+        ).status_code == 200
+        commit.assert_called_once_with(restore_id, frontend_committed=True, frontend_digest="d" * 64)
+        assert client_with_files.post(
+            f"/api/workspace/restores/{restore_id}/complete",
+            json={"frontendDigest": "d" * 64},
+        ).status_code == 200
+        complete.assert_called_once_with(restore_id, frontend_digest="d" * 64)
+        assert client_with_files.post(f"/api/workspace/restores/{restore_id}/abort").status_code == 200
+        assert client_with_files.post(
+            f"/api/workspace/restores/{restore_id}/apply",
+            json={"mode": "replace-empty"},
+        ).status_code == 200
+        apply.assert_called_once_with(restore_id, mode="replace-empty")
+
+
+def test_restore_upload_rejects_empty_multipart_and_digest_mismatch(client: TestClient) -> None:
+    missing = client.post(
+        "/api/workspace/restores/inspect",
+        files={"backup": ("backup.dsibackup", b"data", "application/octet-stream")},
+    )
+    assert missing.status_code == 400
+    empty = client.post(
+        "/api/workspace/restores/inspect",
+        content=b"",
+        headers={"Content-Type": "application/vnd.deepseek-infra.backup+zip"},
+    )
+    assert empty.status_code == 400
+    with patch.object(
+        workspace_routes.workspace_backups,
+        "inspect_archive",
+        return_value={"ok": True, "archiveSha256": "wrong"},
+    ):
+        mismatch = client.post(
+            "/api/workspace/restores/inspect",
+            content=b"payload",
+            headers={"Content-Type": "application/vnd.deepseek-infra.backup+zip"},
+        )
+    assert mismatch.status_code == 400
+
+
+def test_durable_restore_fence_blocks_peer_api_mutations_but_not_reads(tmp_settings: Path) -> None:
+    root = workspace_routes.workspace_backups.RESTORE_DIR.parent
+    fence = {
+        "schemaVersion": 1,
+        "restoreId": "restore_route_fence",
+        "previousEpoch": "legacy",
+        "targetEpoch": "epoch-route",
+        "ownerDocumentId": "owner",
+        "phase": "preparing",
+        "createdAt": 1,
+        "expiresAt": 2**63 - 1,
+    }
+    mutation_gate.write_fence(fence, root)
+    try:
+        with TestClient(server_module.create_app(), base_url="http://127.0.0.1") as live:
+            headers = {"Cookie": f"auth_token={server_module.settings.auth.token}"}
+            blocked = live.post("/api/projects", json={"action": "create", "name": "blocked"}, headers=headers)
+            assert blocked.status_code == 423
+            readable = live.get("/api/workspace/projects", headers=headers)
+            assert readable.status_code == 200
+    finally:
+        mutation_gate.clear_fence("restore_route_fence", root)
 
 
 def test_project_files_no_files(client: TestClient) -> None:

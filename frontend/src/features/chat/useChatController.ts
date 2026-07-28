@@ -77,7 +77,7 @@ const STORAGE_SYNC_FALLBACK_MS = 1_000;
 
 export type MessageSubmissionResult =
   | { accepted: true; conversationId: string }
-  | { accepted: false; reason: "missing-key" | "busy" | "empty" | "offline" };
+  | { accepted: false; reason: "missing-key" | "busy" | "empty" | "offline" | "restore-fenced" };
 
 export interface PendingMemorySuggestion {
   id: string;
@@ -122,6 +122,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
   stateRef.current = state;
   // 同步接受守卫：dispatch 尚未反映到 state 前，同一 tick 的重复提交直接拒绝。
   const submissionGuardRef = useRef(false);
+  const restoreFencedRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const outputPauseGateRef = useRef<ReturnType<typeof createOutputPauseGate> | null>(null);
   if (!outputPauseGateRef.current) outputPauseGateRef.current = createOutputPauseGate();
@@ -208,6 +209,13 @@ export function useChatController(options: ChatControllerOptions = {}) {
     // 生命周期 flush（pagehide / beforeunload / 构建更新激活）：取消待决的
     // 防抖/节流定时器并由本次同步 flush 接管提交——立即提交全部脏状态，绝不双提交。
     cancelAutosaveTimer();
+    if (restoreFencedRef.current) {
+      const capsuleFailure = persistence.writeRecoveryCapsule(readPersistedState(), undefined, options.session);
+      if (capsuleFailure) {
+        recordFlushReport({ ok: false, results: { conversation: capsuleFailure }, failedIds: ["conversation"] });
+      }
+      return { ok: false, code: "restore-fenced", message: "工作区恢复已冻结此标签页" };
+    }
     lastCommitAtRef.current = Date.now();
     let result: PersistenceFlushResult;
     try {
@@ -261,6 +269,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
   const arbitratedFlightRef = useRef({ running: false, queued: false });
   const arbitratedFlushRef = useRef<() => void>(() => undefined);
   arbitratedFlushRef.current = () => {
+    if (restoreFencedRef.current) return;
     const flight = arbitratedFlightRef.current;
     if (flight.running) {
       flight.queued = true;
@@ -431,6 +440,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
 
   // 查看最新与保留副本都由持久化层完成耐久事务，成功后才换 State / 释放 Ledger。
   const resolveConflictByReload = useCallback(async () => {
+    if (restoreFencedRef.current) return;
     if (!conflict || resolvingConflict) return;
     setResolvingConflict(true);
     try {
@@ -447,6 +457,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
   }, [conflict, resolvingConflict, persistence, finishConflict, recordFailedResult]);
 
   const resolveConflictByCopy = useCallback(async () => {
+    if (restoreFencedRef.current) return;
     if (!conflict || resolvingConflict) return;
     setResolvingConflict(true);
     try {
@@ -563,6 +574,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
 
   const tryStartMessage = useCallback(
     (input: string, options: { attachments?: readonly Attachment[]; online?: boolean } = {}): MessageSubmissionResult => {
+      if (restoreFencedRef.current) return { accepted: false, reason: "restore-fenced" };
       if (options.online === false) return { accepted: false, reason: "offline" };
       const attachments = options.attachments ?? [];
       if (settings.agentMode) {
@@ -622,6 +634,8 @@ export function useChatController(options: ChatControllerOptions = {}) {
       const result = tryStartMessage(input, options);
       if (!result.accepted && result.reason === "missing-key") {
         dispatch({ type: "noticeSet", notice: "请先在连接设置中输入 DeepSeek API Key" });
+      } else if (!result.accepted && result.reason === "restore-fenced") {
+        dispatch({ type: "noticeSet", notice: "工作区恢复进行中，此标签页已停止发送请求" });
       }
     },
     [tryStartMessage],
@@ -629,6 +643,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
 
   const editAndResend = useCallback(
     async (messageId: string, input: string) => {
+      if (restoreFencedRef.current) return;
       const content = input.trim();
       if (state.requestStatus === "streaming" || !state.currentConversationId) return;
       const messages = selectCurrentMessages(state);
@@ -667,6 +682,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
 
   const regenerate = useCallback(
     async (messageId: string) => {
+      if (restoreFencedRef.current) return;
       if (state.requestStatus === "streaming") return;
       const messages = selectCurrentMessages(state);
       const targetIndex = messages.findIndex((message) => message.id === messageId && message.role === "assistant");
@@ -690,6 +706,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
 
   const continueGeneration = useCallback(
     async (messageId: string) => {
+      if (restoreFencedRef.current) return;
       if (state.requestStatus === "streaming") return;
       const messages = selectCurrentMessages(state);
       const targetIndex = messages.findIndex((message) => message.id === messageId && message.role === "assistant");
@@ -726,6 +743,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
 
   const saveMemorySuggestion = useCallback(
     async (replaceIds: readonly string[] = []) => {
+      if (restoreFencedRef.current) return;
       const suggestion = pendingMemorySuggestion;
       if (!suggestion) return;
       try {
@@ -776,6 +794,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
   // 既有行为（reducer 同样拒绝删除）。
   const deleteConversation = useCallback(
     (conversationId: string) => {
+      if (restoreFencedRef.current) return;
       if (stateRef.current.requestStatus === "streaming") return;
       void persistence
         // saveCallbacksRef 在首次渲染即初始化，此处必然非空。
@@ -791,6 +810,21 @@ export function useChatController(options: ChatControllerOptions = {}) {
     },
     [persistence, options.session, recordFailedResult],
   );
+
+  const freezeForWorkspaceRestore = useCallback((_epochs: { previousEpoch: string; targetEpoch: string }) => {
+    if (restoreFencedRef.current) return;
+    restoreFencedRef.current = true;
+    submissionGuardRef.current = true;
+    cancelAutosaveTimer();
+    abortControllerRef.current?.abort();
+    outputPauseGateRef.current?.pause();
+    persistence.setTabLease(false, undefined, options.session);
+    const capsuleFailure = persistence.writeRecoveryCapsule(readPersistedState(), undefined, options.session);
+    if (capsuleFailure) {
+      recordFlushReport({ ok: false, results: { conversation: capsuleFailure }, failedIds: ["conversation"] });
+    }
+    dispatch({ type: "noticeSet", notice: "工作区恢复已冻结此标签页；未提交内容已保存在旧 Epoch 恢复胶囊" });
+  }, [cancelAutosaveTimer, options.session, persistence, readPersistedState]);
 
   return {
     state,
@@ -826,6 +860,7 @@ export function useChatController(options: ChatControllerOptions = {}) {
     dismissMemorySuggestion,
     quoteMessage,
     clearQuote,
+    freezeForWorkspaceRestore,
     flushConversationPersistence,
   };
 }
