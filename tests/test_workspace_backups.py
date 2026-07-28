@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -210,9 +211,12 @@ def test_session_failure_limits_and_restore_metadata_errors(
     with pytest.raises(RuntimeError, match="snapshot failed"):
         backups.finalize_session(str(failed["backupId"]))
     assert backups.get_session(str(failed["backupId"]))["phase"] == "failed"
+    assert backups.delete_backup(str(failed["backupId"])) is True
     monkeypatch.setattr(backups, "_build_archive", original_build_archive)
 
     ready = backups.create_backup({"mode": "full"}, frontend_state=_frontend_envelope())
+    archive = backups.backup_path(str(ready["backupId"]))
+    assert backups.inspect_archive(archive.read_bytes())["compatible"] is True
     with pytest.raises(AppError, match="no longer accepts"):
         backups.put_frontend_state(str(ready["backupId"]), _frontend_envelope())
     session_path = backups._session_dir(str(ready["backupId"])) / "session.json"
@@ -229,6 +233,18 @@ def test_session_failure_limits_and_restore_metadata_errors(
     source.write_bytes(b"x")
     with pytest.raises(AppError, match="too large"):
         backups.inspect_archive(source)
+    monkeypatch.setattr(backups, "MAX_ARCHIVE_BYTES", 2_000_000_000)
+    monkeypatch.setattr(backups, "MAX_ENTRIES", 0)
+    with pytest.raises(AppError, match="too many files"):
+        backups.inspect_archive(archive)
+    monkeypatch.setattr(backups, "MAX_ENTRIES", 10_000)
+    monkeypatch.setattr(backups, "MAX_EXPANDED_BYTES", 0)
+    with pytest.raises(AppError, match="entry is too large"):
+        backups.inspect_archive(archive)
+    monkeypatch.setattr(backups, "MAX_EXPANDED_BYTES", 5_000_000_000)
+    monkeypatch.setattr(backups, "MAX_COMPRESSION_RATIO", 0)
+    with pytest.raises(AppError, match="compression ratio"):
+        backups.inspect_archive(archive)
     with pytest.raises(AppError, match="Invalid restore id"):
         backups._restore_root("../bad")
 
@@ -271,9 +287,25 @@ def test_contributor_collision_and_project_artifact_reference_helpers(tmp_settin
     )
     context = backups.BackupContext(mode="project", project_ids=("missing", "proj-helper"))
     assert backups._project_artifact_paths(context) == {"nested/result.md"}
+    config.FILE_CACHE_DIR.mkdir(parents=True)
+    (config.FILE_CACHE_DIR / "unrelated.txt").write_text("cache", encoding="utf-8")
+    file_cache = backups.DirectoryContributor("project-files", 1, "durable", "merge", lambda: config.FILE_CACHE_DIR)
+    assert file_cache.inventory(context) == {"records": 0, "bytes": 0}
+
+    invalid_identity = tmp_path / "invalid-identity"
+    invalid_identity.mkdir()
+    (invalid_identity / "bad.json").write_text("{", encoding="utf-8")
+    assert backups._json_identity_index(invalid_identity) == {}
+    assert backups._restore_identity_map({"operations": [None], "manifest": {}}, "merge") == {}
+    assert backups._merge_json_payload(b"[1]", b"[1,2]") == b"[1,2]"
+    assert backups._merge_json_payload(b"1", b"2") == b"1"
 
 
-def test_archive_manifest_security_variants(tmp_settings: Path, tmp_path: Path) -> None:
+def test_archive_manifest_security_variants(
+    tmp_settings: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config.MEMORY_DIR.mkdir(parents=True)
     config.MEMORY_FILE.write_text('{"items":[]}', encoding="utf-8")
     created = backups.create_backup({"mode": "full"})
@@ -296,8 +328,23 @@ def test_archive_manifest_security_variants(tmp_settings: Path, tmp_path: Path) 
         backups.inspect_archive(manifest_mutator(lambda value: value.update({"purpose": "share-export"})))
     with pytest.raises(AppError, match="inventory"):
         backups.inspect_archive(manifest_mutator(lambda value: value.update({"files": {}})))
+    with pytest.raises(AppError, match="inventory"):
+        backups.inspect_archive(manifest_mutator(lambda value: value["files"].__setitem__(0, "invalid")))
     with pytest.raises(AppError, match="duplicate"):
         backups.inspect_archive(manifest_mutator(lambda value: value["files"].append(value["files"][0])))
+
+    unsupported_manifest = {
+        "schemaVersion": backups.BACKUP_SCHEMA,
+        "purpose": backups.PACKAGE_PURPOSE,
+        "source": {"version": config.APP_VERSION},
+        "scope": {"mode": "full", "projectIds": [], "includeHistory": False, "includeDrafts": False},
+        "contributors": [{"id": "unknown"}],
+        "files": [],
+    }
+    with monkeypatch.context() as patch:
+        patch.setattr(backups, "_safe_extract_and_verify", lambda *_args: unsupported_manifest)
+        with pytest.raises(AppError, match="Unsupported contributor"):
+            backups.inspect_archive(source)
 
     undeclared = tmp_path / "undeclared.dsibackup"
     with zipfile.ZipFile(source) as package, zipfile.ZipFile(undeclared, "w") as target:
@@ -385,6 +432,42 @@ def test_restore_tamper_rollback_helpers_and_sqlite_snapshot(
     broken.write_text("not sqlite", encoding="utf-8")
     with pytest.raises(AppError, match="consistent SQLite"):
         backups._copy_consistent(broken, tmp_path / "broken-copy.sqlite3")
+
+
+def test_build_revision_tracks_clean_dirty_and_unavailable_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_BUILD_REVISION", raising=False)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    def set_results(*results: subprocess.CompletedProcess[object]) -> None:
+        pending = iter(results)
+        monkeypatch.setattr(backups.subprocess, "run", lambda *_args, **_kwargs: next(pending))
+
+    set_results(subprocess.CompletedProcess(["git"], 1, stdout="", stderr="missing"))
+    assert backups._build_revision() == "unknown"
+
+    set_results(
+        subprocess.CompletedProcess(["git"], 0, stdout="abc123\n", stderr=""),
+        subprocess.CompletedProcess(["git"], 0, stdout=b"", stderr=b""),
+    )
+    assert backups._build_revision() == "abc123"
+
+    dirty_status = b" M deepseek_infra/infra/workspace/backups.py\n"
+    dirty_diff = b"diff --git a/backups.py b/backups.py\n"
+    set_results(
+        subprocess.CompletedProcess(["git"], 0, stdout="abc123\n", stderr=""),
+        subprocess.CompletedProcess(["git"], 0, stdout=dirty_status, stderr=b""),
+        subprocess.CompletedProcess(["git"], 0, stdout=dirty_diff, stderr=b""),
+    )
+    expected = hashlib.sha256(dirty_status + dirty_diff).hexdigest()[:16]
+    assert backups._build_revision() == f"abc123-dirty-{expected}"
+
+    set_results(
+        subprocess.CompletedProcess(["git"], 0, stdout="abc123\n", stderr=""),
+        subprocess.CompletedProcess(["git"], 0, stdout=dirty_status, stderr=b""),
+        subprocess.CompletedProcess(["git"], 1, stdout=b"", stderr=b"failed"),
+    )
+    expected_without_diff = hashlib.sha256(dirty_status).hexdigest()[:16]
+    assert backups._build_revision() == f"abc123-dirty-{expected_without_diff}"
 
 
 def test_partial_contributor_failure_rolls_back_its_writes(

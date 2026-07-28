@@ -755,7 +755,11 @@ def _restore_identity_map(plan: dict[str, Any], mode: str) -> dict[str, str]:
     if mode not in {"merge", "project-copy"}:
         return {}
     project_operation = next(
-        (item for item in plan.get("operations", []) if item.get("contributorId") == "projects"),
+        (
+            item
+            for item in plan.get("operations", [])
+            if isinstance(item, dict) and item.get("contributorId") == "projects"
+        ),
         None,
     )
     backup_id = str(plan.get("manifest", {}).get("backupId") or "")
