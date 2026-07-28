@@ -99,7 +99,7 @@ class EncodingRegressionTests(unittest.TestCase):
             self.assertTrue((ROOT / rel).is_file(), rel)
             self.assertIn(rel, readme)
 
-        self.assertIn("docs/evidence/ga-v4.3.7.json", evidence_index)
+        self.assertIn(f"docs/evidence/ga-v{VERSION}.json", evidence_index)
         self.assertIn("evidence_paths(APP_VERSION)", manifest)
         self.assertIn("gaEvidence", manifest)
 
