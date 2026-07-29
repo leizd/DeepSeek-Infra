@@ -20,6 +20,7 @@ DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines
 - Contributor directories are prepared completely, fsynced, and exchanged with journaled rollback paths; startup deterministically completes or rolls back interrupted swaps.
 - Contributor-aware schema migration remaps only declared identity and reference fields, leaving user messages, prompts, and artifact contents untouched.
 - Backup upload/download and ZIP extraction are streamed and size-accounted; completed, rolled-back, and recovery-required transactions follow explicit retention rules.
+- The optional stateless MCP execution plane uses the official TypeScript SDK, Redis-backed tasks and idempotency, two round-robin instances, lease recovery, and OpenTelemetry. It is a focused code-search/test/log service and does not replace the Python MCP compatibility hub.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
@@ -61,12 +62,22 @@ docker compose up -d
 curl http://127.0.0.1:8000/healthz
 ```
 
+Stateless MCP stack:
+
+```powershell
+$env:MCP_AUTH_TOKEN = '<replace-with-a-long-random-token>'
+docker compose -f docker-compose.stateless-mcp.yml up -d --build
+```
+
+Use `http://127.0.0.1:8010/mcp` through the load balancer. Redis durable state is stored in a separate volume; see the deployment guide before backing up or exposing the service.
+
 ## Documentation
 
 The language switcher at the top of every human-maintained Markdown document returns to either the Chinese or English documentation entry. Deep technical documents remain canonical even when a complete line-by-line translation is not yet available.
 
 - [Standalone roadmap](ROADMAP.en.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Stateless MCP](docs/STATELESS_MCP.md)
 - [Getting started](docs/GETTING_STARTED.md)
 - [API reference](docs/API.md)
 - [Deployment](docs/DEPLOYMENT.md)
@@ -82,10 +93,12 @@ The language switcher at the top of every human-maintained Markdown document ret
 ```bash
 npm ci --prefix frontend
 npm run check --prefix frontend
+npm ci --prefix stateless-mcp
+npm run check --prefix stateless-mcp
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.3.7 --ga
+python scripts/preflight_release.py --version 4.4.1 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

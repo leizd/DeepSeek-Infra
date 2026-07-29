@@ -18,6 +18,12 @@
 - Adds durable browser Restore Fence and Journal records. Stale tabs cancel autosave and active requests before saving dirty work only into the previous Epoch capsule; they cannot send, delete, resolve conflicts or advance the restored workspace.
 - Streams backup upload/download paths, retains recovery-required transactions indefinitely, and adds safe list/delete/cleanup APIs without adding encryption, cloud targets, scheduled backups or new bundle budgets.
 
+### Stateless MCP execution plane
+
+- Adds an independent Streamable HTTP MCP service built with the official TypeScript SDK; every request gets a fresh `McpServer`, so instances keep no client session state.
+- Persists task state, leases, fencing tokens, logs, and idempotency indexes in Redis for `code_search`, `start_test_run`, `get_task`, `query_logs`, and `server_info`.
+- Adds a two-instance NGINX round-robin deployment, OpenTelemetry tool latency/failure telemetry, a retrying client, and a CI failover smoke that terminates the task owner and verifies recovery without duplicate non-idempotent work.
+
 ## [4.4.0] - Portable Workspace Backups and Verified Restore
 
 ### Portable, verified backups

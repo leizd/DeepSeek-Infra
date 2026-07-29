@@ -54,9 +54,19 @@ workflow and are not represented as locally verified until that workflow succeed
 - `docs/evidence/rust-coverage-v4.4.1.json`
 - `docs/evidence/rust-sidecar-performance-v4.4.1.json`
 
-4.3.7 is the Replica Convergence and Durable Conflict Resolution release. Frontend evidence covers isolated conflict branches, multiple retained Ledger entries, commit-before-release copy transactions, duplicate Writer rotation, deterministic lock-free sibling Proposals, exactly-once lock callbacks, degraded-Head self-healing, missing-Head anti-resurrection, Recovery Capsule digest verification and crash-recoverable resolution. All 4.3.6 V3 checkpoint, tombstone, per-tab selection, streaming backpressure and bounded compaction contracts remain active. The root `VERSION` file is still canonical; CI derives candidate/exact-merge evidence names and Docker tags from `RELEASE_VERSION`, while the 4.2.8 exact-merge chain and frozen 4.0 protocol remain authoritative.
+4.4.1 is the crash-safe restore and replica-fencing release; all 4.3.7 convergence, 4.3.6 checkpoint/storage-pressure, and frozen 4.0 protocol contracts remain active. The root `VERSION` file is canonical, and CI derives candidate/exact-merge evidence names and Docker tags from `RELEASE_VERSION`.
 
 The typed source of truth is `deepseek_infra/infra/diagnostics/evidence_inventory.py`. Candidate and exact-merge entries below are all required for GA; the optional Python stability report is informative.
+
+## Workflow-only stateless MCP reliability gates
+
+The stateless MCP service is validated by workflow checks rather than a committed release-evidence JSON. Do not treat these rows as exact-merge artifacts; the authoritative result is the GitHub check suite for the commit being evaluated.
+
+| Check | Contract | Reproduction |
+| --- | --- | --- |
+| `stateless-mcp` | Official TypeScript SDK build, strict typecheck, unit tests for request isolation, auth/Host, workspace containment, idempotency, lease/fencing, retry client, and telemetry | `npm ci --prefix stateless-mcp` then `npm run check --prefix stateless-mcp` |
+| `docker` | Stateless MCP image builds and `docker-compose.stateless-mcp.yml` resolves in addition to the default image/Compose | `docker build -f stateless-mcp/Dockerfile -t deepseek-stateless-mcp:test .` and `docker compose -f docker-compose.stateless-mcp.yml config` |
+| `stateless-mcp-failover` | Two-instance round robin, owner termination, cross-instance client retry, expired-lease recovery, and idempotent replay convergence; stale-owner fencing is fixed by the unit gate | `npm run smoke:failover --prefix stateless-mcp` |
 
 ## Candidate tier
 

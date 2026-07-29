@@ -1031,3 +1031,28 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 Restore Fence 活跃时读请求继续；非 Restore Owner 的业务写请求返回 HTTP 423。`commit`、
 `complete` 与 `abort` 可安全重试。浏览器状态存在时，旧
 `/api/workspace/restores/{restoreId}/apply` 会拒绝单阶段提交。
+
+## 独立无状态 MCP 服务（v4.4.1）
+
+这是 `stateless-mcp/` 提供的专用服务，不属于默认 FastAPI 端口，也不替换上面的 Python MCP Tool Hub。默认 Compose 拓扑如下：
+
+| 地址 | 用途 | 鉴权 |
+| --- | --- | --- |
+| `POST/GET http://127.0.0.1:8010/mcp` | NGINX 轮询后的 Streamable HTTP MCP 入口 | `Authorization: Bearer <MCP_AUTH_TOKEN>` |
+| `GET http://127.0.0.1:8010/healthz` | 负载均衡存活检查 | 无 |
+| `GET http://127.0.0.1:8010/readyz` | Redis 可达性就绪检查 | 无 |
+| `GET http://127.0.0.1:8010/instance` | 返回本次请求命中的实例 ID，供轮询诊断 | 无 |
+
+实例直连端口 `8011`、`8012` 默认只发布到 `127.0.0.1`，用于本机诊断；客户端应连接 `8010`。该服务使用独立的 `MCP_AUTH_TOKEN` 与 `MCP_ALLOWED_HOSTS`，不会复用默认应用的 `AUTH_TOKEN` 或 `AUTH_ALLOWED_HOSTS`。
+
+| 工具 | 行为 |
+| --- | --- |
+| `server_info` | 返回实例、Redis 与任务租约配置，不创建持久任务。 |
+| `code_search` | 在 `MCP_WORKSPACE_ROOT` 内运行固定字符串代码搜索，并限制文件数、输出行数与字节数。 |
+| `start_test_run` | 创建或返回一个 Redis 持久 pytest 任务；不接受任意 shell 字符串，目标必须位于工作区内。非幂等执行要求 `idempotencyKey`。 |
+| `get_task` | 查询任务状态、owner、lease、attempts、结果摘要或失败信息。 |
+| `query_logs` | 从 Redis 读取指定任务的有界日志窗口。 |
+
+任务状态保存在 Redis，而不是实例内存。运行实例定期续租；实例退出后，其他实例在租约过期时重新认领。所有完成转换都校验 owner 和 fencing token，已失去租约的旧实例不能提交迟到结果。相同幂等键和相同参数返回同一任务；相同键与不同参数返回工具错误，避免把误重试静默解释为新执行。
+
+无状态 MCP 不开放任意命令执行，不提供默认应用的 17 工具/resources/prompts。完整配置、故障演练和数据保留边界见 [STATELESS_MCP.md](STATELESS_MCP.md)。

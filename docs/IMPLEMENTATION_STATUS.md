@@ -11,6 +11,8 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 
 > 4.4.1 makes workspace restore a crash-recoverable cross-tier transaction. Browser replicas are staged under a new Workspace Epoch and activated by one verified pointer write; stale tabs freeze before persistence and preserve dirty state only as previous-Epoch recovery copies. Backend Contributors are built in staging, validated, fsynced and exchanged behind a durable cross-process Fence and commit journal. Startup can deterministically finish or roll back an interrupted exchange, future schemas are rejected, declared references are remapped without touching user text, and large backup transfers remain streaming. Password encryption remains intentionally deferred to 4.4.2.
 
+> 4.4.1 also adds an optional stateless MCP execution plane. The TypeScript service creates a fresh MCP server per request, stores durable tasks and idempotency in Redis, runs behind two round-robin instances, recovers expired leases after owner loss, and emits OpenTelemetry. It complements rather than replaces the Python MCP Tool Hub.
+
 图例：
 
 - **Status**：`Working` = 核心路径稳定多版本、测试覆盖深、可日常使用；`MVP` = 功能完整可用，但落地时间短 / 兼容性矩阵未铺开 / 接口可能演进；`Experimental` = 核心路径可用，协议/兼容性仍在活跃迭代，接口尚未承诺稳定。
@@ -25,6 +27,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 | 5 | Observability & Trace | Working | ✅ [infra/observability/](../deepseek_infra/infra/observability/) | ✅ | ✅ |
 | 6 | Edge-Cloud Model Router | MVP, dry-run release gated | ✅ [infra/gateway/edge_inference.py](../deepseek_infra/infra/gateway/edge_inference.py) | ✅ | ✅ |
 | 7 | MCP Tool Hub | MVP | ✅ [infra/mcp/](../deepseek_infra/infra/mcp/) | ✅ | ✅ |
+| 7.5 | Stateless MCP Task Service | MVP | ✅ [stateless-mcp/](../stateless-mcp/) | ✅ | ✅ [STATELESS_MCP.md](STATELESS_MCP.md) |
 | 8 | A2A Agent Mesh | MVP | ✅ [infra/agent_runtime/a2a.py](../deepseek_infra/infra/agent_runtime/a2a.py) | ✅ | ✅ |
 | 9 | Context Taint Firewall | MVP, release gated | ✅ [infra/gateway/context_taint.py](../deepseek_infra/infra/gateway/context_taint.py) | ✅ | ✅ |
 | 10 | Workspace Core | MVP | ✅ [infra/workspace/](../deepseek_infra/infra/workspace/) | ✅ | ✅ |
@@ -41,9 +44,9 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 | Evaluation Harness（RAG / Agent / Tool 三条评测线） | [evals/](../evals/) · 评分核心 [infra/evaluation/harness.py](../deepseek_infra/infra/evaluation/harness.py) | ✅ 全部离线可跑；CI 生成统一报告、Agent Eval strict、baseline compare artifact 与 security corpus report；v2.4 起全部纳入硬门禁 |
 | Benchmarks（延迟 / 缓存 / 检索 / DAG） | [benchmarks/](../benchmarks/) | ✅ 离线两项可直接复跑；在线两项需本地服务 + Key |
 | 一键 Demo | [examples/](../examples/) · [docs/DEMO.md](DEMO.md) | ✅ |
-| 部署资产（Docker / Compose / .env） | [Dockerfile](../Dockerfile) · [docker-compose.yml](../docker-compose.yml) · [docs/DEPLOYMENT.md](DEPLOYMENT.md) | ✅ CI 覆盖 `docker build` + `docker compose config` |
+| 部署资产（Docker / Compose / .env） | [Dockerfile](../Dockerfile) · [docker-compose.yml](../docker-compose.yml) · [stateless-mcp/Dockerfile](../stateless-mcp/Dockerfile) · [docker-compose.stateless-mcp.yml](../docker-compose.stateless-mcp.yml) · [docs/DEPLOYMENT.md](DEPLOYMENT.md) | ✅ CI 覆盖默认与无状态 MCP 镜像/Compose；独立 failover job 覆盖双实例恢复 |
 | 安全工程（威胁模型 / CI 扫描） | [docs/THREAT_MODEL.md](THREAT_MODEL.md) · [ci.yml security job](../.github/workflows/ci.yml) | ✅ |
-| Compatibility Smoke Pack | [scripts/smoke_mcp_compat.py](../scripts/smoke_mcp_compat.py) · [scripts/smoke_a2a_compat.py](../scripts/smoke_a2a_compat.py) · [scripts/smoke_a2a_external_peer.py](../scripts/smoke_a2a_external_peer.py) · [scripts/smoke_edge_router.py](../scripts/smoke_edge_router.py) · [examples/edge_router_smoke.py](../examples/edge_router_smoke.py) · [examples/external_mcp_server_partner.py](../examples/external_mcp_server_partner.py) · [examples/a2a_interop_peer.py](../examples/a2a_interop_peer.py) | ✅ 本地服务启动后可复跑；v2.3.0 新增官方 MCP SDK partner + A2A 独立进程 peer 实测；v2.3.3 新增 A2A external peer evidence；v2.4.3 新增 Edge Router structured smoke evidence；v2.8.0 新增 Edge Router dry-run release evidence；v2.4.5 新增 A2A third-party peer structured evidence |
+| Compatibility Smoke Pack | [scripts/smoke_mcp_compat.py](../scripts/smoke_mcp_compat.py) · [stateless-mcp/smoke/failover.ts](../stateless-mcp/smoke/failover.ts) · [scripts/smoke_a2a_compat.py](../scripts/smoke_a2a_compat.py) · [scripts/smoke_a2a_external_peer.py](../scripts/smoke_a2a_external_peer.py) · [scripts/smoke_edge_router.py](../scripts/smoke_edge_router.py) | ✅ 默认 MCP/A2A/Edge smoke 可复跑；v4.4.1 无状态 MCP smoke 验证轮询、owner 退出、客户端重试、租约接管与幂等收敛 |
 | Release Readiness（发版体检 / 产物证明） | [evidence_inventory.py](../deepseek_infra/infra/diagnostics/evidence_inventory.py) · [assemble_release_evidence.py](../scripts/assemble_release_evidence.py) · [scripts/preflight_release.py](../scripts/preflight_release.py) · [verify_release_package.py](../scripts/verify_release_package.py) | ✅ 4.3.7 adds isolated conflict branches, a durable multi-conflict ledger, transactional copy/discard resolution, UUID replica writers with duplicate claims, deterministic lock-free proposals, degraded-Head self-healing, missing-Head anti-resurrection and digest-verified Recovery Capsule V2 while retaining all 4.3.6 checkpoint/storage-pressure, 4.3.5 continuity, 4.3.4 activation, 4.3.3 discovery and 4.2.8 exact-merge gates. |
 | Rust Sidecar Performance Evidence | [scripts/run_rust_sidecar_benchmarks.py](../scripts/run_rust_sidecar_benchmarks.py) · [docs/evidence/rust-sidecar-performance-v4.3.6.json](evidence/rust-sidecar-performance-v4.3.6.json) · [RUST_SIDECAR_PERFORMANCE.md](RUST_SIDECAR_PERFORMANCE.md) | PASS contract: locked release profile; Python/core/warm HTTP/full integration and cold start separated; five delegate families covered; absolute latency informational; no default change. |
 | RAG Vector Binary Parity | [scripts/check_rag_vector_binary_parity.py](../scripts/check_rag_vector_binary_parity.py) · [docs/evidence/rag-vector-binary-parity-v4.3.6.json](evidence/rag-vector-binary-parity-v4.3.6.json) · [RAG_VECTOR_BINARY_TRANSPORT.md](RAG_VECTOR_BINARY_TRANSPORT.md) | PASS: 110 valid + 16 malformed release-sidecar cases; JSON/binary/Python parity, fixed 24-byte response, stable errors, payload reduction, redaction, and no JSON retry. |
@@ -115,6 +118,13 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 - **测试**：[test_mcp.py](../tests/test_mcp.py)（握手 / 目录 / 能力切片 / 真实执行 / 错误码族 / 回环 client / 外部工具 profile / policy gate / 外部 server 不可用 / 远端 `isError=true` / retry stats / circuit breaker / trace diagnostics）。
 - **亲手验证**：[examples/mcp_tool_demo.py](../examples/mcp_tool_demo.py)；`python scripts/smoke_mcp_compat.py --token <token>` 验证握手、目录、工具调用、policy gate 和外部 health API；`GET /api/mcp/external/tools` 查看外部 server health；[COMPATIBILITY.md](COMPATIBILITY.md) 和 [integrations/](integrations/) 提供 Claude Desktop / Cursor 配置与官方 MCP SDK partner 实测记录。
 - **MVP 边界**：本地 MCP server、mock external server、失败场景、危险参数拦截和观测链路已可验证；v2.3.0 新增官方 MCP Python SDK Streamable HTTP partner 实测（SSE 响应解析修复）。Claude Desktop / Cursor GUI 实机已在 v2.4.2 验证并更新兼容矩阵。
+
+### 7.5 Stateless MCP Task Service — MVP
+
+- **代码**：[stateless-mcp/src/](../stateless-mcp/src/) 提供官方 TypeScript SDK 请求级 server factory、Redis task store、Lua 原子状态转换、lease/fencing、幂等索引、受限代码搜索/pytest/日志工具、重试客户端与 OpenTelemetry；[docker-compose.stateless-mcp.yml](../docker-compose.stateless-mcp.yml) 部署 Redis AOF、Collector、两个实例和 NGINX。
+- **测试**：[stateless-mcp/test/](../stateless-mcp/test/) 覆盖配置、认证/Host、工具边界、任务状态、幂等冲突、租约接管、旧 owner fencing 与 telemetry；CI 的 `stateless-mcp` job 执行严格类型检查和单测，`stateless-mcp-failover` 执行容器级故障演练。
+- **亲手验证**：`npm ci --prefix stateless-mcp` 后运行 `npm run check --prefix stateless-mcp`；Docker 可用时运行 `npm run smoke:failover --prefix stateless-mcp`。部署和预期输出见 [STATELESS_MCP.md](STATELESS_MCP.md)。
+- **MVP 边界**：只提供五个专用工具，不承诺默认 Hub 的 17 工具/resources/prompts 目录；需要 Redis，没有进程内降级存储；当前验证聚焦官方 SDK、仓库测试客户端与负载均衡故障恢复，第三方 GUI 仍沿用默认 Python `/mcp`。
 
 ### 8. A2A Agent Mesh — MVP
 

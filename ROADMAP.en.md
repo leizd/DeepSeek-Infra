@@ -7,13 +7,13 @@
 
 This standalone roadmap summarizes the current direction. The detailed historical checklist is preserved in the [Chinese roadmap](ROADMAP.md), while completed release behavior remains governed by the [implementation status matrix](docs/IMPLEMENTATION_STATUS.md), release notes, tests, and versioned evidence.
 
-## Current baseline: 4.0.3
+## Current baseline: 4.4.1
 
 - [x] Python-first hybrid runtime stabilized for 4.0.
 - [x] Optional Rust delegates remain disabled by default with deterministic Python fallback.
-- [x] React + TypeScript migration foundation is isolated under `/ui/`.
-- [x] Normal React chat owns request construction, NDJSON streaming, Markdown rendering, local history recovery, title generation, and stop-generation.
-- [x] Legacy `/` remains the default workspace until feature parity is proven.
+- [x] React owns the default workspace; the legacy frontend was retired in 4.0.8.
+- [x] Workspace restore is a crash-recoverable cross-tier transaction with browser epoch fencing and backend journals.
+- [x] An optional official-TypeScript-SDK MCP plane keeps no client sessions in process, stores durable tasks/idempotency in Redis, runs two round-robin instances, recovers expired leases, and emits OpenTelemetry.
 
 ## Next frontend slices
 
@@ -30,6 +30,7 @@ This standalone roadmap summarizes the current direction. The detailed historica
 - [ ] Keep Python coverage at or above 95% and Rust coverage gated in CI.
 - [ ] Keep docs, manifests, tests, preflight checks, and versioned evidence synchronized for every release.
 - [ ] Continue browser, security, Docker, hybrid-runtime, parity, and release-readiness gates on every main-branch update.
+- [ ] Keep the stateless MCP type/unit, Docker/Compose, and owner-failover gates green; add third-party GUI evidence only when actually reproduced.
 
 ## Completed milestone families
 
@@ -40,5 +41,6 @@ This standalone roadmap summarizes the current direction. The detailed historica
 - [x] 2.7.x–2.8.x — media, edge-router, context-taint, and browser-control stabilization.
 - [x] 3.x — personal runtime GA, quality uplift, semantic-cache work, Rust candidate audits, and 95% Python coverage.
 - [x] 4.0.0–4.0.3 — Python-first hybrid GA, frontend security/offline reliability, React migration foundation, and React chat vertical slice.
+- [x] 4.0.4–4.4.1 — React parity and legacy retirement, query/reload/checkpoint resilience, portable backups, crash-safe restore, and the stateless MCP task plane.
 
 For exact per-version changes, use the [Changelog](CHANGELOG.md) and [release notes](docs/releases/).

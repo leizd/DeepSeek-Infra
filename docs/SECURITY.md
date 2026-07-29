@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v2.9.1。
+适用版本：v4.4.1。
 
 ## 威胁模型
 
@@ -13,7 +13,7 @@
 
 不要把局域网模式暴露在不可信网络中。服务端环境变量中的 DeepSeek / Tavily Key 会对所有通过本地鉴权的浏览器会话可用。
 
-> 七类核心威胁（网页注入 / 恶意文件 / SSRF / 路径越界 / 密钥外泄 / Agent 工具滥用 / 外部 MCP server）到缓解实现与测试的逐条映射，见 [docs/THREAT_MODEL.md](THREAT_MODEL.md)；攻防回归可离线复跑：`python evals/runners/run_tool_eval.py`。
+> 八类核心威胁及其缓解实现、测试和残余风险逐条映射在 [THREAT_MODEL.md](THREAT_MODEL.md)；攻防回归可离线复跑：`python evals/runners/run_tool_eval.py`。
 
 ## 本地鉴权
 
@@ -129,6 +129,19 @@ v2.1.0 起，上面这些零散的工具安全约束被收敛进一个统一的 
 
 默认配置（`TOOL_POLICY_ENABLED=1`，`enforce_schema` / `require_confirm` 关闭，结果清洗与审计开启）下，主聊天用 full 画像、不强制确认，行为与 v2.0.x 一致；能力收窄、强制 schema 与强制确认是按需开启的更严格档位。被策略拦截的工具调用返回 `{"ok": false, "code": "forbidden"|"requires_confirmation", "policy": {...}}`，不会真正执行。
 
+## 无状态 MCP 安全边界
+
+`stateless-mcp/` 是与默认 Python `/mcp` 分离的专用执行服务：
+
+- **入口**：`/mcp` 要求独立的 `MCP_AUTH_TOKEN` Bearer token；`MCP_ALLOWED_HOSTS` 限制 Host 头，生产入口还需要 TLS。实例直连端口和 Redis 默认只应对本机或 Compose 网络开放。
+- **代码搜索**：查询使用固定字符串模式，目标路径必须落在 `MCP_WORKSPACE_ROOT` 内，并限制匹配文件数、输出行数和字节数。
+- **测试执行**：`start_test_run` 不接受 shell 字符串；pytest 目标先做工作区 containment 校验，参数作为独立 argv 传入并使用 `shell=false`，同时限制超时与日志大小。测试代码仍拥有服务容器的操作系统权限，因此只应执行可信仓库。
+- **幂等与接管**：非幂等测试工具要求幂等键，并对规范化参数做哈希；同键不同参数拒绝。Redis 原子 lease/fencing 转换阻止两个实例同时完成同一任务，也阻止旧 owner 在失租后写回迟到结果。
+- **持久状态**：服务没有默认内存降级；Redis 不可达时 readiness 失败，避免实例各自形成不可恢复的分叉状态。Redis AOF 会包含任务参数、日志和结果摘要，应按敏感运行数据保护、备份和销毁。
+- **遥测**：OpenTelemetry 的固定 span/metric attributes 只记录工具名、结果类别、耗时和实例，不把搜索文本、pytest 参数或任务日志正文放进 attributes；异常 span 会保留错误摘要，因此 Collector 仍按敏感运维数据管理。
+
+完整部署和故障演练见 [STATELESS_MCP.md](STATELESS_MCP.md)；相应威胁映射见 [THREAT_MODEL.md](THREAT_MODEL.md#t8--无状态-mcp-横向扩展与任务执行v441)。
+
 ## 请求调度与 backpressure
 
 v2.1.2 起，所有上游模型调用先经过本地请求调度层（`deepseek_infra/infra/gateway/scheduler.py`）的进程内准入控制：优先级队列、并发上限、令牌桶限流与 **backpressure**。这层主要是稳定性/资源边界，而非鉴权边界，但有安全意义：用户连续点「生成」、多个 Agent 同时调模型或上游限流时，等待+在途请求一旦越过 `max_queue_depth` 会被**快速卸载**（503 `{"code":"rate_limited"}`），避免无界排队耗尽本机内存/连接、把瞬时尖峰放大成雪崩。被卸载或耗尽重试的请求写入本地 Dead Letter Queue（`.scheduler/scheduler.sqlite3`），只含 `kind`/原因/尝试次数等元数据，不含 prompt 正文、工具结果或模型输出；发布脚本与 `.gitignore` 排除 `.scheduler/`。准入路径不发起任何新的外部请求，也不放宽 `/api/*` 本地鉴权；默认配置（不限流、并发 16、队列 256）对正常负载透明，仅在压力下生效，可经 `SCHEDULER_*` 环境变量收紧。
@@ -167,6 +180,7 @@ PDF 会优先读取可复制文字。OCR 是可选能力，默认关闭，以避
 - `.semantic-cache/cache.sqlite3`：本地语义缓存，包含可缓存 prompt、embedding、模型回答、usage、命中计数和更新时间。
 - `.search-cache`：搜索结果缓存。
 - `.agent-runs`：可恢复 Agent Run 的事件日志、派生快照和最终答案。
+- Docker 命名卷 `stateless-mcp-redis`：可选无状态 MCP 的 Redis AOF，包含任务参数、日志、结果摘要、租约和幂等索引；不属于默认 `DEEPSEEK_INFRA_ROOT` 数据目录。
 - 进程内 `_SHARE_TARGETS`：PWA 分享缓存，默认 30 分钟过期，读取后立即删除。
 - `.reminders/reminders.json`：本地提醒队列，包含提醒标题、正文和触发时间。
 - `.memory/memories.json`：长期记忆，包含全局、项目和 Seek 作用域。
@@ -180,4 +194,5 @@ PDF 会优先读取可复制文字。OCR 是可选能力，默认关闭，以避
 
 - 本地 HTTP 不提供传输层加密；局域网内其他设备理论上可能观察流量。
 - FastAPI/uvicorn 服务默认面向个人本地和可信局域网使用，不应直接作为公网服务暴露。
+- 无状态 MCP 的 pytest 工具会执行仓库代码；它不是不可信代码沙箱，必须以最小权限运行并限制可访问的工作区、网络和凭证。
 - 搜索结果和上传文件内容可能包含不可信文本，模型输出仍需用户判断。

@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v2.9.1。
+适用版本：v4.4.1。
 
-这页只记录已经可复现的互操作结果，不把"协议上应该兼容"写成"实机已验证"。v2.3.0 的重点是把 v2.2.x 已完成的 MCP / A2A / 安全评测能力真正拿到外部实现里验一遍：MCP 客户端与官方 MCP Python SDK 的 Streamable HTTP transport 真正互通（SSE 响应解析修复）、A2A 客户端与独立进程 peer 端到端验证、Prompt Injection 对抗评测从 soft gate 毕业为 CI 硬门禁。v2.4.2 已完成 Claude Desktop / Cursor 的 GUI 实机验证并填入证据；v2.4.3 将 Edge Router 从 runbook-only 推进为结构化 smoke evidence；v2.4.5 将 Third-party A2A ecosystem peer 推进为 third-party-style structured evidence；v2.4.5 将 Continue.dev 从 Not tested 推进为结构化 MCP evidence；v2.4.6 将 Other OpenAI-compatible SDKs 从 Not tested 推进为结构化 SDK smoke evidence。
+这页只记录已经可复现的互操作结果，不把“协议上应该兼容”写成“实机已验证”。历史 GUI、外部 MCP、A2A 和 SDK 证据继续保留；v4.4.1 另增加官方 TypeScript SDK 无状态 MCP 路径，CI 验证双实例轮询、owner 退出、客户端重试、租约接管和幂等收敛。它的五工具专用目录与默认 Python Hub 的 17 工具目录是两个明确的兼容性表面。
 
 ## Compatibility Smoke Pack / 兼容性冒烟测试包
 
@@ -25,6 +25,7 @@ python scripts/smoke_mcp_compat.py --token <local-token>
 python scripts/smoke_a2a_compat.py --token <local-token>
 python examples/edge_router_smoke.py --token <local-token>
 python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
+npm run smoke:failover --prefix stateless-mcp
 ```
 
 真实第三方 MCP server 冒烟入口：
@@ -41,6 +42,7 @@ python scripts/smoke_mcp_compat.py --token <local-token> --external-server-url h
 | --- | --- | --- | --- |
 | MCP local smoke | ✅ Runner 已添加 | `python scripts/smoke_mcp_compat.py` | `/healthz`、`initialize`、`tools/list`、`tools/call`、policy gate、`/api/mcp/external/tools` |
 | MCP real external server smoke | 🟡 入口就绪 | `python scripts/smoke_mcp_compat.py --external-server-url <url>` | 第三方 server 的 `initialize` / `tools/list`；本仓库未记录实机通过 |
+| Stateless MCP failover | ✅ CI 已测试 | `npm run smoke:failover --prefix stateless-mcp` | 双实例轮询、终止 owner、客户端重试、租约接管和幂等键收敛；旧 owner fencing 由单元测试固定 |
 | A2A live smoke | ✅ Runner 已添加 | `python scripts/smoke_a2a_compat.py` | Agent Card、agents list、`message/send`、`message/stream`、`tasks/resubscribe`、`tasks/cancel` |
 | A2A external peer smoke | ✅ 已测试 | `python scripts/smoke_a2a_external_peer.py` + [integrations/a2a-external-peer.md](integrations/a2a-external-peer.md) | 独立进程 external peer：Agent Card + send + stream + get + cancel + list + artifact chunks + SSE final event。 |
 | A2A contract regression | ✅ 已测试 | `pytest tests/test_a2a_compat_contract.py` | artifact chunks、SSE final status、resubscribe cursor、cancel lifecycle |
@@ -64,6 +66,7 @@ python scripts/smoke_mcp_compat.py --token <local-token> --external-server-url h
 | MCP local smoke runner | ✅ Runner 已添加 | `python scripts/smoke_mcp_compat.py` | 覆盖本地 health、握手、目录、工具执行、policy gate 和外部 health API。 |
 | Headless MCP bridge | ✅ 已测试 | `python scripts/smoke_mcp_headless_bridge.py` + [integrations/headless-mcp-client.md](integrations/headless-mcp-client.md) | 无 GUI 环境下验证 stdio bridge → Streamable HTTP、`tools/list`、`data_transform` 调用与 `fetch_url` policy denial。 |
 | MCP test suite (`tests/test_mcp.py`) | ✅ 已测试 | CI + local pytest | 覆盖握手、目录、能力切片、工具执行、错误码、loopback client、外部 server profile、policy gate、结果清洗、trace diagnostics。 |
+| Official TypeScript SDK stateless client/server | ✅ CI 已测试 | `stateless-mcp/test/` + `stateless-mcp/src/retrying-client.ts` + failover smoke | 请求级 server factory，无粘性会话；重试可落到不同实例并从 Redis 恢复任务。 |
 | `curl` JSON-RPC | ✅ 已测试 | `POST /mcp` | 适合排查 token、协议响应和工具目录。 |
 | Claude Desktop | ✅ GUI tested / 已测试 | [integrations/claude-desktop.md](integrations/claude-desktop.md) | Claude Desktop 0.9.0, commit `54228c4`, Windows 11, 2026-06-28：tools/list + `data_transform` + `fetch_url` SSRF blocked + 系统提示无污染 |
 | Cursor | ✅ GUI tested / 已测试 | [integrations/cursor.md](integrations/cursor.md) | Cursor 0.48.0, commit `54228c4`, Windows 11, 2026-06-28：tools/list + `data_transform` + `fetch_url` SSRF blocked + 系统提示无污染 |
@@ -96,6 +99,19 @@ v2.2.1 起，外部 MCP server 的工具会以 `mcp__<server>__<tool>` 桥接进
 | schema/响应异常 | ✅ invalid JSON / malformed tool catalog mapped to upstream failure |
 | 工具超时/重试 | ✅ client stats + trace diagnostics |
 | 危险参数拦截 | ✅ Tool Policy gate |
+
+## 无状态 MCP 横向扩展兼容性
+
+| 场景 | 状态 | 验证合同 |
+| --- | --- | --- |
+| NGINX round robin，无 sticky session | ✅ CI 已测试 | 连续 `/instance` 请求命中两个实例；MCP client 只连接 `:8010/mcp`。 |
+| 实例突然退出 | ✅ CI 已测试 | failover smoke 终止当前 task owner，另一实例在 lease 过期后接管。 |
+| 客户端传输重试 | ✅ CI 已测试 | retry client 对可重试网络/5xx 失败退避，随后可命中另一实例。 |
+| 非幂等工具重复提交 | ✅ CI 已测试 | 相同 `idempotencyKey` + 相同参数返回原任务；同键不同参数拒绝。 |
+| 旧 owner 迟到完成 | ✅ 单元测试 | owner 与 fencing token 不匹配时完成转换失败。 |
+| OpenTelemetry | ✅ 单元测试 + Compose | tool span 与 duration/failure metrics 发往 Collector；固定属性不含工具参数或任务日志正文，异常 span 可含错误摘要。 |
+
+这里的“已测试”表示仓库 CI 与可复现 Compose smoke 已通过，不等于 Claude Desktop、Cursor、Continue.dev 已对这组五工具目录逐一做 GUI 验证；它们的既有 GUI 证据仍只适用于默认 Python `/mcp`。
 
 ## Health API
 

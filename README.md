@@ -25,6 +25,7 @@ DeepSeek Infra is a local-first Personal AI Runtime: Projects, Memory, Skills, M
 - **OpenAI 兼容网关** — 把任意 OpenAI SDK 的 `base_url` 指向 `localhost:8000/v1` 即可接入
 - **持久化 Agent DAG 运行时** — Planner → Worker → Critic → Synthesizer，支持断线恢复
 - **MCP 原生工具中心** — 17 个本地工具以标准 MCP Server 暴露，外部 MCP server 桥接带 health / retry / 熔断
+- **无状态 MCP 执行平面** — 官方 TypeScript SDK + Redis 持久任务/幂等 + 双实例轮询/租约恢复 + OpenTelemetry
 - **A2A 风格 Agent 网格** — Agent Card 发现 + 任务生命周期，跨 Agent 委派
 - **本地 RAG 数据层** — 混合检索 + 引用回链，零外部依赖
 - **工具策略引擎** — 按能力的权限控制，SSRF / 路径 / 注入防护逐次生效
@@ -82,6 +83,7 @@ DeepSeek Infra 是一个**本地优先的 Agentic AI Infra 平台**：一套本�
 | 5 | **Observability & Trace** | [`infra/observability/`](deepseek_infra/infra/observability/) | 每轮请求的 trace run/span、瀑布图、`/metrics` Prometheus 指标、`/healthz`·`/readyz` 探针。 |
 | 6 | **Edge-Cloud Model Router** | [`infra/gateway/edge_inference.py`](deepseek_infra/infra/gateway/edge_inference.py) | 简单任务路由到本地端侧模型，复杂任务走云端 DeepSeek，云端失败可回退本地。 |
 | 7 | **MCP Tool Hub** | [`infra/mcp/`](deepseek_infra/infra/mcp/) | 把本地工具面封装成 MCP server（JSON-RPC 2.0：`tools` / `resources` / `prompts`），Claude Desktop、Cursor 等任意 MCP 客户端可直接复用；外接 MCP server 可桥接进本地 Agent 工具面。 |
+| 7.5 | **Stateless MCP Task Service** | [`stateless-mcp/`](stateless-mcp/) | 请求级 TypeScript MCP server factory；Redis 保存任务、日志、租约与幂等索引，双实例故障后可接管恢复，默认 Python Hub 不受影响。 |
 | 8 | **A2A Agent Mesh** | [`infra/agent_runtime/a2a.py`](deepseek_infra/infra/agent_runtime/a2a.py) | 为每个本地 Agent 暴露 Agent Card 与 A2A 任务生命周期（`message/send`·`message/stream`·`tasks/resubscribe`·`tasks/get`·`tasks/cancel`），支持 artifact chunks 与跨 Agent 委派。 |
 | 9 | **Context Taint Firewall** | [`infra/gateway/context_taint.py`](deepseek_infra/infra/gateway/context_taint.py) | 上下文按来源打信任标签（网页 / 文件 / 工具结果 = 不可信），扫描注入 / 密钥外泄 / 工具指令，隔离包装不可信块，污染轮高危工具升级人工确认。 |
 | 10 | **Workspace Core** | [`infra/workspace/`](deepseek_infra/infra/workspace/) | Project 2.0、Saved Items、Artifact Hub 与 Markdown / HTML / JSON / ZIP 导出，统一本地 AI 工作台对象模型。 |
@@ -167,6 +169,7 @@ DeepSeek Infra 是一个**本地优先的 Agentic AI Infra 平台**：一套本�
 
 ### 协议互操作：MCP Tool Hub 与 A2A Agent Mesh
 - **MCP-native Tool Hub**：`POST /mcp` 是一个 MCP JSON-RPC 2.0 server（`initialize` / `tools/list` / `tools/call` / `resources/list|read` / `prompts/list|get` / `ping`）。本地 17 个工具（搜索、抓取、文件检索、Python 计算、图表、思维导图、PPT / Word / PDF 生成、记忆、提醒）原样暴露为标准 MCP tools，输入 schema 与风险注解（read-only / destructive / open-world）一并下发；生成的产物（pptx / docx / pdf / svg）以 `generated://<fileId>` resources 暴露，另附 `slides-outline`、`research-brief` 两个 prompts。每个 `tools/call` 都过同一套 Tool Policy 闸门（capability 切片经 `MCP_CAPABILITY` 配置，schema / SSRF / 路径 / 敏感写入防护与结果清洗全部生效）。外接方向由内置 MCP client（`MCP_CLIENT_ENABLED=1` + `MCP_CLIENT_SERVERS`）消费外部 MCP server 的工具目录；v2.2.3 起支持 per-server timeout、retry、短期 circuit breaker，`GET /api/mcp/external/tools` 返回 server health / last error / last refresh / retry count，外部调用写入 `mcp_external` trace span 与 Prometheus 摘要指标。
+- **无状态 MCP 执行平面**：`stateless-mcp/` 使用官方 TypeScript SDK；每个 Streamable HTTP 请求创建独立的 `McpServer`，不在实例内保存客户端会话。`code_search`、`start_test_run`、`get_task`、`query_logs` 与 `server_info` 通过 Redis 保存真正需要恢复的任务、租约和幂等索引；双实例可在 NGINX 后轮询，实例退出后由租约接管恢复，OpenTelemetry 记录工具耗时、结果与失败率。它是面向代码检索和测试任务的专用执行平面，不替换上面的 17 工具兼容端点。
 - **A2A Agent Mesh**：每个本地 Agent 角色（orchestrator / researcher / coder / reasoner / critic）都有自己的 **Agent Card**（`/.well-known/agent-card.json` 做发现，`GET /a2a/agents` 列全部）与 JSON-RPC 任务生命周期：`message/send` 提交任务后台执行、`message/stream` 以 SSE 推送状态与 artifact chunks、`tasks/resubscribe` 按 `afterChunkIndex` 恢复订阅、`tasks/get` / `tasks/cancel` / `tasks/list` 管理任务。任务在角色的 capability 切片内执行（researcher 只有搜索面、reasoner 无工具），快照持久化到 `.a2a/`；`A2AClient` 可向 `A2A_PEERS` 里的外部 Agent 委派任务，`examples/a2a_peer_demo.py` 提供本地 external peer loopback。
 
 ### 上下文安全：Taint Tracking 与注入防火墙
@@ -345,6 +348,15 @@ curl http://127.0.0.1:8000/healthz
 
 默认命令仍然只启动 Python。可选 Rust sidecar 使用 `docker-compose.rust.yml`，详见 [Rust Hybrid Runtime Runbook](docs/RUST_HYBRID_RUNTIME_RUNBOOK.md)。
 
+独立无状态 MCP 双实例栈使用单独的 Compose 文件；PowerShell 下先设置随机 token，再启动：
+
+```powershell
+$env:MCP_AUTH_TOKEN = '<replace-with-a-long-random-token>'
+docker compose -f docker-compose.stateless-mcp.yml up -d --build
+```
+
+负载均衡入口为 `http://127.0.0.1:8010/mcp`，Collector Prometheus exporter 为 `http://127.0.0.1:9464/metrics`。Redis AOF 位于独立命名卷，不属于默认 `/data` 卷；部署、故障演练和备份边界见 [docs/STATELESS_MCP.md](docs/STATELESS_MCP.md)。
+
 ## 环境变量
 
 - `DEEPSEEK_API_KEY`：DeepSeek API Key。可不填，改为在页面设置里临时输入。
@@ -374,6 +386,7 @@ curl http://127.0.0.1:8000/healthz
 - `TOOL_POLICY_ENABLED=1`（默认开）/ `TOOL_POLICY_ENFORCE_SCHEMA` / `TOOL_POLICY_REQUIRE_CONFIRM` / `TOOL_POLICY_SANITIZE_RESULTS`（默认开）/ `TOOL_POLICY_AUDIT_ENABLED`（默认开）：Tool Policy Engine 开关——是否启用工具调用安全策略、是否把 schema 违例从告警升级为硬拒绝、是否对高风险工具强制人工确认、是否清洗工具结果中的 prompt injection、是否把每条策略决策写入 `.tool-audit/audit.jsonl`。
 - `SCHEDULER_ENABLED=1`（默认开）/ `SCHEDULER_MAX_CONCURRENCY`（默认 16）/ `SCHEDULER_MAX_QUEUE_DEPTH`（默认 256，backpressure 卸载阈值）/ `SCHEDULER_RATE_PER_SECOND`（默认 0=不限流）/ `SCHEDULER_RATE_BURST` / `SCHEDULER_ACQUIRE_TIMEOUT_SECONDS`（默认 30）/ `SCHEDULER_DLQ_ENABLED`（默认开）/ `SCHEDULER_ORPHAN_SECONDS`（默认 900）：本地请求调度层——并发上限、队列深度（backpressure）、令牌桶限流速率与突发、准入超时、Dead Letter Queue 开关、启动时回收多久前的在途请求。
 - `MCP_ENABLED=1`（默认开）/ `MCP_CAPABILITY=full`（MCP 客户端获得的能力画像）/ `MCP_EXPOSE_RESOURCES`、`MCP_EXPOSE_PROMPTS`（默认开）/ `MCP_CLIENT_ENABLED`（默认关）/ `MCP_CLIENT_SERVERS='[{"name":"docs","url":"http://127.0.0.1:9001/mcp","timeoutSeconds":10}]'` / `MCP_CLIENT_TIMEOUT_SECONDS`（默认 30）/ `MCP_CLIENT_MAX_RETRIES`（默认 1）/ `MCP_CLIENT_RETRY_BACKOFF_SECONDS`（默认 0.25）/ `MCP_CLIENT_CIRCUIT_BREAKER_FAILURES`（默认 3）/ `MCP_CLIENT_CIRCUIT_BREAKER_RESET_SECONDS`（默认 60）：MCP Tool Hub 与外接 MCP client。
+- 无状态 MCP 独立服务：`MCP_AUTH_TOKEN`（必改）、`REDIS_URL`、`REDIS_PREFIX`、`MCP_ALLOWED_HOSTS`、`MCP_WORKSPACE_ROOT`、`MCP_INSTANCE_ID`、`MCP_TASK_LEASE_MS`、`MCP_TASK_POLL_MS`、`MCP_TASK_TIMEOUT_SECONDS`、`MCP_MAX_OUTPUT_BYTES` 与 `OTEL_EXPORTER_OTLP_ENDPOINT`。这些变量不改变默认 Python `/mcp`。
 - `A2A_ENABLED=1`（默认开）/ `A2A_DEFAULT_AGENT=reasoner` / `A2A_MAX_TASKS`（默认 200）/ `A2A_HISTORY_LIMIT`（默认 20）/ `A2A_PEERS=url1,url2`（外部 A2A Agent 端点）：A2A Agent Mesh。任务执行需要服务端 `DEEPSEEK_API_KEY`。
 - `TAINT_ENABLED=1`（默认开）/ `TAINT_HARDEN_SEARCH_CONTEXT`、`TAINT_HARDEN_FILE_CONTEXT`（默认开，给不可信上下文加隔离声明）/ `TAINT_ESCALATE_CONFIRM`（默认开，污染轮高危工具升级人工确认）：Context Taint Tracking 与注入防火墙。
 

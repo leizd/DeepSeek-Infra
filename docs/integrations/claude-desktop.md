@@ -5,9 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：DeepSeek Infra v2.7.4。
+适用版本：DeepSeek Infra v4.4.1。
 
 本页是可复现配置说明 + GUI 实机验证操作手册。DeepSeek Infra 端已验证的 MCP endpoint 是 `POST /mcp`（Streamable HTTP / JSON-RPC 2.0），本地鉴权默认需要 Bearer token。v2.4.2 已完成 Claude Desktop GUI 实机验证，证据见下方证据模板。
+
+本页配置和既有 GUI 证据针对默认 Python MCP Tool Hub（17 工具 + resources/prompts）。v4.4.1 的无状态五工具执行平面使用独立 `:8010/mcp`、`MCP_AUTH_TOKEN` 和 Redis；它尚未被本页的 Claude Desktop GUI 证据覆盖，部署见 [../STATELESS_MCP.md](../STATELESS_MCP.md)。
 
 ## 1. 启动 DeepSeek Infra
 

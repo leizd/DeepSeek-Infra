@@ -5,11 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.0.3。
+适用版本：v4.4.1。
 
-DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：本地工具面经 **MCP**（`POST /mcp`）暴露给任意 MCP 客户端，本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
+DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 
-## Hybrid Runtime 总览（v4.0.3）
+## Hybrid Runtime 总览（v4.4.1）
 
 > 运维细节、feature flags 与回滚命令见 [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)。
 
@@ -104,9 +104,29 @@ Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具�
 
 ### 版本说明
 
-- **Current release:** `4.0.3`，在隔离的 `/ui/` 中完成 React 普通聊天、流式 Markdown、停止生成和本地会话历史纵切片；默认 `/`、运行时所有权和冻结协议不变。
+- **Current release:** `4.4.1`。默认运行时仍由 Python 拥有；可选无状态 MCP 是独立部署面，不改变 FastAPI 或 Rust delegate 的所有权边界。
 - **Historical qualification:** `v4.0.0-rc.1` 已被 rc.2 supersede，只保留为历史架构预览；stable `4.0.0` 从已验证的 rc.2 提升。
 - **Patch boundary:** Python-first 所有权、默认关闭的 Rust delegates 和冻结协议均不改变。
+
+## 无状态 MCP 横向扩展平面（v4.4.1）
+
+```mermaid
+flowchart LR
+    C["MCP Client"] --> LB["NGINX :8010<br/>round robin"]
+    LB --> M1["MCP instance 1"]
+    LB --> M2["MCP instance 2"]
+    M1 --> R[("Redis AOF<br/>tasks · leases · idempotency · logs")]
+    M2 --> R
+    M1 --> O["OpenTelemetry Collector"]
+    M2 --> O
+    O --> P["Prometheus exporter :9464"]
+```
+
+该平面独立于默认 FastAPI 应用和可选 Rust sidecar。HTTP handler 通过官方 TypeScript SDK 的 server factory 为每个请求创建新的 `McpServer`；MCP 连接身份、握手和客户端会话不写入进程内 Map，也不要求负载均衡器提供粘性会话。真正需要跨请求恢复的任务状态、输出、租约、尝试次数和幂等索引只写入 Redis。
+
+长任务由实例持有短租约并定期续租。实例退出后租约到期，另一个实例可原子认领；完成写入同时校验 owner 与 fencing token，旧实例即使迟到也不能覆盖接管后的结果。非幂等的 `start_test_run` 要求幂等键，相同键与相同参数收敛到同一任务，不同参数则拒绝。
+
+这一服务只暴露 `server_info`、`code_search`、`start_test_run`、`get_task` 与 `query_logs`。现有 Python `/mcp` 的 17 工具、resources、prompts、Tool Policy 和第三方客户端兼容性继续保留；两者是并行部署边界，不应把专用服务描述为完整 Hub 的无缝替代。
 
 ## 分层架构
 
@@ -147,6 +167,7 @@ Python Default Runtime   FastAPI / ASGI: Auth · Streaming · /v1/chat · /healt
 - `infra/rag/` — **Local RAG Data Plane**：`local_rag`（sqlite-vec 向量库 + BM25 词法的 hybrid 检索、增量索引、文档版本、chunk lineage、引用真实性校验、Recall@K 评估）、`files` 解析分块、`context_compressor`。
 - `infra/tool_runtime/` — **Tool Calling Runtime**：`tools` 注册执行 + `search` / `ocr` / `documents` / `presentations` / `mindmaps` / `generated_files` / `slides_skill`。
 - `infra/mcp/` — **MCP-native Tool Hub**：`server`（JSON-RPC 2.0 分发）+ `registry`（tools / resources / prompts 目录）+ `adapters`（执行桥，复用 Tool Policy 闸门）+ `permissions`（能力切片与预批）+ `client`（出方向 MCP client）。
+- `stateless-mcp/` — **无状态 MCP 执行平面**：官方 TypeScript SDK Streamable HTTP server factory + Redis durable task store + lease/fencing 恢复 + 幂等工具 + OpenTelemetry；通过 `docker-compose.stateless-mcp.yml` 部署双实例与 NGINX。
 - `infra/observability/` — **Observability**：`observability`（OpenTelemetry 风格的 trace/span 层级链路，run 为根，`agent.<id>` 包裹其 `context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek` 子 span）+ `trace_api`（`/api/traces`、`/trace/{id}`）+ `export`（trace JSON 脱敏导出）+ `metrics`（Prometheus `/metrics`）+ `health`（`/healthz`·`/readyz`）。
 - `infra/data/` — **本地存储**：`memory` / `projects` / `reminders`。
 - `core/`、`web/`、`launcher/`、`android_entry.py`、`desktop_app.py` — 配置 / 错误 / 工具、HTTP 运行时、跨端打包入口。
@@ -195,6 +216,8 @@ Python Default Runtime   FastAPI / ASGI: Auth · Streaming · /v1/chat · /healt
 | `deepseek_infra/infra/mcp/adapters.py` | MCP `tools/call` → `execute_tool_call` 执行桥：每次调用构造能力切片的 `ToolPolicy`（schema / SSRF / 路径 / 敏感写入防护与结果清洗全部生效），结果转成 MCP `content`（稳定 JSON text part）+ `structuredContent`，策略拒绝与失败是 `isError` 工具级错误；配置了 Tavily Key 时提供真实 `web_search` 回调。 |
 | `deepseek_infra/infra/mcp/permissions.py` | MCP 连接的能力域：`MCP_CAPABILITY` → Tool Policy capability profile（未知回落 `full`）、按连接的工具白名单、`params._meta.approvedTools` 预批解析。 |
 | `deepseek_infra/infra/mcp/client.py` / `bridge.py` / `executor.py` | 出方向 MCP client 与 External MCP Tool Bridge（v2.2.1）：`initialize`（含 `notifications/initialized`）/ `tools/list` / `tools/call`、`Mcp-Session-Id` 会话头管理、per-server timeout、retry stats、health snapshot、短期 circuit breaker、policy-gated external call、audit 与 `mcp_external` trace span。默认关闭，只连 `MCP_CLIENT_SERVERS` 显式配置的外部 server。 |
+| `stateless-mcp/` | 独立 TypeScript MCP 服务：请求级 `McpServer` factory、Redis Lua 原子状态转换、租约与 fencing、幂等请求哈希、受限代码搜索/pytest 执行/日志查询、重试客户端和 OpenTelemetry。 |
+| `docker-compose.stateless-mcp.yml` | Redis AOF、OpenTelemetry Collector、两个无状态 MCP 实例和 NGINX round-robin 的可复现部署；failover smoke 会终止租约 owner 并验证接管、客户端重试与幂等收敛。 |
 | `deepseek_infra/infra/agent_runtime/a2a.py` | A2A Agent Mesh（v2.2.5）：每个本地 Agent 角色（orchestrator / researcher / coder / reasoner / critic）的 Agent Card（`/.well-known/agent-card.json` 发现 + `GET /a2a/agents` 列表）、JSON-RPC 任务生命周期（`message/send`、`message/stream` SSE artifact chunks / 状态推送、`tasks/resubscribe`、`tasks/get`、`tasks/cancel`、`tasks/list`）、任务状态机（submitted→working→completed/failed/canceling→canceled）、`.a2a/` 任务快照持久化与重启对账（磁盘上残留的非终态任务标记 failed）、外部委派 `A2AClient`（`A2A_PEERS`）。任务在角色 capability 切片内经 `call_deepseek` 执行，绝不超出该角色的工具面；v2.2.5 增加 `scripts/smoke_a2a_compat.py` 与 contract tests 作为外部互操作前置验收。 |
 | `deepseek_infra/infra/gateway/context_taint.py` | Context Taint Tracking + Prompt Injection Firewall（v2.1.5）：把组装后的请求按来源分段打信任标签（trusted_system / trusted_user / trusted_memory / trusted_tool 可信；untrusted_web / untrusted_file / untrusted_tool_result 不可信），对不可信段扫描注入、密钥外泄与工具调用指令三类 pattern，产出 `diagnostics.contextTaint` 报告；`harden_search_context`（隔离声明 + 注入红action）与 `file_context_guard_line`（文件上下文确定性 guard 行）做主动加固，字节确定性保证 prompt cache 前缀跨轮稳定。污染判定回流 `ToolPolicy`（taint 升级确认 + 凭证外泄硬拒绝），形成检测→隔离→拦截的闭环。 |
 | `deepseek_infra/infra/rag/files.py` | 文件文本抽取、分块、缓存和附件上下文检索；并为豆包式文档阅读工作台提供原文件原样返回、PDF 逐页 PNG 渲染（PyMuPDF，回退 pdf2image）、按页文字坐标层、分页文本和跨页关键字搜索。 |
