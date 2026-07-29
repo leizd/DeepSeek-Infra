@@ -137,6 +137,7 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: stateless-mcp/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
       - run: npm ci --prefix stateless-mcp
       - run: npm run check --prefix stateless-mcp
 
