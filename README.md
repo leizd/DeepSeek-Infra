@@ -225,6 +225,8 @@ Rust Gateway sidecar（3.0.3 起）已迁移为独立文档：RAG 向量排序�
 ## 协议端点（MCP / A2A）
 
 - `POST /mcp` — MCP JSON-RPC 2.0 端点（本地 token 鉴权）。把 MCP 客户端的 Streamable HTTP server 地址指向它即可使用本地工具面；`GET /api/mcp` 查看 Hub 状态。
+
+需要横向扩展、任务恢复和故障演练时，可使用独立的 [无状态 MCP Server](docs/STATELESS_MCP.md)：官方 TypeScript SDK + Redis 持久任务/幂等索引 + 双实例 NGINX 轮询 + OpenTelemetry。现有 Python `/mcp` 保留为兼容端点。
 - `GET /.well-known/agent-card.json` — A2A 发现：orchestrator 的 Agent Card（仅元数据，不鉴权）。
 - `GET /a2a/agents` — 全部本地 Agent Card；`POST /a2a` 与 `POST /a2a/agents/{agentId}` — A2A JSON-RPC（`message/send` / `message/stream` / `tasks/resubscribe` / `tasks/get` / `tasks/cancel` / `tasks/list`，本地 token 鉴权）。
 - `GET /api/taint` — Context Taint 防火墙状态。
@@ -431,6 +433,7 @@ The roadmap now lives in a standalone document: [ROADMAP.en.md](ROADMAP.en.md).
 - [docs/WORKSPACE.md](docs/WORKSPACE.md) — Workspace Core 对象模型、API、导出包结构与 smoke evidence。
 - [docs/DEMO.md](docs/DEMO.md) — 2 分钟 Demo 路径（含离线可跑项）。
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 分层架构、infra 模块、端云路由与本地数据层。
+- [docs/STATELESS_MCP.md](docs/STATELESS_MCP.md) — 无状态 MCP 双实例部署、Redis 租约恢复、幂等工具与故障演练。
 - [docs/API.md](docs/API.md) — HTTP API、OpenAI 兼容 `/v1` 与鉴权。
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Docker / Compose / 裸机部署与反向代理边界。
 - [docs/SECURITY.md](docs/SECURITY.md) — 鉴权、敏感数据与本地安全边界。

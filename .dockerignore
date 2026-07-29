@@ -10,6 +10,8 @@ __pycache__
 .ruff_cache
 .npm-cache
 frontend/node_modules
+stateless-mcp/node_modules
+stateless-mcp/dist
 static/ui
 .coverage
 rust/target
