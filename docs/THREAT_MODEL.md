@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v2.9.1。
+适用版本：v4.4.1。
 
 定位与信任假设见 [docs/SECURITY.md](SECURITY.md)：个人、本地优先的运行时，运行后端的机器可信，默认只监听 `127.0.0.1`。这一页回答更尖锐的问题：**当模型上下文里混入攻击者可控的内容（网页、文件、工具结果），或本机服务被局域网内他人触达时，每一类威胁由哪段代码挡住、由哪个测试钉住、还剩什么残余风险。**
 
@@ -81,6 +81,20 @@
 - **测试**：[test_mcp.py](../tests/test_mcp.py) 外部桥接用例（profile、命名隔离、策略拒绝、审批、审计、结果清洗、不可用 server 降级、Hub 路径不绕过 policy、远端 `isError=true`、schema refresh、命名碰撞），[test_tool_policy.py](../tests/test_tool_policy.py) 外部 network/filesystem 参数扫描。
 - **残余风险**：外部 server 的真实副作用只能由该 server 自身保证；DeepSeek Infra 只能在调用前后做本地策略门控、审计和结果清洗。只应配置可信来源或本机可审计的 MCP server。
 
+### T8 · 无状态 MCP 横向扩展与任务执行（v4.4.1）
+
+- **路径**：攻击者可能从网络探测专用 MCP 入口、构造工作区越界路径或命令注入参数；客户端重试可能重复触发非幂等测试；实例失租后可能迟到写回；Redis 泄露会暴露任务参数和日志。
+- **缓解**：
+  - **独立鉴权与 Host 边界**：`MCP_AUTH_TOKEN` Bearer token、`MCP_ALLOWED_HOSTS` 和默认回环端口限制入口；Redis 只存在于 Compose 内网；
+  - **路径和进程边界**：代码搜索与 pytest 目标都必须位于 `MCP_WORKSPACE_ROOT`；搜索使用固定字符串，pytest 使用独立 argv 和 `shell=false`，并限制输出与超时；
+  - **无进程会话**：官方 TypeScript SDK handler 每个请求创建新 `McpServer`，不依赖实例内客户端 Map 或 sticky session；
+  - **持久任务状态**：任务、日志、attempts、lease 和幂等索引只写 Redis；Redis 不可达时 readiness 失败，不回退为实例私有状态；
+  - **幂等冲突检测**：`start_test_run` 要求幂等键并绑定规范化参数哈希；同键同参返回原任务，同键异参拒绝；
+  - **lease/fencing**：认领、续租和完成是 Redis Lua 原子转换；完成必须匹配 owner 与 fencing token，旧实例不能覆盖接管结果；
+  - **最小遥测**：OpenTelemetry 的固定 attributes 不记录查询、测试参数或日志正文；异常 span 可能包含错误摘要，Collector 保持私有。
+- **测试**：[stateless-mcp/test/](../stateless-mcp/test/) 覆盖认证、Host、路径、幂等、lease/fencing 和遥测；`npm run smoke:failover --prefix stateless-mcp` 在双实例栈中终止 task owner，验证客户端重试、租约恢复和无重复执行；CI 分别以 `stateless-mcp` 和 `stateless-mcp-failover` 固定两层合同。
+- **残余风险**：pytest 运行的是仓库代码，不是强隔离沙箱；恶意测试仍能使用容器拥有的文件、网络和环境权限。Redis AOF 与任务日志可能含敏感输出，必须按私有运行数据保护。
+
 ## 非目标（明确不在防护范围内）
 
 - 运行后端的本机已被攻陷（恶意进程可直接读本地数据目录）；
@@ -98,3 +112,5 @@
 | 依赖 CVE / 静态安全 / 凭证扫描 | CI `security` job（`pip-audit` · `bandit` · `detect-secrets`） |
 | 运行中防火墙状态 | `GET /api/taint` · `GET /api/tool-policy` |
 | 外部 MCP 工具面核对 | `GET /api/mcp/external/tools` |
+| 无状态 MCP 类型/单元合同 | `npm run check --prefix stateless-mcp` |
+| 无状态 MCP 双实例故障恢复 | `npm run smoke:failover --prefix stateless-mcp` |

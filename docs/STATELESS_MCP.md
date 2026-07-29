@@ -5,6 +5,8 @@
 <!-- docs-language-switcher:end -->
 
 
+适用版本：v4.4.1。
+
 `stateless-mcp/` 是可横向扩展的独立 MCP 服务。它使用官方 TypeScript SDK 的 Streamable HTTP 入口；每个 HTTP 请求都创建一个新的 `McpServer`，进程内不保存客户端会话。现有 Python `POST /mcp` 继续作为兼容端点，迁移期间不会被替换。
 
 ## 架构
@@ -62,6 +64,19 @@ docker compose -f docker-compose.stateless-mcp.yml up -d --build
 默认 token `dev-change-me` 只适合本机演练。生产部署必须覆盖 `MCP_AUTH_TOKEN`，限制 Redis 和实例直连端口，并为负载均衡入口配置 TLS。
 `MCP_ALLOWED_HOSTS` 可用逗号分隔的主机名覆盖 Host 校验白名单；默认仅允许本机地址和 `mcp-lb`，用于防止 DNS rebinding。
 
+主要配置：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `MCP_AUTH_TOKEN` | Compose 为 `dev-change-me` | MCP Bearer token；生产必须覆盖。 |
+| `MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1],mcp-lb` | Host 头白名单。 |
+| `REDIS_URL` / `REDIS_PREFIX` | `redis://127.0.0.1:6379` / `deepseek-infra:mcp:v1` | 持久状态地址和键空间。 |
+| `MCP_WORKSPACE_ROOT` | 当前工作目录 | 搜索和 pytest 允许访问的安全根。 |
+| `MCP_TASK_LEASE_MS` / `MCP_TASK_POLL_MS` | `15000` / `250` | owner 租约和待处理任务轮询间隔。 |
+| `MCP_TASK_TIMEOUT_SECONDS` | `600` | 单个 pytest 任务的最长运行时间。 |
+| `MCP_MAX_OUTPUT_BYTES` | `262144` | 每个任务可保留的输出上限。 |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | 未设置 | 设置后启用 OTLP/HTTP trace 和 metrics 导出。 |
+
 ## 故障恢复演练
 
 下面的命令会自动：
@@ -107,3 +122,5 @@ node stateless-mcp/dist/src/server.js
 ```
 
 生产服务不会回落到内存存储；Redis 不可用时启动失败或 `/readyz` 返回 `503`。`MemoryTaskStore` 仅用于验证幂等和租约合同的单元测试。
+
+Redis AOF 不属于默认 DeepSeek Infra `/data` 卷。任务参数、日志和结果摘要可能包含敏感内容；备份、迁移、保留和销毁都应把该卷作为单独的私有数据源处理。安全边界、威胁映射、API 和兼容性状态分别见 [SECURITY.md](SECURITY.md#无状态-mcp-安全边界)、[THREAT_MODEL.md](THREAT_MODEL.md#t8--无状态-mcp-横向扩展与任务执行v441)、[API.md](API.md#独立无状态-mcp-服务v441) 与 [COMPATIBILITY.md](COMPATIBILITY.md#无状态-mcp-横向扩展兼容性)。

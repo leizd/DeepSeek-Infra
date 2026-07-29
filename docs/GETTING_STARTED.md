@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.0.3.
+Applicable version: v4.4.1.
 
-DeepSeek Infra 4.0.3 starts the React migration without replacing the stable workspace. The default `/` screen remains the complete legacy UI; `/ui/` exposes the isolated React migration preview. Projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports stay in the local runtime root unless you explicitly call an upstream API. The optional Rust sidecar is supported but not required, and the frozen 4.0 runtime contract is unchanged.
+DeepSeek Infra 4.4.1 uses the React workspace as the default UI and keeps projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports in the local runtime root unless you explicitly call an upstream API. The optional Rust sidecar remains supported but disabled by default. A separate stateless MCP stack is available for horizontally scaled code search and durable test tasks; it stores task state in Redis rather than the default runtime root.
 
 ## Local Run
 
@@ -18,18 +18,29 @@ npm run build --prefix frontend
 python app.py
 ```
 
-Open `http://127.0.0.1:8000` for the stable workspace. Open `http://127.0.0.1:8000/ui/` only to inspect the isolated migration preview.
+Open `http://127.0.0.1:8000` for the workspace.
+
+To run the optional two-instance stateless MCP stack:
+
+```powershell
+$env:MCP_AUTH_TOKEN = '<replace-with-a-long-random-token>'
+docker compose -f docker-compose.stateless-mcp.yml up -d --build
+```
+
+Connect the MCP client to `http://127.0.0.1:8010/mcp`. See [STATELESS_MCP.md](STATELESS_MCP.md) for the five-tool boundary and failover demo.
 
 ## Release Smoke
 
 ```bash
 python scripts/doctor.py --offline
-python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.0.3.json
-python scripts/preflight_release.py --version 4.0.3 --ga
+python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.4.1.json
+npm ci --prefix stateless-mcp
+npm run check --prefix stateless-mcp
+python scripts/preflight_release.py --version 4.4.1 --ga
 ```
 
 The GA smoke creates an isolated project chain: Project -> Skill -> Media -> Browser Snapshot -> Saved Item -> Artifact -> Automation -> Export.
 
 ## Data Location
 
-Set `DEEPSEEK_INFRA_ROOT` to move all writable runtime data. Release archives exclude local runtime state such as `.projects`, `.memory`, `.media`, `.automation`, `.generated`, `.local-rag`, `.traces`, `.skills` and secret files.
+Set `DEEPSEEK_INFRA_ROOT` to move all writable default-runtime data. Release archives exclude local runtime state such as `.projects`, `.memory`, `.media`, `.automation`, `.generated`, `.local-rag`, `.traces`, `.skills` and secret files. The optional stateless MCP Redis volume is separate and must be backed up or removed independently.

@@ -5,14 +5,15 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v2.9.1。
+适用版本：v4.4.1。
 
-这一页的目标：**不读任何源码，2 分钟内亲眼看到 README 里的核心能力在跑**。四个脚本都在 [examples/](../examples/)，按「零门槛 → 需要服务 → 需要 Key」排序：
+这一页的目标：**不读任何源码，快速亲眼看到 README 里的核心能力在跑**。四个交互脚本按「零门槛 → 需要服务 → 需要 Key」排序；无状态 MCP 另有一个约十几秒的 Docker 故障恢复演练：
 
 | Demo | 命令 | 需要本地服务 | 需要 DeepSeek Key |
 | --- | --- | --- | --- |
 | 本地 RAG（lineage + 引用校验） | `python examples/local_rag_demo.py` | ❌ 完全离线 | ❌ |
 | MCP Tool Hub 协议回环 | `python examples/mcp_tool_demo.py` | ✅ | ❌（本地工具不走上游） |
+| 无状态 MCP 双实例故障恢复 | `npm run smoke:failover --prefix stateless-mcp` | ✅ Docker Compose 栈 | ❌ |
 | OpenAI 兼容网关 | `python examples/openai_compatible_client.py` | ✅ | ✅ |
 | 多 Agent DAG 流式 | `python examples/run_agent_dag_demo.py` | ✅ | ✅（真实消耗 token） |
 
@@ -62,7 +63,7 @@ python examples/mcp_tool_demo.py
 用仓库内置的 `MCPClient` 对本机 `POST /mcp` 做 `initialize → tools/list → tools/call` 回环：
 
 ```
-[initialize] protocol=2025-06-18 server=deepseek-infra v2.3.2
+[initialize] protocol=2025-06-18 server=deepseek-infra v4.4.1
 
 [tools/list] 17 tools:
    - web_search  [read-only, open-world]
@@ -75,6 +76,27 @@ structuredContent: {"ok": true, "tool": "python_eval", "result": {"expression": 
 ```
 
 每个 `tools/call` 都经过 Tool Policy 闸门（能力切片 / schema / SSRF / 路径 / 密钥外泄防护）。Claude Desktop、Cursor 等任意 MCP 客户端把 Streamable HTTP 地址指向 `http://127.0.0.1:8000/mcp` 即可获得同一工具面。
+
+## 2.1 无状态 MCP：轮询、重试与任务恢复（需 Docker，免 Key）
+
+```powershell
+npm ci --prefix stateless-mcp
+npm run smoke:failover --prefix stateless-mcp
+```
+
+演练会构建并启动 Redis AOF、OpenTelemetry Collector、两个 MCP 实例和 NGINX，然后依次验证：
+
+```text
+roundRobinInstances: ["mcp-instance-1", "mcp-instance-2", "mcp-instance-1", "mcp-instance-2"]
+crashedInstance: "mcp-instance-1"
+recoveredBy: "mcp-instance-2"
+attempts: 2
+clientRetryAttempts: 2
+idempotencyDeduplicated: true
+status: "PASS"
+```
+
+它不会调用 DeepSeek 或消耗模型 token。测试任务使用仓库内的固定 failover fixture；脚本结束前会恢复被终止的实例，并保留 Compose 栈供检查。检查后可运行 `docker compose -f docker-compose.stateless-mcp.yml down`。该服务只暴露五个代码/测试专用工具，不替换上一节的 17 工具 Python Hub。完整拓扑和排障见 [STATELESS_MCP.md](STATELESS_MCP.md)。
 
 ## 3. OpenAI 兼容网关：任意 OpenAI SDK 直连（需服务 + Key）
 

@@ -7,6 +7,14 @@
 
 已完成的能力以 [实现状态矩阵](docs/IMPLEMENTATION_STATUS.md) 为准（含各模块成熟度与明确缺口）；下面是接下来的计划，完成一项勾一项：
 
+### v4.4.1: Crash-Safe Restore & Stateless MCP
+
+- [x] 恢复升级为跨浏览器 Workspace Epoch 与后端 Contributor 的可恢复事务，具备耐久 Fence、Journal、目录交换和启动恢复。
+- [x] 新增官方 TypeScript SDK 无状态 MCP 执行平面，不在实例内保存客户端会话。
+- [x] 用 Redis 持久化测试任务、租约、fencing token、日志与幂等索引。
+- [x] 部署两个 MCP 实例并用 NGINX 轮询；故障 smoke 终止 owner，验证客户端重试、租约接管与幂等收敛。
+- [x] 用 OpenTelemetry 记录工具耗时与失败率，CI 固定类型/单测、镜像/Compose 和容器级 failover 三层合同。
+
 ### v3.0.0: Personal AI Runtime GA
 - [x] First-class Memory with scoped schema, search/edit/delete, skill read policy and sensitive-memory blocking.
 - [x] Unified Workspace home across Projects, Memory, Skills, Media, Browser, Automations, Artifacts, Saved Items, Exports and Settings.

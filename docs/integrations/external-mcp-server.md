@@ -5,9 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：DeepSeek Infra v2.3.0。
+适用版本：DeepSeek Infra v4.4.1。
 
 本页记录 DeepSeek Infra 的 MCP 外部 server 桥接与一个**真实第三方 MCP SDK 实现**的互操作验证结果。验证使用官方 `mcp` Python SDK（PyPI `mcp>=1.0`）构建的 Streamable HTTP server 作为 interop partner，不是同进程 mock。
+
+这里验证的是默认 Python Runtime 作为 MCP client 消费外部 server 的“出方向桥接”。v4.4.1 的无状态 MCP 是独立的“入方向专用执行平面”，不消费 `MCP_CLIENT_SERVERS`，其可靠性合同见 [../STATELESS_MCP.md](../STATELESS_MCP.md)。
 
 ## 互操作 Partner
 

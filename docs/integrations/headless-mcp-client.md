@@ -5,11 +5,13 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：DeepSeek Infra v2.9.1。
+适用版本：DeepSeek Infra v4.4.1。
 
 Headless MCP 验证是面向 CI、服务器以及未安装 Claude Desktop 或 Cursor 的机器的无 GUI 兼容性路径。它证明这些应用通常依赖的 MCP client 路径可以通过 stdio bridge 接入 DeepSeek Infra 的 Streamable HTTP endpoint。
 
 它**不**意味着 Claude Desktop 或 Cursor 的 GUI 验证。在做完 [claude-desktop.md](claude-desktop.md) 和 [cursor.md](cursor.md) 的 GUI runbook 之前，这两行保持 🟡。
+
+本页 smoke 固定验证默认 Python `/mcp`。无状态 `:8010/mcp` 的请求级 TypeScript SDK、双实例重试和租约恢复由 [../STATELESS_MCP.md](../STATELESS_MCP.md) 与 `stateless-mcp-failover` CI job 单独证明，不能用本页 evidence 互相替代。
 
 ## 验证内容
 

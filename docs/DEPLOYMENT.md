@@ -7,7 +7,7 @@
 
 适用版本：v4.4.1。
 
-DeepSeek Infra 的服务形态是一个单进程 FastAPI / ASGI 运行时：`/v1` OpenAI 兼容网关、`/mcp`、`/a2a`、`/api/*` 业务端点，加 `/healthz`·`/readyz`·`/metrics` 运维三件套。所有可写状态（鉴权 token、文件缓存、向量索引、trace、语义缓存、记忆、任务快照）都集中在**一个数据目录**下，由 `DEEPSEEK_INFRA_ROOT`（优先）或 `DEEPSEEK_MOBILE_ROOT`（向后兼容）指定——这也是容器化只需要一个卷的原因。
+DeepSeek Infra 默认服务形态是一个单进程 FastAPI / ASGI 运行时：`/v1` OpenAI 兼容网关、`/mcp`、`/a2a`、`/api/*` 业务端点，加 `/healthz`·`/readyz`·`/metrics` 运维三件套。它的可写状态集中在 `DEEPSEEK_INFRA_ROOT`（或兼容变量 `DEEPSEEK_MOBILE_ROOT`）指定的数据目录。另有可选的无状态 MCP 双实例栈；它把持久任务状态放在独立 Redis AOF 卷中，因此不属于默认单卷备份边界。
 
 ## 1. Docker Compose（推荐）
 
@@ -21,7 +21,7 @@ docker compose logs -f deepseek-infra
 
 ```bash
 curl http://127.0.0.1:8000/healthz
-# {"status":"ok","version":"2.3.2",...}
+# {"status":"ok","version":"4.4.1",...}
 curl http://127.0.0.1:8000/readyz
 curl http://127.0.0.1:8000/metrics | head
 ```
@@ -37,20 +37,45 @@ curl http://127.0.0.1:8000/metrics | head
 
 浏览器访问用 `http://127.0.0.1:8000/?token=<token>`，API 客户端用 `Authorization: Bearer <token>`。
 
-## 2. 纯 Docker
+## 2. 无状态 MCP 双实例 Compose
+
+代码搜索、测试运行、日志查询需要横向扩展与实例故障恢复时，使用独立 Compose：
+
+```powershell
+$env:MCP_AUTH_TOKEN = '<replace-with-a-long-random-token>'
+docker compose -f docker-compose.stateless-mcp.yml up -d --build
+curl http://127.0.0.1:8010/healthz
+curl http://127.0.0.1:8010/readyz
+curl http://127.0.0.1:8010/instance
+```
+
+拓扑包括 Redis（AOF）、OpenTelemetry Collector、`mcp-instance-1`、`mcp-instance-2` 和 NGINX round-robin。客户端只连接 `http://127.0.0.1:8010/mcp`；`8011` / `8012` 只用于本机实例诊断，`9464` 暴露 Collector 的 Prometheus 指标。该服务不需要粘性会话，任务通过 Redis lease/fencing 接管。
+
+生产环境必须覆盖 `MCP_AUTH_TOKEN`，为入口配置 TLS，保持 Redis 不对宿主公网开放，并收紧 `MCP_ALLOWED_HOSTS`。`MCP_WORKSPACE_ROOT` 是代码搜索和 pytest 目标的安全根；服务容器对该目录拥有的权限就是测试代码能获得的权限，不应把不可信仓库交给高权限实例。
+
+Redis 命名卷保存任务参数、日志、结果摘要、租约和幂等索引。它不在 `deepseek-data:/data` 内：备份或迁移时应单独保存 Redis AOF/RDB，并保证与服务版本兼容；删除卷会丢失任务恢复历史。故障恢复演练：
+
+```powershell
+npm ci --prefix stateless-mcp
+npm run smoke:failover --prefix stateless-mcp
+```
+
+演练会启动完整栈、确认轮询分流、创建测试任务、终止 lease owner、验证客户端重试与另一实例接管，并确认相同幂等键不会重复执行。详细说明见 [STATELESS_MCP.md](STATELESS_MCP.md)。
+
+## 3. 纯 Docker
 
 ```bash
-docker build -t deepseek-infra:2.3.2 .
+docker build -t deepseek-infra:4.4.1 .
 docker run -d --name deepseek-infra \
   -p 127.0.0.1:8000:8000 \
   --env-file .env \
   -v deepseek-data:/data \
-  deepseek-infra:2.3.2
+  deepseek-infra:4.4.1
 ```
 
-镜像要点（见 [Dockerfile](../Dockerfile)）：`python:3.12-slim`、`pip --no-cache-dir`、非 root 用户运行、`HEALTHCHECK` 打 `/healthz`、数据卷 `/data`、静态资源固定在镜像内（`DEEPSEEK_INFRA_STATIC_DIR`，旧变量 `DEEPSEEK_MOBILE_STATIC_DIR` 继续兼容），并在构建后清理 `__pycache__`。CI 的 docker job 会同时跑 `docker build -t deepseek-infra:test .` 和 `docker compose config`，确保镜像可构建、Compose 语法有效。
+镜像要点（见 [Dockerfile](../Dockerfile)）：`python:3.12-slim`、`pip --no-cache-dir`、非 root 用户运行、`HEALTHCHECK` 打 `/healthz`、数据卷 `/data`、静态资源固定在镜像内（`DEEPSEEK_INFRA_STATIC_DIR`，旧变量 `DEEPSEEK_MOBILE_STATIC_DIR` 继续兼容），并在构建后清理 `__pycache__`。CI 的 docker job 会验证默认镜像/Compose，也会构建 [stateless-mcp/Dockerfile](../stateless-mcp/Dockerfile) 并校验 [docker-compose.stateless-mcp.yml](../docker-compose.stateless-mcp.yml)。
 
-## 3. 裸机 / systemd
+## 4. 裸机 / systemd
 
 ```bash
 python -m pip install -r requirements.txt
@@ -80,7 +105,7 @@ WantedBy=multi-user.target
 
 安全加固可在 `[Service]` 段按需追加 `ProtectSystem=strict`、`ReadWritePaths=/var/lib/deepseek-infra` 等。
 
-## 4. 配置参考
+## 5. 配置参考
 
 - 模板：[.env.example](../.env.example)（核心变量带注释）；完整清单见 README「环境变量」。
 - 数据目录：`DEEPSEEK_INFRA_ROOT`（优先，`DEEPSEEK_MOBILE_ROOT` 向后兼容；容器内默认 `/data`；裸机默认仓库根目录）。各子目录含义见 README「本地数据与隐私」。
@@ -95,7 +120,7 @@ WantedBy=multi-user.target
 - **冷备**：必须先完全停止服务，再复制整个 `/data` 卷。直接复制运行中的卷可能得到跨 SQLite / JSON 时间点不一致的内容。
 - `.dsibackup` **完整性可验证但默认未加密**；把它当作完整工作区敏感数据存储。分享用 Export 已脱敏或裁剪，不能用于 Restore。
 
-## 5. 暴露到局域网 / 公网前必读
+## 6. 暴露到局域网 / 公网前必读
 
 - `/metrics`、`/healthz`、`/readyz` **不鉴权**：保持只绑回环，或在反向代理上挡掉这三个路径再对外。
 - 反向代理（Caddy 示例）：
@@ -113,7 +138,7 @@ WantedBy=multi-user.target
 - 不要把 `.env`、`/data`（含 `.auth-token`、向量索引、trace、记忆等隐私数据）打进镜像或提交进 git；`.dockerignore` / `.gitignore` / `scripts/release.py` 三处都已排除。
 - 安全边界与威胁模型见 [docs/SECURITY.md](SECURITY.md) 与 [docs/THREAT_MODEL.md](THREAT_MODEL.md)。
 
-## 6. Production Readiness
+## 7. Production Readiness
 
 DeepSeek Infra is designed for **local-first personal / lab / internal use**. Before exposing it to the public Internet, you should add:
 
@@ -127,7 +152,7 @@ DeepSeek Infra is designed for **local-first personal / lab / internal use**. Be
 
 These are not built into the runtime itself — they belong at the infrastructure layer around it. Being explicit about this boundary makes the project safer: it doesn't pretend to solve what it doesn't.
 
-## 7. 常见启动失败排查
+## 8. 常见启动失败排查
 
 服务起不来时，先跑运行时体检，它会用 PASS / WARNING / FAIL 把环境问题逐项指出来：
 
