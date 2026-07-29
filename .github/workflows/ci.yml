@@ -127,6 +127,20 @@ jobs:
             docs/evidence/frontend-bundle-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
 
+  stateless-mcp:
+    needs: release-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: stateless-mcp/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: npm ci --prefix stateless-mcp
+      - run: npm run check --prefix stateless-mcp
+
   frontend-browser:
     needs:
       - evidence-context
@@ -190,6 +204,7 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install pip-audit bandit detect-secrets
       - run: npm ci --prefix frontend
+      - run: npm ci --prefix stateless-mcp
       - name: npm audit (high; documented exceptions gated)
         run: |
           mkdir -p artifacts
@@ -197,6 +212,8 @@ jobs:
           npm audit --prefix frontend --audit-level=high --json > artifacts/npm-audit.json || status=$?
           if [ "$status" -gt 1 ]; then cat artifacts/npm-audit.json; exit "$status"; fi
           python scripts/check_npm_audit.py artifacts/npm-audit.json
+      - name: Stateless MCP npm audit (high)
+        run: npm audit --prefix stateless-mcp --audit-level=high
       - run: pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt
       - run: bandit -r deepseek_infra --severity-level high -q
       - run: detect-secrets scan --baseline .secrets.baseline
@@ -263,7 +280,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t deepseek-infra:test .
+      - run: docker build -f stateless-mcp/Dockerfile -t deepseek-infra-stateless-mcp:test .
       - run: cp .env.example .env && docker compose config
+      - run: docker compose -f docker-compose.stateless-mcp.yml config
+
+  stateless-mcp-failover:
+    needs:
+      - release-version
+      - stateless-mcp
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: stateless-mcp/package-lock.json
+      - run: npm ci --prefix stateless-mcp
+      - name: Simulate instance loss and verify retry, lease recovery, and idempotency
+        run: npm run smoke:failover --prefix stateless-mcp
+      - name: Show stateless MCP logs
+        if: failure()
+        run: docker compose -f docker-compose.stateless-mcp.yml logs --no-color
+      - name: Stop stateless MCP stack
+        if: always()
+        run: docker compose -f docker-compose.stateless-mcp.yml down --volumes --remove-orphans
 
   rust-docker:
     needs:
@@ -838,6 +879,8 @@ jobs:
       - evidence-context
       - frontend
       - frontend-browser
+      - stateless-mcp
+      - stateless-mcp-failover
       - security
       - eval
       - release-readiness
@@ -958,6 +1001,8 @@ jobs:
       - test
       - frontend
       - frontend-browser
+      - stateless-mcp
+      - stateless-mcp-failover
       - security
       - eval
       - docker
@@ -981,6 +1026,8 @@ jobs:
       RC_CI_TEST: ${{ needs.test.result }}
       RC_CI_FRONTEND: ${{ needs.frontend.result }}
       RC_CI_FRONTEND_BROWSER: ${{ needs['frontend-browser'].result }}
+      RC_CI_STATELESS_MCP: ${{ needs['stateless-mcp'].result }}
+      RC_CI_STATELESS_MCP_FAILOVER: ${{ needs['stateless-mcp-failover'].result }}
       RC_CI_SECURITY: ${{ needs.security.result }}
       RC_CI_EVAL: ${{ needs.eval.result }}
       RC_CI_DOCKER: ${{ needs.docker.result }}
@@ -1007,6 +1054,8 @@ jobs:
         shell: bash
         run: |
           test "$RC_CI_FRONTEND" = "success"
+          test "$RC_CI_STATELESS_MCP" = "success"
+          test "$RC_CI_STATELESS_MCP_FAILOVER" = "success"
           test "$RC_CI_EVIDENCE_ASSEMBLY" = "success"
           test "$RC_CI_RELEASE_PACKAGE" = "success"
           mode=--report-only

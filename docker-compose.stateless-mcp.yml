@@ -1,0 +1,78 @@
+x-mcp-environment: &mcp-environment
+  REDIS_URL: redis://redis:6379
+  REDIS_PREFIX: deepseek-infra:mcp:v1
+  MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-change-me}
+  MCP_TASK_LEASE_MS: "5000"
+  MCP_TASK_POLL_MS: "250"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    volumes:
+      - stateless-mcp-redis:/data
+
+  otel-collector:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.157.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./stateless-mcp/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:9464:9464"
+
+  mcp-instance-1:
+    build:
+      context: .
+      dockerfile: stateless-mcp/Dockerfile
+    environment:
+      <<: *mcp-environment
+      MCP_INSTANCE_ID: mcp-instance-1
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8011:8010"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8010/readyz').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  mcp-instance-2:
+    build:
+      context: .
+      dockerfile: stateless-mcp/Dockerfile
+    environment:
+      <<: *mcp-environment
+      MCP_INSTANCE_ID: mcp-instance-2
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8012:8010"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8010/readyz').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  mcp-lb:
+    image: nginx:1.28-alpine
+    volumes:
+      - ./stateless-mcp/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      mcp-instance-1:
+        condition: service_healthy
+      mcp-instance-2:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8010:8010"
+
+volumes:
+  stateless-mcp-redis:
