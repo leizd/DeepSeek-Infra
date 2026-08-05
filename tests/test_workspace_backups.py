@@ -855,12 +855,13 @@ def test_startup_recovery_queries_external_participant_status(tmp_settings: Path
 
     write_external_transaction("restore_externalpending")
     aborted: list[str] = []
+
+    def fake_abort(_self: object, restore_id: str) -> dict[str, object]:
+        aborted.append(restore_id)
+        return journal("rolled-back")
+
     monkeypatch.setattr(backups.StatelessMcpContributor, "restore_status", lambda _self, restore_id: journal("prepared"))
-    monkeypatch.setattr(
-        backups.StatelessMcpContributor,
-        "abort_restore",
-        lambda _self, restore_id: aborted.append(restore_id) or journal("rolled-back"),
-    )
+    monkeypatch.setattr(backups.StatelessMcpContributor, "abort_restore", fake_abort)
     recovered = backups.recover_interrupted_restores()
     assert "restore_externalpending" in recovered["rolledBack"]
     assert aborted == ["restore_externalpending"]
