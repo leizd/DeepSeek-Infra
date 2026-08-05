@@ -9,7 +9,7 @@ import { createServiceMcp } from "./mcp-server.js";
 import { RedisTaskStore } from "./redis-task-store.js";
 import { initializeTelemetry } from "./telemetry.js";
 import { TaskWorker } from "./test-runner.js";
-import { parseBackupSnapshot } from "./task-store.js";
+import { parseBackupSnapshot, RestoreFenceError } from "./task-store.js";
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -179,6 +179,10 @@ async function main(): Promise<void> {
         }
         json(res, 404, { error: "not found" });
       })().catch((error: unknown) => {
+        if (error instanceof RestoreFenceError) {
+          json(res, 423, { error: error.message });
+          return;
+        }
         json(res, 409, { error: error instanceof Error ? error.message : String(error) });
       });
       return;

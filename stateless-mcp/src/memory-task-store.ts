@@ -14,6 +14,7 @@ import {
   parseBackupSnapshot,
   portableTask,
   RestoreConflictError,
+  RestoreFenceError,
   RestoreStateError,
   taskDigest,
   type CreateTaskInput,
@@ -79,7 +80,9 @@ export class MemoryTaskStore implements TaskStore {
       return { task: structuredClone(existing), deduplicated: true };
     }
     this.expireBackupFence(input.now);
+    this.expireRestoreFence(input.now);
     if (this.backupFence !== null) throw new BackupFenceError();
+    if (this.restoreFence !== null) throw new RestoreFenceError();
     this.tasks.set(candidate.id, candidate);
     this.idempotency.set(candidate.idempotencyKeyHash, candidate.id);
     this.generation += 1;
@@ -94,7 +97,9 @@ export class MemoryTaskStore implements TaskStore {
 
   async claim(instanceId: string, now: number, leaseMs: number): Promise<TaskRecord | null> {
     this.expireBackupFence(now);
+    this.expireRestoreFence(now);
     if (this.backupFence !== null) return null;
+    if (this.restoreFence !== null) return null;
     const eligible = [...this.tasks.values()]
       .filter(
         (task) =>
@@ -135,6 +140,8 @@ export class MemoryTaskStore implements TaskStore {
     if (task === undefined || task.status !== "running" || task.ownerInstance !== instanceId) {
       return null;
     }
+    this.expireRestoreFence(now);
+    if (this.restoreFence !== null) throw new RestoreFenceError();
     task.status = outcome.error === null && outcome.exitCode === 0 ? "succeeded" : "failed";
     task.stdout = outcome.stdout;
     task.stderr = outcome.stderr;
@@ -152,6 +159,8 @@ export class MemoryTaskStore implements TaskStore {
 
   async prepareBackup(backupId: string, now: number): Promise<BackupFence> {
     this.expireBackupFence(now);
+    this.expireRestoreFence(now);
+    if (this.restoreFence !== null) throw new RestoreFenceError();
     if (this.backupFence !== null && this.backupFence.backupId !== backupId) throw new BackupFenceError();
     this.backupFence ??= { backupId, generation: this.generation, createdAt: now, expiresAt: now + BACKUP_FENCE_TTL_MS };
     return structuredClone(this.backupFence);
@@ -305,7 +314,7 @@ export class MemoryTaskStore implements TaskStore {
       throw new RestoreStateError("restore transaction digest mismatch");
     }
     if (this.backupFence !== null) {
-      throw new RestoreStateError("a backup fence is active");
+      throw new RestoreFenceError();
     }
     if (this.restoreFence !== null && this.restoreFence.restoreId !== restoreId) {
       throw new RestoreStateError("another restore holds the restore fence");

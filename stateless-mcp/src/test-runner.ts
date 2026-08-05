@@ -3,7 +3,32 @@ import { once } from "node:events";
 
 import type { ServiceConfig } from "./config.js";
 import type { TaskOutcome, TaskRecord, TaskStore } from "./task-store.js";
+import { RestoreFenceError } from "./task-store.js";
 import { resolveWorkspacePath } from "./workspace.js";
+
+export const RESTORE_FENCE_RETRY_LIMIT_MS = 5 * 60 * 1000;
+
+export async function completeWhenUnfenced(
+  store: TaskStore,
+  taskId: string,
+  instanceId: string,
+  outcome: TaskOutcome,
+  pollMs: number,
+  retryLimitMs = RESTORE_FENCE_RETRY_LIMIT_MS,
+): Promise<void> {
+  const deadline = Date.now() + retryLimitMs;
+  for (;;) {
+    try {
+      await store.complete(taskId, instanceId, outcome, Date.now());
+      return;
+    } catch (error) {
+      if (!(error instanceof RestoreFenceError) || Date.now() >= deadline) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  }
+}
 
 function boundedAppend(current: string, chunk: string, limit: number): string {
   const currentBytes = Buffer.byteLength(current);
@@ -124,7 +149,7 @@ export class TaskWorker {
     try {
       const outcome = await executeTestTask(task, this.config, abortController.signal);
       if (leaseOwned && !this.stopped) {
-        await this.store.complete(task.id, this.config.instanceId, outcome, Date.now());
+        await completeWhenUnfenced(this.store, task.id, this.config.instanceId, outcome, this.config.pollMs);
       }
     } finally {
       clearInterval(heartbeat);

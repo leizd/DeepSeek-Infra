@@ -12,6 +12,7 @@ import {
   parseBackupSnapshot,
   portableTask,
   RestoreConflictError,
+  RestoreFenceError,
   RestoreStateError,
   RESTORE_FENCE_TTL_MS,
   RESTORE_JOURNAL_TTL_MS,
@@ -35,6 +36,7 @@ if existing_id then
   return {"existing", existing or ""}
 end
 if redis.call("EXISTS", KEYS[4]) == 1 then return redis.error_reply("BACKUP_FENCED") end
+if redis.call("EXISTS", KEYS[6]) == 1 then return redis.error_reply("RESTORE_FENCED") end
 redis.call("SET", KEYS[1], ARGV[1])
 redis.call("SET", KEYS[2], ARGV[2])
 redis.call("ZADD", KEYS[3], ARGV[4], ARGV[1])
@@ -44,6 +46,7 @@ return {"created", ARGV[2]}
 
 const CLAIM_SCRIPT = `
 if redis.call("EXISTS", KEYS[2]) == 1 then return "" end
+if redis.call("EXISTS", KEYS[4]) == 1 then return "" end
 local ids = redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, 16)
 for _, id in ipairs(ids) do
   local key = ARGV[4] .. id
@@ -91,6 +94,7 @@ local raw = redis.call("GET", KEYS[1])
 if not raw then return "" end
 local task = cjson.decode(raw)
 if task.status ~= "running" or task.ownerInstance ~= ARGV[1] then return "" end
+if redis.call("EXISTS", KEYS[4]) == 1 then return "FENCED" end
 local outcome = cjson.decode(ARGV[2])
 if outcome.error == cjson.null and outcome.exitCode == 0 then
   task.status = "succeeded"
@@ -291,11 +295,13 @@ export class RedisTaskStore implements TaskStore {
           this.queueKey(),
           this.backupFenceKey(),
           this.generationKey(),
+          this.restoreFenceKey(),
         ],
         arguments: [task.id, JSON.stringify(task), `${this.prefix}:task:`, String(input.now)],
       })) as [string, string];
     } catch (error) {
       if (error instanceof Error && error.message.includes("BACKUP_FENCED")) throw new BackupFenceError();
+      if (error instanceof Error && error.message.includes("RESTORE_FENCED")) throw new RestoreFenceError();
       throw error;
     }
     const result = parseTask(response[1]);
@@ -314,7 +320,7 @@ export class RedisTaskStore implements TaskStore {
 
   async claim(instanceId: string, now: number, leaseMs: number): Promise<TaskRecord | null> {
     const raw = (await this.client.eval(CLAIM_SCRIPT, {
-      keys: [this.queueKey(), this.backupFenceKey(), this.generationKey()],
+      keys: [this.queueKey(), this.backupFenceKey(), this.generationKey(), this.restoreFenceKey()],
       arguments: [String(now), instanceId, String(leaseMs), `${this.prefix}:task:`],
     })) as string;
     return raw === "" ? null : parseTask(raw);
@@ -335,9 +341,10 @@ export class RedisTaskStore implements TaskStore {
     now: number,
   ): Promise<TaskRecord | null> {
     const raw = (await this.client.eval(COMPLETE_SCRIPT, {
-      keys: [this.taskKey(taskId), this.queueKey(), this.generationKey()],
+      keys: [this.taskKey(taskId), this.queueKey(), this.generationKey(), this.restoreFenceKey()],
       arguments: [instanceId, JSON.stringify(outcome), String(now)],
     })) as string;
+    if (raw === "FENCED") throw new RestoreFenceError();
     return raw === "" ? null : parseTask(raw);
   }
 
@@ -347,6 +354,7 @@ export class RedisTaskStore implements TaskStore {
   }
 
   async prepareBackup(backupId: string, now: number): Promise<BackupFence> {
+    if ((await this.client.exists(this.restoreFenceKey())) === 1) throw new RestoreFenceError();
     const generation = Number.parseInt((await this.client.get(this.generationKey())) ?? "0", 10);
     const fence: BackupFence = { backupId, generation, createdAt: now, expiresAt: now + BACKUP_FENCE_TTL_MS };
     const created = await this.client.set(this.backupFenceKey(), JSON.stringify(fence), { NX: true, PX: BACKUP_FENCE_TTL_MS });
@@ -634,7 +642,7 @@ export class RedisTaskStore implements TaskStore {
       keys: [this.restoreFenceKey(), this.backupFenceKey()],
       arguments: [restoreId, String(now), String(RESTORE_FENCE_TTL_MS)],
     })) as string;
-    if (fence === "backup-fenced") throw new RestoreStateError("a backup fence is active");
+    if (fence === "backup-fenced") throw new RestoreFenceError();
     if (fence !== "ok") throw new RestoreStateError("another restore holds the restore fence");
 
     const decisions = await this.stagedDecisions(restoreId);
