@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { MemoryTaskStore } from "../src/memory-task-store.js";
 import { completeWhenUnfenced } from "../src/test-runner.js";
-import { BackupFenceError, digest, RestoreFenceError, type TaskOutcome } from "../src/task-store.js";
+import { BackupFenceError, collectSnapshot, digest, RestoreFenceError, type TaskOutcome } from "../src/task-store.js";
 
 const arguments_ = {
   target: "tests/test_mcp.py",
@@ -22,7 +22,7 @@ async function snapshotFromSource(): Promise<string> {
   const source = new MemoryTaskStore();
   await source.createOrGet({ idempotencyKey: "fence-snapshot-task", arguments: arguments_, now: 10 });
   await source.prepareBackup("backup-fence-source", 20);
-  return await source.exportBackup("backup-fence-source");
+  return await collectSnapshot(source.exportBackup("backup-fence-source"));
 }
 
 async function committedRestore(store: MemoryTaskStore): Promise<string> {

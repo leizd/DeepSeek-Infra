@@ -166,21 +166,18 @@ export class MemoryTaskStore implements TaskStore {
     return structuredClone(this.backupFence);
   }
 
-  async exportBackup(backupId: string): Promise<string> {
+  async *exportBackup(backupId: string): AsyncGenerator<string, void, void> {
     if (this.backupFence?.backupId !== backupId) throw new Error("backup fence is not owned by this request");
     const generation = this.generation;
-    const lines: unknown[] = [
-      { type: "metadata", schemaVersion: 1, stateGeneration: generation, restoreEpoch: this.restoreEpoch },
-    ];
+    yield `${JSON.stringify({ type: "metadata", schemaVersion: 1, stateGeneration: generation, restoreEpoch: this.restoreEpoch })}\n`;
     for (const task of [...this.tasks.values()].sort((left, right) => left.id.localeCompare(right.id))) {
       const portable = portableTask(task);
-      lines.push({ type: "task", schemaVersion: 1, task: { ...portable, stdout: "", stderr: "" } });
-      lines.push({ type: "idempotency", schemaVersion: 1, record: { hash: task.idempotencyKeyHash, taskId: task.id, requestHash: task.requestHash } });
-      lines.push({ type: "log", schemaVersion: 1, record: { taskId: task.id, stdout: task.stdout, stderr: task.stderr } });
+      yield `${JSON.stringify({ type: "task", schemaVersion: 1, task: { ...portable, stdout: "", stderr: "" } })}\n`;
+      yield `${JSON.stringify({ type: "idempotency", schemaVersion: 1, record: { hash: task.idempotencyKeyHash, taskId: task.id, requestHash: task.requestHash } })}\n`;
+      yield `${JSON.stringify({ type: "log", schemaVersion: 1, record: { taskId: task.id, stdout: task.stdout, stderr: task.stderr } })}\n`;
     }
-    lines.push({ type: "complete", schemaVersion: 1, stateGeneration: this.generation });
     if (generation !== this.generation) throw new Error("state generation changed during backup");
-    return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
+    yield `${JSON.stringify({ type: "complete", schemaVersion: 1, stateGeneration: this.generation })}\n`;
   }
 
   async releaseBackup(backupId: string): Promise<void> {

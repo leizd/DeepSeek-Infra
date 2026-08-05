@@ -366,33 +366,32 @@ export class RedisTaskStore implements TaskStore {
     return fence;
   }
 
-  async exportBackup(backupId: string): Promise<string> {
+  async *exportBackup(backupId: string): AsyncGenerator<string, void, void> {
     const fence = JSON.parse((await this.client.get(this.backupFenceKey())) ?? "{}") as Partial<BackupFence>;
     if (fence.backupId !== backupId) throw new Error("backup fence is not owned by this request");
     const generation = Number.parseInt((await this.client.get(this.generationKey())) ?? "0", 10);
     const restoreEpoch = (await this.client.get(this.restoreEpochKey())) ?? "initial";
-    const keys: string[] = [];
+    yield `${JSON.stringify({ type: "metadata", schemaVersion: 1, stateGeneration: generation, restoreEpoch })}\n`;
     let cursor = "0";
     do {
       const page = await this.client.scan(cursor, { MATCH: `${this.prefix}:task:*`, COUNT: 200 });
       cursor = page.cursor;
-      keys.push(...page.keys);
+      if (page.keys.length === 0) continue;
+      const values = await this.client.mGet(page.keys);
+      const tasks = values
+        .filter((raw): raw is string => raw !== null)
+        .map(parseTask)
+        .sort((left, right) => left.id.localeCompare(right.id));
+      for (const task of tasks) {
+        const portable = portableTask(task);
+        yield `${JSON.stringify({ type: "task", schemaVersion: 1, task: { ...portable, stdout: "", stderr: "" } })}\n`;
+        yield `${JSON.stringify({ type: "idempotency", schemaVersion: 1, record: { hash: task.idempotencyKeyHash, taskId: task.id, requestHash: task.requestHash } })}\n`;
+        yield `${JSON.stringify({ type: "log", schemaVersion: 1, record: { taskId: task.id, stdout: task.stdout, stderr: task.stderr } })}\n`;
+      }
     } while (cursor !== "0");
-    const lines: unknown[] = [{ type: "metadata", schemaVersion: 1, stateGeneration: generation, restoreEpoch }];
-    const tasks = (await Promise.all(keys.map(async (key) => await this.client.get(key))))
-      .filter((raw): raw is string => raw !== null)
-      .map(parseTask)
-      .sort((left, right) => left.id.localeCompare(right.id));
-    for (const task of tasks) {
-      const portable = portableTask(task);
-      lines.push({ type: "task", schemaVersion: 1, task: { ...portable, stdout: "", stderr: "" } });
-      lines.push({ type: "idempotency", schemaVersion: 1, record: { hash: task.idempotencyKeyHash, taskId: task.id, requestHash: task.requestHash } });
-      lines.push({ type: "log", schemaVersion: 1, record: { taskId: task.id, stdout: task.stdout, stderr: task.stderr } });
-    }
     const endGeneration = Number.parseInt((await this.client.get(this.generationKey())) ?? "0", 10);
-    lines.push({ type: "complete", schemaVersion: 1, stateGeneration: endGeneration });
     if (generation !== endGeneration) throw new Error("state generation changed during backup");
-    return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
+    yield `${JSON.stringify({ type: "complete", schemaVersion: 1, stateGeneration: endGeneration })}\n`;
   }
 
   async releaseBackup(backupId: string): Promise<void> {

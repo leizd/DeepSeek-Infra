@@ -54,7 +54,7 @@ export interface TaskStore {
   complete(taskId: string, instanceId: string, outcome: TaskOutcome, now: number): Promise<TaskRecord | null>;
   backupCapabilities(): Promise<BackupCapabilities>;
   prepareBackup(backupId: string, now: number): Promise<BackupFence>;
-  exportBackup(backupId: string): Promise<string>;
+  exportBackup(backupId: string): AsyncIterable<string>;
   releaseBackup(backupId: string): Promise<void>;
   restoreBackup(restoreId: string, snapshot: string, now: number): Promise<RestoreImportResult>;
   prepareRestore(restoreId: string, transactionDigest: string, source: AsyncIterable<string>, now: number): Promise<RestoreJournal>;
@@ -218,8 +218,7 @@ export function deterministicTaskId(restoreId: string, taskId: string, value: st
 export function parseBackupSnapshot(snapshot: string): {
   tasks: TaskRecord[];
   logs: Map<string, { stdout: string; stderr: string }>;
-} {
-  const tasks: TaskRecord[] = [];
+} {  const tasks: TaskRecord[] = [];
   const logs = new Map<string, { stdout: string; stderr: string }>();
   let complete = false;
   for (const line of snapshot.split(/\r?\n/u).filter((value) => value.length > 0)) {
@@ -238,4 +237,12 @@ export function parseBackupSnapshot(snapshot: string): {
   }
   if (!complete) throw new Error("stateless MCP backup is incomplete");
   return { tasks, logs };
+}
+
+export async function collectSnapshot(entries: AsyncIterable<string>): Promise<string> {
+  let snapshot = "";
+  for await (const chunk of entries) {
+    snapshot += chunk;
+  }
+  return snapshot;
 }

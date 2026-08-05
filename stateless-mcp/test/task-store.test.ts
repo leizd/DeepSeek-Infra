@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { MemoryTaskStore } from "../src/memory-task-store.js";
+import { collectSnapshot } from "../src/task-store.js";
 import { IdempotencyConflictError } from "../src/task-store.js";
 import { BackupFenceError } from "../src/task-store.js";
 import { BACKUP_FENCE_TTL_MS } from "../src/task-store.js";
@@ -82,7 +83,7 @@ test("backup fence blocks new work and exports running tasks as interrupted", as
   );
   assert.equal(await store.claim("instance-2", 21, 100), null);
 
-  const snapshot = await store.exportBackup("backup-contract-123");
+  const snapshot = await collectSnapshot(store.exportBackup("backup-contract-123"));
   assert.match(snapshot, /"status":"interrupted"/u);
   assert.doesNotMatch(snapshot, /ownerInstance":"instance-1"/u);
   assert.doesNotMatch(snapshot, /leaseUntil":110/u);
@@ -126,7 +127,7 @@ test("restore deterministically remaps task and idempotency collisions", async (
   const source = new MemoryTaskStore();
   const created = await source.createOrGet({ idempotencyKey: "collision-task-123", arguments: arguments_, now: 10 });
   await source.prepareBackup("backup-collision-123", 20);
-  const snapshot = await source.exportBackup("backup-collision-123");
+  const snapshot = await collectSnapshot(source.exportBackup("backup-collision-123"));
 
   const target = new MemoryTaskStore();
   target.tasks.set(created.task.id, { ...created.task, requestHash: "different", arguments: { ...arguments_, target: "tests/other.py" } });

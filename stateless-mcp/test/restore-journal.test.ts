@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { MemoryTaskStore } from "../src/memory-task-store.js";
 import { parseSnapshotStream, SnapshotParseError, DEFAULT_JSONL_LIMITS } from "../src/parse-jsonl.js";
-import { digest, RestoreStateError, type TaskRecord } from "../src/task-store.js";
+import { collectSnapshot, digest, RestoreStateError, type TaskRecord } from "../src/task-store.js";
 
 const arguments_ = {
   target: "tests/test_mcp.py",
@@ -23,7 +23,7 @@ async function snapshotFrom(tasks: Array<{ idempotencyKey: string }>): Promise<{
     await store.createOrGet({ idempotencyKey: task.idempotencyKey, arguments: arguments_, now: 10 + index });
   }
   await store.prepareBackup("backup-journal-contract", 20);
-  const snapshot = await store.exportBackup("backup-journal-contract");
+  const snapshot = await collectSnapshot(store.exportBackup("backup-journal-contract"));
   return { snapshot, store };
 }
 
@@ -115,7 +115,7 @@ test("abort from prepared and committed phases rolls back only this transaction"
   const retriedAbort = await preExisting.abortRestore(secondRestore, 36);
   assert.equal(retriedAbort.phase, "rolled-back");
 
-  const sourceSnapshot = await sourceStore.exportBackup("backup-journal-contract");
+  const sourceSnapshot = await collectSnapshot(sourceStore.exportBackup("backup-journal-contract"));
   assert.equal(snapshot, sourceSnapshot);
 });
 
@@ -211,7 +211,7 @@ test("restored tasks stay interrupted and never replay after complete", async ()
   const claimed = await source.claim("instance-1", 12, 100);
   assert.notEqual(claimed, null);
   await source.prepareBackup("backup-replay", 20);
-  const snapshot = await source.exportBackup("backup-replay");
+  const snapshot = await collectSnapshot(source.exportBackup("backup-replay"));
 
   const target = new MemoryTaskStore();
   const restoreId = "restore-replay-123";

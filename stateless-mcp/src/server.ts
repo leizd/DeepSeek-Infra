@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { hostHeaderValidation, toNodeHandler } from "@modelcontextprotocol/node";
@@ -98,9 +99,25 @@ async function main(): Promise<void> {
         }
         const backupMatch = /^\/internal\/backups\/([^/]+)\/(stream|release)$/u.exec(url.pathname);
         if (backupMatch !== null && backupMatch[1] !== undefined && backupMatch[2] === "stream" && req.method === "GET") {
-          const snapshot = await store.exportBackup(backupMatch[1]);
+          const backupId = backupMatch[1];
           res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
-          res.end(snapshot);
+          let clientGone = false;
+          res.on("close", () => {
+            clientGone = true;
+          });
+          try {
+            for await (const line of store.exportBackup(backupId)) {
+              if (clientGone) break;
+              if (!res.write(line)) {
+                await once(res, "drain");
+              }
+            }
+          } finally {
+            if (clientGone) {
+              await store.releaseBackup(backupId).catch(() => undefined);
+            }
+          }
+          res.end();
           return;
         }
         if (backupMatch !== null && backupMatch[1] !== undefined && backupMatch[2] === "release" && req.method === "POST") {
