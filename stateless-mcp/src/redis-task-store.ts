@@ -6,10 +6,8 @@ import {
   BACKUP_FENCE_TTL_MS,
   canonicalRequestHash,
   deterministicTaskId,
-  digest,
   IdempotencyConflictError,
   makeTask,
-  parseBackupSnapshot,
   portableTask,
   RestoreConflictError,
   RestoreFenceError,
@@ -25,7 +23,6 @@ import {
   type TaskOutcome,
   type TaskRecord,
   type TaskStore,
-  type RestoreImportResult,
   type RestoreJournal,
 } from "./task-store.js";
 
@@ -399,66 +396,6 @@ export class RedisTaskStore implements TaskStore {
     if (raw !== null && (JSON.parse(raw) as Partial<BackupFence>).backupId === backupId) {
       await this.client.del(this.backupFenceKey());
     }
-  }
-
-  async restoreBackup(restoreId: string, snapshot: string, now: number): Promise<RestoreImportResult> {
-    const parsed = parseBackupSnapshot(snapshot);
-    const restoreEpoch = deterministicTaskId(restoreId, "restore-epoch", "v1");
-    const remapped: Record<string, string> = {};
-    let imported = 0;
-    let skipped = 0;
-    let interrupted = 0;
-    for (const source of parsed.tasks) {
-      const log = parsed.logs.get(source.id) ?? { stdout: "", stderr: "" };
-      const portable = portableTask({ ...source, ...log });
-      if (portable.status === "interrupted") interrupted += 1;
-      const existingRaw = await this.client.get(this.taskKey(portable.id));
-      if (existingRaw !== null && taskDigest(parseTask(existingRaw)) === taskDigest(portable)) {
-        skipped += 1;
-        continue;
-      }
-      let taskId = portable.id;
-      if (existingRaw !== null) {
-        taskId = deterministicTaskId(restoreId, portable.id, taskDigest(portable));
-        remapped[portable.id] = taskId;
-        const remappedRaw = await this.client.get(this.taskKey(taskId));
-        if (remappedRaw !== null) {
-          const normalized = {
-            ...parseTask(remappedRaw),
-            id: portable.id,
-            idempotencyKeyHash: portable.idempotencyKeyHash,
-          };
-          if (taskDigest(normalized) === taskDigest(portable)) {
-            skipped += 1;
-            continue;
-          }
-          throw new Error("deterministic restore task collision");
-        }
-      }
-      const restored = { ...portable, id: taskId };
-      let indexHash = restored.idempotencyKeyHash;
-      const indexed = await this.client.get(this.idempotencyKey(indexHash));
-      if (indexed !== null && indexed !== taskId) indexHash = digest(`${indexHash}\0${taskId}`);
-      restored.idempotencyKeyHash = indexHash;
-      const writes = await this.client.multi()
-        .set(this.taskKey(taskId), JSON.stringify(restored), { NX: true })
-        .set(this.idempotencyKey(indexHash), taskId, { NX: true })
-        .exec();
-      if (writes[0] === null) {
-        const raced = await this.client.get(this.taskKey(taskId));
-        if (raced === null) throw new Error("restore task write did not converge");
-        const normalized = { ...parseTask(raced), id: portable.id, idempotencyKeyHash: portable.idempotencyKeyHash };
-        if (taskDigest(normalized) !== taskDigest(portable)) throw new Error("restore task write collision");
-        skipped += 1;
-        continue;
-      }
-      imported += 1;
-    }
-    await this.client.multi()
-      .set(this.restoreEpochKey(), restoreEpoch)
-      .incrBy(this.generationKey(), imported > 0 ? 1 : 0)
-      .exec();
-    return { restoreId, restoreEpoch, imported, skipped, remapped, interrupted };
   }
 
   async restoreStatus(restoreId: string): Promise<RestoreJournal | null> {

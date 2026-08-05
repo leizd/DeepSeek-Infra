@@ -56,7 +56,6 @@ export interface TaskStore {
   prepareBackup(backupId: string, now: number): Promise<BackupFence>;
   exportBackup(backupId: string): AsyncIterable<string>;
   releaseBackup(backupId: string): Promise<void>;
-  restoreBackup(restoreId: string, snapshot: string, now: number): Promise<RestoreImportResult>;
   prepareRestore(restoreId: string, transactionDigest: string, source: AsyncIterable<string>, now: number): Promise<RestoreJournal>;
   commitRestoreIntent(restoreId: string, transactionDigest: string, now: number): Promise<RestoreJournal>;
   commitRestore(restoreId: string, transactionDigest: string, now: number): Promise<RestoreJournal>;
@@ -81,15 +80,6 @@ export interface BackupFence {
 }
 
 export const BACKUP_FENCE_TTL_MS = 60 * 60 * 1000;
-
-export interface RestoreImportResult {
-  restoreId: string;
-  restoreEpoch: string;
-  imported: number;
-  skipped: number;
-  remapped: Record<string, string>;
-  interrupted: number;
-}
 
 export type ExternalRestorePhase =
   | "preparing"
@@ -211,32 +201,8 @@ export function taskDigest(task: TaskRecord): string {
 }
 
 export function deterministicTaskId(restoreId: string, taskId: string, value: string): string {
-  const hex = digest(`${restoreId}\0${taskId}\0${value}`);
+  const hex = digest(`${restoreId} ${taskId} ${value}`);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
-
-export function parseBackupSnapshot(snapshot: string): {
-  tasks: TaskRecord[];
-  logs: Map<string, { stdout: string; stderr: string }>;
-} {  const tasks: TaskRecord[] = [];
-  const logs = new Map<string, { stdout: string; stderr: string }>();
-  let complete = false;
-  for (const line of snapshot.split(/\r?\n/u).filter((value) => value.length > 0)) {
-    const entry = JSON.parse(line) as {
-      type?: string;
-      schemaVersion?: number;
-      task?: TaskRecord;
-      record?: { taskId?: string; stdout?: string; stderr?: string };
-    };
-    if (entry.schemaVersion !== 1) throw new Error("unsupported stateless MCP backup schema");
-    if (entry.type === "task" && entry.task !== undefined) tasks.push(entry.task);
-    if (entry.type === "log" && entry.record?.taskId !== undefined) {
-      logs.set(entry.record.taskId, { stdout: entry.record.stdout ?? "", stderr: entry.record.stderr ?? "" });
-    }
-    if (entry.type === "complete") complete = true;
-  }
-  if (!complete) throw new Error("stateless MCP backup is incomplete");
-  return { tasks, logs };
 }
 
 export async function collectSnapshot(entries: AsyncIterable<string>): Promise<string> {

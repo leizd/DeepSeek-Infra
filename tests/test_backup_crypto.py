@@ -233,6 +233,12 @@ def test_helper_discovery_capabilities_and_secret_pipe(tmp_path: Path, monkeypat
     discovered = tmp_path / executable
     discovered.write_bytes(b"path")
     monkeypatch.setattr(backup_crypto.shutil, "which", lambda _name: str(discovered))
+    real_is_file = backup_crypto.Path.is_file
+    monkeypatch.setattr(
+        backup_crypto.Path,
+        "is_file",
+        lambda self: real_is_file(self) and self == discovered,
+    )
     assert backup_crypto.helper_path() == discovered.resolve()
 
     monkeypatch.setattr(backup_crypto.shutil, "which", lambda _name: None)
@@ -556,7 +562,14 @@ def test_stateless_mcp_external_contributor_snapshot_restore_and_validation(
     calls: list[tuple[str, str, bytes | None]] = []
     stream_attempts = 0
 
-    def request(path: str, *, method: str = "GET", body: bytes | None = None, timeout: float = 5.0) -> _Response:
+    def request(
+        path: str,
+        *,
+        method: str = "GET",
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 5.0,
+    ) -> _Response:
         nonlocal stream_attempts
         del timeout
         calls.append((path, method, body))
@@ -567,6 +580,21 @@ def test_stateless_mcp_external_contributor_snapshot_restore_and_validation(
             if stream_attempts == 1:
                 raise AppError("generation changed")
             return _Response(snapshot)
+        if "/internal/restores/" in path:
+            if headers is not None:
+                assert headers["X-Transaction-Digest"] == "digest-12345678"
+                assert headers["X-Content-SHA256"]
+                assert headers["Content-Length"] == str((source / "state.jsonl").stat().st_size)
+            journal = {
+                "phase": "prepared",
+                "sourceDigest": "a" * 64,
+                "preparedDigest": "b" * 64,
+                "imported": 1,
+                "skipped": 0,
+                "interrupted": 1,
+                "remapped": {},
+            }
+            return _Response(json.dumps(journal).encode("utf-8"))
         return _Response(b'{"ok":true}')
 
     monkeypatch.setattr(backups.StatelessMcpContributor, "_request", staticmethod(request))
@@ -582,9 +610,19 @@ def test_stateless_mcp_external_contributor_snapshot_restore_and_validation(
     assert contributor.validate(source, backups.BackupContext()) == []
     plan = contributor.plan_restore(source, backups.BackupContext())
     assert plan["external"] is True and plan["available"] is True
-    plan["restoreId"] = "restore_external_unit"
-    contributor.apply_restore(plan, backups.BackupContext())
-    assert any(path == "/internal/restores/restore_external_unit/apply" for path, _method, _body in calls)
+    with pytest.raises(AppError, match="participant protocol"):
+        contributor.apply_restore(plan, backups.BackupContext())
+
+    journal = contributor.prepare_restore("restore_external_unit", source, "digest-12345678")
+    assert journal["phase"] == "prepared"
+    prepare_call = next(path for path, _method, _body in calls if path.startswith("/internal/restores/") and path.endswith("/prepare"))
+    assert prepare_call == "/internal/restores/restore_external_unit/prepare"
+    for action in ("commit-intent", "commit", "complete", "abort"):
+        getattr(contributor, {"commit-intent": "commit_restore_intent"}.get(action, f"{action}_restore"))(
+            "restore_external_unit", *("digest-12345678",) if action in {"commit-intent", "commit"} else ()
+        )
+        assert any(path.endswith(f"/{action}") for path, _method, _body in calls)
+    assert contributor.restore_status("restore_external_unit") is not None
     assert contributor.inspect_schema(1)["compatible"] is True
     assert contributor.inspect_schema(2)["compatible"] is False
     assert contributor.migrate(source, 1) == source
@@ -630,7 +668,7 @@ def test_stateless_mcp_request_auth_errors_and_coverage_modes(tmp_path: Path, mo
     request = seen["request"]
     assert getattr(request, "headers")["Authorization"] == "Bearer internal-secret"
     assert getattr(request, "headers")["Content-type"] == "application/json"
-    with contributor._request("/internal/restores/inspect", method="POST", body=b'{"type":"complete"}\n') as response:
+    with contributor._request("/internal/restores/restore_x/prepare", method="POST", body=b'{"type":"complete"}\n') as response:
         assert response.read() == b"{}"
     request = seen["request"]
     assert getattr(request, "headers")["Content-type"] == "application/x-ndjson"
@@ -938,22 +976,54 @@ def test_external_restore_prepare_commit_complete(tmp_settings: Path, monkeypatc
         "capabilities",
         lambda _self: {"id": "stateless-mcp", "available": True, "schemaVersion": 1},
     )
+    participant_calls: list[tuple[str, ...]] = []
+
+    def fake_journal(phase: str) -> dict[str, object]:
+        return {
+            "sourceDigest": "a" * 64,
+            "preparedDigest": "b" * 64,
+            "phase": phase,
+            "imported": 1,
+            "skipped": 0,
+            "interrupted": 1,
+            "remapped": {},
+        }
+
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "prepare_restore",
+        lambda _self, restore_id, _source, digest: participant_calls.append(("prepare", restore_id, digest)) or fake_journal("prepared"),
+    )
     prepared = backups.prepare_restore(restore_id)
     assert prepared["phase"] == "backend-staged"
     transaction = backups._read_json(root / "transaction.json")
     assert transaction["contributors"][0]["external"] is True
+    assert participant_calls[0][0] == "prepare"
+    assert transaction["contributors"][0]["participant"]["imported"] == 1
 
-    applied: list[str] = []
     monkeypatch.setattr(
         backups.StatelessMcpContributor,
-        "apply_restore",
-        lambda _self, plan, _context: applied.append(str(plan["restoreId"])),
+        "commit_restore_intent",
+        lambda _self, restore_id, digest: participant_calls.append(("commit-intent", restore_id, digest)) or fake_journal("commit-intent"),
+    )
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "commit_restore",
+        lambda _self, restore_id, digest: participant_calls.append(("commit", restore_id, digest)) or fake_journal("committed-pending-complete"),
     )
     committed = backups.commit_restore(restore_id)
     assert committed["phase"] == "backend-committed"
-    assert applied == [restore_id]
+    assert [call[0] for call in participant_calls] == ["prepare", "commit-intent", "commit"]
+    assert participant_calls[0][2] == participant_calls[1][2] == participant_calls[2][2]
+
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "complete_restore",
+        lambda _self, restore_id: participant_calls.append(("complete", restore_id)) or fake_journal("complete"),
+    )
     completed = backups.complete_restore(restore_id)
     assert completed["phase"] == "complete"
+    assert [call[0] for call in participant_calls] == ["prepare", "commit-intent", "commit", "complete"]
 
 
 @pytest.mark.parametrize(

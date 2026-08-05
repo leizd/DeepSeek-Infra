@@ -93,6 +93,25 @@ class BackupContributor(Protocol):  # pragma: no cover - structural typing contr
     def validate_staging(self, staging: Path, context: "BackupContext") -> list[str]: ...
 
 
+class ExternalRestoreParticipant(Protocol):  # pragma: no cover - structural typing contract
+    """Durable external store joining the workspace restore transaction."""
+
+    contributor_id: str
+    schema_version: int
+
+    def prepare_restore(self, restore_id: str, source: Path, transaction_digest: str) -> dict[str, Any]: ...
+
+    def commit_restore_intent(self, restore_id: str, transaction_digest: str) -> dict[str, Any]: ...
+
+    def commit_restore(self, restore_id: str, transaction_digest: str) -> dict[str, Any]: ...
+
+    def complete_restore(self, restore_id: str) -> dict[str, Any]: ...
+
+    def abort_restore(self, restore_id: str) -> dict[str, Any]: ...
+
+    def restore_status(self, restore_id: str) -> dict[str, Any] | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class BackupContext:
     mode: str = "full"
@@ -312,16 +331,30 @@ class StatelessMcpContributor:
         return f"{base}{path}"
 
     @staticmethod
-    def _request(path: str, *, method: str = "GET", body: bytes | None = None, timeout: float = 5.0) -> Any:
+    def _request(
+        path: str,
+        *,
+        method: str = "GET",
+        body: bytes | BinaryIO | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 5.0,
+    ) -> Any:
         token = os.environ.get("STATELESS_MCP_BACKUP_TOKEN", "").strip()
-        headers = {"Accept": "application/json, application/x-ndjson"}
+        request_headers = {"Accept": "application/json, application/x-ndjson"}
         if token:
-            headers["Authorization"] = f"Bearer {token}"
+            request_headers["Authorization"] = f"Bearer {token}"
         if body is not None:
-            headers["Content-Type"] = "application/x-ndjson" if path.startswith("/internal/restores/") else "application/json"
+            request_headers["Content-Type"] = "application/x-ndjson" if path.startswith("/internal/restores/") else "application/json"
+        if headers:
+            request_headers.update(headers)
         try:
-            return urllib_request.urlopen(urllib_request.Request(StatelessMcpContributor._url(path), data=body, headers=headers, method=method), timeout=timeout)
-        except (OSError, urllib_error.URLError, urllib_error.HTTPError) as exc:
+            return urllib_request.urlopen(
+                urllib_request.Request(StatelessMcpContributor._url(path), data=body, headers=request_headers, method=method),
+                timeout=timeout,
+            )
+        except urllib_error.HTTPError as exc:
+            raise AppError("Stateless MCP durable state is unavailable", code=ErrorCode.INVALID_REQUEST, status=exc.code) from exc
+        except (OSError, urllib_error.URLError) as exc:
             raise AppError("Stateless MCP durable state is unavailable", code=ErrorCode.INVALID_REQUEST, status=409) from exc
 
     def capabilities(self) -> dict[str, Any]:
@@ -423,14 +456,57 @@ class StatelessMcpContributor:
         }
 
     def apply_restore(self, plan: dict[str, Any], context: BackupContext) -> None:
-        del context
-        source = Path(str(plan["source"])) / "state.jsonl"
-        raw = source.read_bytes()
-        with self._request("/internal/restores/inspect", method="POST", body=raw, timeout=60.0) as response:
-            response.read(64_000)
-        restore_id = str(plan.get("restoreId") or f"restore_{uuid.uuid4().hex}")
-        with self._request(f"/internal/restores/{restore_id}/apply", method="POST", body=raw, timeout=60.0) as response:
-            response.read(1_000_000)
+        del plan, context
+        raise AppError(
+            "External restores are coordinated through the restore participant protocol",
+            code=ErrorCode.INVALID_REQUEST,
+        )
+
+    def prepare_restore(self, restore_id: str, source: Path, transaction_digest: str) -> dict[str, Any]:
+        snapshot = source / "state.jsonl" if source.is_dir() else source
+        size = snapshot.stat().st_size
+        digest = _sha256_file(snapshot)
+        with snapshot.open("rb") as stream:
+            with self._request(
+                f"/internal/restores/{restore_id}/prepare",
+                method="POST",
+                body=stream,
+                headers={
+                    "Content-Length": str(size),
+                    "X-Transaction-Digest": transaction_digest,
+                    "X-Content-SHA256": digest,
+                },
+                timeout=300.0,
+            ) as response:
+                journal = json.loads(response.read(2_000_000).decode("utf-8"))
+        return _participant_journal(journal)
+
+    def commit_restore_intent(self, restore_id: str, transaction_digest: str) -> dict[str, Any]:
+        body = json.dumps({"transactionDigest": transaction_digest}).encode("utf-8")
+        with self._request(f"/internal/restores/{restore_id}/commit-intent", method="POST", body=body, timeout=60.0) as response:
+            return _participant_journal(json.loads(response.read(2_000_000).decode("utf-8")))
+
+    def commit_restore(self, restore_id: str, transaction_digest: str) -> dict[str, Any]:
+        body = json.dumps({"transactionDigest": transaction_digest}).encode("utf-8")
+        with self._request(f"/internal/restores/{restore_id}/commit", method="POST", body=body, timeout=300.0) as response:
+            return _participant_journal(json.loads(response.read(2_000_000).decode("utf-8")))
+
+    def complete_restore(self, restore_id: str) -> dict[str, Any]:
+        with self._request(f"/internal/restores/{restore_id}/complete", method="POST", body=b"{}", timeout=60.0) as response:
+            return _participant_journal(json.loads(response.read(2_000_000).decode("utf-8")))
+
+    def abort_restore(self, restore_id: str) -> dict[str, Any]:
+        with self._request(f"/internal/restores/{restore_id}/abort", method="POST", body=b"{}", timeout=60.0) as response:
+            return _participant_journal(json.loads(response.read(2_000_000).decode("utf-8")))
+
+    def restore_status(self, restore_id: str) -> dict[str, Any] | None:
+        try:
+            with self._request(f"/internal/restores/{restore_id}", timeout=10.0) as response:
+                return _participant_journal(json.loads(response.read(2_000_000).decode("utf-8")))
+        except AppError as exc:
+            if exc.status == 404:
+                return None
+            raise
 
     def inspect_schema(self, source_version: int) -> dict[str, Any]:
         return {"compatible": source_version == self.schema_version, "migration": None}
@@ -457,6 +533,28 @@ class StatelessMcpContributor:
 
 
 RegisteredContributor = DirectoryContributor | StatelessMcpContributor
+
+
+def _participant_journal(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or not isinstance(value.get("phase"), str):
+        raise AppError("Stateless MCP restore journal is invalid", code=ErrorCode.INVALID_PAYLOAD)
+    remapped = value.get("remapped")
+    return {
+        "sourceDigest": str(value.get("sourceDigest") or ""),
+        "preparedDigest": str(value.get("preparedDigest") or ""),
+        "phase": value["phase"],
+        "imported": int(value.get("imported") or 0),
+        "skipped": int(value.get("skipped") or 0),
+        "interrupted": int(value.get("interrupted") or 0),
+        "remapped": {str(key): str(item) for key, item in remapped.items()} if isinstance(remapped, dict) else {},
+    }
+
+
+def _external_participants(transaction: dict[str, Any]) -> list[dict[str, Any]]:
+    contributors = transaction.get("contributors")
+    if not isinstance(contributors, list):
+        return []
+    return [item for item in contributors if isinstance(item, dict) and bool(item.get("external"))]
 
 
 def _project_artifact_paths(context: BackupContext) -> set[str]:
@@ -993,11 +1091,12 @@ def prepare_restore(
                             "id": contributor_id,
                             "external": True,
                             "source": str(source),
-                            "prepared": True,
+                            "prepared": False,
                             "swapped": False,
                             "verified": True,
                             "digest": _tree_digest(source),
-                            "swapState": "prepared",
+                            "swapState": "validated",
+                            "phase": "preparing",
                         }
                     )
                     _write_json(journal_path, transaction)
@@ -1053,6 +1152,19 @@ def prepare_restore(
                     }
                 )
             ).hexdigest()
+            participant = StatelessMcpContributor()
+            for external in _external_participants(transaction):
+                journal = participant.prepare_restore(
+                    restore_id,
+                    Path(str(external["source"])),
+                    str(transaction["serverTransactionDigest"]),
+                )
+                external["transactionDigest"] = transaction["serverTransactionDigest"]
+                external["participant"] = journal
+                external["phase"] = journal["phase"]
+                external["prepared"] = True
+                external["swapState"] = "prepared"
+                _write_json(journal_path, transaction)
             transaction["phase"] = "backend-staged"
             transaction["updatedAt"] = _utc_iso()
             fence["phase"] = "preparing" if plan.get("requiresFrontendApply") else "commit-intent"
@@ -1089,6 +1201,14 @@ def frontend_prepared(restore_id: str, *, digest: str) -> dict[str, Any]:
     return _public_restore(transaction, root)
 
 
+def _external_commit_intent(transaction: dict[str, Any], restore_id: str) -> None:
+    participant = StatelessMcpContributor()
+    for contributor in _external_participants(transaction):
+        journal = participant.commit_restore_intent(restore_id, str(transaction["serverTransactionDigest"]))
+        contributor["participant"] = journal
+        contributor["phase"] = journal["phase"]
+
+
 def commit_restore(
     restore_id: str,
     *,
@@ -1120,6 +1240,8 @@ def commit_restore(
                 transaction["updatedAt"] = _utc_iso()
                 _write_json(journal_path, transaction)
                 _update_server_fence(transaction, "commit-intent")
+                _external_commit_intent(transaction, restore_id)
+                _write_json(journal_path, transaction)
                 if not frontend_committed:
                     return _public_restore(transaction, root)
             elif phase != "commit-intent":
@@ -1135,23 +1257,25 @@ def commit_restore(
             transaction["commitIntentAt"] = _utc_iso()
             _write_json(journal_path, transaction)
             _update_server_fence(transaction, "commit-intent")
+            _external_commit_intent(transaction, restore_id)
+            _write_json(journal_path, transaction)
         elif phase not in {"commit-intent", "frontend-committed"}:
             raise AppError("Restore is not ready to commit", code=ErrorCode.INVALID_REQUEST, status=409)
 
         try:
             rollback_root = root / "rollback"
             rollback_root.mkdir(parents=True, exist_ok=True)
-            for contributor in transaction["contributors"]:
+            local_contributors = [item for item in transaction["contributors"] if not bool(item.get("external"))]
+            for contributor in [*local_contributors, *_external_participants(transaction)]:
                 if bool(contributor.get("external")):
-                    contributor["swapState"] = "applying-external"
+                    contributor["swapState"] = "committing-external"
                     _write_json(journal_path, transaction)
-                    StatelessMcpContributor().apply_restore(
-                        {
-                            "source": contributor["source"],
-                            "restoreId": restore_id,
-                        },
-                        BackupContext(),
+                    journal = StatelessMcpContributor().commit_restore(
+                        restore_id,
+                        str(transaction["serverTransactionDigest"]),
                     )
+                    contributor["participant"] = journal
+                    contributor["phase"] = journal["phase"]
                     contributor["swapped"] = True
                     contributor["swapState"] = "swapped"
                     _write_json(journal_path, transaction)
@@ -1203,6 +1327,12 @@ def complete_restore(restore_id: str, *, frontend_digest: str | None = None) -> 
             raise AppError("Backend restore is not committed", code=ErrorCode.INVALID_REQUEST, status=409)
         if transaction.get("requiresFrontendApply") and frontend_digest != transaction.get("frontendDigest"):
             raise AppError("Frontend completion digest does not match", code=ErrorCode.INVALID_REQUEST, status=409)
+        participant = StatelessMcpContributor()
+        for contributor in _external_participants(transaction):
+            if contributor.get("phase") == "committed-pending-complete":
+                journal = participant.complete_restore(restore_id)
+                contributor["participant"] = journal
+                contributor["phase"] = journal["phase"]
         transaction["phase"] = "complete"
         transaction["completedAt"] = _utc_iso()
         transaction["updatedAt"] = _utc_iso()

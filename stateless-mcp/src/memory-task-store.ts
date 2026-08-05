@@ -8,10 +8,8 @@ import {
   BACKUP_FENCE_TTL_MS,
   canonicalRequestHash,
   deterministicTaskId,
-  digest,
   IdempotencyConflictError,
   makeTask,
-  parseBackupSnapshot,
   portableTask,
   RestoreConflictError,
   RestoreFenceError,
@@ -25,7 +23,6 @@ import {
   type TaskStore,
   type BackupCapabilities,
   type BackupFence,
-  type RestoreImportResult,
   type RestoreJournal,
 } from "./task-store.js";
 
@@ -182,53 +179,6 @@ export class MemoryTaskStore implements TaskStore {
 
   async releaseBackup(backupId: string): Promise<void> {
     if (this.backupFence?.backupId === backupId) this.backupFence = null;
-  }
-
-  async restoreBackup(restoreId: string, snapshot: string, now: number): Promise<RestoreImportResult> {
-    const parsed = parseBackupSnapshot(snapshot);
-    const remapped: Record<string, string> = {};
-    let imported = 0;
-    let skipped = 0;
-    let interrupted = 0;
-    this.restoreEpoch = deterministicTaskId(restoreId, "restore-epoch", "v1");
-    for (const source of parsed.tasks) {
-      const log = parsed.logs.get(source.id) ?? { stdout: "", stderr: "" };
-      const portable = portableTask({ ...source, ...log });
-      if (portable.status === "interrupted") interrupted += 1;
-      const existing = this.tasks.get(portable.id);
-      if (existing !== undefined && taskDigest(existing) === taskDigest(portable)) {
-        skipped += 1;
-        continue;
-      }
-      let taskId = portable.id;
-      if (existing !== undefined) {
-        taskId = deterministicTaskId(restoreId, portable.id, taskDigest(portable));
-        remapped[portable.id] = taskId;
-        const remappedExisting = this.tasks.get(taskId);
-        if (remappedExisting !== undefined) {
-          const normalized = {
-            ...remappedExisting,
-            id: portable.id,
-            idempotencyKeyHash: portable.idempotencyKeyHash,
-          };
-          if (taskDigest(normalized) === taskDigest(portable)) {
-            skipped += 1;
-            continue;
-          }
-          throw new Error("deterministic restore task collision");
-        }
-      }
-      const restored = { ...portable, id: taskId };
-      this.tasks.set(taskId, restored);
-      let indexHash = restored.idempotencyKeyHash;
-      const indexed = this.idempotency.get(indexHash);
-      if (indexed !== undefined && indexed !== taskId) indexHash = digest(`${indexHash}\0${taskId}`);
-      restored.idempotencyKeyHash = indexHash;
-      this.idempotency.set(indexHash, taskId);
-      imported += 1;
-    }
-    this.generation += imported > 0 ? 1 : 0;
-    return { restoreId, restoreEpoch: this.restoreEpoch, imported, skipped, remapped, interrupted };
   }
 
   async restoreStatus(restoreId: string): Promise<RestoreJournal | null> {

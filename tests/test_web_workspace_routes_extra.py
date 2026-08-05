@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from deepseek_infra.core.errors import AppError
-from deepseek_infra.infra.workspace import mutation_gate
+from deepseek_infra.infra.workspace import backups, mutation_gate
 import deepseek_infra.web.routes.workspace as workspace_routes
 from deepseek_infra.web import server as server_module
 from deepseek_infra.web.routes.workspace import WorkspaceRouteDeps, create_workspace_router
@@ -79,7 +79,8 @@ def test_projects_action_unsupported(client: TestClient) -> None:
     assert resp.status_code == 400
 
 
-def test_backup_session_finalize_download_and_inspect(client: TestClient) -> None:
+def test_backup_session_finalize_download_and_inspect(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backups.backup_crypto, "helper_path", lambda: None)
     capabilities = client.get("/api/workspace/backups/capabilities")
     assert capabilities.status_code == 200
     assert capabilities.json()["purpose"] == "restorable-backup"

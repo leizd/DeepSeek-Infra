@@ -3,9 +3,40 @@ import test from "node:test";
 
 import { MemoryTaskStore } from "../src/memory-task-store.js";
 import { collectSnapshot } from "../src/task-store.js";
+import { digest } from "../src/task-store.js";
 import { IdempotencyConflictError } from "../src/task-store.js";
 import { BackupFenceError } from "../src/task-store.js";
 import { BACKUP_FENCE_TTL_MS } from "../src/task-store.js";
+import type { RestoreJournal } from "../src/task-store.js";
+
+async function applySnapshot(
+  store: MemoryTaskStore,
+  restoreId: string,
+  snapshot: string,
+  now: number,
+): Promise<RestoreJournal> {
+  const transactionDigest = digest(`transaction:${restoreId}`);
+  const existing = await store.restoreStatus(restoreId);
+  if (existing?.phase === "complete") {
+    return existing;
+  }
+  await store.prepareRestore(
+    restoreId,
+    transactionDigest,
+    (async function* () {
+      yield snapshot;
+    })(),
+    now,
+  );
+  await store.commitRestoreIntent(restoreId, transactionDigest, now + 1);
+  await store.commitRestore(restoreId, transactionDigest, now + 2);
+  await store.completeRestore(restoreId, now + 3);
+  const status = await store.restoreStatus(restoreId);
+  if (status === null) {
+    throw new Error("restore journal is missing after complete");
+  }
+  return status;
+}
 
 const arguments_ = {
   target: "tests/test_mcp.py",
@@ -90,16 +121,17 @@ test("backup fence blocks new work and exports running tasks as interrupted", as
   await store.releaseBackup("backup-contract-123");
 
   const restored = new MemoryTaskStore();
-  const result = await restored.restoreBackup("restore-contract-123", snapshot, 30);
+  const result = await applySnapshot(restored, "restore-contract-123", snapshot, 30);
   assert.equal(result.imported, 1);
   assert.equal(result.interrupted, 1);
   const task = await restored.get(created.task.id);
   assert.equal(task?.status, "interrupted");
   assert.equal(task?.ownerInstance, null);
   assert.equal(await restored.claim("instance-3", 40, 100), null);
-  const retried = await restored.restoreBackup("restore-contract-123", snapshot, 99);
-  assert.equal(retried.skipped, 1);
+  const retried = await applySnapshot(restored, "restore-contract-123", snapshot, 99);
+  assert.equal(retried.imported, 1, "transaction retry converges on the durable journal");
   assert.equal(retried.restoreEpoch, result.restoreEpoch);
+  assert.equal(restored.tasks.size, 1);
 });
 
 test("backup fence permits idempotent retries and expires after an abandoned snapshot", async () => {
@@ -132,15 +164,15 @@ test("restore deterministically remaps task and idempotency collisions", async (
   const target = new MemoryTaskStore();
   target.tasks.set(created.task.id, { ...created.task, requestHash: "different", arguments: { ...arguments_, target: "tests/other.py" } });
   target.idempotency.set(created.task.idempotencyKeyHash, created.task.id);
-  const result = await target.restoreBackup("restore-collision-123", snapshot, 30);
+  const result = await applySnapshot(target, "restore-collision-123", snapshot, 30);
   assert.equal(result.imported, 1);
   assert.notEqual(result.remapped[created.task.id], undefined);
   assert.notEqual(result.remapped[created.task.id], created.task.id);
   assert.equal(target.tasks.size, 2);
   assert.equal(target.idempotency.size, 2);
-  const retried = await target.restoreBackup("restore-collision-123", snapshot, 99);
-  assert.equal(retried.imported, 0);
-  assert.equal(retried.skipped, 1);
+  const retried = await applySnapshot(target, "restore-collision-123", snapshot, 99);
+  assert.equal(retried.imported, 1);
+  assert.equal(retried.remapped[created.task.id], result.remapped[created.task.id]);
   assert.equal(retried.restoreEpoch, result.restoreEpoch);
   assert.equal(target.tasks.size, 2);
 });

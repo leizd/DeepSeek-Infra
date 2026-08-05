@@ -10,7 +10,7 @@ import { createServiceMcp } from "./mcp-server.js";
 import { RedisTaskStore } from "./redis-task-store.js";
 import { initializeTelemetry } from "./telemetry.js";
 import { TaskWorker } from "./test-runner.js";
-import { parseBackupSnapshot, RestoreFenceError } from "./task-store.js";
+import { RestoreFenceError } from "./task-store.js";
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -125,13 +125,7 @@ async function main(): Promise<void> {
           json(res, 200, { ok: true, backupId: backupMatch[1] });
           return;
         }
-        if (req.method === "POST" && url.pathname === "/internal/restores/inspect") {
-          const snapshot = await readBody(req);
-          const parsed = parseBackupSnapshot(snapshot);
-          json(res, 200, { ok: true, schemaVersion: 1, tasks: parsed.tasks.length });
-          return;
-        }
-        const restoreMatch = /^\/internal\/restores\/([^/]+)(?:\/(prepare|commit-intent|commit|complete|abort|apply))?$/u.exec(
+        const restoreMatch = /^\/internal\/restores\/([^/]+)(?:\/(prepare|commit-intent|commit|complete|abort))?$/u.exec(
           url.pathname,
         );
         if (restoreMatch !== null && restoreMatch[1] !== undefined) {
@@ -187,10 +181,6 @@ async function main(): Promise<void> {
           }
           if (req.method === "POST" && action === "abort") {
             json(res, 200, await store.abortRestore(restoreId, Date.now()));
-            return;
-          }
-          if (req.method === "POST" && action === "apply") {
-            json(res, 200, await store.restoreBackup(restoreId, await readBody(req), Date.now()));
             return;
           }
         }
