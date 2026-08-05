@@ -382,17 +382,13 @@ class StatelessMcpContributor:
         try:
             with self._request("/internal/backups/prepare", method="POST", body=prepared) as response:
                 response.read(64_000)
+            transport = ExternalSnapshotTransport(self)
+            receipt: TransferReceipt | None = None
             last_error: AppError | None = None
             for _attempt in range(3):
                 try:
-                    with self._request(f"/internal/backups/{backup_id}/stream", timeout=60.0) as response, target.open("wb") as output:
-                        total = 0
-                        while chunk := response.read(1024 * 1024):
-                            total += len(chunk)
-                            if total > MAX_EXPANDED_BYTES:
-                                raise AppError("External backup snapshot is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
-                            output.write(chunk)
-                        output.flush()
+                    with target.open("wb") as output:
+                        receipt = transport.download_to(f"/internal/backups/{backup_id}/stream", output)
                         os.fsync(output.fileno())
                     last_error = None
                     break
@@ -400,6 +396,7 @@ class StatelessMcpContributor:
                     last_error = exc
             if last_error is not None:
                 raise last_error
+            assert receipt is not None
             errors = self.validate(target.parent, BackupContext())
             if errors:
                 raise AppError("; ".join(errors), code=ErrorCode.INVALID_PAYLOAD)
@@ -409,13 +406,13 @@ class StatelessMcpContributor:
                     response.read(64_000)
             except AppError:
                 pass
-        entry = {"path": f"payload/{self.contributor_id}/state.jsonl", "size": target.stat().st_size, "sha256": _sha256_file(target)}
+        entry = {"path": f"payload/{self.contributor_id}/state.jsonl", "size": receipt.bytes, "sha256": receipt.sha256}
         return BackupContribution(
             contributor_id=self.contributor_id,
             schema_version=self.schema_version,
             records=_jsonl_task_count(target),
-            bytes=target.stat().st_size,
-            digest=str(entry["sha256"]),
+            bytes=receipt.bytes,
+            digest=receipt.sha256,
             restore_policy=self.restore_policy,
             files=(entry,),
         )
@@ -466,19 +463,15 @@ class StatelessMcpContributor:
         snapshot = source / "state.jsonl" if source.is_dir() else source
         size = snapshot.stat().st_size
         digest = _sha256_file(snapshot)
+        transport = ExternalSnapshotTransport(self)
         with snapshot.open("rb") as stream:
-            with self._request(
+            journal = transport.upload_from(
                 f"/internal/restores/{restore_id}/prepare",
-                method="POST",
-                body=stream,
-                headers={
-                    "Content-Length": str(size),
-                    "X-Transaction-Digest": transaction_digest,
-                    "X-Content-SHA256": digest,
-                },
-                timeout=300.0,
-            ) as response:
-                journal = json.loads(response.read(2_000_000).decode("utf-8"))
+                stream,
+                size=size,
+                sha256=digest,
+                headers={"X-Transaction-Digest": transaction_digest},
+            )
         return _participant_journal(journal)
 
     def commit_restore_intent(self, restore_id: str, transaction_digest: str) -> dict[str, Any]:
@@ -533,6 +526,66 @@ class StatelessMcpContributor:
 
 
 RegisteredContributor = DirectoryContributor | StatelessMcpContributor
+
+
+@dataclass(frozen=True, slots=True)
+class TransferReceipt:
+    bytes: int
+    sha256: str
+    records: int
+
+
+class ExternalSnapshotTransport:
+    """Bounded, hashed streaming transfers for external contributor payloads.
+
+    Snapshots move between the workspace and external durable stores without
+    ever being materialized as a single buffer on either side.
+    """
+
+    def __init__(self, contributor: "StatelessMcpContributor | None" = None) -> None:
+        self._contributor = contributor or StatelessMcpContributor()
+
+    def download_to(
+        self,
+        path: str,
+        target: BinaryIO,
+        *,
+        max_bytes: int | None = None,
+        timeout: float = 60.0,
+    ) -> TransferReceipt:
+        limit = MAX_EXPANDED_BYTES if max_bytes is None else max_bytes
+        digest = hashlib.sha256()
+        total = 0
+        records = 0
+        with self._contributor._request(path, timeout=timeout) as response:
+            while chunk := response.read(1024 * 1024):
+                total += len(chunk)
+                if total > limit:
+                    raise AppError("External backup snapshot is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
+                digest.update(chunk)
+                records += chunk.count(b"\n")
+                target.write(chunk)
+            target.flush()
+        return TransferReceipt(bytes=total, sha256=digest.hexdigest(), records=records)
+
+    def upload_from(
+        self,
+        path: str,
+        source: BinaryIO,
+        *,
+        size: int,
+        sha256: str,
+        headers: dict[str, str] | None = None,
+        timeout: float = 300.0,
+    ) -> dict[str, Any]:
+        merged = {"Content-Length": str(size), "X-Content-SHA256": sha256}
+        if headers:
+            merged.update(headers)
+        with self._contributor._request(path, method="POST", body=source, headers=merged, timeout=timeout) as response:
+            payload = json.loads(response.read(2_000_000).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise AppError("Stateless MCP restore journal is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        return payload
 
 
 def _participant_journal(value: Any) -> dict[str, Any]:

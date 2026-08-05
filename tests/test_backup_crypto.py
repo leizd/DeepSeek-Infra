@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -645,6 +646,66 @@ def test_stateless_mcp_external_contributor_snapshot_restore_and_validation(
     assert "incomplete" in contributor.validate(source, backups.BackupContext())[0]
     state.write_text("not-json\n", encoding="utf-8")
     assert "invalid" in contributor.validate(source, backups.BackupContext())[0]
+
+
+def test_external_snapshot_transport_streams_with_receipts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contributor = backups.StatelessMcpContributor()
+    payload = b'{"type":"task","schemaVersion":1,"task":{"id":"t-1"}}\n{"type":"complete","schemaVersion":1,"stateGeneration":1}\n'
+    seen: dict[str, object] = {}
+
+    def request(
+        path: str,
+        *,
+        method: str = "GET",
+        body: object | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 5.0,
+    ) -> _Response:
+        del timeout
+        seen["path"] = path
+        seen["method"] = method
+        seen["body"] = body
+        seen["headers"] = headers
+        if method == "POST":
+            return _Response(b'{"phase":"prepared","sourceDigest":"' + b"a" * 64 + b'","records":1}')
+        return _Response(payload)
+
+    monkeypatch.setattr(backups.StatelessMcpContributor, "_request", staticmethod(request))
+    transport = backups.ExternalSnapshotTransport(contributor)
+
+    target = tmp_path / "state.jsonl"
+    with target.open("wb") as output:
+        receipt = transport.download_to("/internal/backups/backup_x/stream", output)
+    assert receipt.bytes == len(payload)
+    assert receipt.sha256 == hashlib.sha256(payload).hexdigest()
+    assert receipt.records == 2
+    assert target.read_bytes() == payload
+
+    capped = tmp_path / "capped.jsonl"
+    with pytest.raises(AppError) as too_large:
+        with capped.open("wb") as output:
+            transport.download_to("/internal/backups/backup_x/stream", output, max_bytes=8)
+    assert too_large.value.status == 413
+
+    upload_source = tmp_path / "upload.jsonl"
+    upload_source.write_bytes(payload)
+    size = upload_source.stat().st_size
+    digest = hashlib.sha256(payload).hexdigest()
+    with upload_source.open("rb") as stream:
+        journal = transport.upload_from(
+            "/internal/restores/restore_x/prepare",
+            stream,
+            size=size,
+            sha256=digest,
+            headers={"X-Transaction-Digest": "digest-12345678"},
+        )
+    assert journal["phase"] == "prepared"
+    headers = seen["headers"]
+    assert isinstance(headers, dict)
+    assert headers["Content-Length"] == str(size)
+    assert headers["X-Content-SHA256"] == digest
+    assert headers["X-Transaction-Digest"] == "digest-12345678"
+    assert not isinstance(seen["body"], bytes), "upload must stream the file object, not materialized bytes"
 
 
 def test_stateless_mcp_request_auth_errors_and_coverage_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
