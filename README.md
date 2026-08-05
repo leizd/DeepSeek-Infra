@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.1-blue)
+![版本](https://img.shields.io/badge/version-4.4.2-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.1 Crash-Safe Restore Transactions & Replica Fencing：** Restore 先把后端 Contributor 和浏览器副本分别构建到 staging，双方回读核验后写入耐久 commit-intent；浏览器只切换一个 Active Epoch 指针，后端只交换完整目录。旧标签页先冻结并把脏内容保存进旧 Epoch Recovery Capsule，绝不向恢复后的 Head 回写；进程中断后根据前后端 Journal 确定性继续或回滚。引用迁移由 Contributor Schema 声明字段驱动，上传下载改为流式，恢复记录按安全保留策略清理。参见 [4.4.1 发布说明](docs/releases/4.4.1.md)（上一版 [4.4.0](docs/releases/4.4.0.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[前端边界](docs/FRONTEND_MODULES.md)。
+> **4.4.2 Encrypted Backups & External State Portability：** 完整 `.dsibackup` 可通过标准 age v1 密码或 X25519 Recovery Identity 流式加密；密码和私钥只进入五分钟内存 Secret Slot 与匿名管道，不写 Session、Journal、argv、环境变量或日志。加密上传在认证成功前保持 `locked`，不会解析任何 ZIP 元数据；Stateless MCP 的 Redis 任务、日志和幂等索引通过版本化 JSONL 逻辑快照进入覆盖清单，运行任务恢复为 `interrupted` 且不会重放。参见 [4.4.2 发布说明](docs/releases/4.4.2.md)（上一版 [4.4.1](docs/releases/4.4.1.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)。
 
-**4.4.1 validation:** 后端合同覆盖 Prepare/Commit/Complete/Abort 幂等、目录交换崩溃恢复、Schema 兼容与字段感知重映射、跨进程围栏和流式传输；前端合同覆盖 Epoch 原子切换、旧标签页冻结、逐键回读、恢复 Journal 和不重放付费请求。既有 Bundle 预算不提高。
+**4.4.2 validation:** 合同覆盖密码与 Recovery Key 往返、密文篡改/截断拒绝、明文元数据不可搜索、Secret Slot 过期销毁、旧明文包兼容、严格/尽力覆盖策略、Redis generation fence、任务冲突确定性重映射及运行任务不重放。既有 Bundle 预算不提高。
 
 ## 30 秒概览
 

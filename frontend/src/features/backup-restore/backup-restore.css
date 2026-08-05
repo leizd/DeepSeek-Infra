@@ -27,6 +27,37 @@
   text-align: center;
 }
 
+.backup-options,
+.secret-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.backup-options {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--hairw);
+  border-radius: 10px;
+}
+
+.backup-options legend {
+  padding: 0 6px;
+  font-weight: 650;
+}
+
+.secret-fields input,
+.secret-fields textarea,
+.backup-options select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.secret-fields textarea {
+  min-height: 88px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
 .restore-plan dl {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

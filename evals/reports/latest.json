@@ -1,19 +1,19 @@
 {
   "schemaVersion": "offline-eval-suite.v1",
-  "version": "4.4.1",
-  "commit": "b4674bd3a550324130791d65969dca300a02eb15",
-  "testedRevision": "b4674bd3a550324130791d65969dca300a02eb15",
-  "sourceRevision": "b4674bd3a550324130791d65969dca300a02eb15",
+  "version": "4.4.2",
+  "commit": "537c0126702894fa9500119a802761b3c1d38411",
+  "testedRevision": "537c0126702894fa9500119a802761b3c1d38411",
+  "sourceRevision": "537c0126702894fa9500119a802761b3c1d38411",
   "sourceTreeDirty": true,
   "releaseRevision": null,
   "ciRevision": null,
-  "generatedAt": "2026-07-28T05:42:15Z",
+  "generatedAt": "2026-08-05T02:03:13Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
-  "gitSha": "b4674bd3a550324130791d65969dca300a02eb15",
+  "gitSha": "537c0126702894fa9500119a802761b3c1d38411",
   "gitDirty": true,
   "status": "PASS",
   "paths": {
@@ -29,12 +29,12 @@
     "cases": 6,
     "k": 5,
     "recallAt5": 1.0,
-    "mrr": 0.8667,
+    "mrr": 0.875,
     "citationAccuracy": 0.8333,
     "keywordCoverage": 0.8333,
     "latency": {
-      "avgMs": 27.71,
-      "p95Ms": 31.32
+      "avgMs": 25.88,
+      "p95Ms": 28.38
     }
   },
   "toolPolicy": {
@@ -43,8 +43,8 @@
     "passRate": 1.0,
     "injectionDefensePassRate": 1.0,
     "latency": {
-      "avgMs": 0.03,
-      "p95Ms": 0.1
+      "avgMs": 0.02,
+      "p95Ms": 0.04
     }
   },
   "injection": {
@@ -76,8 +76,8 @@
       }
     },
     "latency": {
-      "avgMs": 0.03,
-      "p95Ms": 0.05
+      "avgMs": 0.02,
+      "p95Ms": 0.03
     }
   },
   "agent": {

@@ -1,8 +1,13 @@
 {
   "schemaVersion": "offline-eval-compare.v1",
-  "version": "4.2.6",
-  "commit": "987aed2c",
-  "generatedAt": "2026-07-22T07:32:44Z",
+  "version": "4.4.2",
+  "commit": "537c0126702894fa9500119a802761b3c1d38411",
+  "testedRevision": "537c0126702894fa9500119a802761b3c1d38411",
+  "sourceRevision": "537c0126702894fa9500119a802761b3c1d38411",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-08-05T02:03:15Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -14,8 +19,8 @@
     "gitSha": "v2.2.6-baseline"
   },
   "current": {
-    "version": "4.2.6",
-    "gitSha": "987aed2c"
+    "version": "4.4.2",
+    "gitSha": "537c0126702894fa9500119a802761b3c1d38411"
   },
   "checks": [
     {

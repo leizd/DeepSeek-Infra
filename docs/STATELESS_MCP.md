@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.1。
+适用版本：v4.4.2。
 
 `stateless-mcp/` 是可横向扩展的独立 MCP 服务。它使用官方 TypeScript SDK 的 Streamable HTTP 入口；每个 HTTP 请求都创建一个新的 `McpServer`，进程内不保存客户端会话。现有 Python `POST /mcp` 继续作为兼容端点，迁移期间不会被替换。
 
@@ -69,6 +69,7 @@ docker compose -f docker-compose.stateless-mcp.yml up -d --build
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `MCP_AUTH_TOKEN` | Compose 为 `dev-change-me` | MCP Bearer token；生产必须覆盖。 |
+| `MCP_INTERNAL_BACKUP_TOKEN` | 默认未设置 | 内部逻辑快照端点的独立 Bearer token；必须与 Python 侧 `STATELESS_MCP_BACKUP_TOKEN` 一致。 |
 | `MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1],mcp-lb` | Host 头白名单。 |
 | `REDIS_URL` / `REDIS_PREFIX` | `redis://127.0.0.1:6379` / `deepseek-infra:mcp:v1` | 持久状态地址和键空间。 |
 | `MCP_WORKSPACE_ROOT` | 当前工作目录 | 搜索和 pytest 允许访问的安全根。 |
@@ -97,6 +98,22 @@ npm run smoke:failover --prefix stateless-mcp
 
 CI 中的 `stateless-mcp-failover` job 运行同一演练；`stateless-mcp` job 运行 TypeScript 严格类型检查和单元测试。
 
+## 逻辑备份与恢复（4.4.2）
+
+Redis AOF 仍是部署级运行卷，不会被直接复制进 DeepSeek Infra 备份。配置以下变量后，Workspace Backup 会把无状态 MCP 注册为 external durable Contributor：
+
+```powershell
+$env:STATELESS_MCP_BACKUP_URL = 'http://127.0.0.1:8011'
+$env:STATELESS_MCP_BACKUP_TOKEN = '<internal-backup-token>'
+$env:MCP_INTERNAL_BACKUP_TOKEN = '<internal-backup-token>'
+```
+
+备份先建立 Redis 全局 generation fence：新任务创建和认领暂停，已运行任务可完成；相同幂等键的只读重试仍返回原任务。围栏使用一小时 Redis TTL，备份进程异常退出后不会永久阻塞任务平面；导出前后 generation 一致才接受 JSONL，否则自动重试。逻辑快照包含版本化 task、幂等索引和有界日志，不包含 Redis 地址/密码、Bearer token、实例 ID、Lease Owner/TTL、旧 fencing token 或 OTel 配置。
+
+恢复不覆盖已有任务。ID 冲突按 `restoreId + sourceTaskId + digest` 确定性重映射，幂等索引同步改写；相同 Restore 重试会收敛到已导入记录。来源中的 `queued`、`running` 一律变为没有 owner/lease 的 `interrupted`，不会自动入队或重放付费/副作用操作。
+
+`coveragePolicy=strict` 会在已配置的外部 Contributor 不可达时阻断备份；`best-effort` 允许继续，但 Manifest 明确记录 omission。内部端点只应暴露在受信网络，不能经公共 NGINX 路由。
+
 ## OpenTelemetry
 
 每个工具调用创建 `mcp.tool.<name>` span，并记录：
@@ -123,4 +140,4 @@ node stateless-mcp/dist/src/server.js
 
 生产服务不会回落到内存存储；Redis 不可用时启动失败或 `/readyz` 返回 `503`。`MemoryTaskStore` 仅用于验证幂等和租约合同的单元测试。
 
-Redis AOF 不属于默认 DeepSeek Infra `/data` 卷。任务参数、日志和结果摘要可能包含敏感内容；备份、迁移、保留和销毁都应把该卷作为单独的私有数据源处理。安全边界、威胁映射、API 和兼容性状态分别见 [SECURITY.md](SECURITY.md#无状态-mcp-安全边界)、[THREAT_MODEL.md](THREAT_MODEL.md#t8--无状态-mcp-横向扩展与任务执行v441)、[API.md](API.md#独立无状态-mcp-服务v441) 与 [COMPATIBILITY.md](COMPATIBILITY.md#无状态-mcp-横向扩展兼容性)。
+Redis AOF 不属于默认 DeepSeek Infra `/data` 卷。未配置 external Contributor 时，任务状态仍必须按独立私有数据源保留或销毁；配置后，4.4.2 备份的是受控逻辑快照而非底层 Redis 文件。安全边界、威胁映射、API 和兼容性状态分别见 [SECURITY.md](SECURITY.md#无状态-mcp-安全边界)、[THREAT_MODEL.md](THREAT_MODEL.md#t8--无状态-mcp-横向扩展与任务执行v441)、[API.md](API.md#独立无状态-mcp-服务v442) 与 [COMPATIBILITY.md](COMPATIBILITY.md#无状态-mcp-横向扩展兼容性)。

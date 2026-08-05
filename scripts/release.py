@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from deepseek_infra.infra.diagnostics import release_manifest  # noqa: E402
 from deepseek_infra.infra.diagnostics.evidence_manifest import sha256_of as evidence_sha256_of  # noqa: E402
+from scripts.build_backup_crypto import build_backup_crypto  # noqa: E402
 
 # Runtime data / caches: excluded from the zip AND safe to delete with --clean-workspace.
 EXCLUDED_DIRS = {
@@ -129,6 +130,10 @@ def collect_files(root: Path) -> list[Path]:
             generated_root = root.joinpath(*parts)
             if generated_root.is_dir():
                 candidates.update(generated_root.rglob("*"))
+        executable = "backup-crypto.exe" if os.name == "nt" else "backup-crypto"
+        helper = root / "bin" / executable
+        if helper.is_file():
+            candidates.add(helper)
     return sorted(path for path in candidates if path.is_file() and should_include(path, root))
 
 
@@ -336,6 +341,13 @@ def main() -> int:
     frontend_ready = require_frontend_build(root) if args.skip_frontend_build else build_frontend(root)
     if not frontend_ready:
         return 1
+    helper_manifest = root / "rust" / "crates" / "backup-crypto" / "Cargo.toml"
+    if helper_manifest.is_file():
+        try:
+            build_backup_crypto(root)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            print(f"backup crypto helper build failed: {exc}", file=sys.stderr)
+            return 1
     archive_path = build_release_zip(root, args.output_dir, version)
     if not args.no_manifest:
         sha256 = release_manifest.sha256_of(archive_path)

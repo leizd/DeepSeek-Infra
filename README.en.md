@@ -5,28 +5,27 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.4.1-blue)
+![Version](https://img.shields.io/badge/version-4.4.2-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.4.1 at a glance
+## 4.4.2 at a glance
 
-- Backend Contributors and browser replicas are fully staged and digest-verified before a durable commit intent is recorded.
-- Browser state lives in Workspace Epoch namespaces; restore commits through one Active Epoch pointer switch, while stale tabs freeze and preserve dirty state as previous-Epoch Recovery Capsules.
-- A durable Restore Fence blocks peer mutations across the Web server, CLI, scheduler, automation, Agent checkpoints, Memory, Skills, Media, and Workspace writers.
-- Contributor directories are prepared completely, fsynced, and exchanged with journaled rollback paths; startup deterministically completes or rolls back interrupted swaps.
-- Contributor-aware schema migration remaps only declared identity and reference fields, leaving user messages, prompts, and artifact contents untouched.
-- Backup upload/download and ZIP extraction are streamed and size-accounted; completed, rolled-back, and recovery-required transactions follow explicit retention rules.
-- The optional stateless MCP execution plane uses the official TypeScript SDK, Redis-backed tasks and idempotency, two round-robin instances, lease recovery, and OpenTelemetry. It is a focused code-search/test/log service and does not replace the Python MCP compatibility hub.
+- Complete `.dsibackup` archives can be streamed through the standard age v1 format with either a human passphrase or one or more X25519 recipients.
+- Passphrases and Recovery Identities live only in five-minute in-memory Secret Slots and reach the Rust helper through an inherited anonymous pipe; they never enter persisted sessions, journals, argv, environment variables, logs, or traces.
+- Encrypted uploads remain locked until the entire age message authenticates. ZIP paths, manifests, contributor names, project metadata, and digests are not parsed or exposed before unlock.
+- Full-backup coverage explicitly reports local Contributors, browser replicas, configured external durable sources, and omissions under strict or best-effort policy.
+- Stateless MCP exports Redis task state, bounded logs, and idempotency indexes as versioned JSONL instead of copying AOF. Running and queued tasks restore as inert `interrupted` records and are never replayed.
+- Existing unencrypted v1 backups remain restorable, while encrypted Safety Backups inherit the source protection mode.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.4.1 release notes](docs/releases/4.4.1.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.4.2 release notes](docs/releases/4.4.2.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -98,7 +97,7 @@ npm run check --prefix stateless-mcp
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.4.1 --ga
+python scripts/preflight_release.py --version 4.4.2 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

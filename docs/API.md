@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.1。
+适用版本：v4.4.2。
 
 默认情况下，所有 `/api/*` 路由都需要本地 token 鉴权。客户端可以发送 `Authorization: Bearer <token>`，也可以使用打开 `/?token=<token>` 后写入的 `auth_token` Cookie。未设置 `AUTH_TOKEN` 时，服务端会把自动生成的 token 保存到本地 `.auth-token`，重启后继续复用。
 
@@ -1013,11 +1013,38 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 `Content-Type: application/vnd.deepseek-infra.backup+zip` 的文件请求体，并在
 `X-Backup-Filename` 传原文件名。服务端逐块计数和计算 SHA-256，不会先把整个包读入内存。
 
+创建备份时可提交：
+
+```json
+{
+  "protection": {"mode": "passphrase"},
+  "coveragePolicy": "strict",
+  "includeExternalState": true
+}
+```
+
+`protection` 也可为 `{"mode":"none"}` 或
+`{"mode":"age-recipient","recipients":["age1..."]}`。Secret 不放在该 JSON 中；创建 Session
+后单独 `PUT /api/workspace/backups/{backupId}/secret`，请求体为
+`{"kind":"passphrase|age-identity","secret":"..."}`。Secret Slot 五分钟过期且 Finalize 后销毁。
+
+| Method | Path | 作用 |
+| --- | --- | --- |
+| `GET` | `/api/workspace/backups/capabilities` | 返回 helper、age 模式、覆盖策略和外部 Contributor 可用性。 |
+| `POST` | `/api/workspace/backups` | 创建不含 Secret 的 Backup Session。 |
+| `POST` | `/api/workspace/backups/recovery-identities` | 生成一次性 X25519 Identity 与公开 Recipient；私钥只返回一次。 |
+| `PUT` | `/api/workspace/backups/{backupId}/secret` | 写入进程内临时 Secret Slot。 |
+| `PUT` | `/api/workspace/backups/{backupId}/frontend-state` | 写入已校验浏览器 Envelope。 |
+| `POST` | `/api/workspace/backups/{backupId}/finalize` | 消费 Secret，流式创建并验证包。 |
+| `GET` | `/api/workspace/backups/{backupId}/download` | 流式下载 `.dsibackup` 或 `.dsibackup.age`。 |
+
 协调式恢复 API：
 
 | Method | Path | 作用 |
 | --- | --- | --- |
-| `POST` | `/api/workspace/restores/inspect` | 只读校验包、Schema 与迁移计划。 |
+| `POST` | `/api/workspace/restores/inspect` | 上传明文包后只读校验；age 包只返回 `locked` 与密文摘要。 |
+| `PUT` | `/api/workspace/restores/{restoreId}/secret` | 为 locked 上传提供一次性密码或 Identity。 |
+| `POST` | `/api/workspace/restores/{restoreId}/unlock` | 完整认证 age 消息后进入既有 ZIP/Manifest Inspect。 |
 | `POST` | `/api/workspace/restores/{restoreId}/prepare` | 创建 Safety Backup，并构建完整后端 staging。 |
 | `PUT` | `/api/workspace/restores/{restoreId}/frontend-prepared` | 登记浏览器目标 Epoch 的回读摘要。 |
 | `POST` | `/api/workspace/restores/{restoreId}/commit` | 先记录 commit intent；浏览器切换 Epoch 后以 `frontendCommitted=true` 幂等提交后端。 |
@@ -1032,7 +1059,7 @@ Restore Fence 活跃时读请求继续；非 Restore Owner 的业务写请求返
 `complete` 与 `abort` 可安全重试。浏览器状态存在时，旧
 `/api/workspace/restores/{restoreId}/apply` 会拒绝单阶段提交。
 
-## 独立无状态 MCP 服务（v4.4.1）
+## 独立无状态 MCP 服务（v4.4.2）
 
 这是 `stateless-mcp/` 提供的专用服务，不属于默认 FastAPI 端口，也不替换上面的 Python MCP Tool Hub。默认 Compose 拓扑如下：
 
@@ -1054,5 +1081,18 @@ Restore Fence 活跃时读请求继续；非 Restore Owner 的业务写请求返
 | `query_logs` | 从 Redis 读取指定任务的有界日志窗口。 |
 
 任务状态保存在 Redis，而不是实例内存。运行实例定期续租；实例退出后，其他实例在租约过期时重新认领。所有完成转换都校验 owner 和 fencing token，已失去租约的旧实例不能提交迟到结果。相同幂等键和相同参数返回同一任务；相同键与不同参数返回工具错误，避免把误重试静默解释为新执行。
+
+配置 `MCP_INTERNAL_BACKUP_TOKEN` 后，Python Workspace Backup 可通过实例直连地址使用内部逻辑快照协议：
+
+| Method | Path | 作用 |
+| --- | --- | --- |
+| `GET` | `/internal/backups/capabilities` | 报告 `stateless-mcp` Contributor schema。 |
+| `POST` | `/internal/backups/prepare` | 建立 Redis 全局 backup fence 并记录 generation。 |
+| `GET` | `/internal/backups/{backupId}/stream` | 返回版本化 JSONL 任务、幂等索引与有界日志。 |
+| `POST` | `/internal/backups/{backupId}/release` | 幂等释放 fence。 |
+| `POST` | `/internal/restores/inspect` | 校验完整 JSONL 与 schema。 |
+| `POST` | `/internal/restores/{restoreId}/apply` | 非覆盖、幂等恢复并清除 Lease/运行态。 |
+
+这些内部端点使用独立 token，不应经 NGINX 公共 MCP 入口暴露。
 
 无状态 MCP 不开放任意命令执行，不提供默认应用的 17 工具/resources/prompts。完整配置、故障演练和数据保留边界见 [STATELESS_MCP.md](STATELESS_MCP.md)。

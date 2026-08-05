@@ -10,6 +10,7 @@ export interface ServiceConfig {
   workspaceRoot: string;
   allowedHostnames: string[];
   authToken?: string;
+  internalBackupToken?: string;
   leaseMs: number;
   pollMs: number;
   taskTimeoutSeconds: number;
@@ -30,6 +31,7 @@ function positiveInteger(name: string, fallback: number): number {
 
 export function loadConfig(): ServiceConfig {
   const authToken = process.env.MCP_AUTH_TOKEN?.trim();
+  const internalBackupToken = process.env.MCP_INTERNAL_BACKUP_TOKEN?.trim();
   return {
     host: process.env.MCP_HOST?.trim() || "0.0.0.0",
     port: positiveInteger("MCP_PORT", 8010),
@@ -42,6 +44,7 @@ export function loadConfig(): ServiceConfig {
       .map((host) => host.trim())
       .filter((host) => host.length > 0),
     ...(authToken ? { authToken } : {}),
+    ...(internalBackupToken ? { internalBackupToken } : {}),
     leaseMs: positiveInteger("MCP_TASK_LEASE_MS", 15_000),
     pollMs: positiveInteger("MCP_TASK_POLL_MS", 250),
     taskTimeoutSeconds: positiveInteger("MCP_TASK_TIMEOUT_SECONDS", 600),

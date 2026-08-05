@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import mimetypes
 import os
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -317,6 +319,16 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
         require_api_auth(request)
         return json_response(workspace_backups.create_session(await read_json_body(request)))
 
+    @router.post("/api/workspace/backups/recovery-identities")
+    async def api_workspace_backup_recovery_identity(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backups.generate_recovery_identity())
+
+    @router.put("/api/workspace/backups/{backup_id}/secret")
+    async def api_workspace_backup_secret(request: Request, backup_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backups.put_session_secret(backup_id, await read_json_body(request, max_bytes=128_000)))
+
     @router.put("/api/workspace/backups/{backup_id}/frontend-state")
     async def api_workspace_backup_frontend_state(request: Request, backup_id: str) -> JSONResponse:
         require_api_auth(request)
@@ -325,7 +337,22 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
     @router.post("/api/workspace/backups/{backup_id}/finalize")
     async def api_workspace_backup_finalize(request: Request, backup_id: str) -> JSONResponse:
         require_api_auth(request)
-        return json_response(workspace_backups.finalize_session(backup_id))
+        cancelled = threading.Event()
+        task = asyncio.create_task(
+            asyncio.to_thread(workspace_backups.finalize_session, backup_id, cancel_event=cancelled)
+        )
+        while not task.done():
+            await asyncio.wait({task}, timeout=0.1)
+            if task.done():
+                break
+            if await request.is_disconnected():
+                cancelled.set()
+                try:
+                    await task
+                except Exception:
+                    pass
+                raise AppError("Backup request disconnected", code=ErrorCode.INVALID_REQUEST, status=499)
+        return json_response(await task)
 
     @router.get("/api/workspace/backups/{backup_id}")
     async def api_workspace_backup_get(request: Request, backup_id: str) -> JSONResponse:
@@ -338,7 +365,7 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
         path = workspace_backups.backup_path(backup_id)
         return FileResponse(
             path,
-            media_type="application/vnd.deepseek-infra.backup+zip",
+            media_type="application/age" if path.name.casefold().endswith(".age") else "application/vnd.deepseek-infra.backup+zip",
             filename=path.name,
             headers={
                 "Cache-Control": "no-store",
@@ -404,6 +431,16 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
     async def api_workspace_restore_cleanup(request: Request) -> JSONResponse:
         require_api_auth(request)
         return json_response(workspace_backups.cleanup_restores())
+
+    @router.put("/api/workspace/restores/{restore_id}/secret")
+    async def api_workspace_restore_secret(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backups.put_session_secret(restore_id, await read_json_body(request, max_bytes=128_000)))
+
+    @router.post("/api/workspace/restores/{restore_id}/unlock")
+    async def api_workspace_restore_unlock(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backups.unlock_restore(restore_id))
 
     @router.get("/api/workspace/restores/{restore_id}")
     async def api_workspace_restore_get(request: Request, restore_id: str) -> JSONResponse:
