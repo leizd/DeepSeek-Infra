@@ -331,7 +331,7 @@ def test_run_helper_success_failure_and_process_errors(tmp_path: Path, monkeypat
     missing_stdin.stdin = None  # type: ignore[assignment]
     monkeypatch.setattr(backup_crypto.subprocess, "Popen", lambda *_args, **_kwargs: missing_stdin)
     with pytest.raises(AppError, match="Unable to process"):
-        backup_crypto._run_helper("inspect-header")
+        backup_crypto._run_helper("inspect-header", write_input=write_payload)
     assert missing_stdin.killed is True
 
     def broken_popen(*_args: object, **_kwargs: object) -> _FakeProcess:
@@ -344,6 +344,57 @@ def test_run_helper_success_failure_and_process_errors(tmp_path: Path, monkeypat
     with pytest.raises(AppError) as unavailable:
         backup_crypto._run_helper("inspect-header")
     assert unavailable.value.status == 501
+
+
+def test_inspect_header_uses_inherited_handle_without_stdin_producer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    helper = tmp_path / "backup-crypto"
+    helper.write_bytes(b"helper")
+    monkeypatch.setattr(backup_crypto, "helper_path", lambda: helper)
+    source = tmp_path / "large.dsibackup.age"
+    header = b"age-encryption.org/v1\n-> scrypt abc 14\nxyz\n--- mac\n"
+    source.write_bytes(header + b"\x00" * (8 * 1024 * 1024))
+    captured: dict[str, object] = {}
+
+    class _HandleProcess(_FakeProcess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stdout = io.BytesIO(b'{"age":true,"passphrase":false}')
+
+    def popen(args: list[str], **kwargs: object) -> _FakeProcess:
+        captured["args"] = args
+        captured["stdin"] = kwargs.get("stdin")
+        captured["pass_fds"] = kwargs.get("pass_fds")
+        captured["startupinfo"] = kwargs.get("startupinfo")
+        return _HandleProcess()
+
+    monkeypatch.setattr(backup_crypto.subprocess, "Popen", popen)
+    assert backup_crypto.inspect_header(source) == {"age": True, "passphrase": False}
+
+    args = [str(value) for value in captured["args"]]  # type: ignore[union-attr]
+    assert "--input-handle" in args
+    identifier = args[args.index("--input-handle") + 1]
+    assert identifier and identifier != "-1"
+    # No stdin producer exists for header inspection, so a helper that exits
+    # after the header can never cause a BrokenPipeError in the parent.
+    assert captured["stdin"] == backup_crypto.subprocess.DEVNULL
+    if os.name != "nt":
+        passed = tuple(int(value) for value in captured["pass_fds"])  # type: ignore[union-attr]
+        assert int(identifier) in passed
+        with os.fdopen(os.dup(int(identifier)), "rb") as inherited:
+            assert inherited.read(len(header)) == header
+    else:
+        startupinfo = captured["startupinfo"]
+        assert startupinfo is not None
+        handles = startupinfo.lpAttributeList["handle_list"]  # type: ignore[union-attr]
+        assert int(identifier) in handles
+
+    monkeypatch.setattr(
+        backup_crypto,
+        "_run_helper",
+        lambda *_args, **_kwargs: b'{"age":false}',
+    )
+    with pytest.raises(AppError, match="header"):
+        backup_crypto.inspect_header(source)
 
 
 def test_run_helper_writes_secret_pipe_and_closes_descriptors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

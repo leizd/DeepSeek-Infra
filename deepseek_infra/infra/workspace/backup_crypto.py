@@ -3,7 +3,9 @@
 Secrets are held only in this process and sent to the Rust helper through a
 dedicated inherited anonymous pipe. Workspace bytes use stdin/stdout, so
 passphrases and identities never appear in argv, environment variables, files,
-logs, traces, or persisted backup metadata.
+logs, traces, or persisted backup metadata. Header inspection instead hands the
+helper an inherited read-only file handle, so probing a large ciphertext never
+requires piping the whole file to a child that exits after the header.
 """
 
 from __future__ import annotations
@@ -195,6 +197,7 @@ def _run_helper(
     secret: bytearray | None = None,
     recipients: tuple[str, ...] = (),
     cancel_event: threading.Event | None = None,
+    input_fd: int | None = None,
 ) -> bytes:
     helper = helper_path()
     if helper is None:
@@ -203,18 +206,36 @@ def _run_helper(
     startupinfo: Any = None
     args = [str(helper), command, *recipients]
     pass_fds: tuple[int, ...] = ()
+    inherited_handles: list[int] = []
     if secret is not None:
         read_fd, write_fd, identifier, startupinfo = _secret_pipe(secret)
         args.extend(["--secret-handle", identifier])
         if os.name != "nt":
             pass_fds = (read_fd,)
+    if input_fd is not None:
+        if sys.platform == "win32":
+            import msvcrt
+
+            input_identifier = str(int(msvcrt.get_osfhandle(input_fd)))
+            inherited_handles.append(int(msvcrt.get_osfhandle(input_fd)))
+        else:
+            input_identifier = str(input_fd)
+            pass_fds = (*pass_fds, input_fd)
+        args.extend(["--input-handle", input_identifier])
+    if inherited_handles:
+        if startupinfo is None:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.lpAttributeList = {"handle_list": list(inherited_handles)}
+        else:
+            existing = list(startupinfo.lpAttributeList.get("handle_list", []))
+            startupinfo.lpAttributeList = {"handle_list": [*existing, *inherited_handles]}
     process: subprocess.Popen[bytes] | None = None
     try:
         if cancel_event is not None and cancel_event.is_set():
             raise BrokenPipeError("backup crypto operation cancelled")
         process = subprocess.Popen(
             args,
-            stdin=subprocess.PIPE,
+            stdin=subprocess.PIPE if write_input is not None else subprocess.DEVNULL,
             stdout=output if output is not None else subprocess.PIPE,
             stderr=subprocess.PIPE,
             close_fds=True,
@@ -229,16 +250,17 @@ def _run_helper(
                 write_fd = -1
                 secret_pipe.write(secret or b"")
                 secret_pipe.flush()
-        if process.stdin is None:
-            raise OSError("backup crypto stdin is unavailable")
         try:
             if write_input is not None:
+                if process.stdin is None:
+                    raise OSError("backup crypto stdin is unavailable")
                 input_stream = cast(BinaryIO, process.stdin)
                 if cancel_event is not None:
                     input_stream = cast(BinaryIO, _CancellationWriter(input_stream, cancel_event))
                 write_input(input_stream)
         finally:
-            process.stdin.close()
+            if process.stdin is not None:
+                process.stdin.close()
         stdout = process.stdout.read(MAX_SECRET_BYTES) if output is None and process.stdout is not None else b""
         stderr = process.stderr.read(MAX_SECRET_BYTES) if process.stderr is not None else b""
         status = process.wait()
@@ -336,11 +358,16 @@ def decrypt_file(
 
 
 def inspect_header(source: Path) -> dict[str, object]:
-    def write_input(pipe: BinaryIO) -> None:
-        with source.open("rb") as input_file:
-            shutil.copyfileobj(input_file, pipe, length=1024 * 1024)
+    fd = os.open(source, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    try:
+        os.set_inheritable(fd, True)
+        if sys.platform == "win32":
+            import msvcrt
 
-    raw = _run_helper("inspect-header", write_input=write_input)
+            os.set_handle_inheritable(int(msvcrt.get_osfhandle(fd)), True)
+        raw = _run_helper("inspect-header", input_fd=fd)
+    finally:
+        os.close(fd)
     value = json.loads(raw.decode("utf-8"))
     if not isinstance(value, dict) or value.get("age") is not True:
         raise AppError("Backup encryption header is invalid", code=ErrorCode.INVALID_PAYLOAD)
