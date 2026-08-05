@@ -224,6 +224,23 @@ fn main() {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn secret_handle(value: &[u8]) -> String {
+        use std::os::fd::IntoRawFd;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_SECRET: AtomicU64 = AtomicU64::new(0);
+        let path = env::temp_dir().join(format!(
+            "deepseek-backup-crypto-{}-{}",
+            std::process::id(),
+            NEXT_SECRET.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&path, value).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        file.into_raw_fd().to_string()
+    }
+
     #[test]
     fn passphrase_round_trip_and_tamper_rejection() {
         let plaintext = b"manifest.json must stay private";
@@ -266,5 +283,131 @@ mod tests {
         let mut report = Vec::new();
         inspect_header(&encrypted[..], &mut report).unwrap();
         assert_eq!(report, b"{\"age\":true,\"passphrase\":true}\n");
+    }
+
+    #[test]
+    fn identity_generation_and_derivation_are_consistent() {
+        let mut generated = Vec::new();
+        generate_identity(&mut generated).unwrap();
+        let generated = String::from_utf8(generated).unwrap();
+        assert!(generated.contains("AGE-SECRET-KEY-"));
+        assert!(generated.contains("age1"));
+
+        let identity = age::x25519::Identity::generate();
+        let recipient = identity.to_public().to_string();
+        let mut derived = Vec::new();
+        derive_recipient(
+            identity.to_string().expose_secret().to_owned(),
+            &mut derived,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(derived).unwrap(),
+            format!("{{\"recipients\":[\"{recipient}\"]}}\n")
+        );
+        assert!(derive_recipient("# comments only\n".to_owned(), Vec::new()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_reader_and_command_dispatch_cover_success_and_error_paths() {
+        assert_eq!(
+            read_secret(&secret_handle(b"trimmed-secret\r\n")).unwrap(),
+            "trimmed-secret"
+        );
+        assert!(read_secret(&secret_handle(b"\r\n")).is_err());
+        assert!(secret_reader("not-a-descriptor").is_err());
+
+        let passphrase = b"command-passphrase";
+        let encrypt_args = vec![
+            "encrypt-passphrase".to_owned(),
+            "--secret-handle".to_owned(),
+            secret_handle(passphrase),
+        ];
+        let mut encrypted = Vec::new();
+        run(&encrypt_args, &b"command payload"[..], &mut encrypted).unwrap();
+
+        let decrypt_args = vec![
+            "decrypt-passphrase".to_owned(),
+            "--secret-handle".to_owned(),
+            secret_handle(passphrase),
+        ];
+        let mut decrypted = Vec::new();
+        run(&decrypt_args, &encrypted[..], &mut decrypted).unwrap();
+        assert_eq!(decrypted, b"command payload");
+
+        let identity = age::x25519::Identity::generate();
+        let recipient = identity.to_public().to_string();
+        let recipient_args = vec!["encrypt-age".to_owned(), recipient.clone()];
+        let mut recipient_ciphertext = Vec::new();
+        run(
+            &recipient_args,
+            &b"recipient payload"[..],
+            &mut recipient_ciphertext,
+        )
+        .unwrap();
+
+        let identity_args = vec![
+            "decrypt-age".to_owned(),
+            "--secret-handle".to_owned(),
+            secret_handle(identity.to_string().expose_secret().as_bytes()),
+        ];
+        let mut identity_plaintext = Vec::new();
+        run(
+            &identity_args,
+            &recipient_ciphertext[..],
+            &mut identity_plaintext,
+        )
+        .unwrap();
+        assert_eq!(identity_plaintext, b"recipient payload");
+
+        let mut header = Vec::new();
+        run(
+            &["inspect-header".to_owned()],
+            &recipient_ciphertext[..],
+            &mut header,
+        )
+        .unwrap();
+        assert_eq!(header, b"{\"age\":true,\"passphrase\":false}\n");
+
+        let mut derived = Vec::new();
+        run(
+            &[
+                "derive-recipient".to_owned(),
+                "--secret-handle".to_owned(),
+                secret_handle(identity.to_string().expose_secret().as_bytes()),
+            ],
+            io::empty(),
+            &mut derived,
+        )
+        .unwrap();
+        assert!(String::from_utf8(derived).unwrap().contains(&recipient));
+
+        let mut generated = Vec::new();
+        run(
+            &["generate-identity".to_owned()],
+            io::empty(),
+            &mut generated,
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(generated)
+                .unwrap()
+                .contains("AGE-SECRET-KEY-")
+        );
+
+        let no_args: Vec<String> = Vec::new();
+        assert!(run(&no_args, io::empty(), Vec::new()).is_err());
+        assert!(run(&["unknown".to_owned()], io::empty(), Vec::new()).is_err());
+        assert!(run(&["encrypt-age".to_owned()], io::empty(), Vec::new()).is_err());
+        assert!(run(&["decrypt-age".to_owned()], io::empty(), Vec::new()).is_err());
+        assert!(
+            run(
+                &["decrypt-age".to_owned(), "--secret-handle".to_owned()],
+                io::empty(),
+                Vec::new(),
+            )
+            .is_err()
+        );
     }
 }

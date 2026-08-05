@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Callable, Literal, cast
+from typing import Any, BinaryIO, Callable, Literal, cast
 
 from deepseek_infra.core.errors import AppError, ErrorCode
 
@@ -156,11 +156,11 @@ def capabilities() -> dict[str, object]:
     }
 
 
-def _secret_pipe(secret: bytearray) -> tuple[int, int, str, subprocess.STARTUPINFO | None]:
+def _secret_pipe(secret: bytearray) -> tuple[int, int, str, Any]:
     read_fd, write_fd = os.pipe()
     os.set_inheritable(read_fd, True)
-    startupinfo: subprocess.STARTUPINFO | None = None
-    if os.name == "nt":
+    startupinfo: Any = None
+    if sys.platform == "win32":
         import msvcrt
 
         raw_handle = int(msvcrt.get_osfhandle(read_fd))
@@ -200,7 +200,7 @@ def _run_helper(
     if helper is None:
         raise AppError("Backup crypto helper unavailable", code=ErrorCode.INVALID_REQUEST, status=501)
     read_fd = write_fd = -1
-    startupinfo: subprocess.STARTUPINFO | None = None
+    startupinfo: Any = None
     args = [str(helper), command, *recipients]
     pass_fds: tuple[int, ...] = ()
     if secret is not None:
