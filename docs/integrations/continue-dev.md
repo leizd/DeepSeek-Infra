@@ -5,11 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：DeepSeek Infra v4.4.1。
+适用版本：DeepSeek Infra v4.4.2。
 
 本页是可复现配置说明 + GUI 实机验证操作手册。DeepSeek Infra 端的 MCP endpoint 已由本地 client、CI mock server、policy gate、trace diagnostics 覆盖。v2.4.5 已完成 Continue.dev MCP 实机验证，证据见下方证据模板。
 
-本页配置和既有 GUI 证据针对默认 Python MCP Tool Hub（17 工具 + resources/prompts）。v4.4.1 的无状态五工具执行平面使用独立 `:8010/mcp`、`MCP_AUTH_TOKEN` 和 Redis；它尚未被本页的 Continue.dev GUI 证据覆盖，部署见 [../STATELESS_MCP.md](../STATELESS_MCP.md)。
+本页配置和既有 GUI 证据针对默认 Python MCP Tool Hub（17 工具 + resources/prompts）。无状态五工具执行平面使用独立 `:8010/mcp`、`MCP_AUTH_TOKEN` 和 Redis；v4.4.2 增加逻辑备份但没有扩展本页的 Continue.dev GUI 证据，部署见 [../STATELESS_MCP.md](../STATELESS_MCP.md)。
 
 ## 1. 启动 DeepSeek Infra
 

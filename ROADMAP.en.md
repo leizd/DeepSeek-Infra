@@ -7,13 +7,15 @@
 
 This standalone roadmap summarizes the current direction. The detailed historical checklist is preserved in the [Chinese roadmap](ROADMAP.md), while completed release behavior remains governed by the [implementation status matrix](docs/IMPLEMENTATION_STATUS.md), release notes, tests, and versioned evidence.
 
-## Current baseline: 4.4.1
+## Current baseline: 4.4.2
 
 - [x] Python-first hybrid runtime stabilized for 4.0.
 - [x] Optional Rust delegates remain disabled by default with deterministic Python fallback.
 - [x] React owns the default workspace; the legacy frontend was retired in 4.0.8.
 - [x] Workspace restore is a crash-recoverable cross-tier transaction with browser epoch fencing and backend journals.
 - [x] An optional official-TypeScript-SDK MCP plane keeps no client sessions in process, stores durable tasks/idempotency in Redis, runs two round-robin instances, recovers expired leases, and emits OpenTelemetry.
+- [x] Standard age v1 passphrase/X25519 encryption protects complete backups without persisting secrets or exposing plaintext metadata.
+- [x] Strict/best-effort coverage reports external durable state, and Stateless MCP Redis state travels as logical JSONL with no lease replay.
 
 ## Next frontend slices
 
@@ -41,6 +43,6 @@ This standalone roadmap summarizes the current direction. The detailed historica
 - [x] 2.7.x–2.8.x — media, edge-router, context-taint, and browser-control stabilization.
 - [x] 3.x — personal runtime GA, quality uplift, semantic-cache work, Rust candidate audits, and 95% Python coverage.
 - [x] 4.0.0–4.0.3 — Python-first hybrid GA, frontend security/offline reliability, React migration foundation, and React chat vertical slice.
-- [x] 4.0.4–4.4.1 — React parity and legacy retirement, query/reload/checkpoint resilience, portable backups, crash-safe restore, and the stateless MCP task plane.
+- [x] 4.0.4–4.4.2 — React parity and legacy retirement, query/reload/checkpoint resilience, portable and encrypted backups, crash-safe restore, and portable stateless MCP task state.
 
 For exact per-version changes, use the [Changelog](CHANGELOG.md) and [release notes](docs/releases/).

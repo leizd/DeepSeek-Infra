@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.1。
+适用版本：v4.4.2。
 
-这页只记录已经可复现的互操作结果，不把“协议上应该兼容”写成“实机已验证”。历史 GUI、外部 MCP、A2A 和 SDK 证据继续保留；v4.4.1 另增加官方 TypeScript SDK 无状态 MCP 路径，CI 验证双实例轮询、owner 退出、客户端重试、租约接管和幂等收敛。它的五工具专用目录与默认 Python Hub 的 17 工具目录是两个明确的兼容性表面。
+这页只记录已经可复现的互操作结果，不把“协议上应该兼容”写成“实机已验证”。历史 GUI、外部 MCP、A2A 和 SDK 证据继续保留；v4.4.2 保持官方 TypeScript SDK 无状态 MCP 路径，并增加标准 age v1 文件互操作与版本化 JSONL 外部状态边界。五工具专用目录与默认 Python Hub 的 17 工具目录仍是两个明确的兼容性表面。
 
 ## Compatibility Smoke Pack / 兼容性冒烟测试包
 
@@ -43,6 +43,9 @@ python scripts/smoke_mcp_compat.py --token <local-token> --external-server-url h
 | MCP local smoke | ✅ Runner 已添加 | `python scripts/smoke_mcp_compat.py` | `/healthz`、`initialize`、`tools/list`、`tools/call`、policy gate、`/api/mcp/external/tools` |
 | MCP real external server smoke | 🟡 入口就绪 | `python scripts/smoke_mcp_compat.py --external-server-url <url>` | 第三方 server 的 `initialize` / `tools/list`；本仓库未记录实机通过 |
 | Stateless MCP failover | ✅ CI 已测试 | `npm run smoke:failover --prefix stateless-mcp` | 双实例轮询、终止 owner、客户端重试、租约接管和幂等键收敛；旧 owner fencing 由单元测试固定 |
+| age v1 encrypted backup | ✅ contract 已测试 | `pytest tests/test_backup_crypto.py` + `cargo test --locked --manifest-path rust/Cargo.toml -p backup-crypto` | 密码与 X25519 recipient 两种标准 age v1 模式；Manifest 完全位于密文内；helper 缺失时拒绝加密，不做明文降级。 |
+| Plaintext backup v1 | ✅ 保持兼容 | `pytest tests/test_workspace_backups.py` | 既有 `.dsibackup` 可继续 inspect/restore；加密是显式可选保护层。 |
+| Stateless MCP logical JSONL v1 | ✅ contract 已测试 | `npm run check --prefix stateless-mcp` | generation fence、部署 Secret 排除、queued/running→interrupted、确定性冲突重映射及重试收敛。 |
 | A2A live smoke | ✅ Runner 已添加 | `python scripts/smoke_a2a_compat.py` | Agent Card、agents list、`message/send`、`message/stream`、`tasks/resubscribe`、`tasks/cancel` |
 | A2A external peer smoke | ✅ 已测试 | `python scripts/smoke_a2a_external_peer.py` + [integrations/a2a-external-peer.md](integrations/a2a-external-peer.md) | 独立进程 external peer：Agent Card + send + stream + get + cancel + list + artifact chunks + SSE final event。 |
 | A2A contract regression | ✅ 已测试 | `pytest tests/test_a2a_compat_contract.py` | artifact chunks、SSE final status、resubscribe cursor、cancel lifecycle |

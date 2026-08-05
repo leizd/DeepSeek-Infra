@@ -9,6 +9,7 @@ import { createServiceMcp } from "./mcp-server.js";
 import { RedisTaskStore } from "./redis-task-store.js";
 import { initializeTelemetry } from "./telemetry.js";
 import { TaskWorker } from "./test-runner.js";
+import { parseBackupSnapshot } from "./task-store.js";
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -26,6 +27,18 @@ function authorized(req: IncomingMessage, expected?: string): boolean {
   const provided = Buffer.from(actual.slice("Bearer ".length), "utf8");
   const wanted = Buffer.from(expected, "utf8");
   return provided.length === wanted.length && timingSafeEqual(provided, wanted);
+}
+
+async function readBody(req: IncomingMessage, limit = 64 * 1024 * 1024): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += value.length;
+    if (size > limit) throw new Error("request body is too large");
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function main(): Promise<void> {
@@ -54,6 +67,52 @@ async function main(): Promise<void> {
       return;
     }
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    if (url.pathname.startsWith("/internal/")) {
+      const token = config.internalBackupToken;
+      if (token === undefined || !authorized(req, token)) {
+        json(res, token === undefined ? 404 : 401, { error: token === undefined ? "not found" : "unauthorized" });
+        return;
+      }
+      void (async () => {
+        if (req.method === "GET" && url.pathname === "/internal/backups/capabilities") {
+          json(res, 200, await store.backupCapabilities());
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/internal/backups/prepare") {
+          const body = JSON.parse(await readBody(req)) as { backupId?: string };
+          if (typeof body.backupId !== "string" || body.backupId.length < 8) throw new Error("backupId is required");
+          json(res, 200, await store.prepareBackup(body.backupId, Date.now()));
+          return;
+        }
+        const backupMatch = /^\/internal\/backups\/([^/]+)\/(stream|release)$/u.exec(url.pathname);
+        if (backupMatch !== null && backupMatch[1] !== undefined && backupMatch[2] === "stream" && req.method === "GET") {
+          const snapshot = await store.exportBackup(backupMatch[1]);
+          res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
+          res.end(snapshot);
+          return;
+        }
+        if (backupMatch !== null && backupMatch[1] !== undefined && backupMatch[2] === "release" && req.method === "POST") {
+          await store.releaseBackup(backupMatch[1]);
+          json(res, 200, { ok: true, backupId: backupMatch[1] });
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/internal/restores/inspect") {
+          const snapshot = await readBody(req);
+          const parsed = parseBackupSnapshot(snapshot);
+          json(res, 200, { ok: true, schemaVersion: 1, tasks: parsed.tasks.length });
+          return;
+        }
+        const restoreMatch = /^\/internal\/restores\/([^/]+)\/apply$/u.exec(url.pathname);
+        if (restoreMatch !== null && restoreMatch[1] !== undefined && req.method === "POST") {
+          json(res, 200, await store.restoreBackup(restoreMatch[1], await readBody(req), Date.now()));
+          return;
+        }
+        json(res, 404, { error: "not found" });
+      })().catch((error: unknown) => {
+        json(res, 409, { error: error instanceof Error ? error.message : String(error) });
+      });
+      return;
+    }
     if (url.pathname === "/healthz") {
       json(res, 200, { status: "ok", instanceId: config.instanceId });
       return;

@@ -5,11 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.1。
+适用版本：v4.4.2。
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 
-## Hybrid Runtime 总览（v4.4.1）
+## Hybrid Runtime 总览（v4.4.2）
 
 > 运维细节、feature flags 与回滚命令见 [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)。
 
@@ -104,11 +104,11 @@ Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具�
 
 ### 版本说明
 
-- **Current release:** `4.4.1`。默认运行时仍由 Python 拥有；可选无状态 MCP 是独立部署面，不改变 FastAPI 或 Rust delegate 的所有权边界。
+- **Current release:** `4.4.2`。默认运行时仍由 Python 拥有；`backup-crypto` 只是 age 流式密码边界，备份事务、Contributor 编排和恢复状态机仍由 Python 拥有；可选无状态 MCP 是独立部署面。
 - **Historical qualification:** `v4.0.0-rc.1` 已被 rc.2 supersede，只保留为历史架构预览；stable `4.0.0` 从已验证的 rc.2 提升。
 - **Patch boundary:** Python-first 所有权、默认关闭的 Rust delegates 和冻结协议均不改变。
 
-## 无状态 MCP 横向扩展平面（v4.4.1）
+## 无状态 MCP 横向扩展平面（v4.4.2）
 
 ```mermaid
 flowchart LR
@@ -127,6 +127,22 @@ flowchart LR
 长任务由实例持有短租约并定期续租。实例退出后租约到期，另一个实例可原子认领；完成写入同时校验 owner 与 fencing token，旧实例即使迟到也不能覆盖接管后的结果。非幂等的 `start_test_run` 要求幂等键，相同键与相同参数收敛到同一任务，不同参数则拒绝。
 
 这一服务只暴露 `server_info`、`code_search`、`start_test_run`、`get_task` 与 `query_logs`。现有 Python `/mcp` 的 17 工具、resources、prompts、Tool Policy 和第三方客户端兼容性继续保留；两者是并行部署边界，不应把专用服务描述为完整 Hub 的无缝替代。
+
+## 加密备份与外部状态边界（v4.4.2）
+
+```mermaid
+flowchart LR
+    UI["Backup UI<br/>component-local secret"] -->|"anonymous pipe / handle"| AGE["Rust backup-crypto<br/>standard age v1 stream"]
+    PY["Python restore transaction<br/>journal · fence · contributors"] --> AGE
+    PY --> LOCAL["Local + browser contributors"]
+    PY --> EXT["External contributor protocol"]
+    EXT --> MCP["Stateless MCP<br/>generation-fenced JSONL"]
+    AGE --> PKG[".dsibackup.age<br/>manifest inside ciphertext"]
+```
+
+Secret 不进入 API Session JSON、durable Journal、命令行或环境变量。前端只在 Backup/Restore 组件内短期持有，Python 的 Ephemeral Secret Slot 限时、限长、限尝试次数并在消费后清零；Rust helper 从单独继承的匿名 pipe/handle 读取 Secret，同时通过 stdin/stdout 或文件句柄流式处理包。
+
+External Contributor 与本地目录 Contributor 共享 coverage manifest，但不复制部署存储。Stateless MCP 先用 Redis generation fence 固定逻辑边界，再输出版本化 JSONL；恢复使用确定性 ID remap，清除 lease/owner，并把任何未终结工作冻结为 `interrupted`，因此不会在新环境自动重放任务。
 
 ## 分层架构
 
@@ -167,7 +183,8 @@ Python Default Runtime   FastAPI / ASGI: Auth · Streaming · /v1/chat · /healt
 - `infra/rag/` — **Local RAG Data Plane**：`local_rag`（sqlite-vec 向量库 + BM25 词法的 hybrid 检索、增量索引、文档版本、chunk lineage、引用真实性校验、Recall@K 评估）、`files` 解析分块、`context_compressor`。
 - `infra/tool_runtime/` — **Tool Calling Runtime**：`tools` 注册执行 + `search` / `ocr` / `documents` / `presentations` / `mindmaps` / `generated_files` / `slides_skill`。
 - `infra/mcp/` — **MCP-native Tool Hub**：`server`（JSON-RPC 2.0 分发）+ `registry`（tools / resources / prompts 目录）+ `adapters`（执行桥，复用 Tool Policy 闸门）+ `permissions`（能力切片与预批）+ `client`（出方向 MCP client）。
-- `stateless-mcp/` — **无状态 MCP 执行平面**：官方 TypeScript SDK Streamable HTTP server factory + Redis durable task store + lease/fencing 恢复 + 幂等工具 + OpenTelemetry；通过 `docker-compose.stateless-mcp.yml` 部署双实例与 NGINX。
+- `stateless-mcp/` — **无状态 MCP 执行平面**：官方 TypeScript SDK Streamable HTTP server factory + Redis durable task store + lease/fencing 恢复 + 幂等工具 + OpenTelemetry + generation-fenced logical backup Contributor；通过 `docker-compose.stateless-mcp.yml` 部署双实例与 NGINX。
+- `infra/workspace/backup_crypto.py` + `rust/crates/backup-crypto/` — **加密备份边界**：Python 持有事务和短期 Secret Slot，Rust helper 只执行标准 age v1 加解密、Identity/Recipient 转换和 header inspect。
 - `infra/observability/` — **Observability**：`observability`（OpenTelemetry 风格的 trace/span 层级链路，run 为根，`agent.<id>` 包裹其 `context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek` 子 span）+ `trace_api`（`/api/traces`、`/trace/{id}`）+ `export`（trace JSON 脱敏导出）+ `metrics`（Prometheus `/metrics`）+ `health`（`/healthz`·`/readyz`）。
 - `infra/data/` — **本地存储**：`memory` / `projects` / `reminders`。
 - `core/`、`web/`、`launcher/`、`android_entry.py`、`desktop_app.py` — 配置 / 错误 / 工具、HTTP 运行时、跨端打包入口。

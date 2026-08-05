@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/backup-crypto",
     "crates/deepseek-core",
     "crates/deepseek-gateway",
     "crates/deepseek-mcp",
@@ -25,6 +26,7 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+age = { version = "0.12.1", default-features = false }
 
 [profile.release]
 lto = true

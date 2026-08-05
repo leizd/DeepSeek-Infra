@@ -7,6 +7,15 @@
 
 已完成的能力以 [实现状态矩阵](docs/IMPLEMENTATION_STATUS.md) 为准（含各模块成熟度与明确缺口）；下面是接下来的计划，完成一项勾一项：
 
+### v4.4.2: Encrypted Backups & External State Portability
+
+- [x] 使用标准 age v1 格式流式加密完整 `.dsibackup`，支持密码与多 X25519 Recipient。
+- [x] Rust `backup-crypto` helper 只负责加解密；秘密通过匿名管道传递并由五分钟内存 Secret Slot 管理。
+- [x] 加密上传先进入 locked 状态，完整认证后才复用既有 ZIP/Manifest/Schema Inspect。
+- [x] 完整备份增加 strict / best-effort 覆盖策略，明确报告外部持久数据源遗漏。
+- [x] Stateless MCP 通过 generation fence 导出 Redis 逻辑 JSONL 快照；恢复清空 Lease，并把可运行任务转为 interrupted。
+- [x] 前端增加密码、Recovery Key、数据覆盖与加密解锁流程，不把秘密放入 Context 或浏览器存储。
+
 ### v4.4.1: Crash-Safe Restore & Stateless MCP
 
 - [x] 恢复升级为跨浏览器 Workspace Epoch 与后端 Contributor 的可恢复事务，具备耐久 Fence、Journal、目录交换和启动恢复。

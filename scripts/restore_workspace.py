@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepseek_infra.infra.workspace.backups import apply_restore, inspect_archive  # noqa: E402
+from deepseek_infra.infra.workspace.backups import apply_restore, inspect_archive, put_session_secret, unlock_restore  # noqa: E402
 
 
 def main() -> int:
@@ -23,6 +24,13 @@ def main() -> int:
     parser.add_argument("--mode", choices=("merge", "project-copy", "replace-empty"), default="merge")
     args = parser.parse_args()
     plan = inspect_archive(args.backup.expanduser().resolve(), filename=args.backup.name)
+    if plan.get("phase") == "locked":
+        kind = "passphrase" if plan.get("protection") == "passphrase" else "age-identity"
+        label = "Backup passphrase: " if kind == "passphrase" else "Recovery Identity: "
+        secret = getpass.getpass(label)
+        put_session_secret(str(plan["restoreId"]), {"kind": kind, "secret": secret})
+        secret = ""
+        plan = unlock_restore(str(plan["restoreId"]))
     print(json.dumps({key: value for key, value in plan.items() if key != "manifest"}, ensure_ascii=False, indent=2))
     if not args.apply:
         return 0

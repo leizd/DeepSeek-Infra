@@ -5,13 +5,13 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.1。
+适用版本：v4.4.2。
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
-> 4.4.1 makes workspace restore a crash-recoverable cross-tier transaction. Browser replicas are staged under a new Workspace Epoch and activated by one verified pointer write; stale tabs freeze before persistence and preserve dirty state only as previous-Epoch recovery copies. Backend Contributors are built in staging, validated, fsynced and exchanged behind a durable cross-process Fence and commit journal. Startup can deterministically finish or roll back an interrupted exchange, future schemas are rejected, declared references are remapped without touching user text, and large backup transfers remain streaming. Password encryption remains intentionally deferred to 4.4.2.
+> 4.4.2 wraps the complete internal backup stream in the standard age v1 format, with ephemeral passphrase or X25519 Identity handling and a locked-before-inspect restore phase. Plaintext v1 packages remain compatible, while encrypted Safety Backups inherit the source protection mode.
 
-> 4.4.1 also adds an optional stateless MCP execution plane. The TypeScript service creates a fresh MCP server per request, stores durable tasks and idempotency in Redis, runs behind two round-robin instances, recovers expired leases after owner loss, and emits OpenTelemetry. It complements rather than replaces the Python MCP Tool Hub.
+> Full-backup coverage now distinguishes local, browser, and external durable state. Stateless MCP exports logical JSONL under a generation fence; restore clears leases, deterministically remaps collisions, and preserves queued/running tasks only as inert interrupted records.
 
 图例：
 
@@ -46,7 +46,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 | 一键 Demo | [examples/](../examples/) · [docs/DEMO.md](DEMO.md) | ✅ |
 | 部署资产（Docker / Compose / .env） | [Dockerfile](../Dockerfile) · [docker-compose.yml](../docker-compose.yml) · [stateless-mcp/Dockerfile](../stateless-mcp/Dockerfile) · [docker-compose.stateless-mcp.yml](../docker-compose.stateless-mcp.yml) · [docs/DEPLOYMENT.md](DEPLOYMENT.md) | ✅ CI 覆盖默认与无状态 MCP 镜像/Compose；独立 failover job 覆盖双实例恢复 |
 | 安全工程（威胁模型 / CI 扫描） | [docs/THREAT_MODEL.md](THREAT_MODEL.md) · [ci.yml security job](../.github/workflows/ci.yml) | ✅ |
-| Compatibility Smoke Pack | [scripts/smoke_mcp_compat.py](../scripts/smoke_mcp_compat.py) · [stateless-mcp/smoke/failover.ts](../stateless-mcp/smoke/failover.ts) · [scripts/smoke_a2a_compat.py](../scripts/smoke_a2a_compat.py) · [scripts/smoke_a2a_external_peer.py](../scripts/smoke_a2a_external_peer.py) · [scripts/smoke_edge_router.py](../scripts/smoke_edge_router.py) | ✅ 默认 MCP/A2A/Edge smoke 可复跑；v4.4.1 无状态 MCP smoke 验证轮询、owner 退出、客户端重试、租约接管与幂等收敛 |
+| Compatibility Smoke Pack | [scripts/smoke_mcp_compat.py](../scripts/smoke_mcp_compat.py) · [stateless-mcp/smoke/failover.ts](../stateless-mcp/smoke/failover.ts) · [scripts/smoke_a2a_compat.py](../scripts/smoke_a2a_compat.py) · [scripts/smoke_a2a_external_peer.py](../scripts/smoke_a2a_external_peer.py) · [scripts/smoke_edge_router.py](../scripts/smoke_edge_router.py) | ✅ 默认 MCP/A2A/Edge smoke 可复跑；v4.4.2 保留双实例 failover 合同并新增 generation-fenced JSONL 备份、interrupted 恢复和幂等重映射测试 |
 | Release Readiness（发版体检 / 产物证明） | [evidence_inventory.py](../deepseek_infra/infra/diagnostics/evidence_inventory.py) · [assemble_release_evidence.py](../scripts/assemble_release_evidence.py) · [scripts/preflight_release.py](../scripts/preflight_release.py) · [verify_release_package.py](../scripts/verify_release_package.py) | ✅ 4.3.7 adds isolated conflict branches, a durable multi-conflict ledger, transactional copy/discard resolution, UUID replica writers with duplicate claims, deterministic lock-free proposals, degraded-Head self-healing, missing-Head anti-resurrection and digest-verified Recovery Capsule V2 while retaining all 4.3.6 checkpoint/storage-pressure, 4.3.5 continuity, 4.3.4 activation, 4.3.3 discovery and 4.2.8 exact-merge gates. |
 | Rust Sidecar Performance Evidence | [scripts/run_rust_sidecar_benchmarks.py](../scripts/run_rust_sidecar_benchmarks.py) · [docs/evidence/rust-sidecar-performance-v4.3.6.json](evidence/rust-sidecar-performance-v4.3.6.json) · [RUST_SIDECAR_PERFORMANCE.md](RUST_SIDECAR_PERFORMANCE.md) | PASS contract: locked release profile; Python/core/warm HTTP/full integration and cold start separated; five delegate families covered; absolute latency informational; no default change. |
 | RAG Vector Binary Parity | [scripts/check_rag_vector_binary_parity.py](../scripts/check_rag_vector_binary_parity.py) · [docs/evidence/rag-vector-binary-parity-v4.3.6.json](evidence/rag-vector-binary-parity-v4.3.6.json) · [RAG_VECTOR_BINARY_TRANSPORT.md](RAG_VECTOR_BINARY_TRANSPORT.md) | PASS: 110 valid + 16 malformed release-sidecar cases; JSON/binary/Python parity, fixed 24-byte response, stable errors, payload reduction, redaction, and no JSON retry. |
@@ -121,10 +121,10 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 
 ### 7.5 Stateless MCP Task Service — MVP
 
-- **代码**：[stateless-mcp/src/](../stateless-mcp/src/) 提供官方 TypeScript SDK 请求级 server factory、Redis task store、Lua 原子状态转换、lease/fencing、幂等索引、受限代码搜索/pytest/日志工具、重试客户端与 OpenTelemetry；[docker-compose.stateless-mcp.yml](../docker-compose.stateless-mcp.yml) 部署 Redis AOF、Collector、两个实例和 NGINX。
+- **代码**：[stateless-mcp/src/](../stateless-mcp/src/) 提供官方 TypeScript SDK 请求级 server factory、Redis task store、Lua 原子状态转换、lease/fencing、幂等索引、受限代码搜索/pytest/日志工具、重试客户端、OpenTelemetry 与内部逻辑备份端点；[docker-compose.stateless-mcp.yml](../docker-compose.stateless-mcp.yml) 部署 Redis AOF、Collector、两个实例和 NGINX。
 - **测试**：[stateless-mcp/test/](../stateless-mcp/test/) 覆盖配置、认证/Host、工具边界、任务状态、幂等冲突、租约接管、旧 owner fencing 与 telemetry；CI 的 `stateless-mcp` job 执行严格类型检查和单测，`stateless-mcp-failover` 执行容器级故障演练。
 - **亲手验证**：`npm ci --prefix stateless-mcp` 后运行 `npm run check --prefix stateless-mcp`；Docker 可用时运行 `npm run smoke:failover --prefix stateless-mcp`。部署和预期输出见 [STATELESS_MCP.md](STATELESS_MCP.md)。
-- **MVP 边界**：只提供五个专用工具，不承诺默认 Hub 的 17 工具/resources/prompts 目录；需要 Redis，没有进程内降级存储；当前验证聚焦官方 SDK、仓库测试客户端与负载均衡故障恢复，第三方 GUI 仍沿用默认 Python `/mcp`。
+- **MVP 边界**：只提供五个专用工具，不承诺默认 Hub 的 17 工具/resources/prompts 目录；需要 Redis，没有进程内降级存储；4.4.2 逻辑恢复只导入 inert task 历史，不恢复部署 Secret、Lease，也不自动重放任务；第三方 GUI 仍沿用默认 Python `/mcp`。
 
 ### 8. A2A Agent Mesh — MVP
 
@@ -142,7 +142,7 @@ README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure 
 
 ### 10. Workspace Core — MVP
 
-- **代码**：[workspace/projects.py](../deepseek_infra/infra/workspace/projects.py)（Project 2.0 facade）、[saved_items.py](../deepseek_infra/infra/workspace/saved_items.py)（保存项）、[artifacts.py](../deepseek_infra/infra/workspace/artifacts.py)（Artifact Hub）、[exports.py](../deepseek_infra/infra/workspace/exports.py)（Markdown / HTML / JSON / ZIP 导出）、[schema.py](../deepseek_infra/infra/workspace/schema.py)（ID / 类型 / sourceRef / redaction）。
-- **测试**：[test_workspace.py](../tests/test_workspace.py) 覆盖项目、保存项、产物版本、预览脱敏与项目 ZIP；[test_smoke_workspace.py](../tests/test_smoke_workspace.py) 覆盖离线 evidence 生成；[test_preflight_release.py](../tests/test_preflight_release.py)、[test_smoke_release.py](../tests/test_smoke_release.py) 与 [test_release_manifest.py](../tests/test_release_manifest.py) 固定 release gate。
+- **代码**：[workspace/projects.py](../deepseek_infra/infra/workspace/projects.py)（Project 2.0 facade）、[saved_items.py](../deepseek_infra/infra/workspace/saved_items.py)（保存项）、[artifacts.py](../deepseek_infra/infra/workspace/artifacts.py)（Artifact Hub）、[exports.py](../deepseek_infra/infra/workspace/exports.py)（Markdown / HTML / JSON / ZIP 导出）、[workspace/backups.py](../deepseek_infra/infra/workspace/backups.py)（Contributor、coverage、恢复事务）、[workspace/backup_crypto.py](../deepseek_infra/infra/workspace/backup_crypto.py)（短期 Secret Slot 与 Rust age helper 边界）。
+- **测试**：[test_workspace.py](../tests/test_workspace.py) 覆盖项目、保存项、产物版本、预览脱敏与项目 ZIP；[test_backup_crypto.py](../tests/test_backup_crypto.py) 固定 age locked restore、Secret 生命周期、Recovery Identity、密文元数据边界和 external coverage；[test_workspace_backups.py](../tests/test_workspace_backups.py) 固定恢复事务；release tests 固定打包门禁。
 - **亲手验证**：`python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v4.3.6.json`；本地服务启动后可用 `/api/workspace/projects`、`/api/workspace/projects/{projectId}/saved-items`、`/api/workspace/projects/{projectId}/artifacts` 与 `/api/workspace/exports` 走完整工作台闭环。
 - **MVP 边界**：v2.6.0 先稳定对象模型、API、导出包结构与证据链；复杂 Memory Graph、浏览器控制、自动化工作流与前端精装修留给后续版本。

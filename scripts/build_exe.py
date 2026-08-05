@@ -33,6 +33,7 @@ LEGACY_NAME = "DeepSeekMobile"
 STATIC_DIR = PROJECT_ROOT / "static"
 ICON_PATH = PROJECT_ROOT / "static" / "icons" / "favicon.ico"
 FRONTEND_BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_frontend.py"
+BACKUP_CRYPTO_BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_backup_crypto.py"
 
 
 def validate_multipart_build_environment() -> None:
@@ -109,6 +110,10 @@ def main() -> int:
     if not (STATIC_DIR / "ui" / "index.html").is_file():
         print("Cannot build executable: static/ui/index.html is missing", file=sys.stderr)
         return 1
+    crypto_result = subprocess.call([sys.executable, str(BACKUP_CRYPTO_BUILD_SCRIPT)], cwd=str(PROJECT_ROOT))
+    if crypto_result != 0:
+        return crypto_result
+    crypto_helper = PROJECT_ROOT / "bin" / ("backup-crypto.exe" if os.name == "nt" else "backup-crypto")
 
     cmd = [
         sys.executable,
@@ -119,6 +124,7 @@ def main() -> int:
         "--name",
         args.name,
         f"--add-data={STATIC_DIR}{os.pathsep}static",
+        f"--add-binary={crypto_helper}{os.pathsep}bin",
         "--collect-data=customtkinter",
         "--collect-all=webview",
         "--collect-all=pythonnet",

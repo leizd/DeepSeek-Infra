@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.1。
+适用版本：v4.4.2。
 
 DeepSeek Infra 默认服务形态是一个单进程 FastAPI / ASGI 运行时：`/v1` OpenAI 兼容网关、`/mcp`、`/a2a`、`/api/*` 业务端点，加 `/healthz`·`/readyz`·`/metrics` 运维三件套。它的可写状态集中在 `DEEPSEEK_INFRA_ROOT`（或兼容变量 `DEEPSEEK_MOBILE_ROOT`）指定的数据目录。另有可选的无状态 MCP 双实例栈；它把持久任务状态放在独立 Redis AOF 卷中，因此不属于默认单卷备份边界。
 
@@ -21,7 +21,7 @@ docker compose logs -f deepseek-infra
 
 ```bash
 curl http://127.0.0.1:8000/healthz
-# {"status":"ok","version":"4.4.1",...}
+# {"status":"ok","version":"4.4.2",...}
 curl http://127.0.0.1:8000/readyz
 curl http://127.0.0.1:8000/metrics | head
 ```
@@ -65,12 +65,12 @@ npm run smoke:failover --prefix stateless-mcp
 ## 3. 纯 Docker
 
 ```bash
-docker build -t deepseek-infra:4.4.1 .
+docker build -t deepseek-infra:4.4.2 .
 docker run -d --name deepseek-infra \
   -p 127.0.0.1:8000:8000 \
   --env-file .env \
   -v deepseek-data:/data \
-  deepseek-infra:4.4.1
+  deepseek-infra:4.4.2
 ```
 
 镜像要点（见 [Dockerfile](../Dockerfile)）：`python:3.12-slim`、`pip --no-cache-dir`、非 root 用户运行、`HEALTHCHECK` 打 `/healthz`、数据卷 `/data`、静态资源固定在镜像内（`DEEPSEEK_INFRA_STATIC_DIR`，旧变量 `DEEPSEEK_MOBILE_STATIC_DIR` 继续兼容），并在构建后清理 `__pycache__`。CI 的 docker job 会验证默认镜像/Compose，也会构建 [stateless-mcp/Dockerfile](../stateless-mcp/Dockerfile) 并校验 [docker-compose.stateless-mcp.yml](../docker-compose.stateless-mcp.yml)。
@@ -112,13 +112,15 @@ WantedBy=multi-user.target
 - 外接 MCP server（v2.2.1）：默认关闭。启用时设置 `MCP_CLIENT_ENABLED=1` 与 `MCP_CLIENT_SERVERS='[{"name":"docs","url":"http://127.0.0.1:9001/mcp"}]'`，只连接可信地址；上线前用 `GET /api/mcp/external/tools` 核对 bridged tools、风险等级和审批要求。v2.2.2 起，Agent 和 `/mcp tools/call` 两条入口都会在外部 MCP executor 内部再次执行 ToolPolicy。
 - 升级：换新镜像 tag 重新 `up -d` 即可；数据目录内的 SQLite schema 由各模块幂等迁移，跨小版本升级无需手工步骤。升级前推荐用“备份与恢复”界面或 `python scripts/backup_workspace.py --out workspace.dsibackup` 生成并校验可移植备份。
 
-### 4.4.1 备份与崩溃恢复策略
+### 4.4.2 加密备份、外部覆盖与崩溃恢复策略
 
-- **在线备份（推荐）**：使用 `.dsibackup`。运行时在跨进程 Mutation Gate 下记录 Contributor generation，流式复制后再次核对；代际变化会重试。SQLite 使用 backup API，逐文件校验，并排除 `.env`、`.auth-token`、API Key、缓存、PID 与锁。
+- **在线备份（推荐）**：优先使用 age 保护的 `.dsibackup.age`。运行时在跨进程 Mutation Gate 下记录 Contributor generation，流式复制后再次核对；ZIP 直接进入 Rust helper 的加密流，不发布最终明文包。SQLite 使用 backup API，逐文件校验，并排除 `.env`、`.auth-token`、API Key、缓存、PID 与锁。
 - **恢复**：先运行 `python scripts/restore_workspace.py workspace.dsibackup --inspect`。浏览器参与的包必须通过 UI 的协调式 Prepare / Frontend Prepared / Commit / Complete 流程；服务端不会再用旧单调用 API 提前提交浏览器恢复。无浏览器状态的 CLI 包仍可 `--apply --mode merge`。
 - **崩溃恢复**：`.restore-staging/<restoreId>/transaction.json` 记录 Contributor 准备、目录交换和 rollback 路径，`.workspace-restore-fence.json` 阻止普通写入，`.workspace-mutation.lock` 在 Web、CLI 和后台 Worker 间互斥。服务启动时会扫描未完成 Journal；`recovery-required` 记录和对应 Safety Backup 不得自动删除。
 - **冷备**：必须先完全停止服务，再复制整个 `/data` 卷。直接复制运行中的卷可能得到跨 SQLite / JSON 时间点不一致的内容。
-- `.dsibackup` **完整性可验证但默认未加密**；把它当作完整工作区敏感数据存储。分享用 Export 已脱敏或裁剪，不能用于 Restore。
+- **外部覆盖**：配置 `STATELESS_MCP_BACKUP_URL=http://127.0.0.1:8011`、`STATELESS_MCP_BACKUP_TOKEN`，并在 Stateless MCP 实例设置相同的 `MCP_INTERNAL_BACKUP_TOKEN`。`strict` 在服务不可达时失败；`best-effort` 会在 Manifest 明确记录遗漏。
+- **Helper**：源码环境运行 `python scripts/build_backup_crypto.py`；发布 ZIP 与 PyInstaller 构建会自动携带 `bin/backup-crypto[.exe]`。缺失 helper 时 API 明确禁用加密，不会回退为明文。
+- 旧 `.dsibackup` 仍可恢复，但应按完整工作区敏感数据保管。分享用 Export 已脱敏或裁剪，不能用于 Restore。
 
 ## 6. 暴露到局域网 / 公网前必读
 

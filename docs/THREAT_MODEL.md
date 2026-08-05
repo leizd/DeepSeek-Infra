@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.1。
+适用版本：v4.4.2。
 
 定位与信任假设见 [docs/SECURITY.md](SECURITY.md)：个人、本地优先的运行时，运行后端的机器可信，默认只监听 `127.0.0.1`。这一页回答更尖锐的问题：**当模型上下文里混入攻击者可控的内容（网页、文件、工具结果），或本机服务被局域网内他人触达时，每一类威胁由哪段代码挡住、由哪个测试钉住、还剩什么残余风险。**
 
@@ -94,6 +94,18 @@
   - **最小遥测**：OpenTelemetry 的固定 attributes 不记录查询、测试参数或日志正文；异常 span 可能包含错误摘要，Collector 保持私有。
 - **测试**：[stateless-mcp/test/](../stateless-mcp/test/) 覆盖认证、Host、路径、幂等、lease/fencing 和遥测；`npm run smoke:failover --prefix stateless-mcp` 在双实例栈中终止 task owner，验证客户端重试、租约恢复和无重复执行；CI 分别以 `stateless-mcp` 和 `stateless-mcp-failover` 固定两层合同。
 - **残余风险**：pytest 运行的是仓库代码，不是强隔离沙箱；恶意测试仍能使用容器拥有的文件、网络和环境权限。Redis AOF 与任务日志可能含敏感输出，必须按私有运行数据保护。
+
+### T9 · 备份离机泄露、密码猜测与外部状态漏备（v4.4.2）
+
+- **路径**：明文备份被复制后暴露项目与会话；攻击者篡改密文诱导恢复；密码进入日志/进程参数；“完整备份”静默遗漏 Redis；恢复运行任务触发重复 pytest。
+- **缓解**：
+  - 完整内部 ZIP 由标准 age v1 scrypt 或 X25519 流式保护，Manifest 和所有工作区元数据都位于认证密文内；
+  - Secret Slot 五分钟过期并在消费后清零，helper 通过独立匿名管道读取 Secret；统一解锁错误和内存失败计数限制本地猜测；
+  - age 完整认证成功前不解析 ZIP，认证后仍执行路径、展开大小、摘要和 Schema 验证；
+  - `strict`/`best-effort` Coverage Manifest 区分可用、遗漏和排除的外部永久数据源；
+  - Redis 只导出版本化逻辑 JSONL；generation fence 阻止新任务/认领、允许既有幂等请求安全重试，并以一小时 TTL 防止备份进程崩溃后永久封锁；恢复清空 Lease 并将 queued/running 转为 interrupted。
+- **测试**：[test_backup_crypto.py](../tests/test_backup_crypto.py) 覆盖 Secret 生命周期、加密往返、错误 Secret、明文元数据隐藏和覆盖策略；[stateless-mcp/test/task-store.test.ts](../stateless-mcp/test/task-store.test.ts) 覆盖 generation fence、不重放和冲突重映射；Rust helper 单测覆盖密码/X25519 往返与密文篡改拒绝。
+- **残余风险**：已解锁 staging 在可信本机上短期为明文；低熵密码仍可能被离线猜测；物理介质安全擦除、Recovery Key 备份和端点外围 TLS/权限由部署者负责。
 
 ## 非目标（明确不在防护范围内）
 

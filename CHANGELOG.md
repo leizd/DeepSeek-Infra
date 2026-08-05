@@ -4,6 +4,25 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.2] - Encrypted Backups and External State Portability
+
+### Standard age protection
+
+- Adds a packaged Rust `backup-crypto` helper using the interoperable age v1 format for passphrase and multi-recipient X25519 encryption; ZIP bytes stream directly into encryption and no final plaintext package is published.
+- Keeps passphrases and Recovery Identities in expiring in-memory Secret Slots and transfers them over a dedicated inherited anonymous pipe, never through argv, environment variables, persisted metadata, logs, or traces.
+- Treats encrypted uploads as locked until the complete age message authenticates, then reuses the existing bounded ZIP, checksum, manifest, schema, conflict, and restore-transaction checks. Existing plaintext v1 backups remain compatible.
+
+### External durable-state coverage
+
+- Adds strict and best-effort coverage policies with manifest reporting for local Contributors, browser state, external durable sources, and explicit omissions.
+- Adds versioned Stateless MCP JSONL snapshots for Redis-backed tasks, logs, and idempotency indexes instead of copying AOF, protected by a global generation/fence contract.
+- Clears lease ownership and converts queued/running tasks to inert `interrupted` records on restore; task-ID and idempotency collisions are deterministically remapped without overwriting target Redis state.
+
+### Recovery UX and packaging
+
+- Adds passphrase, one-time Recovery Key confirmation, coverage selection, locked-upload unlock, and secret-clearing controls to the React backup drawer without increasing the initial bundle budget.
+- Bundles the Rust helper in release ZIP and PyInstaller builds; unavailable helpers are reported explicitly and never cause a plaintext fallback.
+
 ## [4.4.1] - Crash-Safe Restore Transactions and Replica Fencing
 
 ### Cross-tier restore transaction

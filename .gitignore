@@ -89,3 +89,6 @@ graphify-out/
 # Rust build artifacts
 rust/target/
 
+# Generated native backup encryption helper
+/bin/backup-crypto
+/bin/backup-crypto.exe

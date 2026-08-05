@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.1。
+适用版本：v4.4.2。
 
 ## 威胁模型
 
@@ -56,6 +56,19 @@ DeepSeek 和 Tavily Key 可以通过环境变量提供，也可以在浏览器�
 - 浏览器填写的 Key 可按用户选择保存在本地 `localStorage`。
 - 浏览器填写的 Tavily Key 只会在本轮请求允许联网搜索时随 `/api/chat` 发送；未勾选保存时刷新页面后清空。
 - v0.9.4 的 `/api/title` 会使用 DeepSeek Key 生成短标题，并对同一 API key 哈希做 60 秒 12 次的内存限流；超限只影响自动标题，聊天本身不会被中断。
+
+## 加密备份与恢复密钥
+
+4.4.2 的加密备份采用标准 age v1 文件格式，不自创加密算法、Nonce、分块或密钥包装协议。密码模式使用 age scrypt Recipient；Recovery Key 模式使用 X25519 Identity，并支持一个包对应多个公开 Recipient。
+
+- 密码与私钥只存在进程内 Secret Slot，默认五分钟过期，Finalize/Unlock 后立即清零；服务重启后必须重新输入。
+- Python 将秘密通过专用继承匿名管道传给 Rust helper；argv、环境变量、Session JSON、Restore Journal、文件名、日志和 Trace attribute 都不含秘密。
+- 加密包完整认证前不会解析 ZIP。错误密码、错误 Identity、篡改和截断对外统一失败，部分明文 staging 会删除。
+- Recovery Identity 只返回一次，不写 Runtime Root、浏览器存储或备份；首次使用前 UI 要求重新导入并验证公开 Recipient。
+- Contributor staging 包含短期明文副本，目录仅供当前运行用户访问且完成后删除；SSD/闪存上不承诺物理安全擦除。
+- 未配置 helper 时 `encryptedBackupAvailable=false`，绝不静默创建明文替代品。
+
+Stateless MCP 的 Redis AOF 不直接进入包。逻辑快照排除 Redis URL/密码、MCP token、实例 ID、Lease Owner/TTL、旧 Fencing Token 和 OTel 配置；恢复后的可运行任务变为 `interrupted`，不会自动执行。
 
 ## Seek 参考文件
 

@@ -2,6 +2,7 @@ x-mcp-environment: &mcp-environment
   REDIS_URL: redis://redis:6379
   REDIS_PREFIX: deepseek-infra:mcp:v1
   MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-change-me}
+  MCP_INTERNAL_BACKUP_TOKEN: ${MCP_INTERNAL_BACKUP_TOKEN:-dev-backup-change-me}
   MCP_TASK_LEASE_MS: "5000"
   MCP_TASK_POLL_MS: "250"
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318

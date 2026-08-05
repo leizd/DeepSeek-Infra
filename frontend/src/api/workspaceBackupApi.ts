@@ -2,6 +2,11 @@ import { httpClient, type HttpClient } from "./httpClient";
 
 export type WorkspacePackagePurpose = "share-export" | "restorable-backup";
 export type BackupPhase = "preparing" | "quiescing" | "snapshotting" | "verifying" | "ready" | "failed";
+export type BackupProtection =
+  | { mode: "none" }
+  | { mode: "passphrase" }
+  | { mode: "age-recipient"; recipients: string[] };
+export type CoveragePolicy = "strict" | "best-effort";
 export type RestoreMode = "merge" | "project-copy" | "replace-empty";
 export type RestorePhase =
   | "inspected"
@@ -23,6 +28,9 @@ export interface BackupRequest {
   includeHistory: boolean;
   includeDrafts: boolean;
   includeRebuildableIndexes: boolean;
+  includeExternalState: boolean;
+  coveragePolicy: CoveragePolicy;
+  protection: BackupProtection;
 }
 
 export interface BackupSession {
@@ -32,11 +40,14 @@ export interface BackupSession {
   estimatedBytes: number;
   included: string[];
   excluded: string[];
+  protection?: { mode: BackupProtection["mode"] };
+  coverage?: BackupCoverage;
   filename?: string;
   downloadUrl?: string;
 }
 
 export interface RestorePlan {
+  phase: "inspected";
   restoreId: string;
   sourceVersion: string;
   targetVersion: string;
@@ -48,6 +59,24 @@ export interface RestorePlan {
   warnings: string[];
   estimatedWriteBytes: number;
   requiresFrontendApply: boolean;
+  encrypted?: boolean;
+  protection?: "none" | "passphrase" | "age-recipient";
+  coverage?: BackupCoverage;
+}
+
+export interface LockedRestoreUpload {
+  restoreId: string;
+  phase: "locked";
+  protection: "passphrase" | "age-recipient";
+  ciphertextSha256: string;
+}
+
+export interface BackupCoverage {
+  policy: CoveragePolicy;
+  localContributors: string[];
+  externalContributors: Array<{ id: string; status: string; schemaVersion?: number }>;
+  unavailableDurableSources: Array<{ id: string; reason: string }>;
+  complete: boolean;
 }
 
 export interface RestoreResult {
@@ -79,10 +108,14 @@ export interface FrontendBackupEnvelopeV1 {
 export function backupCapabilities(client: HttpClient = httpClient) {
   return client.json<{
     purpose: "restorable-backup";
-    encrypted: false;
+    encrypted: boolean;
+    encryptedBackupAvailable: boolean;
+    reason?: string;
+    protectionModes: Array<BackupProtection["mode"]>;
     integrityVerified: true;
     includedByDefault: string[];
     alwaysExcluded: string[];
+    externalContributors: Array<{ id: string; available: boolean; reason?: string }>;
   }>("/api/workspace/backups/capabilities");
 }
 
@@ -109,7 +142,25 @@ export function finalizeBackup(backupId: string, client: HttpClient = httpClient
   return client.postJson<BackupSession>(`/api/workspace/backups/${encodeURIComponent(backupId)}/finalize`, {});
 }
 
-export async function inspectBackup(file: File, client: HttpClient = httpClient): Promise<RestorePlan> {
+export function putBackupSecret(
+  backupId: string,
+  request: { kind: "passphrase" | "age-identity"; secret: string },
+  client: HttpClient = httpClient,
+) {
+  return client.json<{ ok: true; expiresInSeconds: number; attemptsRemaining: number }>(
+    `/api/workspace/backups/${encodeURIComponent(backupId)}/secret`,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) },
+  );
+}
+
+export function generateRecoveryIdentity(client: HttpClient = httpClient) {
+  return client.postJson<{ identity: string; recipient: string; displayedOnce: true }>(
+    "/api/workspace/backups/recovery-identities",
+    {},
+  );
+}
+
+export async function inspectBackup(file: File, client: HttpClient = httpClient): Promise<RestorePlan | LockedRestoreUpload> {
   const response = await client.request("/api/workspace/restores/inspect", {
     method: "POST",
     headers: {
@@ -119,6 +170,21 @@ export async function inspectBackup(file: File, client: HttpClient = httpClient)
     body: file,
   });
   return response.json() as Promise<RestorePlan>;
+}
+
+export function putRestoreSecret(
+  restoreId: string,
+  request: { kind: "passphrase" | "age-identity"; secret: string },
+  client: HttpClient = httpClient,
+) {
+  return client.json<{ ok: true; expiresInSeconds: number; attemptsRemaining: number }>(
+    `/api/workspace/restores/${encodeURIComponent(restoreId)}/secret`,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) },
+  );
+}
+
+export function unlockBackup(restoreId: string, client: HttpClient = httpClient) {
+  return client.postJson<RestorePlan>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/unlock`, {});
 }
 
 export function applyWorkspaceRestore(restoreId: string, mode: RestoreMode, client: HttpClient = httpClient) {

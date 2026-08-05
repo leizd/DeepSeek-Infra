@@ -5,11 +5,13 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.1。
+适用版本：v4.4.2。
 
 ## Runtime ownership
 
 4.0.8 完成 Legacy Frontend Retirement；4.0.9 将最后一个独立原生界面 Trace Viewer 迁入 React。4.1.0 将 Workspace Provider 下沉到聊天路由，并按需加载 Trace 路由与 Diagnostics 共享详情。4.2.2–4.2.7 建立共享加载边界、Mutation 所有权、并发状态、最新 intent 与精确 blocker；4.2.8 再把这些行为绑定到 exact-merge Evidence 装配。4.3.0–4.3.6 依次完成按需加载、升级连续性、不可变构建身份、更新激活事务、可诊断生命周期检查点与 V3 跨标签页分片。4.3.7 将失败副本永久隔离进多分支 Ledger，以事务化 copy/discard 解决冲突，拆分 tab continuity 与 UUID writer identity，通过不可变 Proposal 收敛无锁同胞写入，自愈损坏 Head，并以完整性校验的 Recovery Capsule V2 防止崩溃与过期标签页破坏历史。4.4.1 再把所有副本状态放进 Workspace Epoch 命名空间：Restore Envelope 先由 Persistence Adapter 写入未激活 Epoch 并逐键回读，随后只切换一个 Active Epoch；旧标签页先冻结、取消自动保存和请求，再把脏内容写入 previous-Epoch Recovery Capsule，绝不向恢复后的共享 Head Flush。Frontend Restore Journal 会与服务端状态机对账，服务端不可达时保留 Fence，不能靠猜测清理。以上均不改变聊天关键 Provider、冻结 4.0 runtime contract 或 Bundle 预算。`/` 与 `/trace/:traceId` 只返回 `frontend/` 的 React + TypeScript + Vite 构建，`/ui/` 作为兼容别名返回同一构建。生成产物位于 gitignored `static/ui/`，不得手工修改。
+
+4.4.2 的密码与 Recovery Identity 只保存在 Backup/Restore feature 的组件局部状态，关闭面板、完成或失败时清空；Context、localStorage、URL 和持久 Journal 均不持有 Secret。恢复 UI 在 age 认证成功前只显示 locked 状态和保护类型，不渲染 Manifest 或 Contributor 细节。
 
 服务端不再提供旧前端路由或环境变量回滚。`static/ui/index.html` 缺失时，本地启动、Android、PyInstaller、Docker、发布 ZIP、release smoke 与 preflight 都会硬失败，并提示运行 `scripts/build_frontend.py`。
 
