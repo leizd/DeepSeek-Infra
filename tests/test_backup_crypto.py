@@ -129,8 +129,35 @@ def test_passphrase_encrypted_round_trip_keeps_secret_and_metadata_out_of_cipher
     assert _PASSPHRASE not in (backups.RESTORE_DIR / restore_id / "plan.json").read_bytes()
 
 
-def test_recovery_identity_is_verified_against_public_recipient(
-    tmp_settings: Path,
+def test_extracted_tree_tampering_forces_secret_reentry(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_age(monkeypatch)
+    project = tmp_settings / ".projects" / "secret-project"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text(json.dumps({"id": "secret-project"}), encoding="utf-8")
+    created = backups.create_session({"mode": "full", "requiresFrontendState": False, "protection": {"mode": "passphrase"}})
+    backup_id = str(created["backupId"])
+    backups.put_session_secret(backup_id, {"kind": "passphrase", "secret": _PASSPHRASE.decode()})
+    backups.finalize_session(backup_id)
+    locked = backups.inspect_archive(backups.backup_path(backup_id), filename="encrypted.dsibackup.age")
+    restore_id = str(locked["restoreId"])
+    root = backups.RESTORE_DIR / restore_id
+    backups.put_session_secret(restore_id, {"kind": "passphrase", "secret": _PASSPHRASE.decode()})
+    backups.unlock_restore(restore_id)
+
+    tampered = root / "extracted" / "payload" / "projects" / "secret-project" / "project.json"
+    tampered.write_text("tampered", encoding="utf-8")
+    with pytest.raises(AppError, match="mismatch|changed after inspection"):
+        backups.prepare_restore(restore_id)
+
+    manifest = root / "extracted" / "manifest.json"
+    original = manifest.read_bytes()
+    manifest.write_bytes(b"{}")
+    with pytest.raises(AppError, match="changed after inspection"):
+        backups.prepare_restore(restore_id)
+    manifest.write_bytes(original)
+
+
+def test_recovery_identity_is_verified_against_public_recipient(    tmp_settings: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_fake_age(monkeypatch)

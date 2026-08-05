@@ -1065,8 +1065,39 @@ def _inspect_plain_archive(
         "manifest": manifest,
         "phase": "inspected",
     }
-    _write_json(restore_root / "plan.json", plan)
+    if encrypted:
+        # Residency bound: keep the ciphertext plus one verified extracted
+        # tree; the full plaintext archive is deleted after the first inspect.
+        plan["manifestDigest"] = _sha256_file(extracted / "manifest.json")
+        plan["extractedTreeDigest"] = _tree_digest(extracted)
+        plan["secretArmedAt"] = time.time()
+        _write_json(restore_root / "plan.json", plan)
+        archive_path.unlink(missing_ok=True)
+    else:
+        _write_json(restore_root / "plan.json", plan)
     return {"ok": True, **plan}
+
+
+def _verified_extracted_manifest(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    """Trust the retained extracted tree only when every digest still matches.
+
+    A mismatch never silently re-uses the tree; the caller must re-provide the
+    secret so the ciphertext can be decrypted and inspected again.
+    """
+
+    extracted = root / "extracted"
+    manifest_path = extracted / "manifest.json"
+    if not manifest_path.is_file():
+        raise AppError("Decrypted backup payload is unavailable; re-provide the backup secret", code=ErrorCode.INVALID_REQUEST, status=409)
+    if _sha256_file(manifest_path) != plan.get("manifestDigest"):
+        raise AppError("Decrypted backup payload changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
+    manifest = _verify_manifest_tree(extracted)
+    if _tree_digest(extracted) != plan.get("extractedTreeDigest"):
+        raise AppError("Decrypted backup payload changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
+    verified = root / "verified"
+    shutil.rmtree(verified, ignore_errors=True)
+    shutil.copytree(extracted, verified)
+    return manifest
 
 
 def prepare_restore(
@@ -1096,7 +1127,10 @@ def prepare_restore(
     if not plan.get("compatible"):
         raise AppError("Backup schema is not compatible with this version", code=ErrorCode.INVALID_REQUEST, status=409)
     archive = next(root.glob("*.dsibackup"), None)
-    if archive is None or _sha256_file(archive) != plan.get("archiveSha256"):
+    manifest: dict[str, Any] | None = None
+    if archive is None and bool(plan.get("encrypted")):
+        manifest = _verified_extracted_manifest(root, plan)
+    elif archive is None or _sha256_file(archive) != plan.get("archiveSha256"):
         raise AppError("Backup changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
 
     target = target_epoch or f"epoch-{uuid.uuid4()}"
@@ -1128,7 +1162,10 @@ def prepare_restore(
         }
         _write_json(journal_path, transaction)
         try:
-            manifest = _safe_extract_and_verify(archive, root / "verified")
+            if manifest is None:
+                if archive is None:
+                    raise AppError("Backup changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
+                manifest = _safe_extract_and_verify(archive, root / "verified")
             context = _context_from_manifest(manifest)
             identity_map = _restore_identity_map(plan, mode)
             transaction["identityMap"] = identity_map
@@ -1788,6 +1825,12 @@ def _safe_extract_and_verify(archive_path: Path, destination: Path) -> dict[str,
     checksum_path = destination / "checksums.sha256"
     if not manifest_path.is_file() or not checksum_path.is_file():
         raise AppError("Backup manifest is missing", code=ErrorCode.INVALID_PAYLOAD)
+    return _verify_manifest_tree(destination)
+
+
+def _verify_manifest_tree(destination: Path) -> dict[str, Any]:
+    manifest_path = destination / "manifest.json"
+    checksum_path = destination / "checksums.sha256"
     manifest = _read_json(manifest_path)
     _check_json_depth(manifest)
     if manifest.get("schemaVersion") != BACKUP_SCHEMA or manifest.get("purpose") != PACKAGE_PURPOSE:
