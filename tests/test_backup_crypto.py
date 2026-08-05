@@ -708,6 +708,115 @@ def test_external_snapshot_transport_streams_with_receipts(tmp_path: Path, monke
     assert not isinstance(seen["body"], bytes), "upload must stream the file object, not materialized bytes"
 
 
+def test_coverage_plan_is_frozen_and_attested(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STATELESS_MCP_BACKUP_URL", "http://backup.internal/")
+    availability = {"available": True}
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "capabilities",
+        lambda _self: {
+            "id": "stateless-mcp",
+            "available": availability["available"],
+            "schemaVersion": 1,
+            **({} if availability["available"] else {"reason": "service unavailable"}),
+        },
+    )
+    snapshots: list[str] = []
+
+    def fake_snapshot(self: backups.RegisteredContributor, staging: Path, context: backups.BackupContext) -> backups.BackupContribution:
+        snapshots.append(self.contributor_id)
+        payload = staging / "payload" / self.contributor_id
+        payload.mkdir(parents=True, exist_ok=True)
+        data = payload / "data.json"
+        data.write_text("{}", encoding="utf-8")
+        entry = {"path": f"payload/{self.contributor_id}/data.json", "size": 2, "sha256": hashlib.sha256(b"{}").hexdigest()}
+        return backups.BackupContribution(
+            contributor_id=self.contributor_id,
+            schema_version=self.schema_version,
+            records=1,
+            bytes=2,
+            digest=hashlib.sha256(b"{}").hexdigest(),
+            restore_policy=self.restore_policy,
+            files=(entry,),
+            snapshot_generation=42 if self.contributor_id == "stateless-mcp" else None,
+        )
+
+    monkeypatch.setattr(backups.DirectoryContributor, "snapshot", fake_snapshot)
+    monkeypatch.setattr(backups.StatelessMcpContributor, "snapshot", fake_snapshot)
+
+    created = backups.create_session({"mode": "full", "requiresFrontendState": False, "coveragePolicy": "best-effort"})
+    backup_id = str(created["backupId"])
+    plan = created["contributorPlan"]
+    assert plan["planId"]
+    external_entry = next(item for item in plan["contributors"] if item["kind"] == "external")
+    assert external_entry["status"] == "selected"
+
+    availability["available"] = False
+    finalized = backups.finalize_session(backup_id)
+    assert finalized["phase"] == "ready"
+    import zipfile
+
+    with zipfile.ZipFile(backups.backup_path(backup_id)) as archive:
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    coverage = manifest["coverage"]
+    assert coverage["planId"] == plan["planId"]
+    assert coverage["complete"] is True
+    assert coverage["externalContributors"][0]["id"] == "stateless-mcp"
+    assert coverage["externalContributors"][0]["snapshotGeneration"] == 42
+    assert coverage["externalContributors"][0]["snapshotDigest"] == hashlib.sha256(b"{}").hexdigest()
+    assert "stateless-mcp" in snapshots, "frozen plan must include the external contributor even if it later drops"
+
+    availability["available"] = True
+    created_second = backups.create_session({"mode": "full", "requiresFrontendState": False, "coveragePolicy": "best-effort"})
+    second_id = str(created_second["backupId"])
+    availability["available"] = False
+    monkeypatch.setattr(backups.StatelessMcpContributor, "capabilities", lambda _self: {"id": "stateless-mcp", "available": False, "schemaVersion": 1, "reason": "service unavailable"})
+    created_third = backups.create_session({"mode": "full", "requiresFrontendState": False, "coveragePolicy": "best-effort"})
+    third_id = str(created_third["backupId"])
+    third_plan = created_third["contributorPlan"]
+    third_external = next(item for item in third_plan["contributors"] if item["kind"] == "external")
+    assert third_external["status"] == "unavailable"
+    availability["available"] = True
+    monkeypatch.setattr(backups.StatelessMcpContributor, "capabilities", lambda _self: {"id": "stateless-mcp", "available": True, "schemaVersion": 1})
+    snapshots.clear()
+    backups.finalize_session(third_id)
+    with zipfile.ZipFile(backups.backup_path(third_id)) as archive:
+        third_manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    assert third_manifest["coverage"]["complete"] is False
+    assert third_manifest["coverage"]["unavailableDurableSources"][0]["id"] == "stateless-mcp"
+    assert third_manifest["coverage"]["externalContributors"] == [], "a later recovery must not fake inclusion"
+    assert "stateless-mcp" not in snapshots
+    backups.finalize_session(second_id)
+
+    plan_by_id = {item["id"]: item for item in plan["contributors"]}
+    for item in manifest["contributors"]:
+        assert item["id"] in plan_by_id
+        assert plan_by_id[item["id"]]["status"] == "selected"
+        assert item["digest"]
+    payload_ids = {entry["id"] for entry in manifest["contributors"]}
+    selected_ids = {item["id"] for item in plan["contributors"] if item["status"] == "selected"}
+    assert payload_ids == selected_ids
+
+
+def test_coverage_attestation_rejects_missing_payloads(tmp_settings: Path) -> None:
+    plan = backups._contributor_plan(backups.BackupContext())
+    selected = [item for item in plan["contributors"] if item["status"] == "selected"]
+    assert selected
+    partial = [
+        backups.BackupContribution(
+            contributor_id=selected[0]["id"],
+            schema_version=1,
+            records=0,
+            bytes=0,
+            digest="0" * 64,
+            restore_policy="merge",
+            files=(),
+        )
+    ]
+    with pytest.raises(AppError, match="does not match the contributor plan"):
+        backups._attest_coverage(plan, partial)
+
+
 def test_stateless_mcp_request_auth_errors_and_coverage_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     contributor = backups.StatelessMcpContributor()
     monkeypatch.delenv("STATELESS_MCP_BACKUP_URL", raising=False)

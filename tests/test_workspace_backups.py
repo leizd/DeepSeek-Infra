@@ -207,7 +207,7 @@ def test_session_failure_limits_and_restore_metadata_errors(
 ) -> None:
     failed = backups.create_session({"mode": "full", "requiresFrontendState": False})
     original_build_archive = backups._build_archive
-    monkeypatch.setattr(backups, "_build_archive", lambda *_args: (_ for _ in ()).throw(RuntimeError("snapshot failed")))
+    monkeypatch.setattr(backups, "_build_archive", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot failed")))
     with pytest.raises(RuntimeError, match="snapshot failed"):
         backups.finalize_session(str(failed["backupId"]))
     assert backups.get_session(str(failed["backupId"]))["phase"] == "failed"
@@ -928,7 +928,7 @@ def test_backup_generation_retry_and_restore_helper_edges(
     backup_id = str(created["backupId"])
     candidates: list[Path] = []
 
-    def candidate(*_args: object) -> dict[str, object]:
+    def candidate(*_args: object, **_kwargs: object) -> dict[str, object]:
         path = backups.BACKUP_DIR / f"candidate-{len(candidates)}.dsibackup"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"x")

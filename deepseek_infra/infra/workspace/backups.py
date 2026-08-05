@@ -132,6 +132,7 @@ class BackupContribution:
     digest: str
     restore_policy: RestorePolicy
     files: tuple[dict[str, Any], ...]
+    snapshot_generation: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,9 +380,12 @@ class StatelessMcpContributor:
         target = staging_dir / "payload" / self.contributor_id / "state.jsonl"
         target.parent.mkdir(parents=True, exist_ok=True)
         prepared = _stable_json({"backupId": backup_id})
+        snapshot_generation: int | None = None
         try:
             with self._request("/internal/backups/prepare", method="POST", body=prepared) as response:
-                response.read(64_000)
+                fence = json.loads(response.read(64_000).decode("utf-8"))
+            if isinstance(fence, dict) and isinstance(fence.get("generation"), int):
+                snapshot_generation = fence["generation"]
             transport = ExternalSnapshotTransport(self)
             receipt: TransferReceipt | None = None
             last_error: AppError | None = None
@@ -415,6 +419,7 @@ class StatelessMcpContributor:
             digest=receipt.sha256,
             restore_policy=self.restore_policy,
             files=(entry,),
+            snapshot_generation=snapshot_generation,
         )
 
     def validate(self, source: Path, context: BackupContext) -> list[str]:
@@ -741,7 +746,8 @@ def create_session(payload: dict[str, Any]) -> dict[str, Any]:
     backup_id = f"backup_{uuid.uuid4().hex[:16]}"
     session_dir = _session_dir(backup_id)
     session_dir.mkdir(parents=True, exist_ok=False)
-    contributors = _selected_contributors(context)
+    plan = _contributor_plan(context)
+    contributors = _contributors_from_plan(plan)
     estimates = [item.inventory(context) for item in contributors]
     state = {
         "backupId": backup_id,
@@ -753,7 +759,8 @@ def create_session(payload: dict[str, Any]) -> dict[str, Any]:
         "estimatedBytes": sum(item["bytes"] for item in estimates),
         "included": [item.contributor_id for item in contributors],
         "excluded": _exclusions(context),
-        "coverage": _coverage_status(context),
+        "contributorPlan": plan,
+        "coverage": _coverage_from_plan(plan),
     }
     _write_json(session_dir / "session.json", state)
     return {"ok": True, **state}
@@ -794,6 +801,8 @@ def finalize_session(
 ) -> dict[str, Any]:
     session = _load_session(backup_id)
     context = _context_from_payload(session["context"])
+    plan_raw = session.get("contributorPlan")
+    plan: dict[str, Any] = plan_raw if isinstance(plan_raw, dict) else _contributor_plan(context)
     frontend_path = _session_dir(backup_id) / "frontend.json"
     if session.get("requiresFrontendState") and not frontend_path.is_file():
         raise AppError("Verified frontend state is required", code=ErrorCode.INVALID_REQUEST, status=409)
@@ -818,7 +827,7 @@ def finalize_session(
                 with mutation_gate.exclusive_gate(gate_root):
                     mutation_gate.assert_mutation_allowed(owner_restore_id, root=gate_root)
                     start_generation = mutation_gate.read_generation(gate_root)
-                    for contributor in _selected_contributors(context):
+                    for contributor in _contributors_from_plan(plan):
                         contributor.flush(context)
                 session["phase"] = "snapshotting"
                 _write_json(_session_dir(backup_id) / "session.json", session)
@@ -829,6 +838,7 @@ def finalize_session(
                     protection,
                     secret,
                     cancel_event,
+                    plan=plan,
                 )
                 with mutation_gate.exclusive_gate(gate_root):
                     end_generation = mutation_gate.read_generation(gate_root)
@@ -1593,10 +1603,12 @@ def _build_archive(
     protection: dict[str, Any] | None = None,
     secret: bytearray | None = None,
     cancel_event: threading.Event | None = None,
+    plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     session_dir = _session_dir(backup_id)
     staging = session_dir / "staging"
     normalized_protection = _protection_from_payload({"protection": protection})
+    frozen_plan = plan if isinstance(plan, dict) else _contributor_plan(context)
     encrypted = normalized_protection["mode"] != "none"
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     suffix = ".dsibackup.age" if encrypted else ".dsibackup"
@@ -1611,7 +1623,7 @@ def _build_archive(
             raise AppError("Backup creation cancelled", code=ErrorCode.INVALID_REQUEST, status=499)
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True)
-        contributions = [contributor.snapshot(staging, context) for contributor in _selected_contributors(context)]
+        contributions = [contributor.snapshot(staging, context) for contributor in _contributors_from_plan(frozen_plan)]
         frontend_manifest: dict[str, Any] | None = None
         files = [entry for contribution in contributions for entry in contribution.files]
         if frontend_path is not None:
@@ -1671,7 +1683,7 @@ def _build_archive(
                 }
                 for item in contributions
             ],
-            "coverage": _coverage_status(context),
+            "coverage": _attest_coverage(frozen_plan, contributions),
             "exclusions": _exclusions(context),
             "files": files,
             "encrypted": encrypted,
@@ -1808,23 +1820,167 @@ def _safe_extract_and_verify(archive_path: Path, destination: Path) -> dict[str,
     return manifest
 
 
-def _selected_contributors(context: BackupContext) -> tuple[RegisteredContributor, ...]:
-    local: tuple[RegisteredContributor, ...] = tuple(
-        item
-        for item in _registered_contributors()
-        if item.data_class == "durable"
-        or (item.data_class == "optional-history" and context.include_history)
-        or (item.data_class == "rebuildable" and context.include_rebuildable_indexes)
-    )
-    if context.mode != "full" or not context.include_external_state or not os.environ.get("STATELESS_MCP_BACKUP_URL", "").strip():
-        return local
+def _contributor_plan(context: BackupContext) -> dict[str, Any]:
+    """Freeze the contributor selection for one backup session.
+
+    Finalize retries must never re-ask which contributors are online; the plan
+    is the single attestation source for manifest coverage.
+    """
+
+    entries: list[dict[str, Any]] = []
+    for item in _registered_contributors():
+        selected = (
+            item.data_class == "durable"
+            or (item.data_class == "optional-history" and context.include_history)
+            or (item.data_class == "rebuildable" and context.include_rebuildable_indexes)
+        )
+        entries.append(
+            {
+                "id": item.contributor_id,
+                "kind": "local",
+                "schemaVersion": item.schema_version,
+                "required": item.data_class == "durable",
+                "capabilityDigest": hashlib.sha256(
+                    _stable_json(
+                        {
+                            "id": item.contributor_id,
+                            "schemaVersion": item.schema_version,
+                            "dataClass": item.data_class,
+                        }
+                    )
+                ).hexdigest(),
+                "status": "selected" if selected else "excluded",
+            }
+        )
     external = StatelessMcpContributor()
-    status = external.capabilities()
-    if not status.get("available"):
-        if context.coverage_policy == "strict":
-            raise AppError("Strict backup coverage requires Stateless MCP durable state", code=ErrorCode.INVALID_REQUEST, status=409)
-        return local
-    return (*local, external)
+    configured = bool(os.environ.get("STATELESS_MCP_BACKUP_URL", "").strip())
+    status = "excluded"
+    reason = "not configured"
+    required = False
+    capability: dict[str, Any] = {"id": external.contributor_id, "available": False, "schemaVersion": external.schema_version}
+    if configured and context.include_external_state:
+        required = context.mode == "full"
+        reason = "service unavailable"
+        if context.mode == "full":
+            capability = external.capabilities()
+            if capability.get("available"):
+                status = "selected"
+                reason = ""
+            else:
+                if context.coverage_policy == "strict":
+                    raise AppError("Strict backup coverage requires Stateless MCP durable state", code=ErrorCode.INVALID_REQUEST, status=409)
+                status = "unavailable"
+                reason = str(capability.get("reason") or "service unavailable")
+        else:
+            capability = external.capabilities()
+            status = "excluded"
+            reason = "project-scoped backup"
+    elif configured:
+        required = True
+        reason = "excluded by backup request"
+    entry: dict[str, Any] = {
+        "id": external.contributor_id,
+        "kind": "external",
+        "schemaVersion": external.schema_version,
+        "required": required,
+        "capabilityDigest": hashlib.sha256(_stable_json(capability)).hexdigest(),
+        "status": status,
+    }
+    if reason:
+        entry["reason"] = reason
+    entries.append(entry)
+    return {
+        "planId": f"plan_{uuid.uuid4().hex[:16]}",
+        "createdAt": _utc_iso(),
+        "coveragePolicy": context.coverage_policy,
+        "contributors": entries,
+    }
+
+
+def _contributors_from_plan(plan: dict[str, Any]) -> tuple[RegisteredContributor, ...]:
+    raw = plan.get("contributors")
+    selected = {
+        str(item.get("id"))
+        for item in raw
+        if isinstance(item, dict) and item.get("status") == "selected"
+    } if isinstance(raw, list) else set()
+    known: tuple[RegisteredContributor, ...] = (*_registered_contributors(), StatelessMcpContributor())
+    return tuple(item for item in known if item.contributor_id in selected)
+
+
+def _selected_contributors(context: BackupContext) -> tuple[RegisteredContributor, ...]:
+    return _contributors_from_plan(_contributor_plan(context))
+
+
+def _coverage_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    entries = [item for item in plan.get("contributors", []) if isinstance(item, dict)]
+    local = sorted(str(item["id"]) for item in entries if item.get("kind") == "local" and item.get("status") == "selected")
+    external = [
+        {"id": str(item["id"]), "status": str(item["status"]), "schemaVersion": int(item.get("schemaVersion") or 1)}
+        for item in entries
+        if item.get("kind") == "external" and item.get("status") == "selected"
+    ]
+    unavailable = [
+        {"id": str(item["id"]), "reason": str(item.get("reason") or "unavailable")}
+        for item in entries
+        if bool(item.get("required")) and item.get("status") != "selected"
+    ]
+    return {
+        "policy": str(plan.get("coveragePolicy") or "strict"),
+        "planId": str(plan.get("planId") or ""),
+        "localContributors": local,
+        "externalContributors": external,
+        "unavailableDurableSources": unavailable,
+        "complete": not unavailable,
+    }
+
+
+def _attest_coverage(plan: dict[str, Any], contributions: list[BackupContribution]) -> dict[str, Any]:
+    """Bind manifest coverage to the payloads actually written.
+
+    Every included contributor must have a payload, manifest entry and digest,
+    and every payload must map back to a plan contributor.
+    """
+
+    entries = [item for item in plan.get("contributors", []) if isinstance(item, dict)]
+    selected = {str(item["id"]) for item in entries if item.get("status") == "selected"}
+    contributed = {item.contributor_id for item in contributions}
+    if selected != contributed:
+        missing = sorted(selected - contributed)
+        unexpected = sorted(contributed - selected)
+        raise AppError(
+            f"Backup coverage does not match the contributor plan (missing: {missing}, unexpected: {unexpected})",
+            code=ErrorCode.INVALID_PAYLOAD,
+        )
+    by_id = {item.contributor_id: item for item in contributions}
+    local = sorted(item.contributor_id for item in contributions if item.contributor_id != "stateless-mcp")
+    external = []
+    for item in entries:
+        if item.get("kind") != "external" or item.get("status") != "selected":
+            continue
+        contribution = by_id[str(item["id"])]
+        external.append(
+            {
+                "id": contribution.contributor_id,
+                "schemaVersion": contribution.schema_version,
+                "snapshotGeneration": contribution.snapshot_generation,
+                "snapshotDigest": contribution.digest,
+                "records": contribution.records,
+            }
+        )
+    unavailable = [
+        {"id": str(item["id"]), "reason": str(item.get("reason") or "unavailable")}
+        for item in entries
+        if bool(item.get("required")) and item.get("status") != "selected"
+    ]
+    return {
+        "planId": str(plan.get("planId") or ""),
+        "policy": str(plan.get("coveragePolicy") or "strict"),
+        "localContributors": local,
+        "externalContributors": external,
+        "unavailableDurableSources": unavailable,
+        "complete": not unavailable,
+    }
 
 
 def _context_from_payload(payload: dict[str, Any]) -> BackupContext:
@@ -1894,29 +2050,7 @@ def _protection_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _coverage_status(context: BackupContext) -> dict[str, Any]:
-    local = [
-        item.contributor_id
-        for item in _registered_contributors()
-        if item.data_class == "durable" or (item.data_class == "optional-history" and context.include_history)
-    ]
-    configured = bool(os.environ.get("STATELESS_MCP_BACKUP_URL", "").strip())
-    external: list[dict[str, Any]] = []
-    unavailable: list[dict[str, str]] = []
-    if configured and context.include_external_state:
-        status = StatelessMcpContributor().capabilities()
-        if status.get("available"):
-            external.append({"id": "stateless-mcp", "status": "available", "schemaVersion": 1})
-        else:
-            unavailable.append({"id": "stateless-mcp", "reason": str(status.get("reason") or "service unavailable")})
-    elif configured:
-        unavailable.append({"id": "stateless-mcp", "reason": "excluded by backup request"})
-    return {
-        "policy": context.coverage_policy,
-        "localContributors": local,
-        "externalContributors": external,
-        "unavailableDurableSources": unavailable,
-        "complete": not unavailable,
-    }
+    return _coverage_from_plan(_contributor_plan(context))
 
 
 def _jsonl_task_count(path: Path) -> int:
