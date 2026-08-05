@@ -14,18 +14,18 @@ DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines
 
 ## 4.4.3 at a glance
 
-- Complete `.dsibackup` archives can be streamed through the standard age v1 format with either a human passphrase or one or more X25519 recipients.
-- Passphrases and Recovery Identities live only in five-minute in-memory Secret Slots and reach the Rust helper through an inherited anonymous pipe; they never enter persisted sessions, journals, argv, environment variables, logs, or traces.
-- Encrypted uploads remain locked until the entire age message authenticates. ZIP paths, manifests, contributor names, project metadata, and digests are not parsed or exposed before unlock.
-- Full-backup coverage explicitly reports local Contributors, browser replicas, configured external durable sources, and omissions under strict or best-effort policy.
-- Stateless MCP exports Redis task state, bounded logs, and idempotency indexes as versioned JSONL instead of copying AOF. Running and queued tasks restore as inert `interrupted` records and are never replayed.
-- Existing unencrypted v1 backups remain restorable, while encrypted Safety Backups inherit the source protection mode.
+- Stateless MCP restores now join the workspace restore transaction as journaled two-phase participants: streamed Prepare writes a staged namespace, Commit installs pending objects under a restore fence, Complete makes them visible, and Abort deletes exactly the keys this transaction inserted while their digests still match.
+- Crash recovery is driven by the external participant journal rather than local flags; an unreachable external store is fenced as recovery-required instead of silently retaining half-committed imports.
+- A restore fence blocks task creation (423), claiming and result submission during a restore commit; heartbeats stay allowed and workers defer completions until the fence releases.
+- Age header inspection reads ciphertext through an inherited read-only handle with bounded 1 MiB / 64-stanza limits, so probing large age files can never break the pipe.
+- Snapshots stream line-by-line with HTTP backpressure and single-upload prepare; Python transfers use hashed streaming receipts instead of whole-buffer reads.
+- Contributor coverage is frozen in a per-session plan and attested against the payloads actually written; expired restore secrets can be re-armed against the original ciphertext without re-uploading the package.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.4.2 release notes](docs/releases/4.4.2.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.4.3 release notes](docs/releases/4.4.3.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 

@@ -7,6 +7,16 @@
 
 已完成的能力以 [实现状态矩阵](docs/IMPLEMENTATION_STATUS.md) 为准（含各模块成熟度与明确缺口）；下面是接下来的计划，完成一项勾一项：
 
+### v4.4.3: Federated Restore Transactions & Streaming Crypto Integrity
+
+- [x] Stateless MCP 以两阶段参与者身份并入恢复事务：staged Prepare、Fence 下 Commit、Complete 可见、Abort 精确删除本事务键
+- [x] 崩溃恢复以参与者 Journal 为准；外部存储失联标记 recovery-required，不再依赖本地 swapped 标志
+- [x] Restore Fence：createOrGet 423、claim 暂停、complete 延迟重试、heartbeat 放行
+- [x] Age Header 经继承只读句柄有界探测（1 MiB / 64 stanzas），大密文不再依赖管道容量
+- [x] 快照逐行流式导出与 backpressure，恢复 JSONL 单次上传，Python 传输全面流式化
+- [x] Coverage 冻结在会话级 Plan 并与真实 Payload 双向断言
+- [x] 加密恢复秘密可重挂；首次 Inspect 后只保留密文与验证过的 extracted tree
+
 ### v4.4.2: Encrypted Backups & External State Portability
 
 - [x] 使用标准 age v1 格式流式加密完整 `.dsibackup`，支持密码与多 X25519 Recipient。

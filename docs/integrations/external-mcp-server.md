@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：DeepSeek Infra v4.4.2。
+适用版本：DeepSeek Infra v4.4.3。
 
 本页记录 DeepSeek Infra 的 MCP 外部 server 桥接与一个**真实第三方 MCP SDK 实现**的互操作验证结果。验证使用官方 `mcp` Python SDK（PyPI `mcp>=1.0`）构建的 Streamable HTTP server 作为 interop partner，不是同进程 mock。
 
