@@ -25,6 +25,7 @@ export interface TaskRecord {
   error: string | null;
   createdAt: number;
   updatedAt: number;
+  restorePending?: string;
 }
 
 export interface CreateTaskInput {
@@ -56,6 +57,12 @@ export interface TaskStore {
   exportBackup(backupId: string): Promise<string>;
   releaseBackup(backupId: string): Promise<void>;
   restoreBackup(restoreId: string, snapshot: string, now: number): Promise<RestoreImportResult>;
+  prepareRestore(restoreId: string, transactionDigest: string, source: AsyncIterable<string>, now: number): Promise<RestoreJournal>;
+  commitRestoreIntent(restoreId: string, transactionDigest: string, now: number): Promise<RestoreJournal>;
+  commitRestore(restoreId: string, transactionDigest: string, now: number): Promise<RestoreJournal>;
+  completeRestore(restoreId: string, now: number): Promise<RestoreJournal>;
+  abortRestore(restoreId: string, now: number): Promise<RestoreJournal>;
+  restoreStatus(restoreId: string): Promise<RestoreJournal | null>;
   close(): Promise<void>;
 }
 
@@ -84,10 +91,64 @@ export interface RestoreImportResult {
   interrupted: number;
 }
 
+export type ExternalRestorePhase =
+  | "preparing"
+  | "prepared"
+  | "commit-intent"
+  | "committing"
+  | "committed-pending-complete"
+  | "complete"
+  | "aborting"
+  | "rolled-back"
+  | "recovery-required";
+
+export interface RestoreJournal {
+  contributorId: "stateless-mcp";
+  schemaVersion: 1;
+  restoreId: string;
+  transactionDigest: string;
+  sourceDigest: string;
+  preparedDigest: string;
+  phase: ExternalRestorePhase;
+  records: number;
+  imported: number;
+  skipped: number;
+  interrupted: number;
+  remapped: Record<string, string>;
+  previousEpoch: string;
+  restoreEpoch: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const RESTORE_JOURNAL_TTL_MS = 24 * 60 * 60 * 1000;
+export const RESTORE_FENCE_TTL_MS = 60 * 60 * 1000;
+
 export class BackupFenceError extends Error {
   constructor() {
     super("durable task mutations are fenced for backup");
     this.name = "BackupFenceError";
+  }
+}
+
+export class RestoreFenceError extends Error {
+  constructor() {
+    super("durable task mutations are fenced for restore");
+    this.name = "RestoreFenceError";
+  }
+}
+
+export class RestoreConflictError extends Error {
+  constructor(message = "restore target state changed during the transaction") {
+    super(message);
+    this.name = "RestoreConflictError";
+  }
+}
+
+export class RestoreStateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RestoreStateError";
   }
 }
 
@@ -135,8 +196,10 @@ export function makeTask(input: CreateTaskInput): TaskRecord {
 }
 
 export function portableTask(task: TaskRecord): TaskRecord {
+  const portable = structuredClone(task);
+  delete portable.restorePending;
   return {
-    ...structuredClone(task),
+    ...portable,
     status: task.status === "running" || task.status === "queued" ? "interrupted" : task.status,
     ownerInstance: null,
     leaseUntil: null,
