@@ -1450,14 +1450,19 @@ def recover_interrupted_restores() -> dict[str, Any]:
             contributors = transaction.get("contributors")
             if phase in {"commit-intent", "frontend-committed"} and isinstance(contributors, list) and contributors:
                 all_installed = True
+                participant = StatelessMcpContributor()
                 for contributor in contributors:
                     if not isinstance(contributor, dict):
                         all_installed = False
                         break
                     if bool(contributor.get("external")):
-                        if not bool(contributor.get("swapped")):
+                        # Never guess Redis state from the local swapped flag:
+                        # the participant journal is the only source of truth.
+                        status = participant.restore_status(root.name)
+                        if status is None or status.get("phase") not in {"committed-pending-complete", "complete"}:
                             all_installed = False
                             break
+                        contributor["phase"] = status["phase"]
                         continue
                     destination = Path(str(contributor.get("destination") or ""))
                     staged = Path(str(contributor.get("stagedPath") or ""))
@@ -2235,9 +2240,20 @@ def _rollback_transaction(transaction: dict[str, Any], root: Path) -> None:
         if not isinstance(contributor, dict):
             raise AppError("Restore contributor journal is invalid", code=ErrorCode.INVALID_PAYLOAD)
         if bool(contributor.get("external")):
-            # External restore is non-overwriting and idempotent. Imported tasks
-            # remain inert, so rollback never deletes pre-existing Redis state.
-            contributor["swapState"] = "external-retained"
+            # External participants roll back through their own durable journal:
+            # abort deletes exactly the keys this transaction inserted, and only
+            # while their values still match the staged digests. When the store
+            # is unreachable the operator must reconcile it, so the contributor
+            # is fenced as recovery-required instead of silently retained.
+            try:
+                journal = StatelessMcpContributor().abort_restore(str(transaction["restoreId"]))
+            except AppError:
+                contributor["phase"] = "recovery-required"
+                contributor["swapState"] = "recovery-required"
+            else:
+                contributor["participant"] = journal
+                contributor["phase"] = journal.get("phase") or "rolled-back"
+                contributor["swapState"] = "rolled-back"
             _write_json(journal_path, transaction)
             continue
         destination = Path(str(contributor.get("destination") or ""))
@@ -2255,8 +2271,19 @@ def _rollback_transaction(transaction: dict[str, Any], root: Path) -> None:
             os.replace(rollback, destination)
         contributor["swapped"] = False
         contributor["swapState"] = "rolled-back"
+        contributor["phase"] = "rolled-back"
         _write_json(journal_path, transaction)
     shutil.rmtree(root / "staged", ignore_errors=True)
+    recovery_required = any(
+        isinstance(contributor, dict) and contributor.get("phase") == "recovery-required"
+        for contributor in contributors
+    )
+    if recovery_required:
+        transaction["phase"] = "recovery-required"
+        transaction["updatedAt"] = _utc_iso()
+        _write_json(journal_path, transaction)
+        _update_server_fence(transaction, "recovery-required")
+        return
     transaction["phase"] = "rolled-back"
     transaction["rolledBackAt"] = _utc_iso()
     transaction["updatedAt"] = _utc_iso()

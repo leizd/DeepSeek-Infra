@@ -1109,7 +1109,7 @@ def test_terminal_restore_cleanup_removes_plaintext_and_upload(tmp_settings: Pat
     assert restore_id not in backup_crypto._SLOTS
 
 
-def test_external_and_file_rollback_paths_are_deterministic(tmp_settings: Path) -> None:
+def test_external_and_file_rollback_paths_are_deterministic(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = backups.RESTORE_DIR / "restore_rollbackunit"
     root.mkdir(parents=True)
     destination = root / "installed-file"
@@ -1131,10 +1131,35 @@ def test_external_and_file_rollback_paths_are_deterministic(tmp_settings: Path) 
     }
     backups._rollback_transaction(transaction, root)
     assert not destination.exists()
-    assert transaction["phase"] == "rolled-back"
+    assert transaction["phase"] == "recovery-required"
     contributors = transaction["contributors"]
     assert isinstance(contributors, list)
-    assert contributors[0]["swapState"] == "external-retained"
+    assert contributors[0]["swapState"] == "recovery-required"
+
+    reachable: dict[str, object] = {
+        "restoreId": "restore_rollbackunit",
+        "phase": "commit-intent",
+        "contributors": [{"id": "stateless-mcp", "external": True, "swapped": False}],
+    }
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "abort_restore",
+        lambda _self, restore_id: {
+            "sourceDigest": "a" * 64,
+            "preparedDigest": "b" * 64,
+            "phase": "rolled-back",
+            "imported": 0,
+            "skipped": 0,
+            "interrupted": 0,
+            "remapped": {},
+        },
+    )
+    backups._rollback_transaction(reachable, root)
+    assert reachable["phase"] == "rolled-back"
+    external = reachable["contributors"]
+    assert isinstance(external, list)
+    assert external[0]["swapState"] == "rolled-back"
+    assert external[0]["participant"]["phase"] == "rolled-back"
 
     with pytest.raises(AppError, match="journal is invalid"):
         backups._rollback_transaction({"restoreId": "restore_invalid", "contributors": {}}, root)

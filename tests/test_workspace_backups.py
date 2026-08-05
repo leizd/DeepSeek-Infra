@@ -803,6 +803,90 @@ def test_startup_recovery_finishes_verified_exchange_and_fences_corruption(tmp_s
     mutation_gate.clear_fence(str(fence["restoreId"]), backups.RESTORE_DIR.parent)
 
 
+def test_startup_recovery_queries_external_participant_status(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def write_external_transaction(restore_id: str) -> Path:
+        root = backups.RESTORE_DIR / restore_id
+        root.mkdir(parents=True)
+        backups._write_json(
+            root / "transaction.json",
+            {
+                "restoreId": restore_id,
+                "phase": "commit-intent",
+                "previousEpoch": "legacy",
+                "targetEpoch": "target",
+                "contributors": [{"id": "stateless-mcp", "external": True, "swapped": False, "phase": "commit-intent"}],
+            },
+        )
+        return root
+
+    def journal(phase: str) -> dict[str, object]:
+        return {
+            "sourceDigest": "a" * 64,
+            "preparedDigest": "b" * 64,
+            "phase": phase,
+            "imported": 0,
+            "skipped": 0,
+            "interrupted": 0,
+            "remapped": {},
+        }
+
+    def clear_active_fence() -> None:
+        fence = mutation_gate.read_fence(backups.RESTORE_DIR.parent)
+        if fence is not None:
+            mutation_gate.clear_fence(str(fence["restoreId"]), backups.RESTORE_DIR.parent)
+
+    committed_root = write_external_transaction("restore_externalinstalled")
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "restore_status",
+        lambda _self, restore_id: journal("committed-pending-complete"),
+    )
+    recovered = backups.recover_interrupted_restores()
+    assert "restore_externalinstalled" in recovered["backendCommitted"]
+    transaction = backups._read_json(committed_root / "transaction.json")
+    assert transaction["contributors"][0]["phase"] == "committed-pending-complete"
+    clear_active_fence()
+    committed_root = write_external_transaction("restore_externalinstalled2")
+    monkeypatch.setattr(backups.StatelessMcpContributor, "restore_status", lambda _self, restore_id: journal("complete"))
+    assert "restore_externalinstalled2" in backups.recover_interrupted_restores()["backendCommitted"]
+    clear_active_fence()
+    (committed_root / "transaction.json").unlink()
+    committed_root.rmdir()
+
+    write_external_transaction("restore_externalpending")
+    aborted: list[str] = []
+    monkeypatch.setattr(backups.StatelessMcpContributor, "restore_status", lambda _self, restore_id: journal("prepared"))
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "abort_restore",
+        lambda _self, restore_id: aborted.append(restore_id) or journal("rolled-back"),
+    )
+    recovered = backups.recover_interrupted_restores()
+    assert "restore_externalpending" in recovered["rolledBack"]
+    assert aborted == ["restore_externalpending"]
+    clear_active_fence()
+
+    write_external_transaction("restore_externalmissing")
+    monkeypatch.setattr(backups.StatelessMcpContributor, "restore_status", lambda _self, restore_id: None)
+    recovered = backups.recover_interrupted_restores()
+    assert "restore_externalmissing" in recovered["rolledBack"]
+    clear_active_fence()
+
+    write_external_transaction("restore_externaldown")
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "restore_status",
+        lambda _self, restore_id: (_ for _ in ()).throw(AppError("down")),
+    )
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "abort_restore",
+        lambda _self, restore_id: (_ for _ in ()).throw(AppError("down")),
+    )
+    recovered = backups.recover_interrupted_restores()
+    assert "restore_externaldown" in recovered["recoveryRequired"]
+
+
 def test_mutation_gate_fence_generation_and_path_resolution(tmp_settings: Path) -> None:
     root = tmp_settings
     assert mutation_gate.read_generation(root) == 0
