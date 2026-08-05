@@ -125,6 +125,13 @@ def clear_secret(session_id: str) -> None:
             slot.clear()
 
 
+def has_secret(session_id: str) -> bool:
+    now = time.monotonic()
+    with _SLOT_LOCK:
+        _prune(now)
+        return session_id in _SLOTS
+
+
 def helper_path() -> Path | None:
     explicit = os.environ.get("DEEPSEEK_BACKUP_CRYPTO_HELPER", "").strip()
     executable = "backup-crypto.exe" if os.name == "nt" else "backup-crypto"

@@ -8,6 +8,7 @@ export type BackupProtection =
   | { mode: "age-recipient"; recipients: string[] };
 export type CoveragePolicy = "strict" | "best-effort";
 export type RestoreMode = "merge" | "project-copy" | "replace-empty";
+export type RestoreSecretState = "not-required" | "available" | "expired" | "required-for-safety-backup";
 export type RestorePhase =
   | "inspected"
   | "preparing"
@@ -62,6 +63,7 @@ export interface RestorePlan {
   encrypted?: boolean;
   protection?: "none" | "passphrase" | "age-recipient";
   coverage?: BackupCoverage;
+  secretState?: RestoreSecretState;
 }
 
 export interface LockedRestoreUpload {

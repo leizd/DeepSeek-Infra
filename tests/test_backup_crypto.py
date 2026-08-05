@@ -5,6 +5,7 @@ import io
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterator
 from urllib import error as urllib_error
@@ -127,6 +128,59 @@ def test_passphrase_encrypted_round_trip_keeps_secret_and_metadata_out_of_cipher
     assert plan["sourceVersion"]
     assert bytes(backup_crypto._SLOTS[restore_id].value) == _PASSPHRASE
     assert _PASSPHRASE not in (backups.RESTORE_DIR / restore_id / "plan.json").read_bytes()
+
+
+def test_encrypted_restore_reattaches_secret_and_bounds_plaintext_residency(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_age(monkeypatch)
+    project = tmp_settings / ".projects" / "secret-project"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text(json.dumps({"id": "secret-project"}), encoding="utf-8")
+    created = backups.create_session({"mode": "full", "requiresFrontendState": False, "protection": {"mode": "passphrase"}})
+    backup_id = str(created["backupId"])
+    backups.put_session_secret(backup_id, {"kind": "passphrase", "secret": _PASSPHRASE.decode()})
+    backups.finalize_session(backup_id)
+
+    locked = backups.inspect_archive(backups.backup_path(backup_id), filename="encrypted.dsibackup.age")
+    restore_id = str(locked["restoreId"])
+    root = backups.RESTORE_DIR / restore_id
+    backups.put_session_secret(restore_id, {"kind": "passphrase", "secret": _PASSPHRASE.decode()})
+    plan = backups.unlock_restore(restore_id)
+    assert plan["phase"] == "inspected"
+    assert not (root / "unlocked.dsibackup").exists(), "plaintext archive must not outlive the first inspect"
+    assert list(root.glob("*.dsibackup.age")), "ciphertext is retained"
+    assert (root / "extracted" / "manifest.json").is_file()
+    assert backups.get_restore(restore_id)["secretState"] == "available"
+
+    backup_crypto.clear_secret(restore_id)
+    assert backups.get_restore(restore_id)["secretState"] == "required-for-safety-backup"
+    plan_data = backups._read_json(root / "plan.json")
+    plan_data["secretArmedAt"] = time.time() - backup_crypto.SECRET_TTL_SECONDS - 10
+    backups._write_json(root / "plan.json", plan_data)
+    assert backups.get_restore(restore_id)["secretState"] == "expired"
+    with pytest.raises(AppError, match="required or expired"):
+        backups.prepare_restore(restore_id)
+
+    backups.put_session_secret(restore_id, {"kind": "passphrase", "secret": "wrong-password"})
+    with pytest.raises(AppError, match="Unable to unlock backup"):
+        backups.unlock_restore(restore_id)
+
+    original_plan = backups._read_json(root / "plan.json")
+    backups.put_session_secret(restore_id, {"kind": "passphrase", "secret": _PASSPHRASE.decode()})
+    reattached = backups.unlock_restore(restore_id)
+    assert reattached["restoreId"] == restore_id
+    assert backups.get_restore(restore_id)["secretState"] == "available"
+    assert not (root / "reattach.dsibackup").exists()
+    assert backups._read_json(root / "plan.json")["manifest"] == original_plan["manifest"]
+
+    prepared = backups.prepare_restore(restore_id)
+    assert prepared["phase"] == "backend-staged"
+    assert not (root / "unlocked.dsibackup").exists()
+    transaction = backups._read_json(root / "transaction.json")
+    assert transaction["safetyBackupId"]
+    backups.abort_restore(restore_id)
 
 
 def test_extracted_tree_tampering_forces_secret_reentry(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:

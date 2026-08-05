@@ -966,11 +966,16 @@ def inspect_archive(source: Path | bytes, *, filename: str = "workspace.dsibacku
 
 def unlock_restore(restore_id: str) -> dict[str, Any]:
     root = _restore_root(restore_id)
+    plan_path = root / "plan.json"
     upload_path = root / "upload.json"
-    if not upload_path.is_file():
-        plan = _read_json(root / "plan.json")
+    if plan_path.is_file():
+        plan = _read_json(plan_path)
+        if plan.get("phase") == "inspected" and bool(plan.get("encrypted")):
+            return _reattach_restore_secret(restore_id, root, plan)
         if plan.get("phase") == "inspected":
             return {"ok": True, **plan}
+        raise AppError("Encrypted restore upload is not available", code=ErrorCode.INVALID_REQUEST, status=409)
+    if not upload_path.is_file():
         raise AppError("Encrypted restore upload is not available", code=ErrorCode.INVALID_REQUEST, status=409)
     upload = _read_json(upload_path)
     source = root / str(upload.get("filename") or "")
@@ -1001,6 +1006,38 @@ def unlock_restore(restore_id: str) -> dict[str, Any]:
             raise
         raise AppError("Unable to unlock backup", code=ErrorCode.INVALID_PAYLOAD) from None
     finally:
+        secret[:] = b"\x00" * len(secret)
+
+
+def _reattach_restore_secret(restore_id: str, root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    """Re-arm an expired secret slot without re-parsing the confirmed manifest.
+
+    The candidate secret must decrypt the original ciphertext to the exact
+    inspected plaintext digest; only then is the slot re-armed for the Safety
+    Backup. The manifest, extracted tree and restore plan are never replaced.
+    """
+
+    ciphertext = next(root.glob("*.dsibackup.age"), None)
+    if ciphertext is None or _sha256_file(ciphertext) != plan.get("ciphertextSha256"):
+        raise AppError("Encrypted backup upload changed", code=ErrorCode.INVALID_PAYLOAD)
+    kind: backup_crypto.SecretKind = "passphrase" if plan.get("protection") == "passphrase" else "age-identity"
+    _, secret = backup_crypto.consume_secret(restore_id, kind)
+    temp = root / "reattach.dsibackup"
+    try:
+        backup_crypto.decrypt_file(ciphertext, temp, kind=kind, secret=secret)
+        if _sha256_file(temp) != plan.get("archiveSha256"):
+            raise AppError("Unable to unlock backup", code=ErrorCode.INVALID_PAYLOAD)
+        plan["secretArmedAt"] = time.time()
+        _write_json(root / "plan.json", plan)
+        backup_crypto.put_secret_bytes(restore_id, kind, bytearray(secret))
+        return {"ok": True, **plan}
+    except Exception as exc:
+        backup_crypto.record_unlock_failure(restore_id)
+        if isinstance(exc, AppError) and "helper unavailable" in str(exc).casefold():
+            raise
+        raise AppError("Unable to unlock backup", code=ErrorCode.INVALID_PAYLOAD) from None
+    finally:
+        temp.unlink(missing_ok=True)
         secret[:] = b"\x00" * len(secret)
 
 
@@ -1116,13 +1153,18 @@ def prepare_restore(
     journal_path = root / "transaction.json"
     if journal_path.is_file():
         existing = _read_json(journal_path)
-        if (
-            existing.get("mode") != mode
-            or (target_epoch and existing.get("targetEpoch") != target_epoch)
-            or existing.get("previousEpoch") != previous_epoch
-        ):
-            raise AppError("Restore retry parameters do not match the durable transaction", code=ErrorCode.INVALID_REQUEST, status=409)
-        return _public_restore(existing, root)
+        if existing.get("phase") == "failed":
+            # A failed prepare (for example an expired secret) leaves the
+            # upload in place so the transaction can be rebuilt from scratch.
+            journal_path.unlink()
+        else:
+            if (
+                existing.get("mode") != mode
+                or (target_epoch and existing.get("targetEpoch") != target_epoch)
+                or existing.get("previousEpoch") != previous_epoch
+            ):
+                raise AppError("Restore retry parameters do not match the durable transaction", code=ErrorCode.INVALID_REQUEST, status=409)
+            return _public_restore(existing, root)
     plan = _read_json(root / "plan.json")
     if not plan.get("compatible"):
         raise AppError("Backup schema is not compatible with this version", code=ErrorCode.INVALID_REQUEST, status=409)
@@ -1276,7 +1318,8 @@ def prepare_restore(
             transaction["updatedAt"] = _utc_iso()
             _write_json(journal_path, transaction)
             mutation_gate.clear_fence(restore_id, gate_root)
-            _cleanup_restore_payload(root, remove_upload=True)
+            if not (isinstance(exc, AppError) and "required or expired" in str(exc)):
+                _cleanup_restore_payload(root, remove_upload=True)
             raise
     return _public_restore(transaction, root)
 
@@ -2379,6 +2422,23 @@ def _version_compatible(source: str, target: str) -> bool:
     return source_version[0] == target_version[0] and source_version <= target_version
 
 
+def _restore_secret_state(metadata: dict[str, Any]) -> str:
+    if not bool(metadata.get("encrypted")):
+        return "not-required"
+    phase = str(metadata.get("phase") or "")
+    if phase == "locked":
+        return "not-required"
+    restore_id = str(metadata.get("restoreId") or "")
+    if restore_id and backup_crypto.has_secret(restore_id):
+        return "available"
+    if phase == "inspected":
+        armed = metadata.get("secretArmedAt")
+        if isinstance(armed, (int, float)) and (time.time() - float(armed)) > backup_crypto.SECRET_TTL_SECONDS:
+            return "expired"
+        return "required-for-safety-backup"
+    return "not-required"
+
+
 def _public_restore(
     metadata: dict[str, Any],
     root: Path,
@@ -2394,6 +2454,14 @@ def _public_restore(
             manifest = _read_json(root / "plan.json").get("manifest", {})
         except AppError:
             manifest = {}
+    secret_source = metadata
+    if not bool(metadata.get("encrypted")):
+        try:
+            plan_doc = _read_json(root / "plan.json")
+            if bool(plan_doc.get("encrypted")):
+                secret_source = plan_doc
+        except AppError:
+            pass
     frontend_path = root / "verified" / "frontend" / "state.json"
     if not frontend_path.is_file():
         frontend_path = root / "extracted" / "frontend" / "state.json"
@@ -2405,6 +2473,7 @@ def _public_restore(
             if key not in {"contributors", "identityMap", "manifest", "operations"}
         },
         "restoreId": str(metadata.get("restoreId") or root.name),
+        "secretState": _restore_secret_state(secret_source),
         "applied": [
             item.get("id")
             for item in metadata.get("contributors", [])
