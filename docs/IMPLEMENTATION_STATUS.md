@@ -5,11 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.2。
+适用版本：v4.4.3。
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
-> 4.4.2 wraps the complete internal backup stream in the standard age v1 format, with ephemeral passphrase or X25519 Identity handling and a locked-before-inspect restore phase. Plaintext v1 packages remain compatible, while encrypted Safety Backups inherit the source protection mode.
+> 4.4.3 coordinates Stateless MCP restores as journaled two-phase participants in the workspace restore transaction, streams backup snapshots and external transfers end to end, and inspects age headers through inherited handles without piping whole ciphertexts. Plaintext v1 and 4.4.2 age packages remain compatible.
 
 > Full-backup coverage now distinguishes local, browser, and external durable state. Stateless MCP exports logical JSONL under a generation fence; restore clears leases, deterministically remaps collisions, and preserves queued/running tasks only as inert interrupted records.
 

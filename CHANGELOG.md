@@ -4,6 +4,13 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.3] - Federated Restore Transactions and Streaming Crypto Integrity
+
+### Canonical release identity
+
+- Advances the canonical `VERSION` surface to 4.4.3; all CI evidence paths, artifact names and Docker tags continue to derive from `$RELEASE_VERSION`.
+
+
 ## [4.4.2] - Encrypted Backups and External State Portability
 
 ### Standard age protection
