@@ -15,6 +15,7 @@ from typing import Any
 
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
+    backup_catalog,
     backup_policies,
     backup_publish,
     backup_scheduled,
@@ -96,6 +97,9 @@ def execute_run(run: backup_scheduler.ClaimedRun, *, instance_id: str, now: date
             policy_id=str(policy.get("policyId") or ""),
             schedule_slot=run.schedule_slot,
         )
+        backup_scheduler.assert_run_lease(run.run_id, instance_id, run.fencing_token, now=current)
+        backup_scheduler.record_run_phase(run.run_id, "cataloging", instance_id=instance_id, fencing_token=run.fencing_token)
+        backup_catalog.append_receipt(target.root, published.receipt)
         backup_scheduler.assert_run_lease(run.run_id, instance_id, run.fencing_token, now=current)
         backup_scheduler.complete_run(
             run.run_id,
