@@ -7,6 +7,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, BinaryIO, Callable, Iterator, cast
 from urllib import error as urllib_error
 
@@ -612,6 +613,13 @@ def test_inspect_header_uses_inherited_handle_without_stdin_producer(tmp_path: P
         captured["stdin"] = kwargs.get("stdin")
         captured["pass_fds"] = kwargs.get("pass_fds")
         captured["startupinfo"] = kwargs.get("startupinfo")
+        if os.name != "nt":
+            # The inherited descriptor must be readable at spawn time.
+            descriptor = int(args[args.index("--input-handle") + 1])
+            position = os.lseek(descriptor, 0, os.SEEK_CUR)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            captured["header_bytes"] = os.read(descriptor, len(header))
+            os.lseek(descriptor, position, os.SEEK_SET)
         return _HandleProcess()
 
     monkeypatch.setattr(backup_crypto.subprocess, "Popen", popen)
@@ -627,8 +635,9 @@ def test_inspect_header_uses_inherited_handle_without_stdin_producer(tmp_path: P
     if os.name != "nt":
         passed = tuple(int(value) for value in captured["pass_fds"])
         assert int(identifier) in passed
-        with os.fdopen(os.dup(int(identifier)), "rb") as inherited:
-            assert inherited.read(len(header)) == header
+        assert captured["header_bytes"] == header
+        with pytest.raises(OSError):
+            os.fstat(int(identifier))
     else:
         startupinfo = captured["startupinfo"]
         assert startupinfo is not None
@@ -642,6 +651,76 @@ def test_inspect_header_uses_inherited_handle_without_stdin_producer(tmp_path: P
     )
     with pytest.raises(AppError, match="header"):
         backup_crypto.inspect_header(source)
+
+
+def test_windows_handle_inheritance_paths_are_covered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    helper = tmp_path / "backup-crypto"
+    helper.write_bytes(b"helper")
+    monkeypatch.setattr(backup_crypto, "helper_path", lambda: helper)
+    monkeypatch.setattr(backup_crypto.sys, "platform", "win32")
+    monkeypatch.setitem(backup_crypto.sys.modules, "msvcrt", SimpleNamespace(get_osfhandle=lambda fd: fd + 1000))
+    monkeypatch.setattr(backup_crypto.os, "set_handle_inheritable", lambda *_args: None, raising=False)
+
+    class _StartupInfo:
+        def __init__(self) -> None:
+            self.lpAttributeList: dict[str, list[int]] = {}
+
+    monkeypatch.setattr(backup_crypto.subprocess, "STARTUPINFO", _StartupInfo, raising=False)
+
+    read_fd, write_fd, identifier, startupinfo = backup_crypto._secret_pipe(bytearray(b"x"))
+    try:
+        assert identifier == str(read_fd + 1000)
+        assert startupinfo is not None
+        assert startupinfo.lpAttributeList["handle_list"] == [read_fd + 1000]
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    captured: dict[str, Any] = {}
+
+    def popen(args: list[str], **kwargs: object) -> _FakeProcess:
+        captured["args"] = args
+        captured["startupinfo"] = kwargs.get("startupinfo")
+        process = _FakeProcess()
+        if "inspect-header" in args:
+            process.stdout = io.BytesIO(b'{"age":true,"passphrase":true}')
+        return process
+
+    monkeypatch.setattr(backup_crypto.subprocess, "Popen", popen)
+    source = tmp_path / "windowed.dsibackup.age"
+    source.write_bytes(b"age-encryption.org/v1\n-> scrypt x 1\ny\n--- mac\n")
+    assert backup_crypto.inspect_header(source) == {"age": True, "passphrase": True}
+    created = captured["startupinfo"]
+    assert created is not None
+    handles = created.lpAttributeList["handle_list"]
+    assert handles and handles[0] > 1000
+    args = [str(value) for value in captured["args"]]
+    assert str(handles[0]) == args[args.index("--input-handle") + 1]
+
+    seeded = _StartupInfo()
+    seeded.lpAttributeList = {"handle_list": [4242]}
+    monkeypatch.setattr(backup_crypto, "_secret_pipe", lambda _secret: (-1, -1, "secret-identifier", seeded))
+    input_fd = os.open(source, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    try:
+        assert backup_crypto._run_helper("derive-recipient", secret=bytearray(b"secret"), input_fd=input_fd) == b'{"ok":true}'
+    finally:
+        os.close(input_fd)
+    merged = captured["startupinfo"]
+    assert merged is not None
+    merged_handles = merged.lpAttributeList["handle_list"]
+    assert merged_handles[0] == 4242
+    assert len(merged_handles) == 2 and merged_handles[1] == input_fd + 1000
+
+
+def test_cancellation_writer_delegates_until_cancelled() -> None:
+    cancelled = threading.Event()
+    target = io.BytesIO()
+    writer = backup_crypto._CancellationWriter(target, cancelled)
+    assert writer.write(b"chunk") == 5
+    assert writer.closed is False
+    cancelled.set()
+    with pytest.raises(BrokenPipeError):
+        writer.write(b"chunk")
 
 
 def test_run_helper_writes_secret_pipe_and_closes_descriptors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
