@@ -276,3 +276,188 @@ export function abortWorkspaceRestore(restoreId: string, client: HttpClient = ht
 export function getWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
   return client.json<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}`);
 }
+
+export interface BackupPolicyV1 {
+  schemaVersion: 1;
+  policyId: string;
+  name: string;
+  enabled: boolean;
+  schedule: {
+    cron: string;
+    timezone: string;
+    misfirePolicy: "skip" | "run-once";
+    catchupWindowSeconds: number;
+    jitterSeconds: number;
+  };
+  scope: {
+    mode: "full" | "project";
+    projectIds: string[];
+    includeHistory: boolean;
+    includeExternalState: boolean;
+    coveragePolicy: "strict" | "best-effort";
+  };
+  frontendMirror: { mode: "required" | "best-effort" | "excluded"; profileId?: string; maxAgeSeconds: number };
+  protection: { mode: "age-recipient"; recipients: string[] };
+  targetId: string;
+  retentionPolicyId: string;
+  retry: { maxAttempts: number; initialBackoffSeconds: number; maxBackoffSeconds: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BackupNextRun {
+  scheduledFor: string;
+  localDateTime: string;
+  timezone: string;
+  slotKey: string;
+  jitterSeconds: number;
+}
+
+export interface BackupRunRecord {
+  runId: string;
+  policyId: string;
+  scheduleSlot: string;
+  phase: string;
+  attempt: number;
+  reason?: string | null;
+  error?: string | null;
+  backupId?: string | null;
+  filename?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BackupTargetRecord {
+  schemaVersion: number;
+  targetId: string;
+  path: string;
+  label: string;
+  createdAt: string;
+}
+
+export interface BackupTargetHealth {
+  targetId: string;
+  status: string;
+  checkedAt: string;
+  detail?: string | null;
+}
+
+export interface BackupCatalogEntry {
+  backupId: string;
+  policyId: string;
+  targetId: string;
+  scheduleSlot: string;
+  filename: string;
+  size: number;
+  createdAt: string;
+  creationVerified: boolean;
+  pinned: boolean;
+  ciphertextScrubbedAt?: string | null;
+  scrubOk?: boolean | null;
+  userUnlockVerifiedAt?: string | null;
+  trashed?: boolean;
+}
+
+export interface BackupCatalogView {
+  backups: BackupCatalogEntry[];
+  chainValid: boolean;
+  integrity: { orphans: string[]; missing: string[] };
+  health: {
+    status: string;
+    backups: Array<{
+      backupId: string;
+      status: string;
+      issues: string[];
+      creationVerified: boolean;
+      ciphertextScrubbedAt?: string | null;
+      userUnlockVerifiedAt?: string | null;
+    }>;
+  };
+}
+
+export function listBackupPolicies(client: HttpClient = httpClient) {
+  return client.json<{ policies: BackupPolicyV1[]; nextRuns: Record<string, BackupNextRun | null> }>("/api/workspace/backup-policies");
+}
+
+export function createBackupPolicy(request: Partial<BackupPolicyV1>, client: HttpClient = httpClient) {
+  return client.postJson<BackupPolicyV1>("/api/workspace/backup-policies", request);
+}
+
+export function updateBackupPolicy(policyId: string, patch: Partial<BackupPolicyV1>, client: HttpClient = httpClient) {
+  return client.json<BackupPolicyV1>(`/api/workspace/backup-policies/${encodeURIComponent(policyId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteBackupPolicy(policyId: string, client: HttpClient = httpClient) {
+  return client.json<{ deleted: boolean; policyId: string }>(`/api/workspace/backup-policies/${encodeURIComponent(policyId)}`, { method: "DELETE" });
+}
+
+export function runBackupPolicy(policyId: string, client: HttpClient = httpClient) {
+  return client.postJson<{ phase: string; backupId?: string; filename?: string; error?: string; reason?: string }>(
+    `/api/workspace/backup-policies/${encodeURIComponent(policyId)}/run`,
+    {},
+  );
+}
+
+export function listBackupTargets(client: HttpClient = httpClient) {
+  return client.json<{ targets: BackupTargetRecord[]; health: BackupTargetHealth[] }>("/api/workspace/backup-targets");
+}
+
+export function createBackupTarget(request: { path: string; label?: string }, client: HttpClient = httpClient) {
+  return client.postJson<BackupTargetRecord>("/api/workspace/backup-targets", request);
+}
+
+export function probeBackupTarget(targetId: string, client: HttpClient = httpClient) {
+  return client.postJson<{ targetId: string; ready: boolean; status: string; detail?: string }>(
+    `/api/workspace/backup-targets/${encodeURIComponent(targetId)}/probe`,
+    {},
+  );
+}
+
+export function deleteBackupTarget(targetId: string, client: HttpClient = httpClient) {
+  return client.json<{ deleted: boolean; targetId: string }>(`/api/workspace/backup-targets/${encodeURIComponent(targetId)}`, { method: "DELETE" });
+}
+
+export function listBackupRuns(policyId?: string, client: HttpClient = httpClient) {
+  const query = policyId ? `?policyId=${encodeURIComponent(policyId)}` : "";
+  return client.json<{ runs: BackupRunRecord[] }>(`/api/workspace/backup-runs${query}`);
+}
+
+export function getBackupCatalog(targetId?: string, client: HttpClient = httpClient) {
+  const query = targetId ? `?targetId=${encodeURIComponent(targetId)}` : "";
+  return client.json<BackupCatalogView>(`/api/workspace/backup-catalog${query}`);
+}
+
+export function pinCatalogBackup(backupId: string, pinned: boolean, client: HttpClient = httpClient) {
+  return client.json<{ backupId: string; pinned: boolean }>(`/api/workspace/backup-catalog/${encodeURIComponent(backupId)}/pin`, {
+    method: pinned ? "POST" : "DELETE",
+  });
+}
+
+export function previewBackupRetention(policyId: string, client: HttpClient = httpClient) {
+  return client.postJson<{ keep: string[]; trash: string[]; protected: Array<{ backupId: string; reason: string }> }>(
+    "/api/workspace/retention/preview",
+    { policyId },
+  );
+}
+
+export function applyBackupRetention(policyId: string, client: HttpClient = httpClient) {
+  return client.postJson<{ applied: { trashed: string[] }; finalized: { deleted: string[] } }>("/api/workspace/retention/apply", { policyId });
+}
+
+export function scrubCatalogBackup(backupId: string, client: HttpClient = httpClient) {
+  return client.postJson<{ backupId: string; ok: boolean; checks: Record<string, string>; scrubbedAt: string }>(
+    `/api/workspace/backups/${encodeURIComponent(backupId)}/scrub`,
+    {},
+  );
+}
+
+export function verifyUnlockCatalogBackup(backupId: string, identity: string, client: HttpClient = httpClient) {
+  return client.postJson<{ backupId: string; ok: boolean; userUnlockVerifiedAt: string; sealedFrontend?: { sourceEpoch?: string } | null }>(
+    `/api/workspace/backups/${encodeURIComponent(backupId)}/verify-unlock`,
+    { identity },
+  );
+}

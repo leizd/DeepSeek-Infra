@@ -21,6 +21,8 @@ import { useOverlay } from "../../contexts/OverlayContext";
 import { useSettings } from "../../contexts/SettingsContext";
 import { Icon } from "../../shared/ui/Icon";
 import { applyCoordinatedWorkspaceRestore, collectFrontendBackupEnvelope } from "./frontendBackup";
+import AutomaticBackupsTab from "./AutomaticBackupsTab";
+import BackupLibraryTab from "./BackupLibraryTab";
 import "../workspace/workspace-optional.css";
 import "./backup-restore.css";
 
@@ -55,6 +57,7 @@ export default function BackupRestoreFeature() {
   const [unlockSecret, setUnlockSecret] = useState("");
   const [reattachSecret, setReattachSecret] = useState("");
   const [needsSecret, setNeedsSecret] = useState(false);
+  const [activeTab, setActiveTab] = useState<"manual" | "automatic" | "library">("manual");
 
   const secretRequired = plan?.encrypted === true && (needsSecret || plan.secretState === "expired" || plan.secretState === "required-for-safety-backup");
 
@@ -252,6 +255,16 @@ export default function BackupRestoreFeature() {
         <button type="button" aria-label="关闭备份与恢复" onClick={close}><Icon name="close" /></button>
       </div>
 
+      <div className="backup-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={activeTab === "manual"} className={activeTab === "manual" ? "active" : ""} onClick={() => setActiveTab("manual")}>立即备份</button>
+        <button type="button" role="tab" aria-selected={activeTab === "automatic"} className={activeTab === "automatic" ? "active" : ""} onClick={() => setActiveTab("automatic")}>自动备份</button>
+        <button type="button" role="tab" aria-selected={activeTab === "library"} className={activeTab === "library" ? "active" : ""} onClick={() => setActiveTab("library")}>备份库</button>
+      </div>
+
+      {activeTab === "automatic" && <AutomaticBackupsTab onError={setError} onMessage={setMessage} />}
+      {activeTab === "library" && <BackupLibraryTab onError={setError} onMessage={setMessage} formatBytes={formatBytes} />}
+      {activeTab === "manual" && (
+        <>
       <section className="backup-card">
         <h3>创建完整工作区备份</h3>
         <p>包含项目、源文件、记忆、媒体、自定义技能、自动化和已校验的浏览器会话。凭据、锁、缓存索引和活动任务永不纳入。</p>
@@ -353,6 +366,8 @@ export default function BackupRestoreFeature() {
           </div>
         )}
       </section>
+        </>
+      )}
       {message && <p className="backup-status" role="status">{message}</p>}
       {error && <p className="message-error" role="alert">{error}</p>}
     </section>

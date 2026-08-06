@@ -86,3 +86,63 @@
 .backup-status {
   color: var(--weak);
 }
+
+.backup-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 2px;
+}
+
+.backup-tabs button {
+  padding: 6px 14px;
+  border: 1px solid var(--hairw);
+  border-radius: 999px;
+  background: transparent;
+}
+
+.backup-tabs button.active {
+  background: var(--green);
+  color: var(--paper);
+}
+
+.backup-warning {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper) 80%, #c0392b 20%);
+}
+
+.backup-policy {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--hairw);
+}
+
+.backup-policy dl {
+  display: grid;
+  gap: 2px;
+  margin: 6px 0 0;
+  font-size: 0.85em;
+}
+
+.backup-policy dl div {
+  display: flex;
+  gap: 8px;
+}
+
+.backup-policy dt {
+  color: var(--ink-soft, #666);
+  min-width: 96px;
+}
+
+.backup-policy dd {
+  margin: 0;
+}
+
+.backup-policy-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
