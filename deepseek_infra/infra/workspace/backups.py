@@ -93,6 +93,25 @@ class BackupContributor(Protocol):  # pragma: no cover - structural typing contr
     def validate_staging(self, staging: Path, context: "BackupContext") -> list[str]: ...
 
 
+class ExternalRestoreParticipant(Protocol):  # pragma: no cover - structural typing contract
+    """Durable external store joining the workspace restore transaction."""
+
+    contributor_id: str
+    schema_version: int
+
+    def prepare_restore(self, restore_id: str, source: Path, transaction_digest: str) -> dict[str, Any]: ...
+
+    def commit_restore_intent(self, restore_id: str, transaction_digest: str) -> dict[str, Any]: ...
+
+    def commit_restore(self, restore_id: str, transaction_digest: str) -> dict[str, Any]: ...
+
+    def complete_restore(self, restore_id: str) -> dict[str, Any]: ...
+
+    def abort_restore(self, restore_id: str) -> dict[str, Any]: ...
+
+    def restore_status(self, restore_id: str) -> dict[str, Any] | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class BackupContext:
     mode: str = "full"
@@ -113,6 +132,7 @@ class BackupContribution:
     digest: str
     restore_policy: RestorePolicy
     files: tuple[dict[str, Any], ...]
+    snapshot_generation: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,16 +332,30 @@ class StatelessMcpContributor:
         return f"{base}{path}"
 
     @staticmethod
-    def _request(path: str, *, method: str = "GET", body: bytes | None = None, timeout: float = 5.0) -> Any:
+    def _request(
+        path: str,
+        *,
+        method: str = "GET",
+        body: bytes | BinaryIO | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 5.0,
+    ) -> Any:
         token = os.environ.get("STATELESS_MCP_BACKUP_TOKEN", "").strip()
-        headers = {"Accept": "application/json, application/x-ndjson"}
+        request_headers = {"Accept": "application/json, application/x-ndjson"}
         if token:
-            headers["Authorization"] = f"Bearer {token}"
+            request_headers["Authorization"] = f"Bearer {token}"
         if body is not None:
-            headers["Content-Type"] = "application/x-ndjson" if path.startswith("/internal/restores/") else "application/json"
+            request_headers["Content-Type"] = "application/x-ndjson" if path.startswith("/internal/restores/") else "application/json"
+        if headers:
+            request_headers.update(headers)
         try:
-            return urllib_request.urlopen(urllib_request.Request(StatelessMcpContributor._url(path), data=body, headers=headers, method=method), timeout=timeout)
-        except (OSError, urllib_error.URLError, urllib_error.HTTPError) as exc:
+            return urllib_request.urlopen(
+                urllib_request.Request(StatelessMcpContributor._url(path), data=body, headers=request_headers, method=method),
+                timeout=timeout,
+            )
+        except urllib_error.HTTPError as exc:
+            raise AppError("Stateless MCP durable state is unavailable", code=ErrorCode.INVALID_REQUEST, status=exc.code) from exc
+        except (OSError, urllib_error.URLError) as exc:
             raise AppError("Stateless MCP durable state is unavailable", code=ErrorCode.INVALID_REQUEST, status=409) from exc
 
     def capabilities(self) -> dict[str, Any]:
@@ -346,20 +380,19 @@ class StatelessMcpContributor:
         target = staging_dir / "payload" / self.contributor_id / "state.jsonl"
         target.parent.mkdir(parents=True, exist_ok=True)
         prepared = _stable_json({"backupId": backup_id})
+        snapshot_generation: int | None = None
         try:
             with self._request("/internal/backups/prepare", method="POST", body=prepared) as response:
-                response.read(64_000)
+                fence = json.loads(response.read(64_000).decode("utf-8"))
+            if isinstance(fence, dict) and isinstance(fence.get("generation"), int):
+                snapshot_generation = fence["generation"]
+            transport = ExternalSnapshotTransport(self)
+            receipt: TransferReceipt | None = None
             last_error: AppError | None = None
             for _attempt in range(3):
                 try:
-                    with self._request(f"/internal/backups/{backup_id}/stream", timeout=60.0) as response, target.open("wb") as output:
-                        total = 0
-                        while chunk := response.read(1024 * 1024):
-                            total += len(chunk)
-                            if total > MAX_EXPANDED_BYTES:
-                                raise AppError("External backup snapshot is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
-                            output.write(chunk)
-                        output.flush()
+                    with target.open("wb") as output:
+                        receipt = transport.download_to(f"/internal/backups/{backup_id}/stream", output)
                         os.fsync(output.fileno())
                     last_error = None
                     break
@@ -367,6 +400,7 @@ class StatelessMcpContributor:
                     last_error = exc
             if last_error is not None:
                 raise last_error
+            assert receipt is not None
             errors = self.validate(target.parent, BackupContext())
             if errors:
                 raise AppError("; ".join(errors), code=ErrorCode.INVALID_PAYLOAD)
@@ -376,15 +410,16 @@ class StatelessMcpContributor:
                     response.read(64_000)
             except AppError:
                 pass
-        entry = {"path": f"payload/{self.contributor_id}/state.jsonl", "size": target.stat().st_size, "sha256": _sha256_file(target)}
+        entry = {"path": f"payload/{self.contributor_id}/state.jsonl", "size": receipt.bytes, "sha256": receipt.sha256}
         return BackupContribution(
             contributor_id=self.contributor_id,
             schema_version=self.schema_version,
             records=_jsonl_task_count(target),
-            bytes=target.stat().st_size,
-            digest=str(entry["sha256"]),
+            bytes=receipt.bytes,
+            digest=receipt.sha256,
             restore_policy=self.restore_policy,
             files=(entry,),
+            snapshot_generation=snapshot_generation,
         )
 
     def validate(self, source: Path, context: BackupContext) -> list[str]:
@@ -423,14 +458,53 @@ class StatelessMcpContributor:
         }
 
     def apply_restore(self, plan: dict[str, Any], context: BackupContext) -> None:
-        del context
-        source = Path(str(plan["source"])) / "state.jsonl"
-        raw = source.read_bytes()
-        with self._request("/internal/restores/inspect", method="POST", body=raw, timeout=60.0) as response:
-            response.read(64_000)
-        restore_id = str(plan.get("restoreId") or f"restore_{uuid.uuid4().hex}")
-        with self._request(f"/internal/restores/{restore_id}/apply", method="POST", body=raw, timeout=60.0) as response:
-            response.read(1_000_000)
+        del plan, context
+        raise AppError(
+            "External restores are coordinated through the restore participant protocol",
+            code=ErrorCode.INVALID_REQUEST,
+        )
+
+    def prepare_restore(self, restore_id: str, source: Path, transaction_digest: str) -> dict[str, Any]:
+        snapshot = source / "state.jsonl" if source.is_dir() else source
+        size = snapshot.stat().st_size
+        digest = _sha256_file(snapshot)
+        transport = ExternalSnapshotTransport(self)
+        with snapshot.open("rb") as stream:
+            journal = transport.upload_from(
+                f"/internal/restores/{restore_id}/prepare",
+                stream,
+                size=size,
+                sha256=digest,
+                headers={"X-Transaction-Digest": transaction_digest},
+            )
+        return _participant_journal(journal)
+
+    def commit_restore_intent(self, restore_id: str, transaction_digest: str) -> dict[str, Any]:
+        body = json.dumps({"transactionDigest": transaction_digest}).encode("utf-8")
+        with self._request(f"/internal/restores/{restore_id}/commit-intent", method="POST", body=body, timeout=60.0) as response:
+            return _participant_journal(json.loads(response.read(2_000_000).decode("utf-8")))
+
+    def commit_restore(self, restore_id: str, transaction_digest: str) -> dict[str, Any]:
+        body = json.dumps({"transactionDigest": transaction_digest}).encode("utf-8")
+        with self._request(f"/internal/restores/{restore_id}/commit", method="POST", body=body, timeout=300.0) as response:
+            return _participant_journal(json.loads(response.read(2_000_000).decode("utf-8")))
+
+    def complete_restore(self, restore_id: str) -> dict[str, Any]:
+        with self._request(f"/internal/restores/{restore_id}/complete", method="POST", body=b"{}", timeout=60.0) as response:
+            return _participant_journal(json.loads(response.read(2_000_000).decode("utf-8")))
+
+    def abort_restore(self, restore_id: str) -> dict[str, Any]:
+        with self._request(f"/internal/restores/{restore_id}/abort", method="POST", body=b"{}", timeout=60.0) as response:
+            return _participant_journal(json.loads(response.read(2_000_000).decode("utf-8")))
+
+    def restore_status(self, restore_id: str) -> dict[str, Any] | None:
+        try:
+            with self._request(f"/internal/restores/{restore_id}", timeout=10.0) as response:
+                return _participant_journal(json.loads(response.read(2_000_000).decode("utf-8")))
+        except AppError as exc:
+            if exc.status == 404:
+                return None
+            raise
 
     def inspect_schema(self, source_version: int) -> dict[str, Any]:
         return {"compatible": source_version == self.schema_version, "migration": None}
@@ -457,6 +531,88 @@ class StatelessMcpContributor:
 
 
 RegisteredContributor = DirectoryContributor | StatelessMcpContributor
+
+
+@dataclass(frozen=True, slots=True)
+class TransferReceipt:
+    bytes: int
+    sha256: str
+    records: int
+
+
+class ExternalSnapshotTransport:
+    """Bounded, hashed streaming transfers for external contributor payloads.
+
+    Snapshots move between the workspace and external durable stores without
+    ever being materialized as a single buffer on either side.
+    """
+
+    def __init__(self, contributor: "StatelessMcpContributor | None" = None) -> None:
+        self._contributor = contributor or StatelessMcpContributor()
+
+    def download_to(
+        self,
+        path: str,
+        target: BinaryIO,
+        *,
+        max_bytes: int | None = None,
+        timeout: float = 60.0,
+    ) -> TransferReceipt:
+        limit = MAX_EXPANDED_BYTES if max_bytes is None else max_bytes
+        digest = hashlib.sha256()
+        total = 0
+        records = 0
+        with self._contributor._request(path, timeout=timeout) as response:
+            while chunk := response.read(1024 * 1024):
+                total += len(chunk)
+                if total > limit:
+                    raise AppError("External backup snapshot is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
+                digest.update(chunk)
+                records += chunk.count(b"\n")
+                target.write(chunk)
+            target.flush()
+        return TransferReceipt(bytes=total, sha256=digest.hexdigest(), records=records)
+
+    def upload_from(
+        self,
+        path: str,
+        source: BinaryIO,
+        *,
+        size: int,
+        sha256: str,
+        headers: dict[str, str] | None = None,
+        timeout: float = 300.0,
+    ) -> dict[str, Any]:
+        merged = {"Content-Length": str(size), "X-Content-SHA256": sha256}
+        if headers:
+            merged.update(headers)
+        with self._contributor._request(path, method="POST", body=source, headers=merged, timeout=timeout) as response:
+            payload = json.loads(response.read(2_000_000).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise AppError("Stateless MCP restore journal is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        return payload
+
+
+def _participant_journal(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or not isinstance(value.get("phase"), str):
+        raise AppError("Stateless MCP restore journal is invalid", code=ErrorCode.INVALID_PAYLOAD)
+    remapped = value.get("remapped")
+    return {
+        "sourceDigest": str(value.get("sourceDigest") or ""),
+        "preparedDigest": str(value.get("preparedDigest") or ""),
+        "phase": value["phase"],
+        "imported": int(value.get("imported") or 0),
+        "skipped": int(value.get("skipped") or 0),
+        "interrupted": int(value.get("interrupted") or 0),
+        "remapped": {str(key): str(item) for key, item in remapped.items()} if isinstance(remapped, dict) else {},
+    }
+
+
+def _external_participants(transaction: dict[str, Any]) -> list[dict[str, Any]]:
+    contributors = transaction.get("contributors")
+    if not isinstance(contributors, list):
+        return []
+    return [item for item in contributors if isinstance(item, dict) and bool(item.get("external"))]
 
 
 def _project_artifact_paths(context: BackupContext) -> set[str]:
@@ -590,7 +746,8 @@ def create_session(payload: dict[str, Any]) -> dict[str, Any]:
     backup_id = f"backup_{uuid.uuid4().hex[:16]}"
     session_dir = _session_dir(backup_id)
     session_dir.mkdir(parents=True, exist_ok=False)
-    contributors = _selected_contributors(context)
+    plan = _contributor_plan(context)
+    contributors = _contributors_from_plan(plan)
     estimates = [item.inventory(context) for item in contributors]
     state = {
         "backupId": backup_id,
@@ -602,7 +759,8 @@ def create_session(payload: dict[str, Any]) -> dict[str, Any]:
         "estimatedBytes": sum(item["bytes"] for item in estimates),
         "included": [item.contributor_id for item in contributors],
         "excluded": _exclusions(context),
-        "coverage": _coverage_status(context),
+        "contributorPlan": plan,
+        "coverage": _coverage_from_plan(plan),
     }
     _write_json(session_dir / "session.json", state)
     return {"ok": True, **state}
@@ -643,6 +801,8 @@ def finalize_session(
 ) -> dict[str, Any]:
     session = _load_session(backup_id)
     context = _context_from_payload(session["context"])
+    plan_raw = session.get("contributorPlan")
+    plan: dict[str, Any] = plan_raw if isinstance(plan_raw, dict) else _contributor_plan(context)
     frontend_path = _session_dir(backup_id) / "frontend.json"
     if session.get("requiresFrontendState") and not frontend_path.is_file():
         raise AppError("Verified frontend state is required", code=ErrorCode.INVALID_REQUEST, status=409)
@@ -667,7 +827,7 @@ def finalize_session(
                 with mutation_gate.exclusive_gate(gate_root):
                     mutation_gate.assert_mutation_allowed(owner_restore_id, root=gate_root)
                     start_generation = mutation_gate.read_generation(gate_root)
-                    for contributor in _selected_contributors(context):
+                    for contributor in _contributors_from_plan(plan):
                         contributor.flush(context)
                 session["phase"] = "snapshotting"
                 _write_json(_session_dir(backup_id) / "session.json", session)
@@ -678,6 +838,7 @@ def finalize_session(
                     protection,
                     secret,
                     cancel_event,
+                    plan=plan,
                 )
                 with mutation_gate.exclusive_gate(gate_root):
                     end_generation = mutation_gate.read_generation(gate_root)
@@ -805,11 +966,16 @@ def inspect_archive(source: Path | bytes, *, filename: str = "workspace.dsibacku
 
 def unlock_restore(restore_id: str) -> dict[str, Any]:
     root = _restore_root(restore_id)
+    plan_path = root / "plan.json"
     upload_path = root / "upload.json"
-    if not upload_path.is_file():
-        plan = _read_json(root / "plan.json")
+    if plan_path.is_file():
+        plan = _read_json(plan_path)
+        if plan.get("phase") == "inspected" and bool(plan.get("encrypted")):
+            return _reattach_restore_secret(restore_id, root, plan)
         if plan.get("phase") == "inspected":
             return {"ok": True, **plan}
+        raise AppError("Encrypted restore upload is not available", code=ErrorCode.INVALID_REQUEST, status=409)
+    if not upload_path.is_file():
         raise AppError("Encrypted restore upload is not available", code=ErrorCode.INVALID_REQUEST, status=409)
     upload = _read_json(upload_path)
     source = root / str(upload.get("filename") or "")
@@ -840,6 +1006,38 @@ def unlock_restore(restore_id: str) -> dict[str, Any]:
             raise
         raise AppError("Unable to unlock backup", code=ErrorCode.INVALID_PAYLOAD) from None
     finally:
+        secret[:] = b"\x00" * len(secret)
+
+
+def _reattach_restore_secret(restore_id: str, root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    """Re-arm an expired secret slot without re-parsing the confirmed manifest.
+
+    The candidate secret must decrypt the original ciphertext to the exact
+    inspected plaintext digest; only then is the slot re-armed for the Safety
+    Backup. The manifest, extracted tree and restore plan are never replaced.
+    """
+
+    ciphertext = next(root.glob("*.dsibackup.age"), None)
+    if ciphertext is None or _sha256_file(ciphertext) != plan.get("ciphertextSha256"):
+        raise AppError("Encrypted backup upload changed", code=ErrorCode.INVALID_PAYLOAD)
+    kind: backup_crypto.SecretKind = "passphrase" if plan.get("protection") == "passphrase" else "age-identity"
+    _, secret = backup_crypto.consume_secret(restore_id, kind)
+    temp = root / "reattach.dsibackup"
+    try:
+        backup_crypto.decrypt_file(ciphertext, temp, kind=kind, secret=secret)
+        if _sha256_file(temp) != plan.get("archiveSha256"):
+            raise AppError("Unable to unlock backup", code=ErrorCode.INVALID_PAYLOAD)
+        plan["secretArmedAt"] = time.time()
+        _write_json(root / "plan.json", plan)
+        backup_crypto.put_secret_bytes(restore_id, kind, bytearray(secret))
+        return {"ok": True, **plan}
+    except Exception as exc:
+        backup_crypto.record_unlock_failure(restore_id)
+        if isinstance(exc, AppError) and "helper unavailable" in str(exc).casefold():
+            raise
+        raise AppError("Unable to unlock backup", code=ErrorCode.INVALID_PAYLOAD) from None
+    finally:
+        temp.unlink(missing_ok=True)
         secret[:] = b"\x00" * len(secret)
 
 
@@ -904,8 +1102,39 @@ def _inspect_plain_archive(
         "manifest": manifest,
         "phase": "inspected",
     }
-    _write_json(restore_root / "plan.json", plan)
+    if encrypted:
+        # Residency bound: keep the ciphertext plus one verified extracted
+        # tree; the full plaintext archive is deleted after the first inspect.
+        plan["manifestDigest"] = _sha256_file(extracted / "manifest.json")
+        plan["extractedTreeDigest"] = _tree_digest(extracted)
+        plan["secretArmedAt"] = time.time()
+        _write_json(restore_root / "plan.json", plan)
+        archive_path.unlink(missing_ok=True)
+    else:
+        _write_json(restore_root / "plan.json", plan)
     return {"ok": True, **plan}
+
+
+def _verified_extracted_manifest(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    """Trust the retained extracted tree only when every digest still matches.
+
+    A mismatch never silently re-uses the tree; the caller must re-provide the
+    secret so the ciphertext can be decrypted and inspected again.
+    """
+
+    extracted = root / "extracted"
+    manifest_path = extracted / "manifest.json"
+    if not manifest_path.is_file():
+        raise AppError("Decrypted backup payload is unavailable; re-provide the backup secret", code=ErrorCode.INVALID_REQUEST, status=409)
+    if _sha256_file(manifest_path) != plan.get("manifestDigest"):
+        raise AppError("Decrypted backup payload changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
+    manifest = _verify_manifest_tree(extracted)
+    if _tree_digest(extracted) != plan.get("extractedTreeDigest"):
+        raise AppError("Decrypted backup payload changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
+    verified = root / "verified"
+    shutil.rmtree(verified, ignore_errors=True)
+    shutil.copytree(extracted, verified)
+    return manifest
 
 
 def prepare_restore(
@@ -924,18 +1153,26 @@ def prepare_restore(
     journal_path = root / "transaction.json"
     if journal_path.is_file():
         existing = _read_json(journal_path)
-        if (
-            existing.get("mode") != mode
-            or (target_epoch and existing.get("targetEpoch") != target_epoch)
-            or existing.get("previousEpoch") != previous_epoch
-        ):
-            raise AppError("Restore retry parameters do not match the durable transaction", code=ErrorCode.INVALID_REQUEST, status=409)
-        return _public_restore(existing, root)
+        if existing.get("phase") == "failed":
+            # A failed prepare (for example an expired secret) leaves the
+            # upload in place so the transaction can be rebuilt from scratch.
+            journal_path.unlink()
+        else:
+            if (
+                existing.get("mode") != mode
+                or (target_epoch and existing.get("targetEpoch") != target_epoch)
+                or existing.get("previousEpoch") != previous_epoch
+            ):
+                raise AppError("Restore retry parameters do not match the durable transaction", code=ErrorCode.INVALID_REQUEST, status=409)
+            return _public_restore(existing, root)
     plan = _read_json(root / "plan.json")
     if not plan.get("compatible"):
         raise AppError("Backup schema is not compatible with this version", code=ErrorCode.INVALID_REQUEST, status=409)
     archive = next(root.glob("*.dsibackup"), None)
-    if archive is None or _sha256_file(archive) != plan.get("archiveSha256"):
+    manifest: dict[str, Any] | None = None
+    if archive is None and bool(plan.get("encrypted")):
+        manifest = _verified_extracted_manifest(root, plan)
+    elif archive is None or _sha256_file(archive) != plan.get("archiveSha256"):
         raise AppError("Backup changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
 
     target = target_epoch or f"epoch-{uuid.uuid4()}"
@@ -967,7 +1204,10 @@ def prepare_restore(
         }
         _write_json(journal_path, transaction)
         try:
-            manifest = _safe_extract_and_verify(archive, root / "verified")
+            if manifest is None:
+                if archive is None:
+                    raise AppError("Backup changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
+                manifest = _safe_extract_and_verify(archive, root / "verified")
             context = _context_from_manifest(manifest)
             identity_map = _restore_identity_map(plan, mode)
             transaction["identityMap"] = identity_map
@@ -993,11 +1233,12 @@ def prepare_restore(
                             "id": contributor_id,
                             "external": True,
                             "source": str(source),
-                            "prepared": True,
+                            "prepared": False,
                             "swapped": False,
                             "verified": True,
                             "digest": _tree_digest(source),
-                            "swapState": "prepared",
+                            "swapState": "validated",
+                            "phase": "preparing",
                         }
                     )
                     _write_json(journal_path, transaction)
@@ -1053,6 +1294,19 @@ def prepare_restore(
                     }
                 )
             ).hexdigest()
+            participant = StatelessMcpContributor()
+            for external in _external_participants(transaction):
+                journal = participant.prepare_restore(
+                    restore_id,
+                    Path(str(external["source"])),
+                    str(transaction["serverTransactionDigest"]),
+                )
+                external["transactionDigest"] = transaction["serverTransactionDigest"]
+                external["participant"] = journal
+                external["phase"] = journal["phase"]
+                external["prepared"] = True
+                external["swapState"] = "prepared"
+                _write_json(journal_path, transaction)
             transaction["phase"] = "backend-staged"
             transaction["updatedAt"] = _utc_iso()
             fence["phase"] = "preparing" if plan.get("requiresFrontendApply") else "commit-intent"
@@ -1064,7 +1318,8 @@ def prepare_restore(
             transaction["updatedAt"] = _utc_iso()
             _write_json(journal_path, transaction)
             mutation_gate.clear_fence(restore_id, gate_root)
-            _cleanup_restore_payload(root, remove_upload=True)
+            if not (isinstance(exc, AppError) and "required or expired" in str(exc)):
+                _cleanup_restore_payload(root, remove_upload=True)
             raise
     return _public_restore(transaction, root)
 
@@ -1087,6 +1342,14 @@ def frontend_prepared(restore_id: str, *, digest: str) -> dict[str, Any]:
     _write_json(journal_path, transaction)
     _update_server_fence(transaction, "frontend-staged")
     return _public_restore(transaction, root)
+
+
+def _external_commit_intent(transaction: dict[str, Any], restore_id: str) -> None:
+    participant = StatelessMcpContributor()
+    for contributor in _external_participants(transaction):
+        journal = participant.commit_restore_intent(restore_id, str(transaction["serverTransactionDigest"]))
+        contributor["participant"] = journal
+        contributor["phase"] = journal["phase"]
 
 
 def commit_restore(
@@ -1120,6 +1383,8 @@ def commit_restore(
                 transaction["updatedAt"] = _utc_iso()
                 _write_json(journal_path, transaction)
                 _update_server_fence(transaction, "commit-intent")
+                _external_commit_intent(transaction, restore_id)
+                _write_json(journal_path, transaction)
                 if not frontend_committed:
                     return _public_restore(transaction, root)
             elif phase != "commit-intent":
@@ -1135,23 +1400,25 @@ def commit_restore(
             transaction["commitIntentAt"] = _utc_iso()
             _write_json(journal_path, transaction)
             _update_server_fence(transaction, "commit-intent")
+            _external_commit_intent(transaction, restore_id)
+            _write_json(journal_path, transaction)
         elif phase not in {"commit-intent", "frontend-committed"}:
             raise AppError("Restore is not ready to commit", code=ErrorCode.INVALID_REQUEST, status=409)
 
         try:
             rollback_root = root / "rollback"
             rollback_root.mkdir(parents=True, exist_ok=True)
-            for contributor in transaction["contributors"]:
+            local_contributors = [item for item in transaction["contributors"] if not bool(item.get("external"))]
+            for contributor in [*local_contributors, *_external_participants(transaction)]:
                 if bool(contributor.get("external")):
-                    contributor["swapState"] = "applying-external"
+                    contributor["swapState"] = "committing-external"
                     _write_json(journal_path, transaction)
-                    StatelessMcpContributor().apply_restore(
-                        {
-                            "source": contributor["source"],
-                            "restoreId": restore_id,
-                        },
-                        BackupContext(),
+                    journal = StatelessMcpContributor().commit_restore(
+                        restore_id,
+                        str(transaction["serverTransactionDigest"]),
                     )
+                    contributor["participant"] = journal
+                    contributor["phase"] = journal["phase"]
                     contributor["swapped"] = True
                     contributor["swapState"] = "swapped"
                     _write_json(journal_path, transaction)
@@ -1203,6 +1470,12 @@ def complete_restore(restore_id: str, *, frontend_digest: str | None = None) -> 
             raise AppError("Backend restore is not committed", code=ErrorCode.INVALID_REQUEST, status=409)
         if transaction.get("requiresFrontendApply") and frontend_digest != transaction.get("frontendDigest"):
             raise AppError("Frontend completion digest does not match", code=ErrorCode.INVALID_REQUEST, status=409)
+        participant = StatelessMcpContributor()
+        for contributor in _external_participants(transaction):
+            if contributor.get("phase") == "committed-pending-complete":
+                journal = participant.complete_restore(restore_id)
+                contributor["participant"] = journal
+                contributor["phase"] = journal["phase"]
         transaction["phase"] = "complete"
         transaction["completedAt"] = _utc_iso()
         transaction["updatedAt"] = _utc_iso()
@@ -1320,14 +1593,19 @@ def recover_interrupted_restores() -> dict[str, Any]:
             contributors = transaction.get("contributors")
             if phase in {"commit-intent", "frontend-committed"} and isinstance(contributors, list) and contributors:
                 all_installed = True
+                participant = StatelessMcpContributor()
                 for contributor in contributors:
                     if not isinstance(contributor, dict):
                         all_installed = False
                         break
                     if bool(contributor.get("external")):
-                        if not bool(contributor.get("swapped")):
+                        # Never guess Redis state from the local swapped flag:
+                        # the participant journal is the only source of truth.
+                        status = participant.restore_status(root.name)
+                        if status is None or status.get("phase") not in {"committed-pending-complete", "complete"}:
                             all_installed = False
                             break
+                        contributor["phase"] = status["phase"]
                         continue
                     destination = Path(str(contributor.get("destination") or ""))
                     staged = Path(str(contributor.get("stagedPath") or ""))
@@ -1405,10 +1683,12 @@ def _build_archive(
     protection: dict[str, Any] | None = None,
     secret: bytearray | None = None,
     cancel_event: threading.Event | None = None,
+    plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     session_dir = _session_dir(backup_id)
     staging = session_dir / "staging"
     normalized_protection = _protection_from_payload({"protection": protection})
+    frozen_plan = plan if isinstance(plan, dict) else _contributor_plan(context)
     encrypted = normalized_protection["mode"] != "none"
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     suffix = ".dsibackup.age" if encrypted else ".dsibackup"
@@ -1423,7 +1703,7 @@ def _build_archive(
             raise AppError("Backup creation cancelled", code=ErrorCode.INVALID_REQUEST, status=499)
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True)
-        contributions = [contributor.snapshot(staging, context) for contributor in _selected_contributors(context)]
+        contributions = [contributor.snapshot(staging, context) for contributor in _contributors_from_plan(frozen_plan)]
         frontend_manifest: dict[str, Any] | None = None
         files = [entry for contribution in contributions for entry in contribution.files]
         if frontend_path is not None:
@@ -1483,7 +1763,7 @@ def _build_archive(
                 }
                 for item in contributions
             ],
-            "coverage": _coverage_status(context),
+            "coverage": _attest_coverage(frozen_plan, contributions),
             "exclusions": _exclusions(context),
             "files": files,
             "encrypted": encrypted,
@@ -1588,6 +1868,12 @@ def _safe_extract_and_verify(archive_path: Path, destination: Path) -> dict[str,
     checksum_path = destination / "checksums.sha256"
     if not manifest_path.is_file() or not checksum_path.is_file():
         raise AppError("Backup manifest is missing", code=ErrorCode.INVALID_PAYLOAD)
+    return _verify_manifest_tree(destination)
+
+
+def _verify_manifest_tree(destination: Path) -> dict[str, Any]:
+    manifest_path = destination / "manifest.json"
+    checksum_path = destination / "checksums.sha256"
     manifest = _read_json(manifest_path)
     _check_json_depth(manifest)
     if manifest.get("schemaVersion") != BACKUP_SCHEMA or manifest.get("purpose") != PACKAGE_PURPOSE:
@@ -1620,23 +1906,167 @@ def _safe_extract_and_verify(archive_path: Path, destination: Path) -> dict[str,
     return manifest
 
 
-def _selected_contributors(context: BackupContext) -> tuple[RegisteredContributor, ...]:
-    local: tuple[RegisteredContributor, ...] = tuple(
-        item
-        for item in _registered_contributors()
-        if item.data_class == "durable"
-        or (item.data_class == "optional-history" and context.include_history)
-        or (item.data_class == "rebuildable" and context.include_rebuildable_indexes)
-    )
-    if context.mode != "full" or not context.include_external_state or not os.environ.get("STATELESS_MCP_BACKUP_URL", "").strip():
-        return local
+def _contributor_plan(context: BackupContext) -> dict[str, Any]:
+    """Freeze the contributor selection for one backup session.
+
+    Finalize retries must never re-ask which contributors are online; the plan
+    is the single attestation source for manifest coverage.
+    """
+
+    entries: list[dict[str, Any]] = []
+    for item in _registered_contributors():
+        selected = (
+            item.data_class == "durable"
+            or (item.data_class == "optional-history" and context.include_history)
+            or (item.data_class == "rebuildable" and context.include_rebuildable_indexes)
+        )
+        entries.append(
+            {
+                "id": item.contributor_id,
+                "kind": "local",
+                "schemaVersion": item.schema_version,
+                "required": item.data_class == "durable",
+                "capabilityDigest": hashlib.sha256(
+                    _stable_json(
+                        {
+                            "id": item.contributor_id,
+                            "schemaVersion": item.schema_version,
+                            "dataClass": item.data_class,
+                        }
+                    )
+                ).hexdigest(),
+                "status": "selected" if selected else "excluded",
+            }
+        )
     external = StatelessMcpContributor()
-    status = external.capabilities()
-    if not status.get("available"):
-        if context.coverage_policy == "strict":
-            raise AppError("Strict backup coverage requires Stateless MCP durable state", code=ErrorCode.INVALID_REQUEST, status=409)
-        return local
-    return (*local, external)
+    configured = bool(os.environ.get("STATELESS_MCP_BACKUP_URL", "").strip())
+    status = "excluded"
+    reason = "not configured"
+    required = False
+    capability: dict[str, Any] = {"id": external.contributor_id, "available": False, "schemaVersion": external.schema_version}
+    if configured and context.include_external_state:
+        required = context.mode == "full"
+        reason = "service unavailable"
+        if context.mode == "full":
+            capability = external.capabilities()
+            if capability.get("available"):
+                status = "selected"
+                reason = ""
+            else:
+                if context.coverage_policy == "strict":
+                    raise AppError("Strict backup coverage requires Stateless MCP durable state", code=ErrorCode.INVALID_REQUEST, status=409)
+                status = "unavailable"
+                reason = str(capability.get("reason") or "service unavailable")
+        else:
+            capability = external.capabilities()
+            status = "excluded"
+            reason = "project-scoped backup"
+    elif configured:
+        required = True
+        reason = "excluded by backup request"
+    entry: dict[str, Any] = {
+        "id": external.contributor_id,
+        "kind": "external",
+        "schemaVersion": external.schema_version,
+        "required": required,
+        "capabilityDigest": hashlib.sha256(_stable_json(capability)).hexdigest(),
+        "status": status,
+    }
+    if reason:
+        entry["reason"] = reason
+    entries.append(entry)
+    return {
+        "planId": f"plan_{uuid.uuid4().hex[:16]}",
+        "createdAt": _utc_iso(),
+        "coveragePolicy": context.coverage_policy,
+        "contributors": entries,
+    }
+
+
+def _contributors_from_plan(plan: dict[str, Any]) -> tuple[RegisteredContributor, ...]:
+    raw = plan.get("contributors")
+    selected = {
+        str(item.get("id"))
+        for item in raw
+        if isinstance(item, dict) and item.get("status") == "selected"
+    } if isinstance(raw, list) else set()
+    known: tuple[RegisteredContributor, ...] = (*_registered_contributors(), StatelessMcpContributor())
+    return tuple(item for item in known if item.contributor_id in selected)
+
+
+def _selected_contributors(context: BackupContext) -> tuple[RegisteredContributor, ...]:
+    return _contributors_from_plan(_contributor_plan(context))
+
+
+def _coverage_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    entries = [item for item in plan.get("contributors", []) if isinstance(item, dict)]
+    local = sorted(str(item["id"]) for item in entries if item.get("kind") == "local" and item.get("status") == "selected")
+    external = [
+        {"id": str(item["id"]), "status": str(item["status"]), "schemaVersion": int(item.get("schemaVersion") or 1)}
+        for item in entries
+        if item.get("kind") == "external" and item.get("status") == "selected"
+    ]
+    unavailable = [
+        {"id": str(item["id"]), "reason": str(item.get("reason") or "unavailable")}
+        for item in entries
+        if bool(item.get("required")) and item.get("status") != "selected"
+    ]
+    return {
+        "policy": str(plan.get("coveragePolicy") or "strict"),
+        "planId": str(plan.get("planId") or ""),
+        "localContributors": local,
+        "externalContributors": external,
+        "unavailableDurableSources": unavailable,
+        "complete": not unavailable,
+    }
+
+
+def _attest_coverage(plan: dict[str, Any], contributions: list[BackupContribution]) -> dict[str, Any]:
+    """Bind manifest coverage to the payloads actually written.
+
+    Every included contributor must have a payload, manifest entry and digest,
+    and every payload must map back to a plan contributor.
+    """
+
+    entries = [item for item in plan.get("contributors", []) if isinstance(item, dict)]
+    selected = {str(item["id"]) for item in entries if item.get("status") == "selected"}
+    contributed = {item.contributor_id for item in contributions}
+    if selected != contributed:
+        missing = sorted(selected - contributed)
+        unexpected = sorted(contributed - selected)
+        raise AppError(
+            f"Backup coverage does not match the contributor plan (missing: {missing}, unexpected: {unexpected})",
+            code=ErrorCode.INVALID_PAYLOAD,
+        )
+    by_id = {item.contributor_id: item for item in contributions}
+    local = sorted(item.contributor_id for item in contributions if item.contributor_id != "stateless-mcp")
+    external = []
+    for item in entries:
+        if item.get("kind") != "external" or item.get("status") != "selected":
+            continue
+        contribution = by_id[str(item["id"])]
+        external.append(
+            {
+                "id": contribution.contributor_id,
+                "schemaVersion": contribution.schema_version,
+                "snapshotGeneration": contribution.snapshot_generation,
+                "snapshotDigest": contribution.digest,
+                "records": contribution.records,
+            }
+        )
+    unavailable = [
+        {"id": str(item["id"]), "reason": str(item.get("reason") or "unavailable")}
+        for item in entries
+        if bool(item.get("required")) and item.get("status") != "selected"
+    ]
+    return {
+        "planId": str(plan.get("planId") or ""),
+        "policy": str(plan.get("coveragePolicy") or "strict"),
+        "localContributors": local,
+        "externalContributors": external,
+        "unavailableDurableSources": unavailable,
+        "complete": not unavailable,
+    }
 
 
 def _context_from_payload(payload: dict[str, Any]) -> BackupContext:
@@ -1706,29 +2136,7 @@ def _protection_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _coverage_status(context: BackupContext) -> dict[str, Any]:
-    local = [
-        item.contributor_id
-        for item in _registered_contributors()
-        if item.data_class == "durable" or (item.data_class == "optional-history" and context.include_history)
-    ]
-    configured = bool(os.environ.get("STATELESS_MCP_BACKUP_URL", "").strip())
-    external: list[dict[str, Any]] = []
-    unavailable: list[dict[str, str]] = []
-    if configured and context.include_external_state:
-        status = StatelessMcpContributor().capabilities()
-        if status.get("available"):
-            external.append({"id": "stateless-mcp", "status": "available", "schemaVersion": 1})
-        else:
-            unavailable.append({"id": "stateless-mcp", "reason": str(status.get("reason") or "service unavailable")})
-    elif configured:
-        unavailable.append({"id": "stateless-mcp", "reason": "excluded by backup request"})
-    return {
-        "policy": context.coverage_policy,
-        "localContributors": local,
-        "externalContributors": external,
-        "unavailableDurableSources": unavailable,
-        "complete": not unavailable,
-    }
+    return _coverage_from_plan(_contributor_plan(context))
 
 
 def _jsonl_task_count(path: Path) -> int:
@@ -2014,6 +2422,23 @@ def _version_compatible(source: str, target: str) -> bool:
     return source_version[0] == target_version[0] and source_version <= target_version
 
 
+def _restore_secret_state(metadata: dict[str, Any]) -> str:
+    if not bool(metadata.get("encrypted")):
+        return "not-required"
+    phase = str(metadata.get("phase") or "")
+    if phase == "locked":
+        return "not-required"
+    restore_id = str(metadata.get("restoreId") or "")
+    if restore_id and backup_crypto.has_secret(restore_id):
+        return "available"
+    if phase == "inspected":
+        armed = metadata.get("secretArmedAt")
+        if isinstance(armed, (int, float)) and (time.time() - float(armed)) > backup_crypto.SECRET_TTL_SECONDS:
+            return "expired"
+        return "required-for-safety-backup"
+    return "not-required"
+
+
 def _public_restore(
     metadata: dict[str, Any],
     root: Path,
@@ -2029,6 +2454,14 @@ def _public_restore(
             manifest = _read_json(root / "plan.json").get("manifest", {})
         except AppError:
             manifest = {}
+    secret_source = metadata
+    if not bool(metadata.get("encrypted")):
+        try:
+            plan_doc = _read_json(root / "plan.json")
+            if bool(plan_doc.get("encrypted")):
+                secret_source = plan_doc
+        except AppError:
+            pass
     frontend_path = root / "verified" / "frontend" / "state.json"
     if not frontend_path.is_file():
         frontend_path = root / "extracted" / "frontend" / "state.json"
@@ -2040,6 +2473,7 @@ def _public_restore(
             if key not in {"contributors", "identityMap", "manifest", "operations"}
         },
         "restoreId": str(metadata.get("restoreId") or root.name),
+        "secretState": _restore_secret_state(secret_source),
         "applied": [
             item.get("id")
             for item in metadata.get("contributors", [])
@@ -2105,9 +2539,20 @@ def _rollback_transaction(transaction: dict[str, Any], root: Path) -> None:
         if not isinstance(contributor, dict):
             raise AppError("Restore contributor journal is invalid", code=ErrorCode.INVALID_PAYLOAD)
         if bool(contributor.get("external")):
-            # External restore is non-overwriting and idempotent. Imported tasks
-            # remain inert, so rollback never deletes pre-existing Redis state.
-            contributor["swapState"] = "external-retained"
+            # External participants roll back through their own durable journal:
+            # abort deletes exactly the keys this transaction inserted, and only
+            # while their values still match the staged digests. When the store
+            # is unreachable the operator must reconcile it, so the contributor
+            # is fenced as recovery-required instead of silently retained.
+            try:
+                journal = StatelessMcpContributor().abort_restore(str(transaction["restoreId"]))
+            except AppError:
+                contributor["phase"] = "recovery-required"
+                contributor["swapState"] = "recovery-required"
+            else:
+                contributor["participant"] = journal
+                contributor["phase"] = journal.get("phase") or "rolled-back"
+                contributor["swapState"] = "rolled-back"
             _write_json(journal_path, transaction)
             continue
         destination = Path(str(contributor.get("destination") or ""))
@@ -2125,8 +2570,19 @@ def _rollback_transaction(transaction: dict[str, Any], root: Path) -> None:
             os.replace(rollback, destination)
         contributor["swapped"] = False
         contributor["swapState"] = "rolled-back"
+        contributor["phase"] = "rolled-back"
         _write_json(journal_path, transaction)
     shutil.rmtree(root / "staged", ignore_errors=True)
+    recovery_required = any(
+        isinstance(contributor, dict) and contributor.get("phase") == "recovery-required"
+        for contributor in contributors
+    )
+    if recovery_required:
+        transaction["phase"] = "recovery-required"
+        transaction["updatedAt"] = _utc_iso()
+        _write_json(journal_path, transaction)
+        _update_server_fence(transaction, "recovery-required")
+        return
     transaction["phase"] = "rolled-back"
     transaction["rolledBackAt"] = _utc_iso()
     transaction["updatedAt"] = _utc_iso()

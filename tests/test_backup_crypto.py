@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
 import threading
+import time
 from pathlib import Path
-from typing import BinaryIO, Callable, Iterator
+from types import SimpleNamespace
+from typing import Any, BinaryIO, Callable, Iterator, cast
 from urllib import error as urllib_error
 
 import pytest
@@ -128,8 +131,247 @@ def test_passphrase_encrypted_round_trip_keeps_secret_and_metadata_out_of_cipher
     assert _PASSPHRASE not in (backups.RESTORE_DIR / restore_id / "plan.json").read_bytes()
 
 
-def test_recovery_identity_is_verified_against_public_recipient(
+def test_encrypted_restore_reattaches_secret_and_bounds_plaintext_residency(
     tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_age(monkeypatch)
+    project = tmp_settings / ".projects" / "secret-project"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text(json.dumps({"id": "secret-project"}), encoding="utf-8")
+    created = backups.create_session({"mode": "full", "requiresFrontendState": False, "protection": {"mode": "passphrase"}})
+    backup_id = str(created["backupId"])
+    backups.put_session_secret(backup_id, {"kind": "passphrase", "secret": _PASSPHRASE.decode()})
+    backups.finalize_session(backup_id)
+
+    locked = backups.inspect_archive(backups.backup_path(backup_id), filename="encrypted.dsibackup.age")
+    restore_id = str(locked["restoreId"])
+    root = backups.RESTORE_DIR / restore_id
+    backups.put_session_secret(restore_id, {"kind": "passphrase", "secret": _PASSPHRASE.decode()})
+    plan = backups.unlock_restore(restore_id)
+    assert plan["phase"] == "inspected"
+    assert not (root / "unlocked.dsibackup").exists(), "plaintext archive must not outlive the first inspect"
+    assert list(root.glob("*.dsibackup.age")), "ciphertext is retained"
+    assert (root / "extracted" / "manifest.json").is_file()
+    assert backups.get_restore(restore_id)["secretState"] == "available"
+
+    backup_crypto.clear_secret(restore_id)
+    assert backups.get_restore(restore_id)["secretState"] == "required-for-safety-backup"
+    plan_data = backups._read_json(root / "plan.json")
+    plan_data["secretArmedAt"] = time.time() - backup_crypto.SECRET_TTL_SECONDS - 10
+    backups._write_json(root / "plan.json", plan_data)
+    assert backups.get_restore(restore_id)["secretState"] == "expired"
+    with pytest.raises(AppError, match="required or expired"):
+        backups.prepare_restore(restore_id)
+
+    backups.put_session_secret(restore_id, {"kind": "passphrase", "secret": "wrong-password"})
+    with pytest.raises(AppError, match="Unable to unlock backup"):
+        backups.unlock_restore(restore_id)
+
+    original_plan = backups._read_json(root / "plan.json")
+    backups.put_session_secret(restore_id, {"kind": "passphrase", "secret": _PASSPHRASE.decode()})
+    reattached = backups.unlock_restore(restore_id)
+    assert reattached["restoreId"] == restore_id
+    assert backups.get_restore(restore_id)["secretState"] == "available"
+    assert not (root / "reattach.dsibackup").exists()
+    assert backups._read_json(root / "plan.json")["manifest"] == original_plan["manifest"]
+
+    prepared = backups.prepare_restore(restore_id)
+    assert prepared["phase"] == "backend-staged"
+    assert not (root / "unlocked.dsibackup").exists()
+    transaction = backups._read_json(root / "transaction.json")
+    assert transaction["safetyBackupId"]
+    backups.abort_restore(restore_id)
+
+
+class _FakeExternalStore:
+    """In-process Stateless MCP restore endpoint implementing the journal protocol."""
+
+    def __init__(self) -> None:
+        self.journals: dict[str, dict[str, object]] = {}
+        self.installed: dict[str, bytes] = {}
+        self.uploads: list[bytes] = []
+        self.digests: list[str] = []
+        self.calls: list[tuple[str, str]] = []
+
+    def _journal(self, restore_id: str, phase: str) -> dict[str, object]:
+        journal = {
+            "phase": phase,
+            "sourceDigest": self.digests[-1] if self.digests else "0" * 64,
+            "preparedDigest": "1" * 64,
+            "imported": 1,
+            "skipped": 0,
+            "interrupted": 1,
+            "remapped": {},
+        }
+        self.journals[restore_id] = journal
+        return journal
+
+    def request(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        body: object | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 5.0,
+    ) -> "_Response":
+        del timeout
+        if path == "/internal/backups/capabilities":
+            return _Response(b'{"contributorId":"stateless-mcp","schemaVersion":1}')
+        if path == "/internal/backups/prepare":
+            return _Response(b'{"backupId":"b","generation":7,"createdAt":1,"expiresAt":2}')
+        if path.endswith("/stream"):
+            return _Response(
+                b'{"type":"metadata","schemaVersion":1,"stateGeneration":7,"restoreEpoch":"e"}\n'
+                b'{"type":"task","schemaVersion":1,"task":{"id":"task-1"}}\n'
+                b'{"type":"complete","schemaVersion":1,"stateGeneration":7}\n'
+            )
+        if path.endswith("/release"):
+            return _Response(b'{"ok":true}')
+        parts = path.strip("/").split("/")
+        if len(parts) >= 3 and parts[0] == "internal" and parts[1] == "restores":
+            restore_id = parts[2]
+            action = parts[3] if len(parts) > 3 else ""
+            self.calls.append((restore_id, action or "status"))
+            if action == "prepare":
+                assert not isinstance(body, bytes), "prepare must stream the snapshot, not buffer it"
+                stream = cast(BinaryIO, body)
+                raw = stream.read()
+                self.uploads.append(raw)
+                self.digests.append(hashlib.sha256(raw).hexdigest())
+                assert headers is not None
+                assert headers["X-Content-SHA256"] == self.digests[-1]
+                return _Response(json.dumps(self._journal(restore_id, "prepared")).encode("utf-8"))
+            if action == "commit-intent":
+                return _Response(json.dumps(self._journal(restore_id, "commit-intent")).encode("utf-8"))
+            if action == "commit":
+                self.installed[restore_id] = self.uploads[-1]
+                return _Response(json.dumps(self._journal(restore_id, "committed-pending-complete")).encode("utf-8"))
+            if action == "complete":
+                return _Response(json.dumps(self._journal(restore_id, "complete")).encode("utf-8"))
+            if action == "abort":
+                self.installed.pop(restore_id, None)
+                return _Response(json.dumps(self._journal(restore_id, "rolled-back")).encode("utf-8"))
+            if not action and method == "GET":
+                journal = self.journals.get(restore_id)
+                if journal is None:
+                    raise AppError("not found", status=404)
+                return _Response(json.dumps(journal).encode("utf-8"))
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+
+def test_federated_restore_round_trip_and_abort_over_http(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STATELESS_MCP_BACKUP_URL", "http://backup.internal/")
+    store = _FakeExternalStore()
+    monkeypatch.setattr(backups.StatelessMcpContributor, "_request", staticmethod(store.request))
+    project = tmp_settings / ".projects" / "federated-project"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text(json.dumps({"id": "federated-project"}), encoding="utf-8")
+
+    created = backups.create_session({"mode": "full", "requiresFrontendState": False, "coveragePolicy": "strict"})
+    backup_id = str(created["backupId"])
+    finalized = backups.finalize_session(backup_id)
+    assert finalized["phase"] == "ready"
+    import zipfile
+
+    with zipfile.ZipFile(backups.backup_path(backup_id)) as archive:
+        names = set(archive.namelist())
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    assert "payload/stateless-mcp/state.jsonl" in names
+    external_coverage = manifest["coverage"]["externalContributors"][0]
+    assert external_coverage["snapshotGeneration"] == 7
+    assert external_coverage["records"] == 1
+
+    inspected = backups.inspect_archive(backups.backup_path(backup_id), filename="federated.dsibackup")
+    restore_id = str(inspected["restoreId"])
+    uploads_before = len(store.uploads)
+    prepared = backups.prepare_restore(restore_id)
+    assert prepared["phase"] == "backend-staged"
+    assert len(store.uploads) == uploads_before + 1, "the JSONL snapshot must be uploaded exactly once"
+    root = backups.RESTORE_DIR / restore_id
+    transaction = backups._read_json(root / "transaction.json")
+    external = next(item for item in transaction["contributors"] if item.get("external"))
+    assert external["participant"]["imported"] == 1
+    assert external["transactionDigest"] == transaction["serverTransactionDigest"]
+
+    committed = backups.commit_restore(restore_id)
+    assert committed["phase"] == "backend-committed"
+    assert store.installed.get(restore_id) == store.uploads[-1]
+    assert [action for _rid, action in store.calls].count("prepare") == 1
+    assert [action for _rid, action in store.calls].count("commit") == 1
+
+    completed = backups.complete_restore(restore_id)
+    assert completed["phase"] == "complete"
+    assert store.journals[restore_id]["phase"] == "complete"
+
+    inspected_second = backups.inspect_archive(backups.backup_path(backup_id), filename="federated2.dsibackup")
+    second_id = str(inspected_second["restoreId"])
+    backups.prepare_restore(second_id)
+    backups.commit_restore(second_id)
+    assert second_id in store.installed
+    backups.abort_restore(second_id)
+    assert second_id not in store.installed, "abort must delete exactly this transaction's imported keys"
+    transaction_second = backups._read_json(backups.RESTORE_DIR / second_id / "transaction.json")
+    external_second = next(item for item in transaction_second["contributors"] if item.get("external"))
+    assert external_second["phase"] == "rolled-back"
+    assert transaction_second["phase"] == "rolled-back"
+
+
+def test_federated_restore_crash_recovers_from_participant_status(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STATELESS_MCP_BACKUP_URL", "http://backup.internal/")
+    store = _FakeExternalStore()
+    monkeypatch.setattr(backups.StatelessMcpContributor, "_request", staticmethod(store.request))
+    (tmp_settings / ".projects" / "crash-project").mkdir(parents=True)
+    created = backups.create_session({"mode": "full", "requiresFrontendState": False, "coveragePolicy": "strict"})
+    backups.finalize_session(str(created["backupId"]))
+    inspected = backups.inspect_archive(backups.backup_path(str(created["backupId"])), filename="crash.dsibackup")
+    restore_id = str(inspected["restoreId"])
+    backups.prepare_restore(restore_id)
+    backups.commit_restore(restore_id)
+
+    root = backups.RESTORE_DIR / restore_id
+    transaction = backups._read_json(root / "transaction.json")
+    transaction["phase"] = "commit-intent"
+    backups._write_json(root / "transaction.json", transaction)
+
+    recovered = backups.recover_interrupted_restores()
+    assert restore_id in recovered["backendCommitted"], "participant journal, not the local swapped flag, drives recovery"
+    store.journals[restore_id]["phase"] = "prepared"
+    transaction = backups._read_json(root / "transaction.json")
+    transaction["phase"] = "commit-intent"
+    backups._write_json(root / "transaction.json", transaction)
+    recovered = backups.recover_interrupted_restores()
+    assert restore_id in recovered["rolledBack"]
+    assert restore_id not in store.installed
+    _install_fake_age(monkeypatch)
+    project = tmp_settings / ".projects" / "secret-project"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text(json.dumps({"id": "secret-project"}), encoding="utf-8")
+    created = backups.create_session({"mode": "full", "requiresFrontendState": False, "protection": {"mode": "passphrase"}})
+    backup_id = str(created["backupId"])
+    backups.put_session_secret(backup_id, {"kind": "passphrase", "secret": _PASSPHRASE.decode()})
+    backups.finalize_session(backup_id)
+    locked = backups.inspect_archive(backups.backup_path(backup_id), filename="encrypted.dsibackup.age")
+    restore_id = str(locked["restoreId"])
+    root = backups.RESTORE_DIR / restore_id
+    backups.put_session_secret(restore_id, {"kind": "passphrase", "secret": _PASSPHRASE.decode()})
+    backups.unlock_restore(restore_id)
+
+    tampered = root / "extracted" / "payload" / "projects" / "secret-project" / "project.json"
+    tampered.write_text("tampered", encoding="utf-8")
+    with pytest.raises(AppError, match="mismatch|changed after inspection"):
+        backups.prepare_restore(restore_id)
+
+    manifest = root / "extracted" / "manifest.json"
+    original = manifest.read_bytes()
+    manifest.write_bytes(b"{}")
+    with pytest.raises(AppError, match="changed after inspection"):
+        backups.prepare_restore(restore_id)
+    manifest.write_bytes(original)
+
+
+def test_recovery_identity_is_verified_against_public_recipient(    tmp_settings: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_fake_age(monkeypatch)
@@ -233,6 +475,12 @@ def test_helper_discovery_capabilities_and_secret_pipe(tmp_path: Path, monkeypat
     discovered = tmp_path / executable
     discovered.write_bytes(b"path")
     monkeypatch.setattr(backup_crypto.shutil, "which", lambda _name: str(discovered))
+    real_is_file = backup_crypto.Path.is_file
+    monkeypatch.setattr(
+        backup_crypto.Path,
+        "is_file",
+        lambda self: real_is_file(self) and self == discovered,
+    )
     assert backup_crypto.helper_path() == discovered.resolve()
 
     monkeypatch.setattr(backup_crypto.shutil, "which", lambda _name: None)
@@ -331,7 +579,7 @@ def test_run_helper_success_failure_and_process_errors(tmp_path: Path, monkeypat
     missing_stdin.stdin = None  # type: ignore[assignment]
     monkeypatch.setattr(backup_crypto.subprocess, "Popen", lambda *_args, **_kwargs: missing_stdin)
     with pytest.raises(AppError, match="Unable to process"):
-        backup_crypto._run_helper("inspect-header")
+        backup_crypto._run_helper("inspect-header", write_input=write_payload)
     assert missing_stdin.killed is True
 
     def broken_popen(*_args: object, **_kwargs: object) -> _FakeProcess:
@@ -344,6 +592,135 @@ def test_run_helper_success_failure_and_process_errors(tmp_path: Path, monkeypat
     with pytest.raises(AppError) as unavailable:
         backup_crypto._run_helper("inspect-header")
     assert unavailable.value.status == 501
+
+
+def test_inspect_header_uses_inherited_handle_without_stdin_producer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    helper = tmp_path / "backup-crypto"
+    helper.write_bytes(b"helper")
+    monkeypatch.setattr(backup_crypto, "helper_path", lambda: helper)
+    source = tmp_path / "large.dsibackup.age"
+    header = b"age-encryption.org/v1\n-> scrypt abc 14\nxyz\n--- mac\n"
+    source.write_bytes(header + b"\x00" * (8 * 1024 * 1024))
+    captured: dict[str, Any] = {}
+
+    class _HandleProcess(_FakeProcess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stdout = io.BytesIO(b'{"age":true,"passphrase":false}')
+
+    def popen(args: list[str], **kwargs: object) -> _FakeProcess:
+        captured["args"] = args
+        captured["stdin"] = kwargs.get("stdin")
+        captured["pass_fds"] = kwargs.get("pass_fds")
+        captured["startupinfo"] = kwargs.get("startupinfo")
+        if os.name != "nt":
+            # The inherited descriptor must be readable at spawn time.
+            descriptor = int(args[args.index("--input-handle") + 1])
+            position = os.lseek(descriptor, 0, os.SEEK_CUR)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            captured["header_bytes"] = os.read(descriptor, len(header))
+            os.lseek(descriptor, position, os.SEEK_SET)
+        return _HandleProcess()
+
+    monkeypatch.setattr(backup_crypto.subprocess, "Popen", popen)
+    assert backup_crypto.inspect_header(source) == {"age": True, "passphrase": False}
+
+    args = [str(value) for value in captured["args"]]
+    assert "--input-handle" in args
+    identifier = args[args.index("--input-handle") + 1]
+    assert identifier and identifier != "-1"
+    # No stdin producer exists for header inspection, so a helper that exits
+    # after the header can never cause a BrokenPipeError in the parent.
+    assert captured["stdin"] == backup_crypto.subprocess.DEVNULL
+    if os.name != "nt":
+        passed = tuple(int(value) for value in captured["pass_fds"])
+        assert int(identifier) in passed
+        assert captured["header_bytes"] == header
+        with pytest.raises(OSError):
+            os.fstat(int(identifier))
+    else:
+        startupinfo = captured["startupinfo"]
+        assert startupinfo is not None
+        handles = startupinfo.lpAttributeList["handle_list"]
+        assert int(identifier) in handles
+
+    monkeypatch.setattr(
+        backup_crypto,
+        "_run_helper",
+        lambda *_args, **_kwargs: b'{"age":false}',
+    )
+    with pytest.raises(AppError, match="header"):
+        backup_crypto.inspect_header(source)
+
+
+def test_windows_handle_inheritance_paths_are_covered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    helper = tmp_path / "backup-crypto"
+    helper.write_bytes(b"helper")
+    monkeypatch.setattr(backup_crypto, "helper_path", lambda: helper)
+    monkeypatch.setattr(backup_crypto.sys, "platform", "win32")
+    monkeypatch.setitem(backup_crypto.sys.modules, "msvcrt", SimpleNamespace(get_osfhandle=lambda fd: fd + 1000))
+    monkeypatch.setattr(backup_crypto.os, "set_handle_inheritable", lambda *_args: None, raising=False)
+
+    class _StartupInfo:
+        def __init__(self) -> None:
+            self.lpAttributeList: dict[str, list[int]] = {}
+
+    monkeypatch.setattr(backup_crypto.subprocess, "STARTUPINFO", _StartupInfo, raising=False)
+
+    read_fd, write_fd, identifier, startupinfo = backup_crypto._secret_pipe(bytearray(b"x"))
+    try:
+        assert identifier == str(read_fd + 1000)
+        assert startupinfo is not None
+        assert startupinfo.lpAttributeList["handle_list"] == [read_fd + 1000]
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    captured: dict[str, Any] = {}
+
+    def popen(args: list[str], **kwargs: object) -> _FakeProcess:
+        captured["args"] = args
+        captured["startupinfo"] = kwargs.get("startupinfo")
+        process = _FakeProcess()
+        if "inspect-header" in args:
+            process.stdout = io.BytesIO(b'{"age":true,"passphrase":true}')
+        return process
+
+    monkeypatch.setattr(backup_crypto.subprocess, "Popen", popen)
+    source = tmp_path / "windowed.dsibackup.age"
+    source.write_bytes(b"age-encryption.org/v1\n-> scrypt x 1\ny\n--- mac\n")
+    assert backup_crypto.inspect_header(source) == {"age": True, "passphrase": True}
+    created = captured["startupinfo"]
+    assert created is not None
+    handles = created.lpAttributeList["handle_list"]
+    assert handles and handles[0] > 1000
+    args = [str(value) for value in captured["args"]]
+    assert str(handles[0]) == args[args.index("--input-handle") + 1]
+
+    seeded = _StartupInfo()
+    seeded.lpAttributeList = {"handle_list": [4242]}
+    monkeypatch.setattr(backup_crypto, "_secret_pipe", lambda _secret: (-1, -1, "secret-identifier", seeded))
+    input_fd = os.open(source, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    try:
+        assert backup_crypto._run_helper("derive-recipient", secret=bytearray(b"secret"), input_fd=input_fd) == b'{"ok":true}'
+    finally:
+        os.close(input_fd)
+    merged = captured["startupinfo"]
+    assert merged is not None
+    merged_handles = merged.lpAttributeList["handle_list"]
+    assert merged_handles[0] == 4242
+    assert len(merged_handles) == 2 and merged_handles[1] == input_fd + 1000
+
+
+def test_cancellation_writer_delegates_until_cancelled() -> None:
+    cancelled = threading.Event()
+    target = io.BytesIO()
+    writer = backup_crypto._CancellationWriter(target, cancelled)
+    assert writer.write(b"chunk") == 5
+    assert writer.closed is False
+    cancelled.set()
+    with pytest.raises(BrokenPipeError):
+        writer.write(b"chunk")
 
 
 def test_run_helper_writes_secret_pipe_and_closes_descriptors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -505,7 +882,14 @@ def test_stateless_mcp_external_contributor_snapshot_restore_and_validation(
     calls: list[tuple[str, str, bytes | None]] = []
     stream_attempts = 0
 
-    def request(path: str, *, method: str = "GET", body: bytes | None = None, timeout: float = 5.0) -> _Response:
+    def request(
+        path: str,
+        *,
+        method: str = "GET",
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 5.0,
+    ) -> _Response:
         nonlocal stream_attempts
         del timeout
         calls.append((path, method, body))
@@ -516,6 +900,21 @@ def test_stateless_mcp_external_contributor_snapshot_restore_and_validation(
             if stream_attempts == 1:
                 raise AppError("generation changed")
             return _Response(snapshot)
+        if "/internal/restores/" in path:
+            if headers is not None:
+                assert headers["X-Transaction-Digest"] == "digest-12345678"
+                assert headers["X-Content-SHA256"]
+                assert headers["Content-Length"] == str((source / "state.jsonl").stat().st_size)
+            journal = {
+                "phase": "prepared",
+                "sourceDigest": "a" * 64,
+                "preparedDigest": "b" * 64,
+                "imported": 1,
+                "skipped": 0,
+                "interrupted": 1,
+                "remapped": {},
+            }
+            return _Response(json.dumps(journal).encode("utf-8"))
         return _Response(b'{"ok":true}')
 
     monkeypatch.setattr(backups.StatelessMcpContributor, "_request", staticmethod(request))
@@ -531,9 +930,19 @@ def test_stateless_mcp_external_contributor_snapshot_restore_and_validation(
     assert contributor.validate(source, backups.BackupContext()) == []
     plan = contributor.plan_restore(source, backups.BackupContext())
     assert plan["external"] is True and plan["available"] is True
-    plan["restoreId"] = "restore_external_unit"
-    contributor.apply_restore(plan, backups.BackupContext())
-    assert any(path == "/internal/restores/restore_external_unit/apply" for path, _method, _body in calls)
+    with pytest.raises(AppError, match="participant protocol"):
+        contributor.apply_restore(plan, backups.BackupContext())
+
+    journal = contributor.prepare_restore("restore_external_unit", source, "digest-12345678")
+    assert journal["phase"] == "prepared"
+    prepare_call = next(path for path, _method, _body in calls if path.startswith("/internal/restores/") and path.endswith("/prepare"))
+    assert prepare_call == "/internal/restores/restore_external_unit/prepare"
+    for action in ("commit-intent", "commit", "complete", "abort"):
+        getattr(contributor, {"commit-intent": "commit_restore_intent"}.get(action, f"{action}_restore"))(
+            "restore_external_unit", *("digest-12345678",) if action in {"commit-intent", "commit"} else ()
+        )
+        assert any(path.endswith(f"/{action}") for path, _method, _body in calls)
+    assert contributor.restore_status("restore_external_unit") is not None
     assert contributor.inspect_schema(1)["compatible"] is True
     assert contributor.inspect_schema(2)["compatible"] is False
     assert contributor.migrate(source, 1) == source
@@ -558,6 +967,175 @@ def test_stateless_mcp_external_contributor_snapshot_restore_and_validation(
     assert "invalid" in contributor.validate(source, backups.BackupContext())[0]
 
 
+def test_external_snapshot_transport_streams_with_receipts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contributor = backups.StatelessMcpContributor()
+    payload = b'{"type":"task","schemaVersion":1,"task":{"id":"t-1"}}\n{"type":"complete","schemaVersion":1,"stateGeneration":1}\n'
+    seen: dict[str, object] = {}
+
+    def request(
+        path: str,
+        *,
+        method: str = "GET",
+        body: object | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 5.0,
+    ) -> _Response:
+        del timeout
+        seen["path"] = path
+        seen["method"] = method
+        seen["body"] = body
+        seen["headers"] = headers
+        if method == "POST":
+            return _Response(b'{"phase":"prepared","sourceDigest":"' + b"a" * 64 + b'","records":1}')
+        return _Response(payload)
+
+    monkeypatch.setattr(backups.StatelessMcpContributor, "_request", staticmethod(request))
+    transport = backups.ExternalSnapshotTransport(contributor)
+
+    target = tmp_path / "state.jsonl"
+    with target.open("wb") as output:
+        receipt = transport.download_to("/internal/backups/backup_x/stream", output)
+    assert receipt.bytes == len(payload)
+    assert receipt.sha256 == hashlib.sha256(payload).hexdigest()
+    assert receipt.records == 2
+    assert target.read_bytes() == payload
+
+    capped = tmp_path / "capped.jsonl"
+    with pytest.raises(AppError) as too_large:
+        with capped.open("wb") as output:
+            transport.download_to("/internal/backups/backup_x/stream", output, max_bytes=8)
+    assert too_large.value.status == 413
+
+    upload_source = tmp_path / "upload.jsonl"
+    upload_source.write_bytes(payload)
+    size = upload_source.stat().st_size
+    digest = hashlib.sha256(payload).hexdigest()
+    with upload_source.open("rb") as stream:
+        journal = transport.upload_from(
+            "/internal/restores/restore_x/prepare",
+            stream,
+            size=size,
+            sha256=digest,
+            headers={"X-Transaction-Digest": "digest-12345678"},
+        )
+    assert journal["phase"] == "prepared"
+    headers = seen["headers"]
+    assert isinstance(headers, dict)
+    assert headers["Content-Length"] == str(size)
+    assert headers["X-Content-SHA256"] == digest
+    assert headers["X-Transaction-Digest"] == "digest-12345678"
+    assert not isinstance(seen["body"], bytes), "upload must stream the file object, not materialized bytes"
+
+
+def test_coverage_plan_is_frozen_and_attested(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STATELESS_MCP_BACKUP_URL", "http://backup.internal/")
+    availability = {"available": True}
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "capabilities",
+        lambda _self: {
+            "id": "stateless-mcp",
+            "available": availability["available"],
+            "schemaVersion": 1,
+            **({} if availability["available"] else {"reason": "service unavailable"}),
+        },
+    )
+    snapshots: list[str] = []
+
+    def fake_snapshot(self: backups.RegisteredContributor, staging: Path, context: backups.BackupContext) -> backups.BackupContribution:
+        snapshots.append(self.contributor_id)
+        payload = staging / "payload" / self.contributor_id
+        payload.mkdir(parents=True, exist_ok=True)
+        data = payload / "data.json"
+        data.write_text("{}", encoding="utf-8")
+        entry = {"path": f"payload/{self.contributor_id}/data.json", "size": 2, "sha256": hashlib.sha256(b"{}").hexdigest()}
+        return backups.BackupContribution(
+            contributor_id=self.contributor_id,
+            schema_version=self.schema_version,
+            records=1,
+            bytes=2,
+            digest=hashlib.sha256(b"{}").hexdigest(),
+            restore_policy=self.restore_policy,
+            files=(entry,),
+            snapshot_generation=42 if self.contributor_id == "stateless-mcp" else None,
+        )
+
+    monkeypatch.setattr(backups.DirectoryContributor, "snapshot", fake_snapshot)
+    monkeypatch.setattr(backups.StatelessMcpContributor, "snapshot", fake_snapshot)
+
+    created = backups.create_session({"mode": "full", "requiresFrontendState": False, "coveragePolicy": "best-effort"})
+    backup_id = str(created["backupId"])
+    plan = created["contributorPlan"]
+    assert plan["planId"]
+    external_entry = next(item for item in plan["contributors"] if item["kind"] == "external")
+    assert external_entry["status"] == "selected"
+
+    availability["available"] = False
+    finalized = backups.finalize_session(backup_id)
+    assert finalized["phase"] == "ready"
+    import zipfile
+
+    with zipfile.ZipFile(backups.backup_path(backup_id)) as archive:
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    coverage = manifest["coverage"]
+    assert coverage["planId"] == plan["planId"]
+    assert coverage["complete"] is True
+    assert coverage["externalContributors"][0]["id"] == "stateless-mcp"
+    assert coverage["externalContributors"][0]["snapshotGeneration"] == 42
+    assert coverage["externalContributors"][0]["snapshotDigest"] == hashlib.sha256(b"{}").hexdigest()
+    assert "stateless-mcp" in snapshots, "frozen plan must include the external contributor even if it later drops"
+
+    availability["available"] = True
+    created_second = backups.create_session({"mode": "full", "requiresFrontendState": False, "coveragePolicy": "best-effort"})
+    second_id = str(created_second["backupId"])
+    availability["available"] = False
+    monkeypatch.setattr(backups.StatelessMcpContributor, "capabilities", lambda _self: {"id": "stateless-mcp", "available": False, "schemaVersion": 1, "reason": "service unavailable"})
+    created_third = backups.create_session({"mode": "full", "requiresFrontendState": False, "coveragePolicy": "best-effort"})
+    third_id = str(created_third["backupId"])
+    third_plan = created_third["contributorPlan"]
+    third_external = next(item for item in third_plan["contributors"] if item["kind"] == "external")
+    assert third_external["status"] == "unavailable"
+    availability["available"] = True
+    monkeypatch.setattr(backups.StatelessMcpContributor, "capabilities", lambda _self: {"id": "stateless-mcp", "available": True, "schemaVersion": 1})
+    snapshots.clear()
+    backups.finalize_session(third_id)
+    with zipfile.ZipFile(backups.backup_path(third_id)) as archive:
+        third_manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    assert third_manifest["coverage"]["complete"] is False
+    assert third_manifest["coverage"]["unavailableDurableSources"][0]["id"] == "stateless-mcp"
+    assert third_manifest["coverage"]["externalContributors"] == [], "a later recovery must not fake inclusion"
+    assert "stateless-mcp" not in snapshots
+    backups.finalize_session(second_id)
+
+    plan_by_id = {item["id"]: item for item in plan["contributors"]}
+    for item in manifest["contributors"]:
+        assert item["id"] in plan_by_id
+        assert plan_by_id[item["id"]]["status"] == "selected"
+        assert item["digest"]
+    payload_ids = {entry["id"] for entry in manifest["contributors"]}
+    selected_ids = {item["id"] for item in plan["contributors"] if item["status"] == "selected"}
+    assert payload_ids == selected_ids
+
+
+def test_coverage_attestation_rejects_missing_payloads(tmp_settings: Path) -> None:
+    plan = backups._contributor_plan(backups.BackupContext())
+    selected = [item for item in plan["contributors"] if item["status"] == "selected"]
+    assert selected
+    partial = [
+        backups.BackupContribution(
+            contributor_id=selected[0]["id"],
+            schema_version=1,
+            records=0,
+            bytes=0,
+            digest="0" * 64,
+            restore_policy="merge",
+            files=(),
+        )
+    ]
+    with pytest.raises(AppError, match="does not match the contributor plan"):
+        backups._attest_coverage(plan, partial)
+
+
 def test_stateless_mcp_request_auth_errors_and_coverage_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     contributor = backups.StatelessMcpContributor()
     monkeypatch.delenv("STATELESS_MCP_BACKUP_URL", raising=False)
@@ -579,7 +1157,7 @@ def test_stateless_mcp_request_auth_errors_and_coverage_modes(tmp_path: Path, mo
     request = seen["request"]
     assert getattr(request, "headers")["Authorization"] == "Bearer internal-secret"
     assert getattr(request, "headers")["Content-type"] == "application/json"
-    with contributor._request("/internal/restores/inspect", method="POST", body=b'{"type":"complete"}\n') as response:
+    with contributor._request("/internal/restores/restore_x/prepare", method="POST", body=b'{"type":"complete"}\n') as response:
         assert response.read() == b"{}"
     request = seen["request"]
     assert getattr(request, "headers")["Content-type"] == "application/x-ndjson"
@@ -887,22 +1465,58 @@ def test_external_restore_prepare_commit_complete(tmp_settings: Path, monkeypatc
         "capabilities",
         lambda _self: {"id": "stateless-mcp", "available": True, "schemaVersion": 1},
     )
+    participant_calls: list[tuple[str, ...]] = []
+
+    def fake_journal(phase: str) -> dict[str, object]:
+        return {
+            "sourceDigest": "a" * 64,
+            "preparedDigest": "b" * 64,
+            "phase": phase,
+            "imported": 1,
+            "skipped": 0,
+            "interrupted": 1,
+            "remapped": {},
+        }
+
+    def record(action: str, *values: str) -> dict[str, object]:
+        participant_calls.append((action, *values))
+        return fake_journal({"prepare": "prepared", "commit-intent": "commit-intent", "commit": "committed-pending-complete", "complete": "complete"}[action])
+
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "prepare_restore",
+        lambda _self, restore_id, _source, digest: record("prepare", restore_id, digest),
+    )
     prepared = backups.prepare_restore(restore_id)
     assert prepared["phase"] == "backend-staged"
     transaction = backups._read_json(root / "transaction.json")
     assert transaction["contributors"][0]["external"] is True
+    assert participant_calls[0][0] == "prepare"
+    assert transaction["contributors"][0]["participant"]["imported"] == 1
 
-    applied: list[str] = []
     monkeypatch.setattr(
         backups.StatelessMcpContributor,
-        "apply_restore",
-        lambda _self, plan, _context: applied.append(str(plan["restoreId"])),
+        "commit_restore_intent",
+        lambda _self, restore_id, digest: record("commit-intent", restore_id, digest),
+    )
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "commit_restore",
+        lambda _self, restore_id, digest: record("commit", restore_id, digest),
     )
     committed = backups.commit_restore(restore_id)
     assert committed["phase"] == "backend-committed"
-    assert applied == [restore_id]
+    assert [call[0] for call in participant_calls] == ["prepare", "commit-intent", "commit"]
+    assert participant_calls[0][2] == participant_calls[1][2] == participant_calls[2][2]
+
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "complete_restore",
+        lambda _self, restore_id: record("complete", restore_id),
+    )
     completed = backups.complete_restore(restore_id)
     assert completed["phase"] == "complete"
+    assert [call[0] for call in participant_calls] == ["prepare", "commit-intent", "commit", "complete"]
 
 
 @pytest.mark.parametrize(
@@ -988,7 +1602,7 @@ def test_terminal_restore_cleanup_removes_plaintext_and_upload(tmp_settings: Pat
     assert restore_id not in backup_crypto._SLOTS
 
 
-def test_external_and_file_rollback_paths_are_deterministic(tmp_settings: Path) -> None:
+def test_external_and_file_rollback_paths_are_deterministic(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = backups.RESTORE_DIR / "restore_rollbackunit"
     root.mkdir(parents=True)
     destination = root / "installed-file"
@@ -1010,10 +1624,35 @@ def test_external_and_file_rollback_paths_are_deterministic(tmp_settings: Path) 
     }
     backups._rollback_transaction(transaction, root)
     assert not destination.exists()
-    assert transaction["phase"] == "rolled-back"
+    assert transaction["phase"] == "recovery-required"
     contributors = transaction["contributors"]
     assert isinstance(contributors, list)
-    assert contributors[0]["swapState"] == "external-retained"
+    assert contributors[0]["swapState"] == "recovery-required"
+
+    reachable: dict[str, object] = {
+        "restoreId": "restore_rollbackunit",
+        "phase": "commit-intent",
+        "contributors": [{"id": "stateless-mcp", "external": True, "swapped": False}],
+    }
+    monkeypatch.setattr(
+        backups.StatelessMcpContributor,
+        "abort_restore",
+        lambda _self, restore_id: {
+            "sourceDigest": "a" * 64,
+            "preparedDigest": "b" * 64,
+            "phase": "rolled-back",
+            "imported": 0,
+            "skipped": 0,
+            "interrupted": 0,
+            "remapped": {},
+        },
+    )
+    backups._rollback_transaction(reachable, root)
+    assert reachable["phase"] == "rolled-back"
+    external = reachable["contributors"]
+    assert isinstance(external, list)
+    assert external[0]["swapState"] == "rolled-back"
+    assert external[0]["participant"]["phase"] == "rolled-back"
 
     with pytest.raises(AppError, match="journal is invalid"):
         backups._rollback_transaction({"restoreId": "restore_invalid", "contributors": {}}, root)

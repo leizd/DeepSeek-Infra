@@ -1,19 +1,19 @@
 {
   "schemaVersion": "offline-eval-suite.v1",
-  "version": "4.4.2",
-  "commit": "537c0126702894fa9500119a802761b3c1d38411",
-  "testedRevision": "537c0126702894fa9500119a802761b3c1d38411",
-  "sourceRevision": "537c0126702894fa9500119a802761b3c1d38411",
+  "version": "4.4.3",
+  "commit": "b6d3a030cd5a96cc2da5031da1af62d2b70176a9",
+  "testedRevision": "b6d3a030cd5a96cc2da5031da1af62d2b70176a9",
+  "sourceRevision": "b6d3a030cd5a96cc2da5031da1af62d2b70176a9",
   "sourceTreeDirty": true,
   "releaseRevision": null,
   "ciRevision": null,
-  "generatedAt": "2026-08-05T02:03:13Z",
+  "generatedAt": "2026-08-05T11:19:37Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
-  "gitSha": "537c0126702894fa9500119a802761b3c1d38411",
+  "gitSha": "b6d3a030cd5a96cc2da5031da1af62d2b70176a9",
   "gitDirty": true,
   "status": "PASS",
   "paths": {
@@ -33,8 +33,8 @@
     "citationAccuracy": 0.8333,
     "keywordCoverage": 0.8333,
     "latency": {
-      "avgMs": 25.88,
-      "p95Ms": 28.38
+      "avgMs": 24.71,
+      "p95Ms": 27.88
     }
   },
   "toolPolicy": {
@@ -77,74 +77,7 @@
     },
     "latency": {
       "avgMs": 0.02,
-      "p95Ms": 0.03
-    }
-  },
-  "agent": {
-    "status": "PASS",
-    "reportOnly": false,
-    "cases": 6,
-    "toolCallAccuracy": 1.0,
-    "toolCallF1": 1.0,
-    "agentSuccessRate": 1.0,
-    "promptRegressionPassRate": 1.0,
-    "avgLatencyMs": 4050.0,
-    "p95LatencyMs": 6775.0,
-    "avgTokens": 4610.0,
-    "avgCostUsd": 0.0027,
-    "warnings": [],
-    "baselineCompare": {
-      "status": "PASS",
-      "checks": [
-        {
-          "metric": "toolCallAccuracy",
-          "baseline": 1.0,
-          "current": 1.0,
-          "status": "PASS"
-        },
-        {
-          "metric": "toolCallF1",
-          "baseline": 1.0,
-          "current": 1.0,
-          "status": "PASS"
-        },
-        {
-          "metric": "agentSuccessRate",
-          "baseline": 1.0,
-          "current": 1.0,
-          "status": "PASS"
-        },
-        {
-          "metric": "promptRegressionPassRate",
-          "baseline": 1.0,
-          "current": 1.0,
-          "status": "PASS"
-        },
-        {
-          "metric": "avgLatencyMs",
-          "baseline": 4050.0,
-          "current": 4050.0,
-          "status": "PASS"
-        },
-        {
-          "metric": "p95LatencyMs",
-          "baseline": 6775.0,
-          "current": 6775.0,
-          "status": "PASS"
-        },
-        {
-          "metric": "avgTokens",
-          "baseline": 4610.0,
-          "current": 4610.0,
-          "status": "PASS"
-        },
-        {
-          "metric": "avgCostUsd",
-          "baseline": 0.0027,
-          "current": 0.0027,
-          "status": "PASS"
-        }
-      ]
+      "p95Ms": 0.04
     }
   }
 }

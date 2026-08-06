@@ -4,6 +4,26 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.3] - Federated Restore Transactions and Streaming Crypto Integrity
+
+### Federated restore transactions
+
+- Coordinates Stateless MCP restores as journaled two-phase participants in the workspace restore transaction: streamed Prepare writes a staged namespace, Commit installs pending objects under a restore fence, Complete makes them visible, and Abort deletes exactly the keys this transaction inserted while their values still match the staged digests.
+- Startup crash recovery queries the external participant journal instead of trusting local flags; unreachable external stores fence the contributor as recovery-required rather than silently retaining half-committed imports.
+- A restore fence now blocks task creation (423), claiming and result submission during a restore commit; heartbeats stay allowed, and workers defer completions until the fence releases.
+
+### Streaming crypto integrity and transfers
+
+- Age header inspection reads the ciphertext through an inherited read-only handle with bounded 1 MiB / 64-stanza limits instead of piping whole files to a helper that exits after the header, so probing large age files can never break the pipe.
+- Stateless MCP snapshots stream line-by-line with HTTP backpressure, incremental JSONL validation (line, total, task, log and depth caps), and single-upload Prepare; Python downloads and uploads use hashed streaming receipts instead of whole-buffer reads.
+- Contributor coverage is frozen in a per-session plan and attested against the payloads actually written: manifest coverage can no longer claim completeness for state that never entered the archive.
+
+### Recovery continuity
+
+- Encrypted restores expose a `secretState` (`not-required` / `available` / `expired` / `required-for-safety-backup`) and re-arm expired secret slots by re-verifying the original ciphertext digest without re-uploading the package or re-parsing the confirmed manifest.
+- After the first inspect, only the ciphertext and one verified extracted tree are retained; the full plaintext archive is deleted, and Prepare re-verifies per-file and tree digests before use.
+
+
 ## [4.4.2] - Encrypted Backups and External State Portability
 
 ### Standard age protection

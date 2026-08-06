@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { hostHeaderValidation, toNodeHandler } from "@modelcontextprotocol/node";
@@ -9,7 +10,7 @@ import { createServiceMcp } from "./mcp-server.js";
 import { RedisTaskStore } from "./redis-task-store.js";
 import { initializeTelemetry } from "./telemetry.js";
 import { TaskWorker } from "./test-runner.js";
-import { parseBackupSnapshot } from "./task-store.js";
+import { RestoreFenceError } from "./task-store.js";
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -39,6 +40,18 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024 * 1024): Promise
     chunks.push(value);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+async function* streamRequestBody(req: IncomingMessage): AsyncGenerator<string, void, void> {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    yield decoder.decode(buffer, { stream: true });
+  }
+  const tail = decoder.decode();
+  if (tail.length > 0) {
+    yield tail;
+  }
 }
 
 async function main(): Promise<void> {
@@ -86,9 +99,25 @@ async function main(): Promise<void> {
         }
         const backupMatch = /^\/internal\/backups\/([^/]+)\/(stream|release)$/u.exec(url.pathname);
         if (backupMatch !== null && backupMatch[1] !== undefined && backupMatch[2] === "stream" && req.method === "GET") {
-          const snapshot = await store.exportBackup(backupMatch[1]);
+          const backupId = backupMatch[1];
           res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
-          res.end(snapshot);
+          let clientGone = false;
+          res.on("close", () => {
+            clientGone = true;
+          });
+          try {
+            for await (const line of store.exportBackup(backupId)) {
+              if (clientGone) break;
+              if (!res.write(line)) {
+                await once(res, "drain");
+              }
+            }
+          } finally {
+            if (clientGone) {
+              await store.releaseBackup(backupId).catch(() => undefined);
+            }
+          }
+          res.end();
           return;
         }
         if (backupMatch !== null && backupMatch[1] !== undefined && backupMatch[2] === "release" && req.method === "POST") {
@@ -96,19 +125,71 @@ async function main(): Promise<void> {
           json(res, 200, { ok: true, backupId: backupMatch[1] });
           return;
         }
-        if (req.method === "POST" && url.pathname === "/internal/restores/inspect") {
-          const snapshot = await readBody(req);
-          const parsed = parseBackupSnapshot(snapshot);
-          json(res, 200, { ok: true, schemaVersion: 1, tasks: parsed.tasks.length });
-          return;
-        }
-        const restoreMatch = /^\/internal\/restores\/([^/]+)\/apply$/u.exec(url.pathname);
-        if (restoreMatch !== null && restoreMatch[1] !== undefined && req.method === "POST") {
-          json(res, 200, await store.restoreBackup(restoreMatch[1], await readBody(req), Date.now()));
-          return;
+        const restoreMatch = /^\/internal\/restores\/([^/]+)(?:\/(prepare|commit-intent|commit|complete|abort))?$/u.exec(
+          url.pathname,
+        );
+        if (restoreMatch !== null && restoreMatch[1] !== undefined) {
+          const restoreId = restoreMatch[1];
+          const action = restoreMatch[2];
+          if (req.method === "GET" && action === undefined) {
+            const journal = await store.restoreStatus(restoreId);
+            if (journal === null) {
+              json(res, 404, { error: "not found" });
+              return;
+            }
+            json(res, 200, journal);
+            return;
+          }
+          if (req.method === "POST" && action === "prepare") {
+            const transactionDigest = req.headers["x-transaction-digest"];
+            if (typeof transactionDigest !== "string" || transactionDigest.length < 8) {
+              throw new Error("X-Transaction-Digest is required");
+            }
+            const expectedDigest = req.headers["x-content-sha256"];
+            const journal = await store.prepareRestore(
+              restoreId,
+              transactionDigest,
+              streamRequestBody(req),
+              Date.now(),
+            );
+            if (typeof expectedDigest === "string" && expectedDigest.length > 0 && expectedDigest !== journal.sourceDigest) {
+              await store.abortRestore(restoreId, Date.now());
+              throw new Error("snapshot digest does not match X-Content-SHA256");
+            }
+            json(res, 200, journal);
+            return;
+          }
+          if (req.method === "POST" && action === "commit-intent") {
+            const body = JSON.parse(await readBody(req)) as { transactionDigest?: string };
+            if (typeof body.transactionDigest !== "string" || body.transactionDigest.length < 8) {
+              throw new Error("transactionDigest is required");
+            }
+            json(res, 200, await store.commitRestoreIntent(restoreId, body.transactionDigest, Date.now()));
+            return;
+          }
+          if (req.method === "POST" && action === "commit") {
+            const body = JSON.parse(await readBody(req)) as { transactionDigest?: string };
+            if (typeof body.transactionDigest !== "string" || body.transactionDigest.length < 8) {
+              throw new Error("transactionDigest is required");
+            }
+            json(res, 200, await store.commitRestore(restoreId, body.transactionDigest, Date.now()));
+            return;
+          }
+          if (req.method === "POST" && action === "complete") {
+            json(res, 200, await store.completeRestore(restoreId, Date.now()));
+            return;
+          }
+          if (req.method === "POST" && action === "abort") {
+            json(res, 200, await store.abortRestore(restoreId, Date.now()));
+            return;
+          }
         }
         json(res, 404, { error: "not found" });
       })().catch((error: unknown) => {
+        if (error instanceof RestoreFenceError) {
+          json(res, 423, { error: error.message });
+          return;
+        }
         json(res, 409, { error: error instanceof Error ? error.message : String(error) });
       });
       return;

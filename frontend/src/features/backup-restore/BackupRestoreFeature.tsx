@@ -53,6 +53,10 @@ export default function BackupRestoreFeature() {
   const [externalStatus, setExternalStatus] = useState("未配置");
   const [locked, setLocked] = useState<LockedRestoreUpload | null>(null);
   const [unlockSecret, setUnlockSecret] = useState("");
+  const [reattachSecret, setReattachSecret] = useState("");
+  const [needsSecret, setNeedsSecret] = useState(false);
+
+  const secretRequired = plan?.encrypted === true && (needsSecret || plan.secretState === "expired" || plan.secretState === "required-for-safety-backup");
 
   useEffect(() => {
     if (overlay.activeOverlay !== "backup-restore") return;
@@ -192,6 +196,28 @@ export default function BackupRestoreFeature() {
     }
   }
 
+  async function reattach() {
+    if (!plan || !reattachSecret) return;
+    setBusy(true);
+    setError("");
+    try {
+      await putRestoreSecret(plan.restoreId, {
+        kind: plan.protection === "passphrase" ? "passphrase" : "age-identity",
+        secret: reattachSecret,
+      });
+      const refreshed = await unlockBackup(plan.restoreId);
+      setPlan(refreshed);
+      setNeedsSecret(false);
+      setReattachSecret("");
+      setMessage("秘密已重新挂接；已确认的恢复计划保持不变。");
+    } catch (reason) {
+      setReattachSecret("");
+      setError(reason instanceof Error ? reason.message : "无法重新挂接秘密");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function applyRestore() {
     if (!plan) return;
     setBusy(true);
@@ -204,7 +230,13 @@ export default function BackupRestoreFeature() {
       setMessage("恢复已提交。即将进行一次受控刷新以载入新工作区。");
       window.setTimeout(() => window.location.reload(), 500);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "应用恢复失败");
+      const text = reason instanceof Error ? reason.message : "应用恢复失败";
+      if (plan.encrypted && /required or expired|re-provide|重新提供/.test(text)) {
+        setNeedsSecret(true);
+        setError("秘密已过期或服务已重启；请重新提供以继续恢复，无需重新上传备份包。");
+      } else {
+        setError(text);
+      }
     } finally {
       setBusy(false);
     }
@@ -291,17 +323,33 @@ export default function BackupRestoreFeature() {
               <div><dt>预计写入</dt><dd>{formatBytes(plan.estimatedWriteBytes)}</dd></div>
               <div><dt>ID / 文件冲突</dt><dd>{plan.conflicts.reduce((total, item) => total + item.count, 0)}</dd></div>
             </dl>
-            <label>
-              恢复方式
-              <select value={restoreMode} onChange={(event) => setRestoreMode(event.target.value as RestoreMode)}>
-                <option value="merge">合并（冲突生成确定性副本）</option>
-                <option value="project-copy">作为项目副本</option>
-                <option value="replace-empty">仅恢复到空工作区</option>
-              </select>
-            </label>
-            <button className="drawer-done danger-confirm" type="button" disabled={busy || !plan.compatible} onClick={() => void applyRestore()}>
-              创建安全快照并恢复
-            </button>
+            {secretRequired ? (
+              <div className="secret-fields">
+                <p>{plan.protection === "passphrase" ? "秘密已过期，重新输入备份密码" : "秘密已过期，重新粘贴 Recovery Key"}（无需重新上传备份包）</p>
+                <textarea
+                  value={reattachSecret}
+                  aria-label="重新提供备份秘密"
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => setReattachSecret(event.target.value)}
+                />
+                <button className="drawer-done" type="button" disabled={busy || !reattachSecret} onClick={() => void reattach()}>重新挂接秘密</button>
+              </div>
+            ) : (
+              <>
+                <label>
+                  恢复方式
+                  <select value={restoreMode} onChange={(event) => setRestoreMode(event.target.value as RestoreMode)}>
+                    <option value="merge">合并（冲突生成确定性副本）</option>
+                    <option value="project-copy">作为项目副本</option>
+                    <option value="replace-empty">仅恢复到空工作区</option>
+                  </select>
+                </label>
+                <button className="drawer-done danger-confirm" type="button" disabled={busy || !plan.compatible} onClick={() => void applyRestore()}>
+                  创建安全快照并恢复
+                </button>
+              </>
+            )}
           </div>
         )}
       </section>

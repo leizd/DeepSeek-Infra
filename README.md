@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.2-blue)
+![版本](https://img.shields.io/badge/version-4.4.3-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.2 Encrypted Backups & External State Portability：** 完整 `.dsibackup` 可通过标准 age v1 密码或 X25519 Recovery Identity 流式加密；密码和私钥只进入五分钟内存 Secret Slot 与匿名管道，不写 Session、Journal、argv、环境变量或日志。加密上传在认证成功前保持 `locked`，不会解析任何 ZIP 元数据；Stateless MCP 的 Redis 任务、日志和幂等索引通过版本化 JSONL 逻辑快照进入覆盖清单，运行任务恢复为 `interrupted` 且不会重放。参见 [4.4.2 发布说明](docs/releases/4.4.2.md)（上一版 [4.4.1](docs/releases/4.4.1.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
+> **4.4.3 Federated Restore Transactions & Streaming Crypto Integrity：** Stateless MCP 恢复并入工作区恢复事务——流式 Prepare 写入 staged 命名空间，Commit 在 Restore Fence 下安装 pending 对象，Complete 才使其可见，Abort 只删除本事务插入且摘要未变的键；崩溃恢复以参与者 Journal 为准，外部存储失联则标记 recovery-required。Age Header 探测改为继承只读句柄的有界读取（1 MiB / 64 stanzas），大密文不再撑破管道；快照逐行流式传输并带 backpressure，恢复只上传一次；Coverage 冻结在会话级 Plan 并与真实 Payload 双向断言；过期秘密可按原密文摘要重新挂接，无需重传备份包。参见 [4.4.3 发布说明](docs/releases/4.4.3.md)（上一版 [4.4.2](docs/releases/4.4.2.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)。
 
-**4.4.2 validation:** 合同覆盖密码与 Recovery Key 往返、密文篡改/截断拒绝、明文元数据不可搜索、Secret Slot 过期销毁、旧明文包兼容、严格/尽力覆盖策略、Redis generation fence、任务冲突确定性重映射及运行任务不重放。既有 Bundle 预算不提高。
+**4.4.3 validation:** 合同覆盖外部两阶段恢复（Prepare 无正式写入、Commit 前不可见、Abort 精确删除、重试幂等）、参与者状态驱动的崩溃恢复、Restore Fence 423 与延迟完成、流式导出 backpressure、单次上传、大密文 Header 有界探测、Coverage 冻结与双向证明、加密恢复秘密重挂与明文驻留边界。既有 Bundle 预算不提高。
 
 ## 30 秒概览
 
