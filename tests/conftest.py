@@ -28,6 +28,7 @@ import deepseek_infra.infra.workspace.backups as workspace_backups
 import deepseek_infra.infra.workspace.backup_policies as workspace_backup_policies
 import deepseek_infra.infra.workspace.backup_mirror as workspace_backup_mirror
 import deepseek_infra.infra.workspace.backup_scheduler as workspace_backup_scheduler
+import deepseek_infra.infra.workspace.backup_targets as workspace_backup_targets
 import deepseek_infra.infra.workspace.exports as workspace_exports
 import deepseek_infra.infra.workspace.saved_items as workspace_saved_items
 import deepseek_infra.infra.skills.evidence as skill_evidence
@@ -130,6 +131,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_backup_policies, "BACKUP_POLICY_DIR", tmp_path / ".backup-policies")
     monkeypatch.setattr(workspace_backup_mirror, "BACKUP_MIRROR_DIR", tmp_path / ".backup-mirror")
     monkeypatch.setattr(workspace_backup_scheduler, "BACKUP_SCHEDULER_DIR", tmp_path / ".backup-scheduler")
+    monkeypatch.setattr(workspace_backup_targets, "BACKUP_TARGET_DIR", tmp_path / ".backup-targets")
     skills_dir = tmp_path / ".skills"
     monkeypatch.setattr(config, "SKILLS_DIR", skills_dir)
     monkeypatch.setattr(skill_registry, "SKILLS_DIR", skills_dir)
