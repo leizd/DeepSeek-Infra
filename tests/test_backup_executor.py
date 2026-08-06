@@ -91,9 +91,11 @@ def test_execute_run_completes_and_publishes(tmp_settings: Path, stub_crypto: No
     outcome = _claim_and_run(policy, now=now)
     assert outcome["phase"] == "complete"
     filename = str(outcome["filename"])
-    published = backups.BACKUP_DIR / filename
+    published = backups.BACKUP_DIR / "backups" / filename
     assert published.is_file()
     assert published.read_bytes().startswith(b"age-encryption.org/v1")
+    receipt = backups.BACKUP_DIR / "receipts" / f"{filename}.receipt.json"
+    assert receipt.is_file()
     run = backup_scheduler.get_run(str(outcome["runId"]))
     assert run["phase"] == "complete"
     assert run["filename"] == filename
@@ -149,4 +151,4 @@ def test_execute_run_with_wrong_instance_abandons(tmp_settings: Path, stub_crypt
     claimed = backup_scheduler.claim_due_slots([policy], instance_id="w1", now=now)
     outcome = backup_executor.execute_run(claimed[0], instance_id="intruder", now=now)
     assert outcome["phase"] in {"failed", "abandoned"}
-    assert not list(backups.BACKUP_DIR.glob("*.dsibackup.age"))
+    assert not list(backups.BACKUP_DIR.rglob("*.dsibackup.age"))

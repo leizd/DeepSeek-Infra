@@ -9,17 +9,16 @@ publish over a newer owner.
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
     backup_policies,
+    backup_publish,
     backup_scheduled,
     backup_scheduler,
-    backup_unattended,
     backups,
     mutation_gate,
 )
@@ -42,29 +41,6 @@ def _retry_delay_seconds(policy: dict[str, Any], attempt: int) -> int:
 
 def _max_attempts(policy: dict[str, Any]) -> int:
     return max(1, int(_retry_section(policy).get("maxAttempts") or 3))
-
-
-def _publish_managed_local(package: backup_scheduled.ScheduledBackupPackage) -> Path:
-    """Atomic publish into the managed local backup directory."""
-    target_dir = backups.BACKUP_DIR
-    target_dir.mkdir(parents=True, exist_ok=True)
-    final = target_dir / package.filename
-    temporary = target_dir / f".{package.filename}.{os.getpid()}.part"
-    try:
-        with package.path.open("rb") as source, temporary.open("wb") as output:
-            while True:
-                chunk = source.read(1024 * 1024)
-                if not chunk:
-                    break
-                output.write(chunk)
-            output.flush()
-            os.fsync(output.fileno())
-        if backup_unattended.sha256_file(temporary) != package.ciphertext_sha256:
-            raise AppError("Published backup digest mismatch", code=ErrorCode.INTERNAL, status=500)
-        os.replace(temporary, final)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return final
 
 
 def execute_run(run: backup_scheduler.ClaimedRun, *, instance_id: str, now: datetime | None = None) -> dict[str, Any]:
@@ -97,16 +73,38 @@ def execute_run(run: backup_scheduler.ClaimedRun, *, instance_id: str, now: date
         backup_scheduler.assert_run_lease(run.run_id, instance_id, run.fencing_token, now=current)
         backup_scheduler.record_run_phase(run.run_id, "verifying", instance_id=instance_id, fencing_token=run.fencing_token)
         backup_scheduler.record_run_phase(run.run_id, "publishing", instance_id=instance_id, fencing_token=run.fencing_token)
-        published = _publish_managed_local(package)
+        target_id = str(policy.get("targetId") or "managed-local")
+        try:
+            target = backup_publish.resolve_target(target_id)
+        except AppError as exc:
+            if "blocked-target-unavailable" in str(exc):
+                backup_scheduler.record_target_health(target_id, "blocked", str(exc)[:200])
+                backup_scheduler.fail_run(
+                    run.run_id,
+                    error=str(exc),
+                    instance_id=instance_id,
+                    fencing_token=run.fencing_token,
+                    phase="blocked",
+                    reason="blocked-target-unavailable",
+                )
+                return {**outcome, "phase": "blocked", "reason": "blocked-target-unavailable"}
+            raise
+        published = backup_publish.publish_backup(
+            target,
+            package,
+            run_id=run.run_id,
+            policy_id=str(policy.get("policyId") or ""),
+            schedule_slot=run.schedule_slot,
+        )
         backup_scheduler.assert_run_lease(run.run_id, instance_id, run.fencing_token, now=current)
         backup_scheduler.complete_run(
             run.run_id,
             backup_id=package.backup_id,
-            filename=published.name,
+            filename=published.path.name,
             instance_id=instance_id,
             fencing_token=run.fencing_token,
         )
-        return {**outcome, "phase": "complete", "backupId": package.backup_id, "filename": published.name}
+        return {**outcome, "phase": "complete", "backupId": package.backup_id, "filename": published.path.name}
     except AppError as exc:
         if exc.status == 409 and "lease" in str(exc).casefold():
             backup_scheduler.cleanup_run_staging(run.run_id)
