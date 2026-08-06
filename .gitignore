@@ -28,6 +28,12 @@
 .reminders/
 .backups/
 .restore-staging/
+.backup-policies/
+.backup-mirror/
+.backup-scheduler/
+.backup-targets/
+.backup-catalog/
+.backup-retention/
 .workspace-mutation.lock
 .workspace-generation
 
