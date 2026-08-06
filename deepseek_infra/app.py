@@ -136,6 +136,9 @@ def ensure_startup_dependencies() -> None:
     recovery = recover_interrupted_restores()
     if recovery["recoveryRequired"]:
         logger.error("workspace_restore_recovery_required", extra={"restores": recovery["recoveryRequired"]})
+    from deepseek_infra.backup_worker import start_embedded_worker
+
+    start_embedded_worker()
 
 
 def register_mimetypes() -> None:

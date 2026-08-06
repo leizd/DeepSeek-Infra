@@ -450,6 +450,27 @@ export function sessionHeadKeyV3(conversationId: string): string {
   return `${conversationStorageKeys.v3HeadPrefix}${conversationId}`;
 }
 
+export type DurableHeadListener = () => void;
+
+const durableHeadListeners = new Set<DurableHeadListener>();
+
+export function onDurableHeadCommitted(listener: DurableHeadListener): () => void {
+  durableHeadListeners.add(listener);
+  return () => {
+    durableHeadListeners.delete(listener);
+  };
+}
+
+function notifyDurableHeadCommitted(): void {
+  for (const listener of durableHeadListeners) {
+    try {
+      listener();
+    } catch {
+      // 监听器失败不得破坏持久化路径。
+    }
+  }
+}
+
 export function sessionSnapshotKeyV3(conversationId: string, revision: string): string {
   return `${conversationStorageKeys.v3SnapshotPrefix}${conversationId}.${revision}`;
 }
@@ -1431,6 +1452,7 @@ export function createConversationPersistenceAdapter(
           savedAt: winner.savedAt,
           digest: winner.digest,
         } satisfies ConversationHeadV3));
+        notifyDurableHeadCommitted();
       } catch (error) {
         const failure = classifyStorageError(error);
         return {
@@ -1717,6 +1739,7 @@ export function createConversationPersistenceAdapter(
           savedAt,
           digest,
         } satisfies ConversationHeadV3));
+        notifyDurableHeadCommitted();
       } catch (error) {
         // head 推进只在非冲突路径到达，失败形状与 4.3.6 前一致（shardFailure）。
         return { ok: false, ...fail(error) };

@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.3-blue)
+![版本](https://img.shields.io/badge/version-4.4.4-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.3 Federated Restore Transactions & Streaming Crypto Integrity：** Stateless MCP 恢复并入工作区恢复事务——流式 Prepare 写入 staged 命名空间，Commit 在 Restore Fence 下安装 pending 对象，Complete 才使其可见，Abort 只删除本事务插入且摘要未变的键；崩溃恢复以参与者 Journal 为准，外部存储失联则标记 recovery-required。Age Header 探测改为继承只读句柄的有界读取（1 MiB / 64 stanzas），大密文不再撑破管道；快照逐行流式传输并带 backpressure，恢复只上传一次；Coverage 冻结在会话级 Plan 并与真实 Payload 双向断言；过期秘密可按原密文摘要重新挂接，无需重传备份包。参见 [4.4.3 发布说明](docs/releases/4.4.3.md)（上一版 [4.4.2](docs/releases/4.4.2.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
+> **4.4.4 Scheduled Encrypted Backups & Retention Governance：** 定时备份进入自动化阶段——独立 Backup Policy 只持久化公开 `age1...` Recipient，Recovery Identity 永不落盘；浏览器会话通过 Age 密封的 Frontend Replica Mirror 纳入后台备份，本地服务器不保存会话明文；每次运行生成临时验证 Recipient 完成无人值守加解密往返；耐久 SQLite 调度器以 IANA 时区、DST 语义、租约与 Fencing Token 保证同一 Schedule Slot 恰好执行一次；文件系统目标以 Marker 识别、原子发布；Backup Catalog 采用追加式 Hash Chain Receipt；GFS 保留策略先 Preview 再经 Trash Grace Period 两阶段删除，Pinned 与 Restore 引用永不被自动清除。参见 [4.4.4 发布说明](docs/releases/4.4.4.md)（上一版 [4.4.3](docs/releases/4.4.3.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)。
 
-**4.4.3 validation:** 合同覆盖外部两阶段恢复（Prepare 无正式写入、Commit 前不可见、Abort 精确删除、重试幂等）、参与者状态驱动的崩溃恢复、Restore Fence 423 与延迟完成、流式导出 backpressure、单次上传、大密文 Header 有界探测、Coverage 冻结与双向证明、加密恢复秘密重挂与明文驻留边界。既有 Bundle 预算不提高。
+**4.4.4 validation:** 合同覆盖同一 Schedule Slot 多进程恰好一次、崩溃后 Lease 接管、DST 重复/缺失时间语义、密封 Mirror 往返与旧 Epoch 拒绝、严格 Coverage 下过期 Mirror 阻断、无人值守 Age 往返验证、Recovery Identity 不落盘、Target Marker 替换拒写、原子发布、失败备份不触发删除、GFS 分桶确定性、Pin 与 Restore 引用保护、Catalog 由 Receipt 重建、真实解锁演练记录。既有 Bundle 预算不提高。
 
 ## 30 秒概览
 
