@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.3。
+适用版本：v4.4.4。
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 

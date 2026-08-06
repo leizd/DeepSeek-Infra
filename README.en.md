@@ -5,27 +5,27 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.4.3-blue)
+![Version](https://img.shields.io/badge/version-4.4.4-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.4.3 at a glance
+## 4.4.4 at a glance
 
-- Stateless MCP restores now join the workspace restore transaction as journaled two-phase participants: streamed Prepare writes a staged namespace, Commit installs pending objects under a restore fence, Complete makes them visible, and Abort deletes exactly the keys this transaction inserted while their digests still match.
-- Crash recovery is driven by the external participant journal rather than local flags; an unreachable external store is fenced as recovery-required instead of silently retaining half-committed imports.
-- A restore fence blocks task creation (423), claiming and result submission during a restore commit; heartbeats stay allowed and workers defer completions until the fence releases.
-- Age header inspection reads ciphertext through an inherited read-only handle with bounded 1 MiB / 64-stanza limits, so probing large age files can never break the pipe.
-- Snapshots stream line-by-line with HTTP backpressure and single-upload prepare; Python transfers use hashed streaming receipts instead of whole-buffer reads.
-- Contributor coverage is frozen in a per-session plan and attested against the payloads actually written; expired restore secrets can be re-armed against the original ciphertext without re-uploading the package.
+- Scheduled backups run under durable Backup Policies that persist only public `age1...` recipients; the Recovery Identity is never written to disk and unattended passphrase backups are refused.
+- Browser sessions join background backups through a sealed Frontend Replica Mirror: the envelope is verified, age-encrypted at rest, epoch-fenced, and never stored as plaintext on the server.
+- Every scheduled run performs an unattended round trip with an ephemeral verification recipient, proving the ciphertext unlocks and matches the manifest before publication.
+- A durable SQLite scheduler with IANA timezones, DST semantics, leases and fencing tokens executes each schedule slot exactly once, even across crashes and multiple workers.
+- Filesystem targets are recognized by marker files rather than drive letters; publication is atomic, and the Backup Catalog is an append-only hash chain of receipts that can be rebuilt from disk.
+- Grandfather-father-son retention runs as a previewable two-phase delete with a trash grace period; pinned, restore-referenced, and minimum-healthy copies are never auto-deleted.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.4.3 release notes](docs/releases/4.4.3.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.4.4 release notes](docs/releases/4.4.4.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -97,7 +97,7 @@ npm run check --prefix stateless-mcp
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.4.3 --ga
+python scripts/preflight_release.py --version 4.4.4 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

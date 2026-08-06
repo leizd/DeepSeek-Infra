@@ -4,6 +4,25 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.4] - Scheduled Encrypted Backups and Retention Governance
+
+### Durable scheduled backup policies
+
+- Backup Policies persist only public `age1...` recipients, IANA timezones, misfire semantics and retry bounds; unattended passphrase backups are refused and the Recovery Identity is never written to disk.
+- A sealed Frontend Replica Mirror lets background workers include browser sessions without holding plaintext: envelopes are digest-verified, age-encrypted at rest, epoch-fenced and idempotent.
+- Unattended runs encrypt to the user's recipients plus an ephemeral verification recipient, prove a full decrypt-manifest round trip, then destroy the ephemeral identity.
+
+### Durable scheduler, targets and catalog
+
+- A SQLite-backed scheduler with schedule slots, leases and fencing tokens runs each slot exactly once across crashes and multiple workers, with IANA timezone and DST-aware slot computation.
+- Filesystem backup targets are recognized by marker files, validated against runtime/repo/staging containment, and published atomically through `.partial` staging with target-side digest re-verification.
+- The Backup Catalog is an append-only hash chain of receipts with pin/unpin, scrub status, unlock-drill timestamps and rebuild-from-receipts recovery.
+
+### Retention governance and restore drills
+
+- Grandfather-father-son retention buckets in the policy timezone, runs only after a successful publish, previews before applying, and deletes through a trash grace period; pinned, restore-referenced and minimum-healthy copies are never auto-deleted.
+- Ciphertext scrubs re-verify size, SHA-256 and age headers without the Recovery Identity; user restore drills record `userUnlockVerifiedAt` after a real unlock-and-inspect pass.
+
 ## [4.4.3] - Federated Restore Transactions and Streaming Crypto Integrity
 
 ### Federated restore transactions

@@ -77,7 +77,7 @@ def test_ci_builds_and_smokes_rust_image_in_independent_job() -> None:
 
 def test_rust_image_has_rc2_oci_version_label() -> None:
     dockerfile = _read("rust/Dockerfile")
-    assert 'org.opencontainers.image.version="4.4.3"' in dockerfile
+    assert 'org.opencontainers.image.version="4.4.4"' in dockerfile
 
 
 class _SidecarHandler(BaseHTTPRequestHandler):

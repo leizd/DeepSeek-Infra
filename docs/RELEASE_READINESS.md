@@ -4,7 +4,7 @@
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
-适用版本：v4.4.3。
+适用版本：v4.4.4。
 
 Release v4.4.3 — **Encrypted Backups & External State Portability**。本版把完整内部备份流封装为标准 age v1 消息，增加进程内短期 Secret Slot、X25519 Recovery Identity、locked-before-inspect 恢复，以及无状态 MCP Redis 任务的逻辑快照 Contributor。根 `VERSION` 仍是版本事实源；正式 PASS 只来自对应提交的 CI 与 exact-merge evidence。
 ## 1. Release Preflight — 版本一致性体检
