@@ -229,7 +229,7 @@ def _run_helper(
             input_identifier = str(input_fd)
             pass_fds = (*pass_fds, input_fd)
         args.extend(["--input-handle", input_identifier])
-    if inherited_handles:
+    if sys.platform == "win32" and inherited_handles:
         if startupinfo is None:
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.lpAttributeList = {"handle_list": list(inherited_handles)}

@@ -388,7 +388,10 @@ mod tests {
         inspect_header(&mut reader, &mut report).unwrap();
         assert_eq!(report, b"{\"age\":true,\"passphrase\":false}\n");
         assert!(reader.read < window, "header probe must stay bounded");
-        assert!(reader.read < large.len(), "header probe must not consume the ciphertext");
+        assert!(
+            reader.read < large.len(),
+            "header probe must not consume the ciphertext"
+        );
     }
 
     #[test]
@@ -447,7 +450,7 @@ mod tests {
             "trimmed-secret"
         );
         assert!(read_secret(&secret_handle(b"\r\n")).is_err());
-        assert!(secret_reader("not-a-descriptor").is_err());
+        assert!(inherited_file("not-a-descriptor").is_err());
 
         let passphrase = b"command-passphrase";
         let encrypt_args = vec![
