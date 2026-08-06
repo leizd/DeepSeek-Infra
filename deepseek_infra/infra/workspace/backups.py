@@ -964,6 +964,57 @@ def inspect_archive(source: Path | bytes, *, filename: str = "workspace.dsibacku
         raise
 
 
+def _unlock_sealed_frontend(root: Path, kind: backup_crypto.SecretKind, secret: bytearray) -> dict[str, Any] | None:
+    """Unlock an inner sealed frontend mirror with the same recovery identity.
+
+    Scheduled backups carry ``frontend/sealed-state.age`` instead of a plaintext
+    envelope. When the outer package is unlocked with an age identity, the inner
+    mirror can be decrypted with the same identity; the plaintext envelope is
+    staged under ``verified/frontend/state.json`` (never inside the verified
+    extracted tree) and digest-checked against the mirror metadata.
+    """
+    extracted = root / "extracted"
+    sealed = extracted / "frontend" / "sealed-state.age"
+    if kind != "age-identity" or not sealed.is_file() or (extracted / "frontend" / "state.json").is_file():
+        return None
+    verified_dir = root / "verified" / "frontend"
+    verified_dir.mkdir(parents=True, exist_ok=True)
+    target = verified_dir / "state.json"
+    temporary = verified_dir / f".state.json.{os.getpid()}.tmp"
+    try:
+        backup_crypto.decrypt_file(sealed, temporary, kind="age-identity", secret=secret)
+        envelope = json.loads(temporary.read_text(encoding="utf-8"))
+        if not isinstance(envelope, dict):
+            raise AppError("Sealed frontend mirror payload is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        _validate_frontend_envelope(envelope)
+        metadata_path = extracted / "frontend" / "sealed-state.meta.json"
+        metadata: dict[str, Any] = {}
+        if metadata_path.is_file():
+            raw_meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if isinstance(raw_meta, dict):
+                metadata = raw_meta
+        expected_digest = str(metadata.get("envelopeDigest") or "")
+        if expected_digest and expected_digest != envelope.get("digest"):
+            raise AppError("Sealed frontend mirror digest does not match its metadata", code=ErrorCode.INVALID_PAYLOAD)
+        with temporary.open("rb") as handle:
+            raw = handle.read()
+        target.write_bytes(raw)
+        return {
+            "mode": "sealed-mirror",
+            "profileId": metadata.get("profileId"),
+            "sourceEpoch": metadata.get("sourceEpoch"),
+            "envelopeDigest": envelope.get("digest"),
+            "recipientSetDigest": metadata.get("recipientSetDigest"),
+            "mirrorCreatedAt": metadata.get("createdAt"),
+            "conversations": len(envelope.get("conversations", [])),
+            "conflicts": len(envelope.get("conflicts", [])),
+        }
+    except json.JSONDecodeError as exc:
+        raise AppError("Sealed frontend mirror could not be decoded", code=ErrorCode.INVALID_PAYLOAD) from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def unlock_restore(restore_id: str) -> dict[str, Any]:
     root = _restore_root(restore_id)
     plan_path = root / "plan.json"
@@ -994,6 +1045,14 @@ def unlock_restore(restore_id: str) -> dict[str, Any]:
             ciphertext_sha256=str(upload["ciphertextSha256"]),
             protection=str(upload["protection"]),
         )
+        sealed_frontend = _unlock_sealed_frontend(root, kind, secret)
+        if sealed_frontend is not None:
+            result["sealedFrontend"] = sealed_frontend
+            plan_path = root / "plan.json"
+            if plan_path.is_file():
+                plan = _read_json(plan_path)
+                plan["sealedFrontend"] = sealed_frontend
+                _write_json(plan_path, plan)
         # The same in-memory secret protects the pre-restore Safety Backup. It
         # remains ephemeral and must be re-entered after a server restart.
         backup_crypto.put_secret_bytes(restore_id, kind, bytearray(secret))
