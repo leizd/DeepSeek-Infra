@@ -144,6 +144,48 @@ export function finalizeBackup(backupId: string, client: HttpClient = httpClient
   return client.postJson<BackupSession>(`/api/workspace/backups/${encodeURIComponent(backupId)}/finalize`, {});
 }
 
+export interface BackupMirrorMetadataV1 {
+  schemaVersion: 1;
+  profileId: string;
+  sourceEpoch: string;
+  envelopeDigest: string;
+  recipientSetDigest: string;
+  conversations: number;
+  conflicts: number;
+  createdAt: string;
+  acknowledgedAt: string;
+  ciphertextSha256: string;
+  creationVerified: boolean;
+}
+
+export type BackupMirrorFreshness = "current" | "stale" | "missing" | "epoch-mismatch" | "recipient-mismatch" | "excluded";
+
+export interface BackupMirrorStatus {
+  status: BackupMirrorFreshness;
+  mirror?: BackupMirrorMetadataV1;
+  profileId?: string;
+}
+
+export function listBackupMirrors(client: HttpClient = httpClient) {
+  return client.json<{ mirrors: BackupMirrorMetadataV1[] }>("/api/workspace/backup-mirrors");
+}
+
+export function getBackupMirror(profileId: string, client: HttpClient = httpClient) {
+  return client.json<BackupMirrorStatus>(`/api/workspace/backup-mirrors/${encodeURIComponent(profileId)}`);
+}
+
+export function putBackupMirror(
+  profileId: string,
+  request: { sourceEpoch: string; acknowledgedAt?: string; envelope: FrontendBackupEnvelopeV1 },
+  client: HttpClient = httpClient,
+) {
+  return client.json<BackupMirrorMetadataV1>(`/api/workspace/backup-mirrors/${encodeURIComponent(profileId)}/frontend`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
 export function putBackupSecret(
   backupId: string,
   request: { kind: "passphrase" | "age-identity"; secret: string },

@@ -28,6 +28,8 @@ from deepseek_infra.infra.data.projects import (
 )
 from deepseek_infra.infra.skills import analytics as skill_analytics
 from deepseek_infra.infra.workspace import artifacts as workspace_artifacts
+from deepseek_infra.infra.workspace import backup_mirror as workspace_backup_mirror
+from deepseek_infra.infra.workspace import backup_policies as workspace_backup_policies
 from deepseek_infra.infra.workspace import backups as workspace_backups
 from deepseek_infra.infra.workspace import exports as workspace_exports
 from deepseek_infra.infra.workspace import home as workspace_home
@@ -306,6 +308,32 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
             "Cache-Control": "no-store",
         }
         return Response(content=data, media_type=media_type, headers=headers)
+
+    # ── Sealed frontend replica mirror ─────────────────────────────────────
+
+    @router.get("/api/workspace/backup-mirrors")
+    async def api_workspace_backup_mirrors(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        return json_response({"mirrors": workspace_backup_mirror.list_mirrors()})
+
+    @router.get("/api/workspace/backup-mirrors/{profile_id}")
+    async def api_workspace_backup_mirror_get(request: Request, profile_id: str) -> JSONResponse:
+        require_api_auth(request)
+        recipients = workspace_backup_policies.active_recipients()
+        return json_response(workspace_backup_mirror.mirror_status(profile_id, recipients=recipients or None))
+
+    @router.put("/api/workspace/backup-mirrors/{profile_id}/frontend")
+    async def api_workspace_backup_mirror_put(request: Request, profile_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=64_000_000)
+        envelope = payload.get("envelope")
+        metadata = workspace_backup_mirror.put_frontend_mirror(
+            profile_id,
+            envelope if isinstance(envelope, dict) else {},
+            source_epoch=str(payload.get("sourceEpoch") or ""),
+            acknowledged_at=str(payload.get("acknowledgedAt") or "") or None,
+        )
+        return json_response(metadata)
 
     # ── Restorable backups ─────────────────────────────────────────────────
 

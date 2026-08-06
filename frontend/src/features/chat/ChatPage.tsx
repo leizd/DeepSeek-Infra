@@ -9,6 +9,7 @@ import { useOnlineStatus } from "../../shared/useOnlineStatus";
 import { buildUpdateStore } from "../../app/buildUpdateStore";
 import { ReloadReadiness } from "../build-update/BuildUpdateBanner";
 import { listenForRestoreEpoch, recoverInterruptedFrontendRestore } from "../backup-restore/frontendBackup";
+import { onDurableHeadCommitted } from "../../domain/conversation/persistence";
 import { readFrontendRestoreJournal } from "../../domain/conversation/restorePersistence";
 import { Composer } from "../composer/Composer";
 import { HistoryDrawer } from "../history/HistoryDrawer";
@@ -57,6 +58,13 @@ function ChatWorkspace() {
       setRestoreEpochChanged(true);
     });
   }, [chat.freezeForWorkspaceRestore]);
+
+  useEffect(() => onDurableHeadCommitted(() => {
+    const version = settings.runtime?.version;
+    void import("../backup-restore/backupMirror").then((mirror) => {
+      mirror.scheduleBackupMirrorUpload(version);
+    });
+  }), [settings.runtime?.version]);
 
   useEffect(() => {
     attachments.clear();
