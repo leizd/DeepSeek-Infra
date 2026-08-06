@@ -7,6 +7,16 @@
 
 已完成的能力以 [实现状态矩阵](docs/IMPLEMENTATION_STATUS.md) 为准（含各模块成熟度与明确缺口）；下面是接下来的计划，完成一项勾一项：
 
+### v4.4.4: Scheduled Encrypted Backups & Retention Governance
+
+- [x] 耐久 Backup Policy：只存公开 age1 Recipient、IANA 时区 Cron、Misfire/Catch-up/Jitter、拒绝 Passphrase 与任何凭据
+- [x] 密封 Frontend Replica Mirror：Envelope 双重校验、Age 加密落盘、Epoch/Generation 围栏、幂等上传、Previous 轮换
+- [x] 无人值守往返验证：临时 Age Identity 加密-解密-校验后清零销毁，Recovery Identity 永不落盘
+- [x] SQLite 耐久调度器：UNIQUE(policy_id, schedule_slot) 恰好一次、Lease + Fencing Token、崩溃接管、停机补一次
+- [x] 文件系统目标 Marker 识别 + 容器/符号链接/重叠防护，.partial 原子发布 + Receipt
+- [x] Hash Chain Catalog：Pin、Scrub、解锁演练时间戳、Receipt 可重建
+- [x] GFS 保留治理：Policy 时区分桶、Preview、两阶段 Trash Grace、Pin/Restore 引用/最小健康副本保护
+
 ### v4.4.3: Federated Restore Transactions & Streaming Crypto Integrity
 
 - [x] Stateless MCP 以两阶段参与者身份并入恢复事务：staged Prepare、Fence 下 Commit、Complete 可见、Abort 精确删除本事务键

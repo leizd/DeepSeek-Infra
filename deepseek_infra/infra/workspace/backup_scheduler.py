@@ -550,12 +550,15 @@ def next_run_for_policy(policy: dict[str, Any], *, now: datetime | None = None) 
         schedule = parse_cron(str(schedule_cfg.get("cron") or ""))
     except AppError:
         return None
-    slot = next_slot(
-        schedule,
-        str(schedule_cfg.get("timezone") or "UTC"),
-        after_utc=now or datetime.now(tz=timezone.utc),
-        misfire_policy=str(schedule_cfg.get("misfirePolicy") or "skip"),
-    )
+    try:
+        slot = next_slot(
+            schedule,
+            str(schedule_cfg.get("timezone") or "UTC"),
+            after_utc=now or datetime.now(tz=timezone.utc),
+            misfire_policy=str(schedule_cfg.get("misfirePolicy") or "skip"),
+        )
+    except AppError:
+        return None
     if slot is None:
         return None
     jitter = deterministic_jitter_seconds(str(policy.get("policyId") or ""), slot.slot_key, int(schedule_cfg.get("jitterSeconds") or 0))

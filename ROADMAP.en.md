@@ -7,7 +7,11 @@
 
 This standalone roadmap summarizes the current direction. The detailed historical checklist is preserved in the [Chinese roadmap](ROADMAP.md), while completed release behavior remains governed by the [implementation status matrix](docs/IMPLEMENTATION_STATUS.md), release notes, tests, and versioned evidence.
 
-## Current baseline: 4.4.3
+## Current baseline: 4.4.4
+
+- [x] 4.4.4 adds durable scheduled backup policies with age-sealed frontend mirrors, ephemeral-recipient unattended verification, a lease-fenced SQLite scheduler with IANA timezone/DST semantics, marker-identified atomic filesystem targets, a hash-chained catalog, and previewable GFS retention with trash grace periods.
+
+## Historical baseline: 4.4.3
 
 - [x] Python-first hybrid runtime stabilized for 4.0.
 - [x] Optional Rust delegates remain disabled by default with deterministic Python fallback.

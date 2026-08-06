@@ -60,7 +60,9 @@ def test_target_cli_lifecycle(tmp_settings: Path, tmp_path: Path, monkeypatch: p
     code, probe = _run(target_cli, ["probe", target_id], monkeypatch, capsys)
     assert code == 0 and probe["ready"] is True
     code, listing = _run(target_cli, ["list"], monkeypatch, capsys)
-    assert code == 0 and any(item["targetId"] == target_id for item in listing["targets"])  # type: ignore[operator]
+    targets = listing["targets"]
+    assert code == 0 and isinstance(targets, list)
+    assert any(item["targetId"] == target_id for item in targets)
     code, deleted = _run(target_cli, ["delete", target_id], monkeypatch, capsys)
     assert code == 0 and deleted["deleted"] is True
 

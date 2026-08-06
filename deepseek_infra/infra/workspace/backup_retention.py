@@ -118,7 +118,7 @@ def put_retention_policy(retention_policy_id: str, payload: dict[str, Any]) -> d
 
 
 def list_retention_policies() -> list[dict[str, Any]]:
-    policies = [normalize_retention_policy({}, retention_policy_id=DEFAULT_RETENTION_POLICY_ID)]
+    by_id: dict[str, dict[str, Any]] = {DEFAULT_RETENTION_POLICY_ID: normalize_retention_policy({}, retention_policy_id=DEFAULT_RETENTION_POLICY_ID)}
     if BACKUP_RETENTION_DIR.is_dir():
         for path in sorted(BACKUP_RETENTION_DIR.glob("*.json")):
             try:
@@ -126,15 +126,9 @@ def list_retention_policies() -> list[dict[str, Any]]:
             except (OSError, json.JSONDecodeError):
                 continue
             if isinstance(data, dict):
-                policies.append(normalize_retention_policy(data, retention_policy_id=str(data.get("retentionPolicyId") or path.stem)))
-    seen: set[str] = set()
-    unique: list[dict[str, Any]] = []
-    for policy in policies:
-        if policy["retentionPolicyId"] in seen:
-            continue
-        seen.add(policy["retentionPolicyId"])
-        unique.append(policy)
-    return unique
+                policy = normalize_retention_policy(data, retention_policy_id=str(data.get("retentionPolicyId") or path.stem))
+                by_id[policy["retentionPolicyId"]] = policy
+    return [by_id[key] for key in sorted(by_id)]
 
 
 def _bucket_keys(local: datetime) -> dict[str, str]:
