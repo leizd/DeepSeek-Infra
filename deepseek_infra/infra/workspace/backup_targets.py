@@ -72,8 +72,8 @@ def _is_reparse_point(path: Path) -> bool:
         return True
     if os.name == "nt":
         try:
-            attributes = os.lstat(path).st_file_attributes
-        except (OSError, AttributeError):
+            attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+        except OSError:
             return False
         return bool(attributes & _WINDOWS_REPARSE_POINT)
     return False
