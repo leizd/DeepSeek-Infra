@@ -288,6 +288,26 @@ def claim_due_slots(
     return claimed
 
 
+def claim_manual_run(policy: dict[str, Any], *, instance_id: str, lease_seconds: int = DEFAULT_LEASE_SECONDS, now: datetime | None = None) -> ClaimedRun:
+    """Claim an ad-hoc manual run for a policy (POST .../run)."""
+    current = now or datetime.now(tz=timezone.utc)
+    policy_id = str(policy.get("policyId") or "")
+    slot_key = f"manual/{_utc_iso(current)}"
+    with _connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        run_id = f"run_{uuid.uuid4().hex[:16]}"
+        token = _next_token(connection, "fencing")
+        connection.execute(
+            "INSERT OR IGNORE INTO backup_schedule_slots(policy_id, slot_key, scheduled_for, local_date_time, timezone, status, run_id, created_at) VALUES (?,?,?,?,?,'claimed',?,?)",
+            (policy_id, slot_key, _utc_iso(current), _utc_iso(current), "UTC", run_id, _utc_iso()),
+        )
+        connection.execute(
+            "INSERT INTO backup_runs(run_id, policy_id, schedule_slot, phase, attempt, owner_instance_id, fencing_token, lease_until, created_at, updated_at) VALUES (?,?,?,'leased',?,?,?,?,?,?)",
+            (run_id, policy_id, slot_key, 1, instance_id, token, _utc_iso(current + timedelta(seconds=lease_seconds)), _utc_iso(), _utc_iso()),
+        )
+    return ClaimedRun(run_id=run_id, policy_id=policy_id, schedule_slot=slot_key, scheduled_for=_utc_iso(current), attempt=1, fencing_token=token)
+
+
 def reclaim_abandoned_slots(
     *,
     instance_id: str,
