@@ -108,16 +108,16 @@ def record_unlock_verification(root: Path, backup_id: str) -> dict[str, Any]:
     return _append_entry(root, "unlock-verified", {"backupId": backup_id, "userUnlockVerifiedAt": _utc_iso()})
 
 
-def record_trash(root: Path, backup_id: str, *, retention_run_id: str) -> dict[str, Any]:
-    return _append_entry(root, "trash", {"backupId": backup_id, "retentionRunId": retention_run_id, "trashedAt": _utc_iso()})
+def record_trash(root: Path, backup_id: str, *, retention_run_id: str, at: str | None = None) -> dict[str, Any]:
+    return _append_entry(root, "trash", {"backupId": backup_id, "retentionRunId": retention_run_id, "trashedAt": at or _utc_iso()})
 
 
-def record_restore_from_trash(root: Path, backup_id: str) -> dict[str, Any]:
-    return _append_entry(root, "restore-trash", {"backupId": backup_id, "restoredAt": _utc_iso()})
+def record_restore_from_trash(root: Path, backup_id: str, *, at: str | None = None) -> dict[str, Any]:
+    return _append_entry(root, "restore-trash", {"backupId": backup_id, "restoredAt": at or _utc_iso()})
 
 
-def record_delete(root: Path, backup_id: str, *, retention_run_id: str) -> dict[str, Any]:
-    return _append_entry(root, "delete", {"backupId": backup_id, "retentionRunId": retention_run_id, "deletedAt": _utc_iso()})
+def record_delete(root: Path, backup_id: str, *, retention_run_id: str, at: str | None = None) -> dict[str, Any]:
+    return _append_entry(root, "delete", {"backupId": backup_id, "retentionRunId": retention_run_id, "deletedAt": at or _utc_iso()})
 
 
 def catalog_state(root: Path) -> dict[str, dict[str, Any]]:

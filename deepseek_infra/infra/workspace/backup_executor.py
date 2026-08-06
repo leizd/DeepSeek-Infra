@@ -18,6 +18,7 @@ from deepseek_infra.infra.workspace import (
     backup_catalog,
     backup_policies,
     backup_publish,
+    backup_retention,
     backup_scheduled,
     backup_scheduler,
     backups,
@@ -100,6 +101,12 @@ def execute_run(run: backup_scheduler.ClaimedRun, *, instance_id: str, now: date
         backup_scheduler.assert_run_lease(run.run_id, instance_id, run.fencing_token, now=current)
         backup_scheduler.record_run_phase(run.run_id, "cataloging", instance_id=instance_id, fencing_token=run.fencing_token)
         backup_catalog.append_receipt(target.root, published.receipt)
+        backup_scheduler.assert_run_lease(run.run_id, instance_id, run.fencing_token, now=current)
+        backup_scheduler.record_run_phase(run.run_id, "pruning", instance_id=instance_id, fencing_token=run.fencing_token)
+        retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
+        policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
+        backup_retention.apply_retention(retention, target.root, policy_timezone=policy_timezone, now=current)
+        backup_retention.finalize_retention(retention, target.root, policy_timezone=policy_timezone, now=current)
         backup_scheduler.assert_run_lease(run.run_id, instance_id, run.fencing_token, now=current)
         backup_scheduler.complete_run(
             run.run_id,
