@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
 import unittest
 from pathlib import Path
@@ -10,7 +11,7 @@ from scripts import preflight_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "4.4.6"
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def read_text(rel: str) -> str:
@@ -46,6 +47,26 @@ class EncodingRegressionTests(unittest.TestCase):
         offenders = [str(path.relative_to(ROOT)) for path in python_files if path.read_bytes().startswith(b"\xef\xbb\xbf")]
         self.assertEqual([], offenders)
 
+    def test_tests_do_not_embed_machine_specific_temp_paths(self) -> None:
+        machine_temp = re.compile(
+            r"[A-Za-z]:[\\/]Users[\\/][^\\/]+[\\/]AppData[\\/]Local[\\/]Temp(?:[\\/]|$)",
+            re.IGNORECASE,
+        )
+        offenders: list[str] = []
+        for path in (ROOT / "tests").rglob("*.py"):
+            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if machine_temp.search(line):
+                    offenders.append(f"{path.relative_to(ROOT)}:{line_number}")
+        self.assertEqual([], offenders)
+
+    def test_tests_derive_the_current_release_version(self) -> None:
+        offenders = [
+            str(path.relative_to(ROOT))
+            for path in (ROOT / "tests").rglob("*.py")
+            if VERSION in path.read_text(encoding="utf-8")
+        ]
+        self.assertEqual([], offenders)
+
     def test_release_version_sync_current(self) -> None:
         readme = read_text("README.md")
         config = read_text("deepseek_infra/core/config.py")
@@ -55,14 +76,14 @@ class EncodingRegressionTests(unittest.TestCase):
         ci = read_text(".github/workflows/ci.yml")
         frontend = read_text("frontend/index.html")
 
-        self.assertIn("version-4.4.6-blue", readme)
-        self.assertIn('app_version: str = "4.4.6"', config)
-        self.assertIn("deepseek-infra:4.4.6", dockerfile)
-        self.assertIn('org.opencontainers.image.version="4.4.6"', dockerfile)
-        self.assertIn('versionName "4.4.6"', build_gradle)
+        self.assertIn(f"version-{VERSION}-blue", readme)
+        self.assertIn(f'app_version: str = "{VERSION}"', config)
+        self.assertIn(f"deepseek-infra:{VERSION}", dockerfile)
+        self.assertIn(f'org.opencontainers.image.version="{VERSION}"', dockerfile)
+        self.assertIn(f'versionName "{VERSION}"', build_gradle)
         self.assertIn("versionCode 400046", build_gradle)
-        self.assertIn('<meta name="deepseek-infra-version" content="4.4.6" />', frontend)
-        self.assertIn("## [4.4.6] - Remote Backup Targets and Conditional Object Storage", changelog)
+        self.assertIn(f'<meta name="deepseek-infra-version" content="{VERSION}" />', frontend)
+        self.assertIn(f"## [{VERSION}]", changelog)
         self.assertIn("Personal AI Runtime GA", readme)
         self.assertIn("python scripts/generate_release_evidence.py --version $RELEASE_VERSION", ci)
         self.assertIn("evidence-context:", ci)
@@ -99,7 +120,7 @@ class EncodingRegressionTests(unittest.TestCase):
             "docs/releases/4.4.3.md",
             "docs/releases/4.4.4.md",
             "docs/releases/4.4.5.md",
-            "docs/releases/4.4.6.md",
+            f"docs/releases/{VERSION}.md",
         ):
             self.assertTrue((ROOT / rel).is_file(), rel)
             self.assertIn(rel, readme)
@@ -109,7 +130,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("gaEvidence", manifest)
 
     def test_release_doc_headers_are_readable(self) -> None:
-        header = "适用版本：v4.4.6。"
+        header = f"适用版本：v{VERSION}。"
         for rel in ("docs/IMPLEMENTATION_STATUS.md", "evals/README.md"):
             self.assertIn(header, read_text(rel))
 

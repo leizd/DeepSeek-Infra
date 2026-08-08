@@ -7,6 +7,8 @@ from pathlib import Path
 from deepseek_infra.infra.diagnostics import release_manifest
 from deepseek_infra.infra.diagnostics.evidence_inventory import evidence_paths
 
+CURRENT_VERSION = release_manifest.APP_VERSION
+
 
 def test_sha256_of_matches_hashlib(tmp_path: Path) -> None:
     payload = b"deepseek-infra-release-bytes" * 4096
@@ -81,14 +83,14 @@ def test_build_manifest_has_required_fields(tmp_path: Path) -> None:
     assert manifest["runtimeDefaults"]["authoritativeRuntime"] == "python"
     assert manifest["runtimeDefaults"]["defaultCompose"] == "python-only"
     expected_evidence = (
-        *evidence_paths("4.4.6"),
-        "docs/evidence/evidence-source-context-v4.4.6.json",
-        "docs/evidence/evidence-manifest-v4.4.6.json",
-        "docs/evidence/evidence-manifest-v4.4.6.json.sha256",
+        *evidence_paths(CURRENT_VERSION),
+        f"docs/evidence/evidence-source-context-v{CURRENT_VERSION}.json",
+        f"docs/evidence/evidence-manifest-v{CURRENT_VERSION}.json",
+        f"docs/evidence/evidence-manifest-v{CURRENT_VERSION}.json.sha256",
     )
     assert tuple(manifest["evidence"]) == expected_evidence
     assert manifest["evidenceManifest"] == {}
-    assert manifest["gaEvidence"] == "docs/evidence/ga-v4.4.6.json"
+    assert manifest["gaEvidence"] == f"docs/evidence/ga-v{CURRENT_VERSION}.json"
     assert manifest["qualityGates"]["mcpProtocolParity"] == "PASS"
     assert manifest["qualityGates"]["ragDocumentPreparationParity"] == "PASS"
     assert manifest["qualityGates"]["rustSidecarPerformance"] == "PASS"

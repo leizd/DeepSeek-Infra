@@ -29,6 +29,15 @@
 
 本地没有安装 Gradle wrapper 时，最简单的方式是用 Android Studio 打开 `android/` 目录，等待 Gradle 同步完成。
 
+Gradle 默认从 `PATH` 自动发现与 Chaquopy Python 3.13 兼容的构建解释器。需要指定解释器时，使用环境变量或 Gradle project property，避免把本机绝对路径写进构建脚本：
+
+```powershell
+$env:DEEPSEEK_BUILD_PYTHON = 'C:\Python313\python.exe'
+gradle :app:assembleDebug
+```
+
+也可以传入 `-PDEEPSEEK_BUILD_PYTHON=C:\Python313\python.exe`。同一解释器也会用于构建 React 前端的 Gradle 任务。
+
 ## 命令行构建
 
 如果本机已有 Gradle：

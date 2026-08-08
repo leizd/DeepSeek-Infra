@@ -22,7 +22,8 @@ from deepseek_infra.infra.diagnostics.evidence_manifest import sha256_of, valida
 from scripts import generate_release_evidence
 from scripts.verify_release_package import verify_release_package
 
-VERSION = "4.4.6"
+ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 REVISION = "a" * 40
 
 

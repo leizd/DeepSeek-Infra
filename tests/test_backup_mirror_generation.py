@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import backup_crypto, backup_mirror, backup_unattended
 
@@ -36,7 +37,7 @@ def stub_crypto(monkeypatch: pytest.MonkeyPatch) -> None:
 def _envelope(marker: str = "v1") -> dict[str, object]:
     body: dict[str, object] = {
         "schemaVersion": 1,
-        "sourceVersion": "4.4.6",
+        "sourceVersion": config.APP_VERSION,
         "createdAt": 1,
         "conversations": [{"conversationId": marker, "headRevision": "r1", "checkpoint": {"messages": []}}],
         "conflicts": [],

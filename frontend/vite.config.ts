@@ -10,7 +10,7 @@ import { relative, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import react from "@vitejs/plugin-react";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 
 import {
   createFrontendBuildIdentity,
@@ -40,6 +40,13 @@ const BUILD_IDENTITY = createFrontendBuildIdentity({
 const WORKER_BUILD_ID_TOKEN = "__DEEPSEEK_WORKER_BUILD_ID__";
 const WORKER_ASSET_DIGEST_TOKEN = "__DEEPSEEK_WORKER_ASSET_SET_DIGEST__";
 const WORKER_MANIFEST_URL_TOKEN = "__DEEPSEEK_WORKER_MANIFEST_URL__";
+const DEFAULT_BACKEND_TARGET = "http://127.0.0.1:8000";
+const DEFAULT_DEV_SERVER_PORT = 5173;
+
+function devServerPort(value: string | undefined): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65_535 ? parsed : DEFAULT_DEV_SERVER_PORT;
+}
 
 const WORKSPACE_PRIMARY_MODULES = [
   "src/features/settings/ConnectionSettingsFeature.tsx",
@@ -194,39 +201,45 @@ export function workspaceAssetManifest(identity: FrontendBuildIdentity = BUILD_I
   };
 }
 
-export default defineConfig({
-  plugins: [react(), workspaceAssetManifest()],
-  define: {
-    __APP_BUILD_ID__: JSON.stringify(BUILD_IDENTITY.buildId),
-    __APP_SOURCE_REVISION__: JSON.stringify(BUILD_IDENTITY.sourceRevision),
-  },
-  base: "/ui/",
-  build: {
-    outDir: fileURLToPath(new URL("../static/ui", import.meta.url)),
-    emptyOutDir: true,
-    manifest: true,
-    sourcemap: true,
-    rollupOptions: {
-      output: {
-        // Stable vendor runtime in its own core chunk: the entry asset stays lean and
-        // the vendor hash survives app-only releases (immutable-asset friendly).
-        manualChunks(id: string) {
-          const normalized = id.replaceAll("\\", "/");
-          if (
-            /node_modules\/(react|react-dom|scheduler|react-router|react-router-dom|@tanstack)\//.test(normalized)
-          ) {
-            return "vendor";
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, REPOSITORY_ROOT, "VITE_");
+  const backendTarget = env.VITE_BACKEND_TARGET?.trim() || DEFAULT_BACKEND_TARGET;
+
+  return {
+    plugins: [react(), workspaceAssetManifest()],
+    define: {
+      __APP_BUILD_ID__: JSON.stringify(BUILD_IDENTITY.buildId),
+      __APP_SOURCE_REVISION__: JSON.stringify(BUILD_IDENTITY.sourceRevision),
+    },
+    envDir: REPOSITORY_ROOT,
+    base: "/ui/",
+    build: {
+      outDir: fileURLToPath(new URL("../static/ui", import.meta.url)),
+      emptyOutDir: true,
+      manifest: true,
+      sourcemap: true,
+      rollupOptions: {
+        output: {
+          // Stable vendor runtime in its own core chunk: the entry asset stays lean and
+          // the vendor hash survives app-only releases (immutable-asset friendly).
+          manualChunks(id: string) {
+            const normalized = id.replaceAll("\\", "/");
+            if (
+              /node_modules\/(react|react-dom|scheduler|react-router|react-router-dom|@tanstack)\//.test(normalized)
+            ) {
+              return "vendor";
+            }
           }
         },
       },
     },
-  },
-  server: {
-    port: 5173,
-    proxy: {
-      "/api": "http://127.0.0.1:8000",
-      "/healthz": "http://127.0.0.1:8000",
-      "/readyz": "http://127.0.0.1:8000",
+    server: {
+      port: devServerPort(env.VITE_DEV_SERVER_PORT),
+      proxy: {
+        "/api": backendTarget,
+        "/healthz": backendTarget,
+        "/readyz": backendTarget,
+      },
     },
-  },
+  };
 });

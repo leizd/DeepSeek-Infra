@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -14,19 +13,9 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 
 
 @pytest.fixture
-def tmp_files_dir(monkeypatch):
-    base = Path("C:/Users/12393/AppData/Local/Temp/opencode")
-    base.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=base) as tmp_dir:
-        root = Path(tmp_dir)
-        file_cache_dir = root / ".file-cache"
-        file_cache_dir.mkdir()
-        projects_dir = root / ".projects"
-        monkeypatch.setattr(files, "FILE_CACHE_DIR", file_cache_dir)
-        monkeypatch.setattr(files, "PROJECTS_DIR", projects_dir)
-        files._load_cached_file_cached.cache_clear()
-        yield root
-        files._load_cached_file_cached.cache_clear()
+def tmp_files_dir(tmp_settings: Path):
+    Path(files.FILE_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+    yield tmp_settings
 
 
 def make_zip(entries: dict[str, bytes]) -> bytes:

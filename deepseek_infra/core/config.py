@@ -13,6 +13,10 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 
+DEFAULT_DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+DEFAULT_TAVILY_API_URL = "https://api.tavily.com/search"
+
+
 def _runtime_root() -> Path:
     """Directory where writable user data lives (auth token, caches, projects).
 
@@ -448,8 +452,8 @@ class SkillsSettings:
 class Settings:
     root: Path = ROOT
     app_version: str = "4.4.6"
-    deepseek_url: str = "https://api.deepseek.com/chat/completions"
-    tavily_url: str = "https://api.tavily.com/search"
+    deepseek_url: str = DEFAULT_DEEPSEEK_API_URL
+    tavily_url: str = DEFAULT_TAVILY_API_URL
     deepseek_timeout_seconds: int = 180
     multi_agent_timeout_seconds: int = 3900
     tavily_timeout_seconds: int = 45
@@ -655,8 +659,10 @@ class Settings:
         ocr_defaults = OCRSettings()
         return cls(
             root=runtime_root,
-            deepseek_url=os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions").strip()
-            or "https://api.deepseek.com/chat/completions",
+            deepseek_url=os.environ.get("DEEPSEEK_API_URL", DEFAULT_DEEPSEEK_API_URL).strip()
+            or DEFAULT_DEEPSEEK_API_URL,
+            tavily_url=os.environ.get("TAVILY_API_URL", DEFAULT_TAVILY_API_URL).strip()
+            or DEFAULT_TAVILY_API_URL,
             deepseek_timeout_seconds=_env_int("DEEPSEEK_TIMEOUT_SECONDS", 180),
             multi_agent_timeout_seconds=_env_int("MULTI_AGENT_TIMEOUT_SECONDS", 3900),
             tavily_timeout_seconds=_env_int("TAVILY_TIMEOUT_SECONDS", 45),

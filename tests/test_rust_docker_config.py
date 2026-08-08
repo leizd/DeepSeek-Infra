@@ -14,6 +14,7 @@ from scripts import smoke_rust_sidecar as smoke
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def _read(path: str) -> str:
@@ -75,9 +76,9 @@ def test_ci_builds_and_smokes_rust_image_in_independent_job() -> None:
     assert "--cov-fail-under=95" in workflow
 
 
-def test_rust_image_has_rc2_oci_version_label() -> None:
+def test_rust_image_has_current_oci_version_label() -> None:
     dockerfile = _read("rust/Dockerfile")
-    assert 'org.opencontainers.image.version="4.4.6"' in dockerfile
+    assert f'org.opencontainers.image.version="{VERSION}"' in dockerfile
 
 
 class _SidecarHandler(BaseHTTPRequestHandler):
