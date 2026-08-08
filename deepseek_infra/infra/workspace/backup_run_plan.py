@@ -18,7 +18,7 @@ from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 
 RUN_PLAN_DIR = config.ROOT / ".backup-run-plans"
-RUN_PLAN_SCHEMA_VERSION = 1
+RUN_PLAN_SCHEMA_VERSION = 2
 
 
 def _utc_iso() -> str:
@@ -76,12 +76,20 @@ def freeze_run_plan(
     target_id: str,
     target_head_hash: str = "",
     snapshot_kind: str = "full",
+    lineage_id: str | None = None,
     parent_backup_id: str | None = None,
     base_backup_id: str | None = None,
+    chain_depth: int = 0,
+    parent_commit_hash: str | None = None,
+    parent_receipt_digest: str | None = None,
+    force_full_reason: str | None = None,
     frontend_generation_id: str | None = None,
     backup_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return existing plan for the slot or create and persist a new frozen plan."""
+    """Return existing plan for the slot or create and persist a new frozen plan.
+
+    Once frozen, retries never re-select the parent or snapshot kind.
+    """
     existing = read_run_plan(str(policy.get("policyId") or ""), slot_digest)
     if existing is not None:
         return existing
@@ -99,8 +107,13 @@ def freeze_run_plan(
         "recipientSetDigest": recipient_set_digest(policy),
         "frontendGenerationId": frontend_generation_id,
         "snapshotKind": snapshot_kind if snapshot_kind in {"full", "incremental"} else "full",
+        "lineageId": lineage_id,
         "parentBackupId": parent_backup_id,
         "baseBackupId": base_backup_id,
+        "chainDepth": int(chain_depth),
+        "parentCommitHash": parent_commit_hash,
+        "parentReceiptDigest": parent_receipt_digest,
+        "forceFullReason": force_full_reason,
         "backupId": backup_id or f"backup_{uuid.uuid4().hex[:16]}",
         "createdAt": _utc_iso(),
     }

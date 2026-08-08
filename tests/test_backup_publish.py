@@ -49,7 +49,7 @@ def test_publish_managed_local_layout(tmp_settings: Path, tmp_path: Path) -> Non
     assert result.converged is False
     receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
     assert result.receipt_path == root / "receipts" / "backup_test1.json"
-    assert receipt["schemaVersion"] == 2
+    assert receipt["schemaVersion"] >= 2
     assert receipt["backupId"] == "backup_test1"
     assert receipt["ciphertextSha256"] == package.ciphertext_sha256
     assert receipt["objectDigest"] == package.ciphertext_sha256

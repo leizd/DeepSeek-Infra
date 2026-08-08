@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
 export const FRONTEND_BUILD_IDENTITY_SCHEMA_VERSION = 1;
-export const FRONTEND_BUILD_CONFIGURATION_VERSION = "4.4.7-incremental-snapshot-graphs-v1";
+export const FRONTEND_BUILD_CONFIGURATION_VERSION = "4.4.8-production-incremental-cdc-v1";
 
 export interface FrontendBuildIdentity {
   schemaVersion: 1;

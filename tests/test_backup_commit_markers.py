@@ -197,8 +197,10 @@ def test_executor_converges_when_marker_survives_crash(tmp_settings: Path, stub_
         snapshot_kind: object = None,
         parent_backup_id: object = None,
         base_backup_id: object = None,
+        lineage_id: object = None,
+        chain_depth: object = None,
     ) -> object:
-        del backup_id, contributor_plan, snapshot_kind, parent_backup_id, base_backup_id
+        del backup_id, contributor_plan, snapshot_kind, parent_backup_id, base_backup_id, lineage_id, chain_depth
         run_dir = staging_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         fields = dict(cast(dict[str, Any], stashed["fields"]))

@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.7-blue)
+![版本](https://img.shields.io/badge/version-4.4.8-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.7 Incremental Snapshot Graphs & Remote Recovery Hardening：** 在 4.4.6 远程条件对象存储之上，冻结 Schedule Slot 的 RunPlan 并跨 Scheduler 重试复用已验证 Age 密文；远程 Reconcile 前滚 Head / 回填 Catalog 且不重新生成备份；Remote Restore 以 durable restoreId 跨进程断点续传；Catalog/Retention 经 TargetSession 治理 S3。同时引入增量快照图基础：Merkle Root、Coverage-safe Tombstone、自适应 Full Checkpoint、快照索引与祖先 Retention 保护。参见 [4.4.7 发布说明](docs/releases/4.4.7.md)（上一版 [4.4.6](docs/releases/4.4.6.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
+> **4.4.8 Production Incremental Backups & Content-Defined Deltas：** Scheduler 不再永远生成 Full —— Policy v2 持久化 Incremental 配置，Executor 在冻结 Run Plan 前选择已提交 Parent 与 Lineage；Receipt v3 只暴露最小 Lineage；FastCDC 对大型变化文件生成内容定义差分并复用 Parent Chunk；Retention 保护所有可恢复后代的祖先；Restore Materializer 逐层应用 Delta 并验证 Merkle Root。参见 [4.4.8 发布说明](docs/releases/4.4.8.md)（上一版 [4.4.7](docs/releases/4.4.7.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)。
 
-**4.4.7 validation:** Scheduler 重试复用原 Spool Ciphertext、Remote Commit 崩溃可 Reconcile、Remote Restore 进程退出后按 restoreId 续传、TargetSession 治理远程 Catalog/Retention、增量 put/delete 与 coverage-safe tombstone、Merkle 链验证、缺失 Parent Fail Closed、Pinned 后代保护祖先、Recipient Rotation / Index 丢失强制 Full。
+**4.4.8 validation:** 增量策略持久化、Snapshot Plan 选择/冻结 Parent、有效树继承 Coverage Gap、CDC 确定性/有界内存/中插复用、Receipt v3、DAG Retention 保护祖先、Restore Materializer 逐层 Merkle、缺失 Parent / 损坏 Chunk Fail Closed、Spool 复用增量密文。
 
 ## 30 秒概览
 

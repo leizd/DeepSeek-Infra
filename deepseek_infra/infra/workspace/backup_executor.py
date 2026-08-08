@@ -17,6 +17,7 @@ from typing import Any
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
     backup_catalog,
+    backup_incremental,
     backup_policies,
     backup_publish,
     backup_run_plan,
@@ -33,6 +34,77 @@ from deepseek_infra.infra.workspace.backup_target_store import commit_slot_diges
 
 def _gate_root() -> Path:
     return backups.BACKUP_DIR.parent
+
+
+def _index_available() -> bool:
+    try:
+        return backup_incremental.INDEX_DB.exists() and backup_incremental.INDEX_DB.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _record_committed_index(
+    *,
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    package: Any,
+    run_plan: dict[str, Any],
+) -> None:
+    """Persist a committed snapshot into the rebuildable index (best effort)."""
+    try:
+        manifest = getattr(package, "manifest", None) or {}
+        files = manifest.get("files") or []
+        records = [
+            backup_incremental.FileRecord(
+                contributor_id=str(item.get("contributorId") or ""),
+                logical_path=str(item["path"]),
+                size=int(item["size"]),
+                sha256=str(item["sha256"]),
+            )
+            for item in files
+        ]
+        snapshot = manifest.get("snapshot") if isinstance(manifest, dict) else {}
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        snapshot_kind = str(run_plan.get("snapshotKind") or "full")
+        if snapshot_kind == "incremental":
+            parent = str(run_plan.get("parentBackupId") or "")
+            base = str(run_plan.get("baseBackupId") or parent)
+            depth = int(run_plan.get("chainDepth") or 1)
+            root = str(snapshot.get("rootDigest") or backup_incremental.snapshot_root(records))
+            # Store the effective tree (current + inherited) for lineage continuity.
+            previous = []
+            if parent:
+                previous = backup_incremental.load_snapshot_files(target_id, policy_id, parent)
+            effective = backup_incremental.effective_current(
+                previous,
+                records,
+                successful_contributors={item.contributor_id for item in records},
+            )
+            backup_incremental.record_committed_snapshot(
+                target_id=target_id,
+                policy_id=policy_id,
+                backup_id=backup_id,
+                parent_backup_id=parent or None,
+                base_backup_id=base or None,
+                chain_depth=depth,
+                root_digest=root,
+                files=effective,
+            )
+        else:
+            backup_incremental.record_committed_snapshot(
+                target_id=target_id,
+                policy_id=policy_id,
+                backup_id=backup_id,
+                parent_backup_id=None,
+                base_backup_id=backup_id,
+                chain_depth=0,
+                root_digest=backup_incremental.snapshot_root(records),
+                files=records,
+            )
+    except Exception:
+        # Index is a performance cache; never fail the run on index errors.
+        pass
 
 
 def _retry_section(policy: dict[str, Any]) -> dict[str, Any]:
@@ -142,9 +214,17 @@ def execute_run(
                 return _blocked_target_outcome(run, policy, current, guard, str(exc), outcome)
             raise  # pragma: no cover - other resolve errors bubble to outer handler
 
-        # Freeze run plan on first attempt; retries reuse the same plan + spool.
+        # Select snapshot kind / lineage once, then freeze; retries reuse it.
         context = backup_scheduled._context_from_policy(policy)
         contributor_plan = backups._contributor_plan(context)
+        index_available = _index_available()
+        selected = backup_incremental.select_snapshot_plan(
+            policy=policy,
+            target_id=target_id,
+            policy_id=policy_id,
+            index_available=index_available,
+        )
+        snapshot_kind, lineage_id, parent_backup_id, chain_depth, parent_commit_hash, parent_receipt_digest, force_full_reason = selected
         run_plan = backup_run_plan.freeze_run_plan(
             policy=policy,
             schedule_slot=run.schedule_slot,
@@ -152,10 +232,20 @@ def execute_run(
             contributor_plan=contributor_plan,
             target_id=target_id,
             target_head_hash=_target_head_hash(target),
-            snapshot_kind="full",
+            snapshot_kind=str(snapshot_kind or "full"),
+            lineage_id=lineage_id,
+            parent_backup_id=parent_backup_id,
+            base_backup_id=(parent_backup_id if snapshot_kind == "incremental" else None),
+            chain_depth=int(chain_depth or 0),
+            parent_commit_hash=parent_commit_hash,
+            parent_receipt_digest=parent_receipt_digest,
+            force_full_reason=force_full_reason,
         )
         outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
         outcome["backupId"] = str(run_plan.get("backupId") or "")
+        outcome["snapshotKind"] = str(run_plan.get("snapshotKind") or "full")
+        if run_plan.get("forceFullReason"):
+            outcome["forceFullReason"] = str(run_plan["forceFullReason"])
 
         # A reclaimed run whose slot is already committed by a different worker
         # must not reuse the frozen plan/spool: keep slot-commit-conflict
@@ -205,9 +295,11 @@ def execute_run(
                 cancel_event=guard.cancel_event,
                 backup_id=None if conflicting_slot else str(run_plan.get("backupId") or ""),
                 contributor_plan=contributor_plan,
-                snapshot_kind="full",
+                snapshot_kind=str(run_plan.get("snapshotKind") or "full"),
                 parent_backup_id=run_plan.get("parentBackupId"),
                 base_backup_id=run_plan.get("baseBackupId"),
+                lineage_id=run_plan.get("lineageId"),
+                chain_depth=int(run_plan.get("chainDepth") or 0),
             )
             # Persist verified ciphertext before publish so retries can resume.
             backup_spool.store_verified_package(
@@ -278,7 +370,14 @@ def execute_run(
             fencing_token=run.fencing_token,
             now=guard.now(),
         )
-        # Successful commit: plan can remain for audit; spool cleared by publish.
+        # Successful commit: persist index lineage (best effort), then clear plan.
+        _record_committed_index(
+            target_id=target_id,
+            policy_id=policy_id,
+            backup_id=str(published.receipt.get("backupId") or package.backup_id),
+            package=package,
+            run_plan=run_plan,
+        )
         backup_run_plan.clear_run_plan(policy_id, slot_digest)
         return {
             **outcome,

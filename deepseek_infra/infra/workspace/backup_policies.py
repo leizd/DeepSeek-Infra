@@ -21,11 +21,21 @@ from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace.backup_cron import load_timezone, parse_cron
 
-POLICY_SCHEMA_VERSION = 1
+POLICY_SCHEMA_VERSION = 2
 BACKUP_POLICY_DIR = config.ROOT / ".backup-policies"
 MANAGED_LOCAL_TARGET = "managed-local"
 UNBOUND_TARGET = "unbound"
 DEFAULT_RETENTION_POLICY_ID = "default"
+
+INCREMENTAL_MODES = ("off", "file-delta", "cdc")
+INCREMENTAL_DEFAULTS: dict[str, Any] = {
+    "mode": "off",
+    "maxChainDepth": 8,
+    "fullIntervalDays": 7,
+    "maxDeltaRatio": 0.60,
+    "largeFileMode": "cdc",
+    "largeFileThresholdBytes": 16 * 1024 * 1024,
+}
 
 MISFIRE_POLICIES = ("skip", "run-once")
 SCOPE_MODES = ("full", "project")
@@ -206,6 +216,26 @@ def _normalize_protection(raw: Any) -> dict[str, Any]:
     return {"mode": "age-recipient", "recipients": normalize_recipients(section.get("recipients"))}
 
 
+def _normalize_incremental(raw: Any) -> dict[str, Any]:
+    section = _require_mapping(raw, "incremental") if raw is not None else {}
+    mode = _require_choice(section.get("mode"), "incremental.mode", INCREMENTAL_MODES, "off")
+    large_file_mode = _require_choice(section.get("largeFileMode"), "incremental.largeFileMode", ("whole", "cdc"), "cdc")
+    raw_ratio = section.get("maxDeltaRatio", 0.60)
+    if not isinstance(raw_ratio, (int, float)) or isinstance(raw_ratio, bool):
+        raise AppError("Backup policy field incremental.maxDeltaRatio must be a number", code=ErrorCode.INVALID_PAYLOAD)
+    ratio = float(raw_ratio)
+    if not 0.1 <= ratio <= 0.9:
+        raise AppError("Backup policy field incremental.maxDeltaRatio must be between 0.10 and 0.90", code=ErrorCode.INVALID_PAYLOAD)
+    return {
+        "mode": mode,
+        "maxChainDepth": _require_int(section.get("maxChainDepth"), "incremental.maxChainDepth", 8, 1, 64),
+        "fullIntervalDays": _require_int(section.get("fullIntervalDays"), "incremental.fullIntervalDays", 7, 1, 90),
+        "maxDeltaRatio": ratio,
+        "largeFileMode": large_file_mode,
+        "largeFileThresholdBytes": _require_int(section.get("largeFileThresholdBytes"), "incremental.largeFileThresholdBytes", 16 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024),
+    }
+
+
 def _normalize_retry(raw: Any) -> dict[str, Any]:
     section = _require_mapping(raw, "retry") if raw is not None else {}
     initial = _require_int(section.get("initialBackoffSeconds"), "retry.initialBackoffSeconds", 60, 1, 3600)
@@ -224,7 +254,7 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
         raise AppError("Backup policy payload must be an object", code=ErrorCode.INVALID_PAYLOAD)
     _reject_secret_markers(payload)
     schema_version = payload.get("schemaVersion", POLICY_SCHEMA_VERSION)
-    if schema_version != POLICY_SCHEMA_VERSION:
+    if schema_version not in (1, POLICY_SCHEMA_VERSION):
         raise AppError("Unsupported backup policy schemaVersion", code=ErrorCode.INVALID_PAYLOAD)
     name = str(payload.get("name") or "").strip()
     if not 1 <= len(name) <= 120:
@@ -245,6 +275,7 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
         "targetId": target_id,
         "retentionPolicyId": _require_safe_id(payload.get("retentionPolicyId") or DEFAULT_RETENTION_POLICY_ID, "retentionPolicyId"),
         "retry": _normalize_retry(payload.get("retry")),
+        "incremental": _normalize_incremental(payload.get("incremental")),
         "createdAt": created_at or now,
         "updatedAt": now,
     }
@@ -289,7 +320,7 @@ def update_policy(policy_id: str, patch: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(patch, dict):
         raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
     merged = dict(existing)
-    for key in ("name", "enabled", "schedule", "scope", "frontendMirror", "protection", "targetId", "retentionPolicyId", "retry"):
+    for key in ("name", "enabled", "schedule", "scope", "frontendMirror", "protection", "targetId", "retentionPolicyId", "retry", "incremental"):
         if key in patch:
             merged[key] = patch[key]
     normalized = normalize_policy(merged, policy_id=existing["policyId"], created_at=str(existing.get("createdAt") or ""))

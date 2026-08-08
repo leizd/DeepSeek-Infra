@@ -15,7 +15,7 @@ RECIPIENT_B = "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 def _payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "name": "Nightly backup",
         "enabled": True,
         "schedule": {"cron": "0 3 * * *", "timezone": "Asia/Singapore"},
@@ -29,7 +29,7 @@ def _payload(**overrides: object) -> dict[str, object]:
 def test_create_policy_persists_validated_document(tmp_settings: Path) -> None:
     policy = backup_policies.create_policy(_payload())
     assert policy["policyId"].startswith("policy_")
-    assert policy["schemaVersion"] == 1
+    assert policy["schemaVersion"] == 2
     assert policy["schedule"]["misfirePolicy"] == "skip"
     assert policy["schedule"]["catchupWindowSeconds"] == 86400
     assert policy["scope"] == {
@@ -41,6 +41,14 @@ def test_create_policy_persists_validated_document(tmp_settings: Path) -> None:
     }
     assert policy["frontendMirror"] == {"mode": "best-effort", "maxAgeSeconds": 3600}
     assert policy["retry"] == {"maxAttempts": 3, "initialBackoffSeconds": 60, "maxBackoffSeconds": 900}
+    assert policy["incremental"] == {
+        "mode": "off",
+        "maxChainDepth": 8,
+        "fullIntervalDays": 7,
+        "maxDeltaRatio": 0.60,
+        "largeFileMode": "cdc",
+        "largeFileThresholdBytes": 16 * 1024 * 1024,
+    }
     stored = json.loads((tmp_settings / ".backup-policies" / f"{policy['policyId']}.json").read_text(encoding="utf-8"))
     assert stored["policyId"] == policy["policyId"]
     assert stored["createdAt"] == policy["createdAt"]

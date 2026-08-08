@@ -5,25 +5,26 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.4.7-blue)
+![Version](https://img.shields.io/badge/version-4.4.8-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.4.7 at a glance
+## 4.4.8 at a glance
 
-- Frozen BackupRunPlan + verified spool reuse across scheduler retries (no re-snapshot / re-encrypt on the same slot).
-- Remote store reconcile advances Head, rebuilds receipts, and backfills catalog without regenerating backups.
-- Durable two-phase remote restore sessions resume by restoreId across process restarts; ETag/Version drift fails closed.
-- TargetSession governance for catalog/pin/retention on filesystem and S3; incremental snapshot foundations (Merkle roots, coverage-safe tombstones, adaptive full checkpoints, ancestor retention protection).
+- Policy v2 persists incremental config (`off | file-delta | cdc`); legacy v1 policies normalize to `off`.
+- The executor selects a committed parent and freezes snapshot kind/lineage before publishing; retries reuse the frozen plan and spool ciphertext.
+- Receipts are v3 with minimal lineage only; committed snapshot file/chunk indexes persist (index loss forces full).
+- FastCDC (`fastcdc-gear-v1`) emits content-defined deltas for large files with bounded memory and parent-chunk reuse; chunk digests stay inside the encrypted Age manifest.
+- Retention protects all ancestors of recoverable descendants; the restore materializer replays chains with per-layer Merkle verification and fails closed on missing parents or corrupt chunks.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.4.7 release notes](docs/releases/4.4.7.md) (previous [4.4.6](docs/releases/4.4.6.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.4.8 release notes](docs/releases/4.4.8.md) (previous [4.4.7](docs/releases/4.4.7.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -95,7 +96,7 @@ npm run check --prefix stateless-mcp
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.4.7 --ga
+python scripts/preflight_release.py --version 4.4.8 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.
