@@ -158,7 +158,7 @@ class MultipartUpload:
 
 
 @runtime_checkable
-class BackupTargetStore(Protocol):
+class BackupTargetStore(Protocol):  # pragma: no cover - structural interface only
     def capabilities(self) -> TargetCapabilities: ...
 
     def stat(self, key: str) -> ObjectMeta | None: ...

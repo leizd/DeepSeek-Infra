@@ -342,3 +342,61 @@ def test_evidence_object_assembles() -> None:
     evidence = {key: "PASS" for key in EVIDENCE_KEYS}
     assert set(evidence) == set(EVIDENCE_KEYS)
     assert all(value == "PASS" for value in evidence.values())
+
+
+def test_slot_incomplete_journal_store_and_legacy_marker_read(tmp_settings: Path, tmp_path: Path) -> None:
+    store = MemoryTargetStore()
+    assert backup_publish.slot_has_incomplete_journal_store(store, policy_id="p", schedule_slot="s") is False
+    put_json_if_absent(
+        store,
+        "transactions/run_old.json",
+        {"runId": "run_old", "policyId": "p", "scheduleSlot": "s", "phase": "started"},
+    )
+    assert backup_publish.slot_has_incomplete_journal_store(store, policy_id="p", schedule_slot="s") is True
+    put_json_if_absent(
+        store,
+        commit_marker_key("p", "s"),
+        {"commitHash": "c" * 64, "objectDigest": "d" * 64, "backupId": "b", "targetGeneration": 1},
+    )
+    assert backup_publish.slot_has_incomplete_journal_store(store, policy_id="p", schedule_slot="s") is False
+    assert backup_publish.latest_commit_store(store) is not None
+
+    # Legacy truncated commit marker remains readable on filesystem targets.
+    root = tmp_path / "legacy"
+    root.mkdir()
+    import hashlib
+
+    truncated = hashlib.sha256(b"legacy-slot").hexdigest()[:16]
+    path = root / "commits" / "pol" / f"{truncated}.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"commitHash":"' + ("e" * 64) + '","objectDigest":"' + ("f" * 64) + '","backupId":"b","targetGeneration":1}', encoding="utf-8")
+    found = backup_publish.find_commit_marker_path(root, "pol", "legacy-slot")
+    assert found is not None and found.is_file()
+
+
+def test_resolve_s3_target_requires_probe(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace.backup_target_store import TargetCapabilities
+
+    record = {
+        "schemaVersion": 3,
+        "targetId": "target_s3fail",
+        "kind": "s3",
+        "bucket": "b",
+        "prefix": "",
+        "credentialProvider": {"type": "aws-default-chain"},
+        "createdAt": "t",
+        "registeredAt": "t",
+        "lastProbe": {"scheduledBackupReady": False, "status": "unsupported-conditional-target"},
+    }
+    path = backup_targets.BACKUP_TARGET_DIR / "target_s3fail.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(__import__("json").dumps(record), encoding="utf-8")
+
+    class _BadStore:
+        def capabilities(self) -> TargetCapabilities:
+            return TargetCapabilities(kind="s3")
+
+    monkeypatch.setattr(backup_targets, "open_target_store", lambda *a, **k: _BadStore())
+    monkeypatch.setattr(backup_targets, "probe_target", lambda *_a, **_k: {"scheduledBackupReady": False, "status": "unsupported-conditional-target"})
+    with pytest.raises(AppError):
+        backup_publish.resolve_target("target_s3fail", write_intent=True)
