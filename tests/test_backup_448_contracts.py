@@ -261,7 +261,7 @@ def test_receipt_lineage_and_apply_delta(tmp_settings: Path) -> None:
 
 
 def test_resolve_lineage_from_receipts_and_fail_closed(tmp_settings: Path) -> None:
-    catalog = {
+    catalog: dict[str, dict[str, object]] = {
         "F0": {"backupId": "F0", "snapshotKind": "full", "parentBackupId": None, "baseBackupId": "F0", "chainDepth": 0},
         "I1": {"backupId": "I1", "snapshotKind": "incremental", "parentBackupId": "F0", "baseBackupId": "F0", "chainDepth": 1},
         "I2": {"backupId": "I2", "snapshotKind": "incremental", "parentBackupId": "I1", "baseBackupId": "F0", "chainDepth": 2},
@@ -272,7 +272,10 @@ def test_resolve_lineage_from_receipts_and_fail_closed(tmp_settings: Path) -> No
     del broken["I1"]
     with pytest.raises(AppError):
         backup_incremental.resolve_lineage_from_receipts(broken, "I2")
-    cyclic = {"A": {"backupId": "A", "parentBackupId": "B"}, "B": {"backupId": "B", "parentBackupId": "A"}}
+    cyclic: dict[str, dict[str, object]] = {
+        "A": {"backupId": "A", "parentBackupId": "B"},
+        "B": {"backupId": "B", "parentBackupId": "A"},
+    }
     with pytest.raises(AppError):
         backup_incremental.resolve_lineage_from_receipts(cyclic, "A")
 
