@@ -4,6 +4,7 @@ plugins {
 }
 
 def syncedPythonDir = layout.buildDirectory.dir("generated/python")
+def configuredBuildPython = (findProperty("DEEPSEEK_BUILD_PYTHON") ?: System.getenv("DEEPSEEK_BUILD_PYTHON"))?.toString()?.trim()
 def releaseStoreFilePath = findProperty("DEEPSEEK_RELEASE_STORE_FILE") ?: System.getenv("DEEPSEEK_RELEASE_STORE_FILE")
 def releaseStorePassword = findProperty("DEEPSEEK_RELEASE_STORE_PASSWORD") ?: System.getenv("DEEPSEEK_RELEASE_STORE_PASSWORD")
 def releaseKeyAlias = findProperty("DEEPSEEK_RELEASE_KEY_ALIAS") ?: System.getenv("DEEPSEEK_RELEASE_KEY_ALIAS")
@@ -17,7 +18,7 @@ if (!hasReleaseSigning && releaseStoreFilePath) {
 tasks.register("buildReactFrontend", Exec) {
     // static/ui is a required, gitignored build artifact.
     workingDir rootProject.projectDir.parentFile
-    def pythonCmd = org.gradle.internal.os.OperatingSystem.current().isWindows() ? "python" : "python3"
+    def pythonCmd = configuredBuildPython ?: (org.gradle.internal.os.OperatingSystem.current().isWindows() ? "python" : "python3")
     commandLine pythonCmd, "scripts/build_frontend.py"
     ignoreExitValue false
     doLast {
@@ -82,7 +83,9 @@ dependencies {
 chaquopy {
     defaultConfig {
         version = "3.13"
-        buildPython "D:/python/python.exe"
+        if (configuredBuildPython) {
+            buildPython configuredBuildPython
+        }
         extractPackages("deepseek_infra")
         pip {
             install "-r", "${rootProject.projectDir}/../requirements-mobile.txt"

@@ -1,4 +1,4 @@
-"""4.4.6 remote backup targets and conditional object storage evidence contracts."""
+"""Remote backup targets and conditional object storage evidence contracts."""
 
 from __future__ import annotations
 

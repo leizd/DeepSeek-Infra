@@ -361,6 +361,7 @@ docker compose -f docker-compose.stateless-mcp.yml up -d --build
 
 - `DEEPSEEK_API_KEY`：DeepSeek API Key。可不填，改为在页面设置里临时输入。
 - `TAVILY_API_KEY`：Tavily 搜索 API Key。可不填，改为在页面设置里临时输入或选择保存到本机浏览器。
+- `DEEPSEEK_API_URL` / `TAVILY_API_URL`：可选的上游兼容接口地址；默认分别使用 DeepSeek 与 Tavily 官方接口。
 - `PORT`：本地服务起始端口，默认 `8000`。
 - `HOST=0.0.0.0`：开启局域网 / 手机访问；默认只监听 `127.0.0.1`。
 - `DEEPSEEK_INFRA_ROOT=/path/to/data`：**推荐**，指定数据根目录（替代 `DEEPSEEK_MOBILE_ROOT`）。
@@ -380,6 +381,7 @@ docker compose -f docker-compose.stateless-mcp.yml up -d --build
 - `MULTI_AGENT_TIMEOUT_SECONDS`：多 Agent 并行层级超时，默认 `3900`；长任务建议与 `DEEPSEEK_TIMEOUT_SECONDS` 一起调高。
 - `MULTI_AGENT_TOKEN_BUDGET`：多 Agent 单次运行的 token 预算，默认 `2000000`，设 `0` 不限制。
 - `TAVILY_TIMEOUT_SECONDS`：Tavily 搜索请求超时，默认 `45`。
+- `VITE_BACKEND_TARGET` / `VITE_DEV_SERVER_PORT`：仅用于 `npm run dev --prefix frontend`，覆盖 Vite 开发代理目标与开发服务器端口；默认 `http://127.0.0.1:8000` / `5173`。
 - `UPLOAD_FILE_MAX_BYTES` / `UPLOAD_MAX_BYTES`：单文件 / 单次请求体上限，默认 `200000000` / `220000000`。
 - `EDGE_INFERENCE_ENABLED=1` / `EDGE_PROVIDER=llama_cpp`（兼容 `EDGE_INFERENCE_PROVIDER`）/ `EDGE_MODEL_PATH=/models/qwen2.5-1.5b-instruct-q4_k_m.gguf` / `EDGE_MODE=auto`：可选的本地端侧推理最小配置，详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 - `OLLAMA_ENABLED=1` / `OLLAMA_BASE_URL` / `OLLAMA_TIMEOUT_SECONDS`：可选的本地 Ollama provider 开关、地址（默认 `http://127.0.0.1:11434`）与超时；启用后本地模型经 `/v1` 网关以 `ollama/<tag>` 暴露。

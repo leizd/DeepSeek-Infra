@@ -7,6 +7,7 @@ from pathlib import Path
 from scripts import update_docs_language_nav as language_nav
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def test_all_managed_markdown_has_current_language_switcher() -> None:
@@ -58,5 +59,5 @@ def test_readme_roadmap_is_a_standalone_document() -> None:
 def test_english_entry_documents_are_present() -> None:
     readme = (ROOT / "README.en.md").read_text(encoding="utf-8")
     roadmap = (ROOT / "ROADMAP.en.md").read_text(encoding="utf-8")
-    assert "## 4.4.6 at a glance" in readme
+    assert f"## {VERSION} at a glance" in readme
     assert "## Next frontend slices" in roadmap

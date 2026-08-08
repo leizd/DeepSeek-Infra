@@ -33,10 +33,12 @@ from deepseek_infra.core.config import (
     settings,
 )
 
+CANONICAL_VERSION = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+
 
 class ConfigTests(unittest.TestCase):
     def test_nested_settings_back_compat_constants_match(self) -> None:
-        self.assertEqual(settings.app_version, "4.4.6")
+        self.assertEqual(settings.app_version, CANONICAL_VERSION)
         self.assertEqual(settings.default_host, "127.0.0.1")
         self.assertEqual(DEFAULT_HOST, settings.default_host)
         self.assertEqual(MULTI_AGENT_TIMEOUT_SECONDS, settings.multi_agent_timeout_seconds)
@@ -84,6 +86,7 @@ class ConfigTests(unittest.TestCase):
                 "DEEPSEEK_TIMEOUT_SECONDS": "222",
                 "DEEPSEEK_API_URL": "http://upstream.test/chat/completions",
                 "MULTI_AGENT_TIMEOUT_SECONDS": "333",
+                "TAVILY_API_URL": "http://search.test/search",
                 "TAVILY_TIMEOUT_SECONDS": "33",
                 "UPLOAD_FILE_MAX_BYTES": "123456",
                 "UPLOAD_MAX_BYTES": "234567",
@@ -158,6 +161,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.deepseek_timeout_seconds, 222)
         self.assertEqual(loaded.deepseek_url, "http://upstream.test/chat/completions")
         self.assertEqual(loaded.multi_agent_timeout_seconds, 333)
+        self.assertEqual(loaded.tavily_url, "http://search.test/search")
         self.assertEqual(loaded.tavily_timeout_seconds, 33)
         self.assertEqual(loaded.files.upload_file_max_bytes, 123456)
         self.assertEqual(loaded.files.upload_max_bytes, 234567)
@@ -252,6 +256,7 @@ class ConfigTests(unittest.TestCase):
             {
                 "DEEPSEEK_TIMEOUT_SECONDS": "not-a-number",
                 "MULTI_AGENT_TIMEOUT_SECONDS": " ",
+                "TAVILY_API_URL": " ",
                 "TAVILY_TIMEOUT_SECONDS": "",
             },
             clear=True,
@@ -260,6 +265,7 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(loaded.deepseek_timeout_seconds, 180)
         self.assertEqual(loaded.multi_agent_timeout_seconds, 3900)
+        self.assertEqual(loaded.tavily_url, "https://api.tavily.com/search")
         self.assertEqual(loaded.tavily_timeout_seconds, 45)
 
     def test_multi_agent_token_budget_defaults_and_env_override(self) -> None:

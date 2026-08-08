@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def read(path: str) -> str:
@@ -13,7 +15,7 @@ def read(path: str) -> str:
 
 def test_react_frontend_is_an_isolated_versioned_build() -> None:
     package = json.loads(read("frontend/package.json"))
-    assert package["version"] == "4.4.6"
+    assert package["version"] == VERSION
     assert package["engines"]["node"] == ">=22.12.0"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test"] == "vitest run"
@@ -35,7 +37,10 @@ def test_react_frontend_is_an_isolated_versioned_build() -> None:
     assert 'base: "/ui/"' in vite
     assert 'new URL("../static/ui", import.meta.url)' in vite
     assert "manifest: true" in vite
-    assert '"/api": "http://127.0.0.1:8000"' in vite
+    assert 'loadEnv(mode, REPOSITORY_ROOT, "VITE_")' in vite
+    assert "env.VITE_BACKEND_TARGET" in vite
+    assert '"/api": backendTarget' in vite
+    assert "env.VITE_DEV_SERVER_PORT" in vite
     assert "static/ui/" in read(".gitignore")
 
 
@@ -120,6 +125,8 @@ def test_build_packaging_and_ci_include_the_react_frontend() -> None:
     assert "validate_multipart_build_environment()" in exe
     assert "ignoreExitValue false" in android
     assert "ignoreExitValue true" not in android
+    assert "DEEPSEEK_BUILD_PYTHON" in android
+    assert re.search(r'''buildPython\s+["'][A-Za-z]:[/\\]''', android) is None
     assert "build_frontend.py" in smoke_release
     assert "check_react_frontend_build" in preflight
     assert "React + TypeScript + Vite build" in agents

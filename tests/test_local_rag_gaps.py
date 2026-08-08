@@ -1,46 +1,26 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-import deepseek_infra.core.config as config
 import deepseek_infra.infra.rag.local_rag as local_rag
 from deepseek_infra.infra.rag.local_rag import RAGSearchResult
 
 
 @pytest.fixture
-def tmp_rag_dir(monkeypatch):
-    base = Path("C:/Users/12393/AppData/Local/Temp/opencode")
-    base.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=base) as tmp_dir:
-        root = Path(tmp_dir)
-        file_cache_dir = root / ".file-cache"
-        local_rag_dir = root / ".local-rag"
-        memory_dir = root / ".memory"
-        projects_dir = root / ".projects"
-        local_rag_dir.mkdir()
-        file_cache_dir.mkdir()
-        memory_dir.mkdir()
-        monkeypatch.setattr(config, "FILE_CACHE_DIR", file_cache_dir)
-        monkeypatch.setattr(config, "LOCAL_RAG_DIR", local_rag_dir)
-        monkeypatch.setattr(config, "LOCAL_RAG_DB", local_rag_dir / "rag.sqlite3")
-        monkeypatch.setattr(config, "MEMORY_FILE", memory_dir / "memories.json")
-        monkeypatch.setattr(config, "PROJECTS_DIR", projects_dir)
-        monkeypatch.setattr(local_rag, "FILE_CACHE_DIR", file_cache_dir)
-        monkeypatch.setattr(local_rag, "LOCAL_RAG_DIR", local_rag_dir)
-        monkeypatch.setattr(local_rag, "LOCAL_RAG_DB", local_rag_dir / "rag.sqlite3")
-        monkeypatch.setattr(local_rag, "MEMORY_FILE", memory_dir / "memories.json")
-        monkeypatch.setattr(local_rag, "PROJECTS_DIR", projects_dir)
-        monkeypatch.setattr(local_rag, "LOCAL_RAG_ENABLED", True)
-        monkeypatch.setattr(local_rag, "LOCAL_RAG_BACKEND", "python")
-        monkeypatch.setattr(local_rag, "LOCAL_RAG_INCREMENTAL", True)
-        local_rag.reset_embedding_pipeline()
-        yield root
-        local_rag.reset_embedding_pipeline()
+def tmp_rag_dir(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch):
+    Path(local_rag.LOCAL_RAG_DIR).mkdir(parents=True, exist_ok=True)
+    Path(local_rag.FILE_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+    Path(local_rag.MEMORY_FILE).parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(local_rag, "LOCAL_RAG_ENABLED", True)
+    monkeypatch.setattr(local_rag, "LOCAL_RAG_BACKEND", "python")
+    monkeypatch.setattr(local_rag, "LOCAL_RAG_INCREMENTAL", True)
+    local_rag.reset_embedding_pipeline()
+    yield tmp_settings
+    local_rag.reset_embedding_pipeline()
 
 
 class TestEmbeddingPipeline:

@@ -1,4 +1,4 @@
-"""Targeted coverage for remaining 4.4.6 backup gaps (CI 95% gate)."""
+"""Targeted coverage for remaining backup gaps (CI 95% gate)."""
 
 from __future__ import annotations
 

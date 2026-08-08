@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import tempfile
 from email.message import Message
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -13,9 +12,6 @@ import pytest
 import deepseek_infra.infra.tool_runtime.search as search
 from deepseek_infra.core.errors import AppError, ErrorCode
 from urllib.error import HTTPError, URLError
-
-
-TEMP_DIR = "C:/Users/12393/AppData/Local/Temp/opencode"
 
 
 def test_normalize_search_url_handles_valueerror() -> None:
@@ -275,41 +271,34 @@ def test_search_cache_key() -> None:
     assert all(c in "0123456789abcdef" for c in key)
 
 
-def test_search_cache_save_and_load() -> None:
-    with tempfile.TemporaryDirectory(dir=TEMP_DIR) as tmp:
-        cache_dir = Path(tmp)
-        with patch.object(search, "SEARCH_CACHE_DIR", cache_dir):
-            search.save_search_cache("query", {"status": "done", "results": []})
-            loaded = search.load_search_cache("query")
-            assert loaded is not None
-            assert loaded["status"] == "done"
+def test_search_cache_save_and_load(tmp_settings: Path) -> None:
+    search.save_search_cache("query", {"status": "done", "results": []})
+    loaded = search.load_search_cache("query")
+    assert loaded is not None
+    assert loaded["status"] == "done"
 
 
-def test_load_search_cache_expired_and_malformed() -> None:
-    with tempfile.TemporaryDirectory(dir=TEMP_DIR) as tmp:
-        cache_dir = Path(tmp)
-        with patch.object(search, "SEARCH_CACHE_DIR", cache_dir):
-            key = search.search_cache_key("old")
-            path = cache_dir / f"{key}.json"
-            path.write_text(json.dumps({"status": "done"}))
-            expired = 0
-            os.utime(path, (expired, expired))
-            assert search.load_search_cache("old") is None
+def test_load_search_cache_expired_and_malformed(tmp_settings: Path) -> None:
+    cache_dir = Path(search.SEARCH_CACHE_DIR)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = search.search_cache_key("old")
+    path = cache_dir / f"{key}.json"
+    path.write_text(json.dumps({"status": "done"}))
+    expired = 0
+    os.utime(path, (expired, expired))
+    assert search.load_search_cache("old") is None
 
-            bad_key = search.search_cache_key("bad")
-            bad_path = cache_dir / f"{bad_key}.json"
-            bad_path.write_text("not json")
-            assert search.load_search_cache("bad") is None
+    bad_key = search.search_cache_key("bad")
+    bad_path = cache_dir / f"{bad_key}.json"
+    bad_path.write_text("not json")
+    assert search.load_search_cache("bad") is None
 
-            missing = search.load_search_cache("missing")
-            assert missing is None
+    missing = search.load_search_cache("missing")
+    assert missing is None
 
 
-def test_cleanup_search_cache_no_dir() -> None:
-    with tempfile.TemporaryDirectory(dir=TEMP_DIR) as tmp:
-        cache_dir = Path(tmp) / "nonexistent"
-        with patch.object(search, "SEARCH_CACHE_DIR", cache_dir):
-            search.cleanup_search_cache()
+def test_cleanup_search_cache_no_dir(tmp_settings: Path) -> None:
+    search.cleanup_search_cache()
 
 
 def test_cleanup_search_cache_handles_oserror_on_stat() -> None:
@@ -333,13 +322,10 @@ def test_cleanup_search_cache_handles_oserror_on_unlink() -> None:
         search.cleanup_search_cache()
 
 
-def test_save_search_cache_creates_file() -> None:
-    with tempfile.TemporaryDirectory(dir=TEMP_DIR) as tmp:
-        cache_dir = Path(tmp)
-        with patch.object(search, "SEARCH_CACHE_DIR", cache_dir):
-            search.save_search_cache("save-me", {"status": "done"})
-            key = search.search_cache_key("save-me")
-            assert (cache_dir / f"{key}.json").exists()
+def test_save_search_cache_creates_file(tmp_settings: Path) -> None:
+    search.save_search_cache("save-me", {"status": "done"})
+    key = search.search_cache_key("save-me")
+    assert (Path(search.SEARCH_CACHE_DIR) / f"{key}.json").exists()
 
 
 def test_search_for_client_none_input() -> None:
