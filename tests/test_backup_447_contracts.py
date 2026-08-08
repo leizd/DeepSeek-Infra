@@ -12,9 +12,11 @@ from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
     backup_catalog,
     backup_incremental,
+    backup_policies,
     backup_publish,
     backup_reconcile,
     backup_remote_restore,
+    backup_retention,
     backup_run_plan,
     backup_scheduled,
     backup_spool,
@@ -430,3 +432,71 @@ def test_governance_restore_fetch_route(tmp_settings: Path, monkeypatch: pytest.
     created = client.post("/api/workspace/restores/from-target", json={"targetId": "t", "backupId": "b"})
     assert created.status_code == 200
     assert created.json()["restoreId"] == "restore_new"
+    # complete=true uses restore_from_target
+    monkeypatch.setattr(
+        backup_remote_restore,
+        "restore_from_target",
+        lambda *, target_id, backup_id, client=None: {"restoreId": "restore_done", "phase": "fetched", "downloadedBytes": 10, "expectedBytes": 10},
+    )
+    done = client.post("/api/workspace/restores/from-target", json={"targetId": "t", "backupId": "b", "complete": True})
+    assert done.status_code == 200
+    assert done.json()["phase"] == "fetched"
+    # webdav rejected
+    bad = client.post("/api/workspace/backup-targets", json={"kind": "webdav"})
+    assert bad.status_code in {400, 501}
+
+
+def test_governance_store_catalog_pin_retention(tmp_settings: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web import server as server_module
+    from deepseek_infra.web.routes import backup_governance
+    from fastapi.testclient import TestClient
+
+    store = MemoryTargetStore()
+    put_json_if_absent(store, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    package = _pkg(tmp_path, name="gov1")
+    target = backup_publish.ResolvedTarget(target_id="target_gov", root=None, managed=False, kind="s3", store=store)
+    backup_publish.publish_backup(target, package, run_id="run_gov", policy_id="pol", schedule_slot="slot-gov", fencing_token=1)
+    writer = backup_writer_lease.TargetWriterLease(store=store, target_id="target_gov", owner_run_id="gw", owner_instance_id="i", fencing_token=2)
+    writer.acquire()
+    backup_catalog.append_receipt_store(store, {"backupId": package.backup_id, "filename": package.filename, "policyId": "pol", "targetId": "target_gov", "runId": "run_gov", "scheduleSlot": "slot-gov", "size": 1, "ciphertextSha256": "a" * 64, "objectDigest": "a" * 64, "manifestDigest": "m" * 64, "coverageDigest": "c" * 64, "creationVerified": True, "createdAt": "2026-01-01T00:00:00Z"}, writer=writer)
+    writer.release()
+
+    monkeypatch.setattr(backup_governance, "require_api_auth", lambda _request: None)
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda target_id, *, write_intent=False: target)
+    monkeypatch.setattr(
+        "deepseek_infra.infra.workspace.backup_targets.list_targets",
+        lambda: [{"targetId": "target_gov", "kind": "s3"}],
+    )
+    client = TestClient(server_module.create_app())
+    # store catalog list
+    catalog = client.get("/api/workspace/backup-catalog?targetId=target_gov")
+    assert catalog.status_code == 200
+    assert any(item["backupId"] == package.backup_id for item in catalog.json()["backups"])
+    # store pin/unpin via _find_backup_session store path
+    pin = client.post(f"/api/workspace/backup-catalog/{package.backup_id}/pin")
+    assert pin.status_code == 200
+    unpin = client.delete(f"/api/workspace/backup-catalog/{package.backup_id}/pin")
+    assert unpin.status_code == 200
+    # store retention preview
+    monkeypatch.setattr(
+        backup_policies,
+        "get_policy",
+        lambda pid: {"policyId": pid, "targetId": "target_gov", "schedule": {"timezone": "UTC"}},
+    )
+    monkeypatch.setattr(
+        backup_retention,
+        "get_retention_policy",
+        lambda rid: {"retentionPolicyId": rid, "keepLast": 1},
+    )
+    preview = client.post("/api/workspace/retention/preview", json={"policyId": "pol"})
+    assert preview.status_code == 200
+    assert "keep" in preview.json()
+    # store retention apply
+    applied = client.post("/api/workspace/retention/apply", json={"policyId": "pol"})
+    assert applied.status_code in {200, 409}
+    # _find_backup_session not found
+    with pytest.raises(AppError):
+        backup_governance._find_backup_session("does-not-exist")
+    # _target_root for pure store falls back to require_root -> raises
+    with pytest.raises(AppError):
+        backup_governance._target_root("target_gov")
