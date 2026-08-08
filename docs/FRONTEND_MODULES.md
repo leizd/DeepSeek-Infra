@@ -5,7 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.5。
+适用版本：v4.4.6。
+
+> 4.4.6 Automatic Backups 目标注册支持 Local Folder / S3-compatible（Bucket、Prefix、Region、Endpoint、AWS profile / 默认凭证链），展示 capability probe 与 scheduled-backup readiness；不采集、不回显、不持久化 Access Key。
 
 ## Runtime ownership
 

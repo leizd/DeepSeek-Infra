@@ -1,4 +1,4 @@
-"""Scheduled backup governance routes (4.4.5)."""
+"""Scheduled backup governance routes (4.4.6)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from deepseek_infra.infra.workspace import (
     backup_executor,
     backup_policies,
     backup_publish,
+    backup_remote_restore,
     backup_retention,
     backup_scheduler,
     backup_scrub,
@@ -28,13 +29,15 @@ from deepseek_infra.web.http_utils import json_response, read_json_body, require
 
 
 def _target_root(target_id: str, *, write_intent: bool = False) -> Path:
-    return backup_publish.resolve_target(str(target_id or "managed-local"), write_intent=write_intent).root
+    target = backup_publish.resolve_target(str(target_id or "managed-local"), write_intent=write_intent)
+    return target.require_root()
 
 
 @contextmanager
-def _target_writer(root: Path, target_id: str) -> Iterator[backup_writer_lease.TargetWriterLease]:
+def _target_writer(root: Path | None, target_id: str, *, store: Any | None = None) -> Iterator[backup_writer_lease.TargetWriterLease]:
     lease = backup_writer_lease.TargetWriterLease(
         root,
+        store=store,
         target_id=target_id,
         owner_run_id=f"api_{uuid.uuid4().hex[:12]}",
         owner_instance_id=backup_scheduler.instance_id_from_environment(),
@@ -112,6 +115,23 @@ def create_backup_governance_router() -> APIRouter:
     async def api_backup_targets_create(request: Request) -> JSONResponse:
         require_api_auth(request)
         payload = await read_json_body(request, max_bytes=64_000)
+        kind = str(payload.get("kind") or "filesystem").strip().lower()
+        if kind in {"s3", "s3-compatible"}:
+            provider = payload.get("credentialProvider") if isinstance(payload.get("credentialProvider"), dict) else None
+            return json_response(
+                backup_targets.init_s3_target(
+                    bucket=str(payload.get("bucket") or ""),
+                    prefix=str(payload.get("prefix") or ""),
+                    region=str(payload.get("region") or "") or None,
+                    endpoint_url=str(payload.get("endpointUrl") or "") or None,
+                    expected_bucket_owner=str(payload.get("expectedBucketOwner") or "") or None,
+                    label=str(payload.get("label") or ""),
+                    credential_provider=provider,
+                    probe=bool(payload.get("probe", True)),
+                )
+            )
+        if kind == "webdav":
+            raise AppError("WebDAV targets are reserved but not GA in 4.4.6", code=ErrorCode.INVALID_REQUEST, status=501)
         path = Path(str(payload.get("path") or ""))
         return json_response(backup_targets.init_target(path, label=str(payload.get("label") or "")))
 
@@ -238,5 +258,30 @@ def create_backup_governance_router() -> APIRouter:
         finally:
             for index in range(len(identity)):
                 identity[index] = 0
+
+    @router.post("/api/workspace/restores/from-target")
+    async def api_restore_from_target(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=64_000)
+        return json_response(
+            backup_remote_restore.restore_from_target(
+                target_id=str(payload.get("targetId") or ""),
+                backup_id=str(payload.get("backupId") or ""),
+            )
+        )
+
+    @router.get("/api/workspace/backup-target-capabilities")
+    async def api_backup_target_capabilities(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import backup_target_s3
+
+        return json_response(
+            {
+                "s3TargetAvailable": backup_target_s3.s3_sdk_available(),
+                "webdavTargetAvailable": False,
+                "supportedKinds": ["filesystem", "s3"] if backup_target_s3.s3_sdk_available() else ["filesystem"],
+                "reservedKinds": ["webdav"],
+            }
+        )
 
     return router

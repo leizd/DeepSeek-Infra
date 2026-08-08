@@ -37,8 +37,14 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
   const [targetId, setTargetId] = useState("managed-local");
   const [mirrorMode, setMirrorMode] = useState<"required" | "best-effort" | "excluded">("best-effort");
   const [coveragePolicy, setCoveragePolicy] = useState<"strict" | "best-effort">("strict");
+  const [targetKind, setTargetKind] = useState<"filesystem" | "s3">("filesystem");
   const [targetPath, setTargetPath] = useState("");
   const [targetLabel, setTargetLabel] = useState("");
+  const [s3Bucket, setS3Bucket] = useState("");
+  const [s3Prefix, setS3Prefix] = useState("");
+  const [s3Region, setS3Region] = useState("");
+  const [s3Endpoint, setS3Endpoint] = useState("");
+  const [s3Profile, setS3Profile] = useState("");
 
   const refresh = useCallback(async () => {
     const [policyView, targetView, mirrorView] = await Promise.all([listBackupPolicies(), listBackupTargets(), listBackupMirrors()]);
@@ -127,8 +133,28 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
   async function registerTarget() {
     setBusy(true);
     try {
-      await createBackupTarget({ path: targetPath.trim(), label: targetLabel.trim() });
-      setTargetPath("");
+      if (targetKind === "s3") {
+        if (!s3Bucket.trim()) throw new Error("请填写 S3 Bucket");
+        await createBackupTarget({
+          kind: "s3",
+          bucket: s3Bucket.trim(),
+          prefix: s3Prefix.trim(),
+          region: s3Region.trim() || undefined,
+          endpointUrl: s3Endpoint.trim() || undefined,
+          label: targetLabel.trim(),
+          credentialProvider: s3Profile.trim()
+            ? { type: "aws-profile", profile: s3Profile.trim() }
+            : { type: "aws-default-chain" },
+        });
+        setS3Bucket("");
+        setS3Prefix("");
+        setS3Region("");
+        setS3Endpoint("");
+        setS3Profile("");
+      } else {
+        await createBackupTarget({ path: targetPath.trim(), label: targetLabel.trim() });
+        setTargetPath("");
+      }
       setTargetLabel("");
       onMessage("备份目标已注册");
       await refresh();
@@ -143,13 +169,26 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
     setBusy(true);
     try {
       const result = await probeBackupTarget(target.targetId);
-      onMessage(result.ready ? `目标 ${target.label || target.targetId} 可用` : `目标不可用：${result.detail ?? result.status}`);
+      if (result.ready) {
+        const ready = result.scheduledBackupReady === false ? "已连接但条件写未就绪" : "可用（定时备份就绪）";
+        onMessage(`目标 ${target.label || target.targetId} ${ready}`);
+      } else {
+        onError(`目标不可用：${result.detail ?? result.status}`);
+      }
       await refresh();
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : "探测目标失败");
     } finally {
       setBusy(false);
     }
+  }
+
+  function targetSummary(target: BackupTargetRecord): string {
+    if ((target.kind || "filesystem") === "s3") {
+      const prefix = target.prefix ? `/${target.prefix}` : "";
+      return `s3://${target.bucket || "?"}${prefix}`;
+    }
+    return target.path || "—";
   }
 
   function healthFor(id: string): string {
@@ -220,14 +259,21 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
 
       <section className="backup-card">
         <h3>备份目标</h3>
-        <p>文件系统目标以 Marker 识别，与盘符或挂载路径无关。每次发布前都会重新校验。</p>
+        <p>
+          本地目录以 Marker 识别；S3-compatible 目标使用条件写（If-None-Match / If-Match）与 multipart。
+          Access Key 不会写入 Target 配置——请使用 AWS profile、默认凭证链或 workload role。
+        </p>
         {targets.map((target) => (
           <div className="backup-policy" key={target.targetId}>
             <div>
               <strong>{target.label || target.targetId}</strong>
               <dl>
-                <div><dt>路径</dt><dd>{target.path}</dd></div>
+                <div><dt>类型</dt><dd>{target.kind || "filesystem"}</dd></div>
+                <div><dt>位置</dt><dd>{targetSummary(target)}</dd></div>
                 <div><dt>健康</dt><dd>{healthFor(target.targetId)}</dd></div>
+                {target.lastProbe?.scheduledBackupReady != null && (
+                  <div><dt>定时备份</dt><dd>{target.lastProbe.scheduledBackupReady ? "READY" : "unsupported-conditional-target"}</dd></div>
+                )}
               </dl>
             </div>
             <div className="backup-policy-actions">
@@ -236,9 +282,31 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
           </div>
         ))}
         <div className="secret-fields">
-          <input value={targetPath} placeholder="目标目录绝对路径（如 D:\\backups 或 /mnt/backup）" onChange={(event) => setTargetPath(event.target.value)} />
+          <label>目标类型
+            <select value={targetKind} onChange={(event) => setTargetKind(event.target.value as typeof targetKind)}>
+              <option value="filesystem">本地目录</option>
+              <option value="s3">S3-compatible</option>
+            </select>
+          </label>
+          {targetKind === "filesystem" ? (
+            <input value={targetPath} placeholder="目标目录绝对路径（如 D:\\backups 或 /mnt/backup）" onChange={(event) => setTargetPath(event.target.value)} />
+          ) : (
+            <>
+              <input value={s3Bucket} placeholder="Bucket" onChange={(event) => setS3Bucket(event.target.value)} />
+              <input value={s3Prefix} placeholder="Prefix（可选，如 deepseek-infra/home）" onChange={(event) => setS3Prefix(event.target.value)} />
+              <input value={s3Region} placeholder="Region（可选）" onChange={(event) => setS3Region(event.target.value)} />
+              <input value={s3Endpoint} placeholder="Endpoint URL（S3 兼容可选）" onChange={(event) => setS3Endpoint(event.target.value)} />
+              <input value={s3Profile} placeholder="AWS profile（可选；默认凭证链）" onChange={(event) => setS3Profile(event.target.value)} autoComplete="off" />
+            </>
+          )}
           <input value={targetLabel} placeholder="标签（可选）" onChange={(event) => setTargetLabel(event.target.value)} />
-          <button type="button" disabled={busy || !targetPath.trim()} onClick={() => void registerTarget()}>注册目标</button>
+          <button
+            type="button"
+            disabled={busy || (targetKind === "filesystem" ? !targetPath.trim() : !s3Bucket.trim())}
+            onClick={() => void registerTarget()}
+          >
+            注册目标
+          </button>
         </div>
       </section>
     </>

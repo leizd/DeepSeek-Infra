@@ -55,7 +55,7 @@ def test_publish_managed_local_layout(tmp_settings: Path, tmp_path: Path) -> Non
     assert receipt["pinned"] is False
     marker_path = backup_publish.commit_marker_path(root, "policy_1", "slot")
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    assert marker["schemaVersion"] == 2
+    assert marker["schemaVersion"] >= 2
     assert marker["runId"] == "run_1"
     assert marker["fencingToken"] == 1
     assert marker["backupId"] == "backup_test1"

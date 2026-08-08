@@ -4,6 +4,18 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.6] - Remote Backup Targets and Conditional Object Storage
+
+### Backend-neutral target store and S3-compatible GA
+
+- Introduces `BackupTargetStore` with filesystem and S3-compatible adapters so publish, writer leases, catalog events, retention, scrub and restore no longer assume a local `Path`.
+- Filesystem targets keep 4.4.5 `O_EXCL` / atomic-rename semantics via `FilesystemTargetStore`; existing fenced-commit tests remain the FS parity gate.
+- S3 targets use secret-free registry records (bucket/prefix/region/endpoint/credential provider only), lazy `boto3` loading, and capability probes. Scheduled backup requires conditional create + conditional replace; incompatible endpoints are marked `unsupported-conditional-target` instead of TOCTOU PUT.
+- Commit markers write the full SHA-256 of the schedule slot (v3); truncated 4.4.5 marker names stay readable. Remote layout uses content-addressed objects, receipts, transactions, commits, catalog head/snapshots, control identity/head and restore holds.
+- Durable `.backup-spool/` retains verified Age ciphertext across blocked retries and resumes checksummed multipart uploads. Remote retention is logical trash + delayed GC (no S3 copy-to-trash). Remote restore streams range GETs under a TTL hold and reuses the existing unlock/restore transaction.
+- CLI: `python scripts/backup_target.py init-s3 ...` (no `--secret-access-key`). API/UI register Local Folder or S3-compatible targets without persisting cloud secrets. WebDAV remains interface-reserved, not GA.
+- Evidence: `tests/test_backup_remote_target_contracts.py` pins conditional writes, CAS writer leases, spool reuse, single slot commit, catalog head CAS, logical trash/GC holds, range restore resume, credential absence and no local fallback.
+
 ## [4.4.5] - Fenced Backup Commits and Replica Lineage
 
 ### Fenced-commit evidence contracts and release surface

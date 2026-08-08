@@ -611,3 +611,125 @@ def restore_from_trash(target_root: Path, backup_id: str, *, now: datetime | Non
     _restore_trash_entry(target_root, backup_id)
     backup_catalog.record_restore_from_trash(target_root, backup_id, at=_utc_iso(now))
     return {"restored": True, "backupId": backup_id}
+
+
+def apply_retention_store(
+    retention: dict[str, Any],
+    store: Any,
+    *,
+    policy_timezone: str = "UTC",
+    now: datetime | None = None,
+    checkpoint: Callable[[], None] | None = None,
+    writer: backup_writer_lease.TargetWriterLease | None = None,
+) -> dict[str, Any]:
+    """Logical trash for remote targets: catalog hide only, no object copy."""
+    if writer is not None:
+        writer.assert_owned()
+    current = now or datetime.now(tz=timezone.utc)
+    state = backup_catalog.catalog_state_store(store)
+    # Build a lightweight preview against store state.
+    records = [record for record in state.values() if not record.get("deleted") and not record.get("trashed")]
+    records.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+    keep_last = int(retention.get("keepLast") or 0)
+    keep_ids = {str(item.get("backupId")) for item in records[:keep_last]}
+    for record in records:
+        if record.get("pinned"):
+            keep_ids.add(str(record.get("backupId")))
+    trash_ids = [str(item.get("backupId")) for item in records if str(item.get("backupId")) not in keep_ids]
+    retention_run_id = f"rr_{uuid.uuid4().hex[:12]}"
+    moved: list[str] = []
+    for backup_id in trash_ids:
+        if checkpoint is not None:
+            checkpoint()
+        if writer is not None:
+            writer.assert_owned()
+        backup_catalog._append_entry_store(
+            store,
+            "trash",
+            {"backupId": backup_id, "retentionRunId": retention_run_id, "trashedAt": _utc_iso(current)},
+            writer=writer,
+        )
+        moved.append(backup_id)
+    return {"retentionRunId": retention_run_id, "trashed": moved, "recoveredTrash": [], "preview": {"keep": sorted(keep_ids), "protected": []}}
+
+
+def finalize_retention_store(
+    retention: dict[str, Any],
+    store: Any,
+    *,
+    policy_timezone: str = "UTC",
+    now: datetime | None = None,
+    checkpoint: Callable[[], None] | None = None,
+    writer: backup_writer_lease.TargetWriterLease | None = None,
+) -> dict[str, Any]:
+    """Physical GC of unreferenced Age objects after trash grace on remote targets."""
+    del policy_timezone
+    if writer is not None:
+        writer.assert_owned()
+    current = now or datetime.now(tz=timezone.utc)
+    grace = timedelta(hours=int(retention.get("trashGraceHours") or 24))
+    state = backup_catalog.catalog_state_store(store)
+    deleted: list[str] = []
+    kept: list[str] = []
+    live_digests = {
+        str(record.get("objectDigest") or record.get("ciphertextSha256") or "")
+        for record in state.values()
+        if not record.get("deleted") and not record.get("trashed")
+    }
+    # Protect objects held by active restores.
+    hold_digests = _restore_hold_digests(store)
+    for backup_id, record in list(state.items()):
+        if checkpoint is not None:
+            checkpoint()
+        if not record.get("trashed") or record.get("deleted"):
+            continue
+        trashed_at = _parse_iso(record.get("trashedAt"))
+        if trashed_at is None or current - trashed_at < grace:
+            kept.append(backup_id)
+            continue
+        digest = str(record.get("objectDigest") or record.get("ciphertextSha256") or "")
+        if digest and digest in live_digests:
+            kept.append(backup_id)
+            continue
+        if digest and digest in hold_digests:
+            kept.append(backup_id)
+            continue
+        if writer is not None:
+            writer.assert_owned()
+        if digest:
+            from deepseek_infra.infra.workspace.backup_target_store import object_key
+
+            try:
+                store.delete_if_match(object_key(digest))
+            except AppError:
+                pass
+        backup_catalog._append_entry_store(
+            store,
+            "delete",
+            {"backupId": backup_id, "retentionRunId": str(record.get("retentionRunId") or ""), "deletedAt": _utc_iso(current)},
+            writer=writer,
+        )
+        deleted.append(backup_id)
+    return {"deleted": deleted, "kept": kept, "recoveredTrash": []}
+
+
+def _restore_hold_digests(store: Any) -> set[str]:
+    from deepseek_infra.infra.workspace.backup_target_store import read_json
+
+    digests: set[str] = set()
+    cursor = None
+    while True:
+        page = store.list_objects("holds/restore/", cursor=cursor)
+        for meta in page.objects:
+            if not str(meta.key).endswith(".json"):
+                continue
+            data = read_json(store, meta.key)
+            if not isinstance(data, dict):
+                continue
+            digest = str(data.get("objectDigest") or "")
+            if digest:
+                digests.add(digest)
+        if not page.cursor:
+            break
+        cursor = page.cursor
+    return digests
