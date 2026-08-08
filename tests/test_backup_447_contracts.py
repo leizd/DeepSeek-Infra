@@ -27,6 +27,7 @@ from deepseek_infra.infra.workspace.backup_target_store import (
     commit_slot_digest,
     put_json_if_absent,
     read_json,
+    receipt_key,
 )
 
 
@@ -332,6 +333,29 @@ def test_remote_reconcile_full_paths(tmp_settings: Path, tmp_path: Path) -> None
     report = backup_reconcile.reconcile_target_store(store, target_id="target_recon", writer=writer, now=datetime.now(tz=timezone.utc))
     assert "run_orphan" in report["orphanedTransactions"] or report["orphanedTransactions"]
     writer.release()
+
+    # Receipt-rebuild path: marker without receipt, journal carries receipt
+    store2 = MemoryTargetStore()
+    put_json_if_absent(store2, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    from deepseek_infra.infra.workspace.backup_target_store import commit_marker_key, object_key
+
+    put_json_if_absent(
+        store2,
+        commit_marker_key("pol2", "slot2"),
+        {"commitHash": "c" * 64, "backupId": "rb1", "runId": "run_rb", "objectDigest": "a" * 64, "targetGeneration": 1, "policyId": "pol2", "scheduleSlot": "slot2"},
+    )
+    put_json_if_absent(
+        store2,
+        "transactions/run_rb.json",
+        {"runId": "run_rb", "policyId": "pol2", "scheduleSlot": "slot2", "phase": "committed", "receipt": {"backupId": "rb1", "filename": "rb1.age", "objectDigest": "a" * 64, "size": 1}},
+    )
+    store2.put_if_absent(object_key("a" * 64), b"x", checksum_sha256=hashlib.sha256(b"x").hexdigest())
+    w2 = backup_writer_lease.TargetWriterLease(store=store2, target_id="target_rb", owner_run_id="rw", owner_instance_id="i", fencing_token=7)
+    w2.acquire()
+    report2 = backup_reconcile.reconcile_target_store(store2, target_id="target_rb", writer=w2, now=datetime.now(tz=timezone.utc))
+    assert "rb1" in report2["rebuiltReceipts"] or read_json(store2, receipt_key("rb1")) is not None
+    w2.release()
+
     # reconcile_all_targets with remote + managed
     monkey = pytest.MonkeyPatch()
     try:
