@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.6-blue)
+![版本](https://img.shields.io/badge/version-4.4.7-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.6 Remote Backup Targets & Conditional Object Storage：** 在 4.4.5 本地围栏提交之上，把同一套语义映射到 S3-compatible 对象存储——`BackupTargetStore` 抽象、无密钥 Target 注册表、条件写 Capability Probe、CAS Writer Lease、已验证 Age 密文 Publish Spool 与 multipart 续传、完整 Slot SHA Commit Marker、Catalog v2 CAS 快照、逻辑 Trash/GC 与 Restore Hold、可断点续传的密文远程恢复。云 Access Key 与 Recovery Identity 永不进入持久化状态；WebDAV 仅预留接口。参见 [4.4.6 发布说明](docs/releases/4.4.6.md)（上一版 [4.4.5](docs/releases/4.4.5.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
+> **4.4.7 Incremental Snapshot Graphs & Remote Recovery Hardening：** 在 4.4.6 远程条件对象存储之上，冻结 Schedule Slot 的 RunPlan 并跨 Scheduler 重试复用已验证 Age 密文；远程 Reconcile 前滚 Head / 回填 Catalog 且不重新生成备份；Remote Restore 以 durable restoreId 跨进程断点续传；Catalog/Retention 经 TargetSession 治理 S3。同时引入增量快照图基础：Merkle Root、Coverage-safe Tombstone、自适应 Full Checkpoint、快照索引与祖先 Retention 保护。参见 [4.4.7 发布说明](docs/releases/4.4.7.md)（上一版 [4.4.6](docs/releases/4.4.6.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)。
 
-**4.4.6 validation:** 合同覆盖 Filesystem adapter 对等性、S3 条件创建/CAS Writer Lease、陈旧远程 Writer 不能提交、multipart checksum 与续传、verified spool 跨重试复用、远程 Slot 单次提交、Catalog head CAS、逻辑 Trash/GC 引用保护、Range restore 续传、凭据不落盘、远端失败不回退本地。既有 Bundle 预算不提高。
+**4.4.7 validation:** Scheduler 重试复用原 Spool Ciphertext、Remote Commit 崩溃可 Reconcile、Remote Restore 进程退出后按 restoreId 续传、TargetSession 治理远程 Catalog/Retention、增量 put/delete 与 coverage-safe tombstone、Merkle 链验证、缺失 Parent Fail Closed、Pinned 后代保护祖先、Recipient Rotation / Index 丢失强制 Full。
 
 ## 30 秒概览
 

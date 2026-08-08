@@ -5,25 +5,25 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.4.6-blue)
+![Version](https://img.shields.io/badge/version-4.4.7-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.4.6 at a glance
+## 4.4.7 at a glance
 
-- Backend-neutral `BackupTargetStore` with filesystem and S3-compatible adapters; scheduled backup requires conditional create + conditional replace capability probes.
-- Secret-free remote target registry (bucket/prefix/region/endpoint/credential provider only) — cloud Access Keys never enter Target JSON, journals, receipts, catalogs or logs.
-- Verified encrypted publish spool with checksummed multipart resume; full-slot SHA-256 commit markers; catalog v2 CAS head + snapshots; logical remote trash/GC with restore holds.
-- Range-resumable encrypted restore from target reuses the existing unlock/restore transaction; WebDAV remains reserved, not GA.
+- Frozen BackupRunPlan + verified spool reuse across scheduler retries (no re-snapshot / re-encrypt on the same slot).
+- Remote store reconcile advances Head, rebuilds receipts, and backfills catalog without regenerating backups.
+- Durable two-phase remote restore sessions resume by restoreId across process restarts; ETag/Version drift fails closed.
+- TargetSession governance for catalog/pin/retention on filesystem and S3; incremental snapshot foundations (Merkle roots, coverage-safe tombstones, adaptive full checkpoints, ancestor retention protection).
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.4.6 release notes](docs/releases/4.4.6.md) (previous [4.4.5](docs/releases/4.4.5.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.4.7 release notes](docs/releases/4.4.7.md) (previous [4.4.6](docs/releases/4.4.6.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -95,7 +95,7 @@ npm run check --prefix stateless-mcp
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.4.6 --ga
+python scripts/preflight_release.py --version 4.4.7 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

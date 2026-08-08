@@ -1,4 +1,4 @@
-"""Crash reconciliation for interrupted target publications (4.4.5).
+"""Crash reconciliation for interrupted target publications (4.4.7).
 
 On worker startup every target is scanned deterministically — scheduler DB,
 transaction journals, commit markers, receipts, objects and the catalog — and
@@ -15,6 +15,9 @@ ciphertext for the same schedule slot):
   (rebuilt from committed receipts only);
 - catalog records without a slot commit → reported as ``catalog-corrupt``
   and retention refuses to run until the target is reconciled.
+
+Remote targets use the same rules through :func:`reconcile_target_store` with
+conditional object-store operations instead of filesystem moves.
 """
 
 from __future__ import annotations
@@ -209,19 +212,118 @@ def _rewrite_catalog(root: Path, receipts: list[dict[str, Any]], *, writer: back
     os.replace(tmp, path)
 
 
+def reconcile_target_store(
+    store: Any,
+    *,
+    target_id: str,
+    writer: backup_writer_lease.TargetWriterLease,
+    now: datetime | None = None,
+    orphan_grace_seconds: int = ORPHAN_GRACE_SECONDS,
+) -> dict[str, Any]:
+    """Reconcile a remote BackupTargetStore without regenerating backups."""
+    from deepseek_infra.infra.workspace.backup_target_store import put_json_if_absent, read_json, receipt_key
+
+    writer.assert_owned()
+    current = now or datetime.now(tz=timezone.utc)
+    report: dict[str, Any] = {
+        "targetId": target_id,
+        "kind": "store",
+        "convergedRuns": [],
+        "rebuiltReceipts": [],
+        "catalogBackfills": [],
+        "headAdvanced": False,
+        "orphanedTransactions": [],
+    }
+    markers = []
+    cursor = None
+    while True:
+        page = store.list_objects("commits/", cursor=cursor)
+        for item in page.objects:
+            if not str(item.key).endswith(".json"):  # pragma: no cover - non-json control key
+                continue
+            data = read_json(store, item.key)
+            if isinstance(data, dict) and data.get("commitHash"):
+                markers.append(data)
+        if not page.cursor:
+            break
+        cursor = page.cursor
+    latest = max(markers, key=lambda marker: int(marker.get("targetGeneration") or 0)) if markers else None
+    if latest is not None:
+        head = read_json(store, "control/head.json") or {}
+        head_gen = int(head.get("targetGeneration") or 0)
+        if int(latest.get("targetGeneration") or 0) > head_gen:
+            backup_targets.record_remote_target_head(
+                store,
+                target_id=target_id,
+                generation=int(latest["targetGeneration"]),
+                commit_hash=str(latest["commitHash"]),
+            )
+            report["headAdvanced"] = True
+    catalog_state = backup_catalog.catalog_state_store(store)
+    for marker in markers:
+        backup_id = str(marker.get("backupId") or "")
+        run_id = str(marker.get("runId") or "")
+        if not backup_id:  # pragma: no cover - marker without backup id
+            continue
+        receipt = read_json(store, receipt_key(backup_id))
+        if receipt is None:
+            journal = read_json(store, f"transactions/{run_id}.json") or {}
+            rebuilt = journal.get("receipt")
+            if isinstance(rebuilt, dict) and rebuilt.get("backupId"):
+                put_json_if_absent(store, receipt_key(backup_id), rebuilt)
+                receipt = rebuilt
+                report["rebuiltReceipts"].append(backup_id)
+        if receipt is not None and backup_id not in catalog_state:
+            try:
+                backup_catalog.append_receipt_store(store, receipt, writer=writer)
+                report["catalogBackfills"].append(backup_id)
+                catalog_state[backup_id] = receipt
+            except AppError:  # pragma: no cover - concurrent catalog append
+                pass
+        if run_id and _converge_run(run_id, backup_id=backup_id, filename=str((receipt or {}).get("filename") or backup_id)):
+            report["convergedRuns"].append(run_id)
+    # Orphan transactions without commit past grace stay journal-only (invisible).
+    cursor = None
+    while True:
+        page = store.list_objects("transactions/", cursor=cursor)
+        for item in page.objects:
+            if not str(item.key).endswith(".json"):
+                continue
+            journal_data = read_json(store, item.key)
+            if not isinstance(journal_data, dict):
+                continue
+            phase = str(journal_data.get("phase") or "")
+            if phase in backup_publish.INCOMPLETE_JOURNAL_PHASES:
+                updated = str(journal_data.get("updatedAt") or "")
+                try:
+                    stamped = datetime.fromisoformat(updated.replace("Z", "+00:00")).astimezone(timezone.utc)
+                except ValueError:  # pragma: no cover
+                    stamped = current
+                if current - stamped > timedelta(seconds=orphan_grace_seconds):
+                    report["orphanedTransactions"].append(str(journal_data.get("runId") or item.key))
+        if not page.cursor:
+            break
+        cursor = page.cursor
+    return report
+
+
 def reconcile_all_targets(
     *,
     instance_id: str,
     now: datetime | None = None,
     orphan_grace_seconds: int = ORPHAN_GRACE_SECONDS,
 ) -> list[dict[str, Any]]:
-    """Reconcile the managed target and every registered filesystem target."""
+    """Reconcile managed-local, filesystem targets and remote store targets."""
     roots: list[tuple[str, Path]] = [("managed-local", backups.BACKUP_DIR)]
+    remote_ids: list[str] = []
     for target in backup_targets.list_targets():
-        try:
-            roots.append((str(target["targetId"]), Path(str(target["path"]))))
-        except KeyError:
-            continue
+        kind = str(target.get("kind") or "filesystem")
+        if kind == "filesystem":
+            path_value = str(target.get("path") or "")
+            if path_value:
+                roots.append((str(target["targetId"]), Path(path_value)))
+        else:
+            remote_ids.append(str(target.get("targetId") or ""))
     reports: list[dict[str, Any]] = []
     for target_id, root in roots:
         clock = (lambda: now) if now is not None else None
@@ -240,6 +342,32 @@ def reconcile_all_targets(
             continue
         try:
             reports.append(reconcile_target(root, target_id=target_id, writer=writer, now=now, orphan_grace_seconds=orphan_grace_seconds))
+        finally:
+            writer.release()
+    for target_id in remote_ids:
+        if not target_id:  # pragma: no cover
+            continue
+        try:
+            store = backup_targets.open_target_store(target_id, write_intent=True)
+        except AppError as exc:  # pragma: no cover
+            reports.append({"targetId": target_id, "skipped": str(exc)[:200]})
+            continue
+        clock = (lambda: now) if now is not None else None
+        writer = backup_writer_lease.TargetWriterLease(
+            store=store,
+            target_id=target_id,
+            owner_run_id=f"reconcile_{instance_id}",
+            owner_instance_id=instance_id,
+            fencing_token=backup_scheduler.allocate_fencing_token(),
+            clock=clock,
+        )
+        try:
+            writer.acquire()
+        except AppError as exc:  # pragma: no cover - remote lease busy
+            reports.append({"targetId": target_id, "skipped": str(exc)[:200]})
+            continue
+        try:
+            reports.append(reconcile_target_store(store, target_id=target_id, writer=writer, now=now, orphan_grace_seconds=orphan_grace_seconds))
         finally:
             writer.release()
     return reports

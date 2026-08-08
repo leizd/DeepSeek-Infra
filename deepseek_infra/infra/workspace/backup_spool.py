@@ -1,8 +1,10 @@
-"""Durable encrypted publish spool (4.4.6).
+"""Durable encrypted publish spool (4.4.7).
 
 Holds Age ciphertext that already passed creation verification so a blocked
-remote upload can resume without regenerating the package. Never stores
-plaintext ZIP bytes or Recovery Identities.
+remote upload can resume without regenerating the package. Spool entries are
+bound to a frozen ``runPlanDigest`` so scheduler retries reuse the same
+ciphertext instead of re-encrypting. Never stores plaintext ZIP bytes or
+Recovery Identities.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_unattended
 
 SPOOL_DIR = config.ROOT / ".backup-spool"
-SPOOL_SCHEMA_VERSION = 1
+SPOOL_SCHEMA_VERSION = 2
 DEFAULT_TTL_SECONDS = 7 * 24 * 3600
 DEFAULT_QUOTA_BYTES = 50 * 1024 * 1024 * 1024
 
@@ -56,6 +58,26 @@ def spool_usage_bytes() -> int:
     return total
 
 
+def lookup_verified_package(
+    *,
+    policy_id: str,
+    slot_digest: str,
+    run_plan_digest: str | None = None,
+) -> SpooledPackage | None:
+    """Return an existing verified spool package when present and plan-compatible."""
+    meta = read_package_meta(policy_id, slot_digest)
+    path = package_path(policy_id, slot_digest)
+    if meta is None or path is None:
+        return None
+    if run_plan_digest is not None and str(meta.get("runPlanDigest") or "") not in {"", run_plan_digest}:
+        raise AppError("spool run plan digest mismatch for schedule slot", code=ErrorCode.INVALID_REQUEST, status=409)
+    if not bool(meta.get("creationVerified")):
+        return None
+    if backup_unattended.sha256_file(path) != str(meta.get("ciphertextSha256") or ""):
+        return None
+    return SpooledPackage(meta, path)
+
+
 def store_verified_package(
     package: Any,
     *,
@@ -63,6 +85,7 @@ def store_verified_package(
     schedule_slot: str,
     run_id: str,
     slot_digest: str | None = None,
+    run_plan_digest: str | None = None,
 ) -> dict[str, Any]:
     """Copy a verified Age package into the durable spool for the schedule slot."""
     from deepseek_infra.infra.workspace.backup_target_store import commit_slot_digest
@@ -76,10 +99,20 @@ def store_verified_package(
     if package_path.is_file():
         existing_meta = read_package_meta(policy_id, digest)
         if existing_meta and str(existing_meta.get("ciphertextSha256") or "") == ciphertext_sha256:
+            if run_plan_digest and str(existing_meta.get("runPlanDigest") or "") not in {"", run_plan_digest}:
+                raise AppError("spool run plan digest mismatch for schedule slot", code=ErrorCode.INVALID_REQUEST, status=409)
             return existing_meta
         if backup_unattended.sha256_file(package_path) == ciphertext_sha256:  # pragma: no cover
             meta = existing_meta or {}
-            return meta if meta else _write_meta(meta_path, package, policy_id=policy_id, schedule_slot=schedule_slot, run_id=run_id, slot_digest=digest)
+            return meta if meta else _write_meta(
+                meta_path,
+                package,
+                policy_id=policy_id,
+                schedule_slot=schedule_slot,
+                run_id=run_id,
+                slot_digest=digest,
+                run_plan_digest=run_plan_digest,
+            )
         raise AppError("spool slot already holds a different ciphertext digest", code=ErrorCode.INVALID_REQUEST, status=409)
     if spool_usage_bytes() + int(package.size) > DEFAULT_QUOTA_BYTES:
         cleanup_expired(force_oldest=True)
@@ -94,16 +127,34 @@ def store_verified_package(
         tmp.unlink(missing_ok=True)
         raise AppError("spool package digest mismatch", code=ErrorCode.INTERNAL, status=500)
     os.replace(tmp, package_path)
-    return _write_meta(meta_path, package, policy_id=policy_id, schedule_slot=schedule_slot, run_id=run_id, slot_digest=digest)
+    return _write_meta(
+        meta_path,
+        package,
+        policy_id=policy_id,
+        schedule_slot=schedule_slot,
+        run_id=run_id,
+        slot_digest=digest,
+        run_plan_digest=run_plan_digest,
+    )
 
 
-def _write_meta(path: Path, package: Any, *, policy_id: str, schedule_slot: str, run_id: str, slot_digest: str) -> dict[str, Any]:
+def _write_meta(
+    path: Path,
+    package: Any,
+    *,
+    policy_id: str,
+    schedule_slot: str,
+    run_id: str,
+    slot_digest: str,
+    run_plan_digest: str | None = None,
+) -> dict[str, Any]:
     meta = {
         "schemaVersion": SPOOL_SCHEMA_VERSION,
         "policyId": policy_id,
         "scheduleSlot": schedule_slot,
         "slotDigest": slot_digest,
         "runId": run_id,
+        "runPlanDigest": run_plan_digest or "",
         "backupId": package.backup_id,
         "filename": package.filename,
         "size": int(package.size),

@@ -260,16 +260,24 @@ def build_scheduled_backup(
     staging_root: Path,
     schedule_slot: str = "",
     cancel_event: threading.Event | None = None,
+    backup_id: str | None = None,
+    contributor_plan: Any | None = None,
+    snapshot_kind: str = "full",
+    parent_backup_id: str | None = None,
+    base_backup_id: str | None = None,
 ) -> ScheduledBackupPackage:
     """Build and verify a scheduled backup package under ``staging_root``.
 
     The workspace is quiesced through the mutation gate; if it keeps changing
     across three attempts the run fails with 409 so the scheduler can retry.
+    When ``backup_id`` / ``contributor_plan`` are supplied (frozen run plan),
+    retries keep the same identity instead of minting a new package id.
     """
     context = _context_from_policy(policy)
-    plan = backups._contributor_plan(context)
+    plan = contributor_plan if contributor_plan is not None else backups._contributor_plan(context)
     mirror_metadata, coverage_frontend = mirror_coverage(policy)
-    backup_id = f"backup_{uuid.uuid4().hex[:16]}"
+    resolved_backup_id = backup_id or f"backup_{uuid.uuid4().hex[:16]}"
+    _ = (snapshot_kind, parent_backup_id, base_backup_id)  # pragma: no cover - reserved for incremental builder path
     run_dir = staging_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     gate_root = backups.BACKUP_DIR.parent
@@ -287,7 +295,7 @@ def build_scheduled_backup(
         try:
             candidate = _build_candidate(
                 run_dir,
-                backup_id,
+                resolved_backup_id,
                 policy,
                 context,
                 plan,
