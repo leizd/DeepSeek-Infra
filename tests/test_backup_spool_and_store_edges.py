@@ -159,7 +159,7 @@ def test_init_s3_target_with_fake_client(tmp_settings: Path, monkeypatch: pytest
     assert probe.get("kind") == "s3"
 
 
-def test_remote_restore_hold_release(tmp_settings: Path, tmp_path: Path) -> None:
+def test_remote_restore_hold_release(tmp_settings: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = MemoryTargetStore()
     package = _pkg(tmp_path, body=b"restore-body")
     digest = package.ciphertext_sha256
@@ -182,12 +182,8 @@ def test_remote_restore_hold_release(tmp_settings: Path, tmp_path: Path) -> None
     target = SimpleNamespace(target_id="t1", root=None, managed=False, kind="s3", store=store, require_store=lambda: store)
     import deepseek_infra.infra.workspace.backup_publish as publish
 
-    original = publish.resolve_target
-    publish.resolve_target = lambda *a, **k: target  # type: ignore[assignment]
-    try:
-        staged = backup_remote_restore.restore_from_target(target_id="t1", backup_id=package.backup_id)
-    finally:
-        publish.resolve_target = original  # type: ignore[assignment]
+    monkeypatch.setattr(publish, "resolve_target", lambda *a, **k: target)
+    staged = backup_remote_restore.restore_from_target(target_id="t1", backup_id=package.backup_id)
     assert Path(staged["path"]).is_file()
     hold = read_json(store, restore_hold_key(str(staged["restoreId"])))
     assert hold is not None
@@ -257,24 +253,20 @@ def test_catalog_store_append_and_list(tmp_settings: Path, tmp_path: Path) -> No
     writer.release()
 
 
-def test_remote_restore_errors(tmp_settings: Path) -> None:
+def test_remote_restore_errors(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = MemoryTargetStore()
     target = SimpleNamespace(target_id="t1", root=None, managed=False, kind="s3", store=store, require_store=lambda: store)
     import deepseek_infra.infra.workspace.backup_publish as publish
 
-    original = publish.resolve_target
-    publish.resolve_target = lambda *a, **k: target  # type: ignore[assignment]
-    try:
-        with pytest.raises(AppError):
-            backup_remote_restore.restore_from_target(target_id="t1", backup_id="missing")
-        put_json_if_absent(store, receipt_key("b"), {"backupId": "b", "objectDigest": "short"})
-        with pytest.raises(AppError):
-            backup_remote_restore.restore_from_target(target_id="t1", backup_id="b")
-        put_json_if_absent(store, receipt_key("b2"), {"backupId": "b2", "objectDigest": "a" * 64, "filename": "b2.age"})
-        with pytest.raises(AppError):
-            backup_remote_restore.restore_from_target(target_id="t1", backup_id="b2")
-    finally:
-        publish.resolve_target = original  # type: ignore[assignment]
+    monkeypatch.setattr(publish, "resolve_target", lambda *a, **k: target)
+    with pytest.raises(AppError):
+        backup_remote_restore.restore_from_target(target_id="t1", backup_id="missing")
+    put_json_if_absent(store, receipt_key("b"), {"backupId": "b", "objectDigest": "short"})
+    with pytest.raises(AppError):
+        backup_remote_restore.restore_from_target(target_id="t1", backup_id="b")
+    put_json_if_absent(store, receipt_key("b2"), {"backupId": "b2", "objectDigest": "a" * 64, "filename": "b2.age"})
+    with pytest.raises(AppError):
+        backup_remote_restore.restore_from_target(target_id="t1", backup_id="b2")
 
 
 def test_open_target_store_kinds(tmp_settings: Path) -> None:
