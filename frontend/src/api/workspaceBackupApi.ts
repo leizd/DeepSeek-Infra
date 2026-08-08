@@ -480,16 +480,33 @@ export function listBackupTargetCapabilities(client: HttpClient = httpClient) {
   }>("/api/workspace/backup-target-capabilities");
 }
 
-export function restoreBackupFromTarget(request: { targetId: string; backupId: string }, client: HttpClient = httpClient) {
+export function restoreBackupFromTarget(
+  request: { targetId: string; backupId: string; complete?: boolean },
+  client: HttpClient = httpClient,
+) {
   return client.postJson<{
     restoreId: string;
-    targetId: string;
-    backupId: string;
-    filename: string;
-    size: number;
-    objectDigest: string;
-    path: string;
+    phase?: string;
+    targetId?: string;
+    backupId?: string;
+    filename?: string;
+    size?: number;
+    objectDigest?: string;
+    path?: string;
+    downloadedBytes?: number;
+    expectedBytes?: number;
   }>("/api/workspace/restores/from-target", request);
+}
+
+export function fetchRemoteRestore(restoreId: string, request: { maxBytes?: number } = {}, client: HttpClient = httpClient) {
+  return client.postJson<{
+    restoreId: string;
+    phase: string;
+    downloadedBytes: number;
+    expectedBytes: number;
+    path?: string;
+    next?: string;
+  }>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/fetch`, request);
 }
 
 export function deleteBackupTarget(targetId: string, client: HttpClient = httpClient) {

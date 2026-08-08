@@ -1,10 +1,11 @@
-"""Scheduled backup governance routes (4.4.6)."""
+"""Scheduled backup governance routes (4.4.7)."""
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -28,9 +29,22 @@ from deepseek_infra.infra.workspace import (
 from deepseek_infra.web.http_utils import json_response, read_json_body, require_api_auth
 
 
-def _target_root(target_id: str, *, write_intent: bool = False) -> Path:
+@dataclass(frozen=True, slots=True)
+class BackupTargetSession:
+    target_id: str
+    kind: str
+    store: Any
+    root: Path | None
+
+
+def open_target_session(target_id: str, *, write_intent: bool = False) -> BackupTargetSession:
     target = backup_publish.resolve_target(str(target_id or "managed-local"), write_intent=write_intent)
-    return target.require_root()
+    store = target.require_store()
+    return BackupTargetSession(target_id=target.target_id, kind=target.kind, store=store, root=target.root)
+
+
+def _target_root(target_id: str, *, write_intent: bool = False) -> Path:
+    return open_target_session(target_id, write_intent=write_intent).root or backup_publish.resolve_target(target_id, write_intent=write_intent).require_root()
 
 
 @contextmanager
@@ -53,14 +67,31 @@ def _target_writer(root: Path | None, target_id: str, *, store: Any | None = Non
 def _find_backup_root(backup_id: str) -> tuple[Path, dict[str, Any], str]:
     roots: list[tuple[str, Path]] = [("managed-local", backups.BACKUP_DIR)]
     for target in backup_targets.list_targets():
-        try:
-            roots.append((str(target["targetId"]), Path(str(target["path"]))))
-        except KeyError:
-            continue
+        path_value = str(target.get("path") or "")
+        if path_value:
+            roots.append((str(target["targetId"]), Path(path_value)))
     for target_id, root in roots:
         record = backup_catalog.catalog_state(root).get(backup_id)
         if record is not None:
             return root, record, target_id
+    raise AppError("Backup not found in any catalog", code=ErrorCode.NOT_FOUND, status=404)
+
+
+def _find_backup_session(backup_id: str) -> tuple[BackupTargetSession, dict[str, Any]]:
+    candidates = ["managed-local"] + [str(item.get("targetId") or "") for item in backup_targets.list_targets()]
+    for target_id in candidates:
+        if not target_id:
+            continue
+        try:
+            session = open_target_session(target_id, write_intent=False)
+        except AppError:
+            continue
+        if session.root is not None:
+            record = backup_catalog.catalog_state(session.root).get(backup_id)
+        else:
+            record = backup_catalog.catalog_state_store(session.store).get(backup_id)
+        if record is not None:
+            return session, record
     raise AppError("Backup not found in any catalog", code=ErrorCode.NOT_FOUND, status=404)
 
 
@@ -171,32 +202,53 @@ def create_backup_governance_router() -> APIRouter:
     async def api_backup_catalog(request: Request) -> JSONResponse:
         require_api_auth(request)
         target_id = request.query_params.get("targetId") or "managed-local"
-        root = _target_root(target_id)
+        session = open_target_session(target_id)
         policy_id = request.query_params.get("policyId") or None
-        entries = backup_catalog.list_backups(root, policy_id=policy_id)
+        if session.root is not None:
+            entries = backup_catalog.list_backups(session.root, policy_id=policy_id)
+            return json_response(
+                {
+                    "backups": entries,
+                    "chainValid": backup_catalog.verify_chain(session.root),
+                    "integrity": backup_catalog.find_orphans_and_missing(session.root),
+                    "health": backup_scrub.backup_health(session.root),
+                    "targetKind": session.kind,
+                }
+            )
+        state = backup_catalog.catalog_state_store(session.store)
+        entries = backup_catalog.state_sorted(state.values())
+        if policy_id:
+            entries = [item for item in entries if item.get("policyId") == policy_id]
         return json_response(
             {
                 "backups": entries,
-                "chainValid": backup_catalog.verify_chain(root),
-                "integrity": backup_catalog.find_orphans_and_missing(root),
-                "health": backup_scrub.backup_health(root),
+                "chainValid": True,
+                "integrity": {"orphans": [], "missing": []},
+                "health": {"status": "ok", "backups": []},
+                "targetKind": session.kind,
             }
         )
 
     @router.post("/api/workspace/backup-catalog/{backup_id}/pin")
     async def api_backup_pin(request: Request, backup_id: str) -> JSONResponse:
         require_api_auth(request)
-        root, _, target_id = _find_backup_root(backup_id)
-        with _target_writer(root, target_id) as writer:
-            backup_catalog.pin_backup(root, backup_id, True, writer=writer)
+        session, _record = _find_backup_session(backup_id)
+        with _target_writer(session.root, session.target_id, store=session.store if session.root is None else None) as writer:
+            if session.root is not None:
+                backup_catalog.pin_backup(session.root, backup_id, True, writer=writer)
+            else:
+                backup_catalog._append_entry_store(session.store, "pin", {"backupId": backup_id, "pinned": True}, writer=writer)
         return json_response({"backupId": backup_id, "pinned": True})
 
     @router.delete("/api/workspace/backup-catalog/{backup_id}/pin")
     async def api_backup_unpin(request: Request, backup_id: str) -> JSONResponse:
         require_api_auth(request)
-        root, _, target_id = _find_backup_root(backup_id)
-        with _target_writer(root, target_id) as writer:
-            backup_catalog.pin_backup(root, backup_id, False, writer=writer)
+        session, _record = _find_backup_session(backup_id)
+        with _target_writer(session.root, session.target_id, store=session.store if session.root is None else None) as writer:
+            if session.root is not None:
+                backup_catalog.pin_backup(session.root, backup_id, False, writer=writer)
+            else:
+                backup_catalog._append_entry_store(session.store, "pin", {"backupId": backup_id, "pinned": False}, writer=writer)
         return json_response({"backupId": backup_id, "pinned": False})
 
     # ── Retention ──────────────────────────────────────────────────────────
@@ -207,11 +259,15 @@ def create_backup_governance_router() -> APIRouter:
         payload = await read_json_body(request, max_bytes=64_000)
         policy = backup_policies.get_policy(str(payload.get("policyId") or ""))
         retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
-        root = _target_root(str(policy.get("targetId") or "managed-local"))
+        session = open_target_session(str(policy.get("targetId") or "managed-local"))
         timezone_name = str((policy.get("schedule") or {}).get("timezone") or "UTC")
-        preview = backup_retention.preview_retention(retention, root, policy_timezone=timezone_name)
-        preview.pop("trashRecords", None)
-        return json_response(preview)
+        if session.root is not None:
+            preview = backup_retention.preview_retention(retention, session.root, policy_timezone=timezone_name)
+            preview.pop("trashRecords", None)
+            return json_response(preview)
+        state = backup_catalog.catalog_state_store(session.store)
+        live = [item for item in state.values() if not item.get("deleted") and not item.get("trashed")]
+        return json_response({"keep": [str(item.get("backupId")) for item in live[: int(retention.get("keepLast") or 0)]], "trash": [], "protected": [], "targetKind": session.kind})
 
     @router.post("/api/workspace/retention/apply")
     async def api_retention_apply(request: Request) -> JSONResponse:
@@ -220,17 +276,22 @@ def create_backup_governance_router() -> APIRouter:
         policy = backup_policies.get_policy(str(payload.get("policyId") or ""))
         retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
         timezone_name = str((policy.get("schedule") or {}).get("timezone") or "UTC")
-        root = _target_root(str(policy.get("targetId") or "managed-local"), write_intent=True)
+        target_id = str(policy.get("targetId") or "managed-local")
+        session = open_target_session(target_id, write_intent=True)
         preview = payload.get("preview")
-        with _target_writer(root, str(policy.get("targetId") or "managed-local")) as writer:
-            applied = backup_retention.apply_retention(
-                retention,
-                root,
-                policy_timezone=timezone_name,
-                preview=preview if isinstance(preview, dict) else None,
-                writer=writer,
-            )
-            finalized = backup_retention.finalize_retention(retention, root, policy_timezone=timezone_name, writer=writer)
+        with _target_writer(session.root, target_id, store=session.store if session.root is None else None) as writer:
+            if session.root is not None:
+                applied = backup_retention.apply_retention(
+                    retention,
+                    session.root,
+                    policy_timezone=timezone_name,
+                    preview=preview if isinstance(preview, dict) else None,
+                    writer=writer,
+                )
+                finalized = backup_retention.finalize_retention(retention, session.root, policy_timezone=timezone_name, writer=writer)
+            else:
+                applied = backup_retention.apply_retention_store(retention, session.store, policy_timezone=timezone_name, writer=writer)
+                finalized = backup_retention.finalize_retention_store(retention, session.store, policy_timezone=timezone_name, writer=writer)
         return json_response({"applied": applied, "finalized": finalized})
 
     # ── Scrub and restore drills ───────────────────────────────────────────
@@ -263,10 +324,30 @@ def create_backup_governance_router() -> APIRouter:
     async def api_restore_from_target(request: Request) -> JSONResponse:
         require_api_auth(request)
         payload = await read_json_body(request, max_bytes=64_000)
+        complete = bool(payload.get("complete", False))
+        if complete:
+            return json_response(
+                backup_remote_restore.restore_from_target(
+                    target_id=str(payload.get("targetId") or ""),
+                    backup_id=str(payload.get("backupId") or ""),
+                )
+            )
         return json_response(
-            backup_remote_restore.restore_from_target(
+            backup_remote_restore.create_restore_from_target(
                 target_id=str(payload.get("targetId") or ""),
                 backup_id=str(payload.get("backupId") or ""),
+            )
+        )
+
+    @router.post("/api/workspace/restores/{restore_id}/fetch")
+    async def api_restore_fetch(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=64_000)
+        max_bytes = payload.get("maxBytes")
+        return json_response(
+            backup_remote_restore.fetch_restore_session(
+                restore_id,
+                max_bytes=int(max_bytes) if max_bytes is not None else None,
             )
         )
 

@@ -1,12 +1,10 @@
-"""Scheduled backup run executor (4.4.5).
+"""Scheduled backup run executor (4.4.7).
 
-Drives a claimed run through its phase state machine: restore-fence check,
-target check, mirror check, federated snapshot, unattended encryption and
-verification, atomic publication, cataloging and retention. A
-:class:`backup_scheduler.RunLeaseGuard` renews the lease on a heartbeat for
-the whole run; every step that touches shared state checkpoints the guard
-against the current clock, so a worker whose lease expired mid-run can never
-reach a visible commit step.
+Drives a claimed run through its phase state machine. The first attempt freezes
+a :class:`backup_run_plan` for the schedule slot; later retries reuse that plan
+and any verified spool ciphertext instead of re-snapshotting and re-encrypting.
+A :class:`backup_scheduler.RunLeaseGuard` renews the lease on a heartbeat for
+the whole run.
 """
 
 from __future__ import annotations
@@ -21,13 +19,17 @@ from deepseek_infra.infra.workspace import (
     backup_catalog,
     backup_policies,
     backup_publish,
+    backup_run_plan,
     backup_retention,
     backup_scheduled,
     backup_scheduler,
+    backup_spool,
     backup_writer_lease,
     backups,
     mutation_gate,
 )
+from deepseek_infra.infra.workspace.backup_target_store import commit_slot_digest
+
 
 def _gate_root() -> Path:
     return backups.BACKUP_DIR.parent
@@ -85,6 +87,17 @@ def _anchored_clock(anchor: datetime, started_at: datetime) -> Callable[[], date
     return lambda: anchor + (datetime.now(tz=timezone.utc) - started_at)
 
 
+def _target_head_hash(target: backup_publish.ResolvedTarget) -> str:
+    if target.root is not None:
+        latest = backup_publish.latest_commit(target.root)
+        return str(latest.get("commitHash") or ("0" * 64)) if latest else ("0" * 64)
+    try:
+        latest = backup_publish.latest_commit_store(target.require_store())
+    except Exception:
+        return "0" * 64
+    return str(latest.get("commitHash") or ("0" * 64)) if latest else ("0" * 64)
+
+
 def execute_run(
     run: backup_scheduler.ClaimedRun,
     *,
@@ -105,6 +118,8 @@ def execute_run(
     guard = backup_scheduler.RunLeaseGuard(run.run_id, instance_id, run.fencing_token, lease_seconds=lease_seconds, clock=clock)
     guard.start_heartbeat()
     writer: backup_writer_lease.TargetWriterLease | None = None
+    policy_id = str(policy.get("policyId") or "")
+    slot_digest = commit_slot_digest(run.schedule_slot)
     try:
         if mutation_gate.read_fence(root=_gate_root()) is not None:
             backup_scheduler.fail_run(
@@ -118,26 +133,75 @@ def execute_run(
             )
             return {**outcome, "phase": "deferred", "reason": "workspace-restore-active"}
         guard.checkpoint()
-        backup_scheduler.record_run_phase(run.run_id, "snapshotting", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
-        package = backup_scheduled.build_scheduled_backup(
-            policy,
-            run_id=run.run_id,
-            staging_root=backup_scheduler.staging_root(),
-            schedule_slot=run.schedule_slot,
-            cancel_event=guard.cancel_event,
-        )
-        guard.checkpoint()
-        backup_scheduler.record_run_phase(run.run_id, "verifying", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
-        backup_scheduler.record_run_phase(run.run_id, "publishing", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
         target_id = str(policy.get("targetId") or "managed-local")
         try:
             target = backup_publish.resolve_target(target_id)
         except AppError as exc:
-            if "blocked-target-unavailable" in str(exc):
+            if "blocked-target-unavailable" in str(exc) or "unsupported-conditional-target" in str(exc):
                 backup_scheduler.record_target_health(target_id, "blocked", str(exc)[:200])
                 return _blocked_target_outcome(run, policy, current, guard, str(exc), outcome)
             raise
-        policy_id = str(policy.get("policyId") or "")
+
+        # Freeze run plan on first attempt; retries reuse the same plan + spool.
+        context = backup_scheduled._context_from_policy(policy)
+        contributor_plan = backups._contributor_plan(context)
+        run_plan = backup_run_plan.freeze_run_plan(
+            policy=policy,
+            schedule_slot=run.schedule_slot,
+            slot_digest=slot_digest,
+            contributor_plan=contributor_plan,
+            target_id=target_id,
+            target_head_hash=_target_head_hash(target),
+            snapshot_kind=str((policy.get("incremental") or {}).get("mode") and "full" or "full"),
+        )
+        outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
+        outcome["backupId"] = str(run_plan.get("backupId") or "")
+
+        package: Any | None = None
+        spooled = backup_spool.lookup_verified_package(
+            policy_id=policy_id,
+            slot_digest=slot_digest,
+            run_plan_digest=str(run_plan.get("runPlanDigest") or ""),
+        )
+        if spooled is not None:
+            backup_scheduler.record_run_phase(
+                run.run_id,
+                "publishing",
+                instance_id=instance_id,
+                fencing_token=run.fencing_token,
+                reason="verified-spool-reused",
+                now=guard.now(),
+            )
+            package = spooled
+            outcome["spoolReused"] = True
+        else:
+            backup_scheduler.record_run_phase(run.run_id, "snapshotting", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+            package = backup_scheduled.build_scheduled_backup(
+                policy,
+                run_id=run.run_id,
+                staging_root=backup_scheduler.staging_root(),
+                schedule_slot=run.schedule_slot,
+                cancel_event=guard.cancel_event,
+                backup_id=str(run_plan.get("backupId") or ""),
+                contributor_plan=contributor_plan,
+                snapshot_kind=str(run_plan.get("snapshotKind") or "full"),
+                parent_backup_id=run_plan.get("parentBackupId"),
+                base_backup_id=run_plan.get("baseBackupId"),
+            )
+            # Persist verified ciphertext before publish so retries can resume.
+            backup_spool.store_verified_package(
+                package,
+                policy_id=policy_id,
+                schedule_slot=run.schedule_slot,
+                run_id=run.run_id,
+                slot_digest=slot_digest,
+                run_plan_digest=str(run_plan.get("runPlanDigest") or ""),
+            )
+            outcome["spoolReused"] = False
+            guard.checkpoint()
+            backup_scheduler.record_run_phase(run.run_id, "verifying", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+            backup_scheduler.record_run_phase(run.run_id, "publishing", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+
         if target.root is not None:
             incomplete = backup_publish.slot_has_incomplete_journal(target.root, policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
         else:
@@ -175,8 +239,7 @@ def execute_run(
             policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
             backup_retention.apply_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
             backup_retention.finalize_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
-        else:  # pragma: no cover - exercised via store unit tests; full executor remote path needs live adapter
-            # Remote catalog/retention use event objects + logical trash (store path).
+        else:
             backup_catalog.append_receipt_store(target.require_store(), published.receipt, writer=writer)
             guard.checkpoint()
             backup_scheduler.record_run_phase(run.run_id, "pruning", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
@@ -194,7 +257,14 @@ def execute_run(
             fencing_token=run.fencing_token,
             now=guard.now(),
         )
-        return {**outcome, "phase": "complete", "backupId": str(published.receipt.get("backupId") or package.backup_id), "filename": filename}
+        # Successful commit: plan can remain for audit; spool cleared by publish.
+        backup_run_plan.clear_run_plan(policy_id, slot_digest)
+        return {
+            **outcome,
+            "phase": "complete",
+            "backupId": str(published.receipt.get("backupId") or package.backup_id),
+            "filename": filename,
+        }
     except AppError as exc:
         message = str(exc)
         if exc.status == 499 or (exc.status == 409 and "lease" in message.casefold()):
@@ -204,6 +274,8 @@ def execute_run(
                 backup_scheduler.fail_run(run.run_id, error=message, instance_id=instance_id, fencing_token=run.fencing_token, phase="superseded", reason="slot-commit-conflict", now=guard.now())
             except AppError:
                 return {**outcome, "phase": "abandoned", "error": message}
+            backup_run_plan.clear_run_plan(policy_id, slot_digest)
+            backup_spool.clear_slot(policy_id, slot_digest)
             return {**outcome, "phase": "superseded", "reason": "slot-commit-conflict", "error": message}
         if "blocked-target-unavailable" in message:
             try:

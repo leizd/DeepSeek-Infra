@@ -4,6 +4,19 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.7] - Incremental Snapshot Graphs and Remote Recovery Hardening
+
+### Spool reuse, remote reconcile, and resumable restore
+
+- Scheduler retries freeze a BackupRunPlan for the schedule slot and reuse verified Age ciphertext from `.backup-spool` instead of re-snapshotting and re-encrypting.
+- Remote targets reconcile through `reconcile_target_store` without regenerating backups.
+- Remote restore uses durable two-phase sessions that resume by restoreId across restarts.
+
+### Target-session governance and incremental foundation
+
+- Catalog/pin/retention APIs use BackupTargetSession for filesystem and S3 targets.
+- Incremental helpers: Merkle roots, coverage-safe tombstones, adaptive full checkpoints, snapshot index, ancestor retention protection, payload reference dedupe.
+
 ## [4.4.6] - Remote Backup Targets and Conditional Object Storage
 
 ### Backend-neutral target store and S3-compatible GA
