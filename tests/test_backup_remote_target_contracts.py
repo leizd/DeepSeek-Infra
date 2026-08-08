@@ -295,11 +295,11 @@ def test_remote_restore_range_resumed(tmp_settings: Path, tmp_path: Path) -> Non
         del target_id, write_intent
         return target
 
-    remote_mod.backup_publish.resolve_target = _resolve  # type: ignore[assignment]
+    remote_mod.backup_publish.resolve_target = _resolve
     try:
         staged = backup_remote_restore.restore_from_target(target_id="target_mem", backup_id=package.backup_id)
     finally:
-        remote_mod.backup_publish.resolve_target = original  # type: ignore[assignment]
+        remote_mod.backup_publish.resolve_target = original
     assert Path(staged["path"]).is_file()
     assert staged["objectDigest"] == package.ciphertext_sha256
     assert published.commit["backupId"] == package.backup_id

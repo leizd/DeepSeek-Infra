@@ -197,10 +197,11 @@ def test_atomic_target_publish(tmp_settings: Path, stub_crypto: None) -> None:
     package = backup_scheduled.build_scheduled_backup(policy, run_id="run_ev4", staging_root=tmp_settings / ".staging")
     target = backup_publish.resolve_target("managed-local")
     result = backup_publish.publish_backup(target, package, run_id="run_ev4", policy_id=str(policy["policyId"]), schedule_slot="slot", fencing_token=1)
-    assert result.path.is_file()
-    assert not list((target.root / ".partial").iterdir())
-    backup_catalog.append_receipt(target.root, result.receipt)
-    assert backup_catalog.verify_chain(target.root) is True
+    root = target.require_root()
+    assert result.path is not None and result.path.is_file()
+    assert not list((root / ".partial").iterdir())
+    backup_catalog.append_receipt(root, result.receipt)
+    assert backup_catalog.verify_chain(root) is True
 
 
 def test_failed_backup_does_not_prune(tmp_settings: Path, stub_crypto: None) -> None:
@@ -256,9 +257,10 @@ def test_catalog_rebuilt_from_receipts(tmp_settings: Path, stub_crypto: None) ->
     package = backup_scheduled.build_scheduled_backup(policy, run_id="run_ev5", staging_root=tmp_settings / ".staging")
     target = backup_publish.resolve_target("managed-local")
     result = backup_publish.publish_backup(target, package, run_id="run_ev5", policy_id=str(policy["policyId"]), schedule_slot="slot", fencing_token=1)
-    backup_catalog.append_receipt(target.root, result.receipt)
-    backup_catalog.catalog_path(target.root).write_text("{corrupt\n", encoding="utf-8")
-    rebuilt = backup_catalog.rebuild_catalog_from_receipts(target.root)
+    root = target.require_root()
+    backup_catalog.append_receipt(root, result.receipt)
+    backup_catalog.catalog_path(root).write_text("{corrupt\n", encoding="utf-8")
+    rebuilt = backup_catalog.rebuild_catalog_from_receipts(root)
     assert rebuilt["rebuilt"] >= 1
     assert rebuilt["chainValid"] is True
 
@@ -269,11 +271,12 @@ def test_manual_restore_drill_verified(tmp_settings: Path, stub_crypto: None) ->
     package = backup_scheduled.build_scheduled_backup(policy, run_id="run_ev6", staging_root=tmp_settings / ".staging")
     target = backup_publish.resolve_target("managed-local")
     result = backup_publish.publish_backup(target, package, run_id="run_ev6", policy_id=str(policy["policyId"]), schedule_slot="slot", fencing_token=1)
-    backup_catalog.append_receipt(target.root, result.receipt)
-    drill = backup_scrub.verify_unlock_drill(target.root, package.backup_id, bytearray(b"AGE-SECRET-KEY-1USER"), staged_root=tmp_settings / ".drill")
+    root = target.require_root()
+    backup_catalog.append_receipt(root, result.receipt)
+    drill = backup_scrub.verify_unlock_drill(root, package.backup_id, bytearray(b"AGE-SECRET-KEY-1USER"), staged_root=tmp_settings / ".drill")
     assert drill["ok"] is True
     assert drill["sealedFrontend"] is not None
-    record = backup_catalog.catalog_state(target.root)[package.backup_id]
+    record = backup_catalog.catalog_state(root)[package.backup_id]
     assert record["userUnlockVerifiedAt"]
 
 

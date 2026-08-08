@@ -45,7 +45,7 @@ def stub_crypto(monkeypatch: pytest.MonkeyPatch) -> None:
 def _envelope() -> dict[str, object]:
     body: dict[str, object] = {
         "schemaVersion": 1,
-        "sourceVersion": "4.4.5",
+        "sourceVersion": "4.4.6",
         "createdAt": 1,
         "conversations": [{"conversationId": "c1", "headRevision": "r1", "checkpoint": {"messages": []}}],
         "conflicts": [],

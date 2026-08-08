@@ -14,16 +14,16 @@ DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines
 
 ## 4.4.6 at a glance
 
-- Every executing backup run holds a RunLeaseGuard: a 300-second lease renewed on a 60-second heartbeat, with the first renewal failure setting a run-wide cancel event.
-- Contributor snapshots, unattended age encryption and verification, target copies, target-side hashing, catalog appends and retention moves all checkpoint at chunk boundaries against the current clock — a worker whose lease lapses mid-run can never reach a visible commit step.
-- Run completion, phase transitions, requeue and fail now reject expired leases, and lease renewal refuses terminal runs, so a superseded worker cannot publish, catalog, prune or complete.
-- A schedule slot taken over after a lease lapse converges to exactly one formal backup on the target.
+- Backend-neutral `BackupTargetStore` with filesystem and S3-compatible adapters; scheduled backup requires conditional create + conditional replace capability probes.
+- Secret-free remote target registry (bucket/prefix/region/endpoint/credential provider only) — cloud Access Keys never enter Target JSON, journals, receipts, catalogs or logs.
+- Verified encrypted publish spool with checksummed multipart resume; full-slot SHA-256 commit markers; catalog v2 CAS head + snapshots; logical remote trash/GC with restore holds.
+- Range-resumable encrypted restore from target reuses the existing unlock/restore transaction; WebDAV remains reserved, not GA.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.4.6 release notes](docs/releases/4.4.6.md), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.4.6 release notes](docs/releases/4.4.6.md) (previous [4.4.5](docs/releases/4.4.5.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 

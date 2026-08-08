@@ -47,7 +47,7 @@ android {
         applicationId "com.deepseek.mobile"
         minSdk 24
         targetSdk 34
-        versionCode 400045
+        versionCode 400046
         versionName "4.4.6"
 
         ndk {
