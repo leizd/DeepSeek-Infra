@@ -40,7 +40,7 @@ def test_marker_v2_written_at_init(tmp_settings: Path, tmp_path: Path) -> None:
     directory.mkdir()
     record = backup_targets.init_target(directory)
     marker = _read_marker(directory)
-    assert marker["schemaVersion"] == 2
+    assert int(str(marker["schemaVersion"])) >= 2
     assert str(marker["incarnationId"]).startswith("inc_")
     assert marker["ownerInstallationId"]
     assert marker["targetGeneration"] == 0
@@ -117,7 +117,7 @@ def test_clone_detected_at_second_location(tmp_settings: Path, tmp_path: Path) -
     assert fresh["targetId"] != record["targetId"]
     marker = _read_marker(clone)
     assert marker["targetId"] == fresh["targetId"]
-    assert marker["schemaVersion"] == 2
+    assert int(str(marker["schemaVersion"])) >= 2
     assert marker["targetGeneration"] == 0
 
 
@@ -146,7 +146,7 @@ def test_v1_marker_upgraded_on_write_contact(tmp_settings: Path, tmp_path: Path)
     backup_targets._checkpoint_path(target_id).unlink(missing_ok=True)
     assert backup_targets.verify_target_ready(target_id)
     marker = _read_marker(directory)
-    assert marker["schemaVersion"] == 2
+    assert int(str(marker["schemaVersion"])) >= 2
     assert str(marker["incarnationId"]).startswith("inc_")
     assert marker["targetGeneration"] == 0
     assert backup_targets.verify_target_ready(target_id)

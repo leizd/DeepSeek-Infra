@@ -294,6 +294,6 @@ def test_slot_has_incomplete_journal_edges(tmp_path: Path) -> None:
     (tmp_path / "transactions" / "run_1.json").write_text('{"runId": "run_1", "policyId": "p", "scheduleSlot": "s", "phase": "started"}', encoding="utf-8")
     from unittest.mock import patch as mock_patch
 
-    with mock_patch.object(backup_publish, "commit_marker_path", return_value=marker):
+    with mock_patch.object(backup_publish, "find_commit_marker_path", return_value=marker):
         assert backup_publish.slot_has_incomplete_journal(tmp_path, policy_id="p", schedule_slot="s") is False
     assert backup_publish.slot_has_incomplete_journal(tmp_path, policy_id="other", schedule_slot="s") is False

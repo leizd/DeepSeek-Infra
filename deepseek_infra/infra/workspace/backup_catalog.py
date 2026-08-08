@@ -26,8 +26,10 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_writer_lease
 
 CATALOG_SCHEMA_VERSION = 1
+CATALOG_V2_SCHEMA_VERSION = 2
 CATALOG_FILENAME = "catalog-v1.jsonl"
 GENESIS_HASH = "0" * 64
+SNAPSHOT_EVENT_INTERVAL = 128
 
 
 def _utc_iso() -> str:
@@ -350,3 +352,190 @@ def find_orphans_and_missing(root: Path) -> dict[str, list[str]]:
         and not any(candidate.is_file() for candidate in backup_publish.backup_file_candidates(root, record))
     )
     return {"orphans": orphans, "missing": missing}
+
+
+def _fold_entries(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    state: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        payload = entry.get("payload") or {}
+        backup_id = str(payload.get("backupId") or "")
+        entry_type = str(entry.get("type") or "")
+        if entry_type == "receipt":
+            state[backup_id] = {
+                **payload,
+                "pinned": False,
+                "ciphertextScrubbedAt": None,
+                "scrubOk": None,
+                "userUnlockVerifiedAt": None,
+                "trashed": False,
+                "deleted": False,
+            }
+            continue
+        if backup_id not in state:
+            continue
+        record = state[backup_id]
+        if entry_type == "pin":
+            record["pinned"] = bool(payload.get("pinned"))
+        elif entry_type == "scrub":
+            record["ciphertextScrubbedAt"] = payload.get("scrubbedAt")
+            record["scrubOk"] = bool(payload.get("ok"))
+        elif entry_type == "unlock-verified":
+            record["userUnlockVerifiedAt"] = payload.get("userUnlockVerifiedAt")
+        elif entry_type == "trash":
+            record["trashed"] = True
+            record["trashedAt"] = payload.get("trashedAt")
+        elif entry_type == "restore-trash":
+            record["trashed"] = False
+            record.pop("trashedAt", None)
+        elif entry_type == "delete":
+            record["deleted"] = True
+            record["deletedAt"] = payload.get("deletedAt")
+    return state
+
+
+def _load_store_entries(store: Any) -> list[dict[str, Any]]:
+    from deepseek_infra.infra.workspace.backup_target_store import catalog_head_key, catalog_snapshot_key, read_json
+
+    head = read_json(store, catalog_head_key()) or {}
+    entries: list[dict[str, Any]] = []
+    snapshot_hash = str(head.get("snapshotHash") or "")
+    if snapshot_hash:
+        snapshot = read_json(store, catalog_snapshot_key(snapshot_hash)) or {}
+        for item in snapshot.get("entries") or []:
+            if isinstance(item, dict):
+                entries.append(item)
+    # Load events after snapshot head.
+    previous = str(entries[-1]["entryHash"]) if entries else GENESIS_HASH
+    # Prefer head chain tip when present.
+    tip = str(head.get("headHash") or previous)
+    if tip and tip != previous:
+        # Walk forward from known events by listing — bounded by practical catalog sizes.
+        cursor = None
+        by_prev: dict[str, list[dict[str, Any]]] = {}
+        while True:
+            page = store.list_objects("events/", cursor=cursor)
+            for meta in page.objects:
+                if not str(meta.key).endswith(".json"):
+                    continue
+                entry = read_json(store, meta.key)
+                if isinstance(entry, dict) and entry.get("entryHash"):
+                    by_prev.setdefault(str(entry.get("previousEntryHash") or ""), []).append(entry)
+            if not page.cursor:
+                break
+            cursor = page.cursor
+        head_hash = previous
+        while True:
+            nxt = next((item for item in by_prev.get(head_hash, [])), None)
+            if nxt is None:
+                break
+            entries.append(nxt)
+            head_hash = str(nxt["entryHash"])
+            if head_hash == tip:
+                break
+    elif not entries:
+        cursor = None
+        candidates: dict[str, dict[str, Any]] = {}
+        while True:
+            page = store.list_objects("events/", cursor=cursor)
+            for meta in page.objects:
+                if not str(meta.key).endswith(".json"):
+                    continue
+                entry = read_json(store, meta.key)
+                if isinstance(entry, dict) and entry.get("entryHash"):
+                    candidates[str(entry["entryHash"])] = entry
+            if not page.cursor:
+                break
+            cursor = page.cursor
+        by_previous: dict[str, list[dict[str, Any]]] = {}
+        for entry in candidates.values():
+            by_previous.setdefault(str(entry.get("previousEntryHash") or ""), []).append(entry)
+        head_hash = GENESIS_HASH
+        while True:
+            nxt = next((item for item in by_previous.get(head_hash, [])), None)
+            if nxt is None:
+                break
+            entries.append(nxt)
+            head_hash = str(nxt["entryHash"])
+    return entries
+
+
+def catalog_state_store(store: Any) -> dict[str, dict[str, Any]]:
+    return _fold_entries(_load_store_entries(store))
+
+
+def append_receipt_store(store: Any, receipt: dict[str, Any], *, writer: backup_writer_lease.TargetWriterLease | None = None) -> dict[str, Any]:
+    return _append_entry_store(store, "receipt", receipt, writer=writer)
+
+
+def _append_entry_store(
+    store: Any,
+    entry_type: str,
+    payload: dict[str, Any],
+    *,
+    writer: backup_writer_lease.TargetWriterLease | None = None,
+) -> dict[str, Any]:
+    from deepseek_infra.infra.workspace.backup_target_store import (
+        catalog_head_key,
+        catalog_snapshot_key,
+        event_key,
+        put_json_if_absent,
+        put_json_if_match,
+        read_json,
+    )
+
+    _assert_writer_ownership(writer)
+    entries = _load_store_entries(store)
+    head = str(entries[-1]["entryHash"]) if entries else GENESIS_HASH
+    generation = 0
+    try:
+        from deepseek_infra.infra.workspace import backup_publish
+
+        latest = backup_publish.latest_commit_store(store)
+        generation = int(latest.get("targetGeneration") or 0) if latest is not None else 0
+    except Exception:
+        generation = 0
+    entry = {
+        "schemaVersion": CATALOG_V2_SCHEMA_VERSION,
+        "type": entry_type,
+        "payload": payload,
+        "previousEntryHash": head,
+        "entryHash": _entry_hash(entry_type, payload, head),
+        "recordedAt": _utc_iso(),
+        "targetGeneration": generation,
+        "writerFencingToken": int(writer.fencing_token) if writer is not None else 0,
+    }
+    _assert_writer_ownership(writer)
+    put_json_if_absent(store, event_key(str(entry["entryHash"])), entry)
+    new_entries = entries + [entry]
+    snapshot_hash = ""
+    if len(new_entries) % SNAPSHOT_EVENT_INTERVAL == 0 or len(new_entries) == 1:
+        snapshot = {
+            "schemaVersion": CATALOG_V2_SCHEMA_VERSION,
+            "headHash": str(entry["entryHash"]),
+            "targetGeneration": generation,
+            "eventCount": len(new_entries),
+            "entries": new_entries,
+            "backups": _fold_entries(new_entries),
+        }
+        raw = _stable_json(snapshot)
+        snapshot_hash = hashlib.sha256(raw).hexdigest()
+        put_json_if_absent(store, catalog_snapshot_key(snapshot_hash), snapshot)
+    head_payload = {
+        "schemaVersion": CATALOG_V2_SCHEMA_VERSION,
+        "headHash": str(entry["entryHash"]),
+        "targetGeneration": generation,
+        "eventCount": len(new_entries),
+        "snapshotHash": snapshot_hash or str((read_json(store, catalog_head_key()) or {}).get("snapshotHash") or ""),
+        "updatedAt": _utc_iso(),
+    }
+    current = store.stat(catalog_head_key())
+    if current is None:
+        put_json_if_absent(store, catalog_head_key(), head_payload)
+    else:
+        try:
+            put_json_if_match(store, catalog_head_key(), head_payload, expected_etag=current.etag)
+        except AppError as exc:  # pragma: no cover - concurrent catalog writers
+            if exc.status in {409, 412}:
+                raise AppError("catalog-head-cas-failed: catalog head moved since the precondition snapshot", code=ErrorCode.INVALID_REQUEST, status=409) from exc
+            raise
+    return entry

@@ -33,7 +33,7 @@ from deepseek_infra.infra.workspace import (  # noqa: E402
 
 
 def _root(target_id: str) -> Path:
-    return backup_publish.resolve_target(target_id).root
+    return backup_publish.resolve_target(target_id).require_root()
 
 
 def main() -> int:

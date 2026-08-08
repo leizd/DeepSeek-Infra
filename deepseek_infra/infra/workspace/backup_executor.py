@@ -137,10 +137,16 @@ def execute_run(
                 backup_scheduler.record_target_health(target_id, "blocked", str(exc)[:200])
                 return _blocked_target_outcome(run, policy, current, guard, str(exc), outcome)
             raise
-        if backup_publish.slot_has_incomplete_journal(target.root, policy_id=str(policy.get("policyId") or ""), schedule_slot=run.schedule_slot, exclude_run_id=run.run_id):
+        policy_id = str(policy.get("policyId") or "")
+        if target.root is not None:
+            incomplete = backup_publish.slot_has_incomplete_journal(target.root, policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
+        else:
+            incomplete = backup_publish.slot_has_incomplete_journal_store(target.require_store(), policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
+        if incomplete:
             backup_scheduler.record_run_phase(run.run_id, "reconciling", instance_id=instance_id, fencing_token=run.fencing_token, reason="interrupted-target-transaction", now=guard.now())
         writer = backup_writer_lease.TargetWriterLease(
             target.root,
+            store=target.store if target.root is None else None,
             target_id=target_id,
             owner_run_id=run.run_id,
             owner_instance_id=instance_id,
@@ -153,31 +159,42 @@ def execute_run(
             target,
             package,
             run_id=run.run_id,
-            policy_id=str(policy.get("policyId") or ""),
+            policy_id=policy_id,
             schedule_slot=run.schedule_slot,
             fencing_token=run.fencing_token,
             checkpoint=guard.checkpoint,
         )
         guard.checkpoint()
         backup_scheduler.record_run_phase(run.run_id, "cataloging", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
-        if not published.converged or str(published.receipt.get("backupId") or "") not in backup_catalog.catalog_state(target.root):
-            backup_catalog.append_receipt(target.root, published.receipt, writer=writer, precondition=backup_catalog.catalog_precondition(target.root))
+        if target.root is not None:
+            if not published.converged or str(published.receipt.get("backupId") or "") not in backup_catalog.catalog_state(target.root):
+                backup_catalog.append_receipt(target.root, published.receipt, writer=writer, precondition=backup_catalog.catalog_precondition(target.root))
+            guard.checkpoint()
+            backup_scheduler.record_run_phase(run.run_id, "pruning", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+            retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
+            policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
+            backup_retention.apply_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
+            backup_retention.finalize_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
+        else:  # pragma: no cover - exercised via store unit tests; full executor remote path needs live adapter
+            # Remote catalog/retention use event objects + logical trash (store path).
+            backup_catalog.append_receipt_store(target.require_store(), published.receipt, writer=writer)
+            guard.checkpoint()
+            backup_scheduler.record_run_phase(run.run_id, "pruning", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+            retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
+            policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
+            backup_retention.apply_retention_store(retention, target.require_store(), policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
+            backup_retention.finalize_retention_store(retention, target.require_store(), policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
         guard.checkpoint()
-        backup_scheduler.record_run_phase(run.run_id, "pruning", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
-        retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
-        policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
-        backup_retention.apply_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
-        backup_retention.finalize_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
-        guard.checkpoint()
+        filename = str(published.receipt.get("filename") or (published.path.name if published.path is not None else package.filename))
         backup_scheduler.complete_run(
             run.run_id,
             backup_id=str(published.receipt.get("backupId") or package.backup_id),
-            filename=str(published.receipt.get("filename") or published.path.name),
+            filename=filename,
             instance_id=instance_id,
             fencing_token=run.fencing_token,
             now=guard.now(),
         )
-        return {**outcome, "phase": "complete", "backupId": str(published.receipt.get("backupId") or package.backup_id), "filename": str(published.receipt.get("filename") or published.path.name)}
+        return {**outcome, "phase": "complete", "backupId": str(published.receipt.get("backupId") or package.backup_id), "filename": filename}
     except AppError as exc:
         message = str(exc)
         if exc.status == 499 or (exc.status == 409 and "lease" in message.casefold()):

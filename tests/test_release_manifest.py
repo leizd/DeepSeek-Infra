@@ -81,14 +81,14 @@ def test_build_manifest_has_required_fields(tmp_path: Path) -> None:
     assert manifest["runtimeDefaults"]["authoritativeRuntime"] == "python"
     assert manifest["runtimeDefaults"]["defaultCompose"] == "python-only"
     expected_evidence = (
-        *evidence_paths("4.4.5"),
-        "docs/evidence/evidence-source-context-v4.4.5.json",
-        "docs/evidence/evidence-manifest-v4.4.5.json",
-        "docs/evidence/evidence-manifest-v4.4.5.json.sha256",
+        *evidence_paths("4.4.6"),
+        "docs/evidence/evidence-source-context-v4.4.6.json",
+        "docs/evidence/evidence-manifest-v4.4.6.json",
+        "docs/evidence/evidence-manifest-v4.4.6.json.sha256",
     )
     assert tuple(manifest["evidence"]) == expected_evidence
     assert manifest["evidenceManifest"] == {}
-    assert manifest["gaEvidence"] == "docs/evidence/ga-v4.4.5.json"
+    assert manifest["gaEvidence"] == "docs/evidence/ga-v4.4.6.json"
     assert manifest["qualityGates"]["mcpProtocolParity"] == "PASS"
     assert manifest["qualityGates"]["ragDocumentPreparationParity"] == "PASS"
     assert manifest["qualityGates"]["rustSidecarPerformance"] == "PASS"

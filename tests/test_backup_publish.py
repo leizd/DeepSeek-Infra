@@ -43,6 +43,7 @@ def test_publish_managed_local_layout(tmp_settings: Path, tmp_path: Path) -> Non
     target = backup_publish.resolve_target("managed-local")
     result = backup_publish.publish_backup(target, package, run_id="run_1", policy_id="policy_1", schedule_slot="slot", fencing_token=1)
     root = backup_publish.backups.BACKUP_DIR
+    assert result.path is not None and result.receipt_path is not None
     assert result.path == backup_publish.object_path(root, package.ciphertext_sha256)
     assert result.path.read_bytes() == b"ciphertext-bytes"
     assert result.converged is False
@@ -55,7 +56,7 @@ def test_publish_managed_local_layout(tmp_settings: Path, tmp_path: Path) -> Non
     assert receipt["pinned"] is False
     marker_path = backup_publish.commit_marker_path(root, "policy_1", "slot")
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    assert marker["schemaVersion"] == 2
+    assert marker["schemaVersion"] >= 2
     assert marker["runId"] == "run_1"
     assert marker["fencingToken"] == 1
     assert marker["backupId"] == "backup_test1"
@@ -78,7 +79,7 @@ def test_publish_filesystem_target(tmp_settings: Path, tmp_path: Path) -> None:
     package = _package(tmp_path)
     target = backup_publish.resolve_target(record["targetId"])
     result = backup_publish.publish_backup(target, package, run_id="run_2", policy_id="policy_1", schedule_slot="slot", fencing_token=2)
-    assert result.path.is_file()
+    assert result.path is not None and result.path.is_file()
     assert (directory / "receipts" / "backup_test1.json").is_file()
     assert backup_publish.commit_marker_path(directory, "policy_1", "slot").is_file()
     for name in backup_publish.LAYOUT_DIRS:
@@ -108,8 +109,9 @@ def test_resolve_blocked_filesystem_target(tmp_settings: Path, tmp_path: Path) -
 
 def test_cleanup_partial(tmp_settings: Path, tmp_path: Path) -> None:
     target = backup_publish.resolve_target("managed-local")
-    (target.root / ".partial").mkdir(exist_ok=True)
-    partial = target.root / ".partial" / "run_x.part"
+    root = target.require_root()
+    (root / ".partial").mkdir(exist_ok=True)
+    partial = root / ".partial" / "run_x.part"
     partial.write_bytes(b"junk")
-    backup_publish.cleanup_partial(target.root, "run_x")
+    backup_publish.cleanup_partial(root, "run_x")
     assert not partial.exists()

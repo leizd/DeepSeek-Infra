@@ -33,10 +33,21 @@ from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backups
 
-TARGET_SCHEMA_VERSION = 2
+TARGET_SCHEMA_VERSION = 3
 TARGET_MARKER_NAME = ".deepseek-infra-backup-target.json"
 TARGET_GENESIS_HASH = "0" * 64
 BACKUP_TARGET_DIR = config.ROOT / ".backup-targets"
+_SECRET_FIELD_NAMES = (
+    "accessKey",
+    "accessKeyId",
+    "secretAccessKey",
+    "secret",
+    "sessionToken",
+    "password",
+    "secret_access_key",
+    "access_key_id",
+    "session_token",
+)
 
 _TARGET_ID = re.compile(r"^target_[a-z0-9][a-z0-9._-]{0,63}$")
 _WINDOWS_REPARSE_POINT = 0x400
@@ -114,7 +125,7 @@ def _is_reparse_point(path: Path) -> bool:
     return False
 
 
-def _has_reparse_component(path: Path) -> bool:
+def _has_reparse_component(path: Path) -> bool:  # pragma: no cover - OS reparse traversal
     current = path
     while True:
         if _is_reparse_point(current):
@@ -147,7 +158,12 @@ def _containment_violation(resolved: Path, *, exclude_target_id: str | None = No
     for other in list_targets():
         if exclude_target_id is not None and other.get("targetId") == exclude_target_id:
             continue
-        other_path = Path(str(other.get("path") or "")).resolve()
+        if str(other.get("kind") or "filesystem") != "filesystem":
+            continue
+        other_raw = str(other.get("path") or "")
+        if not other_raw:
+            continue
+        other_path = Path(other_raw).resolve()
         if resolved == other_path or resolved.is_relative_to(other_path) or other_path.is_relative_to(resolved):
             return f"target overlaps registered target {other.get('targetId')}"
     return None
@@ -228,6 +244,7 @@ def _register(resolved: Path, target_id: str, nonce: str, *, label: str, created
     record = {
         "schemaVersion": TARGET_SCHEMA_VERSION,
         "targetId": target_id,
+        "kind": "filesystem",
         "path": str(resolved),
         "targetNonce": nonce,
         "label": label,
@@ -236,6 +253,195 @@ def _register(resolved: Path, target_id: str, nonce: str, *, label: str, created
     }
     _atomic_write_json(_registry_path(target_id), record)
     return record
+
+
+def _assert_no_secrets(payload: dict[str, Any]) -> None:
+    stack: list[Any] = [payload]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if key in _SECRET_FIELD_NAMES and value not in (None, ""):
+                    raise AppError("cloud credentials must not be stored in target registry", code=ErrorCode.INVALID_PAYLOAD)
+                stack.append(value)
+        elif isinstance(current, list):
+            stack.extend(current)
+
+
+def init_s3_target(
+    *,
+    bucket: str,
+    prefix: str = "",
+    region: str | None = None,
+    endpoint_url: str | None = None,
+    expected_bucket_owner: str | None = None,
+    label: str = "",
+    credential_provider: dict[str, Any] | None = None,
+    client: Any | None = None,
+    probe: bool = True,
+) -> dict[str, Any]:
+    """Register a secret-free S3-compatible target (schema v3)."""
+    from deepseek_infra.infra.workspace import backup_target_s3
+    from deepseek_infra.infra.workspace.backup_target_store import (
+        head_key,
+        identity_key,
+        put_json_if_absent,
+        read_json,
+    )
+
+    if not backup_target_s3.s3_sdk_available() and client is None:
+        raise AppError("s3TargetAvailable=false: install boto3 to use S3 targets", code=ErrorCode.INVALID_REQUEST, status=503)
+    provider = dict(credential_provider or {"type": "aws-default-chain"})
+    if provider.get("type") == "aws-default-chain" and provider.get("profile"):
+        provider = {"type": "aws-profile", "profile": str(provider.get("profile"))}
+    record_preview = {
+        "bucket": str(bucket or "").strip(),
+        "prefix": str(prefix or "").strip().strip("/"),
+        "region": str(region or "").strip() or None,
+        "endpointUrl": str(endpoint_url or "").strip() or None,
+        "expectedBucketOwner": str(expected_bucket_owner or "").strip() or None,
+        "credentialProvider": provider,
+    }
+    _assert_no_secrets(record_preview)
+    if not record_preview["bucket"]:
+        raise AppError("S3 bucket is required", code=ErrorCode.INVALID_PAYLOAD)
+    store = backup_target_s3.open_s3_store(record_preview, client=client)
+    target_id = f"target_{secrets.token_hex(6)}"
+    identity = {
+        "schemaVersion": TARGET_SCHEMA_VERSION,
+        "targetId": target_id,
+        "kind": "s3",
+        "bucket": record_preview["bucket"],
+        "prefix": record_preview["prefix"],
+        "incarnationId": f"inc_{secrets.token_hex(8)}",
+        "ownerInstallationId": installation_id(),
+        "createdAt": _utc_iso(),
+    }
+    existing_identity = read_json(store, identity_key())
+    if existing_identity is not None and existing_identity.get("targetId"):
+        target_id = str(existing_identity["targetId"])
+        identity = existing_identity
+    else:
+        put_json_if_absent(store, identity_key(), identity)
+    head = read_json(store, head_key())
+    if head is None:
+        put_json_if_absent(
+            store,
+            head_key(),
+            {
+                "schemaVersion": 1,
+                "targetGeneration": 0,
+                "latestCommitHash": TARGET_GENESIS_HASH,
+                "incarnationId": str(identity.get("incarnationId") or ""),
+            },
+        )
+    probe_result: dict[str, Any] | None = None
+    if probe:
+        from deepseek_infra.infra.workspace.backup_target_store import probe_store_capabilities
+
+        probe_result = probe_store_capabilities(store)
+        if store.capabilities().kind == "s3":
+            detect = getattr(store, "detect_versioning", None)
+            try:
+                versioning = detect() if callable(detect) else None
+            except Exception:
+                versioning = None
+            if probe_result is not None:
+                probe_result.setdefault("capabilities", {})["versioning"] = versioning
+    record = {
+        "schemaVersion": TARGET_SCHEMA_VERSION,
+        "targetId": target_id,
+        "kind": "s3",
+        "label": label,
+        "bucket": record_preview["bucket"],
+        "prefix": record_preview["prefix"],
+        "region": record_preview["region"],
+        "endpointUrl": record_preview["endpointUrl"],
+        "expectedBucketOwner": record_preview["expectedBucketOwner"],
+        "credentialProvider": provider,
+        "createdAt": str(identity.get("createdAt") or _utc_iso()),
+        "registeredAt": _utc_iso(),
+        "lastProbe": probe_result,
+    }
+    _assert_no_secrets(record)
+    _atomic_write_json(_registry_path(target_id), record)
+    _write_checkpoint(
+        target_id,
+        {
+            "incarnationId": str(identity.get("incarnationId") or ""),
+            "targetGeneration": int((head or {}).get("targetGeneration") or 0),
+            "latestCommitHash": str((head or {}).get("latestCommitHash") or TARGET_GENESIS_HASH),
+        },
+    )
+    return record
+
+
+def open_target_store(target_id: str, *, write_intent: bool = True, client: Any | None = None) -> Any:
+    """Open the backend store for a registered target."""
+    from deepseek_infra.infra.workspace import backup_target_s3
+    from deepseek_infra.infra.workspace.backup_target_store import open_filesystem_store, probe_store_capabilities
+
+    if target_id == "managed-local":
+        from deepseek_infra.infra.workspace import backups
+
+        return open_filesystem_store(backups.BACKUP_DIR)
+    record = get_target(target_id)
+    kind = str(record.get("kind") or "filesystem")
+    if kind == "filesystem":
+        root = verify_target_ready(target_id, write_intent=write_intent)
+        return open_filesystem_store(root)
+    if kind == "s3":
+        store = backup_target_s3.open_s3_store(record, client=client)
+        if write_intent:
+            last = record.get("lastProbe") if isinstance(record.get("lastProbe"), dict) else None
+            if not last or not last.get("scheduledBackupReady"):
+                probe = probe_store_capabilities(store)
+                record = {**record, "lastProbe": probe}
+                _assert_no_secrets(record)
+                _atomic_write_json(_registry_path(target_id), record)
+                if not probe.get("scheduledBackupReady"):
+                    raise AppError("unsupported-conditional-target: conditional writes unavailable", code=ErrorCode.INVALID_REQUEST, status=503)
+        return store
+    if kind == "webdav":
+        raise AppError("WebDAV targets are reserved but not GA in 4.4.6", code=ErrorCode.INVALID_REQUEST, status=501)
+    raise AppError(f"unsupported target kind: {kind}", code=ErrorCode.INVALID_PAYLOAD)
+
+
+def record_remote_target_head(store: Any, *, target_id: str, generation: int, commit_hash: str) -> None:
+    """CAS-update control/head.json after a remote slot commit."""
+    from deepseek_infra.infra.workspace.backup_target_store import head_key, put_json_if_match, read_json
+
+    current = read_json(store, head_key()) or {
+        "schemaVersion": 1,
+        "targetGeneration": 0,
+        "latestCommitHash": TARGET_GENESIS_HASH,
+        "incarnationId": "",
+    }
+    meta = store.stat(head_key())
+    payload = {
+        **current,
+        "schemaVersion": 1,
+        "targetGeneration": int(generation),
+        "latestCommitHash": commit_hash,
+    }
+    if meta is None:
+        from deepseek_infra.infra.workspace.backup_target_store import put_json_if_absent
+
+        put_json_if_absent(store, head_key(), payload)
+    else:
+        try:
+            put_json_if_match(store, head_key(), payload, expected_etag=meta.etag)
+        except AppError:
+            # Concurrent head advance is reconciled later; commit marker already won.
+            pass
+    _write_checkpoint(
+        target_id,
+        {
+            "incarnationId": str(current.get("incarnationId") or ""),
+            "targetGeneration": int(generation),
+            "latestCommitHash": commit_hash,
+        },
+    )
 
 
 def get_target(target_id: str) -> dict[str, Any]:
@@ -272,16 +478,53 @@ def delete_target(target_id: str) -> dict[str, Any]:
 def probe_target(target_id: str) -> dict[str, Any]:
     """Re-verify marker, location and lineage; never raises for offline targets."""
     try:
+        record = get_target(target_id)
+    except AppError as exc:
+        return {"targetId": target_id, "ready": False, "status": "blocked-target-unavailable", "detail": str(exc)}
+    kind = str(record.get("kind") or "filesystem")
+    if kind == "s3":
+        try:
+            from deepseek_infra.infra.workspace.backup_target_store import probe_store_capabilities
+
+            store = open_target_store(target_id, write_intent=False)
+            result = probe_store_capabilities(store)
+            try:
+                detect = getattr(store, "detect_versioning", None)
+                if callable(detect):
+                    result.setdefault("capabilities", {})["versioning"] = detect()
+            except Exception:
+                pass
+            updated = {**record, "lastProbe": result}
+            _assert_no_secrets(updated)
+            _atomic_write_json(_registry_path(target_id), updated)
+            return {
+                "targetId": target_id,
+                "ready": bool(result.get("scheduledBackupReady")),
+                "status": str(result.get("status") or "ok"),
+                "kind": "s3",
+                "scheduledBackupReady": bool(result.get("scheduledBackupReady")),
+                "probe": result,
+            }
+        except AppError as exc:
+            return {
+                "targetId": target_id,
+                "ready": False,
+                "status": "blocked-target-unavailable",
+                "kind": "s3",
+                "scheduledBackupReady": False,
+                "detail": str(exc),
+            }
+    try:
         path = verify_target_ready(target_id)
     except AppError as exc:
         detail = str(exc)
         status = "blocked-target-unavailable"
-        for code in ("target-rollback-detected", "target-fork-detected", "target-clone-detected"):
+        for code in ("target-rollback-detected", "target-fork-detected", "target-clone-detected", "unsupported-conditional-target"):
             if code in detail:
                 status = code
                 break
-        return {"targetId": target_id, "ready": False, "status": status, "detail": detail}
-    return {"targetId": target_id, "ready": True, "status": "ok", "path": str(path)}
+        return {"targetId": target_id, "ready": False, "status": status, "detail": detail, "kind": "filesystem", "scheduledBackupReady": False}
+    return {"targetId": target_id, "ready": True, "status": "ok", "path": str(path), "kind": "filesystem", "scheduledBackupReady": True}
 
 
 def verify_target_ready(target_id: str, *, write_intent: bool = True) -> Path:

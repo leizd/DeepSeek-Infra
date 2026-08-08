@@ -352,9 +352,21 @@ export interface BackupRunRecord {
 export interface BackupTargetRecord {
   schemaVersion: number;
   targetId: string;
-  path: string;
+  kind?: "filesystem" | "s3" | "webdav";
+  path?: string;
+  bucket?: string;
+  prefix?: string;
+  region?: string | null;
+  endpointUrl?: string | null;
+  credentialProvider?: { type: string; profile?: string };
   label: string;
   createdAt: string;
+  lastProbe?: {
+    status?: string;
+    scheduledBackupReady?: boolean;
+    results?: Record<string, string>;
+    capabilities?: Record<string, unknown>;
+  };
 }
 
 export interface BackupTargetHealth {
@@ -428,15 +440,56 @@ export function listBackupTargets(client: HttpClient = httpClient) {
   return client.json<{ targets: BackupTargetRecord[]; health: BackupTargetHealth[] }>("/api/workspace/backup-targets");
 }
 
-export function createBackupTarget(request: { path: string; label?: string }, client: HttpClient = httpClient) {
+export function createBackupTarget(
+  request:
+    | { kind?: "filesystem"; path: string; label?: string }
+    | {
+        kind: "s3" | "s3-compatible";
+        bucket: string;
+        prefix?: string;
+        region?: string;
+        endpointUrl?: string;
+        expectedBucketOwner?: string;
+        label?: string;
+        credentialProvider?: { type: string; profile?: string };
+        probe?: boolean;
+      },
+  client: HttpClient = httpClient,
+) {
   return client.postJson<BackupTargetRecord>("/api/workspace/backup-targets", request);
 }
 
 export function probeBackupTarget(targetId: string, client: HttpClient = httpClient) {
-  return client.postJson<{ targetId: string; ready: boolean; status: string; detail?: string }>(
-    `/api/workspace/backup-targets/${encodeURIComponent(targetId)}/probe`,
-    {},
-  );
+  return client.postJson<{
+    targetId: string;
+    ready: boolean;
+    status: string;
+    detail?: string;
+    kind?: string;
+    scheduledBackupReady?: boolean;
+    probe?: BackupTargetRecord["lastProbe"];
+  }>(`/api/workspace/backup-targets/${encodeURIComponent(targetId)}/probe`, {});
+}
+
+export function listBackupTargetCapabilities(client: HttpClient = httpClient) {
+  return client.json<{
+    s3TargetAvailable: boolean;
+    webdavTargetAvailable: boolean;
+    supportedKinds: string[];
+    reservedKinds: string[];
+  }>("/api/workspace/backup-target-capabilities");
+}
+
+export function restoreBackupFromTarget(request: { targetId: string; backupId: string }, client: HttpClient = httpClient) {
+  return client.postJson<{
+    restoreId: string;
+    targetId: string;
+    backupId: string;
+    filename: string;
+    size: number;
+    objectDigest: string;
+    path: string;
+  }>("/api/workspace/restores/from-target", request);
 }
 
 export function deleteBackupTarget(targetId: string, client: HttpClient = httpClient) {
