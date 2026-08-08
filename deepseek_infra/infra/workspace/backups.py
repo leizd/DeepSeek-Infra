@@ -1956,7 +1956,20 @@ def _verify_manifest_tree(destination: Path) -> dict[str, Any]:
         for path in destination.rglob("*")
         if path.is_file() and path.name not in {"manifest.json", "checksums.sha256"}
     }
-    if actual != declared_paths:
+    # Incremental packages carry auxiliary delta/payload files that are declared
+    # in ``manifest["deltaFiles"]`` but are not restorable workspace files.
+    auxiliary: set[str] = set()
+    for entry in manifest.get("deltaFiles") or []:
+        if not isinstance(entry, dict):
+            raise AppError("Backup delta file inventory is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        relative = _validate_archive_path(str(entry.get("path") or ""))
+        if relative in declared_paths or relative in auxiliary:
+            raise AppError("Backup delta file collides with a restorable path", code=ErrorCode.INVALID_PAYLOAD)
+        auxiliary.add(relative)
+        path = destination.joinpath(*PurePosixPath(relative).parts)
+        if not path.is_file() or path.stat().st_size != int(entry.get("size") or -1) or _sha256_file(path) != entry.get("sha256"):
+            raise AppError(f"Backup delta checksum mismatch: {relative}", code=ErrorCode.INVALID_PAYLOAD)
+    if actual != (declared_paths | auxiliary):
         raise AppError("Backup contains undeclared or missing restorable files", code=ErrorCode.INVALID_PAYLOAD)
     checksum_lines = checksum_path.read_text(encoding="utf-8").splitlines()
     expected_manifest_line = f"{_sha256_file(manifest_path)}  manifest.json"

@@ -41,7 +41,7 @@ from deepseek_infra.infra.workspace.backup_target_store import (
     transaction_key,
 )
 
-RECEIPT_SCHEMA_VERSION = 2
+RECEIPT_SCHEMA_VERSION = 3
 COMMIT_SCHEMA_VERSION = 3
 GENESIS_COMMIT_HASH = "0" * 64
 
@@ -256,8 +256,29 @@ def receipt_for(
     target_id: str,
     schedule_slot: str,
 ) -> dict[str, Any]:
+    manifest = getattr(package, "manifest", None) or {}
+    snapshot = manifest.get("snapshot") if isinstance(manifest, dict) else None
+    snapshot_kind = str(manifest.get("snapshotKind") or "full")
+    if isinstance(snapshot, dict):
+        lineage = {
+            "schemaVersion": RECEIPT_SCHEMA_VERSION,
+            "snapshotKind": str(snapshot.get("kind") or snapshot_kind),
+            "lineageId": str(snapshot.get("lineageId") or "") or None,
+            "parentBackupId": str(snapshot.get("parentBackupId") or "") or None,
+            "baseBackupId": str(snapshot.get("baseBackupId") or "") or None,
+            "chainDepth": int(snapshot.get("chainDepth") or 0),
+        }
+    else:
+        lineage = {
+            "schemaVersion": RECEIPT_SCHEMA_VERSION,
+            "snapshotKind": snapshot_kind,
+            "lineageId": None,
+            "parentBackupId": None,
+            "baseBackupId": None,
+            "chainDepth": 0,
+        }
     return {
-        "schemaVersion": RECEIPT_SCHEMA_VERSION,
+        **lineage,
         "backupId": package.backup_id,
         "runId": run_id,
         "policyId": policy_id,

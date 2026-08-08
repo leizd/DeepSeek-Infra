@@ -127,6 +127,11 @@ def _build_candidate(
     *,
     schedule_slot: str,
     cancel_event: threading.Event | None,
+    snapshot_kind: str = "full",
+    parent_backup_id: str | None = None,
+    base_backup_id: str | None = None,
+    lineage_id: str | None = None,
+    chain_depth: int = 0,
 ) -> ScheduledBackupPackage:
     staging = run_dir / "staging"
     verification_dir = run_dir / "verification"
@@ -211,6 +216,65 @@ def _build_candidate(
         }
         if frontend_manifest:
             manifest["frontend"] = frontend_manifest
+        # Incremental: build a delta payload containing only changed files, plus
+        # an operations manifest, and attest the effective tree Merkle root.
+        snapshot_meta: dict[str, Any] = {"kind": "full"}
+        if snapshot_kind == "incremental" and parent_backup_id:
+            from deepseek_infra.infra.workspace import backup_incremental
+
+            parent_files = []
+            try:
+                parent_files = backup_incremental.load_snapshot_files(str(policy.get("targetId") or "managed-local"), str(policy.get("policyId") or ""), parent_backup_id)
+            except Exception:
+                parent_files = []
+            successful = {str(item.get("contributorId") or item.get("contributor_id") or "") for item in plan.get("items") or []}
+            records = [
+                backup_incremental.FileRecord(
+                    contributor_id=str(item.get("contributorId") or ""),
+                    logical_path=str(item["path"]),
+                    size=int(item["size"]),
+                    sha256=str(item["sha256"]),
+                )
+                for item in files
+            ]
+            delta = backup_incremental.diff_trees(parent_files, records, successful_contributors=successful or {c.contributor_id for c in parent_files})
+            (staging / "delta").mkdir(exist_ok=True)
+            operations = backups._stable_json(delta)
+            (staging / "delta" / "operations.json").write_bytes(operations)
+            payload_dir = staging / "payload" / "files"
+            payload_dir.mkdir(parents=True, exist_ok=True)
+            payload_files: list[dict[str, Any]] = []
+            for put in delta["put"]:
+                src = staging / str(put["path"])
+                if src.is_file():
+                    dest = payload_dir / f"{len(payload_files):06d}"
+                    shutil.copyfile(src, dest)
+                    payload_files.append(
+                        {
+                            "path": f"payload/files/{dest.name}",
+                            "size": dest.stat().st_size,
+                            "sha256": hashlib.sha256(dest.read_bytes()).hexdigest(),
+                        }
+                    )
+                    put["payloadRef"] = f"payload/files/{dest.name}"
+            # Auxiliary files declared for verification but not restorable.
+            manifest["deltaFiles"] = [
+                {"path": "delta/operations.json", "size": len(operations), "sha256": hashlib.sha256(operations).hexdigest()},
+                *payload_files,
+            ]
+            snapshot_meta = {
+                "format": "incremental-v2",
+                "kind": "incremental",
+                "lineageId": lineage_id or parent_backup_id,
+                "parentBackupId": parent_backup_id,
+                "baseBackupId": base_backup_id or parent_backup_id,
+                "chainDepth": int(chain_depth or 1),
+                "merkleAlgorithm": backup_incremental.MERKLE_ALGORITHM,
+                "parentRootDigest": delta["parentRootDigest"],
+                "rootDigest": delta["rootDigest"],
+            }
+            manifest["snapshot"] = snapshot_meta
+            manifest["snapshotKind"] = "incremental"
         manifest_bytes = backups._stable_json(manifest)
         (staging / "manifest.json").write_bytes(manifest_bytes)
         checksums = [f"{item['sha256']}  {item['path']}" for item in files]
@@ -265,6 +329,8 @@ def build_scheduled_backup(
     snapshot_kind: str = "full",
     parent_backup_id: str | None = None,
     base_backup_id: str | None = None,
+    lineage_id: str | None = None,
+    chain_depth: int = 0,
 ) -> ScheduledBackupPackage:
     """Build and verify a scheduled backup package under ``staging_root``.
 
@@ -272,12 +338,15 @@ def build_scheduled_backup(
     across three attempts the run fails with 409 so the scheduler can retry.
     When ``backup_id`` / ``contributor_plan`` are supplied (frozen run plan),
     retries keep the same identity instead of minting a new package id.
+
+    With ``snapshot_kind="incremental"`` the candidate builds a delta payload
+    (changed files + operations) attested by a Merkle root over the effective
+    tree; unchanged files are inherited from ``parent_backup_id``.
     """
     context = _context_from_policy(policy)
     plan = contributor_plan if contributor_plan is not None else backups._contributor_plan(context)
     mirror_metadata, coverage_frontend = mirror_coverage(policy)
     resolved_backup_id = backup_id or f"backup_{uuid.uuid4().hex[:16]}"
-    _ = (snapshot_kind, parent_backup_id, base_backup_id)  # pragma: no cover - reserved for incremental builder path
     run_dir = staging_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     gate_root = backups.BACKUP_DIR.parent
@@ -303,6 +372,11 @@ def build_scheduled_backup(
                 coverage_frontend,
                 schedule_slot=schedule_slot,
                 cancel_event=cancel_event,
+                snapshot_kind=snapshot_kind,
+                parent_backup_id=parent_backup_id,
+                base_backup_id=base_backup_id,
+                lineage_id=lineage_id,
+                chain_depth=chain_depth,
             )
         except AppError as exc:
             last_error = exc

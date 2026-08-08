@@ -4,6 +4,27 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.8] - Production Incremental Backups and Content-Defined Deltas
+
+### Incremental policy and scheduler integration
+
+- Policies are schema v2 with an `incremental` section (`off | file-delta | cdc`); legacy v1 policies normalize to `off` automatically.
+- Executor selects snapshot kind + committed parent before freezing the run plan; retries reuse the frozen plan/spool ciphertext.
+- Receipts are schema v3 and carry minimal lineage (snapshotKind/lineageId/parent/base/chainDepth) without workspace plaintext roots.
+- Committed snapshot indexes (files + chunk maps) persist after target commit; index loss forces a full baseline.
+
+### Content-defined deltas
+
+- FastCDC `fastcdc-gear-v1` chunker (min 512KiB / avg 2MiB / max 8MiB) streams with bounded memory; identical files chunk deterministically.
+- Large changed files emit chunk deltas that reuse parent chunks after boundary resync; chunk digests stay inside the encrypted Age manifest only.
+- `diff_trees` computes roots over the effective tree so coverage gaps inherit parent files instead of vanishing.
+
+### DAG-aware retention and restore
+
+- Retention protects every ancestor of a kept incremental snapshot (`ancestor-of-kept-snapshot`), including ancestors of trashed-but-recoverable descendants.
+- Restore materializer resolves lineages purely from receipts (no local index) and applies delta puts/deletes with per-layer Merkle verification; missing parents and corrupt chunks fail closed.
+- Evidence pinned in `tests/test_backup_448_contracts.py`.
+
 ## [4.4.7] - Incremental Snapshot Graphs and Remote Recovery Hardening
 
 ### Spool reuse, remote reconcile, and resumable restore

@@ -445,7 +445,7 @@ def test_remote_reconcile_full_paths(tmp_settings: Path, tmp_path: Path) -> None
 
 
 def test_incremental_sqlite_and_merkle_edges(tmp_settings: Path) -> None:
-    assert backup_incremental.merkle_root([]) == hashlib.sha256(b"").hexdigest()
+    assert backup_incremental.merkle_root([]) == hashlib.sha256(b"\x00").hexdigest()
     leaves = [backup_incremental.leaf_digest(contributor_id="c", logical_path=f"p{i}", size=i, sha256=f"{i:064d}"[-64:]) for i in range(5)]
     root = backup_incremental.merkle_root(leaves)
     assert len(root) == 64

@@ -11,7 +11,7 @@ vi.mock("../../api/workspaceBackupApi", () => ({
 
 const envelope: FrontendBackupEnvelopeV1 = {
   schemaVersion: 1,
-  sourceVersion: "4.4.7",
+  sourceVersion: "4.4.8",
   createdAt: 1,
   conversations: [],
   conflicts: [],
@@ -183,7 +183,7 @@ describe("backupMirror", () => {
       sessionStorage: sessionB,
     })).toBe(false);
 
-    await uploadBackupMirror("4.4.7", {
+    await uploadBackupMirror("4.4.8", {
       storage,
       sessionStorage: sessionA,
       createBroadcastChannel: factory,
@@ -204,7 +204,7 @@ describe("backupMirror", () => {
       backupMirrorStorageKeys.leaderLease,
       JSON.stringify({ schemaVersion: 1, replicaId: replicaA, expiresAt: clock.now + 10_000, claimedAt: clock.now }),
     );
-    await uploadBackupMirror("4.4.7", {
+    await uploadBackupMirror("4.4.8", {
       storage,
       sessionStorage: sessionB,
       createBroadcastChannel: factory,
@@ -223,7 +223,7 @@ describe("backupMirror", () => {
       backupMirrorStorageKeys.leaderLease,
       JSON.stringify({ schemaVersion: 1, replicaId: "old-leader", expiresAt: 4_000, claimedAt: 1_000 }),
     );
-    await uploadBackupMirror("4.4.7", baseEnv({
+    await uploadBackupMirror("4.4.8", baseEnv({
       storage,
       sessionStorage: sessionB,
       now: () => clock.now,
@@ -234,13 +234,13 @@ describe("backupMirror", () => {
 
   it("skips re-uploading an unchanged digest for the same epoch", async () => {
     const env = baseEnv();
-    await uploadBackupMirror("4.4.7", env);
-    await uploadBackupMirror("4.4.7", env);
+    await uploadBackupMirror("4.4.8", env);
+    await uploadBackupMirror("4.4.8", env);
     expect(putBackupMirror).toHaveBeenCalledTimes(1);
   });
 
   it("freezes uploads while a restore fence is active", async () => {
-    await uploadBackupMirror("4.4.7", baseEnv({
+    await uploadBackupMirror("4.4.8", baseEnv({
       storage: storageWithEpoch("epoch-a", [[WORKSPACE_RESTORE_FENCE_KEY, "{}"]]),
     }));
     expect(putBackupMirror).not.toHaveBeenCalled();
@@ -261,11 +261,11 @@ describe("backupMirror", () => {
       clearInterval: silentTimers().clearInterval,
     };
     const env = baseEnv({ online: () => online.value, timers });
-    await uploadBackupMirror("4.4.7", env);
+    await uploadBackupMirror("4.4.8", env);
     expect(putBackupMirror).not.toHaveBeenCalled();
     expect(scheduled).toBeGreaterThan(0);
     online.value = true;
-    await uploadBackupMirror("4.4.7", env);
+    await uploadBackupMirror("4.4.8", env);
     expect(putBackupMirror).toHaveBeenCalledTimes(1);
   });
 
@@ -287,7 +287,7 @@ describe("backupMirror", () => {
         ciphertextSha256: "aa".repeat(32),
         creationVerified: true,
       });
-    await uploadBackupMirror("4.4.7", baseEnv({ now: () => 50 }));
+    await uploadBackupMirror("4.4.8", baseEnv({ now: () => 50 }));
     expect(putBackupMirror).toHaveBeenCalledTimes(2);
     const second = putBackupMirror.mock.calls[1]?.[1] as PutBackupMirrorRequest;
     expect(second.clientSequence).toBeGreaterThan(1);
@@ -297,7 +297,7 @@ describe("backupMirror", () => {
     const storage = storageWithEpoch("epoch-a");
     const seen: MirrorChannelMessage[] = [];
     const stop = onBackupMirrorUploaded((message) => seen.push(message));
-    await uploadBackupMirror("4.4.7", baseEnv({ storage }));
+    await uploadBackupMirror("4.4.8", baseEnv({ storage }));
     stop();
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({
@@ -314,15 +314,15 @@ describe("backupMirror", () => {
 
   it("swallows non-retryable upload failures without throwing", async () => {
     putBackupMirror.mockRejectedValue(new ApiError("bad envelope", 400));
-    await expect(uploadBackupMirror("4.4.7", baseEnv())).resolves.toBeUndefined();
+    await expect(uploadBackupMirror("4.4.8", baseEnv())).resolves.toBeUndefined();
   });
 
   it("debounces scheduled uploads", async () => {
     vi.useFakeTimers();
     try {
       const env = baseEnv({ timers: fakeTimersBridge() });
-      scheduleBackupMirrorUpload("4.4.7", 10, env);
-      scheduleBackupMirrorUpload("4.4.7", 10, env);
+      scheduleBackupMirrorUpload("4.4.8", 10, env);
+      scheduleBackupMirrorUpload("4.4.8", 10, env);
       await vi.advanceTimersByTimeAsync(20);
       expect(collectFrontendBackupEnvelope).toHaveBeenCalledTimes(1);
     } finally {

@@ -264,6 +264,36 @@ def _healthy_records(records: list[dict[str, Any]], target_root: Path) -> list[d
     return healthy
 
 
+def _protect_snapshot_ancestors(records: list[dict[str, Any]], keep: set[str], protected: dict[str, str]) -> dict[str, list[str]]:
+    """Protect ancestors of every kept incremental snapshot using receipt lineage."""
+    by_id = {str(record.get("backupId") or ""): record for record in records}
+    required_by: dict[str, list[str]] = {}
+    for backup_id in list(keep):
+        if str((by_id.get(backup_id) or {}).get("snapshotKind") or "full") != "incremental":
+            continue
+        chain: list[str] = []
+        seen: set[str] = set()
+        current = backup_id
+        while current:
+            if current in seen:
+                break
+            seen.add(current)
+            record = by_id.get(current)
+            if record is None:
+                break
+            chain.append(current)
+            parent = record.get("parentBackupId")
+            if not parent:
+                break
+            current = str(parent)
+        for ancestor in chain[1:]:
+            required_by.setdefault(ancestor, []).append(backup_id)
+            if ancestor not in keep:
+                keep.add(ancestor)
+            protected.setdefault(ancestor, "ancestor-of-kept-snapshot")
+    return required_by
+
+
 def preview_retention(
     retention: dict[str, Any],
     target_root: Path,
@@ -329,6 +359,7 @@ def preview_retention(
         if backup_id in references or filename in references or str(record.get("ciphertextSha256") or "") in references:
             protected.setdefault(backup_id, "restore-referenced")
             keep.add(backup_id)
+    _protect_snapshot_ancestors(records, keep, protected)
     trash: list[dict[str, Any]] = []
     if retention.get("maxTotalBytes"):
         total = sum(int(record.get("size") or 0) for record in records if str(record["backupId"]) in keep)
