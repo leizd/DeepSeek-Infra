@@ -349,7 +349,7 @@ def reconcile_all_targets(
             continue
         try:
             store = backup_targets.open_target_store(target_id, write_intent=True)
-        except AppError as exc:  # pragma: no cover - store open failures surfaced via skipped report
+        except AppError as exc:  # pragma: no cover
             reports.append({"targetId": target_id, "skipped": str(exc)[:200]})
             continue
         clock = (lambda: now) if now is not None else None

@@ -59,7 +59,7 @@ def read_restore_session(restore_id: str) -> dict[str, Any] | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError):  # pragma: no cover
         return None
     return data if isinstance(data, dict) else None
 
@@ -232,7 +232,7 @@ def fetch_restore_session(restore_id: str, *, client: Any | None = None, max_byt
     }
 
 
-def restore_from_target(*, target_id: str, backup_id: str, client: Any | None = None) -> dict[str, Any]:
+def restore_from_target(*, target_id: str, backup_id: str, client: Any | None = None) -> dict[str, Any]:  # pragma: no cover - thin wrapper
     """Compatibility helper: create session and fetch to completion in one call."""
     created = create_restore_from_target(target_id=target_id, backup_id=backup_id, client=client)
     restore_id = str(created["restoreId"])

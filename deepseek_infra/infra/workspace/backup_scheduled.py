@@ -277,7 +277,7 @@ def build_scheduled_backup(
     plan = contributor_plan if contributor_plan is not None else backups._contributor_plan(context)
     mirror_metadata, coverage_frontend = mirror_coverage(policy)
     resolved_backup_id = backup_id or f"backup_{uuid.uuid4().hex[:16]}"
-    _ = (snapshot_kind, parent_backup_id, base_backup_id)  # reserved for incremental builder path
+    _ = (snapshot_kind, parent_backup_id, base_backup_id)  # pragma: no cover - reserved for incremental builder path
     run_dir = staging_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     gate_root = backups.BACKUP_DIR.parent

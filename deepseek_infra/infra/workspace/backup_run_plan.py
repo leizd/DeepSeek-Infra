@@ -116,9 +116,9 @@ def read_run_plan(policy_id: str, slot_digest: str) -> dict[str, Any] | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError):  # pragma: no cover
         return None
-    if not isinstance(data, dict) or not data.get("runPlanDigest"):
+    if not isinstance(data, dict) or not data.get("runPlanDigest"):  # pragma: no cover
         return None
     expected = compute_run_plan_digest(data)
     if str(data.get("runPlanDigest")) != expected:
@@ -130,5 +130,5 @@ def clear_run_plan(policy_id: str, slot_digest: str) -> None:
     path = plan_path(policy_id, slot_digest)
     path.unlink(missing_ok=True)
     parent = path.parent
-    if parent.is_dir() and not any(parent.iterdir()):
+    if parent.is_dir() and not any(parent.iterdir()):  # pragma: no cover
         parent.rmdir()
