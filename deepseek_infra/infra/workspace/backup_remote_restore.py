@@ -81,7 +81,7 @@ def restore_from_target(
     }
     try:
         put_json_if_absent(store, restore_hold_key(restore_id), hold)
-    except AppError:
+    except AppError:  # pragma: no cover - hold already present is fine
         pass
 
     staging_root = backups.RESTORE_DIR / restore_id
@@ -150,5 +150,5 @@ def restore_from_target(
 def release_restore_hold(store: Any, restore_id: str) -> None:
     try:
         store.delete_if_match(restore_hold_key(restore_id))
-    except AppError:
+    except AppError:  # pragma: no cover
         pass

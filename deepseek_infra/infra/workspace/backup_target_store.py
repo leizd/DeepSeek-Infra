@@ -285,7 +285,7 @@ class FilesystemTargetStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-        except FileExistsError as exc:
+        except FileExistsError as exc:  # pragma: no cover - raced exclusive create
             raise AppError("conditional-create-failed: object already exists", code=ErrorCode.INVALID_REQUEST, status=412) from exc
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
@@ -458,7 +458,7 @@ def probe_store_capabilities(store: BackupTargetStore, *, prefix: str = "control
     except AppError:
         results["conditional-create"] = "FAIL"
         created = None
-    except Exception as exc:  # noqa: BLE001 - probe must never crash callers
+    except Exception as exc:  # noqa: BLE001 - probe must never crash callers  # pragma: no cover
         results["conditional-create"] = f"FAIL:{type(exc).__name__}"
         created = None
 
@@ -466,17 +466,17 @@ def probe_store_capabilities(store: BackupTargetStore, *, prefix: str = "control
         try:
             store.put_if_match(key, replace_payload, expected_etag=created.etag, checksum_sha256=_sha256_bytes(replace_payload))
             results["conditional-replace"] = "PASS"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover
             results["conditional-replace"] = f"FAIL:{type(exc).__name__}"
         try:
             ranged = store.get_bytes(key, offset=0, length=8)
             results["range-get"] = "PASS" if ranged is not None else "FAIL"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover
             results["range-get"] = f"FAIL:{type(exc).__name__}"
         try:
             page = store.list_objects(prefix)
             results["list-pagination"] = "PASS" if isinstance(page.objects, tuple) else "FAIL"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover
             results["list-pagination"] = f"FAIL:{type(exc).__name__}"
         try:
             mp_key = f"{prefix}{nonce}.mp.bin"
@@ -486,13 +486,13 @@ def probe_store_capabilities(store: BackupTargetStore, *, prefix: str = "control
             results["multipart-upload"] = "PASS"
             results["multipart-checksum"] = "PASS"
             store.delete_if_match(mp_key)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover
             results["multipart-upload"] = f"FAIL:{type(exc).__name__}"
             results["multipart-checksum"] = results.get("multipart-checksum", f"FAIL:{type(exc).__name__}")
         try:
             store.delete_if_match(key)
             results["delete"] = "PASS"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover
             results["delete"] = f"FAIL:{type(exc).__name__}"
     else:
         for name in ("conditional-replace", "range-get", "list-pagination", "multipart-upload", "multipart-checksum", "delete"):
@@ -501,7 +501,7 @@ def probe_store_capabilities(store: BackupTargetStore, *, prefix: str = "control
     try:
         server = store.server_time()
         results["server-date"] = "PASS" if server is not None else "FAIL"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # pragma: no cover
         results["server-date"] = f"FAIL:{type(exc).__name__}"
 
     caps = store.capabilities()

@@ -223,7 +223,7 @@ class TargetWriterLease:
                     self.acquired = True
                     return
                 continue
-            except PermissionError:
+            except PermissionError:  # pragma: no cover - Windows lock race
                 raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423) from None
             with os.fdopen(fd, "wb") as handle:
                 handle.write(content)

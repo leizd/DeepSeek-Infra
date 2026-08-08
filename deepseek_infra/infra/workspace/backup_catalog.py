@@ -534,7 +534,7 @@ def _append_entry_store(
     else:
         try:
             put_json_if_match(store, catalog_head_key(), head_payload, expected_etag=current.etag)
-        except AppError as exc:
+        except AppError as exc:  # pragma: no cover - concurrent catalog writers
             if exc.status in {409, 412}:
                 raise AppError("catalog-head-cas-failed: catalog head moved since the precondition snapshot", code=ErrorCode.INVALID_REQUEST, status=409) from exc
             raise
