@@ -144,29 +144,45 @@ class TargetWriterLease:
 
     def acquire(self) -> None:
         probe_atomic_target(self.root)
-        now = self._now()
-        payload = self._payload(now)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        content = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-        try:
-            fd = _retry_permission(lambda: os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
-        except FileExistsError:
-            existing = self._read()
-            if existing is not None and not self._expired(existing, now):
-                raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423)
-            if existing is not None and int(existing.get("fencingToken") or 0) >= self.fencing_token:
-                raise AppError("Target writer is held by a newer or equal fencing token", code=ErrorCode.INVALID_REQUEST, status=423)
-            self._write(payload)
+        # Retry the exclusive-create path after preemption or a vanished lease so two
+        # waiters cannot both believe they own writer.json after a concurrent release.
+        for _ in range(8):
+            now = self._now()
+            payload = self._payload(now)
+            content = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            try:
+                fd = _retry_permission(lambda: os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
+            except FileExistsError:
+                existing = self._read()
+                if existing is not None and not self._expired(existing, now):
+                    raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423)
+                if existing is not None and int(existing.get("fencingToken") or 0) >= self.fencing_token:
+                    raise AppError("Target writer is held by a newer or equal fencing token", code=ErrorCode.INVALID_REQUEST, status=423)
+                if existing is None:
+                    # Holder released between O_EXCL and read — retry exclusive create.
+                    continue
+                # Expired + lower token: publish our claim then confirm we still own it.
+                self._write(payload)
+                confirmed = self._read()
+                if (
+                    confirmed is not None
+                    and str(confirmed.get("ownerRunId") or "") == self.owner_run_id
+                    and int(confirmed.get("fencingToken") or -1) == self.fencing_token
+                    and not self._expired(confirmed, self._now())
+                ):
+                    self.acquired = True
+                    return
+                continue
+            except PermissionError:
+                raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423) from None
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
             self.acquired = True
-            self.assert_owned()
             return
-        except PermissionError:
-            raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423) from None
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        self.acquired = True
+        raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423)
 
     def renew(self) -> None:
         existing = self._read()

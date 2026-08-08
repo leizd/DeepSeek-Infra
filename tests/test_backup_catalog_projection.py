@@ -155,12 +155,16 @@ def test_concurrent_appends_serialize_without_fork(tmp_settings: Path, tmp_path:
                 try:
                     lease.acquire()
                 except AppError as exc:
-                    if exc.status == 423:
+                    if exc.status in {409, 423}:
                         threading.Event().wait(0.01)
                         continue
                     raise
                 try:
                     backup_catalog.append_receipt(tmp_path, _receipt(f"backup_{worker_index}_{entry_index}"), writer=lease)
+                except AppError as exc:
+                    if exc.status in {409, 423}:
+                        continue
+                    raise
                 finally:
                     lease.release()
                 break

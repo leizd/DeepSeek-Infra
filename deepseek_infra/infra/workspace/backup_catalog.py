@@ -127,7 +127,11 @@ def _append_entry(root: Path, entry_type: str, payload: dict[str, Any], *, write
         "targetGeneration": generation,
         "writerFencingToken": int(writer.fencing_token) if writer is not None else 0,
     }
+    # Re-check ownership immediately before durable writes so a preempted holder
+    # cannot publish an event or JSONL line after losing the writer lease.
+    _assert_writer_ownership(writer)
     _write_event_file(root, entry)
+    _assert_writer_ownership(writer)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
         handle.flush()
