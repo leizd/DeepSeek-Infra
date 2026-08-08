@@ -50,25 +50,32 @@ def _envelope(conversation_id: str = "c1") -> dict[str, object]:
 
 def test_mirror_round_trip_and_metadata_shape(tmp_settings: Path, stub_crypto: None) -> None:
     metadata = backup_mirror.put_frontend_mirror("mirror_main", _envelope(), source_epoch="epoch-1", recipients=[RECIPIENT_A], acknowledged_at="2026-01-01T00:00:00Z")
-    assert metadata["schemaVersion"] == 1
+    assert metadata["schemaVersion"] == 2
     assert metadata["profileId"] == "mirror_main"
     assert metadata["sourceEpoch"] == "epoch-1"
     assert metadata["conversations"] == 1
     assert metadata["conflicts"] == 0
     assert metadata["creationVerified"] is True
+    assert metadata["generationId"].startswith("gen_")
+    assert metadata["parentGenerationId"] is None
     assert len(metadata["ciphertextSha256"]) == 64
     ciphertext, meta_path, loaded = backup_mirror.mirror_files("mirror_main")
     raw = ciphertext.read_bytes()
     assert raw.startswith(b"age:")
-    assert b"c1" not in raw
+    assert b'"conversationId"' not in raw
     assert meta_path.is_file()
     assert loaded["envelopeDigest"] == metadata["envelopeDigest"]
     meta_keys = set(loaded)
     assert meta_keys == {
         "schemaVersion",
         "profileId",
+        "generationId",
+        "parentGenerationId",
         "sourceEpoch",
+        "clientReplicaId",
+        "clientSequence",
         "envelopeDigest",
+        "recipientVariants",
         "recipientSetDigest",
         "conversations",
         "conflicts",
@@ -101,14 +108,16 @@ def test_mirror_idempotent_reupload_skips(tmp_settings: Path, stub_crypto: None)
 
 
 def test_mirror_rejects_stale_and_previous_epoch_uploads(tmp_settings: Path, stub_crypto: None) -> None:
-    backup_mirror.put_frontend_mirror("mirror_main", _envelope("new"), source_epoch="epoch-2", recipients=[RECIPIENT_A], acknowledged_at="2026-01-02T00:00:00Z")
+    backup_mirror.put_frontend_mirror("mirror_main", _envelope("one"), source_epoch="epoch-1", recipients=[RECIPIENT_A], acknowledged_at="2026-01-01T00:00:00Z", client_sequence=1)
+    backup_mirror.put_frontend_mirror("mirror_main", _envelope("two"), source_epoch="epoch-2", recipients=[RECIPIENT_A], acknowledged_at="2026-01-02T00:00:00Z", client_sequence=2)
     with pytest.raises(AppError) as stale:
-        backup_mirror.put_frontend_mirror("mirror_main", _envelope("old"), source_epoch="epoch-1", recipients=[RECIPIENT_A], acknowledged_at="2026-01-01T00:00:00Z")
+        backup_mirror.put_frontend_mirror("mirror_main", _envelope("one-b"), source_epoch="epoch-1", recipients=[RECIPIENT_A], acknowledged_at="2026-01-04T00:00:00Z", client_sequence=3)
     assert stale.value.status == 409
-    updated = backup_mirror.put_frontend_mirror("mirror_main", _envelope("newer"), source_epoch="epoch-3", recipients=[RECIPIENT_A], acknowledged_at="2026-01-03T00:00:00Z")
+    assert "mirror-stale-epoch" in str(stale.value)
+    updated = backup_mirror.put_frontend_mirror("mirror_main", _envelope("newer"), source_epoch="epoch-3", recipients=[RECIPIENT_A], acknowledged_at="2026-01-03T00:00:00Z", client_sequence=4)
     assert updated["sourceEpoch"] == "epoch-3"
-    previous = tmp_settings / ".backup-mirror" / "mirror_main" / "previous" / "frontend-state.meta.json"
-    assert json.loads(previous.read_text(encoding="utf-8"))["sourceEpoch"] == "epoch-2"
+    parent = tmp_settings / ".backup-mirror" / "mirror_main" / "generations" / str(updated["parentGenerationId"]) / "metadata.json"
+    assert json.loads(parent.read_text(encoding="utf-8"))["sourceEpoch"] == "epoch-2"
 
 
 def test_mirror_updates_rejected_during_restore_fence(tmp_settings: Path, stub_crypto: None) -> None:
@@ -122,12 +131,17 @@ def test_mirror_updates_rejected_during_restore_fence(tmp_settings: Path, stub_c
 
 
 def test_mirror_recipient_change_rotates_and_marks_mismatch(tmp_settings: Path, stub_crypto: None) -> None:
-    backup_mirror.put_frontend_mirror("mirror_main", _envelope(), source_epoch="epoch-1", recipients=[RECIPIENT_A], acknowledged_at="2026-01-01T00:00:00Z")
+    backup_mirror.put_frontend_mirror("mirror_main", _envelope(), source_epoch="epoch-1", recipients=[RECIPIENT_A], acknowledged_at="2026-01-01T00:00:00Z", client_sequence=1)
     status = backup_mirror.mirror_status("mirror_main", recipients=[RECIPIENT_B])
     assert status["status"] == "recipient-mismatch"
-    backup_mirror.put_frontend_mirror("mirror_main", _envelope(), source_epoch="epoch-1", recipients=[RECIPIENT_B], acknowledged_at="2026-01-02T00:00:00Z")
+    backup_mirror.put_frontend_mirror("mirror_main", _envelope(), source_epoch="epoch-1", recipients=[RECIPIENT_B], acknowledged_at="2026-01-02T00:00:00Z", client_sequence=2)
     assert backup_mirror.mirror_status("mirror_main", recipients=[RECIPIENT_B])["status"] == "current"
-    assert (tmp_settings / ".backup-mirror" / "mirror_main" / "previous" / "frontend-state.age").is_file()
+    head = json.loads((tmp_settings / ".backup-mirror" / "mirror_main" / "HEAD.json").read_text(encoding="utf-8"))
+    parent_dir = tmp_settings / ".backup-mirror" / "mirror_main" / "generations" / str(head["generationId"])
+    assert list(parent_dir.glob("state.*.age"))
+    metadata = json.loads((parent_dir / "metadata.json").read_text(encoding="utf-8"))
+    previous = tmp_settings / ".backup-mirror" / "mirror_main" / "generations" / str(metadata["parentGenerationId"])
+    assert list(previous.glob("state.*.age"))
 
 
 def test_mirror_status_matrix(tmp_settings: Path, stub_crypto: None) -> None:

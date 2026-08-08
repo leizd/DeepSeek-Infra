@@ -1,4 +1,4 @@
-"""Scheduled backup package construction (4.4.4).
+"""Scheduled backup package construction (4.4.5).
 
 Builds a full workspace backup for a durable policy without any browser or
 user secret in the loop: the contributor plan is frozen, the workspace is
@@ -111,6 +111,11 @@ def _context_from_policy(policy: dict[str, Any]) -> backups.BackupContext:
     )
 
 
+def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise AppError("Scheduled backup cancelled", code=ErrorCode.INVALID_REQUEST, status=499)
+
+
 def _build_candidate(
     run_dir: Path,
     backup_id: str,
@@ -128,11 +133,16 @@ def _build_candidate(
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True)
     try:
-        contributions = [contributor.snapshot(staging, context) for contributor in backups._contributors_from_plan(plan)]
+        _raise_if_cancelled(cancel_event)
+        contributions = []
+        for contributor in backups._contributors_from_plan(plan):
+            _raise_if_cancelled(cancel_event)
+            contributions.append(contributor.snapshot(staging, context))
         files = [entry for contribution in contributions for entry in contribution.files]
         frontend_manifest: dict[str, Any] | None = None
         if mirror_metadata is not None:
-            ciphertext, metadata_path, _ = backup_mirror.mirror_files(str(mirror_metadata["profileId"]))
+            policy_recipients = tuple(str(item) for item in (policy.get("protection") or {}).get("recipients") or [])
+            ciphertext, metadata_path, _ = backup_mirror.mirror_files(str(mirror_metadata["profileId"]), recipients=policy_recipients)
             frontend_dir = staging / "frontend"
             frontend_dir.mkdir(parents=True, exist_ok=True)
             sealed_target = frontend_dir / "sealed-state.age"
@@ -217,11 +227,13 @@ def _build_candidate(
             if (verified.get("coverage") or {}).get("frontend") != coverage_frontend:
                 raise AppError("Scheduled backup coverage verification failed", code=ErrorCode.INTERNAL, status=500)
 
+        _raise_if_cancelled(cancel_event)
         encryption = backup_unattended.encrypt_unattended(
             target,
             lambda output: backups._write_zip_tree(staging, output),
             recipients=tuple(str(item) for item in (policy.get("protection") or {}).get("recipients") or []),
             verify=_verify,
+            cancel_event=cancel_event,
         )
         return ScheduledBackupPackage(
             backup_id=backup_id,
@@ -266,8 +278,7 @@ def build_scheduled_backup(
         raise AppError("Scheduled backup policy has no recipients", code=ErrorCode.INVALID_PAYLOAD)
     last_error: AppError | None = None
     for _attempt in range(1, 4):
-        if cancel_event is not None and cancel_event.is_set():
-            raise AppError("Scheduled backup cancelled", code=ErrorCode.INVALID_REQUEST, status=499)
+        _raise_if_cancelled(cancel_event)
         with mutation_gate.exclusive_gate(gate_root):
             mutation_gate.assert_mutation_allowed(root=gate_root)
             start_generation = mutation_gate.read_generation(gate_root)

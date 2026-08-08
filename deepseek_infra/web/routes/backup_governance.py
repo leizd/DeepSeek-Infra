@@ -1,7 +1,10 @@
-"""Scheduled backup governance routes (4.4.4)."""
+"""Scheduled backup governance routes (4.4.5)."""
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -18,13 +21,30 @@ from deepseek_infra.infra.workspace import (
     backup_scheduler,
     backup_scrub,
     backup_targets,
+    backup_writer_lease,
     backups,
 )
 from deepseek_infra.web.http_utils import json_response, read_json_body, require_api_auth
 
 
-def _target_root(target_id: str) -> Path:
-    return backup_publish.resolve_target(str(target_id or "managed-local")).root
+def _target_root(target_id: str, *, write_intent: bool = False) -> Path:
+    return backup_publish.resolve_target(str(target_id or "managed-local"), write_intent=write_intent).root
+
+
+@contextmanager
+def _target_writer(root: Path, target_id: str) -> Iterator[backup_writer_lease.TargetWriterLease]:
+    lease = backup_writer_lease.TargetWriterLease(
+        root,
+        target_id=target_id,
+        owner_run_id=f"api_{uuid.uuid4().hex[:12]}",
+        owner_instance_id=backup_scheduler.instance_id_from_environment(),
+        fencing_token=backup_scheduler.allocate_fencing_token(),
+    )
+    lease.acquire()
+    try:
+        yield lease
+    finally:
+        lease.release()
 
 
 def _find_backup_root(backup_id: str) -> tuple[Path, dict[str, Any], str]:
@@ -107,6 +127,18 @@ def create_backup_governance_router() -> APIRouter:
         require_api_auth(request)
         return json_response(backup_targets.delete_target(target_id))
 
+    @router.post("/api/workspace/backup-targets/{target_id}/adopt")
+    async def api_backup_targets_adopt(request: Request, target_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(backup_targets.adopt_target_incarnation(target_id))
+
+    @router.post("/api/workspace/backup-targets/register-new")
+    async def api_backup_targets_register_new(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=64_000)
+        path = Path(str(payload.get("path") or ""))
+        return json_response(backup_targets.reinitialize_target(path, label=str(payload.get("label") or "")))
+
     # ── Runs and catalog ───────────────────────────────────────────────────
 
     @router.get("/api/workspace/backup-runs")
@@ -134,15 +166,17 @@ def create_backup_governance_router() -> APIRouter:
     @router.post("/api/workspace/backup-catalog/{backup_id}/pin")
     async def api_backup_pin(request: Request, backup_id: str) -> JSONResponse:
         require_api_auth(request)
-        root, _, _ = _find_backup_root(backup_id)
-        backup_catalog.pin_backup(root, backup_id, True)
+        root, _, target_id = _find_backup_root(backup_id)
+        with _target_writer(root, target_id) as writer:
+            backup_catalog.pin_backup(root, backup_id, True, writer=writer)
         return json_response({"backupId": backup_id, "pinned": True})
 
     @router.delete("/api/workspace/backup-catalog/{backup_id}/pin")
     async def api_backup_unpin(request: Request, backup_id: str) -> JSONResponse:
         require_api_auth(request)
-        root, _, _ = _find_backup_root(backup_id)
-        backup_catalog.pin_backup(root, backup_id, False)
+        root, _, target_id = _find_backup_root(backup_id)
+        with _target_writer(root, target_id) as writer:
+            backup_catalog.pin_backup(root, backup_id, False, writer=writer)
         return json_response({"backupId": backup_id, "pinned": False})
 
     # ── Retention ──────────────────────────────────────────────────────────
@@ -165,10 +199,18 @@ def create_backup_governance_router() -> APIRouter:
         payload = await read_json_body(request, max_bytes=64_000)
         policy = backup_policies.get_policy(str(payload.get("policyId") or ""))
         retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
-        root = _target_root(str(policy.get("targetId") or "managed-local"))
         timezone_name = str((policy.get("schedule") or {}).get("timezone") or "UTC")
-        applied = backup_retention.apply_retention(retention, root, policy_timezone=timezone_name)
-        finalized = backup_retention.finalize_retention(retention, root, policy_timezone=timezone_name)
+        root = _target_root(str(policy.get("targetId") or "managed-local"), write_intent=True)
+        preview = payload.get("preview")
+        with _target_writer(root, str(policy.get("targetId") or "managed-local")) as writer:
+            applied = backup_retention.apply_retention(
+                retention,
+                root,
+                policy_timezone=timezone_name,
+                preview=preview if isinstance(preview, dict) else None,
+                writer=writer,
+            )
+            finalized = backup_retention.finalize_retention(retention, root, policy_timezone=timezone_name, writer=writer)
         return json_response({"applied": applied, "finalized": finalized})
 
     # ── Scrub and restore drills ───────────────────────────────────────────
@@ -177,7 +219,8 @@ def create_backup_governance_router() -> APIRouter:
     async def api_backup_scrub(request: Request, backup_id: str) -> JSONResponse:
         require_api_auth(request)
         root, _, target_id = _find_backup_root(backup_id)
-        return json_response(backup_scrub.scrub_backup(root, backup_id, target_id=target_id))
+        with _target_writer(root, target_id):
+            return json_response(backup_scrub.scrub_backup(root, backup_id, target_id=target_id))
 
     @router.post("/api/workspace/backups/{backup_id}/verify-unlock")
     async def api_backup_verify_unlock(request: Request, backup_id: str) -> JSONResponse:
@@ -188,9 +231,10 @@ def create_backup_governance_router() -> APIRouter:
             raise AppError("A valid Recovery Identity is required", code=ErrorCode.INVALID_PAYLOAD)
         identity = bytearray(identity_text.encode("utf-8"))
         try:
-            root, _, _ = _find_backup_root(backup_id)
+            root, _, target_id = _find_backup_root(backup_id)
             staged = backups.RESTORE_DIR / "drills"
-            return json_response(backup_scrub.verify_unlock_drill(root, backup_id, identity, staged_root=staged))
+            with _target_writer(root, target_id):
+                return json_response(backup_scrub.verify_unlock_drill(root, backup_id, identity, staged_root=staged))
         finally:
             for index in range(len(identity)):
                 identity[index] = 0

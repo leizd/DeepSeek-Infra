@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.4-blue)
+![版本](https://img.shields.io/badge/version-4.4.5-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.4 Scheduled Encrypted Backups & Retention Governance：** 定时备份进入自动化阶段——独立 Backup Policy 只持久化公开 `age1...` Recipient，Recovery Identity 永不落盘；浏览器会话通过 Age 密封的 Frontend Replica Mirror 纳入后台备份，本地服务器不保存会话明文；每次运行生成临时验证 Recipient 完成无人值守加解密往返；耐久 SQLite 调度器以 IANA 时区、DST 语义、租约与 Fencing Token 保证同一 Schedule Slot 恰好执行一次；文件系统目标以 Marker 识别、原子发布；Backup Catalog 采用追加式 Hash Chain Receipt；GFS 保留策略先 Preview 再经 Trash Grace Period 两阶段删除，Pinned 与 Restore 引用永不被自动清除。参见 [4.4.4 发布说明](docs/releases/4.4.4.md)（上一版 [4.4.3](docs/releases/4.4.3.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
+> **4.4.5 Fenced Backup Commits & Replica Lineage：** 备份一致性进入事务闭环阶段——每个执行中的 Run 持有 RunLeaseGuard，租约 300 秒、心跳每 60 秒续租，首次续租失败即触发 Run 级 Cancel Event；Contributor Snapshot、Age 加密与验证、目标复制、目标端 SHA-256、Catalog 追加与 Retention 移动全部在分块边界 Checkpoint，Lease 丢失后禁止进入任何可见提交步骤；`complete_run`、`record_run_phase`、`requeue_run`、`fail_run` 在校验 Owner 与 Fencing Token 之外同时拒绝过期 Lease，失去租约的 Worker 无法发布、编目、清理或完成，同一 Schedule Slot 最终只形成一个正式结果。参见 [4.4.5 发布说明](docs/releases/4.4.5.md)（上一版 [4.4.4](docs/releases/4.4.4.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)。
 
-**4.4.4 validation:** 合同覆盖同一 Schedule Slot 多进程恰好一次、崩溃后 Lease 接管、DST 重复/缺失时间语义、密封 Mirror 往返与旧 Epoch 拒绝、严格 Coverage 下过期 Mirror 阻断、无人值守 Age 往返验证、Recovery Identity 不落盘、Target Marker 替换拒写、原子发布、失败备份不触发删除、GFS 分桶确定性、Pin 与 Restore 引用保护、Catalog 由 Receipt 重建、真实解锁演练记录。既有 Bundle 预算不提高。
+**4.4.5 validation:** 合同覆盖心跳续租使 Lease 持续推进、续租失败即置 Cancel Event、运行中途 Lease 过期后旧 Worker 无法发布或编目、过期 Lease 拒绝 complete/phase/requeue/fail、Terminal Run 拒绝续租、新 Worker 接管后同一 Schedule Slot 只有一个正式备份、Cancel Event 贯穿 Contributor Snapshot 与 Age 加密分块。既有 Bundle 预算不提高。
 
 ## 30 秒概览
 

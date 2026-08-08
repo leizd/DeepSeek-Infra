@@ -108,7 +108,7 @@ def test_scheduled_backup_includes_sealed_mirror(tmp_settings: Path, stub_crypto
         assert "frontend/state.json" not in names
         inner = archive.read("frontend/sealed-state.age")
         assert inner.startswith(b"age-encryption.org/v1")
-        assert b"c1" not in inner
+        assert b'"conversationId"' not in inner
 
 
 def test_scheduled_backup_best_effort_without_mirror(tmp_settings: Path, stub_crypto: None) -> None:

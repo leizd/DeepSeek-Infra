@@ -1055,10 +1055,10 @@ def conversation_search(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def frontend_index_path() -> Path:
-    react_index = STATIC_DIR / "ui" / "index.html"
-    if not react_index.is_file():
+    candidate = STATIC_DIR / "ui" / "index.html"
+    if not candidate.is_file():
         raise RuntimeError("React frontend build is missing. Run scripts/build_frontend.py.")
-    return react_index
+    return candidate
 
 
 def resolve_static_file(raw_path: str) -> Path | None:

@@ -144,18 +144,31 @@ export function finalizeBackup(backupId: string, client: HttpClient = httpClient
   return client.postJson<BackupSession>(`/api/workspace/backups/${encodeURIComponent(backupId)}/finalize`, {});
 }
 
+export interface BackupMirrorRecipientVariantV1 {
+  recipientSetDigest: string;
+  ciphertextSha256: string;
+  filename: string;
+  creationVerified: boolean;
+}
+
 export interface BackupMirrorMetadataV1 {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   profileId: string;
+  generationId?: string;
+  parentGenerationId?: string | null;
   sourceEpoch: string;
+  clientReplicaId?: string;
+  clientSequence?: number;
   envelopeDigest: string;
   recipientSetDigest: string;
+  recipientVariants?: BackupMirrorRecipientVariantV1[];
   conversations: number;
   conflicts: number;
   createdAt: string;
   acknowledgedAt: string;
   ciphertextSha256: string;
   creationVerified: boolean;
+  idempotent?: boolean;
 }
 
 export type BackupMirrorFreshness = "current" | "stale" | "missing" | "epoch-mismatch" | "recipient-mismatch" | "excluded";
@@ -164,6 +177,15 @@ export interface BackupMirrorStatus {
   status: BackupMirrorFreshness;
   mirror?: BackupMirrorMetadataV1;
   profileId?: string;
+}
+
+export interface PutBackupMirrorRequest {
+  sourceEpoch: string;
+  acknowledgedAt?: string;
+  envelope: FrontendBackupEnvelopeV1;
+  clientReplicaId?: string;
+  clientSequence?: number;
+  expectedHeadGenerationId?: string;
 }
 
 export function listBackupMirrors(client: HttpClient = httpClient) {
@@ -176,7 +198,7 @@ export function getBackupMirror(profileId: string, client: HttpClient = httpClie
 
 export function putBackupMirror(
   profileId: string,
-  request: { sourceEpoch: string; acknowledgedAt?: string; envelope: FrontendBackupEnvelopeV1 },
+  request: PutBackupMirrorRequest,
   client: HttpClient = httpClient,
 ) {
   return client.json<BackupMirrorMetadataV1>(`/api/workspace/backup-mirrors/${encodeURIComponent(profileId)}/frontend`, {

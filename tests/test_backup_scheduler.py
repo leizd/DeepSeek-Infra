@@ -76,7 +76,7 @@ def test_stale_worker_cannot_publish_or_complete(tmp_settings: Path) -> None:
     with pytest.raises(AppError) as lost:
         backup_scheduler.complete_run(run.run_id, backup_id="backup_x", filename="f.age", instance_id="w1", fencing_token=run.fencing_token)
     assert lost.value.status == 409
-    backup_scheduler.complete_run(takeover.run_id, backup_id="backup_x", filename="f.age", instance_id="w2", fencing_token=takeover.fencing_token)
+    backup_scheduler.complete_run(takeover.run_id, backup_id="backup_x", filename="f.age", instance_id="w2", fencing_token=takeover.fencing_token, now=now + timedelta(seconds=400))
     assert backup_scheduler.get_run(takeover.run_id)["phase"] == "complete"
 
 
@@ -125,7 +125,7 @@ def test_deferred_slots_reclaimed_within_window(tmp_settings: Path) -> None:
     policy = _policy(tmp_settings)
     now = datetime(2026, 6, 2, 4, 0, tzinfo=UTC)
     run = _claim(policy, now=now)[0]
-    backup_scheduler.fail_run(run.run_id, error="workspace-restore-active", instance_id="w1", fencing_token=run.fencing_token, phase="deferred", reason="workspace-restore-active")
+    backup_scheduler.fail_run(run.run_id, error="workspace-restore-active", instance_id="w1", fencing_token=run.fencing_token, phase="deferred", reason="workspace-restore-active", now=now)
     reclaimed = backup_scheduler.reclaim_deferred_slots([policy], instance_id="w2", now=now + timedelta(hours=1))
     assert len(reclaimed) == 1
     assert reclaimed[0].attempt == 2
@@ -137,7 +137,7 @@ def test_requeue_then_reclaim_after_backoff(tmp_settings: Path) -> None:
     policy = _policy(tmp_settings)
     now = datetime(2026, 6, 2, 4, 0, tzinfo=UTC)
     run = _claim(policy, now=now)[0]
-    backup_scheduler.requeue_run(run.run_id, instance_id="w1", fencing_token=run.fencing_token, retry_at=now + timedelta(seconds=120), error="transient")
+    backup_scheduler.requeue_run(run.run_id, instance_id="w1", fencing_token=run.fencing_token, retry_at=now + timedelta(seconds=120), error="transient", now=now)
     early = backup_scheduler.reclaim_abandoned_slots(instance_id="w2", now=now + timedelta(seconds=60))
     assert early == []
     later = backup_scheduler.reclaim_abandoned_slots(instance_id="w2", now=now + timedelta(seconds=180))
@@ -149,12 +149,12 @@ def test_run_phase_transitions_and_listing(tmp_settings: Path) -> None:
     policy = _policy(tmp_settings)
     now = datetime(2026, 6, 2, 4, 0, tzinfo=UTC)
     run = _claim(policy, now=now)[0]
-    backup_scheduler.record_run_phase(run.run_id, "snapshotting", instance_id="w1", fencing_token=run.fencing_token)
+    backup_scheduler.record_run_phase(run.run_id, "snapshotting", instance_id="w1", fencing_token=run.fencing_token, now=now)
     with pytest.raises(AppError):
-        backup_scheduler.record_run_phase(run.run_id, "snapshotting", instance_id="w2", fencing_token=run.fencing_token)
+        backup_scheduler.record_run_phase(run.run_id, "snapshotting", instance_id="w2", fencing_token=run.fencing_token, now=now)
     with pytest.raises(AppError):
         backup_scheduler.record_run_phase(run.run_id, "not-a-phase")
-    backup_scheduler.complete_run(run.run_id, backup_id="backup_1", filename="f.age", instance_id="w1", fencing_token=run.fencing_token)
+    backup_scheduler.complete_run(run.run_id, backup_id="backup_1", filename="f.age", instance_id="w1", fencing_token=run.fencing_token, now=now)
     runs = backup_scheduler.list_runs(policy_id=str(policy["policyId"]))
     assert runs[0]["phase"] == "complete"
     assert runs[0]["backupId"] == "backup_1"

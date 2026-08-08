@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage durable scheduled backup policies (4.4.4).
+"""Manage durable scheduled backup policies (4.4.5).
 
 Usage:
     python scripts/backup_policy.py create --cron "0 3 * * *" --timezone Asia/Singapore --recipient age1... --target <target-id>

@@ -447,7 +447,7 @@ class SkillsSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "4.4.4"
+    app_version: str = "4.4.5"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
     tavily_url: str = "https://api.tavily.com/search"
     deepseek_timeout_seconds: int = 180
@@ -1063,6 +1063,7 @@ def _mcp_client_server_timeouts_from_env() -> Mapping[str, int]:
 settings = Settings.from_env()
 
 STATIC_DIR = settings.static_dir
+FRONTEND_INDEX_PATH = STATIC_DIR / "ui" / "index.html"
 APP_VERSION = settings.app_version
 DEEPSEEK_URL = settings.deepseek_url
 TAVILY_URL = settings.tavily_url

@@ -1,4 +1,4 @@
-"""Unattended age encryption verified with ephemeral recipients (4.4.4).
+"""Unattended age encryption verified with ephemeral recipients (4.4.5).
 
 Scheduled runs only know the user's public ``age1...`` recipients, so they
 cannot decrypt with the user's Recovery Identity to prove a round trip. Instead
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,10 +31,12 @@ class UnattendedEncryption:
     recipients: tuple[str, ...]
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path, *, checkpoint: Callable[[], None] | None = None) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            if checkpoint is not None:
+                checkpoint()
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -69,6 +72,7 @@ def encrypt_unattended(
     *,
     recipients: tuple[str, ...] | list[str],
     verify: Callable[[Path], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> UnattendedEncryption:
     user_recipients = tuple(dict.fromkeys(str(item).strip() for item in recipients if str(item).strip()))
     if not user_recipients:
@@ -81,8 +85,8 @@ def encrypt_unattended(
     all_recipients = tuple(dict.fromkeys([*user_recipients, ephemeral_recipient]))
     verify_path = target.with_name(f".{target.name}.{os.getpid()}.verify")
     try:
-        backup_crypto.encrypt_stream(target, write_plaintext, mode="age-recipient", recipients=all_recipients)
-        backup_crypto.decrypt_file(target, verify_path, kind="age-identity", secret=ephemeral_identity)
+        backup_crypto.encrypt_stream(target, write_plaintext, mode="age-recipient", recipients=all_recipients, cancel_event=cancel_event)
+        backup_crypto.decrypt_file(target, verify_path, kind="age-identity", secret=ephemeral_identity, cancel_event=cancel_event)
         if verify is not None:
             verify(verify_path)
     finally:

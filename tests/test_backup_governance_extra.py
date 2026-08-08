@@ -155,8 +155,12 @@ def test_executor_blocked_target(tmp_settings: Path, stub_crypto: None, tmp_path
     now = datetime(2026, 6, 2, 4, 0, tzinfo=UTC)
     run = backup_scheduler.claim_due_slots([policy], instance_id="w1", now=now)[0]
     outcome = backup_executor.execute_run(run, instance_id="w1", now=now)
-    assert outcome["phase"] == "blocked"
+    assert outcome["phase"] == "blocked-retryable"
     assert outcome["reason"] == "blocked-target-unavailable"
+    assert outcome["retryInSeconds"] > 0
+    stored = backup_scheduler.get_run(run.run_id)
+    assert stored["phase"] == "blocked-retryable"
+    assert stored["nextRetryAt"]
 
 
 def test_executor_unexpected_exception_fails_run(tmp_settings: Path, stub_crypto: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -178,7 +182,9 @@ def test_executor_publishes_to_filesystem_target(tmp_settings: Path, stub_crypto
     run = backup_scheduler.claim_due_slots([policy], instance_id="w1", now=now)[0]
     outcome = backup_executor.execute_run(run, instance_id="w1", now=now)
     assert outcome["phase"] == "complete"
-    assert (directory / "backups" / str(outcome["filename"])).is_file()
+    record = backup_catalog.catalog_state(directory)[str(outcome["backupId"])]
+    assert backup_publish.backup_file_candidates(directory, record)[0].is_file()
+    assert backup_publish.commit_marker_path(directory, str(policy["policyId"]), run.schedule_slot).is_file()
     assert backup_catalog.verify_chain(directory) is True
 
 
@@ -335,7 +341,8 @@ def test_mirror_status_without_max_age_and_bad_ack(tmp_settings: Path, stub_cryp
     envelope["digest"] = hashlib.sha256(json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     backup_mirror.put_frontend_mirror("mirror_x", envelope, source_epoch="epoch-1", recipients=[RECIPIENT_A])
     assert backup_mirror.mirror_status("mirror_x", max_age_seconds=None)["status"] == "current"
-    meta = backup_mirror.BACKUP_MIRROR_DIR / "mirror_x" / "frontend-state.meta.json"
+    head = json.loads((backup_mirror.BACKUP_MIRROR_DIR / "mirror_x" / "HEAD.json").read_text(encoding="utf-8"))
+    meta = backup_mirror.BACKUP_MIRROR_DIR / "mirror_x" / "generations" / str(head["generationId"]) / "metadata.json"
     payload = json.loads(meta.read_text(encoding="utf-8"))
     payload["acknowledgedAt"] = "not-a-time"
     meta.write_text(json.dumps(payload), encoding="utf-8")
@@ -418,4 +425,4 @@ def test_publish_oserror_becomes_blocked(tmp_settings: Path, stub_crypto: None, 
     _Package.path.write_bytes(b"x")
     monkeypatch.setattr(Path, "open", lambda self, *a, **k: (_ for _ in ()).throw(OSError("disk full")))
     with pytest.raises(AppError, match="blocked-target-unavailable"):
-        backup_publish.publish_backup(target, _Package(), run_id="run_e", policy_id="p", schedule_slot="s")
+        backup_publish.publish_backup(target, _Package(), run_id="run_e", policy_id="p", schedule_slot="s", fencing_token=1)

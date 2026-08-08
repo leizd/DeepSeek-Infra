@@ -1,4 +1,4 @@
-"""Ciphertext scrubbing and restore drills (4.4.4).
+"""Ciphertext scrubbing and restore drills (4.4.5).
 
 Scrubs re-read ciphertext and verify size, SHA-256 and age header validity
 without any Recovery Identity — they never claim the content was unlocked.
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_catalog, backup_crypto, backup_targets, backup_unattended, backups
+from deepseek_infra.infra.workspace import backup_catalog, backup_crypto, backup_publish, backup_targets, backup_unattended, backups
 
 UNLOCK_VERIFICATION_WARNING_DAYS = 30
 
@@ -32,11 +32,20 @@ def _catalog_record(root: Path, backup_id: str) -> dict[str, Any]:
     return record
 
 
+def _ciphertext_path(root: Path, record: dict[str, Any]) -> Path:
+    candidates = backup_publish.backup_file_candidates(root, record)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    if candidates:
+        return candidates[0]
+    return root / "backups" / str(record.get("filename") or "")
+
+
 def scrub_backup(root: Path, backup_id: str, *, target_id: str | None = None) -> dict[str, Any]:
     """Re-verify one ciphertext against its receipt without unlocking it."""
     record = _catalog_record(root, backup_id)
-    filename = str(record.get("filename") or "")
-    path = root / "backups" / filename
+    path = _ciphertext_path(root, record)
     checks: dict[str, str] = {}
     ok = True
 
@@ -86,8 +95,7 @@ def verify_unlock_drill(
     applies anything, records ``userUnlockVerifiedAt`` and destroys plaintext.
     """
     record = _catalog_record(root, backup_id)
-    filename = str(record.get("filename") or "")
-    source = root / "backups" / filename
+    source = _ciphertext_path(root, record)
     if not source.is_file():
         raise AppError("Backup file is missing", code=ErrorCode.NOT_FOUND, status=404)
     if backup_unattended.sha256_file(source) != str(record.get("ciphertextSha256") or ""):

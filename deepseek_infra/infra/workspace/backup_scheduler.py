@@ -1,20 +1,24 @@
-"""Durable SQLite scheduler for backup policies (4.4.4).
+"""Durable SQLite scheduler for backup policies (4.4.5).
 
 Tracks schedule slots, runs and leases in a single SQLite database. The
 ``UNIQUE(policy_id, slot_key)`` constraint makes concurrent workers claiming
 the same schedule slot a no-op for all but one of them; fencing tokens and
 lease expirations ensure a crashed worker can be taken over without ever
-letting a stale worker publish over a newer one.
+letting a stale worker publish over a newer one. Executing runs hold a
+:class:`RunLeaseGuard` that renews the lease on a heartbeat and checkpoints
+ownership against the current clock before every visible commit step.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,6 +28,8 @@ from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_policies
 from deepseek_infra.infra.workspace.backup_cron import iter_slots, next_slot, parse_cron
+
+_logger = logging.getLogger("deepseek_infra.backup_worker")
 
 BACKUP_SCHEDULER_DIR = config.ROOT / ".backup-scheduler"
 SCHEDULER_DB_NAME = "scheduler.db"
@@ -38,16 +44,22 @@ RUN_PHASES = (
     "publishing",
     "cataloging",
     "pruning",
+    "reconciling",
     "complete",
     "deferred",
     "blocked",
+    "blocked-retryable",
+    "blocked-terminal",
+    "superseded",
     "failed",
     "abandoned",
 )
-TERMINAL_PHASES = ("complete", "failed", "abandoned")
-ACTIVE_PHASES = ("queued", "leased", "waiting-for-mirror", "snapshotting", "encrypting", "verifying", "publishing", "cataloging", "pruning")
+TERMINAL_PHASES = ("complete", "failed", "abandoned", "blocked-terminal", "superseded")
+ACTIVE_PHASES = ("queued", "leased", "waiting-for-mirror", "snapshotting", "encrypting", "verifying", "publishing", "cataloging", "pruning", "reconciling")
+BLOCKED_PHASES = ("blocked", "blocked-retryable")
 
 DEFAULT_LEASE_SECONDS = 300
+LEASE_HEARTBEAT_SECONDS = 60.0
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS backup_schedule_slots (
@@ -148,15 +160,19 @@ def deterministic_jitter_seconds(policy_id: str, slot_key: str, jitter_seconds: 
 
 
 def _row_to_run(row: sqlite3.Row) -> dict[str, Any]:
+    phase = str(row["phase"])
+    blocked = phase in BLOCKED_PHASES or phase == "blocked-terminal"
     return {
         "runId": row["run_id"],
         "policyId": row["policy_id"],
         "scheduleSlot": row["schedule_slot"],
-        "phase": row["phase"],
+        "phase": phase,
         "attempt": row["attempt"],
         "ownerInstanceId": row["owner_instance_id"],
         "fencingToken": row["fencing_token"],
         "leaseUntil": row["lease_until"],
+        "nextRetryAt": row["lease_until"] if blocked else None,
+        "blockedReason": row["reason"] if blocked else None,
         "reason": row["reason"],
         "error": row["error"],
         "backupId": row["backup_id"],
@@ -292,15 +308,17 @@ def claim_manual_run(policy: dict[str, Any], *, instance_id: str, lease_seconds:
     """Claim an ad-hoc manual run for a policy (POST .../run)."""
     current = now or datetime.now(tz=timezone.utc)
     policy_id = str(policy.get("policyId") or "")
-    slot_key = f"manual/{_utc_iso(current)}"
+    slot_key = f"manual/{uuid.uuid4().hex}"
     with _connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         run_id = f"run_{uuid.uuid4().hex[:16]}"
         token = _next_token(connection, "fencing")
-        connection.execute(
+        cursor = connection.execute(
             "INSERT OR IGNORE INTO backup_schedule_slots(policy_id, slot_key, scheduled_for, local_date_time, timezone, status, run_id, created_at) VALUES (?,?,?,?,?,'claimed',?,?)",
             (policy_id, slot_key, _utc_iso(current), _utc_iso(current), "UTC", run_id, _utc_iso()),
         )
+        if cursor.rowcount == 0:
+            raise AppError("Manual backup run slot was already claimed", code=ErrorCode.INVALID_REQUEST, status=409)
         connection.execute(
             "INSERT INTO backup_runs(run_id, policy_id, schedule_slot, phase, attempt, owner_instance_id, fencing_token, lease_until, created_at, updated_at) VALUES (?,?,?,'leased',?,?,?,?,?,?)",
             (run_id, policy_id, slot_key, 1, instance_id, token, _utc_iso(current + timedelta(seconds=lease_seconds)), _utc_iso(), _utc_iso()),
@@ -360,6 +378,112 @@ def reclaim_abandoned_slots(
                     policy_id=str(row["policy_id"]),
                     schedule_slot=str(row["schedule_slot"]),
                     scheduled_for=str(slot_row["scheduled_for"]) if slot_row else str(row["schedule_slot"]),
+                    attempt=attempt,
+                    fencing_token=token,
+                )
+            )
+    return reclaimed
+
+
+def _policy_max_attempts(policy: dict[str, Any]) -> int:
+    retry = policy.get("retry")
+    value = retry.get("maxAttempts") if isinstance(retry, dict) else None
+    return max(1, int(value or 3))
+
+
+def reclaim_blocked_slots(
+    policies: list[dict[str, Any]],
+    *,
+    instance_id: str,
+    now: datetime | None = None,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    probe_seconds: int = 300,
+) -> list[ClaimedRun]:
+    """Retry blocked runs once their target probes healthy again.
+
+    Blocked runs stay parked (with ``nextRetryAt`` pushed forward) while the
+    target stays offline; they become ``blocked-terminal`` when the policy is
+    gone, the catch-up window has passed or attempts are exhausted.
+    """
+    from deepseek_infra.infra.workspace import backup_publish
+
+    current = now or datetime.now(tz=timezone.utc)
+    policy_map = {str(policy.get("policyId") or ""): policy for policy in policies if policy.get("enabled")}
+    reclaimed: list[ClaimedRun] = []
+    placeholders = ",".join("?" for _ in BLOCKED_PHASES)
+    with _connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute(
+            f"SELECT * FROM backup_runs WHERE phase IN ({placeholders}) AND lease_until <= ?",
+            (*BLOCKED_PHASES, _utc_iso(current)),
+        ).fetchall()
+        for row in rows:
+            policy = policy_map.get(str(row["policy_id"]))
+            slot_row = connection.execute(
+                "SELECT scheduled_for FROM backup_schedule_slots WHERE policy_id = ? AND slot_key = ?",
+                (row["policy_id"], row["schedule_slot"]),
+            ).fetchone()
+            scheduled_for = str(slot_row["scheduled_for"]) if slot_row else str(row["schedule_slot"])
+
+            def _terminal(reason: str) -> None:
+                connection.execute(
+                    "UPDATE backup_runs SET phase = 'blocked-terminal', error = ?, reason = ?, updated_at = ? WHERE run_id = ?",
+                    (str(row["error"] or "")[:500], reason, _utc_iso(), row["run_id"]),
+                )
+                connection.execute("UPDATE backup_schedule_slots SET status = 'failed' WHERE run_id = ?", (row["run_id"],))
+
+            if policy is None:
+                _terminal("policy-missing")
+                continue
+            catchup = int((policy.get("schedule") or {}).get("catchupWindowSeconds") or 86400)
+            try:
+                slot_time = _parse_iso(scheduled_for)
+            except ValueError:
+                slot_time = current
+            if slot_time < current - timedelta(seconds=catchup):
+                _terminal("catchup-window-exceeded")
+                continue
+            if int(row["attempt"]) >= _policy_max_attempts(policy):
+                _terminal("max-attempts-exceeded")
+                continue
+            target_id = str(policy.get("targetId") or "managed-local")
+            try:
+                backup_publish.resolve_target(target_id)
+            except AppError as exc:
+                connection.execute(
+                    "INSERT INTO backup_target_health(target_id, status, checked_at, detail) VALUES (?,?,?,?) ON CONFLICT(target_id) DO UPDATE SET status = excluded.status, checked_at = excluded.checked_at, detail = excluded.detail",
+                    (target_id, "blocked", _utc_iso(), str(exc)[:200]),
+                )
+                connection.execute(
+                    "UPDATE backup_runs SET lease_until = ?, updated_at = ? WHERE run_id = ?",
+                    (_utc_iso(current + timedelta(seconds=probe_seconds)), _utc_iso(), row["run_id"]),
+                )
+                continue
+            connection.execute(
+                "INSERT INTO backup_target_health(target_id, status, checked_at, detail) VALUES (?,?,?,NULL) ON CONFLICT(target_id) DO UPDATE SET status = excluded.status, checked_at = excluded.checked_at, detail = excluded.detail",
+                (target_id, "ok", _utc_iso()),
+            )
+            token = _next_token(connection, "fencing")
+            connection.execute(
+                "UPDATE backup_runs SET phase = 'abandoned', error = ?, updated_at = ? WHERE run_id = ?",
+                ("blocked-retry", _utc_iso(), row["run_id"]),
+            )
+            run_id = f"run_{uuid.uuid4().hex[:16]}"
+            attempt = int(row["attempt"]) + 1
+            connection.execute(
+                "INSERT INTO backup_runs(run_id, policy_id, schedule_slot, phase, attempt, owner_instance_id, fencing_token, lease_until, created_at, updated_at) VALUES (?,?,?,'leased',?,?,?,?,?,?)",
+                (run_id, row["policy_id"], row["schedule_slot"], attempt, instance_id, token, _utc_iso(current + timedelta(seconds=lease_seconds)), _utc_iso(), _utc_iso()),
+            )
+            connection.execute(
+                "UPDATE backup_schedule_slots SET run_id = ?, status = 'claimed' WHERE policy_id = ? AND slot_key = ?",
+                (run_id, row["policy_id"], row["schedule_slot"]),
+            )
+            reclaimed.append(
+                ClaimedRun(
+                    run_id=run_id,
+                    policy_id=str(row["policy_id"]),
+                    schedule_slot=str(row["schedule_slot"]),
+                    scheduled_for=scheduled_for,
                     attempt=attempt,
                     fencing_token=token,
                 )
@@ -452,7 +576,7 @@ def renew_run_lease(run_id: str, instance_id: str, fencing_token: int, *, lease_
     current = now or datetime.now(tz=timezone.utc)
     with _connect() as connection:
         cursor = connection.execute(
-            "UPDATE backup_runs SET lease_until = ?, updated_at = ? WHERE run_id = ? AND owner_instance_id = ? AND fencing_token = ? AND lease_until >= ?",
+            "UPDATE backup_runs SET lease_until = ?, updated_at = ? WHERE run_id = ? AND owner_instance_id = ? AND fencing_token = ? AND lease_until >= ? AND phase NOT IN ('complete', 'failed', 'abandoned')",
             (
                 _utc_iso(current + timedelta(seconds=lease_seconds)),
                 _utc_iso(current),
@@ -466,20 +590,100 @@ def renew_run_lease(run_id: str, instance_id: str, fencing_token: int, *, lease_
             raise AppError("Backup run lease renewal failed; ownership lost", code=ErrorCode.INVALID_REQUEST, status=409)
 
 
-def record_run_phase(run_id: str, phase: str, *, instance_id: str | None = None, fencing_token: int | None = None, reason: str | None = None) -> None:
+class RunLeaseGuard:
+    """Active lease holder for an executing run.
+
+    The heartbeat renews the lease every ``heartbeat_seconds``; the first
+    renewal failure sets ``cancel_event`` so chunked helpers stop at their
+    next boundary. ``checkpoint()`` asserts ownership against the current
+    clock — never the run's start time — and must run before every
+    externally visible commit step.
+    """
+
+    def __init__(
+        self,
+        run_id: str,
+        instance_id: str,
+        fencing_token: int,
+        *,
+        lease_seconds: int = DEFAULT_LEASE_SECONDS,
+        heartbeat_seconds: float = LEASE_HEARTBEAT_SECONDS,
+        clock: Callable[[], datetime] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        self.run_id = run_id
+        self.instance_id = instance_id
+        self.fencing_token = fencing_token
+        self.lease_seconds = lease_seconds
+        self.heartbeat_seconds = heartbeat_seconds
+        self.cancel_event = cancel_event or threading.Event()
+        self._clock = clock or (lambda: datetime.now(tz=timezone.utc))
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._renewal_error: str | None = None
+        self._writer: Any = None
+
+    def now(self) -> datetime:
+        return self._clock()
+
+    def attach_writer(self, writer: Any) -> None:
+        """Attach a target writer lease renewed and asserted alongside the run lease."""
+        self._writer = writer
+
+    def checkpoint(self) -> None:
+        """Raise 409 when the lease is cancelled, expired or taken over."""
+        if self.cancel_event.is_set():
+            detail = self._renewal_error or "lease heartbeat failed"
+            raise AppError(f"Backup run lease lost: {detail}", code=ErrorCode.INVALID_REQUEST, status=409)
+        assert_run_lease(self.run_id, self.instance_id, self.fencing_token, now=self._clock())
+        if self._writer is not None:
+            self._writer.assert_owned()
+
+    def start_heartbeat(self) -> None:
+        if self._thread is not None or self.heartbeat_seconds <= 0:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._heartbeat_loop, name=f"backup-lease-heartbeat-{self.run_id[-8:]}", daemon=True)
+        self._thread.start()
+
+    def _heartbeat_loop(self) -> None:
+        while not self._stop.wait(self.heartbeat_seconds):
+            try:
+                renew_run_lease(self.run_id, self.instance_id, self.fencing_token, lease_seconds=self.lease_seconds, now=self._clock())
+                if self._writer is not None:
+                    self._writer.renew()
+            except Exception as exc:
+                self._renewal_error = str(exc)[:200]
+                self.cancel_event.set()
+                return
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+            self._thread = None
+
+
+def _assert_run_owned_and_leased(connection: sqlite3.Connection, run_id: str, instance_id: str, fencing_token: int, now: datetime | None) -> None:
+    row = _fetch_run(connection, run_id)
+    if row["owner_instance_id"] != instance_id or int(row["fencing_token"]) != fencing_token:
+        raise AppError("Backup run lease was lost to another worker", code=ErrorCode.INVALID_REQUEST, status=409)
+    if str(row["lease_until"]) < _utc_iso(now):
+        raise AppError("Backup run lease expired", code=ErrorCode.INVALID_REQUEST, status=409)
+
+
+def record_run_phase(run_id: str, phase: str, *, instance_id: str | None = None, fencing_token: int | None = None, reason: str | None = None, now: datetime | None = None) -> None:
     if phase not in RUN_PHASES:
         raise AppError(f"Unknown backup run phase {phase}", code=ErrorCode.INVALID_PAYLOAD)
     with _connect() as connection:
         if instance_id is not None and fencing_token is not None:
-            row = _fetch_run(connection, run_id)
-            if row["owner_instance_id"] != instance_id or int(row["fencing_token"]) != fencing_token:
-                raise AppError("Backup run lease was lost to another worker", code=ErrorCode.INVALID_REQUEST, status=409)
+            _assert_run_owned_and_leased(connection, run_id, instance_id, fencing_token, now)
         connection.execute(
             "UPDATE backup_runs SET phase = ?, reason = COALESCE(?, reason), updated_at = ? WHERE run_id = ?",
             (phase, reason, _utc_iso(), run_id),
         )
         if phase in TERMINAL_PHASES or phase == "deferred":
-            status = {"complete": "complete", "failed": "failed", "abandoned": "failed", "deferred": "deferred"}.get(phase)
+            status = {"complete": "complete", "failed": "failed", "abandoned": "failed", "deferred": "deferred", "blocked-terminal": "failed", "superseded": "complete"}.get(phase)
             if status:
                 connection.execute(
                     "UPDATE backup_schedule_slots SET status = ? WHERE run_id = ?",
@@ -487,13 +691,12 @@ def record_run_phase(run_id: str, phase: str, *, instance_id: str | None = None,
                 )
 
 
-def complete_run(run_id: str, *, backup_id: str, filename: str, instance_id: str, fencing_token: int) -> None:
+def complete_run(run_id: str, *, backup_id: str, filename: str, instance_id: str, fencing_token: int, now: datetime | None = None) -> None:
     with _connect() as connection:
         row = _fetch_run(connection, run_id)
         if row["phase"] in TERMINAL_PHASES:
             raise AppError("Backup run is no longer active", code=ErrorCode.INVALID_REQUEST, status=409)
-        if row["owner_instance_id"] != instance_id or int(row["fencing_token"]) != fencing_token:
-            raise AppError("Backup run lease was lost to another worker", code=ErrorCode.INVALID_REQUEST, status=409)
+        _assert_run_owned_and_leased(connection, run_id, instance_id, fencing_token, now)
         connection.execute(
             "UPDATE backup_runs SET phase = 'complete', backup_id = ?, filename = ?, updated_at = ? WHERE run_id = ?",
             (backup_id, filename, _utc_iso(), run_id),
@@ -501,30 +704,64 @@ def complete_run(run_id: str, *, backup_id: str, filename: str, instance_id: str
         connection.execute("UPDATE backup_schedule_slots SET status = 'complete' WHERE run_id = ?", (run_id,))
 
 
-def requeue_run(run_id: str, *, instance_id: str, fencing_token: int, retry_at: datetime, error: str | None = None) -> None:
+def requeue_run(run_id: str, *, instance_id: str, fencing_token: int, retry_at: datetime, error: str | None = None, now: datetime | None = None) -> None:
     """Park an active run until its backoff expires; reclaim picks it up later."""
     with _connect() as connection:
         cursor = connection.execute(
-            "UPDATE backup_runs SET phase = 'queued', lease_until = ?, error = ?, updated_at = ? WHERE run_id = ? AND owner_instance_id = ? AND fencing_token = ?",
-            (_utc_iso(retry_at), (error or "")[:500] or None, _utc_iso(), run_id, instance_id, fencing_token),
+            "UPDATE backup_runs SET phase = 'queued', lease_until = ?, error = ?, updated_at = ? WHERE run_id = ? AND owner_instance_id = ? AND fencing_token = ? AND lease_until >= ?",
+            (_utc_iso(retry_at), (error or "")[:500] or None, _utc_iso(), run_id, instance_id, fencing_token, _utc_iso(now)),
         )
         if cursor.rowcount == 0:
             raise AppError("Backup run lease was lost to another worker", code=ErrorCode.INVALID_REQUEST, status=409)
 
 
-def fail_run(run_id: str, *, error: str, instance_id: str | None = None, fencing_token: int | None = None, phase: str = "failed", reason: str | None = None) -> None:
-    if phase not in {"failed", "deferred", "blocked"}:
-        raise AppError("fail_run phase must be failed, deferred or blocked", code=ErrorCode.INVALID_PAYLOAD)
+def block_run(
+    run_id: str,
+    *,
+    instance_id: str,
+    fencing_token: int,
+    error: str,
+    reason: str,
+    retry_at: datetime | None = None,
+    terminal: bool = False,
+    now: datetime | None = None,
+) -> None:
+    """Park a run whose target is unavailable; retryable blocks carry ``nextRetryAt``."""
+    phase = "blocked-terminal" if terminal else "blocked-retryable"
+    with _connect() as connection:
+        _assert_run_owned_and_leased(connection, run_id, instance_id, fencing_token, now)
+        connection.execute(
+            "UPDATE backup_runs SET phase = ?, lease_until = ?, error = ?, reason = ?, updated_at = ? WHERE run_id = ?",
+            (phase, _utc_iso(retry_at) if (retry_at is not None and not terminal) else None, error[:500], reason, _utc_iso(), run_id),
+        )
+        connection.execute("UPDATE backup_schedule_slots SET status = ? WHERE run_id = ?", ("failed" if terminal else "blocked", run_id))
+
+
+def fail_run(run_id: str, *, error: str, instance_id: str | None = None, fencing_token: int | None = None, phase: str = "failed", reason: str | None = None, now: datetime | None = None) -> None:
+    if phase not in {"failed", "deferred", "blocked", "blocked-terminal", "superseded"}:
+        raise AppError("fail_run phase must be failed, deferred, blocked, blocked-terminal or superseded", code=ErrorCode.INVALID_PAYLOAD)
     with _connect() as connection:
         if instance_id is not None and fencing_token is not None:
-            row = _fetch_run(connection, run_id)
-            if row["owner_instance_id"] != instance_id or int(row["fencing_token"]) != fencing_token:
-                raise AppError("Backup run lease was lost to another worker", code=ErrorCode.INVALID_REQUEST, status=409)
+            _assert_run_owned_and_leased(connection, run_id, instance_id, fencing_token, now)
         connection.execute(
             "UPDATE backup_runs SET phase = ?, error = ?, reason = COALESCE(?, reason), updated_at = ? WHERE run_id = ?",
             (phase, error[:500], reason, _utc_iso(), run_id),
         )
-        connection.execute("UPDATE backup_schedule_slots SET status = ? WHERE run_id = ?", (phase, run_id))
+        connection.execute("UPDATE backup_schedule_slots SET status = ? WHERE run_id = ?", ({"blocked-terminal": "failed", "superseded": "complete"}.get(phase, phase), run_id))
+
+
+def converge_completed_run(run_id: str, *, backup_id: str, filename: str) -> bool:
+    """Administratively converge a published run to complete during target reconciliation."""
+    with _connect() as connection:
+        row = _fetch_run(connection, run_id)
+        if row["phase"] in TERMINAL_PHASES:
+            return False
+        connection.execute(
+            "UPDATE backup_runs SET phase = 'complete', backup_id = ?, filename = ?, updated_at = ? WHERE run_id = ?",
+            (backup_id, filename, _utc_iso(), run_id),
+        )
+        connection.execute("UPDATE backup_schedule_slots SET status = 'complete' WHERE run_id = ?", (run_id,))
+        return True
 
 
 def get_run(run_id: str) -> dict[str, Any]:
@@ -570,6 +807,12 @@ def next_run_for_policy(policy: dict[str, Any], *, now: datetime | None = None) 
         "slotKey": slot.slot_key,
         "jitterSeconds": jitter,
     }
+
+
+def allocate_fencing_token() -> int:
+    """Allocate a globally monotonic fencing token for ad-hoc target writers."""
+    with _connect() as connection:
+        return _next_token(connection, "fencing")
 
 
 def record_target_health(target_id: str, status: str, detail: str | None = None) -> None:
@@ -625,22 +868,25 @@ def worker_tick(
     current = now or datetime.now(tz=timezone.utc)
     policies = backup_policies.enabled_policies()
     reclaimed = reclaim_abandoned_slots(instance_id=instance_id, now=current, lease_seconds=lease_seconds)
+    blocked = reclaim_blocked_slots(policies, instance_id=instance_id, now=current, lease_seconds=lease_seconds)
     deferred = reclaim_deferred_slots(policies, instance_id=instance_id, now=current, lease_seconds=lease_seconds)
     claimed = claim_due_slots(policies, instance_id=instance_id, now=current, lease_seconds=lease_seconds)
     executed = 0
-    for run in [*reclaimed, *deferred, *claimed]:
+    for run in [*reclaimed, *blocked, *deferred, *claimed]:
         executor(run)
         executed += 1
-    return {"reclaimed": len(reclaimed), "deferred": len(deferred), "claimed": len(claimed), "executed": executed}
+    return {"reclaimed": len(reclaimed), "blocked": len(blocked), "deferred": len(deferred), "claimed": len(claimed), "executed": executed}
 
 
 class BackupWorker:
     """Embedded worker loop; also used by ``python -m deepseek_infra.backup_worker``."""
 
-    def __init__(self, executor: Any, *, instance_id: str | None = None, tick_seconds: float = 30.0, lease_seconds: int = DEFAULT_LEASE_SECONDS) -> None:
+    def __init__(self, executor: Any, *, instance_id: str | None = None, tick_seconds: float = 30.0, lease_seconds: int = DEFAULT_LEASE_SECONDS, reconcile_on_start: bool = True) -> None:
         self.instance_id = instance_id or instance_id_from_environment()
         self.tick_seconds = tick_seconds
         self.lease_seconds = lease_seconds
+        self.reconcile_on_start = reconcile_on_start
+        self.tick_failures = 0
         self._executor = executor
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -648,6 +894,13 @@ class BackupWorker:
     def start(self) -> None:
         if self._thread is not None:
             return
+        if self.reconcile_on_start:
+            try:
+                from deepseek_infra.infra.workspace import backup_reconcile
+
+                backup_reconcile.reconcile_all_targets(instance_id=self.instance_id)
+            except Exception:
+                _logger.exception("backup worker startup reconciliation failed", extra={"instanceId": self.instance_id})
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name=scheduler_thread_name(self.instance_id), daemon=True)
         self._thread.start()
@@ -657,7 +910,10 @@ class BackupWorker:
             try:
                 worker_tick(instance_id=self.instance_id, executor=self._executor, lease_seconds=self.lease_seconds)
             except Exception:
-                pass
+                self.tick_failures += 1
+                _logger.exception("backup worker tick failed", extra={"instanceId": self.instance_id, "tickFailures": self.tick_failures})
+            else:
+                self.tick_failures = 0
             self._stop.wait(self.tick_seconds)
 
     def stop(self, timeout: float = 5.0) -> None:

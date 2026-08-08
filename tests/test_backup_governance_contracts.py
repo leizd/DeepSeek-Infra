@@ -196,7 +196,7 @@ def test_atomic_target_publish(tmp_settings: Path, stub_crypto: None) -> None:
     policy = _policy(tmp_settings)
     package = backup_scheduled.build_scheduled_backup(policy, run_id="run_ev4", staging_root=tmp_settings / ".staging")
     target = backup_publish.resolve_target("managed-local")
-    result = backup_publish.publish_backup(target, package, run_id="run_ev4", policy_id=str(policy["policyId"]), schedule_slot="slot")
+    result = backup_publish.publish_backup(target, package, run_id="run_ev4", policy_id=str(policy["policyId"]), schedule_slot="slot", fencing_token=1)
     assert result.path.is_file()
     assert not list((target.root / ".partial").iterdir())
     backup_catalog.append_receipt(target.root, result.receipt)
@@ -209,13 +209,13 @@ def test_failed_backup_does_not_prune(tmp_settings: Path, stub_crypto: None) -> 
     first = backup_scheduler.claim_due_slots([policy], instance_id="w1", now=now)[0]
     assert backup_executor.execute_run(first, instance_id="w1", now=now)["phase"] == "complete"
     root = backups.BACKUP_DIR
-    survivors = set((root / "backups").iterdir())
+    survivors = set((root / "objects" / "sha256").rglob("*.age"))
     strict = backup_policies.update_policy(str(policy["policyId"]), {"frontendMirror": {"mode": "required", "maxAgeSeconds": 60}})
     backup_mirror.put_frontend_mirror("mirror_default", _envelope(), source_epoch="epoch-1", recipients=[RECIPIENT_A], acknowledged_at="2020-01-01T00:00:00Z")
     second = backup_scheduler.claim_due_slots([strict], instance_id="w1", now=now + timedelta(days=1, minutes=5))[0]
     outcome = backup_executor.execute_run(second, instance_id="w1", now=now + timedelta(days=1, minutes=5))
     assert outcome["phase"] != "complete"
-    assert set((root / "backups").iterdir()) == survivors
+    assert set((root / "objects" / "sha256").rglob("*.age")) == survivors
 
 
 def test_gfs_retention_deterministic(tmp_settings: Path, stub_crypto: None) -> None:
@@ -255,7 +255,7 @@ def test_catalog_rebuilt_from_receipts(tmp_settings: Path, stub_crypto: None) ->
     policy = _policy(tmp_settings)
     package = backup_scheduled.build_scheduled_backup(policy, run_id="run_ev5", staging_root=tmp_settings / ".staging")
     target = backup_publish.resolve_target("managed-local")
-    result = backup_publish.publish_backup(target, package, run_id="run_ev5", policy_id=str(policy["policyId"]), schedule_slot="slot")
+    result = backup_publish.publish_backup(target, package, run_id="run_ev5", policy_id=str(policy["policyId"]), schedule_slot="slot", fencing_token=1)
     backup_catalog.append_receipt(target.root, result.receipt)
     backup_catalog.catalog_path(target.root).write_text("{corrupt\n", encoding="utf-8")
     rebuilt = backup_catalog.rebuild_catalog_from_receipts(target.root)
@@ -268,7 +268,7 @@ def test_manual_restore_drill_verified(tmp_settings: Path, stub_crypto: None) ->
     backup_mirror.put_frontend_mirror("mirror_default", _envelope(), source_epoch="epoch-1", recipients=[RECIPIENT_A])
     package = backup_scheduled.build_scheduled_backup(policy, run_id="run_ev6", staging_root=tmp_settings / ".staging")
     target = backup_publish.resolve_target("managed-local")
-    result = backup_publish.publish_backup(target, package, run_id="run_ev6", policy_id=str(policy["policyId"]), schedule_slot="slot")
+    result = backup_publish.publish_backup(target, package, run_id="run_ev6", policy_id=str(policy["policyId"]), schedule_slot="slot", fencing_token=1)
     backup_catalog.append_receipt(target.root, result.receipt)
     drill = backup_scrub.verify_unlock_drill(target.root, package.backup_id, bytearray(b"AGE-SECRET-KEY-1USER"), staged_root=tmp_settings / ".drill")
     assert drill["ok"] is True
