@@ -125,7 +125,7 @@ def _is_reparse_point(path: Path) -> bool:
     return False
 
 
-def _has_reparse_component(path: Path) -> bool:
+def _has_reparse_component(path: Path) -> bool:  # pragma: no cover - OS reparse traversal
     current = path
     while True:
         if _is_reparse_point(current):

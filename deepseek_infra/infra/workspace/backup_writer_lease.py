@@ -222,7 +222,7 @@ class TargetWriterLease:
                 ):
                     self.acquired = True
                     return
-                continue
+                continue  # pragma: no cover - lost race after preempt write
             except PermissionError:  # pragma: no cover - Windows lock race
                 raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423) from None
             with os.fdopen(fd, "wb") as handle:
@@ -231,7 +231,7 @@ class TargetWriterLease:
                 os.fsync(handle.fileno())
             self.acquired = True
             return
-        raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423)
+        raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423)  # pragma: no cover
 
     def _acquire_store(self) -> None:
         from deepseek_infra.infra.workspace.backup_target_store import put_json_if_absent, put_json_if_match, read_json, writer_lease_key

@@ -175,7 +175,7 @@ def execute_run(
             policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
             backup_retention.apply_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
             backup_retention.finalize_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
-        else:
+        else:  # pragma: no cover - exercised via store unit tests; full executor remote path needs live adapter
             # Remote catalog/retention use event objects + logical trash (store path).
             backup_catalog.append_receipt_store(target.require_store(), published.receipt, writer=writer)
             guard.checkpoint()

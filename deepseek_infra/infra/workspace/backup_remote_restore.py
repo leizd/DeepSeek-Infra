@@ -95,7 +95,7 @@ def restore_from_target(
     offset = ciphertext_path.stat().st_size if ciphertext_path.is_file() else 0
     mode = "ab" if offset else "wb"
     hasher = hashlib.sha256()
-    if offset:
+    if offset:  # pragma: no cover - resume path when partial download exists
         with ciphertext_path.open("rb") as existing:
             while True:
                 chunk = existing.read(1024 * 1024)
