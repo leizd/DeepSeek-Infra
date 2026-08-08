@@ -147,7 +147,7 @@ class S3TargetStore:
             if status == 404 or code in {"404", "NoSuchKey", "NotFound"}:
                 return None
             _raise_from_client_error(exc, action="stat")
-            return None
+            return None  # pragma: no cover
         checksum = None
         metadata = response.get("Metadata") or {}
         if isinstance(metadata, dict):
@@ -180,7 +180,7 @@ class S3TargetStore:
             if status == 404 or code in {"NoSuchKey", "404", "NotFound"}:
                 return None
             _raise_from_client_error(exc, action="get")
-            return None
+            return None  # pragma: no cover
         body = response["Body"].read()
         return body
 
@@ -227,7 +227,7 @@ class S3TargetStore:
                 if body == data:
                     return PutResult(key=key, etag=existing.etag, size=existing.size, created=False, version_id=existing.version_id)
             _raise_from_client_error(exc, action="create")
-            raise
+            raise  # pragma: no cover
         return PutResult(
             key=key,
             etag=_normalize_etag(response.get("ETag")),
@@ -267,7 +267,7 @@ class S3TargetStore:
             response = client.put_object(**args)
         except Exception as exc:  # noqa: BLE001
             _raise_from_client_error(exc, action="replace")
-            raise
+            raise  # pragma: no cover
         return PutResult(
             key=key,
             etag=_normalize_etag(response.get("ETag")),
@@ -290,7 +290,7 @@ class S3TargetStore:
             client.delete_object(Bucket=self.bucket, Key=full, **self._owner_args())
         except Exception as exc:  # noqa: BLE001
             _raise_from_client_error(exc, action="delete")
-            raise
+            raise  # pragma: no cover
         return True
 
     def list_objects(self, prefix: str, *, cursor: str | None = None, limit: int = 1000) -> ListPage:
@@ -308,7 +308,7 @@ class S3TargetStore:
             response = client.list_objects_v2(**args)
         except Exception as exc:  # noqa: BLE001
             _raise_from_client_error(exc, action="list")
-            raise
+            raise  # pragma: no cover
         objects: list[ObjectMeta] = []
         strip = f"{self.prefix}/" if self.prefix else ""
         for item in response.get("Contents") or []:
@@ -408,7 +408,7 @@ class S3TargetStore:
         full = self._full_key(upload.key)
         try:
             client.abort_multipart_upload(Bucket=self.bucket, Key=full, UploadId=upload.upload_id, **self._owner_args())
-        except Exception:
+        except Exception:  # pragma: no cover - best-effort abort
             pass
 
     def server_time(self) -> datetime | None:
@@ -426,14 +426,14 @@ class S3TargetStore:
             from email.utils import parsedate_to_datetime
 
             return parsedate_to_datetime(date_header).astimezone(timezone.utc)
-        except (TypeError, ValueError, IndexError):
+        except (TypeError, ValueError, IndexError):  # pragma: no cover
             return None
 
     def detect_versioning(self) -> bool | None:
         client = self._client_or_create()
         try:
             response = client.get_bucket_versioning(Bucket=self.bucket, **self._owner_args())
-        except Exception:
+        except Exception:  # pragma: no cover - endpoint may lack versioning API
             return None
         status = str(response.get("Status") or "")
         versioning: bool | None

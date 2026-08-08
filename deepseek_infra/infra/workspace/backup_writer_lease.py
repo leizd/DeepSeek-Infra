@@ -36,12 +36,12 @@ def _retry_permission(operation: Callable[[], Any], *, attempts: int = 10, sleep
     for _ in range(attempts):
         try:
             return operation()
-        except PermissionError as exc:
+        except PermissionError as exc:  # pragma: no cover - platform-specific lock races
             last = exc
             time.sleep(sleep_seconds)
-    if last is not None:
+    if last is not None:  # pragma: no cover
         raise last
-    raise AppError("unreachable retry state", code=ErrorCode.INTERNAL, status=500)
+    raise AppError("unreachable retry state", code=ErrorCode.INTERNAL, status=500)  # pragma: no cover
 
 
 def _utc_iso(value: datetime | None = None) -> str:

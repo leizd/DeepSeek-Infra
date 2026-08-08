@@ -272,6 +272,48 @@ def test_s3_sdk_available_flag() -> None:
     assert isinstance(backup_target_s3.s3_sdk_available(), bool)
 
 
+def test_s3_error_and_converge_edges() -> None:
+    client = FakeS3Client()
+    store = _store(client)
+    # head non-404 error
+    client.fail_next["head"] = _ClientError(code="SlowDown", status=503)
+    with pytest.raises(AppError):
+        store.stat("missing-key")
+    # range open-ended
+    data = b"0123456789"
+    digest = hashlib.sha256(data).hexdigest()
+    store.put_if_absent("rng", data, checksum_sha256=digest)
+    assert store.get_bytes("rng", offset=5) == b"56789"
+    # delete missing with etag
+    assert store.delete_if_match("nope", expected_etag='"x"') is False
+    # list failure
+    client.fail_next["list"] = _ClientError(code="AccessDenied", status=403)
+    with pytest.raises(AppError):
+        store.list_objects("x/")
+    # put replace failure
+    meta = store.stat("rng")
+    assert meta is not None
+    client.fail_next["put"] = _ClientError(code="PreconditionFailed", status=412)
+    with pytest.raises(AppError):
+        store.put_if_match("rng", b"abc", expected_etag=meta.etag, checksum_sha256=hashlib.sha256(b"abc").hexdigest())
+    # delete failure
+    client.fail_next["delete"] = _ClientError(code="SlowDown", status=503)
+    with pytest.raises(AppError):
+        store.delete_if_match("rng")
+    # parse missing bucket
+    with pytest.raises(AppError):
+        backup_target_s3.parse_s3_uri("s3://")
+    # converge put via matching sha metadata after 412
+    body = b"same-bytes"
+    d2 = hashlib.sha256(body).hexdigest()
+    store.put_if_absent("conv", body, checksum_sha256=d2)
+    # force fail then converge on sha
+    client.fail_next["put"] = _ClientError(code="PreconditionFailed", status=412)
+    # Fake client still has object; S3 adapter will stat and compare sha
+    result = store.put_if_absent("conv", body, checksum_sha256=d2)
+    assert result.created is False
+
+
 def test_s3_client_lazy_create_with_fake_boto3(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
     from types import ModuleType, SimpleNamespace
