@@ -4,6 +4,83 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.5] - Fenced Backup Commits and Replica Lineage
+
+### Fenced-commit evidence contracts and release surface
+
+- `tests/test_backup_fenced_commit_contracts.py` pins the 4.4.5 acceptance surface as twelve evidence keys: one formal commit per schedule slot, expired-lease state rejection, target writer-lease fencing, orphan invisibility after crash reconcile, blocked-retryable / slot-conflict phases, catalog projection CAS, target rollback/fork/clone detection, retention snapshot CAS, immutable mirror generations, epoch/sequence fences, policy-isolated recipient variants, and client replica/sequence acceptance.
+- Release docs (`EVIDENCE_INDEX`, `RELEASE_CHECKLIST`, `RELEASE_READINESS`, `IMPLEMENTATION_STATUS`, module headers) and the `docs/releases/4.4.5.md` verification block list the fenced-commit / governance contract suite alongside the existing crypto and frontend gates.
+
+### Single-tab mirror uploader election
+
+- Browser tabs elect one mirror uploader via a `localStorage` leader lease plus `BroadcastChannel` heartbeats: only the leader collects the full frontend envelope and calls `PUT .../backup-mirrors/{id}/frontend`, carrying a stable per-document `clientReplicaId` and a monotonic per-profile `clientSequence` (with `expectedHeadGenerationId` CAS).
+- When the leader tab closes or its lease expires, another tab claims leadership and continues the sequence; successful uploads broadcast the new `generationId` so peers skip redundant work; restore fences freeze collection/upload, and offline or 5xx failures retry with exponential backoff.
+
+### Policy-specific mirror recipient variants
+
+- Mirror uploads no longer merge every enabled policy's recipients into one set: each generation seals one variant per distinct policy recipient group (`state.<recipientGroupId16>.age`, group id = `sha256(sorted(recipients))`), so a daily local-disk policy, a weekly offsite policy and an archive policy with a combined key each get a ciphertext sealed to exactly their own recovery keys — no shared decryption ability and no `recipient-mismatch`.
+- `mirror_status` matches a policy's recipient set against the generation's variant list, and `mirror_files` / scheduled builds read only the variant sealed to the requesting policy (missing variants fail explicitly); explicit `recipients=` uploads still seal a single variant.
+
+### Server-fenced mirror epochs and sequences
+
+- The server now keeps an accepted-state registry per mirror profile inside `HEAD.json` v2 (`acceptedEpoch`, `acceptedEpochIndex`, `acceptedSequence`, `epochIndexes`) instead of comparing client timestamps: a superseded epoch is rejected as `mirror-stale-epoch` even when it carries a later client time, and `clientSequence` must increase monotonically per profile (`mirror-stale-sequence`) — including for epoch takeovers after a restore.
+- `acknowledgedAt` is now display-only (freshness reporting); identical epoch + envelope + recipients replays stay idempotent, and legacy mirrors accept any first v2 sequence before fencing engages.
+
+### Frontend mirrors are immutable generations
+
+- Every mirror upload now produces an immutable generation (`generations/<generationId>/state.<recipientSetDigest>.age` + `metadata.json` with generation lineage, client replica/sequence and recipient variants), verified with a full decrypt round trip and fsynced before the `HEAD.json` pointer is CAS-updated; readers resolve HEAD once and copy from that single generation, so a backup can never mix ciphertext and metadata from two generations.
+- Mirror reads re-verify the ciphertext digest against the generation descriptor, uploads send `expectedHeadGenerationId` for `mirror-head-conflict` CAS, identical digests with a different epoch are no longer swallowed as idempotent, and crashed uploads leave an unreferenced generation that the next upload prunes (HEAD plus its parent are retained).
+- Legacy 4.4.4 mirrors stay readable through the fallback path until the first new generation replaces them.
+
+### Retention applies against committed catalog snapshots
+
+- Retention previews now carry `retentionRunId`, `targetGeneration`, `catalogHeadHash` and `policyDigest`; applying with a stale or incomplete preview fails with `retention-stale-snapshot` (catalog head, target generation or policy changed) and must be recomputed, while the writer lease is asserted before every move.
+- Healthy copies counted toward `minimumHealthyCopies` must now have an existing object, a receipt whose bytes match the slot marker's receipt digest, a valid commit marker, a readable age header and a recent successful scrub or creation verification — corrupted or uncommitted files no longer count.
+- Trash moves are journaled (`intent → payload-moved → receipt-moved → event-committed`) and interrupted transactions roll forward deterministically on the next apply/finalize, so a crash can never leave half a backup in `.trash`.
+
+### Target rollback, fork and clone detection
+
+- Target markers are now v2: they carry an `incarnationId`, `ownerInstallationId` and the live commit head (`targetGeneration` / `latestCommitHash`), advanced atomically after every slot commit. A trusted per-target checkpoint in `.backup-targets/` remembers what this installation last saw.
+- Reconnecting a disk whose generation fell behind raises `target-rollback-detected`; a same-generation head change or incarnation change raises `target-fork-detected`; one target id alive at two locations raises `target-clone-detected`. Until the user adopts the branch (`POST .../backup-targets/{id}/adopt`) or registers it as new (`POST .../backup-targets/register-new`), publishing and retention stay blocked while read-only listing and scrubbing remain available.
+- A disk that simply moved mount paths re-registers cleanly when the old location is gone, and 4.4.4-era v1 markers upgrade in place on first write contact, deriving their generation and head from the commits on disk.
+
+### Catalog is a projection of committed target events
+
+- The catalog no longer decides which backups exist — slot commit markers and receipts do. Every mutation (receipt, pin, scrub, unlock verification, trash, restore, delete) is written first as an immutable event file under `events/<prefix>/<entryHash>.json` carrying `previousEntryHash`, the target generation and the writer's fencing token; the JSONL catalog is just an index rebuilt from those events.
+- Appends accept a `CatalogPrecondition` (expected head hash + expected target generation): callers bound to a snapshot fail with `catalog-head-cas-failed` / `catalog-generation-cas-failed` instead of writing against a stale head, and concurrent writers serialize through the target writer lease without ever forking the chain.
+- Rebuilding now replays immutable event files plus legacy JSONL plus on-disk receipts, so pin, scrub, unlock-drill and trash history survives catalog loss; forked entries are skipped deterministically and reported.
+- The React index resolution in `frontend_index_path()` now follows `STATIC_DIR` dynamically instead of an import-time constant, removing hidden sensitivity to whether the frontend build exists locally.
+
+### Scheduler state machine recovers blocked and duplicate runs
+
+- `blocked` is split into `blocked-retryable` (carries `nextRetryAt` and `blockedReason`) and `blocked-terminal` (attempts exhausted or catch-up window passed); blocked runs are reclaimed automatically once their target probes healthy again, and runs taken over an interrupted target transaction surface as `reconciling`.
+- A run that loses its schedule slot to a committed rival is marked `superseded` (terminal, slot stays complete) instead of endlessly retrying.
+- Manual runs now claim UUID slot keys (`manual/<uuid>`) and verify the slot insert actually succeeded — two requests in the same second can no longer create duplicate runs.
+- The worker loop logs tick failures with structured context and counts consecutive failures instead of silently swallowing them.
+
+### Crash reconciliation for interrupted publications
+
+- Worker startup now deterministically scans every target — scheduler DB, transaction journals, commit markers, receipts, objects and catalog — instead of re-running backups: a surviving commit marker converges its still-active run to `complete`, a missing receipt is rebuilt from the transaction journal, a missing catalog projection is backfilled (rebuilt from committed receipts only), and objects with no commit stay invisible until the grace period moves them and their unpublished receipts to `.orphaned/`.
+- Catalog records without a slot commit are reported as `catalog-corrupt` and retention refuses to apply or finalize until the target is reconciled, so a forked or half-written catalog can never drive deletions.
+
+### Target writer leases fence every mutation
+
+- Each target now carries `.target-lock/writer.json`: a single-writer lease acquired with `O_EXCL`, preemptible only when expired *and* by a strictly higher fencing token, and asserted at every visible mutation — commit markers, catalog appends, pin/unpin, scrub records, retention moves, trash restores and catalog rebuilds.
+- The run heartbeat renews the target writer lease alongside the SQLite run lease, and every executor checkpoint asserts both, so a worker that loses target ownership mid-publish or mid-retention stops before its next file move.
+- API-driven pin, scrub, unlock-drill and retention operations acquire the same lease with freshly allocated fencing tokens, mutually excluding background backups; filesystems that cannot honor exclusive-create or atomic-rename semantics are rejected explicitly as `unsupported-atomic-target`.
+
+### Immutable objects and fenced slot commits
+
+- A backup is now visible only when its schedule slot's commit marker is created: ciphertext is stored as a content-addressed object under `objects/sha256/<prefix>/<digest>.age` (deduplicated across slots), the intent is journaled under `transactions/<runId>.json`, the immutable receipt lives at `receipts/<backupId>.json`, and the `commits/<policyId>/<slotHash>.json` marker is created with `O_EXCL` carrying the run's fencing token and a target-wide generation chain.
+- A second publisher for the same `(policyId, scheduleSlot)` converges to the existing commit when the object digest matches — backfilling a missing catalog projection — and is rejected with `slot-commit-conflict` otherwise; stale fencing tokens are named explicitly. A crashed or lease-losing worker can leave at most an invisible orphan object and receipt, never a second formal backup.
+- Retention, scrubs, restore drills and catalog integrity checks resolve ciphertext through the commit-aware candidate chain, so legacy 4.4.4 targets with `backups/<filename>` layouts remain fully readable, scrubbable and prunable; content-addressed objects shared by multiple receipts are never trashed while another live receipt references them.
+
+### Heartbeated, actively enforced run leases
+
+- Every executing run now holds a `RunLeaseGuard`: a heartbeat renews the SQLite lease every 60 seconds (300-second lease), the first renewal failure sets a run-wide cancel event, and every phase transition, publication chunk, retention move and completion checkpoints ownership against the current clock instead of the run's frozen start time.
+- `complete_run`, `record_run_phase`, `requeue_run` and `fail_run` now reject expired leases, and lease renewal refuses terminal runs — a worker whose lease lapsed mid-run can no longer publish, catalog, prune or complete; the run is abandoned for the next owner to reclaim.
+- Unattended age encryption, target-side copy/SHA-256 verification, contributor snapshots and retention sweeps all honour the cancel event or checkpoint at chunk boundaries, so lease loss stops long operations before the next visible commit step.
+
 ## [4.4.4] - Scheduled Encrypted Backups and Retention Governance
 
 ### Durable scheduled backup policies

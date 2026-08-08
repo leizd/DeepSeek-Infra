@@ -83,7 +83,8 @@ def test_rebuild_catalog_from_receipts(tmp_path: Path) -> None:
         (receipts / f"backup_{index}.receipt.json").write_text(json.dumps(_receipt(f"backup_{index}", created=f"2026-01-0{index + 1}T00:00:00Z")), encoding="utf-8")
     (receipts / "broken.receipt.json").write_text("{not json", encoding="utf-8")
     result = backup_catalog.rebuild_catalog_from_receipts(tmp_path)
-    assert result == {"rebuilt": 3, "chainValid": True}
+    assert result["rebuilt"] == 3
+    assert result["chainValid"] is True
     state = backup_catalog.catalog_state(tmp_path)
     assert set(state) == {"backup_0", "backup_1", "backup_2"}
 

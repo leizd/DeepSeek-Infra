@@ -10,7 +10,7 @@ from scripts import preflight_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "4.4.4"
+VERSION = "4.4.5"
 
 
 def read_text(rel: str) -> str:
@@ -55,14 +55,14 @@ class EncodingRegressionTests(unittest.TestCase):
         ci = read_text(".github/workflows/ci.yml")
         frontend = read_text("frontend/index.html")
 
-        self.assertIn("version-4.4.4-blue", readme)
-        self.assertIn('app_version: str = "4.4.4"', config)
-        self.assertIn("deepseek-infra:4.4.4", dockerfile)
-        self.assertIn('org.opencontainers.image.version="4.4.4"', dockerfile)
-        self.assertIn('versionName "4.4.4"', build_gradle)
-        self.assertIn("versionCode 400044", build_gradle)
-        self.assertIn('<meta name="deepseek-infra-version" content="4.4.4" />', frontend)
-        self.assertIn("## [4.4.4] - Scheduled Encrypted Backups and Retention Governance", changelog)
+        self.assertIn("version-4.4.5-blue", readme)
+        self.assertIn('app_version: str = "4.4.5"', config)
+        self.assertIn("deepseek-infra:4.4.5", dockerfile)
+        self.assertIn('org.opencontainers.image.version="4.4.5"', dockerfile)
+        self.assertIn('versionName "4.4.5"', build_gradle)
+        self.assertIn("versionCode 400045", build_gradle)
+        self.assertIn('<meta name="deepseek-infra-version" content="4.4.5" />', frontend)
+        self.assertIn("## [4.4.5] - Fenced Backup Commits and Replica Lineage", changelog)
         self.assertIn("Personal AI Runtime GA", readme)
         self.assertIn("python scripts/generate_release_evidence.py --version $RELEASE_VERSION", ci)
         self.assertIn("evidence-context:", ci)
@@ -98,6 +98,7 @@ class EncodingRegressionTests(unittest.TestCase):
             "docs/releases/4.4.2.md",
             "docs/releases/4.4.3.md",
             "docs/releases/4.4.4.md",
+            "docs/releases/4.4.5.md",
         ):
             self.assertTrue((ROOT / rel).is_file(), rel)
             self.assertIn(rel, readme)
@@ -107,7 +108,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn("gaEvidence", manifest)
 
     def test_release_doc_headers_are_readable(self) -> None:
-        header = "\u9002\u7528\u7248\u672c\uff1av4.4.4\u3002"
+        header = "适用版本：v4.4.5。"
         for rel in ("docs/IMPLEMENTATION_STATUS.md", "evals/README.md"):
             self.assertIn(header, read_text(rel))
 
@@ -116,8 +117,8 @@ class EncodingRegressionTests(unittest.TestCase):
 
         index = read_text("docs/EVIDENCE_INDEX.md")
         required = required_evidence_paths(VERSION)
-        self.assertIn("docs/evidence/ga-v4.4.4.json", required)
-        self.assertIn("docs/evidence/frontend-browser-v4.4.4.json", required)
+        self.assertIn(f"docs/evidence/ga-v{VERSION}.json", required)
+        self.assertIn(f"docs/evidence/frontend-browser-v{VERSION}.json", required)
         for rel in required:
             self.assertIn(rel, index, rel)
 

@@ -1,9 +1,11 @@
-"""Retention governance for scheduled backups (4.4.4).
+"""Retention governance for scheduled backups (4.4.5).
 
 Grandfather-father-son retention buckets backups in the *policy* timezone,
 never deletes pinned, restore-referenced or minimum-healthy copies, runs only
 after a successful publish, and deletes in two phases with a trash grace
-period so a retention bug can be undone.
+period so a retention bug can be undone. Callers pass a lease ``checkpoint``
+that runs before every trash/delete move so a worker that lost its lease
+mid-sweep stops before the next visible mutation.
 """
 
 from __future__ import annotations
@@ -12,13 +14,14 @@ import json
 import os
 import shutil
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_catalog, backup_scheduler, backups
+from deepseek_infra.infra.workspace import backup_catalog, backup_crypto, backup_publish, backup_reconcile, backup_scheduler, backup_unattended, backups, backup_writer_lease
 from deepseek_infra.infra.workspace.backup_cron import load_timezone
 
 RETENTION_SCHEMA_VERSION = 1
@@ -198,6 +201,69 @@ def _active_run_backup_ids() -> set[str]:
     return active
 
 
+def _policy_digest(retention: dict[str, Any]) -> str:
+    import hashlib
+
+    body = {key: value for key, value in retention.items() if key != "retentionPolicyId"}
+    return hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _preview_snapshot(target_root: Path) -> dict[str, Any]:
+    precondition = backup_catalog.catalog_precondition(target_root)
+    return {"targetGeneration": int(precondition.expected_target_generation or 0), "catalogHeadHash": str(precondition.expected_head_hash or backup_catalog.GENESIS_HASH)}
+
+
+def _validate_preview_snapshot(preview: dict[str, Any], retention: dict[str, Any], target_root: Path) -> None:
+    snapshot = _preview_snapshot(target_root)
+    if str(preview.get("catalogHeadHash") or "") != snapshot["catalogHeadHash"]:
+        raise AppError("retention-stale-snapshot: catalog head changed since preview", code=ErrorCode.INVALID_REQUEST, status=409)
+    if int(preview.get("targetGeneration") or 0) != int(snapshot["targetGeneration"]):
+        raise AppError("retention-stale-snapshot: target generation changed since preview", code=ErrorCode.INVALID_REQUEST, status=409)
+    if str(preview.get("policyDigest") or "") != _policy_digest(retention):
+        raise AppError("retention-stale-snapshot: retention policy changed since preview", code=ErrorCode.INVALID_REQUEST, status=409)
+
+
+def _healthy_records(records: list[dict[str, Any]], target_root: Path) -> list[dict[str, Any]]:
+    """Records that count toward ``minimumHealthyCopies``.
+
+    Schema-2 records must have an existing object, a receipt whose bytes match
+    the slot marker's receipt digest, a valid commit marker, a readable age
+    header and a recent successful scrub or creation verification. Legacy
+    records keep the file-existence check plus the same scrub/creation rule.
+    """
+    markers = {str(marker.get("backupId") or ""): marker for marker in backup_publish.read_commit_markers(target_root)}
+    healthy: list[dict[str, Any]] = []
+    for record in records:
+        backup_id = str(record.get("backupId") or "")
+        if record.get("scrubOk") is not True and record.get("creationVerified") is not True:
+            continue
+        candidate = next((path for path in backup_publish.backup_file_candidates(target_root, record) if path.is_file()), None)
+        if candidate is None:
+            continue
+        if int(record.get("schemaVersion") or 0) < 2:
+            healthy.append(record)
+            continue
+        marker = markers.get(backup_id)
+        if marker is None or not backup_publish.commit_marker_valid(marker):
+            continue
+        digest = str(record.get("objectDigest") or record.get("ciphertextSha256") or "")
+        if not digest or str(marker.get("objectDigest") or "") != digest:
+            continue
+        receipt_path = target_root / "receipts" / f"{backup_id}.json"
+        if not receipt_path.is_file():
+            continue
+        if backup_unattended.sha256_file(receipt_path) != str(marker.get("receiptDigest") or ""):
+            continue
+        try:
+            header = backup_crypto.inspect_header(candidate)
+        except AppError:
+            continue
+        if not header.get("age"):
+            continue
+        healthy.append(record)
+    return healthy
+
+
 def preview_retention(
     retention: dict[str, Any],
     target_root: Path,
@@ -247,7 +313,7 @@ def preview_retention(
                 keep.add(str(record["backupId"]))
     references = _restore_references()
     active_runs = _active_run_backup_ids()
-    healthy = [record for record in records if (target_root / "backups" / str(record.get("filename") or "")).is_file()]
+    healthy = _healthy_records(records, target_root)
     for record in healthy[: int(retention["minimumHealthyCopies"])]:
         protected.setdefault(str(record["backupId"]), "minimum-healthy-copies")
         keep.add(str(record["backupId"]))
@@ -276,7 +342,13 @@ def preview_retention(
         backup_id = str(record["backupId"])
         if backup_id not in keep and backup_id not in protected:
             trash.append(record)
+    snapshot = _preview_snapshot(target_root)
     return {
+        "retentionRunId": f"rr_{uuid.uuid4().hex[:12]}",
+        "targetId": str(target_root),
+        "targetGeneration": snapshot["targetGeneration"],
+        "catalogHeadHash": snapshot["catalogHeadHash"],
+        "policyDigest": _policy_digest(retention),
         "policyTimezone": policy_timezone,
         "evaluatedAt": _utc_iso(current),
         "keep": sorted(keep),
@@ -286,16 +358,143 @@ def preview_retention(
     }
 
 
+TRASH_JOURNAL_NAME = "trash.journal.json"
+
+
+def _trash_journal_write(destination: Path, journal: dict[str, Any]) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / TRASH_JOURNAL_NAME
+    tmp = destination / f".{TRASH_JOURNAL_NAME}.{os.getpid()}.tmp"
+    with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(journal, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def _trash_candidates(target_root: Path, record: dict[str, Any]) -> tuple[list[Path], list[Path]]:
+    backup_id = str(record["backupId"])
+    filename = str(record.get("filename") or "")
+    digest = str(record.get("objectDigest") or record.get("ciphertextSha256") or "")
+    state = backup_catalog.catalog_state(target_root)
+    shared = bool(digest) and any(
+        other_id != backup_id
+        and not other.get("trashed")
+        and not other.get("deleted")
+        and str(other.get("objectDigest") or other.get("ciphertextSha256") or "") == digest
+        for other_id, other in state.items()
+    )
+    payloads = [
+        candidate
+        for candidate in backup_publish.backup_file_candidates(target_root, record)
+        if candidate.is_file() and not (candidate.parent.name != "backups" and shared)
+    ]
+    receipts = [path for path in (target_root / "receipts" / f"{backup_id}.json", target_root / "receipts" / f"{filename}.receipt.json") if path.is_file()]
+    return payloads, receipts
+
+
+def _execute_trash_move(
+    target_root: Path,
+    record: dict[str, Any],
+    *,
+    retention_run_id: str,
+    at: str,
+    writer: backup_writer_lease.TargetWriterLease | None,
+) -> bool:
+    """Journaled trash move: intent → payload-moved → receipt-moved → event-committed."""
+    backup_id = str(record["backupId"])
+    filename = str(record.get("filename") or "")
+    if not filename or "/" in filename or "\\" in filename:
+        return False
+    destination = target_root / ".trash" / backup_id
+    digest = str(record.get("objectDigest") or record.get("ciphertextSha256") or "")
+    payloads, receipts = _trash_candidates(target_root, record)
+    journal = {
+        "schemaVersion": 1,
+        "backupId": backup_id,
+        "retentionRunId": retention_run_id,
+        "filename": filename,
+        "objectDigest": digest,
+        "payloadNames": [path.name for path in payloads],
+        "receiptNames": [path.name for path in receipts],
+        "phase": "intent",
+        "recordedAt": at,
+    }
+    _trash_journal_write(destination, journal)
+    for payload in payloads:
+        os.replace(payload, destination / payload.name)
+    journal["phase"] = "payload-moved"
+    _trash_journal_write(destination, journal)
+    for receipt in receipts:
+        os.replace(receipt, destination / receipt.name)
+    journal["phase"] = "receipt-moved"
+    _trash_journal_write(destination, journal)
+    backup_catalog.record_trash(target_root, backup_id, retention_run_id=retention_run_id, at=at, writer=writer)
+    journal["phase"] = "event-committed"
+    _trash_journal_write(destination, journal)
+    return True
+
+
+def _recover_trash_journals(target_root: Path, *, at: str, writer: backup_writer_lease.TargetWriterLease | None) -> list[str]:
+    """Roll interrupted trash transactions forward to their committed event."""
+    trash_dir = target_root / ".trash"
+    if not trash_dir.is_dir():
+        return []
+    recovered: list[str] = []
+    state = backup_catalog.catalog_state(target_root)
+    for entry in sorted(trash_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        journal_path = entry / TRASH_JOURNAL_NAME
+        if not journal_path.is_file():
+            continue
+        try:
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        phase = str(journal.get("phase") or "")
+        if phase == "event-committed":
+            continue
+        backup_id = str(journal.get("backupId") or entry.name)
+        record = state.get(backup_id)
+        candidates = backup_publish.backup_file_candidates(target_root, record or journal)
+        for payload in candidates:
+            if payload.is_file() and payload.name in set(journal.get("payloadNames") or [payload.name]):
+                os.replace(payload, entry / payload.name)
+        for name in set(journal.get("receiptNames") or []):
+            for base in (target_root / "receipts",):
+                source = base / str(name)
+                if source.is_file():
+                    os.replace(source, entry / str(name))
+        if record is not None and not record.get("trashed"):
+            backup_catalog.record_trash(target_root, backup_id, retention_run_id=str(journal.get("retentionRunId") or ""), at=at, writer=writer)
+        journal["phase"] = "event-committed"
+        _trash_journal_write(entry, journal)
+        recovered.append(backup_id)
+    return recovered
+
+
 def apply_retention(
     retention: dict[str, Any],
     target_root: Path,
     *,
     policy_timezone: str = "UTC",
     now: datetime | None = None,
+    checkpoint: Callable[[], None] | None = None,
+    preview: dict[str, Any] | None = None,
+    writer: backup_writer_lease.TargetWriterLease | None = None,
 ) -> dict[str, Any]:
     """Phase one: move prune candidates into ``.trash`` and record intent."""
-    preview = preview_retention(retention, target_root, policy_timezone=policy_timezone, now=now)
-    retention_run_id = f"rr_{uuid.uuid4().hex[:12]}"
+    backup_reconcile.assert_catalog_committed(target_root)
+    if writer is not None:
+        writer.assert_owned()
+    if preview is None:
+        preview = preview_retention(retention, target_root, policy_timezone=policy_timezone, now=now)
+    else:
+        if "trashRecords" not in preview or "keep" not in preview:
+            raise AppError("retention-stale-snapshot: preview is incomplete", code=ErrorCode.INVALID_REQUEST, status=409)
+        _validate_preview_snapshot(preview, retention, target_root)
+    retention_run_id = str(preview.get("retentionRunId") or f"rr_{uuid.uuid4().hex[:12]}")
     backup_scheduler.record_retention_run(
         retention_run_id,
         policy_id=str(retention.get("retentionPolicyId") or ""),
@@ -303,21 +502,16 @@ def apply_retention(
         status="preview",
         preview={key: preview[key] for key in ("keep", "trash", "protected")},
     )
-    trash_dir = target_root / ".trash"
+    recovered = _recover_trash_journals(target_root, at=_utc_iso(now), writer=writer)
     moved: list[str] = []
     for record in preview["trashRecords"]:
+        if checkpoint is not None:
+            checkpoint()
+        if writer is not None:
+            writer.assert_owned()
         backup_id = str(record["backupId"])
-        filename = str(record.get("filename") or "")
-        if not filename or "/" in filename or "\\" in filename:
-            continue
-        destination = trash_dir / backup_id
-        destination.mkdir(parents=True, exist_ok=True)
-        for base, suffix in ((target_root / "backups", ""), (target_root / "receipts", ".receipt.json")):
-            source = base / f"{filename}{suffix}"
-            if source.is_file():
-                os.replace(source, destination / f"{filename}{suffix}")
-        backup_catalog.record_trash(target_root, backup_id, retention_run_id=retention_run_id, at=_utc_iso(now))
-        moved.append(backup_id)
+        if _execute_trash_move(target_root, record, retention_run_id=retention_run_id, at=_utc_iso(now), writer=writer):
+            moved.append(backup_id)
     backup_scheduler.record_retention_run(
         retention_run_id,
         policy_id=str(retention.get("retentionPolicyId") or ""),
@@ -325,7 +519,7 @@ def apply_retention(
         status="trashed",
         preview={"trashed": moved},
     )
-    return {"retentionRunId": retention_run_id, "trashed": moved, "preview": {key: preview[key] for key in ("keep", "protected")}}
+    return {"retentionRunId": retention_run_id, "trashed": moved, "recoveredTrash": recovered, "preview": {key: preview[key] for key in ("keep", "protected")}}
 
 
 def finalize_retention(
@@ -334,8 +528,14 @@ def finalize_retention(
     *,
     policy_timezone: str = "UTC",
     now: datetime | None = None,
+    checkpoint: Callable[[], None] | None = None,
+    writer: backup_writer_lease.TargetWriterLease | None = None,
 ) -> dict[str, Any]:
     """Phase two: permanently delete grace-expired trash after re-checking protections."""
+    backup_reconcile.assert_catalog_committed(target_root)
+    if writer is not None:
+        writer.assert_owned()
+    recovered = _recover_trash_journals(target_root, at=_utc_iso(now), writer=writer)
     current = now or datetime.now(tz=timezone.utc)
     grace = timedelta(hours=int(retention["trashGraceHours"]))
     state = backup_catalog.catalog_state(target_root)
@@ -347,6 +547,8 @@ def finalize_retention(
         still_protected = {item["backupId"] for item in preview["protected"]} | set(preview["keep"])
         references = _restore_references()
         for entry in sorted(trash_dir.iterdir()):
+            if checkpoint is not None:
+                checkpoint()
             if not entry.is_dir():
                 continue
             backup_id = entry.name
@@ -364,14 +566,14 @@ def finalize_retention(
                 or str(record.get("ciphertextSha256") or "") in references
             )
             if rescued:
-                backup_catalog.record_restore_from_trash(target_root, backup_id, at=_utc_iso(current))
+                backup_catalog.record_restore_from_trash(target_root, backup_id, at=_utc_iso(current), writer=writer)
                 _restore_trash_entry(target_root, backup_id)
                 kept.append(backup_id)
                 continue
             shutil.rmtree(entry, ignore_errors=True)
-            backup_catalog.record_delete(target_root, backup_id, retention_run_id=str(record.get("retentionRunId") or ""), at=_utc_iso(current))
+            backup_catalog.record_delete(target_root, backup_id, retention_run_id=str(record.get("retentionRunId") or ""), at=_utc_iso(current), writer=writer)
             deleted.append(backup_id)
-    return {"deleted": deleted, "kept": kept}
+    return {"deleted": deleted, "kept": kept, "recoveredTrash": recovered}
 
 
 def _restore_trash_entry(target_root: Path, backup_id: str) -> None:
@@ -379,10 +581,24 @@ def _restore_trash_entry(target_root: Path, backup_id: str) -> None:
     if not entry.is_dir():
         return
     for path in entry.iterdir():
-        if path.name.endswith(".receipt.json"):
-            os.replace(path, target_root / "receipts" / path.name)
+        name = path.name
+        if name == TRASH_JOURNAL_NAME:
+            continue
+        stem = name[: -len(".age")] if name.endswith(".age") else ""
+        if len(stem) == 64 and all(char in "0123456789abcdef" for char in stem):
+            destination = backup_publish.object_path(target_root, stem)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                path.unlink()
+            else:
+                os.replace(path, destination)
+        elif name.endswith(".json"):
+            (target_root / "receipts").mkdir(parents=True, exist_ok=True)
+            os.replace(path, target_root / "receipts" / name)
         else:
-            os.replace(path, target_root / "backups" / path.name)
+            (target_root / "backups").mkdir(parents=True, exist_ok=True)
+            os.replace(path, target_root / "backups" / name)
+    (entry / TRASH_JOURNAL_NAME).unlink(missing_ok=True)
     entry.rmdir()
 
 

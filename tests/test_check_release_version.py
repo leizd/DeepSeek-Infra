@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_release_version.py"
-VERSION = "4.4.4"
+VERSION = "4.4.5"
 
 
 def _write_repo(root: Path, version: str) -> None:

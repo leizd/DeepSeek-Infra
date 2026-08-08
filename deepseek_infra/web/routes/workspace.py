@@ -332,6 +332,9 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
             envelope if isinstance(envelope, dict) else {},
             source_epoch=str(payload.get("sourceEpoch") or ""),
             acknowledged_at=str(payload.get("acknowledgedAt") or "") or None,
+            client_replica_id=str(payload.get("clientReplicaId") or ""),
+            client_sequence=payload.get("clientSequence") or 0,
+            expected_head_generation_id=str(payload.get("expectedHeadGenerationId") or "") or None,
         )
         return json_response(metadata)
 

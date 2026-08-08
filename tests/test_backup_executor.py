@@ -9,10 +9,12 @@ import pytest
 
 from deepseek_infra.core import config
 from deepseek_infra.infra.workspace import (
+    backup_catalog,
     backup_crypto,
     backup_executor,
     backup_mirror,
     backup_policies,
+    backup_publish,
     backup_scheduler,
     backups,
     mutation_gate,
@@ -91,11 +93,15 @@ def test_execute_run_completes_and_publishes(tmp_settings: Path, stub_crypto: No
     outcome = _claim_and_run(policy, now=now)
     assert outcome["phase"] == "complete"
     filename = str(outcome["filename"])
-    published = backups.BACKUP_DIR / "backups" / filename
+    record = backup_catalog.catalog_state(backups.BACKUP_DIR)[str(outcome["backupId"])]
+    published = backup_publish.backup_file_candidates(backups.BACKUP_DIR, record)[0]
     assert published.is_file()
     assert published.read_bytes().startswith(b"age-encryption.org/v1")
-    receipt = backups.BACKUP_DIR / "receipts" / f"{filename}.receipt.json"
+    assert published.name == f"{record['objectDigest']}.age"
+    receipt = backups.BACKUP_DIR / "receipts" / f"{outcome['backupId']}.json"
     assert receipt.is_file()
+    marker = backup_publish.commit_marker_path(backups.BACKUP_DIR, str(policy["policyId"]), "2026-06-02T03:00@UTC")
+    assert marker.is_file()
     run = backup_scheduler.get_run(str(outcome["runId"]))
     assert run["phase"] == "complete"
     assert run["filename"] == filename
@@ -151,4 +157,4 @@ def test_execute_run_with_wrong_instance_abandons(tmp_settings: Path, stub_crypt
     claimed = backup_scheduler.claim_due_slots([policy], instance_id="w1", now=now)
     outcome = backup_executor.execute_run(claimed[0], instance_id="intruder", now=now)
     assert outcome["phase"] in {"failed", "abandoned"}
-    assert not list(backups.BACKUP_DIR.rglob("*.dsibackup.age"))
+    assert not list((backups.BACKUP_DIR / "objects").rglob("*.age")) if (backups.BACKUP_DIR / "objects").is_dir() else True

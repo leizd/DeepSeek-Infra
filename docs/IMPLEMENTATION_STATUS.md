@@ -5,11 +5,13 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.4。
+适用版本：v4.4.5。
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
-> 4.4.4 adds durable scheduled backup policies with age-sealed frontend replica mirrors, ephemeral-recipient unattended verification, a lease-fenced SQLite scheduler with IANA timezone/DST semantics, marker-identified atomic filesystem targets, a hash-chained backup catalog, and previewable grandfather-father-son retention with trash grace periods. Recovery Identities remain offline-only.
+> 4.4.5 closes automatic backups into a fenced commit loop: heartbeated run leases, target writer leases, immutable content-addressed objects with one formal commit marker per schedule slot, catalog-as-projection with CAS, target rollback/fork/clone detection, retention snapshot CAS with trash journals, immutable mirror generations with epoch/sequence fences and policy-specific recipient variants, plus single-tab frontend mirror uploader election. Recovery Identities remain offline-only.
+
+> 4.4.4 added durable scheduled backup policies with age-sealed frontend replica mirrors, ephemeral-recipient unattended verification, a lease-fenced SQLite scheduler with IANA timezone/DST semantics, marker-identified atomic filesystem targets, a hash-chained backup catalog, and previewable grandfather-father-son retention with trash grace periods.
 
 > Full-backup coverage now distinguishes local, browser, and external durable state. Stateless MCP exports logical JSONL under a generation fence; restore clears leases, deterministically remaps collisions, and preserves queued/running tasks only as inert interrupted records.
 

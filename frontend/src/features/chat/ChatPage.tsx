@@ -44,6 +44,9 @@ function ChatWorkspace() {
       previousEpoch: fence.previousEpoch,
       targetEpoch: fence.targetEpoch,
     });
+    void import("../backup-restore/backupMirror").then((mirror) => {
+      mirror.freezeBackupMirrorForRestore();
+    });
     setRestoreEpochChanged(true);
   }), [chat.freezeForWorkspaceRestore]);
 
@@ -54,6 +57,9 @@ function ChatWorkspace() {
       chat.freezeForWorkspaceRestore({
         previousEpoch: journal?.previousEpoch ?? "",
         targetEpoch: journal?.targetEpoch ?? "",
+      });
+      void import("../backup-restore/backupMirror").then((mirror) => {
+        mirror.freezeBackupMirrorForRestore();
       });
       setRestoreEpochChanged(true);
     });

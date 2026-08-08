@@ -121,4 +121,5 @@ def test_catalog_cli_rebuild(tmp_settings: Path, stub_crypto: None, tmp_path: Pa
     )
     code, result = _run(catalog_cli, ["rebuild"], monkeypatch, capsys)
     assert code == 0
-    assert result == {"rebuilt": 1, "chainValid": True}
+    assert result["rebuilt"] == 1
+    assert result["chainValid"] is True

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage filesystem backup targets (4.4.4).
+"""Manage filesystem backup targets (4.4.5).
 
 Usage:
     python scripts/backup_target.py init /mnt/backup

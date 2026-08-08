@@ -41,15 +41,31 @@ def _package(tmp_path: Path, payload: bytes = b"ciphertext-bytes") -> _Package:
 def test_publish_managed_local_layout(tmp_settings: Path, tmp_path: Path) -> None:
     package = _package(tmp_path)
     target = backup_publish.resolve_target("managed-local")
-    result = backup_publish.publish_backup(target, package, run_id="run_1", policy_id="policy_1", schedule_slot="slot")
+    result = backup_publish.publish_backup(target, package, run_id="run_1", policy_id="policy_1", schedule_slot="slot", fencing_token=1)
     root = backup_publish.backups.BACKUP_DIR
-    assert result.path == root / "backups" / package.filename
+    assert result.path == backup_publish.object_path(root, package.ciphertext_sha256)
     assert result.path.read_bytes() == b"ciphertext-bytes"
+    assert result.converged is False
     receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
-    assert receipt["schemaVersion"] == 1
+    assert result.receipt_path == root / "receipts" / "backup_test1.json"
+    assert receipt["schemaVersion"] == 2
     assert receipt["backupId"] == "backup_test1"
     assert receipt["ciphertextSha256"] == package.ciphertext_sha256
+    assert receipt["objectDigest"] == package.ciphertext_sha256
     assert receipt["pinned"] is False
+    marker_path = backup_publish.commit_marker_path(root, "policy_1", "slot")
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["schemaVersion"] == 2
+    assert marker["runId"] == "run_1"
+    assert marker["fencingToken"] == 1
+    assert marker["backupId"] == "backup_test1"
+    assert marker["objectDigest"] == package.ciphertext_sha256
+    assert marker["targetGeneration"] == 1
+    assert marker["previousCommitHash"] == backup_publish.GENESIS_COMMIT_HASH
+    journal = backup_publish.read_journal(root, "run_1")
+    assert journal is not None
+    assert journal["phase"] == "committed"
+    assert journal["commitHash"] == marker["commitHash"]
     assert not list((root / ".partial").iterdir())
     health = backup_scheduler.target_health()
     assert health and health[0]["status"] == "ok"
@@ -61,9 +77,10 @@ def test_publish_filesystem_target(tmp_settings: Path, tmp_path: Path) -> None:
     record = backup_targets.init_target(directory)
     package = _package(tmp_path)
     target = backup_publish.resolve_target(record["targetId"])
-    result = backup_publish.publish_backup(target, package, run_id="run_2", policy_id="policy_1", schedule_slot="slot")
+    result = backup_publish.publish_backup(target, package, run_id="run_2", policy_id="policy_1", schedule_slot="slot", fencing_token=2)
     assert result.path.is_file()
-    assert (directory / "receipts" / f"{package.filename}.receipt.json").is_file()
+    assert (directory / "receipts" / "backup_test1.json").is_file()
+    assert backup_publish.commit_marker_path(directory, "policy_1", "slot").is_file()
     for name in backup_publish.LAYOUT_DIRS:
         assert (directory / name).is_dir()
 
@@ -71,11 +88,12 @@ def test_publish_filesystem_target(tmp_settings: Path, tmp_path: Path) -> None:
 def test_publish_rejects_digest_mismatch(tmp_settings: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     package = _package(tmp_path)
     target = backup_publish.resolve_target("managed-local")
-    monkeypatch.setattr(backup_publish.backup_unattended, "sha256_file", lambda _path: "0" * 64)
+    monkeypatch.setattr(backup_publish.backup_unattended, "sha256_file", lambda _path, **_kwargs: "0" * 64)
     with pytest.raises(AppError, match="digest mismatch"):
-        backup_publish.publish_backup(target, package, run_id="run_3", policy_id="policy_1", schedule_slot="slot")
+        backup_publish.publish_backup(target, package, run_id="run_3", policy_id="policy_1", schedule_slot="slot", fencing_token=3)
     root = backup_publish.backups.BACKUP_DIR
-    assert not (root / "backups" / package.filename).exists()
+    assert not backup_publish.object_path(root, package.ciphertext_sha256).exists()
+    assert not backup_publish.commit_marker_path(root, "policy_1", "slot").exists()
     assert not list((root / ".partial").iterdir())
 
 

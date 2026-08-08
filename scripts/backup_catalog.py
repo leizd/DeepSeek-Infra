@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect and maintain the backup catalog (4.4.4).
+"""Inspect and maintain the backup catalog (4.4.5).
 
 Usage:
     python scripts/backup_catalog.py list [--target-id <id>]

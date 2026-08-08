@@ -189,7 +189,7 @@ def test_complete_on_terminal_run_rejected(tmp_settings: Path) -> None:
     )
     now = datetime(2026, 6, 2, 4, 0, tzinfo=UTC)
     run = backup_scheduler.claim_due_slots([policy], instance_id="w1", now=now)[0]
-    backup_scheduler.fail_run(run.run_id, error="x", instance_id="w1", fencing_token=run.fencing_token)
+    backup_scheduler.fail_run(run.run_id, error="x", instance_id="w1", fencing_token=run.fencing_token, now=now)
     with pytest.raises(AppError, match="no longer active"):
         backup_scheduler.complete_run(run.run_id, backup_id="b", filename="f", instance_id="w1", fencing_token=run.fencing_token)
 
