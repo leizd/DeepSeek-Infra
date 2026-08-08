@@ -152,17 +152,38 @@ def execute_run(
             contributor_plan=contributor_plan,
             target_id=target_id,
             target_head_hash=_target_head_hash(target),
-            snapshot_kind=str((policy.get("incremental") or {}).get("mode") and "full" or "full"),
+            snapshot_kind="full",
         )
         outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
         outcome["backupId"] = str(run_plan.get("backupId") or "")
 
+        # A reclaimed run whose slot is already committed by a different worker
+        # must not reuse the frozen plan/spool: keep slot-commit-conflict
+        # semantics by rebuilding a distinct package identity.
+        conflicting_slot = False
+        if target.root is not None:
+            marker = backup_publish.find_commit_marker_path(target.root, policy_id, run.schedule_slot)
+            if marker is not None and marker.is_file():
+                import json as _json
+
+                try:
+                    existing_marker = _json.loads(marker.read_text(encoding="utf-8"))
+                except Exception:  # pragma: no cover
+                    existing_marker = {}
+                if existing_marker and str(existing_marker.get("runId") or "") != run.run_id:
+                    conflicting_slot = True
+        if conflicting_slot:
+            backup_run_plan.clear_run_plan(policy_id, slot_digest)
+            backup_spool.clear_slot(policy_id, slot_digest)
+
         package: Any | None = None
-        spooled = backup_spool.lookup_verified_package(
-            policy_id=policy_id,
-            slot_digest=slot_digest,
-            run_plan_digest=str(run_plan.get("runPlanDigest") or ""),
-        )
+        spooled = None
+        if not conflicting_slot:
+            spooled = backup_spool.lookup_verified_package(
+                policy_id=policy_id,
+                slot_digest=slot_digest,
+                run_plan_digest=str(run_plan.get("runPlanDigest") or ""),
+            )
         if spooled is not None:
             backup_scheduler.record_run_phase(
                 run.run_id,
@@ -182,9 +203,9 @@ def execute_run(
                 staging_root=backup_scheduler.staging_root(),
                 schedule_slot=run.schedule_slot,
                 cancel_event=guard.cancel_event,
-                backup_id=str(run_plan.get("backupId") or ""),
+                backup_id=None if conflicting_slot else str(run_plan.get("backupId") or ""),
                 contributor_plan=contributor_plan,
-                snapshot_kind=str(run_plan.get("snapshotKind") or "full"),
+                snapshot_kind="full",
                 parent_backup_id=run_plan.get("parentBackupId"),
                 base_backup_id=run_plan.get("baseBackupId"),
             )

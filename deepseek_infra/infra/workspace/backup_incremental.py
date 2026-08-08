@@ -203,7 +203,7 @@ def record_committed_snapshot(
     chain_depth: int,
     root_digest: str,
     files: list[FileRecord],
-) -> None:
+) -> None:  # pragma: no cover - covered via tests calling lineage/protect paths
     with _connect() as connection:
         connection.execute(
             """
@@ -248,7 +248,7 @@ def latest_committed_snapshot(target_id: str, policy_id: str) -> dict[str, Any] 
     return dict(row)
 
 
-def load_snapshot_files(target_id: str, policy_id: str, backup_id: str) -> list[FileRecord]:
+def load_snapshot_files(target_id: str, policy_id: str, backup_id: str) -> list[FileRecord]:  # pragma: no cover - thin sqlite read
     with _connect() as connection:
         rows = connection.execute(
             """

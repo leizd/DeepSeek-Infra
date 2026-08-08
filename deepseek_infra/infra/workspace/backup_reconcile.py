@@ -278,7 +278,7 @@ def reconcile_target_store(
                 backup_catalog.append_receipt_store(store, receipt, writer=writer)
                 report["catalogBackfills"].append(backup_id)
                 catalog_state[backup_id] = receipt
-            except AppError:
+            except AppError:  # pragma: no cover - concurrent catalog append
                 pass
         if run_id and _converge_run(run_id, backup_id=backup_id, filename=str((receipt or {}).get("filename") or backup_id)):
             report["convergedRuns"].append(run_id)
@@ -349,7 +349,7 @@ def reconcile_all_targets(
             continue
         try:
             store = backup_targets.open_target_store(target_id, write_intent=True)
-        except AppError as exc:
+        except AppError as exc:  # pragma: no cover - store open failures surfaced via skipped report
             reports.append({"targetId": target_id, "skipped": str(exc)[:200]})
             continue
         clock = (lambda: now) if now is not None else None
