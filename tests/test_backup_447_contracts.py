@@ -304,7 +304,78 @@ def test_executor_reuses_spool_without_rebuild(tmp_settings: Path, tmp_path: Pat
     assert backup_spool.lookup_verified_package(policy_id="policy_exec", slot_digest=slot_d, run_plan_digest=str(plan["runPlanDigest"])) is not None
 
 
+def test_incremental_force_full_all_branches() -> None:
+    base: dict[str, object] = {
+        "chain_depth": 0,
+        "days_since_full": 0.0,
+        "delta_bytes": 0,
+        "estimated_full_bytes": 100,
+        "index_missing": False,
+        "scope_changed": False,
+        "recipient_changed": False,
+        "schema_changed": False,
+        "target_fork_adopted": False,
+    }
+    assert backup_incremental.should_force_full(**base)[0] is False  # type: ignore[arg-type]
+    for key, expected in (
+        ("scope_changed", "scope-changed"),
+        ("recipient_changed", "recipient-rotation"),
+        ("schema_changed", "contributor-schema-changed"),
+        ("target_fork_adopted", "target-fork-adopted"),
+    ):
+        force, reason = backup_incremental.should_force_full(**{**base, key: True})  # type: ignore[arg-type]
+        assert force and reason == expected
+    force, reason = backup_incremental.should_force_full(**{**base, "chain_depth": 8})  # type: ignore[arg-type]
+    assert force and reason == "chain-depth"
+    force, reason = backup_incremental.should_force_full(**{**base, "days_since_full": 8.0})  # type: ignore[arg-type]
+    assert force and reason == "full-interval"
+    force, reason = backup_incremental.should_force_full(**{**base, "delta_bytes": 70, "estimated_full_bytes": 100})  # type: ignore[arg-type]
+    assert force and reason == "delta-ratio"
+    force, reason = backup_incremental.should_force_full(**{**base, "delta_bytes": 10, "estimated_full_bytes": 100})  # type: ignore[arg-type]
+    assert force is False
+
+
 def test_evidence_keys() -> None:
+    evidence = {key: "PASS" for key in EVIDENCE_KEYS}
+    assert set(evidence) == set(EVIDENCE_KEYS)
+
+
+def test_memory_store_edge_cases(tmp_settings: Path) -> None:
+    store = MemoryTargetStore()
+    assert list(store.get_stream("missing")) == []
+    data = b"hello"
+    d = hashlib.sha256(data).hexdigest()
+    with pytest.raises(AppError):
+        store.put_if_absent("k", data, checksum_sha256="0" * 64)
+    store.put_if_absent("k", data, checksum_sha256=d)
+    # identical converges
+    same = store.put_if_absent("k", data, checksum_sha256=d)
+    assert same.created is False
+    with pytest.raises(AppError):
+        store.put_if_match("k", data, expected_etag='"nope"', checksum_sha256=d)
+    with pytest.raises(AppError):
+        store.put_if_match("k", data, expected_etag=same.etag, checksum_sha256="0" * 64)
+    assert store.delete_if_match("missing") is False
+    with pytest.raises(AppError):
+        store.delete_if_match("k", expected_etag='"nope"')
+    upload = store.begin_multipart("m", checksum_sha256=d)
+    with pytest.raises(AppError):
+        store.upload_part(upload, 1, b"x", checksum_sha256="0" * 64)
+    store.upload_part(upload, 1, data, checksum_sha256=d)
+    store.abort_multipart(upload)
+    assert store.stat("m") is None
+    # complete checksum mismatch
+    up2 = store.begin_multipart("m2", checksum_sha256=d)
+    store.upload_part(up2, 1, data, checksum_sha256=d)
+    up2.checksum_sha256 = "0" * 64
+    with pytest.raises(AppError):
+        store.complete_multipart_if_absent(up2)
+
+
+def test_latest_snapshot_none_and_protect_missing(tmp_settings: Path) -> None:
+    assert backup_incremental.latest_committed_snapshot("t", "none") is None
+    protected = backup_incremental.protect_ancestors("t", "p", {"does-not-exist"})
+    assert protected == {}
     evidence = {key: "PASS" for key in EVIDENCE_KEYS}
     assert set(evidence) == set(EVIDENCE_KEYS)
 

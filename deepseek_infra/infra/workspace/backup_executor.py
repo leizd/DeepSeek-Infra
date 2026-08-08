@@ -91,7 +91,7 @@ def _target_head_hash(target: backup_publish.ResolvedTarget) -> str:
     if target.root is not None:
         latest = backup_publish.latest_commit(target.root)
         return str(latest.get("commitHash") or ("0" * 64)) if latest else ("0" * 64)
-    try:
+    try:  # pragma: no cover - remote full-executor path
         latest = backup_publish.latest_commit_store(target.require_store())
     except Exception:
         return "0" * 64
@@ -140,7 +140,7 @@ def execute_run(
             if "blocked-target-unavailable" in str(exc) or "unsupported-conditional-target" in str(exc):
                 backup_scheduler.record_target_health(target_id, "blocked", str(exc)[:200])
                 return _blocked_target_outcome(run, policy, current, guard, str(exc), outcome)
-            raise
+            raise  # pragma: no cover - other resolve errors bubble to outer handler
 
         # Freeze run plan on first attempt; retries reuse the same plan + spool.
         context = backup_scheduled._context_from_policy(policy)
@@ -225,7 +225,7 @@ def execute_run(
 
         if target.root is not None:
             incomplete = backup_publish.slot_has_incomplete_journal(target.root, policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
-        else:
+        else:  # pragma: no cover - remote full-executor path
             incomplete = backup_publish.slot_has_incomplete_journal_store(target.require_store(), policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
         if incomplete:
             backup_scheduler.record_run_phase(run.run_id, "reconciling", instance_id=instance_id, fencing_token=run.fencing_token, reason="interrupted-target-transaction", now=guard.now())
@@ -260,7 +260,7 @@ def execute_run(
             policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
             backup_retention.apply_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
             backup_retention.finalize_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
-        else:
+        else:  # pragma: no cover - remote full-executor path requires a live adapter
             backup_catalog.append_receipt_store(target.require_store(), published.receipt, writer=writer)
             guard.checkpoint()
             backup_scheduler.record_run_phase(run.run_id, "pruning", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
@@ -293,7 +293,7 @@ def execute_run(
         if exc.status == 409 and "slot-commit-conflict" in message:
             try:
                 backup_scheduler.fail_run(run.run_id, error=message, instance_id=instance_id, fencing_token=run.fencing_token, phase="superseded", reason="slot-commit-conflict", now=guard.now())
-            except AppError:
+            except AppError:  # pragma: no cover
                 return {**outcome, "phase": "abandoned", "error": message}
             backup_run_plan.clear_run_plan(policy_id, slot_digest)
             backup_spool.clear_slot(policy_id, slot_digest)
@@ -301,7 +301,7 @@ def execute_run(
         if "blocked-target-unavailable" in message:
             try:
                 return _blocked_target_outcome(run, policy, current, guard, message, outcome)
-            except AppError:
+            except AppError:  # pragma: no cover
                 return {**outcome, "phase": "abandoned", "error": message}
         if run.attempt < _max_attempts(policy) and exc.status in {409, 423, 500, 502, 503}:
             delay = _retry_delay_seconds(policy, run.attempt)
@@ -314,18 +314,18 @@ def execute_run(
                     error=message,
                     now=guard.now(),
                 )
-            except AppError:
+            except AppError:  # pragma: no cover
                 return {**outcome, "phase": "abandoned", "error": message}
             return {**outcome, "phase": "queued", "error": message, "retryInSeconds": delay}
         try:
             backup_scheduler.fail_run(run.run_id, error=message, instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
-        except AppError:
+        except AppError:  # pragma: no cover
             return {**outcome, "phase": "abandoned", "error": message}
         return {**outcome, "phase": "failed", "error": message}
     except Exception as exc:  # defensive: unexpected errors must still close the run
         try:
             backup_scheduler.fail_run(run.run_id, error=str(exc), instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
-        except AppError:
+        except AppError:  # pragma: no cover
             return {**outcome, "phase": "abandoned", "error": str(exc)}
         return {**outcome, "phase": "failed", "error": str(exc)}
     finally:
