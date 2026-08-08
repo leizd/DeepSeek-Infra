@@ -252,7 +252,7 @@ class FilesystemTargetStore:
             return None
         try:
             return self._meta_for(key, path)
-        except OSError:
+        except OSError:  # pragma: no cover - filesystem race
             return None
 
     def get_bytes(self, key: str, *, offset: int = 0, length: int | None = None) -> bytes | None:

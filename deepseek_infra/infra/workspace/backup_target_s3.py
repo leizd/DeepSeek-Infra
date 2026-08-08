@@ -27,7 +27,7 @@ from deepseek_infra.infra.workspace.backup_target_store import (
 def s3_sdk_available() -> bool:
     try:
         import boto3  # noqa: F401
-    except ImportError:
+    except ImportError:  # pragma: no cover - optional dependency absent in CI
         return False
     return True
 

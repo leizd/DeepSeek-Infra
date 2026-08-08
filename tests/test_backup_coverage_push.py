@@ -331,6 +331,117 @@ def test_targets_lineage_and_s3_open_paths(tmp_settings: Path, tmp_path: Path, m
         backup_targets.init_s3_target(bucket="b", probe=False)
 
 
+def test_writer_lease_store_renew_release_and_skew(tmp_settings: Path) -> None:
+    store = MemoryTargetStore()
+    lease = backup_writer_lease.TargetWriterLease(
+        store=store,
+        target_id="t",
+        owner_run_id="run1",
+        owner_instance_id="inst",
+        fencing_token=1,
+    )
+    lease.acquire()
+    # server date skew paths
+    lease._note_server_date(None)
+    lease._note_server_date("not-a-date")
+    lease._note_server_date("2026-01-01T00:00:00Z")
+    from email.utils import format_datetime
+    from datetime import datetime, timezone
+
+    lease._note_server_date(format_datetime(datetime.now(tz=timezone.utc)))
+    lease.renew()
+    lease.assert_owned()
+    # missing etag write fails when calling _write directly
+    lease._etag = None
+    with pytest.raises(AppError):
+        lease._write(lease._payload(lease._now()))
+    lease.release()
+
+
+def test_publish_existing_object_and_multipart_resume(tmp_settings: Path, tmp_path: Path) -> None:
+    store = MemoryTargetStore()
+    put_json_if_absent(store, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    package = _pkg(tmp_path, name="big", body=b"z" * (9 * 1024 * 1024))
+    digest = package.ciphertext_sha256
+    obj = f"objects/sha256/{digest[:2]}/{digest}.age"
+    # pre-seed object so publish verifies instead of upload
+    store.put_if_absent(obj, package.path.read_bytes(), checksum_sha256=digest)
+    target = backup_publish.ResolvedTarget(target_id="t", root=None, managed=False, kind="s3", store=store)
+    result = backup_publish.publish_backup(target, package, run_id="r-pre", policy_id="pol", schedule_slot="slot-pre", fencing_token=1, checkpoint=lambda: None)
+    assert result.converged is False
+    # multipart resume: seed spool multipart state then publish new package
+    package2 = _pkg(tmp_path, name="big2", body=b"y" * (9 * 1024 * 1024))
+    slot = "slot-resume"
+    slot_d = commit_slot_digest(slot)
+    backup_spool.store_verified_package(package2, policy_id="pol", schedule_slot=slot, run_id="r-res")
+    upload = store.begin_multipart(f"objects/sha256/{package2.ciphertext_sha256[:2]}/{package2.ciphertext_sha256}.age", checksum_sha256=package2.ciphertext_sha256)
+    # upload first part only
+    part = package2.path.read_bytes()[: 8 * 1024 * 1024]
+    store.upload_part(upload, 1, part, checksum_sha256=hashlib.sha256(part).hexdigest())
+    backup_spool.write_multipart_state(
+        "pol",
+        slot_d,
+        {"key": f"objects/sha256/{package2.ciphertext_sha256[:2]}/{package2.ciphertext_sha256}.age", "uploadId": upload.upload_id, "parts": upload.parts, "checksumSha256": package2.ciphertext_sha256},
+    )
+    result2 = backup_publish.publish_backup(target, package2, run_id="r-res2", policy_id="pol", schedule_slot=slot, fencing_token=2, checkpoint=lambda: None)
+    assert result2.commit["objectDigest"] == package2.ciphertext_sha256
+    # latest_commit_store pagination
+    for i in range(3):
+        put_json_if_absent(store, f"commits/extra/{i}.bin", {"no": "json"})  # non-json skipped via read fail - actually put json
+    put_json_if_absent(store, "commits/extra/note.txt", {"commitHash": None})
+    assert backup_publish.latest_commit_store(store) is not None
+
+
+def test_catalog_store_snapshot_reload(tmp_settings: Path) -> None:
+    store = MemoryTargetStore()
+    writer = backup_writer_lease.TargetWriterLease(store=store, target_id="t", owner_run_id="r", owner_instance_id="i", fencing_token=3)
+    writer.acquire()
+    # force snapshot interval by appending many events
+    for i in range(5):
+        backup_catalog.append_receipt_store(
+            store,
+            {
+                "backupId": f"c{i}",
+                "filename": f"c{i}.age",
+                "policyId": "p",
+                "targetId": "t",
+                "runId": "r",
+                "scheduleSlot": f"s{i}",
+                "size": 1,
+                "ciphertextSha256": f"{i:064d}"[-64:],
+                "objectDigest": f"{i:064d}"[-64:],
+                "manifestDigest": "m" * 64,
+                "coverageDigest": "c" * 64,
+                "creationVerified": True,
+                "createdAt": f"2026-02-0{i+1}T00:00:00Z",
+            },
+            writer=writer,
+        )
+    state = backup_catalog.catalog_state_store(store)
+    assert "c0" in state
+    backup_catalog._append_entry_store(store, "unlock-verified", {"backupId": "c0", "userUnlockVerifiedAt": "2026-02-10T00:00:00Z"}, writer=writer)
+    backup_catalog._append_entry_store(store, "restore-trash", {"backupId": "c1", "restoredAt": "2026-02-11T00:00:00Z"}, writer=writer)
+    backup_catalog._append_entry_store(store, "delete", {"backupId": "c2", "retentionRunId": "rr", "deletedAt": "2026-02-12T00:00:00Z"}, writer=writer)
+    state2 = backup_catalog.catalog_state_store(store)
+    assert state2["c0"].get("userUnlockVerifiedAt")
+    writer.release()
+
+
+def test_governance_adopt_register_new(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web.routes import backup_governance
+
+    monkeypatch.setattr(backup_governance, "require_api_auth", lambda _request: None)
+    directory = tmp_settings / "usb2"
+    directory.mkdir()
+    record = backup_targets.init_target(directory)
+    app = server_module.create_app()
+    client = TestClient(app)
+    adopted = client.post(f"/api/workspace/backup-targets/{record['targetId']}/adopt")
+    assert adopted.status_code == 200
+    registered = client.post("/api/workspace/backup-targets/register-new", json={"path": str(directory), "label": "n"})
+    assert registered.status_code == 200
+
+
 def test_governance_api_new_routes(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from test_backup_target_s3_adapter import FakeS3Client
     from deepseek_infra.web.routes import backup_governance
