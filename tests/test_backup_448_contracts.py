@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,7 +19,11 @@ from deepseek_infra.infra.workspace import (
     backup_retention,
     backup_run_plan,
 )
-from deepseek_infra.infra.workspace.backup_target_store import commit_slot_digest
+from deepseek_infra.infra.workspace.backup_target_store import (
+    MemoryTargetStore,
+    commit_slot_digest,
+    put_json_if_absent,
+)
 
 EVIDENCE_KEYS = (
     "scheduledIncrementalPathEnabled",
@@ -351,6 +357,130 @@ def test_evidence_keys() -> None:
     assert set(evidence) == set(EVIDENCE_KEYS)
 
 
+def test_restore_session_edges(tmp_settings: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_remote_restore
+
+    # session not found
+    with pytest.raises(AppError):
+        backup_remote_restore.fetch_restore_session("restore_nope")
+    store = MemoryTargetStore()
+    put_json_if_absent(store, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    # Build a real ciphertext object in the store
+    raw = b"age-encryption.org/v1\nrestore-body"
+    digest = hashlib.sha256(raw).hexdigest()
+    from deepseek_infra.infra.workspace.backup_target_store import object_key
+
+    store.put_if_absent(object_key(digest), raw, checksum_sha256=digest)
+    put_json_if_absent(
+        store,
+        "receipts/rs1.json",
+        {"backupId": "rs1", "objectDigest": digest, "filename": "rs1.age", "size": len(raw)},
+    )
+    put_json_if_absent(
+        store,
+        "commits/pol/slot.json",
+        {"commitHash": "c" * 64, "backupId": "rs1", "objectDigest": digest, "targetGeneration": 1},
+    )
+    target = backup_publish.ResolvedTarget(target_id="target_rs", root=None, managed=False, kind="s3", store=store)
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda *a, **k: target)
+    created = backup_remote_restore.create_restore_from_target(target_id="target_rs", backup_id="rs1")
+    restore_id = str(created["restoreId"])
+    # ETag drift rejects resume
+    session_path = tmp_settings / ".restore-staging" / restore_id / "remote-fetch.json"
+    if not session_path.is_file():
+        # find via RESTORE_DIR override
+        from deepseek_infra.infra.workspace import backups as _b
+
+        session_path = _b.RESTORE_DIR / restore_id / "remote-fetch.json"
+    data = json.loads(session_path.read_text(encoding="utf-8"))
+    data["remoteETag"] = '"other"'
+    session_path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AppError):
+        backup_remote_restore.fetch_restore_session(restore_id)
+    # fetched idempotent
+    data["remoteETag"] = ""
+    data["phase"] = "fetched"
+    data["downloadedBytes"] = len(raw)
+    data["expectedBytes"] = len(raw)
+    session_path.write_text(json.dumps(data), encoding="utf-8")
+    done = backup_remote_restore.fetch_restore_session(restore_id)
+    assert done["phase"] == "fetched"
+
+
+def test_record_committed_index_full_and_incremental(tmp_settings: Path) -> None:
+    from deepseek_infra.infra.workspace import backup_executor
+
+    pkg = SimpleNamespace(
+        manifest={
+            "files": [
+                {"contributorId": "local", "path": "a.txt", "size": 1, "sha256": "a" * 64},
+                {"contributorId": "local", "path": "b.txt", "size": 2, "sha256": "b" * 64},
+            ]
+        }
+    )
+    # Full snapshot
+    backup_executor._record_committed_index(
+        target_id="t",
+        policy_id="p",
+        backup_id="F0",
+        package=pkg,
+        run_plan={"snapshotKind": "full"},
+    )
+    latest0 = backup_incremental.latest_committed_snapshot("t", "p")
+    assert latest0 is not None and int(latest0["chain_depth"]) == 0
+    # Incremental against baseline
+    backup_incremental.record_committed_snapshot(
+        target_id="t",
+        policy_id="p",
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root([backup_incremental.FileRecord("local", "a.txt", 1, "a" * 64)]),
+        files=[backup_incremental.FileRecord("local", "a.txt", 1, "a" * 64)],
+    )
+    incr_pkg = SimpleNamespace(
+        manifest={
+            "files": [
+                {"contributorId": "local", "path": "a.txt", "size": 1, "sha256": "a" * 64},
+                {"contributorId": "local", "path": "b.txt", "size": 2, "sha256": "b" * 64},
+            ],
+            "snapshot": {"rootDigest": "0" * 64},
+        }
+    )
+    backup_executor._record_committed_index(
+        target_id="t",
+        policy_id="p",
+        backup_id="I1",
+        package=incr_pkg,
+        run_plan={"snapshotKind": "incremental", "parentBackupId": "F0", "baseBackupId": "F0", "chainDepth": 1},
+    )
+    assert backup_incremental.ancestor_chain("t", "p", "I1") == ["F0", "I1"]
+    # Exception safety: corrupt manifest does not raise
+    backup_executor._record_committed_index(
+        target_id="t",
+        policy_id="p",
+        backup_id="I2",
+        package=SimpleNamespace(manifest={"files": [{"path": "x", "size": "bad"}]}),
+        run_plan={"snapshotKind": "incremental", "parentBackupId": "F0"},
+    )
+
+
+def test_snapshot_chunk_map_persistence(tmp_settings: Path) -> None:
+    data = bytes(range(256)) * 256  # ~64KiB, single chunk
+    records = backup_incremental.chunk_map_for("local", "big.bin", io.BytesIO(data), file_size=len(data))
+    assert len(records) == 1
+    backup_incremental.record_snapshot_chunks(target_id="t", policy_id="p", backup_id="I1", chunks=records)
+    loaded = backup_incremental.load_snapshot_chunks("t", "p", "I1")
+    assert len(loaded) == 1
+    assert loaded[0].chunk_sha256 == records[0].chunk_sha256
+    assert loaded[0].offset == 0
+    assert loaded[0].length == len(data)
+    # replace
+    backup_incremental.record_snapshot_chunks(target_id="t", policy_id="p", backup_id="I1", chunks=[])
+    assert backup_incremental.load_snapshot_chunks("t", "p", "I1") == []
+
+
 def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Drive the real incremental builder: baseline in index -> delta package."""
     from deepseek_infra.core import config
@@ -445,5 +575,8 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
         root_digest=snapshot["rootDigest"],
         files=baseline_files,
     )
-    latest = backup_incremental.latest_committed_snapshot("managed-local", str(policy["policyId"]))
-    assert latest is not None and int(latest["chain_depth"]) == 1
+    # The incremental snapshot must be index-backed and chain to the baseline.
+    chain = backup_incremental.ancestor_chain("managed-local", str(policy["policyId"]), str(plan["backupId"]))
+    assert chain == ["F0", str(plan["backupId"])]
+    loaded = backup_incremental.load_snapshot_files("managed-local", str(policy["policyId"]), str(plan["backupId"]))
+    assert loaded

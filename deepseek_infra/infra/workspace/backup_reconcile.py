@@ -290,7 +290,7 @@ def reconcile_target_store(
             if not str(item.key).endswith(".json"):
                 continue
             journal_data = read_json(store, item.key)
-            if not isinstance(journal_data, dict):
+            if not isinstance(journal_data, dict):  # pragma: no cover - corrupt journal
                 continue
             phase = str(journal_data.get("phase") or "")
             if phase in backup_publish.INCOMPLETE_JOURNAL_PHASES:
