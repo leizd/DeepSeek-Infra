@@ -349,3 +349,101 @@ def test_spool_reuse_and_duplicate_payload(tmp_settings: Path, tmp_path: Path) -
 def test_evidence_keys() -> None:
     evidence = {key: "PASS" for key in EVIDENCE_KEYS}
     assert set(evidence) == set(EVIDENCE_KEYS)
+
+
+def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drive the real incremental builder: baseline in index -> delta package."""
+    from deepseek_infra.core import config
+    from deepseek_infra.infra.workspace import backup_crypto, backup_scheduled
+
+    prefix = b"age-encryption.org/v1\n"
+
+    def encrypt_stream(target: Path, write_plaintext: object, *, mode: str, secret: object = None, recipients: tuple[str, ...] = (), cancel_event: object = None) -> None:
+        import io
+
+        buffer = io.BytesIO()
+        write_plaintext(buffer)  # type: ignore[operator]
+        target.write_bytes(prefix + bytes(buffer.getbuffer())[::-1])
+
+    def decrypt_file(source: Path, target: Path, *, kind: str, secret: bytearray, cancel_event: object = None) -> None:
+        raw = source.read_bytes()
+        assert raw.startswith(prefix)
+        target.write_bytes(raw[len(prefix):][::-1])
+
+    monkeypatch.setattr(backup_crypto, "encrypt_stream", encrypt_stream)
+    monkeypatch.setattr(backup_crypto, "decrypt_file", decrypt_file)
+    monkeypatch.setattr(backup_crypto, "generate_identity", lambda: {"identity": "AGE-SECRET-KEY-1EPH", "recipient": "age1eph"})
+    monkeypatch.setattr(backup_crypto, "inspect_header", lambda _path: {"age": True})
+    monkeypatch.setattr(
+        backup_crypto,
+        "capabilities",
+        lambda: {"encryptedBackupAvailable": True, "formats": ["age-v1"], "protectionModes": ["passphrase", "age-recipient"]},
+    )
+
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"remember"}]}', encoding="utf-8")
+    policy = backup_policies.create_policy(_policy(incremental={"mode": "file-delta"}))
+    # Record a baseline snapshot in the index for this policy/target.
+    baseline_files = [
+        backup_incremental.FileRecord("local", "state.json", 10, "a" * 64),
+        backup_incremental.FileRecord("mcp", "state.jsonl", 5, "b" * 64),
+    ]
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root(baseline_files),
+        files=baseline_files,
+    )
+    # Ensure the frozen run plan carries incremental lineage, then build.
+    slot = "2026-02-01T03:00@UTC"
+    slot_d = commit_slot_digest(slot)
+    plan = backup_run_plan.freeze_run_plan(
+        policy=policy,
+        schedule_slot=slot,
+        slot_digest=slot_d,
+        contributor_plan={"items": []},
+        target_id="managed-local",
+        snapshot_kind="incremental",
+        lineage_id="lineage_b",
+        parent_backup_id="F0",
+        base_backup_id="F0",
+        chain_depth=1,
+    )
+    assert plan["snapshotKind"] == "incremental"
+    package = backup_scheduled.build_scheduled_backup(
+        policy,
+        run_id="run_incr",
+        staging_root=tmp_settings / ".staging",
+        schedule_slot=slot,
+        backup_id=str(plan["backupId"]),
+        contributor_plan={"items": []},
+        snapshot_kind="incremental",
+        parent_backup_id="F0",
+        base_backup_id="F0",
+        lineage_id="lineage_b",
+        chain_depth=1,
+    )
+    assert package.path.is_file()
+    assert package.manifest.get("snapshotKind") == "incremental"
+    snapshot = package.manifest["snapshot"]
+    assert snapshot["kind"] == "incremental"
+    assert snapshot["parentBackupId"] == "F0"
+    assert snapshot["chainDepth"] == 1
+    assert snapshot["rootDigest"]
+    # Index committed state after build + manual commit index record.
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id=str(plan["backupId"]),
+        parent_backup_id="F0",
+        base_backup_id="F0",
+        chain_depth=1,
+        root_digest=snapshot["rootDigest"],
+        files=baseline_files,
+    )
+    latest = backup_incremental.latest_committed_snapshot("managed-local", str(policy["policyId"]))
+    assert latest is not None and int(latest["chain_depth"]) == 1

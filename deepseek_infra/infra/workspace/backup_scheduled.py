@@ -239,15 +239,29 @@ def _build_candidate(
             ]
             delta = backup_incremental.diff_trees(parent_files, records, successful_contributors=successful or {c.contributor_id for c in parent_files})
             (staging / "delta").mkdir(exist_ok=True)
-            (staging / "delta" / "operations.json").write_bytes(backups._stable_json(delta))
+            operations = backups._stable_json(delta)
+            (staging / "delta" / "operations.json").write_bytes(operations)
             payload_dir = staging / "payload" / "files"
             payload_dir.mkdir(parents=True, exist_ok=True)
+            payload_files: list[dict[str, Any]] = []
             for put in delta["put"]:
                 src = staging / str(put["path"])
                 if src.is_file():
-                    dest = payload_dir / f"{len(list(payload_dir.iterdir())):06d}"
+                    dest = payload_dir / f"{len(payload_files):06d}"
                     shutil.copyfile(src, dest)
+                    payload_files.append(
+                        {
+                            "path": f"payload/files/{dest.name}",
+                            "size": dest.stat().st_size,
+                            "sha256": hashlib.sha256(dest.read_bytes()).hexdigest(),
+                        }
+                    )
                     put["payloadRef"] = f"payload/files/{dest.name}"
+            # Auxiliary files declared for verification but not restorable.
+            manifest["deltaFiles"] = [
+                {"path": "delta/operations.json", "size": len(operations), "sha256": hashlib.sha256(operations).hexdigest()},
+                *payload_files,
+            ]
             snapshot_meta = {
                 "format": "incremental-v2",
                 "kind": "incremental",
