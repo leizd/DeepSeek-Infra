@@ -10,6 +10,7 @@ import pytest
 
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
+    backup_catalog,
     backup_incremental,
     backup_publish,
     backup_reconcile,
@@ -303,3 +304,129 @@ def test_executor_reuses_spool_without_rebuild(tmp_settings: Path, tmp_path: Pat
 def test_evidence_keys() -> None:
     evidence = {key: "PASS" for key in EVIDENCE_KEYS}
     assert set(evidence) == set(EVIDENCE_KEYS)
+
+
+def test_remote_reconcile_full_paths(tmp_settings: Path, tmp_path: Path) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    store = MemoryTargetStore()
+    put_json_if_absent(store, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    package = _pkg(tmp_path, name="recon1")
+    target = backup_publish.ResolvedTarget(target_id="target_recon", root=None, managed=False, kind="s3", store=store)
+    published = backup_publish.publish_backup(target, package, run_id="run_recon", policy_id="pol", schedule_slot="slot-recon", fencing_token=1)
+    writer = backup_writer_lease.TargetWriterLease(store=store, target_id="target_recon", owner_run_id="rec", owner_instance_id="i", fencing_token=5)
+    writer.acquire()
+    # Backfill catalog event first
+    backup_catalog.append_receipt_store(store, published.receipt, writer=writer)
+    # Add orphan transaction with old timestamp
+    old = (datetime.now(tz=timezone.utc) - timedelta(seconds=90000)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    put_json_if_absent(
+        store,
+        "transactions/run_orphan.json",
+        {"runId": "run_orphan", "policyId": "pol", "scheduleSlot": "slot-x", "phase": "started", "updatedAt": old},
+    )
+    # Non-json transaction key
+    put_json_if_absent(store, "transactions/readme.txt", {"no": "json"})
+    report = backup_reconcile.reconcile_target_store(store, target_id="target_recon", writer=writer, now=datetime.now(tz=timezone.utc))
+    assert "run_orphan" in report["orphanedTransactions"] or report["orphanedTransactions"]
+    writer.release()
+    # reconcile_all_targets with remote + managed
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(
+            "deepseek_infra.infra.workspace.backup_targets.open_target_store",
+            lambda target_id, **k: store,
+        )
+        monkey.setattr(
+            "deepseek_infra.infra.workspace.backup_targets.list_targets",
+            lambda: [{"targetId": "target_recon", "kind": "s3"}],
+        )
+        reports = backup_reconcile.reconcile_all_targets(instance_id="inst_x", now=datetime.now(tz=timezone.utc))
+        assert reports
+    finally:
+        monkey.undo()
+
+
+def test_incremental_sqlite_and_merkle_edges(tmp_settings: Path) -> None:
+    assert backup_incremental.merkle_root([]) == hashlib.sha256(b"").hexdigest()
+    leaves = [backup_incremental.leaf_digest(contributor_id="c", logical_path=f"p{i}", size=i, sha256=f"{i:064d}"[-64:]) for i in range(5)]
+    root = backup_incremental.merkle_root(leaves)
+    assert len(root) == 64
+    files = [backup_incremental.FileRecord("c", f"f{i}", i, f"{i:064d}"[-64:]) for i in range(3)]
+    backup_incremental.record_committed_snapshot(
+        target_id="t",
+        policy_id="p",
+        backup_id="s1",
+        parent_backup_id=None,
+        base_backup_id="s1",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root(files),
+        files=files,
+    )
+    loaded = backup_incremental.load_snapshot_files("t", "p", "s1")
+    assert len(loaded) == 3
+    latest = backup_incremental.latest_committed_snapshot("t", "p")
+    assert latest is not None and latest["backup_id"] == "s1"
+    # replace snapshot files
+    backup_incremental.record_committed_snapshot(
+        target_id="t",
+        policy_id="p",
+        backup_id="s1",
+        parent_backup_id=None,
+        base_backup_id="s1",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root(files[:1]),
+        files=files[:1],
+    )
+    assert len(backup_incremental.load_snapshot_files("t", "p", "s1")) == 1
+    # cycle detection
+    backup_incremental.record_committed_snapshot(
+        target_id="t",
+        policy_id="p",
+        backup_id="a",
+        parent_backup_id="b",
+        base_backup_id="a",
+        chain_depth=0,
+        root_digest="0" * 64,
+        files=[],
+    )
+    backup_incremental.record_committed_snapshot(
+        target_id="t",
+        policy_id="p",
+        backup_id="b",
+        parent_backup_id="a",
+        base_backup_id="a",
+        chain_depth=0,
+        root_digest="0" * 64,
+        files=[],
+    )
+    with pytest.raises(AppError):
+        backup_incremental.ancestor_chain("t", "p", "a")
+
+
+def test_governance_restore_fetch_route(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web import server as server_module
+    from deepseek_infra.web.routes import backup_governance
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(backup_governance, "require_api_auth", lambda _request: None)
+    monkeypatch.setattr(
+        backup_remote_restore,
+        "fetch_restore_session",
+        lambda restore_id, *, client=None, max_bytes=None: {"restoreId": restore_id, "phase": "fetching", "downloadedBytes": 1, "expectedBytes": 2},
+    )
+    client = TestClient(server_module.create_app())
+    resp = client.post("/api/workspace/restores/restore_abc/fetch", json={"maxBytes": 1024})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["restoreId"] == "restore_abc"
+    assert body["phase"] == "fetching"
+    # create route monkeypatched
+    monkeypatch.setattr(
+        backup_remote_restore,
+        "create_restore_from_target",
+        lambda *, target_id, backup_id, client=None: {"restoreId": "restore_new", "phase": "fetching", "downloadedBytes": 0, "expectedBytes": 10},
+    )
+    created = client.post("/api/workspace/restores/from-target", json={"targetId": "t", "backupId": "b"})
+    assert created.status_code == 200
+    assert created.json()["restoreId"] == "restore_new"

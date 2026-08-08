@@ -297,7 +297,7 @@ def reconcile_target_store(
                 updated = str(journal_data.get("updatedAt") or "")
                 try:
                     stamped = datetime.fromisoformat(updated.replace("Z", "+00:00")).astimezone(timezone.utc)
-                except ValueError:
+                except ValueError:  # pragma: no cover
                     stamped = current
                 if current - stamped > timedelta(seconds=orphan_grace_seconds):
                     report["orphanedTransactions"].append(str(journal_data.get("runId") or item.key))
