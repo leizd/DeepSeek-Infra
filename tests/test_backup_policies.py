@@ -196,3 +196,21 @@ def test_list_policies_skips_corrupt_files(tmp_settings: Path) -> None:
     (tmp_settings / ".backup-policies" / "policy_corrupt.json").write_text("{not json", encoding="utf-8")
     (tmp_settings / ".backup-policies" / "other.json").write_text("{}", encoding="utf-8")
     assert [item["policyId"] for item in backup_policies.list_policies()] == [policy["policyId"]]
+
+def test_incremental_validation_errors() -> None:
+    with pytest.raises(AppError, match="maxDeltaRatio must be a number"):
+        backup_policies.normalize_policy(_payload(incremental={"mode": "file-delta", "maxDeltaRatio": "high"}))
+    with pytest.raises(AppError, match="maxDeltaRatio must be between"):
+        backup_policies.normalize_policy(_payload(incremental={"mode": "file-delta", "maxDeltaRatio": 5}))
+    with pytest.raises(AppError, match="largeFileMode"):
+        backup_policies.normalize_policy(_payload(incremental={"mode": "file-delta", "largeFileMode": "fast"}))
+    with pytest.raises(AppError, match="maxChainDepth"):
+        backup_policies.normalize_policy(_payload(incremental={"mode": "file-delta", "maxChainDepth": 0}))
+    with pytest.raises(AppError, match="largeFileThresholdBytes"):
+        backup_policies.normalize_policy(_payload(incremental={"mode": "file-delta", "largeFileThresholdBytes": 1}))
+    with pytest.raises(AppError, match="retry.maxBackoffSeconds must be"):
+        backup_policies.normalize_policy(_payload(retry={"maxAttempts": 3, "initialBackoffSeconds": 600, "maxBackoffSeconds": 60}))
+    with pytest.raises(AppError, match="must be an object"):
+        backup_policies.normalize_policy("not-a-dict")  # type: ignore[arg-type]
+    with pytest.raises(AppError, match="Unsupported backup policy schemaVersion"):
+        backup_policies.normalize_policy(_payload(schemaVersion=99))

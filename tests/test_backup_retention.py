@@ -222,6 +222,19 @@ def test_trashed_descendant_protects_ancestors(tmp_settings: Path, tmp_path: Pat
     assert "F0" in preview2["keep"]
 
 
+def test_protect_ancestors_cycle_and_missing(tmp_settings: Path) -> None:
+    records = [
+        {"backupId": "A", "snapshotKind": "incremental", "parentBackupId": "B"},
+        {"backupId": "B", "snapshotKind": "incremental", "parentBackupId": "A"},
+        {"backupId": "X", "snapshotKind": "incremental", "parentBackupId": "GHOST"},
+    ]
+    keep = {"A", "X"}
+    protected: dict[str, str] = {}
+    backup_retention._protect_snapshot_ancestors(records, keep, protected, descendants={"A", "X"})
+    # A cycle terminates and a missing ancestor breaks the walk without raising.
+    assert "GHOST" not in keep
+
+
 def test_grace_expired_trash_releases_ancestors(tmp_settings: Path, tmp_path: Path) -> None:
     """A grace-expired trashed descendant no longer protects its ancestors."""
     root = tmp_path / "target"

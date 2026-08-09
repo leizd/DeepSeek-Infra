@@ -286,3 +286,17 @@ def test_open_target_store_kinds(tmp_settings: Path) -> None:
     )
     with pytest.raises(AppError):
         backup_targets.open_target_store("target_webdavx")
+
+def test_spool_lookup_miss_and_plan_mismatch(tmp_settings: Path, tmp_path: Path) -> None:
+    assert backup_spool.lookup_verified_package(policy_id="nope", slot_digest="nope") is None
+    package = _pkg(tmp_path)
+    meta = backup_spool.store_verified_package(package, policy_id="pol_miss", schedule_slot="slot-1", run_id="r1", run_plan_digest="plan-A")
+    digest = commit_slot_digest("slot-1")
+    with pytest.raises(AppError, match="run plan digest mismatch"):
+        backup_spool.lookup_verified_package(policy_id="pol_miss", slot_digest=digest, run_plan_digest="plan-B")
+    # Meta present but the ciphertext vanished -> miss.
+    path = backup_spool.package_path("pol_miss", digest)
+    assert path is not None
+    path.unlink()
+    assert backup_spool.lookup_verified_package(policy_id="pol_miss", slot_digest=digest) is None
+    assert meta["ciphertextSha256"]
