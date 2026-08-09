@@ -400,12 +400,14 @@ def cdc_delta_for_file(
         parent_by_hash.setdefault(item.chunk_sha256, item.chunk_ordinal)
     described: list[dict[str, Any]] = []
     for item in current_chunks:
-        if item.chunk_sha256 in parent_by_hash:
+        parent_ordinal = parent_by_hash.get(item.chunk_sha256)
+        if parent_ordinal is not None:
             described.append(
                 {
                     "length": item.length,
                     "sha256": item.chunk_sha256,
                     "source": "parent",
+                    "parentOrdinal": parent_ordinal,
                 }
             )
         else:

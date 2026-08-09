@@ -51,6 +51,31 @@ EVIDENCE_KEYS = (
 )
 
 
+def _stub_crypto(monkeypatch: pytest.MonkeyPatch, prefix: bytes) -> None:
+    """Install the reversible age stub used to exercise the real builder."""
+    from deepseek_infra.infra.workspace import backup_crypto
+
+    def encrypt_stream(target: Path, write_plaintext: object, *, mode: str, secret: object = None, recipients: tuple[str, ...] = (), cancel_event: object = None) -> None:
+        buffer = io.BytesIO()
+        write_plaintext(buffer)  # type: ignore[operator]
+        target.write_bytes(prefix + bytes(buffer.getbuffer())[::-1])
+
+    def decrypt_file(source: Path, target: Path, *, kind: str, secret: bytearray, cancel_event: object = None) -> None:
+        raw = source.read_bytes()
+        assert raw.startswith(prefix)
+        target.write_bytes(raw[len(prefix):][::-1])
+
+    monkeypatch.setattr(backup_crypto, "encrypt_stream", encrypt_stream)
+    monkeypatch.setattr(backup_crypto, "decrypt_file", decrypt_file)
+    monkeypatch.setattr(backup_crypto, "generate_identity", lambda: {"identity": "AGE-SECRET-KEY-1EPH", "recipient": "age1eph"})
+    monkeypatch.setattr(backup_crypto, "inspect_header", lambda _path: {"age": True})
+    monkeypatch.setattr(
+        backup_crypto,
+        "capabilities",
+        lambda: {"encryptedBackupAvailable": True, "formats": ["age-v1"], "protectionModes": ["passphrase", "age-recipient"]},
+    )
+
+
 @pytest.fixture(autouse=True)
 def _tempdir_outside_targets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake = tmp_path / ".sys-temp"
@@ -489,31 +514,10 @@ def test_snapshot_chunk_map_persistence(tmp_settings: Path) -> None:
 def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Drive the real incremental builder: baseline in index -> delta package."""
     from deepseek_infra.core import config
-    from deepseek_infra.infra.workspace import backup_crypto, backup_scheduled
+    from deepseek_infra.infra.workspace import backup_scheduled
 
     prefix = b"age-encryption.org/v1\n"
-
-    def encrypt_stream(target: Path, write_plaintext: object, *, mode: str, secret: object = None, recipients: tuple[str, ...] = (), cancel_event: object = None) -> None:
-        import io
-
-        buffer = io.BytesIO()
-        write_plaintext(buffer)  # type: ignore[operator]
-        target.write_bytes(prefix + bytes(buffer.getbuffer())[::-1])
-
-    def decrypt_file(source: Path, target: Path, *, kind: str, secret: bytearray, cancel_event: object = None) -> None:
-        raw = source.read_bytes()
-        assert raw.startswith(prefix)
-        target.write_bytes(raw[len(prefix):][::-1])
-
-    monkeypatch.setattr(backup_crypto, "encrypt_stream", encrypt_stream)
-    monkeypatch.setattr(backup_crypto, "decrypt_file", decrypt_file)
-    monkeypatch.setattr(backup_crypto, "generate_identity", lambda: {"identity": "AGE-SECRET-KEY-1EPH", "recipient": "age1eph"})
-    monkeypatch.setattr(backup_crypto, "inspect_header", lambda _path: {"age": True})
-    monkeypatch.setattr(
-        backup_crypto,
-        "capabilities",
-        lambda: {"encryptedBackupAvailable": True, "formats": ["age-v1"], "protectionModes": ["passphrase", "age-recipient"]},
-    )
+    _stub_crypto(monkeypatch, prefix)
 
     config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"remember"}]}', encoding="utf-8")
@@ -654,3 +658,139 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
         ops2 = json.loads(archive.read("delta/operations.json"))
     assert ops2["put"] == [] and ops2["delete"] == []
     assert not any(name.startswith("payload/") for name in names2)
+
+
+def test_incremental_builder_cdc_payloads_and_reuse(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CDC emission in the production builder: payload chunks, then parent reuse."""
+    import random
+
+    from deepseek_infra.core import config
+    from deepseek_infra.infra.workspace import backups as _backups
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+
+    prefix = b"age-encryption.org/v1\n"
+    _stub_crypto(monkeypatch, prefix)
+    rng = random.Random(7)
+    big = rng.randbytes(2 * 1024 * 1024)
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    config.MEMORY_FILE.write_bytes(big)
+    policy = backup_policies.create_policy(
+        _policy(incremental={"mode": "file-delta", "largeFileMode": "cdc", "largeFileThresholdBytes": 1024 * 1024})
+    )
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root([]),
+        files=[],
+    )
+    contributor_plan = _backups._contributor_plan(_scheduled._context_from_policy(policy))
+    slot = "2026-03-01T03:00@UTC"
+    plan = backup_run_plan.freeze_run_plan(
+        policy=policy,
+        schedule_slot=slot,
+        slot_digest=commit_slot_digest(slot),
+        contributor_plan=contributor_plan,
+        target_id="managed-local",
+        snapshot_kind="incremental",
+        lineage_id="lineage_cdc",
+        parent_backup_id="F0",
+        base_backup_id="F0",
+        chain_depth=1,
+    )
+    package = _scheduled.build_scheduled_backup(
+        policy,
+        run_id="run_cdc1",
+        staging_root=tmp_settings / ".staging",
+        schedule_slot=slot,
+        backup_id=str(plan["backupId"]),
+        contributor_plan=contributor_plan,
+        snapshot_kind="incremental",
+        parent_backup_id="F0",
+        base_backup_id="F0",
+        lineage_id="lineage_cdc",
+        chain_depth=1,
+    )
+    import zipfile as _zipfile
+
+    raw = package.path.read_bytes()
+    with _zipfile.ZipFile(io.BytesIO(raw[len(prefix):][::-1])) as archive:
+        ops = json.loads(archive.read("delta/operations.json"))
+    big_put = next(item for item in ops["put"] if str(item["path"]).endswith("memories.json"))
+    assert big_put["storage"] == "cdc"
+    assert big_put["size"] == len(big)
+    assert len(big_put["chunks"]) > 1
+    assert all(item["source"] == "payload" for item in big_put["chunks"])
+    assert all(str(item["payloadRef"]).startswith("payload/files/") for item in big_put["chunks"])
+    # First CDC delta uploads every chunk of the file as a distinct blob.
+    delta_paths = [str(item["path"]) for item in package.manifest["deltaFiles"]]
+    chunk_refs = {str(item["payloadRef"]) for item in big_put["chunks"]}
+    assert len(chunk_refs) == len(big_put["chunks"])
+    assert chunk_refs <= set(delta_paths)
+    assert package.chunk_records
+    # Commit I1's file tree and chunk maps to the index, then mutate one byte.
+    real_files = [
+        backup_incremental.FileRecord(str(item["contributorId"]), str(item["path"]), int(item["size"]), str(item["sha256"]))
+        for item in package.manifest["files"]
+    ]
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id=str(plan["backupId"]),
+        parent_backup_id="F0",
+        base_backup_id="F0",
+        chain_depth=1,
+        root_digest=str(package.manifest["snapshot"]["rootDigest"]),
+        files=real_files,
+    )
+    backup_incremental.record_snapshot_chunks(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id=str(plan["backupId"]),
+        chunks=list(package.chunk_records),
+    )
+    mutated = bytearray(big)
+    mutated[len(big) // 2] ^= 0x01
+    config.MEMORY_FILE.write_bytes(bytes(mutated))
+    slot2 = "2026-03-01T04:00@UTC"
+    plan2 = backup_run_plan.freeze_run_plan(
+        policy=policy,
+        schedule_slot=slot2,
+        slot_digest=commit_slot_digest(slot2),
+        contributor_plan=contributor_plan,
+        target_id="managed-local",
+        snapshot_kind="incremental",
+        lineage_id="lineage_cdc",
+        parent_backup_id=str(plan["backupId"]),
+        base_backup_id="F0",
+        chain_depth=2,
+    )
+    package2 = _scheduled.build_scheduled_backup(
+        policy,
+        run_id="run_cdc2",
+        staging_root=tmp_settings / ".staging",
+        schedule_slot=slot2,
+        backup_id=str(plan2["backupId"]),
+        contributor_plan=contributor_plan,
+        snapshot_kind="incremental",
+        parent_backup_id=str(plan["backupId"]),
+        base_backup_id="F0",
+        lineage_id="lineage_cdc",
+        chain_depth=2,
+    )
+    raw2 = package2.path.read_bytes()
+    with _zipfile.ZipFile(io.BytesIO(raw2[len(prefix):][::-1])) as archive:
+        ops2 = json.loads(archive.read("delta/operations.json"))
+    big_put2 = next(item for item in ops2["put"] if str(item["path"]).endswith("memories.json"))
+    assert big_put2["storage"] == "cdc"
+    parent_chunks = [item for item in big_put2["chunks"] if item["source"] == "parent"]
+    payload_chunks = [item for item in big_put2["chunks"] if item["source"] == "payload"]
+    assert len(parent_chunks) >= len(big_put2["chunks"]) - 2
+    assert all("parentOrdinal" in item for item in parent_chunks)
+    assert 0 < len(payload_chunks) < len(big_put2["chunks"])
+    delta_paths2 = [str(item["path"]) for item in package2.manifest["deltaFiles"]]
+    payload_blobs2 = [p for p in delta_paths2 if p.startswith("payload/files/")]
+    assert len(payload_blobs2) == len(payload_chunks)

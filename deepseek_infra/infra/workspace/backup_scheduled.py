@@ -38,6 +38,7 @@ class ScheduledBackupPackage:
     frontend: dict[str, Any]
     coverage: dict[str, Any]
     manifest: dict[str, Any]
+    chunk_records: tuple[Any, ...] = ()
 
 
 def _utc_iso() -> str:
@@ -219,6 +220,7 @@ def _build_candidate(
         # Incremental: build a delta payload containing only changed files, plus
         # an operations manifest, and attest the effective tree Merkle root.
         snapshot_meta: dict[str, Any] = {"kind": "full"}
+        current_chunk_records: list[backup_incremental.ChunkRecord] = []
         if snapshot_kind == "incremental" and parent_backup_id:
             from deepseek_infra.infra.workspace import backup_incremental
 
@@ -242,29 +244,83 @@ def _build_candidate(
             ]
             delta = backup_incremental.diff_trees(parent_files, records, successful_contributors=successful or {c.contributor_id for c in parent_files})
             (staging / "delta").mkdir(exist_ok=True)
+            incremental_cfg = _section(policy, "incremental")
+            large_file_mode = str(incremental_cfg.get("largeFileMode") or "cdc")
+            large_file_threshold = int(incremental_cfg.get("largeFileThresholdBytes") or (16 * 1024 * 1024))
             payload_dir = staging / "payload" / "files"
             payload_dir.mkdir(parents=True, exist_ok=True)
             payload_files: list[dict[str, Any]] = []
             payload_by_sha: dict[str, str] = {}
+            parent_chunks_all: list[backup_incremental.ChunkRecord] = []
+            if parent_backup_id:
+                try:
+                    parent_chunks_all = backup_incremental.load_snapshot_chunks(
+                        str(policy.get("targetId") or "managed-local"), str(policy.get("policyId") or ""), parent_backup_id
+                    )
+                except Exception:
+                    parent_chunks_all = []
             for put in delta["put"]:
                 src = staging / str(put["path"])
-                if src.is_file():
-                    blob_sha = str(put.get("sha256") or "")
-                    existing = payload_by_sha.get(blob_sha)
-                    if existing is not None:
-                        put["payloadRef"] = existing
-                        continue
-                    dest = payload_dir / f"{len(payload_files):06d}"
-                    shutil.copyfile(src, dest)
-                    payload_files.append(
-                        {
-                            "path": f"payload/files/{dest.name}",
-                            "size": dest.stat().st_size,
-                            "sha256": blob_sha,
-                        }
+                if not src.is_file():
+                    continue
+                blob_sha = str(put.get("sha256") or "")
+                is_large = int(put.get("size") or 0) >= large_file_threshold
+                if large_file_mode == "cdc" and is_large:
+                    contributor_id = str(put.get("contributorId") or "")
+                    logical_path = str(put["path"])
+                    parent_chunks = [item for item in parent_chunks_all if item.contributor_id == contributor_id and item.logical_path == logical_path]
+                    with src.open("rb") as handle:
+                        current_chunks = backup_incremental.chunk_map_for(contributor_id, logical_path, handle, file_size=int(put.get("size") or 0))
+                    described = backup_incremental.cdc_delta_for_file(
+                        contributor_id=contributor_id,
+                        logical_path=logical_path,
+                        file_size=int(put.get("size") or 0),
+                        parent_chunks=parent_chunks,
+                        current_chunks=current_chunks,
                     )
-                    payload_by_sha[blob_sha] = f"payload/files/{dest.name}"
-                    put["payloadRef"] = f"payload/files/{dest.name}"
+                    for index, chunk in enumerate(described):
+                        if chunk["source"] != "payload":
+                            continue
+                        chunk_sha = str(chunk.get("sha256") or "")
+                        existing_ref = payload_by_sha.get(chunk_sha)
+                        if existing_ref is not None:
+                            chunk["payloadRef"] = existing_ref
+                            continue
+                        record = current_chunks[index]
+                        dest = payload_dir / f"{len(payload_files):06d}"
+                        with src.open("rb") as handle:
+                            handle.seek(record.offset)
+                            chunk_bytes = handle.read(record.length)
+                        dest.write_bytes(chunk_bytes)
+                        payload_files.append(
+                            {
+                                "path": f"payload/files/{dest.name}",
+                                "size": len(chunk_bytes),
+                                "sha256": chunk_sha,
+                            }
+                        )
+                        payload_by_sha[chunk_sha] = f"payload/files/{dest.name}"
+                        chunk["payloadRef"] = f"payload/files/{dest.name}"
+                    put["storage"] = "cdc"
+                    put["chunks"] = described
+                    put.pop("payloadRef", None)
+                    current_chunk_records.extend(current_chunks)
+                    continue
+                existing = payload_by_sha.get(blob_sha)
+                if existing is not None:
+                    put["payloadRef"] = existing
+                    continue
+                dest = payload_dir / f"{len(payload_files):06d}"
+                shutil.copyfile(src, dest)
+                payload_files.append(
+                    {
+                        "path": f"payload/files/{dest.name}",
+                        "size": dest.stat().st_size,
+                        "sha256": blob_sha,
+                    }
+                )
+                payload_by_sha[blob_sha] = f"payload/files/{dest.name}"
+                put["payloadRef"] = f"payload/files/{dest.name}"
             # Serialize the delta manifest only after every payload reference is
             # allocated so operations.json carries the final payloadRef paths.
             operations = backups._stable_json(delta)
@@ -336,6 +392,7 @@ def _build_candidate(
             frontend=coverage_frontend,
             coverage=coverage,
             manifest=manifest,
+            chunk_records=tuple(current_chunk_records) if snapshot_kind == "incremental" else (),
         )
     finally:
         shutil.rmtree(staging, ignore_errors=True)

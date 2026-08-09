@@ -1997,11 +1997,24 @@ def _verify_manifest_tree(destination: Path) -> dict[str, Any]:
         for put in ops.get("put") or []:
             if not isinstance(put, dict):
                 raise AppError("Backup delta operations manifest is invalid", code=ErrorCode.INVALID_PAYLOAD)
-            ref = str(put.get("payloadRef") or "")
-            if ref and ref not in auxiliary:
-                raise AppError(f"Backup delta references undeclared payload: {ref}", code=ErrorCode.INVALID_PAYLOAD)
-            if ref:
-                referenced.add(ref)
+            if str(put.get("storage") or "whole") == "cdc":
+                chunks = put.get("chunks")
+                if not isinstance(chunks, list):
+                    raise AppError("Backup delta CDC file has no chunk list", code=ErrorCode.INVALID_PAYLOAD)
+                for chunk in chunks:
+                    if not isinstance(chunk, dict):
+                        raise AppError("Backup delta CDC file has an invalid chunk", code=ErrorCode.INVALID_PAYLOAD)
+                    ref = str(chunk.get("payloadRef") or "") if chunk.get("source") == "payload" else ""
+                    if ref and ref not in auxiliary:
+                        raise AppError(f"Backup delta references undeclared payload: {ref}", code=ErrorCode.INVALID_PAYLOAD)
+                    if ref:
+                        referenced.add(ref)
+            else:
+                ref = str(put.get("payloadRef") or "")
+                if ref and ref not in auxiliary:
+                    raise AppError(f"Backup delta references undeclared payload: {ref}", code=ErrorCode.INVALID_PAYLOAD)
+                if ref:
+                    referenced.add(ref)
         if referenced != (auxiliary - {"delta/operations.json"}):
             raise AppError("Backup delta payload has unreferenced blobs", code=ErrorCode.INVALID_PAYLOAD)
     elif actual != (declared_paths | auxiliary):
