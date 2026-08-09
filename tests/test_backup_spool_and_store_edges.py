@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from deepseek_infra.core.errors import AppError
-from deepseek_infra.infra.workspace import backup_remote_restore, backup_spool, backup_targets
+from deepseek_infra.infra.workspace import backup_catalog, backup_remote_restore, backup_spool, backup_targets
 from deepseek_infra.infra.workspace.backup_target_store import (
     MemoryTargetStore,
     commit_marker_key,
@@ -300,3 +300,22 @@ def test_spool_lookup_miss_and_plan_mismatch(tmp_settings: Path, tmp_path: Path)
     path.unlink()
     assert backup_spool.lookup_verified_package(policy_id="pol_miss", slot_digest=digest) is None
     assert meta["ciphertextSha256"]
+
+def test_store_catalog_chain_orphan_and_generation(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = MemoryTargetStore()
+    backup_catalog.append_receipt_store(store, {"backupId": "A", "filename": "A.age", "size": 1, "ciphertextSha256": "a" * 64})
+    backup_catalog.append_receipt_store(store, {"backupId": "B", "filename": "B.age", "size": 1, "ciphertextSha256": "b" * 64})
+    state = backup_catalog.catalog_state_store(store)
+    assert "A" in state and "B" in state
+    # An orphan event for an unknown backup is skipped by the fold.
+    backup_catalog._append_entry_store(store, "scrub", {"backupId": "GHOST", "ok": True})
+    state2 = backup_catalog.catalog_state_store(store)
+    assert "GHOST" not in state2
+    # A store head read failure degrades the generation to zero.
+    from deepseek_infra.infra.workspace import backup_publish
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise AppError("store read failed", status=500)
+    monkeypatch.setattr(backup_publish, "latest_commit_store", _boom)
+    entry = backup_catalog._append_entry_store(store, "receipt", {"backupId": "C", "filename": "C.age", "size": 1, "ciphertextSha256": "c" * 64})
+    assert int(entry.get("targetGeneration") or 0) == 0

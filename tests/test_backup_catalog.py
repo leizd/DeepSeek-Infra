@@ -111,3 +111,20 @@ def test_corrupt_catalog_raises_actionable_error(tmp_path: Path) -> None:
 def test_append_receipt_requires_identity(tmp_path: Path) -> None:
     with pytest.raises(AppError):
         backup_catalog.append_receipt(tmp_path, {"filename": "f"})
+
+def test_rebuild_catalog_loads_events_and_skips_corrupt(tmp_path: Path) -> None:
+    catalog = backup_catalog.catalog_path(tmp_path)
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text("{bad json\n", encoding="utf-8")
+    events = tmp_path / "events" / "pol"
+    events.mkdir(parents=True)
+    payload = {"backupId": "A"}
+    entry_hash = backup_catalog._entry_hash("receipt", payload, backup_catalog.GENESIS_HASH)
+    (events / "e1.json").write_text(
+        json.dumps({"entryHash": entry_hash, "type": "receipt", "payload": payload, "previousEntryHash": backup_catalog.GENESIS_HASH}), encoding="utf-8"
+    )
+    (events / "e2.json").write_text("{bad", encoding="utf-8")
+    result = backup_catalog.rebuild_catalog_from_receipts(tmp_path)
+    state = backup_catalog.catalog_state(tmp_path)
+    assert "A" in state
+    assert result["chainValid"] is True
