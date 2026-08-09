@@ -2099,9 +2099,9 @@ def test_verify_manifest_tree_incremental_error_branches(tmp_path: Path) -> None
         "snapshotKind": "incremental",
         "files": [{"contributorId": "local", "path": "payload/local/a.txt", "size": 4, "sha256": sha}],
     }
-    empty_ops = {"put": [], "delete": []}
+    empty_ops: dict[str, object] = {"put": [], "delete": []}
     with pytest.raises(AppError, match="inventory is invalid"):
-        m = dict(base_manifest)
+        m: dict[str, object] = dict(base_manifest)
         m["deltaFiles"] = [None]
         _verify_tree = _write_delta_verify_tree(tmp_path / "e1", manifest=m, ops=empty_ops, disk={})
         _backups._verify_manifest_tree(_verify_tree)
