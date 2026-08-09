@@ -1139,6 +1139,94 @@ def test_true_delta_size_regression(tmp_settings: Path, monkeypatch: pytest.Monk
     assert pkg1.size < pkg0.size * 0.5  # type: ignore[attr-defined]
 
 
+def test_corrupt_payload_chunk_fails_closed(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Corrupting a CDC payload chunk must fail the chain restore closed."""
+    import random
+    import zipfile
+
+    from deepseek_infra.core import config
+    from deepseek_infra.infra.workspace import backup_incremental_restore
+    from deepseek_infra.infra.workspace import backups as _backups
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+
+    prefix = b"age-encryption.org/v1\n"
+    _stub_crypto(monkeypatch, prefix)
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    memories = config.MEMORY_DIR / "memories.json"
+    big = random.Random(19).randbytes(4 * 1024 * 1024)
+    memories.write_bytes(big)
+    policy = backup_policies.create_policy(
+        _policy(incremental={"mode": "file-delta", "largeFileMode": "cdc", "largeFileThresholdBytes": 1024 * 1024})
+    )
+    contributor_plan = _backups._contributor_plan(_scheduled._context_from_policy(policy))
+
+    def build(slot: str, kind: str, parent: str | None = None, base: str | None = None, depth: int = 0) -> object:
+        plan = backup_run_plan.freeze_run_plan(
+            policy=policy,
+            schedule_slot=slot,
+            slot_digest=commit_slot_digest(slot),
+            contributor_plan=contributor_plan,
+            target_id="managed-local",
+            snapshot_kind=kind,
+            lineage_id="F0",
+            parent_backup_id=parent,
+            base_backup_id=base,
+            chain_depth=depth,
+        )
+        return _scheduled.build_scheduled_backup(
+            policy,
+            run_id=f"run_corrupt_{int(hashlib.sha256(slot.encode()).hexdigest()[:8], 16)}",
+            staging_root=tmp_settings / ".staging",
+            schedule_slot=slot,
+            backup_id=str(plan["backupId"]),
+            contributor_plan=contributor_plan,
+            snapshot_kind=kind,
+            parent_backup_id=parent,
+            base_backup_id=base,
+            lineage_id="F0",
+            chain_depth=depth,
+        )
+
+    pkg0 = build("2026-09-01T03:00@UTC", "full")
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root(
+            [backup_incremental.FileRecord(str(i["contributorId"]), str(i["path"]), int(i["size"]), str(i["sha256"])) for i in pkg0.manifest["files"]]  # type: ignore[attr-defined]
+        ),
+        files=[backup_incremental.FileRecord(str(i["contributorId"]), str(i["path"]), int(i["size"]), str(i["sha256"])) for i in pkg0.manifest["files"]],  # type: ignore[attr-defined]
+    )
+    backup_incremental.record_snapshot_chunks(
+        target_id="managed-local", policy_id=str(policy["policyId"]), backup_id="F0", chunks=list(pkg0.chunk_records)  # type: ignore[attr-defined]
+    )
+    mutated = bytearray(big)
+    mutated[3 * 1024 * 1024] ^= 0x08
+    memories.write_bytes(bytes(mutated))
+    pkg1 = build("2026-09-01T04:00@UTC", "incremental", parent="F0", base="F0", depth=1)
+
+    def extract(package: object, dest: Path) -> None:
+        raw = package.path.read_bytes()  # type: ignore[attr-defined]
+        dest.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(raw[len(prefix):][::-1])) as archive:
+            archive.extractall(dest)
+
+    roots = [tmp_settings / "corrupt0", tmp_settings / "corrupt1"]
+    extract(pkg0, roots[0])
+    extract(pkg1, roots[1])
+    payload_blobs = sorted((roots[1] / "payload" / "files").glob("*")) if (roots[1] / "payload" / "files").is_dir() else []
+    assert payload_blobs, "incremental must carry CDC payload chunks"
+    blob = payload_blobs[0]
+    corrupted = bytearray(blob.read_bytes())
+    corrupted[len(corrupted) // 2] ^= 0xFF
+    blob.write_bytes(bytes(corrupted))
+    with pytest.raises(AppError):
+        backup_incremental_restore.materialize_chain(roots, tmp_settings / "out_corrupt_chunk")
+
+
 def test_full_snapshot_computes_chunk_maps(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Full snapshots chunk large files so the first delta can reuse parents."""
     import random
