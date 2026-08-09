@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from deepseek_infra.core.errors import AppError
-from deepseek_infra.infra.workspace import backup_catalog, backup_retention, backup_scheduler, backups
+from deepseek_infra.infra.workspace import backup_catalog, backup_retention, backup_scheduler, backup_unattended, backups
 
 
 UTC = timezone.utc
@@ -271,3 +271,45 @@ def test_list_policies_skips_corrupt_and_invalid_created_at(tmp_settings: Path, 
     policy = _policy(keepLast=1, keepHourly=0, keepDaily=0, keepWeekly=0, keepMonthly=0, minimumHealthyCopies=1)
     preview = _br.preview_retention(policy, root, now=now)
     assert "good_latest" in preview["keep"] or "good_latest" in preview["trash"]
+
+def test_healthy_records_schema2_marker_validation(tmp_settings: Path, tmp_path: Path) -> None:
+    from deepseek_infra.infra.workspace import backup_publish
+
+    root = tmp_path / "target"
+    (root / "backups").mkdir(parents=True)
+    (root / "backups" / "a.dsibackup.age").write_bytes(b"not-an-age-file")
+    receipt = {
+        "backupId": "a",
+        "schemaVersion": 2,
+        "filename": "a.dsibackup.age",
+        "size": 15,
+        "objectDigest": "d" * 64,
+        "ciphertextSha256": "d" * 64,
+        "creationVerified": True,
+    }
+    backup_catalog.append_receipt(root, receipt)
+    records = [backup_catalog.catalog_state(root)["a"]]
+    marker_path = root / "commits" / "pol" / "slot.json"
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def write_marker(**fields: object) -> None:
+        marker = {"backupId": "a", "objectDigest": "d" * 64, "targetGeneration": 1}
+        marker.update(fields)
+        marker["commitHash"] = backup_publish._commit_hash(marker)
+        marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+    # Marker object digest mismatch -> not healthy.
+    write_marker(objectDigest="e" * 64)
+    assert backup_retention._healthy_records(records, root) == []
+    # Matching marker but the receipt file is missing -> not healthy.
+    write_marker()
+    assert backup_retention._healthy_records(records, root) == []
+    # Receipt digest mismatch -> not healthy.
+    (root / "receipts").mkdir(parents=True, exist_ok=True)
+    receipt_file = root / "receipts" / "a.json"
+    receipt_file.write_text(json.dumps(receipt), encoding="utf-8")
+    write_marker(receiptDigest="0" * 64)
+    assert backup_retention._healthy_records(records, root) == []
+    # Valid marker + receipt but a non-age payload header -> not healthy.
+    write_marker(receiptDigest=backup_unattended.sha256_file(receipt_file))
+    assert backup_retention._healthy_records(records, root) == []
