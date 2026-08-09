@@ -170,6 +170,11 @@ def test_cdc_boundary_deterministic_and_bounded_memory(tmp_settings: Path) -> No
     assert sum(item["length"] for item in chunks1) == len(data)
     assert all(item["length"] <= backup_incremental.CDC_MAX_CHUNK for item in chunks1)
     assert len(chunks1) > 1
+    # Chunk ranges must tile the file contiguously with no overlaps or gaps.
+    for previous, current in zip(chunks1, chunks1[1:]):
+        assert current["offset"] == previous["offset"] + previous["length"]
+    assert chunks1[0]["offset"] == 0
+    assert chunks1[-1]["offset"] + chunks1[-1]["length"] == len(data)
     # Middle insertion: boundaries after the perturbation resync, so the tail
     # chunks are byte-identical and reused.
     inserted = data[: 2 * 1024 * 1024] + b"x" * (512 * 1024) + data[2 * 1024 * 1024 :]

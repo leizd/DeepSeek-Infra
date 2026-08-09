@@ -330,14 +330,21 @@ def chunk_stream(
                     }
                 )
                 chunk = bytearray()
-                chunk_start = offset + len(data)
+                chunk_start = offset + 1
                 fp = 0
             offset += 1
     if chunk:
         data = bytes(chunk)
         chunks.append({"offset": chunk_start, "length": len(data), "sha256": hashlib.sha256(data).hexdigest()})
-    # Safety: the emitted ranges must exactly cover the file.
+    # Safety: the emitted ranges must exactly and contiguously cover the file.
     if sum(item["length"] for item in chunks) != file_size:
+        raise AppError("CDC chunking produced non-covering ranges", code=ErrorCode.INTERNAL, status=500)
+    expected = 0
+    for item in chunks:
+        if int(item["offset"]) != expected:
+            raise AppError("CDC chunking produced non-contiguous ranges", code=ErrorCode.INTERNAL, status=500)
+        expected += int(item["length"])
+    if expected != file_size:
         raise AppError("CDC chunking produced non-covering ranges", code=ErrorCode.INTERNAL, status=500)
     return chunks
 
