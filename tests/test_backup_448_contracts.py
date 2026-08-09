@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -595,7 +596,7 @@ def test_incremental_chain_materialize_e2e(tmp_settings: Path, monkeypatch: pyte
     pkg1 = build("2026-05-01T04:00@UTC", "run_chain1", "incremental", parent="F0", base="F0", depth=1)
     record(pkg1, str(pkg1.backup_id), "F0", "F0", 1)  # type: ignore[attr-defined]
     mutated2 = bytearray(mutated1)
-    mutated2[100] ^= 0x02
+    mutated2[1024 * 1024] ^= 0x02
     memories.write_bytes(bytes(mutated2))
     pkg2 = build("2026-05-01T05:00@UTC", "run_chain2", "incremental", parent=str(pkg1.backup_id), base="F0", depth=2)  # type: ignore[attr-defined]
 
@@ -1361,6 +1362,297 @@ def test_store_incremental_restore_end_to_end(tmp_settings: Path, monkeypatch: p
         if source.is_file():
             relative = source.relative_to(config.MEMORY_DIR).as_posix()
             assert (tree / "payload" / "memory" / relative).is_file()
+
+
+def _manual_chain(tmp_path: Path) -> tuple[Path, Path, str]:
+    """A minimal valid F0+I1 chain for materializer error-branch coverage."""
+    content = b"data"
+    sha = hashlib.sha256(content).hexdigest()
+    record = backup_incremental.FileRecord("local", "payload/local/a.txt", len(content), sha)
+    f0_root = backup_incremental.snapshot_root([record])
+    f0_dir = tmp_path / "mc-f0"
+    (f0_dir / "payload" / "local").mkdir(parents=True)
+    (f0_dir / "payload" / "local" / "a.txt").write_bytes(content)
+    (f0_dir / "manifest.json").write_text(
+        json.dumps({"files": [{"contributorId": "local", "path": "payload/local/a.txt", "size": 4, "sha256": sha}], "snapshot": {"rootDigest": f0_root}}),
+        encoding="utf-8",
+    )
+    i1_dir = tmp_path / "mc-i1"
+    (i1_dir / "delta").mkdir(parents=True)
+    ops = {"put": [], "delete": [], "parentRootDigest": f0_root, "rootDigest": f0_root}
+    (i1_dir / "delta" / "operations.json").write_text(json.dumps(ops), encoding="utf-8")
+    (i1_dir / "manifest.json").write_text(
+        json.dumps(
+            {"files": [{"contributorId": "local", "path": "payload/local/a.txt", "size": 4, "sha256": sha}], "snapshotKind": "incremental", "snapshot": {"rootDigest": f0_root}}
+        ),
+        encoding="utf-8",
+    )
+    return f0_dir, i1_dir, f0_root
+
+
+def test_materialize_chain_error_branches(tmp_settings: Path, tmp_path: Path) -> None:
+    from deepseek_infra.infra.workspace import backup_incremental_restore
+
+    f0_dir, i1_dir, f0_root = _manual_chain(tmp_path)
+    with pytest.raises(AppError):
+        backup_incremental_restore.materialize_chain([], tmp_path / "e-empty")
+    # First member must be a full baseline.
+    with pytest.raises(AppError, match="full baseline"):
+        backup_incremental_restore.materialize_chain([i1_dir], tmp_path / "e-baseline")
+    # Missing manifest.json.
+    broken = tmp_path / "e-nomanifest"
+    broken.mkdir(parents=True)
+    with pytest.raises(AppError, match="manifest"):
+        backup_incremental_restore.materialize_chain([broken, i1_dir], tmp_path / "e-m")
+    # Full baseline Merkle root mismatch.
+    bad_f0 = tmp_path / "e-badroot"
+    shutil.copytree(f0_dir, bad_f0)
+    (bad_f0 / "manifest.json").write_text(
+        (bad_f0 / "manifest.json").read_text(encoding="utf-8").replace(f0_root, "0" * 64), encoding="utf-8"
+    )
+    with pytest.raises(AppError, match="Merkle root mismatch"):
+        backup_incremental_restore.materialize_chain([bad_f0, i1_dir], tmp_path / "e-r")
+    # Invalid delta ops (missing put/delete).
+    bad_ops = tmp_path / "e-ops"
+    shutil.copytree(i1_dir, bad_ops)
+    (bad_ops / "delta" / "operations.json").write_text(json.dumps({"nope": 1}), encoding="utf-8")
+    with pytest.raises(AppError):
+        backup_incremental_restore.materialize_chain([f0_dir, bad_ops], tmp_path / "e-ops2")
+    # Parent root mismatch at the incremental layer.
+    bad_parent = tmp_path / "e-parent"
+    shutil.copytree(i1_dir, bad_parent)
+    (bad_parent / "delta" / "operations.json").write_text(
+        json.dumps({"put": [], "delete": [], "parentRootDigest": "0" * 64, "rootDigest": f0_root}), encoding="utf-8"
+    )
+    with pytest.raises(AppError, match="parent root mismatch"):
+        backup_incremental_restore.materialize_chain([f0_dir, bad_parent], tmp_path / "e-p")
+    # Whole put missing blob.
+    whole = _ops_with_put({"path": "payload/local/b.txt", "size": 1, "sha256": "1" * 64, "storage": "whole", "payloadRef": "payload/files/099"}, f0_root)
+    bad_blob = tmp_path / "e-blob"
+    shutil.copytree(i1_dir, bad_blob)
+    (bad_blob / "delta" / "operations.json").write_text(json.dumps(whole), encoding="utf-8")
+    with pytest.raises(AppError, match="missing"):
+        backup_incremental_restore.materialize_chain([f0_dir, bad_blob], tmp_path / "e-blob2")
+    # Unsupported storage.
+    weird = _ops_with_put({"path": "payload/local/b.txt", "size": 1, "sha256": "1" * 64, "storage": "weird", "payloadRef": "x"}, f0_root)
+    bad_storage = tmp_path / "e-storage"
+    shutil.copytree(i1_dir, bad_storage)
+    (bad_storage / "delta" / "operations.json").write_text(json.dumps(weird), encoding="utf-8")
+    with pytest.raises(AppError, match="Unsupported delta storage"):
+        backup_incremental_restore.materialize_chain([f0_dir, bad_storage], tmp_path / "e-st")
+    # Whole put checksum mismatch.
+    payload_dir = tmp_path / "e-checksum"
+    shutil.copytree(i1_dir, payload_dir)
+    (payload_dir / "payload" / "files").mkdir(parents=True)
+    (payload_dir / "payload" / "files" / "000000").write_bytes(b"zzzz")
+    checksum_put = _ops_with_put(
+        {"path": "payload/local/b.txt", "size": 4, "sha256": hashlib.sha256(b"zzzzz").hexdigest(), "storage": "whole", "payloadRef": "payload/files/000000"}, f0_root
+    )
+    (payload_dir / "delta" / "operations.json").write_text(json.dumps(checksum_put), encoding="utf-8")
+    with pytest.raises(AppError, match="failed checksum"):
+        backup_incremental_restore.materialize_chain([f0_dir, payload_dir], tmp_path / "e-c")
+    # CDC invalid parent ordinal.
+    cdc_put = _ops_with_put(
+        {"path": "payload/local/a.txt", "size": 4, "sha256": sha_of("data"), "storage": "cdc", "chunks": [{"length": 4, "sha256": sha_of("data"), "source": "parent", "parentOrdinal": 99}]},
+        f0_root,
+    )
+    bad_cdc = tmp_path / "e-cdc"
+    shutil.copytree(i1_dir, bad_cdc)
+    (bad_cdc / "delta" / "operations.json").write_text(json.dumps(cdc_put), encoding="utf-8")
+    with pytest.raises(AppError, match="invalid parent chunk"):
+        backup_incremental_restore.materialize_chain([f0_dir, bad_cdc], tmp_path / "e-cdc2")
+    # CDC missing parent file.
+    cdc_missing = _ops_with_put(
+        {"path": "payload/local/new.bin", "size": 4, "sha256": sha_of("data"), "storage": "cdc", "chunks": [{"length": 4, "sha256": sha_of("data"), "source": "payload", "payloadRef": "payload/files/000000"}]},
+        f0_root,
+    )
+    bad_cdc_missing = tmp_path / "e-cdcm"
+    shutil.copytree(i1_dir, bad_cdc_missing)
+    (bad_cdc_missing / "delta" / "operations.json").write_text(json.dumps(cdc_missing), encoding="utf-8")
+    with pytest.raises(AppError, match="missing parent file"):
+        backup_incremental_restore.materialize_chain([f0_dir, bad_cdc_missing], tmp_path / "e-cdcm2")
+    # Corrupt / non-dict manifest.
+    bad_manifest = tmp_path / "e-mf"
+    shutil.copytree(i1_dir, bad_manifest)
+    (bad_manifest / "manifest.json").write_text("not json", encoding="utf-8")
+    with pytest.raises(AppError, match="manifest is invalid"):
+        backup_incremental_restore.materialize_chain([f0_dir, bad_manifest], tmp_path / "e-mf2")
+    bad_list = tmp_path / "e-ml"
+    shutil.copytree(i1_dir, bad_list)
+    (bad_list / "manifest.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(AppError, match="manifest is invalid"):
+        backup_incremental_restore.materialize_chain([f0_dir, bad_list], tmp_path / "e-ml2")
+    bad_item = tmp_path / "e-mi"
+    shutil.copytree(i1_dir, bad_item)
+    (bad_item / "manifest.json").write_text(json.dumps({"files": ["nope"], "snapshotKind": "incremental"}), encoding="utf-8")
+    with pytest.raises(AppError, match="inventory is invalid"):
+        backup_incremental_restore.materialize_chain([f0_dir, bad_item], tmp_path / "e-mi2")
+    # Missing operations manifest.
+    no_ops = tmp_path / "e-noops"
+    shutil.copytree(i1_dir, no_ops)
+    (no_ops / "delta" / "operations.json").unlink()
+    with pytest.raises(AppError, match="missing its operations"):
+        backup_incremental_restore.materialize_chain([f0_dir, no_ops], tmp_path / "e-noops2")
+    # CDC chunk list / entries / lengths malformed.
+    for label, chunks, match in (
+        ("nocl", "not-a-list", "no chunk list"),
+        ("badchunk", [None], "invalid chunk"),
+        ("lenmismatch", [{"source": "parent", "parentOrdinal": 0, "length": 999, "sha256": sha_of("data")}], "length mismatch"),
+        ("missingref", [{"source": "payload", "length": 4, "sha256": sha_of("data")}], "missing"),
+        ("lenmis", [{"source": "payload", "length": 999, "sha256": sha_of("data"), "payloadRef": "payload/files/000000"}], "length mismatch"),
+        ("shamis", [{"source": "payload", "length": 4, "sha256": "0" * 64, "payloadRef": "payload/files/000000"}], "checksum mismatch"),
+    ):
+        branch = tmp_path / f"e-cdc-{label}"
+        shutil.copytree(i1_dir, branch)
+        (branch / "payload" / "files").mkdir(parents=True, exist_ok=True)
+        (branch / "payload" / "files" / "000000").write_bytes(b"data")
+        op = _ops_with_put(
+            {"path": "payload/local/a.txt", "size": 4, "sha256": sha_of("data"), "storage": "cdc", "chunks": chunks},
+            f0_root,
+        )
+        (branch / "delta" / "operations.json").write_text(json.dumps(op), encoding="utf-8")
+        with pytest.raises(AppError, match=match):
+            backup_incremental_restore.materialize_chain([f0_dir, branch], tmp_path / f"e-cdc-{label}-out")
+    # Delete of a declared file.
+    del_dir = tmp_path / "e-del"
+    shutil.copytree(i1_dir, del_dir)
+    (del_dir / "delta" / "operations.json").write_text(
+        json.dumps({"put": [], "delete": [{"contributorId": "local", "path": "payload/local/a.txt"}], "parentRootDigest": f0_root, "rootDigest": backup_incremental.snapshot_root([])}), encoding="utf-8"
+    )
+    out_del = tmp_path / "e-del-out"
+    backup_incremental_restore.materialize_chain([f0_dir, del_dir], out_del)
+    assert not (out_del / "payload" / "local" / "a.txt").exists()
+    # Non-dict put / delete entries.
+    bad_entries = tmp_path / "e-bade"
+    shutil.copytree(i1_dir, bad_entries)
+    (bad_entries / "delta" / "operations.json").write_text(
+        json.dumps({"put": ["x"], "delete": [], "parentRootDigest": f0_root, "rootDigest": f0_root}), encoding="utf-8"
+    )
+    with pytest.raises(AppError, match="invalid"):
+        backup_incremental_restore.materialize_chain([f0_dir, bad_entries], tmp_path / "e-bade2")
+
+
+def _ops_with_put(put: dict, f0_root: str) -> dict:
+    return {"put": [put], "delete": [], "parentRootDigest": f0_root, "rootDigest": backup_incremental.snapshot_root([])}
+
+
+def sha_of(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def test_restore_session_error_branches(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_remote_restore
+    from deepseek_infra.infra.workspace.backup_target_store import object_key
+
+    store = MemoryTargetStore()
+    put_json_if_absent(store, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    target = backup_publish.ResolvedTarget(target_id="target_er", root=None, managed=False, kind="s3", store=store)
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda *a, **k: target)
+    # Unknown restore session.
+    with pytest.raises(AppError):
+        backup_remote_restore.materialize_restore_session("restore_nope", secret=bytearray(4))
+    # Receipt missing on target.
+    with pytest.raises(AppError):
+        backup_remote_restore.create_restore_from_target(target_id="target_er", backup_id="missing")
+    # Receipt with an invalid digest.
+    put_json_if_absent(store, "receipts/short.json", {"backupId": "short", "objectDigest": "nope", "filename": "s.age", "size": 1})
+    with pytest.raises(AppError):
+        backup_remote_restore.create_restore_from_target(target_id="target_er", backup_id="short")
+    # Chain member ciphertext missing on target.
+    for bid, parent in (("F0", None), ("I1", "F0")):
+        raw = f"age-encryption.org/v1\n{bid}".encode()
+        digest = hashlib.sha256(raw).hexdigest()
+        store.put_if_absent(object_key(digest), raw, checksum_sha256=digest)
+        put_json_if_absent(
+            store,
+            f"receipts/{bid}.json",
+            {"backupId": bid, "objectDigest": digest, "filename": f"{bid}.age", "size": len(raw), "snapshotKind": "full" if parent is None else "incremental", "parentBackupId": parent, "baseBackupId": "F0"},
+        )
+    put_json_if_absent(
+        store,
+        "commits/pol/slot.json",
+        {"commitHash": "c" * 64, "backupId": "I1", "objectDigest": hashlib.sha256(b"age-encryption.org/v1\nI1").hexdigest(), "targetGeneration": 1},
+    )
+    # Corrupt I1's object so the chain fetch fails closed.
+    created = backup_remote_restore.create_restore_from_target(target_id="target_er", backup_id="I1")
+    assert created["chain"] == ["F0", "I1"]
+    restore_id = str(created["restoreId"])
+    # A chain whose member object is missing fails the fetch closed.
+    session_path = tmp_settings / ".restore-staging" / restore_id / "remote-fetch.json"
+    from deepseek_infra.infra.workspace import backups as _b
+
+    if not session_path.is_file():
+        session_path = _b.RESTORE_DIR / restore_id / "remote-fetch.json"
+    data = json.loads(session_path.read_text(encoding="utf-8"))
+    data["chain"] = [dict(item) for item in data["chain"]]
+    data["chain"][0]["objectDigest"] = "0" * 64
+    session_path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AppError):
+        backup_remote_restore.fetch_restore_session(restore_id)
+    # Materializing before the chain finishes fetching is rejected.
+    data["phase"] = "fetching-chain"
+    data["chain"] = [dict(item) for item in data["chain"]]
+    data["chain"][0]["objectDigest"] = hashlib.sha256(b"age-encryption.org/v1\nF0").hexdigest()
+    session_path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AppError):
+        backup_remote_restore.materialize_restore_session(restore_id, secret=bytearray(4))
+    # Receipt with a valid digest but no formal commit marker is rejected.
+    no_commit_store = MemoryTargetStore()
+    put_json_if_absent(no_commit_store, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    raw = b"age-encryption.org/v1\nnc"
+    digest = hashlib.sha256(raw).hexdigest()
+    no_commit_store.put_if_absent(object_key(digest), raw, checksum_sha256=digest)
+    put_json_if_absent(no_commit_store, "receipts/nc.json", {"backupId": "nc", "objectDigest": digest, "filename": "nc.age", "size": len(raw)})
+    target2 = backup_publish.ResolvedTarget(target_id="target_nc", root=None, managed=False, kind="s3", store=no_commit_store)
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda *a, **k: target2)
+    with pytest.raises(AppError, match="no formal slot commit"):
+        backup_remote_restore.create_restore_from_target(target_id="target_nc", backup_id="nc")
+    # A chain referencing a missing intermediate fails closed at creation.
+    broken_store = MemoryTargetStore()
+    put_json_if_absent(broken_store, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    for bid, parent in (("F0", None), ("I1", "F0"), ("I2", "GHOST")):
+        raw = f"age-encryption.org/v1\n{bid}-broken".encode()
+        digest = hashlib.sha256(raw).hexdigest()
+        broken_store.put_if_absent(object_key(digest), raw, checksum_sha256=digest)
+        put_json_if_absent(
+            broken_store,
+            f"receipts/{bid}.json",
+            {"backupId": bid, "objectDigest": digest, "filename": f"{bid}.age", "size": len(raw), "snapshotKind": "full" if parent is None else "incremental", "parentBackupId": parent, "baseBackupId": "F0"},
+        )
+    put_json_if_absent(
+        broken_store,
+        "commits/pol/slot.json",
+        {"commitHash": "c" * 64, "backupId": "I2", "objectDigest": hashlib.sha256(b"age-encryption.org/v1\nI2-broken").hexdigest(), "targetGeneration": 1},
+    )
+    target3 = backup_publish.ResolvedTarget(target_id="target_broken", root=None, managed=False, kind="s3", store=broken_store)
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda *a, **k: target3)
+    with pytest.raises(AppError):
+        backup_remote_restore.create_restore_from_target(target_id="target_broken", backup_id="I2")
+
+
+def test_scheduled_backup_error_branches(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scheduled builder fail-closed paths: no recipients, retry exhaustion."""
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+    from deepseek_infra.infra.workspace import mutation_gate
+
+    _stub_crypto(monkeypatch, b"age-encryption.org/v1\n")
+    # A policy without recipients is refused.
+    policy = backup_policies.create_policy(_policy(incremental={"mode": "file-delta"}))
+    policy["protection"] = {"mode": "age-recipient", "recipients": []}
+    with pytest.raises(AppError, match="no recipients"):
+        _scheduled.build_scheduled_backup(policy, run_id="run_norec", staging_root=tmp_settings / ".staging")
+    # A workspace that keeps changing exhausts the three attempts.
+    counter = {"n": 0}
+
+    def flaky_generation(_root: object) -> int:
+        counter["n"] += 1
+        return counter["n"]
+
+    monkeypatch.setattr(mutation_gate, "read_generation", flaky_generation)
+    policy2 = backup_policies.create_policy(_policy(incremental={"mode": "file-delta"}))
+    with pytest.raises(AppError, match="Workspace changed repeatedly"):
+        _scheduled.build_scheduled_backup(policy2, run_id="run_exhaust", staging_root=tmp_settings / ".staging")
+    assert counter["n"] >= 6
 
 
 def test_full_snapshot_computes_chunk_maps(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:

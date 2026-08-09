@@ -1,4 +1,4 @@
-"""fastcdc-gear-v2 golden vectors and protocol contracts (4.4.9).
+"""fastcdc-gear-v2 golden vectors and protocol contracts.
 
 The protocol version is pinned: any change to the gear table, the boundary
 masks, the min/avg/max sizes, or the rolling-hash update silently changes every

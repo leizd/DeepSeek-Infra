@@ -127,7 +127,10 @@ def _materialize_cdc(output_root: Path, package_root: Path, target: Path, put: d
                 raise AppError(f"Delta CDC file has an invalid chunk: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
             length = int(chunk.get("length") or 0)
             if str(chunk.get("source") or "") == "parent":
-                ordinal = int(chunk.get("parentOrdinal") or -1)
+                raw_ordinal = chunk.get("parentOrdinal")
+                if not isinstance(raw_ordinal, int):
+                    raise AppError(f"Delta CDC references an invalid parent chunk: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
+                ordinal = raw_ordinal
                 if ordinal < 0 or ordinal >= len(parent_ranges):
                     raise AppError(f"Delta CDC references an invalid parent chunk: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
                 offset, chunk_length = parent_ranges[ordinal]
@@ -179,6 +182,9 @@ def materialize_chain(package_roots: list[Path], output_root: Path) -> dict[str,
                 raise AppError("Full baseline Merkle root mismatch", code=ErrorCode.INVALID_PAYLOAD)
             continue
         ops = _read_delta_ops(package_root)
+        # The parent snapshot for this layer is the materialized tree after the
+        # previous layer; a cross-layer parent cache would be stale.
+        parent_files.clear()
         if str(ops.get("parentRootDigest") or "") != backup_incremental.snapshot_root(current):
             raise AppError(f"Incremental chain parent root mismatch at {index}", code=ErrorCode.INVALID_PAYLOAD)
         for delete in ops.get("delete") or []:
