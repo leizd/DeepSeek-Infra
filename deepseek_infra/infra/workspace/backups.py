@@ -207,7 +207,7 @@ class DirectoryContributor:
             size = target.stat().st_size
             file_digest = _sha256_file(target)
             package_path = target.relative_to(staging_dir).as_posix()
-            entry = {"path": package_path, "size": size, "sha256": file_digest}
+            entry = {"contributorId": self.contributor_id, "path": package_path, "size": size, "sha256": file_digest}
             files.append(entry)
             digest.update(_stable_json(entry))
         return BackupContribution(
@@ -410,7 +410,7 @@ class StatelessMcpContributor:
                     response.read(64_000)
             except AppError:
                 pass
-        entry = {"path": f"payload/{self.contributor_id}/state.jsonl", "size": receipt.bytes, "sha256": receipt.sha256}
+        entry = {"contributorId": self.contributor_id, "path": f"payload/{self.contributor_id}/state.jsonl", "size": receipt.bytes, "sha256": receipt.sha256}
         return BackupContribution(
             contributor_id=self.contributor_id,
             schema_version=self.schema_version,
@@ -1770,6 +1770,7 @@ def _build_archive(
             frontend_target.parent.mkdir(parents=True)
             shutil.copyfile(frontend_path, frontend_target)
             entry = {
+                "contributorId": "frontend",
                 "path": "frontend/state.json",
                 "size": frontend_target.stat().st_size,
                 "sha256": _sha256_file(frontend_target),
@@ -1789,6 +1790,7 @@ def _build_archive(
         raw_migration = migration_path.read_bytes()
         files.append(
             {
+                "contributorId": "migration",
                 "path": "migration/source-schemas.json",
                 "size": len(raw_migration),
                 "sha256": hashlib.sha256(raw_migration).hexdigest(),

@@ -154,8 +154,8 @@ def _build_candidate(
             sealed_meta_target = frontend_dir / "sealed-state.meta.json"
             shutil.copyfile(ciphertext, sealed_target)
             shutil.copyfile(metadata_path, sealed_meta_target)
-            files.append({"path": "frontend/sealed-state.age", "size": sealed_target.stat().st_size, "sha256": backups._sha256_file(sealed_target)})
-            files.append({"path": "frontend/sealed-state.meta.json", "size": sealed_meta_target.stat().st_size, "sha256": backups._sha256_file(sealed_meta_target)})
+            files.append({"contributorId": "frontend", "path": "frontend/sealed-state.age", "size": sealed_target.stat().st_size, "sha256": backups._sha256_file(sealed_target)})
+            files.append({"contributorId": "frontend", "path": "frontend/sealed-state.meta.json", "size": sealed_meta_target.stat().st_size, "sha256": backups._sha256_file(sealed_meta_target)})
             frontend_manifest = {
                 "schemaVersion": 1,
                 "mode": "sealed-mirror",
@@ -172,7 +172,7 @@ def _build_candidate(
         migration_path.parent.mkdir(parents=True, exist_ok=True)
         migration_path.write_bytes(backups._stable_json(source_schemas))
         raw_migration = migration_path.read_bytes()
-        files.append({"path": "migration/source-schemas.json", "size": len(raw_migration), "sha256": hashlib.sha256(raw_migration).hexdigest()})
+        files.append({"contributorId": "migration", "path": "migration/source-schemas.json", "size": len(raw_migration), "sha256": hashlib.sha256(raw_migration).hexdigest()})
         files.sort(key=lambda entry: str(entry["path"]).casefold())
         coverage = backups._attest_coverage(plan, contributions)
         coverage["frontend"] = coverage_frontend
@@ -227,7 +227,10 @@ def _build_candidate(
                 parent_files = backup_incremental.load_snapshot_files(str(policy.get("targetId") or "managed-local"), str(policy.get("policyId") or ""), parent_backup_id)
             except Exception:
                 parent_files = []
-            successful = {str(item.get("contributorId") or item.get("contributor_id") or "") for item in plan.get("items") or []}
+            successful = {
+                str(item.get("id") or item.get("contributorId") or item.get("contributor_id") or "")
+                for item in plan.get("contributors") or []
+            }
             records = [
                 backup_incremental.FileRecord(
                     contributor_id=str(item.get("contributorId") or ""),
