@@ -7,7 +7,7 @@ import {
 } from "../../domain/conversation/persistence";
 import { collectFrontendBackupEnvelope } from "./frontendBackup";
 
-const DEFAULT_SOURCE_VERSION = "4.4.8";
+const DEFAULT_SOURCE_VERSION = "4.4.9";
 const DEBOUNCE_MS = 2000;
 const LEASE_TTL_MS = 8_000;
 const HEARTBEAT_MS = 3_000;

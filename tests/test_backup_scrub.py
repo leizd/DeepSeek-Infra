@@ -169,3 +169,16 @@ def test_scrub_all(tmp_settings: Path, stub_crypto: None) -> None:
     result = backup_scrub.scrub_all(root)
     assert result["scrubbed"] == 1
     assert result["ok"] is True
+
+def test_scrub_target_marker_failure(tmp_settings: Path, stub_crypto: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_targets
+
+    root, info = _build(tmp_settings)
+    def _boom(*_a: object, **_k: object) -> None:
+        raise AppError("target not ready")
+    monkeypatch.setattr(backup_targets, "verify_target_ready", _boom)
+    result = backup_scrub.scrub_backup(root, str(info["backupId"]), target_id="target_unready")
+    assert result["ok"] is False
+    assert "FAIL" in result["checks"]["target-marker"]
+    ok = backup_scrub.scrub_backup(root, str(info["backupId"]))
+    assert ok["ok"] is True

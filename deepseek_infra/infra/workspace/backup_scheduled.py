@@ -22,7 +22,7 @@ from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_mirror, backup_unattended, backups, mutation_gate
+from deepseek_infra.infra.workspace import backup_incremental, backup_mirror, backup_unattended, backups, mutation_gate
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +38,8 @@ class ScheduledBackupPackage:
     frontend: dict[str, Any]
     coverage: dict[str, Any]
     manifest: dict[str, Any]
+    chunk_records: tuple[Any, ...] = ()
+    savings: dict[str, Any] | None = None
 
 
 def _utc_iso() -> str:
@@ -154,8 +156,8 @@ def _build_candidate(
             sealed_meta_target = frontend_dir / "sealed-state.meta.json"
             shutil.copyfile(ciphertext, sealed_target)
             shutil.copyfile(metadata_path, sealed_meta_target)
-            files.append({"path": "frontend/sealed-state.age", "size": sealed_target.stat().st_size, "sha256": backups._sha256_file(sealed_target)})
-            files.append({"path": "frontend/sealed-state.meta.json", "size": sealed_meta_target.stat().st_size, "sha256": backups._sha256_file(sealed_meta_target)})
+            files.append({"contributorId": "frontend", "path": "frontend/sealed-state.age", "size": sealed_target.stat().st_size, "sha256": backups._sha256_file(sealed_target)})
+            files.append({"contributorId": "frontend", "path": "frontend/sealed-state.meta.json", "size": sealed_meta_target.stat().st_size, "sha256": backups._sha256_file(sealed_meta_target)})
             frontend_manifest = {
                 "schemaVersion": 1,
                 "mode": "sealed-mirror",
@@ -172,7 +174,7 @@ def _build_candidate(
         migration_path.parent.mkdir(parents=True, exist_ok=True)
         migration_path.write_bytes(backups._stable_json(source_schemas))
         raw_migration = migration_path.read_bytes()
-        files.append({"path": "migration/source-schemas.json", "size": len(raw_migration), "sha256": hashlib.sha256(raw_migration).hexdigest()})
+        files.append({"contributorId": "migration", "path": "migration/source-schemas.json", "size": len(raw_migration), "sha256": hashlib.sha256(raw_migration).hexdigest()})
         files.sort(key=lambda entry: str(entry["path"]).casefold())
         coverage = backups._attest_coverage(plan, contributions)
         coverage["frontend"] = coverage_frontend
@@ -219,15 +221,20 @@ def _build_candidate(
         # Incremental: build a delta payload containing only changed files, plus
         # an operations manifest, and attest the effective tree Merkle root.
         snapshot_meta: dict[str, Any] = {"kind": "full"}
+        incremental_cfg = _section(policy, "incremental")
+        large_file_mode = str(incremental_cfg.get("largeFileMode") or "cdc")
+        large_file_threshold = int(incremental_cfg.get("largeFileThresholdBytes") or (16 * 1024 * 1024))
+        current_chunk_records: list[backup_incremental.ChunkRecord] = []
         if snapshot_kind == "incremental" and parent_backup_id:
-            from deepseek_infra.infra.workspace import backup_incremental
-
             parent_files = []
             try:
                 parent_files = backup_incremental.load_snapshot_files(str(policy.get("targetId") or "managed-local"), str(policy.get("policyId") or ""), parent_backup_id)
             except Exception:
                 parent_files = []
-            successful = {str(item.get("contributorId") or item.get("contributor_id") or "") for item in plan.get("items") or []}
+            successful = {
+                str(item.get("id") or item.get("contributorId") or item.get("contributor_id") or "")
+                for item in plan.get("contributors") or []
+            }
             records = [
                 backup_incremental.FileRecord(
                     contributor_id=str(item.get("contributorId") or ""),
@@ -239,29 +246,97 @@ def _build_candidate(
             ]
             delta = backup_incremental.diff_trees(parent_files, records, successful_contributors=successful or {c.contributor_id for c in parent_files})
             (staging / "delta").mkdir(exist_ok=True)
-            operations = backups._stable_json(delta)
-            (staging / "delta" / "operations.json").write_bytes(operations)
             payload_dir = staging / "payload" / "files"
             payload_dir.mkdir(parents=True, exist_ok=True)
             payload_files: list[dict[str, Any]] = []
+            payload_by_sha: dict[str, str] = {}
+            parent_chunks_all: list[backup_incremental.ChunkRecord] = []
+            if parent_backup_id:
+                try:
+                    parent_chunks_all = backup_incremental.load_snapshot_chunks(
+                        str(policy.get("targetId") or "managed-local"), str(policy.get("policyId") or ""), parent_backup_id
+                    )
+                except Exception:
+                    parent_chunks_all = []
             for put in delta["put"]:
                 src = staging / str(put["path"])
-                if src.is_file():
-                    dest = payload_dir / f"{len(payload_files):06d}"
-                    shutil.copyfile(src, dest)
-                    payload_files.append(
-                        {
-                            "path": f"payload/files/{dest.name}",
-                            "size": dest.stat().st_size,
-                            "sha256": hashlib.sha256(dest.read_bytes()).hexdigest(),
-                        }
+                if not src.is_file():
+                    continue
+                blob_sha = str(put.get("sha256") or "")
+                is_large = int(put.get("size") or 0) >= large_file_threshold
+                if large_file_mode == "cdc" and is_large:
+                    contributor_id = str(put.get("contributorId") or "")
+                    logical_path = str(put["path"])
+                    parent_chunks = [item for item in parent_chunks_all if item.contributor_id == contributor_id and item.logical_path == logical_path]
+                    with src.open("rb") as handle:
+                        current_chunks = backup_incremental.chunk_map_for(contributor_id, logical_path, handle, file_size=int(put.get("size") or 0))
+                    described = backup_incremental.cdc_delta_for_file(
+                        contributor_id=contributor_id,
+                        logical_path=logical_path,
+                        file_size=int(put.get("size") or 0),
+                        parent_chunks=parent_chunks,
+                        current_chunks=current_chunks,
                     )
-                    put["payloadRef"] = f"payload/files/{dest.name}"
+                    for index, chunk in enumerate(described):
+                        if chunk["source"] != "payload":
+                            continue
+                        chunk_sha = str(chunk.get("sha256") or "")
+                        existing_ref = payload_by_sha.get(chunk_sha)
+                        if existing_ref is not None:
+                            chunk["payloadRef"] = existing_ref
+                            continue
+                        record = current_chunks[index]
+                        dest = payload_dir / f"{len(payload_files):06d}"
+                        with src.open("rb") as handle:
+                            handle.seek(record.offset)
+                            chunk_bytes = handle.read(record.length)
+                        dest.write_bytes(chunk_bytes)
+                        payload_files.append(
+                            {
+                                "path": f"payload/files/{dest.name}",
+                                "size": len(chunk_bytes),
+                                "sha256": chunk_sha,
+                            }
+                        )
+                        payload_by_sha[chunk_sha] = f"payload/files/{dest.name}"
+                        chunk["payloadRef"] = f"payload/files/{dest.name}"
+                    put["storage"] = "cdc"
+                    put["chunks"] = described
+                    put.pop("payloadRef", None)
+                    current_chunk_records.extend(current_chunks)
+                    continue
+                existing = payload_by_sha.get(blob_sha)
+                if existing is not None:
+                    put["payloadRef"] = existing
+                    continue
+                dest = payload_dir / f"{len(payload_files):06d}"
+                shutil.copyfile(src, dest)
+                payload_files.append(
+                    {
+                        "path": f"payload/files/{dest.name}",
+                        "size": dest.stat().st_size,
+                        "sha256": blob_sha,
+                    }
+                )
+                payload_by_sha[blob_sha] = f"payload/files/{dest.name}"
+                put["payloadRef"] = f"payload/files/{dest.name}"
+            # Serialize the delta manifest only after every payload reference is
+            # allocated so operations.json carries the final payloadRef paths.
+            operations = backups._stable_json(delta)
+            (staging / "delta" / "operations.json").write_bytes(operations)
             # Auxiliary files declared for verification but not restorable.
             manifest["deltaFiles"] = [
                 {"path": "delta/operations.json", "size": len(operations), "sha256": hashlib.sha256(operations).hexdigest()},
                 *payload_files,
             ]
+            # True delta storage: drop the full workspace copies so the archive
+            # carries only the changed payloads plus the operations manifest.
+            if (staging / "payload").is_dir():
+                for entry in list((staging / "payload").iterdir()):
+                    if entry.name != "files":
+                        shutil.rmtree(entry, ignore_errors=True)
+            for auxiliary_dir in ("migration", "frontend"):
+                shutil.rmtree(staging / auxiliary_dir, ignore_errors=True)
             snapshot_meta = {
                 "format": "incremental-v2",
                 "kind": "incremental",
@@ -275,9 +350,42 @@ def _build_candidate(
             }
             manifest["snapshot"] = snapshot_meta
             manifest["snapshotKind"] = "incremental"
+            logical_changed_bytes = sum(int(item.get("size") or 0) for item in delta["put"])
+            physical_payload_bytes = sum(int(item.get("size") or 0) for item in payload_files)
+            savings = {
+                "logicalChangedBytes": logical_changed_bytes,
+                "physicalPayloadBytes": physical_payload_bytes,
+                "savedBytes": max(0, logical_changed_bytes - physical_payload_bytes),
+                "savedRatio": round(1.0 - (physical_payload_bytes / logical_changed_bytes), 4) if logical_changed_bytes else 0.0,
+            }
+            manifest["incrementalSavings"] = savings
+        elif snapshot_kind == "full" and large_file_mode == "cdc":
+            # Full snapshots also chunk large files so the first incremental can
+            # reuse parent chunks instead of re-uploading the whole file.
+            full_chunk_records: list[backup_incremental.ChunkRecord] = []
+            for file_entry in files:
+                if int(file_entry.get("size") or 0) < large_file_threshold:
+                    continue
+                staging_path = staging / str(file_entry["path"])
+                if not staging_path.is_file():
+                    continue
+                contributor_id = str(file_entry.get("contributorId") or "")
+                with staging_path.open("rb") as handle:
+                    full_chunk_records.extend(
+                        backup_incremental.chunk_map_for(
+                            contributor_id,
+                            str(file_entry["path"]),
+                            handle,
+                            file_size=int(file_entry.get("size") or 0),
+                        )
+                    )
+            current_chunk_records = full_chunk_records
         manifest_bytes = backups._stable_json(manifest)
         (staging / "manifest.json").write_bytes(manifest_bytes)
-        checksums = [f"{item['sha256']}  {item['path']}" for item in files]
+        # Incremental packages checksum only the physically-present payload.
+        delta_files = manifest.get("deltaFiles")
+        checksummed = delta_files if snapshot_kind == "incremental" and isinstance(delta_files, list) else files
+        checksums = [f"{item['sha256']}  {item['path']}" for item in checksummed]
         checksums.append(f"{hashlib.sha256(manifest_bytes).hexdigest()}  manifest.json")
         (staging / "checksums.sha256").write_text("\n".join(checksums) + "\n", encoding="utf-8", newline="\n")
         filename = f"deepseek-infra-backup-{time.strftime('%Y%m%d')}-{backup_id[-8:]}.dsibackup.age"
@@ -286,7 +394,9 @@ def _build_candidate(
 
         def _verify(decrypted: Path) -> None:
             verified = backups._safe_extract_and_verify(decrypted, verification_dir)
-            if expect_sealed and not (verification_dir / "frontend" / "sealed-state.age").is_file():
+            # Incremental packages inherit the sealed mirror from the parent when
+            # it is unchanged, so presence is only asserted for full packages.
+            if expect_sealed and snapshot_kind != "incremental" and not (verification_dir / "frontend" / "sealed-state.age").is_file():
                 raise AppError("Scheduled backup verification lost the sealed frontend mirror", code=ErrorCode.INTERNAL, status=500)
             if (verified.get("coverage") or {}).get("frontend") != coverage_frontend:
                 raise AppError("Scheduled backup coverage verification failed", code=ErrorCode.INTERNAL, status=500)
@@ -311,6 +421,8 @@ def _build_candidate(
             frontend=coverage_frontend,
             coverage=coverage,
             manifest=manifest,
+            chunk_records=tuple(current_chunk_records),
+            savings=manifest.get("incrementalSavings") if snapshot_kind == "incremental" else None,
         )
     finally:
         shutil.rmtree(staging, ignore_errors=True)

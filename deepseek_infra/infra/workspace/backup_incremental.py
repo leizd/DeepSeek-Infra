@@ -1,10 +1,11 @@
-"""Incremental snapshot graphs and content-defined deltas (4.4.8).
+"""Incremental snapshot graphs and content-defined deltas (4.4.9).
 
 Builds production incremental delta packages relative to a committed parent
 snapshot, attests trees with domain-separated Merkle roots, never emits
 deletion tombstones for unavailable contributors, and chunks large changed
-files with FastCDC. Convergent encryption is explicitly out of scope: chunk
-digests live only inside the encrypted package manifest and the local index.
+files with the pinned ``fastcdc-gear-v2`` protocol. Convergent encryption is
+explicitly out of scope: chunk digests live only inside the encrypted package
+manifest and the local index.
 """
 
 from __future__ import annotations
@@ -30,13 +31,16 @@ _LEAF_DOMAIN = b"\x00"
 _NODE_DOMAIN = b"\x01"
 
 # FastCDC protocol parameters (fixed for lineage stability).
-CDC_ALGORITHM = "fastcdc-gear-v1"
+# ``fastcdc-gear-v2`` is the production protocol with pinned boundaries and
+# golden vectors. ``fastcdc-gear-v1`` is a legacy experimental format and is
+# never accepted as a production lineage parent.
+CDC_ALGORITHM = "fastcdc-gear-v2"
+CDC_ALGORITHM_V1 = "fastcdc-gear-v1"
 CDC_MIN_CHUNK = 512 * 1024
 CDC_AVG_CHUNK = 2 * 1024 * 1024
 CDC_MAX_CHUNK = 8 * 1024 * 1024
 _CDC_MASK_S = 13
 _CDC_MASK_L = 22
-_CDC_GEAR = 0x0000B504F333F9DE
 
 
 def _utc_iso() -> str:
@@ -179,13 +183,16 @@ def select_snapshot_plan(
     target_id: str,
     policy_id: str,
     index_available: bool,
+    contributor_schemas: dict[str, int] | None = None,
 ) -> tuple[str, str | None, str | None, int, str | None, str | None, str | None]:
     """Decide snapshot kind / lineage before freezing the run plan.
 
     Returns ``(snapshot_kind, lineage_id, parent_backup_id, chain_depth,
     parent_commit_hash, parent_receipt_digest, force_full_reason)``.
     Incremental is only chosen when an index-backed committed baseline exists
-    and the policy incremental mode is enabled.
+    and the policy incremental mode is enabled. Force-full conditions are
+    evaluated from committed snapshot metadata (scope / recipient / schema
+    digests, full-interval age, chain depth), not from the raw policy alone.
     """
     incremental = policy.get("incremental") or {}
     mode = str(incremental.get("mode") or "off")
@@ -199,15 +206,26 @@ def select_snapshot_plan(
         return "full", None, None, 0, None, None, "baseline-format-upgrade"
     parent = str(latest.get("backup_id") or "")
     depth = int(latest.get("chain_depth") or 0)
+    committed_scope = str(latest.get("scope_digest") or "")
+    committed_recipients = str(latest.get("recipient_set_digest") or "")
+    committed_schema = str(latest.get("schema_digest") or "")
+    now = datetime.now(tz=timezone.utc)
+    full_reference = str(latest.get("full_committed_at") or latest.get("committed_at") or "")
+    days_since_full = 0.0
+    try:
+        full_time = datetime.fromisoformat(full_reference.replace("Z", "+00:00"))
+        days_since_full = max(0.0, (now - full_time).total_seconds() / 86400.0)
+    except ValueError:
+        days_since_full = 0.0
     force, reason = should_force_full(
         chain_depth=depth,
-        days_since_full=0.0,
+        days_since_full=days_since_full,
         delta_bytes=0,
-        estimated_full_bytes=0,
+        estimated_full_bytes=int(latest.get("logical_bytes") or 0),
         index_missing=False,
-        scope_changed=False,
-        recipient_changed=False,
-        schema_changed=False,
+        scope_changed=bool(committed_scope) and committed_scope != scope_digest(policy),
+        recipient_changed=bool(committed_recipients) and committed_recipients != recipient_set_digest(policy),
+        schema_changed=bool(committed_schema) and committed_schema != schema_digest(contributor_schemas or {}),
         target_fork_adopted=False,
         max_chain_depth=int(incremental.get("maxChainDepth") or DEFAULT_MAX_CHAIN_DEPTH),
         full_interval_days=int(incremental.get("fullIntervalDays") or DEFAULT_FULL_INTERVAL_DAYS),
@@ -264,15 +282,22 @@ class ChunkRecord:
 
 
 def _fastcdc_gears() -> list[int]:
+    """Deterministic splitmix64 gear table for fastcdc-gear-v2.
+
+    The table is a fixed pseudorandom sequence: identical byte streams always
+    produce identical chunk boundaries, so the protocol stays stable across
+    processes, machines and releases.
+    """
     gears: list[int] = []
-    seed = 0x7FEB352D
+    seed = 0x9E3779B97F4A7C15
     mask = (1 << 64) - 1
     for _ in range(256):
-        seed = (seed * 6364136223846793005 + 1442695040888963407) & mask
-        gear = 1
-        for _shift in range(0, 64, 8):
-            gear = (gear * 2654435761) & mask
-        gears.append(seed)
+        seed = (seed + 0x9E3779B97F4A7C15) & mask
+        z = seed
+        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & mask
+        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & mask
+        z = z ^ (z >> 31)
+        gears.append(z)
     return gears
 
 
@@ -291,10 +316,11 @@ def chunk_stream(
     *,
     file_size: int,
 ) -> list[dict[str, Any]]:
-    """Stream a file into FastCDC chunks using bounded memory.
+    """Stream a file into fastcdc-gear-v2 chunks using bounded memory.
 
-    Emits ``{offset, length, sha256}`` for each chunk. Memory stays near
-    ``CDC_MAX_CHUNK`` regardless of file size.
+    Emits ``{offset, length, sha256}`` for each chunk. Boundaries use the short
+    mask up to the average size and the long mask beyond it, so the protocol is
+    pinned for lineage stability. Memory stays near ``CDC_MAX_CHUNK``.
     """
     gears = _gears()
     chunk: bytearray = bytearray()
@@ -303,6 +329,8 @@ def chunk_stream(
     chunk_start = 0
     offset = 0
     mask_s = (1 << _CDC_MASK_S) - 1
+    mask_l = (1 << _CDC_MASK_L) - 1
+    mask_64 = (1 << 64) - 1
     finished = False
     while not finished:
         block = handle.read(CDC_MAX_CHUNK)
@@ -315,9 +343,9 @@ def chunk_stream(
             if length >= CDC_MAX_CHUNK:
                 emit = True
             elif length >= CDC_MIN_CHUNK:
-                gear = gears[byte]
-                fp = ((fp << 1) & 0xFFFFFFFFFFFFFFFF) + gear
-                emit = (fp & mask_s) == 0
+                fp = (((fp << 1) & mask_64) + gears[byte]) & mask_64
+                boundary_mask = mask_l if length >= CDC_AVG_CHUNK else mask_s
+                emit = (fp & boundary_mask) == 0
             else:
                 emit = False
             if emit:
@@ -330,14 +358,20 @@ def chunk_stream(
                     }
                 )
                 chunk = bytearray()
-                chunk_start = offset + len(data)
-                fp = 0
+                chunk_start = offset + 1
             offset += 1
     if chunk:
         data = bytes(chunk)
         chunks.append({"offset": chunk_start, "length": len(data), "sha256": hashlib.sha256(data).hexdigest()})
-    # Safety: the emitted ranges must exactly cover the file.
+    # Safety: the emitted ranges must exactly and contiguously cover the file.
     if sum(item["length"] for item in chunks) != file_size:
+        raise AppError("CDC chunking produced non-covering ranges", code=ErrorCode.INTERNAL, status=500)
+    expected = 0
+    for item in chunks:
+        if int(item["offset"]) != expected:
+            raise AppError("CDC chunking produced non-contiguous ranges", code=ErrorCode.INTERNAL, status=500)
+        expected += int(item["length"])
+    if expected != file_size:
         raise AppError("CDC chunking produced non-covering ranges", code=ErrorCode.INTERNAL, status=500)
     return chunks
 
@@ -380,12 +414,14 @@ def cdc_delta_for_file(
         parent_by_hash.setdefault(item.chunk_sha256, item.chunk_ordinal)
     described: list[dict[str, Any]] = []
     for item in current_chunks:
-        if item.chunk_sha256 in parent_by_hash:
+        parent_ordinal = parent_by_hash.get(item.chunk_sha256)
+        if parent_ordinal is not None:
             described.append(
                 {
                     "length": item.length,
                     "sha256": item.chunk_sha256,
                     "source": "parent",
+                    "parentOrdinal": parent_ordinal,
                 }
             )
         else:
@@ -398,6 +434,52 @@ def cdc_delta_for_file(
                 }
             )
     return described
+
+
+_LINEAGE_EXTRA_COLUMNS = (
+    ("scope_digest", "TEXT"),
+    ("recipient_set_digest", "TEXT"),
+    ("schema_digest", "TEXT"),
+    ("chunk_protocol", "TEXT"),
+    ("full_committed_at", "TEXT"),
+    ("logical_bytes", "INTEGER"),
+)
+
+
+def _migrate_lineage_columns(connection: sqlite3.Connection) -> None:
+    existing = {str(row[1]) for row in connection.execute("PRAGMA table_info(snapshot_lineages)")}
+    for name, column_type in _LINEAGE_EXTRA_COLUMNS:
+        if name not in existing:
+            connection.execute(f"ALTER TABLE snapshot_lineages ADD COLUMN {name} {column_type}")
+
+
+def scope_digest(policy: dict[str, Any]) -> str:
+    """Deterministic digest of the backup scope relevant to force-full checks."""
+    raw_scope = policy.get("scope")
+    scope = raw_scope if isinstance(raw_scope, dict) else {}
+    body = _stable_json(
+        {
+            "mode": str(scope.get("mode") or "full"),
+            "projectIds": sorted(str(item) for item in (scope.get("projectIds") or [])),
+            "includeHistory": bool(scope.get("includeHistory", True)),
+            "includeDrafts": bool(scope.get("includeDrafts", False)),
+            "includeExternalState": bool(scope.get("includeExternalState", True)),
+            "coveragePolicy": str(scope.get("coveragePolicy") or "strict"),
+        }
+    )
+    return hashlib.sha256(body).hexdigest()
+
+
+def recipient_set_digest(policy: dict[str, Any]) -> str:
+    raw_protection = policy.get("protection")
+    protection = raw_protection if isinstance(raw_protection, dict) else {}
+    recipients = sorted(str(item) for item in (protection.get("recipients") or []))
+    return hashlib.sha256(_stable_json(recipients)).hexdigest()
+
+
+def schema_digest(contributor_schemas: dict[str, int]) -> str:
+    body = _stable_json({str(key): int(value) for key, value in sorted(contributor_schemas.items())})
+    return hashlib.sha256(body).hexdigest()
 
 
 def _connect() -> sqlite3.Connection:
@@ -419,6 +501,7 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
+    _migrate_lineage_columns(connection)
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS snapshot_files (
@@ -462,15 +545,37 @@ def record_committed_snapshot(
     chain_depth: int,
     root_digest: str,
     files: list[FileRecord],
+    scope_digest: str = "",
+    recipient_set_digest: str = "",
+    schema_digest: str = "",
+    chunk_protocol: str = "",
+    full_committed_at: str | None = None,
+    logical_bytes: int = 0,
 ) -> None:  # pragma: no cover - covered via tests calling lineage/protect paths
     with _connect() as connection:
         connection.execute(
             """
             INSERT OR REPLACE INTO snapshot_lineages
-            (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at,
+             scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, logical_bytes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, int(chain_depth), root_digest, _utc_iso()),
+            (
+                target_id,
+                policy_id,
+                backup_id,
+                parent_backup_id,
+                base_backup_id,
+                int(chain_depth),
+                root_digest,
+                _utc_iso(),
+                scope_digest,
+                recipient_set_digest,
+                schema_digest,
+                chunk_protocol,
+                full_committed_at,
+                int(logical_bytes),
+            ),
         )
         connection.execute(
             "DELETE FROM snapshot_files WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
@@ -494,10 +599,11 @@ def latest_committed_snapshot(target_id: str, policy_id: str) -> dict[str, Any] 
     with _connect() as connection:
         row = connection.execute(
             """
-            SELECT backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at
+            SELECT backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at,
+                   scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, logical_bytes
             FROM snapshot_lineages
             WHERE target_id = ? AND policy_id = ?
-            ORDER BY committed_at DESC
+            ORDER BY committed_at DESC, rowid DESC
             LIMIT 1
             """,
             (target_id, policy_id),

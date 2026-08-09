@@ -4,6 +4,29 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.9] - True Delta Storage and Verified Incremental Recovery
+
+### True delta packages
+
+- Incremental Age packages drop the full workspace payload: they carry only `delta/operations.json` and `blobs/` (whole-file `f/<id>` and CDC `c/<id>`).
+- Delta operations are serialized after every payload reference is allocated, so `operations.json` reflects the real final paths; whole-file payloads deduplicate by SHA-256 within a delta.
+
+### Stabilized content-defined deltas
+
+- FastCDC protocol `fastcdc-gear-v2` with contiguous chunk offsets, golden vectors and fixed min/avg/max bounds; the legacy v1 gear path is rejected as a production parent.
+- The production incremental builder emits CDC payloads for large changed files and persists committed chunk maps after publication.
+
+### Lineage, adaptive fulls and restore chains
+
+- Full baseline ids are preserved across incremental chains (`baseBackupId` tracks the Full, `parentBackupId` the immediate parent).
+- Every adaptive force-full condition is evaluated from committed snapshot metadata (scope/recipient/schema digests, logical bytes, chunk protocol).
+- Restore materializes chains as a durable session, verifying each snapshot Merkle transition before handing the federated restore a complete workspace tree.
+
+### Retention and reporting
+
+- Retention protects ancestors of recoverable trashed descendants until a child is physically deleted.
+- Backups report physical incremental savings (delta payload bytes vs logical changed bytes).
+
 ## [4.4.8] - Production Incremental Backups and Content-Defined Deltas
 
 ### Incremental policy and scheduler integration

@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.8。
+适用版本：v4.4.9。
 
 > 4.4.8 hardens remote recovery (frozen run plans + verified spool reuse across scheduler retries, store reconcile, durable restore fetch sessions, TargetSession governance) and introduces incremental snapshot graph foundations (Merkle roots, coverage-safe tombstones, adaptive full checkpoints, snapshot index, DAG-aware ancestor protection).
 

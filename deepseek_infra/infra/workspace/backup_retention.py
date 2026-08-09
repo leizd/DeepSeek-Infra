@@ -264,11 +264,17 @@ def _healthy_records(records: list[dict[str, Any]], target_root: Path) -> list[d
     return healthy
 
 
-def _protect_snapshot_ancestors(records: list[dict[str, Any]], keep: set[str], protected: dict[str, str]) -> dict[str, list[str]]:
-    """Protect ancestors of every kept incremental snapshot using receipt lineage."""
+def _protect_snapshot_ancestors(
+    records: list[dict[str, Any]],
+    keep: set[str],
+    protected: dict[str, str],
+    descendants: set[str] | None = None,
+) -> dict[str, list[str]]:
+    """Protect ancestors of every kept/recoverable incremental snapshot."""
     by_id = {str(record.get("backupId") or ""): record for record in records}
     required_by: dict[str, list[str]] = {}
-    for backup_id in list(keep):
+    considered = set(keep) if descendants is None else set(descendants)
+    for backup_id in list(considered):
         if str((by_id.get(backup_id) or {}).get("snapshotKind") or "full") != "incremental":
             continue
         chain: list[str] = []
@@ -294,6 +300,11 @@ def _protect_snapshot_ancestors(records: list[dict[str, Any]], keep: set[str], p
     return required_by
 
 
+def _grace_expired(record: dict[str, Any], current: datetime, grace: timedelta) -> bool:
+    trashed_at = _parse_iso(record.get("trashedAt"))
+    return trashed_at is not None and current - trashed_at >= grace
+
+
 def preview_retention(
     retention: dict[str, Any],
     target_root: Path,
@@ -305,11 +316,16 @@ def preview_retention(
     current = now or datetime.now(tz=timezone.utc)
     tz = load_timezone(policy_timezone)
     now_local = current.astimezone(tz)
-    records = [
-        record
-        for record in backup_catalog.catalog_state(target_root).values()
-        if not record.get("deleted") and not record.get("trashed")
-    ]
+    all_records = list(backup_catalog.catalog_state(target_root).values())
+    grace = timedelta(hours=int(retention.get("trashGraceHours") or 24))
+    # ``not_deleted`` drives ancestor chain walks: a kept descendant's parent may
+    # itself be trashed (recoverable), so the walk must traverse trash. Only
+    # physically-deleted records drop out of the dependency graph.
+    not_deleted = [record for record in all_records if not record.get("deleted")]
+    # Recoverable descendants still protect ancestors: trash still inside its
+    # grace period. Grace-expired trash is pending physical delete.
+    recoverable = [record for record in not_deleted if not _grace_expired(record, current, grace)]
+    records = [record for record in not_deleted if not record.get("trashed")]
     records.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
     keep: set[str] = set()
     protected: dict[str, str] = {}
@@ -359,7 +375,12 @@ def preview_retention(
         if backup_id in references or filename in references or str(record.get("ciphertextSha256") or "") in references:
             protected.setdefault(backup_id, "restore-referenced")
             keep.add(backup_id)
-    _protect_snapshot_ancestors(records, keep, protected)
+    trashed_incremental = {
+        str(record["backupId"])
+        for record in recoverable
+        if record.get("trashed") and str(record.get("snapshotKind") or "full") == "incremental"
+    }
+    _protect_snapshot_ancestors(not_deleted, keep, protected, descendants=set(keep) | trashed_incremental)
     trash: list[dict[str, Any]] = []
     if retention.get("maxTotalBytes"):
         total = sum(int(record.get("size") or 0) for record in records if str(record["backupId"]) in keep)
