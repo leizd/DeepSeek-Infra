@@ -515,6 +515,190 @@ def test_restore_session_edges(tmp_settings: Path, tmp_path: Path, monkeypatch: 
     assert done["phase"] == "fetched"
 
 
+def test_incremental_chain_materialize_e2e(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Build F0/I1/I2, materialize the chain and compare the tree byte-for-byte."""
+    import random
+    import zipfile
+
+    from deepseek_infra.core import config
+    from deepseek_infra.infra.workspace import backup_incremental_restore
+    from deepseek_infra.infra.workspace import backups as _backups
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+
+    prefix = b"age-encryption.org/v1\n"
+    _stub_crypto(monkeypatch, prefix)
+    rng = random.Random(11)
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    memories = config.MEMORY_DIR / "memories.json"
+    big = rng.randbytes(2 * 1024 * 1024)
+    memories.write_bytes(big)
+    policy = backup_policies.create_policy(
+        _policy(incremental={"mode": "file-delta", "largeFileMode": "cdc", "largeFileThresholdBytes": 1024 * 1024})
+    )
+    policy_id = str(policy["policyId"])
+    contributor_plan = _backups._contributor_plan(_scheduled._context_from_policy(policy))
+
+    def record(package: object, backup_id: str, parent: str | None, base: str, depth: int) -> None:
+        manifest = package.manifest  # type: ignore[attr-defined]
+        files = [
+            backup_incremental.FileRecord(str(item["contributorId"]), str(item["path"]), int(item["size"]), str(item["sha256"]))
+            for item in manifest["files"]
+        ]
+        snapshot = manifest.get("snapshot")
+        root_digest = snapshot.get("rootDigest") if isinstance(snapshot, dict) else None
+        backup_incremental.record_committed_snapshot(
+            target_id="managed-local",
+            policy_id=policy_id,
+            backup_id=backup_id,
+            parent_backup_id=parent,
+            base_backup_id=base,
+            chain_depth=depth,
+            root_digest=str(root_digest or backup_incremental.snapshot_root(files)),
+            files=files,
+        )
+        backup_incremental.record_snapshot_chunks(
+            target_id="managed-local", policy_id=policy_id, backup_id=backup_id, chunks=list(package.chunk_records)  # type: ignore[attr-defined]
+        )
+
+    def build(slot: str, run_id: str, kind: str, parent: str | None = None, base: str | None = None, depth: int = 0) -> object:
+        plan = backup_run_plan.freeze_run_plan(
+            policy=policy,
+            schedule_slot=slot,
+            slot_digest=commit_slot_digest(slot),
+            contributor_plan=contributor_plan,
+            target_id="managed-local",
+            snapshot_kind=kind,
+            lineage_id="F0",
+            parent_backup_id=parent,
+            base_backup_id=base,
+            chain_depth=depth,
+        )
+        return _scheduled.build_scheduled_backup(
+            policy,
+            run_id=run_id,
+            staging_root=tmp_settings / ".staging",
+            schedule_slot=slot,
+            backup_id=str(plan["backupId"]),
+            contributor_plan=contributor_plan,
+            snapshot_kind=kind,
+            parent_backup_id=parent,
+            base_backup_id=base,
+            lineage_id="F0",
+            chain_depth=depth,
+        )
+
+    pkg0 = build("2026-05-01T03:00@UTC", "run_chain0", "full")
+    record(pkg0, "F0", None, "F0", 0)
+    mutated1 = bytearray(big)
+    mutated1[0] ^= 0x01
+    memories.write_bytes(bytes(mutated1))
+    pkg1 = build("2026-05-01T04:00@UTC", "run_chain1", "incremental", parent="F0", base="F0", depth=1)
+    record(pkg1, str(pkg1.backup_id), "F0", "F0", 1)  # type: ignore[attr-defined]
+    mutated2 = bytearray(mutated1)
+    mutated2[100] ^= 0x02
+    memories.write_bytes(bytes(mutated2))
+    pkg2 = build("2026-05-01T05:00@UTC", "run_chain2", "incremental", parent=str(pkg1.backup_id), base="F0", depth=2)  # type: ignore[attr-defined]
+
+    def extract(package: object, dest: Path) -> None:
+        raw = package.path.read_bytes()  # type: ignore[attr-defined]
+        assert raw.startswith(prefix)
+        dest.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(raw[len(prefix):][::-1])) as archive:
+            archive.extractall(dest)
+
+    roots = [tmp_settings / f"chain/{index}" for index in range(3)]
+    for package, dest in ((pkg0, roots[0]), (pkg1, roots[1]), (pkg2, roots[2])):
+        extract(package, dest)
+    output = tmp_settings / "chain-materialized"
+    backup_incremental_restore.materialize_chain(roots, output)
+    restored = (output / "payload/memory/memories.json").read_bytes()
+    assert restored == bytes(mutated2)
+    # Deletes: nothing in the source was removed, but the migration file must exist.
+    assert (output / "migration/source-schemas.json").is_file()
+
+
+def test_incremental_chain_materialize_fails_closed(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deleting a chain member or corrupting a chunk fails closed."""
+    import random
+    import zipfile
+
+    from deepseek_infra.core import config
+    from deepseek_infra.infra.workspace import backup_incremental_restore
+    from deepseek_infra.infra.workspace import backups as _backups
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+
+    prefix = b"age-encryption.org/v1\n"
+    _stub_crypto(monkeypatch, prefix)
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    config.MEMORY_FILE.write_bytes(random.Random(3).randbytes(2 * 1024 * 1024))
+    policy = backup_policies.create_policy(
+        _policy(incremental={"mode": "file-delta", "largeFileMode": "cdc", "largeFileThresholdBytes": 1024 * 1024})
+    )
+    contributor_plan = _backups._contributor_plan(_scheduled._context_from_policy(policy))
+
+    def build(slot: str, kind: str, parent: str | None = None, base: str | None = None, depth: int = 0) -> object:
+        plan = backup_run_plan.freeze_run_plan(
+            policy=policy,
+            schedule_slot=slot,
+            slot_digest=commit_slot_digest(slot),
+            contributor_plan=contributor_plan,
+            target_id="managed-local",
+            snapshot_kind=kind,
+            lineage_id="F0",
+            parent_backup_id=parent,
+            base_backup_id=base,
+            chain_depth=depth,
+        )
+        return _scheduled.build_scheduled_backup(
+            policy,
+            run_id=f"run_{kind}_{int(hashlib.sha256(slot.encode()).hexdigest()[:8], 16)}",
+            staging_root=tmp_settings / ".staging",
+            schedule_slot=slot,
+            backup_id=str(plan["backupId"]),
+            contributor_plan=contributor_plan,
+            snapshot_kind=kind,
+            parent_backup_id=parent,
+            base_backup_id=base,
+            lineage_id="F0",
+            chain_depth=depth,
+        )
+
+    pkg0 = build("2026-06-01T03:00@UTC", "full")
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=str(pkg0.manifest["snapshot"]["rootDigest"])  # type: ignore[attr-defined]
+        if isinstance(pkg0.manifest.get("snapshot"), dict)  # type: ignore[attr-defined]
+        else backup_incremental.snapshot_root([backup_incremental.FileRecord(str(i["contributorId"]), str(i["path"]), int(i["size"]), str(i["sha256"])) for i in pkg0.manifest["files"]]),  # type: ignore[attr-defined]
+        files=[backup_incremental.FileRecord(str(i["contributorId"]), str(i["path"]), int(i["size"]), str(i["sha256"])) for i in pkg0.manifest["files"]],  # type: ignore[attr-defined]
+    )
+    mutated = bytearray(config.MEMORY_FILE.read_bytes())
+    mutated[len(mutated) // 2] ^= 0x01
+    config.MEMORY_FILE.write_bytes(bytes(mutated))
+    pkg1 = build("2026-06-01T04:00@UTC", "incremental", parent="F0", base="F0", depth=1)
+
+    def extract(package: object, dest: Path) -> None:
+        raw = package.path.read_bytes()  # type: ignore[attr-defined]
+        dest.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(raw[len(prefix):][::-1])) as archive:
+            archive.extractall(dest)
+
+    roots = [tmp_settings / "fail0", tmp_settings / "fail1"]
+    extract(pkg0, roots[0])
+    extract(pkg1, roots[1])
+    # Missing F0 -> fail closed.
+    with pytest.raises(AppError):
+        backup_incremental_restore.materialize_chain([roots[1]], tmp_settings / "out_missing")
+    # Corrupt a payload chunk in I1 -> fail closed.
+    (roots[1] / "delta" / "operations.json").write_text('{"put": [], "delete": []}', encoding="utf-8")
+    with pytest.raises(AppError):
+        backup_incremental_restore.materialize_chain(roots, tmp_settings / "out_corrupt")
+
+
 def test_incremental_chain_restore_session(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from deepseek_infra.infra.workspace import backup_remote_restore
     from deepseek_infra.infra.workspace.backup_target_store import object_key
