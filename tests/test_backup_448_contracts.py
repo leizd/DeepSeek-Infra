@@ -699,6 +699,98 @@ def test_incremental_chain_materialize_fails_closed(tmp_settings: Path, monkeypa
         backup_incremental_restore.materialize_chain(roots, tmp_settings / "out_corrupt")
 
 
+def test_materialize_restore_session_chain(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A chain-fetched session decrypts, materializes and verifies the tree."""
+    import random
+
+    from deepseek_infra.core import config
+    from deepseek_infra.infra.workspace import backup_remote_restore
+    from deepseek_infra.infra.workspace import backups as _backups
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+
+    prefix = b"age-encryption.org/v1\n"
+    _stub_crypto(monkeypatch, prefix)
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    memories = config.MEMORY_DIR / "memories.json"
+    big = random.Random(13).randbytes(2 * 1024 * 1024)
+    memories.write_bytes(big)
+    policy = backup_policies.create_policy(
+        _policy(incremental={"mode": "file-delta", "largeFileMode": "cdc", "largeFileThresholdBytes": 1024 * 1024})
+    )
+    contributor_plan = _backups._contributor_plan(_scheduled._context_from_policy(policy))
+
+    def build(slot: str, run_id: str, kind: str, parent: str | None = None, base: str | None = None, depth: int = 0) -> object:
+        plan = backup_run_plan.freeze_run_plan(
+            policy=policy,
+            schedule_slot=slot,
+            slot_digest=commit_slot_digest(slot),
+            contributor_plan=contributor_plan,
+            target_id="managed-local",
+            snapshot_kind=kind,
+            lineage_id="F0",
+            parent_backup_id=parent,
+            base_backup_id=base,
+            chain_depth=depth,
+        )
+        return _scheduled.build_scheduled_backup(
+            policy,
+            run_id=run_id,
+            staging_root=tmp_settings / ".staging",
+            schedule_slot=slot,
+            backup_id=str(plan["backupId"]),
+            contributor_plan=contributor_plan,
+            snapshot_kind=kind,
+            parent_backup_id=parent,
+            base_backup_id=base,
+            lineage_id="F0",
+            chain_depth=depth,
+        )
+
+    pkg0 = build("2026-07-01T03:00@UTC", "run_rs0", "full")
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root(
+            [backup_incremental.FileRecord(str(i["contributorId"]), str(i["path"]), int(i["size"]), str(i["sha256"])) for i in pkg0.manifest["files"]]  # type: ignore[attr-defined]
+        ),
+        files=[backup_incremental.FileRecord(str(i["contributorId"]), str(i["path"]), int(i["size"]), str(i["sha256"])) for i in pkg0.manifest["files"]],  # type: ignore[attr-defined]
+    )
+    mutated = bytearray(big)
+    mutated[1] ^= 0x04
+    memories.write_bytes(bytes(mutated))
+    pkg1 = build("2026-07-01T04:00@UTC", "run_rs1", "incremental", parent="F0", base="F0", depth=1)
+
+    restore_id = "restore_chainmat"
+    base_dir = tmp_settings / ".restore-staging" / restore_id
+    base_dir.mkdir(parents=True, exist_ok=True)
+    session = {
+        "schemaVersion": 2,
+        "restoreId": restore_id,
+        "source": "remote-target",
+        "targetId": "t",
+        "backupId": "I1",
+        "snapshotKind": "incremental",
+        "chainIndex": 2,
+        "phase": "chain-fetched",
+        "chain": [
+            {"backupId": "F0", "ciphertextPath": str(pkg0.path), "expectedBytes": pkg0.size},  # type: ignore[attr-defined]
+            {"backupId": "I1", "ciphertextPath": str(pkg1.path), "expectedBytes": pkg1.size},  # type: ignore[attr-defined]
+        ],
+    }
+    (base_dir / "remote-fetch.json").write_text(json.dumps(session), encoding="utf-8")
+    result = backup_remote_restore.materialize_restore_session(restore_id, secret=bytearray(b"x" * 32))
+    assert result["phase"] == "materialized"
+    tree = Path(str(result["tree"]))
+    assert (tree / "payload/memory/memories.json").read_bytes() == bytes(mutated)
+    assert (tree / "migration/source-schemas.json").is_file()
+    # The normalized manifest is a complete tree: full verification passes.
+    assert result["manifest"]["snapshotKind"] == "full"
+
+
 def test_incremental_chain_restore_session(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from deepseek_infra.infra.workspace import backup_remote_restore
     from deepseek_infra.infra.workspace.backup_target_store import object_key

@@ -11,13 +11,22 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_catalog, backup_incremental, backup_publish, backup_targets, backups
+from deepseek_infra.infra.workspace import (
+    backup_catalog,
+    backup_crypto,
+    backup_incremental,
+    backup_incremental_restore,
+    backup_publish,
+    backup_targets,
+    backups,
+)
 from deepseek_infra.infra.workspace.backup_target_store import (
     object_key,
     put_json_if_absent,
@@ -419,3 +428,88 @@ def release_restore_hold(store: Any, restore_id: str) -> None:
         store.delete_if_match(restore_hold_key(restore_id))
     except AppError:  # pragma: no cover
         pass
+
+
+def _write_checksums(tree_root: Path, manifest: dict[str, Any]) -> None:
+    manifest_bytes = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    (tree_root / "manifest.json").write_bytes(manifest_bytes)
+    lines = [f"{str(item.get('sha256') or '')}  {str(item.get('path') or '')}" for item in manifest.get("files") or []]
+    lines.append(f"{hashlib.sha256(manifest_bytes).hexdigest()}  manifest.json")
+    (tree_root / "checksums.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def _normalized_full_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Present a fully materialized chain as a complete, verifiable tree."""
+    normalized = dict(manifest)
+    normalized["snapshotKind"] = "full"
+    normalized.pop("deltaFiles", None)
+    return normalized
+
+
+def materialize_restore_session(
+    restore_id: str,
+    *,
+    kind: str = "passphrase",
+    secret: bytearray,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    """Decrypt the fetched chain, materialize the workspace and verify every root.
+
+    Every ancestor is decrypted and extracted, then :func:`materialize_chain`
+    applies the delta operations layer by layer, verifying each Merkle
+    transition. The resulting complete tree carries a normalized manifest so the
+    federated restore transaction can consume it without re-extracting.
+    """
+    session = read_restore_session(restore_id)
+    if session is None:
+        raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+    phase = str(session.get("phase") or "")
+    if phase not in {"fetched", "chain-fetched"}:
+        raise AppError("Restore session has not finished fetching", code=ErrorCode.INVALID_REQUEST, status=409)
+    del client
+    base = _session_dir(restore_id)
+    secret_kind: Literal["passphrase", "age-identity"] = "passphrase" if str(kind) != "age-identity" else "age-identity"
+    if str(session.get("snapshotKind") or "full") == "incremental":
+        chain = session.get("chain") or []
+        extracted_dirs: list[Path] = []
+        for index, member in enumerate(chain):
+            ciphertext = Path(str(member["ciphertextPath"]))
+            decrypted = base / f"decrypted-{index}.dsibackup"
+            backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
+            extracted = base / f"extracted-{index}"
+            backups._safe_extract_and_verify(decrypted, extracted)
+            extracted_dirs.append(extracted)
+        verified = base / "verified"
+        shutil.rmtree(verified, ignore_errors=True)
+        final_manifest = backup_incremental_restore.materialize_chain(extracted_dirs, verified)
+        normalized = _normalized_full_manifest(final_manifest)
+        _write_checksums(verified, normalized)
+        backups._verify_manifest_tree(verified)
+        session["phase"] = "materialized"
+        session["updatedAt"] = _utc_iso()
+        _atomic_write_json(_session_path(restore_id), session)
+        return {
+            "restoreId": restore_id,
+            "phase": "materialized",
+            "snapshotKind": "incremental",
+            "chain": [str(item["backupId"]) for item in chain],
+            "tree": str(verified),
+            "manifest": normalized,
+        }
+    ciphertext = Path(str(session.get("ciphertextPath") or ""))
+    if not ciphertext.is_file():
+        raise AppError("Restore session ciphertext is unavailable", code=ErrorCode.NOT_FOUND, status=404)
+    decrypted = base / "decrypted-0.dsibackup"
+    backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
+    extracted = base / "extracted-0"
+    manifest = backups._safe_extract_and_verify(decrypted, extracted)
+    session["phase"] = "materialized"
+    session["updatedAt"] = _utc_iso()
+    _atomic_write_json(_session_path(restore_id), session)
+    return {
+        "restoreId": restore_id,
+        "phase": "materialized",
+        "snapshotKind": "full",
+        "tree": str(extracted),
+        "manifest": manifest,
+    }
