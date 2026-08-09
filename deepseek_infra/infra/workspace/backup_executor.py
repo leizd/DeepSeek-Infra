@@ -102,6 +102,14 @@ def _record_committed_index(
                 root_digest=backup_incremental.snapshot_root(records),
                 files=records,
             )
+        chunk_records = getattr(package, "chunk_records", None) or []
+        if chunk_records:
+            backup_incremental.record_snapshot_chunks(
+                target_id=target_id,
+                policy_id=policy_id,
+                backup_id=backup_id,
+                chunks=list(chunk_records),
+            )
     except Exception:
         # Index is a performance cache; never fail the run on index errors.
         pass

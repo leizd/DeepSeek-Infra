@@ -22,7 +22,7 @@ from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_mirror, backup_unattended, backups, mutation_gate
+from deepseek_infra.infra.workspace import backup_incremental, backup_mirror, backup_unattended, backups, mutation_gate
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,10 +220,11 @@ def _build_candidate(
         # Incremental: build a delta payload containing only changed files, plus
         # an operations manifest, and attest the effective tree Merkle root.
         snapshot_meta: dict[str, Any] = {"kind": "full"}
+        incremental_cfg = _section(policy, "incremental")
+        large_file_mode = str(incremental_cfg.get("largeFileMode") or "cdc")
+        large_file_threshold = int(incremental_cfg.get("largeFileThresholdBytes") or (16 * 1024 * 1024))
         current_chunk_records: list[backup_incremental.ChunkRecord] = []
         if snapshot_kind == "incremental" and parent_backup_id:
-            from deepseek_infra.infra.workspace import backup_incremental
-
             parent_files = []
             try:
                 parent_files = backup_incremental.load_snapshot_files(str(policy.get("targetId") or "managed-local"), str(policy.get("policyId") or ""), parent_backup_id)
@@ -244,9 +245,6 @@ def _build_candidate(
             ]
             delta = backup_incremental.diff_trees(parent_files, records, successful_contributors=successful or {c.contributor_id for c in parent_files})
             (staging / "delta").mkdir(exist_ok=True)
-            incremental_cfg = _section(policy, "incremental")
-            large_file_mode = str(incremental_cfg.get("largeFileMode") or "cdc")
-            large_file_threshold = int(incremental_cfg.get("largeFileThresholdBytes") or (16 * 1024 * 1024))
             payload_dir = staging / "payload" / "files"
             payload_dir.mkdir(parents=True, exist_ok=True)
             payload_files: list[dict[str, Any]] = []
@@ -351,6 +349,27 @@ def _build_candidate(
             }
             manifest["snapshot"] = snapshot_meta
             manifest["snapshotKind"] = "incremental"
+        elif snapshot_kind == "full" and large_file_mode == "cdc":
+            # Full snapshots also chunk large files so the first incremental can
+            # reuse parent chunks instead of re-uploading the whole file.
+            full_chunk_records: list[backup_incremental.ChunkRecord] = []
+            for file_entry in files:
+                if int(file_entry.get("size") or 0) < large_file_threshold:
+                    continue
+                staging_path = staging / str(file_entry["path"])
+                if not staging_path.is_file():
+                    continue
+                contributor_id = str(file_entry.get("contributorId") or "")
+                with staging_path.open("rb") as handle:
+                    full_chunk_records.extend(
+                        backup_incremental.chunk_map_for(
+                            contributor_id,
+                            str(file_entry["path"]),
+                            handle,
+                            file_size=int(file_entry.get("size") or 0),
+                        )
+                    )
+            current_chunk_records = full_chunk_records
         manifest_bytes = backups._stable_json(manifest)
         (staging / "manifest.json").write_bytes(manifest_bytes)
         # Incremental packages checksum only the physically-present payload.
@@ -392,7 +411,7 @@ def _build_candidate(
             frontend=coverage_frontend,
             coverage=coverage,
             manifest=manifest,
-            chunk_records=tuple(current_chunk_records) if snapshot_kind == "incremental" else (),
+            chunk_records=tuple(current_chunk_records),
         )
     finally:
         shutil.rmtree(staging, ignore_errors=True)

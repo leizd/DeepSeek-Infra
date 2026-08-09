@@ -476,7 +476,8 @@ def test_record_committed_index_full_and_incremental(tmp_settings: Path) -> None
                 {"contributorId": "local", "path": "b.txt", "size": 2, "sha256": "b" * 64},
             ],
             "snapshot": {"rootDigest": "0" * 64},
-        }
+        },
+        chunk_records=[backup_incremental.ChunkRecord("local", "big.bin", 0, 0, 10, "c" * 64)],
     )
     backup_executor._record_committed_index(
         target_id="t",
@@ -486,6 +487,9 @@ def test_record_committed_index_full_and_incremental(tmp_settings: Path) -> None
         run_plan={"snapshotKind": "incremental", "parentBackupId": "F0", "baseBackupId": "F0", "chainDepth": 1},
     )
     assert backup_incremental.ancestor_chain("t", "p", "I1") == ["F0", "I1"]
+    persisted_chunks = backup_incremental.load_snapshot_chunks("t", "p", "I1")
+    assert len(persisted_chunks) == 1
+    assert persisted_chunks[0].chunk_sha256 == "c" * 64
     # Exception safety: corrupt manifest does not raise
     backup_executor._record_committed_index(
         target_id="t",
@@ -658,6 +662,46 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
         ops2 = json.loads(archive.read("delta/operations.json"))
     assert ops2["put"] == [] and ops2["delete"] == []
     assert not any(name.startswith("payload/") for name in names2)
+
+
+def test_full_snapshot_computes_chunk_maps(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Full snapshots chunk large files so the first delta can reuse parents."""
+    import random
+
+    from deepseek_infra.core import config
+    from deepseek_infra.infra.workspace import backups as _backups
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+
+    prefix = b"age-encryption.org/v1\n"
+    _stub_crypto(monkeypatch, prefix)
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    config.MEMORY_FILE.write_bytes(random.Random(9).randbytes(2 * 1024 * 1024))
+    policy = backup_policies.create_policy(
+        _policy(incremental={"mode": "file-delta", "largeFileMode": "cdc", "largeFileThresholdBytes": 1024 * 1024})
+    )
+    contributor_plan = _backups._contributor_plan(_scheduled._context_from_policy(policy))
+    slot = "2026-04-01T03:00@UTC"
+    plan = backup_run_plan.freeze_run_plan(
+        policy=policy,
+        schedule_slot=slot,
+        slot_digest=commit_slot_digest(slot),
+        contributor_plan=contributor_plan,
+        target_id="managed-local",
+        snapshot_kind="full",
+    )
+    package = _scheduled.build_scheduled_backup(
+        policy,
+        run_id="run_full_cdc",
+        staging_root=tmp_settings / ".staging",
+        schedule_slot=slot,
+        backup_id=str(plan["backupId"]),
+        contributor_plan=contributor_plan,
+        snapshot_kind="full",
+    )
+    assert package.manifest.get("snapshotKind") != "incremental"
+    assert package.chunk_records
+    big_records = [item for item in package.chunk_records if item.logical_path.endswith("memories.json")]
+    assert len(big_records) > 1
 
 
 def test_incremental_builder_cdc_payloads_and_reuse(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
