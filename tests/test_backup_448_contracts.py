@@ -1062,6 +1062,83 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
     assert not any(name.startswith("payload/") for name in names2)
 
 
+def test_true_delta_size_regression(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A small edit to a large file must ship a tiny payload, not the whole file."""
+    import random
+
+    from deepseek_infra.core import config
+    from deepseek_infra.infra.workspace import backups as _backups
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+
+    prefix = b"age-encryption.org/v1\n"
+    _stub_crypto(monkeypatch, prefix)
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    memories = config.MEMORY_DIR / "memories.json"
+    big = random.Random(17).randbytes(8 * 1024 * 1024)
+    memories.write_bytes(big)
+    policy = backup_policies.create_policy(
+        _policy(incremental={"mode": "file-delta", "largeFileMode": "cdc", "largeFileThresholdBytes": 1024 * 1024})
+    )
+    policy_id = str(policy["policyId"])
+    contributor_plan = _backups._contributor_plan(_scheduled._context_from_policy(policy))
+
+    def build(slot: str, run_id: str, kind: str, parent: str | None = None, base: str | None = None, depth: int = 0) -> object:
+        plan = backup_run_plan.freeze_run_plan(
+            policy=policy,
+            schedule_slot=slot,
+            slot_digest=commit_slot_digest(slot),
+            contributor_plan=contributor_plan,
+            target_id="managed-local",
+            snapshot_kind=kind,
+            lineage_id="F0",
+            parent_backup_id=parent,
+            base_backup_id=base,
+            chain_depth=depth,
+        )
+        return _scheduled.build_scheduled_backup(
+            policy,
+            run_id=run_id,
+            staging_root=tmp_settings / ".staging",
+            schedule_slot=slot,
+            backup_id=str(plan["backupId"]),
+            contributor_plan=contributor_plan,
+            snapshot_kind=kind,
+            parent_backup_id=parent,
+            base_backup_id=base,
+            lineage_id="F0",
+            chain_depth=depth,
+        )
+
+    pkg0 = build("2026-08-01T03:00@UTC", "run_size0", "full")
+    snapshot = pkg0.manifest.get("snapshot")  # type: ignore[attr-defined]
+    files0 = [
+        backup_incremental.FileRecord(str(i["contributorId"]), str(i["path"]), int(i["size"]), str(i["sha256"])) for i in pkg0.manifest["files"]  # type: ignore[attr-defined]
+    ]
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=policy_id,
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=str(snapshot.get("rootDigest") if isinstance(snapshot, dict) else backup_incremental.snapshot_root(files0)),
+        files=files0,
+    )
+    backup_incremental.record_snapshot_chunks(
+        target_id="managed-local", policy_id=policy_id, backup_id="F0", chunks=list(pkg0.chunk_records)  # type: ignore[attr-defined]
+    )
+    mutated = bytearray(big)
+    mutated[42] ^= 0x7F
+    memories.write_bytes(bytes(mutated))
+    pkg1 = build("2026-08-01T04:00@UTC", "run_size1", "incremental", parent="F0", base="F0", depth=1)
+    # The acceptance line: physical payload stays near the changed-chunk size.
+    savings = pkg1.manifest["incrementalSavings"]  # type: ignore[attr-defined]
+    assert savings["physicalPayloadBytes"] < savings["logicalChangedBytes"] * 0.15
+    assert savings["savedRatio"] > 0.85
+    # The whole package (ciphertext) must also be far smaller than the full.
+    assert pkg1.size < pkg0.size * 0.5  # type: ignore[attr-defined]
+
+
 def test_full_snapshot_computes_chunk_maps(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Full snapshots chunk large files so the first delta can reuse parents."""
     import random
