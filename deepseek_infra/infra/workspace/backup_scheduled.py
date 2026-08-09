@@ -39,6 +39,7 @@ class ScheduledBackupPackage:
     coverage: dict[str, Any]
     manifest: dict[str, Any]
     chunk_records: tuple[Any, ...] = ()
+    savings: dict[str, Any] | None = None
 
 
 def _utc_iso() -> str:
@@ -349,6 +350,15 @@ def _build_candidate(
             }
             manifest["snapshot"] = snapshot_meta
             manifest["snapshotKind"] = "incremental"
+            logical_changed_bytes = sum(int(item.get("size") or 0) for item in delta["put"])
+            physical_payload_bytes = sum(int(item.get("size") or 0) for item in payload_files)
+            savings = {
+                "logicalChangedBytes": logical_changed_bytes,
+                "physicalPayloadBytes": physical_payload_bytes,
+                "savedBytes": max(0, logical_changed_bytes - physical_payload_bytes),
+                "savedRatio": round(1.0 - (physical_payload_bytes / logical_changed_bytes), 4) if logical_changed_bytes else 0.0,
+            }
+            manifest["incrementalSavings"] = savings
         elif snapshot_kind == "full" and large_file_mode == "cdc":
             # Full snapshots also chunk large files so the first incremental can
             # reuse parent chunks instead of re-uploading the whole file.
@@ -412,6 +422,7 @@ def _build_candidate(
             coverage=coverage,
             manifest=manifest,
             chunk_records=tuple(current_chunk_records),
+            savings=manifest.get("incrementalSavings") if snapshot_kind == "incremental" else None,
         )
     finally:
         shutil.rmtree(staging, ignore_errors=True)

@@ -351,6 +351,9 @@ def execute_run(
             guard.checkpoint()
             backup_scheduler.record_run_phase(run.run_id, "verifying", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
             backup_scheduler.record_run_phase(run.run_id, "publishing", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+        savings = getattr(package, "savings", None)
+        if savings:
+            outcome["incrementalSavings"] = savings
 
         if target.root is not None:
             incomplete = backup_publish.slot_has_incomplete_journal(target.root, policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)

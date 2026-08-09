@@ -1236,3 +1236,8 @@ def test_incremental_builder_cdc_payloads_and_reuse(tmp_settings: Path, monkeypa
     delta_paths2 = [str(item["path"]) for item in package2.manifest["deltaFiles"]]
     payload_blobs2 = [p for p in delta_paths2 if p.startswith("payload/files/")]
     assert len(payload_blobs2) == len(payload_chunks)
+    # Physical incremental savings are reported from committed builder metadata.
+    savings2 = package2.manifest["incrementalSavings"]
+    assert savings2["physicalPayloadBytes"] < savings2["logicalChangedBytes"]
+    assert savings2["savedRatio"] > 0
+    assert package2.savings == savings2
