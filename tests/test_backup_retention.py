@@ -17,7 +17,7 @@ def _policy(**overrides: object) -> dict[str, object]:
     return backup_retention.normalize_retention_policy(overrides)
 
 
-def _add_backup(root: Path, backup_id: str, *, created: str, size: int = 100, pinned: bool = False) -> None:
+def _add_backup(root: Path, backup_id: str, *, created: str, size: int = 100, pinned: bool = False, **extra: object) -> None:
     (root / "backups").mkdir(parents=True, exist_ok=True)
     filename = f"{backup_id}.dsibackup.age"
     (root / "backups" / filename).write_bytes(b"x" * size)
@@ -38,6 +38,7 @@ def _add_backup(root: Path, backup_id: str, *, created: str, size: int = 100, pi
             "creationVerified": True,
             "createdAt": created,
             "pinned": pinned,
+            **extra,
         },
     )
     if pinned:
@@ -184,3 +185,59 @@ def test_active_run_backup_protected(tmp_settings: Path, tmp_path: Path) -> None
     preview = backup_retention.preview_retention(policy, root, now=now)
     reasons = {item["backupId"]: item["reason"] for item in preview["protected"]}
     assert reasons.get("backup_busy") == "active-run"
+
+
+def _add_incremental(root: Path, backup_id: str, created: str, parent: str | None) -> None:
+    _add_backup(
+        root,
+        backup_id,
+        created=created,
+        snapshotKind="full" if parent is None else "incremental",
+        parentBackupId=parent,
+        baseBackupId="F0",
+    )
+
+
+def test_trashed_descendant_protects_ancestors(tmp_settings: Path, tmp_path: Path) -> None:
+    """A trashed-but-recoverable incremental descendant keeps its ancestors."""
+    root = tmp_path / "target"
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
+    _add_incremental(root, "F0", "2026-01-01T00:00:00Z", None)
+    _add_incremental(root, "I1", "2026-02-01T00:00:00Z", "F0")
+    _add_incremental(root, "I2", "2026-06-15T10:00:00Z", "I1")
+    # I1 is trashed but still inside trash grace. I2 (kept) needs I1 which needs
+    # F0, so the ancestor chain must walk through the trashed intermediate.
+    backup_catalog.record_trash(root, "I1", retention_run_id="rr", at="2026-06-15T11:00:00Z")
+    policy = _policy(keepLast=0, keepHourly=0, keepDaily=0, keepWeekly=0, keepMonthly=0, minimumHealthyCopies=1)
+    preview = backup_retention.preview_retention(policy, root, now=now)
+    assert "I2" in preview["keep"]
+    assert "F0" in preview["keep"]
+    reasons = {item["backupId"]: item["reason"] for item in preview["protected"]}
+    assert reasons.get("F0") == "ancestor-of-kept-snapshot"
+    assert reasons.get("I1") == "ancestor-of-kept-snapshot"
+    # A trashed descendant itself also protects its ancestors while in grace.
+    _add_incremental(root, "I3", "2026-06-15T09:00:00Z", "I2")
+    backup_catalog.record_trash(root, "I3", retention_run_id="rr", at="2026-06-15T11:30:00Z")
+    preview2 = backup_retention.preview_retention(policy, root, now=now)
+    assert "F0" in preview2["keep"]
+
+
+def test_grace_expired_trash_releases_ancestors(tmp_settings: Path, tmp_path: Path) -> None:
+    """A grace-expired trashed descendant no longer protects its ancestors."""
+    root = tmp_path / "target"
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
+    _add_incremental(root, "F0", "2026-01-01T00:00:00Z", None)
+    _add_incremental(root, "I1", "2026-02-01T00:00:00Z", "F0")
+    _add_incremental(root, "I2", "2026-03-01T00:00:00Z", "I1")
+    _add_incremental(root, "I3", "2026-06-14T00:00:00Z", "I2")
+    backup_catalog.record_trash(root, "I3", retention_run_id="rr", at="2026-06-10T00:00:00Z")
+    backup_catalog.record_trash(root, "I2", retention_run_id="rr", at="2026-06-10T00:00:00Z")
+    backup_catalog.record_trash(root, "I1", retention_run_id="rr", at="2026-06-10T00:00:00Z")
+    policy = _policy(keepLast=0, keepHourly=0, keepDaily=0, keepWeekly=0, keepMonthly=0, minimumHealthyCopies=1, trashGraceHours=24)
+    preview = backup_retention.preview_retention(policy, root, now=now)
+    reasons = {item["backupId"]: item["reason"] for item in preview["protected"]}
+    # Every descendant is trashed past grace, so none of them protects the
+    # ancestors; F0 only stays as the latest visible snapshot.
+    assert reasons.get("F0") == "latest-successful-backup"
+    assert reasons.get("I2") != "ancestor-of-kept-snapshot"
+    assert "I2" not in preview["keep"]
