@@ -515,6 +515,50 @@ def test_restore_session_edges(tmp_settings: Path, tmp_path: Path, monkeypatch: 
     assert done["phase"] == "fetched"
 
 
+def test_incremental_chain_restore_session(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_remote_restore
+    from deepseek_infra.infra.workspace.backup_target_store import object_key
+
+    store = MemoryTargetStore()
+    put_json_if_absent(store, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    for bid, parent in (("F0", None), ("I1", "F0"), ("I2", "I1")):
+        raw = f"age-encryption.org/v1\n{bid}-body".encode()
+        digest = hashlib.sha256(raw).hexdigest()
+        store.put_if_absent(object_key(digest), raw, checksum_sha256=digest)
+        receipt: dict[str, object] = {
+            "backupId": bid,
+            "objectDigest": digest,
+            "filename": f"{bid}.age",
+            "size": len(raw),
+            "snapshotKind": "incremental" if parent else "full",
+            "parentBackupId": parent,
+            "baseBackupId": "F0" if parent else bid,
+            "chainDepth": 0 if not parent else (1 if parent == "F0" else 2),
+        }
+        put_json_if_absent(store, f"receipts/{bid}.json", receipt)
+    put_json_if_absent(
+        store,
+        "commits/pol/slot.json",
+        {"commitHash": "c" * 64, "backupId": "I2", "objectDigest": hashlib.sha256(b"age-encryption.org/v1\nI2-body").hexdigest(), "targetGeneration": 1},
+    )
+    target = backup_publish.ResolvedTarget(target_id="target_chain", root=None, managed=False, kind="s3", store=store)
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda *a, **k: target)
+    created = backup_remote_restore.create_restore_from_target(target_id="target_chain", backup_id="I2")
+    assert created["snapshotKind"] == "incremental"
+    assert created["chain"] == ["F0", "I1", "I2"]
+    assert created["phase"] == "fetching-chain"
+    restore_id = str(created["restoreId"])
+    assert len(created["holds"]) == 3
+    result = backup_remote_restore.fetch_restore_session(restore_id)
+    assert result["phase"] == "chain-fetched"
+    assert result["chain"] == ["F0", "I1", "I2"]
+    assert len(result["ciphertextPaths"]) == 3
+    assert result["downloadedBytes"] == result["expectedBytes"]
+    # idempotent
+    again = backup_remote_restore.fetch_restore_session(restore_id)
+    assert again["phase"] == "chain-fetched"
+
+
 def test_record_committed_index_full_and_incremental(tmp_settings: Path) -> None:
     from deepseek_infra.infra.workspace import backup_executor
 
