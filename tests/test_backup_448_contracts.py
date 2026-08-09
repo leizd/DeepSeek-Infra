@@ -2069,6 +2069,136 @@ def test_download_member_empty_piece_and_version_drift(tmp_settings: Path, monke
         backup_remote_restore.fetch_restore_session(restore_id)
 
 
+def _write_delta_verify_tree(root: Path, *, manifest: dict, ops: dict, disk: dict[str, bytes]) -> Path:
+    """Build an incremental package tree on disk for _verify_manifest_tree."""
+    dest = root / "vt"
+    dest.mkdir(parents=True, exist_ok=True)
+    ops_bytes = json.dumps(ops, sort_keys=True).encode("utf-8")
+    if "deltaFiles" not in manifest:
+        manifest["deltaFiles"] = [{"path": "delta/operations.json", "size": len(ops_bytes), "sha256": hashlib.sha256(ops_bytes).hexdigest()}]
+    (dest / "delta").mkdir(parents=True, exist_ok=True)
+    (dest / "delta" / "operations.json").write_bytes(ops_bytes)
+    for relative, data in disk.items():
+        path = dest / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    manifest_bytes = json.dumps(manifest, sort_keys=True).encode("utf-8")
+    (dest / "manifest.json").write_bytes(manifest_bytes)
+    (dest / "checksums.sha256").write_text(f"{hashlib.sha256(manifest_bytes).hexdigest()}  manifest.json\n", encoding="utf-8")
+    return dest
+
+
+def test_verify_manifest_tree_incremental_error_branches(tmp_path: Path) -> None:
+    from deepseek_infra.infra.workspace import backups as _backups
+
+    sha = hashlib.sha256(b"data").hexdigest()
+    base_manifest = {
+        "schemaVersion": _backups.BACKUP_SCHEMA,
+        "purpose": _backups.PACKAGE_PURPOSE,
+        "backupId": "I1",
+        "snapshotKind": "incremental",
+        "files": [{"contributorId": "local", "path": "payload/local/a.txt", "size": 4, "sha256": sha}],
+    }
+    empty_ops = {"put": [], "delete": []}
+    with pytest.raises(AppError, match="inventory is invalid"):
+        m = dict(base_manifest)
+        m["deltaFiles"] = [None]
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e1", manifest=m, ops=empty_ops, disk={})
+        _backups._verify_manifest_tree(_verify_tree)
+    # Collision between a declared restorable path and a delta file.
+    with pytest.raises(AppError, match="collides"):
+        m = dict(base_manifest)
+        m["deltaFiles"] = [{"path": "payload/local/a.txt", "size": 4, "sha256": sha}]
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e2", manifest=m, ops=empty_ops, disk={"payload/local/a.txt": b"data"})
+        _backups._verify_manifest_tree(_verify_tree)
+    # Delta checksum mismatch.
+    with pytest.raises(AppError, match="checksum mismatch"):
+        m = dict(base_manifest)
+        m["deltaFiles"] = [{"path": "delta/operations.json", "size": 1, "sha256": "0" * 64}]
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e3", manifest=m, ops=empty_ops, disk={})
+        _backups._verify_manifest_tree(_verify_tree)
+    # An undeclared extra file on disk.
+    with pytest.raises(AppError, match="payload mismatch"):
+        m = dict(base_manifest)
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e4", manifest=m, ops=empty_ops, disk={"payload/files/000000": b"x"})
+        _backups._verify_manifest_tree(_verify_tree)
+    # Missing operations manifest.
+    with pytest.raises(AppError, match="operations manifest is missing"):
+        m = dict(base_manifest)
+        m["deltaFiles"] = []
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e5", manifest=m, ops=empty_ops, disk={})
+        ( _verify_tree / "delta" / "operations.json").unlink()
+        _backups._verify_manifest_tree(_verify_tree)
+    # Malformed operations JSON.
+    with pytest.raises(AppError, match="operations manifest is invalid"):
+        m = dict(base_manifest)
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e6", manifest=m, ops=empty_ops, disk={})
+        ( _verify_tree / "delta" / "operations.json").write_text("{bad", encoding="utf-8")
+        _sync_ops_entry(_verify_tree)
+        _backups._verify_manifest_tree(_verify_tree)
+    # Operations not an object.
+    with pytest.raises(AppError, match="operations manifest is invalid"):
+        m = dict(base_manifest)
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e7", manifest=m, ops=empty_ops, disk={})
+        ( _verify_tree / "delta" / "operations.json").write_text("[]", encoding="utf-8")
+        _sync_ops_entry(_verify_tree)
+        _backups._verify_manifest_tree(_verify_tree)
+    # A non-dict put entry.
+    with pytest.raises(AppError, match="operations manifest is invalid"):
+        m = dict(base_manifest)
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e8", manifest=m, ops={"put": [None], "delete": []}, disk={})
+        _backups._verify_manifest_tree(_verify_tree)
+    # CDC put without a chunk list.
+    with pytest.raises(AppError, match="no chunk list"):
+        m = dict(base_manifest)
+        ops = {"put": [{"path": "payload/local/a.txt", "size": 4, "sha256": sha, "storage": "cdc", "chunks": "x"}], "delete": []}
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e9", manifest=m, ops=ops, disk={})
+        _backups._verify_manifest_tree(_verify_tree)
+    # CDC chunk that is not a dict.
+    with pytest.raises(AppError, match="invalid chunk"):
+        m = dict(base_manifest)
+        ops = {"put": [{"path": "payload/local/a.txt", "size": 4, "sha256": sha, "storage": "cdc", "chunks": [None]}], "delete": []}
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e10", manifest=m, ops=ops, disk={})
+        _backups._verify_manifest_tree(_verify_tree)
+    # CDC payload chunk referencing an undeclared blob.
+    with pytest.raises(AppError, match="undeclared payload"):
+        m = dict(base_manifest)
+        ops = {"put": [{"path": "payload/local/a.txt", "size": 4, "sha256": sha, "storage": "cdc", "chunks": [{"source": "payload", "payloadRef": "payload/files/nope", "length": 4, "sha256": sha}]}], "delete": []}
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e11", manifest=m, ops=ops, disk={})
+        _backups._verify_manifest_tree(_verify_tree)
+    # Whole-file put referencing an undeclared blob.
+    with pytest.raises(AppError, match="undeclared payload"):
+        m = dict(base_manifest)
+        ops = {"put": [{"path": "payload/local/a.txt", "size": 4, "sha256": sha, "storage": "whole", "payloadRef": "payload/files/nope"}], "delete": []}
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e12", manifest=m, ops=ops, disk={})
+        _backups._verify_manifest_tree(_verify_tree)
+    # A blob present on disk but referenced by no operation.
+    with pytest.raises(AppError, match="unreferenced blobs"):
+        m = dict(base_manifest)
+        orphan = b"x"
+        _verify_tree = _write_delta_verify_tree(tmp_path / "e13", manifest=m, ops=empty_ops, disk={"payload/files/000000": orphan})
+        m2 = _read_json_manifest(_verify_tree)
+        m2["deltaFiles"] = m2["deltaFiles"] + [{"path": "payload/files/000000", "size": len(orphan), "sha256": hashlib.sha256(orphan).hexdigest()}]
+        ( _verify_tree / "manifest.json").write_text(json.dumps(m2, sort_keys=True), encoding="utf-8")
+        ( _verify_tree / "checksums.sha256").write_text(f"{hashlib.sha256(json.dumps(m2, sort_keys=True).encode()).hexdigest()}  manifest.json\n", encoding="utf-8")
+        _backups._verify_manifest_tree(_verify_tree)
+
+
+def _read_json_manifest(tree: Path) -> dict:
+    return json.loads((tree / "manifest.json").read_text(encoding="utf-8"))
+
+
+def _sync_ops_entry(tree: Path) -> None:
+    raw = (tree / "delta" / "operations.json").read_bytes()
+    manifest = _read_json_manifest(tree)
+    for entry in manifest.get("deltaFiles") or []:
+        if isinstance(entry, dict) and entry.get("path") == "delta/operations.json":
+            entry["size"] = len(raw)
+            entry["sha256"] = hashlib.sha256(raw).hexdigest()
+    (tree / "manifest.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    (tree / "checksums.sha256").write_text(f"{hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()}  manifest.json\n", encoding="utf-8")
+
+
 def test_full_snapshot_computes_chunk_maps(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Full snapshots chunk large files so the first delta can reuse parents."""
     import random
