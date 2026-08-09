@@ -559,6 +559,18 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
     )
     assert package.path.is_file()
     assert package.manifest.get("snapshotKind") == "incremental"
+    # The delta manifest must be serialized after payload allocation: every
+    # whole-file PUT payloadRef must point at the final payload/files/ path,
+    # not the pre-allocation SHA-256 placeholder.
+    import zipfile as _zipfile
+
+    raw = package.path.read_bytes()
+    assert raw.startswith(prefix)
+    with _zipfile.ZipFile(io.BytesIO(raw[len(prefix):][::-1])) as archive:
+        ops = json.loads(archive.read("delta/operations.json"))
+    payload_refs = [item["payloadRef"] for item in ops["put"] if item.get("storage") == "whole"]
+    assert payload_refs
+    assert all(str(ref).startswith("payload/files/") for ref in payload_refs)
     snapshot = package.manifest["snapshot"]
     assert snapshot["kind"] == "incremental"
     assert snapshot["parentBackupId"] == "F0"

@@ -242,8 +242,6 @@ def _build_candidate(
             ]
             delta = backup_incremental.diff_trees(parent_files, records, successful_contributors=successful or {c.contributor_id for c in parent_files})
             (staging / "delta").mkdir(exist_ok=True)
-            operations = backups._stable_json(delta)
-            (staging / "delta" / "operations.json").write_bytes(operations)
             payload_dir = staging / "payload" / "files"
             payload_dir.mkdir(parents=True, exist_ok=True)
             payload_files: list[dict[str, Any]] = []
@@ -260,6 +258,10 @@ def _build_candidate(
                         }
                     )
                     put["payloadRef"] = f"payload/files/{dest.name}"
+            # Serialize the delta manifest only after every payload reference is
+            # allocated so operations.json carries the final payloadRef paths.
+            operations = backups._stable_json(delta)
+            (staging / "delta" / "operations.json").write_bytes(operations)
             # Auxiliary files declared for verification but not restorable.
             manifest["deltaFiles"] = [
                 {"path": "delta/operations.json", "size": len(operations), "sha256": hashlib.sha256(operations).hexdigest()},
