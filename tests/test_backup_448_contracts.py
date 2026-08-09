@@ -2024,6 +2024,51 @@ def test_restore_pagination_branches(tmp_settings: Path, monkeypatch: pytest.Mon
     assert created["phase"] == "fetching"
 
 
+def test_download_member_empty_piece_and_version_drift(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import types
+
+    from deepseek_infra.infra.workspace import backup_remote_restore
+    from deepseek_infra.infra.workspace.backup_target_store import object_key
+
+    store = MemoryTargetStore()
+    raw_f0 = b"age-encryption.org/v1\nempty-f0"
+    digest_f0 = hashlib.sha256(raw_f0).hexdigest()
+    store.put_if_absent(object_key(digest_f0), raw_f0, checksum_sha256=digest_f0)
+    target = backup_publish.ResolvedTarget(target_id="target_empty", root=None, managed=False, kind="s3", store=store)
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda *a, **k: target)
+    restore_id = "restore_empty"
+    base_dir = tmp_settings / ".restore-staging" / restore_id
+    base_dir.mkdir(parents=True, exist_ok=True)
+    session = {
+        "schemaVersion": 2,
+        "restoreId": restore_id,
+        "targetId": "target_empty",
+        "backupId": "F0",
+        "objectDigest": digest_f0,
+        "filename": "F0.age",
+        "expectedBytes": len(raw_f0),
+        "downloadedBytes": 0,
+        "ciphertextPath": str(base_dir / "F0.age"),
+        "phase": "fetching",
+    }
+    (base_dir / "remote-fetch.json").write_text(json.dumps(session), encoding="utf-8")
+    # An empty range response stops the download short (partial progress).
+    monkeypatch.setattr(store, "get_bytes", lambda *a, **k: b"")
+    result = backup_remote_restore.fetch_restore_session(restore_id)
+    assert result["phase"] == "fetching"
+    # A remote version change rejects the resume.
+    real_stat = store.stat
+    monkeypatch.setattr(
+        store,
+        "stat",
+        lambda key: (lambda meta: None if meta is None else types.SimpleNamespace(key=meta.key, size=meta.size, etag=meta.etag, version_id="v9"))(real_stat(key)),
+    )
+    session["remoteVersionId"] = "v8"
+    (base_dir / "remote-fetch.json").write_text(json.dumps(session), encoding="utf-8")
+    with pytest.raises(AppError, match="object version changed"):
+        backup_remote_restore.fetch_restore_session(restore_id)
+
+
 def test_full_snapshot_computes_chunk_maps(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Full snapshots chunk large files so the first delta can reuse parents."""
     import random
