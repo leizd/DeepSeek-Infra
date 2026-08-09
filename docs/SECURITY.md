@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.5。
+适用版本：v4.4.10。
 
 ## 威胁模型
 
@@ -14,6 +14,8 @@
 不要把局域网模式暴露在不可信网络中。服务端环境变量中的 DeepSeek / Tavily Key 会对所有通过本地鉴权的浏览器会话可用。
 
 > 八类核心威胁及其缓解实现、测试和残余风险逐条映射在 [THREAT_MODEL.md](THREAT_MODEL.md)；攻防回归可离线复跑：`python evals/runners/run_tool_eval.py`。
+
+关键边界索引：`fetch_url` 的 SSRF 防护会拦截内网、私有/回环/链路本地地址与云元数据地址 `169.254.169.254`；本地鉴权通过 `HttpOnly` `auth_token` Cookie 下发和校验。详细规则分别见“本地鉴权”与“本地工具调用与 URL 精读”。
 
 ## 本地鉴权
 
@@ -100,7 +102,9 @@ v0.7.2 起 function calling 只开放固定白名单工具，模型不能自定�
 
 `search_files` 只读取本地 `.local-rag`、`.file-cache` 和 `.projects` 索引。它不会扫描任意磁盘路径，也不会把文件原文发给第三方嵌入服务；检索结果仍然会随 DeepSeek 请求发送给模型，因此项目文档和附件应视为会进入本轮模型上下文。
 
-检索锚点：`fetch_url` 的 SSRF 防护会拦截内网或元数据地址，包括 `localhost`、`.local`、私有网段、回环地址、链路本地地址、保留地址、无法解析的 host，以及云元数据地址 `169.254.169.254`。这些规则由 Tool Policy 的静态 URL safety 与 `fetch_url` DNS 后校验共同执行。
+### `fetch_url` SSRF 防护
+
+`fetch_url` 的 SSRF 防护会拦截内网或元数据地址，包括 `localhost`、`.local`、私有网段、回环地址、链路本地地址、保留地址、无法解析的 host，以及云元数据地址 `169.254.169.254`。这些规则由 Tool Policy 的静态 URL safety 与 `fetch_url` DNS 后校验共同执行。
 
 `fetch_url` 和 `POST /api/fetch-url` 用于搜索结果二次精读。后端只允许 `http` / `https`，会拒绝 `localhost`、`.local`、私有网段、回环地址、链路本地地址、保留地址和无法解析的 host，降低 SSRF 风险。读取上限为 2 MB，正文缓存写入 `.search-cache`。抓取到的网页内容依旧是不可信文本，可能包含 prompt injection。
 

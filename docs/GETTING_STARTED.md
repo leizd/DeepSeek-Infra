@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.4.2.
+Applicable version: v4.4.10.
 
-DeepSeek Infra 4.4.2 uses the React workspace as the default UI and keeps projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports in the local runtime root unless you explicitly call an upstream API. Workspace Backup can create plaintext v1 packages or standard age v1 encrypted packages using a passphrase or X25519 Recovery Identity; encrypted restore remains locked until authentication succeeds. The optional Rust sidecar remains supported but disabled by default. A separate stateless MCP stack is available for horizontally scaled code search and durable test tasks, and its Redis-backed durable state can be included through the optional logical-snapshot Contributor.
+DeepSeek Infra 4.4.10 uses the React workspace as the default UI and keeps projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports in the local runtime root unless you explicitly call an upstream API. Workspace Backup can create plaintext or standard age v1 encrypted Full + Delta chains using a passphrase or X25519 Recovery Identity; remote restore stays locked until authentication, then materializes the chain with bounded streaming into the federated restore transaction. The optional Rust sidecar remains disabled by default, while the packaged `deepseek-backup` helper can accelerate deterministic FastCDC scanning with Python fallback. A separate stateless MCP stack is available for horizontally scaled code search and durable test tasks, and its Redis-backed durable state can be included through the optional logical-snapshot Contributor.
 
 ## Local Run
 
@@ -33,10 +33,10 @@ Connect the MCP client to `http://127.0.0.1:8010/mcp`. See [STATELESS_MCP.md](ST
 
 ```bash
 python scripts/doctor.py --offline
-python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.4.2.json
+python scripts/smoke_ga.py --offline --out docs/evidence/ga-v4.4.10.json
 npm ci --prefix stateless-mcp
 npm run check --prefix stateless-mcp
-python scripts/preflight_release.py --version 4.4.2 --ga
+python scripts/preflight_release.py --version 4.4.10 --ga
 ```
 
 The GA smoke creates an isolated project chain: Project -> Skill -> Media -> Browser Snapshot -> Saved Item -> Artifact -> Automation -> Export.

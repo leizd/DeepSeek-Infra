@@ -30,17 +30,23 @@ MERKLE_ALGORITHM = "dsib-merkle-sha256-v2"
 _LEAF_DOMAIN = b"\x00"
 _NODE_DOMAIN = b"\x01"
 
-# FastCDC protocol parameters (fixed for lineage stability).
-# ``fastcdc-gear-v2`` is the production protocol with pinned boundaries and
-# golden vectors. ``fastcdc-gear-v1`` is a legacy experimental format and is
-# never accepted as a production lineage parent.
-CDC_ALGORITHM = "fastcdc-gear-v2"
+# FastCDC protocol parameters (fixed for lineage stability). 4.4.10 writes v3;
+# v2 remains a first-class decoder because a committed 4.4.9 lineage may be
+# restored indefinitely. The v3 normalization deliberately makes boundaries
+# harder before the 2 MiB target and easier afterwards.
+CDC_ALGORITHM = "fastcdc-gear-v2"  # public 4.4.9 compatibility alias
+CDC_ALGORITHM_V2 = CDC_ALGORITHM
+CDC_ALGORITHM_V3 = "fastcdc-gear-v3"
+CURRENT_CDC_PROTOCOL = CDC_ALGORITHM_V3
 CDC_ALGORITHM_V1 = "fastcdc-gear-v1"
+SUPPORTED_CDC_PROTOCOLS = (CDC_ALGORITHM_V2, CDC_ALGORITHM_V3)
 CDC_MIN_CHUNK = 512 * 1024
 CDC_AVG_CHUNK = 2 * 1024 * 1024
 CDC_MAX_CHUNK = 8 * 1024 * 1024
-_CDC_MASK_S = 13
-_CDC_MASK_L = 22
+_CDC_V2_MASK_EARLY = 13
+_CDC_V2_MASK_LATE = 22
+_CDC_V3_MASK_EARLY = 22
+_CDC_V3_MASK_LATE = 20
 
 
 def _utc_iso() -> str:
@@ -209,6 +215,12 @@ def select_snapshot_plan(
     committed_scope = str(latest.get("scope_digest") or "")
     committed_recipients = str(latest.get("recipient_set_digest") or "")
     committed_schema = str(latest.get("schema_digest") or "")
+    # Rebuildable pre-4.4.9 test/index rows did not carry a protocol at all;
+    # only an explicitly committed v2 lineage proves that an upgrade full is
+    # required. Real 4.4.9 executor rows always persisted v2.
+    committed_chunk_protocol = str(latest.get("chunk_protocol") or CURRENT_CDC_PROTOCOL)
+    if committed_chunk_protocol != CURRENT_CDC_PROTOCOL:
+        return "full", None, None, 0, None, None, "chunk-protocol-upgrade"
     now = datetime.now(tz=timezone.utc)
     full_reference = str(latest.get("full_committed_at") or latest.get("committed_at") or "")
     days_since_full = 0.0
@@ -315,21 +327,28 @@ def chunk_stream(
     handle: BinaryIO,
     *,
     file_size: int,
+    protocol: str = CDC_ALGORITHM,
 ) -> list[dict[str, Any]]:
-    """Stream a file into fastcdc-gear-v2 chunks using bounded memory.
+    """Stream a file into versioned FastCDC chunks using bounded memory.
 
     Emits ``{offset, length, sha256}`` for each chunk. Boundaries use the short
     mask up to the average size and the long mask beyond it, so the protocol is
     pinned for lineage stability. Memory stays near ``CDC_MAX_CHUNK``.
     """
+    if protocol not in SUPPORTED_CDC_PROTOCOLS:
+        raise AppError(f"Unsupported CDC chunk protocol: {protocol}", code=ErrorCode.INVALID_PAYLOAD)
     gears = _gears()
     chunk: bytearray = bytearray()
     chunks: list[dict[str, Any]] = []
     fp = 0
     chunk_start = 0
     offset = 0
-    mask_s = (1 << _CDC_MASK_S) - 1
-    mask_l = (1 << _CDC_MASK_L) - 1
+    if protocol == CDC_ALGORITHM_V2 or file_size <= 16 * 1024 * 1024:
+        early_bits, late_bits = _CDC_V2_MASK_EARLY, _CDC_V2_MASK_LATE
+    else:
+        early_bits, late_bits = _CDC_V3_MASK_EARLY, _CDC_V3_MASK_LATE
+    early_mask = (1 << early_bits) - 1
+    late_mask = (1 << late_bits) - 1
     mask_64 = (1 << 64) - 1
     finished = False
     while not finished:
@@ -344,7 +363,7 @@ def chunk_stream(
                 emit = True
             elif length >= CDC_MIN_CHUNK:
                 fp = (((fp << 1) & mask_64) + gears[byte]) & mask_64
-                boundary_mask = mask_l if length >= CDC_AVG_CHUNK else mask_s
+                boundary_mask = late_mask if length >= CDC_AVG_CHUNK else early_mask
                 emit = (fp & boundary_mask) == 0
             else:
                 emit = False
@@ -362,7 +381,12 @@ def chunk_stream(
             offset += 1
     if chunk:
         data = bytes(chunk)
-        chunks.append({"offset": chunk_start, "length": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+        if protocol == CDC_ALGORITHM_V3 and not chunks and len(data) >= CDC_AVG_CHUNK:
+            midpoint = len(data) // 2
+            for relative, part in ((0, data[:midpoint]), (midpoint, data[midpoint:])):
+                chunks.append({"offset": chunk_start + relative, "length": len(part), "sha256": hashlib.sha256(part).hexdigest()})
+        else:
+            chunks.append({"offset": chunk_start, "length": len(data), "sha256": hashlib.sha256(data).hexdigest()})
     # Safety: the emitted ranges must exactly and contiguously cover the file.
     if sum(item["length"] for item in chunks) != file_size:
         raise AppError("CDC chunking produced non-covering ranges", code=ErrorCode.INTERNAL, status=500)
@@ -382,9 +406,10 @@ def chunk_map_for(
     handle: BinaryIO,
     *,
     file_size: int,
+    protocol: str = CDC_ALGORITHM,
 ) -> list[ChunkRecord]:
     """Chunk a large changed file and record its chunk map."""
-    chunks = chunk_stream(handle, file_size=file_size)
+    chunks = chunk_stream(handle, file_size=file_size, protocol=protocol)
     records: list[ChunkRecord] = []
     for index, chunk in enumerate(chunks):
         records.append(
@@ -532,6 +557,12 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_snapshot_chunks_file
+        ON snapshot_chunks (target_id, policy_id, backup_id, contributor_id, logical_path, chunk_ordinal)
+        """
+    )
     return connection
 
 
@@ -673,6 +704,31 @@ def load_snapshot_chunks(target_id: str, policy_id: str, backup_id: str) -> list
             ORDER BY contributor_id, logical_path, chunk_ordinal
             """,
             (target_id, policy_id, backup_id),
+        ).fetchall()
+    return [
+        ChunkRecord(str(row["contributor_id"]), str(row["logical_path"]), int(row["chunk_ordinal"]), int(row["offset"]), int(row["length"]), str(row["chunk_sha256"]))
+        for row in rows
+    ]
+
+
+def load_snapshot_chunks_for_file(
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    contributor_id: str,
+    logical_path: str,
+) -> list[ChunkRecord]:
+    """Load one parent file's chunk map through the composite index."""
+    with _connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT contributor_id, logical_path, chunk_ordinal, offset, length, chunk_sha256
+            FROM snapshot_chunks
+            WHERE target_id = ? AND policy_id = ? AND backup_id = ?
+              AND contributor_id = ? AND logical_path = ?
+            ORDER BY chunk_ordinal
+            """,
+            (target_id, policy_id, backup_id, contributor_id, logical_path),
         ).fetchall()
     return [
         ChunkRecord(str(row["contributor_id"]), str(row["logical_path"]), int(row["chunk_ordinal"]), int(row["offset"]), int(row["length"]), str(row["chunk_sha256"]))

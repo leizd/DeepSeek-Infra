@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.5。
+适用版本：v4.4.10。
 
 DeepSeek Infra 默认服务形态是一个单进程 FastAPI / ASGI 运行时：`/v1` OpenAI 兼容网关、`/mcp`、`/a2a`、`/api/*` 业务端点，加 `/healthz`·`/readyz`·`/metrics` 运维三件套。它的可写状态集中在 `DEEPSEEK_INFRA_ROOT`（或兼容变量 `DEEPSEEK_MOBILE_ROOT`）指定的数据目录。另有可选的无状态 MCP 双实例栈；它把持久任务状态放在独立 Redis AOF 卷中，因此不属于默认单卷备份边界。
 
@@ -21,7 +21,7 @@ docker compose logs -f deepseek-infra
 
 ```bash
 curl http://127.0.0.1:8000/healthz
-# {"status":"ok","version":"4.4.2",...}
+# {"status":"ok","version":"4.4.10",...}
 curl http://127.0.0.1:8000/readyz
 curl http://127.0.0.1:8000/metrics | head
 ```
@@ -65,12 +65,12 @@ npm run smoke:failover --prefix stateless-mcp
 ## 3. 纯 Docker
 
 ```bash
-docker build -t deepseek-infra:4.4.2 .
+docker build -t deepseek-infra:4.4.10 .
 docker run -d --name deepseek-infra \
   -p 127.0.0.1:8000:8000 \
   --env-file .env \
   -v deepseek-data:/data \
-  deepseek-infra:4.4.2
+  deepseek-infra:4.4.10
 ```
 
 镜像要点（见 [Dockerfile](../Dockerfile)）：`python:3.12-slim`、`pip --no-cache-dir`、非 root 用户运行、`HEALTHCHECK` 打 `/healthz`、数据卷 `/data`、静态资源固定在镜像内（`DEEPSEEK_INFRA_STATIC_DIR`，旧变量 `DEEPSEEK_MOBILE_STATIC_DIR` 继续兼容），并在构建后清理 `__pycache__`。CI 的 docker job 会验证默认镜像/Compose，也会构建 [stateless-mcp/Dockerfile](../stateless-mcp/Dockerfile) 并校验 [docker-compose.stateless-mcp.yml](../docker-compose.stateless-mcp.yml)。
@@ -119,7 +119,9 @@ WantedBy=multi-user.target
 - **崩溃恢复**：`.restore-staging/<restoreId>/transaction.json` 记录 Contributor 准备、目录交换和 rollback 路径，`.workspace-restore-fence.json` 阻止普通写入，`.workspace-mutation.lock` 在 Web、CLI 和后台 Worker 间互斥。服务启动时会扫描未完成 Journal；`recovery-required` 记录和对应 Safety Backup 不得自动删除。
 - **冷备**：必须先完全停止服务，再复制整个 `/data` 卷。直接复制运行中的卷可能得到跨 SQLite / JSON 时间点不一致的内容。
 - **外部覆盖**：配置 `STATELESS_MCP_BACKUP_URL=http://127.0.0.1:8011`、`STATELESS_MCP_BACKUP_TOKEN`，并在 Stateless MCP 实例设置相同的 `MCP_INTERNAL_BACKUP_TOKEN`。`strict` 在服务不可达时失败；`best-effort` 会在 Manifest 明确记录遗漏。
-- **Helper**：源码环境运行 `python scripts/build_backup_crypto.py`；发布 ZIP 与 PyInstaller 构建会自动携带 `bin/backup-crypto[.exe]`。缺失 helper 时 API 明确禁用加密，不会回退为明文。
+- **Helper**：源码环境运行 `python scripts/build_backup_crypto.py`；发布 ZIP 与 PyInstaller 构建会自动携带 `bin/backup-crypto[.exe]` 和 `bin/deepseek-backup[.exe]`。缺失 `backup-crypto` 时 API 明确禁用加密，不会回退为明文；缺失 `deepseek-backup` 时 Chunk 扫描安全回退到 Python。
+- **流式恢复**：Remote Restore 先 `from-target`、再 `fetch`，写入临时 Secret 后调用 `materialize`；服务端以 1 MiB 窗口重建 Chain，并把验证后的 Tree 接入协调式 Restore。不要复制或手工修改 `.restore-staging` 中的 Session/Journal。
+- **并发预算**：Incremental Policy 可设置 `scanWorkers`（默认 `min(4, CPU)`）与 `maxInFlightBytes`（默认 64 MiB）。S3 multipart 新上传默认 4 Worker、16 MiB Part、64 MiB 在途；重启后以耐久 Journal + `ListParts` 对账，不应手工清理活动 Upload ID。
 - 旧 `.dsibackup` 仍可恢复，但应按完整工作区敏感数据保管。分享用 Export 已脱敏或裁剪，不能用于 Restore。
 
 ## 6. 暴露到局域网 / 公网前必读

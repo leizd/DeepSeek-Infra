@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, NoReturn
 from urllib.parse import urlparse
 
 from deepseek_infra.core.errors import AppError, ErrorCode
@@ -43,7 +43,7 @@ def _normalize_etag(value: str | None) -> str:
     return f'"{text}"'
 
 
-def _raise_from_client_error(exc: Exception, *, action: str) -> None:
+def _raise_from_client_error(exc: Exception, *, action: str) -> NoReturn:
     response = getattr(exc, "response", None) or {}
     error = response.get("Error") if isinstance(response, dict) else {}
     code = str((error or {}).get("Code") or "")
@@ -338,7 +338,6 @@ class S3TargetStore:
             )
         except Exception as exc:  # noqa: BLE001
             _raise_from_client_error(exc, action="begin-multipart")
-            raise
         return MultipartUpload(key=key, upload_id=str(response["UploadId"]), checksum_sha256=checksum_sha256)
 
     def upload_part(self, upload: MultipartUpload, part_number: int, data: bytes, *, checksum_sha256: str | None = None) -> dict[str, Any]:
@@ -359,12 +358,43 @@ class S3TargetStore:
             )
         except Exception as exc:  # noqa: BLE001
             _raise_from_client_error(exc, action="upload-part")
-            raise
         part = {"partNumber": part_number, "etag": _normalize_etag(response.get("ETag")), "size": len(data), "checksumSHA256": _b64_sha256(data)}
         upload.parts = [item for item in upload.parts if int(item["partNumber"]) != part_number]
         upload.parts.append(part)
         upload.parts.sort(key=lambda item: int(item["partNumber"]))
         return part
+
+    def list_multipart_parts(self, upload: MultipartUpload) -> list[dict[str, Any]]:
+        client = self._client_or_create()
+        full = self._full_key(upload.key)
+        marker: int | None = None
+        parts: list[dict[str, Any]] = []
+        while True:
+            args: dict[str, Any] = {
+                "Bucket": self.bucket,
+                "Key": full,
+                "UploadId": upload.upload_id,
+                **self._owner_args(),
+            }
+            if marker is not None:
+                args["PartNumberMarker"] = marker
+            try:
+                response = client.list_parts(**args)
+            except Exception as exc:  # noqa: BLE001
+                _raise_from_client_error(exc, action="list-parts")
+            for item in response.get("Parts") or []:
+                parts.append(
+                    {
+                        "partNumber": int(item["PartNumber"]),
+                        "etag": _normalize_etag(item.get("ETag")),
+                        "size": int(item.get("Size") or 0),
+                        **({"checksumSHA256": item["ChecksumSHA256"]} if item.get("ChecksumSHA256") else {}),
+                    }
+                )
+            if not response.get("IsTruncated"):
+                break
+            marker = int(response.get("NextPartNumberMarker") or 0)
+        return parts
 
     def complete_multipart_if_absent(self, upload: MultipartUpload) -> PutResult:
         client = self._client_or_create()
@@ -392,7 +422,6 @@ class S3TargetStore:
             if existing is not None and (existing.sha256 == upload.checksum_sha256 or existing.size > 0):
                 return PutResult(key=upload.key, etag=existing.etag, size=existing.size, created=False, version_id=existing.version_id)
             _raise_from_client_error(exc, action="complete-multipart")
-            raise
         size = sum(int(item.get("size") or 0) for item in upload.parts)
         return PutResult(
             key=upload.key,

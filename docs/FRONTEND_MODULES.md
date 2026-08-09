@@ -5,9 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.9。
+适用版本：v4.4.10。
 
-> 4.4.8 Automatic Backups 目标注册支持 Local Folder / S3-compatible（Bucket、Prefix、Region、Endpoint、AWS profile / 默认凭证链），展示 capability probe 与 scheduled-backup readiness；不采集、不回显、不持久化 Access Key。
+> 4.4.10 Remote Restore 通过公开 Materialize API 把 Target Chain 转成既有 Federated Restore 的 prepared 事务；Frontend 只提交临时 Secret Slot 引用并消费服务端状态，不持有 Chunk、父文件或 Multipart 状态，也不采集、不回显、不持久化 Access Key。
+
+前端模块按 `app`、`api`、`domain`、`features` 与 `shared` 边界拆分；Agent timeline 的规范化实现位于 `frontend/src/domain/chat/agentTimeline.ts`。
 
 ## Runtime ownership
 
@@ -25,7 +27,8 @@
 | --- | --- | --- |
 | App composition / routes | `frontend/src/app/`, `frontend/src/contexts/` | Provider ownership, React Router routes, mutation keys and top-level workspace composition |
 | HTTP / streaming | `frontend/src/api/` | JSON, multipart, NDJSON, auth and abortable request boundaries |
-| Chat domain | `frontend/src/domain/chat/`, `frontend/src/domain/conversation/` | Reducers, request building, persisted-history migration and selectors |
+| Chat domain | `frontend/src/domain/chat/`, `frontend/src/domain/conversation/` | Reducers, request building, persisted-history migration and selectors; Agent timeline: `frontend/src/domain/chat/agentTimeline.ts` |
+| Agent timeline | `frontend/src/domain/chat/agentTimeline.ts` | Agent timeline normalization, stable step identities and legacy-history deduplication |
 | Chat UI | `frontend/src/features/chat/`, `frontend/src/features/composer/` | Message flow, generation controls, editing, quoting and composer actions |
 | Agent / Activity | `frontend/src/features/agent-run/`, `frontend/src/features/activity/` | Durable runs, plan confirmation, timeline and diagnostics presentation |
 | Trace | `frontend/src/features/trace/`, `frontend/src/features/diagnostics/` | Routed Trace detail, shared summary/tree/waterfall/category/error views and drawer integration |

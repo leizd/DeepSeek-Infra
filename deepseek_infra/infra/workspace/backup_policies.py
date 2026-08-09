@@ -35,6 +35,8 @@ INCREMENTAL_DEFAULTS: dict[str, Any] = {
     "maxDeltaRatio": 0.60,
     "largeFileMode": "cdc",
     "largeFileThresholdBytes": 16 * 1024 * 1024,
+    "scanWorkers": min(4, os.cpu_count() or 1),
+    "maxInFlightBytes": 64 * 1024 * 1024,
 }
 
 MISFIRE_POLICIES = ("skip", "run-once")
@@ -184,13 +186,14 @@ def _normalize_scope(raw: Any) -> dict[str, Any]:
         _require_safe_id(project_id, "scope.projectIds")
     if mode == "project" and not project_ids:
         raise AppError("Backup policy scope.projectIds is required for project mode", code=ErrorCode.INVALID_PAYLOAD)
-    return {
+    normalized = {
         "mode": mode,
         "projectIds": project_ids,
         "includeHistory": _require_bool(section.get("includeHistory"), "scope.includeHistory", True),
         "includeExternalState": _require_bool(section.get("includeExternalState"), "scope.includeExternalState", True),
         "coveragePolicy": _require_choice(section.get("coveragePolicy"), "scope.coveragePolicy", COVERAGE_POLICIES, "strict"),
     }
+    return normalized
 
 
 def _normalize_frontend_mirror(raw: Any) -> dict[str, Any]:
@@ -226,7 +229,7 @@ def _normalize_incremental(raw: Any) -> dict[str, Any]:
     ratio = float(raw_ratio)
     if not 0.1 <= ratio <= 0.9:
         raise AppError("Backup policy field incremental.maxDeltaRatio must be between 0.10 and 0.90", code=ErrorCode.INVALID_PAYLOAD)
-    return {
+    normalized = {
         "mode": mode,
         "maxChainDepth": _require_int(section.get("maxChainDepth"), "incremental.maxChainDepth", 8, 1, 64),
         "fullIntervalDays": _require_int(section.get("fullIntervalDays"), "incremental.fullIntervalDays", 7, 1, 90),
@@ -234,6 +237,10 @@ def _normalize_incremental(raw: Any) -> dict[str, Any]:
         "largeFileMode": large_file_mode,
         "largeFileThresholdBytes": _require_int(section.get("largeFileThresholdBytes"), "incremental.largeFileThresholdBytes", 16 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024),
     }
+    if mode != "off" or "scanWorkers" in section or "maxInFlightBytes" in section:
+        normalized["scanWorkers"] = _require_int(section.get("scanWorkers"), "incremental.scanWorkers", min(4, os.cpu_count() or 1), 1, 16)
+        normalized["maxInFlightBytes"] = _require_int(section.get("maxInFlightBytes"), "incremental.maxInFlightBytes", 64 * 1024 * 1024, 8 * 1024 * 1024, 2 * 1024 * 1024 * 1024)
+    return normalized
 
 
 def _normalize_retry(raw: Any) -> dict[str, Any]:

@@ -458,6 +458,14 @@ def _load_rag_runner():
     return module
 
 
+def test_rag_chunker_preserves_markdown_section_boundaries() -> None:
+    runner = _load_rag_runner()
+    chunks = runner.chunk_document("intro\n\n## Security\nbody\n\n### Details\nend")
+
+    assert [chunk["text"] for chunk in chunks] == ["intro", "## Security\nbody", "### Details\nend"]
+    assert [(chunk["index"], chunk["lineStart"], chunk["lineEnd"]) for chunk in chunks] == [(0, 1, 2), (1, 3, 5), (2, 6, 7)]
+
+
 def test_rag_runner_evaluates_real_retrieval_offline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Isolated local RAG index so the real .local-rag is never touched.
     index_dir = tmp_path / ".rag-index"

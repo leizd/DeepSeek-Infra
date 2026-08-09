@@ -62,6 +62,12 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def _set_phase(session: dict[str, Any], phase: str) -> None:
+    session["phase"] = phase
+    session["updatedAt"] = _utc_iso()
+    _atomic_write_json(_session_path(str(session["restoreId"])), session)
+
+
 def read_restore_session(restore_id: str) -> dict[str, Any] | None:
     path = _session_path(restore_id)
     if not path.is_file():
@@ -464,11 +470,12 @@ def materialize_restore_session(
     if session is None:
         raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
     phase = str(session.get("phase") or "")
-    if phase not in {"fetched", "chain-fetched"}:
+    if phase not in {"fetched", "chain-fetched", "decrypting-chain", "materializing", "verified"}:
         raise AppError("Restore session has not finished fetching", code=ErrorCode.INVALID_REQUEST, status=409)
     del client
     base = _session_dir(restore_id)
     secret_kind: Literal["passphrase", "age-identity"] = "passphrase" if str(kind) != "age-identity" else "age-identity"
+    _set_phase(session, "decrypting-chain")
     if str(session.get("snapshotKind") or "full") == "incremental":
         chain = session.get("chain") or []
         extracted_dirs: list[Path] = []
@@ -479,21 +486,20 @@ def materialize_restore_session(
             extracted = base / f"extracted-{index}"
             backups._safe_extract_and_verify(decrypted, extracted)
             extracted_dirs.append(extracted)
-        verified = base / "verified"
-        shutil.rmtree(verified, ignore_errors=True)
-        final_manifest = backup_incremental_restore.materialize_chain(extracted_dirs, verified)
+        _set_phase(session, "materializing")
+        extracted = base / "extracted"
+        shutil.rmtree(extracted, ignore_errors=True)
+        final_manifest = backup_incremental_restore.materialize_chain(extracted_dirs, extracted)
         normalized = _normalized_full_manifest(final_manifest)
-        _write_checksums(verified, normalized)
-        backups._verify_manifest_tree(verified)
-        session["phase"] = "materialized"
-        session["updatedAt"] = _utc_iso()
-        _atomic_write_json(_session_path(restore_id), session)
+        _write_checksums(extracted, normalized)
+        backups._verify_manifest_tree(extracted)
+        _set_phase(session, "verified")
         return {
             "restoreId": restore_id,
             "phase": "materialized",
             "snapshotKind": "incremental",
             "chain": [str(item["backupId"]) for item in chain],
-            "tree": str(verified),
+            "tree": str(extracted),
             "manifest": normalized,
         }
     ciphertext = Path(str(session.get("ciphertextPath") or ""))
@@ -501,11 +507,10 @@ def materialize_restore_session(
         raise AppError("Restore session ciphertext is unavailable", code=ErrorCode.NOT_FOUND, status=404)
     decrypted = base / "decrypted-0.dsibackup"
     backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
-    extracted = base / "extracted-0"
+    _set_phase(session, "materializing")
+    extracted = base / "extracted"
     manifest = backups._safe_extract_and_verify(decrypted, extracted)
-    session["phase"] = "materialized"
-    session["updatedAt"] = _utc_iso()
-    _atomic_write_json(_session_path(restore_id), session)
+    _set_phase(session, "verified")
     return {
         "restoreId": restore_id,
         "phase": "materialized",
@@ -513,3 +518,68 @@ def materialize_restore_session(
         "tree": str(extracted),
         "manifest": manifest,
     }
+
+
+def materialize_federated_restore(
+    restore_id: str,
+    *,
+    mode: str = "merge",
+    previous_epoch: str = "legacy",
+    target_epoch: str | None = None,
+    owner_document_id: str = "server",
+    client: Any | None = None,
+) -> dict[str, Any]:
+    """Close the public remote chain into the crash-safe federated restore."""
+    session = read_restore_session(restore_id)
+    if session is None:
+        raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+    phase = str(session.get("phase") or "")
+    if phase in {"preparing", "prepared", "committing", "complete"}:
+        restored = backups.get_restore(restore_id)
+        return {**restored, "phase": phase, "remoteRestorePhase": phase, "materializedTreeVerified": True}
+    if phase not in {"fetched", "chain-fetched", "decrypting-chain", "materializing", "verified"}:
+        raise AppError("Restore session has not finished fetching", code=ErrorCode.INVALID_REQUEST, status=409)
+    kind, secret = backup_crypto.consume_secret(restore_id)
+    try:
+        materialized = materialize_restore_session(restore_id, kind=kind, secret=secret, client=client)
+        session = read_restore_session(restore_id) or session
+        tree = Path(str(materialized["tree"]))
+        members = session.get("chain") if isinstance(session.get("chain"), list) else []
+        ciphertext_digest = str(
+            (members[-1].get("objectDigest") if members and isinstance(members[-1], dict) else session.get("objectDigest")) or ""
+        )
+        protection = "passphrase" if kind == "passphrase" else "age-recipient"
+        backups.inspect_verified_restore_tree(
+            restore_id,
+            tree,
+            protection=protection,
+            ciphertext_sha256=ciphertext_digest or None,
+        )
+        backup_crypto.put_secret_bytes(restore_id, kind, bytearray(secret))
+        _set_phase(session, "preparing")
+        prepared = backups.prepare_restore(
+            restore_id,
+            mode=mode,
+            previous_epoch=previous_epoch,
+            target_epoch=target_epoch,
+            owner_document_id=owner_document_id,
+        )
+        session = read_restore_session(restore_id) or session
+        session["federatedPhase"] = str(prepared.get("phase") or "backend-staged")
+        _set_phase(session, "prepared")
+        return {**prepared, "phase": "prepared", "remoteRestorePhase": "prepared", "materializedTreeVerified": True}
+    except Exception:
+        session = read_restore_session(restore_id) or session
+        transaction_exists = (_session_dir(restore_id) / "transaction.json").is_file()
+        _set_phase(session, "recovery-required" if transaction_exists else "failed")
+        backup_crypto.record_unlock_failure(restore_id)
+        raise
+    finally:
+        secret[:] = b"\x00" * len(secret)
+
+
+def advance_federated_phase(restore_id: str, phase: str) -> None:
+    """Mirror transaction progress into a remote restore session when present."""
+    session = read_restore_session(restore_id)
+    if session is not None:
+        _set_phase(session, phase)

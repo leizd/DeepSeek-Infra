@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.5。
+适用版本：v4.4.10。
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 
@@ -104,7 +104,7 @@ Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具�
 
 ### 版本说明
 
-- **Current release:** `4.4.5`。默认运行时仍由 Python 拥有；`backup-crypto` 只是 age 流式密码边界，备份事务、租约围栏提交、Contributor 编排和恢复状态机仍由 Python 拥有；可选无状态 MCP 是独立部署面。
+- **Current release:** `4.4.10`。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的可选 Chunk 扫描加速。备份事务、租约围栏提交、Contributor 编排和恢复状态机仍由 Python 拥有；可选无状态 MCP 是独立部署面。
 - **Historical qualification:** `v4.0.0-rc.1` 已被 rc.2 supersede，只保留为历史架构预览；stable `4.0.0` 从已验证的 rc.2 提升。
 - **Patch boundary:** Python-first 所有权、默认关闭的 Rust delegates 和冻结协议均不改变。
 
@@ -143,6 +143,25 @@ flowchart LR
 Secret 不进入 API Session JSON、durable Journal、命令行或环境变量。前端只在 Backup/Restore 组件内短期持有，Python 的 Ephemeral Secret Slot 限时、限长、限尝试次数并在消费后清零；Rust helper 从单独继承的匿名 pipe/handle 读取 Secret，同时通过 stdin/stdout 或文件句柄流式处理包。
 
 External Contributor 与本地目录 Contributor 共享 coverage manifest，但不复制部署存储。Stateless MCP 先用 Redis generation fence 固定逻辑边界，再输出版本化 JSONL；恢复使用确定性 ID remap，清除 lease/owner，并把任何未终结工作冻结为 `interrupted`，因此不会在新环境自动重放任务。
+
+## 流式增量恢复与原生 Chunk Engine（v4.4.10）
+
+```mermaid
+flowchart LR
+    T["BackupTargetStore<br/>Full + Delta ciphertext"] --> F["durable fetch session<br/>range resume + SHA"]
+    F --> A["backup-crypto<br/>age authentication"]
+    A --> M["1 MiB bounded materializer<br/>v2/v3 decoder + Merkle verify"]
+    M --> V["verified workspace tree"]
+    V --> R["Federated Restore<br/>prepare · commit · complete"]
+    P["Python Chunk Engine"] --> B["BackupChunkEngine contract"]
+    N["Rust deepseek-backup"] --> B
+    B --> D["adaptive v3 delta builder"]
+    D --> S["fenced multipart publish<br/>durable part journal"]
+```
+
+Remote Restore Session 只保存 Target、Lineage、Object 摘要、进度和状态，不保存 Secret。Materializer 对每层执行认证解密、路径/Schema 校验、Chunk/File SHA 与 Merkle 转移验证，并把最终完整 Tree 交回 4.4.1 的 Federated Restore；它不拥有正式 Workspace Commit。
+
+`BackupChunkEngine` 把文件 SHA、FastCDC 边界和 Chunk SHA 合并为一次遍历。Python 实现是兼容基线，Rust helper 必须产生逐项完全相同的结果，否则回退并拒绝采用分歧结果。Builder 用 Worker 上限和在途逻辑字节预算控制并行；Run Plan 在真实物理 Delta 比率可知后冻结。S3 上传的 Part Journal 在每个成功 Part 后耐久化，并在续传时用 `ListParts` 对账；所有提交点继续受 Writer Lease/Fence 约束。
 
 ## 分层架构
 
@@ -185,6 +204,7 @@ Python Default Runtime   FastAPI / ASGI: Auth · Streaming · /v1/chat · /healt
 - `infra/mcp/` — **MCP-native Tool Hub**：`server`（JSON-RPC 2.0 分发）+ `registry`（tools / resources / prompts 目录）+ `adapters`（执行桥，复用 Tool Policy 闸门）+ `permissions`（能力切片与预批）+ `client`（出方向 MCP client）。
 - `stateless-mcp/` — **无状态 MCP 执行平面**：官方 TypeScript SDK Streamable HTTP server factory + Redis durable task store + lease/fencing 恢复 + 幂等工具 + OpenTelemetry + generation-fenced logical backup Contributor；通过 `docker-compose.stateless-mcp.yml` 部署双实例与 NGINX。
 - `infra/workspace/backup_crypto.py` + `rust/crates/backup-crypto/` — **加密备份边界**：Python 持有事务和短期 Secret Slot，Rust helper 只执行标准 age v1 加解密、Identity/Recipient 转换和 header inspect。
+- `infra/workspace/backup_chunk_engine.py` + `rust/crates/deepseek-backup/` — **差分扫描边界**：单次流式计算 File SHA、FastCDC v2/v3 Boundary 与 Chunk SHA；Python/Rust 精确 Parity，Native 不可用时安全回退。
 - `infra/observability/` — **Observability**：`observability`（OpenTelemetry 风格的 trace/span 层级链路，run 为根，`agent.<id>` 包裹其 `context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek` 子 span）+ `trace_api`（`/api/traces`、`/trace/{id}`）+ `export`（trace JSON 脱敏导出）+ `metrics`（Prometheus `/metrics`）+ `health`（`/healthz`·`/readyz`）。
 - `infra/data/` — **本地存储**：`memory` / `projects` / `reminders`。
 - `core/`、`web/`、`launcher/`、`android_entry.py`、`desktop_app.py` — 配置 / 错误 / 工具、HTTP 运行时、跨端打包入口。

@@ -267,6 +267,7 @@ def receipt_for(
             "parentBackupId": str(snapshot.get("parentBackupId") or "") or None,
             "baseBackupId": str(snapshot.get("baseBackupId") or "") or None,
             "chainDepth": int(snapshot.get("chainDepth") or 0),
+            "chunkProtocol": str(snapshot.get("chunkProtocol") or manifest.get("chunkProtocol") or "") or None,
         }
     else:
         lineage = {
@@ -276,6 +277,7 @@ def receipt_for(
             "parentBackupId": None,
             "baseBackupId": None,
             "chainDepth": 0,
+            "chunkProtocol": str(manifest.get("chunkProtocol") or "") or None,
         }
     return {
         **lineage,
@@ -642,42 +644,82 @@ def _upload_object_resumable(
     slot_digest: str,
     checkpoint: Callable[[], None] | None = None,
 ) -> None:
-    part_size = 8 * 1024 * 1024
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    default_part_size = 16 * 1024 * 1024
+    workers = 4
     digest = str(package.ciphertext_sha256)
     size = int(package.size)
     state = backup_spool.read_multipart_state(policy_id, slot_digest) or {}
     upload = None
     if state.get("uploadId") and str(state.get("key") or "") == obj_key:
+        part_size = int(state.get("partSize") or (8 * 1024 * 1024))
         from deepseek_infra.infra.workspace.backup_target_store import MultipartUpload
 
         upload = MultipartUpload(key=obj_key, upload_id=str(state["uploadId"]), checksum_sha256=digest, parts=list(state.get("parts") or []))
+        state["partSize"] = part_size
+        state["workers"] = workers
+        state["maxInFlightBytes"] = workers * part_size
+        state["checksumSha256"] = digest
     else:
+        part_size = default_part_size
         upload = store.begin_multipart(obj_key, checksum_sha256=digest)
-        state = {"key": obj_key, "uploadId": upload.upload_id, "parts": [], "checksumSha256": digest}
+        state = {
+            "key": obj_key,
+            "uploadId": upload.upload_id,
+            "parts": [],
+            "checksumSha256": digest,
+            "partSize": part_size,
+            "workers": workers,
+            "maxInFlightBytes": workers * part_size,
+            "phase": "uploading",
+        }
         backup_spool.write_multipart_state(policy_id, slot_digest, state)
 
     completed_parts = {int(item["partNumber"]): item for item in upload.parts}
-    with Path(package.path).open("rb") as handle:
-        part_number = 1
-        offset = 0
-        while offset < size:
+    list_parts = getattr(store, "list_multipart_parts", None)
+    if callable(list_parts):
+        try:
+            completed_parts.update({int(item["partNumber"]): item for item in list_parts(upload)})
+        except AppError:
+            if completed_parts:
+                raise
+    upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
+    state["parts"] = upload.parts
+    backup_spool.write_multipart_state(policy_id, slot_digest, state)
+
+    def upload_one(part_number: int, offset: int, length: int) -> dict[str, Any]:
+        with Path(package.path).open("rb") as handle:
+            handle.seek(offset)
+            chunk = handle.read(length)
+        if len(chunk) != length:
+            raise AppError("spooled multipart package was truncated", code=ErrorCode.INTERNAL, status=500)
+        return store.upload_part(upload, part_number, chunk, checksum_sha256=hashlib.sha256(chunk).hexdigest())
+
+    pending = [
+        (part_number, offset, min(part_size, size - offset))
+        for part_number, offset in enumerate(range(0, size, part_size), start=1)
+        if part_number not in completed_parts
+    ]
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="backup-multipart") as executor:
+        futures = {}
+        for part_number, offset, length in pending:
             if checkpoint is not None:
                 checkpoint()
-            chunk = handle.read(part_size)
-            if not chunk:
-                break
-            if part_number not in completed_parts:
-                part = store.upload_part(upload, part_number, chunk, checksum_sha256=hashlib.sha256(chunk).hexdigest())
-                completed_parts[part_number] = part
-                upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
-                state["parts"] = upload.parts
-                backup_spool.write_multipart_state(policy_id, slot_digest, state)
-            else:
-                handle.seek(offset + len(chunk))
-            offset += len(chunk)
-            part_number += 1
+            futures[executor.submit(upload_one, part_number, offset, length)] = part_number
+        for future in as_completed(futures):
+            if checkpoint is not None:
+                checkpoint()
+            part_number = futures[future]
+            completed_parts[part_number] = future.result()
+            upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
+            state["parts"] = upload.parts
+            state["completedParts"] = len(upload.parts)
+            backup_spool.write_multipart_state(policy_id, slot_digest, state)
     if checkpoint is not None:
         checkpoint()
+    state["phase"] = "completing"
+    backup_spool.write_multipart_state(policy_id, slot_digest, state)
     store.complete_multipart_if_absent(upload)
 
 

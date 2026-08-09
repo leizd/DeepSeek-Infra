@@ -5,13 +5,13 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.9。
+适用版本：v4.4.10。
 
-> 4.4.8 hardens remote recovery (frozen run plans + verified spool reuse across scheduler retries, store reconcile, durable restore fetch sessions, TargetSession governance) and introduces incremental snapshot graph foundations (Merkle roots, coverage-safe tombstones, adaptive full checkpoints, snapshot index, DAG-aware ancestor protection).
+> 4.4.10 closes remote Chain Materialize into the federated restore transaction, streams parent/payload reconstruction with 1 MiB bounds, introduces versioned FastCDC v3 plus exact Python/Rust engine parity, freezes plans from actual delta ratio, and resumes fenced four-worker S3 multipart uploads from durable per-part journals.
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
-> 4.4.8 adds remote backup targets: a backend-neutral `BackupTargetStore`, secret-free S3-compatible registry + capability probe, conditional-write leases/commits, verified encrypted publish spool with multipart resume, catalog v2 CAS head/snapshots, logical remote trash/GC with restore holds, and range-resumable encrypted restore from target. WebDAV is reserved, not GA. Recovery Identities and cloud Access Keys never enter backup metadata.
+> 4.4.9 provides true delta packages and verified Full + Delta recovery chains. 4.4.10 keeps those contents encrypted while bounding reconstruction memory and native acceleration; WebDAV, convergent encryption and cloud chunk CAS remain reserved, not GA. Recovery Identities, Chunk hashes and cloud Access Keys never enter remote receipts or performance telemetry.
 
 > 4.4.5 closed automatic backups into a fenced commit loop: heartbeated run leases, target writer leases, immutable content-addressed objects with one formal commit marker per schedule slot, catalog-as-projection with CAS, target rollback/fork/clone detection, retention snapshot CAS with trash journals, immutable mirror generations with epoch/sequence fences and policy-specific recipient variants, plus single-tab frontend mirror uploader election. Recovery Identities remain offline-only.
 

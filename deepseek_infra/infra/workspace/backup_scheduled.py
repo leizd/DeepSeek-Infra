@@ -22,7 +22,7 @@ from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_incremental, backup_mirror, backup_unattended, backups, mutation_gate
+from deepseek_infra.infra.workspace import backup_chunk_engine, backup_incremental, backup_mirror, backup_unattended, backups, mutation_gate
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +114,9 @@ def _context_from_policy(policy: dict[str, Any]) -> backups.BackupContext:
 
 
 def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+    checkpoint = getattr(cancel_event, "backup_checkpoint", None)
+    if callable(checkpoint):
+        checkpoint()
     if cancel_event is not None and cancel_event.is_set():
         raise AppError("Scheduled backup cancelled", code=ErrorCode.INVALID_REQUEST, status=499)
 
@@ -224,6 +227,8 @@ def _build_candidate(
         incremental_cfg = _section(policy, "incremental")
         large_file_mode = str(incremental_cfg.get("largeFileMode") or "cdc")
         large_file_threshold = int(incremental_cfg.get("largeFileThresholdBytes") or (16 * 1024 * 1024))
+        scan_workers = int(incremental_cfg.get("scanWorkers") or 1)
+        max_in_flight_bytes = int(incremental_cfg.get("maxInFlightBytes") or (64 * 1024 * 1024))
         current_chunk_records: list[backup_incremental.ChunkRecord] = []
         if snapshot_kind == "incremental" and parent_backup_id:
             parent_files = []
@@ -250,14 +255,18 @@ def _build_candidate(
             payload_dir.mkdir(parents=True, exist_ok=True)
             payload_files: list[dict[str, Any]] = []
             payload_by_sha: dict[str, str] = {}
-            parent_chunks_all: list[backup_incremental.ChunkRecord] = []
-            if parent_backup_id:
-                try:
-                    parent_chunks_all = backup_incremental.load_snapshot_chunks(
-                        str(policy.get("targetId") or "managed-local"), str(policy.get("policyId") or ""), parent_backup_id
-                    )
-                except Exception:
-                    parent_chunks_all = []
+            large_paths = [
+                staging / str(put["path"])
+                for put in delta["put"]
+                if large_file_mode == "cdc" and int(put.get("size") or 0) >= large_file_threshold
+            ]
+            scans, scan_telemetry = backup_chunk_engine.scan_files_bounded(
+                large_paths,
+                workers=scan_workers,
+                max_in_flight_bytes=max_in_flight_bytes,
+                cancel_event=cancel_event,
+                checkpoint=getattr(cancel_event, "backup_checkpoint", None),
+            ) if large_paths else ({}, {"engine": "none", "files": 0, "logicalBytes": 0, "scanSeconds": 0.0, "throughputBytesPerSecond": 0, "workers": scan_workers, "maxInFlightBytes": max_in_flight_bytes})
             for put in delta["put"]:
                 src = staging / str(put["path"])
                 if not src.is_file():
@@ -267,9 +276,30 @@ def _build_candidate(
                 if large_file_mode == "cdc" and is_large:
                     contributor_id = str(put.get("contributorId") or "")
                     logical_path = str(put["path"])
-                    parent_chunks = [item for item in parent_chunks_all if item.contributor_id == contributor_id and item.logical_path == logical_path]
-                    with src.open("rb") as handle:
-                        current_chunks = backup_incremental.chunk_map_for(contributor_id, logical_path, handle, file_size=int(put.get("size") or 0))
+                    try:
+                        parent_chunks = backup_incremental.load_snapshot_chunks_for_file(
+                            str(policy.get("targetId") or "managed-local"),
+                            str(policy.get("policyId") or ""),
+                            parent_backup_id,
+                            contributor_id,
+                            logical_path,
+                        )
+                    except Exception:
+                        parent_chunks = []
+                    scan = scans[src]
+                    if scan.sha256 != blob_sha or scan.size != int(put.get("size") or 0):
+                        raise AppError("Workspace file changed during CDC scan", code=ErrorCode.INVALID_REQUEST, status=409)
+                    current_chunks = [
+                        backup_incremental.ChunkRecord(
+                            contributor_id,
+                            logical_path,
+                            index,
+                            int(item["offset"]),
+                            int(item["length"]),
+                            str(item["sha256"]),
+                        )
+                        for index, item in enumerate(scan.chunks)
+                    ]
                     described = backup_incremental.cdc_delta_for_file(
                         contributor_id=contributor_id,
                         logical_path=logical_path,
@@ -277,29 +307,35 @@ def _build_candidate(
                         parent_chunks=parent_chunks,
                         current_chunks=current_chunks,
                     )
-                    for index, chunk in enumerate(described):
-                        if chunk["source"] != "payload":
-                            continue
-                        chunk_sha = str(chunk.get("sha256") or "")
-                        existing_ref = payload_by_sha.get(chunk_sha)
-                        if existing_ref is not None:
-                            chunk["payloadRef"] = existing_ref
-                            continue
-                        record = current_chunks[index]
-                        dest = payload_dir / f"{len(payload_files):06d}"
-                        with src.open("rb") as handle:
+                    with src.open("rb") as handle:
+                        for index, chunk in enumerate(described):
+                            if chunk["source"] != "payload":
+                                continue
+                            chunk_sha = str(chunk.get("sha256") or "")
+                            existing_ref = payload_by_sha.get(chunk_sha)
+                            if existing_ref is not None:
+                                chunk["payloadRef"] = existing_ref
+                                continue
+                            record = current_chunks[index]
+                            dest = payload_dir / f"{len(payload_files):06d}"
                             handle.seek(record.offset)
-                            chunk_bytes = handle.read(record.length)
-                        dest.write_bytes(chunk_bytes)
-                        payload_files.append(
-                            {
-                                "path": f"payload/files/{dest.name}",
-                                "size": len(chunk_bytes),
-                                "sha256": chunk_sha,
-                            }
-                        )
-                        payload_by_sha[chunk_sha] = f"payload/files/{dest.name}"
-                        chunk["payloadRef"] = f"payload/files/{dest.name}"
+                            remaining = record.length
+                            with dest.open("wb") as output:
+                                while remaining:
+                                    block = handle.read(min(1024 * 1024, remaining))
+                                    if not block:
+                                        raise AppError("Workspace file was truncated during CDC staging", code=ErrorCode.INVALID_REQUEST, status=409)
+                                    output.write(block)
+                                    remaining -= len(block)
+                            payload_files.append(
+                                {
+                                    "path": f"payload/files/{dest.name}",
+                                    "size": record.length,
+                                    "sha256": chunk_sha,
+                                }
+                            )
+                            payload_by_sha[chunk_sha] = f"payload/files/{dest.name}"
+                            chunk["payloadRef"] = f"payload/files/{dest.name}"
                     put["storage"] = "cdc"
                     put["chunks"] = described
                     put.pop("payloadRef", None)
@@ -338,7 +374,8 @@ def _build_candidate(
             for auxiliary_dir in ("migration", "frontend"):
                 shutil.rmtree(staging / auxiliary_dir, ignore_errors=True)
             snapshot_meta = {
-                "format": "incremental-v2",
+                "format": "incremental-v3",
+                "chunkProtocol": backup_incremental.CURRENT_CDC_PROTOCOL,
                 "kind": "incremental",
                 "lineageId": lineage_id or parent_backup_id,
                 "parentBackupId": parent_backup_id,
@@ -353,33 +390,50 @@ def _build_candidate(
             logical_changed_bytes = sum(int(item.get("size") or 0) for item in delta["put"])
             physical_payload_bytes = sum(int(item.get("size") or 0) for item in payload_files)
             savings = {
+                "logicalBytes": sum(int(item.size) for item in records),
                 "logicalChangedBytes": logical_changed_bytes,
                 "physicalPayloadBytes": physical_payload_bytes,
+                "reusedBytes": max(0, logical_changed_bytes - physical_payload_bytes),
                 "savedBytes": max(0, logical_changed_bytes - physical_payload_bytes),
                 "savedRatio": round(1.0 - (physical_payload_bytes / logical_changed_bytes), 4) if logical_changed_bytes else 0.0,
             }
             manifest["incrementalSavings"] = savings
+            manifest["incrementalPerformance"] = {**scan_telemetry, **savings}
         elif snapshot_kind == "full" and large_file_mode == "cdc":
             # Full snapshots also chunk large files so the first incremental can
             # reuse parent chunks instead of re-uploading the whole file.
             full_chunk_records: list[backup_incremental.ChunkRecord] = []
-            for file_entry in files:
-                if int(file_entry.get("size") or 0) < large_file_threshold:
-                    continue
+            large_entries = [
+                item for item in files
+                if int(item.get("size") or 0) >= large_file_threshold and (staging / str(item["path"])).is_file()
+            ]
+            scans, scan_telemetry = backup_chunk_engine.scan_files_bounded(
+                [staging / str(item["path"]) for item in large_entries],
+                workers=scan_workers,
+                max_in_flight_bytes=max_in_flight_bytes,
+                cancel_event=cancel_event,
+                checkpoint=getattr(cancel_event, "backup_checkpoint", None),
+            ) if large_entries else ({}, {"engine": "none", "files": 0, "logicalBytes": 0, "scanSeconds": 0.0, "throughputBytesPerSecond": 0, "workers": scan_workers, "maxInFlightBytes": max_in_flight_bytes})
+            for file_entry in large_entries:
                 staging_path = staging / str(file_entry["path"])
-                if not staging_path.is_file():
-                    continue
                 contributor_id = str(file_entry.get("contributorId") or "")
-                with staging_path.open("rb") as handle:
-                    full_chunk_records.extend(
-                        backup_incremental.chunk_map_for(
-                            contributor_id,
-                            str(file_entry["path"]),
-                            handle,
-                            file_size=int(file_entry.get("size") or 0),
-                        )
+                scan = scans[staging_path]
+                if scan.sha256 != str(file_entry.get("sha256") or ""):
+                    raise AppError("Workspace file changed during CDC scan", code=ErrorCode.INVALID_REQUEST, status=409)
+                full_chunk_records.extend(
+                    backup_incremental.ChunkRecord(
+                        contributor_id,
+                        str(file_entry["path"]),
+                        index,
+                        int(item["offset"]),
+                        int(item["length"]),
+                        str(item["sha256"]),
                     )
+                    for index, item in enumerate(scan.chunks)
+                )
             current_chunk_records = full_chunk_records
+            manifest["chunkProtocol"] = backup_incremental.CURRENT_CDC_PROTOCOL
+            manifest["incrementalPerformance"] = scan_telemetry
         manifest_bytes = backups._stable_json(manifest)
         (staging / "manifest.json").write_bytes(manifest_bytes)
         # Incremental packages checksum only the physically-present payload.

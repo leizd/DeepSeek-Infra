@@ -509,6 +509,21 @@ export function fetchRemoteRestore(restoreId: string, request: { maxBytes?: numb
   }>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/fetch`, request);
 }
 
+export function materializeRemoteRestore(
+  restoreId: string,
+  request: { mode?: "merge" | "project-copy" | "replace-empty"; previousEpoch?: string; targetEpoch?: string; ownerDocumentId?: string },
+  client: HttpClient = httpClient,
+) {
+  return client.postJson<{
+    restoreId: string;
+    phase: "prepared";
+    remoteRestorePhase: "prepared";
+    materializedTreeVerified: boolean;
+    serverTransactionDigest?: string;
+    frontend?: unknown;
+  }>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/materialize`, request);
+}
+
 export function deleteBackupTarget(targetId: string, client: HttpClient = httpClient) {
   return client.json<{ deleted: boolean; targetId: string }>(`/api/workspace/backup-targets/${encodeURIComponent(targetId)}`, { method: "DELETE" });
 }

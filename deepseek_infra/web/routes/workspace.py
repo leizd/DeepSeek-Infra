@@ -30,6 +30,7 @@ from deepseek_infra.infra.skills import analytics as skill_analytics
 from deepseek_infra.infra.workspace import artifacts as workspace_artifacts
 from deepseek_infra.infra.workspace import backup_mirror as workspace_backup_mirror
 from deepseek_infra.infra.workspace import backup_policies as workspace_backup_policies
+from deepseek_infra.infra.workspace import backup_remote_restore as workspace_backup_remote_restore
 from deepseek_infra.infra.workspace import backups as workspace_backups
 from deepseek_infra.infra.workspace import exports as workspace_exports
 from deepseek_infra.infra.workspace import home as workspace_home
@@ -507,29 +508,31 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
     async def api_workspace_restore_commit(request: Request, restore_id: str) -> JSONResponse:
         require_api_auth(request)
         payload = await read_json_body(request)
-        return json_response(
-            workspace_backups.commit_restore(
-                restore_id,
-                frontend_committed=bool(payload.get("frontendCommitted")),
-                frontend_digest=str(payload.get("frontendDigest") or "") or None,
-            )
+        result = workspace_backups.commit_restore(
+            restore_id,
+            frontend_committed=bool(payload.get("frontendCommitted")),
+            frontend_digest=str(payload.get("frontendDigest") or "") or None,
         )
+        workspace_backup_remote_restore.advance_federated_phase(restore_id, "committing")
+        return json_response(result)
 
     @router.post("/api/workspace/restores/{restore_id}/complete")
     async def api_workspace_restore_complete(request: Request, restore_id: str) -> JSONResponse:
         require_api_auth(request)
         payload = await read_json_body(request)
-        return json_response(
-            workspace_backups.complete_restore(
-                restore_id,
-                frontend_digest=str(payload.get("frontendDigest") or "") or None,
-            )
+        result = workspace_backups.complete_restore(
+            restore_id,
+            frontend_digest=str(payload.get("frontendDigest") or "") or None,
         )
+        workspace_backup_remote_restore.advance_federated_phase(restore_id, "complete")
+        return json_response(result)
 
     @router.post("/api/workspace/restores/{restore_id}/abort")
     async def api_workspace_restore_abort(request: Request, restore_id: str) -> JSONResponse:
         require_api_auth(request)
-        return json_response(workspace_backups.abort_restore(restore_id))
+        result = workspace_backups.abort_restore(restore_id)
+        workspace_backup_remote_restore.advance_federated_phase(restore_id, "rolled-back")
+        return json_response(result)
 
     @router.post("/api/workspace/restores/{restore_id}/apply")
     async def api_workspace_restore_apply(request: Request, restore_id: str) -> JSONResponse:

@@ -130,10 +130,11 @@ def collect_files(root: Path) -> list[Path]:
             generated_root = root.joinpath(*parts)
             if generated_root.is_dir():
                 candidates.update(generated_root.rglob("*"))
-        executable = "backup-crypto.exe" if os.name == "nt" else "backup-crypto"
-        helper = root / "bin" / executable
-        if helper.is_file():
-            candidates.add(helper)
+        for name in ("backup-crypto", "deepseek-backup"):
+            executable = f"{name}.exe" if os.name == "nt" else name
+            helper = root / "bin" / executable
+            if helper.is_file():
+                candidates.add(helper)
     return sorted(path for path in candidates if path.is_file() and should_include(path, root))
 
 

@@ -351,6 +351,20 @@ def create_backup_governance_router() -> APIRouter:
             )
         )
 
+    @router.post("/api/workspace/restores/{restore_id}/materialize")
+    async def api_restore_materialize(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=64_000)
+        return json_response(
+            backup_remote_restore.materialize_federated_restore(
+                restore_id,
+                mode=str(payload.get("mode") or "merge"),
+                previous_epoch=str(payload.get("previousEpoch") or "legacy"),
+                target_epoch=str(payload.get("targetEpoch") or "") or None,
+                owner_document_id=str(payload.get("ownerDocumentId") or "browser"),
+            )
+        )
+
     @router.get("/api/workspace/backup-target-capabilities")
     async def api_backup_target_capabilities(request: Request) -> JSONResponse:
         require_api_auth(request)
