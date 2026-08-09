@@ -254,3 +254,20 @@ def test_grace_expired_trash_releases_ancestors(tmp_settings: Path, tmp_path: Pa
     assert reasons.get("F0") == "latest-successful-backup"
     assert reasons.get("I2") != "ancestor-of-kept-snapshot"
     assert "I2" not in preview["keep"]
+
+def test_list_policies_skips_corrupt_and_invalid_created_at(tmp_settings: Path, tmp_path: Path) -> None:
+    from deepseek_infra.infra.workspace import backup_retention as _br
+    policies_dir = _br.BACKUP_RETENTION_DIR
+    policies_dir.mkdir(parents=True, exist_ok=True)
+    (policies_dir / "corrupt.json").write_text("{bad", encoding="utf-8")
+    (policies_dir / "list.json").write_text("[]", encoding="utf-8")
+    listed = _br.list_retention_policies()
+    assert any(item["retentionPolicyId"] == "default" for item in listed)
+    # A record with an unparseable createdAt is skipped by bucketing.
+    root = tmp_path / "target"
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
+    _add_backup(root, "bad_created", created="not-a-date")
+    _add_backup(root, "good_latest", created="2026-06-15T00:00:00Z")
+    policy = _policy(keepLast=1, keepHourly=0, keepDaily=0, keepWeekly=0, keepMonthly=0, minimumHealthyCopies=1)
+    preview = _br.preview_retention(policy, root, now=now)
+    assert "good_latest" in preview["keep"] or "good_latest" in preview["trash"]
