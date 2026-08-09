@@ -1,10 +1,11 @@
-"""Incremental snapshot graphs and content-defined deltas (4.4.8).
+"""Incremental snapshot graphs and content-defined deltas (4.4.9).
 
 Builds production incremental delta packages relative to a committed parent
 snapshot, attests trees with domain-separated Merkle roots, never emits
 deletion tombstones for unavailable contributors, and chunks large changed
-files with FastCDC. Convergent encryption is explicitly out of scope: chunk
-digests live only inside the encrypted package manifest and the local index.
+files with the pinned ``fastcdc-gear-v2`` protocol. Convergent encryption is
+explicitly out of scope: chunk digests live only inside the encrypted package
+manifest and the local index.
 """
 
 from __future__ import annotations
@@ -30,13 +31,16 @@ _LEAF_DOMAIN = b"\x00"
 _NODE_DOMAIN = b"\x01"
 
 # FastCDC protocol parameters (fixed for lineage stability).
-CDC_ALGORITHM = "fastcdc-gear-v1"
+# ``fastcdc-gear-v2`` is the production protocol with pinned boundaries and
+# golden vectors. ``fastcdc-gear-v1`` is a legacy experimental format and is
+# never accepted as a production lineage parent.
+CDC_ALGORITHM = "fastcdc-gear-v2"
+CDC_ALGORITHM_V1 = "fastcdc-gear-v1"
 CDC_MIN_CHUNK = 512 * 1024
 CDC_AVG_CHUNK = 2 * 1024 * 1024
 CDC_MAX_CHUNK = 8 * 1024 * 1024
 _CDC_MASK_S = 13
 _CDC_MASK_L = 22
-_CDC_GEAR = 0x0000B504F333F9DE
 
 
 def _utc_iso() -> str:
@@ -264,15 +268,22 @@ class ChunkRecord:
 
 
 def _fastcdc_gears() -> list[int]:
+    """Deterministic splitmix64 gear table for fastcdc-gear-v2.
+
+    The table is a fixed pseudorandom sequence: identical byte streams always
+    produce identical chunk boundaries, so the protocol stays stable across
+    processes, machines and releases.
+    """
     gears: list[int] = []
-    seed = 0x7FEB352D
+    seed = 0x9E3779B97F4A7C15
     mask = (1 << 64) - 1
     for _ in range(256):
-        seed = (seed * 6364136223846793005 + 1442695040888963407) & mask
-        gear = 1
-        for _shift in range(0, 64, 8):
-            gear = (gear * 2654435761) & mask
-        gears.append(seed)
+        seed = (seed + 0x9E3779B97F4A7C15) & mask
+        z = seed
+        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & mask
+        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & mask
+        z = z ^ (z >> 31)
+        gears.append(z)
     return gears
 
 
@@ -291,10 +302,11 @@ def chunk_stream(
     *,
     file_size: int,
 ) -> list[dict[str, Any]]:
-    """Stream a file into FastCDC chunks using bounded memory.
+    """Stream a file into fastcdc-gear-v2 chunks using bounded memory.
 
-    Emits ``{offset, length, sha256}`` for each chunk. Memory stays near
-    ``CDC_MAX_CHUNK`` regardless of file size.
+    Emits ``{offset, length, sha256}`` for each chunk. Boundaries use the short
+    mask up to the average size and the long mask beyond it, so the protocol is
+    pinned for lineage stability. Memory stays near ``CDC_MAX_CHUNK``.
     """
     gears = _gears()
     chunk: bytearray = bytearray()
@@ -303,6 +315,8 @@ def chunk_stream(
     chunk_start = 0
     offset = 0
     mask_s = (1 << _CDC_MASK_S) - 1
+    mask_l = (1 << _CDC_MASK_L) - 1
+    mask_64 = (1 << 64) - 1
     finished = False
     while not finished:
         block = handle.read(CDC_MAX_CHUNK)
@@ -315,9 +329,9 @@ def chunk_stream(
             if length >= CDC_MAX_CHUNK:
                 emit = True
             elif length >= CDC_MIN_CHUNK:
-                gear = gears[byte]
-                fp = ((fp << 1) & 0xFFFFFFFFFFFFFFFF) + gear
-                emit = (fp & mask_s) == 0
+                fp = (((fp << 1) & mask_64) + gears[byte]) & mask_64
+                boundary_mask = mask_l if length >= CDC_AVG_CHUNK else mask_s
+                emit = (fp & boundary_mask) == 0
             else:
                 emit = False
             if emit:
@@ -331,7 +345,6 @@ def chunk_stream(
                 )
                 chunk = bytearray()
                 chunk_start = offset + 1
-                fp = 0
             offset += 1
     if chunk:
         data = bytes(chunk)
