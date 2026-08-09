@@ -15,6 +15,7 @@ from deepseek_infra.infra.workspace import (
     backup_mirror,
     backup_policies,
     backup_publish,
+    backup_run_plan,
     backup_scheduler,
     backups,
     mutation_gate,
@@ -158,3 +159,74 @@ def test_execute_run_with_wrong_instance_abandons(tmp_settings: Path, stub_crypt
     outcome = backup_executor.execute_run(claimed[0], instance_id="intruder", now=now)
     assert outcome["phase"] in {"failed", "abandoned"}
     assert not list((backups.BACKUP_DIR / "objects").rglob("*.age")) if (backups.BACKUP_DIR / "objects").is_dir() else True
+
+
+@pytest.mark.parametrize(
+    ("max_delta_ratio", "logical_multiplier", "expected_kind", "expected_reason"),
+    ((0.10, 1, "full", "delta-ratio"), (0.90, 2, "incremental", "delta-ratio-within-limit")),
+)
+def test_execute_run_freezes_actual_delta_ratio(
+    tmp_settings: Path,
+    stub_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+    max_delta_ratio: float,
+    logical_multiplier: int,
+    expected_kind: str,
+    expected_reason: str,
+) -> None:
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"before"}]}', encoding="utf-8")
+    backup_mirror.put_frontend_mirror("mirror_default", _envelope(), source_epoch="epoch-1", recipients=[RECIPIENT_A])
+    policy = _policy(tmp_settings)
+    policy = backup_policies.update_policy(
+        str(policy["policyId"]),
+        {
+            "incremental": {
+                "mode": "file-delta",
+                "maxChainDepth": 8,
+                "fullEvery": 30,
+                "maxDeltaRatio": max_delta_ratio,
+                "largeFileMode": "whole",
+            }
+        },
+    )
+    first_now = datetime(2026, 6, 2, 4, 0, tzinfo=UTC)
+    first = _claim_and_run(policy, now=first_now)
+    assert first["phase"] == "complete" and first["snapshotKind"] == "full"
+
+    parent_backup_id = str(first["backupId"])
+    monkeypatch.setattr(
+        backup_executor.backup_incremental,
+        "select_snapshot_plan",
+        lambda **_kwargs: ("incremental", parent_backup_id, parent_backup_id, 1, None, None, None),
+    )
+    original_build = backup_executor.backup_scheduled.build_scheduled_backup
+
+    def build_with_ratio(*args: object, **kwargs: object) -> object:
+        package = original_build(*args, **kwargs)  # type: ignore[arg-type]
+        savings = getattr(package, "savings", None)
+        if isinstance(savings, dict) and int(savings.get("physicalPayloadBytes") or 0) > 0:
+            savings["logicalBytes"] = int(savings["physicalPayloadBytes"]) * logical_multiplier
+        return package
+
+    monkeypatch.setattr(backup_executor.backup_scheduled, "build_scheduled_backup", build_with_ratio)
+    resolutions: list[tuple[str, str]] = []
+    original_resolve = backup_run_plan.resolve_adaptive_plan
+
+    def resolve_plan(*args: object, **kwargs: object) -> dict[str, object]:
+        resolutions.append((str(kwargs["resolved_snapshot_kind"]), str(kwargs["reason"])))
+        return original_resolve(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backup_executor.backup_run_plan, "resolve_adaptive_plan", resolve_plan)
+
+    config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"after"}]}', encoding="utf-8")
+    second_now = first_now + timedelta(days=1)
+    second = _claim_and_run(policy, now=second_now)
+    assert second["phase"] == "complete" and second["snapshotKind"] == expected_kind
+    if expected_kind == "full":
+        assert second["forceFullReason"] == "delta-ratio"
+    else:
+        savings = second.get("incrementalSavings")
+        assert isinstance(savings, dict) and int(savings["logicalBytes"]) > 0
+
+    assert resolutions == [(expected_kind, expected_reason)]

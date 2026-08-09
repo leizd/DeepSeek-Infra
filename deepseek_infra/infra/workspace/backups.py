@@ -1111,6 +1111,33 @@ def _inspect_plain_archive(
 ) -> dict[str, Any]:
     extracted = restore_root / "extracted"
     manifest = _safe_extract_and_verify(archive_path, extracted)
+    result = _inspect_verified_tree(
+        manifest,
+        extracted,
+        restore_root,
+        restore_id,
+        encrypted=encrypted,
+        ciphertext_sha256=ciphertext_sha256,
+        protection=protection,
+        archive_sha256=_sha256_file(archive_path),
+    )
+    if encrypted:
+        archive_path.unlink(missing_ok=True)
+    return result
+
+
+def _inspect_verified_tree(
+    manifest: dict[str, Any],
+    extracted: Path,
+    restore_root: Path,
+    restore_id: str,
+    *,
+    encrypted: bool,
+    ciphertext_sha256: str | None,
+    protection: str,
+    archive_sha256: str,
+) -> dict[str, Any]:
+    """Build the normal federated restore plan from an already verified tree."""
     context = _context_from_manifest(manifest)
     operations: list[dict[str, Any]] = []
     conflicts: list[dict[str, Any]] = []
@@ -1153,7 +1180,7 @@ def _inspect_plain_archive(
         "warnings": [] if encrypted else ["Backup is integrity-verified but not encrypted."],
         "estimatedWriteBytes": sum(int(item["size"]) for item in manifest["files"]),
         "requiresFrontendApply": bool(manifest.get("frontend")),
-        "archiveSha256": _sha256_file(archive_path),
+        "archiveSha256": archive_sha256,
         "ciphertextSha256": ciphertext_sha256,
         "encrypted": encrypted,
         "protection": protection,
@@ -1168,10 +1195,35 @@ def _inspect_plain_archive(
         plan["extractedTreeDigest"] = _tree_digest(extracted)
         plan["secretArmedAt"] = time.time()
         _write_json(restore_root / "plan.json", plan)
-        archive_path.unlink(missing_ok=True)
     else:
         _write_json(restore_root / "plan.json", plan)
     return {"ok": True, **plan}
+
+
+def inspect_verified_restore_tree(
+    restore_id: str,
+    tree: Path,
+    *,
+    protection: str,
+    ciphertext_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Attach a remotely materialized tree to the existing restore state machine."""
+    root = _restore_root(restore_id)
+    extracted = root / "extracted"
+    if tree.resolve() != extracted.resolve():
+        shutil.rmtree(extracted, ignore_errors=True)
+        shutil.copytree(tree, extracted)
+    manifest = _verify_manifest_tree(extracted)
+    return _inspect_verified_tree(
+        manifest,
+        extracted,
+        root,
+        restore_id,
+        encrypted=True,
+        ciphertext_sha256=ciphertext_sha256,
+        protection=protection,
+        archive_sha256=_tree_digest(extracted),
+    )
 
 
 def _verified_extracted_manifest(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
@@ -1566,15 +1618,22 @@ def get_restore(restore_id: str) -> dict[str, Any]:
     root = _restore_root(restore_id)
     metadata = next((root / name for name in ("transaction.json", "plan.json", "upload.json") if (root / name).is_file()), None)
     if metadata is None:
+        remote = root / "remote-fetch.json"
+        if remote.is_file():
+            return {"ok": True, **_read_json(remote), "secretState": _restore_secret_state(_read_json(remote))}
         raise AppError("Restore metadata is unavailable", code=ErrorCode.INVALID_PAYLOAD)
-    return _public_restore(_read_json(metadata), root)
+    result = _public_restore(_read_json(metadata), root)
+    remote = root / "remote-fetch.json"
+    if remote.is_file():
+        result["remoteRestorePhase"] = str(_read_json(remote).get("phase") or "")
+    return result
 
 
 def list_restores() -> dict[str, Any]:
     RESTORE_DIR.mkdir(parents=True, exist_ok=True)
     restores: list[dict[str, Any]] = []
     for root in sorted((item for item in RESTORE_DIR.iterdir() if item.is_dir()), key=lambda item: item.name):
-        metadata = next((root / name for name in ("transaction.json", "plan.json", "upload.json") if (root / name).is_file()), root / "plan.json")
+        metadata = next((root / name for name in ("transaction.json", "plan.json", "upload.json", "remote-fetch.json") if (root / name).is_file()), root / "plan.json")
         try:
             restores.append(_public_restore(_read_json(metadata), root, include_frontend=False))
         except AppError:

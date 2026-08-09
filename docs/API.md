@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.5。
+适用版本：v4.4.10。
 
 默认情况下，所有 `/api/*` 路由都需要本地 token 鉴权。客户端可以发送 `Authorization: Bearer <token>`，也可以使用打开 `/?token=<token>` 后写入的 `auth_token` Cookie。未设置 `AUTH_TOKEN` 时，服务端会把自动生成的 token 保存到本地 `.auth-token`，重启后继续复用。
 
@@ -1043,8 +1043,11 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 | Method | Path | 作用 |
 | --- | --- | --- |
 | `POST` | `/api/workspace/restores/inspect` | 上传明文包后只读校验；age 包只返回 `locked` 与密文摘要。 |
+| `POST` | `/api/workspace/restores/from-target` | 从已注册 Target 与 Backup ID 创建耐久 Remote Restore Session。 |
+| `POST` | `/api/workspace/restores/{restoreId}/fetch` | 按 Receipt Lineage 有界下载 Full + Delta 密文链，并逐对象校验摘要。 |
 | `PUT` | `/api/workspace/restores/{restoreId}/secret` | 为 locked 上传提供一次性密码或 Identity。 |
 | `POST` | `/api/workspace/restores/{restoreId}/unlock` | 完整认证 age 消息后进入既有 ZIP/Manifest Inspect。 |
+| `POST` | `/api/workspace/restores/{restoreId}/materialize` | 消费 Secret，流式解密/应用 Chain，验证完整 Tree 后接入 Federated Restore Prepare。 |
 | `POST` | `/api/workspace/restores/{restoreId}/prepare` | 创建 Safety Backup，并构建完整后端 staging。 |
 | `PUT` | `/api/workspace/restores/{restoreId}/frontend-prepared` | 登记浏览器目标 Epoch 的回读摘要。 |
 | `POST` | `/api/workspace/restores/{restoreId}/commit` | 先记录 commit intent；浏览器切换 Epoch 后以 `frontendCommitted=true` 幂等提交后端。 |
@@ -1058,6 +1061,10 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 Restore Fence 活跃时读请求继续；非 Restore Owner 的业务写请求返回 HTTP 423。`commit`、
 `complete` 与 `abort` 可安全重试。浏览器状态存在时，旧
 `/api/workspace/restores/{restoreId}/apply` 会拒绝单阶段提交。
+
+远端恢复的持久相位为 `fetching-chain → chain-fetched → decrypting-chain → materializing → verified → preparing → prepared → committing → complete`。`materialize` 不接受原始密码，只消费先前写入的临时 Secret Slot；失败或超时后 Slot 清空。Parent Range 与 Delta Payload 以最大 1 MiB 窗口读取，所有层的 Chunk/File SHA 与 Merkle 转移通过后才允许进入 Prepare。
+
+Incremental Policy 的 `scanWorkers`（1–16，默认不超过 4）和 `maxInFlightBytes`（8 MiB–2 GiB，默认 64 MiB）同时限制扫描并发。新 Snapshot 写入 `chunkProtocol=fastcdc-gear-v3`；显式 v2 Parent 仍可解码，但协议升级会强制 Full。Run Plan schema v3 记录 `plannedSnapshotKind`、`resolvedSnapshotKind` 和 `resolutionReason`，实际物理 Delta 比率一旦冻结，重试不得改变决策。
 
 ## 独立无状态 MCP 服务（v4.4.2）
 

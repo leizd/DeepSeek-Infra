@@ -114,6 +114,7 @@ def main() -> int:
     if crypto_result != 0:
         return crypto_result
     crypto_helper = PROJECT_ROOT / "bin" / ("backup-crypto.exe" if os.name == "nt" else "backup-crypto")
+    chunk_helper = PROJECT_ROOT / "bin" / ("deepseek-backup.exe" if os.name == "nt" else "deepseek-backup")
 
     cmd = [
         sys.executable,
@@ -125,6 +126,7 @@ def main() -> int:
         args.name,
         f"--add-data={STATIC_DIR}{os.pathsep}static",
         f"--add-binary={crypto_helper}{os.pathsep}bin",
+        f"--add-binary={chunk_helper}{os.pathsep}bin",
         "--collect-data=customtkinter",
         "--collect-all=webview",
         "--collect-all=pythonnet",

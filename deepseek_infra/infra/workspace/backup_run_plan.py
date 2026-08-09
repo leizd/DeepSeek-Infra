@@ -18,7 +18,7 @@ from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 
 RUN_PLAN_DIR = config.ROOT / ".backup-run-plans"
-RUN_PLAN_SCHEMA_VERSION = 2
+RUN_PLAN_SCHEMA_VERSION = 3
 
 
 def _utc_iso() -> str:
@@ -107,6 +107,13 @@ def freeze_run_plan(
         "recipientSetDigest": recipient_set_digest(policy),
         "frontendGenerationId": frontend_generation_id,
         "snapshotKind": snapshot_kind if snapshot_kind in {"full", "incremental"} else "full",
+        "plannedSnapshotKind": (
+            "adaptive"
+            if str((policy.get("incremental") or {}).get("mode") or "off") != "off" and snapshot_kind == "incremental"
+            else (snapshot_kind if snapshot_kind in {"full", "incremental"} else "full")
+        ),
+        "resolvedSnapshotKind": snapshot_kind if snapshot_kind in {"full", "incremental"} else "full",
+        "resolutionReason": force_full_reason,
         "lineageId": lineage_id,
         "parentBackupId": parent_backup_id,
         "baseBackupId": base_backup_id,
@@ -121,6 +128,39 @@ def freeze_run_plan(
     path = plan_path(body["policyId"], slot_digest)
     _atomic_write_json(path, body)
     return body
+
+
+def resolve_adaptive_plan(
+    policy_id: str,
+    slot_digest: str,
+    *,
+    resolved_snapshot_kind: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Durably resolve an adaptive plan once; retries observe the same result."""
+    if resolved_snapshot_kind not in {"full", "incremental"}:
+        raise AppError("invalid adaptive snapshot resolution", code=ErrorCode.INVALID_PAYLOAD)
+    plan = read_run_plan(policy_id, slot_digest)
+    if plan is None:
+        raise AppError("backup run plan is unavailable", code=ErrorCode.NOT_FOUND, status=404)
+    if plan.get("plannedSnapshotKind") != "adaptive":
+        if plan.get("resolvedSnapshotKind") != resolved_snapshot_kind:
+            raise AppError("backup run plan is not adaptive", code=ErrorCode.INVALID_REQUEST, status=409)
+        return plan
+    if plan.get("resolutionReason") and plan.get("resolvedSnapshotKind") != resolved_snapshot_kind:
+        raise AppError("adaptive backup resolution already frozen", code=ErrorCode.INVALID_REQUEST, status=409)
+    plan["resolvedSnapshotKind"] = resolved_snapshot_kind
+    plan["snapshotKind"] = resolved_snapshot_kind
+    plan["resolutionReason"] = reason
+    if resolved_snapshot_kind == "full":
+        plan["forceFullReason"] = reason
+        plan["lineageId"] = None
+        plan["parentBackupId"] = None
+        plan["baseBackupId"] = None
+        plan["chainDepth"] = 0
+    plan["runPlanDigest"] = compute_run_plan_digest(plan)
+    _atomic_write_json(plan_path(policy_id, slot_digest), plan)
+    return plan
 
 
 def read_run_plan(policy_id: str, slot_digest: str) -> dict[str, Any] | None:

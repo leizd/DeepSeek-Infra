@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.9。
+适用版本：v4.4.10。
 
-> 4.4.8 Automatic Backups 目标注册支持 Local Folder / S3-compatible（Bucket、Prefix、Region、Endpoint、AWS profile / 默认凭证链），展示 capability probe 与 scheduled-backup readiness；不采集、不回显、不持久化 Access Key。
+> 4.4.10 Remote Restore 通过公开 Materialize API 把 Target Chain 转成既有 Federated Restore 的 prepared 事务；Frontend 只提交临时 Secret Slot 引用并消费服务端状态，不持有 Chunk、父文件或 Multipart 状态，也不采集、不回显、不持久化 Access Key。
 
 ## Runtime ownership
 

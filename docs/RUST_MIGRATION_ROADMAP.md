@@ -561,6 +561,14 @@ See [RAG_VECTOR_BINARY_TRANSPORT.md](RAG_VECTOR_BINARY_TRANSPORT.md) for the wir
 
 See [SEMANTIC_CACHE_BINARY_EMBEDDINGS.md](SEMANTIC_CACHE_BINARY_EMBEDDINGS.md) for the storage, migration, corruption, downgrade, diagnostics, and operational contracts.
 
+### 4.4.10 — Native backup chunk scanning (completed)
+
+- Adds the packaged `deepseek-backup` CLI as an optional implementation of the Python-owned `BackupChunkEngine` boundary.
+- A single bounded stream computes the whole-file SHA-256, FastCDC v2/v3 boundaries and per-chunk SHA-256 values; no workspace transaction, target credential, encryption secret, policy or publication state crosses into Rust.
+- Exact Python/Rust parity is mandatory for offset, length, chunk digest and file digest. Missing, failed or malformed native output falls back to Python before any publish decision.
+- Build, release ZIP, PyInstaller and Docker packaging include both `backup-crypto` and `deepseek-backup`; the Rust workspace fmt/clippy/test gates cover the new crate.
+- Python continues to own adaptive planning, concurrency byte budgets, snapshot indexes, lineage, encryption, multipart fencing and federated restore.
+
 ## Testing Priorities
 
 Coverage work should prioritize meaningful behavior rather than easy lines:

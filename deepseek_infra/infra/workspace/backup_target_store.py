@@ -194,6 +194,8 @@ class BackupTargetStore(Protocol):  # pragma: no cover - structural interface on
 
     def upload_part(self, upload: MultipartUpload, part_number: int, data: bytes, *, checksum_sha256: str | None = None) -> dict[str, Any]: ...
 
+    def list_multipart_parts(self, upload: MultipartUpload) -> list[dict[str, Any]]: ...
+
     def complete_multipart_if_absent(self, upload: MultipartUpload) -> PutResult: ...
 
     def abort_multipart(self, upload: MultipartUpload) -> None: ...
@@ -399,6 +401,17 @@ class FilesystemTargetStore:
         upload.parts.append(part)
         upload.parts.sort(key=lambda item: int(item["partNumber"]))
         return part
+
+    def list_multipart_parts(self, upload: MultipartUpload) -> list[dict[str, Any]]:
+        staging = self.root / ".multipart" / upload.upload_id
+        if not staging.is_dir():
+            return []
+        parts: list[dict[str, Any]] = []
+        for path in sorted(staging.glob("part-*")):
+            number = int(path.name.split("-")[-1])
+            data = path.read_bytes()
+            parts.append({"partNumber": number, "etag": _etag_for_bytes(data), "size": len(data)})
+        return parts
 
     def complete_multipart_if_absent(self, upload: MultipartUpload) -> PutResult:
         staging = self.root / ".multipart" / upload.upload_id
@@ -655,6 +668,13 @@ class MemoryTargetStore:
         upload.parts.append(part)
         upload.parts.sort(key=lambda item: int(item["partNumber"]))
         return part
+
+    def list_multipart_parts(self, upload: MultipartUpload) -> list[dict[str, Any]]:
+        state = self._multipart.get(upload.upload_id) or {"parts": {}}
+        return [
+            {"partNumber": number, "etag": _etag_for_bytes(data), "size": len(data)}
+            for number, data in sorted((state.get("parts") or {}).items())
+        ]
 
     def complete_multipart_if_absent(self, upload: MultipartUpload) -> PutResult:
         self._maybe_fail("complete_multipart")

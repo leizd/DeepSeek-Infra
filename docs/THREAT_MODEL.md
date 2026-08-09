@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.5。
+适用版本：v4.4.10。
 
 定位与信任假设见 [docs/SECURITY.md](SECURITY.md)：个人、本地优先的运行时，运行后端的机器可信，默认只监听 `127.0.0.1`。这一页回答更尖锐的问题：**当模型上下文里混入攻击者可控的内容（网页、文件、工具结果），或本机服务被局域网内他人触达时，每一类威胁由哪段代码挡住、由哪个测试钉住、还剩什么残余风险。**
 
@@ -106,6 +106,18 @@
   - Redis 只导出版本化逻辑 JSONL；generation fence 阻止新任务/认领、允许既有幂等请求安全重试，并以一小时 TTL 防止备份进程崩溃后永久封锁；恢复清空 Lease 并将 queued/running 转为 interrupted。
 - **测试**：[test_backup_crypto.py](../tests/test_backup_crypto.py) 覆盖 Secret 生命周期、加密往返、错误 Secret、明文元数据隐藏和覆盖策略；[stateless-mcp/test/task-store.test.ts](../stateless-mcp/test/task-store.test.ts) 覆盖 generation fence、不重放和冲突重映射；Rust helper 单测覆盖密码/X25519 往返与密文篡改拒绝。
 - **残余风险**：已解锁 staging 在可信本机上短期为明文；低熵密码仍可能被离线猜测；物理介质安全擦除、Recovery Key 备份和端点外围 TLS/权限由部署者负责。
+
+### T10 · 增量恢复资源耗尽、协议混淆与旧 Writer 迟到提交（v4.4.10）
+
+- **路径**：恶意或损坏的 Delta 可能诱导大范围内存读取、跨协议复用错误 Chunk Map；并行扫描/上传可能突破资源预算；实例退出后旧 Multipart Writer 可能迟到完成对象；性能遥测可能泄露内容摘要。
+- **缓解**：
+  - Parent Range 与 Payload Chunk 只用最大 1 MiB 缓冲复制；ZIP/age、Chunk、File 与 Merkle 边界逐层验证，正式 Workspace 只接收完整 Verified Tree；
+  - Snapshot 显式记录 `fastcdc-gear-v3`，v2 仅作兼容解码；协议升级强制 Full，未知/未来协议 Fail Closed；
+  - Python/Rust Engine 输出逐项校验，Native 缺失或异常回退 Python；Worker 数与 `maxInFlightBytes` 同时限流，所有长循环执行取消/租约检查；
+  - Multipart 每 Part 耐久记录，恢复先用 `ListParts` 对账，并在 Submit/Complete 前验证 Writer Fence，失租 Writer 不能完成上传；
+  - 遥测只记录耗时、引擎、计数与字节规模，不记录 Chunk SHA、文件路径/正文、密码、Identity 或云凭证。
+- **测试**：[test_backup_4410_contracts.py](../tests/test_backup_4410_contracts.py) 覆盖有界流式读取、v2/v3 升级、Python/Rust parity、并发预算、计划冻结和 Multipart 恢复/围栏。
+- **残余风险**：已认证并展开的恢复 Tree 在可信本机 Staging 中仍是明文；实际磁盘吞吐和云端限流依赖部署环境。跨文件/跨备份云端 Chunk CAS 与 Convergent Encryption 不在本版本范围。
 
 ## 非目标（明确不在防护范围内）
 

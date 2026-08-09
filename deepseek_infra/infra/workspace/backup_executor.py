@@ -82,7 +82,7 @@ def _record_committed_index(
             "scope_digest": backup_incremental.scope_digest(policy_dict),
             "recipient_set_digest": backup_incremental.recipient_set_digest(policy_dict),
             "schema_digest": backup_incremental.schema_digest(contributor_schemas),
-            "chunk_protocol": backup_incremental.CDC_ALGORITHM,
+            "chunk_protocol": backup_incremental.CURRENT_CDC_PROTOCOL,
         }
         if snapshot_kind == "incremental":
             parent = str(run_plan.get("parentBackupId") or "")
@@ -221,6 +221,7 @@ def execute_run(
         return {**outcome, "phase": "failed", "reason": "policy-missing"}
     guard = backup_scheduler.RunLeaseGuard(run.run_id, instance_id, run.fencing_token, lease_seconds=lease_seconds, clock=clock)
     guard.start_heartbeat()
+    setattr(guard.cancel_event, "backup_checkpoint", guard.checkpoint)
     writer: backup_writer_lease.TargetWriterLease | None = None
     policy_id = str(policy.get("policyId") or "")
     slot_digest = commit_slot_digest(run.schedule_slot)
@@ -338,6 +339,48 @@ def execute_run(
                 lineage_id=run_plan.get("lineageId"),
                 chain_depth=int(run_plan.get("chainDepth") or 0),
             )
+            savings = getattr(package, "savings", None) or {}
+            logical_bytes = int(savings.get("logicalBytes") or 0)
+            physical_bytes = int(savings.get("physicalPayloadBytes") or 0)
+            max_delta_ratio = float((policy.get("incremental") or {}).get("maxDeltaRatio") or backup_incremental.DEFAULT_MAX_DELTA_RATIO)
+            if (
+                run_plan.get("plannedSnapshotKind") == "adaptive"
+                and str(run_plan.get("resolvedSnapshotKind") or "incremental") == "incremental"
+                and logical_bytes > 0
+                and physical_bytes / logical_bytes > max_delta_ratio
+            ):
+                Path(package.path).unlink(missing_ok=True)
+                run_plan = backup_run_plan.resolve_adaptive_plan(
+                    policy_id,
+                    slot_digest,
+                    resolved_snapshot_kind="full",
+                    reason="delta-ratio",
+                )
+                outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
+                outcome["snapshotKind"] = "full"
+                outcome["forceFullReason"] = "delta-ratio"
+                package = backup_scheduled.build_scheduled_backup(
+                    policy,
+                    run_id=run.run_id,
+                    staging_root=backup_scheduler.staging_root(),
+                    schedule_slot=run.schedule_slot,
+                    cancel_event=guard.cancel_event,
+                    backup_id=str(run_plan.get("backupId") or ""),
+                    contributor_plan=contributor_plan,
+                    snapshot_kind="full",
+                    parent_backup_id=None,
+                    base_backup_id=None,
+                    lineage_id=None,
+                    chain_depth=0,
+                )
+            elif run_plan.get("plannedSnapshotKind") == "adaptive" and not run_plan.get("resolutionReason"):
+                run_plan = backup_run_plan.resolve_adaptive_plan(
+                    policy_id,
+                    slot_digest,
+                    resolved_snapshot_kind="incremental",
+                    reason="delta-ratio-within-limit",
+                )
+                outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
             # Persist verified ciphertext before publish so retries can resume.
             backup_spool.store_verified_package(
                 package,

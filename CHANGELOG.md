@@ -4,11 +4,31 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.10] - Streaming Recovery and Native Delta Acceleration
+
+### Public, bounded restore materialization
+
+- Adds the public remote-target materialization transition and feeds the verified full tree into the existing federated restore transaction.
+- Streams parent ranges and delta payload chunks in 1 MiB windows, verifies every reconstructed chunk and atomically replaces the destination.
+- Persists the remote restore phase progression so retries converge through fetch, verify, prepare, commit and completion.
+
+### Versioned CDC and native parity
+
+- New snapshots use `fastcdc-gear-v3`; the v2 decoder remains available and a protocol transition forces a full baseline.
+- Adds the `BackupChunkEngine` contract with deterministic Python and packaged Rust implementations; one pass computes the file digest, boundaries and chunk digests.
+- Bounded parallel scanning enforces both worker and in-flight byte budgets, supports cancellation checkpoints and emits hash-free timing telemetry.
+
+### Adaptive storage and resumable upload
+
+- Freezes the run plan only after the actual physical delta ratio is known, rebuilding the same backup as Full when the configured limit is exceeded.
+- Persists `plannedSnapshotKind`, `resolvedSnapshotKind` and the resolution reason so retries cannot reinterpret the decision.
+- S3 multipart publish uses four workers, 16 MiB parts, a 64 MiB in-flight budget, durable per-part journals and `ListParts` reconciliation under the writer fence.
+
 ## [4.4.9] - True Delta Storage and Verified Incremental Recovery
 
 ### True delta packages
 
-- Incremental Age packages drop the full workspace payload: they carry only `delta/operations.json` and `blobs/` (whole-file `f/<id>` and CDC `c/<id>`).
+- Incremental Age packages drop the full workspace payload: they carry only `delta/operations.json` and content-addressed `payload/files/<id>` objects for whole files and CDC chunks.
 - Delta operations are serialized after every payload reference is allocated, so `operations.json` reflects the real final paths; whole-file payloads deduplicate by SHA-256 within a delta.
 
 ### Stabilized content-defined deltas
