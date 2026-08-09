@@ -512,6 +512,9 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
 
     config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"remember"}]}', encoding="utf-8")
+    duplicate_dir = config.MEMORY_DIR / "duplicates"
+    duplicate_dir.mkdir(parents=True, exist_ok=True)
+    (duplicate_dir / "state-copy.json").write_text('{"items":[{"id":"m1","text":"remember"}]}', encoding="utf-8")
     policy = backup_policies.create_policy(_policy(incremental={"mode": "file-delta"}))
     # Record a baseline snapshot in the index for this policy/target.
     baseline_files = [
@@ -528,14 +531,20 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
         root_digest=backup_incremental.snapshot_root(baseline_files),
         files=baseline_files,
     )
-    # Ensure the frozen run plan carries incremental lineage, then build.
+    # Ensure the frozen run plan carries incremental lineage, then build. A real
+    # contributor plan selects the durable memory contributor so its files land
+    # in the delta.
+    from deepseek_infra.infra.workspace import backups as _backups
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+
+    contributor_plan = _backups._contributor_plan(_scheduled._context_from_policy(policy))
     slot = "2026-02-01T03:00@UTC"
     slot_d = commit_slot_digest(slot)
     plan = backup_run_plan.freeze_run_plan(
         policy=policy,
         schedule_slot=slot,
         slot_digest=slot_d,
-        contributor_plan={"items": []},
+        contributor_plan=contributor_plan,
         target_id="managed-local",
         snapshot_kind="incremental",
         lineage_id="lineage_b",
@@ -550,7 +559,7 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
         staging_root=tmp_settings / ".staging",
         schedule_slot=slot,
         backup_id=str(plan["backupId"]),
-        contributor_plan={"items": []},
+        contributor_plan=contributor_plan,
         snapshot_kind="incremental",
         parent_backup_id="F0",
         base_backup_id="F0",
@@ -572,6 +581,12 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
     payload_refs = [item["payloadRef"] for item in ops["put"] if item.get("storage") == "whole"]
     assert payload_refs
     assert all(str(ref).startswith("payload/files/") for ref in payload_refs)
+    # Identical whole-file payloads must deduplicate to one physical blob.
+    memory_puts = [item for item in ops["put"] if "payload/memory/" in str(item.get("path"))]
+    assert len(memory_puts) >= 2
+    assert len({str(item["payloadRef"]) for item in memory_puts}) == 1
+    delta_paths = [str(item["path"]) for item in package.manifest["deltaFiles"]]
+    assert len([p for p in delta_paths if p.startswith("payload/files/")]) < len(ops["put"])
     # True delta storage: the archive must not carry full payload/<contributor>
     # copies of the workspace; only the changed payload blobs may appear.
     assert not any(name.startswith("payload/") and not name.startswith("payload/files/") for name in names)
@@ -607,7 +622,7 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
         policy=policy,
         schedule_slot=slot2,
         slot_digest=commit_slot_digest(slot2),
-        contributor_plan={"items": []},
+        contributor_plan=contributor_plan,
         target_id="managed-local",
         snapshot_kind="incremental",
         lineage_id="lineage_b",
@@ -621,7 +636,7 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
         staging_root=tmp_settings / ".staging",
         schedule_slot=slot2,
         backup_id=str(plan2["backupId"]),
-        contributor_plan={"items": []},
+        contributor_plan=contributor_plan,
         snapshot_kind="incremental",
         parent_backup_id=str(plan["backupId"]),
         base_backup_id="F0",

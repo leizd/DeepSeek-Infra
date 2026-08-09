@@ -245,18 +245,25 @@ def _build_candidate(
             payload_dir = staging / "payload" / "files"
             payload_dir.mkdir(parents=True, exist_ok=True)
             payload_files: list[dict[str, Any]] = []
+            payload_by_sha: dict[str, str] = {}
             for put in delta["put"]:
                 src = staging / str(put["path"])
                 if src.is_file():
+                    blob_sha = str(put.get("sha256") or "")
+                    existing = payload_by_sha.get(blob_sha)
+                    if existing is not None:
+                        put["payloadRef"] = existing
+                        continue
                     dest = payload_dir / f"{len(payload_files):06d}"
                     shutil.copyfile(src, dest)
                     payload_files.append(
                         {
                             "path": f"payload/files/{dest.name}",
                             "size": dest.stat().st_size,
-                            "sha256": hashlib.sha256(dest.read_bytes()).hexdigest(),
+                            "sha256": blob_sha,
                         }
                     )
+                    payload_by_sha[blob_sha] = f"payload/files/{dest.name}"
                     put["payloadRef"] = f"payload/files/{dest.name}"
             # Serialize the delta manifest only after every payload reference is
             # allocated so operations.json carries the final payloadRef paths.
