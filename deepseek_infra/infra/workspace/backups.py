@@ -1942,6 +1942,7 @@ def _verify_manifest_tree(destination: Path) -> dict[str, Any]:
     declared = manifest.get("files")
     if not isinstance(declared, list):
         raise AppError("Backup file inventory is invalid", code=ErrorCode.INVALID_PAYLOAD)
+    is_incremental = str(manifest.get("snapshotKind") or "") == "incremental"
     declared_paths: set[str] = set()
     for entry in declared:
         if not isinstance(entry, dict):
@@ -1950,6 +1951,10 @@ def _verify_manifest_tree(destination: Path) -> dict[str, Any]:
         if relative in {"manifest.json", "checksums.sha256"} or relative in declared_paths:
             raise AppError("Backup manifest contains duplicate entries", code=ErrorCode.INVALID_PAYLOAD)
         declared_paths.add(relative)
+        if is_incremental:
+            # Incremental packages declare the full logical tree but physically
+            # carry only the changed payloads; presence is asserted below.
+            continue
         path = destination.joinpath(*PurePosixPath(relative).parts)
         if not path.is_file() or path.stat().st_size != int(entry.get("size") or -1) or _sha256_file(path) != entry.get("sha256"):
             raise AppError(f"Backup checksum mismatch: {relative}", code=ErrorCode.INVALID_PAYLOAD)
@@ -1971,7 +1976,35 @@ def _verify_manifest_tree(destination: Path) -> dict[str, Any]:
         path = destination.joinpath(*PurePosixPath(relative).parts)
         if not path.is_file() or path.stat().st_size != int(entry.get("size") or -1) or _sha256_file(path) != entry.get("sha256"):
             raise AppError(f"Backup delta checksum mismatch: {relative}", code=ErrorCode.INVALID_PAYLOAD)
-    if actual != (declared_paths | auxiliary):
+    if is_incremental:
+        # A delta package's physical contents must equal the declared delta
+        # payload exactly, and every payload reference in operations.json must
+        # resolve to a present blob with no unreferenced leftovers.
+        if actual != auxiliary:
+            missing = sorted(auxiliary - actual)
+            extra = sorted(actual - auxiliary)
+            raise AppError(f"Backup delta payload mismatch (missing {missing}, extra {extra})", code=ErrorCode.INVALID_PAYLOAD)
+        ops_path = destination / "delta" / "operations.json"
+        if not ops_path.is_file():
+            raise AppError("Backup delta operations manifest is missing", code=ErrorCode.INVALID_PAYLOAD)
+        try:
+            ops = json.loads(ops_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise AppError("Backup delta operations manifest is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        if not isinstance(ops, dict):
+            raise AppError("Backup delta operations manifest is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        referenced: set[str] = set()
+        for put in ops.get("put") or []:
+            if not isinstance(put, dict):
+                raise AppError("Backup delta operations manifest is invalid", code=ErrorCode.INVALID_PAYLOAD)
+            ref = str(put.get("payloadRef") or "")
+            if ref and ref not in auxiliary:
+                raise AppError(f"Backup delta references undeclared payload: {ref}", code=ErrorCode.INVALID_PAYLOAD)
+            if ref:
+                referenced.add(ref)
+        if referenced != (auxiliary - {"delta/operations.json"}):
+            raise AppError("Backup delta payload has unreferenced blobs", code=ErrorCode.INVALID_PAYLOAD)
+    elif actual != (declared_paths | auxiliary):
         raise AppError("Backup contains undeclared or missing restorable files", code=ErrorCode.INVALID_PAYLOAD)
     checksum_lines = checksum_path.read_text(encoding="utf-8").splitlines()
     expected_manifest_line = f"{_sha256_file(manifest_path)}  manifest.json"

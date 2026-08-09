@@ -267,6 +267,14 @@ def _build_candidate(
                 {"path": "delta/operations.json", "size": len(operations), "sha256": hashlib.sha256(operations).hexdigest()},
                 *payload_files,
             ]
+            # True delta storage: drop the full workspace copies so the archive
+            # carries only the changed payloads plus the operations manifest.
+            if (staging / "payload").is_dir():
+                for entry in list((staging / "payload").iterdir()):
+                    if entry.name != "files":
+                        shutil.rmtree(entry, ignore_errors=True)
+            for auxiliary_dir in ("migration", "frontend"):
+                shutil.rmtree(staging / auxiliary_dir, ignore_errors=True)
             snapshot_meta = {
                 "format": "incremental-v2",
                 "kind": "incremental",
@@ -282,7 +290,10 @@ def _build_candidate(
             manifest["snapshotKind"] = "incremental"
         manifest_bytes = backups._stable_json(manifest)
         (staging / "manifest.json").write_bytes(manifest_bytes)
-        checksums = [f"{item['sha256']}  {item['path']}" for item in files]
+        # Incremental packages checksum only the physically-present payload.
+        delta_files = manifest.get("deltaFiles")
+        checksummed = delta_files if snapshot_kind == "incremental" and isinstance(delta_files, list) else files
+        checksums = [f"{item['sha256']}  {item['path']}" for item in checksummed]
         checksums.append(f"{hashlib.sha256(manifest_bytes).hexdigest()}  manifest.json")
         (staging / "checksums.sha256").write_text("\n".join(checksums) + "\n", encoding="utf-8", newline="\n")
         filename = f"deepseek-infra-backup-{time.strftime('%Y%m%d')}-{backup_id[-8:]}.dsibackup.age"
@@ -291,7 +302,9 @@ def _build_candidate(
 
         def _verify(decrypted: Path) -> None:
             verified = backups._safe_extract_and_verify(decrypted, verification_dir)
-            if expect_sealed and not (verification_dir / "frontend" / "sealed-state.age").is_file():
+            # Incremental packages inherit the sealed mirror from the parent when
+            # it is unchanged, so presence is only asserted for full packages.
+            if expect_sealed and snapshot_kind != "incremental" and not (verification_dir / "frontend" / "sealed-state.age").is_file():
                 raise AppError("Scheduled backup verification lost the sealed frontend mirror", code=ErrorCode.INTERNAL, status=500)
             if (verified.get("coverage") or {}).get("frontend") != coverage_frontend:
                 raise AppError("Scheduled backup coverage verification failed", code=ErrorCode.INTERNAL, status=500)

@@ -567,16 +567,24 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
     raw = package.path.read_bytes()
     assert raw.startswith(prefix)
     with _zipfile.ZipFile(io.BytesIO(raw[len(prefix):][::-1])) as archive:
+        names = set(archive.namelist())
         ops = json.loads(archive.read("delta/operations.json"))
     payload_refs = [item["payloadRef"] for item in ops["put"] if item.get("storage") == "whole"]
     assert payload_refs
     assert all(str(ref).startswith("payload/files/") for ref in payload_refs)
+    # True delta storage: the archive must not carry full payload/<contributor>
+    # copies of the workspace; only the changed payload blobs may appear.
+    assert not any(name.startswith("payload/") and not name.startswith("payload/files/") for name in names)
     snapshot = package.manifest["snapshot"]
     assert snapshot["kind"] == "incremental"
     assert snapshot["parentBackupId"] == "F0"
     assert snapshot["chainDepth"] == 1
     assert snapshot["rootDigest"]
-    # Index committed state after build + manual commit index record.
+    # Index committed state from the REAL logical tree of the built package.
+    real_files = [
+        backup_incremental.FileRecord(str(item["contributorId"]), str(item["path"]), int(item["size"]), str(item["sha256"]))
+        for item in package.manifest["files"]
+    ]
     backup_incremental.record_committed_snapshot(
         target_id="managed-local",
         policy_id=str(policy["policyId"]),
@@ -585,10 +593,44 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
         base_backup_id="F0",
         chain_depth=1,
         root_digest=snapshot["rootDigest"],
-        files=baseline_files,
+        files=real_files,
     )
     # The incremental snapshot must be index-backed and chain to the baseline.
     chain = backup_incremental.ancestor_chain("managed-local", str(policy["policyId"]), str(plan["backupId"]))
     assert chain == ["F0", str(plan["backupId"])]
     loaded = backup_incremental.load_snapshot_files("managed-local", str(policy["policyId"]), str(plan["backupId"]))
     assert loaded
+    # A second incremental with no workspace changes must emit an empty delta:
+    # zero payload blobs, only the operations manifest.
+    slot2 = "2026-02-01T04:00@UTC"
+    plan2 = backup_run_plan.freeze_run_plan(
+        policy=policy,
+        schedule_slot=slot2,
+        slot_digest=commit_slot_digest(slot2),
+        contributor_plan={"items": []},
+        target_id="managed-local",
+        snapshot_kind="incremental",
+        lineage_id="lineage_b",
+        parent_backup_id=str(plan["backupId"]),
+        base_backup_id="F0",
+        chain_depth=2,
+    )
+    package2 = backup_scheduled.build_scheduled_backup(
+        policy,
+        run_id="run_incr2",
+        staging_root=tmp_settings / ".staging",
+        schedule_slot=slot2,
+        backup_id=str(plan2["backupId"]),
+        contributor_plan={"items": []},
+        snapshot_kind="incremental",
+        parent_backup_id=str(plan["backupId"]),
+        base_backup_id="F0",
+        lineage_id="lineage_b",
+        chain_depth=2,
+    )
+    raw2 = package2.path.read_bytes()
+    with _zipfile.ZipFile(io.BytesIO(raw2[len(prefix):][::-1])) as archive:
+        names2 = set(archive.namelist())
+        ops2 = json.loads(archive.read("delta/operations.json"))
+    assert ops2["put"] == [] and ops2["delete"] == []
+    assert not any(name.startswith("payload/") for name in names2)
