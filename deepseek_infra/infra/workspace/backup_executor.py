@@ -243,7 +243,7 @@ def execute_run(
             snapshot_kind=str(snapshot_kind or "full"),
             lineage_id=lineage_id,
             parent_backup_id=parent_backup_id,
-            base_backup_id=(parent_backup_id if snapshot_kind == "incremental" else None),
+            base_backup_id=(lineage_id if snapshot_kind == "incremental" else None),
             chain_depth=int(chain_depth or 0),
             parent_commit_hash=parent_commit_hash,
             parent_receipt_digest=parent_receipt_digest,

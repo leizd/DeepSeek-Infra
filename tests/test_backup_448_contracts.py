@@ -169,6 +169,23 @@ def test_snapshot_plan_selection_and_force_full(tmp_settings: Path) -> None:
     assert selected[0] == "incremental"
     assert selected[2] == "F0"
     assert selected[3] == 1
+    # A deeper chain must keep the FULL baseline as the lineage base, not the
+    # immediate parent: F0 -> I1 -> I2 has parent I1 and base F0.
+    backup_incremental.record_committed_snapshot(
+        target_id="t",
+        policy_id="p",
+        backup_id="I1",
+        parent_backup_id="F0",
+        base_backup_id="F0",
+        chain_depth=1,
+        root_digest=backup_incremental.snapshot_root(files),
+        files=files,
+    )
+    selected2 = backup_incremental.select_snapshot_plan(policy=policy, target_id="t", policy_id="p", index_available=True)
+    assert selected2[0] == "incremental"
+    assert selected2[1] == "F0"  # lineage base stays the full baseline
+    assert selected2[2] == "I1"  # parent is the immediate predecessor
+    assert selected2[3] == 2
     # recipient rotation -> new full lineage
     force, reason = backup_incremental.should_force_full(
         chain_depth=0,

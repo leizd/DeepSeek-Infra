@@ -519,7 +519,7 @@ def latest_committed_snapshot(target_id: str, policy_id: str) -> dict[str, Any] 
             SELECT backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at
             FROM snapshot_lineages
             WHERE target_id = ? AND policy_id = ?
-            ORDER BY committed_at DESC
+            ORDER BY committed_at DESC, rowid DESC
             LIMIT 1
             """,
             (target_id, policy_id),
