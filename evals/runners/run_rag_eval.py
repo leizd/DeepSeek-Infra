@@ -38,24 +38,38 @@ CHUNK_CHAR_BUDGET = 800
 
 
 def chunk_document(text: str) -> list[dict[str, Any]]:
-    """Split a document into ~CHUNK_CHAR_BUDGET-char chunks with line tracking."""
+    """Split a document into stable, heading-aware chunks with line tracking.
+
+    Flushing before Markdown headings prevents a short release-header edit from
+    shifting every later semantic section across the character budget.
+    """
     lines = text.splitlines()
     chunks: list[dict[str, Any]] = []
     buffer: list[str] = []
     line_start = 1
     size = 0
     index = 0
+
+    def flush(line_end: int) -> None:
+        nonlocal buffer, line_start, size, index
+        body = "\n".join(buffer).strip()
+        if body:
+            chunks.append({"text": body, "index": index, "lineStart": line_start, "lineEnd": line_end})
+            index += 1
+        buffer = []
+        size = 0
+
     for line_number, line in enumerate(lines, start=1):
+        if line.lstrip().startswith("#") and buffer:
+            flush(line_number - 1)
+            line_start = line_number
         buffer.append(line)
         size += len(line) + 1
         if size >= CHUNK_CHAR_BUDGET:
-            chunks.append({"text": "\n".join(buffer).strip(), "index": index, "lineStart": line_start, "lineEnd": line_number})
-            index += 1
-            buffer = []
-            size = 0
+            flush(line_number)
             line_start = line_number + 1
-    if buffer and "\n".join(buffer).strip():
-        chunks.append({"text": "\n".join(buffer).strip(), "index": index, "lineStart": line_start, "lineEnd": len(lines)})
+    if buffer:
+        flush(len(lines))
     return [chunk for chunk in chunks if chunk["text"]]
 
 
