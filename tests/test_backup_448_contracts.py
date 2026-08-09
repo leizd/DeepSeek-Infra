@@ -1227,6 +1227,142 @@ def test_corrupt_payload_chunk_fails_closed(tmp_settings: Path, monkeypatch: pyt
         backup_incremental_restore.materialize_chain(roots, tmp_settings / "out_corrupt_chunk")
 
 
+def test_store_incremental_restore_end_to_end(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real end-to-end: build a chain, publish to a target store, restore via the
+    chain session and compare the materialized workspace byte-for-byte."""
+    import random
+
+    from deepseek_infra.core import config
+    from deepseek_infra.infra.workspace import backup_remote_restore
+    from deepseek_infra.infra.workspace import backups as _backups
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+    from deepseek_infra.infra.workspace.backup_target_store import object_key
+
+    prefix = b"age-encryption.org/v1\n"
+    _stub_crypto(monkeypatch, prefix)
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    memories = config.MEMORY_DIR / "memories.json"
+    big = random.Random(23).randbytes(4 * 1024 * 1024)
+    memories.write_bytes(big)
+    policy = backup_policies.create_policy(
+        _policy(incremental={"mode": "file-delta", "largeFileMode": "cdc", "largeFileThresholdBytes": 1024 * 1024})
+    )
+    policy_id = str(policy["policyId"])
+    contributor_plan = _backups._contributor_plan(_scheduled._context_from_policy(policy))
+
+    def build(slot: str, kind: str, parent: str | None = None, base: str | None = None, depth: int = 0) -> tuple[object, str]:
+        plan = backup_run_plan.freeze_run_plan(
+            policy=policy,
+            schedule_slot=slot,
+            slot_digest=commit_slot_digest(slot),
+            contributor_plan=contributor_plan,
+            target_id="managed-local",
+            snapshot_kind=kind,
+            lineage_id="F0",
+            parent_backup_id=parent,
+            base_backup_id=base,
+            chain_depth=depth,
+        )
+        package = _scheduled.build_scheduled_backup(
+            policy,
+            run_id=f"run_e2e_{int(hashlib.sha256(slot.encode()).hexdigest()[:8], 16)}",
+            staging_root=tmp_settings / ".staging",
+            schedule_slot=slot,
+            backup_id=str(plan["backupId"]),
+            contributor_plan=contributor_plan,
+            snapshot_kind=kind,
+            parent_backup_id=parent,
+            base_backup_id=base,
+            lineage_id="F0",
+            chain_depth=depth,
+        )
+        return package, str(plan["backupId"])
+
+    pkg0, bid0 = build("2026-10-01T03:00@UTC", "full")
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=policy_id,
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root(
+            [backup_incremental.FileRecord(str(i["contributorId"]), str(i["path"]), int(i["size"]), str(i["sha256"])) for i in pkg0.manifest["files"]]  # type: ignore[attr-defined]
+        ),
+        files=[backup_incremental.FileRecord(str(i["contributorId"]), str(i["path"]), int(i["size"]), str(i["sha256"])) for i in pkg0.manifest["files"]],  # type: ignore[attr-defined]
+    )
+    backup_incremental.record_snapshot_chunks(
+        target_id="managed-local", policy_id=policy_id, backup_id="F0", chunks=list(pkg0.chunk_records)  # type: ignore[attr-defined]
+    )
+    m1 = bytearray(big)
+    m1[1024] ^= 0x01
+    memories.write_bytes(bytes(m1))
+    pkg1, bid1 = build("2026-10-01T04:00@UTC", "incremental", parent="F0", base="F0", depth=1)
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=policy_id,
+        backup_id=bid1,
+        parent_backup_id="F0",
+        base_backup_id="F0",
+        chain_depth=1,
+        root_digest=str(pkg1.manifest["snapshot"]["rootDigest"]),  # type: ignore[attr-defined]
+        files=[backup_incremental.FileRecord(str(i["contributorId"]), str(i["path"]), int(i["size"]), str(i["sha256"])) for i in pkg1.manifest["files"]],  # type: ignore[attr-defined]
+    )
+    m2 = bytearray(m1)
+    m2[2048] ^= 0x02
+    memories.write_bytes(bytes(m2))
+    pkg2, bid2 = build("2026-10-01T05:00@UTC", "incremental", parent=bid1, base="F0", depth=2)
+
+    # Publish the chain into a backend-neutral target store (S3-compatible).
+    store = MemoryTargetStore()
+    put_json_if_absent(store, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    published: dict[str, tuple[bytes, str]] = {}
+    for package, backup_id, parent, depth in ((pkg0, "F0", None, 0), (pkg1, bid1, "F0", 1), (pkg2, bid2, bid1, 2)):
+        raw = package.path.read_bytes()  # type: ignore[attr-defined]
+        digest = hashlib.sha256(raw).hexdigest()
+        store.put_if_absent(object_key(digest), raw, checksum_sha256=digest)
+        published[backup_id] = (raw, digest)
+        put_json_if_absent(
+            store,
+            f"receipts/{backup_id}.json",
+            {
+                "backupId": backup_id,
+                "objectDigest": digest,
+                "filename": f"{backup_id}.age",
+                "size": len(raw),
+                "snapshotKind": "incremental" if parent else "full",
+                "parentBackupId": parent,
+                "baseBackupId": "F0",
+                "chainDepth": depth,
+            },
+        )
+    _, i2_digest = published[bid2]
+    put_json_if_absent(
+        store,
+        "commits/e2e/slot.json",
+        {"commitHash": "c" * 64, "backupId": bid2, "objectDigest": i2_digest, "targetGeneration": 1},
+    )
+    target = backup_publish.ResolvedTarget(target_id="target_e2e", root=None, managed=False, kind="s3", store=store)
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda *a, **k: target)
+
+    created = backup_remote_restore.create_restore_from_target(target_id="target_e2e", backup_id=bid2)
+    assert created["snapshotKind"] == "incremental"
+    assert created["chain"] == ["F0", bid1, bid2]
+    restore_id = str(created["restoreId"])
+    fetched = backup_remote_restore.fetch_restore_session(restore_id)
+    assert fetched["phase"] == "chain-fetched"
+    materialized = backup_remote_restore.materialize_restore_session(restore_id, secret=bytearray(b"s" * 32))
+    assert materialized["phase"] == "materialized"
+    tree = Path(str(materialized["tree"]))
+    assert (tree / "payload/memory/memories.json").read_bytes() == bytes(m2)
+    # The restored tree matches the source snapshot byte-for-byte across layers.
+    source_files = sorted((config.MEMORY_DIR).rglob("*")) if config.MEMORY_DIR.is_dir() else []
+    for source in source_files:
+        if source.is_file():
+            relative = source.relative_to(config.MEMORY_DIR).as_posix()
+            assert (tree / "payload" / "memory" / relative).is_file()
+
+
 def test_full_snapshot_computes_chunk_maps(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Full snapshots chunk large files so the first delta can reuse parents."""
     import random
