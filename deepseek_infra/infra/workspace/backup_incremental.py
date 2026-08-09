@@ -183,13 +183,16 @@ def select_snapshot_plan(
     target_id: str,
     policy_id: str,
     index_available: bool,
+    contributor_schemas: dict[str, int] | None = None,
 ) -> tuple[str, str | None, str | None, int, str | None, str | None, str | None]:
     """Decide snapshot kind / lineage before freezing the run plan.
 
     Returns ``(snapshot_kind, lineage_id, parent_backup_id, chain_depth,
     parent_commit_hash, parent_receipt_digest, force_full_reason)``.
     Incremental is only chosen when an index-backed committed baseline exists
-    and the policy incremental mode is enabled.
+    and the policy incremental mode is enabled. Force-full conditions are
+    evaluated from committed snapshot metadata (scope / recipient / schema
+    digests, full-interval age, chain depth), not from the raw policy alone.
     """
     incremental = policy.get("incremental") or {}
     mode = str(incremental.get("mode") or "off")
@@ -203,15 +206,26 @@ def select_snapshot_plan(
         return "full", None, None, 0, None, None, "baseline-format-upgrade"
     parent = str(latest.get("backup_id") or "")
     depth = int(latest.get("chain_depth") or 0)
+    committed_scope = str(latest.get("scope_digest") or "")
+    committed_recipients = str(latest.get("recipient_set_digest") or "")
+    committed_schema = str(latest.get("schema_digest") or "")
+    now = datetime.now(tz=timezone.utc)
+    full_reference = str(latest.get("full_committed_at") or latest.get("committed_at") or "")
+    days_since_full = 0.0
+    try:
+        full_time = datetime.fromisoformat(full_reference.replace("Z", "+00:00"))
+        days_since_full = max(0.0, (now - full_time).total_seconds() / 86400.0)
+    except ValueError:
+        days_since_full = 0.0
     force, reason = should_force_full(
         chain_depth=depth,
-        days_since_full=0.0,
+        days_since_full=days_since_full,
         delta_bytes=0,
-        estimated_full_bytes=0,
+        estimated_full_bytes=int(latest.get("logical_bytes") or 0),
         index_missing=False,
-        scope_changed=False,
-        recipient_changed=False,
-        schema_changed=False,
+        scope_changed=bool(committed_scope) and committed_scope != scope_digest(policy),
+        recipient_changed=bool(committed_recipients) and committed_recipients != recipient_set_digest(policy),
+        schema_changed=bool(committed_schema) and committed_schema != schema_digest(contributor_schemas or {}),
         target_fork_adopted=False,
         max_chain_depth=int(incremental.get("maxChainDepth") or DEFAULT_MAX_CHAIN_DEPTH),
         full_interval_days=int(incremental.get("fullIntervalDays") or DEFAULT_FULL_INTERVAL_DAYS),
@@ -422,6 +436,52 @@ def cdc_delta_for_file(
     return described
 
 
+_LINEAGE_EXTRA_COLUMNS = (
+    ("scope_digest", "TEXT"),
+    ("recipient_set_digest", "TEXT"),
+    ("schema_digest", "TEXT"),
+    ("chunk_protocol", "TEXT"),
+    ("full_committed_at", "TEXT"),
+    ("logical_bytes", "INTEGER"),
+)
+
+
+def _migrate_lineage_columns(connection: sqlite3.Connection) -> None:
+    existing = {str(row[1]) for row in connection.execute("PRAGMA table_info(snapshot_lineages)")}
+    for name, column_type in _LINEAGE_EXTRA_COLUMNS:
+        if name not in existing:
+            connection.execute(f"ALTER TABLE snapshot_lineages ADD COLUMN {name} {column_type}")
+
+
+def scope_digest(policy: dict[str, Any]) -> str:
+    """Deterministic digest of the backup scope relevant to force-full checks."""
+    raw_scope = policy.get("scope")
+    scope = raw_scope if isinstance(raw_scope, dict) else {}
+    body = _stable_json(
+        {
+            "mode": str(scope.get("mode") or "full"),
+            "projectIds": sorted(str(item) for item in (scope.get("projectIds") or [])),
+            "includeHistory": bool(scope.get("includeHistory", True)),
+            "includeDrafts": bool(scope.get("includeDrafts", False)),
+            "includeExternalState": bool(scope.get("includeExternalState", True)),
+            "coveragePolicy": str(scope.get("coveragePolicy") or "strict"),
+        }
+    )
+    return hashlib.sha256(body).hexdigest()
+
+
+def recipient_set_digest(policy: dict[str, Any]) -> str:
+    raw_protection = policy.get("protection")
+    protection = raw_protection if isinstance(raw_protection, dict) else {}
+    recipients = sorted(str(item) for item in (protection.get("recipients") or []))
+    return hashlib.sha256(_stable_json(recipients)).hexdigest()
+
+
+def schema_digest(contributor_schemas: dict[str, int]) -> str:
+    body = _stable_json({str(key): int(value) for key, value in sorted(contributor_schemas.items())})
+    return hashlib.sha256(body).hexdigest()
+
+
 def _connect() -> sqlite3.Connection:
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(INDEX_DB)
@@ -441,6 +501,7 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
+    _migrate_lineage_columns(connection)
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS snapshot_files (
@@ -484,15 +545,37 @@ def record_committed_snapshot(
     chain_depth: int,
     root_digest: str,
     files: list[FileRecord],
+    scope_digest: str = "",
+    recipient_set_digest: str = "",
+    schema_digest: str = "",
+    chunk_protocol: str = "",
+    full_committed_at: str | None = None,
+    logical_bytes: int = 0,
 ) -> None:  # pragma: no cover - covered via tests calling lineage/protect paths
     with _connect() as connection:
         connection.execute(
             """
             INSERT OR REPLACE INTO snapshot_lineages
-            (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at,
+             scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, logical_bytes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, int(chain_depth), root_digest, _utc_iso()),
+            (
+                target_id,
+                policy_id,
+                backup_id,
+                parent_backup_id,
+                base_backup_id,
+                int(chain_depth),
+                root_digest,
+                _utc_iso(),
+                scope_digest,
+                recipient_set_digest,
+                schema_digest,
+                chunk_protocol,
+                full_committed_at,
+                int(logical_bytes),
+            ),
         )
         connection.execute(
             "DELETE FROM snapshot_files WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
@@ -516,7 +599,8 @@ def latest_committed_snapshot(target_id: str, policy_id: str) -> dict[str, Any] 
     with _connect() as connection:
         row = connection.execute(
             """
-            SELECT backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at
+            SELECT backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at,
+                   scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, logical_bytes
             FROM snapshot_lineages
             WHERE target_id = ? AND policy_id = ?
             ORDER BY committed_at DESC, rowid DESC

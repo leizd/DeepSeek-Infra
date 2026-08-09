@@ -127,6 +127,67 @@ def test_coverage_gap_inherited_into_effective_root(tmp_settings: Path) -> None:
     assert delta["parentRootDigest"] == backup_incremental.snapshot_root(prev)
 
 
+def test_force_full_from_committed_metadata(tmp_settings: Path) -> None:
+    """Adaptive full conditions are evaluated from committed snapshot metadata."""
+    base_files = [backup_incremental.FileRecord("local", "a.txt", 1, "a" * 64)]
+
+    def record(policy_id: str, *, scope: str, recipients: str, schema: str, full_at: str | None = None) -> None:
+        backup_incremental.record_committed_snapshot(
+            target_id="t",
+            policy_id=policy_id,
+            backup_id="F0",
+            parent_backup_id=None,
+            base_backup_id="F0",
+            chain_depth=0,
+            root_digest=backup_incremental.snapshot_root(base_files),
+            files=base_files,
+            scope_digest=scope,
+            recipient_set_digest=recipients,
+            schema_digest=schema,
+            full_committed_at=full_at,
+        )
+
+    matching = _policy()
+    scope = backup_incremental.scope_digest(matching)
+    recips = backup_incremental.recipient_set_digest(matching)
+    schemas = backup_incremental.schema_digest({"local": 1})
+    record("p_match", scope=scope, recipients=recips, schema=schemas)
+    selected = backup_incremental.select_snapshot_plan(
+        policy=matching, target_id="t", policy_id="p_match", index_available=True, contributor_schemas={"local": 1}
+    )
+    assert selected[0] == "incremental"
+    # Scope change -> force full.
+    record("p_scope", scope=scope, recipients=recips, schema=schemas)
+    changed_scope = _policy(scope={"mode": "project", "projectIds": ["p1"]})
+    selected = backup_incremental.select_snapshot_plan(
+        policy=changed_scope, target_id="t", policy_id="p_scope", index_available=True, contributor_schemas={"local": 1}
+    )
+    assert selected[0] == "full" and selected[6] == "scope-changed"
+    # Recipient rotation -> force full (new lineage).
+    record("p_recip", scope=scope, recipients=recips, schema=schemas)
+    rotated = _policy(protection={"mode": "age-recipient", "recipients": ["age1other", RECIPIENT_A]})
+    selected = backup_incremental.select_snapshot_plan(
+        policy=rotated, target_id="t", policy_id="p_recip", index_available=True, contributor_schemas={"local": 1}
+    )
+    assert selected[0] == "full" and selected[6] == "recipient-rotation"
+    # Contributor schema change -> force full.
+    record("p_schema", scope=scope, recipients=recips, schema=schemas)
+    selected = backup_incremental.select_snapshot_plan(
+        policy=matching, target_id="t", policy_id="p_schema", index_available=True, contributor_schemas={"local": 2}
+    )
+    assert selected[0] == "full" and selected[6] == "contributor-schema-changed"
+    # Full-interval age from committed metadata -> force full.
+    from datetime import datetime, timedelta, timezone
+
+    stale = (datetime.now(tz=timezone.utc) - timedelta(days=10)).isoformat(timespec="seconds")
+    record("p_interval", scope=scope, recipients=recips, schema=schemas, full_at=stale)
+    interval = _policy(incremental={"mode": "file-delta", "fullIntervalDays": 7})
+    selected = backup_incremental.select_snapshot_plan(
+        policy=interval, target_id="t", policy_id="p_interval", index_available=True, contributor_schemas={"local": 1}
+    )
+    assert selected[0] == "full" and selected[6] == "full-interval"
+
+
 def test_snapshot_plan_selection_and_force_full(tmp_settings: Path) -> None:
     policy = _policy()
     # off -> full

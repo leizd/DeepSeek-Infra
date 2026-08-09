@@ -43,6 +43,10 @@ def _index_available() -> bool:
         return False
 
 
+def _utc_iso_now() -> str:
+    return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def _record_committed_index(
     *,
     target_id: str,
@@ -50,6 +54,7 @@ def _record_committed_index(
     backup_id: str,
     package: Any,
     run_plan: dict[str, Any],
+    policy: dict[str, Any] | None = None,
 ) -> None:
     """Persist a committed snapshot into the rebuildable index (best effort)."""
     try:
@@ -67,6 +72,18 @@ def _record_committed_index(
         snapshot = manifest.get("snapshot") if isinstance(manifest, dict) else {}
         snapshot = snapshot if isinstance(snapshot, dict) else {}
         snapshot_kind = str(run_plan.get("snapshotKind") or "full")
+        policy_dict = policy if isinstance(policy, dict) else {}
+        contributor_schemas = {
+            str(item.get("id") or ""): int(item.get("schemaVersion") or 0)
+            for item in (manifest.get("contributors") or [])
+            if isinstance(item, dict)
+        }
+        common = {
+            "scope_digest": backup_incremental.scope_digest(policy_dict),
+            "recipient_set_digest": backup_incremental.recipient_set_digest(policy_dict),
+            "schema_digest": backup_incremental.schema_digest(contributor_schemas),
+            "chunk_protocol": backup_incremental.CDC_ALGORITHM,
+        }
         if snapshot_kind == "incremental":
             parent = str(run_plan.get("parentBackupId") or "")
             base = str(run_plan.get("baseBackupId") or parent)
@@ -81,6 +98,7 @@ def _record_committed_index(
                 records,
                 successful_contributors={item.contributor_id for item in records},
             )
+            parent_latest = backup_incremental.latest_committed_snapshot(target_id, policy_id)
             backup_incremental.record_committed_snapshot(
                 target_id=target_id,
                 policy_id=policy_id,
@@ -90,6 +108,9 @@ def _record_committed_index(
                 chain_depth=depth,
                 root_digest=root,
                 files=effective,
+                full_committed_at=str(parent_latest.get("full_committed_at") or "") if parent_latest else None,
+                logical_bytes=sum(int(item.size) for item in effective),
+                **common,
             )
         else:
             backup_incremental.record_committed_snapshot(
@@ -101,6 +122,9 @@ def _record_committed_index(
                 chain_depth=0,
                 root_digest=backup_incremental.snapshot_root(records),
                 files=records,
+                full_committed_at=_utc_iso_now(),
+                logical_bytes=sum(int(item.size) for item in records),
+                **common,
             )
         chunk_records = getattr(package, "chunk_records", None) or []
         if chunk_records:
@@ -226,11 +250,16 @@ def execute_run(
         context = backup_scheduled._context_from_policy(policy)
         contributor_plan = backups._contributor_plan(context)
         index_available = _index_available()
+        contributor_schemas: dict[str, int] = {}
+        for item in contributor_plan.get("contributors") or []:
+            if isinstance(item, dict):
+                contributor_schemas[str(item.get("id") or "")] = int(item.get("schemaVersion") or 0)
         selected = backup_incremental.select_snapshot_plan(
             policy=policy,
             target_id=target_id,
             policy_id=policy_id,
             index_available=index_available,
+            contributor_schemas=contributor_schemas,
         )
         snapshot_kind, lineage_id, parent_backup_id, chain_depth, parent_commit_hash, parent_receipt_digest, force_full_reason = selected
         run_plan = backup_run_plan.freeze_run_plan(
@@ -385,6 +414,7 @@ def execute_run(
             backup_id=str(published.receipt.get("backupId") or package.backup_id),
             package=package,
             run_plan=run_plan,
+            policy=policy,
         )
         backup_run_plan.clear_run_plan(policy_id, slot_digest)
         return {
