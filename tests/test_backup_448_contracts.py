@@ -1994,6 +1994,36 @@ def test_index_available_oserror(tmp_settings: Path, monkeypatch: pytest.MonkeyP
     assert backup_executor._index_available() is False
 
 
+def test_restore_pagination_branches(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Catalog and commit listings paginate past the store page limit."""
+    from deepseek_infra.infra.workspace import backup_remote_restore
+    from deepseek_infra.infra.workspace.backup_target_store import object_key
+
+    store = MemoryTargetStore()
+    put_json_if_absent(store, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
+    raw = b"age-encryption.org/v1\npaginate"
+    digest = hashlib.sha256(raw).hexdigest()
+    store.put_if_absent(object_key(digest), raw, checksum_sha256=digest)
+    put_json_if_absent(
+        store,
+        "receipts/F0.json",
+        {"backupId": "F0", "objectDigest": digest, "filename": "F0.age", "size": len(raw), "snapshotKind": "full"},
+    )
+    # Push the receipts and commits listings past one page so the cursor path runs.
+    for index in range(1001):
+        store.put_if_absent(f"receipts/filler-{index}.json", b"{}")
+        store.put_if_absent(f"commits/filler-{index}.json", b"{}")
+    put_json_if_absent(
+        store,
+        "commits/pol/slot.json",
+        {"commitHash": "c" * 64, "backupId": "F0", "objectDigest": digest, "targetGeneration": 1},
+    )
+    target = backup_publish.ResolvedTarget(target_id="target_page", root=None, managed=False, kind="s3", store=store)
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda *a, **k: target)
+    created = backup_remote_restore.create_restore_from_target(target_id="target_page", backup_id="F0")
+    assert created["phase"] == "fetching"
+
+
 def test_full_snapshot_computes_chunk_maps(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Full snapshots chunk large files so the first delta can reuse parents."""
     import random
