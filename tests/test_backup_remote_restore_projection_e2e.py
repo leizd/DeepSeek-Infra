@@ -1,4 +1,4 @@
-"""End-to-end projected remote restore through the federated commit (4.4.13)."""
+"""End-to-end projected remote restore through the federated commit (projected-recovery)."""
 
 from __future__ import annotations
 

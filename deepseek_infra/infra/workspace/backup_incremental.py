@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2250,9 +2251,20 @@ def _migrate_index_db_auto_vacuum(target_id: str, policy_id: str, before: dict[s
             new_connection.close()
         # sqlite3 connections cycle through their C object; force-collect so no
         # earlier ``with sqlite3.connect(...)`` reader still holds INDEX_DB open
-        # on Windows before the atomic swap.
+        # on Windows, then retry the swap briefly while the OS releases locks.
         gc.collect()
-        os.replace(new_path, INDEX_DB)
+        last_error: OSError | None = None
+        for _attempt in range(3):
+            try:
+                os.replace(new_path, INDEX_DB)
+                break
+            except OSError as exc:
+                last_error = exc
+                gc.collect()
+                time.sleep(0.1)
+        else:
+            assert last_error is not None
+            raise last_error
     except Exception:
         new_path.unlink(missing_ok=True)
         raise

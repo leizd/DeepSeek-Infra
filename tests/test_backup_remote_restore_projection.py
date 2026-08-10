@@ -1,4 +1,4 @@
-"""Selection-freeze contracts for the durable remote restore session (4.4.13)."""
+"""Selection-freeze contracts for the durable remote restore session (projected-recovery)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Offline contracts for the 4.4.13 projected restore planner."""
+"""Offline contracts for the projected-recovery projected restore planner."""
 
 from __future__ import annotations
 
@@ -376,3 +376,91 @@ def test_projection_cdc_same_file_parent_closure() -> None:
     assert "payload/projects/p1/big.bin" in plan.needed_after_layer[0]
     assert "payload/projects/p1/big.bin" in plan.produced_by_layer[1]
     assert plan.needed_blobs == frozenset({"blob_000001"})
+
+
+def test_normalize_selection_rejects_non_object_and_all_blank() -> None:
+    with pytest.raises(AppError, match="must be an object"):
+        normalize_selection("projects")
+    with pytest.raises(AppError, match="at least one contributor"):
+        normalize_selection({"contributors": [""]})
+
+
+def test_plan_projection_rejects_empty_chain_and_bad_baseline_root() -> None:
+    from deepseek_infra.infra.workspace.backup_projection import _chain_roots
+
+    with pytest.raises(AppError, match="non-empty chain"):
+        _chain_roots([])
+    bad_baseline = ChainPackage(
+        snapshot_kind="full",
+        files=(_rec("projects", "payload/projects/p1/a.bin", 4, _sha(80)),),
+        root_digest="0" * 64,
+        contributor_ids=frozenset({"projects"}),
+    )
+    with pytest.raises(AppError, match="Full baseline Merkle root mismatch"):
+        plan_projection(RestoreSelection(contributors=("projects",), project_ids=("p1",)), [bad_baseline], ciphertext_download_bytes=0)
+
+
+def test_plan_projection_rejects_incremental_without_operations() -> None:
+    baseline = ChainPackage(
+        snapshot_kind="full",
+        files=(_rec("projects", "payload/projects/p1/a.bin", 4, _sha(81)),),
+        root_digest=backup_incremental.snapshot_root([_rec("projects", "payload/projects/p1/a.bin", 4, _sha(81))]),
+        contributor_ids=frozenset({"projects"}),
+    )
+    incremental = ChainPackage(snapshot_kind="incremental", files=(_rec("projects", "payload/projects/p1/b.bin", 4, _sha(82)),), operations=None)
+    with pytest.raises(AppError, match="has no operations"):
+        plan_projection(
+            RestoreSelection(contributors=("projects",), project_ids=("p1",)),
+            [baseline, incremental],
+            ciphertext_download_bytes=0,
+        )
+
+
+def test_projection_parent_file_closure_and_migration_skip() -> None:
+    parent_sha = _sha(83)
+    base_sha = _sha(88)
+    f0 = [
+        _rec("projects", "payload/projects/p2/source.bin", 4, parent_sha),
+        _rec("projects", "payload/projects/p1/base.bin", 4, base_sha),
+    ]
+    final_sha = _sha(84)
+    f1 = [*f0, _rec("projects", "payload/projects/p1/copy.bin", 4, final_sha)]
+    ops = backup_incremental.diff_trees(f0, f1, successful_contributors={"projects"})
+    for put in ops["put"]:
+        if put["path"] == "payload/projects/p1/copy.bin":
+            put["storage"] = "parent-file"
+            put["parentPath"] = "payload/projects/p2/source.bin"
+            put.pop("payloadRef", None)
+    baseline = ChainPackage(snapshot_kind="full", files=tuple(f0), root_digest=backup_incremental.snapshot_root(f0), contributor_ids=frozenset({"projects"}))
+    incremental = ChainPackage(snapshot_kind="incremental", files=tuple(f1), operations=ops, root_digest=backup_incremental.snapshot_root(f1))
+    plan = plan_projection(
+        RestoreSelection(contributors=("projects",), project_ids=("p1",)),
+        [baseline, incremental],
+        ciphertext_download_bytes=0,
+    )
+    assert "payload/projects/p1/copy.bin" in plan.output_files
+    assert "payload/projects/p2/source.bin" in plan.support_files
+
+
+def test_projection_selectable_skips_migration_files() -> None:
+    from deepseek_infra.infra.workspace.backup_projection import _selectable_files
+
+    files = [
+        _rec("projects", "payload/projects/p1/a.bin", 4, _sha(85)),
+        _rec("migration", "migration/source-schemas.json", 4, _sha(86)),
+    ]
+    output = _selectable_files(files, RestoreSelection(contributors=("projects", "migration"), project_ids=("p1",)))
+    assert output == {"payload/projects/p1/a.bin"}
+
+
+def test_layer_needed_payloads_boundaries() -> None:
+    from deepseek_infra.infra.workspace.backup_projection import layer_needed_payloads
+
+    baseline = ChainPackage(
+        snapshot_kind="full",
+        files=(_rec("projects", "payload/projects/p1/a.bin", 4, _sha(87)),),
+        root_digest=backup_incremental.snapshot_root([_rec("projects", "payload/projects/p1/a.bin", 4, _sha(87))]),
+        contributor_ids=frozenset({"projects"}),
+    )
+    assert layer_needed_payloads([baseline], [set()], 0) == (set(), set(), set())
+    assert layer_needed_payloads([baseline], [set()], 1) == (set(), set(), set())

@@ -1,4 +1,4 @@
-"""Selective archive extraction contracts (4.4.13 projected restore)."""
+"""Selective archive extraction contracts (projected-recovery projected restore)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Production remote restore end-to-end through the real executor (4.4.13).
+"""Production remote restore end-to-end through the real executor (projected-recovery).
 
 Drives the real Policy -> Scheduler -> Executor -> Age -> S3 -> Receipt ->
 Catalog -> Remote Restore -> Federated Commit/Complete path against a real

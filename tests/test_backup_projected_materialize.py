@@ -1,4 +1,4 @@
-"""Projection-aware materializer contracts (4.4.13)."""
+"""Projection-aware materializer contracts (projected-recovery)."""
 
 from __future__ import annotations
 
@@ -148,6 +148,20 @@ def test_projected_materialize_verifies_full_chain(tmp_path: Path) -> None:
     ops_path.write_text(json.dumps(ops, sort_keys=True), encoding="utf-8")
     with pytest.raises(AppError, match="Merkle root mismatch"):
         backup_incremental_restore.materialize_chain([f0_root, tampered], tmp_path / "output-bad", projection=projection)
+
+
+def test_projected_materialize_fails_on_corrupt_support(tmp_path: Path) -> None:
+    f0_root, i1_root, projection = _build_chain(tmp_path)
+    (f0_root / "payload/projects/p2/source.bin").write_bytes(b"corrupted-source")
+    with pytest.raises(AppError, match="checksum mismatch"):
+        backup_incremental_restore.materialize_chain([f0_root, i1_root], tmp_path / "output-corrupt", projection=projection)
+
+
+def test_projected_materialize_missing_baseline_entry_fails(tmp_path: Path) -> None:
+    f0_root, i1_root, projection = _build_chain(tmp_path)
+    (f0_root / "payload/projects/p2/source.bin").unlink()
+    with pytest.raises(AppError, match="Projection baseline file is missing"):
+        backup_incremental_restore.materialize_chain([f0_root, i1_root], tmp_path / "output-missing", projection=projection)
 
 
 def test_pack_handle_cache_verifies_only_used_packs(tmp_path: Path) -> None:
