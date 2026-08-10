@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.12。
+适用版本：v4.4.13。
 
 默认情况下，所有 `/api/*` 路由都需要本地 token 鉴权。客户端可以发送 `Authorization: Bearer <token>`，也可以使用打开 `/?token=<token>` 后写入的 `auth_token` Cookie。未设置 `AUTH_TOKEN` 时，服务端会把自动生成的 token 保存到本地 `.auth-token`，重启后继续复用。
 
@@ -1066,7 +1066,9 @@ Restore Fence 活跃时读请求继续；非 Restore Owner 的业务写请求返
 
 Incremental Policy 的 `scanWorkers`（1–16，默认不超过 4）和 `maxInFlightBytes`（8 MiB–2 GiB，默认 64 MiB）同时限制扫描并发。新 Snapshot 写入 `chunkProtocol=fastcdc-gear-v3`；显式 v2 Parent 仍可解码，但协议升级会强制 Full。Run Plan schema v3 记录 `plannedSnapshotKind`、`resolvedSnapshotKind` 和 `resolutionReason`，实际物理 Delta 比率一旦冻结，重试不得改变决策。
 
-4.4.12 的 Incremental Package 使用 `incremental-v5`。`payloadRef` 可以是 `{"kind":"pack-range","blobId":"..."}` 或 `{"kind":"standalone","path":"payload/files/..."}`；`parent-file` / `parent-range` 保持 4.4.11 语义。Pack Index、Blob SHA 和路径只存在于 Age 内部，不属于公开 Receipt/Catalog API。运行结果只暴露聚合 `packing` 与 `index` 指标（Blob/Pack/Entry/字节、Snapshot Ops、Effective Files、File Versions、Chunk Maps、DB Bytes、Free Page Ratio），不返回文件路径或内容摘要。
+4.4.13 的 Incremental Package 使用 `incremental-v5`。`payloadRef` 可以是 `{"kind":"pack-range","blobId":"..."}` 或 `{"kind":"standalone","path":"payload/files/..."}`；`parent-file` / `parent-range` 保持 4.4.11 语义。Pack Index、Blob SHA 和路径只存在于 Age 内部，不属于公开 Receipt/Catalog API。运行结果只暴露聚合 `packing` 与 `index` 指标（Blob/Pack/Entry/字节、Snapshot Ops、Effective Files、File Versions、Chunk Maps、DB Bytes、Free Page Ratio），不返回文件路径或内容摘要。
+
+`POST /api/workspace/restores/from-target` 可携带 `selection`（`contributors` + `projectIds`）与 `restoreId`：创建时冻结 `selectionDigest`，Retry 改选返回 `409 restore-selection-mismatch`。`POST /api/workspace/restores/from-target/preview` 先获取整条密文链并只提取 Metadata 平面，返回 `selectionDigest`、`selected`/`dependencies`/`bytes` 统计与 `networkSelective: false`（`whole-age-object`）。`materialize` 的返回包含 `projection`（selectionDigest / selected / dependencies / bytes / requiresFrontendApply / requiresExternalMcp），未选中 Contributor 不会被 staging 或写入。
 
 ## 独立无状态 MCP 服务（v4.4.2）
 

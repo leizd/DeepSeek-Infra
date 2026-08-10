@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.12。
+适用版本：v4.4.13。
 
 定位与信任假设见 [docs/SECURITY.md](SECURITY.md)：个人、本地优先的运行时，运行后端的机器可信，默认只监听 `127.0.0.1`。这一页回答更尖锐的问题：**当模型上下文里混入攻击者可控的内容（网页、文件、工具结果），或本机服务被局域网内他人触达时，每一类威胁由哪段代码挡住、由哪个测试钉住、还剩什么残余风险。**
 
@@ -142,6 +142,18 @@
   - GC 只在 Retention 已物理删除 Snapshot 后清理无引用 Version/Map；Maintenance 仅在 DB 超过 256 MiB 且空闲页超过 30% 时执行有界 `incremental_vacuum`，不在 Commit 路径完整 VACUUM。
 - **测试**：[test_backup_packed_delta_contracts.py](../tests/test_backup_packed_delta_contracts.py) 覆盖 Pack 对齐/滚动、Pack/Blob 篡改、四句柄 LRU、File Version 共享、Head 不一致、GC/Compaction 和 10 万文件增长；[test_backup_s3_http_e2e.py](../tests/test_backup_s3_http_e2e.py) 在真实 HTTP S3-compatible 服务上覆盖 Multipart 中断恢复、Range GET 与 Full + v5 字节级恢复。
 - **残余风险**：Pack 与 Index 仍消耗可信本机磁盘，极端 Workspace 的首次 Full 仍与总数据量成正比；本地数据库和解密 staging 应与 Workspace 同级保护。跨 Snapshot Pack、云端 Chunk CAS、Convergent Encryption、WAL 增量与 WebDAV 不在本版本范围。
+
+### T13 · 投影选择篡改、依赖闭包泄漏与远端 Hold 生命周期（v4.4.13）
+
+- **路径**：Restore Session 一旦创建，攻击者可能在 Retry 时悄悄换选不同 Contributor/Project；投影恢复可能遗漏跨文件 Parent 依赖（Support 只物化不落盘）或把 Support 文件误写入 Workspace；选择性物化可能跳过 Merkle 校验；Remote Restore 失败/取消后可能遗留祖先 Hold 造成远端对象被 GC 或长期滞留。
+- **缓解**：
+  - `selection` 在 Session 创建时冻结并持久化 `selectionDigest`，Retry 改选返回 `409 restore-selection-mismatch`；Federated 交易的 `serverTransactionDigest` 纳入 `selectionDigest`；
+  - Projection Planner 先完整应用 F0→I1→…→In 逻辑链并逐层校验 Merkle Root，只有 Payload 平面做选择性物化；`restoreOutputSet` 与 `restoreDependencySet` 严格分离，Support 文件绝不进入 Prepared Final Mutation List，未选中 Contributor 一律不被改动；
+  - Metadata Plane 只提取 `manifest.json` / `operations.json` / Pack Index，并只解压所选 Full 条目、所需 Pack 与 Standalone；未使用 Pack 首次使用前才做 Size/SHA 校验；
+  - Whole-Age Object 模型下 API/UI 如实上报 `networkSelective: false`，不把选择性物化宣传成网络级 Selective Fetch；
+  - 远端祖先 Hold 在 Complete / Abort / Federated 交易前失败时释放，`recovery-required` 时保留；TTL 仍是最终兜底。
+- **测试**：[test_backup_projection.py](../tests/test_backup_projection.py) 覆盖选择冻结/依赖闭包/Support 分离/完整逻辑链；[test_backup_remote_restore_projection_e2e.py](../tests/test_backup_remote_restore_projection_e2e.py) 覆盖投影 Round-Trip、Rollback 范围、Hold 生命周期与 Preview；[test_backup_production_remote_restore_e2e.py](../tests/test_backup_production_remote_restore_e2e.py) 在真实 MinIO + 真实 Age Helper 上覆盖生产全链路。
+- **残余风险**：网络层仍须下载整条 Whole-Age 密文链（选择性物化不减少下载量）；网络级 Selective Fetch 需要独立加密 Pack 协议，推迟到 4.4.14 及以后。
 
 ## 非目标（明确不在防护范围内）
 

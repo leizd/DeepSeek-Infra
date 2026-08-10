@@ -54,66 +54,66 @@ Real Age MinIO production E2E ──→ evidence + release surfaces
 
 ### Phase 1: Projection core
 
-- [ ] Task 2: Add the pure projection module.
+- [x] Task 2: Add the pure projection module.
   - Acceptance: contributor/project granularity validation, canonical `selection_digest`, and full-logical-chain dependency closure (output set, support set, needed packs/blobs) computed from chain metadata; byte report with `networkSelective: false`.
   - Verification: offline unit contracts (digest stability, cross-file parent closure, support/output separation).
   - Files: new `backup_projection.py` + tests.
 
 ### Phase 2: Durable selection freeze and preview
 
-- [ ] Task 3: Freeze selection in the remote restore session (schema v3) and reject retries that change it.
+- [x] Task 3: Freeze selection in the remote restore session (schema v3) and reject retries that change it.
   - Acceptance: `create_restore_from_target` persists `selection` + `selectionDigest`; resume with a different selection returns `409 restore-selection-mismatch`.
   - Verification: session-contract tests.
   - Files: `backup_remote_restore.py`, `backup_governance.py` routes, tests.
-- [ ] Task 4: Add the from-target preview endpoint.
+- [x] Task 4: Add the from-target preview endpoint.
   - Acceptance: fetch + decrypt + metadata-only extract + projection plan + accurate byte report (`ciphertextDownloadBytes` = whole chain), reusing the session so confirm does not re-download.
   - Verification: preview-contract tests and route coverage.
   - Files: preview function, routes, frontend API client.
 
 ### Phase 3: Selective materialization
 
-- [ ] Task 5: Split extraction into metadata-only and selective entry extraction.
+- [x] Task 5: Split extraction into metadata-only and selective entry extraction.
   - Acceptance: path/dup/compression validations preserved; only required Full entries, Packs and standalone blobs are extracted.
   - Verification: extraction-contract tests.
   - Files: extraction helpers, restore session, tests.
-- [ ] Task 6: Lazy pack verification.
+- [x] Task 6: Lazy pack verification.
   - Acceptance: `parse_pack_index` (no file I/O) + `verify_pack` on first use; unused packs are not opened or hashed.
   - Verification: open-handle-count and corruption tests.
   - Files: `backup_pack.py`, `PackHandleCache`, tests.
-- [ ] Task 7: Projection-aware chain materializer.
+- [x] Task 7: Projection-aware chain materializer.
   - Acceptance: `projection=None` is byte-identical to 4.4.12; with projection, full logical chain verification is retained, only outputs reach the workspace, support files never do, and selected file SHAs verify.
   - Verification: projected byte-for-byte, unselected-isolation, support-never-written tests.
   - Files: `backup_incremental_restore.py`, tests.
 
 ### Phase 4: Projected federated restore
 
-- [ ] Task 8: Projected `prepare_restore`, commit and rollback.
+- [x] Task 8: Projected `prepare_restore`, commit and rollback.
   - Acceptance: only selected contributors/projects are staged and swapped; `serverTransactionDigest` includes `selectionDigest`; project-scoped commit/rollback via the always-full safety backup.
   - Verification: transaction/rollback and retry-digest contracts.
   - Files: `backups.py`, contributor apply, tests.
-- [ ] Task 9: Derive frontend/external-MCP participation and complete the hold lifecycle.
+- [x] Task 9: Derive frontend/external-MCP participation and complete the hold lifecycle.
   - Acceptance: `requiresFrontendApply`/`requiresExternalMcp` derive from selection; holds release at complete/abort/failed-before-transaction and are retained at `recovery-required`.
   - Verification: gating and hold-lifecycle contracts.
   - Files: `backup_remote_restore.py`, frontend, tests.
 
 ### Phase 5: Cost model and maintenance
 
-- [ ] Task 10: Base adaptive full on packed-container physical cost.
+- [x] Task 10: Base adaptive full on packed-container physical cost.
   - Acceptance: the executor decision uses physical delta bytes vs estimated full archive bytes, with evidence recorded.
   - Verification: adaptive-ratio contracts.
   - Files: `backup_scheduled.py`, `backup_executor.py`, tests.
-- [ ] Task 11: Add the index-maintenance migration path.
+- [x] Task 11: Add the index-maintenance migration path.
   - Acceptance: rebuild → copy live state → verify head/root → fsync → atomic swap, keeping the old DB until success; no full `VACUUM` on the scheduler path.
   - Verification: migration and fail-safe contracts.
   - Files: `backup_incremental.py`, tests.
 
 ### Phase 6: Production remote restore E2E and release
 
-- [ ] Task 12: Add the real Age + MinIO production restore E2E and CI wiring.
+- [x] Task 12: Add the real Age + MinIO production restore E2E and CI wiring.
   - Acceptance: real executor F0/I1, receipts/catalog, slot commit, new-process restart, real Age decrypt, projection, federated commit/complete; workspace equals the I1 snapshot byte-for-byte.
   - Verification: dedicated CI job with the Rust helper built and evidence emitted.
   - Files: E2E test/script, CI workflow, evidence producer.
-- [ ] Task 13: Update release-facing documentation, evidence contracts and run the full gates.
+- [x] Task 13: Update release-facing documentation, evidence contracts and run the full gates.
   - Verification: full Python/frontend/Rust/docs gates, coverage ≥ 95%, exact-merge evidence.
 
 ## Risks and Mitigations
