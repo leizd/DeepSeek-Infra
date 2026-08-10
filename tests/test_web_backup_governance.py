@@ -169,3 +169,54 @@ def test_target_lifecycle(client: TestClient, tmp_path: Path) -> None:
 def test_scrub_missing_backup(client: TestClient) -> None:
     resp = client.post("/api/workspace/backups/backup_missing/scrub")
     assert resp.status_code == 404
+
+
+def test_from_target_preview_route(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_remote_restore
+
+    monkeypatch.setattr(
+        backup_remote_restore,
+        "preview_restore_from_target",
+        lambda *, target_id, backup_id, selection, restore_id=None, client=None: {
+            "restoreId": "restore_p",
+            "phase": "preview-planned",
+            "requiresSecret": False,
+            "selectionDigest": "d" * 64,
+        },
+    )
+    resp = client.post(
+        "/api/workspace/restores/from-target/preview",
+        json={"targetId": "t", "backupId": "b", "selection": {"contributors": ["projects"]}, "restoreId": "restore_p"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["restoreId"] == "restore_p"
+
+
+def test_find_backup_session_skips_empty_and_failed_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_catalog
+    from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore
+
+    calls: list[str] = []
+
+    def fake_open(target_id: str, *, write_intent: bool = True) -> object:
+        calls.append(target_id)
+        if target_id in {"managed-local", "target_empty", "target_fail"}:
+            raise AppError("boom")
+        store = MemoryTargetStore()
+        backup_catalog.append_receipt_store(store, {"backupId": "b1", "objectDigest": "0" * 64, "snapshotKind": "full"})
+        from deepseek_infra.infra.workspace.backup_publish import ResolvedTarget
+
+        return ResolvedTarget(target_id=target_id, root=None, managed=False, kind="s3", store=store)
+
+    monkeypatch.setattr(governance, "open_target_session", fake_open)
+    monkeypatch.setattr(
+        governance.backup_targets,
+        "list_targets",
+        lambda: [{"targetId": "target_empty"}, {"targetId": "target_fail"}, {"targetId": "target_ok"}],
+    )
+    session, record = governance._find_backup_session("b1")
+    assert session.target_id == "target_ok"
+    assert record["backupId"] == "b1"
+    assert calls == ["managed-local", "target_empty", "target_fail", "target_ok"]
+    with pytest.raises(AppError):
+        governance._find_backup_session("missing")
