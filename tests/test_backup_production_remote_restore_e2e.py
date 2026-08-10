@@ -201,6 +201,10 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
         assert session is not None and session.get("selection") is not None, "projected selection was not frozen"
         prepared = backup_remote_restore.materialize_federated_restore(restore_id, mode="merge", owner_document_id="server")
         assert prepared["phase"] == "prepared"
+        import json as _json
+
+        _plan = _json.loads((backups.RESTORE_DIR / restore_id / "plan.json").read_text(encoding="utf-8"))
+        assert _plan.get("projected") is True, f"restore did not freeze a projection: {_plan.get('requiresFrontendApply')}"
         assert prepared.get("requiresFrontendApply") is False, "projected restore must not require frontend apply"
         committed = backups.commit_restore(restore_id)
         assert committed["phase"] == "backend-committed"
