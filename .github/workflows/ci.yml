@@ -244,6 +244,11 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+      - name: Build the real Age backup crypto helper
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ""
+      - run: python scripts/build_backup_crypto.py
       - name: Start pinned MinIO server
         run: >-
           docker run --detach --name deepseek-minio
