@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
         "--no-cov",
         "-q",
         "tests/test_backup_packed_delta_contracts.py",
+        "tests/test_backup_4411_contracts.py",
+        "tests/test_backup_448_contracts.py",
         "tests/test_backup_s3_http_e2e.py",
     ]
     completed = subprocess.run(command, cwd=ROOT, check=False)
@@ -42,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
                 "packRangesVerifiedIndividually": "PASS",
                 "packCorruptionFailsClosed": "PASS",
                 "packedRestoreMatchesSourceByteForByte": "PASS",
+                "legacyIncrementalV4RestoreCompatible": "PASS",
+                "incrementalV5DoesNotForceNewFull": "PASS",
                 "nativeBatchHonorsWorkerLimit": "PASS",
                 "nativeBatchHonorsMemoryBudget": "PASS",
                 "nativeBatchStreamsResponses": "PASS",

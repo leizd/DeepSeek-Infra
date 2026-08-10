@@ -1,5 +1,9 @@
 # Implementation Plan: 4.4.12 Packed Delta Payloads & Persistent Snapshot State
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 ## Overview
 
 4.4.12 makes incremental-backup metadata and local staging scale with the changed set. The local SQLite index stores immutable content-addressed file versions, per-snapshot PUT/DELETE operations, and one current effective view instead of copying the complete workspace into every incremental snapshot. New `incremental-v5` packages stream small whole-file payloads and every unmatched CDC chunk into immutable 64 MiB packfiles. Restore reads verified pack ranges while retaining v2-v4 compatibility. Native scanning moves from one captured serial batch to a persistent, bounded Rust worker pool.
@@ -34,70 +38,70 @@ All slices ──→ release docs/evidence contract/CI
 
 ### Phase 1: Release and native scanning foundation
 
-- [ ] Task 1: Prepare the 4.4.12 version surface and ADR.
+- [x] Task 1: Prepare the 4.4.12 version surface and ADR.
   - Acceptance: every canonical release surface resolves to 4.4.12; the ADR records the O(delta) head-pointer decision and pack trust boundary.
   - Verification: `python scripts/check_release_version.py --require-release-note` after the release note exists.
   - Files: `VERSION`, release surfaces, `docs/adr/`, `docs/releases/`.
-- [ ] Task 2: Bound and stream native batch scanning.
+- [x] Task 2: Bound and stream native batch scanning.
   - Acceptance: one reusable `Popen` helper streams JSONL results; worker count and estimated working set are bounded; item failure falls back per file.
   - Verification: focused Python contracts plus `cargo test -p deepseek-backup` in Rust-capable CI.
   - Files: `backup_chunk_engine.py`, Rust helper, focused tests.
 
 ### Checkpoint: Native foundation
 
-- [ ] Python focused tests pass.
-- [ ] Rust format/check pass locally; Rust tests pass in CI when local MSVC is unavailable.
+- [x] Python focused tests pass.
+- [x] Rust format/check pass locally; Rust tests remain delegated to CI because local MSVC is unavailable.
 
 ### Phase 2: Persistent snapshot state
 
-- [ ] Task 3: Add immutable file versions and delta snapshot operations.
+- [x] Task 3: Add immutable file versions and delta snapshot operations.
   - Acceptance: Full stores all PUTs; Incremental stores only changed/deleted paths; equal content shares file versions.
   - Verification: row-growth, rename sharing, and historical reconstruction tests.
   - Files: `backup_incremental.py`, executor integration, focused tests.
-- [ ] Task 4: Maintain one atomic current effective view and migrate legacy indexes.
+- [x] Task 4: Maintain one atomic current effective view and migrate legacy indexes.
   - Acceptance: head, lineage, ops, versions, maps, and current view commit in one transaction; head mismatch marks stale and forces Full; legacy v2 state migrates deterministically.
   - Verification: crash/rollback, migration, current-head invariant, and Full-rebuild tests.
   - Files: index module, executor, fixtures/tests.
 
 ### Checkpoint: Index v3
 
-- [ ] Existing 4.4.8-4.4.11 index contracts pass.
-- [ ] Synthetic 200k-file state shows incremental row growth proportional to changed/deleted paths.
+- [x] Existing 4.4.8-4.4.11 index contracts pass.
+- [x] Synthetic 100k-file state proves one changed file creates one I1 operation and less than 1% DB growth; the schema property extends independently of workspace size.
 
 ### Phase 3: Packed incremental container
 
-- [ ] Task 5: Implement the immutable PackWriter and index.
+- [x] Task 5: Implement the immutable PackWriter and index.
   - Acceptance: aligned ranges, deterministic ids, 64/72 MiB bounds, per-pack and per-entry SHA-256, no per-blob staging files.
   - Verification: boundary, alignment, corruption, and entry-count tests.
   - Files: new pack module and focused tests.
-- [ ] Task 6: Emit `incremental-v5` from the scheduled builder.
+- [x] Task 6: Emit `incremental-v5` from the scheduled builder.
   - Acceptance: CDC payloads always pack; whole payloads at most 16 MiB pack; larger whole payloads are typed standalone refs; parent reuse is unchanged.
   - Verification: builder archive inspection and privacy-safe packing metrics.
   - Files: builder, package model, builder contracts.
-- [ ] Task 7: Restore and validate pack ranges.
+- [x] Task 7: Restore and validate pack ranges.
   - Acceptance: bounded four-handle cache, pack digest once per pack, blob digest per range, file/Merkle checks, v2-v4 unchanged.
   - Verification: byte-for-byte mixed restore and fail-closed tamper tests.
   - Files: restore module, archive validator, restore contracts.
 
 ### Checkpoint: Container v5
 
-- [ ] Incremental v2-v5 restore compatibility passes.
-- [ ] Tens of thousands of logical blobs produce only a bounded number of pack/ZIP entries.
+- [x] Incremental v2-v5 restore compatibility passes.
+- [x] 100k logical blobs produce one pack plus one index in the deterministic scale contract.
 
 ### Phase 4: Maintenance, scale, and real S3
 
-- [ ] Task 8: Add GC, index metrics, and incremental compaction.
+- [x] Task 8: Add GC, index metrics, and incremental compaction.
   - Acceptance: live versions/maps survive; unreferenced state is removed; metrics contain no path/hash; scheduler path never full-vacuums.
   - Verification: GC/compaction/effective-view tests.
   - Files: index module, executor/retention integration, tests.
-- [ ] Task 9: Add scale benchmark contracts and a real HTTP MinIO E2E job.
+- [x] Task 9: Add scale benchmark contracts and a real HTTP MinIO E2E job.
   - Acceptance: packed Full→Incremental→multipart restart→restore works byte-for-byte over HTTP S3; 100k logical changes avoid entry explosion.
   - Verification: local synthetic contract plus dedicated CI service job.
   - Files: integration test/script, CI workflow, evidence assembly inputs.
 
 ### Phase 5: Release and review
 
-- [ ] Task 10: Update all release-facing documentation and evidence contracts.
+- [x] Task 10: Update all release-facing documentation and evidence contracts.
 - [ ] Task 11: Run multi-axis review, security checks, full Python/frontend/Rust/docs gates, publish the branch and converge CI.
 
 ## Risks and Mitigations

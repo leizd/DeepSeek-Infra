@@ -14,11 +14,11 @@ DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines
 
 ## 4.4.12 at a glance
 
-- Immutable chunk maps are referenced by each effective snapshot, so unchanged large-file maps survive arbitrarily many incremental layers without copying millions of chunk rows.
-- Exact, immediate-parent lookup reuses chunks across files and reuses renamed or copied whole files with zero payload bytes; no historical dependency edge or remote plaintext hash index is introduced.
-- `incremental-v4` stores verified parent byte ranges. Restore prepares every PUT against an immutable parent view before applying tombstones and atomic replacements, while v2/v3 `parentOrdinal` decoding remains supported.
-- A local-only Bloom filter eliminates definite misses, but only batched SQLite matches on SHA-256 plus length can authorize reuse. Corruption can reduce deduplication, never correctness.
-- The Rust helper scans JSONL batches in one process and telemetry reports actual Rust/Python fallback counts. S3 multipart convergence now requires both the exact digest metadata and exact object size.
+- Index v3 stores immutable content-addressed file versions, Full checkpoints, per-incremental PUT/DELETE operations, and one current effective view guarded by an atomic head. Incremental index growth follows the changed set instead of copying the full workspace view.
+- `incremental-v5` streams every unmatched CDC payload and whole-file payload up to 16 MiB into immutable snapshot-local packs targeting 64 MiB. Larger whole files remain typed standalone payloads; packs never add cross-snapshot dependencies.
+- Restore verifies the encrypted object, Pack digest, Blob range digest, reconstructed File digest, and Snapshot Merkle root. At most four pack handles remain open, and legacy incremental v2-v4 chains remain restorable.
+- The Rust JSONL scanner is a persistent bounded worker pool. Python limits it by estimated working set rather than logical file size and falls back per file on native failures.
+- Privacy-safe packing/index metrics, 100k-file scale contracts, thresholded incremental compaction, and a real HTTP MinIO Full→v5→Restore CI gate make the scale claims executable.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.

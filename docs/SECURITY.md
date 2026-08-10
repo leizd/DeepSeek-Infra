@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.11。
+适用版本：v4.4.12。
 
 ## 威胁模型
 
@@ -16,6 +16,8 @@
 > 八类核心威胁及其缓解实现、测试和残余风险逐条映射在 [THREAT_MODEL.md](THREAT_MODEL.md)；攻防回归可离线复跑：`python evals/runners/run_tool_eval.py`。
 
 关键边界索引：`fetch_url` 的 SSRF 防护会拦截内网、私有/回环/链路本地地址与云元数据地址 `169.254.169.254`；本地鉴权通过 `HttpOnly` `auth_token` Cookie 下发和校验。详细规则分别见“本地鉴权”与“本地工具调用与 URL 精读”。
+
+4.4.12 的 Backup Pack Index 与内容摘要只存在于 Age 认证密文和可信本地 `.backup-index`；恢复对 Pack Path、Offset/Length、Pack/Blob/File/Merkle 摘要逐层 Fail Closed。Pack 不跨 Snapshot 引用，也不引入云端 Chunk CAS、Convergent Encryption 或远端明文 Hash Index。
 
 ## 本地鉴权
 

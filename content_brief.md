@@ -1,7 +1,7 @@
-# DeepSeek Infra 项目介绍 PPT · 内容简报（Content Brief）
+# DeepSeek Infra 项目介绍 PPT · 历史内容简报（Content Brief）
 
 > 调研员：内容调研员_ContentBrief ｜ 所有事实与数字均来自仓库文件原文，逐条标注来源。
-> 当前版本：**v4.0.3**（来源：README.md 徽章行、docs/IMPLEMENTATION_STATUS.md 第 8 行、docs/ARCHITECTURE.md 第 8 行）
+> 历史基线版本：**v4.0.3**。本文件保留当时的演示数字，不代表当前 4.4.12 发布面；当前事实以 README、VERSION、IMPLEMENTATION_STATUS 与 release Evidence 为准。
 
 ---
 
@@ -21,7 +21,7 @@ DeepSeek Infra 是一个**本地优先的 Agentic AI 基础设施平台**——�
 
 | 数字 | 含义 | 来源 |
 | --- | --- | --- |
-| 4.0.3 | 当前版本号 | README.md 徽章 / IMPLEMENTATION_STATUS.md |
+| 4.0.3 | 本简报的历史基线版本号 | 当时的 README.md 徽章 / IMPLEMENTATION_STATUS.md |
 | 13 个 | 核心基础设施模块（另加 #10.5 Memory 与 #14 Rust Core Hybrid Runtime） | README.md 模块表 / IMPLEMENTATION_STATUS.md |
 | 17 个 | 本地工具经 MCP 暴露（搜索、抓取、文件检索、Python 计算、图表、思维导图、PPT/Word/PDF 生成、记忆、提醒等） | README.md 第 171 行 / docs/DEMO.md |
 | 2 个 | 模型：`deepseek-v4-pro`（默认）与 `deepseek-v4-flash` | README.md 第 135 行 |
