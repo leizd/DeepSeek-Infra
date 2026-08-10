@@ -248,7 +248,11 @@ def execute_run(
         index_available = _index_available()
         contributor_schemas: dict[str, int] = {}
         for item in contributor_plan.get("contributors") or []:
-            if isinstance(item, dict):
+            # Only the selected contributors participate in the snapshot, so
+            # their schema digest must match what the builder attests in the
+            # manifest. Including excluded contributors would make every
+            # force-full schema comparison mismatched.
+            if isinstance(item, dict) and item.get("status") == "selected":
                 contributor_schemas[str(item.get("id") or "")] = int(item.get("schemaVersion") or 0)
         selected = backup_incremental.select_snapshot_plan(
             policy=policy,

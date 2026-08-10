@@ -169,7 +169,14 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
         assert first["phase"] == "complete", first.get("error")
         assert first["snapshotKind"] == "full"
 
-        (config.PROJECTS_DIR / "proj-a" / "plan.bin").write_bytes(b"project-plan-v2" + b"x" * 2048)
+        # The changed file must be large and moderately compressible: the
+        # adaptive-full delta ratio divides the real packed archive bytes by the
+        # changed logical bytes, so a tiny change always looks more expensive
+        # than the fixed manifest/ops/pack overhead. Roughly 10:1 compression
+        # (mostly a repeated pattern plus random tail) keeps the per-entry
+        # compression-ratio guard below 100 while making the delta cheap.
+        changed = bytes(range(256)) * 3686 + random.Random(3).randbytes(100 * 1024)
+        (config.PROJECTS_DIR / "proj-a" / "plan.bin").write_bytes(changed)
         config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"after"}]}', encoding="utf-8")
         second = _claim_and_run(policy, now=first_now + timedelta(days=1))
         assert second["phase"] == "complete", second.get("error")
@@ -199,7 +206,7 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
         assert completed["phase"] == "complete"
 
         # The selected project is byte-for-byte identical to the I1 snapshot.
-        assert (config.PROJECTS_DIR / "proj-a" / "plan.bin").read_bytes() == b"project-plan-v2" + b"x" * 2048
+        assert (config.PROJECTS_DIR / "proj-a" / "plan.bin").read_bytes() == changed
         # Unselected contributors are never mutated.
         assert config.MEMORY_FILE.read_text(encoding="utf-8") == '{"items":[{"id":"m1","text":"after"}]}'
     finally:
