@@ -214,9 +214,79 @@ jobs:
           python scripts/check_npm_audit.py artifacts/npm-audit.json
       - name: Stateless MCP npm audit (high)
         run: npm audit --prefix stateless-mcp --audit-level=high
-      - run: pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt
+      - run: pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt -r requirements-s3-e2e.txt
       - run: bandit -r deepseek_infra --severity-level high -q
       - run: detect-secrets scan --baseline .secrets.baseline
+
+  packed-delta-s3-e2e:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+      MINIO_ROOT_USER: deepseekci
+      MINIO_ROOT_PASSWORD: ci-packed-delta-${{ github.run_id }}
+      AWS_ACCESS_KEY_ID: deepseekci
+      AWS_SECRET_ACCESS_KEY: ci-packed-delta-${{ github.run_id }}
+      DEEPSEEK_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      DEEPSEEK_TEST_S3_BUCKET: deepseek-packed-e2e
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+      - name: Start pinned MinIO server
+        run: >-
+          docker run --detach --name deepseek-minio
+          --publish 9000:9000
+          --env MINIO_ROOT_USER
+          --env MINIO_ROOT_PASSWORD
+          quay.io/minio/minio:RELEASE.2025-09-06T17-38-46Z
+          server /data --address ":9000"
+      - name: Wait for MinIO health endpoint
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs deepseek-minio
+          exit 1
+      - name: Run real HTTP packed incremental restore
+        run: >-
+          python scripts/run_packed_delta_s3_e2e.py
+          --out docs/evidence/packed-delta-s3-v$RELEASE_VERSION.json
+      - name: Stage packed-delta exact-merge Evidence
+        run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer packed-delta-s3-e2e
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-packed-delta-s3-e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-packed-delta-s3-e2e
+          path: artifacts/evidence-producer-packed-delta-s3-e2e
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packed-delta-s3-e2e
+          path: docs/evidence/packed-delta-s3-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Collect MinIO diagnostics
+        if: always()
+        run: docker logs deepseek-minio || true
 
   eval:
     needs:
@@ -881,6 +951,7 @@ jobs:
       - frontend-browser
       - stateless-mcp
       - stateless-mcp-failover
+      - packed-delta-s3-e2e
       - security
       - eval
       - release-readiness
@@ -1003,6 +1074,7 @@ jobs:
       - frontend-browser
       - stateless-mcp
       - stateless-mcp-failover
+      - packed-delta-s3-e2e
       - security
       - eval
       - docker
@@ -1028,6 +1100,7 @@ jobs:
       RC_CI_FRONTEND_BROWSER: ${{ needs['frontend-browser'].result }}
       RC_CI_STATELESS_MCP: ${{ needs['stateless-mcp'].result }}
       RC_CI_STATELESS_MCP_FAILOVER: ${{ needs['stateless-mcp-failover'].result }}
+      RC_CI_PACKED_DELTA_S3_E2E: ${{ needs['packed-delta-s3-e2e'].result }}
       RC_CI_SECURITY: ${{ needs.security.result }}
       RC_CI_EVAL: ${{ needs.eval.result }}
       RC_CI_DOCKER: ${{ needs.docker.result }}
@@ -1056,6 +1129,7 @@ jobs:
           test "$RC_CI_FRONTEND" = "success"
           test "$RC_CI_STATELESS_MCP" = "success"
           test "$RC_CI_STATELESS_MCP_FAILOVER" = "success"
+          test "$RC_CI_PACKED_DELTA_S3_E2E" = "success"
           test "$RC_CI_EVIDENCE_ASSEMBLY" = "success"
           test "$RC_CI_RELEASE_PACKAGE" = "success"
           mode=--report-only

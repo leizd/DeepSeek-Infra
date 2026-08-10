@@ -3,7 +3,7 @@
 Applies an ordered chain ``[F0, I1, ..., In]`` of decrypted, extracted backup
 packages into a complete workspace tree, verifying the domain-separated Merkle
 root at every snapshot transition. Whole-file deltas are restored by copying
-payload blobs; content-defined (``fastcdc-gear-v2``) files are reconstructed
+standalone blobs or verified pack ranges; content-defined files are reconstructed
 from parent ranges plus payload chunks. Any missing member or corrupt chunk
 fails closed.
 """
@@ -15,11 +15,13 @@ import json
 import os
 import shutil
 import uuid
+from collections import OrderedDict
 from pathlib import Path
-from typing import Any
+from pathlib import PurePosixPath
+from typing import Any, BinaryIO, Protocol
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_incremental
+from deepseek_infra.infra.workspace import backup_incremental, backup_pack
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -79,6 +81,117 @@ def _copy_full_tree(package_root: Path, output_root: Path) -> None:
 COPY_BUFFER_BYTES = 1024 * 1024
 
 
+class PayloadSource(Protocol):
+    def copy_to(self, output: BinaryIO, *, expected_sha256: str, expected_length: int) -> None: ...
+
+
+class FilePayloadSource:
+    def __init__(self, path: Path, *, offset: int = 0, label: str = "payload") -> None:
+        self.path = path
+        self.offset = int(offset)
+        self.label = label
+
+    def copy_to(self, output: BinaryIO, *, expected_sha256: str, expected_length: int) -> None:
+        if not self.path.is_file() or self.offset < 0:
+            raise AppError(f"Delta payload range is missing: {self.label}", code=ErrorCode.INVALID_PAYLOAD)
+        if self.offset + expected_length > self.path.stat().st_size:
+            raise AppError(f"Delta CDC chunk length mismatch: {self.label}", code=ErrorCode.INVALID_PAYLOAD)
+        with self.path.open("rb") as source:
+            _copy_verified_range(
+                source,
+                output,
+                offset=self.offset,
+                length=expected_length,
+                expected_sha256=expected_sha256,
+                label=self.label,
+            )
+
+
+class PackHandleCache:
+    """Verify packfiles once and retain at most four seekable handles."""
+
+    def __init__(self, package_root: Path, *, max_handles: int = 4) -> None:
+        self.package_root = package_root
+        self.max_handles = max(1, int(max_handles))
+        self.index = backup_pack.load_pack_index(package_root)
+        self._handles: OrderedDict[str, BinaryIO] = OrderedDict()
+
+    @property
+    def open_handle_count(self) -> int:
+        return len(self._handles)
+
+    def entry(self, blob_id: str) -> dict[str, Any]:
+        raw = self.index["entries"].get(blob_id)
+        if not isinstance(raw, dict):
+            raise AppError(f"Delta pack blob is missing: {blob_id}", code=ErrorCode.INVALID_PAYLOAD)
+        return raw
+
+    def handle(self, relative: str) -> BinaryIO:
+        existing = self._handles.pop(relative, None)
+        if existing is not None:
+            self._handles[relative] = existing
+            return existing
+        relative_path = PurePosixPath(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise AppError("Delta pack path is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        opened = self.package_root.joinpath(*relative_path.parts).open("rb")
+        self._handles[relative] = opened
+        while len(self._handles) > self.max_handles:
+            _, evicted = self._handles.popitem(last=False)
+            evicted.close()
+        return opened
+
+    def close(self) -> None:
+        for handle in self._handles.values():
+            handle.close()
+        self._handles.clear()
+
+    def __enter__(self) -> PackHandleCache:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        del exc_type, exc, traceback
+        self.close()
+
+
+class PackRangePayloadSource:
+    def __init__(self, cache: PackHandleCache, blob_id: str) -> None:
+        self.cache = cache
+        self.blob_id = blob_id
+
+    def copy_to(self, output: BinaryIO, *, expected_sha256: str, expected_length: int) -> None:
+        entry = self.cache.entry(self.blob_id)
+        length = int(entry["length"])
+        digest = str(entry["sha256"])
+        if length != expected_length or digest != expected_sha256:
+            raise AppError(f"Delta pack blob metadata mismatch: {self.blob_id}", code=ErrorCode.INVALID_PAYLOAD)
+        source = self.cache.handle(str(entry["pack"]))
+        _copy_verified_range(
+            source,
+            output,
+            offset=int(entry["offset"]),
+            length=length,
+            expected_sha256=digest,
+            label=self.blob_id,
+        )
+
+
+def _standalone_path(package_root: Path, relative: str) -> Path:
+    normalized = PurePosixPath(relative)
+    if normalized.is_absolute() or ".." in normalized.parts:
+        raise AppError("Delta payload path is invalid", code=ErrorCode.INVALID_PAYLOAD)
+    return package_root.joinpath(*normalized.parts)
+
+
+def _payload_source(package_root: Path, raw_ref: Any, cache: PackHandleCache | None) -> PayloadSource:
+    kind, locator = backup_pack.parse_payload_ref(raw_ref)
+    if kind == "pack-range":
+        if cache is None:
+            raise AppError("Delta pack index is missing", code=ErrorCode.INVALID_PAYLOAD)
+        return PackRangePayloadSource(cache, locator)
+    return FilePayloadSource(_standalone_path(package_root, locator), label=locator)
+
+
 def _chunk_ranges_for(parent_path: Path, protocol: str) -> list[tuple[int, int]]:
     with parent_path.open("rb") as parent:
         chunks = backup_incremental.chunk_stream(
@@ -96,20 +209,43 @@ def _parent_path(output_root: Path, logical_path: str) -> Path:
     return path
 
 
-def _materialize_put(package_root: Path, parent_root: Path, target: Path, put: dict[str, Any], *, chunk_protocol: str) -> None:
+def _materialize_put(
+    package_root: Path,
+    parent_root: Path,
+    target: Path,
+    put: dict[str, Any],
+    *,
+    chunk_protocol: str,
+    payload_cache: PackHandleCache | None = None,
+) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     storage = str(put.get("storage") or "whole")
     if storage == "cdc":
-        _materialize_cdc(parent_root, package_root, target, put, chunk_protocol=chunk_protocol)
+        _materialize_cdc(
+            parent_root,
+            package_root,
+            target,
+            put,
+            chunk_protocol=chunk_protocol,
+            payload_cache=payload_cache,
+        )
     elif storage == "whole":
-        ref = str(put.get("payloadRef") or "")
-        source = package_root / ref
-        if not source.is_file():
-            raise AppError(f"Delta payload blob is missing: {ref}", code=ErrorCode.INVALID_PAYLOAD)
-        shutil.copyfile(source, target)
+        source = _payload_source(package_root, put.get("payloadRef"), payload_cache)
+        with target.open("wb") as output:
+            source.copy_to(
+                output,
+                expected_sha256=str(put.get("sha256") or ""),
+                expected_length=int(put.get("size") or 0),
+            )
     elif storage == "parent-file":
         parent_path = _parent_path(parent_root, str(put.get("parentPath") or ""))
-        shutil.copyfile(parent_path, target)
+        source = FilePayloadSource(parent_path, label=str(put.get("parentPath") or ""))
+        with target.open("wb") as output:
+            source.copy_to(
+                output,
+                expected_sha256=str(put.get("sha256") or ""),
+                expected_length=int(put.get("size") or 0),
+            )
     else:
         raise AppError(f"Unsupported delta storage: {storage}", code=ErrorCode.INVALID_PAYLOAD)
     expected = str(put.get("sha256") or "")
@@ -139,6 +275,7 @@ def _materialize_cdc(
     put: dict[str, Any],
     *,
     chunk_protocol: str,
+    payload_cache: PackHandleCache | None = None,
 ) -> None:
     logical_path = str(put["path"])
     chunks = put.get("chunks")
@@ -163,8 +300,11 @@ def _materialize_cdc(
                     offset, chunk_length = parent_ranges[raw_ordinal]
                     if chunk_length != length:
                         raise AppError(f"Delta CDC parent chunk length mismatch: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
-                    with parent_path.open("rb") as parent:
-                        _copy_verified_range(parent, output, offset=offset, length=length, expected_sha256=expected, label=label)
+                    FilePayloadSource(parent_path, offset=offset, label=label).copy_to(
+                        output,
+                        expected_sha256=expected,
+                        expected_length=length,
+                    )
                 elif source_kind == "parent-range":
                     parent_path = _parent_path(parent_root, str(chunk.get("parentPath") or ""))
                     raw_offset = chunk.get("offset")
@@ -173,15 +313,14 @@ def _materialize_cdc(
                     offset = raw_offset
                     if offset + length > parent_path.stat().st_size:
                         raise AppError(f"Delta CDC parent range exceeds its file: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
-                    with parent_path.open("rb") as parent:
-                        _copy_verified_range(parent, output, offset=offset, length=length, expected_sha256=expected, label=label)
+                    FilePayloadSource(parent_path, offset=offset, label=label).copy_to(
+                        output,
+                        expected_sha256=expected,
+                        expected_length=length,
+                    )
                 else:
-                    ref = str(chunk.get("payloadRef") or "")
-                    source = package_root / ref
-                    if not source.is_file():
-                        raise AppError(f"Delta CDC payload chunk is missing: {ref}", code=ErrorCode.INVALID_PAYLOAD)
-                    with source.open("rb") as payload:
-                        _copy_verified_range(payload, output, offset=0, length=length, expected_sha256=expected, label=label)
+                    source = _payload_source(package_root, chunk.get("payloadRef"), payload_cache)
+                    source.copy_to(output, expected_sha256=expected, expected_length=length)
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, target)
@@ -239,7 +378,10 @@ def materialize_chain(package_roots: list[Path], output_root: Path) -> dict[str,
         # single tombstone. This makes delete+copy, rename and file swaps safe.
         prepared_root = output_root / f".delta-prepared-{uuid.uuid4().hex}"
         prepared_root.mkdir(parents=True, exist_ok=False)
+        payload_cache: PackHandleCache | None = None
         try:
+            if (package_root / backup_pack.PACK_INDEX_PATH).is_file():
+                payload_cache = PackHandleCache(package_root)
             for put in ops.get("put") or []:
                 if not isinstance(put, dict):
                     raise AppError("Delta put entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
@@ -249,6 +391,7 @@ def materialize_chain(package_roots: list[Path], output_root: Path) -> dict[str,
                     prepared_root / str(put["path"]),
                     put,
                     chunk_protocol=_chunk_protocol(manifest),
+                    payload_cache=payload_cache,
                 )
             for delete in ops.get("delete") or []:
                 if not isinstance(delete, dict):
@@ -263,6 +406,8 @@ def materialize_chain(package_roots: list[Path], output_root: Path) -> dict[str,
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(prepared_root / str(put["path"]), target)
         finally:
+            if payload_cache is not None:
+                payload_cache.close()
             shutil.rmtree(prepared_root, ignore_errors=True)
         current = backup_incremental.apply_delta_ops(
             current,

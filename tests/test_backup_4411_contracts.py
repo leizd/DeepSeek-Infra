@@ -278,24 +278,37 @@ def test_broken_legacy_index_migration_marks_every_scope_stale(tmp_settings: Pat
             files=[file],
             chunk_protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
         )
-    backup_incremental.record_committed_snapshot(
-        target_id="target",
-        policy_id="orphan",
-        backup_id="I1",
-        parent_backup_id="missing",
-        base_backup_id="missing",
-        chain_depth=1,
-        root_digest=backup_incremental.snapshot_root([]),
-        files=[],
-        chunk_protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
-    )
     conflict_map_id = backup_incremental.chunk_map_id(
         protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
         file_size=conflicting.size,
         file_sha256=conflicting.sha256,
     )
     with sqlite3.connect(backup_incremental.INDEX_DB) as connection:
+        connection.execute(
+            """
+            INSERT INTO snapshot_lineages
+            (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth,
+             root_digest, committed_at, scope_digest, recipient_set_digest, schema_digest,
+             chunk_protocol, full_committed_at, logical_bytes)
+            VALUES ('target', 'orphan', 'I1', 'missing', 'missing', 1, ?,
+                    '2026-01-01T00:00:00Z', '', '', '', ?, NULL, 0)
+            """,
+            (backup_incremental.snapshot_root([]), backup_incremental.CURRENT_CDC_PROTOCOL),
+        )
+        connection.executemany(
+            """
+            INSERT INTO snapshot_files
+            (target_id, policy_id, backup_id, contributor_id, logical_path, size, sha256)
+            VALUES ('target', ?, 'F0', 'local', ?, 4, ?)
+            """,
+            (
+                ("unknown", unknown.logical_path, unknown.sha256),
+                ("invalid", invalid.logical_path, invalid.sha256),
+                ("conflicting", conflicting.logical_path, conflicting.sha256),
+            ),
+        )
         connection.execute("DELETE FROM index_meta WHERE key = ?", (backup_incremental.INDEX_SCHEMA_KEY,))
+        connection.execute("DELETE FROM index_meta WHERE key = ?", (backup_incremental.STATE_SCHEMA_KEY,))
         connection.executemany(
             "INSERT INTO snapshot_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -745,6 +758,14 @@ def test_legacy_chunk_migration_and_reference_gc(tmp_settings: Path) -> None:
         chunk_protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
     )
     with backup_incremental._connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO snapshot_files
+            (target_id, policy_id, backup_id, contributor_id, logical_path, size, sha256)
+            VALUES ('target', 'policy', 'F0', 'local', ?, ?, ?)
+            """,
+            (file.logical_path, file.size, file.sha256),
+        )
         connection.execute("DELETE FROM index_meta WHERE key = ?", (backup_incremental.INDEX_SCHEMA_KEY,))
         connection.execute("DELETE FROM index_meta WHERE key = ?", (backup_incremental.STATE_SCHEMA_KEY,))
         connection.execute(

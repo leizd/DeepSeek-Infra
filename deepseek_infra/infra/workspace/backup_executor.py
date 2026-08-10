@@ -1,4 +1,4 @@
-"""Scheduled backup run executor (4.4.7).
+"""Scheduled backup run executor (4.4.12).
 
 Drives a claimed run through its phase state machine. The first attempt freezes
 a :class:`backup_run_plan` for the schedule slot; later retries reuse that plan
@@ -55,7 +55,7 @@ def _record_committed_index(
     package: Any,
     run_plan: dict[str, Any],
     policy: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any]:
     """Persist a committed snapshot into the rebuildable index (best effort)."""
     try:
         manifest = getattr(package, "manifest", None) or {}
@@ -127,9 +127,11 @@ def _record_committed_index(
             logical_bytes=sum(int(item.size) for item in effective),
             **common,
         )
+        return backup_incremental.index_metrics(target_id, policy_id)
     except Exception:
         # Index is a performance cache; never fail the run on index errors.
         backup_incremental.mark_index_stale(target_id, policy_id, "snapshot-index-commit-failed")
+        return {"status": "stale"}
 
 
 def _retry_section(policy: dict[str, Any]) -> dict[str, Any]:
@@ -470,7 +472,7 @@ def execute_run(
             now=guard.now(),
         )
         # Successful commit: persist index lineage (best effort), then clear plan.
-        _record_committed_index(
+        committed_index = _record_committed_index(
             target_id=target_id,
             policy_id=policy_id,
             backup_id=str(published.receipt.get("backupId") or package.backup_id),
@@ -484,6 +486,8 @@ def execute_run(
             "phase": "complete",
             "backupId": str(published.receipt.get("backupId") or package.backup_id),
             "filename": filename,
+            "packing": (getattr(package, "manifest", None) or {}).get("packing") or {},
+            "index": committed_index,
         }
     except AppError as exc:
         message = str(exc)

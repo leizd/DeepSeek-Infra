@@ -1,4 +1,4 @@
-"""Scheduled backup package construction (4.4.5).
+"""Scheduled backup package construction (4.4.12).
 
 Builds a full workspace backup for a durable policy without any browser or
 user secret in the loop: the contributor plan is frozen, the workspace is
@@ -22,7 +22,15 @@ from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_chunk_engine, backup_incremental, backup_mirror, backup_unattended, backups, mutation_gate
+from deepseek_infra.infra.workspace import (
+    backup_chunk_engine,
+    backup_incremental,
+    backup_mirror,
+    backup_pack,
+    backup_unattended,
+    backups,
+    mutation_gate,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,9 +279,12 @@ def _build_candidate(
             )
             (staging / "delta").mkdir(exist_ok=True)
             payload_dir = staging / "payload" / "files"
-            payload_dir.mkdir(parents=True, exist_ok=True)
             payload_files: list[dict[str, Any]] = []
-            payload_by_sha: dict[str, str] = {}
+            payload_by_digest: dict[tuple[str, int], dict[str, str]] = {}
+            pack_writer: backup_pack.PackWriter | None = None
+            logical_payload_blobs = 0
+            raw_payload_bytes = 0
+            standalone_blobs = 0
             same_file_chunks_reused = 0
             cross_file_chunks_reused = 0
             whole_files_parent_reused = 0
@@ -410,51 +421,54 @@ def _build_candidate(
                         for index, chunk in enumerate(described):
                             if chunk["source"] != "payload":
                                 continue
+                            logical_payload_blobs += 1
                             chunk_sha = str(chunk.get("sha256") or "")
-                            existing_ref = payload_by_sha.get(chunk_sha)
+                            record = current_chunks[index]
+                            payload_key = (chunk_sha, record.length)
+                            existing_ref = payload_by_digest.get(payload_key)
                             if existing_ref is not None:
                                 chunk["payloadRef"] = existing_ref
                                 continue
-                            record = current_chunks[index]
-                            dest = payload_dir / f"{len(payload_files):06d}"
                             handle.seek(record.offset)
-                            remaining = record.length
-                            with dest.open("wb") as output:
-                                while remaining:
-                                    block = handle.read(min(1024 * 1024, remaining))
-                                    if not block:
-                                        raise AppError("Workspace file was truncated during CDC staging", code=ErrorCode.INVALID_REQUEST, status=409)
-                                    output.write(block)
-                                    remaining -= len(block)
-                            payload_files.append(
-                                {
-                                    "path": f"payload/files/{dest.name}",
-                                    "size": record.length,
-                                    "sha256": chunk_sha,
-                                }
+                            if pack_writer is None:
+                                pack_writer = backup_pack.PackWriter(staging)
+                            ref = pack_writer.append(
+                                handle,
+                                expected_length=record.length,
+                                expected_sha256=chunk_sha,
                             )
-                            payload_by_sha[chunk_sha] = f"payload/files/{dest.name}"
-                            chunk["payloadRef"] = f"payload/files/{dest.name}"
+                            raw_payload_bytes += record.length
+                            payload_by_digest[payload_key] = ref
+                            chunk["payloadRef"] = ref
                     put["storage"] = "cdc"
                     put["chunks"] = described
                     put.pop("payloadRef", None)
                     current_chunk_records.extend(current_chunks)
                     continue
-                existing = payload_by_sha.get(blob_sha)
+                logical_payload_blobs += 1
+                payload_size = int(put.get("size") or 0)
+                payload_key = (blob_sha, payload_size)
+                existing = payload_by_digest.get(payload_key)
                 if existing is not None:
                     put["payloadRef"] = existing
                     continue
-                dest = payload_dir / f"{len(payload_files):06d}"
-                shutil.copyfile(src, dest)
-                payload_files.append(
-                    {
-                        "path": f"payload/files/{dest.name}",
-                        "size": dest.stat().st_size,
-                        "sha256": blob_sha,
-                    }
-                )
-                payload_by_sha[blob_sha] = f"payload/files/{dest.name}"
-                put["payloadRef"] = f"payload/files/{dest.name}"
+                if payload_size <= backup_pack.WHOLE_FILE_PACK_THRESHOLD:
+                    if pack_writer is None:
+                        pack_writer = backup_pack.PackWriter(staging)
+                    with src.open("rb") as source:
+                        ref = pack_writer.append(source, expected_length=payload_size, expected_sha256=blob_sha)
+                else:
+                    payload_dir.mkdir(parents=True, exist_ok=True)
+                    dest = payload_dir / f"{standalone_blobs:06d}"
+                    shutil.copyfile(src, dest)
+                    relative = f"payload/files/{dest.name}"
+                    payload_files.append({"path": relative, "size": dest.stat().st_size, "sha256": blob_sha})
+                    ref = {"kind": "standalone", "path": relative}
+                    standalone_blobs += 1
+                raw_payload_bytes += payload_size
+                payload_by_digest[payload_key] = ref
+                put["payloadRef"] = ref
+            pack_files = pack_writer.delta_files() if pack_writer is not None else []
             # Serialize the delta manifest only after every payload reference is
             # allocated so operations.json carries the final payloadRef paths.
             operations = backups._stable_json(delta)
@@ -463,17 +477,21 @@ def _build_candidate(
             manifest["deltaFiles"] = [
                 {"path": "delta/operations.json", "size": len(operations), "sha256": hashlib.sha256(operations).hexdigest()},
                 *payload_files,
+                *pack_files,
             ]
             # True delta storage: drop the full workspace copies so the archive
             # carries only the changed payloads plus the operations manifest.
             if (staging / "payload").is_dir():
                 for entry in list((staging / "payload").iterdir()):
-                    if entry.name != "files":
+                    if entry.name not in {"files", "packs"}:
                         shutil.rmtree(entry, ignore_errors=True)
+                for retained in (staging / "payload" / "files", staging / "payload" / "packs"):
+                    if retained.is_dir() and not any(retained.iterdir()):
+                        retained.rmdir()
             for auxiliary_dir in ("migration", "frontend"):
                 shutil.rmtree(staging / auxiliary_dir, ignore_errors=True)
             snapshot_meta = {
-                "format": "incremental-v4",
+                "format": "incremental-v5",
                 "chunkProtocol": backup_incremental.CURRENT_CDC_PROTOCOL,
                 "kind": "incremental",
                 "lineageId": lineage_id or parent_backup_id,
@@ -487,7 +505,7 @@ def _build_candidate(
             manifest["snapshot"] = snapshot_meta
             manifest["snapshotKind"] = "incremental"
             logical_changed_bytes = sum(int(item.get("size") or 0) for item in delta["put"])
-            physical_payload_bytes = sum(int(item.get("size") or 0) for item in payload_files)
+            physical_payload_bytes = raw_payload_bytes
             payload_chunks_written = sum(1 for put in delta["put"] for chunk in (put.get("chunks") or []) if chunk.get("source") == "payload")
             savings = {
                 "logicalBytes": sum(int(item.size) for item in records),
@@ -507,9 +525,29 @@ def _build_candidate(
                 "payloadBytes": physical_payload_bytes,
                 "dedupRatio": round(parent_reuse_bytes / logical_changed_bytes, 4) if logical_changed_bytes else 0.0,
             }
+            pack_index = pack_writer.finalize() if pack_writer is not None else {"packs": [], "entries": {}}
+            pack_count = len(pack_index["packs"])
+            packed_blobs = len(pack_index["entries"])
+            packing = {
+                "logicalPayloadBlobs": logical_payload_blobs,
+                "standaloneBlobs": standalone_blobs,
+                "packCount": pack_count,
+                "packedBlobs": packed_blobs,
+                "rawPayloadBytes": raw_payload_bytes,
+                "packBytes": sum(int(item.get("size") or 0) for item in pack_index["packs"]),
+                "filesystemEntriesAvoided": max(0, packed_blobs - pack_count),
+                "zipEntriesAvoided": max(0, packed_blobs - pack_count),
+            }
             manifest["incrementalSavings"] = savings
             manifest["dedup"] = dedup
-            manifest["incrementalPerformance"] = {**scan_telemetry, **savings, "dedup": dedup, "lookup": lookup_metrics}
+            manifest["packing"] = packing
+            manifest["incrementalPerformance"] = {
+                **scan_telemetry,
+                **savings,
+                "dedup": dedup,
+                "lookup": lookup_metrics,
+                "packing": packing,
+            }
         elif snapshot_kind == "full" and large_file_mode == "cdc":
             # Full snapshots also chunk large files so the first incremental can
             # reuse parent chunks instead of re-uploading the whole file.

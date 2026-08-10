@@ -3,7 +3,7 @@
 Builds production incremental delta packages relative to a committed parent
 snapshot, attests trees with domain-separated Merkle roots, never emits
 deletion tombstones for unavailable contributors, and chunks large changed
-files with the pinned ``fastcdc-gear-v2`` protocol. Convergent encryption is
+files with the pinned ``fastcdc-gear-v3`` protocol. Convergent encryption is
 explicitly out of scope: chunk digests live only inside the encrypted package
 manifest and the local index.
 """
@@ -39,7 +39,7 @@ _LEAF_DOMAIN = b"\x00"
 _NODE_DOMAIN = b"\x01"
 
 # FastCDC protocol parameters (fixed for lineage stability). 4.4.10 introduced v3;
-# 4.4.11 keeps v3 while upgrading only the encrypted delta reference format.
+# 4.4.12 keeps v3 while upgrading only the encrypted delta container format.
 # v2 remains a first-class decoder because a committed 4.4.9 lineage may be
 # restored indefinitely. The v3 normalization deliberately makes boundaries
 # harder before the 2 MiB target and easier afterwards.
@@ -907,16 +907,64 @@ def _records_for_version_state(
     connection: sqlite3.Connection,
     state: dict[tuple[str, str], str],
 ) -> list[FileRecord]:
+    metadata = _version_metadata(connection, set(state.values()))
     records: list[FileRecord] = []
     for (contributor_id, logical_path), version_id in sorted(state.items()):
-        row = connection.execute(
-            "SELECT size, sha256 FROM file_versions WHERE file_version_id = ?",
-            (version_id,),
-        ).fetchone()
-        if row is None:
+        stored = metadata.get(version_id)
+        if stored is None:
             raise AppError("Snapshot state references a missing file version", code=ErrorCode.INTERNAL, status=500)
-        records.append(FileRecord(contributor_id, logical_path, int(row["size"]), str(row["sha256"])))
+        records.append(FileRecord(contributor_id, logical_path, stored[0], stored[1]))
     return records
+
+
+def _version_metadata(
+    connection: sqlite3.Connection,
+    version_ids: set[str],
+) -> dict[str, tuple[int, str, str | None]]:
+    metadata: dict[str, tuple[int, str, str | None]] = {}
+    selected = sorted(version_ids)
+    for start in range(0, len(selected), 500):
+        batch = selected[start : start + 500]
+        if not batch:
+            continue
+        placeholders = ",".join("?" for _ in batch)
+        rows = connection.execute(
+            f"SELECT file_version_id, size, sha256, chunk_map_id FROM file_versions WHERE file_version_id IN ({placeholders})",
+            batch,
+        ).fetchall()
+        metadata.update(
+            {
+                str(row["file_version_id"]): (
+                    int(row["size"]),
+                    str(row["sha256"]),
+                    str(row["chunk_map_id"]) if row["chunk_map_id"] is not None else None,
+                )
+                for row in rows
+            }
+        )
+    return metadata
+
+
+def _store_file_versions(
+    connection: sqlite3.Connection,
+    candidates: list[tuple[FileRecord, str | None]],
+) -> dict[tuple[str, str], str]:
+    rows: list[tuple[str, int, str, str | None]] = []
+    state: dict[tuple[str, str], str] = {}
+    expected: dict[str, tuple[int, str, str | None]] = {}
+    for file, map_id in candidates:
+        version_id = file_version_id(size=file.size, sha256=file.sha256, chunk_map_id=map_id)
+        rows.append((version_id, int(file.size), file.sha256, map_id))
+        state[(file.contributor_id, file.logical_path)] = version_id
+        expected[version_id] = (file.size, file.sha256, map_id)
+    connection.executemany(
+        "INSERT OR IGNORE INTO file_versions (file_version_id, size, sha256, chunk_map_id) VALUES (?, ?, ?, ?)",
+        rows,
+    )
+    stored = _version_metadata(connection, set(expected))
+    if stored != expected:
+        raise AppError("Immutable file version conflicts with stored index data", code=ErrorCode.INTERNAL, status=500)
+    return state
 
 
 def _legacy_snapshot_version_state(
@@ -1049,99 +1097,29 @@ def record_committed_snapshot(
     chunk_protocol: str = "",
     full_committed_at: str | None = None,
     logical_bytes: int = 0,
-) -> None:  # pragma: no cover - covered via tests calling lineage/protect paths
-    with _connect() as connection:
-        connection.execute(
-            """
-            INSERT OR REPLACE INTO snapshot_lineages
-            (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at,
-             scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, logical_bytes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                target_id,
-                policy_id,
-                backup_id,
-                parent_backup_id,
-                base_backup_id,
-                int(chain_depth),
-                root_digest,
-                _utc_iso(),
-                scope_digest,
-                recipient_set_digest,
-                schema_digest,
-                chunk_protocol,
-                full_committed_at,
-                int(logical_bytes),
-            ),
-        )
-        connection.execute(
-            "DELETE FROM snapshot_files WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
-            (target_id, policy_id, backup_id),
-        )
-        connection.executemany(
-            """
-            INSERT INTO snapshot_files
-            (target_id, policy_id, backup_id, contributor_id, logical_path, size, sha256)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (target_id, policy_id, backup_id, item.contributor_id, item.logical_path, int(item.size), item.sha256)
-                for item in files
-            ],
-        )
-        previous_state = _current_version_state(connection, target_id, policy_id)
-        incoming_state = {
-            (item.contributor_id, item.logical_path): _store_file_version(connection, item, map_id=None)
-            for item in files
-        }
-        connection.execute(
-            "DELETE FROM snapshot_file_ops WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
-            (target_id, policy_id, backup_id),
-        )
-        connection.executemany(
-            """
-            INSERT INTO snapshot_file_ops
-            (target_id, policy_id, backup_id, contributor_id, logical_path, op, file_version_id)
-            VALUES (?, ?, ?, ?, ?, 'PUT', ?)
-            """,
-            [
-                (target_id, policy_id, backup_id, key[0], key[1], version_id)
-                for key, version_id in incoming_state.items()
-                if parent_backup_id is None or previous_state.get(key) != version_id
-            ],
-        )
-        if parent_backup_id:
-            connection.executemany(
-                """
-                INSERT INTO snapshot_file_ops
-                (target_id, policy_id, backup_id, contributor_id, logical_path, op, file_version_id)
-                VALUES (?, ?, ?, ?, ?, 'DELETE', NULL)
-                """,
-                [(target_id, policy_id, backup_id, key[0], key[1]) for key in previous_state.keys() - incoming_state.keys()],
-            )
-        connection.execute(
-            "DELETE FROM current_effective_files WHERE target_id = ? AND policy_id = ?",
-            (target_id, policy_id),
-        )
-        connection.executemany(
-            """
-            INSERT INTO current_effective_files
-            (target_id, policy_id, contributor_id, logical_path, file_version_id)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            [(target_id, policy_id, key[0], key[1], version_id) for key, version_id in incoming_state.items()],
-        )
-        connection.execute(
-            """
-            INSERT INTO current_effective_heads (target_id, policy_id, backup_id, root_digest)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(target_id, policy_id)
-            DO UPDATE SET backup_id = excluded.backup_id, root_digest = excluded.root_digest
-            """,
-            (target_id, policy_id, backup_id, root_digest),
-        )
-        connection.commit()
+) -> None:  # pragma: no cover - compatibility wrapper exercised by contract tests
+    """Compatibility wrapper around the atomic v3 index commit.
+
+    Older tests and integrations call this lineage helper before attaching
+    chunk maps. It must not revive the legacy per-snapshot materialized tables.
+    """
+    commit_snapshot_index(
+        target_id=target_id,
+        policy_id=policy_id,
+        backup_id=backup_id,
+        parent_backup_id=parent_backup_id,
+        base_backup_id=base_backup_id,
+        chain_depth=chain_depth,
+        root_digest=root_digest,
+        files=files,
+        chunks=[],
+        scope_digest=scope_digest,
+        recipient_set_digest=recipient_set_digest,
+        schema_digest=schema_digest,
+        chunk_protocol=chunk_protocol or CURRENT_CDC_PROTOCOL,
+        full_committed_at=full_committed_at,
+        logical_bytes=logical_bytes,
+    )
 
 
 def index_is_healthy(target_id: str, policy_id: str) -> bool:
@@ -1449,31 +1427,26 @@ def commit_snapshot_index(
                 _assert_stored_chunk_map(connection, map_id=map_id, protocol=chunk_protocol, file=file, chunks=items)
                 map_ids[key] = map_id
 
+            previous_metadata = _version_metadata(connection, set(previous_state.values()))
+            reusable_by_digest: dict[tuple[int, str], tuple[str, str | None]] = {}
+            for version_id, (stored_size, stored_sha256, stored_map_id) in previous_metadata.items():
+                reusable_by_digest.setdefault((stored_size, stored_sha256), (version_id, stored_map_id))
             incoming_state: dict[tuple[str, str], str] = {}
+            version_candidates: list[tuple[FileRecord, str | None]] = []
             for file in files:
                 key = (file.contributor_id, file.logical_path)
                 candidate_map_id = map_ids.get(key)
                 if candidate_map_id is None:
                     previous_version = previous_state.get(key)
-                    previous = connection.execute(
-                        "SELECT size, sha256, chunk_map_id FROM file_versions WHERE file_version_id = ?",
-                        (previous_version,),
-                    ).fetchone() if previous_version else None
-                    if previous is not None and int(previous["size"]) == file.size and str(previous["sha256"]) == file.sha256:
+                    previous = previous_metadata.get(previous_version or "")
+                    if previous is not None and previous[0] == file.size and previous[1] == file.sha256:
                         incoming_state[key] = str(previous_version)
                         continue
-                    else:
-                        reusable = connection.execute(
-                            """
-                            SELECT chunk_map_id FROM file_versions
-                            WHERE size = ? AND sha256 = ?
-                            ORDER BY chunk_map_id IS NOT NULL DESC, file_version_id LIMIT 1
-                            """,
-                            (int(file.size), file.sha256),
-                        ).fetchone()
-                        if reusable is not None and reusable["chunk_map_id"] is not None:
-                            candidate_map_id = str(reusable["chunk_map_id"])
-                incoming_state[key] = _store_file_version(connection, file, map_id=candidate_map_id)
+                    reusable = reusable_by_digest.get((file.size, file.sha256))
+                    if reusable is not None:
+                        candidate_map_id = reusable[1]
+                version_candidates.append((file, candidate_map_id))
+            incoming_state.update(_store_file_versions(connection, version_candidates))
 
             connection.execute(
                 "DELETE FROM snapshot_file_ops WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
@@ -1580,7 +1553,100 @@ def record_snapshot_chunks(
     backup_id: str,
     chunks: list[ChunkRecord],
 ) -> None:
+    grouped: dict[tuple[str, str], list[ChunkRecord]] = {}
+    for item in chunks:
+        grouped.setdefault((item.contributor_id, item.logical_path), []).append(item)
     with _connect() as connection:
+        lineage = connection.execute(
+            "SELECT COALESCE(NULLIF(chunk_protocol, ''), ?) AS protocol FROM snapshot_lineages WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+            (CURRENT_CDC_PROTOCOL, target_id, policy_id, backup_id),
+        ).fetchone()
+        try:
+            state = _load_snapshot_version_state(connection, target_id, policy_id, backup_id)
+        except AppError:
+            state = {}
+        if lineage is not None and state:
+            protocol = str(lineage["protocol"])
+            selected = set(grouped)
+            if not chunks:
+                selected = {
+                    (str(row["contributor_id"]), str(row["logical_path"]))
+                    for row in connection.execute(
+                        """
+                        SELECT contributor_id, logical_path FROM snapshot_file_ops
+                        WHERE target_id = ? AND policy_id = ? AND backup_id = ? AND op = 'PUT'
+                        """,
+                        (target_id, policy_id, backup_id),
+                    ).fetchall()
+                }
+            metadata = _version_metadata(connection, {state[key] for key in selected if key in state})
+            replacements: dict[tuple[str, str], str] = {}
+            connection.commit()
+            connection.execute("BEGIN IMMEDIATE")
+            for key in selected:
+                version_id = state.get(key)
+                stored = metadata.get(version_id or "")
+                if stored is None:
+                    raise AppError("Chunk index references an unknown file", code=ErrorCode.INTERNAL, status=500)
+                file = FileRecord(key[0], key[1], stored[0], stored[1])
+                ordered = sorted(grouped.get(key, []), key=lambda item: item.chunk_ordinal)
+                map_id: str | None = None
+                if ordered:
+                    _validate_chunk_map(file, ordered)
+                    map_id = chunk_map_id(protocol=protocol, file_size=file.size, file_sha256=file.sha256)
+                    connection.execute(
+                        "INSERT OR IGNORE INTO chunk_maps (chunk_map_id, protocol, file_size, file_sha256, chunk_count) VALUES (?, ?, ?, ?, ?)",
+                        (map_id, protocol, file.size, file.sha256, len(ordered)),
+                    )
+                    connection.executemany(
+                        "INSERT OR IGNORE INTO chunk_map_chunks (chunk_map_id, ordinal, offset, length, chunk_sha256) VALUES (?, ?, ?, ?, ?)",
+                        [(map_id, item.chunk_ordinal, item.offset, item.length, item.chunk_sha256) for item in ordered],
+                    )
+                    _assert_stored_chunk_map(connection, map_id=map_id, protocol=protocol, file=file, chunks=ordered)
+                replacements[key] = _store_file_version(connection, file, map_id=map_id)
+            for key, replacement in replacements.items():
+                updated = connection.execute(
+                    """
+                    UPDATE snapshot_file_ops SET file_version_id = ?
+                    WHERE target_id = ? AND policy_id = ? AND backup_id = ?
+                      AND contributor_id = ? AND logical_path = ? AND op = 'PUT'
+                    """,
+                    (replacement, target_id, policy_id, backup_id, key[0], key[1]),
+                )
+                if updated.rowcount == 0:
+                    connection.execute(
+                        """
+                        INSERT INTO snapshot_file_ops
+                        (target_id, policy_id, backup_id, contributor_id, logical_path, op, file_version_id)
+                        VALUES (?, ?, ?, ?, ?, 'PUT', ?)
+                        """,
+                        (target_id, policy_id, backup_id, key[0], key[1], replacement),
+                    )
+            head = connection.execute(
+                "SELECT backup_id FROM current_effective_heads WHERE target_id = ? AND policy_id = ?",
+                (target_id, policy_id),
+            ).fetchone()
+            if head is not None and str(head["backup_id"]) == backup_id:
+                connection.executemany(
+                    """
+                    UPDATE current_effective_files SET file_version_id = ?
+                    WHERE target_id = ? AND policy_id = ? AND contributor_id = ? AND logical_path = ?
+                    """,
+                    [(replacement, target_id, policy_id, key[0], key[1]) for key, replacement in replacements.items()],
+                )
+            connection.execute(
+                "DELETE FROM snapshot_chunks WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+                (target_id, policy_id, backup_id),
+            )
+            connection.execute(
+                "DELETE FROM snapshot_chunk_refs WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+                (target_id, policy_id, backup_id),
+            )
+            connection.commit()
+            return
+
+        # Compatibility path for callers that only use this helper as an
+        # isolated chunk-map store without first recording a snapshot.
         connection.execute(
             "DELETE FROM snapshot_chunks WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
             (target_id, policy_id, backup_id),
@@ -1606,9 +1672,6 @@ def record_snapshot_chunks(
                 for item in chunks
             ],
         )
-        grouped: dict[tuple[str, str], list[ChunkRecord]] = {}
-        for item in chunks:
-            grouped.setdefault((item.contributor_id, item.logical_path), []).append(item)
         connection.execute(
             "DELETE FROM snapshot_chunk_refs WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
             (target_id, policy_id, backup_id),
@@ -2043,6 +2106,100 @@ def garbage_collect_chunk_maps(deleted_snapshots: list[tuple[str, str, str]]) ->
         "deletedFileVersions": versions_before - versions_after,
         "deletedChunkMaps": before - after,
     }
+
+
+def index_metrics(target_id: str, policy_id: str) -> dict[str, int | float]:
+    """Return aggregate storage efficiency without exposing paths or digests."""
+    with _connect() as connection:
+        head = connection.execute(
+            "SELECT backup_id FROM current_effective_heads WHERE target_id = ? AND policy_id = ?",
+            (target_id, policy_id),
+        ).fetchone()
+        backup_id = str(head["backup_id"]) if head is not None else ""
+        snapshot_ops = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM snapshot_file_ops WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+                (target_id, policy_id, backup_id),
+            ).fetchone()[0]
+        )
+        effective_files = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM current_effective_files WHERE target_id = ? AND policy_id = ?",
+                (target_id, policy_id),
+            ).fetchone()[0]
+        )
+        versions = int(
+            connection.execute(
+                """
+                SELECT COUNT(DISTINCT file_version_id) FROM (
+                    SELECT file_version_id FROM current_effective_files WHERE target_id = ? AND policy_id = ?
+                    UNION ALL
+                    SELECT file_version_id FROM snapshot_file_ops
+                    WHERE target_id = ? AND policy_id = ? AND file_version_id IS NOT NULL
+                )
+                """,
+                (target_id, policy_id, target_id, policy_id),
+            ).fetchone()[0]
+        )
+        chunk_maps = int(
+            connection.execute(
+                """
+                SELECT COUNT(DISTINCT v.chunk_map_id)
+                FROM file_versions v
+                WHERE v.chunk_map_id IS NOT NULL AND v.file_version_id IN (
+                    SELECT file_version_id FROM current_effective_files WHERE target_id = ? AND policy_id = ?
+                    UNION
+                    SELECT file_version_id FROM snapshot_file_ops
+                    WHERE target_id = ? AND policy_id = ? AND file_version_id IS NOT NULL
+                )
+                """,
+                (target_id, policy_id, target_id, policy_id),
+            ).fetchone()[0]
+        )
+        page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+        page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+        free_pages = int(connection.execute("PRAGMA freelist_count").fetchone()[0])
+    return {
+        "snapshotFileOps": snapshot_ops,
+        "effectiveFiles": effective_files,
+        "fileVersions": versions,
+        "chunkMaps": chunk_maps,
+        "dbBytes": page_count * page_size,
+        "freePageRatio": round(free_pages / page_count, 6) if page_count else 0.0,
+    }
+
+
+def maintain_snapshot_index(
+    target_id: str,
+    policy_id: str,
+    *,
+    minimum_db_bytes: int = 256 * 1024 * 1024,
+    minimum_free_page_ratio: float = 0.30,
+    maximum_pages: int = 1024,
+) -> dict[str, Any]:
+    """Run bounded incremental compaction outside the backup commit path."""
+    before = index_metrics(target_id, policy_id)
+    if int(before["dbBytes"]) <= int(minimum_db_bytes) or float(before["freePageRatio"]) <= float(minimum_free_page_ratio):
+        return {"status": "not-needed", "before": before, "after": before}
+    with _connect() as connection:
+        mode = int(connection.execute("PRAGMA auto_vacuum").fetchone()[0])
+        if mode != 2:
+            return {"status": "auto-vacuum-disabled", "before": before, "after": before}
+        head = connection.execute(
+            "SELECT backup_id, root_digest FROM current_effective_heads WHERE target_id = ? AND policy_id = ?",
+            (target_id, policy_id),
+        ).fetchone()
+        pages = max(1, min(int(maximum_pages), int(connection.execute("PRAGMA freelist_count").fetchone()[0])))
+        connection.execute(f"PRAGMA incremental_vacuum({pages})")
+        connection.commit()
+        if head is not None:
+            current = connection.execute(
+                "SELECT backup_id, root_digest FROM current_effective_heads WHERE target_id = ? AND policy_id = ?",
+                (target_id, policy_id),
+            ).fetchone()
+            if current is None or tuple(current) != tuple(head):
+                raise AppError("Index compaction changed the effective head", code=ErrorCode.INTERNAL, status=500)
+    return {"status": "compacted", "pagesRequested": pages, "before": before, "after": index_metrics(target_id, policy_id)}
 
 
 def receipt_lineage_fields(receipt: dict[str, Any]) -> dict[str, Any]:
