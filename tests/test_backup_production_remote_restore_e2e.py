@@ -73,6 +73,10 @@ def _seed_workspace() -> None:
     config.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     (config.PROJECTS_DIR / "proj-a").mkdir(parents=True, exist_ok=True)
     (config.PROJECTS_DIR / "proj-a" / "plan.bin").write_bytes(b"project-plan-v1")
+    # A large static file makes the adaptive-full delta-ratio decision cheap:
+    # the incremental candidate then carries only the small changed file, far
+    # below maxDeltaRatio, so the second run stays incremental.
+    (config.PROJECTS_DIR / "proj-a" / "static.bin").write_bytes(random.Random(7).randbytes(2 * 1024 * 1024))
     config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"before"}]}', encoding="utf-8")
 
 
