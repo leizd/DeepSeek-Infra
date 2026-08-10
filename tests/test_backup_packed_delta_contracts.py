@@ -261,6 +261,87 @@ def test_pack_ranges_restore_whole_and_cdc_payloads(tmp_path: Path) -> None:
     assert cdc_target.read_bytes() == combined
 
 
+def test_index_maintenance_migrates_legacy_db_to_auto_vacuum(tmp_path: Path, monkeypatch: Any) -> None:
+    import sqlite3 as _sqlite3
+
+    index_dir = tmp_path / ".backup-index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    legacy = index_dir / "index.db"
+    connection = _sqlite3.connect(legacy)
+    connection.execute("CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (backup_incremental.INDEX_SCHEMA_KEY, backup_incremental.INDEX_SCHEMA_VERSION))
+    connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (backup_incremental.STATE_SCHEMA_KEY, backup_incremental.STATE_SCHEMA_VERSION))
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(backup_incremental, "INDEX_DIR", index_dir)
+    monkeypatch.setattr(backup_incremental, "INDEX_DB", legacy)
+    connection = backup_incremental._connect()
+    try:
+        assert int(connection.execute("PRAGMA auto_vacuum").fetchone()[0]) == 0
+        connection.execute(
+            "INSERT INTO current_effective_heads (target_id, policy_id, backup_id, root_digest) VALUES (?, ?, ?, ?)",
+            ("target", "policy", "F0", "d" * 64),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    result = backup_incremental.maintain_snapshot_index(
+        "target",
+        "policy",
+        minimum_db_bytes=-1,
+        minimum_free_page_ratio=-1.0,
+        migrate=True,
+    )
+    assert result["status"] == "migrated-auto-vacuum"
+    connection = backup_incremental._connect()
+    try:
+        assert int(connection.execute("PRAGMA auto_vacuum").fetchone()[0]) == 2
+        head = connection.execute(
+            "SELECT backup_id, root_digest FROM current_effective_heads WHERE target_id = 'target' AND policy_id = 'policy'"
+        ).fetchone()
+        assert head is not None and tuple(head) == ("F0", "d" * 64)
+    finally:
+        connection.close()
+    assert not [path for path in index_dir.glob("index-maintenance-*.db")]
+
+
+def test_index_maintenance_migration_keeps_old_db_on_failure(tmp_path: Path, monkeypatch: Any) -> None:
+    import sqlite3 as _sqlite3
+
+    index_dir = tmp_path / ".backup-index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    legacy = index_dir / "index.db"
+    connection = _sqlite3.connect(legacy)
+    connection.execute("CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (backup_incremental.INDEX_SCHEMA_KEY, backup_incremental.INDEX_SCHEMA_VERSION))
+    connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (backup_incremental.STATE_SCHEMA_KEY, backup_incremental.STATE_SCHEMA_VERSION))
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(backup_incremental, "INDEX_DIR", index_dir)
+    monkeypatch.setattr(backup_incremental, "INDEX_DB", legacy)
+    with backup_incremental._connect() as connection:
+        connection.execute(
+            "INSERT INTO current_effective_heads (target_id, policy_id, backup_id, root_digest) VALUES (?, ?, ?, ?)",
+            ("target", "policy", "F0", "d" * 64),
+        )
+        connection.commit()
+    original_open = backup_incremental._open_index_db
+
+    def broken_open(path: object) -> object:
+        connection = original_open(path)  # type: ignore[arg-type]
+        connection.execute("INSERT INTO current_effective_heads (target_id, policy_id, backup_id, root_digest) VALUES ('other', 'policy', 'X', '0' * 64)")
+        connection.commit()
+        return connection
+
+    monkeypatch.setattr(backup_incremental, "_open_index_db", broken_open)
+    with pytest.raises(Exception):
+        backup_incremental.maintain_snapshot_index("target", "policy", minimum_db_bytes=-1, minimum_free_page_ratio=-1.0, migrate=True)
+    monkeypatch.setattr(backup_incremental, "_open_index_db", original_open)
+    # The old database is retained on failure and still reads its head.
+    with backup_incremental._connect() as connection:
+        assert connection.execute("SELECT backup_id FROM current_effective_heads WHERE target_id = 'target' AND policy_id = 'policy'").fetchone()["backup_id"] == "F0"
+
+
 def test_pack_and_blob_corruption_fail_closed(tmp_path: Path) -> None:
     package_root = tmp_path / "package"
     value = b"verified payload"

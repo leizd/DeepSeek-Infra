@@ -10,8 +10,10 @@ manifest and the local index.
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -556,7 +558,11 @@ def schema_digest(contributor_schemas: dict[str, int]) -> str:
 
 def _connect() -> sqlite3.Connection:
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(INDEX_DB)
+    return _open_index_db(INDEX_DB)
+
+
+def _open_index_db(path: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA auto_vacuum = INCREMENTAL")
@@ -2169,6 +2175,89 @@ def index_metrics(target_id: str, policy_id: str) -> dict[str, int | float]:
     }
 
 
+_MAINTENANCE_TABLE_ORDER = (
+    "snapshot_lineages",
+    "snapshot_files",
+    "snapshot_chunks",
+    "chunk_maps",
+    "chunk_map_chunks",
+    "snapshot_chunk_refs",
+    "file_versions",
+    "snapshot_file_ops",
+    "current_effective_files",
+    "current_effective_heads",
+    "index_health",
+    "index_meta",
+)
+
+
+def _migrate_index_db_auto_vacuum(target_id: str, policy_id: str, before: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild the index DB with incremental auto-vacuum enabled.
+
+    A legacy database created before the ``PRAGMA auto_vacuum = INCREMENTAL``
+    header cannot enable it in place without a full ``VACUUM``. Instead the
+    maintenance path builds a fresh database, copies the live state, verifies
+    the effective head and index schema, fsyncs and atomically swaps it in,
+    keeping the old file until every step succeeds.
+    """
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    new_path = INDEX_DIR / f"index-maintenance-{timestamp}.db"
+    try:
+        head_before: tuple[Any, ...] | None = None
+        connection = _connect()
+        try:
+            row = connection.execute(
+                "SELECT backup_id, root_digest FROM current_effective_heads WHERE target_id = ? AND policy_id = ?",
+                (target_id, policy_id),
+            ).fetchone()
+            head_before = tuple(row) if row is not None else None
+            connection.execute("PRAGMA wal_checkpoint(FULL)")
+        finally:
+            connection.close()
+        new_connection = _open_index_db(new_path)
+        try:
+            new_connection.execute("PRAGMA foreign_keys = OFF")
+            source = sqlite3.connect(INDEX_DB)
+            try:
+                source.row_factory = sqlite3.Row
+                for table in _MAINTENANCE_TABLE_ORDER:
+                    exists = source.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                        (table,),
+                    ).fetchone()
+                    if not exists:
+                        continue
+                    rows = source.execute(f"SELECT * FROM {table}").fetchall()
+                    if not rows:
+                        continue
+                    placeholders = ",".join("?" for _ in rows[0].keys())
+                    columns = ",".join(f'"{column}"' for column in rows[0].keys())
+                    new_connection.executemany(f"INSERT OR REPLACE INTO {table} ({columns}) VALUES ({placeholders})", [tuple(row) for row in rows])
+            finally:
+                source.close()
+            new_connection.execute("PRAGMA foreign_keys = ON")
+            new_connection.commit()
+            head_after = new_connection.execute(
+                "SELECT backup_id, root_digest FROM current_effective_heads WHERE target_id = ? AND policy_id = ?",
+                (target_id, policy_id),
+            ).fetchone()
+            if tuple(head_after) != head_before:
+                raise AppError("Index migration changed the effective head", code=ErrorCode.INTERNAL, status=500)
+            new_connection.execute("PRAGMA integrity_check")
+            new_connection.execute("PRAGMA wal_checkpoint(FULL)")
+            new_connection.execute("PRAGMA journal_mode = WAL")
+        finally:
+            new_connection.close()
+        # sqlite3 connections cycle through their C object; force-collect so no
+        # earlier ``with sqlite3.connect(...)`` reader still holds INDEX_DB open
+        # on Windows before the atomic swap.
+        gc.collect()
+        os.replace(new_path, INDEX_DB)
+    except Exception:
+        new_path.unlink(missing_ok=True)
+        raise
+    return {"status": "migrated-auto-vacuum", "before": before, "after": index_metrics(target_id, policy_id)}
+
 def maintain_snapshot_index(
     target_id: str,
     policy_id: str,
@@ -2176,15 +2265,23 @@ def maintain_snapshot_index(
     minimum_db_bytes: int = 256 * 1024 * 1024,
     minimum_free_page_ratio: float = 0.30,
     maximum_pages: int = 1024,
+    migrate: bool = False,
 ) -> dict[str, Any]:
     """Run bounded incremental compaction outside the backup commit path."""
     before = index_metrics(target_id, policy_id)
     if int(before["dbBytes"]) <= int(minimum_db_bytes) or float(before["freePageRatio"]) <= float(minimum_free_page_ratio):
         return {"status": "not-needed", "before": before, "after": before}
-    with _connect() as connection:
+    connection = _connect()
+    try:
         mode = int(connection.execute("PRAGMA auto_vacuum").fetchone()[0])
-        if mode != 2:
-            return {"status": "auto-vacuum-disabled", "before": before, "after": before}
+    finally:
+        connection.close()
+    if mode != 2:
+        if migrate and INDEX_DB.is_file():
+            return _migrate_index_db_auto_vacuum(target_id, policy_id, before)
+        return {"status": "auto-vacuum-disabled", "before": before, "after": before}
+    connection = _connect()
+    try:
         head = connection.execute(
             "SELECT backup_id, root_digest FROM current_effective_heads WHERE target_id = ? AND policy_id = ?",
             (target_id, policy_id),
@@ -2199,6 +2296,8 @@ def maintain_snapshot_index(
             ).fetchone()
             if current is None or tuple(current) != tuple(head):
                 raise AppError("Index compaction changed the effective head", code=ErrorCode.INTERNAL, status=500)
+    finally:
+        connection.close()
     return {"status": "compacted", "pagesRequested": pages, "before": before, "after": index_metrics(target_id, policy_id)}
 
 
