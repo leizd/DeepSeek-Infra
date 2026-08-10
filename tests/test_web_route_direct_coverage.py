@@ -184,6 +184,6 @@ def test_skills_thread_sensitive_actions_are_direct(monkeypatch: pytest.MonkeyPa
     endpoint = _endpoint(skills.create_skills_router(deps), "/api/skills")
     assert _json(_call(endpoint, {"action": "list"}))["skills"] == [{"id": "s1"}]
     assert _json(_call(endpoint, {"action": "run", "skillId": "s1"}))["skillId"] == "s1"
-    assert _json(_call(endpoint, {"action": "eval_report", "version": "4.4.12"}))["report"]["version"] == "4.4.12"
+    assert _json(_call(endpoint, {"action": "eval_report", "version": skills.APP_VERSION}))["report"]["version"] == skills.APP_VERSION
     assert _json(_call(endpoint, {"action": "security_review", "skillId": "s1"}))["review"]["skillId"] == "s1"
     assert _json(_call(endpoint, {"action": "security_review_pack", "packId": "p1"}))["review"]["packId"] == "p1"
