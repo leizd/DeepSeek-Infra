@@ -62,7 +62,9 @@ def _envelope(recipient: str) -> dict[str, object]:
         "conversations": [],
         "conflicts": [],
     }
-    body["digest"] = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+    body["digest"] = hashlib.sha256(
+        json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     return body
 
 

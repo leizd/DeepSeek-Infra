@@ -464,3 +464,65 @@ def test_layer_needed_payloads_boundaries() -> None:
     )
     assert layer_needed_payloads([baseline], [set()], 0) == (set(), set(), set())
     assert layer_needed_payloads([baseline], [set()], 1) == (set(), set(), set())
+
+
+def test_projection_private_edge_branches() -> None:
+    from deepseek_infra.infra.workspace.backup_projection import (
+        _count_parent_ranges,
+        _put_parent_dependencies,
+        _under_selected_project,
+        layer_needed_payloads,
+    )
+
+    # parent-file with no parentPath contributes no dependency.
+    assert _put_parent_dependencies({"storage": "parent-file"}) == set()
+    # CDC chunks that are not dicts or carry empty sources are skipped.
+    assert _put_parent_dependencies({"storage": "cdc", "path": "p", "chunks": [{"source": "parent"}]}) == {"p"}
+    assert _put_parent_dependencies({"storage": "cdc", "chunks": [{"source": "parent"}]}) == set()
+    assert _put_parent_dependencies({"storage": "cdc", "path": "p", "chunks": [{"source": "parent-range"}]}) == set()
+    assert _put_parent_dependencies({"storage": "cdc", "path": "p", "chunks": ["junk", {"source": "parent-range", "parentPath": "q"}]}) == {"q"}
+    # whole storage has no parent dependencies.
+    assert _put_parent_dependencies({"storage": "whole", "payloadRef": "x"}) == set()
+    # Projects paths with too few parts are never selected by project id.
+    assert _under_selected_project("payload/projects", frozenset({"p1"})) is False
+
+    blob_sha = _sha(90)
+    f0 = [_rec("projects", "payload/projects/p1/a.bin", 4, _sha(91))]
+    f1 = [
+        _rec("projects", "payload/projects/p1/a.bin", 4, _sha(91)),
+        _rec("projects", "payload/projects/p1/cdc.bin", 4, blob_sha),
+        _rec("projects", "payload/projects/p1/whole.bin", 4, _sha(92)),
+    ]
+    ops = backup_incremental.diff_trees(f0, f1, successful_contributors={"projects"})
+    for put in ops["put"]:
+        if put["path"] == "payload/projects/p1/cdc.bin":
+            put["storage"] = "cdc"
+            put["chunks"] = [
+                {"source": "payload", "payloadRef": {"kind": "standalone", "path": "payload/files/000000"}, "length": 4, "sha256": blob_sha},
+                {"source": "payload", "payloadRef": {"kind": "pack-range", "blobId": "blob_000000"}, "length": 4, "sha256": blob_sha},
+            ]
+            put.pop("payloadRef", None)
+        elif put["path"] == "payload/projects/p1/whole.bin":
+            put["storage"] = "whole"
+            put["payloadRef"] = {"kind": "pack-range", "blobId": "blob_missing"}
+    pack_index = {"schemaVersion": 1, "packs": [{"path": "payload/packs/0000.pack", "size": 8, "sha256": _sha(93)}], "entries": {"blob_000000": {"pack": "payload/packs/0000.pack", "offset": 0, "length": 4, "sha256": blob_sha}}}
+    baseline = ChainPackage(snapshot_kind="full", files=tuple(f0), root_digest=backup_incremental.snapshot_root(f0), contributor_ids=frozenset({"projects"}))
+    incremental = ChainPackage(snapshot_kind="incremental", files=tuple(f1), operations=ops, root_digest=backup_incremental.snapshot_root(f1), pack_index=pack_index)
+    produced = [set(), {"payload/projects/p1/cdc.bin", "payload/projects/p1/whole.bin"}]
+    packs, blobs, standalone = layer_needed_payloads([baseline, incremental], produced, 1)
+    assert blobs == {"blob_000000", "blob_missing"}
+    assert standalone == {"payload/files/000000"}
+    assert packs == {"payload/packs/0000.pack"}
+    # A produced set that omits the put path contributes nothing.
+    assert layer_needed_payloads([baseline, incremental], [set(), set()], 1) == (set(), set(), set())
+    # _count_parent_ranges skips non-produced and non-cdc entries.
+    assert _count_parent_ranges([baseline, incremental], produced) == 0
+
+
+def test_projection_plan_with_selection_digest_override() -> None:
+    _, baseline = _baseline()
+    plan = plan_projection(RestoreSelection(contributors=("projects",), project_ids=("p1",)), [baseline], ciphertext_download_bytes=0)
+    overridden = plan.with_selection_digest("0" * 64)
+    assert overridden.selection_digest == "0" * 64
+    assert overridden.report["selectionDigest"] == "0" * 64
+    assert plan.selection_digest != overridden.selection_digest

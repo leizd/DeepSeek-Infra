@@ -164,6 +164,98 @@ def test_projected_materialize_missing_baseline_entry_fails(tmp_path: Path) -> N
         backup_incremental_restore.materialize_chain([f0_root, i1_root], tmp_path / "output-missing", projection=projection)
 
 
+def test_materialize_chain_rejects_corrupt_members(tmp_path: Path) -> None:
+    f0_root, i1_root, projection = _build_chain(tmp_path)
+
+    no_manifest = tmp_path / "no-manifest"
+    no_manifest.mkdir()
+    with pytest.raises(AppError, match="missing manifest.json"):
+        backup_incremental_restore.materialize_chain([no_manifest], tmp_path / "o1", projection=projection)
+
+    bad_json = tmp_path / "bad-json"
+    bad_json.mkdir()
+    (bad_json / "manifest.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(AppError, match="manifest is invalid"):
+        backup_incremental_restore.materialize_chain([bad_json], tmp_path / "o2", projection=projection)
+
+    bad_inventory = tmp_path / "bad-inventory"
+    bad_inventory.mkdir()
+    (bad_inventory / "manifest.json").write_text('{"files": ["junk"]}', encoding="utf-8")
+    with pytest.raises(AppError, match="file inventory is invalid"):
+        backup_incremental_restore.materialize_chain([bad_inventory], tmp_path / "o3", projection=projection)
+
+    missing_ops = tmp_path / "missing-ops"
+    missing_ops.mkdir()
+    (missing_ops / "manifest.json").write_text('{"snapshotKind": "incremental", "files": []}', encoding="utf-8")
+    with pytest.raises(AppError, match="missing its operations manifest"):
+        backup_incremental_restore.materialize_chain([f0_root, missing_ops], tmp_path / "o4", projection=projection)
+
+    invalid_ops = tmp_path / "invalid-ops"
+    invalid_ops.mkdir()
+    (invalid_ops / "delta").mkdir()
+    (invalid_ops / "delta/operations.json").write_text('{"put": []}', encoding="utf-8")
+    (invalid_ops / "manifest.json").write_text('{"snapshotKind": "incremental", "files": []}', encoding="utf-8")
+    with pytest.raises(AppError, match="operations manifest is invalid"):
+        backup_incremental_restore.materialize_chain([f0_root, invalid_ops], tmp_path / "o5", projection=projection)
+
+
+def test_materialize_put_parent_file_and_standalone(tmp_path: Path) -> None:
+    parent_root = tmp_path / "parent"
+    parent_root.mkdir()
+    (parent_root / "src.bin").write_bytes(b"parent-bytes")
+    package_root = tmp_path / "package"
+    package_root.mkdir()
+    standalone_dir = package_root / "payload" / "files"
+    standalone_dir.mkdir(parents=True)
+    standalone = b"standalone-bytes"
+    (standalone_dir / "000000").write_bytes(standalone)
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    chunk_protocol = backup_incremental.CURRENT_CDC_PROTOCOL
+
+    parent_target = output_root / "parent-copy.bin"
+    backup_incremental_restore._materialize_put(
+        package_root,
+        parent_root,
+        parent_target,
+        {
+            "path": "parent-copy.bin",
+            "storage": "parent-file",
+            "parentPath": "src.bin",
+            "size": len(b"parent-bytes"),
+            "sha256": hashlib.sha256(b"parent-bytes").hexdigest(),
+        },
+        chunk_protocol=chunk_protocol,
+    )
+    assert parent_target.read_bytes() == b"parent-bytes"
+
+    standalone_target = output_root / "standalone.bin"
+    backup_incremental_restore._materialize_put(
+        package_root,
+        parent_root,
+        standalone_target,
+        {
+            "path": "standalone.bin",
+            "storage": "whole",
+            "payloadRef": {"kind": "standalone", "path": "payload/files/000000"},
+            "size": len(standalone),
+            "sha256": hashlib.sha256(standalone).hexdigest(),
+        },
+        chunk_protocol=chunk_protocol,
+    )
+    assert standalone_target.read_bytes() == standalone
+
+    # Unsupported storage fails closed.
+    with pytest.raises(AppError, match="Unsupported delta storage"):
+        backup_incremental_restore._materialize_put(
+            package_root,
+            parent_root,
+            output_root / "bad.bin",
+            {"path": "bad.bin", "storage": "mystery", "size": 1, "sha256": "0" * 64},
+            chunk_protocol=chunk_protocol,
+        )
+
+
 def test_pack_handle_cache_verifies_only_used_packs(tmp_path: Path) -> None:
     root = tmp_path / "pkg"
     writer = backup_pack.PackWriter(root, target_pack_size=4, max_pack_size=8, alignment=8)
