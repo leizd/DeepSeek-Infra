@@ -336,8 +336,14 @@ def execute_run(
             )
             savings = getattr(package, "savings", None) or {}
             logical_bytes = int(savings.get("logicalBytes") or 0)
-            physical_bytes = int(savings.get("physicalPayloadBytes") or 0)
+            physical_bytes = int(
+                savings.get("unencryptedArchiveBytes")
+                or savings.get("physicalDeltaBytes")
+                or savings.get("physicalPayloadBytes")
+                or 0
+            )
             max_delta_ratio = float((policy.get("incremental") or {}).get("maxDeltaRatio") or backup_incremental.DEFAULT_MAX_DELTA_RATIO)
+            cost_basis = "unencrypted-archive-bytes" if savings.get("unencryptedArchiveBytes") else ("packed-delta-bytes" if savings.get("physicalDeltaBytes") else "raw-payload-bytes")
             if (
                 run_plan.get("plannedSnapshotKind") == "adaptive"
                 and str(run_plan.get("resolvedSnapshotKind") or "incremental") == "incremental"
@@ -354,6 +360,7 @@ def execute_run(
                 outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
                 outcome["snapshotKind"] = "full"
                 outcome["forceFullReason"] = "delta-ratio"
+                outcome["adaptiveCostBasis"] = cost_basis
                 package = backup_scheduled.build_scheduled_backup(
                     policy,
                     run_id=run.run_id,
