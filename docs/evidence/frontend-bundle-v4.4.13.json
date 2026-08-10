@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "version": "4.4.13",
+  "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "sourceRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-08-10T10:46:38.119894+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "baseline428InitialBytes": 425914,
+  "minimumReductionPercent": 8,
+  "initialEntry": "static/ui/assets/index-C1imatEo.js",
+  "initialBytes": 204761,
+  "initialGraphBytes": 494039,
+  "initialReductionPercent": 51.92,
+  "initialBundleBudgetBytes": 390000,
+  "initialCss": [
+    "assets/index-DoDlcT0k.css"
+  ],
+  "initialCssBytes": 27975,
+  "initialCssBudgetBytes": 28000,
+  "optionalChunkBudgetBytes": 90000,
+  "workspaceFeatureChunks": {
+    "settings": {
+      "path": "static/ui/assets/ConnectionSettingsFeature-4sdQoAxl.js",
+      "bytes": 151,
+      "css": [
+        "assets/ConnectionSettingsDrawer-4oDVp73n.css"
+      ]
+    },
+    "projects": {
+      "path": "static/ui/assets/ProjectsFeature-BubaDoWt.js",
+      "bytes": 172,
+      "css": [
+        "assets/ProjectsDrawer-Cut3XB7_.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    },
+    "skills": {
+      "path": "static/ui/assets/SkillsFeature-B1_R5rG0.js",
+      "bytes": 168,
+      "css": [
+        "assets/SkillsDrawer-CGhTe0Du.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    },
+    "memory": {
+      "path": "static/ui/assets/MemoryFeature-B2mzkuVy.js",
+      "bytes": 277,
+      "css": [
+        "assets/MemoryDrawer-CiI9qPE0.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    },
+    "reminders": {
+      "path": "static/ui/assets/RemindersFeature-DdUanOgX.js",
+      "bytes": 174,
+      "css": [
+        "assets/RemindersDrawer-CXATuoE7.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    },
+    "diagnostics": {
+      "path": "static/ui/assets/DiagnosticsFeature-DiTGJMVB.js",
+      "bytes": 178,
+      "css": [
+        "assets/DiagnosticsDrawer-CjdUL9PP.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    },
+    "file-preview": {
+      "path": "static/ui/assets/FilePreviewFeature-BLHKvvB8.js",
+      "bytes": 172,
+      "css": [
+        "assets/file-preview-C5BNpLOj.css"
+      ]
+    },
+    "image-lightbox": {
+      "path": "static/ui/assets/ImageLightboxFeature-CY1n97zK.js",
+      "bytes": 170,
+      "css": [
+        "assets/file-preview-C5BNpLOj.css"
+      ]
+    },
+    "activity": {
+      "path": "static/ui/assets/ActivityFeature-BRHJx_BV.js",
+      "bytes": 153,
+      "css": [
+        "assets/activity-DdwW0kWG.css"
+      ]
+    },
+    "backup-restore": {
+      "path": "static/ui/assets/BackupRestoreFeature-BR2K3dLd.js",
+      "bytes": 12125,
+      "css": [
+        "assets/backup-restore-CqVrHOyz.css",
+        "assets/workspace-optional-vGKthsMy.css"
+      ]
+    }
+  },
+  "workspaceOfflineManifest": "static/ui/workspace-assets.json",
+  "workspaceBuildId": "49f0e4b5807a4f86",
+  "workspaceSourceRevision": "4daebb3d1a39096364ac4c551bc29796410f4bdb",
+  "workspaceAssetSetDigest": "e076cdbbb74af76c1695773474c3d5be85fbb6ce0205c72ebba4f23d303e7cbb",
+  "workspaceImmutableManifest": "static/ui/workspace-assets-49f0e4b5807a4f86.json",
+  "workspaceWorker": "static/ui/sw-49f0e4b5807a4f86.js",
+  "workspaceRootWorker": "static/ui/sw-root-49f0e4b5807a4f86.js",
+  "tracePageChunk": "static/ui/assets/TracePage-hseAWpEk.js",
+  "tracePageBytes": 777,
+  "traceDetailChunk": "static/ui/assets/TraceDetailView-xCGzWt80.js",
+  "traceDetailBytes": 11021,
+  "traceCss": [
+    "assets/TraceDetailView-DRm3eTNC.css"
+  ],
+  "checks": {
+    "workspaceProjectsDynamicEntry": "PASS",
+    "workspaceSkillsDynamicEntry": "PASS",
+    "workspaceMemoryDynamicEntry": "PASS",
+    "workspaceSettingsDynamicEntry": "PASS",
+    "workspaceUtilitiesDynamicEntry": "PASS",
+    "workspaceOptionalCssDeferred": "PASS",
+    "initialBundleReducedFrom428": "PASS",
+    "initialBundleBudget": "PASS",
+    "initialCssBudget": "PASS",
+    "optionalFeatureChunkBudget": "PASS",
+    "workspaceOfflineAssetManifest": "PASS",
+    "immutableWorkerBuildIdentity": "PASS",
+    "workerManifestIdentityBound": "PASS",
+    "stableBuildDiscoveryRuntime": "PASS",
+    "stagedWorkerActivationProtocol": "PASS",
+    "reloadCoordinationRuntime": "PASS",
+    "workspacePrimaryWarmLayer": "PASS",
+    "workspaceRecoveryChunksDeferred": "PASS",
+    "routeOptionalChunksSeparated": "PASS",
+    "tracePageDynamicEntry": "PASS",
+    "traceDetailDynamicEntry": "PASS",
+    "traceImplementationDeferred": "PASS",
+    "traceCssDeferred": "PASS"
+  }
+}

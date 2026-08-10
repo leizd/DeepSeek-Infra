@@ -1,0 +1,55 @@
+{
+  "version": "4.4.13",
+  "commit": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "sourceRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "sourceTreeDirty": false,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "sourceContext": {
+    "schemaVersion": 2,
+    "version": "4.4.13",
+    "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+    "sourceTreeDirty": false,
+    "capturedAt": "2026-08-10T10:41:18Z",
+    "generator": "scripts/generate_release_evidence.py",
+    "repository": "local",
+    "workflowRunId": "local",
+    "workflowAttempt": 1,
+    "eventName": "local",
+    "ref": "refs/heads/codex/4.4.13-projected-recovery"
+  },
+  "generatedAt": "2026-08-10T10:41:40+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "skillWorkbenchEntrypoint": "PASS",
+    "skillCreateEditDelete": "PASS",
+    "skillApiActions": "PASS",
+    "projectSkillBindingUi": "PASS",
+    "skillPanelLifecycle": "PASS",
+    "skillPanelStyles": "PASS",
+    "reactPwaOwnership": "PASS",
+    "frontendTypecheckGate": "PASS",
+    "skillUiAssets": "PASS"
+  },
+  "details": {
+    "skillUiAssets": {
+      "assets": [
+        "docs/assets/skill-workbench.png",
+        "docs/assets/skill-run-result.png"
+      ],
+      "missingOrEmpty": []
+    },
+    "uiSources": [
+      "frontend/src/features/skills/SkillsDrawer.tsx",
+      "frontend/src/features/skills/useSkillController.ts",
+      "frontend/src/api/skillsApi.ts",
+      "frontend/src/features/projects/ProjectsDrawer.tsx"
+    ]
+  }
+}
