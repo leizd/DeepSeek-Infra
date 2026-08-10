@@ -21,7 +21,7 @@ from pathlib import PurePosixPath
 from typing import Any, BinaryIO, Protocol
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_incremental, backup_pack
+from deepseek_infra.infra.workspace import backup_incremental, backup_pack, backup_projection
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -108,17 +108,27 @@ class FilePayloadSource:
 
 
 class PackHandleCache:
-    """Verify packfiles once and retain at most four seekable handles."""
+    """Parse the pack index once and verify+open packfiles lazily on first use.
+
+    Packs referenced by a projected restore are the only ones ever hashed or
+    opened; a full restore naturally touches every pack.
+    """
 
     def __init__(self, package_root: Path, *, max_handles: int = 4) -> None:
         self.package_root = package_root
         self.max_handles = max(1, int(max_handles))
-        self.index = backup_pack.load_pack_index(package_root)
+        self.index = backup_pack.parse_pack_index(package_root)
+        self._spec_by_path = {str(item["path"]): item for item in self.index["packs"]}
+        self._verified: set[str] = set()
         self._handles: OrderedDict[str, BinaryIO] = OrderedDict()
 
     @property
     def open_handle_count(self) -> int:
         return len(self._handles)
+
+    @property
+    def verified_pack_count(self) -> int:
+        return len(self._verified)
 
     def entry(self, blob_id: str) -> dict[str, Any]:
         raw = self.index["entries"].get(blob_id)
@@ -134,6 +144,12 @@ class PackHandleCache:
         relative_path = PurePosixPath(relative)
         if relative_path.is_absolute() or ".." in relative_path.parts:
             raise AppError("Delta pack path is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        if relative not in self._verified:
+            spec = self._spec_by_path.get(relative)
+            if spec is None:
+                raise AppError(f"Delta pack is missing from the index: {relative}", code=ErrorCode.INVALID_PAYLOAD)
+            backup_pack.verify_pack(self.package_root, spec)
+            self._verified.add(relative)
         opened = self.package_root.joinpath(*relative_path.parts).open("rb")
         self._handles[relative] = opened
         while len(self._handles) > self.max_handles:
@@ -339,19 +355,127 @@ def _chunk_protocol(manifest: dict[str, Any]) -> str:
     return backup_incremental.CDC_ALGORITHM_V2
 
 
-def materialize_chain(package_roots: list[Path], output_root: Path) -> dict[str, Any]:
+def _copy_projected_baseline(package_root: Path, output_root: Path, needed_entries: frozenset[str]) -> None:
+    for relative in sorted(needed_entries):
+        source = package_root.joinpath(*PurePosixPath(relative).parts)
+        if not source.is_file():
+            raise AppError(f"Projection baseline file is missing: {relative}", code=ErrorCode.INVALID_PAYLOAD)
+        target = output_root.joinpath(*PurePosixPath(relative).parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+
+
+def materialize_chain(
+    package_roots: list[Path],
+    output_root: Path,
+    *,
+    projection: backup_projection.ProjectionPlan | None = None,
+) -> dict[str, Any]:
     """Reconstruct the workspace tree for an incremental chain.
 
     ``package_roots`` are ordered decrypted-and-extracted package directories
     starting with the full baseline. Every transition is verified against the
     domain-separated Merkle root; a missing parent, a corrupt payload or a
     root mismatch fails closed. Returns the final package manifest.
+
+    With ``projection`` the full logical chain is still verified, but only the
+    projected outputs are written to ``output_root`` while their support
+    dependencies are materialized in scratch space and removed afterwards.
+    Without a projection the behavior is byte-identical to a full restore.
     """
     if not package_roots:
         raise AppError("Incremental restore chain is empty", code=ErrorCode.INVALID_PAYLOAD)
     output_root.mkdir(parents=True, exist_ok=True)
     current: list[backup_incremental.FileRecord] = []
     final_manifest: dict[str, Any] = {}
+
+    if projection is not None:
+        scratch = output_root / f".projection-support-{uuid.uuid4().hex}"
+        scratch.mkdir(parents=True, exist_ok=False)
+        try:
+            for index, package_root in enumerate(package_roots):
+                manifest_path = package_root / "manifest.json"
+                if not manifest_path.is_file():
+                    raise AppError("Chain member is missing manifest.json", code=ErrorCode.INVALID_PAYLOAD)
+                manifest = _read_json(manifest_path)
+                final_manifest = manifest
+                files = _manifest_files(manifest)
+                if index == 0:
+                    if str(manifest.get("snapshotKind") or "full") == "incremental" or (package_root / "delta" / "operations.json").is_file():
+                        raise AppError("Incremental restore chain is missing its full baseline", code=ErrorCode.INVALID_PAYLOAD)
+                    _copy_projected_baseline(package_root, scratch, projection.needed_full_entries)
+                    current = files
+                    expected_root = str(((manifest.get("snapshot") or {}).get("rootDigest")) or "")
+                    if expected_root and backup_incremental.snapshot_root(current) != expected_root:
+                        raise AppError("Full baseline Merkle root mismatch", code=ErrorCode.INVALID_PAYLOAD)
+                    continue
+                ops = _read_delta_ops(package_root)
+                if str(ops.get("parentRootDigest") or "") != backup_incremental.snapshot_root(current):
+                    raise AppError(f"Incremental chain parent root mismatch at {index}", code=ErrorCode.INVALID_PAYLOAD)
+                needed_after = projection.needed_after_layer[index]
+                produced = projection.produced_by_layer[index]
+                prepared_root = scratch / f".delta-prepared-{uuid.uuid4().hex}"
+                prepared_root.mkdir(parents=True, exist_ok=False)
+                layer_cache: PackHandleCache | None = None
+                try:
+                    if (package_root / backup_pack.PACK_INDEX_PATH).is_file():
+                        layer_cache = PackHandleCache(package_root)
+                    for put in ops.get("put") or []:
+                        if not isinstance(put, dict):
+                            raise AppError("Delta put entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
+                        if str(put["path"]) not in produced:
+                            continue
+                        _materialize_put(
+                            package_root,
+                            scratch,
+                            prepared_root / str(put["path"]),
+                            put,
+                            chunk_protocol=_chunk_protocol(manifest),
+                            payload_cache=layer_cache,
+                        )
+                    for delete in ops.get("delete") or []:
+                        if not isinstance(delete, dict):
+                            raise AppError("Delta delete entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
+                        delete_path = str(delete["path"])
+                        if delete_path in needed_after:
+                            raise AppError(f"Projection required file is deleted: {delete_path}", code=ErrorCode.INVALID_PAYLOAD)
+                        target = scratch / delete_path
+                        if target.is_file():
+                            target.unlink()
+                        elif target.is_dir():
+                            shutil.rmtree(target, ignore_errors=True)
+                    for put in ops.get("put") or []:
+                        if not isinstance(put, dict) or str(put["path"]) not in produced:
+                            continue
+                        target = scratch / str(put["path"])
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(prepared_root / str(put["path"]), target)
+                finally:
+                    if layer_cache is not None:
+                        layer_cache.close()
+                    shutil.rmtree(prepared_root, ignore_errors=True)
+                current = backup_incremental.apply_delta_ops(
+                    current,
+                    ops,
+                    successful_contributors={item.contributor_id for item in current},
+                )
+                expected_root = str(ops.get("rootDigest") or "")
+                if expected_root and backup_incremental.snapshot_root(current) != expected_root:
+                    raise AppError(f"Incremental chain Merkle root mismatch at {index}", code=ErrorCode.INVALID_PAYLOAD)
+            final_by_path = {item.logical_path: item for item in current}
+            for entry_path in sorted(projection.needed_after_layer[-1]):
+                record = final_by_path.get(entry_path)
+                entry_target = scratch.joinpath(*PurePosixPath(entry_path).parts)
+                if record is None or not entry_target.is_file() or _sha256_file(entry_target) != record.sha256:
+                    raise AppError(f"Projected file failed checksum: {entry_path}", code=ErrorCode.INVALID_PAYLOAD)
+            for entry_path in sorted(projection.output_files):
+                source = scratch.joinpath(*PurePosixPath(entry_path).parts)
+                target = output_root.joinpath(*PurePosixPath(entry_path).parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(source, target)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        return final_manifest
 
     for index, package_root in enumerate(package_roots):
         manifest_path = package_root / "manifest.json"

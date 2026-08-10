@@ -54,8 +54,12 @@ def parse_payload_ref(value: Any) -> tuple[str, str]:
     raise AppError("Delta payload reference is missing or invalid", code=ErrorCode.INVALID_PAYLOAD)
 
 
-def load_pack_index(root: Path) -> dict[str, Any]:
-    """Load and fully verify the immutable pack index and every pack digest."""
+def parse_pack_index(root: Path) -> dict[str, Any]:
+    """Parse and structurally validate the pack index without reading pack bytes.
+
+    Validates schema, pack paths, blob ranges, integer bounds and overlap. Pack
+    digests are verified lazily on first use by :func:`verify_pack`.
+    """
     path = root / PACK_INDEX_PATH
     try:
         index = json.loads(path.read_text(encoding="utf-8"))
@@ -87,9 +91,6 @@ def load_pack_index(root: Path) -> dict[str, Any]:
             or not _is_sha256(digest)
         ):
             raise AppError("Delta pack index is invalid", code=ErrorCode.INVALID_PAYLOAD)
-        pack_path = root.joinpath(*relative_path.parts)
-        if not pack_path.is_file() or pack_path.stat().st_size != size or _sha256_file(pack_path) != digest:
-            raise AppError(f"Delta pack failed checksum: {relative}", code=ErrorCode.INVALID_PAYLOAD)
         packs[relative] = size
     ranges: dict[str, list[tuple[int, int]]] = {relative: [] for relative in packs}
     for blob_id, raw in raw_entries.items():
@@ -119,6 +120,33 @@ def load_pack_index(root: Path) -> dict[str, Any]:
             if start < previous_end:
                 raise AppError("Delta pack entries overlap", code=ErrorCode.INVALID_PAYLOAD)
             previous_end = max(previous_end, end)
+    return index
+
+
+def verify_pack(root: Path, spec: dict[str, Any]) -> None:
+    """Verify one pack's size and SHA-256 against its index declaration."""
+    relative = str(spec.get("path") or "")
+    size = spec.get("size")
+    digest = str(spec.get("sha256") or "")
+    relative_path = PurePosixPath(relative)
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise AppError(f"Delta pack path is invalid: {relative}", code=ErrorCode.INVALID_PAYLOAD)
+    pack_path = root.joinpath(*relative_path.parts)
+    if (
+        not pack_path.is_file()
+        or isinstance(size, bool)
+        or not isinstance(size, int)
+        or pack_path.stat().st_size != size
+        or _sha256_file(pack_path) != digest
+    ):
+        raise AppError(f"Delta pack failed checksum: {relative}", code=ErrorCode.INVALID_PAYLOAD)
+
+
+def load_pack_index(root: Path) -> dict[str, Any]:
+    """Load and fully verify the immutable pack index and every pack digest."""
+    index = parse_pack_index(root)
+    for raw in index.get("packs") or []:
+        verify_pack(root, raw)
     return index
 
 

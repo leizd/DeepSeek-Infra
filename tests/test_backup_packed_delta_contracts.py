@@ -270,8 +270,11 @@ def test_pack_and_blob_corruption_fail_closed(tmp_path: Path) -> None:
     index = writer.finalize()
     pack_path = package_root / str(index["packs"][0]["path"])
     pack_path.write_bytes(b"X" + pack_path.read_bytes()[1:])
+    # Pack verification is lazy: the cache constructs, but the first access
+    # (open) verifies size/SHA-256 and fails closed.
     with pytest.raises(AppError, match="pack failed checksum"):
-        backup_incremental_restore.PackHandleCache(package_root)
+        with backup_incremental_restore.PackHandleCache(package_root) as cache:
+            cache.handle(str(index["packs"][0]["path"]))
 
     index["packs"][0]["sha256"] = hashlib.sha256(pack_path.read_bytes()).hexdigest()
     (package_root / backup_pack.PACK_INDEX_PATH).write_text(
