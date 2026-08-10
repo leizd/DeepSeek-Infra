@@ -8,8 +8,10 @@ import pytest
 
 from deepseek_infra.infra.diagnostics import release_manifest
 from deepseek_infra.infra.diagnostics.evidence_assembly import (
+    _validate_producer_directory,
     assemble_evidence,
     prepare_producer_artifact,
+    validate_evidence_payload,
 )
 from deepseek_infra.infra.diagnostics.evidence_inventory import (
     evidence_paths,
@@ -176,6 +178,69 @@ def test_assembly_rejects_revision_and_ci_mismatch(tmp_path: Path) -> None:
             context=_context(),
             github_sha=REVISION,
         )
+
+
+def test_producer_payload_and_staging_guards_fail_closed(tmp_path: Path) -> None:
+    spec = next(spec for spec in evidence_specs() if spec.producer == "frontend")
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text("not-json", encoding="utf-8")
+    assert "invalid Evidence" in validate_evidence_payload(
+        payload_path,
+        spec,
+        version=VERSION,
+        context=_context(),
+        github_sha=REVISION,
+    )[0]
+
+    payload_path.write_text("{}", encoding="utf-8")
+    errors = validate_evidence_payload(payload_path, spec, version=VERSION, context=_context(), github_sha=REVISION)
+    for fragment in ("version mismatch", "status is not PASS", "generatedAt missing", "ciRevision"):
+        assert any(fragment in error for error in errors), fragment
+
+    with pytest.raises(ValueError, match="unknown or empty"):
+        prepare_producer_artifact(tmp_path, tmp_path / "unknown", producer="not-a-producer", version=VERSION, context=_context(), github_sha=REVISION)
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    with pytest.raises(ValueError, match="output already exists"):
+        prepare_producer_artifact(tmp_path, existing, producer="frontend", version=VERSION, context=_context(), github_sha=REVISION)
+    with pytest.raises(ValueError, match="missing owned Evidence"):
+        prepare_producer_artifact(tmp_path, tmp_path / "missing", producer="frontend", version=VERSION, context=_context(), github_sha=REVISION)
+
+
+def test_producer_descriptor_validation_reports_metadata_and_ownership_errors(tmp_path: Path) -> None:
+    producer = "frontend"
+    directory = tmp_path / "producer"
+    paths, errors = _validate_producer_directory(
+        directory,
+        producer=producer,
+        version=VERSION,
+        context=_context(),
+        github_sha=REVISION,
+    )
+    assert paths == [] and errors == [f"missing producer descriptor: {producer}"]
+
+    directory.mkdir()
+    (directory / "producer.json").write_text("[]", encoding="utf-8")
+    _, errors = _validate_producer_directory(directory, producer=producer, version=VERSION, context=_context(), github_sha=REVISION)
+    assert "invalid producer descriptor" in errors[0]
+
+    source = tmp_path / "source"
+    for spec in evidence_specs():
+        if spec.producer == producer:
+            path = source / spec.path(VERSION)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(_payload()) + "\n", encoding="utf-8")
+    valid = tmp_path / "valid"
+    prepare_producer_artifact(source, valid, producer=producer, version=VERSION, context=_context(), github_sha=REVISION)
+    descriptor_path = valid / "producer.json"
+    descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    descriptor.update(producer="other", version="wrong", testedRevision="wrong", paths=[], sha256={})
+    descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
+    extra = valid / "extra.json"
+    extra.write_text("{}", encoding="utf-8")
+    _, errors = _validate_producer_directory(valid, producer=producer, version=VERSION, context=_context(), github_sha=REVISION)
+    for fragment in ("ownership mismatch", "version mismatch", "revision mismatch", "path inventory mismatch", "artifact ownership mismatch", "checksum mismatch"):
+        assert any(fragment in error for error in errors), fragment
 
 
 def test_assembly_writes_detached_checksum_and_rejects_tampering(tmp_path: Path) -> None:
