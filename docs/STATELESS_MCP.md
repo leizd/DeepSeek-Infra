@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.10。
+适用版本：v4.4.11。
 
 `stateless-mcp/` 是可横向扩展的独立 MCP 服务。它使用官方 TypeScript SDK 的 Streamable HTTP 入口；每个 HTTP 请求都创建一个新的 `McpServer`，进程内不保存客户端会话。现有 Python `POST /mcp` 继续作为兼容端点，迁移期间不会被替换。
 

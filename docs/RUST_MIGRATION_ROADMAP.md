@@ -569,6 +569,13 @@ See [SEMANTIC_CACHE_BINARY_EMBEDDINGS.md](SEMANTIC_CACHE_BINARY_EMBEDDINGS.md) f
 - Build, release ZIP, PyInstaller and Docker packaging include both `backup-crypto` and `deepseek-backup`; the Rust workspace fmt/clippy/test gates cover the new crate.
 - Python continues to own adaptive planning, concurrency byte budgets, snapshot indexes, lineage, encryption, multipart fencing and federated restore.
 
+### 4.4.11 — Persistent batch backup scanning (completed)
+
+- Adds `deepseek-backup scan-batch`, a JSONL stdin/stdout mode that scans a file batch in one helper process while preserving a request id on every result or item-level error.
+- The Python `RustChunkEngine` submits one batch and validates completeness; any process, protocol or output failure falls back to the authoritative Python engine before publication.
+- Telemetry reports actual Rust files, Python fallback files and aggregate reasons without paths or hashes; fallback above ten percent marks the run degraded without changing correctness.
+- Rust still owns no Snapshot Index, Bloom Filter, Parent Locator, Manifest, target credential, encryption secret, retention decision or restore transaction. All effective dedup semantics stay Python-owned and local-only.
+
 ## Testing Priorities
 
 Coverage work should prioritize meaningful behavior rather than easy lines:

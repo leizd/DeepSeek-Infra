@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.10。
+适用版本：v4.4.11。
 
 这一页的目标：**不读任何源码，快速亲眼看到 README 里的核心能力在跑**。四个交互脚本按「零门槛 → 需要服务 → 需要 Key」排序；无状态 MCP 另有一个约十几秒的 Docker 故障恢复演练：
 
@@ -63,7 +63,7 @@ python examples/mcp_tool_demo.py
 用仓库内置的 `MCPClient` 对本机 `POST /mcp` 做 `initialize → tools/list → tools/call` 回环：
 
 ```
-[initialize] protocol=2025-06-18 server=deepseek-infra v4.4.10
+[initialize] protocol=2025-06-18 server=deepseek-infra v4.4.11
 
 [tools/list] 17 tools:
    - web_search  [read-only, open-world]

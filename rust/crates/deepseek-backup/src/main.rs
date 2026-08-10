@@ -1,9 +1,9 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fmt::Write as _;
 use std::fs::File;
-use std::io::{self, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Write as IoWrite};
 use std::path::PathBuf;
 
 const MIN_CHUNK: usize = 512 * 1024;
@@ -25,6 +25,27 @@ struct Scan {
     sha256: String,
     protocol: String,
     chunks: Vec<Chunk>,
+}
+
+#[derive(Deserialize)]
+struct BatchRequest {
+    id: serde_json::Value,
+    path: PathBuf,
+    protocol: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchResponse {
+    id: serde_json::Value,
+    #[serde(flatten)]
+    scan: Scan,
+}
+
+#[derive(Serialize)]
+struct BatchError {
+    id: serde_json::Value,
+    error: &'static str,
 }
 
 fn gears() -> [u64; 256] {
@@ -140,8 +161,60 @@ fn scan(path: PathBuf, protocol: String) -> io::Result<Scan> {
     })
 }
 
+fn scan_batch_io<R: BufRead, W: IoWrite>(reader: R, mut writer: W) -> io::Result<()> {
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let request: BatchRequest = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => {
+                serde_json::to_writer(
+                    &mut writer,
+                    &BatchError {
+                        id: serde_json::Value::Null,
+                        error: "invalid-request",
+                    },
+                )?;
+                writer.write_all(b"\n")?;
+                writer.flush()?;
+                continue;
+            }
+        };
+        match scan(request.path, request.protocol) {
+            Ok(result) => serde_json::to_writer(
+                &mut writer,
+                &BatchResponse {
+                    id: request.id,
+                    scan: result,
+                },
+            )?,
+            Err(_) => serde_json::to_writer(
+                &mut writer,
+                &BatchError {
+                    id: request.id,
+                    error: "scan-failed",
+                },
+            )?,
+        }
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+    }
+    Ok(())
+}
+
+fn scan_batch() -> io::Result<()> {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    scan_batch_io(stdin.lock(), stdout.lock())
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
+    if args.len() == 2 && args[1] == "scan-batch" {
+        return scan_batch();
+    }
     if args.len() != 5 || args[1] != "scan" || args[2] != "--protocol" {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -192,6 +265,30 @@ mod tests {
         ));
         fs::write(&path, b"data").expect("write fixture");
         assert!(scan(path.clone(), "future".to_string()).is_err());
+        fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn batch_scanner_keeps_ids_and_reports_item_failures() {
+        let path =
+            env::temp_dir().join(format!("deepseek-backup-batch-{}.bin", std::process::id()));
+        fs::write(&path, b"batch-data").expect("write fixture");
+        let requests = format!(
+            "{{\"id\":7,\"path\":{},\"protocol\":\"fastcdc-gear-v3\"}}\n{{\"id\":8,\"path\":{},\"protocol\":\"future\"}}\n",
+            serde_json::to_string(&path).expect("encode path"),
+            serde_json::to_string(&path).expect("encode path")
+        );
+        let mut output = Vec::new();
+        scan_batch_io(BufReader::new(requests.as_bytes()), &mut output).expect("scan batch");
+        let lines: Vec<serde_json::Value> = String::from_utf8(output)
+            .expect("utf8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("jsonl"))
+            .collect();
+        assert_eq!(lines[0]["id"], 7);
+        assert_eq!(lines[0]["size"], 10);
+        assert_eq!(lines[1]["id"], 8);
+        assert_eq!(lines[1]["error"], "scan-failed");
         fs::remove_file(path).expect("remove fixture");
     }
 }

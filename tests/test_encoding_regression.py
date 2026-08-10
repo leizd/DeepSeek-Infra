@@ -81,7 +81,7 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn(f"deepseek-infra:{VERSION}", dockerfile)
         self.assertIn(f'org.opencontainers.image.version="{VERSION}"', dockerfile)
         self.assertIn(f'versionName "{VERSION}"', build_gradle)
-        self.assertIn("versionCode 400050", build_gradle)
+        self.assertIn("versionCode 400051", build_gradle)
         self.assertIn(f'<meta name="deepseek-infra-version" content="{VERSION}" />', frontend)
         self.assertIn(f"## [{VERSION}]", changelog)
         self.assertIn("Personal AI Runtime GA", readme)

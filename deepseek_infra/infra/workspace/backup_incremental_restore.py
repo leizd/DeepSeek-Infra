@@ -1,4 +1,4 @@
-"""Incremental chain materializer (4.4.9).
+"""Incremental chain materializer with immutable-parent apply (4.4.11).
 
 Applies an ordered chain ``[F0, I1, ..., In]`` of decrypted, extracted backup
 packages into a complete workspace tree, verifying the domain-separated Merkle
@@ -96,18 +96,20 @@ def _parent_path(output_root: Path, logical_path: str) -> Path:
     return path
 
 
-def _materialize_put(package_root: Path, output_root: Path, put: dict[str, Any], *, chunk_protocol: str) -> None:
-    target = output_root / str(put["path"])
+def _materialize_put(package_root: Path, parent_root: Path, target: Path, put: dict[str, Any], *, chunk_protocol: str) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     storage = str(put.get("storage") or "whole")
     if storage == "cdc":
-        _materialize_cdc(output_root, package_root, target, put, chunk_protocol=chunk_protocol)
+        _materialize_cdc(parent_root, package_root, target, put, chunk_protocol=chunk_protocol)
     elif storage == "whole":
         ref = str(put.get("payloadRef") or "")
         source = package_root / ref
         if not source.is_file():
             raise AppError(f"Delta payload blob is missing: {ref}", code=ErrorCode.INVALID_PAYLOAD)
         shutil.copyfile(source, target)
+    elif storage == "parent-file":
+        parent_path = _parent_path(parent_root, str(put.get("parentPath") or ""))
+        shutil.copyfile(parent_path, target)
     else:
         raise AppError(f"Unsupported delta storage: {storage}", code=ErrorCode.INVALID_PAYLOAD)
     expected = str(put.get("sha256") or "")
@@ -131,7 +133,7 @@ def _copy_verified_range(source: Any, output: Any, *, offset: int, length: int, 
 
 
 def _materialize_cdc(
-    output_root: Path,
+    parent_root: Path,
     package_root: Path,
     target: Path,
     put: dict[str, Any],
@@ -139,28 +141,40 @@ def _materialize_cdc(
     chunk_protocol: str,
 ) -> None:
     logical_path = str(put["path"])
-    parent_path = _parent_path(output_root, logical_path)
-    parent_ranges = _chunk_ranges_for(parent_path, chunk_protocol)
     chunks = put.get("chunks")
     if not isinstance(chunks, list):
         raise AppError(f"Delta CDC file has no chunk list: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
     temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.restore-tmp")
     try:
-        with parent_path.open("rb") as parent, temporary.open("wb") as output:
+        with temporary.open("wb") as output:
             for index, chunk in enumerate(chunks):
                 if not isinstance(chunk, dict):
                     raise AppError(f"Delta CDC file has an invalid chunk: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
                 length = int(chunk.get("length") or 0)
                 expected = str(chunk.get("sha256") or "")
                 label = f"{logical_path}#{index}"
-                if str(chunk.get("source") or "") == "parent":
+                source_kind = str(chunk.get("source") or "")
+                if source_kind == "parent":
+                    parent_path = _parent_path(parent_root, logical_path)
+                    parent_ranges = _chunk_ranges_for(parent_path, chunk_protocol)
                     raw_ordinal = chunk.get("parentOrdinal")
                     if not isinstance(raw_ordinal, int) or raw_ordinal < 0 or raw_ordinal >= len(parent_ranges):
                         raise AppError(f"Delta CDC references an invalid parent chunk: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
                     offset, chunk_length = parent_ranges[raw_ordinal]
                     if chunk_length != length:
                         raise AppError(f"Delta CDC parent chunk length mismatch: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
-                    _copy_verified_range(parent, output, offset=offset, length=length, expected_sha256=expected, label=label)
+                    with parent_path.open("rb") as parent:
+                        _copy_verified_range(parent, output, offset=offset, length=length, expected_sha256=expected, label=label)
+                elif source_kind == "parent-range":
+                    parent_path = _parent_path(parent_root, str(chunk.get("parentPath") or ""))
+                    raw_offset = chunk.get("offset")
+                    if isinstance(raw_offset, bool) or not isinstance(raw_offset, int) or raw_offset < 0 or length <= 0:
+                        raise AppError(f"Delta CDC references an invalid parent range: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
+                    offset = raw_offset
+                    if offset + length > parent_path.stat().st_size:
+                        raise AppError(f"Delta CDC parent range exceeds its file: {logical_path}", code=ErrorCode.INVALID_PAYLOAD)
+                    with parent_path.open("rb") as parent:
+                        _copy_verified_range(parent, output, offset=offset, length=length, expected_sha256=expected, label=label)
                 else:
                     ref = str(chunk.get("payloadRef") or "")
                     source = package_root / ref
@@ -221,18 +235,35 @@ def materialize_chain(package_roots: list[Path], output_root: Path) -> dict[str,
         # previous layer; a cross-layer parent cache would be stale.
         if str(ops.get("parentRootDigest") or "") != backup_incremental.snapshot_root(current):
             raise AppError(f"Incremental chain parent root mismatch at {index}", code=ErrorCode.INVALID_PAYLOAD)
-        for delete in ops.get("delete") or []:
-            if not isinstance(delete, dict):
-                raise AppError("Delta delete entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
-            target = output_root / str(delete["path"])
-            if target.is_file():
-                target.unlink()
-            elif target.is_dir():
-                shutil.rmtree(target, ignore_errors=True)
-        for put in ops.get("put") or []:
-            if not isinstance(put, dict):
-                raise AppError("Delta put entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
-            _materialize_put(package_root, output_root, put, chunk_protocol=_chunk_protocol(manifest))
+        # Prepare every PUT against the immutable parent view before applying a
+        # single tombstone. This makes delete+copy, rename and file swaps safe.
+        prepared_root = output_root / f".delta-prepared-{uuid.uuid4().hex}"
+        prepared_root.mkdir(parents=True, exist_ok=False)
+        try:
+            for put in ops.get("put") or []:
+                if not isinstance(put, dict):
+                    raise AppError("Delta put entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
+                _materialize_put(
+                    package_root,
+                    output_root,
+                    prepared_root / str(put["path"]),
+                    put,
+                    chunk_protocol=_chunk_protocol(manifest),
+                )
+            for delete in ops.get("delete") or []:
+                if not isinstance(delete, dict):
+                    raise AppError("Delta delete entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
+                target = output_root / str(delete["path"])
+                if target.is_file():
+                    target.unlink()
+                elif target.is_dir():
+                    shutil.rmtree(target, ignore_errors=True)
+            for put in ops.get("put") or []:
+                target = output_root / str(put["path"])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(prepared_root / str(put["path"]), target)
+        finally:
+            shutil.rmtree(prepared_root, ignore_errors=True)
         current = backup_incremental.apply_delta_ops(
             current,
             ops,

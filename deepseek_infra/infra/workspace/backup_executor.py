@@ -84,59 +84,48 @@ def _record_committed_index(
             "schema_digest": backup_incremental.schema_digest(contributor_schemas),
             "chunk_protocol": backup_incremental.CURRENT_CDC_PROTOCOL,
         }
+        parent: str | None = None
+        base = backup_id
+        depth = 0
+        full_committed_at: str | None = _utc_iso_now()
         if snapshot_kind == "incremental":
-            parent = str(run_plan.get("parentBackupId") or "")
-            base = str(run_plan.get("baseBackupId") or parent)
+            parent_value = str(run_plan.get("parentBackupId") or "")
+            parent = parent_value or None
+            base = str(run_plan.get("baseBackupId") or parent_value)
             depth = int(run_plan.get("chainDepth") or 1)
             root = str(snapshot.get("rootDigest") or backup_incremental.snapshot_root(records))
             # Store the effective tree (current + inherited) for lineage continuity.
             previous = []
-            if parent:
-                previous = backup_incremental.load_snapshot_files(target_id, policy_id, parent)
+            if parent_value:
+                previous = backup_incremental.load_snapshot_files(target_id, policy_id, parent_value)
             effective = backup_incremental.effective_current(
                 previous,
                 records,
                 successful_contributors={item.contributor_id for item in records},
             )
             parent_latest = backup_incremental.latest_committed_snapshot(target_id, policy_id)
-            backup_incremental.record_committed_snapshot(
-                target_id=target_id,
-                policy_id=policy_id,
-                backup_id=backup_id,
-                parent_backup_id=parent or None,
-                base_backup_id=base or None,
-                chain_depth=depth,
-                root_digest=root,
-                files=effective,
-                full_committed_at=str(parent_latest.get("full_committed_at") or "") if parent_latest else None,
-                logical_bytes=sum(int(item.size) for item in effective),
-                **common,
-            )
+            full_committed_at = str(parent_latest.get("full_committed_at") or "") if parent_latest else None
         else:
-            backup_incremental.record_committed_snapshot(
-                target_id=target_id,
-                policy_id=policy_id,
-                backup_id=backup_id,
-                parent_backup_id=None,
-                base_backup_id=backup_id,
-                chain_depth=0,
-                root_digest=backup_incremental.snapshot_root(records),
-                files=records,
-                full_committed_at=_utc_iso_now(),
-                logical_bytes=sum(int(item.size) for item in records),
-                **common,
-            )
+            root = backup_incremental.snapshot_root(records)
+            effective = records
         chunk_records = getattr(package, "chunk_records", None) or []
-        if chunk_records:
-            backup_incremental.record_snapshot_chunks(
-                target_id=target_id,
-                policy_id=policy_id,
-                backup_id=backup_id,
-                chunks=list(chunk_records),
-            )
+        backup_incremental.commit_snapshot_index(
+            target_id=target_id,
+            policy_id=policy_id,
+            backup_id=backup_id,
+            parent_backup_id=parent,
+            base_backup_id=base or None,
+            chain_depth=depth,
+            root_digest=root,
+            files=effective,
+            chunks=list(chunk_records),
+            full_committed_at=full_committed_at,
+            logical_bytes=sum(int(item.size) for item in effective),
+            **common,
+        )
     except Exception:
         # Index is a performance cache; never fail the run on index errors.
-        pass
+        backup_incremental.mark_index_stale(target_id, policy_id, "snapshot-index-commit-failed")
 
 
 def _retry_section(policy: dict[str, Any]) -> dict[str, Any]:
@@ -434,7 +423,10 @@ def execute_run(
             retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
             policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
             backup_retention.apply_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
-            backup_retention.finalize_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
+            finalized = backup_retention.finalize_retention(
+                retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
+            )
+            catalog_after_retention = backup_catalog.catalog_state(target.root)
         else:  # pragma: no cover - remote full-executor path requires a live adapter
             backup_catalog.append_receipt_store(target.require_store(), published.receipt, writer=writer)
             guard.checkpoint()
@@ -442,7 +434,27 @@ def execute_run(
             retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
             policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
             backup_retention.apply_retention_store(retention, target.require_store(), policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
-            backup_retention.finalize_retention_store(retention, target.require_store(), policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
+            finalized = backup_retention.finalize_retention_store(
+                retention, target.require_store(), policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
+            )
+            catalog_after_retention = backup_catalog.catalog_state_store(target.require_store())
+        deleted_snapshots = [
+            (
+                target_id,
+                str((catalog_after_retention.get(str(backup_id)) or {}).get("policyId") or policy_id),
+                str(backup_id),
+            )
+            for backup_id in finalized.get("deleted", [])
+            if str(backup_id)
+        ]
+        if deleted_snapshots:
+            try:
+                backup_incremental.garbage_collect_chunk_maps(deleted_snapshots)
+            except Exception:
+                # The index is rebuildable; retention has already completed and
+                # must not be reported as failed because its local GC lagged.
+                for _, deleted_policy_id, _ in deleted_snapshots:
+                    backup_incremental.mark_index_stale(target_id, deleted_policy_id, "chunk-map-gc-failed")
         guard.checkpoint()
         filename = str(published.receipt.get("filename") or (published.path.name if published.path is not None else package.filename))
         backup_scheduler.complete_run(

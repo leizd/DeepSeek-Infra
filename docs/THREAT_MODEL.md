@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.10。
+适用版本：v4.4.11。
 
 定位与信任假设见 [docs/SECURITY.md](SECURITY.md)：个人、本地优先的运行时，运行后端的机器可信，默认只监听 `127.0.0.1`。这一页回答更尖锐的问题：**当模型上下文里混入攻击者可控的内容（网页、文件、工具结果），或本机服务被局域网内他人触达时，每一类威胁由哪段代码挡住、由哪个测试钉住、还剩什么残余风险。**
 
@@ -118,6 +118,18 @@
   - 遥测只记录耗时、引擎、计数与字节规模，不记录 Chunk SHA、文件路径/正文、密码、Identity 或云凭证。
 - **测试**：[test_backup_4410_contracts.py](../tests/test_backup_4410_contracts.py) 覆盖有界流式读取、v2/v3 升级、Python/Rust parity、并发预算、计划冻结和 Multipart 恢复/围栏。
 - **残余风险**：已认证并展开的恢复 Tree 在可信本机 Staging 中仍是明文；实际磁盘吞吐和云端限流依赖部署环境。跨文件/跨备份云端 Chunk CAS 与 Convergent Encryption 不在本版本范围。
+
+### T11 · 去重索引投毒、概率误判与跨文件引用竞态（v4.4.11）
+
+- **路径**：损坏或半提交的本地 Chunk Index 可能把错误 Range 绑定到新 Delta；Bloom 误报可能被错误当成复用授权；跨文件 Restore 若先删除 Parent 文件会读到缺失或已替换数据；S3 上同 Key 的外国非空对象可能被 Multipart 重试误判为成功。
+- **缓解**：
+  - Chunk Map 由 Protocol、File Size 和 File SHA-256 内容寻址，Map 元数据与所有连续 Range 必须精确一致；Lineage、Effective Files、Map 与 Ref 在单个 `BEGIN IMMEDIATE` 事务中提交；
+  - 任何索引冲突、迁移断链或未知协议都会回滚并写入耐久 stale 标记，下一轮只能 Full；Retention 物理删除后才移除 Snapshot Ref，无引用 Map 才能 GC；
+  - Bloom 只排除确定 Miss，任何 Positive 必须继续执行 Immediate Parent 范围内的批量 SQLite `(SHA-256, length)` 精确查询；Bloom、路径和 Hash 均不上传；
+  - `incremental-v4` Parent Range 逐段验证，所有 PUT 先从未修改 Parent Tree 写入 Prepared Tree 并校验最终文件摘要，然后才执行 Tombstone 和 Atomic Replace；
+  - Multipart 冲突只有目标 Metadata SHA-256 与 Expected Size 同时匹配才收敛；Metadata 缺失或不同返回 `object-integrity-unproven`，Capability Probe 将该 Provider 标为 Scheduled Not Ready。
+- **测试**：[test_backup_4411_contracts.py](../tests/test_backup_4411_contracts.py) 覆盖 Effective Ref 继承、Map 单份存储、原子回滚/强制 Full、Immediate Parent 精确查询、Bloom 损坏、文件交换/Parent 删除、Range Restore、Batch Fallback、Legacy Migration/GC 与 Multipart Fail Closed；[test_backup_448_contracts.py](../tests/test_backup_448_contracts.py) 保留 v2/v3 Chain 兼容和真实 Delta Restore 合同。
+- **残余风险**：本地 Chunk Index 仍会泄露同一可信工作区内部的内容相等性，必须与 Workspace 数据同级保护；索引损坏会降低复用率或触发 Full，从而增加本地 IO/存储，但不能降低恢复正确性。Convergent Encryption、云端明文 Hash Index、独立 Chunk Objects、跨 Target/Policy 或超越 Immediate Parent 的历史去重仍明确不在范围内。
 
 ## 非目标（明确不在防护范围内）
 
