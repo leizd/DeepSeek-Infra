@@ -320,6 +320,19 @@ def create_backup_governance_router() -> APIRouter:
             for index in range(len(identity)):
                 identity[index] = 0
 
+    @router.post("/api/workspace/restores/from-target/preview")
+    async def api_restore_from_target_preview(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=64_000)
+        return json_response(
+            backup_remote_restore.preview_restore_from_target(
+                target_id=str(payload.get("targetId") or ""),
+                backup_id=str(payload.get("backupId") or ""),
+                selection=payload.get("selection"),
+                restore_id=str(payload.get("restoreId") or "") or None,
+            )
+        )
+
     @router.post("/api/workspace/restores/from-target")
     async def api_restore_from_target(request: Request) -> JSONResponse:
         require_api_auth(request)

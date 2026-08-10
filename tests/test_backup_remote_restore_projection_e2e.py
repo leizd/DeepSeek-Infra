@@ -207,7 +207,96 @@ def _restore_to_complete(restore_id: str) -> dict[str, Any]:
     assert prepared["phase"] == "prepared"
     committed = backups.commit_restore(restore_id)
     assert committed["phase"] == "backend-committed"
-    return backups.complete_restore(restore_id)
+    completed = backups.complete_restore(restore_id)
+    backup_remote_restore.advance_federated_phase(restore_id, "complete")
+    return completed
+
+
+def test_from_target_preview_reports_honest_projection(tmp_settings: Path, stub_crypto: None) -> None:
+    _seed_workspace()
+    package_f0, package_i1 = _build_chain_packages(tmp_settings)
+    _publish_chain(package_f0, package_i1)
+    selection = {"contributors": ["projects"], "projectIds": ["p1"]}
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id="backup_i1",
+        selection=selection,
+    )
+    restore_id = str(created["restoreId"])
+    result = backup_remote_restore.fetch_restore_session(restore_id)
+    while str(result.get("phase") or "") not in {"fetched", "chain-fetched"}:
+        result = backup_remote_restore.fetch_restore_session(restore_id)
+    # Preview without a secret reports that one is required.
+    no_secret = backup_remote_restore.preview_restore_from_target(
+        target_id="managed-local",
+        backup_id="backup_i1",
+        selection=selection,
+        restore_id=restore_id,
+    )
+    assert no_secret["requiresSecret"] is True
+    backup_crypto.put_secret(restore_id, "passphrase", "hunter2")
+    preview = backup_remote_restore.preview_restore_from_target(
+        target_id="managed-local",
+        backup_id="backup_i1",
+        selection=selection,
+        restore_id=restore_id,
+    )
+    assert preview["phase"] == "preview-planned"
+    projection = preview["projection"]
+    assert projection["networkSelective"] is False
+    assert projection["networkSelectivityReason"] == "whole-age-object"
+    assert projection["selected"]["projects"] == 1
+    assert projection["bytes"]["selectedLogicalBytes"] > 0
+    assert projection["bytes"]["ciphertextDownloadBytes"] == package_f0.size + package_i1.size
+    assert projection["requiresFrontendApply"] is False
+    # The preview re-put the secret so the federated materialize can proceed.
+    completed = _restore_to_complete(restore_id)
+    assert completed["phase"] == "complete"
+
+
+def test_restore_holds_released_on_complete(tmp_settings: Path, stub_crypto: None) -> None:
+    _seed_workspace()
+    package_f0, package_i1 = _build_chain_packages(tmp_settings)
+    _publish_chain(package_f0, package_i1)
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id="backup_i1",
+        selection={"contributors": ["projects"], "projectIds": ["p1"]},
+    )
+    restore_id = str(created["restoreId"])
+    session = backup_remote_restore.read_restore_session(restore_id)
+    assert session is not None
+    hold_keys = list(session.get("holdKeys") or [])
+    assert len(hold_keys) == 2
+    for key in hold_keys:
+        assert (backups.BACKUP_DIR / key).is_file()
+    _restore_to_complete(restore_id)
+    for key in hold_keys:
+        assert not (backups.BACKUP_DIR / key).is_file()
+
+
+def test_hold_release_respects_recovery_required(tmp_settings: Path) -> None:
+    restore_id = "restore_hold_policy"
+    hold_keys = [f"holds/restore/{restore_id}:0.json", f"holds/restore/{restore_id}:1.json"]
+    session = {
+        "schemaVersion": 3,
+        "restoreId": restore_id,
+        "targetId": "managed-local",
+        "backupId": "backup_b",
+        "snapshotKind": "incremental",
+        "holdKeys": hold_keys,
+        "holdKey": None,
+        "phase": "preparing",
+    }
+    backup_remote_restore._atomic_write_json(backup_remote_restore._session_path(restore_id), session)
+    for key in hold_keys:
+        path = backups.BACKUP_DIR / key
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"schemaVersion":1}', encoding="utf-8")
+    backup_remote_restore.advance_federated_phase(restore_id, "recovery-required")
+    assert all((backups.BACKUP_DIR / key).is_file() for key in hold_keys)
+    backup_remote_restore.advance_federated_phase(restore_id, "complete")
+    assert all(not (backups.BACKUP_DIR / key).is_file() for key in hold_keys)
 
 
 def test_projected_remote_restore_round_trip(tmp_settings: Path, stub_crypto: None) -> None:

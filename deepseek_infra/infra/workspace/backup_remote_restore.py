@@ -461,6 +461,87 @@ def fetch_restore_session(restore_id: str, *, client: Any | None = None, max_byt
     }
 
 
+def preview_restore_from_target(
+    *,
+    target_id: str,
+    backup_id: str,
+    selection: Any,
+    restore_id: str | None = None,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    """Fetch the whole chain, metadata-extract it and report the projected plan.
+
+    Because 4.4.13 keeps the whole-age-object model, the preview downloads the
+    full chain before it can report accurate byte counts; ``networkSelective``
+    is always ``False``. The client provides a secret first so the metadata
+    plane can be decrypted; the preview re-puts it so the later materialize
+    step can still consume it.
+    """
+    selection_value = backup_projection.normalize_selection(selection)
+    assert selection_value is not None
+    created = create_restore_from_target(
+        target_id=target_id,
+        backup_id=backup_id,
+        client=client,
+        selection=selection_value.canonical(),
+        restore_id=restore_id,
+    )
+    restore_id = str(created["restoreId"])
+    result = fetch_restore_session(restore_id, client=client)
+    phase = str(result.get("phase") or "")
+    if phase not in {"fetched", "chain-fetched"}:
+        return {
+            "restoreId": restore_id,
+            "phase": phase,
+            "selectionDigest": created.get("selectionDigest"),
+            "downloadedBytes": int(result.get("downloadedBytes") or 0),
+            "expectedBytes": int(result.get("expectedBytes") or 0),
+            "requiresSecret": False,
+        }
+    if not backup_crypto.has_secret(restore_id):
+        return {
+            "restoreId": restore_id,
+            "phase": phase,
+            "selectionDigest": created.get("selectionDigest"),
+            "requiresSecret": True,
+        }
+    kind, secret = backup_crypto.consume_secret(restore_id)
+    try:
+        session = read_restore_session(restore_id)
+        if session is None:
+            raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+        base = _session_dir(restore_id)
+        members = session.get("chain") or []
+        secret_kind: Literal["passphrase", "age-identity"] = "passphrase" if kind != "age-identity" else "age-identity"
+        decrypted_paths: list[Path] = []
+        for index, member in enumerate(members):
+            ciphertext = Path(str(member["ciphertextPath"]))
+            decrypted = base / f"preview-decrypted-{index}.dsibackup"
+            backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
+            decrypted_paths.append(decrypted)
+        packages = _metadata_chain_packages(decrypted_paths, base)
+        ciphertext_download = sum(int(item.get("expectedBytes") or 0) for item in members)
+        plan = backup_projection.plan_projection(
+            selection_value,
+            packages,
+            ciphertext_download_bytes=ciphertext_download,
+        )
+        session["projectionPlan"] = plan.report
+        session["phase"] = "preview-planned"
+        _atomic_write_json(_session_path(restore_id), session)
+        return {
+            "restoreId": restore_id,
+            "phase": "preview-planned",
+            "selection": selection_value.canonical(),
+            "selectionDigest": plan.report["selectionDigest"],
+            "requiresSecret": False,
+            "projection": plan.report,
+        }
+    finally:
+        backup_crypto.put_secret_bytes(restore_id, kind, bytearray(secret))
+        secret[:] = b"\x00" * len(secret)
+
+
 def restore_from_target(*, target_id: str, backup_id: str, client: Any | None = None) -> dict[str, Any]:  # pragma: no cover - thin wrapper
     """Compatibility helper: create session and fetch to completion in one call."""
     created = create_restore_from_target(target_id=target_id, backup_id=backup_id, client=client)
@@ -485,6 +566,26 @@ def release_restore_hold(store: Any, restore_id: str) -> None:
         store.delete_if_match(restore_hold_key(restore_id))
     except AppError:  # pragma: no cover
         pass
+
+
+def _release_session_holds(session: dict[str, Any]) -> None:
+    """Release every remote hold this restore session created."""
+    target_id = str(session.get("targetId") or "")
+    if not target_id:
+        return
+    try:
+        target = backup_publish.resolve_target(target_id, write_intent=False)
+        store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False)
+    except AppError:  # pragma: no cover
+        return
+    keys = list(session.get("holdKeys") or [])
+    if not keys and session.get("holdKey"):
+        keys = [str(session["holdKey"])]
+    for key in keys:
+        try:
+            store.delete_if_match(str(key))
+        except AppError:  # pragma: no cover
+            pass
 
 
 def _write_checksums(tree_root: Path, manifest: dict[str, Any]) -> None:
@@ -760,6 +861,10 @@ def materialize_federated_restore(
         session = read_restore_session(restore_id) or session
         transaction_exists = (_session_dir(restore_id) / "transaction.json").is_file()
         _set_phase(session, "recovery-required" if transaction_exists else "failed")
+        if not transaction_exists:
+            # Failed before the federated transaction: nothing durable to
+            # recover, so the ancestor holds can be released.
+            _release_session_holds(session)
         backup_crypto.record_unlock_failure(restore_id)
         raise
     finally:
@@ -767,7 +872,14 @@ def materialize_federated_restore(
 
 
 def advance_federated_phase(restore_id: str, phase: str) -> None:
-    """Mirror transaction progress into a remote restore session when present."""
+    """Mirror transaction progress into a remote restore session when present.
+
+    Terminal phases (complete / aborted / failed) release every remote ancestor
+    hold the session created; ``recovery-required`` intentionally keeps them so
+    the chain cannot be garbage-collected before the operator recovers.
+    """
     session = read_restore_session(restore_id)
     if session is not None:
         _set_phase(session, phase)
+        if phase in {"complete", "aborted", "rolled-back", "failed"}:
+            _release_session_holds(session)
