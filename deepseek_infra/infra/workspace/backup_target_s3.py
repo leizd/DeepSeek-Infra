@@ -419,8 +419,11 @@ class S3TargetStore:
             response = client.complete_multipart_upload(**args)
         except Exception as exc:  # noqa: BLE001
             existing = self.stat(upload.key)
-            if existing is not None and (existing.sha256 == upload.checksum_sha256 or existing.size > 0):
+            expected_size = upload.expected_size if upload.expected_size is not None else sum(int(item.get("size") or 0) for item in upload.parts)
+            if existing is not None and existing.sha256 == upload.checksum_sha256 and existing.size == expected_size:
                 return PutResult(key=upload.key, etag=existing.etag, size=existing.size, created=False, version_id=existing.version_id)
+            if existing is not None:
+                raise AppError("object-integrity-unproven", code=ErrorCode.INVALID_REQUEST, status=409) from exc
             _raise_from_client_error(exc, action="complete-multipart")
         size = sum(int(item.get("size") or 0) for item in upload.parts)
         return PutResult(

@@ -155,6 +155,7 @@ class MultipartUpload:
     upload_id: str
     checksum_sha256: str
     parts: list[dict[str, Any]] = field(default_factory=list)
+    expected_size: int | None = None
 
 
 @runtime_checkable
@@ -494,10 +495,16 @@ def probe_store_capabilities(store: BackupTargetStore, *, prefix: str = "control
         try:
             mp_key = f"{prefix}{nonce}.mp.bin"
             upload = store.begin_multipart(mp_key, checksum_sha256=_sha256_bytes(payload))
+            upload.expected_size = len(payload)
             store.upload_part(upload, 1, payload, checksum_sha256=_sha256_bytes(payload))
             store.complete_multipart_if_absent(upload)
             results["multipart-upload"] = "PASS"
-            results["multipart-checksum"] = "PASS"
+            completed = store.stat(mp_key)
+            results["multipart-checksum"] = (
+                "PASS"
+                if completed is not None and completed.sha256 == _sha256_bytes(payload) and completed.size == len(payload)
+                else "FAIL"
+            )
             store.delete_if_match(mp_key)
         except Exception as exc:  # noqa: BLE001  # pragma: no cover
             results["multipart-upload"] = f"FAIL:{type(exc).__name__}"
@@ -519,10 +526,12 @@ def probe_store_capabilities(store: BackupTargetStore, *, prefix: str = "control
 
     caps = store.capabilities()
     conditional_ok = results.get("conditional-create") == "PASS" and results.get("conditional-replace") == "PASS"
-    status = "READY" if conditional_ok else "unsupported-conditional-target"
+    multipart_ok = not caps.multipart_upload or results.get("multipart-checksum") == "PASS"
+    ready = conditional_ok and multipart_ok
+    status = "READY" if ready else ("object-integrity-unproven" if conditional_ok else "unsupported-conditional-target")
     return {
         "status": status,
-        "scheduledBackupReady": conditional_ok,
+        "scheduledBackupReady": ready,
         "results": results,
         "capabilities": caps.as_dict(),
         "probedAt": _utc_iso(),

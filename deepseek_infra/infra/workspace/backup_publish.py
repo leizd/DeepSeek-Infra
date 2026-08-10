@@ -656,7 +656,13 @@ def _upload_object_resumable(
         part_size = int(state.get("partSize") or (8 * 1024 * 1024))
         from deepseek_infra.infra.workspace.backup_target_store import MultipartUpload
 
-        upload = MultipartUpload(key=obj_key, upload_id=str(state["uploadId"]), checksum_sha256=digest, parts=list(state.get("parts") or []))
+        upload = MultipartUpload(
+            key=obj_key,
+            upload_id=str(state["uploadId"]),
+            checksum_sha256=digest,
+            parts=list(state.get("parts") or []),
+            expected_size=size,
+        )
         state["partSize"] = part_size
         state["workers"] = workers
         state["maxInFlightBytes"] = workers * part_size
@@ -664,6 +670,7 @@ def _upload_object_resumable(
     else:
         part_size = default_part_size
         upload = store.begin_multipart(obj_key, checksum_sha256=digest)
+        upload.expected_size = size
         state = {
             "key": obj_key,
             "uploadId": upload.upload_id,

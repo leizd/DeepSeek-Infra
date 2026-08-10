@@ -1,4 +1,4 @@
-"""Incremental snapshot graphs and content-defined deltas (4.4.9).
+"""Incremental snapshot graphs and effective dedup indexes (4.4.11).
 
 Builds production incremental delta packages relative to a committed parent
 snapshot, attests trees with domain-separated Merkle roots, never emits
@@ -15,6 +15,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, BinaryIO
 
 from deepseek_infra.core import config
@@ -22,6 +23,11 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 
 INDEX_DIR = config.ROOT / ".backup-index"
 INDEX_DB = INDEX_DIR / "index.db"
+BLOOM_BITS_PER_ITEM = 10
+BLOOM_HASH_FUNCTIONS = 7
+BLOOM_MAGIC = b"DSIBBF1\n"
+INDEX_SCHEMA_KEY = "chunk-map-schema"
+INDEX_SCHEMA_VERSION = "2"
 DEFAULT_MAX_CHAIN_DEPTH = 8
 DEFAULT_FULL_INTERVAL_DAYS = 7
 DEFAULT_MAX_DELTA_RATIO = 0.60
@@ -30,7 +36,8 @@ MERKLE_ALGORITHM = "dsib-merkle-sha256-v2"
 _LEAF_DOMAIN = b"\x00"
 _NODE_DOMAIN = b"\x01"
 
-# FastCDC protocol parameters (fixed for lineage stability). 4.4.10 writes v3;
+# FastCDC protocol parameters (fixed for lineage stability). 4.4.10 introduced v3;
+# 4.4.11 keeps v3 while upgrading only the encrypted delta reference format.
 # v2 remains a first-class decoder because a committed 4.4.9 lineage may be
 # restored indefinitely. The v3 normalization deliberately makes boundaries
 # harder before the 2 MiB target and easier afterwards.
@@ -206,6 +213,8 @@ def select_snapshot_plan(
         return "full", None, None, 0, None, None, None
     if not index_available:
         return "full", None, None, 0, None, None, "index-missing"
+    if not index_is_healthy(target_id, policy_id):
+        return "full", None, None, 0, None, None, "chunk-index-rebuild-failed"
     latest = latest_committed_snapshot(target_id, policy_id)
     if latest is None:
         # Existing pre-incremental fulls have no lineage record -> force full.
@@ -291,6 +300,21 @@ class ChunkRecord:
     offset: int
     length: int
     chunk_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class ParentChunkLocation:
+    contributor_id: str
+    logical_path: str
+    chunk_ordinal: int
+    offset: int
+    length: int
+    chunk_sha256: str
+
+
+def chunk_map_id(*, protocol: str, file_size: int, file_sha256: str) -> str:
+    """Content-address an immutable local chunk map without exposing it remotely."""
+    return hashlib.sha256(f"{protocol}\0{int(file_size)}\0{file_sha256}".encode("ascii")).hexdigest()
 
 
 def _fastcdc_gears() -> list[int]:
@@ -432,14 +456,28 @@ def cdc_delta_for_file(
     file_size: int,
     parent_chunks: list[ChunkRecord],
     current_chunks: list[ChunkRecord],
+    parent_locations: dict[tuple[str, int], ParentChunkLocation] | None = None,
 ) -> list[dict[str, Any]]:
     """Describe a large-file delta reusing parent chunks where hashes match."""
-    parent_by_hash: dict[str, int] = {}
+    parent_by_hash: dict[tuple[str, int], int] = {}
     for item in parent_chunks:
-        parent_by_hash.setdefault(item.chunk_sha256, item.chunk_ordinal)
+        parent_by_hash.setdefault((item.chunk_sha256, item.length), item.chunk_ordinal)
     described: list[dict[str, Any]] = []
     for item in current_chunks:
-        parent_ordinal = parent_by_hash.get(item.chunk_sha256)
+        location = (parent_locations or {}).get((item.chunk_sha256, item.length))
+        if location is not None:
+            described.append(
+                {
+                    "length": item.length,
+                    "sha256": item.chunk_sha256,
+                    "source": "parent-range",
+                    "parentContributorId": location.contributor_id,
+                    "parentPath": location.logical_path,
+                    "offset": location.offset,
+                }
+            )
+            continue
+        parent_ordinal = parent_by_hash.get((item.chunk_sha256, item.length))
         if parent_ordinal is not None:
             described.append(
                 {
@@ -563,7 +601,197 @@ def _connect() -> sqlite3.Connection:
         ON snapshot_chunks (target_id, policy_id, backup_id, contributor_id, logical_path, chunk_ordinal)
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chunk_maps (
+            chunk_map_id TEXT PRIMARY KEY,
+            protocol TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            file_sha256 TEXT NOT NULL,
+            chunk_count INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chunk_map_chunks (
+            chunk_map_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            offset INTEGER NOT NULL,
+            length INTEGER NOT NULL,
+            chunk_sha256 TEXT NOT NULL,
+            PRIMARY KEY (chunk_map_id, ordinal),
+            FOREIGN KEY (chunk_map_id) REFERENCES chunk_maps(chunk_map_id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS snapshot_chunk_refs (
+            target_id TEXT NOT NULL,
+            policy_id TEXT NOT NULL,
+            backup_id TEXT NOT NULL,
+            contributor_id TEXT NOT NULL,
+            logical_path TEXT NOT NULL,
+            chunk_map_id TEXT NOT NULL,
+            PRIMARY KEY (target_id, policy_id, backup_id, contributor_id, logical_path),
+            FOREIGN KEY (chunk_map_id) REFERENCES chunk_maps(chunk_map_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_chunk_map_hash
+        ON chunk_map_chunks (chunk_sha256, length, chunk_map_id)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_snapshot_chunk_refs_snapshot
+        ON snapshot_chunk_refs (target_id, policy_id, backup_id, contributor_id, logical_path)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS index_health (
+            target_id TEXT NOT NULL,
+            policy_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (target_id, policy_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS index_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    migrated = connection.execute("SELECT value FROM index_meta WHERE key = ?", (INDEX_SCHEMA_KEY,)).fetchone()
+    if migrated is None or str(migrated["value"]) != INDEX_SCHEMA_VERSION:
+        _migrate_legacy_chunk_index(connection)
+        connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (INDEX_SCHEMA_KEY, INDEX_SCHEMA_VERSION))
+        connection.commit()
     return connection
+
+
+def _migrate_legacy_chunk_index(connection: sqlite3.Connection) -> None:
+    """Idempotently project legacy rows into immutable maps and inherited refs."""
+    legacy_count = int(connection.execute("SELECT COUNT(*) FROM snapshot_chunks").fetchone()[0])
+    rows = connection.execute(
+        """
+        SELECT c.target_id, c.policy_id, c.backup_id, c.contributor_id, c.logical_path,
+               c.chunk_ordinal, c.offset, c.length, c.chunk_sha256,
+               f.size AS file_size, f.sha256 AS file_sha256,
+               COALESCE(NULLIF(l.chunk_protocol, ''), ?) AS protocol
+        FROM snapshot_chunks c
+        JOIN snapshot_files f
+          ON f.target_id = c.target_id AND f.policy_id = c.policy_id AND f.backup_id = c.backup_id
+         AND f.contributor_id = c.contributor_id AND f.logical_path = c.logical_path
+        JOIN snapshot_lineages l
+          ON l.target_id = c.target_id AND l.policy_id = c.policy_id AND l.backup_id = c.backup_id
+        ORDER BY c.target_id, c.policy_id, c.backup_id, c.contributor_id, c.logical_path, c.chunk_ordinal
+        """,
+        (CDC_ALGORITHM_V2,),
+    ).fetchall()
+    migration_broken = len(rows) != legacy_count
+    grouped: dict[tuple[str, str, str, str, str], list[sqlite3.Row]] = {}
+    for row in rows:
+        key = (
+            str(row["target_id"]),
+            str(row["policy_id"]),
+            str(row["backup_id"]),
+            str(row["contributor_id"]),
+            str(row["logical_path"]),
+        )
+        grouped.setdefault(key, []).append(row)
+    for (target_id, policy_id, backup_id, contributor_id, logical_path), items in grouped.items():
+        first = items[0]
+        protocol = str(first["protocol"])
+        if protocol not in SUPPORTED_CDC_PROTOCOLS:
+            migration_broken = True
+            continue
+        file = FileRecord(contributor_id, logical_path, int(first["file_size"]), str(first["file_sha256"]))
+        chunk_records = [
+            ChunkRecord(
+                contributor_id,
+                logical_path,
+                int(item["chunk_ordinal"]),
+                int(item["offset"]),
+                int(item["length"]),
+                str(item["chunk_sha256"]),
+            )
+            for item in items
+        ]
+        try:
+            _validate_chunk_map(file, chunk_records)
+        except AppError:
+            migration_broken = True
+            continue
+        map_id = chunk_map_id(protocol=protocol, file_size=file.size, file_sha256=file.sha256)
+        connection.execute(
+            "INSERT OR IGNORE INTO chunk_maps (chunk_map_id, protocol, file_size, file_sha256, chunk_count) VALUES (?, ?, ?, ?, ?)",
+            (map_id, protocol, file.size, file.sha256, len(items)),
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO chunk_map_chunks (chunk_map_id, ordinal, offset, length, chunk_sha256) VALUES (?, ?, ?, ?, ?)",
+            [(map_id, int(item["chunk_ordinal"]), int(item["offset"]), int(item["length"]), str(item["chunk_sha256"])) for item in items],
+        )
+        try:
+            _assert_stored_chunk_map(connection, map_id=map_id, protocol=protocol, file=file, chunks=chunk_records)
+        except AppError:
+            migration_broken = True
+            continue
+        connection.execute(
+            "INSERT OR IGNORE INTO snapshot_chunk_refs (target_id, policy_id, backup_id, contributor_id, logical_path, chunk_map_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (target_id, policy_id, backup_id, contributor_id, logical_path, map_id),
+        )
+    # Replay effective refs through immediate parents. Matching file identity is
+    # required, so a changed file can never inherit a stale map accidentally.
+    lineages = connection.execute(
+        "SELECT target_id, policy_id, backup_id, parent_backup_id FROM snapshot_lineages WHERE parent_backup_id IS NOT NULL ORDER BY chain_depth, committed_at, rowid"
+    ).fetchall()
+    for lineage in lineages:
+        parent_exists = connection.execute(
+            "SELECT 1 FROM snapshot_lineages WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+            (str(lineage["target_id"]), str(lineage["policy_id"]), str(lineage["parent_backup_id"])),
+        ).fetchone()
+        if parent_exists is None:
+            migration_broken = True
+            continue
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO snapshot_chunk_refs
+            (target_id, policy_id, backup_id, contributor_id, logical_path, chunk_map_id)
+            SELECT ?, ?, ?, child_file.contributor_id, child_file.logical_path, parent_ref.chunk_map_id
+            FROM snapshot_chunk_refs parent_ref
+            JOIN snapshot_files parent_file
+              ON parent_file.target_id = parent_ref.target_id AND parent_file.policy_id = parent_ref.policy_id
+             AND parent_file.backup_id = parent_ref.backup_id AND parent_file.contributor_id = parent_ref.contributor_id
+             AND parent_file.logical_path = parent_ref.logical_path
+            JOIN snapshot_files child_file
+              ON child_file.target_id = ? AND child_file.policy_id = ? AND child_file.backup_id = ?
+             AND child_file.size = parent_file.size AND child_file.sha256 = parent_file.sha256
+            WHERE parent_ref.target_id = ? AND parent_ref.policy_id = ? AND parent_ref.backup_id = ?
+            """,
+            (
+                str(lineage["target_id"]), str(lineage["policy_id"]), str(lineage["backup_id"]),
+                str(lineage["target_id"]), str(lineage["policy_id"]), str(lineage["backup_id"]),
+                str(lineage["target_id"]), str(lineage["policy_id"]), str(lineage["parent_backup_id"]),
+            ),
+        )
+    if migration_broken:
+        scopes = connection.execute(
+            "SELECT target_id, policy_id FROM snapshot_lineages UNION SELECT target_id, policy_id FROM snapshot_chunks"
+        ).fetchall()
+        connection.executemany(
+            "INSERT OR REPLACE INTO index_health (target_id, policy_id, status, reason, updated_at) VALUES (?, ?, 'stale', 'chunk-index-rebuild-failed', ?)",
+            [(str(row["target_id"]), str(row["policy_id"]), _utc_iso()) for row in scopes],
+        )
 
 
 def record_committed_snapshot(
@@ -624,6 +852,222 @@ def record_committed_snapshot(
             ],
         )
         connection.commit()
+
+
+def index_is_healthy(target_id: str, policy_id: str) -> bool:
+    if _health_marker_path(target_id, policy_id).exists():
+        return False
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT status FROM index_health WHERE target_id = ? AND policy_id = ?",
+            (target_id, policy_id),
+        ).fetchone()
+    return row is None or str(row["status"]) == "healthy"
+
+
+def mark_index_stale(target_id: str, policy_id: str, reason: str) -> None:
+    marker = _health_marker_path(target_id, policy_id)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        temporary = marker.with_suffix(".tmp")
+        temporary.write_text(reason + "\n", encoding="utf-8")
+        temporary.replace(marker)
+    except OSError:
+        pass
+    try:
+        with _connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO index_health (target_id, policy_id, status, reason, updated_at)
+                VALUES (?, ?, 'stale', ?, ?)
+                """,
+                (target_id, policy_id, reason, _utc_iso()),
+            )
+            connection.commit()
+    except sqlite3.Error:
+        pass
+
+
+def _health_marker_path(target_id: str, policy_id: str) -> Path:
+    scope = hashlib.sha256(f"{target_id}\0{policy_id}".encode()).hexdigest()[:24]
+    return INDEX_DIR / "health" / f"{scope}.stale"
+
+
+def _validate_chunk_map(file: FileRecord, chunks: list[ChunkRecord]) -> None:
+    expected_offset = 0
+    for ordinal, item in enumerate(chunks):
+        if item.chunk_ordinal != ordinal or item.offset != expected_offset or item.length <= 0:
+            raise AppError("Chunk index map is non-contiguous", code=ErrorCode.INTERNAL, status=500)
+        if len(item.chunk_sha256) != 64:
+            raise AppError("Chunk index map has an invalid digest", code=ErrorCode.INTERNAL, status=500)
+        expected_offset += item.length
+    if expected_offset != file.size:
+        raise AppError("Chunk index map does not cover its file", code=ErrorCode.INTERNAL, status=500)
+
+
+def _assert_stored_chunk_map(
+    connection: sqlite3.Connection,
+    *,
+    map_id: str,
+    protocol: str,
+    file: FileRecord,
+    chunks: list[ChunkRecord],
+) -> None:
+    metadata = connection.execute(
+        "SELECT protocol, file_size, file_sha256, chunk_count FROM chunk_maps WHERE chunk_map_id = ?",
+        (map_id,),
+    ).fetchone()
+    stored = connection.execute(
+        "SELECT ordinal, offset, length, chunk_sha256 FROM chunk_map_chunks WHERE chunk_map_id = ? ORDER BY ordinal",
+        (map_id,),
+    ).fetchall()
+    expected = [(item.chunk_ordinal, item.offset, item.length, item.chunk_sha256) for item in chunks]
+    actual = [(int(row["ordinal"]), int(row["offset"]), int(row["length"]), str(row["chunk_sha256"])) for row in stored]
+    if (
+        metadata is None
+        or str(metadata["protocol"]) != protocol
+        or int(metadata["file_size"]) != file.size
+        or str(metadata["file_sha256"]) != file.sha256
+        or int(metadata["chunk_count"]) != len(chunks)
+        or actual != expected
+    ):
+        raise AppError("Immutable chunk map conflicts with stored index data", code=ErrorCode.INTERNAL, status=500)
+
+
+def commit_snapshot_index(
+    *,
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    parent_backup_id: str | None,
+    base_backup_id: str | None,
+    chain_depth: int,
+    root_digest: str,
+    files: list[FileRecord],
+    chunks: list[ChunkRecord],
+    scope_digest: str = "",
+    recipient_set_digest: str = "",
+    schema_digest: str = "",
+    chunk_protocol: str = CURRENT_CDC_PROTOCOL,
+    full_committed_at: str | None = None,
+    logical_bytes: int = 0,
+) -> None:
+    """Atomically commit lineage, effective files, immutable maps and refs."""
+    grouped: dict[tuple[str, str], list[ChunkRecord]] = {}
+    for item in chunks:
+        grouped.setdefault((item.contributor_id, item.logical_path), []).append(item)
+    file_by_key = {(item.contributor_id, item.logical_path): item for item in files}
+    for key, items in grouped.items():
+        file = file_by_key.get(key)
+        if file is None:
+            raise AppError("Chunk index references an unknown file", code=ErrorCode.INTERNAL, status=500)
+        _validate_chunk_map(file, sorted(items, key=lambda item: item.chunk_ordinal))
+
+    try:
+        with _connect() as connection:
+            connection.commit()
+            health = connection.execute(
+                "SELECT status FROM index_health WHERE target_id = ? AND policy_id = ?",
+                (target_id, policy_id),
+            ).fetchone()
+            rebuilding = parent_backup_id is None and (
+                _health_marker_path(target_id, policy_id).exists()
+                or (health is not None and str(health["status"]) != "healthy")
+            )
+            connection.execute("BEGIN IMMEDIATE")
+            if rebuilding:
+                connection.execute("DELETE FROM snapshot_chunk_refs WHERE target_id = ? AND policy_id = ?", (target_id, policy_id))
+                connection.execute("DELETE FROM snapshot_chunks WHERE target_id = ? AND policy_id = ?", (target_id, policy_id))
+                connection.execute("DELETE FROM snapshot_files WHERE target_id = ? AND policy_id = ?", (target_id, policy_id))
+                connection.execute("DELETE FROM snapshot_lineages WHERE target_id = ? AND policy_id = ?", (target_id, policy_id))
+                connection.execute(
+                    "DELETE FROM chunk_map_chunks WHERE NOT EXISTS (SELECT 1 FROM snapshot_chunk_refs r WHERE r.chunk_map_id = chunk_map_chunks.chunk_map_id)"
+                )
+                connection.execute(
+                    "DELETE FROM chunk_maps WHERE NOT EXISTS (SELECT 1 FROM snapshot_chunk_refs r WHERE r.chunk_map_id = chunk_maps.chunk_map_id)"
+                )
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO snapshot_lineages
+                (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at,
+                 scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, logical_bytes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_id, policy_id, backup_id, parent_backup_id, base_backup_id, int(chain_depth), root_digest, _utc_iso(),
+                    scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, int(logical_bytes),
+                ),
+            )
+            connection.execute(
+                "DELETE FROM snapshot_files WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+                (target_id, policy_id, backup_id),
+            )
+            connection.executemany(
+                "INSERT INTO snapshot_files (target_id, policy_id, backup_id, contributor_id, logical_path, size, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(target_id, policy_id, backup_id, item.contributor_id, item.logical_path, int(item.size), item.sha256) for item in files],
+            )
+            connection.execute(
+                "DELETE FROM snapshot_chunk_refs WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+                (target_id, policy_id, backup_id),
+            )
+            for key, raw_items in grouped.items():
+                file = file_by_key[key]
+                items = sorted(raw_items, key=lambda item: item.chunk_ordinal)
+                map_id = chunk_map_id(protocol=chunk_protocol, file_size=file.size, file_sha256=file.sha256)
+                if rebuilding:
+                    connection.execute("DELETE FROM chunk_map_chunks WHERE chunk_map_id = ?", (map_id,))
+                    connection.execute(
+                        "INSERT OR REPLACE INTO chunk_maps (chunk_map_id, protocol, file_size, file_sha256, chunk_count) VALUES (?, ?, ?, ?, ?)",
+                        (map_id, chunk_protocol, int(file.size), file.sha256, len(items)),
+                    )
+                    connection.executemany(
+                        "INSERT INTO chunk_map_chunks (chunk_map_id, ordinal, offset, length, chunk_sha256) VALUES (?, ?, ?, ?, ?)",
+                        [(map_id, item.chunk_ordinal, item.offset, item.length, item.chunk_sha256) for item in items],
+                    )
+                else:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO chunk_maps (chunk_map_id, protocol, file_size, file_sha256, chunk_count) VALUES (?, ?, ?, ?, ?)",
+                        (map_id, chunk_protocol, int(file.size), file.sha256, len(items)),
+                    )
+                    connection.executemany(
+                        "INSERT OR IGNORE INTO chunk_map_chunks (chunk_map_id, ordinal, offset, length, chunk_sha256) VALUES (?, ?, ?, ?, ?)",
+                        [(map_id, item.chunk_ordinal, item.offset, item.length, item.chunk_sha256) for item in items],
+                    )
+                _assert_stored_chunk_map(connection, map_id=map_id, protocol=chunk_protocol, file=file, chunks=items)
+                connection.execute(
+                    "INSERT INTO snapshot_chunk_refs (target_id, policy_id, backup_id, contributor_id, logical_path, chunk_map_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    (target_id, policy_id, backup_id, key[0], key[1], map_id),
+                )
+            if parent_backup_id:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO snapshot_chunk_refs
+                    (target_id, policy_id, backup_id, contributor_id, logical_path, chunk_map_id)
+                    SELECT ?, ?, ?, child_file.contributor_id, child_file.logical_path, parent_ref.chunk_map_id
+                    FROM snapshot_chunk_refs parent_ref
+                    JOIN snapshot_files parent_file
+                      ON parent_file.target_id = parent_ref.target_id AND parent_file.policy_id = parent_ref.policy_id
+                     AND parent_file.backup_id = parent_ref.backup_id AND parent_file.contributor_id = parent_ref.contributor_id
+                     AND parent_file.logical_path = parent_ref.logical_path
+                    JOIN snapshot_files child_file
+                      ON child_file.target_id = ? AND child_file.policy_id = ? AND child_file.backup_id = ?
+                     AND child_file.size = parent_file.size AND child_file.sha256 = parent_file.sha256
+                    WHERE parent_ref.target_id = ? AND parent_ref.policy_id = ? AND parent_ref.backup_id = ?
+                    """,
+                    (target_id, policy_id, backup_id, target_id, policy_id, backup_id, target_id, policy_id, parent_backup_id),
+                )
+            connection.execute(
+                "INSERT OR REPLACE INTO index_health (target_id, policy_id, status, reason, updated_at) VALUES (?, ?, 'healthy', '', ?)",
+                (target_id, policy_id, _utc_iso()),
+            )
+            connection.commit()
+        try:
+            _health_marker_path(target_id, policy_id).unlink(missing_ok=True)
+        except OSError:
+            pass
+    except Exception:
+        mark_index_stale(target_id, policy_id, "snapshot-index-commit-failed")
+        raise
 
 
 def latest_committed_snapshot(target_id: str, policy_id: str) -> dict[str, Any] | None:
@@ -691,6 +1135,38 @@ def record_snapshot_chunks(
                 for item in chunks
             ],
         )
+        grouped: dict[tuple[str, str], list[ChunkRecord]] = {}
+        for item in chunks:
+            grouped.setdefault((item.contributor_id, item.logical_path), []).append(item)
+        connection.execute(
+            "DELETE FROM snapshot_chunk_refs WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+            (target_id, policy_id, backup_id),
+        )
+        for (contributor_id, logical_path), items in grouped.items():
+            file = connection.execute(
+                "SELECT size, sha256 FROM snapshot_files WHERE target_id = ? AND policy_id = ? AND backup_id = ? AND contributor_id = ? AND logical_path = ?",
+                (target_id, policy_id, backup_id, contributor_id, logical_path),
+            ).fetchone()
+            lineage = connection.execute(
+                "SELECT COALESCE(NULLIF(chunk_protocol, ''), ?) AS protocol FROM snapshot_lineages WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+                (CDC_ALGORITHM_V2, target_id, policy_id, backup_id),
+            ).fetchone()
+            if file is None or lineage is None:
+                continue
+            ordered = sorted(items, key=lambda item: item.chunk_ordinal)
+            map_id = chunk_map_id(protocol=str(lineage["protocol"]), file_size=int(file["size"]), file_sha256=str(file["sha256"]))
+            connection.execute(
+                "INSERT OR IGNORE INTO chunk_maps (chunk_map_id, protocol, file_size, file_sha256, chunk_count) VALUES (?, ?, ?, ?, ?)",
+                (map_id, str(lineage["protocol"]), int(file["size"]), str(file["sha256"]), len(ordered)),
+            )
+            connection.executemany(
+                "INSERT OR IGNORE INTO chunk_map_chunks (chunk_map_id, ordinal, offset, length, chunk_sha256) VALUES (?, ?, ?, ?, ?)",
+                [(map_id, item.chunk_ordinal, item.offset, item.length, item.chunk_sha256) for item in ordered],
+            )
+            connection.execute(
+                "INSERT INTO snapshot_chunk_refs (target_id, policy_id, backup_id, contributor_id, logical_path, chunk_map_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (target_id, policy_id, backup_id, contributor_id, logical_path, map_id),
+            )
         connection.commit()
 
 
@@ -698,13 +1174,19 @@ def load_snapshot_chunks(target_id: str, policy_id: str, backup_id: str) -> list
     with _connect() as connection:
         rows = connection.execute(
             """
-            SELECT contributor_id, logical_path, chunk_ordinal, offset, length, chunk_sha256
-            FROM snapshot_chunks
-            WHERE target_id = ? AND policy_id = ? AND backup_id = ?
-            ORDER BY contributor_id, logical_path, chunk_ordinal
+            SELECT r.contributor_id, r.logical_path, c.ordinal AS chunk_ordinal, c.offset, c.length, c.chunk_sha256
+            FROM snapshot_chunk_refs r
+            JOIN chunk_map_chunks c ON c.chunk_map_id = r.chunk_map_id
+            WHERE r.target_id = ? AND r.policy_id = ? AND r.backup_id = ?
+            ORDER BY r.contributor_id, r.logical_path, c.ordinal
             """,
             (target_id, policy_id, backup_id),
         ).fetchall()
+        if not rows:
+            rows = connection.execute(
+                "SELECT contributor_id, logical_path, chunk_ordinal, offset, length, chunk_sha256 FROM snapshot_chunks WHERE target_id = ? AND policy_id = ? AND backup_id = ? ORDER BY contributor_id, logical_path, chunk_ordinal",
+                (target_id, policy_id, backup_id),
+            ).fetchall()
     return [
         ChunkRecord(str(row["contributor_id"]), str(row["logical_path"]), int(row["chunk_ordinal"]), int(row["offset"]), int(row["length"]), str(row["chunk_sha256"]))
         for row in rows
@@ -722,18 +1204,253 @@ def load_snapshot_chunks_for_file(
     with _connect() as connection:
         rows = connection.execute(
             """
-            SELECT contributor_id, logical_path, chunk_ordinal, offset, length, chunk_sha256
-            FROM snapshot_chunks
-            WHERE target_id = ? AND policy_id = ? AND backup_id = ?
-              AND contributor_id = ? AND logical_path = ?
-            ORDER BY chunk_ordinal
+            SELECT r.contributor_id, r.logical_path, c.ordinal AS chunk_ordinal, c.offset, c.length, c.chunk_sha256
+            FROM snapshot_chunk_refs r
+            JOIN chunk_map_chunks c ON c.chunk_map_id = r.chunk_map_id
+            WHERE r.target_id = ? AND r.policy_id = ? AND r.backup_id = ?
+              AND r.contributor_id = ? AND r.logical_path = ?
+            ORDER BY c.ordinal
             """,
             (target_id, policy_id, backup_id, contributor_id, logical_path),
         ).fetchall()
+        if not rows:
+            rows = connection.execute(
+                "SELECT contributor_id, logical_path, chunk_ordinal, offset, length, chunk_sha256 FROM snapshot_chunks WHERE target_id = ? AND policy_id = ? AND backup_id = ? AND contributor_id = ? AND logical_path = ? ORDER BY chunk_ordinal",
+                (target_id, policy_id, backup_id, contributor_id, logical_path),
+            ).fetchall()
     return [
         ChunkRecord(str(row["contributor_id"]), str(row["logical_path"]), int(row["chunk_ordinal"]), int(row["offset"]), int(row["length"]), str(row["chunk_sha256"]))
         for row in rows
     ]
+
+
+def load_snapshot_chunk_refs(target_id: str, policy_id: str, backup_id: str) -> dict[tuple[str, str], str]:
+    with _connect() as connection:
+        rows = connection.execute(
+            "SELECT contributor_id, logical_path, chunk_map_id FROM snapshot_chunk_refs WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+            (target_id, policy_id, backup_id),
+        ).fetchall()
+    return {(str(row["contributor_id"]), str(row["logical_path"])): str(row["chunk_map_id"]) for row in rows}
+
+
+def lookup_parent_file_by_digest(
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    *,
+    sha256: str,
+    size: int,
+    exclude_path: str = "",
+) -> FileRecord | None:
+    with _connect() as connection:
+        row = connection.execute(
+            """
+            SELECT contributor_id, logical_path, size, sha256
+            FROM snapshot_files
+            WHERE target_id = ? AND policy_id = ? AND backup_id = ? AND sha256 = ? AND size = ?
+              AND logical_path != ?
+            ORDER BY contributor_id, logical_path
+            LIMIT 1
+            """,
+            (target_id, policy_id, backup_id, sha256, int(size), exclude_path),
+        ).fetchone()
+    if row is None:
+        return None
+    return FileRecord(str(row["contributor_id"]), str(row["logical_path"]), int(row["size"]), str(row["sha256"]))
+
+
+def lookup_parent_chunks(
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    candidates: list[tuple[str, int]],
+    *,
+    preferred_file: tuple[str, str] | None = None,
+    batch_size: int = 256,
+) -> dict[tuple[str, int], ParentChunkLocation]:
+    """Batch exact chunk lookup scoped strictly to the immediate parent view."""
+    unique = list(dict.fromkeys((str(sha), int(length)) for sha, length in candidates))
+    found: dict[tuple[str, int], ParentChunkLocation] = {}
+    with _connect() as connection:
+        for start in range(0, len(unique), max(1, min(512, batch_size))):
+            batch = unique[start : start + max(1, min(512, batch_size))]
+            if not batch:
+                continue
+            predicates = " OR ".join("(c.chunk_sha256 = ? AND c.length = ?)" for _ in batch)
+            parameters: list[Any] = [target_id, policy_id, backup_id]
+            for sha256, length in batch:
+                parameters.extend((sha256, length))
+            rows = connection.execute(
+                f"""
+                SELECT r.contributor_id, r.logical_path, c.ordinal, c.offset, c.length, c.chunk_sha256
+                FROM snapshot_chunk_refs r
+                JOIN chunk_map_chunks c ON c.chunk_map_id = r.chunk_map_id
+                WHERE r.target_id = ? AND r.policy_id = ? AND r.backup_id = ? AND ({predicates})
+                ORDER BY r.contributor_id, r.logical_path, c.ordinal
+                """,
+                parameters,
+            ).fetchall()
+            for row in rows:
+                key = (str(row["chunk_sha256"]), int(row["length"]))
+                location = ParentChunkLocation(
+                    str(row["contributor_id"]), str(row["logical_path"]), int(row["ordinal"]),
+                    int(row["offset"]), int(row["length"]), str(row["chunk_sha256"]),
+                )
+                current = found.get(key)
+                if current is None or (
+                    preferred_file is not None
+                    and (location.contributor_id, location.logical_path) == preferred_file
+                    and (current.contributor_id, current.logical_path) != preferred_file
+                ):
+                    found[key] = location
+    return found
+
+
+class ParentChunkBloom:
+    """Local-only probabilistic negative cache; exact SQLite remains authoritative."""
+
+    def __init__(self, bits: bytearray, bit_count: int, hash_count: int = BLOOM_HASH_FUNCTIONS) -> None:
+        self.bits = bits
+        self.bit_count = bit_count
+        self.hash_count = hash_count
+
+    @staticmethod
+    def _key(sha256: str, length: int) -> bytes:
+        return f"{sha256}:{int(length)}".encode("ascii")
+
+    def _positions(self, sha256: str, length: int) -> list[int]:
+        digest = hashlib.sha256(self._key(sha256, length)).digest()
+        first = int.from_bytes(digest[:8], "big")
+        second = int.from_bytes(digest[8:16], "big") or 1
+        return [int((first + index * second) % self.bit_count) for index in range(self.hash_count)]
+
+    def add(self, sha256: str, length: int) -> None:
+        for position in self._positions(sha256, length):
+            self.bits[position // 8] |= 1 << (position % 8)
+
+    def might_contain(self, sha256: str, length: int) -> bool:
+        return all(self.bits[position // 8] & (1 << (position % 8)) for position in self._positions(sha256, length))
+
+    def to_bytes(self) -> bytes:
+        header = _stable_json({"bits": self.bit_count, "hashes": self.hash_count}) + b"\n"
+        return BLOOM_MAGIC + header + bytes(self.bits)
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> ParentChunkBloom | None:
+        try:
+            if not raw.startswith(BLOOM_MAGIC):
+                return None
+            header_raw, body = raw[len(BLOOM_MAGIC) :].split(b"\n", 1)
+            header = json.loads(header_raw)
+            bit_count = int(header["bits"])
+            hash_count = int(header["hashes"])
+            if bit_count <= 0 or hash_count <= 0 or len(body) * 8 < bit_count:
+                return None
+            return cls(bytearray(body), bit_count, hash_count)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+
+def _bloom_path(target_id: str, policy_id: str, backup_id: str) -> Path:
+    scope = hashlib.sha256(f"{target_id}\0{policy_id}".encode()).hexdigest()[:24]
+    return INDEX_DIR / "bloom" / scope / f"{backup_id}.bf"
+
+
+def parent_chunk_bloom(target_id: str, policy_id: str, backup_id: str) -> ParentChunkBloom:
+    path = _bloom_path(target_id, policy_id, backup_id)
+    try:
+        loaded = ParentChunkBloom.from_bytes(path.read_bytes())
+    except OSError:
+        loaded = None
+    if loaded is not None:
+        return loaded
+    with _connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT c.chunk_sha256, c.length
+            FROM snapshot_chunk_refs r JOIN chunk_map_chunks c ON c.chunk_map_id = r.chunk_map_id
+            WHERE r.target_id = ? AND r.policy_id = ? AND r.backup_id = ?
+            """,
+            (target_id, policy_id, backup_id),
+        ).fetchall()
+    bit_count = max(8, len(rows) * BLOOM_BITS_PER_ITEM)
+    bloom = ParentChunkBloom(bytearray((bit_count + 7) // 8), bit_count)
+    for row in rows:
+        bloom.add(str(row["chunk_sha256"]), int(row["length"]))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_bytes(bloom.to_bytes())
+        temporary.replace(path)
+    except OSError:
+        pass
+    return bloom
+
+
+def lookup_parent_chunks_accelerated(
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    candidates: list[tuple[str, int]],
+    *,
+    preferred_file: tuple[str, str] | None = None,
+) -> tuple[dict[tuple[str, int], ParentChunkLocation], dict[str, int]]:
+    bloom = parent_chunk_bloom(target_id, policy_id, backup_id)
+    maybe: list[tuple[str, int]] = []
+    negatives = 0
+    for candidate in dict.fromkeys(candidates):
+        if bloom.might_contain(*candidate):
+            maybe.append(candidate)
+        else:
+            negatives += 1
+    exact = (
+        lookup_parent_chunks(target_id, policy_id, backup_id, maybe, preferred_file=preferred_file)
+        if maybe
+        else {}
+    )
+    return exact, {
+        "bloomNegatives": negatives,
+        "bloomPositives": len(maybe),
+        "exactHits": len(exact),
+        "falsePositives": max(0, len(maybe) - len(exact)),
+    }
+
+
+def garbage_collect_chunk_maps(deleted_snapshots: list[tuple[str, str, str]]) -> dict[str, int]:
+    """Drop physically deleted snapshot rows and now-unreferenced maps."""
+    bloom_paths = [_bloom_path(target_id, policy_id, backup_id) for target_id, policy_id, backup_id in deleted_snapshots]
+    with _connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        for target_id, policy_id, backup_id in deleted_snapshots:
+            connection.execute(
+                "DELETE FROM snapshot_chunk_refs WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+                (target_id, policy_id, backup_id),
+            )
+            connection.execute(
+                "DELETE FROM snapshot_chunks WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+                (target_id, policy_id, backup_id),
+            )
+            connection.execute(
+                "DELETE FROM snapshot_files WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+                (target_id, policy_id, backup_id),
+            )
+            connection.execute(
+                "DELETE FROM snapshot_lineages WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+                (target_id, policy_id, backup_id),
+            )
+        before = int(connection.execute("SELECT COUNT(*) FROM chunk_maps").fetchone()[0])
+        connection.execute(
+            "DELETE FROM chunk_map_chunks WHERE NOT EXISTS (SELECT 1 FROM snapshot_chunk_refs r WHERE r.chunk_map_id = chunk_map_chunks.chunk_map_id)"
+        )
+        connection.execute("DELETE FROM chunk_maps WHERE NOT EXISTS (SELECT 1 FROM snapshot_chunk_refs r WHERE r.chunk_map_id = chunk_maps.chunk_map_id)")
+        after = int(connection.execute("SELECT COUNT(*) FROM chunk_maps").fetchone()[0])
+        connection.commit()
+    for path in bloom_paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"deletedSnapshotRefs": len(deleted_snapshots), "deletedChunkMaps": before - after}
 
 
 def receipt_lineage_fields(receipt: dict[str, Any]) -> dict[str, Any]:

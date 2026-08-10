@@ -5,13 +5,13 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.10。
+适用版本：v4.4.11。
 
-> 4.4.10 closes remote Chain Materialize into the federated restore transaction, streams parent/payload reconstruction with 1 MiB bounds, introduces versioned FastCDC v3 plus exact Python/Rust engine parity, freezes plans from actual delta ratio, and resumes fenced four-worker S3 multipart uploads from durable per-part journals.
+> 4.4.11 gives Chunk State the same Effective Snapshot semantics as File State: immutable maps are inherited by reference across unchanged Incrementals, exact Immediate Parent lookup reuses chunks and whole files across paths, and `incremental-v4` restores Parent Ranges from an immutable two-phase view. Local Bloom acceleration, Rust JSONL batch scanning, accurate fallback metrics, legacy index migration/GC and strict multipart convergence do not weaken the Age or remote metadata boundaries.
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
 
-> 4.4.9 provides true delta packages and verified Full + Delta recovery chains. 4.4.10 keeps those contents encrypted while bounding reconstruction memory and native acceleration; WebDAV, convergent encryption and cloud chunk CAS remain reserved, not GA. Recovery Identities, Chunk hashes and cloud Access Keys never enter remote receipts or performance telemetry.
+> 4.4.10 provides bounded streaming recovery, FastCDC v3 and native/Python parity. 4.4.11 keeps all plaintext Chunk Maps and Bloom data local while using encrypted Manifest references for cross-file reuse; WebDAV, convergent encryption, cloud chunk CAS and historical references beyond the Immediate Parent remain reserved, not GA. Recovery Identities, Chunk hashes, file paths and cloud Access Keys never enter remote receipts or dedup telemetry.
 
 > 4.4.5 closed automatic backups into a fenced commit loop: heartbeated run leases, target writer leases, immutable content-addressed objects with one formal commit marker per schedule slot, catalog-as-projection with CAS, target rollback/fork/clone detection, retention snapshot CAS with trash journals, immutable mirror generations with epoch/sequence fences and policy-specific recipient variants, plus single-tab frontend mirror uploader election. Recovery Identities remain offline-only.
 

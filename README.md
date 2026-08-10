@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.10-blue)
+![版本](https://img.shields.io/badge/version-4.4.11-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.10 Streaming Recovery & Native Delta Acceleration：** 增量恢复从远端 Target 到 Federated Restore 形成公开闭环；父文件和 Payload Chunk 全程以 1 MiB 有界窗口流式重建。`fastcdc-gear-v3` 成为新写入协议，v2 解码继续兼容；Python/Rust Chunk Engine 共享同一边界合同并安全回退。扫描、哈希与 CDC 单次遍历且受并发字节预算约束，实际 Delta 比率会在发布前冻结 Full/Incremental 计划；S3 multipart 以 4 个 Worker、16 MiB Part 和耐久 Part Journal 恢复。参见 [4.4.10 发布说明](docs/releases/4.4.10.md)（上一版 [4.4.9](docs/releases/4.4.9.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
+> **4.4.11 Effective Snapshot Dedup Index & Cross-File Chunk Reuse：** 本地 `.backup-index` 以不可变 Chunk Map 和 Snapshot Reference 表达有效快照，未变化的大文件 Map 可无损穿过任意数量的 Incremental。新文件可精确复用 Immediate Parent 中其他文件的 Chunk 或完整内容；加密 Manifest 只记录 `parent-range`，恢复先在只读 Parent View 上准备并校验全部 PUT，再提交 Delete/Replace。Bloom 只做本地负查加速，精确 SQLite 匹配仍是唯一复用依据；Rust 批扫描、真实回退遥测和 S3 multipart 精确摘要/长度收敛共同 Fail Closed。参见 [4.4.11 发布说明](docs/releases/4.4.11.md)（上一版 [4.4.10](docs/releases/4.4.10.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)。
 
-**4.4.10 validation:** 远端 Chain Materialize 接入既有 Federated Restore、父文件/Payload 不整体读入内存、CDC v2/v3 解码与升级强制 Full、Python/Rust 精确边界一致、受限并发扫描、实际 Delta 比率冻结计划、Multipart ListParts 恢复与 Fence 检查、重试幂等、遥测不泄露 Chunk Hash。
+**4.4.11 validation:** Effective Chunk Ref 跨未变化 Incremental 继承、不可变 Map 单份存储、索引单事务提交与损坏强制 Full、跨文件 Chunk/整文件零 Payload 复用、`incremental-v4` Parent Range、Immutable Parent 两阶段恢复、Bloom 负查后精确批查询、Rust `scan-batch` 与逐文件回退计数、S3 Multipart 摘要和长度双重收敛、远端遥测不泄露路径或 Hash。
 
 ## 30 秒概览
 

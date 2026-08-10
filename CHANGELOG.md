@@ -4,6 +4,31 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.11] - Effective Snapshot Dedup Index and Cross-File Chunk Reuse
+
+### Effective snapshot chunk state
+
+- Replaces per-snapshot copied chunk rows with immutable content-addressed Chunk Maps and effective Snapshot references inherited across unchanged Incrementals.
+- Commits lineage, effective files, new maps and references in one SQLite transaction; conflicts roll back, mark the local index stale and force the next run to Full.
+- Migrates the legacy index once and garbage-collects unreferenced maps only after retention physically deletes their snapshot references.
+
+### Cross-file and whole-file reuse
+
+- Batches exact SHA-256 plus length lookups across the Immediate Parent effective view, preferring same-file ranges but allowing safe cross-file reuse.
+- Adds local-only Bloom negative acceleration without allowing probabilistic matches to authorize reuse or leaking hashes into receipts, cloud objects or telemetry.
+- Reuses renamed/copied whole files with `parent-file` operations and reports aggregate same-file, cross-file, whole-file, payload and lookup metrics without paths or hashes.
+
+### Incremental v4 restore and native batching
+
+- `incremental-v4` encodes verified `parent-range` byte references while retaining legacy v2/v3 `parentOrdinal` restore compatibility and FastCDC v3 generation.
+- Materialization prepares and verifies every PUT against an immutable Parent Tree before committing deletes and atomic replacements, making swaps, renames and cross-file references safe.
+- Adds Rust `scan-batch` JSONL processing, accurate per-file native fallback telemetry and degraded-rate reporting.
+
+### Remote fail-closed convergence
+
+- S3 multipart conflict convergence now requires both exact SHA-256 metadata and exact expected size; foreign non-empty objects fail with `object-integrity-unproven`.
+- Capability probes reject scheduled backup on providers that do not preserve multipart checksum metadata.
+
 ## [4.4.10] - Streaming Recovery and Native Delta Acceleration
 
 ### Public, bounded restore materialization

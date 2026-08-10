@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.10。
+适用版本：v4.4.11。
 
 DeepSeek Infra 默认服务形态是一个单进程 FastAPI / ASGI 运行时：`/v1` OpenAI 兼容网关、`/mcp`、`/a2a`、`/api/*` 业务端点，加 `/healthz`·`/readyz`·`/metrics` 运维三件套。它的可写状态集中在 `DEEPSEEK_INFRA_ROOT`（或兼容变量 `DEEPSEEK_MOBILE_ROOT`）指定的数据目录。另有可选的无状态 MCP 双实例栈；它把持久任务状态放在独立 Redis AOF 卷中，因此不属于默认单卷备份边界。
 
@@ -21,7 +21,7 @@ docker compose logs -f deepseek-infra
 
 ```bash
 curl http://127.0.0.1:8000/healthz
-# {"status":"ok","version":"4.4.10",...}
+# {"status":"ok","version":"4.4.11",...}
 curl http://127.0.0.1:8000/readyz
 curl http://127.0.0.1:8000/metrics | head
 ```
@@ -65,12 +65,12 @@ npm run smoke:failover --prefix stateless-mcp
 ## 3. 纯 Docker
 
 ```bash
-docker build -t deepseek-infra:4.4.10 .
+docker build -t deepseek-infra:4.4.11 .
 docker run -d --name deepseek-infra \
   -p 127.0.0.1:8000:8000 \
   --env-file .env \
   -v deepseek-data:/data \
-  deepseek-infra:4.4.10
+  deepseek-infra:4.4.11
 ```
 
 镜像要点（见 [Dockerfile](../Dockerfile)）：`python:3.12-slim`、`pip --no-cache-dir`、非 root 用户运行、`HEALTHCHECK` 打 `/healthz`、数据卷 `/data`、静态资源固定在镜像内（`DEEPSEEK_INFRA_STATIC_DIR`，旧变量 `DEEPSEEK_MOBILE_STATIC_DIR` 继续兼容），并在构建后清理 `__pycache__`。CI 的 docker job 会验证默认镜像/Compose，也会构建 [stateless-mcp/Dockerfile](../stateless-mcp/Dockerfile) 并校验 [docker-compose.stateless-mcp.yml](../docker-compose.stateless-mcp.yml)。

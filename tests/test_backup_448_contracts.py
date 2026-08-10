@@ -898,7 +898,7 @@ def test_record_committed_index_full_and_incremental(tmp_settings: Path) -> None
             ],
             "snapshot": {"rootDigest": "0" * 64},
         },
-        chunk_records=[backup_incremental.ChunkRecord("local", "big.bin", 0, 0, 10, "c" * 64)],
+        chunk_records=[backup_incremental.ChunkRecord("local", "b.txt", 0, 0, 2, "c" * 64)],
     )
     backup_executor._record_committed_index(
         target_id="t",
@@ -1483,7 +1483,7 @@ def test_materialize_chain_error_branches(tmp_settings: Path, tmp_path: Path) ->
     (bad_cdc / "delta" / "operations.json").write_text(json.dumps(cdc_put), encoding="utf-8")
     with pytest.raises(AppError, match="invalid parent chunk"):
         backup_incremental_restore.materialize_chain([f0_dir, bad_cdc], tmp_path / "e-cdc2")
-    # CDC missing parent file.
+    # CDC payload-only file does not require a parent, but its payload must exist.
     cdc_missing = _ops_with_put(
         {"path": "payload/local/new.bin", "size": 4, "sha256": sha_of("data"), "storage": "cdc", "chunks": [{"length": 4, "sha256": sha_of("data"), "source": "payload", "payloadRef": "payload/files/000000"}]},
         f0_root,
@@ -1491,7 +1491,7 @@ def test_materialize_chain_error_branches(tmp_settings: Path, tmp_path: Path) ->
     bad_cdc_missing = tmp_path / "e-cdcm"
     shutil.copytree(i1_dir, bad_cdc_missing)
     (bad_cdc_missing / "delta" / "operations.json").write_text(json.dumps(cdc_missing), encoding="utf-8")
-    with pytest.raises(AppError, match="missing parent file"):
+    with pytest.raises(AppError, match="payload chunk is missing"):
         backup_incremental_restore.materialize_chain([f0_dir, bad_cdc_missing], tmp_path / "e-cdcm2")
     # Corrupt / non-dict manifest.
     bad_manifest = tmp_path / "e-mf"
@@ -2365,10 +2365,10 @@ def test_incremental_builder_cdc_payloads_and_reuse(tmp_settings: Path, monkeypa
         ops2 = json.loads(archive.read("delta/operations.json"))
     big_put2 = next(item for item in ops2["put"] if str(item["path"]).endswith("memories.json"))
     assert big_put2["storage"] == "cdc"
-    parent_chunks = [item for item in big_put2["chunks"] if item["source"] == "parent"]
+    parent_chunks = [item for item in big_put2["chunks"] if item["source"] == "parent-range"]
     payload_chunks = [item for item in big_put2["chunks"] if item["source"] == "payload"]
     assert len(parent_chunks) >= len(big_put2["chunks"]) - 2
-    assert all("parentOrdinal" in item for item in parent_chunks)
+    assert all({"parentPath", "offset", "length", "sha256"} <= set(item) for item in parent_chunks)
     assert 0 < len(payload_chunks) < len(big_put2["chunks"])
     delta_paths2 = [str(item["path"]) for item in package2.manifest["deltaFiles"]]
     payload_blobs2 = [p for p in delta_paths2 if p.startswith("payload/files/")]

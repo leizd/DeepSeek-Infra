@@ -231,9 +231,11 @@ def _build_candidate(
         max_in_flight_bytes = int(incremental_cfg.get("maxInFlightBytes") or (64 * 1024 * 1024))
         current_chunk_records: list[backup_incremental.ChunkRecord] = []
         if snapshot_kind == "incremental" and parent_backup_id:
+            target_id = str(policy.get("targetId") or "managed-local")
+            policy_id = str(policy.get("policyId") or "")
             parent_files = []
             try:
-                parent_files = backup_incremental.load_snapshot_files(str(policy.get("targetId") or "managed-local"), str(policy.get("policyId") or ""), parent_backup_id)
+                parent_files = backup_incremental.load_snapshot_files(target_id, policy_id, parent_backup_id)
             except Exception:
                 parent_files = []
             successful = {
@@ -255,10 +257,33 @@ def _build_candidate(
             payload_dir.mkdir(parents=True, exist_ok=True)
             payload_files: list[dict[str, Any]] = []
             payload_by_sha: dict[str, str] = {}
+            same_file_chunks_reused = 0
+            cross_file_chunks_reused = 0
+            whole_files_parent_reused = 0
+            parent_reuse_bytes = 0
+            lookup_metrics = {"bloomNegatives": 0, "bloomPositives": 0, "exactHits": 0, "falsePositives": 0}
+            for put in delta["put"]:
+                parent_file = backup_incremental.lookup_parent_file_by_digest(
+                    target_id,
+                    policy_id,
+                    parent_backup_id,
+                    sha256=str(put.get("sha256") or ""),
+                    size=int(put.get("size") or 0),
+                    exclude_path=str(put.get("path") or ""),
+                )
+                if parent_file is not None:
+                    put["storage"] = "parent-file"
+                    put["parentContributorId"] = parent_file.contributor_id
+                    put["parentPath"] = parent_file.logical_path
+                    put.pop("payloadRef", None)
+                    whole_files_parent_reused += 1
+                    parent_reuse_bytes += int(put.get("size") or 0)
             large_paths = [
                 staging / str(put["path"])
                 for put in delta["put"]
-                if large_file_mode == "cdc" and int(put.get("size") or 0) >= large_file_threshold
+                if large_file_mode == "cdc"
+                and str(put.get("storage") or "whole") != "parent-file"
+                and int(put.get("size") or 0) >= large_file_threshold
             ]
             scans, scan_telemetry = backup_chunk_engine.scan_files_bounded(
                 large_paths,
@@ -266,8 +291,10 @@ def _build_candidate(
                 max_in_flight_bytes=max_in_flight_bytes,
                 cancel_event=cancel_event,
                 checkpoint=getattr(cancel_event, "backup_checkpoint", None),
-            ) if large_paths else ({}, {"engine": "none", "files": 0, "logicalBytes": 0, "scanSeconds": 0.0, "throughputBytesPerSecond": 0, "workers": scan_workers, "maxInFlightBytes": max_in_flight_bytes})
+            ) if large_paths else ({}, {"engine": {"preferred": "none", "rustFiles": 0, "pythonFallbackFiles": 0, "fallbackReasons": {}, "degraded": False}, "files": 0, "logicalBytes": 0, "scanSeconds": 0.0, "throughputBytesPerSecond": 0, "workers": scan_workers, "maxInFlightBytes": max_in_flight_bytes})
             for put in delta["put"]:
+                if str(put.get("storage") or "") == "parent-file":
+                    continue
                 src = staging / str(put["path"])
                 if not src.is_file():
                     continue
@@ -278,8 +305,8 @@ def _build_candidate(
                     logical_path = str(put["path"])
                     try:
                         parent_chunks = backup_incremental.load_snapshot_chunks_for_file(
-                            str(policy.get("targetId") or "managed-local"),
-                            str(policy.get("policyId") or ""),
+                            target_id,
+                            policy_id,
                             parent_backup_id,
                             contributor_id,
                             logical_path,
@@ -300,13 +327,46 @@ def _build_candidate(
                         )
                         for index, item in enumerate(scan.chunks)
                     ]
+                    parent_locations, current_lookup = backup_incremental.lookup_parent_chunks_accelerated(
+                        target_id,
+                        policy_id,
+                        parent_backup_id,
+                        [(item.chunk_sha256, item.length) for item in current_chunks],
+                        preferred_file=(contributor_id, logical_path),
+                    )
+                    for parent_chunk in parent_chunks:
+                        parent_locations.setdefault(
+                            (parent_chunk.chunk_sha256, parent_chunk.length),
+                            backup_incremental.ParentChunkLocation(
+                                contributor_id,
+                                logical_path,
+                                parent_chunk.chunk_ordinal,
+                                parent_chunk.offset,
+                                parent_chunk.length,
+                                parent_chunk.chunk_sha256,
+                            ),
+                        )
+                    for key in lookup_metrics:
+                        lookup_metrics[key] += int(current_lookup.get(key) or 0)
                     described = backup_incremental.cdc_delta_for_file(
                         contributor_id=contributor_id,
                         logical_path=logical_path,
                         file_size=int(put.get("size") or 0),
                         parent_chunks=parent_chunks,
                         current_chunks=current_chunks,
+                        parent_locations=parent_locations,
                     )
+                    for chunk in described:
+                        if chunk.get("source") != "parent-range":
+                            continue
+                        if (
+                            str(chunk.get("parentContributorId") or "") == contributor_id
+                            and str(chunk.get("parentPath") or "") == logical_path
+                        ):
+                            same_file_chunks_reused += 1
+                        else:
+                            cross_file_chunks_reused += 1
+                        parent_reuse_bytes += int(chunk.get("length") or 0)
                     with src.open("rb") as handle:
                         for index, chunk in enumerate(described):
                             if chunk["source"] != "payload":
@@ -374,7 +434,7 @@ def _build_candidate(
             for auxiliary_dir in ("migration", "frontend"):
                 shutil.rmtree(staging / auxiliary_dir, ignore_errors=True)
             snapshot_meta = {
-                "format": "incremental-v3",
+                "format": "incremental-v4",
                 "chunkProtocol": backup_incremental.CURRENT_CDC_PROTOCOL,
                 "kind": "incremental",
                 "lineageId": lineage_id or parent_backup_id,
@@ -389,6 +449,7 @@ def _build_candidate(
             manifest["snapshotKind"] = "incremental"
             logical_changed_bytes = sum(int(item.get("size") or 0) for item in delta["put"])
             physical_payload_bytes = sum(int(item.get("size") or 0) for item in payload_files)
+            payload_chunks_written = sum(1 for put in delta["put"] for chunk in (put.get("chunks") or []) if chunk.get("source") == "payload")
             savings = {
                 "logicalBytes": sum(int(item.size) for item in records),
                 "logicalChangedBytes": logical_changed_bytes,
@@ -397,8 +458,19 @@ def _build_candidate(
                 "savedBytes": max(0, logical_changed_bytes - physical_payload_bytes),
                 "savedRatio": round(1.0 - (physical_payload_bytes / logical_changed_bytes), 4) if logical_changed_bytes else 0.0,
             }
+            dedup = {
+                "logicalChangedBytes": logical_changed_bytes,
+                "sameFileChunksReused": same_file_chunks_reused,
+                "crossFileChunksReused": cross_file_chunks_reused,
+                "wholeFilesParentReused": whole_files_parent_reused,
+                "payloadChunksWritten": payload_chunks_written,
+                "parentReuseBytes": parent_reuse_bytes,
+                "payloadBytes": physical_payload_bytes,
+                "dedupRatio": round(parent_reuse_bytes / logical_changed_bytes, 4) if logical_changed_bytes else 0.0,
+            }
             manifest["incrementalSavings"] = savings
-            manifest["incrementalPerformance"] = {**scan_telemetry, **savings}
+            manifest["dedup"] = dedup
+            manifest["incrementalPerformance"] = {**scan_telemetry, **savings, "dedup": dedup, "lookup": lookup_metrics}
         elif snapshot_kind == "full" and large_file_mode == "cdc":
             # Full snapshots also chunk large files so the first incremental can
             # reuse parent chunks instead of re-uploading the whole file.
@@ -413,7 +485,7 @@ def _build_candidate(
                 max_in_flight_bytes=max_in_flight_bytes,
                 cancel_event=cancel_event,
                 checkpoint=getattr(cancel_event, "backup_checkpoint", None),
-            ) if large_entries else ({}, {"engine": "none", "files": 0, "logicalBytes": 0, "scanSeconds": 0.0, "throughputBytesPerSecond": 0, "workers": scan_workers, "maxInFlightBytes": max_in_flight_bytes})
+            ) if large_entries else ({}, {"engine": {"preferred": "none", "rustFiles": 0, "pythonFallbackFiles": 0, "fallbackReasons": {}, "degraded": False}, "files": 0, "logicalBytes": 0, "scanSeconds": 0.0, "throughputBytesPerSecond": 0, "workers": scan_workers, "maxInFlightBytes": max_in_flight_bytes})
             for file_entry in large_entries:
                 staging_path = staging / str(file_entry["path"])
                 contributor_id = str(file_entry.get("contributorId") or "")
