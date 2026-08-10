@@ -39,6 +39,7 @@ class ScheduledBackupPackage:
     coverage: dict[str, Any]
     manifest: dict[str, Any]
     chunk_records: tuple[Any, ...] = ()
+    effective_files: tuple[Any, ...] = ()
     savings: dict[str, Any] | None = None
 
 
@@ -230,14 +231,25 @@ def _build_candidate(
         scan_workers = int(incremental_cfg.get("scanWorkers") or 1)
         max_in_flight_bytes = int(incremental_cfg.get("maxInFlightBytes") or (64 * 1024 * 1024))
         current_chunk_records: list[backup_incremental.ChunkRecord] = []
+        effective_index_records = [
+            backup_incremental.FileRecord(
+                contributor_id=str(item.get("contributorId") or ""),
+                logical_path=str(item["path"]),
+                size=int(item["size"]),
+                sha256=str(item["sha256"]),
+            )
+            for item in files
+        ]
         if snapshot_kind == "incremental" and parent_backup_id:
             target_id = str(policy.get("targetId") or "managed-local")
             policy_id = str(policy.get("policyId") or "")
             parent_files = []
+            parent_index_available = True
             try:
                 parent_files = backup_incremental.load_snapshot_files(target_id, policy_id, parent_backup_id)
             except Exception:
                 parent_files = []
+                parent_index_available = False
             successful = {
                 str(item.get("id") or item.get("contributorId") or item.get("contributor_id") or "")
                 for item in plan.get("contributors") or []
@@ -252,6 +264,11 @@ def _build_candidate(
                 for item in files
             ]
             delta = backup_incremental.diff_trees(parent_files, records, successful_contributors=successful or {c.contributor_id for c in parent_files})
+            effective_index_records = backup_incremental.effective_current(
+                parent_files,
+                records,
+                successful_contributors=successful or {item.contributor_id for item in records},
+            )
             (staging / "delta").mkdir(exist_ok=True)
             payload_dir = staging / "payload" / "files"
             payload_dir.mkdir(parents=True, exist_ok=True)
@@ -263,14 +280,19 @@ def _build_candidate(
             parent_reuse_bytes = 0
             lookup_metrics = {"bloomNegatives": 0, "bloomPositives": 0, "exactHits": 0, "falsePositives": 0}
             for put in delta["put"]:
-                parent_file = backup_incremental.lookup_parent_file_by_digest(
-                    target_id,
-                    policy_id,
-                    parent_backup_id,
-                    sha256=str(put.get("sha256") or ""),
-                    size=int(put.get("size") or 0),
-                    exclude_path=str(put.get("path") or ""),
-                )
+                parent_file = None
+                if parent_index_available:
+                    try:
+                        parent_file = backup_incremental.lookup_parent_file_by_digest(
+                            target_id,
+                            policy_id,
+                            parent_backup_id,
+                            sha256=str(put.get("sha256") or ""),
+                            size=int(put.get("size") or 0),
+                            exclude_path=str(put.get("path") or ""),
+                        )
+                    except Exception:
+                        parent_index_available = False
                 if parent_file is not None:
                     put["storage"] = "parent-file"
                     put["parentContributorId"] = parent_file.contributor_id
@@ -327,13 +349,30 @@ def _build_candidate(
                         )
                         for index, item in enumerate(scan.chunks)
                     ]
-                    parent_locations, current_lookup = backup_incremental.lookup_parent_chunks_accelerated(
-                        target_id,
-                        policy_id,
-                        parent_backup_id,
-                        [(item.chunk_sha256, item.length) for item in current_chunks],
-                        preferred_file=(contributor_id, logical_path),
-                    )
+                    if parent_index_available:
+                        try:
+                            parent_locations, current_lookup = backup_incremental.lookup_parent_chunks_accelerated(
+                                target_id,
+                                policy_id,
+                                parent_backup_id,
+                                [(item.chunk_sha256, item.length) for item in current_chunks],
+                                preferred_file=(contributor_id, logical_path),
+                            )
+                        except Exception:
+                            parent_index_available = False
+                            parent_locations, current_lookup = {}, {
+                                "bloomNegatives": 0,
+                                "bloomPositives": 0,
+                                "exactHits": 0,
+                                "falsePositives": 0,
+                            }
+                    else:
+                        parent_locations, current_lookup = {}, {
+                            "bloomNegatives": 0,
+                            "bloomPositives": 0,
+                            "exactHits": 0,
+                            "falsePositives": 0,
+                        }
                     for parent_chunk in parent_chunks:
                         parent_locations.setdefault(
                             (parent_chunk.chunk_sha256, parent_chunk.length),
@@ -548,6 +587,7 @@ def _build_candidate(
             coverage=coverage,
             manifest=manifest,
             chunk_records=tuple(current_chunk_records),
+            effective_files=tuple(effective_index_records),
             savings=manifest.get("incrementalSavings") if snapshot_kind == "incremental" else None,
         )
     finally:

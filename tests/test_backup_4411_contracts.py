@@ -105,7 +105,8 @@ def test_effective_chunk_refs_survive_unchanged_incrementals(tmp_settings: Path)
     assert found[("2" * 64, 4)].logical_path == b1.logical_path
     with backup_incremental._connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM chunk_maps").fetchone()[0] == 3
-        assert connection.execute("SELECT COUNT(*) FROM snapshot_chunk_refs").fetchone()[0] == 6
+        assert connection.execute("SELECT COUNT(*) FROM snapshot_chunk_refs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM snapshot_file_ops").fetchone()[0] == 3
 
 
 def test_snapshot_index_conflict_rolls_back_and_forces_full(tmp_settings: Path) -> None:
@@ -177,7 +178,7 @@ def test_parent_lookup_is_exact_batched_and_immediate_parent_only(tmp_settings: 
     assert renamed_refs[("local", renamed_file.logical_path)] == backup_incremental.load_snapshot_chunk_refs(
         "target", "policy", "F0"
     )[("local", second.logical_path)]
-    _commit("I1", [], [], parent="F0", depth=1)
+    _commit("I1", [], [], parent="I0", depth=2)
     assert backup_incremental.lookup_parent_chunks("target", "policy", "I1", [(shared, 4)]) == {}
 
 
@@ -745,6 +746,7 @@ def test_legacy_chunk_migration_and_reference_gc(tmp_settings: Path) -> None:
     )
     with backup_incremental._connect() as connection:
         connection.execute("DELETE FROM index_meta WHERE key = ?", (backup_incremental.INDEX_SCHEMA_KEY,))
+        connection.execute("DELETE FROM index_meta WHERE key = ?", (backup_incremental.STATE_SCHEMA_KEY,))
         connection.execute(
             "INSERT INTO snapshot_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ("target", "policy", "F0", "local", file.logical_path, 0, 0, 4, "1" * 64),
@@ -754,6 +756,10 @@ def test_legacy_chunk_migration_and_reference_gc(tmp_settings: Path) -> None:
     assert refs[("local", file.logical_path)] == backup_incremental.chunk_map_id(
         protocol=backup_incremental.CURRENT_CDC_PROTOCOL, file_size=4, file_sha256=file.sha256
     )
+    with backup_incremental._connect() as connection:
+        assert connection.execute("SELECT value FROM index_meta WHERE key = ?", (backup_incremental.STATE_SCHEMA_KEY,)).fetchone()[0] == "3"
+        assert connection.execute("SELECT COUNT(*) FROM snapshot_file_ops WHERE backup_id = 'F0'").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM current_effective_files").fetchone()[0] == 1
     _commit("I1", [file], [], parent="F0", depth=1)
     first_gc = backup_incremental.garbage_collect_chunk_maps([("target", "policy", "F0")])
     assert first_gc["deletedChunkMaps"] == 0

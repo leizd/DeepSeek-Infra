@@ -25,6 +25,93 @@ def _scan(path: Path) -> backup_chunk_engine.FileChunkScan:
     )
 
 
+def _file(path: str, *, sha: str, size: int = 4) -> backup_incremental.FileRecord:
+    return backup_incremental.FileRecord("local", path, size, sha * 64)
+
+
+def _commit_index(
+    backup_id: str,
+    files: list[backup_incremental.FileRecord],
+    *,
+    parent: str | None = None,
+    chunks: list[backup_incremental.ChunkRecord] | None = None,
+) -> None:
+    backup_incremental.commit_snapshot_index(
+        target_id="target",
+        policy_id="policy",
+        backup_id=backup_id,
+        parent_backup_id=parent,
+        base_backup_id="F0",
+        chain_depth=0 if parent is None else 1,
+        root_digest=backup_incremental.snapshot_root(files),
+        files=files,
+        chunks=chunks or [],
+        logical_bytes=sum(item.size for item in files),
+    )
+
+
+def test_snapshot_index_stores_full_checkpoint_then_only_file_operations(tmp_settings: Path) -> None:
+    del tmp_settings
+    first = _file("payload/local/a.bin", sha="a")
+    unchanged = _file("payload/local/b.bin", sha="b")
+    changed = _file("payload/local/b.bin", sha="c")
+    added = _file("payload/local/c.bin", sha="d")
+    _commit_index("F0", [first, unchanged])
+    _commit_index("I1", [first, changed, added], parent="F0")
+
+    with backup_incremental._connect() as connection:
+        counts = {
+            str(row["backup_id"]): int(row["count"])
+            for row in connection.execute(
+                "SELECT backup_id, COUNT(*) AS count FROM snapshot_file_ops GROUP BY backup_id"
+            )
+        }
+        assert counts == {"F0": 2, "I1": 2}
+        assert connection.execute("SELECT COUNT(*) FROM current_effective_files").fetchone()[0] == 3
+        assert connection.execute("SELECT COUNT(*) FROM snapshot_files").fetchone()[0] == 0
+        head = connection.execute("SELECT backup_id, root_digest FROM current_effective_heads").fetchone()
+        assert head is not None and tuple(head) == ("I1", backup_incremental.snapshot_root([first, changed, added]))
+
+    assert backup_incremental.load_snapshot_files("target", "policy", "F0") == [first, unchanged]
+    assert backup_incremental.load_snapshot_files("target", "policy", "I1") == [first, changed, added]
+
+
+def test_file_versions_are_shared_across_renames(tmp_settings: Path) -> None:
+    del tmp_settings
+    original = _file("payload/local/original.bin", sha="e")
+    renamed = _file("payload/local/renamed.bin", sha="e")
+    _commit_index("F0", [original])
+    _commit_index("I1", [renamed], parent="F0")
+
+    with backup_incremental._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM file_versions").fetchone()[0] == 1
+        operations = connection.execute(
+            "SELECT op, logical_path FROM snapshot_file_ops WHERE backup_id = 'I1' ORDER BY op, logical_path"
+        ).fetchall()
+    assert [tuple(row) for row in operations] == [
+        ("DELETE", original.logical_path),
+        ("PUT", renamed.logical_path),
+    ]
+
+
+def test_effective_head_mismatch_forces_full(tmp_settings: Path) -> None:
+    del tmp_settings
+    file = _file("payload/local/a.bin", sha="f")
+    _commit_index("F0", [file])
+    with backup_incremental._connect() as connection:
+        connection.execute("UPDATE current_effective_heads SET backup_id = 'ghost'")
+        connection.commit()
+
+    assert not backup_incremental.index_is_healthy("target", "policy")
+    selected = backup_incremental.select_snapshot_plan(
+        policy={"incremental": {"mode": "file-delta"}},
+        target_id="target",
+        policy_id="policy",
+        index_available=True,
+    )
+    assert selected[0] == "full" and selected[6] == "chunk-index-rebuild-failed"
+
+
 def test_scan_budget_uses_estimated_working_set_not_logical_file_size() -> None:
     ten_mib = 10 * 1024 * 1024
     assert backup_chunk_engine.scan_working_set_bytes(50 * 1024 * 1024 * 1024) == ten_mib

@@ -896,7 +896,14 @@ def test_record_committed_index_full_and_incremental(tmp_settings: Path) -> None
                 {"contributorId": "local", "path": "a.txt", "size": 1, "sha256": "a" * 64},
                 {"contributorId": "local", "path": "b.txt", "size": 2, "sha256": "b" * 64},
             ],
-            "snapshot": {"rootDigest": "0" * 64},
+            "snapshot": {
+                "rootDigest": backup_incremental.snapshot_root(
+                    [
+                        backup_incremental.FileRecord("local", "a.txt", 1, "a" * 64),
+                        backup_incremental.FileRecord("local", "b.txt", 2, "b" * 64),
+                    ]
+                )
+            },
         },
         chunk_records=[backup_incremental.ChunkRecord("local", "b.txt", 0, 0, 2, "c" * 64)],
     )

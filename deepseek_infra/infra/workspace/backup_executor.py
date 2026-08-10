@@ -94,15 +94,19 @@ def _record_committed_index(
             base = str(run_plan.get("baseBackupId") or parent_value)
             depth = int(run_plan.get("chainDepth") or 1)
             root = str(snapshot.get("rootDigest") or backup_incremental.snapshot_root(records))
-            # Store the effective tree (current + inherited) for lineage continuity.
-            previous = []
-            if parent_value:
-                previous = backup_incremental.load_snapshot_files(target_id, policy_id, parent_value)
-            effective = backup_incremental.effective_current(
-                previous,
-                records,
-                successful_contributors={item.contributor_id for item in records},
-            )
+            packaged_effective = getattr(package, "effective_files", None)
+            if packaged_effective is not None:
+                effective = list(packaged_effective)
+            else:
+                # Compatibility for packages constructed by older callers.
+                previous = []
+                if parent_value:
+                    previous = backup_incremental.load_snapshot_files(target_id, policy_id, parent_value)
+                effective = backup_incremental.effective_current(
+                    previous,
+                    records,
+                    successful_contributors={item.contributor_id for item in records},
+                )
             parent_latest = backup_incremental.latest_committed_snapshot(target_id, policy_id)
             full_committed_at = str(parent_latest.get("full_committed_at") or "") if parent_latest else None
         else:
