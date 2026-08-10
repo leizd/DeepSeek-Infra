@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import queue
 import threading
 import time
 from pathlib import Path
@@ -514,3 +515,532 @@ def test_native_batch_response_timeout_resets_process(tmp_path: Path, monkeypatc
         engine.scan_files([source])
     assert process.stdin.closed
     assert engine._batch_process is None
+
+
+def _write_pack_fixture(root: Path, *, content: bytes = b"abcdefgh") -> dict[str, Any]:
+    pack_path = root / "payload" / "packs" / "0000.pack"
+    pack_path.parent.mkdir(parents=True, exist_ok=True)
+    pack_path.write_bytes(content)
+    index: dict[str, Any] = {
+        "schemaVersion": 1,
+        "packs": [
+            {
+                "path": "payload/packs/0000.pack",
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        ],
+        "entries": {
+            "blob_000000": {
+                "pack": "payload/packs/0000.pack",
+                "offset": 0,
+                "length": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        },
+    }
+    index_path = root / backup_pack.PACK_INDEX_PATH
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+    return index
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        {},
+        {"kind": "pack-range"},
+        {"kind": "standalone"},
+        {"kind": "unknown", "path": "payload/files/000000"},
+    ],
+)
+def test_payload_reference_parser_rejects_incomplete_typed_values(value: Any) -> None:
+    with pytest.raises(AppError, match="reference is missing or invalid"):
+        backup_pack.parse_payload_ref(value)
+    assert backup_pack.parse_payload_ref("payload/files/legacy") == ("standalone", "payload/files/legacy")
+    assert backup_pack.parse_payload_ref({"kind": "pack-range", "blobId": "blob"}) == ("pack-range", "blob")
+    assert backup_pack.parse_payload_ref({"kind": "standalone", "path": "payload/files/blob"}) == (
+        "standalone",
+        "payload/files/blob",
+    )
+    assert not backup_pack._is_sha256("g" * 64)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "invalid-json",
+        "invalid-schema",
+        "invalid-containers",
+        "invalid-pack-record",
+        "invalid-pack-path",
+        "duplicate-pack",
+        "invalid-pack-size",
+        "invalid-pack-digest",
+        "missing-pack",
+        "invalid-entry-record",
+        "invalid-entry-pack",
+        "invalid-entry-offset",
+        "invalid-entry-length",
+        "invalid-entry-digest",
+        "overlap",
+    ],
+)
+def test_pack_index_rejects_malformed_or_unverifiable_state(tmp_path: Path, case: str) -> None:
+    index = _write_pack_fixture(tmp_path)
+    index_path = tmp_path / backup_pack.PACK_INDEX_PATH
+    if case == "invalid-json":
+        index_path.write_text("{", encoding="utf-8")
+    elif case == "invalid-schema":
+        index["schemaVersion"] = 2
+    elif case == "invalid-containers":
+        index["packs"] = {}
+    elif case == "invalid-pack-record":
+        index["packs"] = [None]
+    elif case == "invalid-pack-path":
+        index["packs"][0]["path"] = "../0000.pack"
+    elif case == "duplicate-pack":
+        index["packs"].append(dict(index["packs"][0]))
+    elif case == "invalid-pack-size":
+        index["packs"][0]["size"] = True
+    elif case == "invalid-pack-digest":
+        index["packs"][0]["sha256"] = "not-a-digest"
+    elif case == "missing-pack":
+        (tmp_path / "payload" / "packs" / "0000.pack").unlink()
+    elif case == "invalid-entry-record":
+        index["entries"] = {"blob": None}
+    elif case == "invalid-entry-pack":
+        index["entries"]["blob_000000"]["pack"] = "payload/packs/missing.pack"
+    elif case == "invalid-entry-offset":
+        index["entries"]["blob_000000"]["offset"] = 1
+    elif case == "invalid-entry-length":
+        index["entries"]["blob_000000"]["length"] = True
+    elif case == "invalid-entry-digest":
+        index["entries"]["blob_000000"]["sha256"] = "bad"
+    elif case == "overlap":
+        index["entries"]["blob_000001"] = {
+            "pack": "payload/packs/0000.pack",
+            "offset": 0,
+            "length": 1,
+            "sha256": hashlib.sha256(b"a").hexdigest(),
+        }
+    if case != "invalid-json":
+        index_path.write_text(json.dumps(index), encoding="utf-8")
+    with pytest.raises(AppError):
+        backup_pack.load_pack_index(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("target", "maximum", "alignment"),
+    [(0, 1, 1), (2, 1, 1), (1, 1, 0)],
+)
+def test_pack_writer_validates_limits(tmp_path: Path, target: int, maximum: int, alignment: int) -> None:
+    with pytest.raises(ValueError, match="invalid pack writer limits"):
+        backup_pack.PackWriter(tmp_path, target_pack_size=target, max_pack_size=maximum, alignment=alignment)
+
+
+def test_pack_writer_empty_finalize_idempotency_and_state_guards(tmp_path: Path) -> None:
+    writer = backup_pack.PackWriter(tmp_path, target_pack_size=8, max_pack_size=8, alignment=8)
+    assert writer._aligned_offset() == 0
+    writer._finish_pack()
+    index = writer.finalize()
+    assert index == {"schemaVersion": 1, "packs": [], "entries": {}}
+    assert writer.finalize() is index
+    assert writer.delta_files()[0]["path"] == backup_pack.PACK_INDEX_PATH
+    with pytest.raises(AppError, match="already finalized"):
+        writer.append(io.BytesIO(), expected_length=0, expected_sha256=hashlib.sha256(b"").hexdigest())
+
+
+@pytest.mark.parametrize("length", [-1, 9])
+def test_pack_writer_rejects_out_of_range_blob_lengths(tmp_path: Path, length: int) -> None:
+    writer = backup_pack.PackWriter(tmp_path, target_pack_size=8, max_pack_size=8)
+    with pytest.raises(AppError, match="exceeds the maximum pack size"):
+        writer.append(io.BytesIO(), expected_length=length, expected_sha256=hashlib.sha256(b"").hexdigest())
+
+
+def test_pack_writer_bounds_overreading_sources_and_tolerates_abort_cleanup_error(tmp_path: Path, monkeypatch: Any) -> None:
+    class OverreadingSource:
+        def read(self, _size: int) -> bytes:
+            return b"abcdef"
+
+    writer = backup_pack.PackWriter(tmp_path, target_pack_size=8, max_pack_size=8)
+    ref = writer.append(OverreadingSource(), expected_length=2, expected_sha256=hashlib.sha256(b"ab").hexdigest())  # type: ignore[arg-type]
+    assert ref["kind"] == "pack-range"
+    monkeypatch.setattr(Path, "unlink", lambda self, **kwargs: (_ for _ in ()).throw(OSError("busy")))
+    writer.abort()
+    assert writer._handle is None
+
+
+def test_payload_sources_reject_missing_invalid_and_mismatched_ranges(tmp_path: Path) -> None:
+    digest = hashlib.sha256(b"data").hexdigest()
+    with pytest.raises(AppError, match="range is missing"):
+        backup_incremental_restore.FilePayloadSource(tmp_path / "missing").copy_to(
+            io.BytesIO(), expected_sha256=digest, expected_length=4
+        )
+    source_path = tmp_path / "source.bin"
+    source_path.write_bytes(b"data")
+    with pytest.raises(AppError, match="length mismatch"):
+        backup_incremental_restore.FilePayloadSource(source_path, offset=2).copy_to(
+            io.BytesIO(), expected_sha256=digest, expected_length=4
+        )
+    with pytest.raises(AppError, match="payload path is invalid"):
+        backup_incremental_restore._standalone_path(tmp_path, "../escape")
+    with pytest.raises(AppError, match="pack index is missing"):
+        backup_incremental_restore._payload_source(
+            tmp_path, {"kind": "pack-range", "blobId": "blob"}, None
+        )
+
+
+def test_pack_handle_and_range_source_reject_unknown_or_tampered_metadata(tmp_path: Path) -> None:
+    index = _write_pack_fixture(tmp_path)
+    cache = backup_incremental_restore.PackHandleCache(tmp_path)
+    with pytest.raises(AppError, match="blob is missing"):
+        cache.entry("missing")
+    with pytest.raises(AppError, match="pack path is invalid"):
+        cache.handle("../escape.pack")
+    with pytest.raises(AppError, match="metadata mismatch"):
+        backup_incremental_restore.PackRangePayloadSource(cache, "blob_000000").copy_to(
+            io.BytesIO(), expected_sha256="0" * 64, expected_length=8
+        )
+    assert cache.handle(str(index["packs"][0]["path"])) is cache.handle(str(index["packs"][0]["path"]))
+    cache.close()
+    assert cache.open_handle_count == 0
+
+
+def test_verified_range_and_materialized_file_fail_closed_on_short_or_corrupt_data(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    with pytest.raises(AppError, match="length mismatch"):
+        backup_incremental_restore._copy_verified_range(
+            io.BytesIO(b"x"), io.BytesIO(), offset=0, length=2, expected_sha256="", label="short"
+        )
+    with pytest.raises(AppError, match="checksum mismatch"):
+        backup_incremental_restore._copy_verified_range(
+            io.BytesIO(b"xx"), io.BytesIO(), offset=0, length=2, expected_sha256="0" * 64, label="bad"
+        )
+    package = tmp_path / "package"
+    parent = tmp_path / "parent"
+    target = tmp_path / "target.bin"
+    payload = package / "payload" / "files" / "000000"
+    payload.parent.mkdir(parents=True)
+    payload.write_bytes(b"data")
+    parent.mkdir()
+    monkeypatch.setattr(backup_incremental_restore, "_sha256_file", lambda path: "0" * 64)
+    with pytest.raises(AppError, match="failed checksum after restore"):
+        backup_incremental_restore._materialize_put(
+            package,
+            parent,
+            target,
+            {
+                "path": "target.bin",
+                "storage": "whole",
+                "size": 4,
+                "sha256": hashlib.sha256(b"data").hexdigest(),
+                "payloadRef": "payload/files/000000",
+            },
+            chunk_protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
+            payload_cache=None,
+        )
+
+
+def test_materialize_chain_removes_directory_tombstones_before_final_validation(tmp_path: Path) -> None:
+    full = tmp_path / "full"
+    delta = tmp_path / "delta"
+    output = tmp_path / "output"
+    logical_path = "payload/local/folder/value.bin"
+    data = b"value"
+    digest = hashlib.sha256(data).hexdigest()
+    full_file = full / logical_path
+    full_file.parent.mkdir(parents=True)
+    full_file.write_bytes(data)
+    record = backup_incremental.FileRecord("local", logical_path, len(data), digest)
+    (full / "manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshotKind": "full",
+                "files": [
+                    {
+                        "contributorId": record.contributor_id,
+                        "path": record.logical_path,
+                        "size": record.size,
+                        "sha256": record.sha256,
+                    }
+                ],
+                "snapshot": {"rootDigest": backup_incremental.snapshot_root([record])},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (delta / "delta").mkdir(parents=True)
+    (delta / "manifest.json").write_text(json.dumps({"snapshotKind": "incremental"}), encoding="utf-8")
+    (delta / "delta" / "operations.json").write_text(
+        json.dumps(
+            {
+                "parentRootDigest": backup_incremental.snapshot_root([record]),
+                "put": [],
+                "delete": [{"contributorId": "local", "path": "payload/local/folder"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(AppError, match="missing declared file"):
+        backup_incremental_restore.materialize_chain([full, delta], output)
+    assert not (output / "payload" / "local" / "folder").exists()
+
+
+def test_chunk_stream_defensive_coverage_checks_fail_closed() -> None:
+    with pytest.raises(AppError, match="non-covering ranges"):
+        backup_incremental.chunk_stream(io.BytesIO(b"short"), file_size=6)
+
+
+def test_immutable_file_versions_and_snapshot_state_detect_corruption(tmp_settings: Path, monkeypatch: Any) -> None:
+    del tmp_settings
+    file = _file("payload/local/a.bin", sha="a")
+    with backup_incremental._connect() as connection:
+        connection.execute(
+            "INSERT INTO file_versions (file_version_id, size, sha256, chunk_map_id) VALUES ('fixed', 1, ?, NULL)",
+            ("b" * 64,),
+        )
+        monkeypatch.setattr(backup_incremental, "file_version_id", lambda **kwargs: "fixed")
+        with pytest.raises(AppError, match="Immutable file version conflicts"):
+            backup_incremental._store_file_version(connection, file, map_id=None)
+        with pytest.raises(AppError, match="Immutable file version conflicts"):
+            backup_incremental._store_file_versions(connection, [(file, None)])
+        with pytest.raises(AppError, match="missing file version"):
+            backup_incremental._records_for_version_state(connection, {("local", "missing"): "absent"})
+
+
+def test_historical_snapshot_state_replays_put_delete_and_legacy_fallback(tmp_settings: Path) -> None:
+    del tmp_settings
+    first = _file("payload/local/a.bin", sha="a")
+    second = _file("payload/local/b.bin", sha="b")
+    _commit_index("F0", [first, second])
+    _commit_index("I1", [second], parent="F0")
+    with backup_incremental._connect() as connection:
+        connection.execute("DELETE FROM current_effective_heads")
+        connection.execute("DELETE FROM current_effective_files")
+        state = backup_incremental._load_snapshot_version_state(connection, "target", "policy", "I1")
+        records = backup_incremental._records_for_version_state(connection, state)
+        assert records == [second]
+
+        connection.execute("UPDATE snapshot_lineages SET parent_backup_id = 'F0' WHERE backup_id = 'F0'")
+        with pytest.raises(AppError, match="chain cycle"):
+            backup_incremental._load_snapshot_version_state(connection, "target", "policy", "F0")
+
+
+def test_snapshot_state_rejects_put_without_version_and_recovers_legacy_rows(tmp_settings: Path) -> None:
+    del tmp_settings
+    file = _file("payload/local/a.bin", sha="c")
+    _commit_index("F0", [file])
+    with backup_incremental._connect() as connection:
+        connection.execute("DELETE FROM current_effective_heads")
+        connection.execute("DELETE FROM current_effective_files")
+        connection.execute("UPDATE snapshot_file_ops SET file_version_id = NULL WHERE backup_id = 'F0'")
+        with pytest.raises(AppError, match="PUT is missing a file version"):
+            backup_incremental._load_snapshot_version_state(connection, "target", "policy", "F0")
+
+        connection.execute("DELETE FROM snapshot_file_ops")
+        connection.execute(
+            "INSERT INTO snapshot_files (target_id, policy_id, backup_id, contributor_id, logical_path, size, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("target", "policy", "F0", file.contributor_id, file.logical_path, file.size, file.sha256),
+        )
+        state = backup_incremental._load_snapshot_version_state(connection, "target", "policy", "F0")
+        assert backup_incremental._records_for_version_state(connection, state) == [file]
+        connection.execute("DELETE FROM snapshot_lineages")
+        assert backup_incremental._load_snapshot_version_state(connection, "target", "policy", "F0")
+
+
+def test_current_head_compatibility_and_stale_parent_commit_are_fail_closed(tmp_settings: Path) -> None:
+    del tmp_settings
+    file = _file("payload/local/a.bin", sha="d")
+    with backup_incremental._connect() as connection:
+        assert backup_incremental._current_head_matches_latest(connection, "target", "policy")
+    _commit_index("F0", [file])
+    with backup_incremental._connect() as connection:
+        connection.execute("DELETE FROM current_effective_heads")
+        assert not backup_incremental._current_head_matches_latest(connection, "target", "policy")
+        connection.execute(
+            "INSERT INTO snapshot_files (target_id, policy_id, backup_id, contributor_id, logical_path, size, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("target", "policy", "F0", file.contributor_id, file.logical_path, file.size, file.sha256),
+        )
+        assert backup_incremental._current_head_matches_latest(connection, "target", "policy")
+        connection.execute(
+            "INSERT INTO current_effective_heads (target_id, policy_id, backup_id, root_digest) VALUES ('target', 'policy', 'wrong', 'wrong')"
+        )
+    with pytest.raises(AppError, match="does not match the committed parent"):
+        _commit_index("I1", [file], parent="F0")
+
+
+def test_chunk_state_can_be_attached_after_snapshot_commit_and_queried_historically(tmp_settings: Path) -> None:
+    del tmp_settings
+    data = b"data"
+    digest = hashlib.sha256(data).hexdigest()
+    file = backup_incremental.FileRecord("local", "payload/local/a.bin", len(data), digest)
+    chunk = backup_incremental.ChunkRecord("local", file.logical_path, 0, 0, len(data), digest)
+    _commit_index("F0", [file])
+    backup_incremental.record_snapshot_chunks(
+        target_id="target", policy_id="policy", backup_id="F0", chunks=[chunk]
+    )
+    _commit_index("I1", [file], parent="F0")
+    with backup_incremental._connect() as connection:
+        connection.execute("DELETE FROM current_effective_heads")
+        connection.execute("DELETE FROM current_effective_files")
+    assert backup_incremental.load_snapshot_chunks("target", "policy", "F0") == [chunk]
+    refs = backup_incremental.load_snapshot_chunk_refs("target", "policy", "F0")
+    assert refs[(file.contributor_id, file.logical_path)]
+    assert backup_incremental.lookup_parent_file_by_digest(
+        "target", "policy", "F0", sha256=digest, size=len(data), exclude_path="different"
+    ) == file
+    matches, metrics = backup_incremental.lookup_parent_chunks_accelerated(
+        "target", "policy", "F0", [(digest, len(data))]
+    )
+    assert matches[(digest, len(data))].logical_path == file.logical_path
+    assert metrics["exactHits"] == 1
+
+
+def test_record_snapshot_chunks_rejects_unknown_file_and_migrates_legacy_rows(tmp_settings: Path) -> None:
+    del tmp_settings
+    digest = hashlib.sha256(b"data").hexdigest()
+    unknown = backup_incremental.ChunkRecord("local", "payload/local/unknown.bin", 0, 0, 4, digest)
+    _commit_index("F0", [_file("payload/local/known.bin", sha="e")])
+    with pytest.raises(AppError, match="unknown file"):
+        backup_incremental.record_snapshot_chunks(
+            target_id="target", policy_id="policy", backup_id="F0", chunks=[unknown]
+        )
+
+    with backup_incremental._connect() as connection:
+        connection.execute("DELETE FROM snapshot_lineages")
+        connection.execute(
+            "INSERT INTO snapshot_files (target_id, policy_id, backup_id, contributor_id, logical_path, size, sha256) VALUES ('target', 'policy', 'legacy', 'local', ?, 4, ?)",
+            (unknown.logical_path, digest),
+        )
+    backup_incremental.record_snapshot_chunks(
+        target_id="target", policy_id="policy", backup_id="legacy", chunks=[unknown]
+    )
+    assert backup_incremental.load_snapshot_chunks("target", "policy", "legacy") == [unknown]
+
+
+def test_snapshot_index_maintenance_not_needed_preserves_metrics(tmp_settings: Path) -> None:
+    del tmp_settings
+    result = backup_incremental.maintain_snapshot_index(
+        "target", "policy", minimum_db_bytes=10**12, minimum_free_page_ratio=1.0
+    )
+    assert result["status"] == "not-needed"
+    assert result["before"] == result["after"]
+
+
+def test_native_batch_lifecycle_handles_reconfiguration_missing_pipes_and_failed_shutdown(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    helper = tmp_path / "deepseek-backup"
+    helper.write_bytes(b"helper")
+    engine = backup_chunk_engine.RustChunkEngine(helper)
+    closed: list[bool] = []
+    engine._batch_process = _FakeProcess()  # type: ignore[assignment]
+    engine._batch_process_workers = 1
+    monkeypatch.setattr(engine, "_close_batch_process", lambda: closed.append(True))
+    engine.configure_batch(workers=2, max_in_flight_bytes=64 * 1024 * 1024)
+    assert closed == [True]
+
+    class MissingPipes:
+        stdin = None
+        stdout = None
+        killed = False
+
+        def kill(self) -> None:
+            self.killed = True
+
+    missing = MissingPipes()
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", lambda *args, **kwargs: missing)
+    engine = backup_chunk_engine.RustChunkEngine(helper)
+    with pytest.raises(AppError, match="no streaming pipes"):
+        engine._start_batch_process()
+    assert missing.killed
+
+    class Unstoppable(_FakeProcess):
+        killed = False
+
+        def wait(self, timeout: float | None = None) -> int:
+            raise OSError("wait failed")
+
+        def terminate(self) -> None:
+            raise OSError("terminate failed")
+
+        def kill(self) -> None:
+            self.killed = True
+
+    unstoppable = Unstoppable()
+    engine._batch_process = unstoppable  # type: ignore[assignment]
+    engine._close_batch_process()
+    assert unstoppable.killed
+
+
+def test_native_batch_empty_input_and_cancelled_byte_budget(tmp_path: Path) -> None:
+    helper = tmp_path / "deepseek-backup"
+    helper.write_bytes(b"helper")
+    assert backup_chunk_engine.RustChunkEngine(helper).scan_files([]) == {}
+    budget = backup_chunk_engine._ByteBudget(1)
+    assert budget.acquire(1, None) == 1
+    cancelled = threading.Event()
+    cancelled.set()
+    with pytest.raises(AppError, match="cancelled"):
+        budget.acquire(1, cancelled)
+    budget.release(1)
+
+
+def test_native_batch_write_failure_is_reported_after_response_drain(tmp_path: Path, monkeypatch: Any) -> None:
+    source = tmp_path / "a.bin"
+    source.write_bytes(b"a")
+    helper = tmp_path / "deepseek-backup"
+    helper.write_bytes(b"helper")
+    process = _FakeProcess()
+    digest = hashlib.sha256(b"a").hexdigest()
+    process.stdout.append(
+        json.dumps(
+            {
+                "id": 0,
+                "size": 1,
+                "sha256": digest,
+                "protocol": backup_incremental.CURRENT_CDC_PROTOCOL,
+                "chunks": [{"offset": 0, "length": 1, "sha256": digest}],
+            }
+        )
+        + "\n"
+    )
+
+    class FailingStdin:
+        def write(self, value: str) -> int:
+            del value
+            raise OSError("write failed")
+
+        def flush(self) -> None:
+            return None
+
+        def close(self) -> None:
+            raise OSError("close failed")
+
+    process.stdin = FailingStdin()  # type: ignore[assignment]
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", lambda *args, **kwargs: process)
+    with pytest.raises(AppError, match="invalid output"):
+        backup_chunk_engine.RustChunkEngine(helper).scan_files([source])
+
+
+def test_native_batch_bounded_queue_stops_reader_after_timeout(tmp_path: Path, monkeypatch: Any) -> None:
+    source = tmp_path / "a.bin"
+    source.write_bytes(b"a")
+    helper = tmp_path / "deepseek-backup"
+    helper.write_bytes(b"helper")
+    process = _FakeProcess()
+    process.stdin.flush = lambda: None  # type: ignore[method-assign]
+
+    class AlwaysFullQueue(queue.Queue[Any]):
+        def put(self, item: Any, block: bool = True, timeout: float | None = None) -> None:
+            del item, block, timeout
+            raise backup_chunk_engine.queue.Full
+
+    monkeypatch.setattr(backup_chunk_engine.queue, "Queue", AlwaysFullQueue)
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(backup_chunk_engine, "NATIVE_BATCH_RESPONSE_TIMEOUT_SECONDS", 0.01)
+    process.stdout.append("{}\n")
+    with pytest.raises(AppError, match="invalid output"):
+        backup_chunk_engine.RustChunkEngine(helper).scan_files([source])
