@@ -197,8 +197,11 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
 
         # Real Age decrypt via the real helper using the generated identity.
         backup_crypto.put_secret(restore_id, "age-identity", identity_text)
+        session = backup_remote_restore.read_restore_session(restore_id)
+        assert session is not None and session.get("selection") is not None, "projected selection was not frozen"
         prepared = backup_remote_restore.materialize_federated_restore(restore_id, mode="merge", owner_document_id="server")
         assert prepared["phase"] == "prepared"
+        assert prepared.get("requiresFrontendApply") is False, "projected restore must not require frontend apply"
         committed = backups.commit_restore(restore_id)
         assert committed["phase"] == "backend-committed"
         completed = backups.complete_restore(restore_id)
