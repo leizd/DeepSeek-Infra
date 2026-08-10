@@ -194,16 +194,19 @@ def test_force_full_from_committed_metadata(tmp_settings: Path) -> None:
     )
     assert selected[0] == "incremental"
     # A chain whose parent record vanished fails closed in ancestor_chain.
-    backup_incremental.record_committed_snapshot(
-        target_id="t",
-        policy_id="p_orphan",
-        backup_id="I1",
-        parent_backup_id="GHOST",
-        base_backup_id="GHOST",
-        chain_depth=1,
-        root_digest=backup_incremental.snapshot_root([]),
-        files=[],
-    )
+    with backup_incremental._connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO snapshot_lineages
+            (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth,
+             root_digest, committed_at, scope_digest, recipient_set_digest, schema_digest,
+             chunk_protocol, full_committed_at, logical_bytes)
+            VALUES ('t', 'p_orphan', 'I1', 'GHOST', 'GHOST', 1, ?,
+                    '2026-01-01T00:00:00Z', '', '', '', ?, NULL, 0)
+            """,
+            (backup_incremental.snapshot_root([]), backup_incremental.CURRENT_CDC_PROTOCOL),
+        )
+        connection.commit()
     with pytest.raises(AppError, match="missing parent snapshot"):
         backup_incremental.ancestor_chain("t", "p_orphan", "I1")
 
@@ -896,7 +899,14 @@ def test_record_committed_index_full_and_incremental(tmp_settings: Path) -> None
                 {"contributorId": "local", "path": "a.txt", "size": 1, "sha256": "a" * 64},
                 {"contributorId": "local", "path": "b.txt", "size": 2, "sha256": "b" * 64},
             ],
-            "snapshot": {"rootDigest": "0" * 64},
+            "snapshot": {
+                "rootDigest": backup_incremental.snapshot_root(
+                    [
+                        backup_incremental.FileRecord("local", "a.txt", 1, "a" * 64),
+                        backup_incremental.FileRecord("local", "b.txt", 2, "b" * 64),
+                    ]
+                )
+            },
         },
         chunk_records=[backup_incremental.ChunkRecord("local", "b.txt", 0, 0, 2, "c" * 64)],
     )
@@ -1002,9 +1012,8 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
     )
     assert package.path.is_file()
     assert package.manifest.get("snapshotKind") == "incremental"
-    # The delta manifest must be serialized after payload allocation: every
-    # whole-file PUT payloadRef must point at the final payload/files/ path,
-    # not the pre-allocation SHA-256 placeholder.
+    # The delta manifest is serialized after allocation and small whole-file
+    # payloads point at immutable ranges in the snapshot-local pack index.
     import zipfile as _zipfile
 
     raw = package.path.read_bytes()
@@ -1014,26 +1023,25 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
         ops = json.loads(archive.read("delta/operations.json"))
     payload_refs = [item["payloadRef"] for item in ops["put"] if item.get("storage") == "whole"]
     assert payload_refs
-    assert all(str(ref).startswith("payload/files/") for ref in payload_refs)
+    assert all(ref.get("kind") == "pack-range" and str(ref.get("blobId") or "").startswith("blob_") for ref in payload_refs)
     # Identical whole-file payloads must deduplicate to one physical blob.
     memory_puts = [item for item in ops["put"] if "payload/memory/" in str(item.get("path"))]
     assert len(memory_puts) >= 2
-    assert len({str(item["payloadRef"]) for item in memory_puts}) == 1
+    assert len({str(item["payloadRef"]["blobId"]) for item in memory_puts}) == 1
     delta_paths = [str(item["path"]) for item in package.manifest["deltaFiles"]]
-    assert len([p for p in delta_paths if p.startswith("payload/files/")]) < len(ops["put"])
+    assert "payload/packs/index.json" in delta_paths
+    assert len([p for p in delta_paths if p.endswith(".pack")]) < len(ops["put"])
     # True delta storage: the archive must not carry full payload/<contributor>
     # copies of the workspace; only the changed payload blobs may appear.
-    assert not any(name.startswith("payload/") and not name.startswith("payload/files/") for name in names)
+    assert not any(name.startswith("payload/") and not name.startswith("payload/packs/") for name in names)
     snapshot = package.manifest["snapshot"]
+    assert snapshot["format"] == "incremental-v5"
     assert snapshot["kind"] == "incremental"
     assert snapshot["parentBackupId"] == "F0"
     assert snapshot["chainDepth"] == 1
     assert snapshot["rootDigest"]
     # Index committed state from the REAL logical tree of the built package.
-    real_files = [
-        backup_incremental.FileRecord(str(item["contributorId"]), str(item["path"]), int(item["size"]), str(item["sha256"]))
-        for item in package.manifest["files"]
-    ]
+    real_files = list(package.effective_files)
     backup_incremental.record_committed_snapshot(
         target_id="managed-local",
         policy_id=str(policy["policyId"]),
@@ -1083,6 +1091,60 @@ def test_full_incremental_build_and_index(tmp_settings: Path, monkeypatch: pytes
         ops2 = json.loads(archive.read("delta/operations.json"))
     assert ops2["put"] == [] and ops2["delete"] == []
     assert not any(name.startswith("payload/") for name in names2)
+
+
+def test_incremental_builder_keeps_large_whole_payload_standalone(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from deepseek_infra.core import config
+    from deepseek_infra.infra.workspace import backups as _backups
+    from deepseek_infra.infra.workspace import backup_scheduled as _scheduled
+
+    prefix = b"age-encryption.org/v1\n"
+    _stub_crypto(monkeypatch, prefix)
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    import random
+
+    config.MEMORY_FILE.write_bytes(random.Random(412).randbytes(16 * 1024 * 1024 + 1))
+    policy = backup_policies.create_policy(
+        _policy(incremental={"mode": "file-delta", "largeFileMode": "whole"})
+    )
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root([]),
+        files=[],
+    )
+    contributor_plan = _backups._contributor_plan(_scheduled._context_from_policy(policy))
+    package = _scheduled.build_scheduled_backup(
+        policy,
+        run_id="run_large_whole",
+        staging_root=tmp_settings / ".staging",
+        schedule_slot="2026-05-01T03:00@UTC",
+        backup_id="I1",
+        contributor_plan=contributor_plan,
+        snapshot_kind="incremental",
+        parent_backup_id="F0",
+        base_backup_id="F0",
+        lineage_id="lineage_whole",
+        chain_depth=1,
+    )
+
+    import zipfile as _zipfile
+
+    raw = package.path.read_bytes()
+    with _zipfile.ZipFile(io.BytesIO(raw[len(prefix):][::-1])) as archive:
+        operations = json.loads(archive.read("delta/operations.json"))
+        names = set(archive.namelist())
+    memory_put = next(item for item in operations["put"] if str(item["path"]).endswith("memories.json"))
+    assert memory_put["payloadRef"] == {"kind": "standalone", "path": "payload/files/000000"}
+    assert "payload/files/000000" in names
+    assert package.manifest["packing"]["standaloneBlobs"] == 1
 
 
 def test_true_delta_size_regression(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1240,9 +1302,9 @@ def test_corrupt_payload_chunk_fails_closed(tmp_settings: Path, monkeypatch: pyt
     roots = [tmp_settings / "corrupt0", tmp_settings / "corrupt1"]
     extract(pkg0, roots[0])
     extract(pkg1, roots[1])
-    payload_blobs = sorted((roots[1] / "payload" / "files").glob("*")) if (roots[1] / "payload" / "files").is_dir() else []
-    assert payload_blobs, "incremental must carry CDC payload chunks"
-    blob = payload_blobs[0]
+    payload_packs = sorted((roots[1] / "payload" / "packs").glob("*.pack"))
+    assert payload_packs, "incremental must carry CDC payload packs"
+    blob = payload_packs[0]
     corrupted = bytearray(blob.read_bytes())
     corrupted[len(corrupted) // 2] ^= 0xFF
     blob.write_bytes(bytes(corrupted))
@@ -1471,7 +1533,7 @@ def test_materialize_chain_error_branches(tmp_settings: Path, tmp_path: Path) ->
         {"path": "payload/local/b.txt", "size": 4, "sha256": hashlib.sha256(b"zzzzz").hexdigest(), "storage": "whole", "payloadRef": "payload/files/000000"}, f0_root
     )
     (payload_dir / "delta" / "operations.json").write_text(json.dumps(checksum_put), encoding="utf-8")
-    with pytest.raises(AppError, match="failed checksum"):
+    with pytest.raises(AppError, match="checksum mismatch"):
         backup_incremental_restore.materialize_chain([f0_dir, payload_dir], tmp_path / "e-c")
     # CDC invalid parent ordinal.
     cdc_put = _ops_with_put(
@@ -1491,7 +1553,7 @@ def test_materialize_chain_error_branches(tmp_settings: Path, tmp_path: Path) ->
     bad_cdc_missing = tmp_path / "e-cdcm"
     shutil.copytree(i1_dir, bad_cdc_missing)
     (bad_cdc_missing / "delta" / "operations.json").write_text(json.dumps(cdc_missing), encoding="utf-8")
-    with pytest.raises(AppError, match="payload chunk is missing"):
+    with pytest.raises(AppError, match="payload.*missing"):
         backup_incremental_restore.materialize_chain([f0_dir, bad_cdc_missing], tmp_path / "e-cdcm2")
     # Corrupt / non-dict manifest.
     bad_manifest = tmp_path / "e-mf"
@@ -2303,12 +2365,13 @@ def test_incremental_builder_cdc_payloads_and_reuse(tmp_settings: Path, monkeypa
     assert big_put["size"] == len(big)
     assert len(big_put["chunks"]) > 1
     assert all(item["source"] == "payload" for item in big_put["chunks"])
-    assert all(str(item["payloadRef"]).startswith("payload/files/") for item in big_put["chunks"])
-    # First CDC delta uploads every chunk of the file as a distinct blob.
+    assert all(item["payloadRef"]["kind"] == "pack-range" for item in big_put["chunks"])
+    # First CDC delta indexes every unique chunk while emitting only a few packs.
     delta_paths = [str(item["path"]) for item in package.manifest["deltaFiles"]]
-    chunk_refs = {str(item["payloadRef"]) for item in big_put["chunks"]}
+    chunk_refs = {str(item["payloadRef"]["blobId"]) for item in big_put["chunks"]}
     assert len(chunk_refs) == len(big_put["chunks"])
-    assert chunk_refs <= set(delta_paths)
+    assert package.manifest["packing"]["packedBlobs"] >= len(chunk_refs)
+    assert len([path for path in delta_paths if path.endswith(".pack")]) < len(chunk_refs)
     assert package.chunk_records
     # Commit I1's file tree and chunk maps to the index, then mutate one byte.
     real_files = [
@@ -2371,8 +2434,10 @@ def test_incremental_builder_cdc_payloads_and_reuse(tmp_settings: Path, monkeypa
     assert all({"parentPath", "offset", "length", "sha256"} <= set(item) for item in parent_chunks)
     assert 0 < len(payload_chunks) < len(big_put2["chunks"])
     delta_paths2 = [str(item["path"]) for item in package2.manifest["deltaFiles"]]
-    payload_blobs2 = [p for p in delta_paths2 if p.startswith("payload/files/")]
-    assert len(payload_blobs2) == len(payload_chunks)
+    assert not [p for p in delta_paths2 if p.startswith("payload/files/")]
+    assert package2.manifest["packing"]["packedBlobs"] >= len(
+        {str(item["payloadRef"]["blobId"]) for item in payload_chunks}
+    )
     # Physical incremental savings are reported from committed builder metadata.
     savings2 = package2.manifest["incrementalSavings"]
     assert savings2["physicalPayloadBytes"] < savings2["logicalChangedBytes"]

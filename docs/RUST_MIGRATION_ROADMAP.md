@@ -576,6 +576,13 @@ See [SEMANTIC_CACHE_BINARY_EMBEDDINGS.md](SEMANTIC_CACHE_BINARY_EMBEDDINGS.md) f
 - Telemetry reports actual Rust files, Python fallback files and aggregate reasons without paths or hashes; fallback above ten percent marks the run degraded without changing correctness.
 - Rust still owns no Snapshot Index, Bloom Filter, Parent Locator, Manifest, target credential, encryption secret, retention decision or restore transaction. All effective dedup semantics stay Python-owned and local-only.
 
+### 4.4.12 — Bounded streaming backup worker pool (completed)
+
+- Reuses one long-lived `deepseek-backup scan-batch --workers N` JSONL process instead of capturing an entire serial batch per call.
+- Rust executes scans through a bounded worker pool and emits request-id responses as files complete; Python validates cardinality and falls back only failed or malformed files.
+- Python derives the effective worker count from an estimated approximately 10 MiB scan working set rather than treating logical file length as resident memory.
+- Pack construction, Index v3, S3 publication, encryption, retention and restore remain Python-owned. The native process receives only selected paths and the pinned CDC protocol.
+
 ## Testing Priorities
 
 Coverage work should prioritize meaningful behavior rather than easy lines:

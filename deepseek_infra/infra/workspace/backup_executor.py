@@ -1,4 +1,4 @@
-"""Scheduled backup run executor (4.4.7).
+"""Scheduled backup run executor (4.4.12).
 
 Drives a claimed run through its phase state machine. The first attempt freezes
 a :class:`backup_run_plan` for the schedule slot; later retries reuse that plan
@@ -55,7 +55,7 @@ def _record_committed_index(
     package: Any,
     run_plan: dict[str, Any],
     policy: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any]:
     """Persist a committed snapshot into the rebuildable index (best effort)."""
     try:
         manifest = getattr(package, "manifest", None) or {}
@@ -94,15 +94,19 @@ def _record_committed_index(
             base = str(run_plan.get("baseBackupId") or parent_value)
             depth = int(run_plan.get("chainDepth") or 1)
             root = str(snapshot.get("rootDigest") or backup_incremental.snapshot_root(records))
-            # Store the effective tree (current + inherited) for lineage continuity.
-            previous = []
-            if parent_value:
-                previous = backup_incremental.load_snapshot_files(target_id, policy_id, parent_value)
-            effective = backup_incremental.effective_current(
-                previous,
-                records,
-                successful_contributors={item.contributor_id for item in records},
-            )
+            packaged_effective = getattr(package, "effective_files", None)
+            if packaged_effective is not None:
+                effective = list(packaged_effective)
+            else:
+                # Compatibility for packages constructed by older callers.
+                previous = []
+                if parent_value:
+                    previous = backup_incremental.load_snapshot_files(target_id, policy_id, parent_value)
+                effective = backup_incremental.effective_current(
+                    previous,
+                    records,
+                    successful_contributors={item.contributor_id for item in records},
+                )
             parent_latest = backup_incremental.latest_committed_snapshot(target_id, policy_id)
             full_committed_at = str(parent_latest.get("full_committed_at") or "") if parent_latest else None
         else:
@@ -123,9 +127,11 @@ def _record_committed_index(
             logical_bytes=sum(int(item.size) for item in effective),
             **common,
         )
+        return backup_incremental.index_metrics(target_id, policy_id)
     except Exception:
         # Index is a performance cache; never fail the run on index errors.
         backup_incremental.mark_index_stale(target_id, policy_id, "snapshot-index-commit-failed")
+        return {"status": "stale"}
 
 
 def _retry_section(policy: dict[str, Any]) -> dict[str, Any]:
@@ -466,7 +472,7 @@ def execute_run(
             now=guard.now(),
         )
         # Successful commit: persist index lineage (best effort), then clear plan.
-        _record_committed_index(
+        committed_index = _record_committed_index(
             target_id=target_id,
             policy_id=policy_id,
             backup_id=str(published.receipt.get("backupId") or package.backup_id),
@@ -480,6 +486,8 @@ def execute_run(
             "phase": "complete",
             "backupId": str(published.receipt.get("backupId") or package.backup_id),
             "filename": filename,
+            "packing": (getattr(package, "manifest", None) or {}).get("packing") or {},
+            "index": committed_index,
         }
     except AppError as exc:
         message = str(exc)

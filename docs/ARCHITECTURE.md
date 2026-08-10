@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.11。
+适用版本：v4.4.12。
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 
@@ -104,7 +104,7 @@ Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具�
 
 ### 版本说明
 
-- **Current release:** `4.4.11`。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的批量 Chunk 扫描。Python 拥有 Effective Snapshot Index、Bloom/Exact Lookup、Delta Manifest、备份事务、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。
+- **Current release:** `4.4.12`。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Bloom/Exact Lookup、备份事务、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。
 - **Historical qualification:** `v4.0.0-rc.1` 已被 rc.2 supersede，只保留为历史架构预览；stable `4.0.0` 从已验证的 rc.2 提升。
 - **Patch boundary:** Python-first 所有权、默认关闭的 Rust delegates 和冻结协议均不改变。
 
@@ -163,6 +163,26 @@ flowchart LR
 Remote Restore Session 只保存 Target、Lineage、Object 摘要、进度和状态，不保存 Secret。`incremental-v4` 的 Parent Range 只存在于 Age 加密 Manifest；Materializer 对每层先从未修改 Parent Tree 准备全部 PUT，验证 Chunk/File SHA 后再执行 Delete/Replace 和 Merkle 转移，并把最终完整 Tree 交回 4.4.1 的 Federated Restore；它不拥有正式 Workspace Commit。
 
 `BackupChunkEngine` 把文件 SHA、FastCDC v3 边界和 Chunk SHA 合并为一次遍历；Rust helper 用 JSONL Batch 避免逐文件启动进程，失败文件由 Python 权威实现接管并按实际结果计数。Builder 只查询 Immediate Parent Effective View：Bloom 排除确定 Miss，SQLite 批量精确匹配决定 Range 复用，Chunk Map/Ref 单事务提交。所有 Hash/Bloom 都留在本地。S3 上传的 Part Journal 继续受 Writer Fence 约束，Complete 冲突只有摘要与长度同时匹配才可收敛。
+
+## Packed Delta 与持久化快照状态（v4.4.12）
+
+```mermaid
+flowchart LR
+    W["Workspace scan"] --> V["immutable file_versions"]
+    V --> O["snapshot_file_ops: checkpoint or delta"]
+    O --> C["current_effective_files"]
+    C --> H["atomic current_effective_heads"]
+    W --> P["PackWriter: 64 MiB target"]
+    P --> Z["incremental-v5 inside age ZIP"]
+    Z --> R["Pack Range reader: 4-handle LRU"]
+    R --> M["File SHA + Merkle verify"]
+```
+
+Index v3 只为 Full 保存完整 PUT Checkpoint，Incremental 只保存发生变化的 PUT/DELETE；最新 Parent 的 Path→File Version 仅物化一份，并由单行 Head 绑定 committed backup 与 root。File Version 由 Size、File SHA 与可选 Chunk Map 内容寻址，Rename/Copy 可以共享；历史读取最多重放一个 Full 与受策略限制的 Delta 深度。提交使用同一个 `BEGIN IMMEDIATE`，Head/Root 无法证明一致时写 stale 标记并 Force Full。
+
+`incremental-v5` 只改变当前 Child 新 Payload 的物理布局：CDC Payload 与不超过 16 MiB 的 Whole Payload 直接流入 Snapshot-local Pack，较大的 Whole Payload 保持 standalone；Parent File/Range 依赖仍严格限于 Immediate Parent。Pack Index 留在 Age 认证密文内。恢复依次验证 Pack、Blob Range、File 与 Snapshot Merkle，并以最多四个只读句柄复用同一 Pack；v2～v4 解码路径保留。
+
+Rust Scanner 使用一个长生命周期 JSONL 子进程和有界 Worker Pool，结果完成即回传。Python 用预计工作集而非逻辑文件长度计算并发预算；任一 Native 结果缺失、畸形或失败只回退对应文件。Index Maintenance 只在数据库超过 256 MiB 且空闲页超过 30% 时执行有界 `incremental_vacuum`，从不在 Scheduler Commit 路径执行完整 `VACUUM`。
 
 ## 分层架构
 

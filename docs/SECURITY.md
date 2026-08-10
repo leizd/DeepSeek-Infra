@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.11。
+适用版本：v4.4.12。
 
 ## 威胁模型
 
@@ -69,6 +69,8 @@ DeepSeek 和 Tavily Key 可以通过环境变量提供，也可以在浏览器�
 - Recovery Identity 只返回一次，不写 Runtime Root、浏览器存储或备份；首次使用前 UI 要求重新导入并验证公开 Recipient。
 - Contributor staging 包含短期明文副本，目录仅供当前运行用户访问且完成后删除；SSD/闪存上不承诺物理安全擦除。
 - 未配置 helper 时 `encryptedBackupAvailable=false`，绝不静默创建明文替代品。
+
+4.4.12 的 Backup Pack Index 与内容摘要只存在于 Age 认证密文和可信本地 `.backup-index`；恢复对 Pack Path、Offset/Length、Pack/Blob/File/Merkle 摘要逐层 Fail Closed。Pack 不跨 Snapshot 引用，也不引入云端 Chunk CAS、Convergent Encryption 或远端明文 Hash Index。
 
 Stateless MCP 的 Redis AOF 不直接进入包。逻辑快照排除 Redis URL/密码、MCP token、实例 ID、Lease Owner/TTL、旧 Fencing Token 和 OTel 配置；恢复后的可运行任务变为 `interrupted`，不会自动执行。
 

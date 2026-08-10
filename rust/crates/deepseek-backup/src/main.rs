@@ -5,6 +5,8 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write as IoWrite};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 
 const MIN_CHUNK: usize = 512 * 1024;
 const AVG_CHUNK: usize = 2 * 1024 * 1024;
@@ -161,59 +163,142 @@ fn scan(path: PathBuf, protocol: String) -> io::Result<Scan> {
     })
 }
 
-fn scan_batch_io<R: BufRead, W: IoWrite>(reader: R, mut writer: W) -> io::Result<()> {
+fn write_batch_value<W: IoWrite, T: Serialize>(writer: &mut W, value: &T) -> io::Result<()> {
+    serde_json::to_writer(&mut *writer, value)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
+}
+
+fn scan_batch_pool_io<R, W, F>(reader: R, writer: W, workers: usize, scanner: F) -> io::Result<()>
+where
+    R: BufRead,
+    W: IoWrite + Send + 'static,
+    F: Fn(PathBuf, String) -> io::Result<Scan> + Send + Sync + 'static,
+{
+    let worker_count = workers.clamp(1, 64);
+    let writer = Arc::new(Mutex::new(writer));
+    let scanner = Arc::new(scanner);
+    let (sender, receiver) = mpsc::sync_channel::<BatchRequest>(worker_count * 2);
+    let receiver = Arc::new(Mutex::new(receiver));
+    let mut handles = Vec::with_capacity(worker_count);
+    for _ in 0..worker_count {
+        let receiver = Arc::clone(&receiver);
+        let scanner = Arc::clone(&scanner);
+        let writer = Arc::clone(&writer);
+        handles.push(thread::spawn(move || -> io::Result<()> {
+            loop {
+                let request = {
+                    let guard = receiver
+                        .lock()
+                        .map_err(|_| io::Error::other("batch receiver lock poisoned"))?;
+                    match guard.recv() {
+                        Ok(value) => value,
+                        Err(_) => break,
+                    }
+                };
+                let result = scanner(request.path, request.protocol);
+                let mut output = writer
+                    .lock()
+                    .map_err(|_| io::Error::other("batch writer lock poisoned"))?;
+                match result {
+                    Ok(result) => write_batch_value(
+                        &mut *output,
+                        &BatchResponse {
+                            id: request.id,
+                            scan: result,
+                        },
+                    )?,
+                    Err(_) => write_batch_value(
+                        &mut *output,
+                        &BatchError {
+                            id: request.id,
+                            error: "scan-failed",
+                        },
+                    )?,
+                }
+            }
+            Ok(())
+        }));
+    }
+
+    let mut read_error = None;
     for line in reader.lines() {
-        let line = line?;
+        let line = match line {
+            Ok(value) => value,
+            Err(error) => {
+                read_error = Some(error);
+                break;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
         let request: BatchRequest = match serde_json::from_str(&line) {
             Ok(value) => value,
             Err(_) => {
-                serde_json::to_writer(
-                    &mut writer,
+                let mut output = writer
+                    .lock()
+                    .map_err(|_| io::Error::other("batch writer lock poisoned"))?;
+                write_batch_value(
+                    &mut *output,
                     &BatchError {
                         id: serde_json::Value::Null,
                         error: "invalid-request",
                     },
                 )?;
-                writer.write_all(b"\n")?;
-                writer.flush()?;
                 continue;
             }
         };
-        match scan(request.path, request.protocol) {
-            Ok(result) => serde_json::to_writer(
-                &mut writer,
-                &BatchResponse {
-                    id: request.id,
-                    scan: result,
-                },
-            )?,
-            Err(_) => serde_json::to_writer(
-                &mut writer,
-                &BatchError {
-                    id: request.id,
-                    error: "scan-failed",
-                },
-            )?,
+        if sender.send(request).is_err() {
+            read_error = Some(io::Error::other("native scan workers stopped unexpectedly"));
+            break;
         }
-        writer.write_all(b"\n")?;
-        writer.flush()?;
+    }
+    drop(sender);
+
+    let mut worker_error = None;
+    for handle in handles {
+        match handle.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                worker_error.get_or_insert(error);
+            }
+            Err(_) => {
+                worker_error.get_or_insert_with(|| io::Error::other("native scan worker panicked"));
+            }
+        };
+    }
+    if let Some(error) = read_error {
+        return Err(error);
+    }
+    if let Some(error) = worker_error {
+        return Err(error);
     }
     Ok(())
 }
 
-fn scan_batch() -> io::Result<()> {
+fn scan_batch(workers: usize) -> io::Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
-    scan_batch_io(stdin.lock(), stdout.lock())
+    scan_batch_pool_io(stdin.lock(), stdout, workers, scan)
 }
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
-    if args.len() == 2 && args[1] == "scan-batch" {
-        return scan_batch();
+    if args.get(1).is_some_and(|value| value == "scan-batch") {
+        let workers = match args.as_slice() {
+            [_, _] => 1,
+            [_, _, flag, value] if flag == "--workers" => value.parse::<usize>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "--workers must be an integer")
+            })?,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "usage: deepseek-backup scan-batch [--workers <count>]",
+                ));
+            }
+        };
+        return scan_batch(workers);
     }
     if args.len() != 5 || args[1] != "scan" || args[2] != "--protocol" {
         return Err(io::Error::new(
@@ -232,6 +317,37 @@ fn main() -> io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    #[derive(Clone, Default)]
+    struct SharedOutput(Arc<Mutex<Vec<u8>>>);
+
+    impl IoWrite for SharedOutput {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .expect("output lock")
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn observe_maximum(maximum: &AtomicUsize, active: usize) {
+        let mut observed = maximum.load(Ordering::SeqCst);
+        while active > observed {
+            match maximum.compare_exchange(observed, active, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => break,
+                Err(current) => observed = current,
+            }
+        }
+    }
 
     #[test]
     fn v2_and_v3_cover_the_file_and_hash_in_one_scan() {
@@ -278,17 +394,65 @@ mod tests {
             serde_json::to_string(&path).expect("encode path"),
             serde_json::to_string(&path).expect("encode path")
         );
-        let mut output = Vec::new();
-        scan_batch_io(BufReader::new(requests.as_bytes()), &mut output).expect("scan batch");
-        let lines: Vec<serde_json::Value> = String::from_utf8(output)
-            .expect("utf8")
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("jsonl"))
-            .collect();
+        let output = SharedOutput::default();
+        let output_bytes = Arc::clone(&output.0);
+        scan_batch_pool_io(BufReader::new(requests.as_bytes()), output, 2, scan)
+            .expect("scan batch");
+        let mut lines: Vec<serde_json::Value> =
+            String::from_utf8(output_bytes.lock().expect("output lock").clone())
+                .expect("utf8")
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("jsonl"))
+                .collect();
+        lines.sort_by_key(|value| value["id"].as_i64());
         assert_eq!(lines[0]["id"], 7);
         assert_eq!(lines[0]["size"], 10);
         assert_eq!(lines[1]["id"], 8);
         assert_eq!(lines[1]["error"], "scan-failed");
         fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn batch_scanner_runs_through_a_bounded_worker_pool() {
+        let mut requests = String::new();
+        for id in 0..8 {
+            writeln!(
+                &mut requests,
+                "{{\"id\":{id},\"path\":\"fixture-{id}\",\"protocol\":\"fastcdc-gear-v3\"}}"
+            )
+            .expect("write request");
+        }
+        let output = SharedOutput::default();
+        let output_bytes = Arc::clone(&output.0);
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let scanner = {
+            let active = Arc::clone(&active);
+            let maximum = Arc::clone(&maximum);
+            move |_path: PathBuf, protocol: String| {
+                let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                observe_maximum(&maximum, now);
+                thread::sleep(Duration::from_millis(20));
+                active.fetch_sub(1, Ordering::SeqCst);
+                Ok(Scan {
+                    size: 0,
+                    sha256: "0".repeat(64),
+                    protocol,
+                    chunks: Vec::new(),
+                })
+            }
+        };
+
+        scan_batch_pool_io(BufReader::new(requests.as_bytes()), output, 2, scanner)
+            .expect("scan batch pool");
+
+        assert_eq!(maximum.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            String::from_utf8(output_bytes.lock().expect("output lock").clone())
+                .expect("utf8")
+                .lines()
+                .count(),
+            8
+        );
     }
 }

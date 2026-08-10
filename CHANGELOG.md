@@ -4,6 +4,25 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.12] - Packed Delta Payloads and Persistent Snapshot State
+
+### Persistent snapshot index
+
+- Replaces per-snapshot materialized file/ref copies with immutable file versions, per-snapshot PUT/DELETE operations, one current effective view and one atomic generation head.
+- Reconstructs historical snapshots from a Full plus bounded deltas, migrates legacy materialized rows additively, and forces Full whenever the current head or root invariant cannot be proven.
+- Garbage-collects unreferenced file versions and chunk maps after physical retention, reports privacy-safe index efficiency, and limits compaction to thresholded incremental maintenance.
+
+### Incremental v5 packfiles
+
+- Streams every unmatched CDC payload and small whole-file payload into snapshot-local, aligned 64 MiB packfiles instead of creating one staging file and ZIP entry per logical blob.
+- Keeps large whole-file payloads standalone and preserves immediate-parent `parent-file` / `parent-range` reuse without adding cross-snapshot pack dependencies.
+- Verifies Pack, Blob Range, reconstructed File and Snapshot Merkle digests independently during restore while retaining incremental v2-v4 compatibility.
+
+### Bounded native scanning and scale evidence
+
+- Runs the Rust JSONL scanner as a persistent bounded worker pool, streams results as files finish, and budgets estimated scanner working set rather than logical file size.
+- Adds aggregate packing/index metrics, 100k-file scale contracts, and a real HTTP S3-compatible packed Full→Incremental→Restore CI path.
+
 ## [4.4.11] - Effective Snapshot Dedup Index and Cross-File Chunk Reuse
 
 ### Effective snapshot chunk state

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import sqlite3
 import threading
@@ -26,6 +27,33 @@ from deepseek_infra.infra.workspace.backup_target_store import (
     ObjectMeta,
     probe_store_capabilities,
 )
+
+
+def _streaming_process(output: str = "") -> SimpleNamespace:
+    state: dict[str, int | None] = {"returncode": None}
+
+    def poll() -> int | None:
+        return state["returncode"]
+
+    def wait(timeout: float | None = None) -> int:
+        del timeout
+        state["returncode"] = 0
+        return 0
+
+    def terminate() -> None:
+        state["returncode"] = -1
+
+    def kill() -> None:
+        state["returncode"] = -9
+
+    return SimpleNamespace(
+        stdin=io.StringIO(),
+        stdout=io.StringIO(output),
+        poll=poll,
+        wait=wait,
+        terminate=terminate,
+        kill=kill,
+    )
 
 
 def _file(path: str, *, size: int = 4, sha: str = "a") -> backup_incremental.FileRecord:
@@ -77,7 +105,8 @@ def test_effective_chunk_refs_survive_unchanged_incrementals(tmp_settings: Path)
     assert found[("2" * 64, 4)].logical_path == b1.logical_path
     with backup_incremental._connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM chunk_maps").fetchone()[0] == 3
-        assert connection.execute("SELECT COUNT(*) FROM snapshot_chunk_refs").fetchone()[0] == 6
+        assert connection.execute("SELECT COUNT(*) FROM snapshot_chunk_refs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM snapshot_file_ops").fetchone()[0] == 3
 
 
 def test_snapshot_index_conflict_rolls_back_and_forces_full(tmp_settings: Path) -> None:
@@ -149,7 +178,7 @@ def test_parent_lookup_is_exact_batched_and_immediate_parent_only(tmp_settings: 
     assert renamed_refs[("local", renamed_file.logical_path)] == backup_incremental.load_snapshot_chunk_refs(
         "target", "policy", "F0"
     )[("local", second.logical_path)]
-    _commit("I1", [], [], parent="F0", depth=1)
+    _commit("I1", [], [], parent="I0", depth=2)
     assert backup_incremental.lookup_parent_chunks("target", "policy", "I1", [(shared, 4)]) == {}
 
 
@@ -249,24 +278,37 @@ def test_broken_legacy_index_migration_marks_every_scope_stale(tmp_settings: Pat
             files=[file],
             chunk_protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
         )
-    backup_incremental.record_committed_snapshot(
-        target_id="target",
-        policy_id="orphan",
-        backup_id="I1",
-        parent_backup_id="missing",
-        base_backup_id="missing",
-        chain_depth=1,
-        root_digest=backup_incremental.snapshot_root([]),
-        files=[],
-        chunk_protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
-    )
     conflict_map_id = backup_incremental.chunk_map_id(
         protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
         file_size=conflicting.size,
         file_sha256=conflicting.sha256,
     )
     with sqlite3.connect(backup_incremental.INDEX_DB) as connection:
+        connection.execute(
+            """
+            INSERT INTO snapshot_lineages
+            (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth,
+             root_digest, committed_at, scope_digest, recipient_set_digest, schema_digest,
+             chunk_protocol, full_committed_at, logical_bytes)
+            VALUES ('target', 'orphan', 'I1', 'missing', 'missing', 1, ?,
+                    '2026-01-01T00:00:00Z', '', '', '', ?, NULL, 0)
+            """,
+            (backup_incremental.snapshot_root([]), backup_incremental.CURRENT_CDC_PROTOCOL),
+        )
+        connection.executemany(
+            """
+            INSERT INTO snapshot_files
+            (target_id, policy_id, backup_id, contributor_id, logical_path, size, sha256)
+            VALUES ('target', ?, 'F0', 'local', ?, 4, ?)
+            """,
+            (
+                ("unknown", unknown.logical_path, unknown.sha256),
+                ("invalid", invalid.logical_path, invalid.sha256),
+                ("conflicting", conflicting.logical_path, conflicting.sha256),
+            ),
+        )
         connection.execute("DELETE FROM index_meta WHERE key = ?", (backup_incremental.INDEX_SCHEMA_KEY,))
+        connection.execute("DELETE FROM index_meta WHERE key = ?", (backup_incremental.STATE_SCHEMA_KEY,))
         connection.executemany(
             "INSERT INTO snapshot_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -483,52 +525,53 @@ def test_native_batch_helper_and_fallback_telemetry(tmp_path: Path, monkeypatch:
     helper.write_bytes(b"helper")
     calls: list[list[str]] = []
 
-    def run(args: list[str], **kwargs: Any) -> SimpleNamespace:
+    def popen(args: list[str], **kwargs: Any) -> SimpleNamespace:
+        del kwargs
         calls.append(args)
         responses = []
-        for line in str(kwargs["input"]).splitlines():
-            request = json.loads(line)
-            data = Path(request["path"]).read_bytes()
+        for request_id, path in enumerate((first, second)):
+            data = path.read_bytes()
             responses.append(
                 json.dumps(
                     {
-                        "id": request["id"],
+                        "id": request_id,
                         "size": len(data),
                         "sha256": hashlib.sha256(data).hexdigest(),
-                        "protocol": request["protocol"],
+                        "protocol": backup_incremental.CURRENT_CDC_PROTOCOL,
                         "chunks": [{"offset": 0, "length": len(data), "sha256": hashlib.sha256(data).hexdigest()}],
                     }
                 )
             )
-        return SimpleNamespace(returncode=0, stdout="\n".join(responses))
+        return _streaming_process("\n".join(responses) + "\n")
 
-    monkeypatch.setattr(backup_chunk_engine.subprocess, "run", run)
-    scans = backup_chunk_engine.RustChunkEngine(helper).scan_files([first, second])
-    assert set(scans) == {first, second} and calls == [[str(helper), "scan-batch"]]
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", popen)
+    native = backup_chunk_engine.RustChunkEngine(helper)
+    scans = native.scan_files([first, second])
+    native.close()
+    assert set(scans) == {first, second} and calls == [[str(helper), "scan-batch", "--workers", "1"]]
 
-    def partial_run(args: list[str], **kwargs: Any) -> SimpleNamespace:
-        del args
-        requests = [json.loads(line) for line in str(kwargs["input"]).splitlines()]
-        data = Path(requests[0]["path"]).read_bytes()
-        return SimpleNamespace(
-            returncode=0,
-            stdout="\n".join(
+    def partial_popen(args: list[str], **kwargs: Any) -> SimpleNamespace:
+        del args, kwargs
+        data = first.read_bytes()
+        return _streaming_process(
+            "\n".join(
                 (
                     json.dumps(
                         {
-                            "id": requests[0]["id"],
+                            "id": 0,
                             "size": len(data),
                             "sha256": hashlib.sha256(data).hexdigest(),
-                            "protocol": requests[0]["protocol"],
+                            "protocol": backup_incremental.CURRENT_CDC_PROTOCOL,
                             "chunks": [{"offset": 0, "length": len(data), "sha256": hashlib.sha256(data).hexdigest()}],
                         }
                     ),
-                    json.dumps({"id": requests[1]["id"], "error": "scan-failed"}),
+                    json.dumps({"id": 1, "error": "scan-failed"}),
                 )
-            ),
+            )
+            + "\n"
         )
 
-    monkeypatch.setattr(backup_chunk_engine.subprocess, "run", partial_run)
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", partial_popen)
     partial = backup_chunk_engine.FallbackChunkEngine(backup_chunk_engine.RustChunkEngine(helper))
     _, partial_telemetry = backup_chunk_engine.scan_files_bounded(
         [first, second], workers=2, max_in_flight_bytes=1024, engine=partial
@@ -578,12 +621,19 @@ def test_native_helper_protocol_failures_fall_back_or_fail_closed(tmp_path: Path
     monkeypatch.setattr(backup_chunk_engine.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=""))
     with pytest.raises(AppError, match="helper failed"):
         rust.scan_file(first)
+
+    def failed_popen(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        del args, kwargs
+        raise backup_chunk_engine.subprocess.SubprocessError("failed")
+
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", failed_popen)
     with pytest.raises(AppError, match="batch helper failed"):
         rust.scan_files([first, second])
 
     monkeypatch.setattr(backup_chunk_engine.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="[]"))
     with pytest.raises(AppError, match="invalid output"):
         rust.scan_file(first)
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", lambda *args, **kwargs: _streaming_process("[]\n"))
     with pytest.raises(AppError, match="invalid output"):
         rust.scan_files([first, second])
 
@@ -593,11 +643,7 @@ def test_native_helper_protocol_failures_fall_back_or_fail_closed(tmp_path: Path
         "not-json",
     )
     for output in invalid_batch_outputs:
-        monkeypatch.setattr(
-            backup_chunk_engine.subprocess,
-            "run",
-            lambda *args, _output=output, **kwargs: SimpleNamespace(returncode=0, stdout=_output),
-        )
+        monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", lambda *args, _output=output, **kwargs: _streaming_process(_output + "\n"))
         with pytest.raises(AppError, match="invalid output|incomplete output"):
             rust.scan_files([first, second])
 
@@ -605,7 +651,7 @@ def test_native_helper_protocol_failures_fall_back_or_fail_closed(tmp_path: Path
         del args, kwargs
         raise backup_chunk_engine.subprocess.SubprocessError("interrupted")
 
-    monkeypatch.setattr(backup_chunk_engine.subprocess, "run", interrupted)
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", interrupted)
     with pytest.raises(AppError, match="batch helper failed"):
         rust.scan_files([first, second])
 
@@ -712,7 +758,16 @@ def test_legacy_chunk_migration_and_reference_gc(tmp_settings: Path) -> None:
         chunk_protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
     )
     with backup_incremental._connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO snapshot_files
+            (target_id, policy_id, backup_id, contributor_id, logical_path, size, sha256)
+            VALUES ('target', 'policy', 'F0', 'local', ?, ?, ?)
+            """,
+            (file.logical_path, file.size, file.sha256),
+        )
         connection.execute("DELETE FROM index_meta WHERE key = ?", (backup_incremental.INDEX_SCHEMA_KEY,))
+        connection.execute("DELETE FROM index_meta WHERE key = ?", (backup_incremental.STATE_SCHEMA_KEY,))
         connection.execute(
             "INSERT INTO snapshot_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ("target", "policy", "F0", "local", file.logical_path, 0, 0, 4, "1" * 64),
@@ -722,6 +777,10 @@ def test_legacy_chunk_migration_and_reference_gc(tmp_settings: Path) -> None:
     assert refs[("local", file.logical_path)] == backup_incremental.chunk_map_id(
         protocol=backup_incremental.CURRENT_CDC_PROTOCOL, file_size=4, file_sha256=file.sha256
     )
+    with backup_incremental._connect() as connection:
+        assert connection.execute("SELECT value FROM index_meta WHERE key = ?", (backup_incremental.STATE_SCHEMA_KEY,)).fetchone()[0] == "3"
+        assert connection.execute("SELECT COUNT(*) FROM snapshot_file_ops WHERE backup_id = 'F0'").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM current_effective_files").fetchone()[0] == 1
     _commit("I1", [file], [], parent="F0", depth=1)
     first_gc = backup_incremental.garbage_collect_chunk_maps([("target", "policy", "F0")])
     assert first_gc["deletedChunkMaps"] == 0

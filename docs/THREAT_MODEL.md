@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.11。
+适用版本：v4.4.12。
 
 定位与信任假设见 [docs/SECURITY.md](SECURITY.md)：个人、本地优先的运行时，运行后端的机器可信，默认只监听 `127.0.0.1`。这一页回答更尖锐的问题：**当模型上下文里混入攻击者可控的内容（网页、文件、工具结果），或本机服务被局域网内他人触达时，每一类威胁由哪段代码挡住、由哪个测试钉住、还剩什么残余风险。**
 
@@ -130,6 +130,18 @@
   - Multipart 冲突只有目标 Metadata SHA-256 与 Expected Size 同时匹配才收敛；Metadata 缺失或不同返回 `object-integrity-unproven`，Capability Probe 将该 Provider 标为 Scheduled Not Ready。
 - **测试**：[test_backup_4411_contracts.py](../tests/test_backup_4411_contracts.py) 覆盖 Effective Ref 继承、Map 单份存储、原子回滚/强制 Full、Immediate Parent 精确查询、Bloom 损坏、文件交换/Parent 删除、Range Restore、Batch Fallback、Legacy Migration/GC 与 Multipart Fail Closed；[test_backup_448_contracts.py](../tests/test_backup_448_contracts.py) 保留 v2/v3 Chain 兼容和真实 Delta Restore 合同。
 - **残余风险**：本地 Chunk Index 仍会泄露同一可信工作区内部的内容相等性，必须与 Workspace 数据同级保护；索引损坏会降低复用率或触发 Full，从而增加本地 IO/存储，但不能降低恢复正确性。Convergent Encryption、云端明文 Hash Index、独立 Chunk Objects、跨 Target/Policy 或超越 Immediate Parent 的历史去重仍明确不在范围内。
+
+### T12 · Pack Range 越界、索引膨胀与维护竞态（v4.4.12）
+
+- **路径**：认证后的恶意 Pack Index 可能尝试绝对路径/目录穿越、负数或布尔 Offset、越界/重叠 Range；损坏 Pack 可能让多个逻辑 Blob 共享错误字节；每 Snapshot 完整物化 Workspace 会耗尽本地 SQLite；在 Commit 路径执行大规模 VACUUM 可能阻塞 Scheduler。
+- **缓解**：
+  - Pack Index 只接受 `payload/packs/*.pack` 相对路径、Schema v1、严格整数、8 字节对齐、声明 Pack 范围内且互不重叠的 Entry；Pack SHA、Blob SHA、File SHA 与 Merkle Root 逐层 Fail Closed；
+  - Pack 只包含当前 Snapshot 的新 Payload，不允许引用其他 Snapshot、Target 或 Policy；Index 和所有明文 Hash 只存在于 Age 认证密文与可信本地缓存；
+  - Index v3 以不可变 File Version、Full Checkpoint 和 Incremental PUT/DELETE 表达历史；单份 Current View 与单行 Head 在 `BEGIN IMMEDIATE` 中提交，Head/Root 不一致耐久标 stale 并 Force Full；
+  - Restore 最多保留四个只读 Pack Handle，Range Copy 使用 1 MiB Buffer；Native Scanner Worker 由预计工作集预算约束，单项失败回退 Python；
+  - GC 只在 Retention 已物理删除 Snapshot 后清理无引用 Version/Map；Maintenance 仅在 DB 超过 256 MiB 且空闲页超过 30% 时执行有界 `incremental_vacuum`，不在 Commit 路径完整 VACUUM。
+- **测试**：[test_backup_packed_delta_contracts.py](../tests/test_backup_packed_delta_contracts.py) 覆盖 Pack 对齐/滚动、Pack/Blob 篡改、四句柄 LRU、File Version 共享、Head 不一致、GC/Compaction 和 10 万文件增长；[test_backup_s3_http_e2e.py](../tests/test_backup_s3_http_e2e.py) 在真实 HTTP S3-compatible 服务上覆盖 Multipart 中断恢复、Range GET 与 Full + v5 字节级恢复。
+- **残余风险**：Pack 与 Index 仍消耗可信本机磁盘，极端 Workspace 的首次 Full 仍与总数据量成正比；本地数据库和解密 staging 应与 Workspace 同级保护。跨 Snapshot Pack、云端 Chunk CAS、Convergent Encryption、WAL 增量与 WebDAV 不在本版本范围。
 
 ## 非目标（明确不在防护范围内）
 

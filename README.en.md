@@ -5,26 +5,26 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.4.11-blue)
+![Version](https://img.shields.io/badge/version-4.4.12-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.4.11 at a glance
+## 4.4.12 at a glance
 
-- Immutable chunk maps are referenced by each effective snapshot, so unchanged large-file maps survive arbitrarily many incremental layers without copying millions of chunk rows.
-- Exact, immediate-parent lookup reuses chunks across files and reuses renamed or copied whole files with zero payload bytes; no historical dependency edge or remote plaintext hash index is introduced.
-- `incremental-v4` stores verified parent byte ranges. Restore prepares every PUT against an immutable parent view before applying tombstones and atomic replacements, while v2/v3 `parentOrdinal` decoding remains supported.
-- A local-only Bloom filter eliminates definite misses, but only batched SQLite matches on SHA-256 plus length can authorize reuse. Corruption can reduce deduplication, never correctness.
-- The Rust helper scans JSONL batches in one process and telemetry reports actual Rust/Python fallback counts. S3 multipart convergence now requires both the exact digest metadata and exact object size.
+- Index v3 stores immutable content-addressed file versions, Full checkpoints, per-incremental PUT/DELETE operations, and one current effective view guarded by an atomic head. Incremental index growth follows the changed set instead of copying the full workspace view.
+- `incremental-v5` streams every unmatched CDC payload and whole-file payload up to 16 MiB into immutable snapshot-local packs targeting 64 MiB. Larger whole files remain typed standalone payloads; packs never add cross-snapshot dependencies.
+- Restore verifies the encrypted object, Pack digest, Blob range digest, reconstructed File digest, and Snapshot Merkle root. At most four pack handles remain open, and legacy incremental v2-v4 chains remain restorable.
+- The Rust JSONL scanner is a persistent bounded worker pool. Python limits it by estimated working set rather than logical file size and falls back per file on native failures.
+- Privacy-safe packing/index metrics, 100k-file scale contracts, thresholded incremental compaction, and a real HTTP MinIO Full→v5→Restore CI gate make the scale claims executable.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.4.11 release notes](docs/releases/4.4.11.md) (previous [4.4.10](docs/releases/4.4.10.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.4.12 release notes](docs/releases/4.4.12.md) (previous [4.4.11](docs/releases/4.4.11.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -96,7 +96,7 @@ npm run check --prefix stateless-mcp
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.4.11 --ga
+python scripts/preflight_release.py --version 4.4.12 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

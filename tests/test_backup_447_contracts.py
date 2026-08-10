@@ -477,26 +477,19 @@ def test_incremental_sqlite_and_merkle_edges(tmp_settings: Path) -> None:
     )
     assert len(backup_incremental.load_snapshot_files("t", "p", "s1")) == 1
     # cycle detection
-    backup_incremental.record_committed_snapshot(
-        target_id="t",
-        policy_id="p",
-        backup_id="a",
-        parent_backup_id="b",
-        base_backup_id="a",
-        chain_depth=0,
-        root_digest="0" * 64,
-        files=[],
-    )
-    backup_incremental.record_committed_snapshot(
-        target_id="t",
-        policy_id="p",
-        backup_id="b",
-        parent_backup_id="a",
-        base_backup_id="a",
-        chain_depth=0,
-        root_digest="0" * 64,
-        files=[],
-    )
+    with backup_incremental._connect() as connection:
+        for backup_id, parent_id in (("a", "b"), ("b", "a")):
+            connection.execute(
+                """
+                INSERT INTO snapshot_lineages
+                (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth,
+                 root_digest, committed_at, scope_digest, recipient_set_digest, schema_digest,
+                 chunk_protocol, full_committed_at, logical_bytes)
+                VALUES ('t', 'p', ?, ?, 'a', 0, ?, '2026-01-01T00:00:00Z', '', '', '', ?, NULL, 0)
+                """,
+                (backup_id, parent_id, "0" * 64, backup_incremental.CURRENT_CDC_PROTOCOL),
+            )
+        connection.commit()
     with pytest.raises(AppError):
         backup_incremental.ancestor_chain("t", "p", "a")
 

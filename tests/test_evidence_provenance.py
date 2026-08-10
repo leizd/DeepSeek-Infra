@@ -5,8 +5,11 @@ from pathlib import Path
 
 from deepseek_infra.infra.diagnostics.evidence_manifest import (
     build_evidence_manifest,
+    manifest_checksum_path,
     validate_evidence_manifest,
+    validate_manifest_checksum,
     write_evidence_manifest,
+    write_manifest_checksum,
 )
 
 
@@ -113,3 +116,111 @@ def test_strict_provenance_rejects_missing_and_duplicate_entries(tmp_path: Path)
     )
     write_evidence_manifest(path, manifest)
     assert any("duplicate evidence manifest path" in error for error in _validate(tmp_path))
+
+
+def test_detached_manifest_checksum_fails_closed(tmp_path: Path) -> None:
+    manifest = tmp_path / "evidence-manifest.json"
+    assert validate_manifest_checksum(manifest) == [f"missing evidence manifest: {manifest}"]
+
+    manifest.write_text("{}\n", encoding="utf-8")
+    checksum = manifest_checksum_path(manifest)
+    assert validate_manifest_checksum(manifest) == [f"missing detached evidence manifest checksum: {checksum}"]
+
+    checksum.write_text("invalid\n", encoding="utf-8")
+    assert validate_manifest_checksum(manifest) == ["invalid detached evidence manifest checksum format"]
+    checksum.write_text(f"{'0' * 64}  {manifest.name}\n", encoding="utf-8")
+    assert validate_manifest_checksum(manifest) == ["evidence manifest detached checksum mismatch"]
+    assert write_manifest_checksum(manifest) == checksum
+    assert validate_manifest_checksum(manifest) == []
+
+
+def test_manifest_validation_rejects_invalid_top_level_state(tmp_path: Path) -> None:
+    missing = validate_evidence_manifest(
+        tmp_path,
+        version=VERSION,
+        expected_revision=REVISION,
+        required_paths=[EVIDENCE],
+    )
+    assert missing and "missing evidence manifest" in missing[0]
+
+    path = tmp_path / "docs" / "evidence" / f"evidence-manifest-v{VERSION}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not-json", encoding="utf-8")
+    assert "invalid evidence manifest" in _validate(tmp_path)[0]
+
+    path.write_text("[]", encoding="utf-8")
+    assert "must contain a JSON object" in _validate(tmp_path)[0]
+
+    path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 99,
+                "version": "wrong",
+                "testedRevision": "wrong",
+                "sourceTreeDirty": True,
+                "artifacts": "invalid",
+            }
+        ),
+        encoding="utf-8",
+    )
+    errors = validate_evidence_manifest(
+        tmp_path,
+        version=VERSION,
+        expected_revision="unknown",
+        required_paths=[EVIDENCE],
+    )
+    assert any("schemaVersion" in error for error in errors)
+    assert any("version" in error for error in errors)
+    assert any("candidate revision must be known" in error for error in errors)
+    assert any("testedRevision" in error for error in errors)
+    assert any("sourceTreeDirty" in error for error in errors)
+    assert any("sourceContext" in error for error in errors)
+    assert any("artifacts must be a list" in error for error in errors)
+
+
+def test_manifest_validation_reports_every_artifact_integrity_failure(tmp_path: Path) -> None:
+    evidence = _write_evidence(tmp_path)
+    manifest_path = _write_manifest(tmp_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"].insert(0, "invalid")
+    manifest["artifacts"].append({"path": "docs/evidence/missing.json", "sha256": "x", "bytes": 1, "status": "PASS"})
+    entry = manifest["artifacts"][1]
+    entry.update(sha256="wrong", bytes=-1, status="FAIL")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    evidence.write_text(
+        json.dumps(
+            {
+                "version": "wrong",
+                "status": "FAIL",
+                "testedRevision": "different",
+                "sourceRevision": "other",
+                "sourceTreeDirty": True,
+                "sourceContext": {"different": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    errors = _validate(tmp_path, github_sha=REVISION)
+    expected_fragments = (
+        "artifact 0 is invalid",
+        "references missing file",
+        "checksum mismatch",
+        "byte size mismatch",
+        "status is not PASS",
+        "version mismatch",
+        "testedRevision mismatch",
+        "sourceRevision mismatch",
+        "sourceTreeDirty is not false",
+        "sourceContext mismatch",
+        "ciRevision does not match",
+    )
+    for fragment in expected_fragments:
+        assert any(fragment in error for error in errors), fragment
+
+
+def test_manifest_validation_rejects_unreadable_evidence_payload(tmp_path: Path) -> None:
+    evidence = _write_evidence(tmp_path)
+    _write_manifest(tmp_path)
+    evidence.write_text("[]", encoding="utf-8")
+    assert any("invalid evidence file" in error for error in _validate(tmp_path))

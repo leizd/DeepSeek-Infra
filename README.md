@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.11-blue)
+![版本](https://img.shields.io/badge/version-4.4.12-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.11 Effective Snapshot Dedup Index & Cross-File Chunk Reuse：** 本地 `.backup-index` 以不可变 Chunk Map 和 Snapshot Reference 表达有效快照，未变化的大文件 Map 可无损穿过任意数量的 Incremental。新文件可精确复用 Immediate Parent 中其他文件的 Chunk 或完整内容；加密 Manifest 只记录 `parent-range`，恢复先在只读 Parent View 上准备并校验全部 PUT，再提交 Delete/Replace。Bloom 只做本地负查加速，精确 SQLite 匹配仍是唯一复用依据；Rust 批扫描、真实回退遥测和 S3 multipart 精确摘要/长度收敛共同 Fail Closed。参见 [4.4.11 发布说明](docs/releases/4.4.11.md)（上一版 [4.4.10](docs/releases/4.4.10.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
+> **4.4.12 Packed Delta Payloads & Persistent Snapshot State：** 本地 `.backup-index` 以不可变 File Version、每快照 PUT/DELETE 和单份 Current Effective View 表达历史，Incremental 新增状态只随变化量增长。新 `incremental-v5` 把小 Whole Payload 与 CDC Payload 流式写入 Snapshot 内部的 64 MiB Pack，并逐层校验 Pack、Range、File 与 Merkle；Rust JSONL Helper 使用受控 Worker Pool 和工作集预算。参见 [4.4.12 发布说明](docs/releases/4.4.12.md)（上一版 [4.4.11](docs/releases/4.4.11.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
 历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)。
 
-**4.4.11 validation:** Effective Chunk Ref 跨未变化 Incremental 继承、不可变 Map 单份存储、索引单事务提交与损坏强制 Full、跨文件 Chunk/整文件零 Payload 复用、`incremental-v4` Parent Range、Immutable Parent 两阶段恢复、Bloom 负查后精确批查询、Rust `scan-batch` 与逐文件回退计数、S3 Multipart 摘要和长度双重收敛、远端遥测不泄露路径或 Hash。
+**4.4.12 validation:** Snapshot Index 只保存变化 Path Ops、Current Effective Head 与最新提交一致、Rename 共享 File Version、数万个 Payload Blob 进入少量 Pack、Pack/Range 双层损坏 Fail Closed、v2-v5 永久恢复兼容、Native Batch 遵守 Worker/内存预算并流式回传、Index GC/Compaction 不改变有效视图、真实 HTTP S3 Packed Restore 字节级一致。
 
 ## 30 秒概览
 

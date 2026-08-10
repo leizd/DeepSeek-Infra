@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.11。
+适用版本：v4.4.12。
 
-> 4.4.11 的 Effective Dedup Index、Bloom、跨文件 Parent Range、Rust Batch Scanner 与 Multipart 收敛全部属于后端/本地索引边界。Frontend 继续只提交临时 Secret Slot 引用并消费 Federated Restore 状态，不持有 Chunk Map、Chunk Hash、父文件范围、Bloom 或 Multipart 状态，也不采集、不回显、不持久化 Access Key。
+> 4.4.12 的 File Version、Snapshot Ops、Current Effective Head、Pack Index/Range、Bloom、Rust Worker Pool 与 Multipart 收敛全部属于后端/本地索引边界。Frontend 继续只提交临时 Secret Slot 引用并消费 Federated Restore 状态，不持有 File/Chunk Hash、Pack Offset、父文件范围、Bloom、Index DB 或 Multipart 状态，也不采集、不回显、不持久化 Access Key。
 
 前端模块按 `app`、`api`、`domain`、`features` 与 `shared` 边界拆分；Agent timeline 的规范化实现位于 `frontend/src/domain/chat/agentTimeline.ts`。
 

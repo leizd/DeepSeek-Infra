@@ -28,7 +28,7 @@ from typing import Any, BinaryIO, Callable, Literal, Protocol, cast
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_crypto, mutation_gate
+from deepseek_infra.infra.workspace import backup_crypto, backup_pack, mutation_gate
 
 BACKUP_SCHEMA = "deepseek-workspace-backup.v1"
 FRONTEND_SCHEMA_VERSION = 1
@@ -2052,7 +2052,19 @@ def _verify_manifest_tree(destination: Path) -> dict[str, Any]:
             raise AppError("Backup delta operations manifest is invalid", code=ErrorCode.INVALID_PAYLOAD)
         if not isinstance(ops, dict):
             raise AppError("Backup delta operations manifest is invalid", code=ErrorCode.INVALID_PAYLOAD)
-        referenced: set[str] = set()
+        referenced_files: set[str] = set()
+        referenced_blobs: set[str] = set()
+
+        def record_payload_reference(raw: Any) -> None:
+            kind, locator = backup_pack.parse_payload_ref(raw)
+            if kind == "pack-range":
+                referenced_blobs.add(locator)
+                return
+            relative = _validate_archive_path(locator)
+            if relative not in auxiliary:
+                raise AppError(f"Backup delta references undeclared payload: {relative}", code=ErrorCode.INVALID_PAYLOAD)
+            referenced_files.add(relative)
+
         for put in ops.get("put") or []:
             if not isinstance(put, dict):
                 raise AppError("Backup delta operations manifest is invalid", code=ErrorCode.INVALID_PAYLOAD)
@@ -2063,18 +2075,29 @@ def _verify_manifest_tree(destination: Path) -> dict[str, Any]:
                 for chunk in chunks:
                     if not isinstance(chunk, dict):
                         raise AppError("Backup delta CDC file has an invalid chunk", code=ErrorCode.INVALID_PAYLOAD)
-                    ref = str(chunk.get("payloadRef") or "") if chunk.get("source") == "payload" else ""
-                    if ref and ref not in auxiliary:
-                        raise AppError(f"Backup delta references undeclared payload: {ref}", code=ErrorCode.INVALID_PAYLOAD)
-                    if ref:
-                        referenced.add(ref)
+                    if chunk.get("source") == "payload":
+                        record_payload_reference(chunk.get("payloadRef"))
             else:
-                ref = str(put.get("payloadRef") or "")
-                if ref and ref not in auxiliary:
-                    raise AppError(f"Backup delta references undeclared payload: {ref}", code=ErrorCode.INVALID_PAYLOAD)
-                if ref:
-                    referenced.add(ref)
-        if referenced != (auxiliary - {"delta/operations.json"}):
+                raw_ref = put.get("payloadRef")
+                if raw_ref:
+                    record_payload_reference(raw_ref)
+        pack_index_path = backup_pack.PACK_INDEX_PATH
+        if referenced_blobs or pack_index_path in auxiliary:
+            if pack_index_path not in auxiliary:
+                raise AppError("Backup delta pack index is undeclared", code=ErrorCode.INVALID_PAYLOAD)
+            pack_index = backup_pack.load_pack_index(destination)
+            entries = pack_index["entries"]
+            if referenced_blobs != set(entries):
+                raise AppError("Backup delta pack has unreferenced blobs", code=ErrorCode.INVALID_PAYLOAD)
+            indexed_packs = {str(item["path"]) for item in pack_index["packs"]}
+            if not indexed_packs or not indexed_packs <= auxiliary:
+                raise AppError("Backup delta pack inventory is incomplete", code=ErrorCode.INVALID_PAYLOAD)
+            used_packs = {str(entries[blob_id]["pack"]) for blob_id in referenced_blobs}
+            if used_packs != indexed_packs:
+                raise AppError("Backup delta pack inventory has unreferenced packs", code=ErrorCode.INVALID_PAYLOAD)
+            referenced_files.update(indexed_packs)
+            referenced_files.add(pack_index_path)
+        if referenced_files != (auxiliary - {"delta/operations.json"}):
             raise AppError("Backup delta payload has unreferenced blobs", code=ErrorCode.INVALID_PAYLOAD)
     elif actual != (declared_paths | auxiliary):
         raise AppError("Backup contains undeclared or missing restorable files", code=ErrorCode.INVALID_PAYLOAD)
