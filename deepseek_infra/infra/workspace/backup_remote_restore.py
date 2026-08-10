@@ -825,6 +825,14 @@ def materialize_federated_restore(
         )
         protection = "passphrase" if kind == "passphrase" else "age-recipient"
         projection_report = materialized.get("projection")
+        if not isinstance(projection_report, dict):
+            import sys as _dbg
+
+            print(
+                f"MATERIALIZED-KEYS {sorted(str(key) for key in materialized.keys())} phase={materialized.get('phase')} "
+                f"snapshotKind={materialized.get('snapshotKind')}",
+                file=_dbg.stderr,
+            )
         if isinstance(projection_report, dict):
             raw_manifest = materialized.get("manifest")
             if not isinstance(raw_manifest, dict):
