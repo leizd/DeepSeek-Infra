@@ -23,6 +23,7 @@ from deepseek_infra.infra.workspace import (
     backup_crypto,
     backup_incremental,
     backup_incremental_restore,
+    backup_pack,
     backup_projection,
     backup_publish,
     backup_targets,
@@ -502,6 +503,90 @@ def _normalized_full_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _metadata_chain_packages(
+    decrypted_paths: list[Path],
+    base: Path,
+) -> list[backup_projection.ChainPackage]:
+    """Extract only metadata from each decrypted member and build the planner input."""
+    packages: list[backup_projection.ChainPackage] = []
+    for index, decrypted in enumerate(decrypted_paths):
+        meta_dir = base / f"metadata-{index}"
+        manifest = backups.extract_archive_metadata(decrypted, meta_dir)
+        snapshot_kind = str(manifest.get("snapshotKind") or "full")
+        operations: dict[str, Any] | None = None
+        pack_index: dict[str, Any] | None = None
+        if snapshot_kind == "incremental":
+            ops_path = meta_dir / "delta" / "operations.json"
+            if ops_path.is_file():
+                try:
+                    operations = json.loads(ops_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):  # pragma: no cover - validated at plan time
+                    operations = None
+            index_path = meta_dir / backup_pack.PACK_INDEX_PATH
+            if index_path.is_file():
+                try:
+                    pack_index = json.loads(index_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):  # pragma: no cover - validated at plan time
+                    pack_index = None
+        contributor_ids = frozenset(str(item.get("id") or "") for item in manifest.get("contributors") or [])
+        frontend = bool(manifest.get("frontend"))
+        external_mcp = bool((manifest.get("coverage") or {}).get("externalContributors"))
+        packages.append(
+            backup_projection.ChainPackage(
+                snapshot_kind=snapshot_kind,
+                files=tuple(backup_incremental_restore._manifest_files(manifest)),
+                root_digest=str(((manifest.get("snapshot") or {}).get("rootDigest")) or ""),
+                operations=operations,
+                pack_index=pack_index,
+                frontend=frontend,
+                contributor_ids=contributor_ids,
+                external_mcp=external_mcp,
+                manifest=manifest,
+            )
+        )
+    return packages
+
+
+def _selective_extract_members(
+    decrypted_paths: list[Path],
+    packages: list[backup_projection.ChainPackage],
+    base: Path,
+    projection: backup_projection.ProjectionPlan,
+) -> list[Path]:
+    extracted_dirs: list[Path] = []
+    for index, decrypted in enumerate(decrypted_paths):
+        extracted = base / f"projected-{index}"
+        raw_manifest = packages[index].manifest
+        manifest: dict[str, Any] = {}
+        if isinstance(raw_manifest, dict):
+            manifest = raw_manifest
+        if index == 0:
+            backups.extract_selected_archive(
+                decrypted,
+                extracted,
+                needed_full=set(projection.needed_full_entries),
+                needed_packs=set(),
+                needed_standalone=set(),
+                manifest=manifest,
+            )
+        else:
+            layer_packs, _layer_blobs, layer_standalone = backup_projection.layer_needed_payloads(
+                packages,
+                projection.produced_by_layer,
+                index,
+            )
+            backups.extract_selected_archive(
+                decrypted,
+                extracted,
+                needed_full=set(),
+                needed_packs=layer_packs,
+                needed_standalone=layer_standalone,
+                manifest=manifest,
+            )
+        extracted_dirs.append(extracted)
+    return extracted_dirs
+
+
 def materialize_restore_session(
     restore_id: str,
     *,
@@ -528,18 +613,57 @@ def materialize_restore_session(
     _set_phase(session, "decrypting-chain")
     if str(session.get("snapshotKind") or "full") == "incremental":
         chain = session.get("chain") or []
-        extracted_dirs: list[Path] = []
+        decrypted_paths: list[Path] = []
         for index, member in enumerate(chain):
             ciphertext = Path(str(member["ciphertextPath"]))
             decrypted = base / f"decrypted-{index}.dsibackup"
             backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
-            extracted = base / f"extracted-{index}"
-            backups._safe_extract_and_verify(decrypted, extracted)
-            extracted_dirs.append(extracted)
+            decrypted_paths.append(decrypted)
+        frozen_selection = session.get("selection")
+        projection: backup_projection.ProjectionPlan | None = None
+        packages: list[backup_projection.ChainPackage] = []
+        if frozen_selection is not None:
+            packages = _metadata_chain_packages(decrypted_paths, base)
+            selection_value = backup_projection.normalize_selection(frozen_selection)
+            assert selection_value is not None
+            ciphertext_download = sum(int(item.get("expectedBytes") or 0) for item in chain)
+            projection = backup_projection.plan_projection(
+                selection_value,
+                packages,
+                ciphertext_download_bytes=ciphertext_download,
+            )
+            if selection_value is not None:
+                frozen_digest = session.get("selectionDigest")
+                computed_digest = backup_projection.selection_digest(selection_value)
+                if frozen_digest and computed_digest != frozen_digest:
+                    raise AppError(
+                        "Restore selection does not match the frozen session selection",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=409,
+                    )
         _set_phase(session, "materializing")
         extracted = base / "extracted"
         shutil.rmtree(extracted, ignore_errors=True)
-        final_manifest = backup_incremental_restore.materialize_chain(extracted_dirs, extracted)
+        if projection is not None:
+            extracted_dirs = _selective_extract_members(decrypted_paths, packages, base, projection)
+        else:
+            extracted_dirs = []
+            for index, decrypted in enumerate(decrypted_paths):
+                member_extracted = base / f"extracted-{index}"
+                backups._safe_extract_and_verify(decrypted, member_extracted)
+                extracted_dirs.append(member_extracted)
+        final_manifest = backup_incremental_restore.materialize_chain(extracted_dirs, extracted, projection=projection)
+        if projection is not None:
+            _set_phase(session, "verified")
+            return {
+                "restoreId": restore_id,
+                "phase": "materialized",
+                "snapshotKind": "incremental",
+                "chain": [str(item["backupId"]) for item in chain],
+                "tree": str(extracted),
+                "manifest": final_manifest,
+                "projection": projection.report,
+            }
         normalized = _normalized_full_manifest(final_manifest)
         _write_checksums(extracted, normalized)
         backups._verify_manifest_tree(extracted)
@@ -599,12 +723,26 @@ def materialize_federated_restore(
             (members[-1].get("objectDigest") if members and isinstance(members[-1], dict) else session.get("objectDigest")) or ""
         )
         protection = "passphrase" if kind == "passphrase" else "age-recipient"
-        backups.inspect_verified_restore_tree(
-            restore_id,
-            tree,
-            protection=protection,
-            ciphertext_sha256=ciphertext_digest or None,
-        )
+        projection_report = materialized.get("projection")
+        if isinstance(projection_report, dict):
+            raw_manifest = materialized.get("manifest")
+            if not isinstance(raw_manifest, dict):
+                raise AppError("Projected restore manifest is unavailable", code=ErrorCode.INVALID_REQUEST, status=409)
+            backups.inspect_projected_restore_tree(
+                restore_id,
+                tree,
+                protection=protection,
+                ciphertext_sha256=ciphertext_digest or None,
+                projection=projection_report,
+                manifest=raw_manifest,
+            )
+        else:
+            backups.inspect_verified_restore_tree(
+                restore_id,
+                tree,
+                protection=protection,
+                ciphertext_sha256=ciphertext_digest or None,
+            )
         backup_crypto.put_secret_bytes(restore_id, kind, bytearray(secret))
         _set_phase(session, "preparing")
         prepared = backups.prepare_restore(

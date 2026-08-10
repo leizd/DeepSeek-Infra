@@ -1227,6 +1227,92 @@ def inspect_verified_restore_tree(
     )
 
 
+def inspect_projected_restore_tree(
+    restore_id: str,
+    tree: Path,
+    *,
+    protection: str,
+    ciphertext_sha256: str | None,
+    projection: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach a projected tree and freeze a selection-filtered restore plan.
+
+    The logical chain was already fully Merkle-verified during projected
+    materialization, so the tree is trusted here; the plan is filtered to the
+    frozen selection and carries the durable ``selectionDigest``.
+    """
+    root = _restore_root(restore_id)
+    extracted = root / "extracted"
+    if tree.resolve() != extracted.resolve():
+        shutil.rmtree(extracted, ignore_errors=True)
+        shutil.copytree(tree, extracted)
+    context = _context_from_manifest(manifest)
+    selection = projection.get("selection") or {}
+    selected_contributors = {str(item) for item in selection.get("contributors") or []}
+    project_ids = [str(item) for item in selection.get("projectIds") or []]
+    known: dict[str, RegisteredContributor] = {item.contributor_id: item for item in _registered_contributors()}
+    external_contributor = StatelessMcpContributor()
+    known[external_contributor.contributor_id] = external_contributor
+    operations: list[dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
+    migrations: list[dict[str, Any]] = []
+    compatible = _version_compatible(str(manifest["source"].get("version") or ""), config.APP_VERSION)
+    for entry in manifest["contributors"]:
+        contributor_id = str(entry["id"])
+        if contributor_id not in selected_contributors:
+            continue
+        contributor = known.get(contributor_id)
+        if contributor is None:
+            raise AppError(f"Unsupported contributor: {contributor_id}", code=ErrorCode.INVALID_PAYLOAD)
+        try:
+            source_schema = int(entry.get("schemaVersion"))
+        except (TypeError, ValueError):
+            source_schema = -1
+        schema = contributor.inspect_schema(source_schema)
+        compatible = compatible and bool(schema["compatible"])
+        if schema["migration"]:
+            migrations.append(schema["migration"])
+        source_dir = extracted / "payload" / contributor_id
+        errors = contributor.validate(source_dir, context)
+        if errors:
+            raise AppError("; ".join(errors), code=ErrorCode.INVALID_PAYLOAD)
+        operation = contributor.plan_restore(source_dir, context)
+        if operation.get("external") and not operation.get("available"):
+            compatible = False
+        if contributor_id == backup_projection.PROJECTS_CONTRIBUTOR and project_ids:
+            operation["projectScope"] = project_ids
+        operations.append(operation)
+        if operation["conflicts"]:
+            conflicts.append({"contributorId": contributor_id, "count": operation["conflicts"], "strategy": "deterministic-remap"})
+    plan = {
+        "restoreId": restore_id,
+        "sourceVersion": manifest["source"]["version"],
+        "targetVersion": config.APP_VERSION,
+        "compatible": compatible,
+        "purpose": manifest["purpose"],
+        "operations": operations,
+        "conflicts": conflicts,
+        "migrations": migrations,
+        "warnings": [],
+        "estimatedWriteBytes": int((projection.get("bytes") or {}).get("selectedLogicalBytes") or 0),
+        "requiresFrontendApply": bool(projection.get("requiresFrontendApply")),
+        "requiresExternalMcp": bool(projection.get("requiresExternalMcp")),
+        "archiveSha256": _tree_digest(extracted),
+        "ciphertextSha256": ciphertext_sha256,
+        "encrypted": True,
+        "protection": protection,
+        "coverage": manifest.get("coverage") or {},
+        "manifest": manifest,
+        "selection": selection,
+        "selectionDigest": str(projection.get("selectionDigest") or ""),
+        "projected": True,
+        "phase": "inspected",
+    }
+    _write_json(root / "plan.json", plan)
+    return {"ok": True, **plan}
+
+
 def _verified_extracted_manifest(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
     """Trust the retained extracted tree only when every digest still matches.
 
@@ -1263,6 +1349,7 @@ def prepare_restore(
         raise AppError("Unsupported restore mode", code=ErrorCode.INVALID_PAYLOAD)
     root = _restore_root(restore_id)
     journal_path = root / "transaction.json"
+    plan = _read_json(root / "plan.json")
     if journal_path.is_file():
         existing = _read_json(journal_path)
         if existing.get("phase") == "failed":
@@ -1276,16 +1363,32 @@ def prepare_restore(
                 or existing.get("previousEpoch") != previous_epoch
             ):
                 raise AppError("Restore retry parameters do not match the durable transaction", code=ErrorCode.INVALID_REQUEST, status=409)
+            if str(existing.get("selectionDigest") or "") != str(plan.get("selectionDigest") or ""):
+                raise AppError(
+                    "Restore selection does not match the durable transaction",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
             return _public_restore(existing, root)
-    plan = _read_json(root / "plan.json")
     if not plan.get("compatible"):
         raise AppError("Backup schema is not compatible with this version", code=ErrorCode.INVALID_REQUEST, status=409)
-    archive = next(root.glob("*.dsibackup"), None)
-    manifest: dict[str, Any] | None = None
-    if archive is None and bool(plan.get("encrypted")):
-        manifest = _verified_extracted_manifest(root, plan)
-    elif archive is None or _sha256_file(archive) != plan.get("archiveSha256"):
-        raise AppError("Backup changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
+    projected = bool(plan.get("projected"))
+    archive: Path | None = None
+    if projected:
+        raw_manifest = plan.get("manifest")
+        if not isinstance(raw_manifest, dict):
+            raise AppError("Projected restore plan is missing its manifest", code=ErrorCode.INVALID_PAYLOAD)
+        manifest = raw_manifest
+    else:
+        # Remote restores share the restore root with their durable session, so
+        # the decrypted staging archives live there too and must never be
+        # mistaken for an uploaded package.
+        archive = None if (root / "remote-fetch.json").is_file() else next(root.glob("*.dsibackup"), None)
+        manifest = None
+        if archive is None and bool(plan.get("encrypted")):
+            manifest = _verified_extracted_manifest(root, plan)
+        elif archive is None or _sha256_file(archive) != plan.get("archiveSha256"):
+            raise AppError("Backup changed after inspection", code=ErrorCode.INVALID_PAYLOAD)
 
     target = target_epoch or f"epoch-{uuid.uuid4()}"
     now = int(time.time() * 1000)
@@ -1311,6 +1414,8 @@ def prepare_restore(
             "phase": "preparing",
             "updatedAt": _utc_iso(),
             "requiresFrontendApply": bool(plan.get("requiresFrontendApply")),
+            "requiresExternalMcp": bool(plan.get("requiresExternalMcp")),
+            "selectionDigest": str(plan.get("selectionDigest") or ""),
             "contributors": [],
             "identityMap": {},
         }
@@ -1332,11 +1437,12 @@ def prepare_restore(
             staged_root = root / "staged"
             shutil.rmtree(staged_root, ignore_errors=True)
             staged_root.mkdir(parents=True)
+            projected_source_root = root / ("extracted" if projected else "verified")
             for operation in plan["operations"]:
                 contributor_id = str(operation["contributorId"])
                 contributor = known[contributor_id]
                 if bool(operation.get("external")):
-                    source = root / "verified" / "payload" / contributor_id
+                    source = projected_source_root / "payload" / contributor_id
                     errors = contributor.validate(source, context)
                     if errors:
                         raise AppError("; ".join(errors), code=ErrorCode.INVALID_PAYLOAD)
@@ -1357,14 +1463,21 @@ def prepare_restore(
                     continue
                 destination = Path(str(operation["destination"]))
                 staged = staged_root / contributor_id
-                if destination.exists():
+                project_scope = [str(item) for item in operation.get("projectScope") or []]
+                if project_scope:
+                    staged.mkdir(parents=True)
+                    for project in project_scope:
+                        source_project = destination / project
+                        if source_project.exists():
+                            shutil.copytree(source_project, staged / project)
+                elif destination.exists():
                     shutil.copytree(destination, staged)
                 else:
                     staged.mkdir(parents=True)
                 current = dict(operation)
                 current.update(
                     {
-                        "source": str(root / "verified" / "payload" / contributor_id),
+                        "source": str(projected_source_root / "payload" / contributor_id),
                         "destination": str(staged),
                         "mode": mode,
                         "identityMap": identity_map,
@@ -1385,6 +1498,7 @@ def prepare_restore(
                         "stagedPath": str(staged),
                         "rollbackPath": str(root / "rollback" / contributor_id),
                         "hadDestination": destination.exists(),
+                        "projectScope": project_scope or None,
                         "prepared": True,
                         "swapped": False,
                         "verified": True,
@@ -1399,6 +1513,7 @@ def prepare_restore(
                         "restoreId": restore_id,
                         "mode": mode,
                         "targetEpoch": target,
+                        "selectionDigest": str(plan.get("selectionDigest") or ""),
                         "contributors": [
                             {"id": item["id"], "digest": item["digest"]}
                             for item in transaction["contributors"]
@@ -1538,6 +1653,34 @@ def commit_restore(
                 destination = Path(str(contributor["destination"]))
                 staged = Path(str(contributor["stagedPath"]))
                 rollback = Path(str(contributor["rollbackPath"]))
+                project_scope = contributor.get("projectScope") or []
+                if project_scope:
+                    contributor["projectSwapState"] = {}
+                    for project in project_scope:
+                        state: dict[str, bool] = {"had": False, "installed": False}
+                        destination_project = destination / project
+                        staged_project = staged / project
+                        rollback_project = rollback / project
+                        state["had"] = destination_project.exists()
+                        contributor["projectSwapState"][project] = state
+                        _write_json(journal_path, transaction)
+                        if state["had"]:
+                            rollback_project.parent.mkdir(parents=True, exist_ok=True)
+                            if rollback_project.exists():
+                                shutil.rmtree(rollback_project)
+                            os.replace(destination_project, rollback_project)
+                            _fsync_directory(destination_project.parent)
+                        if staged_project.exists():
+                            destination_project.parent.mkdir(parents=True, exist_ok=True)
+                            os.replace(staged_project, destination_project)
+                            _fsync_directory(destination_project.parent)
+                            state["installed"] = True
+                        contributor["projectSwapState"][project] = state
+                        _write_json(journal_path, transaction)
+                    contributor["swapped"] = True
+                    contributor["swapState"] = "swapped"
+                    _write_json(journal_path, transaction)
+                    continue
                 contributor["swapState"] = "moving-old"
                 _write_json(journal_path, transaction)
                 if bool(contributor["hadDestination"]) and destination.exists():
@@ -1945,35 +2088,150 @@ def _build_archive(
             target.unlink(missing_ok=True)
 
 
+def _validate_archive_infos(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+    """Structurally validate every entry without extracting any of them.
+
+    Guards path traversal, duplicate / case-colliding names, links and special
+    files, entry and total size bounds, and suspicious compression ratios.
+    """
+    infos = archive.infolist()
+    if len(infos) > MAX_ENTRIES:
+        raise AppError("Backup contains too many files", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
+    seen: set[str] = set()
+    declared_total = 0
+    for info in infos:
+        normalized = _validate_archive_path(info.filename)
+        folded = normalized.casefold()
+        if folded in seen:
+            raise AppError("Backup contains duplicate or case-colliding paths", code=ErrorCode.INVALID_PAYLOAD)
+        seen.add(folded)
+        mode = info.external_attr >> 16
+        file_type = stat.S_IFMT(mode)
+        if stat.S_ISLNK(mode) or (file_type and not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))):
+            raise AppError("Backup contains a link or special file", code=ErrorCode.INVALID_PAYLOAD)
+        if info.file_size < 0 or info.file_size > MAX_EXPANDED_BYTES:
+            raise AppError("Backup entry is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
+        declared_total += info.file_size
+        if declared_total > MAX_EXPANDED_BYTES:
+            raise AppError("Expanded backup is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
+        if info.compress_size == 0 and info.file_size > 0:
+            raise AppError("Suspicious compression ratio", code=ErrorCode.INVALID_PAYLOAD)
+        if info.compress_size and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
+            raise AppError("Suspicious compression ratio", code=ErrorCode.INVALID_PAYLOAD)
+    return infos
+
+
+def _extract_selected(
+    archive: zipfile.ZipFile,
+    destination: Path,
+    infos: list[zipfile.ZipInfo],
+    desired: set[str],
+) -> None:
+    for info in infos:
+        normalized = _validate_archive_path(info.filename)
+        if normalized not in desired or info.is_dir():
+            continue
+        target = destination.joinpath(*PurePosixPath(normalized).parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(info) as source, target.open("wb") as output:
+            while chunk := source.read(1024 * 1024):
+                output.write(chunk)
+
+
+_METADATA_ENTRIES = frozenset(
+    {
+        "manifest.json",
+        "checksums.sha256",
+        "delta/operations.json",
+        "payload/packs/index.json",
+    }
+)
+
+
+def extract_archive_metadata(archive_path: Path, destination: Path) -> dict[str, Any]:
+    """Validate every entry but extract only the metadata plane.
+
+    Returns the validated manifest. No payload bytes are written, which keeps a
+    projected restore from materializing unselected files.
+    """
+    shutil.rmtree(destination, ignore_errors=True)
+    destination.mkdir(parents=True)
+    with zipfile.ZipFile(archive_path) as archive:
+        infos = _validate_archive_infos(archive)
+        _extract_selected(archive, destination, infos, set(_METADATA_ENTRIES))
+    manifest_path = destination / "manifest.json"
+    checksum_path = destination / "checksums.sha256"
+    if not manifest_path.is_file() or not checksum_path.is_file():
+        raise AppError("Backup manifest is missing", code=ErrorCode.INVALID_PAYLOAD)
+    return _read_json(manifest_path)
+
+
+def extract_selected_archive(
+    archive_path: Path,
+    destination: Path,
+    *,
+    needed_full: set[str],
+    needed_packs: set[str],
+    needed_standalone: set[str],
+    manifest: dict[str, Any],
+) -> None:
+    """Validate every entry but extract only the projected set.
+
+    ``needed_full`` selects Full package payload paths, ``needed_packs`` the
+    immutable packfiles and ``needed_standalone`` the standalone blobs. Every
+    extracted payload is checked against its declared digest so what is
+    materialized is byte-exact even when the rest of the archive is skipped.
+    """
+    shutil.rmtree(destination, ignore_errors=True)
+    destination.mkdir(parents=True)
+    is_incremental = str(manifest.get("snapshotKind") or "") == "incremental"
+    desired = {"manifest.json", "checksums.sha256"} | set(needed_full) | set(needed_packs) | set(needed_standalone)
+    if is_incremental:
+        desired |= {"delta/operations.json", "payload/packs/index.json"}
+    declared_digests = _declared_archive_digests(manifest)
+    with zipfile.ZipFile(archive_path) as archive:
+        infos = _validate_archive_infos(archive)
+        available = {_validate_archive_path(info.filename) for info in infos if not info.is_dir()}
+        missing = desired - available
+        if missing:
+            raise AppError(f"Backup is missing required entries: {', '.join(sorted(missing))}", code=ErrorCode.INVALID_PAYLOAD)
+        _extract_selected(archive, destination, infos, desired)
+    for relative in sorted(set(needed_full) | set(needed_standalone)):
+        expected = declared_digests.get(relative)
+        if expected is None:
+            raise AppError(f"Backup entry is undeclared: {relative}", code=ErrorCode.INVALID_PAYLOAD)
+        path = destination.joinpath(*PurePosixPath(relative).parts)
+        if not path.is_file() or _sha256_file(path) != expected:
+            raise AppError(f"Backup selected entry failed checksum: {relative}", code=ErrorCode.INVALID_PAYLOAD)
+    if is_incremental:
+        ops_path = destination / "delta" / "operations.json"
+        if not ops_path.is_file():
+            raise AppError("Backup delta operations manifest is missing", code=ErrorCode.INVALID_PAYLOAD)
+
+
+def _declared_archive_digests(manifest: dict[str, Any]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for entry in manifest.get("files") or []:
+        if isinstance(entry, dict) and entry.get("path") and entry.get("sha256"):
+            result[str(entry["path"])] = str(entry["sha256"])
+    for entry in manifest.get("deltaFiles") or []:
+        if isinstance(entry, dict) and entry.get("path") and entry.get("sha256"):
+            result[str(entry["path"])] = str(entry["sha256"])
+    return result
+
+
 def _safe_extract_and_verify(archive_path: Path, destination: Path) -> dict[str, Any]:
     shutil.rmtree(destination, ignore_errors=True)
     destination.mkdir(parents=True)
-    seen: set[str] = set()
-    declared_total = 0
-    actual_total = 0
     with zipfile.ZipFile(archive_path) as archive:
-        infos = archive.infolist()
-        if len(infos) > MAX_ENTRIES:
-            raise AppError("Backup contains too many files", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
+        infos = _validate_archive_infos(archive)
+        seen: set[str] = set()
+        actual_total = 0
         for info in infos:
             normalized = _validate_archive_path(info.filename)
-            folded = normalized.casefold()
-            if folded in seen:
+            if normalized.casefold() in seen:
                 raise AppError("Backup contains duplicate or case-colliding paths", code=ErrorCode.INVALID_PAYLOAD)
-            seen.add(folded)
-            mode = info.external_attr >> 16
-            file_type = stat.S_IFMT(mode)
-            if stat.S_ISLNK(mode) or (file_type and not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))):
-                raise AppError("Backup contains a link or special file", code=ErrorCode.INVALID_PAYLOAD)
-            if info.file_size < 0 or info.file_size > MAX_EXPANDED_BYTES:
-                raise AppError("Backup entry is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
-            declared_total += info.file_size
-            if declared_total > MAX_EXPANDED_BYTES:
-                raise AppError("Expanded backup is too large", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
-            if info.compress_size == 0 and info.file_size > 0:
-                raise AppError("Suspicious compression ratio", code=ErrorCode.INVALID_PAYLOAD)
-            if info.compress_size and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
-                raise AppError("Suspicious compression ratio", code=ErrorCode.INVALID_PAYLOAD)
+            seen.add(normalized.casefold())
             target = destination.joinpath(*PurePosixPath(normalized).parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             if not info.is_dir():
@@ -2760,6 +3018,26 @@ def _rollback_transaction(transaction: dict[str, Any], root: Path) -> None:
             continue
         destination = Path(str(contributor.get("destination") or ""))
         rollback = Path(str(contributor.get("rollbackPath") or ""))
+        project_scope = contributor.get("projectScope") or []
+        if project_scope:
+            swap_state = contributor.get("projectSwapState") or {}
+            for project in project_scope:
+                state = swap_state.get(project) or {}
+                destination_project = destination / project
+                rollback_project = rollback / project
+                if bool(state.get("installed")) and destination_project.exists():
+                    if destination_project.is_dir():
+                        shutil.rmtree(destination_project)
+                    else:
+                        destination_project.unlink()
+                if bool(state.get("had")) and rollback_project.exists():
+                    destination_project.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(rollback_project, destination_project)
+            contributor["swapped"] = False
+            contributor["swapState"] = "rolled-back"
+            contributor["phase"] = "rolled-back"
+            _write_json(journal_path, transaction)
+            continue
         state = str(contributor.get("swapState") or "")
         installed = bool(contributor.get("swapped")) or state in {"installing-staged", "swapped"}
         old_moved = state in {"old-moved", "installing-staged", "swapped"} or rollback.exists()

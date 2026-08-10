@@ -18,7 +18,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, Mapping, Sequence
+from typing import Any, Collection, Mapping, Sequence
 
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_incremental, backup_pack
@@ -103,6 +103,7 @@ class ChainPackage:
     frontend: bool = False
     contributor_ids: frozenset[str] = frozenset()
     external_mcp: bool = False
+    manifest: Mapping[str, Any] | None = None
 
 
 def _chain_roots(chain: Sequence[ChainPackage]) -> list[list[backup_incremental.FileRecord]]:
@@ -261,39 +262,60 @@ def _closure(chain: Sequence[ChainPackage], output_set: set[str]) -> tuple[list[
     return needed_after, produced_by_layer
 
 
+def layer_needed_payloads(
+    chain: Sequence[ChainPackage],
+    produced_by_layer: Sequence[Collection[str]],
+    layer: int,
+) -> tuple[set[str], set[str], set[str]]:
+    """Pack paths, blob ids and standalone paths needed to materialize ``layer``."""
+    packs: set[str] = set()
+    blobs: set[str] = set()
+    standalone: set[str] = set()
+    if layer <= 0 or layer >= len(chain):
+        return packs, blobs, standalone
+    ops = chain[layer].operations or {}
+    index = chain[layer].pack_index
+    produced = produced_by_layer[layer]
+    for put in ops.get("put") or []:
+        if not isinstance(put, dict) or str(put.get("path") or "") not in produced:
+            continue
+        storage = str(put.get("storage") or "whole")
+        if storage == "cdc":
+            for chunk in put.get("chunks") or []:
+                if isinstance(chunk, dict) and str(chunk.get("source") or "") == "payload":
+                    kind, locator = backup_pack.parse_payload_ref(chunk.get("payloadRef"))
+                    if kind == "pack-range":
+                        blobs.add(locator)
+                        entry = (index or {}).get("entries", {}).get(locator) if isinstance(index, dict) else None
+                        if isinstance(entry, dict) and str(entry.get("pack") or ""):
+                            packs.add(str(entry["pack"]))
+                    elif kind == "standalone":
+                        standalone.add(locator)
+        elif storage == "whole":
+            kind, locator = backup_pack.parse_payload_ref(put.get("payloadRef"))
+            if kind == "pack-range":
+                blobs.add(locator)
+                entry = (index or {}).get("entries", {}).get(locator) if isinstance(index, dict) else None
+                if isinstance(entry, dict) and str(entry.get("pack") or ""):
+                    packs.add(str(entry["pack"]))
+            elif kind == "standalone":
+                standalone.add(locator)
+    return packs, blobs, standalone
+
+
 def _payload_entries(
     chain: Sequence[ChainPackage],
-    produced_by_layer: list[set[str]],
+    produced_by_layer: Sequence[Collection[str]],
 ) -> tuple[set[str], set[str], set[str]]:
     """Resolve needed pack paths, blob ids and standalone payload paths."""
     packs: set[str] = set()
     blobs: set[str] = set()
     standalone: set[str] = set()
-
-    def record_ref(raw: Any, index: Mapping[str, Any] | None) -> None:
-        kind, locator = backup_pack.parse_payload_ref(raw)
-        if kind == "pack-range":
-            blobs.add(locator)
-            entry = (index or {}).get("entries", {}).get(locator) if isinstance(index, dict) else None
-            if isinstance(entry, dict) and str(entry.get("pack") or ""):
-                packs.add(str(entry["pack"]))
-        elif kind == "standalone":
-            standalone.add(locator)
-
     for k in range(1, len(chain)):
-        ops = chain[k].operations or {}
-        index = chain[k].pack_index
-        produced = produced_by_layer[k]
-        for put in ops.get("put") or []:
-            if not isinstance(put, dict) or str(put.get("path") or "") not in produced:
-                continue
-            storage = str(put.get("storage") or "whole")
-            if storage == "cdc":
-                for chunk in put.get("chunks") or []:
-                    if isinstance(chunk, dict) and str(chunk.get("source") or "") == "payload":
-                        record_ref(chunk.get("payloadRef"), index)
-            elif storage == "whole":
-                record_ref(put.get("payloadRef"), index)
+        layer_packs, layer_blobs, layer_standalone = layer_needed_payloads(chain, produced_by_layer, k)
+        packs |= layer_packs
+        blobs |= layer_blobs
+        standalone |= layer_standalone
     return packs, blobs, standalone
 
 
@@ -382,6 +404,7 @@ def plan_projection(
     baseline_files = frozenset(needed_after[0])
     report = {
         "selectionDigest": selection_digest_value or selection_digest(selection),
+        "selection": selection.canonical(),
         "selected": {
             "contributors": len(selection.contributors),
             "projects": len(selection.project_ids),
