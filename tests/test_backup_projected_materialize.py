@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -197,6 +198,105 @@ def test_materialize_chain_rejects_corrupt_members(tmp_path: Path) -> None:
     (invalid_ops / "manifest.json").write_text('{"snapshotKind": "incremental", "files": []}', encoding="utf-8")
     with pytest.raises(AppError, match="operations manifest is invalid"):
         backup_incremental_restore.materialize_chain([f0_root, invalid_ops], tmp_path / "o5", projection=projection)
+
+
+def test_projected_materialize_error_branches(tmp_path: Path) -> None:
+    # Baseline declared as incremental -> missing full baseline.
+    f0_root, i1_root, projection = _build_chain(tmp_path / "case-inc")
+    bad_baseline = tmp_path / "case-inc" / "f0-inc"
+    shutil.copytree(f0_root, bad_baseline)
+    manifest = json.loads((bad_baseline / "manifest.json").read_text(encoding="utf-8"))
+    manifest["snapshotKind"] = "incremental"
+    (bad_baseline / "manifest.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    with pytest.raises(AppError, match="missing its full baseline"):
+        backup_incremental_restore.materialize_chain([bad_baseline, i1_root], tmp_path / "case-inc/o-inc", projection=projection)
+
+    # Baseline root digest mismatch.
+    f0_root, i1_root, projection = _build_chain(tmp_path / "case-root")
+    manifest = json.loads((f0_root / "manifest.json").read_text(encoding="utf-8"))
+    manifest["snapshot"]["rootDigest"] = "0" * 64
+    (f0_root / "manifest.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    with pytest.raises(AppError, match="Full baseline Merkle root mismatch"):
+        backup_incremental_restore.materialize_chain([f0_root, i1_root], tmp_path / "case-root/o-root", projection=projection)
+
+    # Parent root mismatch.
+    f0_root, i1_root, projection = _build_chain(tmp_path / "case-parent")
+    ops = json.loads((i1_root / "delta/operations.json").read_text(encoding="utf-8"))
+    ops["parentRootDigest"] = "0" * 64
+    (i1_root / "delta/operations.json").write_text(json.dumps(ops, sort_keys=True), encoding="utf-8")
+    with pytest.raises(AppError, match="parent root mismatch"):
+        backup_incremental_restore.materialize_chain([f0_root, i1_root], tmp_path / "case-parent/o-parent", projection=projection)
+
+    # Non-dict put entry.
+    f0_root, i1_root, projection = _build_chain(tmp_path / "case-put")
+    ops = json.loads((i1_root / "delta/operations.json").read_text(encoding="utf-8"))
+    ops["put"].append("junk")
+    (i1_root / "delta/operations.json").write_text(json.dumps(ops, sort_keys=True), encoding="utf-8")
+    with pytest.raises(AppError, match="Delta put entry is invalid"):
+        backup_incremental_restore.materialize_chain([f0_root, i1_root], tmp_path / "case-put/o-put", projection=projection)
+
+    # Non-dict delete entry.
+    f0_root, i1_root, projection = _build_chain(tmp_path / "case-del-junk")
+    ops = json.loads((i1_root / "delta/operations.json").read_text(encoding="utf-8"))
+    ops["delete"] = ["junk"]
+    (i1_root / "delta/operations.json").write_text(json.dumps(ops, sort_keys=True), encoding="utf-8")
+    with pytest.raises(AppError, match="Delta delete entry is invalid"):
+        backup_incremental_restore.materialize_chain([f0_root, i1_root], tmp_path / "case-del-junk/o-del-junk", projection=projection)
+
+    # A delete that targets a needed file.
+    f0_root, i1_root, projection = _build_chain(tmp_path / "case-del")
+    ops = json.loads((i1_root / "delta/operations.json").read_text(encoding="utf-8"))
+    ops["delete"] = [{"contributorId": "projects", "path": "payload/projects/p1/keep.bin"}]
+    (i1_root / "delta/operations.json").write_text(json.dumps(ops, sort_keys=True), encoding="utf-8")
+    with pytest.raises(AppError, match="Projection required file is deleted"):
+        backup_incremental_restore.materialize_chain([f0_root, i1_root], tmp_path / "case-del/o-del", projection=projection)
+
+    # Delete of an ordinary (non-needed) file path succeeds.
+    f0_root, i1_root, projection = _build_chain(tmp_path / "case-del-ok")
+    ops = json.loads((i1_root / "delta/operations.json").read_text(encoding="utf-8"))
+    ops["delete"] = [{"contributorId": "projects", "path": "payload/memory/memories.json"}]
+    (i1_root / "delta/operations.json").write_text(json.dumps(ops, sort_keys=True), encoding="utf-8")
+    backup_incremental_restore.materialize_chain([f0_root, i1_root], tmp_path / "case-del-ok/o-del-ok", projection=projection)
+
+
+def test_pack_handle_cache_rejects_pack_missing_from_index(tmp_path: Path) -> None:
+    root = tmp_path / "pkg"
+    writer = backup_pack.PackWriter(root)
+    writer.append(io.BytesIO(b"aaaa"), expected_length=4, expected_sha256=_sha(b"aaaa"))
+    writer.finalize()
+    cache = backup_incremental_restore.PackHandleCache(root)
+    with pytest.raises(AppError, match="missing from the index"):
+        cache.handle("payload/packs/9999.pack")
+
+
+def test_materialize_put_rejects_missing_parent_and_pack_blob(tmp_path: Path) -> None:
+    parent_root = tmp_path / "parent"
+    parent_root.mkdir()
+    package_root = tmp_path / "package"
+    package_root.mkdir()
+    writer = backup_pack.PackWriter(package_root)
+    writer.append(io.BytesIO(b"aaaa"), expected_length=4, expected_sha256=_sha(b"aaaa"))
+    writer.finalize()
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    with pytest.raises(AppError, match="missing parent file"):
+        backup_incremental_restore._materialize_put(
+            package_root,
+            parent_root,
+            output_root / "x.bin",
+            {"path": "x.bin", "storage": "parent-file", "parentPath": "nope.bin", "size": 1, "sha256": "0" * 64},
+            chunk_protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
+        )
+    with backup_incremental_restore.PackHandleCache(package_root) as cache:
+        with pytest.raises(AppError, match="blob is missing"):
+            backup_incremental_restore._materialize_put(
+                package_root,
+                parent_root,
+                output_root / "y.bin",
+                {"path": "y.bin", "storage": "whole", "payloadRef": {"kind": "pack-range", "blobId": "blob_missing"}, "size": 4, "sha256": _sha(b"aaaa")},
+                chunk_protocol=backup_incremental.CURRENT_CDC_PROTOCOL,
+                payload_cache=cache,
+            )
 
 
 def test_materialize_put_parent_file_and_standalone(tmp_path: Path) -> None:
