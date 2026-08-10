@@ -2117,7 +2117,8 @@ def garbage_collect_chunk_maps(deleted_snapshots: list[tuple[str, str, str]]) ->
 
 def index_metrics(target_id: str, policy_id: str) -> dict[str, int | float]:
     """Return aggregate storage efficiency without exposing paths or digests."""
-    with _connect() as connection:
+    connection = _connect()
+    try:
         head = connection.execute(
             "SELECT backup_id FROM current_effective_heads WHERE target_id = ? AND policy_id = ?",
             (target_id, policy_id),
@@ -2166,6 +2167,8 @@ def index_metrics(target_id: str, policy_id: str) -> dict[str, int | float]:
         page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
         page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
         free_pages = int(connection.execute("PRAGMA freelist_count").fetchone()[0])
+    finally:
+        connection.close()
     return {
         "snapshotFileOps": snapshot_ops,
         "effectiveFiles": effective_files,
@@ -2234,6 +2237,9 @@ def _migrate_index_db_auto_vacuum(target_id: str, policy_id: str, before: dict[s
                     placeholders = ",".join("?" for _ in rows[0].keys())
                     columns = ",".join(f'"{column}"' for column in rows[0].keys())
                     new_connection.executemany(f"INSERT OR REPLACE INTO {table} ({columns}) VALUES ({placeholders})", [tuple(row) for row in rows])
+                    # Drop the row/cursor references so close() can release the
+                    # source file handle on Windows before the atomic swap.
+                    rows.clear()
             finally:
                 source.close()
             new_connection.execute("PRAGMA foreign_keys = ON")
