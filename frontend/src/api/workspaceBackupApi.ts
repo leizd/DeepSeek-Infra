@@ -481,7 +481,7 @@ export function listBackupTargetCapabilities(client: HttpClient = httpClient) {
 }
 
 export function restoreBackupFromTarget(
-  request: { targetId: string; backupId: string; complete?: boolean },
+  request: { targetId: string; backupId: string; complete?: boolean; selection?: { contributors: string[]; projectIds?: string[] }; restoreId?: string },
   client: HttpClient = httpClient,
 ) {
   return client.postJson<{
@@ -495,7 +495,32 @@ export function restoreBackupFromTarget(
     path?: string;
     downloadedBytes?: number;
     expectedBytes?: number;
+    selection?: { contributors: string[]; projectIds?: string[] };
+    selectionDigest?: string;
+    requiresSecret?: boolean;
   }>("/api/workspace/restores/from-target", request);
+}
+
+export function previewRestoreFromTarget(
+  request: { targetId: string; backupId: string; selection: { contributors: string[]; projectIds?: string[] }; restoreId?: string },
+  client: HttpClient = httpClient,
+) {
+  return client.postJson<{
+    restoreId: string;
+    phase: string;
+    requiresSecret: boolean;
+    selectionDigest?: string;
+    projection?: {
+      selectionDigest: string;
+      selected: { contributors: number; projects: number; files: number };
+      dependencies: { supportFiles: number; parentRanges: number; packs: number };
+      bytes: { selectedLogicalBytes: number; dependencyBytes: number; ciphertextDownloadBytes: number; estimatedMaterializedBytes: number };
+      networkSelective: boolean;
+      networkSelectivityReason: string;
+      requiresFrontendApply: boolean;
+      requiresExternalMcp: boolean;
+    };
+  }>("/api/workspace/restores/from-target/preview", request);
 }
 
 export function fetchRemoteRestore(restoreId: string, request: { maxBytes?: number } = {}, client: HttpClient = httpClient) {
