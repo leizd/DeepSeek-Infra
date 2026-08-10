@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.4.12.
+Applicable version: v4.4.13.
 
 ## 4.4.12 candidate evidence contract
 

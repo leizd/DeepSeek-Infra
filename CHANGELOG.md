@@ -4,6 +4,31 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.13] - Projected Recovery and Production Remote Restore
+
+### Projected restore
+
+- Freezes a remote restore into an explicit Contributor/Project projection whose `selectionDigest` is durable and immutable across retries; resuming with a different selection fails with `409 restore-selection-mismatch`.
+- Materializes and commits only the selected Workspace scope. Cross-file `parent-range` dependencies enter a read-only support set that is built in scratch space but never written to the final tree.
+- Verifies the full F0→I1→…→In logical Merkle chain layer by layer even when byte materialization is selective; unselected contributors are never mutated.
+- Reports whole-age-object download honestly with `networkSelective: false` and a `whole-age-object` reason, never claiming network-level selective fetch.
+
+### Selective materialization
+
+- Extracts only the required Full entries, required Packs and required standalone blobs from decrypted archives; unused packs are verified lazily on first use.
+- Derives `requiresFrontendApply` / `requiresExternalMcp` from the frozen selection instead of the whole backup plan.
+- Releases remote ancestor holds at terminal states while retaining them during `recovery-required`.
+
+### Production remote restore
+
+- Adds a from-target preview that fetches, decrypts, metadata-extracts and plans a projection before the selection is frozen.
+- Adds a real HTTP MinIO Full→Incremental→Age→S3→Receipt→Restore→Federated-commit E2E using the real Rust Age helper.
+
+### Cost and maintenance
+
+- Bases adaptive-full decisions on packed-container physical bytes rather than raw logical payload bytes.
+- Adds an index-maintenance migration path that rebuilds and atomically swaps the index DB without a full `VACUUM` on the scheduler path.
+
 ## [4.4.12] - Packed Delta Payloads and Persistent Snapshot State
 
 ### Persistent snapshot index

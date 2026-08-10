@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.12。
+适用版本：v4.4.13。
 
 > 4.4.12 replaces per-snapshot materialized file/ref copies with immutable File Versions, Full checkpoints, Incremental PUT/DELETE operations and one atomically headed Current Effective View. `incremental-v5` streams small Whole and all unmatched CDC payloads into snapshot-local 64 MiB Packs; restore verifies Pack, Range, File and Merkle layers with a four-handle LRU. The Rust JSONL helper is persistent, bounded and response-streaming, while 100k-file and real HTTP S3 contracts make the scale properties executable.
 

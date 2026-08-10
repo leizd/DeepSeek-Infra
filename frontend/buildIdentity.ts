@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
 export const FRONTEND_BUILD_IDENTITY_SCHEMA_VERSION = 1;
-export const FRONTEND_BUILD_CONFIGURATION_VERSION = "4.4.12-packed-delta-index-v1";
+export const FRONTEND_BUILD_CONFIGURATION_VERSION = "4.4.13-projected-recovery-v1";
 
 export interface FrontendBuildIdentity {
   schemaVersion: 1;

@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.12。
+适用版本：v4.4.13。
 
 > 4.4.12 的 File Version、Snapshot Ops、Current Effective Head、Pack Index/Range、Bloom、Rust Worker Pool 与 Multipart 收敛全部属于后端/本地索引边界。Frontend 继续只提交临时 Secret Slot 引用并消费 Federated Restore 状态，不持有 File/Chunk Hash、Pack Offset、父文件范围、Bloom、Index DB 或 Multipart 状态，也不采集、不回显、不持久化 Access Key。
 
