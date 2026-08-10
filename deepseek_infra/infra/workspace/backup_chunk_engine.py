@@ -19,6 +19,22 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_incremental
 
 
+SCAN_READER_BUFFER_BYTES = 1024 * 1024
+SCAN_METADATA_BUDGET_BYTES = 1024 * 1024
+SCAN_WORKING_SET_BYTES = backup_incremental.CDC_MAX_CHUNK + SCAN_READER_BUFFER_BYTES + SCAN_METADATA_BUDGET_BYTES
+
+
+def scan_working_set_bytes(file_size: int) -> int:
+    """Estimate resident scanner memory without charging logical file length."""
+    return min(SCAN_WORKING_SET_BYTES, max(1, int(file_size)))
+
+
+def effective_scan_workers(*, workers: int, max_in_flight_bytes: int) -> int:
+    requested = max(1, int(workers))
+    budget_workers = max(1, int(max_in_flight_bytes) // SCAN_WORKING_SET_BYTES)
+    return min(requested, budget_workers)
+
+
 @dataclass(frozen=True, slots=True)
 class FileChunkScan:
     size: int
@@ -95,6 +111,74 @@ class RustChunkEngine:
 
     def __init__(self, executable: Path) -> None:
         self.executable = executable
+        self._batch_workers = 1
+        self._batch_max_in_flight_bytes = SCAN_WORKING_SET_BYTES
+        self._batch_process: subprocess.Popen[str] | None = None
+        self._batch_process_workers: int | None = None
+        self._batch_lock = threading.Lock()
+        self._next_request_id = 0
+
+    def configure_batch(self, *, workers: int, max_in_flight_bytes: int) -> None:
+        selected = effective_scan_workers(workers=workers, max_in_flight_bytes=max_in_flight_bytes)
+        with self._batch_lock:
+            self._batch_workers = selected
+            self._batch_max_in_flight_bytes = max(1, int(max_in_flight_bytes))
+            if self._batch_process is not None and self._batch_process_workers != selected:
+                self._close_batch_process()
+
+    def _start_batch_process(self) -> subprocess.Popen[str]:
+        try:
+            process = subprocess.Popen(
+                [str(self.executable), "scan-batch", "--workers", str(self._batch_workers)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+                creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise AppError("native backup batch helper failed", code=ErrorCode.INTERNAL, status=500) from exc
+        if process.stdin is None or process.stdout is None:
+            process.kill()
+            raise AppError("native backup batch helper has no streaming pipes", code=ErrorCode.INTERNAL, status=500)
+        self._batch_process = process
+        self._batch_process_workers = self._batch_workers
+        return process
+
+    def _batch_process_or_start(self) -> subprocess.Popen[str]:
+        process = self._batch_process
+        if process is None or process.poll() is not None:
+            self._close_batch_process()
+            process = self._start_batch_process()
+        return process
+
+    def _close_batch_process(self) -> None:
+        process = self._batch_process
+        self._batch_process = None
+        self._batch_process_workers = None
+        if process is None:
+            return
+        try:
+            if process.stdin is not None:
+                process.stdin.close()
+            process.wait(timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            try:
+                process.terminate()
+                process.wait(timeout=2)
+            except (OSError, subprocess.SubprocessError):
+                process.kill()
+
+    def close(self) -> None:
+        with self._batch_lock:
+            self._close_batch_process()
+
+    def __del__(self) -> None:  # pragma: no cover - best-effort interpreter cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _decode(self, payload: dict[str, Any]) -> FileChunkScan:
         try:
@@ -128,47 +212,67 @@ class RustChunkEngine:
             raise AppError("native backup chunk helper returned invalid output", code=ErrorCode.INTERNAL, status=500) from exc
 
     def scan_files(self, paths: list[Path], *, protocol: str = backup_incremental.CURRENT_CDC_PROTOCOL) -> dict[Path, FileChunkScan]:
-        """Scan many files through one persistent JSONL helper process."""
-        requests = [json.dumps({"id": index, "path": str(path), "protocol": protocol}) for index, path in enumerate(paths)]
-        try:
-            result = subprocess.run(
-                [str(self.executable), "scan-batch"],
-                input="\n".join(requests) + "\n",
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=3600,
-            )
-        except subprocess.SubprocessError as exc:
-            raise AppError("native backup batch helper failed", code=ErrorCode.INTERNAL, status=500) from exc
-        if result.returncode != 0:
-            raise AppError("native backup batch helper failed", code=ErrorCode.INTERNAL, status=500)
-        decoded: dict[int, FileChunkScan] = {}
-        failed: set[int] = set()
-        seen: set[int] = set()
-        try:
-            for line in result.stdout.splitlines():
-                payload = json.loads(line)
-                if not isinstance(payload, dict):
-                    raise ValueError("native batch item is not an object")
-                item_id = int(payload["id"])
-                if item_id < 0 or item_id >= len(paths) or item_id in seen:
-                    raise ValueError("native batch item id is invalid")
-                seen.add(item_id)
-                if "error" in payload:
-                    failed.add(item_id)
-                else:
-                    decoded[item_id] = self._decode(payload)
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise AppError("native backup batch helper returned invalid output", code=ErrorCode.INTERNAL, status=500) from exc
-        if seen != set(range(len(paths))):
-            raise AppError("native backup batch helper returned incomplete output", code=ErrorCode.INTERNAL, status=500)
-        if failed:
-            raise NativeBatchItemErrors(
-                {path: decoded[index] for index, path in enumerate(paths) if index in decoded},
-                [path for index, path in enumerate(paths) if index in failed],
-            )
-        return {path: decoded[index] for index, path in enumerate(paths)}
+        """Scan files through one reusable process and consume results as completed."""
+        if not paths:
+            return {}
+        with self._batch_lock:
+            process = self._batch_process_or_start()
+            assert process.stdin is not None and process.stdout is not None
+            stdin = process.stdin
+            stdout = process.stdout
+            requests: list[tuple[int, Path]] = []
+            for path in paths:
+                request_id = self._next_request_id
+                self._next_request_id += 1
+                requests.append((request_id, path))
+            outstanding = dict(requests)
+            decoded: dict[Path, FileChunkScan] = {}
+            failed: list[Path] = []
+            write_errors: list[BaseException] = []
+
+            def write_requests() -> None:
+                try:
+                    for request_id, path in requests:
+                        stdin.write(json.dumps({"id": request_id, "path": str(path), "protocol": protocol}) + "\n")
+                        stdin.flush()
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    write_errors.append(exc)
+                    try:
+                        stdin.close()
+                    except (OSError, ValueError):
+                        pass
+
+            writer = threading.Thread(target=write_requests, name="backup-native-scan-writer", daemon=True)
+            writer.start()
+            try:
+                for _ in paths:
+                    line = stdout.readline()
+                    if not line:
+                        raise OSError("native batch stream ended early")
+                    payload = json.loads(line)
+                    if not isinstance(payload, dict):
+                        raise ValueError("native batch item is not an object")
+                    item_id = int(payload["id"])
+                    path = outstanding.pop(item_id)
+                    if "error" in payload:
+                        failed.append(path)
+                    else:
+                        decoded[path] = self._decode(payload)
+                writer.join(timeout=5)
+                if writer.is_alive():
+                    raise OSError("native batch request writer did not drain")
+                if write_errors:
+                    raise OSError("native batch request stream failed") from write_errors[0]
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
+                self._close_batch_process()
+                writer.join(timeout=2)
+                raise AppError("native backup batch helper returned invalid output", code=ErrorCode.INTERNAL, status=500) from exc
+            if outstanding:
+                self._close_batch_process()
+                raise AppError("native backup batch helper returned incomplete output", code=ErrorCode.INTERNAL, status=500)
+            if failed:
+                raise NativeBatchItemErrors(decoded, failed)
+            return decoded
 
 
 class FallbackChunkEngine:
@@ -179,6 +283,12 @@ class FallbackChunkEngine:
     def __init__(self, native: RustChunkEngine | None, reference: PythonChunkEngine | None = None) -> None:
         self.native = native
         self.reference = reference or PythonChunkEngine()
+
+    def configure_batch(self, *, workers: int, max_in_flight_bytes: int) -> None:
+        if self.native is not None:
+            configure = getattr(self.native, "configure_batch", None)
+            if callable(configure):
+                configure(workers=workers, max_in_flight_bytes=max_in_flight_bytes)
 
     def scan_file(self, path: Path, *, protocol: str = backup_incremental.CURRENT_CDC_PROTOCOL) -> FileChunkScan:
         if self.native is not None:
@@ -251,13 +361,14 @@ def scan_files_bounded(
 ) -> tuple[dict[Path, FileChunkScan], dict[str, Any]]:
     """Scan independent files concurrently under byte and descriptor bounds."""
     selected = engine or default_chunk_engine()
+    effective_workers = effective_scan_workers(workers=workers, max_in_flight_bytes=max_in_flight_bytes)
     budget = _ByteBudget(max_in_flight_bytes)
     started = time.monotonic()
 
     def scan_one(path: Path) -> FileChunkScan:
         if cancel_event is not None and cancel_event.is_set():
             raise AppError("Scheduled backup cancelled", code=ErrorCode.INVALID_REQUEST, status=499)
-        held = budget.acquire(path.stat().st_size, cancel_event)
+        held = budget.acquire(scan_working_set_bytes(path.stat().st_size), cancel_event)
         try:
             if checkpoint is not None:
                 checkpoint()
@@ -268,6 +379,9 @@ def scan_files_bounded(
     results: dict[Path, FileChunkScan] = {}
     batch_scan = getattr(selected, "scan_files", None)
     if callable(batch_scan) and len(paths) > 1:
+        configure_batch = getattr(selected, "configure_batch", None)
+        if callable(configure_batch):
+            configure_batch(workers=effective_workers, max_in_flight_bytes=max_in_flight_bytes)
         for path in paths:
             if cancel_event is not None and cancel_event.is_set():
                 raise AppError("Scheduled backup cancelled", code=ErrorCode.INVALID_REQUEST, status=499)
@@ -275,7 +389,7 @@ def scan_files_bounded(
                 checkpoint()
         results = dict(batch_scan(paths, protocol=protocol))
     else:
-        with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="backup-cdc") as executor:
+        with ThreadPoolExecutor(max_workers=effective_workers, thread_name_prefix="backup-cdc") as executor:
             futures = {executor.submit(scan_one, path): path for path in paths}
             for future in as_completed(futures):
                 results[futures[future]] = future.result()
@@ -299,6 +413,7 @@ def scan_files_bounded(
         "logicalBytes": logical,
         "scanSeconds": round(elapsed, 6),
         "throughputBytesPerSecond": int(logical / elapsed),
-        "workers": max(1, workers),
+        "workers": effective_workers,
         "maxInFlightBytes": max_in_flight_bytes,
+        "scanWorkingSetBytes": SCAN_WORKING_SET_BYTES,
     }

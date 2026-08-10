@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import sqlite3
 import threading
@@ -26,6 +27,33 @@ from deepseek_infra.infra.workspace.backup_target_store import (
     ObjectMeta,
     probe_store_capabilities,
 )
+
+
+def _streaming_process(output: str = "") -> SimpleNamespace:
+    state: dict[str, int | None] = {"returncode": None}
+
+    def poll() -> int | None:
+        return state["returncode"]
+
+    def wait(timeout: float | None = None) -> int:
+        del timeout
+        state["returncode"] = 0
+        return 0
+
+    def terminate() -> None:
+        state["returncode"] = -1
+
+    def kill() -> None:
+        state["returncode"] = -9
+
+    return SimpleNamespace(
+        stdin=io.StringIO(),
+        stdout=io.StringIO(output),
+        poll=poll,
+        wait=wait,
+        terminate=terminate,
+        kill=kill,
+    )
 
 
 def _file(path: str, *, size: int = 4, sha: str = "a") -> backup_incremental.FileRecord:
@@ -483,52 +511,53 @@ def test_native_batch_helper_and_fallback_telemetry(tmp_path: Path, monkeypatch:
     helper.write_bytes(b"helper")
     calls: list[list[str]] = []
 
-    def run(args: list[str], **kwargs: Any) -> SimpleNamespace:
+    def popen(args: list[str], **kwargs: Any) -> SimpleNamespace:
+        del kwargs
         calls.append(args)
         responses = []
-        for line in str(kwargs["input"]).splitlines():
-            request = json.loads(line)
-            data = Path(request["path"]).read_bytes()
+        for request_id, path in enumerate((first, second)):
+            data = path.read_bytes()
             responses.append(
                 json.dumps(
                     {
-                        "id": request["id"],
+                        "id": request_id,
                         "size": len(data),
                         "sha256": hashlib.sha256(data).hexdigest(),
-                        "protocol": request["protocol"],
+                        "protocol": backup_incremental.CURRENT_CDC_PROTOCOL,
                         "chunks": [{"offset": 0, "length": len(data), "sha256": hashlib.sha256(data).hexdigest()}],
                     }
                 )
             )
-        return SimpleNamespace(returncode=0, stdout="\n".join(responses))
+        return _streaming_process("\n".join(responses) + "\n")
 
-    monkeypatch.setattr(backup_chunk_engine.subprocess, "run", run)
-    scans = backup_chunk_engine.RustChunkEngine(helper).scan_files([first, second])
-    assert set(scans) == {first, second} and calls == [[str(helper), "scan-batch"]]
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", popen)
+    native = backup_chunk_engine.RustChunkEngine(helper)
+    scans = native.scan_files([first, second])
+    native.close()
+    assert set(scans) == {first, second} and calls == [[str(helper), "scan-batch", "--workers", "1"]]
 
-    def partial_run(args: list[str], **kwargs: Any) -> SimpleNamespace:
-        del args
-        requests = [json.loads(line) for line in str(kwargs["input"]).splitlines()]
-        data = Path(requests[0]["path"]).read_bytes()
-        return SimpleNamespace(
-            returncode=0,
-            stdout="\n".join(
+    def partial_popen(args: list[str], **kwargs: Any) -> SimpleNamespace:
+        del args, kwargs
+        data = first.read_bytes()
+        return _streaming_process(
+            "\n".join(
                 (
                     json.dumps(
                         {
-                            "id": requests[0]["id"],
+                            "id": 0,
                             "size": len(data),
                             "sha256": hashlib.sha256(data).hexdigest(),
-                            "protocol": requests[0]["protocol"],
+                            "protocol": backup_incremental.CURRENT_CDC_PROTOCOL,
                             "chunks": [{"offset": 0, "length": len(data), "sha256": hashlib.sha256(data).hexdigest()}],
                         }
                     ),
-                    json.dumps({"id": requests[1]["id"], "error": "scan-failed"}),
+                    json.dumps({"id": 1, "error": "scan-failed"}),
                 )
-            ),
+            )
+            + "\n"
         )
 
-    monkeypatch.setattr(backup_chunk_engine.subprocess, "run", partial_run)
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", partial_popen)
     partial = backup_chunk_engine.FallbackChunkEngine(backup_chunk_engine.RustChunkEngine(helper))
     _, partial_telemetry = backup_chunk_engine.scan_files_bounded(
         [first, second], workers=2, max_in_flight_bytes=1024, engine=partial
@@ -578,12 +607,19 @@ def test_native_helper_protocol_failures_fall_back_or_fail_closed(tmp_path: Path
     monkeypatch.setattr(backup_chunk_engine.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=""))
     with pytest.raises(AppError, match="helper failed"):
         rust.scan_file(first)
+
+    def failed_popen(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        del args, kwargs
+        raise backup_chunk_engine.subprocess.SubprocessError("failed")
+
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", failed_popen)
     with pytest.raises(AppError, match="batch helper failed"):
         rust.scan_files([first, second])
 
     monkeypatch.setattr(backup_chunk_engine.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="[]"))
     with pytest.raises(AppError, match="invalid output"):
         rust.scan_file(first)
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", lambda *args, **kwargs: _streaming_process("[]\n"))
     with pytest.raises(AppError, match="invalid output"):
         rust.scan_files([first, second])
 
@@ -593,11 +629,7 @@ def test_native_helper_protocol_failures_fall_back_or_fail_closed(tmp_path: Path
         "not-json",
     )
     for output in invalid_batch_outputs:
-        monkeypatch.setattr(
-            backup_chunk_engine.subprocess,
-            "run",
-            lambda *args, _output=output, **kwargs: SimpleNamespace(returncode=0, stdout=_output),
-        )
+        monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", lambda *args, _output=output, **kwargs: _streaming_process(_output + "\n"))
         with pytest.raises(AppError, match="invalid output|incomplete output"):
             rust.scan_files([first, second])
 
@@ -605,7 +637,7 @@ def test_native_helper_protocol_failures_fall_back_or_fail_closed(tmp_path: Path
         del args, kwargs
         raise backup_chunk_engine.subprocess.SubprocessError("interrupted")
 
-    monkeypatch.setattr(backup_chunk_engine.subprocess, "run", interrupted)
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", interrupted)
     with pytest.raises(AppError, match="batch helper failed"):
         rust.scan_files([first, second])
 
