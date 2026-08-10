@@ -250,7 +250,7 @@ jobs:
           --publish 9000:9000
           --env MINIO_ROOT_USER
           --env MINIO_ROOT_PASSWORD
-          quay.io/minio/minio:RELEASE.2025-09-06T17-38-46Z
+          quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
           server /data --address ":9000"
       - name: Wait for MinIO health endpoint
         run: |

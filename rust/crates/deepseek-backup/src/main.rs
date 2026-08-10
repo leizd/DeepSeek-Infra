@@ -414,13 +414,14 @@ mod tests {
 
     #[test]
     fn batch_scanner_runs_through_a_bounded_worker_pool() {
-        let requests = (0..8)
-            .map(|id| {
-                format!(
-                    "{{\"id\":{id},\"path\":\"fixture-{id}\",\"protocol\":\"fastcdc-gear-v3\"}}\n"
-                )
-            })
-            .collect::<String>();
+        let mut requests = String::new();
+        for id in 0..8 {
+            writeln!(
+                &mut requests,
+                "{{\"id\":{id},\"path\":\"fixture-{id}\",\"protocol\":\"fastcdc-gear-v3\"}}"
+            )
+            .expect("write request");
+        }
         let output = SharedOutput::default();
         let output_bytes = Arc::clone(&output.0);
         let active = Arc::new(AtomicUsize::new(0));
