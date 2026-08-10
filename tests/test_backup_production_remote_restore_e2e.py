@@ -173,7 +173,7 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
         config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"after"}]}', encoding="utf-8")
         second = _claim_and_run(policy, now=first_now + timedelta(days=1))
         assert second["phase"] == "complete", second.get("error")
-        assert second["snapshotKind"] == "incremental"
+        assert second["snapshotKind"] == "incremental", second.get("forceFullReason") or second.get("error")
 
         # Simulate a fresh process: a new HTTP client and store with no local
         # index state. Lineage is resolved from target receipts only.
