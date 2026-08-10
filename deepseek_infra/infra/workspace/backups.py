@@ -28,7 +28,7 @@ from typing import Any, BinaryIO, Callable, Literal, Protocol, cast
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_crypto, backup_pack, mutation_gate
+from deepseek_infra.infra.workspace import backup_crypto, backup_pack, backup_projection, mutation_gate
 
 BACKUP_SCHEMA = "deepseek-workspace-backup.v1"
 FRONTEND_SCHEMA_VERSION = 1
@@ -729,6 +729,7 @@ def capabilities() -> dict[str, Any]:
         "coveragePolicies": ["strict", "best-effort"],
         "includedByDefault": included,
         "optionalHistory": optional,
+        "restoreProjection": backup_projection.restore_projection_capabilities(),
         "externalContributors": [StatelessMcpContributor().capabilities()],
         "alwaysExcluded": sorted(_SECRET_NAMES | {"rebuildable indexes", "runtime locks", "active tasks"}),
         "limits": {
