@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.11。
+适用版本：v4.4.12。
 
 > 4.4.11 gives Chunk State the same Effective Snapshot semantics as File State: immutable maps are inherited by reference across unchanged Incrementals, exact Immediate Parent lookup reuses chunks and whole files across paths, and `incremental-v4` restores Parent Ranges from an immutable two-phase view. Local Bloom acceleration, Rust JSONL batch scanning, accurate fallback metrics, legacy index migration/GC and strict multipart convergence do not weaken the Age or remote metadata boundaries.
 

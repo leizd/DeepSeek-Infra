@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.11。
+适用版本：v4.4.12。
 
 > 4.4.11 的 Effective Dedup Index、Bloom、跨文件 Parent Range、Rust Batch Scanner 与 Multipart 收敛全部属于后端/本地索引边界。Frontend 继续只提交临时 Secret Slot 引用并消费 Federated Restore 状态，不持有 Chunk Map、Chunk Hash、父文件范围、Bloom 或 Multipart 状态，也不采集、不回显、不持久化 Access Key。
 

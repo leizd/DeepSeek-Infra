@@ -1,0 +1,23 @@
+# 4.4.12 Checklist
+
+- [ ] Version surfaces and ADR
+- [ ] Persistent Rust JSONL helper
+- [ ] Bounded Rust worker pool
+- [ ] Working-set scan budget
+- [ ] Immutable `file_versions`
+- [ ] Delta `snapshot_file_ops`
+- [ ] `current_effective_files` plus single-row head
+- [ ] Legacy materialized-index migration
+- [ ] Snapshot-local 64 MiB PackWriter
+- [ ] Typed pack-range and standalone payload references
+- [ ] `incremental-v5` builder integration
+- [ ] Bounded verified pack-range restore
+- [ ] v2-v5 compatibility contracts
+- [ ] File-version/chunk-map GC
+- [ ] Privacy-safe index/packing metrics
+- [ ] Thresholded incremental compaction
+- [ ] 100k-file/200k-index scale contracts
+- [ ] Real HTTP MinIO S3 E2E
+- [ ] Release documentation and Evidence contract
+- [ ] Full local gates
+- [ ] Atomic commits, push, PR, and green CI
