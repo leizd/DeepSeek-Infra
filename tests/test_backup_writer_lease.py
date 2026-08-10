@@ -119,6 +119,50 @@ def test_acquire_release_roundtrip(tmp_path: Path) -> None:
     _lease(tmp_path, run="run_2", token=2).acquire()
 
 
+def test_store_acquire_reconciles_large_server_clock_skew(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_writer_lease
+    from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore, read_json, writer_lease_key
+
+    clock = lambda: datetime(2026, 6, 2, 4, 0, 0, tzinfo=timezone.utc)  # noqa: E731
+    store = MemoryTargetStore()
+    lease = backup_writer_lease.TargetWriterLease(
+        None,
+        store=store,
+        target_id="t",
+        owner_run_id="run_1",
+        owner_instance_id="w1",
+        fencing_token=1,
+        clock=clock,
+    )
+    # Simulate a target server clock two hours ahead of the local clock.
+    def note_server_date(self_: object, server_date: str | None) -> None:
+        del self_, server_date
+        lease._server_skew = timedelta(hours=2)
+
+    monkeypatch.setattr(backup_writer_lease.TargetWriterLease, "_note_server_date", note_server_date)
+    lease.acquire()
+    payload = read_json(store, writer_lease_key())
+    assert payload is not None and payload["ownerRunId"] == "run_1"
+    # The reconciled lease expires at least a lease period after the skewed now.
+    from deepseek_infra.infra.workspace.backup_writer_lease import CLOCK_SKEW_SAFETY_SECONDS
+
+    assert str(payload["expiresAt"]) > (clock() + timedelta(hours=2)).isoformat(timespec="seconds").replace("+00:00", "Z") + "Z"
+    assert abs((datetime.fromisoformat(str(payload["expiresAt"]).replace("Z", "+00:00")) - (clock() + timedelta(hours=2))).total_seconds()) > CLOCK_SKEW_SAFETY_SECONDS
+    # A follower using the reconciled skew must still own the lease.
+    follower = backup_writer_lease.TargetWriterLease(
+        None,
+        store=store,
+        target_id="t",
+        owner_run_id="run_1",
+        owner_instance_id="w1",
+        fencing_token=1,
+        clock=clock,
+    )
+    follower._server_skew = timedelta(hours=2)
+    follower.acquired = True
+    follower.assert_owned()
+
+
 def test_expired_lease_preempted_only_by_higher_token(tmp_path: Path) -> None:
     _seed_lease_file(tmp_path, token=3, expired=True)
     lease = _lease(tmp_path, run="run_new", token=5, clock=lambda: NOW)

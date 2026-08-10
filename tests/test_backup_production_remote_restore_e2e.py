@@ -98,6 +98,14 @@ def _claim_and_run(policy: dict[str, object], *, now: datetime) -> dict[str, obj
     return backup_executor.execute_run(claimed[0], instance_id="prod-e2e", now=now)
 
 
+def _run_clock(base: datetime) -> datetime:
+    # Keep the scheduler/executor clock on the real wall clock so the
+    # writer-lease clock skew against MinIO stays ~0. A synthetic past date
+    # would make every S3 Date-header skew large enough to instantly expire the
+    # just-acquired lease.
+    return datetime.now(timezone.utc).replace(hour=base.hour, minute=base.minute, second=0, microsecond=0, tzinfo=timezone.utc)
+
+
 def _register_s3_target() -> str:
     from deepseek_infra.infra.workspace import backup_targets
 
@@ -152,7 +160,7 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
                 }
             },
         )
-        first_now = datetime(2026, 6, 2, 4, 0, tzinfo=UTC)
+        first_now = _run_clock(datetime(2026, 6, 2, 4, 0, tzinfo=UTC))
         first = _claim_and_run(policy, now=first_now)
         assert first["phase"] == "complete", first.get("error")
         assert first["snapshotKind"] == "full"
