@@ -23,6 +23,7 @@ from deepseek_infra.infra.workspace import (
     backup_crypto,
     backup_incremental,
     backup_incremental_restore,
+    backup_projection,
     backup_publish,
     backup_targets,
     backups,
@@ -36,7 +37,7 @@ from deepseek_infra.infra.workspace.backup_target_store import (
 )
 
 HOLD_TTL_SECONDS = 6 * 3600
-SESSION_SCHEMA_VERSION = 2
+SESSION_SCHEMA_VERSION = 3
 
 
 def _utc_iso(value: datetime | None = None) -> str:
@@ -123,13 +124,54 @@ def _chain_member(store: Any, receipt: dict[str, Any], staging_root: Path) -> di
     }
 
 
-def create_restore_from_target(*, target_id: str, backup_id: str, client: Any | None = None) -> dict[str, Any]:
-    """Create a durable remote restore session (phase=fetching / fetching-chain).
+def create_restore_from_target(
+    *,
+    target_id: str,
+    backup_id: str,
+    client: Any | None = None,
+    selection: Any | None = None,
+    restore_id: str | None = None,
+) -> dict[str, Any]:
+    """Create or resume a durable remote restore session (phase=fetching / fetching-chain).
 
     For incremental backups the session resolves the whole chain from the target
     receipts and creates a remote hold for every required ancestor, so no member
     can be garbage-collected before the chain is fetched.
+
+    An optional ``selection`` freezes the restore into a Contributor/Project
+    projection: its canonical ``selectionDigest`` is persisted with the session
+    and, once frozen, resuming the same session with a different selection is
+    rejected with ``409 restore-selection-mismatch``.
     """
+    selection_value = backup_projection.normalize_selection(selection)
+    selection_digest_value = backup_projection.selection_digest(selection_value) if selection_value is not None else None
+    if restore_id:
+        existing = read_restore_session(restore_id)
+        if existing is None:
+            raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+        frozen = existing.get("selectionDigest")
+        if selection_digest_value is not None and frozen and frozen != selection_digest_value:
+            raise AppError(
+                "Restore selection does not match the frozen session selection",
+                code=ErrorCode.INVALID_REQUEST,
+                status=409,
+            )
+        if selection_digest_value is not None and not frozen:
+            assert selection_value is not None
+            existing["selection"] = selection_value.canonical()
+            existing["selectionDigest"] = selection_digest_value
+            existing["schemaVersion"] = SESSION_SCHEMA_VERSION
+            _atomic_write_json(_session_path(restore_id), existing)
+            frozen = selection_digest_value
+        return {
+            "restoreId": restore_id,
+            "phase": str(existing.get("phase") or "fetching"),
+            "targetId": str(existing.get("targetId") or target_id),
+            "backupId": str(existing.get("backupId") or backup_id),
+            "selection": selection_value.canonical() if selection_value is not None else existing.get("selection"),
+            "selectionDigest": selection_digest_value or existing.get("selectionDigest"),
+            "holds": list(existing.get("holdKeys") or ([existing["holdKey"]] if existing.get("holdKey") else [])),
+        }
     target = backup_publish.resolve_target(target_id, write_intent=False)
     store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False, client=client)
     catalog = _catalog_receipts(target, store)
@@ -196,6 +238,8 @@ def create_restore_from_target(*, target_id: str, backup_id: str, client: Any | 
             "chain": members,
             "chainIndex": 0,
             "holdKeys": hold_keys,
+            "selection": selection_value.canonical() if selection_value is not None else None,
+            "selectionDigest": selection_digest_value,
             "phase": "fetching-chain",
             "createdAt": _utc_iso(),
             "updatedAt": _utc_iso(),
@@ -208,6 +252,8 @@ def create_restore_from_target(*, target_id: str, backup_id: str, client: Any | 
             "phase": "fetching-chain",
             "targetId": target_id,
             "backupId": backup_id,
+            "selection": session["selection"],
+            "selectionDigest": selection_digest_value,
             "holds": hold_keys,
         }
 
@@ -242,6 +288,8 @@ def create_restore_from_target(*, target_id: str, backup_id: str, client: Any | 
         "remoteETag": meta.etag,
         "remoteVersionId": meta.version_id,
         "holdKey": restore_hold_key(restore_id),
+        "selection": selection_value.canonical() if selection_value is not None else None,
+        "selectionDigest": selection_digest_value,
         "ciphertextPath": str(staging_root / filename),
         "phase": "fetching",
         "createdAt": _utc_iso(),
@@ -256,6 +304,8 @@ def create_restore_from_target(*, target_id: str, backup_id: str, client: Any | 
         "targetId": target_id,
         "backupId": backup_id,
         "objectDigest": digest,
+        "selection": session["selection"],
+        "selectionDigest": selection_digest_value,
         "hold": hold,
     }
 

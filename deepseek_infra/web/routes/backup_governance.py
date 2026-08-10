@@ -336,6 +336,8 @@ def create_backup_governance_router() -> APIRouter:
             backup_remote_restore.create_restore_from_target(
                 target_id=str(payload.get("targetId") or ""),
                 backup_id=str(payload.get("backupId") or ""),
+                selection=payload.get("selection"),
+                restore_id=str(payload.get("restoreId") or "") or None,
             )
         )
 
