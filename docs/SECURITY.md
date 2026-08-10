@@ -17,8 +17,6 @@
 
 关键边界索引：`fetch_url` 的 SSRF 防护会拦截内网、私有/回环/链路本地地址与云元数据地址 `169.254.169.254`；本地鉴权通过 `HttpOnly` `auth_token` Cookie 下发和校验。详细规则分别见“本地鉴权”与“本地工具调用与 URL 精读”。
 
-4.4.12 的 Backup Pack Index 与内容摘要只存在于 Age 认证密文和可信本地 `.backup-index`；恢复对 Pack Path、Offset/Length、Pack/Blob/File/Merkle 摘要逐层 Fail Closed。Pack 不跨 Snapshot 引用，也不引入云端 Chunk CAS、Convergent Encryption 或远端明文 Hash Index。
-
 ## 本地鉴权
 
 默认情况下所有 `/api/*` 路由都需要启动 token。启动服务后，请打开终端打印的带 `?token=...` 的地址；后端会设置 `HttpOnly` 的 `auth_token` Cookie，前端后续请求依赖浏览器自动携带 Cookie，不会把 token 写入 `localStorage` 或 `sessionStorage`。未显式设置 `AUTH_TOKEN` 时，服务会把生成的本地 token 保存到 `.auth-token` 并在后续启动复用，避免重启后旧 Cookie 立刻失效；该文件已加入 `.gitignore` 和发布排除。
@@ -71,6 +69,8 @@ DeepSeek 和 Tavily Key 可以通过环境变量提供，也可以在浏览器�
 - Recovery Identity 只返回一次，不写 Runtime Root、浏览器存储或备份；首次使用前 UI 要求重新导入并验证公开 Recipient。
 - Contributor staging 包含短期明文副本，目录仅供当前运行用户访问且完成后删除；SSD/闪存上不承诺物理安全擦除。
 - 未配置 helper 时 `encryptedBackupAvailable=false`，绝不静默创建明文替代品。
+
+4.4.12 的 Backup Pack Index 与内容摘要只存在于 Age 认证密文和可信本地 `.backup-index`；恢复对 Pack Path、Offset/Length、Pack/Blob/File/Merkle 摘要逐层 Fail Closed。Pack 不跨 Snapshot 引用，也不引入云端 Chunk CAS、Convergent Encryption 或远端明文 Hash Index。
 
 Stateless MCP 的 Redis AOF 不直接进入包。逻辑快照排除 Redis URL/密码、MCP token、实例 ID、Lease Owner/TTL、旧 Fencing Token 和 OTel 配置；恢复后的可运行任务变为 `interrupted`，不会自动执行。
 

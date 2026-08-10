@@ -367,7 +367,12 @@ def test_batch_scan_receives_worker_and_working_set_limits(tmp_path: Path) -> No
             assert protocol == backup_incremental.CURRENT_CDC_PROTOCOL
             return {path: _scan(path) for path in selected}
 
-        def scan_file(self, path: Path, *, protocol: str) -> backup_chunk_engine.FileChunkScan:
+        def scan_file(
+            self,
+            path: Path,
+            *,
+            protocol: str = backup_incremental.CURRENT_CDC_PROTOCOL,
+        ) -> backup_chunk_engine.FileChunkScan:
             assert protocol == backup_incremental.CURRENT_CDC_PROTOCOL
             return _scan(path)
 
@@ -492,3 +497,20 @@ def test_native_batch_reuses_one_streaming_process(tmp_path: Path, monkeypatch: 
     assert commands == [[str(helper), "scan-batch", "--workers", "2"]]
     engine.close()
     assert processes[0].stdin.closed
+
+
+def test_native_batch_response_timeout_resets_process(tmp_path: Path, monkeypatch: Any) -> None:
+    source = tmp_path / "a.bin"
+    source.write_bytes(b"a")
+    helper = tmp_path / "deepseek-backup"
+    helper.write_bytes(b"helper")
+    process = _FakeProcess()
+    process.stdin.flush = lambda: None  # type: ignore[method-assign]
+    monkeypatch.setattr(backup_chunk_engine.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(backup_chunk_engine, "NATIVE_BATCH_RESPONSE_TIMEOUT_SECONDS", 0.01)
+
+    engine = backup_chunk_engine.RustChunkEngine(helper)
+    with pytest.raises(AppError, match="invalid output"):
+        engine.scan_files([source])
+    assert process.stdin.closed
+    assert engine._batch_process is None

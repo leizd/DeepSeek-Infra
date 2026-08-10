@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from deepseek_infra.infra.workspace import backup_incremental
 SCAN_READER_BUFFER_BYTES = 1024 * 1024
 SCAN_METADATA_BUDGET_BYTES = 1024 * 1024
 SCAN_WORKING_SET_BYTES = backup_incremental.CDC_MAX_CHUNK + SCAN_READER_BUFFER_BYTES + SCAN_METADATA_BUDGET_BYTES
+NATIVE_BATCH_RESPONSE_TIMEOUT_SECONDS = 3600
 
 
 def scan_working_set_bytes(file_size: int) -> int:
@@ -112,7 +114,6 @@ class RustChunkEngine:
     def __init__(self, executable: Path) -> None:
         self.executable = executable
         self._batch_workers = 1
-        self._batch_max_in_flight_bytes = SCAN_WORKING_SET_BYTES
         self._batch_process: subprocess.Popen[str] | None = None
         self._batch_process_workers: int | None = None
         self._batch_lock = threading.Lock()
@@ -122,7 +123,6 @@ class RustChunkEngine:
         selected = effective_scan_workers(workers=workers, max_in_flight_bytes=max_in_flight_bytes)
         with self._batch_lock:
             self._batch_workers = selected
-            self._batch_max_in_flight_bytes = max(1, int(max_in_flight_bytes))
             if self._batch_process is not None and self._batch_process_workers != selected:
                 self._close_batch_process()
 
@@ -229,6 +229,8 @@ class RustChunkEngine:
             decoded: dict[Path, FileChunkScan] = {}
             failed: list[Path] = []
             write_errors: list[BaseException] = []
+            response_queue: queue.Queue[str | BaseException] = queue.Queue(maxsize=max(1, self._batch_workers * 2))
+            reader_stop = threading.Event()
 
             def write_requests() -> None:
                 try:
@@ -242,13 +244,36 @@ class RustChunkEngine:
                     except (OSError, ValueError):
                         pass
 
+            def enqueue_response(response: str | BaseException) -> bool:
+                while not reader_stop.is_set():
+                    try:
+                        response_queue.put(response, timeout=0.1)
+                        return True
+                    except queue.Full:
+                        continue
+                return False
+
+            def read_responses() -> None:
+                try:
+                    for _ in paths:
+                        line = stdout.readline()
+                        if not line:
+                            raise OSError("native batch stream ended early")
+                        if not enqueue_response(line):
+                            return
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    enqueue_response(exc)
+
             writer = threading.Thread(target=write_requests, name="backup-native-scan-writer", daemon=True)
+            reader = threading.Thread(target=read_responses, name="backup-native-scan-reader", daemon=True)
             writer.start()
+            reader.start()
             try:
                 for _ in paths:
-                    line = stdout.readline()
-                    if not line:
-                        raise OSError("native batch stream ended early")
+                    response = response_queue.get(timeout=NATIVE_BATCH_RESPONSE_TIMEOUT_SECONDS)
+                    if isinstance(response, BaseException):
+                        raise OSError("native batch response stream failed") from response
+                    line = response
                     payload = json.loads(line)
                     if not isinstance(payload, dict):
                         raise ValueError("native batch item is not an object")
@@ -261,12 +286,19 @@ class RustChunkEngine:
                 writer.join(timeout=5)
                 if writer.is_alive():
                     raise OSError("native batch request writer did not drain")
+                reader.join(timeout=2)
+                if reader.is_alive():
+                    raise OSError("native batch response reader did not drain")
                 if write_errors:
                     raise OSError("native batch request stream failed") from write_errors[0]
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError, queue.Empty) as exc:
+                reader_stop.set()
                 self._close_batch_process()
                 writer.join(timeout=2)
+                reader.join(timeout=2)
                 raise AppError("native backup batch helper returned invalid output", code=ErrorCode.INTERNAL, status=500) from exc
+            finally:
+                reader_stop.set()
             if outstanding:
                 self._close_batch_process()
                 raise AppError("native backup batch helper returned incomplete output", code=ErrorCode.INTERNAL, status=500)
