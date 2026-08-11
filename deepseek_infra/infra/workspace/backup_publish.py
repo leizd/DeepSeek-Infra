@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_scheduler, backup_spool, backup_targets, backup_unattended, backups
+from deepseek_infra.infra.workspace import backup_object_set, backup_scheduler, backup_spool, backup_targets, backup_unattended, backups
 from deepseek_infra.infra.workspace.backup_target_store import (
     BackupTargetStore,
     commit_marker_key,
@@ -41,8 +41,10 @@ from deepseek_infra.infra.workspace.backup_target_store import (
     transaction_key,
 )
 
-RECEIPT_SCHEMA_VERSION = 3
-COMMIT_SCHEMA_VERSION = 3
+LEGACY_RECEIPT_SCHEMA_VERSION = 3
+RECEIPT_SCHEMA_VERSION = 4
+LEGACY_COMMIT_SCHEMA_VERSION = 3
+COMMIT_SCHEMA_VERSION = 4
 GENESIS_COMMIT_HASH = "0" * 64
 
 LAYOUT_DIRS = ("objects", "transactions", "receipts", "commits", "catalog", "control", "events", "holds", ".partial", ".trash", ".orphaned")
@@ -257,11 +259,13 @@ def receipt_for(
     schedule_slot: str,
 ) -> dict[str, Any]:
     manifest = getattr(package, "manifest", None) or {}
+    is_object_set = isinstance(package, backup_object_set.ObjectSetPackage)
+    receipt_schema = RECEIPT_SCHEMA_VERSION if is_object_set else LEGACY_RECEIPT_SCHEMA_VERSION
     snapshot = manifest.get("snapshot") if isinstance(manifest, dict) else None
     snapshot_kind = str(manifest.get("snapshotKind") or "full")
     if isinstance(snapshot, dict):
         lineage = {
-            "schemaVersion": RECEIPT_SCHEMA_VERSION,
+            "schemaVersion": receipt_schema,
             "snapshotKind": str(snapshot.get("kind") or snapshot_kind),
             "lineageId": str(snapshot.get("lineageId") or "") or None,
             "parentBackupId": str(snapshot.get("parentBackupId") or "") or None,
@@ -271,7 +275,7 @@ def receipt_for(
         }
     else:
         lineage = {
-            "schemaVersion": RECEIPT_SCHEMA_VERSION,
+            "schemaVersion": receipt_schema,
             "snapshotKind": snapshot_kind,
             "lineageId": None,
             "parentBackupId": None,
@@ -279,7 +283,7 @@ def receipt_for(
             "chainDepth": 0,
             "chunkProtocol": str(manifest.get("chunkProtocol") or "") or None,
         }
-    return {
+    result = {
         **lineage,
         "backupId": package.backup_id,
         "runId": run_id,
@@ -288,14 +292,25 @@ def receipt_for(
         "scheduleSlot": schedule_slot,
         "filename": package.filename,
         "size": package.size,
-        "ciphertextSha256": package.ciphertext_sha256,
-        "objectDigest": package.ciphertext_sha256,
         "manifestDigest": package.manifest_digest,
         "coverageDigest": package.coverage_digest,
         "creationVerified": package.creation_verified,
         "createdAt": _utc_iso(),
         "pinned": False,
     }
+    if is_object_set:
+        result.update(
+            storageProtocol=backup_object_set.OBJECT_SET_V1,
+            controlObjectDigest=package.control.ciphertext_digest,
+            objectSetDigest=package.object_set_digest,
+            objects=backup_object_set.remote_object_inventory(package.components),
+        )
+    else:
+        result.update(
+            ciphertextSha256=package.ciphertext_sha256,
+            objectDigest=package.ciphertext_sha256,
+        )
+    return result
 
 
 def _read_commit_marker(store: BackupTargetStore, policy_id: str, schedule_slot: str) -> dict[str, Any] | None:

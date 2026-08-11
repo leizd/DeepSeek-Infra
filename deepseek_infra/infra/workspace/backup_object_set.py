@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 from deepseek_infra.core.errors import AppError, ErrorCode
 
@@ -27,6 +27,53 @@ class EncryptedComponent:
     ciphertext_digest: str
     ciphertext_size: int
     control: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectSetPackage:
+    """Verified independently encrypted components for one snapshot."""
+
+    backup_id: str
+    components: tuple[EncryptedComponent, ...]
+    manifest_digest: str
+    coverage_digest: str
+    manifest: dict[str, Any]
+    creation_verified: bool = True
+    chunk_records: tuple[Any, ...] = ()
+    effective_files: tuple[Any, ...] = ()
+    savings: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        validate_components(self.components)
+
+    @property
+    def storage_protocol(self) -> str:
+        return OBJECT_SET_V1
+
+    @property
+    def control(self) -> EncryptedComponent:
+        return next(item for item in self.components if item.control)
+
+    @property
+    def object_set_digest(self) -> str:
+        return object_set_digest(self.components)
+
+    @property
+    def filename(self) -> str:
+        return f"{self.backup_id}.object-set"
+
+    @property
+    def path(self) -> Path:
+        return self.control.path
+
+    @property
+    def size(self) -> int:
+        return total_ciphertext_bytes(self.components)
+
+    @property
+    def ciphertext_sha256(self) -> str:
+        """Compatibility commitment; never used as an object key."""
+        return self.object_set_digest
 
 
 def validate_components(components: Sequence[EncryptedComponent]) -> None:

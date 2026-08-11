@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from deepseek_infra.core.errors import AppError
-from deepseek_infra.infra.workspace import backup_object_set
+from deepseek_infra.infra.workspace import backup_object_set, backup_publish
 
 
 def _component(tmp_path: Path, component_id: str, payload: bytes, *, control: bool = False) -> backup_object_set.EncryptedComponent:
@@ -57,3 +57,32 @@ def test_remote_object_inventory_contains_ciphertext_facts_only(tmp_path: Path) 
     assert inventory == sorted(inventory, key=lambda item: item["digest"])
     assert set(inventory[0]) == {"digest", "size"}
     assert {item["digest"] for item in inventory} == {control.ciphertext_digest, payload.ciphertext_digest}
+
+
+def test_receipt_v4_commits_exact_ciphertext_set_without_roles(tmp_path: Path) -> None:
+    control = _component(tmp_path, "control", b"control", control=True)
+    payload = _component(tmp_path, "p0000", b"payload")
+    package = backup_object_set.ObjectSetPackage(
+        backup_id="backup_object_set",
+        components=(control, payload),
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+        manifest={"snapshotKind": "full"},
+    )
+
+    receipt = backup_publish.receipt_for(
+        package,
+        run_id="run_object_set",
+        policy_id="policy_object_set",
+        target_id="target_object_set",
+        schedule_slot="slot_object_set",
+    )
+
+    assert receipt["schemaVersion"] == 4
+    assert receipt["storageProtocol"] == backup_object_set.OBJECT_SET_V1
+    assert receipt["controlObjectDigest"] == control.ciphertext_digest
+    assert receipt["objectSetDigest"] == package.object_set_digest
+    assert receipt["objects"] == backup_object_set.remote_object_inventory(package.components)
+    serialized = str(receipt)
+    for forbidden in ("componentId", "componentRole", "projectId", "plaintext", "logicalPath"):
+        assert forbidden not in serialized
