@@ -13,11 +13,13 @@ from deepseek_infra.infra.workspace import (
     backup_catalog,
     backup_crypto,
     backup_executor,
+    backup_incremental,
     backup_mirror,
     backup_policies,
     backup_publish,
     backup_run_plan,
     backup_scheduler,
+    backup_scheduled,
     backups,
     mutation_gate,
 )
@@ -160,6 +162,54 @@ def test_execute_run_with_wrong_instance_abandons(tmp_settings: Path, stub_crypt
     outcome = backup_executor.execute_run(claimed[0], instance_id="intruder", now=now)
     assert outcome["phase"] in {"failed", "abandoned"}
     assert not list((backups.BACKUP_DIR / "objects").rglob("*.age")) if (backups.BACKUP_DIR / "objects").is_dir() else True
+
+
+def test_incremental_archive_is_spooled_to_disk_before_encryption(
+    tmp_settings: Path,
+    stub_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"changed"}]}', encoding="utf-8")
+    policy = _policy(tmp_settings)
+    policy = backup_policies.update_policy(
+        str(policy["policyId"]),
+        {"incremental": {"mode": "file-delta", "largeFileMode": "whole"}},
+    )
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root([]),
+        files=[],
+    )
+    contributor_plan = backups._contributor_plan(backup_scheduled._context_from_policy(policy))
+    observed_file_backing: list[bool] = []
+    original_write_zip_tree = backups._write_zip_tree
+
+    def inspect_archive_output(staging: Path, output: object) -> None:
+        observed_file_backing.append(not isinstance(output, __import__("io").BytesIO))
+        original_write_zip_tree(staging, output)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backups, "_write_zip_tree", inspect_archive_output)
+    package = backup_scheduled.build_scheduled_backup(
+        policy,
+        run_id="run_disk_delta",
+        staging_root=tmp_settings / ".staging",
+        contributor_plan=contributor_plan,
+        snapshot_kind="incremental",
+        parent_backup_id="F0",
+        base_backup_id="F0",
+        lineage_id="F0",
+        chain_depth=1,
+    )
+
+    assert observed_file_backing == [True]
+    assert package.savings is not None and int(package.savings["unencryptedArchiveBytes"]) > 0
+    assert not list((tmp_settings / ".staging" / "run_disk_delta").glob("*.tmp"))
 
 
 @pytest.mark.parametrize(

@@ -10,7 +10,7 @@ ephemeral recipient that is destroyed immediately after the round trip.
 from __future__ import annotations
 
 import hashlib
-import io
+import os
 import platform
 import shutil
 import threading
@@ -150,7 +150,9 @@ def _build_candidate(
 ) -> ScheduledBackupPackage:
     staging = run_dir / "staging"
     verification_dir = run_dir / "verification"
+    plaintext_archive = run_dir / f".{backup_id}.candidate.delta.tmp"
     shutil.rmtree(staging, ignore_errors=True)
+    plaintext_archive.unlink(missing_ok=True)
     staging.mkdir(parents=True)
     try:
         _raise_if_cancelled(cancel_event)
@@ -606,19 +608,24 @@ def _build_candidate(
                 raise AppError("Scheduled backup coverage verification failed", code=ErrorCode.INTERNAL, status=500)
 
         _raise_if_cancelled(cancel_event)
-        plaintext_buffer: io.BytesIO | None = None
+        plaintext_archive_bytes = 0
 
         def _stream_plaintext(output: Any) -> None:
-            if plaintext_buffer is not None:
-                output.write(plaintext_buffer.getvalue())
+            if plaintext_archive.is_file():
+                with plaintext_archive.open("rb") as source:
+                    shutil.copyfileobj(source, output, length=1024 * 1024)
             else:
                 backups._write_zip_tree(staging, output)
 
         if snapshot_kind == "incremental":
-            # The incremental candidate is small; buffer its exact plaintext ZIP
-            # so the adaptive-full decision can compare true container bytes.
-            plaintext_buffer = io.BytesIO()
-            backups._write_zip_tree(staging, plaintext_buffer)
+            # Keep exact container-cost accounting without retaining the delta
+            # archive in RAM. The verified temporary archive is streamed into
+            # Age and removed whether encryption succeeds or fails.
+            with plaintext_archive.open("w+b") as archive_output:
+                backups._write_zip_tree(staging, archive_output)
+                archive_output.flush()
+                os.fsync(archive_output.fileno())
+            plaintext_archive_bytes = plaintext_archive.stat().st_size
         encryption = backup_unattended.encrypt_unattended(
             target,
             _stream_plaintext,
@@ -630,7 +637,7 @@ def _build_candidate(
         if snapshot_kind == "incremental":
             final_savings = dict(manifest.get("incrementalSavings") or {})
             final_savings["physicalDeltaBytes"] = sum(int(item.get("size") or 0) for item in (manifest.get("deltaFiles") or []))
-            final_savings["unencryptedArchiveBytes"] = len(plaintext_buffer.getvalue()) if plaintext_buffer is not None else 0
+            final_savings["unencryptedArchiveBytes"] = plaintext_archive_bytes
         return ScheduledBackupPackage(
             backup_id=backup_id,
             filename=filename,
@@ -648,6 +655,7 @@ def _build_candidate(
             savings=final_savings,
         )
     finally:
+        plaintext_archive.unlink(missing_ok=True)
         shutil.rmtree(staging, ignore_errors=True)
         shutil.rmtree(verification_dir, ignore_errors=True)
 
