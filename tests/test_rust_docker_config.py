@@ -76,6 +76,15 @@ def test_ci_builds_and_smokes_rust_image_in_independent_job() -> None:
     assert "--cov-fail-under=95" in workflow
 
 
+def test_rag_parity_retries_transient_docker_registry_failures() -> None:
+    workflow = _read(".github/workflows/ci.yml")
+
+    assert "for attempt in 1 2 3; do" in workflow
+    assert "docker build -f rust/Dockerfile -t deepseek-rust-gateway:parity ." in workflow
+    assert 'if [ "$attempt" -eq 3 ]; then' in workflow
+    assert 'sleep "$((attempt * 5))"' in workflow
+
+
 def test_rust_image_has_current_oci_version_label() -> None:
     dockerfile = _read("rust/Dockerfile")
     assert f'org.opencontainers.image.version="{VERSION}"' in dockerfile

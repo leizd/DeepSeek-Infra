@@ -161,6 +161,12 @@ def test_browser_update_activation_uses_frame_event_and_replaces_stale_evidence(
     assert '"diagnosticError": str(diagnostic_error)' in smoke
 
 
+def test_browser_update_gate_allows_ci_service_worker_settlement() -> None:
+    smoke = read("scripts/smoke_frontend_browser.py")
+    assert "UPDATE_READY_TIMEOUT_MS = 60_000" in smoke
+    assert smoke.count("timeout=UPDATE_READY_TIMEOUT_MS") >= 2
+
+
 def test_browser_cross_tab_selection_gate_targets_exact_revision_with_diagnostics() -> None:
     smoke = read("scripts/smoke_frontend_browser.py")
     history = read("frontend/src/features/history/ConversationList.tsx")

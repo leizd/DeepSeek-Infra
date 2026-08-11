@@ -532,7 +532,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build Rust sidecar image for RAG parity
-        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:parity .
+        run: |
+          for attempt in 1 2 3; do
+            if docker build -f rust/Dockerfile -t deepseek-rust-gateway:parity .; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
       - name: Start Rust sidecar for RAG parity
         run: |
           docker run --detach \
