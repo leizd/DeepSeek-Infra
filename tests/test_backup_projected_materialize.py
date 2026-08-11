@@ -74,7 +74,8 @@ def _build_chain(tmp_path: Path) -> tuple[Path, Path, ProjectionPlan]:
     i1_root = tmp_path / "i1"
     writer = backup_pack.PackWriter(i1_root)
     pack_ref = writer.append(io.BytesIO(new_content), expected_length=len(new_content), expected_sha256=_sha(new_content))
-    pack_index = writer.finalize()
+    writer.finalize()
+    pack_index = json.loads((i1_root / backup_pack.PACK_INDEX_PATH).read_text(encoding="utf-8"))
     (i1_root / "delta").mkdir()
     (i1_root / "delta/operations.json").write_text(json.dumps(ops, sort_keys=True), encoding="utf-8")
     operations_bytes = (i1_root / "delta/operations.json").read_bytes()

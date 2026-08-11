@@ -4,7 +4,6 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -15,6 +14,7 @@ from deepseek_infra.infra.workspace import (
     backup_catalog,
     backup_crypto,
     backup_executor,
+    backup_object_set,
     backup_policies,
     backup_publish,
     backup_retention,
@@ -160,7 +160,16 @@ def test_executor_converges_when_marker_survives_crash(tmp_settings: Path, stub_
 
     def publish_then_expire(*args: object, **kwargs: object) -> object:
         package = args[1]
-        stashed["bytes"] = package.path.read_bytes()  # type: ignore[attr-defined]
+        stashed["components"] = [
+            {
+                "component_id": component.component_id,
+                "bytes": component.path.read_bytes(),
+                "ciphertext_digest": component.ciphertext_digest,
+                "ciphertext_size": component.ciphertext_size,
+                "control": component.control,
+            }
+            for component in package.components  # type: ignore[attr-defined]
+        ]
         stashed["fields"] = {
             "backup_id": package.backup_id,  # type: ignore[attr-defined]
             "filename": package.filename,  # type: ignore[attr-defined]
@@ -199,14 +208,48 @@ def test_executor_converges_when_marker_survives_crash(tmp_settings: Path, stub_
         base_backup_id: object = None,
         lineage_id: object = None,
         chain_depth: object = None,
+        adaptive_max_delta_ratio: object = None,
+        storage_protocol: object = None,
     ) -> object:
-        del backup_id, contributor_plan, snapshot_kind, parent_backup_id, base_backup_id, lineage_id, chain_depth
+        del (
+            schedule_slot,
+            cancel_event,
+            backup_id,
+            contributor_plan,
+            snapshot_kind,
+            parent_backup_id,
+            base_backup_id,
+            lineage_id,
+            chain_depth,
+            adaptive_max_delta_ratio,
+            storage_protocol,
+        )
         run_dir = staging_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         fields = dict(cast(dict[str, Any], stashed["fields"]))
-        target = run_dir / str(fields["filename"])
-        target.write_bytes(cast(bytes, stashed["bytes"]))
-        return SimpleNamespace(path=target, **fields)
+        components = []
+        for raw in cast(list[dict[str, Any]], stashed["components"]):
+            target = run_dir / f"{raw['component_id']}.age"
+            target.write_bytes(cast(bytes, raw["bytes"]))
+            components.append(
+                backup_object_set.EncryptedComponent(
+                    component_id=str(raw["component_id"]),
+                    path=target,
+                    ciphertext_digest=str(raw["ciphertext_digest"]),
+                    ciphertext_size=int(raw["ciphertext_size"]),
+                    control=bool(raw["control"]),
+                )
+            )
+        return backup_object_set.ObjectSetPackage(
+            backup_id=str(fields["backup_id"]),
+            components=tuple(components),
+            manifest_digest=str(fields["manifest_digest"]),
+            coverage_digest=str(fields["coverage_digest"]),
+            manifest=cast(dict[str, Any], fields["manifest"]),
+            creation_verified=bool(fields["creation_verified"]),
+            frontend=cast(dict[str, Any], fields["frontend"]),
+            coverage=cast(dict[str, Any], fields["coverage"]),
+        )
 
     monkeypatch.setattr(backup_executor.backup_scheduled, "build_scheduled_backup", rebuild_package)
     reclaimed = backup_scheduler.reclaim_abandoned_slots(instance_id="w2", now=NOW + timedelta(seconds=400))
@@ -218,7 +261,9 @@ def test_executor_converges_when_marker_survives_crash(tmp_settings: Path, stub_
     assert len(state) == 1
     assert str(next(iter(state.values())).get("runId")) == run.run_id
     assert len(backup_publish.read_commit_markers(backups.BACKUP_DIR)) == 1
-    assert len(list((backups.BACKUP_DIR / "objects" / "sha256").rglob("*.age"))) == 1
+    assert len(list((backups.BACKUP_DIR / "objects" / "sha256").rglob("*.age"))) == len(
+        cast(list[dict[str, Any]], stashed["components"])
+    )
 
 
 def test_executor_slot_commit_conflict_fails_without_overwrite(tmp_settings: Path, stub_crypto: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,7 +284,7 @@ def test_executor_slot_commit_conflict_fails_without_overwrite(tmp_settings: Pat
     monkeypatch.setattr(backup_executor.backup_scheduler, "complete_run", original_complete)
     markers = backup_publish.read_commit_markers(backups.BACKUP_DIR)
     assert len(markers) == 1
-    committed_digest = str(markers[0]["objectDigest"])
+    committed_digest = str(markers[0]["objectSetDigest"])
     config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"changed"}]}', encoding="utf-8")
     reclaimed = backup_scheduler.reclaim_abandoned_slots(instance_id="w2", now=NOW + timedelta(seconds=400))
     assert len(reclaimed) == 1
@@ -248,7 +293,7 @@ def test_executor_slot_commit_conflict_fails_without_overwrite(tmp_settings: Pat
     assert "slot-commit-conflict" in str(outcome["error"])
     assert backup_scheduler.get_run(str(outcome["runId"]))["phase"] == "superseded"
     marker_after = json.loads(backup_publish.commit_marker_path(backups.BACKUP_DIR, str(policy["policyId"]), run.schedule_slot).read_text(encoding="utf-8"))
-    assert marker_after["objectDigest"] == committed_digest
+    assert marker_after["objectSetDigest"] == committed_digest
     state = backup_catalog.catalog_state(backups.BACKUP_DIR)
     assert len(state) == 1
 
@@ -272,7 +317,8 @@ def test_expired_worker_leaves_only_invisible_orphans(tmp_settings: Path, stub_c
     assert backup_publish.read_commit_markers(root) == []
     assert backup_catalog.catalog_state(root) == {}
     assert len(list((root / "receipts").glob("*.json"))) == 1
-    assert len(list((root / "objects" / "sha256").rglob("*.age"))) == 1
+    receipt = json.loads(next((root / "receipts").glob("*.json")).read_text(encoding="utf-8"))
+    assert len(list((root / "objects" / "sha256").rglob("*.age"))) == len(receipt["objects"])
     assert backup_catalog.find_orphans_and_missing(root) == {"orphans": [], "missing": []}
     journal = backup_publish.read_journal(root, run.run_id)
     assert journal is not None

@@ -10,8 +10,10 @@ import pytest
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
+    backup_catalog,
     backup_crypto,
     backup_executor,
+    backup_object_set,
     backup_policies,
     backup_publish,
     backup_scheduler,
@@ -174,5 +176,7 @@ def test_execute_run_abandons_when_lease_expires_during_publish(tmp_settings: Pa
     takeover = backup_executor.execute_run(reclaimed[0], instance_id="w2", now=NOW + timedelta(seconds=400))
     assert takeover["phase"] == "complete"
     published = list((backups.BACKUP_DIR / "objects").rglob("*.age"))
-    assert len(published) == 1
+    committed = next(iter(backup_catalog.catalog_state(backups.BACKUP_DIR).values()))
+    expected_digests = backup_object_set.committed_object_digests(committed)
+    assert {path.stem for path in published} == expected_digests
     assert backup_scheduler.get_run(str(takeover["runId"]))["phase"] == "complete"

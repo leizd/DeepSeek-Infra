@@ -411,9 +411,11 @@ def test_pack_and_blob_corruption_fail_closed(tmp_path: Path) -> None:
         with backup_incremental_restore.PackHandleCache(package_root) as cache:
             cache.handle(str(index["packs"][0]["path"]))
 
-    index["packs"][0]["sha256"] = hashlib.sha256(pack_path.read_bytes()).hexdigest()
-    (package_root / backup_pack.PACK_INDEX_PATH).write_text(
-        json.dumps(index, sort_keys=True, separators=(",", ":")) + "\n",
+    index_path = package_root / backup_pack.PACK_INDEX_PATH
+    stored_index = json.loads(index_path.read_text(encoding="utf-8"))
+    stored_index["packs"][0]["sha256"] = hashlib.sha256(pack_path.read_bytes()).hexdigest()
+    index_path.write_text(
+        json.dumps(stored_index, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
     with backup_incremental_restore.PackHandleCache(package_root) as cache:
@@ -782,7 +784,7 @@ def test_pack_writer_empty_finalize_idempotency_and_state_guards(tmp_path: Path)
     assert writer._aligned_offset() == 0
     writer._finish_pack()
     index = writer.finalize()
-    assert index == {"schemaVersion": 1, "packs": [], "entries": {}}
+    assert index == {"schemaVersion": backup_pack.PACK_INDEX_SCHEMA_VERSION, "packs": [], "entries": {}}
     assert writer.finalize() is index
     assert writer.delta_files()[0]["path"] == backup_pack.PACK_INDEX_PATH
     with pytest.raises(AppError, match="already finalized"):

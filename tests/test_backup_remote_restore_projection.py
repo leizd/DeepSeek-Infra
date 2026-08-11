@@ -101,6 +101,6 @@ def test_resume_without_selection_keeps_frozen_digest(tmp_settings: Path) -> Non
     assert result["selection"] == selection.canonical()
 
 
-def test_session_schema_version_is_three() -> None:
-    assert backup_remote_restore.SESSION_SCHEMA_VERSION == 3
+def test_session_schema_version_is_four() -> None:
+    assert backup_remote_restore.SESSION_SCHEMA_VERSION == 4
     assert backups.capabilities()["restoreProjection"]["projects"]["granularity"] == "project"

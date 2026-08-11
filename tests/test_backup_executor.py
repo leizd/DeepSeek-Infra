@@ -95,13 +95,15 @@ def test_execute_run_completes_and_publishes(tmp_settings: Path, stub_crypto: No
     policy = _policy(tmp_settings)
     now = datetime(2026, 6, 2, 4, 0, tzinfo=UTC)
     outcome = _claim_and_run(policy, now=now)
-    assert outcome["phase"] == "complete"
+    assert outcome["phase"] == "complete", outcome
     filename = str(outcome["filename"])
     record = backup_catalog.catalog_state(backups.BACKUP_DIR)[str(outcome["backupId"])]
-    published = backup_publish.backup_file_candidates(backups.BACKUP_DIR, record)[0]
+    candidates = backup_publish.backup_file_candidates(backups.BACKUP_DIR, record)
+    published = backup_publish.object_path(backups.BACKUP_DIR, str(record["controlObjectDigest"]))
     assert published.is_file()
     assert published.read_bytes().startswith(b"age-encryption.org/v1")
-    assert published.name == f"{record['objectDigest']}.age"
+    assert published.name == f"{record['controlObjectDigest']}.age"
+    assert len(candidates) == len(record["objects"])
     receipt = backups.BACKUP_DIR / "receipts" / f"{outcome['backupId']}.json"
     assert receipt.is_file()
     marker = backup_publish.commit_marker_path(backups.BACKUP_DIR, str(policy["policyId"]), "2026-06-02T03:00@UTC")
@@ -307,11 +309,25 @@ def test_execute_run_freezes_actual_delta_ratio(
         lambda **_kwargs: ("incremental", parent_backup_id, parent_backup_id, 1, None, None, None),
     )
     original_build = backup_executor.backup_scheduled.build_scheduled_backup
+    encryption_calls: list[Path] = []
+    encryption_by_kind: list[tuple[str, int]] = []
+    original_encrypt = backup_scheduled.backup_unattended.encrypt_unattended
+
+    def track_encrypt(target: Path, *args: object, **kwargs: object) -> object:
+        encryption_calls.append(target)
+        return original_encrypt(target, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backup_scheduled.backup_unattended, "encrypt_unattended", track_encrypt)
 
     def build_with_ratio(*args: object, **kwargs: object) -> object:
+        kind = str(kwargs.get("snapshot_kind") or "full")
         if kwargs.get("snapshot_kind") == "incremental" and "adaptive_max_delta_ratio" in kwargs:
             kwargs["adaptive_max_delta_ratio"] = 0.0 if expected_kind == "full" else 100.0
-        package = original_build(*args, **kwargs)  # type: ignore[arg-type]
+        before = len(encryption_calls)
+        try:
+            package = original_build(*args, **kwargs)  # type: ignore[arg-type]
+        finally:
+            encryption_by_kind.append((kind, len(encryption_calls) - before))
         savings = getattr(package, "savings", None)
         if isinstance(savings, dict) and int(savings.get("unencryptedArchiveBytes") or 0) > 0:
             savings["logicalBytes"] = int(savings["unencryptedArchiveBytes"]) * logical_multiplier
@@ -326,15 +342,6 @@ def test_execute_run_freezes_actual_delta_ratio(
         return original_resolve(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(backup_executor.backup_run_plan, "resolve_adaptive_plan", resolve_plan)
-    encryption_calls: list[Path] = []
-    original_encrypt = backup_scheduled.backup_unattended.encrypt_unattended
-
-    def track_encrypt(target: Path, *args: object, **kwargs: object) -> object:
-        encryption_calls.append(target)
-        return original_encrypt(target, *args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(backup_scheduled.backup_unattended, "encrypt_unattended", track_encrypt)
-
     config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"after"}]}', encoding="utf-8")
     second_now = first_now + timedelta(days=1)
     second = _claim_and_run(policy, now=second_now)
@@ -346,7 +353,12 @@ def test_execute_run_freezes_actual_delta_ratio(
         assert isinstance(savings, dict) and int(savings["logicalBytes"]) > 0
 
     assert resolutions == [(expected_kind, expected_reason)]
-    assert len(encryption_calls) == 1
+    if expected_kind == "full":
+        assert encryption_by_kind[0] == ("incremental", 0)
+        assert encryption_by_kind[1][0] == "full" and encryption_by_kind[1][1] > 0
+    else:
+        assert encryption_by_kind[0][0] == "incremental" and encryption_by_kind[0][1] > 0
+        assert len(encryption_by_kind) == 1
 
 
 def test_incremental_run_records_packed_container_cost(
