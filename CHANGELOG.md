@@ -4,6 +4,30 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.14] - Encrypted Object Sets and True Selective Fetch
+
+### Projection correctness
+
+- Gives Full and Incremental snapshots identical projection semantics, including metadata planning, selective materialization and federated commit behavior.
+- Validates selected projects against the fully verified target snapshot so projects created after the Full baseline remain restorable.
+- Proves that unselected contributors which diverged after backup remain byte-for-byte untouched.
+
+### Bounded adaptive backup
+
+- Replaces in-memory incremental ZIP buffering with a bounded temporary archive and aborts oversized deltas before Age encryption.
+- Keeps adaptive decision memory at O(buffer) regardless of candidate delta size.
+
+### Encrypted object sets
+
+- Introduces `object-set-v1`: one independently encrypted control object plus independently randomized encrypted payload components addressed only by ciphertext SHA-256.
+- Commits exact ciphertext sets through Receipt/Commit schema v4 without exposing plaintext hashes, paths, projects, contributors or component roles remotely.
+- Fetches and decrypts controls first, resolves Merkle-verified component dependency closure, then downloads only required payload components.
+
+### Durability and compatibility
+
+- Persists verified object sets in the spool, resumes component downloads and federated commits after real process exits, and protects every recoverable component through holds and retention/GC.
+- Keeps legacy Whole-Age v2-v5 chains permanently restorable and forces a new object-set Full checkpoint at the protocol upgrade boundary.
+
 ## [4.4.13] - Projected Recovery and Production Remote Restore
 
 ### Projected restore

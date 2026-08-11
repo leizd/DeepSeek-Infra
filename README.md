@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.13-blue)
+![版本](https://img.shields.io/badge/version-4.4.14-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.13 Projected Recovery & Production Remote Restore：** 远端恢复可冻结为明确的 Contributor/Project 投影，`selectionDigest` 跨重试不可变；跨文件 `parent-range` 依赖自动进入只读 Support 集，绝不写入最终树。元数据平面仍逐层验证完整 Merkle 链，正文物化才可选择性；未选中 Contributor 一律不被改动。仍采用 Whole-Age Object，API/UI 明确报告整条密文链仍需下载（`networkSelective: false`）。真实 MinIO + 真实 Age + Executor + Slot Commit + Receipt/Catalog + Federated Complete 全链路成为 CI 门禁。参见 [4.4.13 发布说明](docs/releases/4.4.13.md)（上一版 [4.4.12](docs/releases/4.4.12.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
+> **4.4.14 Encrypted Object Sets & True Selective Fetch：** Full 与 Incremental 统一 Projection 语义，Adaptive Full 使用有界临时归档并在超阈值后停止 Incremental 加密。新 `object-set-v1` 把加密 Control 与随机独立 Age Payload Components 分离，Restore 先解密完整 Metadata Plane，再只 GET Merkle-verified Dependency Closure 所需的密文 Components。远端只观察密文摘要、大小和粗粒度组件数量；不得出现 plaintext hash、路径、项目或 Contributor 元数据。旧 Whole-Age 链永久可恢复。参见 [4.4.14 发布说明](docs/releases/4.4.14.md)（上一版 [4.4.13](docs/releases/4.4.13.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)。
 
-**4.4.13 validation:** 选择冻结跨重试一致、重试改选返回 409、跨文件父依赖进入 Support 且不落盘、未选中 Contributor 零改动、投影恢复仍逐层验证完整 Merkle、只解压所需 Full/Pack、未使用 Pack 不哈希不打开、whole-age-object 如实上报密文下载量、Holds 在 complete/abort 释放而 recovery-required 保留、Adaptive Full 使用真实 Pack 容器成本、真实 Age MinIO 生产链路字节级一致。
+**4.4.14 validation target:** Full/Incremental Projection 同义、最终快照中新建 Project 可选、未选且已分叉 Contributor 零改动、Adaptive Delta O(buffer) 且超阈值前终止加密、Object Set 精确提交、Control-first Preview、未选 Component 零 GET、真实进程退出后恢复续传、Object Set Holds/GC 和旧 Whole-Age 永久兼容。
 
 ## 30 秒概览
 

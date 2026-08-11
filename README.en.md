@@ -5,27 +5,27 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.4.13-blue)
+![Version](https://img.shields.io/badge/version-4.4.14-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.4.13 at a glance
+## 4.4.14 at a glance
 
-- Remote restores freeze into an explicit Contributor/Project projection. The selection digest is durable and immutable across retries; resuming with a different selection fails with `409 restore-selection-mismatch`.
-- Only the selected Workspace scope is materialized and committed. Cross-file `parent-range` dependencies enter a read-only support set that is built in scratch space and never written to the final tree.
-- The full F0→I1→…→In logical Merkle chain is verified layer by layer even when byte materialization is selective; unselected contributors are never mutated.
-- Selective materialization extracts only the required Full entries, Packs and standalone blobs from decrypted archives; unused packs are verified lazily on first use. Frontend/external-MCP participation is derived from the frozen selection.
-- Whole-age-object download is reported honestly: `networkSelective: false` with a `whole-age-object` reason. This release does not claim network-level selective fetch.
-- A real HTTP MinIO Full→Incremental→Age→S3→Receipt→Restore→Federated-commit E2E uses the real Rust Age helper, and adaptive-full decisions use packed-container physical bytes.
+- Full and Incremental snapshots share one projection pipeline, and project selection is validated against the fully verified target snapshot rather than only the Full baseline.
+- Adaptive Full uses a bounded temporary delta archive and aborts oversized candidates before Age encryption, keeping memory O(buffer).
+- `object-set-v1` stores one independently encrypted control object and independently randomized encrypted payload components addressed only by ciphertext SHA-256.
+- Restore decrypts control metadata first, resolves the full Merkle-verified dependency closure, then downloads only required ciphertext components; unselected components receive zero GET requests.
+- Receipt/Commit v4 exposes only ciphertext digests and sizes. Plaintext hashes, paths, projects, contributors and component roles remain inside encrypted control metadata.
+- Real subprocess restart and MinIO Evidence gates cover download resumption, federated commit resumption, holds, orphan GC and permanent Whole-Age v2-v5 compatibility.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.4.13 release notes](docs/releases/4.4.13.md) (previous [4.4.12](docs/releases/4.4.12.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.4.14 release notes](docs/releases/4.4.14.md) (previous [4.4.13](docs/releases/4.4.13.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -97,7 +97,7 @@ npm run check --prefix stateless-mcp
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.4.13 --ga
+python scripts/preflight_release.py --version 4.4.14 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.
