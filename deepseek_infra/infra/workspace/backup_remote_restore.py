@@ -496,11 +496,11 @@ def preview_restore_from_target(
 ) -> dict[str, Any]:
     """Fetch the whole chain, metadata-extract it and report the projected plan.
 
-    Because 4.4.13 keeps the whole-age-object model, the preview downloads the
-    full chain before it can report accurate byte counts; ``networkSelective``
-    is always ``False``. The client provides a secret first so the metadata
-    plane can be decrypted; the preview re-puts it so the later materialize
-    step can still consume it.
+    Whole-Age sessions download every member before reporting accurate byte
+    counts, so ``networkSelective`` is ``False`` for this legacy storage
+    protocol. The client provides a secret first so the metadata plane can be
+    decrypted; the preview re-puts it so the later materialize step can still
+    consume it.
     """
     selection_value = backup_projection.normalize_selection(selection)
     assert selection_value is not None
@@ -536,7 +536,7 @@ def preview_restore_from_target(
         if session is None:
             raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
         base = _session_dir(restore_id)
-        members = session.get("chain") or []
+        members = restore_members(session)
         secret_kind: Literal["passphrase", "age-identity"] = "passphrase" if kind != "age-identity" else "age-identity"
         decrypted_paths: list[Path] = []
         for index, member in enumerate(members):

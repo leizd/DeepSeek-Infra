@@ -254,6 +254,35 @@ def test_from_target_preview_reports_honest_projection(tmp_settings: Path, stub_
     assert completed["phase"] == "complete"
 
 
+def test_full_from_target_preview_uses_projection_planner(tmp_settings: Path, stub_crypto: None) -> None:
+    _seed_workspace()
+    package_f0, package_i1 = _build_chain_packages(tmp_settings)
+    _publish_chain(package_f0, package_i1)
+    selection = {"contributors": ["projects"], "projectIds": ["p1"]}
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id="backup_f0",
+        selection=selection,
+    )
+    restore_id = str(created["restoreId"])
+    result = backup_remote_restore.fetch_restore_session(restore_id)
+    while str(result.get("phase") or "") != "fetched":
+        result = backup_remote_restore.fetch_restore_session(restore_id)
+    backup_crypto.put_secret(restore_id, "passphrase", "hunter2")
+
+    preview = backup_remote_restore.preview_restore_from_target(
+        target_id="managed-local",
+        backup_id="backup_f0",
+        selection=selection,
+        restore_id=restore_id,
+    )
+
+    assert preview["phase"] == "preview-planned"
+    assert preview["projection"]["selected"] == {"contributors": 1, "projects": 1, "files": 1}
+    assert preview["projection"]["bytes"]["ciphertextDownloadBytes"] == package_f0.size
+    assert preview["projection"]["requiresFrontendApply"] is False
+
+
 def test_restore_holds_released_on_complete(tmp_settings: Path, stub_crypto: None) -> None:
     _seed_workspace()
     package_f0, package_i1 = _build_chain_packages(tmp_settings)
