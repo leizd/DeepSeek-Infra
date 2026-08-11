@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, cast
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
@@ -50,6 +50,43 @@ class ScheduledBackupPackage:
     chunk_records: tuple[Any, ...] = ()
     effective_files: tuple[Any, ...] = ()
     savings: dict[str, Any] | None = None
+
+
+class DeltaCostExceeded(Exception):
+    """The exact incremental ZIP exceeded its frozen adaptive-full budget."""
+
+    def __init__(self, *, byte_limit: int, attempted_size: int) -> None:
+        self.byte_limit = byte_limit
+        self.attempted_size = attempted_size
+        super().__init__(f"delta archive exceeded {byte_limit} byte adaptive limit")
+
+
+class ThresholdWriter:
+    """Seekable binary writer that bounds the maximum file extent."""
+
+    def __init__(self, output: BinaryIO, *, byte_limit: int) -> None:
+        if byte_limit < 0:
+            raise ValueError("byte_limit must be non-negative")
+        self._output = output
+        self.byte_limit = byte_limit
+
+    def write(self, data: bytes) -> int:
+        attempted_size = self._output.tell() + len(data)
+        if attempted_size > self.byte_limit:
+            raise DeltaCostExceeded(byte_limit=self.byte_limit, attempted_size=attempted_size)
+        return self._output.write(data)
+
+    def tell(self) -> int:
+        return self._output.tell()
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return self._output.seek(offset, whence)
+
+    def flush(self) -> None:
+        self._output.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._output, name)
 
 
 def _utc_iso() -> str:
@@ -147,6 +184,7 @@ def _build_candidate(
     base_backup_id: str | None = None,
     lineage_id: str | None = None,
     chain_depth: int = 0,
+    adaptive_max_delta_ratio: float | None = None,
 ) -> ScheduledBackupPackage:
     staging = run_dir / "staging"
     verification_dir = run_dir / "verification"
@@ -622,8 +660,19 @@ def _build_candidate(
             # archive in RAM. The verified temporary archive is streamed into
             # Age and removed whether encryption succeeds or fails.
             with plaintext_archive.open("w+b") as archive_output:
-                backups._write_zip_tree(staging, archive_output)
-                archive_output.flush()
+                logical_bytes = int((manifest.get("incrementalSavings") or {}).get("logicalBytes") or 0)
+                byte_limit = (
+                    int(logical_bytes * adaptive_max_delta_ratio)
+                    if adaptive_max_delta_ratio is not None and logical_bytes > 0
+                    else None
+                )
+                bounded_output = (
+                    ThresholdWriter(archive_output, byte_limit=byte_limit)
+                    if byte_limit is not None
+                    else archive_output
+                )
+                backups._write_zip_tree(staging, cast(BinaryIO, bounded_output))
+                bounded_output.flush()
                 os.fsync(archive_output.fileno())
             plaintext_archive_bytes = plaintext_archive.stat().st_size
         encryption = backup_unattended.encrypt_unattended(
@@ -674,6 +723,7 @@ def build_scheduled_backup(
     base_backup_id: str | None = None,
     lineage_id: str | None = None,
     chain_depth: int = 0,
+    adaptive_max_delta_ratio: float | None = None,
 ) -> ScheduledBackupPackage:
     """Build and verify a scheduled backup package under ``staging_root``.
 
@@ -720,6 +770,7 @@ def build_scheduled_backup(
                 base_backup_id=base_backup_id,
                 lineage_id=lineage_id,
                 chain_depth=chain_depth,
+                adaptive_max_delta_ratio=adaptive_max_delta_ratio,
             )
         except AppError as exc:
             last_error = exc

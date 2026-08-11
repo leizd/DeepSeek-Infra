@@ -212,6 +212,61 @@ def test_incremental_archive_is_spooled_to_disk_before_encryption(
     assert not list((tmp_settings / ".staging" / "run_disk_delta").glob("*.tmp"))
 
 
+def test_threshold_writer_bounds_file_extent(tmp_settings: Path) -> None:
+    target = tmp_settings / "candidate.delta.tmp"
+    with target.open("w+b") as output:
+        writer = backup_scheduled.ThresholdWriter(output, byte_limit=4)
+        assert writer.write(b"abcd") == 4
+        writer.seek(0)
+        assert writer.write(b"AB") == 2
+        writer.seek(4)
+        with pytest.raises(backup_scheduled.DeltaCostExceeded, match="4 byte adaptive limit"):
+            writer.write(b"x")
+    assert target.read_bytes() == b"ABcd"
+
+
+def test_oversized_delta_aborts_before_incremental_encryption(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"changed"}]}', encoding="utf-8")
+    policy = _policy(tmp_settings)
+    policy = backup_policies.update_policy(
+        str(policy["policyId"]),
+        {"incremental": {"mode": "file-delta", "largeFileMode": "whole"}},
+    )
+    backup_incremental.record_committed_snapshot(
+        target_id="managed-local",
+        policy_id=str(policy["policyId"]),
+        backup_id="F0",
+        parent_backup_id=None,
+        base_backup_id="F0",
+        chain_depth=0,
+        root_digest=backup_incremental.snapshot_root([]),
+        files=[],
+    )
+
+    def unexpected_encrypt(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("oversized incremental candidate reached Age encryption")
+
+    monkeypatch.setattr(backup_scheduled.backup_unattended, "encrypt_unattended", unexpected_encrypt)
+    with pytest.raises(backup_scheduled.DeltaCostExceeded):
+        backup_scheduled.build_scheduled_backup(
+            policy,
+            run_id="run_oversized_delta",
+            staging_root=tmp_settings / ".staging",
+            snapshot_kind="incremental",
+            parent_backup_id="F0",
+            base_backup_id="F0",
+            lineage_id="F0",
+            chain_depth=1,
+            adaptive_max_delta_ratio=0.0,
+        )
+
+    assert not list((tmp_settings / ".staging" / "run_oversized_delta").glob("*.tmp"))
+
+
 @pytest.mark.parametrize(
     ("max_delta_ratio", "logical_multiplier", "expected_kind", "expected_reason"),
     ((0.10, 1, "full", "delta-ratio"), (0.90, 2, "incremental", "delta-ratio-within-limit")),
@@ -254,6 +309,8 @@ def test_execute_run_freezes_actual_delta_ratio(
     original_build = backup_executor.backup_scheduled.build_scheduled_backup
 
     def build_with_ratio(*args: object, **kwargs: object) -> object:
+        if kwargs.get("snapshot_kind") == "incremental" and "adaptive_max_delta_ratio" in kwargs:
+            kwargs["adaptive_max_delta_ratio"] = 0.0 if expected_kind == "full" else 100.0
         package = original_build(*args, **kwargs)  # type: ignore[arg-type]
         savings = getattr(package, "savings", None)
         if isinstance(savings, dict) and int(savings.get("unencryptedArchiveBytes") or 0) > 0:
@@ -269,6 +326,14 @@ def test_execute_run_freezes_actual_delta_ratio(
         return original_resolve(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(backup_executor.backup_run_plan, "resolve_adaptive_plan", resolve_plan)
+    encryption_calls: list[Path] = []
+    original_encrypt = backup_scheduled.backup_unattended.encrypt_unattended
+
+    def track_encrypt(target: Path, *args: object, **kwargs: object) -> object:
+        encryption_calls.append(target)
+        return original_encrypt(target, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backup_scheduled.backup_unattended, "encrypt_unattended", track_encrypt)
 
     config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"after"}]}', encoding="utf-8")
     second_now = first_now + timedelta(days=1)
@@ -281,6 +346,7 @@ def test_execute_run_freezes_actual_delta_ratio(
         assert isinstance(savings, dict) and int(savings["logicalBytes"]) > 0
 
     assert resolutions == [(expected_kind, expected_reason)]
+    assert len(encryption_calls) == 1
 
 
 def test_incremental_run_records_packed_container_cost(
