@@ -355,6 +355,12 @@ def create_restore_from_target(
         existing = read_restore_session(restore_id)
         if existing is None:
             raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+        if str(existing.get("targetId") or "") != target_id or str(existing.get("backupId") or "") != backup_id:
+            raise AppError(
+                "Restore session source does not match the requested target and backup",
+                code=ErrorCode.INVALID_REQUEST,
+                status=409,
+            )
         frozen = existing.get("selectionDigest")
         if selection_digest_value is not None and frozen and frozen != selection_digest_value:
             raise AppError(
