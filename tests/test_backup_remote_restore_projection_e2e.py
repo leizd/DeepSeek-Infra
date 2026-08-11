@@ -325,6 +325,28 @@ def test_projected_remote_restore_round_trip(tmp_settings: Path, stub_crypto: No
     assert (config.MEMORY_FILE).read_text(encoding="utf-8") == '{"items":[{"id":"m1","text":"before"}]}'
 
 
+def test_full_remote_restore_applies_project_projection(tmp_settings: Path, stub_crypto: None) -> None:
+    _seed_workspace()
+    package_f0, package_i1 = _build_chain_packages(tmp_settings)
+    _publish_chain(package_f0, package_i1)
+    selection = {"contributors": ["projects"], "projectIds": ["p1"]}
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id="backup_f0",
+        selection=selection,
+    )
+
+    completed = _restore_to_complete(str(created["restoreId"]))
+
+    assert completed["phase"] == "complete"
+    assert completed["selectionDigest"] == backup_projection.selection_digest(
+        RestoreSelection(contributors=("projects",), project_ids=("p1",))
+    )
+    assert (config.PROJECTS_DIR / "p1" / "keep.bin").read_bytes() == b"keep"
+    assert not (config.PROJECTS_DIR / "p2").exists()
+    assert config.MEMORY_FILE.read_text(encoding="utf-8") == '{"items":[{"id":"m1","text":"before"}]}'
+
+
 def test_full_remote_restore_round_trip_still_works(tmp_settings: Path, stub_crypto: None) -> None:
     _seed_workspace()
     package_f0, package_i1 = _build_chain_packages(tmp_settings)

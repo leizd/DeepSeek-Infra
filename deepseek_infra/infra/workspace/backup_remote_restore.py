@@ -125,6 +125,31 @@ def _chain_member(store: Any, receipt: dict[str, Any], staging_root: Path) -> di
     }
 
 
+def restore_members(session: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the ordered ciphertext members for either restore shape.
+
+    Full sessions historically stored their only member as top-level fields,
+    while Incremental sessions stored ``chain``.  Projection planning must not
+    inherit that storage distinction, so callers consume this canonical view.
+    """
+    if str(session.get("snapshotKind") or "full") == "incremental":
+        raw_chain = session.get("chain")
+        if not isinstance(raw_chain, list) or not raw_chain or any(not isinstance(item, dict) for item in raw_chain):
+            raise AppError("Incremental restore session has no valid chain", code=ErrorCode.INVALID_REQUEST, status=409)
+        return raw_chain
+    return [
+        {
+            "backupId": str(session.get("backupId") or ""),
+            "objectDigest": str(session.get("objectDigest") or ""),
+            "filename": str(session.get("filename") or ""),
+            "expectedBytes": int(session.get("expectedBytes") or 0),
+            "downloadedBytes": int(session.get("downloadedBytes") or 0),
+            "ciphertextPath": str(session.get("ciphertextPath") or ""),
+            "snapshotKind": "full",
+        }
+    ]
+
+
 def create_restore_from_target(
     *,
     target_id: str,
@@ -712,87 +737,68 @@ def materialize_restore_session(
     base = _session_dir(restore_id)
     secret_kind: Literal["passphrase", "age-identity"] = "passphrase" if str(kind) != "age-identity" else "age-identity"
     _set_phase(session, "decrypting-chain")
-    if str(session.get("snapshotKind") or "full") == "incremental":
-        chain = session.get("chain") or []
-        decrypted_paths: list[Path] = []
-        for index, member in enumerate(chain):
-            ciphertext = Path(str(member["ciphertextPath"]))
-            decrypted = base / f"decrypted-{index}.dsibackup"
-            backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
-            decrypted_paths.append(decrypted)
-        frozen_selection = session.get("selection")
-        projection: backup_projection.ProjectionPlan | None = None
-        packages: list[backup_projection.ChainPackage] = []
-        if frozen_selection is not None:
-            packages = _metadata_chain_packages(decrypted_paths, base)
-            selection_value = backup_projection.normalize_selection(frozen_selection)
-            assert selection_value is not None
-            ciphertext_download = sum(int(item.get("expectedBytes") or 0) for item in chain)
-            projection = backup_projection.plan_projection(
-                selection_value,
-                packages,
-                ciphertext_download_bytes=ciphertext_download,
+    members = restore_members(session)
+    decrypted_paths: list[Path] = []
+    for index, member in enumerate(members):
+        ciphertext = Path(str(member["ciphertextPath"]))
+        if not ciphertext.is_file():
+            raise AppError("Restore session ciphertext is unavailable", code=ErrorCode.NOT_FOUND, status=404)
+        decrypted = base / f"decrypted-{index}.dsibackup"
+        backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
+        decrypted_paths.append(decrypted)
+
+    frozen_selection = session.get("selection")
+    projection: backup_projection.ProjectionPlan | None = None
+    packages: list[backup_projection.ChainPackage] = []
+    if frozen_selection is not None:
+        packages = _metadata_chain_packages(decrypted_paths, base)
+        selection_value = backup_projection.normalize_selection(frozen_selection)
+        assert selection_value is not None
+        frozen_digest = session.get("selectionDigest")
+        computed_digest = backup_projection.selection_digest(selection_value)
+        if frozen_digest and computed_digest != frozen_digest:
+            raise AppError(
+                "Restore selection does not match the frozen session selection",
+                code=ErrorCode.INVALID_REQUEST,
+                status=409,
             )
-            if selection_value is not None:
-                frozen_digest = session.get("selectionDigest")
-                computed_digest = backup_projection.selection_digest(selection_value)
-                if frozen_digest and computed_digest != frozen_digest:
-                    raise AppError(
-                        "Restore selection does not match the frozen session selection",
-                        code=ErrorCode.INVALID_REQUEST,
-                        status=409,
-                    )
-        _set_phase(session, "materializing")
-        extracted = base / "extracted"
-        shutil.rmtree(extracted, ignore_errors=True)
-        if projection is not None:
-            extracted_dirs = _selective_extract_members(decrypted_paths, packages, base, projection)
-        else:
-            extracted_dirs = []
-            for index, decrypted in enumerate(decrypted_paths):
-                member_extracted = base / f"extracted-{index}"
-                backups._safe_extract_and_verify(decrypted, member_extracted)
-                extracted_dirs.append(member_extracted)
-        final_manifest = backup_incremental_restore.materialize_chain(extracted_dirs, extracted, projection=projection)
-        if projection is not None:
-            _set_phase(session, "verified")
-            return {
-                "restoreId": restore_id,
-                "phase": "materialized",
-                "snapshotKind": "incremental",
-                "chain": [str(item["backupId"]) for item in chain],
-                "tree": str(extracted),
-                "manifest": final_manifest,
-                "projection": projection.report,
-            }
-        normalized = _normalized_full_manifest(final_manifest)
-        _write_checksums(extracted, normalized)
-        backups._verify_manifest_tree(extracted)
-        _set_phase(session, "verified")
-        return {
-            "restoreId": restore_id,
-            "phase": "materialized",
-            "snapshotKind": "incremental",
-            "chain": [str(item["backupId"]) for item in chain],
-            "tree": str(extracted),
-            "manifest": normalized,
-        }
-    ciphertext = Path(str(session.get("ciphertextPath") or ""))
-    if not ciphertext.is_file():
-        raise AppError("Restore session ciphertext is unavailable", code=ErrorCode.NOT_FOUND, status=404)
-    decrypted = base / "decrypted-0.dsibackup"
-    backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
+        projection = backup_projection.plan_projection(
+            selection_value,
+            packages,
+            ciphertext_download_bytes=sum(int(item.get("expectedBytes") or 0) for item in members),
+            selection_digest_value=computed_digest,
+        )
+
     _set_phase(session, "materializing")
     extracted = base / "extracted"
-    manifest = backups._safe_extract_and_verify(decrypted, extracted)
+    shutil.rmtree(extracted, ignore_errors=True)
+    if projection is not None:
+        extracted_dirs = _selective_extract_members(decrypted_paths, packages, base, projection)
+    else:
+        extracted_dirs = []
+        for index, decrypted in enumerate(decrypted_paths):
+            member_extracted = base / f"extracted-{index}"
+            backups._safe_extract_and_verify(decrypted, member_extracted)
+            extracted_dirs.append(member_extracted)
+    final_manifest = backup_incremental_restore.materialize_chain(extracted_dirs, extracted, projection=projection)
+    snapshot_kind = str(session.get("snapshotKind") or "full")
+    if projection is None:
+        final_manifest = _normalized_full_manifest(final_manifest)
+        _write_checksums(extracted, final_manifest)
+        backups._verify_manifest_tree(extracted)
     _set_phase(session, "verified")
-    return {
+    result: dict[str, Any] = {
         "restoreId": restore_id,
         "phase": "materialized",
-        "snapshotKind": "full",
+        "snapshotKind": snapshot_kind,
         "tree": str(extracted),
-        "manifest": manifest,
+        "manifest": final_manifest,
     }
+    if snapshot_kind == "incremental":
+        result["chain"] = [str(item["backupId"]) for item in members]
+    if projection is not None:
+        result["projection"] = projection.report
+    return result
 
 
 def materialize_federated_restore(
