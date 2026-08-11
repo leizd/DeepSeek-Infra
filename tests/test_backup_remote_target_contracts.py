@@ -196,6 +196,67 @@ def test_verified_spool_reused_and_remote_single_commit(tmp_settings: Path, tmp_
     assert "slot-commit-conflict" in str(conflict.value)
 
 
+def test_remote_incremental_receipt_survives_spool_boundary(tmp_settings: Path, tmp_path: Path) -> None:
+    store = MemoryTargetStore()
+    package = _package(tmp_path, backup_id="backup_incremental")
+    package.manifest = {
+        "snapshotKind": "incremental",
+        "chunkProtocol": "fastcdc-v1",
+        "snapshot": {
+            "kind": "incremental",
+            "lineageId": "backup_full",
+            "parentBackupId": "backup_full",
+            "baseBackupId": "backup_full",
+            "chainDepth": 1,
+            "chunkProtocol": "fastcdc-v1",
+            "parentRootDigest": "private-parent-root",
+            "rootDigest": "private-current-root",
+        },
+    }
+    target = backup_publish.ResolvedTarget(target_id="target_incremental", root=None, managed=False, kind="s3", store=store)
+    put_json_if_absent(
+        store,
+        "control/head.json",
+        {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "inc_incremental"},
+    )
+    spool_meta = backup_spool.store_verified_package(
+        package,
+        policy_id="policy_incremental",
+        schedule_slot="2026-08-11T03:00@UTC",
+        run_id="run_incremental",
+    )
+    assert spool_meta["receiptManifest"] == {
+        "snapshotKind": "incremental",
+        "chunkProtocol": "fastcdc-v1",
+        "snapshot": {
+            "kind": "incremental",
+            "lineageId": "backup_full",
+            "parentBackupId": "backup_full",
+            "baseBackupId": "backup_full",
+            "chainDepth": 1,
+            "chunkProtocol": "fastcdc-v1",
+        },
+    }
+
+    published = backup_publish.publish_backup(
+        target,
+        package,
+        run_id="run_incremental",
+        policy_id="policy_incremental",
+        schedule_slot="2026-08-11T03:00@UTC",
+        fencing_token=1,
+    )
+
+    assert published.receipt["snapshotKind"] == "incremental"
+    assert published.receipt["lineageId"] == "backup_full"
+    assert published.receipt["parentBackupId"] == "backup_full"
+    assert published.receipt["baseBackupId"] == "backup_full"
+    assert published.receipt["chainDepth"] == 1
+    assert published.receipt["chunkProtocol"] == "fastcdc-v1"
+    assert "rootDigest" not in published.receipt
+    assert "parentRootDigest" not in published.receipt
+
+
 def test_spool_reused_across_retry(tmp_settings: Path, tmp_path: Path) -> None:
     package = _package(tmp_path)
     meta1 = backup_spool.store_verified_package(package, policy_id="p1", schedule_slot="slot-a", run_id="r1")
