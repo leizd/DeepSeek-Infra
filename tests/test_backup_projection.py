@@ -100,6 +100,39 @@ def test_validate_selection_unknown_contributor_and_project() -> None:
     assert validate_selection(RestoreSelection(contributors=(),), [baseline])
 
 
+def test_plan_projection_accepts_project_created_after_full_baseline() -> None:
+    f0 = [_rec("projects", "payload/projects/p1/base.bin", 8, _sha(5))]
+    created_sha = _sha(6)
+    f1 = [*f0, _rec("projects", "payload/projects/p2/created.bin", 24, created_sha)]
+    ops = backup_incremental.diff_trees(f0, f1, successful_contributors={"projects"})
+    for put in ops["put"]:
+        if put["path"] == "payload/projects/p2/created.bin":
+            put["storage"] = "whole"
+            put["payloadRef"] = {"kind": "standalone", "path": "payload/files/created.bin"}
+    baseline = ChainPackage(
+        snapshot_kind="full",
+        files=tuple(f0),
+        root_digest=backup_incremental.snapshot_root(f0),
+        contributor_ids=frozenset({"projects"}),
+    )
+    incremental = ChainPackage(
+        snapshot_kind="incremental",
+        files=tuple(f1),
+        operations=ops,
+        root_digest=backup_incremental.snapshot_root(f1),
+        contributor_ids=frozenset({"projects"}),
+    )
+
+    plan = plan_projection(
+        RestoreSelection(contributors=("projects",), project_ids=("p2",)),
+        [baseline, incremental],
+        ciphertext_download_bytes=0,
+    )
+
+    assert plan.output_files == frozenset({"payload/projects/p2/created.bin"})
+    assert plan.needed_standalone == frozenset({"payload/files/created.bin"})
+
+
 def test_validate_selection_frontend_and_mcp_are_conditional() -> None:
     files, baseline = _baseline()
     plain = ChainPackage(
