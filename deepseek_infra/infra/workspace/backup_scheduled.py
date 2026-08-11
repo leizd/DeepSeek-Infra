@@ -27,6 +27,7 @@ from deepseek_infra.infra.workspace import (
     backup_chunk_engine,
     backup_incremental,
     backup_mirror,
+    backup_object_set,
     backup_pack,
     backup_unattended,
     backups,
@@ -185,7 +186,8 @@ def _build_candidate(
     lineage_id: str | None = None,
     chain_depth: int = 0,
     adaptive_max_delta_ratio: float | None = None,
-) -> ScheduledBackupPackage:
+    storage_protocol: str = backup_object_set.WHOLE_AGE_V1,
+) -> ScheduledBackupPackage | backup_object_set.ObjectSetPackage:
     staging = run_dir / "staging"
     verification_dir = run_dir / "verification"
     plaintext_archive = run_dir / f".{backup_id}.candidate.delta.tmp"
@@ -675,6 +677,29 @@ def _build_candidate(
                 bounded_output.flush()
                 os.fsync(archive_output.fileno())
             plaintext_archive_bytes = plaintext_archive.stat().st_size
+        final_savings: dict[str, Any] | None = None
+        if snapshot_kind == "incremental":
+            final_savings = dict(manifest.get("incrementalSavings") or {})
+            final_savings["physicalDeltaBytes"] = sum(int(item.get("size") or 0) for item in (manifest.get("deltaFiles") or []))
+            final_savings["unencryptedArchiveBytes"] = plaintext_archive_bytes
+        if storage_protocol == backup_object_set.OBJECT_SET_V1:
+            return backup_object_set.build_encrypted_object_set(
+                staging,
+                run_dir / "object-set",
+                backup_id=backup_id,
+                recipients=tuple(str(item) for item in (policy.get("protection") or {}).get("recipients") or []),
+                manifest=manifest,
+                manifest_digest=hashlib.sha256(manifest_bytes).hexdigest(),
+                coverage_digest=hashlib.sha256(backups._stable_json(coverage)).hexdigest(),
+                frontend=coverage_frontend,
+                coverage=coverage,
+                cancel_event=cancel_event,
+                chunk_records=tuple(current_chunk_records),
+                effective_files=tuple(effective_index_records),
+                savings=final_savings,
+            )
+        if storage_protocol != backup_object_set.WHOLE_AGE_V1:
+            raise AppError("Unsupported remote storage protocol", code=ErrorCode.INVALID_PAYLOAD)
         encryption = backup_unattended.encrypt_unattended(
             target,
             _stream_plaintext,
@@ -682,11 +707,6 @@ def _build_candidate(
             verify=_verify,
             cancel_event=cancel_event,
         )
-        final_savings: dict[str, Any] | None = None
-        if snapshot_kind == "incremental":
-            final_savings = dict(manifest.get("incrementalSavings") or {})
-            final_savings["physicalDeltaBytes"] = sum(int(item.get("size") or 0) for item in (manifest.get("deltaFiles") or []))
-            final_savings["unencryptedArchiveBytes"] = plaintext_archive_bytes
         return ScheduledBackupPackage(
             backup_id=backup_id,
             filename=filename,
@@ -724,7 +744,8 @@ def build_scheduled_backup(
     lineage_id: str | None = None,
     chain_depth: int = 0,
     adaptive_max_delta_ratio: float | None = None,
-) -> ScheduledBackupPackage:
+    storage_protocol: str = backup_object_set.WHOLE_AGE_V1,
+) -> ScheduledBackupPackage | backup_object_set.ObjectSetPackage:
     """Build and verify a scheduled backup package under ``staging_root``.
 
     The workspace is quiesced through the mutation gate; if it keeps changing
@@ -771,6 +792,7 @@ def build_scheduled_backup(
                 lineage_id=lineage_id,
                 chain_depth=chain_depth,
                 adaptive_max_delta_ratio=adaptive_max_delta_ratio,
+                storage_protocol=storage_protocol,
             )
         except AppError as exc:
             last_error = exc

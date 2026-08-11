@@ -86,7 +86,7 @@ export default function BackupLibraryTab({ onError, onMessage, formatBytes }: Pr
         return (
           <div className="backup-policy" key={entry.backupId}>
             <div>
-              <strong>{entry.filename}</strong>
+              <strong>{entry.filename ?? entry.backupId}</strong>
               <dl>
                 <div><dt>大小</dt><dd>{formatBytes(entry.size)}</dd></div>
                 <div><dt>创建时间</dt><dd>{entry.createdAt}</dd></div>

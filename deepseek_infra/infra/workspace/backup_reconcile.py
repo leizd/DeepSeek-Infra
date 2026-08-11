@@ -22,6 +22,7 @@ conditional object-store operations instead of filesystem moves.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,7 @@ from typing import Any
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_catalog,
+    backup_object_set,
     backup_publish,
     backup_scheduler,
     backup_targets,
@@ -76,6 +78,26 @@ def assert_catalog_committed(root: Path) -> None:
 
 def _marker_valid(marker: dict[str, Any]) -> bool:
     return backup_publish.commit_marker_valid(marker)
+
+
+def _committed_receipt_objects(marker: dict[str, Any], receipt: dict[str, Any], *, receipt_digest: str | None = None) -> set[str]:
+    """Validate marker/receipt agreement and return the exact committed set."""
+    try:
+        digests = backup_object_set.committed_object_digests(receipt)
+    except AppError:
+        return set()
+    if str(receipt.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
+        if (
+            int(marker.get("schemaVersion") or 0) != 4
+            or not receipt_digest
+            or str(marker.get("receiptDigest") or "") != receipt_digest
+            or str(marker.get("objectSetDigest") or "") != str(receipt.get("objectSetDigest") or "")
+            or str(marker.get("controlObjectDigest") or "") != str(receipt.get("controlObjectDigest") or "")
+        ):
+            return set()
+        return digests
+    digest = str(receipt.get("objectDigest") or receipt.get("ciphertextSha256") or "")
+    return digests if str(marker.get("objectDigest") or "") == digest else set()
 
 
 def _rebuild_receipt_from_journal(root: Path, marker: dict[str, Any], *, writer: backup_writer_lease.TargetWriterLease) -> dict[str, Any] | None:
@@ -132,10 +154,11 @@ def reconcile_target(
         _rewrite_catalog(root, committed_receipts, writer=writer)
         report["catalogRebuilt"] = True
         state = backup_catalog.catalog_state(root)
+    committed_digests: set[str] = set()
+    committed_backups: set[str] = set()
     for marker in markers:
         backup_id = str(marker.get("backupId") or "")
-        digest = str(marker.get("objectDigest") or "")
-        if not _marker_valid(marker) or not backup_id or not digest or not backup_publish.object_path(root, digest).is_file():
+        if not _marker_valid(marker) or not backup_id:
             report["invalidMarkers"].append(str(marker.get("commitHash") or "")[:16])
             continue
         receipt_path = receipt_files.get(backup_id)
@@ -145,12 +168,20 @@ def reconcile_target(
                 report["invalidMarkers"].append(str(marker.get("commitHash") or "")[:16])
                 continue
             report["rebuiltReceipts"].append(backup_id)
+            receipt_bytes = (json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
         else:
             try:
-                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt_bytes = receipt_path.read_bytes()
+                receipt = json.loads(receipt_bytes)
             except (OSError, json.JSONDecodeError):
                 report["invalidMarkers"].append(str(marker.get("commitHash") or "")[:16])
                 continue
+        object_digests = _committed_receipt_objects(marker, receipt, receipt_digest=hashlib.sha256(receipt_bytes).hexdigest())
+        if not object_digests or any(not backup_publish.object_path(root, digest).is_file() for digest in object_digests):
+            report["invalidMarkers"].append(str(marker.get("commitHash") or "")[:16])
+            continue
+        committed_digests.update(object_digests)
+        committed_backups.add(backup_id)
         if backup_id not in state:
             backup_catalog.append_receipt(root, receipt, writer=writer)
             report["catalogBackfilled"].append(backup_id)
@@ -158,8 +189,6 @@ def reconcile_target(
         run_id = str(marker.get("runId") or "")
         if run_id and _converge_run(run_id, backup_id=backup_id, filename=str(receipt.get("filename") or "")):
             report["convergedRuns"].append(run_id)
-    committed_digests = {str(marker.get("objectDigest") or "") for marker in markers}
-    committed_backups = {str(marker.get("backupId") or "") for marker in markers}
     objects_dir = root / "objects" / "sha256"
     if objects_dir.is_dir():
         for path in sorted(objects_dir.glob("*/*.age")):
@@ -233,6 +262,8 @@ def reconcile_target_store(
         "catalogBackfills": [],
         "headAdvanced": False,
         "orphanedTransactions": [],
+        "orphanedObjects": [],
+        "invalidMarkers": [],
     }
     markers = []
     cursor = None
@@ -260,10 +291,12 @@ def reconcile_target_store(
             )
             report["headAdvanced"] = True
     catalog_state = backup_catalog.catalog_state_store(store)
+    committed_digests: set[str] = set()
     for marker in markers:
         backup_id = str(marker.get("backupId") or "")
         run_id = str(marker.get("runId") or "")
-        if not backup_id:  # pragma: no cover - marker without backup id
+        if not backup_id or not _marker_valid(marker):
+            report["invalidMarkers"].append(str(marker.get("commitHash") or "")[:16])
             continue
         receipt = read_json(store, receipt_key(backup_id))
         if receipt is None:
@@ -273,6 +306,16 @@ def reconcile_target_store(
                 put_json_if_absent(store, receipt_key(backup_id), rebuilt)
                 receipt = rebuilt
                 report["rebuiltReceipts"].append(backup_id)
+        receipt_bytes = store.get_bytes(receipt_key(backup_id)) if receipt is not None else b""
+        object_digests = _committed_receipt_objects(
+            marker,
+            receipt or {},
+            receipt_digest=hashlib.sha256(receipt_bytes).hexdigest() if receipt_bytes else None,
+        )
+        if not object_digests or any(store.stat(f"objects/sha256/{digest[:2]}/{digest}.age") is None for digest in object_digests):
+            report["invalidMarkers"].append(str(marker.get("commitHash") or "")[:16])
+            continue
+        committed_digests.update(object_digests)
         if receipt is not None and backup_id not in catalog_state:
             try:
                 backup_catalog.append_receipt_store(store, receipt, writer=writer)
@@ -283,6 +326,7 @@ def reconcile_target_store(
         if run_id and _converge_run(run_id, backup_id=backup_id, filename=str((receipt or {}).get("filename") or backup_id)):
             report["convergedRuns"].append(run_id)
     # Orphan transactions without commit past grace stay journal-only (invisible).
+    orphan_candidates: set[str] = set()
     cursor = None
     while True:
         page = store.list_objects("transactions/", cursor=cursor)
@@ -301,9 +345,32 @@ def reconcile_target_store(
                     stamped = current
                 if current - stamped > timedelta(seconds=orphan_grace_seconds):
                     report["orphanedTransactions"].append(str(journal_data.get("runId") or item.key))
+                    receipt = journal_data.get("receipt")
+                    if isinstance(receipt, dict):
+                        try:
+                            orphan_candidates.update(backup_object_set.committed_object_digests(receipt))
+                        except AppError:
+                            pass
+                    raw_objects = journal_data.get("objects")
+                    if isinstance(raw_objects, list) and all(isinstance(candidate, dict) for candidate in raw_objects):
+                        try:
+                            if backup_object_set.object_inventory_digest(raw_objects) == str(journal_data.get("objectSetDigest") or ""):
+                                orphan_candidates.update(str(candidate.get("digest") or "") for candidate in raw_objects)
+                        except AppError:
+                            pass
         if not page.cursor:
             break
         cursor = page.cursor
+    from deepseek_infra.infra.workspace import backup_retention
+    from deepseek_infra.infra.workspace.backup_target_store import object_key
+
+    held_digests = backup_retention._restore_hold_digests(store, now=current)
+    for digest in sorted(orphan_candidates - committed_digests - held_digests):
+        key = object_key(digest)
+        if store.stat(key) is None:
+            continue
+        store.delete_if_match(key)
+        report["orphanedObjects"].append(key)
     return report
 
 

@@ -21,7 +21,7 @@ from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_catalog, backup_crypto, backup_publish, backup_reconcile, backup_scheduler, backup_unattended, backups, backup_writer_lease
+from deepseek_infra.infra.workspace import backup_catalog, backup_crypto, backup_object_set, backup_publish, backup_reconcile, backup_scheduler, backup_unattended, backups, backup_writer_lease
 from deepseek_infra.infra.workspace.backup_cron import load_timezone
 
 RETENTION_SCHEMA_VERSION = 1
@@ -427,21 +427,24 @@ def _trash_journal_write(destination: Path, journal: dict[str, Any]) -> None:
 def _trash_candidates(target_root: Path, record: dict[str, Any]) -> tuple[list[Path], list[Path]]:
     backup_id = str(record["backupId"])
     filename = str(record.get("filename") or "")
-    digest = str(record.get("objectDigest") or record.get("ciphertextSha256") or "")
+    record_digests = backup_object_set.committed_object_digests(record)
     state = backup_catalog.catalog_state(target_root)
-    shared = bool(digest) and any(
-        other_id != backup_id
-        and not other.get("trashed")
-        and not other.get("deleted")
-        and str(other.get("objectDigest") or other.get("ciphertextSha256") or "") == digest
-        for other_id, other in state.items()
-    )
-    payloads = [
-        candidate
-        for candidate in backup_publish.backup_file_candidates(target_root, record)
-        if candidate.is_file() and not (candidate.parent.name != "backups" and shared)
-    ]
-    receipts = [path for path in (target_root / "receipts" / f"{backup_id}.json", target_root / "receipts" / f"{filename}.receipt.json") if path.is_file()]
+    shared_digests: set[str] = set()
+    for other_id, other in state.items():
+        if other_id != backup_id and not other.get("trashed") and not other.get("deleted"):
+            shared_digests.update(backup_object_set.committed_object_digests(other))
+    payloads: list[Path] = []
+    for candidate in backup_publish.backup_file_candidates(target_root, record):
+        if not candidate.is_file():
+            continue
+        stem = candidate.name[: -len(".age")] if candidate.name.endswith(".age") else ""
+        if candidate.parent.name != "backups" and stem in record_digests and stem in shared_digests:
+            continue
+        payloads.append(candidate)
+    receipt_candidates = [target_root / "receipts" / f"{backup_id}.json"]
+    if filename:
+        receipt_candidates.append(target_root / "receipts" / f"{filename}.receipt.json")
+    receipts = [path for path in receipt_candidates if path.is_file()]
     return payloads, receipts
 
 
@@ -456,9 +459,11 @@ def _execute_trash_move(
     """Journaled trash move: intent → payload-moved → receipt-moved → event-committed."""
     backup_id = str(record["backupId"])
     filename = str(record.get("filename") or "")
-    if not filename or "/" in filename or "\\" in filename:
+    is_object_set = str(record.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1
+    if (not filename and not is_object_set) or "/" in filename or "\\" in filename:
         return False
     destination = target_root / ".trash" / backup_id
+    object_digests = sorted(backup_object_set.committed_object_digests(record))
     digest = str(record.get("objectDigest") or record.get("ciphertextSha256") or "")
     payloads, receipts = _trash_candidates(target_root, record)
     journal = {
@@ -467,6 +472,7 @@ def _execute_trash_move(
         "retentionRunId": retention_run_id,
         "filename": filename,
         "objectDigest": digest,
+        "objectDigests": object_digests,
         "payloadNames": [path.name for path in payloads],
         "receiptNames": [path.name for path in receipts],
         "phase": "intent",
@@ -615,7 +621,7 @@ def finalize_retention(
                 backup_id in still_protected
                 or bool(record.get("pinned"))
                 or str(record.get("filename") or "") in references
-                or str(record.get("ciphertextSha256") or "") in references
+                or bool(backup_object_set.committed_object_digests(record) & references)
             )
             if rescued:
                 backup_catalog.record_restore_from_trash(target_root, backup_id, at=_utc_iso(current), writer=writer)
@@ -723,13 +729,15 @@ def finalize_retention_store(
     state = backup_catalog.catalog_state_store(store)
     deleted: list[str] = []
     kept: list[str] = []
-    live_digests = {
-        str(record.get("objectDigest") or record.get("ciphertextSha256") or "")
-        for record in state.values()
-        if not record.get("deleted") and not record.get("trashed")
-    }
+    recoverable_digests: set[str] = set()
+    for record in state.values():
+        if record.get("deleted"):
+            continue
+        trashed_at = _parse_iso(record.get("trashedAt")) if record.get("trashed") else None
+        if not record.get("trashed") or trashed_at is None or current - trashed_at < grace:
+            recoverable_digests.update(backup_object_set.committed_object_digests(record))
     # Protect objects held by active restores.
-    hold_digests = _restore_hold_digests(store)
+    hold_digests = _restore_hold_digests(store, now=current)
     for backup_id, record in list(state.items()):
         if checkpoint is not None:
             checkpoint()
@@ -739,18 +747,16 @@ def finalize_retention_store(
         if trashed_at is None or current - trashed_at < grace:
             kept.append(backup_id)
             continue
-        digest = str(record.get("objectDigest") or record.get("ciphertextSha256") or "")
-        if digest and digest in live_digests:
-            kept.append(backup_id)
-            continue
-        if digest and digest in hold_digests:
+        digests = backup_object_set.committed_object_digests(record)
+        if digests & hold_digests:
             kept.append(backup_id)
             continue
         if writer is not None:
             writer.assert_owned()
-        if digest:
+        if digests:
             from deepseek_infra.infra.workspace.backup_target_store import object_key
 
+        for digest in sorted(digests - recoverable_digests):
             try:
                 store.delete_if_match(object_key(digest))
             except AppError:
@@ -765,10 +771,11 @@ def finalize_retention_store(
     return {"deleted": deleted, "kept": kept, "recoveredTrash": []}
 
 
-def _restore_hold_digests(store: Any) -> set[str]:
+def _restore_hold_digests(store: Any, *, now: datetime | None = None) -> set[str]:
     from deepseek_infra.infra.workspace.backup_target_store import read_json
 
     digests: set[str] = set()
+    current = now or datetime.now(tz=timezone.utc)
     cursor = None
     while True:
         page = store.list_objects("holds/restore/", cursor=cursor)
@@ -778,9 +785,18 @@ def _restore_hold_digests(store: Any) -> set[str]:
             data = read_json(store, meta.key)
             if not isinstance(data, dict):
                 continue
+            expires_at = _parse_iso(data.get("expiresAt"))
+            if expires_at is not None and expires_at <= current:
+                continue
             digest = str(data.get("objectDigest") or "")
-            if digest:
+            if len(digest) == 64:
                 digests.add(digest)
+            for item in data.get("objects") or []:
+                if not isinstance(item, dict):
+                    continue
+                component_digest = str(item.get("digest") or "")
+                if len(component_digest) == 64:
+                    digests.add(component_digest)
         if not page.cursor:
             break
         cursor = page.cursor

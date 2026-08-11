@@ -286,6 +286,8 @@ def layer_needed_payloads(
         return packs, blobs, standalone
     ops = chain[layer].operations or {}
     index = chain[layer].pack_index
+    if index is not None:
+        index = backup_pack.normalize_pack_index(index)
     produced = produced_by_layer[layer]
     for put in ops.get("put") or []:
         if not isinstance(put, dict) or str(put.get("path") or "") not in produced:

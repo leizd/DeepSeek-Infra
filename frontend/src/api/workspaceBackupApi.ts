@@ -381,7 +381,7 @@ export interface BackupCatalogEntry {
   policyId: string;
   targetId: string;
   scheduleSlot: string;
-  filename: string;
+  filename?: string;
   size: number;
   createdAt: string;
   creationVerified: boolean;
@@ -517,6 +517,12 @@ export function previewRestoreFromTarget(
       bytes: { selectedLogicalBytes: number; dependencyBytes: number; ciphertextDownloadBytes: number; estimatedMaterializedBytes: number };
       networkSelective: boolean;
       networkSelectivityReason: string;
+      wholeChainCiphertextBytes?: number;
+      requiredCiphertextBytes?: number;
+      networkBytesSaved?: number;
+      networkSavingsRatio?: number;
+      requiredComponents?: number;
+      totalComponents?: number;
       requiresFrontendApply: boolean;
       requiresExternalMcp: boolean;
     };
@@ -529,6 +535,7 @@ export function fetchRemoteRestore(restoreId: string, request: { maxBytes?: numb
     phase: string;
     downloadedBytes: number;
     expectedBytes: number;
+    requiredComponents?: number;
     path?: string;
     next?: string;
   }>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/fetch`, request);

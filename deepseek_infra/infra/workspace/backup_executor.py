@@ -18,6 +18,7 @@ from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
     backup_catalog,
     backup_incremental,
+    backup_object_set,
     backup_policies,
     backup_publish,
     backup_run_plan,
@@ -59,7 +60,9 @@ def _record_committed_index(
     """Persist a committed snapshot into the rebuildable index (best effort)."""
     try:
         manifest = getattr(package, "manifest", None) or {}
-        files = manifest.get("files") or []
+        files = manifest.get("files")
+        if not isinstance(files, list):
+            raise AppError("Verified spool has no plaintext index material; rebuild is required")
         records = [
             backup_incremental.FileRecord(
                 contributor_id=str(item.get("contributorId") or ""),
@@ -83,6 +86,7 @@ def _record_committed_index(
             "recipient_set_digest": backup_incremental.recipient_set_digest(policy_dict),
             "schema_digest": backup_incremental.schema_digest(contributor_schemas),
             "chunk_protocol": backup_incremental.CURRENT_CDC_PROTOCOL,
+            "storage_protocol": str(getattr(package, "storage_protocol", backup_object_set.WHOLE_AGE_V1)),
         }
         parent: str | None = None
         base = backup_id
@@ -347,6 +351,7 @@ def execute_run(
                     lineage_id=run_plan.get("lineageId"),
                     chain_depth=int(run_plan.get("chainDepth") or 0),
                     adaptive_max_delta_ratio=adaptive_delta_ratio,
+                    storage_protocol=backup_object_set.CURRENT_STORAGE_PROTOCOL,
                 )
             except backup_scheduled.DeltaCostExceeded as exc:
                 run_plan = backup_run_plan.resolve_adaptive_plan(
@@ -373,6 +378,7 @@ def execute_run(
                     base_backup_id=None,
                     lineage_id=None,
                     chain_depth=0,
+                    storage_protocol=backup_object_set.CURRENT_STORAGE_PROTOCOL,
                 )
             savings = getattr(package, "savings", None) or {}
             logical_bytes = int(savings.get("logicalBytes") or 0)
@@ -413,6 +419,7 @@ def execute_run(
                     base_backup_id=None,
                     lineage_id=None,
                     chain_depth=0,
+                    storage_protocol=backup_object_set.CURRENT_STORAGE_PROTOCOL,
                 )
             elif run_plan.get("plannedSnapshotKind") == "adaptive" and not run_plan.get("resolutionReason"):
                 run_plan = backup_run_plan.resolve_adaptive_plan(
@@ -436,6 +443,9 @@ def execute_run(
             backup_scheduler.record_run_phase(run.run_id, "verifying", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
             backup_scheduler.record_run_phase(run.run_id, "publishing", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
         savings = getattr(package, "savings", None)
+        outcome["storageProtocol"] = str(
+            getattr(package, "storage_protocol", backup_object_set.WHOLE_AGE_V1)
+        )
         if savings:
             outcome["incrementalSavings"] = savings
 

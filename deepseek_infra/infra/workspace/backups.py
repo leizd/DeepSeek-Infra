@@ -1928,8 +1928,27 @@ def apply_restore(restore_id: str, *, mode: str = "merge") -> dict[str, Any]:
     }
 
 
+class _NonSeekableZipSink:
+    """Force ZIP data descriptors when the destination is a process pipe.
+
+    Windows ``Popen.stdin`` can expose a misleading seek/tell surface: zipfile
+    then tries to rewrite local headers, but pipe writes append a second header
+    instead. Hiding seek/tell makes zipfile use its correct streaming format.
+    """
+
+    def __init__(self, output: BinaryIO) -> None:
+        self._output = output
+
+    def write(self, value: bytes) -> int:
+        return self._output.write(value)
+
+    def flush(self) -> None:
+        self._output.flush()
+
+
 def _write_zip_tree(staging: Path, output: BinaryIO) -> None:
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+    sink = _NonSeekableZipSink(output)
+    with zipfile.ZipFile(cast(BinaryIO, sink), "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for path in sorted((item for item in staging.rglob("*") if item.is_file()), key=lambda item: item.relative_to(staging).as_posix()):
             info = zipfile.ZipInfo(path.relative_to(staging).as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
@@ -2144,6 +2163,8 @@ _METADATA_ENTRIES = frozenset(
         "checksums.sha256",
         "delta/operations.json",
         "payload/packs/index.json",
+        "payload-index.json",
+        "component-map.json",
     }
 )
 

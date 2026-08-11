@@ -14,15 +14,16 @@ import os
 import shutil
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_unattended
+from deepseek_infra.infra.workspace import backup_object_set, backup_unattended
 
 SPOOL_DIR = config.ROOT / ".backup-spool"
 SPOOL_SCHEMA_VERSION = 3
+OBJECT_SET_SPOOL_SCHEMA_VERSION = 4
 DEFAULT_TTL_SECONDS = 7 * 24 * 3600
 DEFAULT_QUOTA_BYTES = 50 * 1024 * 1024 * 1024
 
@@ -90,8 +91,13 @@ def lookup_verified_package(
     policy_id: str,
     slot_digest: str,
     run_plan_digest: str | None = None,
-) -> SpooledPackage | None:
+) -> SpooledPackage | backup_object_set.ObjectSetPackage | None:
     """Return an existing verified spool package when present and plan-compatible."""
+    object_set_meta = read_object_set_meta(policy_id, slot_digest)
+    if object_set_meta is not None:
+        if run_plan_digest is not None and str(object_set_meta.get("runPlanDigest") or "") not in {"", run_plan_digest}:
+            raise AppError("spool run plan digest mismatch for schedule slot", code=ErrorCode.INVALID_REQUEST, status=409)
+        return _load_spooled_object_set(policy_id, slot_digest, object_set_meta)
     meta = read_package_meta(policy_id, slot_digest)
     path = package_path(policy_id, slot_digest)
     if meta is None or path is None:
@@ -121,6 +127,15 @@ def store_verified_package(
     from deepseek_infra.infra.workspace.backup_target_store import commit_slot_digest
 
     digest = slot_digest or commit_slot_digest(schedule_slot)
+    if isinstance(package, backup_object_set.ObjectSetPackage):
+        return _store_verified_object_set(
+            package,
+            policy_id=policy_id,
+            schedule_slot=schedule_slot,
+            run_id=run_id,
+            slot_digest=digest,
+            run_plan_digest=run_plan_digest,
+        )
     dest_dir = _slot_dir(policy_id, digest)
     dest_dir.mkdir(parents=True, exist_ok=True)
     package_path = dest_dir / "package.age"
@@ -176,6 +191,158 @@ def store_verified_package(
         slot_digest=digest,
         run_plan_digest=run_plan_digest,
     )
+
+
+def _store_verified_object_set(
+    package: backup_object_set.ObjectSetPackage,
+    *,
+    policy_id: str,
+    schedule_slot: str,
+    run_id: str,
+    slot_digest: str,
+    run_plan_digest: str | None,
+) -> dict[str, Any]:
+    dest_dir = _slot_dir(policy_id, slot_digest)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = dest_dir / "object-set.json"
+    existing = read_object_set_meta(policy_id, slot_digest)
+    if existing is not None:
+        if (
+            str(existing.get("objectSetDigest") or "") != package.object_set_digest
+            or str(existing.get("controlObjectDigest") or "") != package.control.ciphertext_digest
+        ):
+            raise AppError("spool slot already holds a different object set", code=ErrorCode.INVALID_REQUEST, status=409)
+        if run_plan_digest and str(existing.get("runPlanDigest") or "") not in {"", run_plan_digest}:
+            raise AppError("spool run plan digest mismatch for schedule slot", code=ErrorCode.INVALID_REQUEST, status=409)
+        if _load_spooled_object_set(policy_id, slot_digest, existing) is not None:
+            return existing
+    if (dest_dir / "package.age").exists() or (dest_dir / "package.json").exists():
+        raise AppError("spool slot already holds a whole-age package", code=ErrorCode.INVALID_REQUEST, status=409)
+    if spool_usage_bytes() + package.size > DEFAULT_QUOTA_BYTES:
+        cleanup_expired(force_oldest=True)
+        if spool_usage_bytes() + package.size > DEFAULT_QUOTA_BYTES:  # pragma: no cover
+            raise AppError("backup spool quota exceeded", code=ErrorCode.INVALID_REQUEST, status=507)
+    objects: list[dict[str, Any]] = []
+    payload_ordinal = 0
+    for component in package.components:
+        relative = "control.age" if component.control else f"payload/{payload_ordinal:04d}.age"
+        if not component.control:
+            payload_ordinal += 1
+        destination = dest_dir.joinpath(*relative.split("/"))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        tmp = destination.with_name(f".{destination.name}.{os.getpid()}.part")
+        with component.path.open("rb") as source, tmp.open("wb") as output:
+            shutil.copyfileobj(source, output, length=1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+        if tmp.stat().st_size != component.ciphertext_size or backup_unattended.sha256_file(tmp) != component.ciphertext_digest:
+            tmp.unlink(missing_ok=True)
+            raise AppError("spool object-set component mismatch", code=ErrorCode.INTERNAL, status=500)
+        os.replace(tmp, destination)
+        objects.append({"path": relative, "digest": component.ciphertext_digest, "size": component.ciphertext_size})
+    meta = {
+        "schemaVersion": OBJECT_SET_SPOOL_SCHEMA_VERSION,
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "policyId": policy_id,
+        "scheduleSlot": schedule_slot,
+        "slotDigest": slot_digest,
+        "runId": run_id,
+        "runPlanDigest": run_plan_digest or "",
+        "backupId": package.backup_id,
+        "objectSetDigest": package.object_set_digest,
+        "controlObjectDigest": package.control.ciphertext_digest,
+        "creationVerified": package.creation_verified,
+        "receiptManifest": _receipt_manifest(package),
+        "storedAt": _utc_iso(),
+        "objects": objects,
+    }
+    _atomic_write_json(meta_path, meta)
+    return meta
+
+
+def read_object_set_meta(policy_id: str, slot_digest: str) -> dict[str, Any] | None:
+    path = _slot_dir(policy_id, slot_digest) / "object-set.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _load_spooled_object_set(
+    policy_id: str,
+    slot_digest: str,
+    meta: dict[str, Any],
+) -> backup_object_set.ObjectSetPackage | None:
+    if int(meta.get("schemaVersion") or 0) != OBJECT_SET_SPOOL_SCHEMA_VERSION:
+        return None
+    raw_objects = meta.get("objects")
+    if not isinstance(raw_objects, list):
+        return None
+    components: list[backup_object_set.EncryptedComponent] = []
+    payload_ordinal = 0
+    control_count = 0
+    seen_paths: set[str] = set()
+    for raw in raw_objects:
+        if not isinstance(raw, dict):
+            return None
+        relative = str(raw.get("path") or "")
+        relative_path = PurePosixPath(relative)
+        expected_payload = f"payload/{payload_ordinal:04d}.age"
+        is_control = relative == "control.age"
+        control_count += int(is_control)
+        if (
+            relative_path.is_absolute()
+            or ".." in relative_path.parts
+            or relative in seen_paths
+            or (not is_control and relative != expected_payload)
+        ):
+            return None
+        seen_paths.add(relative)
+        path = _slot_dir(policy_id, slot_digest).joinpath(*relative_path.parts)
+        digest = str(raw.get("digest") or "")
+        raw_size = raw.get("size")
+        if (
+            len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+            or isinstance(raw_size, bool)
+            or not isinstance(raw_size, int)
+            or raw_size < 0
+        ):
+            return None
+        size = raw_size
+        if not path.is_file() or path.stat().st_size != size or backup_unattended.sha256_file(path) != digest:
+            return None
+        components.append(
+            backup_object_set.EncryptedComponent(
+                component_id="control" if is_control else f"p{payload_ordinal:04d}",
+                path=path,
+                ciphertext_digest=digest,
+                ciphertext_size=size,
+                control=is_control,
+            )
+        )
+        if not is_control:
+            payload_ordinal += 1
+    if control_count != 1:
+        return None
+    raw_manifest = meta.get("receiptManifest")
+    package = backup_object_set.ObjectSetPackage(
+        backup_id=str(meta.get("backupId") or ""),
+        components=tuple(components),
+        manifest_digest="",
+        coverage_digest="",
+        manifest=dict(raw_manifest) if isinstance(raw_manifest, dict) else {},
+        creation_verified=bool(meta.get("creationVerified")),
+    )
+    if (
+        package.object_set_digest != str(meta.get("objectSetDigest") or "")
+        or package.control.ciphertext_digest != str(meta.get("controlObjectDigest") or "")
+    ):
+        return None
+    return package
 
 
 def _write_meta(
@@ -241,6 +408,26 @@ def write_multipart_state(policy_id: str, slot_digest: str, state: dict[str, Any
     _atomic_write_json(_slot_dir(policy_id, slot_digest) / "multipart.json", state)
 
 
+def read_component_multipart_state(policy_id: str, slot_digest: str, ciphertext_digest: str) -> dict[str, Any] | None:
+    path = _slot_dir(policy_id, slot_digest) / "multipart" / f"{ciphertext_digest}.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write_component_multipart_state(
+    policy_id: str,
+    slot_digest: str,
+    ciphertext_digest: str,
+    state: dict[str, Any],
+) -> None:
+    _atomic_write_json(_slot_dir(policy_id, slot_digest) / "multipart" / f"{ciphertext_digest}.json", state)
+
+
 def clear_slot(policy_id: str, slot_digest: str) -> None:
     dest = _slot_dir(policy_id, slot_digest)
     if dest.is_dir():
@@ -261,7 +448,13 @@ def cleanup_expired(*, ttl_seconds: int = DEFAULT_TTL_SECONDS, force_oldest: boo
             if not slot_dir.is_dir():
                 continue
             meta_path = slot_dir / "package.json"
-            mtime = meta_path.stat().st_mtime if meta_path.is_file() else slot_dir.stat().st_mtime
+            object_set_meta_path = slot_dir / "object-set.json"
+            if meta_path.is_file():
+                mtime = meta_path.stat().st_mtime
+            elif object_set_meta_path.is_file():
+                mtime = object_set_meta_path.stat().st_mtime
+            else:
+                mtime = slot_dir.stat().st_mtime
             size = sum(p.stat().st_size for p in slot_dir.rglob("*") if p.is_file())
             entries.append((mtime, slot_dir, size))
             if now - mtime > ttl_seconds:
