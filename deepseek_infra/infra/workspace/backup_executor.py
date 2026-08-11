@@ -248,7 +248,11 @@ def execute_run(
         index_available = _index_available()
         contributor_schemas: dict[str, int] = {}
         for item in contributor_plan.get("contributors") or []:
-            if isinstance(item, dict):
+            # Only the selected contributors participate in the snapshot, so
+            # their schema digest must match what the builder attests in the
+            # manifest. Including excluded contributors would make every
+            # force-full schema comparison mismatched.
+            if isinstance(item, dict) and item.get("status") == "selected":
                 contributor_schemas[str(item.get("id") or "")] = int(item.get("schemaVersion") or 0)
         selected = backup_incremental.select_snapshot_plan(
             policy=policy,
@@ -336,8 +340,14 @@ def execute_run(
             )
             savings = getattr(package, "savings", None) or {}
             logical_bytes = int(savings.get("logicalBytes") or 0)
-            physical_bytes = int(savings.get("physicalPayloadBytes") or 0)
+            physical_bytes = int(
+                savings.get("unencryptedArchiveBytes")
+                or savings.get("physicalDeltaBytes")
+                or savings.get("physicalPayloadBytes")
+                or 0
+            )
             max_delta_ratio = float((policy.get("incremental") or {}).get("maxDeltaRatio") or backup_incremental.DEFAULT_MAX_DELTA_RATIO)
+            cost_basis = "unencrypted-archive-bytes" if savings.get("unencryptedArchiveBytes") else ("packed-delta-bytes" if savings.get("physicalDeltaBytes") else "raw-payload-bytes")
             if (
                 run_plan.get("plannedSnapshotKind") == "adaptive"
                 and str(run_plan.get("resolvedSnapshotKind") or "incremental") == "incremental"
@@ -354,6 +364,7 @@ def execute_run(
                 outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
                 outcome["snapshotKind"] = "full"
                 outcome["forceFullReason"] = "delta-ratio"
+                outcome["adaptiveCostBasis"] = cost_basis
                 package = backup_scheduled.build_scheduled_backup(
                     policy,
                     run_id=run.run_id,

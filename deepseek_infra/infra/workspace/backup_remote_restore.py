@@ -23,6 +23,8 @@ from deepseek_infra.infra.workspace import (
     backup_crypto,
     backup_incremental,
     backup_incremental_restore,
+    backup_pack,
+    backup_projection,
     backup_publish,
     backup_targets,
     backups,
@@ -36,7 +38,7 @@ from deepseek_infra.infra.workspace.backup_target_store import (
 )
 
 HOLD_TTL_SECONDS = 6 * 3600
-SESSION_SCHEMA_VERSION = 2
+SESSION_SCHEMA_VERSION = 3
 
 
 def _utc_iso(value: datetime | None = None) -> str:
@@ -123,13 +125,54 @@ def _chain_member(store: Any, receipt: dict[str, Any], staging_root: Path) -> di
     }
 
 
-def create_restore_from_target(*, target_id: str, backup_id: str, client: Any | None = None) -> dict[str, Any]:
-    """Create a durable remote restore session (phase=fetching / fetching-chain).
+def create_restore_from_target(
+    *,
+    target_id: str,
+    backup_id: str,
+    client: Any | None = None,
+    selection: Any | None = None,
+    restore_id: str | None = None,
+) -> dict[str, Any]:
+    """Create or resume a durable remote restore session (phase=fetching / fetching-chain).
 
     For incremental backups the session resolves the whole chain from the target
     receipts and creates a remote hold for every required ancestor, so no member
     can be garbage-collected before the chain is fetched.
+
+    An optional ``selection`` freezes the restore into a Contributor/Project
+    projection: its canonical ``selectionDigest`` is persisted with the session
+    and, once frozen, resuming the same session with a different selection is
+    rejected with ``409 restore-selection-mismatch``.
     """
+    selection_value = backup_projection.normalize_selection(selection)
+    selection_digest_value = backup_projection.selection_digest(selection_value) if selection_value is not None else None
+    if restore_id:
+        existing = read_restore_session(restore_id)
+        if existing is None:
+            raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+        frozen = existing.get("selectionDigest")
+        if selection_digest_value is not None and frozen and frozen != selection_digest_value:
+            raise AppError(
+                "Restore selection does not match the frozen session selection",
+                code=ErrorCode.INVALID_REQUEST,
+                status=409,
+            )
+        if selection_digest_value is not None and not frozen:
+            assert selection_value is not None
+            existing["selection"] = selection_value.canonical()
+            existing["selectionDigest"] = selection_digest_value
+            existing["schemaVersion"] = SESSION_SCHEMA_VERSION
+            _atomic_write_json(_session_path(restore_id), existing)
+            frozen = selection_digest_value
+        return {
+            "restoreId": restore_id,
+            "phase": str(existing.get("phase") or "fetching"),
+            "targetId": str(existing.get("targetId") or target_id),
+            "backupId": str(existing.get("backupId") or backup_id),
+            "selection": selection_value.canonical() if selection_value is not None else existing.get("selection"),
+            "selectionDigest": selection_digest_value or existing.get("selectionDigest"),
+            "holds": list(existing.get("holdKeys") or ([existing["holdKey"]] if existing.get("holdKey") else [])),
+        }
     target = backup_publish.resolve_target(target_id, write_intent=False)
     store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False, client=client)
     catalog = _catalog_receipts(target, store)
@@ -196,6 +239,8 @@ def create_restore_from_target(*, target_id: str, backup_id: str, client: Any | 
             "chain": members,
             "chainIndex": 0,
             "holdKeys": hold_keys,
+            "selection": selection_value.canonical() if selection_value is not None else None,
+            "selectionDigest": selection_digest_value,
             "phase": "fetching-chain",
             "createdAt": _utc_iso(),
             "updatedAt": _utc_iso(),
@@ -208,6 +253,8 @@ def create_restore_from_target(*, target_id: str, backup_id: str, client: Any | 
             "phase": "fetching-chain",
             "targetId": target_id,
             "backupId": backup_id,
+            "selection": session["selection"],
+            "selectionDigest": selection_digest_value,
             "holds": hold_keys,
         }
 
@@ -242,6 +289,8 @@ def create_restore_from_target(*, target_id: str, backup_id: str, client: Any | 
         "remoteETag": meta.etag,
         "remoteVersionId": meta.version_id,
         "holdKey": restore_hold_key(restore_id),
+        "selection": selection_value.canonical() if selection_value is not None else None,
+        "selectionDigest": selection_digest_value,
         "ciphertextPath": str(staging_root / filename),
         "phase": "fetching",
         "createdAt": _utc_iso(),
@@ -256,6 +305,8 @@ def create_restore_from_target(*, target_id: str, backup_id: str, client: Any | 
         "targetId": target_id,
         "backupId": backup_id,
         "objectDigest": digest,
+        "selection": session["selection"],
+        "selectionDigest": selection_digest_value,
         "hold": hold,
     }
 
@@ -410,6 +461,87 @@ def fetch_restore_session(restore_id: str, *, client: Any | None = None, max_byt
     }
 
 
+def preview_restore_from_target(
+    *,
+    target_id: str,
+    backup_id: str,
+    selection: Any,
+    restore_id: str | None = None,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    """Fetch the whole chain, metadata-extract it and report the projected plan.
+
+    Because 4.4.13 keeps the whole-age-object model, the preview downloads the
+    full chain before it can report accurate byte counts; ``networkSelective``
+    is always ``False``. The client provides a secret first so the metadata
+    plane can be decrypted; the preview re-puts it so the later materialize
+    step can still consume it.
+    """
+    selection_value = backup_projection.normalize_selection(selection)
+    assert selection_value is not None
+    created = create_restore_from_target(
+        target_id=target_id,
+        backup_id=backup_id,
+        client=client,
+        selection=selection_value.canonical(),
+        restore_id=restore_id,
+    )
+    restore_id = str(created["restoreId"])
+    result = fetch_restore_session(restore_id, client=client)
+    phase = str(result.get("phase") or "")
+    if phase not in {"fetched", "chain-fetched"}:
+        return {
+            "restoreId": restore_id,
+            "phase": phase,
+            "selectionDigest": created.get("selectionDigest"),
+            "downloadedBytes": int(result.get("downloadedBytes") or 0),
+            "expectedBytes": int(result.get("expectedBytes") or 0),
+            "requiresSecret": False,
+        }
+    if not backup_crypto.has_secret(restore_id):
+        return {
+            "restoreId": restore_id,
+            "phase": phase,
+            "selectionDigest": created.get("selectionDigest"),
+            "requiresSecret": True,
+        }
+    kind, secret = backup_crypto.consume_secret(restore_id)
+    try:
+        session = read_restore_session(restore_id)
+        if session is None:
+            raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+        base = _session_dir(restore_id)
+        members = session.get("chain") or []
+        secret_kind: Literal["passphrase", "age-identity"] = "passphrase" if kind != "age-identity" else "age-identity"
+        decrypted_paths: list[Path] = []
+        for index, member in enumerate(members):
+            ciphertext = Path(str(member["ciphertextPath"]))
+            decrypted = base / f"preview-decrypted-{index}.dsibackup"
+            backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
+            decrypted_paths.append(decrypted)
+        packages = _metadata_chain_packages(decrypted_paths, base)
+        ciphertext_download = sum(int(item.get("expectedBytes") or 0) for item in members)
+        plan = backup_projection.plan_projection(
+            selection_value,
+            packages,
+            ciphertext_download_bytes=ciphertext_download,
+        )
+        session["projectionPlan"] = plan.report
+        session["phase"] = "preview-planned"
+        _atomic_write_json(_session_path(restore_id), session)
+        return {
+            "restoreId": restore_id,
+            "phase": "preview-planned",
+            "selection": selection_value.canonical(),
+            "selectionDigest": plan.report["selectionDigest"],
+            "requiresSecret": False,
+            "projection": plan.report,
+        }
+    finally:
+        backup_crypto.put_secret_bytes(restore_id, kind, bytearray(secret))
+        secret[:] = b"\x00" * len(secret)
+
+
 def restore_from_target(*, target_id: str, backup_id: str, client: Any | None = None) -> dict[str, Any]:  # pragma: no cover - thin wrapper
     """Compatibility helper: create session and fetch to completion in one call."""
     created = create_restore_from_target(target_id=target_id, backup_id=backup_id, client=client)
@@ -436,6 +568,26 @@ def release_restore_hold(store: Any, restore_id: str) -> None:
         pass
 
 
+def _release_session_holds(session: dict[str, Any]) -> None:
+    """Release every remote hold this restore session created."""
+    target_id = str(session.get("targetId") or "")
+    if not target_id:
+        return
+    try:
+        target = backup_publish.resolve_target(target_id, write_intent=False)
+        store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False)
+    except AppError:  # pragma: no cover
+        return
+    keys = list(session.get("holdKeys") or [])
+    if not keys and session.get("holdKey"):
+        keys = [str(session["holdKey"])]
+    for key in keys:
+        try:
+            store.delete_if_match(str(key))
+        except AppError:  # pragma: no cover
+            pass
+
+
 def _write_checksums(tree_root: Path, manifest: dict[str, Any]) -> None:
     manifest_bytes = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     (tree_root / "manifest.json").write_bytes(manifest_bytes)
@@ -450,6 +602,90 @@ def _normalized_full_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     normalized["snapshotKind"] = "full"
     normalized.pop("deltaFiles", None)
     return normalized
+
+
+def _metadata_chain_packages(
+    decrypted_paths: list[Path],
+    base: Path,
+) -> list[backup_projection.ChainPackage]:
+    """Extract only metadata from each decrypted member and build the planner input."""
+    packages: list[backup_projection.ChainPackage] = []
+    for index, decrypted in enumerate(decrypted_paths):
+        meta_dir = base / f"metadata-{index}"
+        manifest = backups.extract_archive_metadata(decrypted, meta_dir)
+        snapshot_kind = str(manifest.get("snapshotKind") or "full")
+        operations: dict[str, Any] | None = None
+        pack_index: dict[str, Any] | None = None
+        if snapshot_kind == "incremental":
+            ops_path = meta_dir / "delta" / "operations.json"
+            if ops_path.is_file():
+                try:
+                    operations = json.loads(ops_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):  # pragma: no cover - validated at plan time
+                    operations = None
+            index_path = meta_dir / backup_pack.PACK_INDEX_PATH
+            if index_path.is_file():
+                try:
+                    pack_index = json.loads(index_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):  # pragma: no cover - validated at plan time
+                    pack_index = None
+        contributor_ids = frozenset(str(item.get("id") or "") for item in manifest.get("contributors") or [])
+        frontend = bool(manifest.get("frontend"))
+        external_mcp = bool((manifest.get("coverage") or {}).get("externalContributors"))
+        packages.append(
+            backup_projection.ChainPackage(
+                snapshot_kind=snapshot_kind,
+                files=tuple(backup_incremental_restore._manifest_files(manifest)),
+                root_digest=str(((manifest.get("snapshot") or {}).get("rootDigest")) or ""),
+                operations=operations,
+                pack_index=pack_index,
+                frontend=frontend,
+                contributor_ids=contributor_ids,
+                external_mcp=external_mcp,
+                manifest=manifest,
+            )
+        )
+    return packages
+
+
+def _selective_extract_members(
+    decrypted_paths: list[Path],
+    packages: list[backup_projection.ChainPackage],
+    base: Path,
+    projection: backup_projection.ProjectionPlan,
+) -> list[Path]:
+    extracted_dirs: list[Path] = []
+    for index, decrypted in enumerate(decrypted_paths):
+        extracted = base / f"projected-{index}"
+        raw_manifest = packages[index].manifest
+        manifest: dict[str, Any] = {}
+        if isinstance(raw_manifest, dict):
+            manifest = raw_manifest
+        if index == 0:
+            backups.extract_selected_archive(
+                decrypted,
+                extracted,
+                needed_full=set(projection.needed_full_entries),
+                needed_packs=set(),
+                needed_standalone=set(),
+                manifest=manifest,
+            )
+        else:
+            layer_packs, _layer_blobs, layer_standalone = backup_projection.layer_needed_payloads(
+                packages,
+                projection.produced_by_layer,
+                index,
+            )
+            backups.extract_selected_archive(
+                decrypted,
+                extracted,
+                needed_full=set(),
+                needed_packs=layer_packs,
+                needed_standalone=layer_standalone,
+                manifest=manifest,
+            )
+        extracted_dirs.append(extracted)
+    return extracted_dirs
 
 
 def materialize_restore_session(
@@ -478,18 +714,57 @@ def materialize_restore_session(
     _set_phase(session, "decrypting-chain")
     if str(session.get("snapshotKind") or "full") == "incremental":
         chain = session.get("chain") or []
-        extracted_dirs: list[Path] = []
+        decrypted_paths: list[Path] = []
         for index, member in enumerate(chain):
             ciphertext = Path(str(member["ciphertextPath"]))
             decrypted = base / f"decrypted-{index}.dsibackup"
             backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
-            extracted = base / f"extracted-{index}"
-            backups._safe_extract_and_verify(decrypted, extracted)
-            extracted_dirs.append(extracted)
+            decrypted_paths.append(decrypted)
+        frozen_selection = session.get("selection")
+        projection: backup_projection.ProjectionPlan | None = None
+        packages: list[backup_projection.ChainPackage] = []
+        if frozen_selection is not None:
+            packages = _metadata_chain_packages(decrypted_paths, base)
+            selection_value = backup_projection.normalize_selection(frozen_selection)
+            assert selection_value is not None
+            ciphertext_download = sum(int(item.get("expectedBytes") or 0) for item in chain)
+            projection = backup_projection.plan_projection(
+                selection_value,
+                packages,
+                ciphertext_download_bytes=ciphertext_download,
+            )
+            if selection_value is not None:
+                frozen_digest = session.get("selectionDigest")
+                computed_digest = backup_projection.selection_digest(selection_value)
+                if frozen_digest and computed_digest != frozen_digest:
+                    raise AppError(
+                        "Restore selection does not match the frozen session selection",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=409,
+                    )
         _set_phase(session, "materializing")
         extracted = base / "extracted"
         shutil.rmtree(extracted, ignore_errors=True)
-        final_manifest = backup_incremental_restore.materialize_chain(extracted_dirs, extracted)
+        if projection is not None:
+            extracted_dirs = _selective_extract_members(decrypted_paths, packages, base, projection)
+        else:
+            extracted_dirs = []
+            for index, decrypted in enumerate(decrypted_paths):
+                member_extracted = base / f"extracted-{index}"
+                backups._safe_extract_and_verify(decrypted, member_extracted)
+                extracted_dirs.append(member_extracted)
+        final_manifest = backup_incremental_restore.materialize_chain(extracted_dirs, extracted, projection=projection)
+        if projection is not None:
+            _set_phase(session, "verified")
+            return {
+                "restoreId": restore_id,
+                "phase": "materialized",
+                "snapshotKind": "incremental",
+                "chain": [str(item["backupId"]) for item in chain],
+                "tree": str(extracted),
+                "manifest": final_manifest,
+                "projection": projection.report,
+            }
         normalized = _normalized_full_manifest(final_manifest)
         _write_checksums(extracted, normalized)
         backups._verify_manifest_tree(extracted)
@@ -549,12 +824,26 @@ def materialize_federated_restore(
             (members[-1].get("objectDigest") if members and isinstance(members[-1], dict) else session.get("objectDigest")) or ""
         )
         protection = "passphrase" if kind == "passphrase" else "age-recipient"
-        backups.inspect_verified_restore_tree(
-            restore_id,
-            tree,
-            protection=protection,
-            ciphertext_sha256=ciphertext_digest or None,
-        )
+        projection_report = materialized.get("projection")
+        if isinstance(projection_report, dict):
+            raw_manifest = materialized.get("manifest")
+            if not isinstance(raw_manifest, dict):
+                raise AppError("Projected restore manifest is unavailable", code=ErrorCode.INVALID_REQUEST, status=409)
+            backups.inspect_projected_restore_tree(
+                restore_id,
+                tree,
+                protection=protection,
+                ciphertext_sha256=ciphertext_digest or None,
+                projection=projection_report,
+                manifest=raw_manifest,
+            )
+        else:
+            backups.inspect_verified_restore_tree(
+                restore_id,
+                tree,
+                protection=protection,
+                ciphertext_sha256=ciphertext_digest or None,
+            )
         backup_crypto.put_secret_bytes(restore_id, kind, bytearray(secret))
         _set_phase(session, "preparing")
         prepared = backups.prepare_restore(
@@ -572,6 +861,10 @@ def materialize_federated_restore(
         session = read_restore_session(restore_id) or session
         transaction_exists = (_session_dir(restore_id) / "transaction.json").is_file()
         _set_phase(session, "recovery-required" if transaction_exists else "failed")
+        if not transaction_exists:
+            # Failed before the federated transaction: nothing durable to
+            # recover, so the ancestor holds can be released.
+            _release_session_holds(session)
         backup_crypto.record_unlock_failure(restore_id)
         raise
     finally:
@@ -579,7 +872,14 @@ def materialize_federated_restore(
 
 
 def advance_federated_phase(restore_id: str, phase: str) -> None:
-    """Mirror transaction progress into a remote restore session when present."""
+    """Mirror transaction progress into a remote restore session when present.
+
+    Terminal phases (complete / aborted / failed) release every remote ancestor
+    hold the session created; ``recovery-required`` intentionally keeps them so
+    the chain cannot be garbage-collected before the operator recovers.
+    """
     session = read_restore_session(restore_id)
     if session is not None:
         _set_phase(session, phase)
+        if phase in {"complete", "aborted", "rolled-back", "failed"}:
+            _release_session_holds(session)

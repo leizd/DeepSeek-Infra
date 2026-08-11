@@ -515,7 +515,7 @@ def test_governance_restore_fetch_route(tmp_settings: Path, monkeypatch: pytest.
     monkeypatch.setattr(
         backup_remote_restore,
         "create_restore_from_target",
-        lambda *, target_id, backup_id, client=None: {"restoreId": "restore_new", "phase": "fetching", "downloadedBytes": 0, "expectedBytes": 10},
+        lambda *, target_id, backup_id, client=None, selection=None, restore_id=None: {"restoreId": "restore_new", "phase": "fetching", "downloadedBytes": 0, "expectedBytes": 10},
     )
     created = client.post("/api/workspace/restores/from-target", json={"targetId": "t", "backupId": "b"})
     assert created.status_code == 200

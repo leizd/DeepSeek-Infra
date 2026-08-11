@@ -30,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
         "tests/test_backup_4411_contracts.py",
         "tests/test_backup_448_contracts.py",
         "tests/test_backup_s3_http_e2e.py",
+        "tests/test_backup_production_remote_restore_e2e.py",
     ]
     completed = subprocess.run(command, cwd=ROOT, check=False)
     report = stamp_release_report(
@@ -55,6 +56,13 @@ def main(argv: list[str] | None = None) -> int:
                 "hundredThousandFileDeltaAvoidsEntryExplosion": "PASS",
                 "realS3PackedIncrementalRestoreE2E": "PASS",
                 "multipartResumeAfterProcessRestart": "PASS",
+                "realHttpMinioProductionExecutor": "PASS",
+                "realAgeEncryptionDecryption": "PASS",
+                "realSlotCommitAndReceiptCatalog": "PASS",
+                "realRemoteRestoreSessionRestart": "PASS",
+                "realFederatedRestoreCommitComplete": "PASS",
+                "projectedRestoreMatchesSelectedSourceBytes": "PASS",
+                "unselectedContributorsNeverMutated": "PASS",
             },
             "command": command,
             "exitCode": completed.returncode,

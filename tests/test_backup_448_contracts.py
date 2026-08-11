@@ -2442,4 +2442,8 @@ def test_incremental_builder_cdc_payloads_and_reuse(tmp_settings: Path, monkeypa
     savings2 = package2.manifest["incrementalSavings"]
     assert savings2["physicalPayloadBytes"] < savings2["logicalChangedBytes"]
     assert savings2["savedRatio"] > 0
-    assert package2.savings == savings2
+    assert package2.savings is not None
+    for key in ("physicalPayloadBytes", "logicalChangedBytes", "savedRatio", "reusedBytes"):
+        assert package2.savings[key] == savings2[key]
+    assert int(package2.savings["physicalDeltaBytes"]) > 0
+    assert int(package2.savings["unencryptedArchiveBytes"]) > 0

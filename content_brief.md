@@ -1,7 +1,7 @@
 # DeepSeek Infra 项目介绍 PPT · 历史内容简报（Content Brief）
 
 > 调研员：内容调研员_ContentBrief ｜ 所有事实与数字均来自仓库文件原文，逐条标注来源。
-> 历史基线版本：**v4.0.3**。本文件保留当时的演示数字，不代表当前 4.4.12 发布面；当前事实以 README、VERSION、IMPLEMENTATION_STATUS 与 release Evidence 为准。
+> 历史基线版本：**v4.0.3**。本文件保留当时的演示数字，不代表当前 4.4.13 发布面；当前事实以 README、VERSION、IMPLEMENTATION_STATUS 与 release Evidence 为准。
 
 ---
 

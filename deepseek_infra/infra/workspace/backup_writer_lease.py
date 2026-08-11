@@ -248,6 +248,7 @@ class TargetWriterLease:
                 result = put_json_if_absent(self.store, key, payload)
                 self._etag = result.etag
                 self._note_server_date(result.server_date)
+                self._reconcile_lease_after_server_date(key, now)
                 self.acquired = True
                 return
             except AppError as exc:
@@ -269,6 +270,7 @@ class TargetWriterLease:
                 raise
             self._etag = result.etag
             self._note_server_date(result.server_date)
+            self._reconcile_lease_after_server_date(key, now)
             confirmed = read_json(self.store, key)
             if (
                 confirmed is not None
@@ -279,6 +281,30 @@ class TargetWriterLease:
                 self.acquired = True
                 return
         raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423)
+
+    def _reconcile_lease_after_server_date(self, key: str, written_at: datetime) -> None:
+        """Re-anchor a fresh lease to the reconciled server clock.
+
+        ``_note_server_date`` computes the clock skew from the target's Date
+        header *after* the first write, which used ``skew = 0``. With a large
+        skew the freshly written ``expiresAt`` would look already expired to
+        later ``assert_owned`` checks. Rewrite the lease with the reconciled
+        timestamp whenever the skew exceeds the safety margin.
+        """
+        reconciled = self._now()
+        if abs((reconciled - written_at).total_seconds()) <= CLOCK_SKEW_SAFETY_SECONDS:
+            return
+        if self.store is None:
+            return
+        from deepseek_infra.infra.workspace.backup_target_store import put_json_if_match, writer_lease_key
+
+        assert self._etag is not None
+        payload = self._payload(reconciled)
+        try:
+            result = put_json_if_match(self.store, writer_lease_key(), payload, expected_etag=self._etag)
+        except AppError:  # pragma: no cover - assert_owned surfaces ownership loss later
+            return
+        self._etag = result.etag
 
     def renew(self) -> None:
         existing = self._read()

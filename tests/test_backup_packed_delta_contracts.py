@@ -261,6 +261,141 @@ def test_pack_ranges_restore_whole_and_cdc_payloads(tmp_path: Path) -> None:
     assert cdc_target.read_bytes() == combined
 
 
+def test_index_maintenance_migrates_legacy_db_to_auto_vacuum(tmp_path: Path, monkeypatch: Any) -> None:
+    import sqlite3 as _sqlite3
+
+    index_dir = tmp_path / ".backup-index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    legacy = index_dir / "index.db"
+    connection = _sqlite3.connect(legacy)
+    connection.execute("CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (backup_incremental.INDEX_SCHEMA_KEY, backup_incremental.INDEX_SCHEMA_VERSION))
+    connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (backup_incremental.STATE_SCHEMA_KEY, backup_incremental.STATE_SCHEMA_VERSION))
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(backup_incremental, "INDEX_DIR", index_dir)
+    monkeypatch.setattr(backup_incremental, "INDEX_DB", legacy)
+    connection = backup_incremental._connect()
+    try:
+        assert int(connection.execute("PRAGMA auto_vacuum").fetchone()[0]) == 0
+        connection.execute(
+            "INSERT INTO current_effective_heads (target_id, policy_id, backup_id, root_digest) VALUES (?, ?, ?, ?)",
+            ("target", "policy", "F0", "d" * 64),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    result = backup_incremental.maintain_snapshot_index(
+        "target",
+        "policy",
+        minimum_db_bytes=-1,
+        minimum_free_page_ratio=-1.0,
+        migrate=True,
+    )
+    assert result["status"] == "migrated-auto-vacuum"
+    connection = backup_incremental._connect()
+    try:
+        assert int(connection.execute("PRAGMA auto_vacuum").fetchone()[0]) == 2
+        head = connection.execute(
+            "SELECT backup_id, root_digest FROM current_effective_heads WHERE target_id = 'target' AND policy_id = 'policy'"
+        ).fetchone()
+        assert head is not None and tuple(head) == ("F0", "d" * 64)
+    finally:
+        connection.close()
+    assert not [path for path in index_dir.glob("index-maintenance-*.db")]
+
+
+def test_index_maintenance_migration_keeps_old_db_on_failure(tmp_path: Path, monkeypatch: Any) -> None:
+    import sqlite3 as _sqlite3
+
+    index_dir = tmp_path / ".backup-index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    legacy = index_dir / "index.db"
+    connection = _sqlite3.connect(legacy)
+    connection.execute("CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (backup_incremental.INDEX_SCHEMA_KEY, backup_incremental.INDEX_SCHEMA_VERSION))
+    connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (backup_incremental.STATE_SCHEMA_KEY, backup_incremental.STATE_SCHEMA_VERSION))
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(backup_incremental, "INDEX_DIR", index_dir)
+    monkeypatch.setattr(backup_incremental, "INDEX_DB", legacy)
+    with backup_incremental._connect() as connection:
+        connection.execute(
+            "INSERT INTO current_effective_heads (target_id, policy_id, backup_id, root_digest) VALUES (?, ?, ?, ?)",
+            ("target", "policy", "F0", "d" * 64),
+        )
+        connection.commit()
+    original_open = backup_incremental._open_index_db
+
+    def broken_open(path: object) -> object:
+        connection = original_open(path)  # type: ignore[arg-type]
+        if str(Path(str(path)).name).startswith("index-maintenance"):
+            # Tamper every copied head row inside the fresh database so the
+            # post-copy verification fails and the swap is abandoned.
+            connection.execute(
+                """
+                CREATE TRIGGER tamper_head AFTER INSERT ON current_effective_heads
+                WHEN NEW.target_id = 'target' AND NEW.policy_id = 'policy'
+                BEGIN
+                    UPDATE current_effective_heads SET root_digest = '9'
+                    WHERE target_id = NEW.target_id AND policy_id = NEW.policy_id;
+                END
+                """
+            )
+            connection.commit()
+        return connection
+
+    monkeypatch.setattr(backup_incremental, "_open_index_db", broken_open)
+    with pytest.raises(AppError, match="Index migration changed the effective head"):
+        backup_incremental.maintain_snapshot_index("target", "policy", minimum_db_bytes=-1, minimum_free_page_ratio=-1.0, migrate=True)
+    monkeypatch.setattr(backup_incremental, "_open_index_db", original_open)
+    # The old database is retained on failure and still reads its head.
+    with backup_incremental._connect() as connection:
+        assert connection.execute("SELECT backup_id FROM current_effective_heads WHERE target_id = 'target' AND policy_id = 'policy'").fetchone()["backup_id"] == "F0"
+    # The failed maintenance leaves no partial replacement behind.
+    assert not [path for path in index_dir.glob("index-maintenance-*.db")]
+
+
+def test_index_maintenance_migration_retries_replace(tmp_path: Path, monkeypatch: Any) -> None:
+    import sqlite3 as _sqlite3
+
+    index_dir = tmp_path / ".backup-index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    legacy = index_dir / "index.db"
+    connection = _sqlite3.connect(legacy)
+    connection.execute("CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (backup_incremental.INDEX_SCHEMA_KEY, backup_incremental.INDEX_SCHEMA_VERSION))
+    connection.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (backup_incremental.STATE_SCHEMA_KEY, backup_incremental.STATE_SCHEMA_VERSION))
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(backup_incremental, "INDEX_DIR", index_dir)
+    monkeypatch.setattr(backup_incremental, "INDEX_DB", legacy)
+    connection = backup_incremental._connect()
+    try:
+        connection.execute(
+            "INSERT INTO current_effective_heads (target_id, policy_id, backup_id, root_digest) VALUES (?, ?, ?, ?)",
+            ("target", "policy", "F0", "d" * 64),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    original_replace = backup_incremental.os.replace
+    attempts: list[tuple[Path, Path]] = []
+
+    def flaky_replace(source: Path, destination: Path) -> None:
+        attempts.append((source, destination))
+        if len(attempts) == 1:
+            raise OSError(5, "access denied")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(backup_incremental.os, "replace", flaky_replace)
+    result = backup_incremental.maintain_snapshot_index("target", "policy", minimum_db_bytes=-1, minimum_free_page_ratio=-1.0, migrate=True)
+    assert result["status"] == "migrated-auto-vacuum"
+    assert len(attempts) >= 2
+    with backup_incremental._connect() as connection:
+        assert int(connection.execute("PRAGMA auto_vacuum").fetchone()[0]) == 2
+
+
 def test_pack_and_blob_corruption_fail_closed(tmp_path: Path) -> None:
     package_root = tmp_path / "package"
     value = b"verified payload"
@@ -270,8 +405,11 @@ def test_pack_and_blob_corruption_fail_closed(tmp_path: Path) -> None:
     index = writer.finalize()
     pack_path = package_root / str(index["packs"][0]["path"])
     pack_path.write_bytes(b"X" + pack_path.read_bytes()[1:])
+    # Pack verification is lazy: the cache constructs, but the first access
+    # (open) verifies size/SHA-256 and fails closed.
     with pytest.raises(AppError, match="pack failed checksum"):
-        backup_incremental_restore.PackHandleCache(package_root)
+        with backup_incremental_restore.PackHandleCache(package_root) as cache:
+            cache.handle(str(index["packs"][0]["path"]))
 
     index["packs"][0]["sha256"] = hashlib.sha256(pack_path.read_bytes()).hexdigest()
     (package_root / backup_pack.PACK_INDEX_PATH).write_text(

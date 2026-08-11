@@ -48,8 +48,8 @@ android {
         applicationId "com.deepseek.mobile"
         minSdk 24
         targetSdk 34
-        versionCode 400052
-        versionName "4.4.12"
+        versionCode 400053
+        versionName "4.4.13"
 
         ndk {
             abiFilters "arm64-v8a", "x86_64"

@@ -5,26 +5,27 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.4.12-blue)
+![Version](https://img.shields.io/badge/version-4.4.13-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-## 4.4.12 at a glance
+## 4.4.13 at a glance
 
-- Index v3 stores immutable content-addressed file versions, Full checkpoints, per-incremental PUT/DELETE operations, and one current effective view guarded by an atomic head. Incremental index growth follows the changed set instead of copying the full workspace view.
-- `incremental-v5` streams every unmatched CDC payload and whole-file payload up to 16 MiB into immutable snapshot-local packs targeting 64 MiB. Larger whole files remain typed standalone payloads; packs never add cross-snapshot dependencies.
-- Restore verifies the encrypted object, Pack digest, Blob range digest, reconstructed File digest, and Snapshot Merkle root. At most four pack handles remain open, and legacy incremental v2-v4 chains remain restorable.
-- The Rust JSONL scanner is a persistent bounded worker pool. Python limits it by estimated working set rather than logical file size and falls back per file on native failures.
-- Privacy-safe packing/index metrics, 100k-file scale contracts, thresholded incremental compaction, and a real HTTP MinIO Full→v5→Restore CI gate make the scale claims executable.
+- Remote restores freeze into an explicit Contributor/Project projection. The selection digest is durable and immutable across retries; resuming with a different selection fails with `409 restore-selection-mismatch`.
+- Only the selected Workspace scope is materialized and committed. Cross-file `parent-range` dependencies enter a read-only support set that is built in scratch space and never written to the final tree.
+- The full F0→I1→…→In logical Merkle chain is verified layer by layer even when byte materialization is selective; unselected contributors are never mutated.
+- Selective materialization extracts only the required Full entries, Packs and standalone blobs from decrypted archives; unused packs are verified lazily on first use. Frontend/external-MCP participation is derived from the frozen selection.
+- Whole-age-object download is reported honestly: `networkSelective: false` with a `whole-age-object` reason. This release does not claim network-level selective fetch.
+- A real HTTP MinIO Full→Incremental→Age→S3→Receipt→Restore→Federated-commit E2E uses the real Rust Age helper, and adaptive-full decisions use packed-container physical bytes.
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-See the [4.4.12 release notes](docs/releases/4.4.12.md) (previous [4.4.11](docs/releases/4.4.11.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
+See the [4.4.13 release notes](docs/releases/4.4.13.md) (previous [4.4.12](docs/releases/4.4.12.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 
 ## Architecture
 
@@ -96,7 +97,7 @@ npm run check --prefix stateless-mcp
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.4.12 --ga
+python scripts/preflight_release.py --version 4.4.13 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

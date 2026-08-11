@@ -10,6 +10,7 @@ ephemeral recipient that is destroyed immediately after the round trip.
 from __future__ import annotations
 
 import hashlib
+import io
 import platform
 import shutil
 import threading
@@ -605,13 +606,31 @@ def _build_candidate(
                 raise AppError("Scheduled backup coverage verification failed", code=ErrorCode.INTERNAL, status=500)
 
         _raise_if_cancelled(cancel_event)
+        plaintext_buffer: io.BytesIO | None = None
+
+        def _stream_plaintext(output: Any) -> None:
+            if plaintext_buffer is not None:
+                output.write(plaintext_buffer.getvalue())
+            else:
+                backups._write_zip_tree(staging, output)
+
+        if snapshot_kind == "incremental":
+            # The incremental candidate is small; buffer its exact plaintext ZIP
+            # so the adaptive-full decision can compare true container bytes.
+            plaintext_buffer = io.BytesIO()
+            backups._write_zip_tree(staging, plaintext_buffer)
         encryption = backup_unattended.encrypt_unattended(
             target,
-            lambda output: backups._write_zip_tree(staging, output),
+            _stream_plaintext,
             recipients=tuple(str(item) for item in (policy.get("protection") or {}).get("recipients") or []),
             verify=_verify,
             cancel_event=cancel_event,
         )
+        final_savings: dict[str, Any] | None = None
+        if snapshot_kind == "incremental":
+            final_savings = dict(manifest.get("incrementalSavings") or {})
+            final_savings["physicalDeltaBytes"] = sum(int(item.get("size") or 0) for item in (manifest.get("deltaFiles") or []))
+            final_savings["unencryptedArchiveBytes"] = len(plaintext_buffer.getvalue()) if plaintext_buffer is not None else 0
         return ScheduledBackupPackage(
             backup_id=backup_id,
             filename=filename,
@@ -626,7 +645,7 @@ def _build_candidate(
             manifest=manifest,
             chunk_records=tuple(current_chunk_records),
             effective_files=tuple(effective_index_records),
-            savings=manifest.get("incrementalSavings") if snapshot_kind == "incremental" else None,
+            savings=final_savings,
         )
     finally:
         shutil.rmtree(staging, ignore_errors=True)

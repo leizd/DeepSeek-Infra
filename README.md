@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.4.12-blue)
+![版本](https://img.shields.io/badge/version-4.4.13-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.12 Packed Delta Payloads & Persistent Snapshot State：** 本地 `.backup-index` 以不可变 File Version、每快照 PUT/DELETE 和单份 Current Effective View 表达历史，Incremental 新增状态只随变化量增长。新 `incremental-v5` 把小 Whole Payload 与 CDC Payload 流式写入 Snapshot 内部的 64 MiB Pack，并逐层校验 Pack、Range、File 与 Merkle；Rust JSONL Helper 使用受控 Worker Pool 和工作集预算。参见 [4.4.12 发布说明](docs/releases/4.4.12.md)（上一版 [4.4.11](docs/releases/4.4.11.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
+> **4.4.13 Projected Recovery & Production Remote Restore：** 远端恢复可冻结为明确的 Contributor/Project 投影，`selectionDigest` 跨重试不可变；跨文件 `parent-range` 依赖自动进入只读 Support 集，绝不写入最终树。元数据平面仍逐层验证完整 Merkle 链，正文物化才可选择性；未选中 Contributor 一律不被改动。仍采用 Whole-Age Object，API/UI 明确报告整条密文链仍需下载（`networkSelective: false`）。真实 MinIO + 真实 Age + Executor + Slot Commit + Receipt/Catalog + Federated Complete 全链路成为 CI 门禁。参见 [4.4.13 发布说明](docs/releases/4.4.13.md)（上一版 [4.4.12](docs/releases/4.4.12.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)。
 
-**4.4.12 validation:** Snapshot Index 只保存变化 Path Ops、Current Effective Head 与最新提交一致、Rename 共享 File Version、数万个 Payload Blob 进入少量 Pack、Pack/Range 双层损坏 Fail Closed、v2-v5 永久恢复兼容、Native Batch 遵守 Worker/内存预算并流式回传、Index GC/Compaction 不改变有效视图、真实 HTTP S3 Packed Restore 字节级一致。
+**4.4.13 validation:** 选择冻结跨重试一致、重试改选返回 409、跨文件父依赖进入 Support 且不落盘、未选中 Contributor 零改动、投影恢复仍逐层验证完整 Merkle、只解压所需 Full/Pack、未使用 Pack 不哈希不打开、whole-age-object 如实上报密文下载量、Holds 在 complete/abort 释放而 recovery-required 保留、Adaptive Full 使用真实 Pack 容器成本、真实 Age MinIO 生产链路字节级一致。
 
 ## 30 秒概览
 

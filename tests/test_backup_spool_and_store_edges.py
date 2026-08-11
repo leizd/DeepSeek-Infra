@@ -301,6 +301,19 @@ def test_spool_lookup_miss_and_plan_mismatch(tmp_settings: Path, tmp_path: Path)
     assert backup_spool.lookup_verified_package(policy_id="pol_miss", slot_digest=digest) is None
     assert meta["ciphertextSha256"]
 
+
+def test_legacy_spool_metadata_is_invalidated_before_reuse(tmp_settings: Path, tmp_path: Path) -> None:
+    package = _pkg(tmp_path)
+    meta = backup_spool.store_verified_package(package, policy_id="pol_legacy", schedule_slot="slot-legacy", run_id="run-legacy")
+    digest = commit_slot_digest("slot-legacy")
+    legacy = {key: value for key, value in meta.items() if key != "receiptManifest"}
+    legacy["schemaVersion"] = backup_spool.SPOOL_SCHEMA_VERSION - 1
+    backup_spool._atomic_write_json(backup_spool.SPOOL_DIR / "pol_legacy" / digest / "package.json", legacy)
+
+    assert backup_spool.lookup_verified_package(policy_id="pol_legacy", slot_digest=digest) is None
+    assert not (backup_spool.SPOOL_DIR / "pol_legacy" / digest).exists()
+
+
 def test_store_catalog_chain_orphan_and_generation(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = MemoryTargetStore()
     backup_catalog.append_receipt_store(store, {"backupId": "A", "filename": "A.age", "size": 1, "ciphertextSha256": "a" * 64})

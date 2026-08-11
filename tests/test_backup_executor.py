@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -205,8 +206,8 @@ def test_execute_run_freezes_actual_delta_ratio(
     def build_with_ratio(*args: object, **kwargs: object) -> object:
         package = original_build(*args, **kwargs)  # type: ignore[arg-type]
         savings = getattr(package, "savings", None)
-        if isinstance(savings, dict) and int(savings.get("physicalPayloadBytes") or 0) > 0:
-            savings["logicalBytes"] = int(savings["physicalPayloadBytes"]) * logical_multiplier
+        if isinstance(savings, dict) and int(savings.get("unencryptedArchiveBytes") or 0) > 0:
+            savings["logicalBytes"] = int(savings["unencryptedArchiveBytes"]) * logical_multiplier
         return package
 
     monkeypatch.setattr(backup_executor.backup_scheduled, "build_scheduled_backup", build_with_ratio)
@@ -230,3 +231,47 @@ def test_execute_run_freezes_actual_delta_ratio(
         assert isinstance(savings, dict) and int(savings["logicalBytes"]) > 0
 
     assert resolutions == [(expected_kind, expected_reason)]
+
+
+def test_incremental_run_records_packed_container_cost(
+    tmp_settings: Path,
+    stub_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    config.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"before"}]}', encoding="utf-8")
+    (config.PROJECTS_DIR / "proj-a").mkdir()
+    (config.PROJECTS_DIR / "proj-a" / "static.bin").write_bytes(random.Random(7).randbytes(256 * 1024))
+    backup_mirror.put_frontend_mirror("mirror_default", _envelope(), source_epoch="epoch-1", recipients=[RECIPIENT_A])
+    policy = _policy(tmp_settings)
+    policy = backup_policies.update_policy(
+        str(policy["policyId"]),
+        {
+            "incremental": {
+                "mode": "file-delta",
+                "maxChainDepth": 8,
+                "fullEvery": 30,
+                "maxDeltaRatio": 0.60,
+                "largeFileMode": "whole",
+            }
+        },
+    )
+    first_now = datetime(2026, 6, 2, 4, 0, tzinfo=UTC)
+    first = _claim_and_run(policy, now=first_now)
+    assert first["phase"] == "complete" and first["snapshotKind"] == "full"
+    parent_backup_id = str(first["backupId"])
+    monkeypatch.setattr(
+        backup_executor.backup_incremental,
+        "select_snapshot_plan",
+        lambda **_kwargs: ("incremental", parent_backup_id, parent_backup_id, 1, None, None, None),
+    )
+    config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"after"}]}', encoding="utf-8")
+    second = _claim_and_run(policy, now=first_now + timedelta(days=1))
+    assert second["phase"] == "complete" and second["snapshotKind"] == "incremental"
+    savings = second.get("incrementalSavings")
+    assert isinstance(savings, dict)
+    assert int(savings["physicalDeltaBytes"]) > 0
+    assert int(savings["unencryptedArchiveBytes"]) > 0
+    assert int(savings["unencryptedArchiveBytes"]) >= int(savings["physicalDeltaBytes"])
+    assert int(savings["logicalBytes"]) > 0

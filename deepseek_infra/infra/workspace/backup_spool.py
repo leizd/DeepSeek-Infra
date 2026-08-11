@@ -22,13 +22,40 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_unattended
 
 SPOOL_DIR = config.ROOT / ".backup-spool"
-SPOOL_SCHEMA_VERSION = 2
+SPOOL_SCHEMA_VERSION = 3
 DEFAULT_TTL_SECONDS = 7 * 24 * 3600
 DEFAULT_QUOTA_BYTES = 50 * 1024 * 1024 * 1024
+
+_RECEIPT_SNAPSHOT_STRING_FIELDS = (
+    "kind",
+    "lineageId",
+    "parentBackupId",
+    "baseBackupId",
+    "chunkProtocol",
+)
 
 
 def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _receipt_manifest(package: Any) -> dict[str, Any]:
+    """Keep only the public lineage fields needed to rebuild a receipt."""
+    raw_manifest = getattr(package, "manifest", None)
+    manifest = raw_manifest if isinstance(raw_manifest, dict) else {}
+    result: dict[str, Any] = {"snapshotKind": str(manifest.get("snapshotKind") or "full")}
+    chunk_protocol = str(manifest.get("chunkProtocol") or "")
+    if chunk_protocol:
+        result["chunkProtocol"] = chunk_protocol
+    raw_snapshot = manifest.get("snapshot")
+    if isinstance(raw_snapshot, dict):
+        snapshot: dict[str, Any] = {
+            field: str(raw_snapshot.get(field) or "") or None
+            for field in _RECEIPT_SNAPSHOT_STRING_FIELDS
+        }
+        snapshot["chainDepth"] = int(raw_snapshot.get("chainDepth") or 0)
+        result["snapshot"] = snapshot
+    return result
 
 
 def _slot_dir(policy_id: str, slot_digest: str) -> Path:
@@ -69,6 +96,9 @@ def lookup_verified_package(
     path = package_path(policy_id, slot_digest)
     if meta is None or path is None:
         return None
+    if int(meta.get("schemaVersion") or 0) != SPOOL_SCHEMA_VERSION or not isinstance(meta.get("receiptManifest"), dict):
+        clear_slot(policy_id, slot_digest)
+        return None
     if run_plan_digest is not None and str(meta.get("runPlanDigest") or "") not in {"", run_plan_digest}:
         raise AppError("spool run plan digest mismatch for schedule slot", code=ErrorCode.INVALID_REQUEST, status=409)
     if not bool(meta.get("creationVerified")):
@@ -101,7 +131,17 @@ def store_verified_package(
         if existing_meta and str(existing_meta.get("ciphertextSha256") or "") == ciphertext_sha256:
             if run_plan_digest and str(existing_meta.get("runPlanDigest") or "") not in {"", run_plan_digest}:
                 raise AppError("spool run plan digest mismatch for schedule slot", code=ErrorCode.INVALID_REQUEST, status=409)
-            return existing_meta
+            if int(existing_meta.get("schemaVersion") or 0) == SPOOL_SCHEMA_VERSION and isinstance(existing_meta.get("receiptManifest"), dict):
+                return existing_meta
+            return _write_meta(
+                meta_path,
+                package,
+                policy_id=policy_id,
+                schedule_slot=schedule_slot,
+                run_id=run_id,
+                slot_digest=digest,
+                run_plan_digest=run_plan_digest,
+            )
         if backup_unattended.sha256_file(package_path) == ciphertext_sha256:  # pragma: no cover
             meta = existing_meta or {}
             return meta if meta else _write_meta(
@@ -162,6 +202,7 @@ def _write_meta(
         "manifestDigest": str(package.manifest_digest),
         "coverageDigest": str(package.coverage_digest),
         "creationVerified": bool(package.creation_verified),
+        "receiptManifest": _receipt_manifest(package),
         "storedAt": _utc_iso(),
         "packagePath": "package.age",
     }
@@ -250,4 +291,6 @@ class SpooledPackage:
         self.manifest_digest = str(meta.get("manifestDigest") or "")
         self.coverage_digest = str(meta.get("coverageDigest") or "")
         self.creation_verified = bool(meta.get("creationVerified"))
+        raw_manifest = meta.get("receiptManifest")
+        self.manifest = dict(raw_manifest) if isinstance(raw_manifest, dict) else {}
         self.path = path
