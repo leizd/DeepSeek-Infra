@@ -177,10 +177,18 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
         # compression-ratio guard below 100 while making the delta cheap.
         changed = bytes(range(256)) * 3686 + random.Random(3).randbytes(100 * 1024)
         (config.PROJECTS_DIR / "proj-a" / "plan.bin").write_bytes(changed)
-        config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"after"}]}', encoding="utf-8")
+        config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"snapshot-value"}]}', encoding="utf-8")
         second = _claim_and_run(policy, now=first_now + timedelta(days=1))
         assert second["phase"] == "complete", second.get("error")
         assert second["snapshotKind"] == "incremental", second.get("forceFullReason") or second.get("error")
+
+        # Diverge both selected and unselected live state after the target
+        # snapshot is committed. A no-op restore can no longer satisfy the
+        # project assertion, and an accidental full restore can no longer
+        # satisfy the memory assertion.
+        (config.PROJECTS_DIR / "proj-a" / "plan.bin").write_bytes(b"live-project-diverged-after-backup")
+        live_memory = '{"items":[{"id":"m1","text":"live-diverged-after-backup"}]}'
+        config.MEMORY_FILE.write_text(live_memory, encoding="utf-8")
 
         # Simulate a fresh process: a new HTTP client and store with no local
         # index state. Lineage is resolved from target receipts only.
@@ -212,9 +220,9 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
         backup_remote_restore.advance_federated_phase(restore_id, "complete")
         assert completed["phase"] == "complete"
 
-        # The selected project is byte-for-byte identical to the I1 snapshot.
+        # The selected project is byte-for-byte identical to the I1 snapshot,
+        # while the unselected contributor retains its post-backup live state.
         assert (config.PROJECTS_DIR / "proj-a" / "plan.bin").read_bytes() == changed
-        # Unselected contributors are never mutated.
-        assert config.MEMORY_FILE.read_text(encoding="utf-8") == '{"items":[{"id":"m1","text":"after"}]}'
+        assert config.MEMORY_FILE.read_text(encoding="utf-8") == live_memory
     finally:
         _cleanup_s3()

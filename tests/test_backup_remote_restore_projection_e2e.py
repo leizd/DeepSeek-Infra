@@ -332,6 +332,8 @@ def test_projected_remote_restore_round_trip(tmp_settings: Path, stub_crypto: No
     _seed_workspace()
     package_f0, package_i1 = _build_chain_packages(tmp_settings)
     _publish_chain(package_f0, package_i1)
+    live_memory = '{"items":[{"id":"m1","text":"live-diverged-after-backup"}]}'
+    config.MEMORY_FILE.write_text(live_memory, encoding="utf-8")
     selection = {"contributors": ["projects"], "projectIds": ["p1"]}
     created = backup_remote_restore.create_restore_from_target(
         target_id="managed-local",
@@ -351,13 +353,15 @@ def test_projected_remote_restore_round_trip(tmp_settings: Path, stub_crypto: No
     # Support file from the unselected project never reaches the workspace.
     assert not (projects_root / "p2").exists()
     # Unselected contributor is never mutated.
-    assert (config.MEMORY_FILE).read_text(encoding="utf-8") == '{"items":[{"id":"m1","text":"before"}]}'
+    assert config.MEMORY_FILE.read_text(encoding="utf-8") == live_memory
 
 
 def test_full_remote_restore_applies_project_projection(tmp_settings: Path, stub_crypto: None) -> None:
     _seed_workspace()
     package_f0, package_i1 = _build_chain_packages(tmp_settings)
     _publish_chain(package_f0, package_i1)
+    live_memory = '{"items":[{"id":"m1","text":"live-diverged-after-backup"}]}'
+    config.MEMORY_FILE.write_text(live_memory, encoding="utf-8")
     selection = {"contributors": ["projects"], "projectIds": ["p1"]}
     created = backup_remote_restore.create_restore_from_target(
         target_id="managed-local",
@@ -373,7 +377,7 @@ def test_full_remote_restore_applies_project_projection(tmp_settings: Path, stub
     )
     assert (config.PROJECTS_DIR / "p1" / "keep.bin").read_bytes() == b"keep"
     assert not (config.PROJECTS_DIR / "p2").exists()
-    assert config.MEMORY_FILE.read_text(encoding="utf-8") == '{"items":[{"id":"m1","text":"before"}]}'
+    assert config.MEMORY_FILE.read_text(encoding="utf-8") == live_memory
 
 
 def test_full_remote_restore_round_trip_still_works(tmp_settings: Path, stub_crypto: None) -> None:
