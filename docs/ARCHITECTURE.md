@@ -200,6 +200,10 @@ flowchart LR
 
 远端恢复在创建 Session 时冻结 `selection`（Contributors + ProjectIds）并持久化 `selectionDigest`；Retry 改选直接返回 `409 restore-selection-mismatch`。Planner 先在 Metadata 平面完整应用 F0→I1→…→In 逻辑链并逐层校验 Merkle Root，再从最终状态计算 Output 集合与向后依赖闭包：跨文件 `parent-range` / `parent-file` / CDC Parent 依赖进入只读 Support 集合，只参与 Scratch 物化与校验，绝不写入最终树。API/UI 始终上报 `networkSelective: false` 与 `whole-age-object` 理由，不把选择性物化宣传成网络级 Selective Fetch。Federated 交易的 `serverTransactionDigest` 纳入 `selectionDigest`，`requiresFrontendApply` / `requiresExternalMcp` 由 selection 推导；Safety Backup 仍保持 Full。远端 Hold 在 complete/abort/失败时释放，`recovery-required` 时保留。Adaptive Full 使用 Pack 容器的真实物理字节，Index Maintenance 增加重建 + 原子换库迁移路径。
 
+## 独立加密对象集与真正的选择性拉取（v4.4.14）
+
+`object-set-v1` 将每个 Snapshot 提交为一个独立随机 Age 加密 Control 与若干约 64 MiB Payload Components。Full 按 Contributor/Project 恢复边界分组；Incremental 的 Pack/Standalone 由加密 Control 映射到组件。Receipt/Commit v4 只暴露 role-blind ciphertext digest/size 集合。Restore 的耐久状态机先获取整条 Lineage 的 Controls，完整应用并 Merkle 校验 Metadata，再把 Output/Support File Closure 映射为 Required Component Set；只有该集合允许触发对象 GET。Spool、Multipart、Fetch、Federated Prepare/Commit 与 Hold 均可跨真实进程退出恢复。旧 Whole-Age Lineage 走永久兼容路径，升级边界强制 Full。
+
 ## 分层架构
 
 ![DeepSeek Infra 架构总览](assets/architecture.svg)
