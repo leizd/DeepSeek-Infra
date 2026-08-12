@@ -13,8 +13,10 @@ import {
 
 const BUILD_A = "aaaaaaaaaaaaaaaa";
 const BUILD_B = "bbbbbbbbbbbbbbbb";
+const BUILD_C = "cccccccccccccccc";
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
+const DIGEST_C = "c".repeat(64);
 
 interface FakeMessageChannel extends MessageChannel {
   respond(data: unknown): void;
@@ -191,6 +193,56 @@ describe("build-scoped service worker registration", () => {
 
     driver.reload();
     expect(windowValue.location.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts an exact installed worker before registration.waiting supersedes the prior build", async () => {
+    channels.length = 0;
+    const workerA = {
+      ...controller(BUILD_A, DIGEST_A),
+      scriptURL: `https://example.test/sw-${BUILD_A}.js`,
+    };
+    const workerB = {
+      ...controller(BUILD_B, DIGEST_B),
+      scriptURL: `https://example.test/sw-${BUILD_B}.js`,
+      state: "installed",
+    };
+    let onStateChange: EventListener | undefined;
+    const workerC = {
+      ...controller(BUILD_C, DIGEST_C),
+      scriptURL: `https://example.test/sw-${BUILD_C}.js`,
+      state: "installing",
+      addEventListener: vi.fn((_type: "statechange", listener: EventListener) => {
+        onStateChange = listener;
+      }),
+      removeEventListener: vi.fn(),
+    };
+    const serviceWorkers = container(workerA);
+    serviceWorkers.register.mockResolvedValue({
+      active: workerA,
+      waiting: workerB,
+      installing: workerC,
+    });
+    const driver = createBuildUpdateDriver(serviceWorkers, runtimeWindow(), true, channelFactory);
+    const buildC: DeployedBuild = {
+      schemaVersion: 1,
+      version: "4.4.14-smoke-c",
+      sourceRevision: "revision-c",
+      buildId: BUILD_C,
+      assetSetDigest: DIGEST_C,
+    };
+
+    const staged = driver.stage(buildC);
+    await vi.waitFor(() => expect(onStateChange).toBeDefined());
+    workerC.state = "installed";
+    onStateChange?.(new Event("statechange"));
+
+    await expect(staged).resolves.toMatchObject({
+      buildId: BUILD_C,
+      assetSetDigest: DIGEST_C,
+      cacheReady: true,
+    });
+    expect(serviceWorkers.register).toHaveBeenCalledTimes(1);
+    expect(workerC.removeEventListener).toHaveBeenCalledWith("statechange", onStateChange);
   });
 
   it("does not warm page B through worker A, then warms once after controllerchange to B", async () => {
