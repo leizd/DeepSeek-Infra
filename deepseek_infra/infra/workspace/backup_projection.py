@@ -138,38 +138,49 @@ def _chain_roots(chain: Sequence[ChainPackage]) -> list[list[backup_incremental.
     return state
 
 
-def _known_contributors(chain: Sequence[ChainPackage]) -> set[str]:
-    baseline = chain[0]
-    known = set(baseline.contributor_ids)
-    if baseline.frontend:
+def _known_contributors(
+    chain: Sequence[ChainPackage],
+    final_files: Sequence[backup_incremental.FileRecord],
+) -> set[str]:
+    target = chain[-1] if chain else None
+    known = {record.contributor_id for record in final_files}
+    if target is not None:
+        known.update(target.contributor_ids)
+    if target is not None and target.frontend:
         known.add(FRONTEND_CONTRIBUTOR)
-    if baseline.external_mcp:
+    if target is not None and target.external_mcp:
         known.add(STATELESS_MCP_CONTRIBUTOR)
     return known
 
 
-def _project_ids_in_baseline(chain: Sequence[ChainPackage]) -> set[str]:
+def _project_ids_in_final(final_files: Sequence[backup_incremental.FileRecord]) -> set[str]:
     result: set[str] = set()
-    for record in chain[0].files:
+    for record in final_files:
         path = PurePosixPath(record.logical_path)
         if len(path.parts) >= 3 and path.parts[:2] == ("payload", "projects"):
             result.add(path.parts[2])
     return result
 
 
-def validate_selection(selection: RestoreSelection, chain: Sequence[ChainPackage]) -> list[str]:
+def validate_selection(
+    selection: RestoreSelection,
+    chain: Sequence[ChainPackage],
+    *,
+    final_files: Sequence[backup_incremental.FileRecord] | None = None,
+) -> list[str]:
     """Return human-readable errors, or an empty list when the selection is valid."""
     errors: list[str] = []
+    effective_files = final_files if final_files is not None else (chain[-1].files if chain else ())
     if not selection.contributors:
         errors.append("selection is empty")
-    known = _known_contributors(chain)
+    known = _known_contributors(chain, effective_files)
     unknown = sorted(set(selection.contributors) - known)
     if unknown:
         errors.append(f"selection includes unsupported contributors: {', '.join(unknown)}")
     if selection.project_ids and PROJECTS_CONTRIBUTOR not in selection.contributors:
         errors.append("selection projectIds require the projects contributor")
     if PROJECTS_CONTRIBUTOR in selection.contributors and selection.project_ids:
-        available = _project_ids_in_baseline(chain)
+        available = _project_ids_in_final(effective_files)
         missing = sorted(set(selection.project_ids) - available)
         if missing:
             errors.append(f"selection includes unknown project ids: {', '.join(missing)}")
@@ -275,6 +286,8 @@ def layer_needed_payloads(
         return packs, blobs, standalone
     ops = chain[layer].operations or {}
     index = chain[layer].pack_index
+    if index is not None:
+        index = backup_pack.normalize_pack_index(index)
     produced = produced_by_layer[layer]
     for put in ops.get("put") or []:
         if not isinstance(put, dict) or str(put.get("path") or "") not in produced:
@@ -381,11 +394,11 @@ def plan_projection(
     The full logical chain is applied and every Merkle root verified before any
     projection is computed; only payload materialization is selective.
     """
-    errors = validate_selection(selection, chain)
-    if errors:
-        raise AppError("; ".join(errors), code=ErrorCode.INVALID_REQUEST, status=409)
     state = _chain_roots(chain)
     final_files = state[-1]
+    errors = validate_selection(selection, chain, final_files=final_files)
+    if errors:
+        raise AppError("; ".join(errors), code=ErrorCode.INVALID_REQUEST, status=409)
     output_set = _selectable_files(final_files, selection)
     if not output_set:
         raise AppError(

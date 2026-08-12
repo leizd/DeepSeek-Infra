@@ -23,6 +23,7 @@ from typing import Any, BinaryIO
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.workspace import backup_object_set
 
 INDEX_DIR = config.ROOT / ".backup-index"
 INDEX_DB = INDEX_DIR / "index.db"
@@ -236,6 +237,9 @@ def select_snapshot_plan(
     committed_scope = str(latest.get("scope_digest") or "")
     committed_recipients = str(latest.get("recipient_set_digest") or "")
     committed_schema = str(latest.get("schema_digest") or "")
+    committed_storage_protocol = str(latest.get("storage_protocol") or backup_object_set.WHOLE_AGE_V1)
+    if committed_storage_protocol != backup_object_set.CURRENT_STORAGE_PROTOCOL:
+        return "full", None, None, 0, None, None, "storage-protocol-upgrade"
     # Rebuildable pre-4.4.9 test/index rows did not carry a protocol at all;
     # only an explicitly committed v2 lineage proves that an upgrade full is
     # required. Real 4.4.9 executor rows always persisted v2.
@@ -518,6 +522,7 @@ _LINEAGE_EXTRA_COLUMNS = (
     ("chunk_protocol", "TEXT"),
     ("full_committed_at", "TEXT"),
     ("logical_bytes", "INTEGER"),
+    ("storage_protocol", "TEXT"),
 )
 
 
@@ -1104,6 +1109,7 @@ def record_committed_snapshot(
     chunk_protocol: str = "",
     full_committed_at: str | None = None,
     logical_bytes: int = 0,
+    storage_protocol: str = backup_object_set.CURRENT_STORAGE_PROTOCOL,
 ) -> None:  # pragma: no cover - compatibility wrapper exercised by contract tests
     """Compatibility wrapper around the atomic v3 index commit.
 
@@ -1126,6 +1132,7 @@ def record_committed_snapshot(
         chunk_protocol=chunk_protocol or CURRENT_CDC_PROTOCOL,
         full_committed_at=full_committed_at,
         logical_bytes=logical_bytes,
+        storage_protocol=storage_protocol,
     )
 
 
@@ -1337,6 +1344,7 @@ def commit_snapshot_index(
     chunk_protocol: str = CURRENT_CDC_PROTOCOL,
     full_committed_at: str | None = None,
     logical_bytes: int = 0,
+    storage_protocol: str = backup_object_set.CURRENT_STORAGE_PROTOCOL,
 ) -> None:
     """Atomically commit lineage, delta ops, immutable versions and one effective view."""
     grouped: dict[tuple[str, str], list[ChunkRecord]] = {}
@@ -1399,12 +1407,12 @@ def commit_snapshot_index(
                 """
                 INSERT OR REPLACE INTO snapshot_lineages
                 (target_id, policy_id, backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at,
-                 scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, logical_bytes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, logical_bytes, storage_protocol)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     target_id, policy_id, backup_id, parent_backup_id, base_backup_id, int(chain_depth), root_digest, _utc_iso(),
-                    scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, int(logical_bytes),
+                    scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, int(logical_bytes), storage_protocol,
                 ),
             )
             map_ids: dict[tuple[str, str], str] = {}
@@ -1534,7 +1542,7 @@ def latest_committed_snapshot(target_id: str, policy_id: str) -> dict[str, Any] 
         row = connection.execute(
             """
             SELECT backup_id, parent_backup_id, base_backup_id, chain_depth, root_digest, committed_at,
-                   scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, logical_bytes
+                   scope_digest, recipient_set_digest, schema_digest, chunk_protocol, full_committed_at, logical_bytes, storage_protocol
             FROM snapshot_lineages
             WHERE target_id = ? AND policy_id = ?
             ORDER BY committed_at DESC, rowid DESC

@@ -410,11 +410,16 @@ def test_remote_reconcile_full_paths(tmp_settings: Path, tmp_path: Path) -> None
     put_json_if_absent(store2, "control/head.json", {"schemaVersion": 1, "targetGeneration": 0, "latestCommitHash": "0" * 64, "incarnationId": "i"})
     from deepseek_infra.infra.workspace.backup_target_store import commit_marker_key, object_key
 
-    put_json_if_absent(
-        store2,
-        commit_marker_key("pol2", "slot2"),
-        {"commitHash": "c" * 64, "backupId": "rb1", "runId": "run_rb", "objectDigest": "a" * 64, "targetGeneration": 1, "policyId": "pol2", "scheduleSlot": "slot2"},
-    )
+    marker = {
+        "backupId": "rb1",
+        "runId": "run_rb",
+        "objectDigest": "a" * 64,
+        "targetGeneration": 1,
+        "policyId": "pol2",
+        "scheduleSlot": "slot2",
+    }
+    marker["commitHash"] = backup_publish._commit_hash(marker)
+    put_json_if_absent(store2, commit_marker_key("pol2", "slot2"), marker)
     put_json_if_absent(
         store2,
         "transactions/run_rb.json",

@@ -10,7 +10,7 @@ ephemeral recipient that is destroyed immediately after the round trip.
 from __future__ import annotations
 
 import hashlib
-import io
+import os
 import platform
 import shutil
 import threading
@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, cast
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
@@ -27,6 +27,7 @@ from deepseek_infra.infra.workspace import (
     backup_chunk_engine,
     backup_incremental,
     backup_mirror,
+    backup_object_set,
     backup_pack,
     backup_unattended,
     backups,
@@ -50,6 +51,43 @@ class ScheduledBackupPackage:
     chunk_records: tuple[Any, ...] = ()
     effective_files: tuple[Any, ...] = ()
     savings: dict[str, Any] | None = None
+
+
+class DeltaCostExceeded(Exception):
+    """The exact incremental ZIP exceeded its frozen adaptive-full budget."""
+
+    def __init__(self, *, byte_limit: int, attempted_size: int) -> None:
+        self.byte_limit = byte_limit
+        self.attempted_size = attempted_size
+        super().__init__(f"delta archive exceeded {byte_limit} byte adaptive limit")
+
+
+class ThresholdWriter:
+    """Seekable binary writer that bounds the maximum file extent."""
+
+    def __init__(self, output: BinaryIO, *, byte_limit: int) -> None:
+        if byte_limit < 0:
+            raise ValueError("byte_limit must be non-negative")
+        self._output = output
+        self.byte_limit = byte_limit
+
+    def write(self, data: bytes) -> int:
+        attempted_size = self._output.tell() + len(data)
+        if attempted_size > self.byte_limit:
+            raise DeltaCostExceeded(byte_limit=self.byte_limit, attempted_size=attempted_size)
+        return self._output.write(data)
+
+    def tell(self) -> int:
+        return self._output.tell()
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return self._output.seek(offset, whence)
+
+    def flush(self) -> None:
+        self._output.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._output, name)
 
 
 def _utc_iso() -> str:
@@ -147,10 +185,14 @@ def _build_candidate(
     base_backup_id: str | None = None,
     lineage_id: str | None = None,
     chain_depth: int = 0,
-) -> ScheduledBackupPackage:
+    adaptive_max_delta_ratio: float | None = None,
+    storage_protocol: str = backup_object_set.WHOLE_AGE_V1,
+) -> ScheduledBackupPackage | backup_object_set.ObjectSetPackage:
     staging = run_dir / "staging"
     verification_dir = run_dir / "verification"
+    plaintext_archive = run_dir / f".{backup_id}.candidate.delta.tmp"
     shutil.rmtree(staging, ignore_errors=True)
+    plaintext_archive.unlink(missing_ok=True)
     staging.mkdir(parents=True)
     try:
         _raise_if_cancelled(cancel_event)
@@ -606,19 +648,58 @@ def _build_candidate(
                 raise AppError("Scheduled backup coverage verification failed", code=ErrorCode.INTERNAL, status=500)
 
         _raise_if_cancelled(cancel_event)
-        plaintext_buffer: io.BytesIO | None = None
+        plaintext_archive_bytes = 0
 
         def _stream_plaintext(output: Any) -> None:
-            if plaintext_buffer is not None:
-                output.write(plaintext_buffer.getvalue())
+            if plaintext_archive.is_file():
+                with plaintext_archive.open("rb") as source:
+                    shutil.copyfileobj(source, output, length=1024 * 1024)
             else:
                 backups._write_zip_tree(staging, output)
 
         if snapshot_kind == "incremental":
-            # The incremental candidate is small; buffer its exact plaintext ZIP
-            # so the adaptive-full decision can compare true container bytes.
-            plaintext_buffer = io.BytesIO()
-            backups._write_zip_tree(staging, plaintext_buffer)
+            # Keep exact container-cost accounting without retaining the delta
+            # archive in RAM. The verified temporary archive is streamed into
+            # Age and removed whether encryption succeeds or fails.
+            with plaintext_archive.open("w+b") as archive_output:
+                logical_bytes = int((manifest.get("incrementalSavings") or {}).get("logicalBytes") or 0)
+                byte_limit = (
+                    int(logical_bytes * adaptive_max_delta_ratio)
+                    if adaptive_max_delta_ratio is not None and logical_bytes > 0
+                    else None
+                )
+                bounded_output = (
+                    ThresholdWriter(archive_output, byte_limit=byte_limit)
+                    if byte_limit is not None
+                    else archive_output
+                )
+                backups._write_zip_tree(staging, cast(BinaryIO, bounded_output))
+                bounded_output.flush()
+                os.fsync(archive_output.fileno())
+            plaintext_archive_bytes = plaintext_archive.stat().st_size
+        final_savings: dict[str, Any] | None = None
+        if snapshot_kind == "incremental":
+            final_savings = dict(manifest.get("incrementalSavings") or {})
+            final_savings["physicalDeltaBytes"] = sum(int(item.get("size") or 0) for item in (manifest.get("deltaFiles") or []))
+            final_savings["unencryptedArchiveBytes"] = plaintext_archive_bytes
+        if storage_protocol == backup_object_set.OBJECT_SET_V1:
+            return backup_object_set.build_encrypted_object_set(
+                staging,
+                run_dir / "object-set",
+                backup_id=backup_id,
+                recipients=tuple(str(item) for item in (policy.get("protection") or {}).get("recipients") or []),
+                manifest=manifest,
+                manifest_digest=hashlib.sha256(manifest_bytes).hexdigest(),
+                coverage_digest=hashlib.sha256(backups._stable_json(coverage)).hexdigest(),
+                frontend=coverage_frontend,
+                coverage=coverage,
+                cancel_event=cancel_event,
+                chunk_records=tuple(current_chunk_records),
+                effective_files=tuple(effective_index_records),
+                savings=final_savings,
+            )
+        if storage_protocol != backup_object_set.WHOLE_AGE_V1:
+            raise AppError("Unsupported remote storage protocol", code=ErrorCode.INVALID_PAYLOAD)
         encryption = backup_unattended.encrypt_unattended(
             target,
             _stream_plaintext,
@@ -626,11 +707,6 @@ def _build_candidate(
             verify=_verify,
             cancel_event=cancel_event,
         )
-        final_savings: dict[str, Any] | None = None
-        if snapshot_kind == "incremental":
-            final_savings = dict(manifest.get("incrementalSavings") or {})
-            final_savings["physicalDeltaBytes"] = sum(int(item.get("size") or 0) for item in (manifest.get("deltaFiles") or []))
-            final_savings["unencryptedArchiveBytes"] = len(plaintext_buffer.getvalue()) if plaintext_buffer is not None else 0
         return ScheduledBackupPackage(
             backup_id=backup_id,
             filename=filename,
@@ -648,6 +724,7 @@ def _build_candidate(
             savings=final_savings,
         )
     finally:
+        plaintext_archive.unlink(missing_ok=True)
         shutil.rmtree(staging, ignore_errors=True)
         shutil.rmtree(verification_dir, ignore_errors=True)
 
@@ -666,7 +743,9 @@ def build_scheduled_backup(
     base_backup_id: str | None = None,
     lineage_id: str | None = None,
     chain_depth: int = 0,
-) -> ScheduledBackupPackage:
+    adaptive_max_delta_ratio: float | None = None,
+    storage_protocol: str = backup_object_set.WHOLE_AGE_V1,
+) -> ScheduledBackupPackage | backup_object_set.ObjectSetPackage:
     """Build and verify a scheduled backup package under ``staging_root``.
 
     The workspace is quiesced through the mutation gate; if it keeps changing
@@ -712,6 +791,8 @@ def build_scheduled_backup(
                 base_backup_id=base_backup_id,
                 lineage_id=lineage_id,
                 chain_depth=chain_depth,
+                adaptive_max_delta_ratio=adaptive_max_delta_ratio,
+                storage_protocol=storage_protocol,
             )
         except AppError as exc:
             last_error = exc

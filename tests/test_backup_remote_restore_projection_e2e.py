@@ -254,6 +254,35 @@ def test_from_target_preview_reports_honest_projection(tmp_settings: Path, stub_
     assert completed["phase"] == "complete"
 
 
+def test_full_from_target_preview_uses_projection_planner(tmp_settings: Path, stub_crypto: None) -> None:
+    _seed_workspace()
+    package_f0, package_i1 = _build_chain_packages(tmp_settings)
+    _publish_chain(package_f0, package_i1)
+    selection = {"contributors": ["projects"], "projectIds": ["p1"]}
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id="backup_f0",
+        selection=selection,
+    )
+    restore_id = str(created["restoreId"])
+    result = backup_remote_restore.fetch_restore_session(restore_id)
+    while str(result.get("phase") or "") != "fetched":
+        result = backup_remote_restore.fetch_restore_session(restore_id)
+    backup_crypto.put_secret(restore_id, "passphrase", "hunter2")
+
+    preview = backup_remote_restore.preview_restore_from_target(
+        target_id="managed-local",
+        backup_id="backup_f0",
+        selection=selection,
+        restore_id=restore_id,
+    )
+
+    assert preview["phase"] == "preview-planned"
+    assert preview["projection"]["selected"] == {"contributors": 1, "projects": 1, "files": 1}
+    assert preview["projection"]["bytes"]["ciphertextDownloadBytes"] == package_f0.size
+    assert preview["projection"]["requiresFrontendApply"] is False
+
+
 def test_restore_holds_released_on_complete(tmp_settings: Path, stub_crypto: None) -> None:
     _seed_workspace()
     package_f0, package_i1 = _build_chain_packages(tmp_settings)
@@ -303,6 +332,8 @@ def test_projected_remote_restore_round_trip(tmp_settings: Path, stub_crypto: No
     _seed_workspace()
     package_f0, package_i1 = _build_chain_packages(tmp_settings)
     _publish_chain(package_f0, package_i1)
+    live_memory = '{"items":[{"id":"m1","text":"live-diverged-after-backup"}]}'
+    config.MEMORY_FILE.write_text(live_memory, encoding="utf-8")
     selection = {"contributors": ["projects"], "projectIds": ["p1"]}
     created = backup_remote_restore.create_restore_from_target(
         target_id="managed-local",
@@ -322,7 +353,31 @@ def test_projected_remote_restore_round_trip(tmp_settings: Path, stub_crypto: No
     # Support file from the unselected project never reaches the workspace.
     assert not (projects_root / "p2").exists()
     # Unselected contributor is never mutated.
-    assert (config.MEMORY_FILE).read_text(encoding="utf-8") == '{"items":[{"id":"m1","text":"before"}]}'
+    assert config.MEMORY_FILE.read_text(encoding="utf-8") == live_memory
+
+
+def test_full_remote_restore_applies_project_projection(tmp_settings: Path, stub_crypto: None) -> None:
+    _seed_workspace()
+    package_f0, package_i1 = _build_chain_packages(tmp_settings)
+    _publish_chain(package_f0, package_i1)
+    live_memory = '{"items":[{"id":"m1","text":"live-diverged-after-backup"}]}'
+    config.MEMORY_FILE.write_text(live_memory, encoding="utf-8")
+    selection = {"contributors": ["projects"], "projectIds": ["p1"]}
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id="backup_f0",
+        selection=selection,
+    )
+
+    completed = _restore_to_complete(str(created["restoreId"]))
+
+    assert completed["phase"] == "complete"
+    assert completed["selectionDigest"] == backup_projection.selection_digest(
+        RestoreSelection(contributors=("projects",), project_ids=("p1",))
+    )
+    assert (config.PROJECTS_DIR / "p1" / "keep.bin").read_bytes() == b"keep"
+    assert not (config.PROJECTS_DIR / "p2").exists()
+    assert config.MEMORY_FILE.read_text(encoding="utf-8") == live_memory
 
 
 def test_full_remote_restore_round_trip_still_works(tmp_settings: Path, stub_crypto: None) -> None:

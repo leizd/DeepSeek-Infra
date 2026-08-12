@@ -16,6 +16,7 @@ PACK_ALIGNMENT = 8
 WHOLE_FILE_PACK_THRESHOLD = 16 * 1024 * 1024
 COPY_BUFFER_BYTES = 1024 * 1024
 PACK_INDEX_PATH = "payload/packs/index.json"
+PACK_INDEX_SCHEMA_VERSION = 2
 
 
 def _is_sha256(value: str) -> bool:
@@ -65,13 +66,15 @@ def parse_pack_index(root: Path) -> dict[str, Any]:
         index = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise AppError("Delta pack index is invalid", code=ErrorCode.INVALID_PAYLOAD) from exc
-    if not isinstance(index, dict) or index.get("schemaVersion") != 1:
+    if not isinstance(index, dict) or index.get("schemaVersion") not in {1, PACK_INDEX_SCHEMA_VERSION}:
         raise AppError("Delta pack index is invalid", code=ErrorCode.INVALID_PAYLOAD)
+    schema_version = int(index["schemaVersion"])
     raw_packs = index.get("packs")
     raw_entries = index.get("entries")
-    if not isinstance(raw_packs, list) or not isinstance(raw_entries, dict):
+    if not isinstance(raw_packs, list) or not isinstance(raw_entries, dict if schema_version == 1 else list):
         raise AppError("Delta pack index is invalid", code=ErrorCode.INVALID_PAYLOAD)
     packs: dict[str, int] = {}
+    pack_order: list[str] = []
     for raw in raw_packs:
         if not isinstance(raw, dict):
             raise AppError("Delta pack index is invalid", code=ErrorCode.INVALID_PAYLOAD)
@@ -92,14 +95,34 @@ def parse_pack_index(root: Path) -> dict[str, Any]:
         ):
             raise AppError("Delta pack index is invalid", code=ErrorCode.INVALID_PAYLOAD)
         packs[relative] = size
+        pack_order.append(relative)
     ranges: dict[str, list[tuple[int, int]]] = {relative: [] for relative in packs}
-    for blob_id, raw in raw_entries.items():
-        if not isinstance(blob_id, str) or not blob_id or not isinstance(raw, dict):
+    normalized_entries: dict[str, dict[str, Any]] = {}
+    iterable: list[tuple[str, Any]]
+    if schema_version == 1:
+        assert isinstance(raw_entries, dict)
+        iterable = list(raw_entries.items())
+    else:
+        assert isinstance(raw_entries, list)
+        iterable = [(f"blob_{ordinal:06d}", raw) for ordinal, raw in enumerate(raw_entries)]
+    for blob_id, raw in iterable:
+        if not isinstance(blob_id, str) or not blob_id:
             raise AppError("Delta pack entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
-        relative = str(raw.get("pack") or "")
-        offset = raw.get("offset")
-        length = raw.get("length")
-        digest = str(raw.get("sha256") or "")
+        if schema_version == 1:
+            if not isinstance(raw, dict):
+                raise AppError("Delta pack entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
+            relative = str(raw.get("pack") or "")
+            offset = raw.get("offset")
+            length = raw.get("length")
+            digest = str(raw.get("sha256") or "")
+        else:
+            if not isinstance(raw, list) or len(raw) != 3:
+                raise AppError("Delta pack entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
+            pack_ordinal, offset, length = raw
+            if isinstance(pack_ordinal, bool) or not isinstance(pack_ordinal, int) or not (0 <= pack_ordinal < len(pack_order)):
+                raise AppError("Delta pack entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
+            relative = pack_order[pack_ordinal]
+            digest = ""
         if (
             relative not in packs
             or isinstance(offset, bool)
@@ -110,17 +133,45 @@ def parse_pack_index(root: Path) -> dict[str, Any]:
             or not isinstance(length, int)
             or length < 0
             or offset + length > packs[relative]
-            or not _is_sha256(digest)
+            or (schema_version == 1 and not _is_sha256(digest))
         ):
             raise AppError("Delta pack entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
         ranges[relative].append((offset, offset + length))
+        normalized_entries[blob_id] = {
+            "pack": relative,
+            "offset": offset,
+            "length": length,
+            **({"sha256": digest} if digest else {}),
+        }
     for pack_ranges in ranges.values():
         previous_end = 0
         for start, end in sorted(pack_ranges):
             if start < previous_end:
                 raise AppError("Delta pack entries overlap", code=ErrorCode.INVALID_PAYLOAD)
             previous_end = max(previous_end, end)
-    return index
+    return {**index, "entries": normalized_entries}
+
+
+def normalize_pack_index(index: Any) -> dict[str, Any]:
+    """Normalize an already-decoded v1/v2 index for projection planning."""
+    if not isinstance(index, dict):
+        raise AppError("Delta pack index is invalid", code=ErrorCode.INVALID_PAYLOAD)
+    if index.get("schemaVersion") == 1 and isinstance(index.get("entries"), dict):
+        return index
+    packs = index.get("packs")
+    entries = index.get("entries")
+    if index.get("schemaVersion") != PACK_INDEX_SCHEMA_VERSION or not isinstance(packs, list) or not isinstance(entries, list):
+        raise AppError("Delta pack index is invalid", code=ErrorCode.INVALID_PAYLOAD)
+    paths = [str(item.get("path") or "") if isinstance(item, dict) else "" for item in packs]
+    normalized: dict[str, dict[str, int | str]] = {}
+    for ordinal, entry in enumerate(entries):
+        if not isinstance(entry, list) or len(entry) != 3:
+            raise AppError("Delta pack entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        pack_ordinal, offset, length = entry
+        if isinstance(pack_ordinal, bool) or not isinstance(pack_ordinal, int) or not (0 <= pack_ordinal < len(paths)):
+            raise AppError("Delta pack entry is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        normalized[f"blob_{ordinal:06d}"] = {"pack": paths[pack_ordinal], "offset": offset, "length": length}
+    return {**index, "entries": normalized}
 
 
 def verify_pack(root: Path, spec: dict[str, Any]) -> None:
@@ -272,14 +323,23 @@ class PackWriter:
             return self._finalized
         self._finish_pack()
         index: dict[str, Any] = {
-            "schemaVersion": 1,
+            "schemaVersion": PACK_INDEX_SCHEMA_VERSION,
             "packs": self._packs,
             "entries": self._entries,
+        }
+        pack_ordinals = {str(item["path"]): ordinal for ordinal, item in enumerate(self._packs)}
+        stored_index = {
+            "schemaVersion": PACK_INDEX_SCHEMA_VERSION,
+            "packs": self._packs,
+            "entries": [
+                [pack_ordinals[str(entry["pack"])], int(entry["offset"]), int(entry["length"])]
+                for entry in self._entries.values()
+            ],
         }
         path = self.root / PACK_INDEX_PATH
         temporary = path.with_suffix(".tmp")
         temporary.write_text(
-            json.dumps(index, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+            json.dumps(stored_index, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
             encoding="utf-8",
             newline="\n",
         )

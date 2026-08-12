@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_scheduler, backup_spool, backup_targets, backup_unattended, backups
+from deepseek_infra.infra.workspace import backup_object_set, backup_scheduler, backup_spool, backup_targets, backup_unattended, backups
 from deepseek_infra.infra.workspace.backup_target_store import (
     BackupTargetStore,
     commit_marker_key,
@@ -41,8 +41,10 @@ from deepseek_infra.infra.workspace.backup_target_store import (
     transaction_key,
 )
 
-RECEIPT_SCHEMA_VERSION = 3
-COMMIT_SCHEMA_VERSION = 3
+LEGACY_RECEIPT_SCHEMA_VERSION = 3
+RECEIPT_SCHEMA_VERSION = 4
+LEGACY_COMMIT_SCHEMA_VERSION = 3
+COMMIT_SCHEMA_VERSION = 4
 GENESIS_COMMIT_HASH = "0" * 64
 
 LAYOUT_DIRS = ("objects", "transactions", "receipts", "commits", "catalog", "control", "events", "holds", ".partial", ".trash", ".orphaned")
@@ -135,6 +137,14 @@ def object_path(root: Path, digest: str) -> Path:
 def backup_file_candidates(root: Path, record: dict[str, Any]) -> list[Path]:
     """Existing-layout then legacy locations for a catalog/receipt record."""
     candidates: list[Path] = []
+    if str(record.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
+        try:
+            inventory = backup_object_set.committed_object_inventory(record)
+        except AppError:
+            return []
+        for item in inventory:
+            candidates.append(object_path(root, str(item["digest"])))
+        return candidates
     digest = str(record.get("objectDigest") or record.get("ciphertextSha256") or "")
     if len(digest) == 64:
         candidates.append(object_path(root, digest))
@@ -193,6 +203,29 @@ def commit_marker_valid(marker: dict[str, Any]) -> bool:
     if not commit_hash:
         return False
     return commit_hash == _commit_hash(marker)
+
+
+def _object_set_commit_fields_valid(marker: dict[str, Any], *, object_set_digest: str, control_digest: str) -> bool:
+    return (
+        int(marker.get("schemaVersion") or 0) == COMMIT_SCHEMA_VERSION
+        and str(marker.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1
+        and str(marker.get("objectSetDigest") or "") == object_set_digest
+        and str(marker.get("controlObjectDigest") or "") == control_digest
+        and commit_marker_valid(marker)
+    )
+
+
+def _object_set_receipt_fields_valid(receipt: dict[str, Any], *, object_set_digest: str, control_digest: str) -> bool:
+    try:
+        backup_object_set.committed_object_inventory(receipt)
+    except AppError:
+        return False
+    return (
+        int(receipt.get("schemaVersion") or 0) == RECEIPT_SCHEMA_VERSION
+        and str(receipt.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1
+        and str(receipt.get("objectSetDigest") or "") == object_set_digest
+        and str(receipt.get("controlObjectDigest") or "") == control_digest
+    )
 
 
 def _journal_path(root: Path, run_id: str) -> Path:
@@ -257,11 +290,13 @@ def receipt_for(
     schedule_slot: str,
 ) -> dict[str, Any]:
     manifest = getattr(package, "manifest", None) or {}
+    is_object_set = isinstance(package, backup_object_set.ObjectSetPackage)
+    receipt_schema = RECEIPT_SCHEMA_VERSION if is_object_set else LEGACY_RECEIPT_SCHEMA_VERSION
     snapshot = manifest.get("snapshot") if isinstance(manifest, dict) else None
     snapshot_kind = str(manifest.get("snapshotKind") or "full")
     if isinstance(snapshot, dict):
         lineage = {
-            "schemaVersion": RECEIPT_SCHEMA_VERSION,
+            "schemaVersion": receipt_schema,
             "snapshotKind": str(snapshot.get("kind") or snapshot_kind),
             "lineageId": str(snapshot.get("lineageId") or "") or None,
             "parentBackupId": str(snapshot.get("parentBackupId") or "") or None,
@@ -271,7 +306,7 @@ def receipt_for(
         }
     else:
         lineage = {
-            "schemaVersion": RECEIPT_SCHEMA_VERSION,
+            "schemaVersion": receipt_schema,
             "snapshotKind": snapshot_kind,
             "lineageId": None,
             "parentBackupId": None,
@@ -279,22 +314,33 @@ def receipt_for(
             "chainDepth": 0,
             "chunkProtocol": str(manifest.get("chunkProtocol") or "") or None,
         }
-    return {
+    common_result = {
         **lineage,
         "backupId": package.backup_id,
         "runId": run_id,
         "policyId": policy_id,
         "targetId": target_id,
         "scheduleSlot": schedule_slot,
-        "filename": package.filename,
         "size": package.size,
-        "ciphertextSha256": package.ciphertext_sha256,
-        "objectDigest": package.ciphertext_sha256,
-        "manifestDigest": package.manifest_digest,
-        "coverageDigest": package.coverage_digest,
         "creationVerified": package.creation_verified,
         "createdAt": _utc_iso(),
         "pinned": False,
+    }
+    if is_object_set:
+        return {
+            **common_result,
+            "storageProtocol": backup_object_set.OBJECT_SET_V1,
+            "controlObjectDigest": package.control.ciphertext_digest,
+            "objectSetDigest": package.object_set_digest,
+            "objects": backup_object_set.remote_object_inventory(package.components),
+        }
+    return {
+        **common_result,
+        "filename": package.filename,
+        "manifestDigest": package.manifest_digest,
+        "coverageDigest": package.coverage_digest,
+        "ciphertextSha256": package.ciphertext_sha256,
+        "objectDigest": package.ciphertext_sha256,
     }
 
 
@@ -318,6 +364,28 @@ def publish_backup(
     checkpoint: Callable[[], None] | None = None,
 ) -> PublishResult:
     """Publish a verified package as an immutable object plus slot commit."""
+    if isinstance(package, backup_object_set.ObjectSetPackage):
+        if target.kind != "filesystem" or target.root is None:
+            return _publish_object_set_via_store(
+                target,
+                package,
+                run_id=run_id,
+                policy_id=policy_id,
+                schedule_slot=schedule_slot,
+                fencing_token=fencing_token,
+                receipt=receipt,
+                checkpoint=checkpoint,
+            )
+        return _publish_object_set_filesystem(
+            target,
+            package,
+            run_id=run_id,
+            policy_id=policy_id,
+            schedule_slot=schedule_slot,
+            fencing_token=fencing_token,
+            receipt=receipt,
+            checkpoint=checkpoint,
+        )
     if target.kind != "filesystem" or target.root is None:
         return _publish_via_store(
             target,
@@ -417,7 +485,7 @@ def publish_backup(
         latest = latest_commit(root)
         generation = int(latest["targetGeneration"]) + 1 if latest is not None else 1
         marker: dict[str, Any] = {
-            "schemaVersion": COMMIT_SCHEMA_VERSION,
+            "schemaVersion": LEGACY_COMMIT_SCHEMA_VERSION,
             "policyId": policy_id,
             "scheduleSlot": schedule_slot,
             "slotDigest": commit_slot_digest(schedule_slot),
@@ -456,6 +524,377 @@ def publish_backup(
         partial.unlink(missing_ok=True)
         backup_scheduler.record_target_health(target.target_id, "blocked", str(exc)[:200])
         raise AppError(f"blocked-target-unavailable: {exc}", code=ErrorCode.INVALID_REQUEST, status=503) from exc
+
+
+def _publish_object_set_filesystem(
+    target: ResolvedTarget,
+    package: backup_object_set.ObjectSetPackage,
+    *,
+    run_id: str,
+    policy_id: str,
+    schedule_slot: str,
+    fencing_token: int,
+    receipt: dict[str, Any] | None,
+    checkpoint: Callable[[], None] | None,
+) -> PublishResult:
+    root = target.require_root()
+    _ensure_layout(root)
+    set_digest = package.object_set_digest
+    control_digest = package.control.ciphertext_digest
+    partials: list[Path] = []
+
+    def _checkpoint() -> None:
+        if checkpoint is not None:
+            checkpoint()
+
+    journal: dict[str, Any] = {
+        "schemaVersion": 2,
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "runId": run_id,
+        "policyId": policy_id,
+        "scheduleSlot": schedule_slot,
+        "fencingToken": int(fencing_token),
+        "backupId": package.backup_id,
+        "objectSetDigest": set_digest,
+        "controlObjectDigest": control_digest,
+        "objects": backup_object_set.remote_object_inventory(package.components),
+        "phase": "started",
+        "updatedAt": _utc_iso(),
+    }
+    try:
+        _write_journal(root, journal)
+        for component in package.components:
+            if (
+                not component.path.is_file()
+                or component.path.stat().st_size != component.ciphertext_size
+                or backup_unattended.sha256_file(component.path, checkpoint=checkpoint) != component.ciphertext_digest
+            ):
+                raise AppError("Object-set component fails its ciphertext commitment", code=ErrorCode.INVALID_PAYLOAD)
+            destination = object_path(root, component.ciphertext_digest)
+            partial = root / ".partial" / f"{run_id}-{component.ciphertext_digest}.part"
+            partials.append(partial)
+            if not destination.is_file():
+                with component.path.open("rb") as source, partial.open("wb") as output:
+                    while chunk := source.read(1024 * 1024):
+                        _checkpoint()
+                        output.write(chunk)
+                    output.flush()
+                    os.fsync(output.fileno())
+                if backup_unattended.sha256_file(partial, checkpoint=checkpoint) != component.ciphertext_digest:
+                    raise AppError("Target-side object-set digest mismatch after copy", code=ErrorCode.INTERNAL, status=500)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                _checkpoint()
+                os.replace(partial, destination)
+                _fsync_dir(destination.parent)
+            elif backup_unattended.sha256_file(destination, checkpoint=checkpoint) != component.ciphertext_digest:
+                raise AppError("Content-addressed component on target fails its digest", code=ErrorCode.INTERNAL, status=500)
+        journal.update(phase="objects-published", updatedAt=_utc_iso())
+        _write_journal(root, journal)
+
+        receipt_data = receipt_for(
+            package,
+            run_id=run_id,
+            policy_id=policy_id,
+            target_id=target.target_id,
+            schedule_slot=schedule_slot,
+        )
+        receipt_data.update(
+            schemaVersion=RECEIPT_SCHEMA_VERSION,
+            storageProtocol=backup_object_set.OBJECT_SET_V1,
+            controlObjectDigest=control_digest,
+            objectSetDigest=set_digest,
+            objects=backup_object_set.remote_object_inventory(package.components),
+        )
+        receipt_data.pop("objectDigest", None)
+        receipt_data.pop("ciphertextSha256", None)
+        receipt_bytes = (json.dumps(receipt_data, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        receipt_digest = hashlib.sha256(receipt_bytes).hexdigest()
+        receipt_path = root / "receipts" / f"{package.backup_id}.json"
+        marker_path = find_commit_marker_path(root, policy_id, schedule_slot) or commit_marker_path(root, policy_id, schedule_slot)
+
+        def _converge_or_conflict(existing: dict[str, Any]) -> PublishResult:
+            if _object_set_commit_fields_valid(existing, object_set_digest=set_digest, control_digest=control_digest):
+                existing_receipt_path = root / "receipts" / f"{existing.get('backupId')}.json"
+                if existing_receipt_path.is_file():
+                    existing_receipt_bytes = existing_receipt_path.read_bytes()
+                    existing_receipt = json.loads(existing_receipt_bytes)
+                    if (
+                        hashlib.sha256(existing_receipt_bytes).hexdigest() == str(existing.get("receiptDigest") or "")
+                        and _object_set_receipt_fields_valid(existing_receipt, object_set_digest=set_digest, control_digest=control_digest)
+                    ):
+                        journal.update(phase="converged", convergedToRunId=str(existing.get("runId") or ""), updatedAt=_utc_iso())
+                        _write_journal(root, journal)
+                        backup_scheduler.record_target_health(target.target_id, "ok", None)
+                        return PublishResult(
+                            receipt=existing_receipt,
+                            path=object_path(root, control_digest),
+                            receipt_path=existing_receipt_path,
+                            commit=existing,
+                            converged=True,
+                            object_key=object_key(control_digest),
+                            receipt_key=receipt_key(str(existing.get("backupId") or "")),
+                        )
+            detail = "stale-fencing-token" if int(existing.get("fencingToken") or 0) > int(fencing_token) else "different-object-set"
+            journal.update(phase="slot-commit-conflict", conflict=detail, updatedAt=_utc_iso())
+            _write_journal(root, journal)
+            raise AppError(f"slot-commit-conflict ({detail}): schedule slot is already committed", code=ErrorCode.INVALID_REQUEST, status=409)
+
+        _checkpoint()
+        if marker_path.is_file():
+            return _converge_or_conflict(json.loads(marker_path.read_text(encoding="utf-8")))
+        _write_immutable(receipt_path, receipt_bytes)
+        journal.update(phase="receipt-published", receiptDigest=receipt_digest, receipt=receipt_data, updatedAt=_utc_iso())
+        _write_journal(root, journal)
+
+        _checkpoint()
+        latest = latest_commit(root)
+        generation = int(latest["targetGeneration"]) + 1 if latest is not None else 1
+        marker: dict[str, Any] = {
+            "schemaVersion": COMMIT_SCHEMA_VERSION,
+            "policyId": policy_id,
+            "scheduleSlot": schedule_slot,
+            "slotDigest": commit_slot_digest(schedule_slot),
+            "runId": run_id,
+            "fencingToken": int(fencing_token),
+            "backupId": package.backup_id,
+            "storageProtocol": backup_object_set.OBJECT_SET_V1,
+            "objectSetDigest": set_digest,
+            "controlObjectDigest": control_digest,
+            "receiptDigest": receipt_digest,
+            "targetGeneration": generation,
+            "previousCommitHash": str(latest["commitHash"]) if latest is not None else GENESIS_COMMIT_HASH,
+        }
+        marker["commitHash"] = _commit_hash(marker)
+        marker_bytes = (json.dumps(marker, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        if not _create_exclusive(marker_path, marker_bytes):
+            return _converge_or_conflict(json.loads(marker_path.read_text(encoding="utf-8")))
+        _fsync_dir(marker_path.parent)
+        journal.update(phase="committed", commitHash=marker["commitHash"], updatedAt=_utc_iso())
+        _write_journal(root, journal)
+        if not target.managed:
+            backup_targets.record_target_head(
+                root,
+                target_id=target.target_id,
+                generation=int(marker["targetGeneration"]),
+                commit_hash=str(marker["commitHash"]),
+            )
+        backup_scheduler.record_target_health(target.target_id, "ok", None)
+        return PublishResult(
+            receipt=receipt_data,
+            path=object_path(root, control_digest),
+            receipt_path=receipt_path,
+            commit=marker,
+            converged=False,
+            object_key=object_key(control_digest),
+            receipt_key=receipt_key(package.backup_id),
+        )
+    except AppError:
+        for partial in partials:
+            partial.unlink(missing_ok=True)
+        backup_scheduler.record_target_health(target.target_id, "error", "publish-failed")
+        raise
+    except OSError as exc:
+        for partial in partials:
+            partial.unlink(missing_ok=True)
+        backup_scheduler.record_target_health(target.target_id, "blocked", str(exc)[:200])
+        raise AppError(f"blocked-target-unavailable: {exc}", code=ErrorCode.INVALID_REQUEST, status=503) from exc
+
+
+def _publish_object_set_via_store(
+    target: ResolvedTarget,
+    package: backup_object_set.ObjectSetPackage,
+    *,
+    run_id: str,
+    policy_id: str,
+    schedule_slot: str,
+    fencing_token: int,
+    receipt: dict[str, Any] | None,
+    checkpoint: Callable[[], None] | None,
+) -> PublishResult:
+    store = target.require_store()
+    slot_digest = commit_slot_digest(schedule_slot)
+    marker_key = commit_marker_key(policy_id, schedule_slot, full_digest=True)
+    def _checkpoint() -> None:
+        if checkpoint is not None:
+            checkpoint()
+
+    spool_meta = backup_spool.store_verified_package(
+        package,
+        policy_id=policy_id,
+        schedule_slot=schedule_slot,
+        run_id=run_id,
+        slot_digest=slot_digest,
+    )
+    spooled = backup_spool.lookup_verified_package(policy_id=policy_id, slot_digest=slot_digest)
+    if not isinstance(spooled, backup_object_set.ObjectSetPackage):  # pragma: no cover
+        raise AppError("verified object-set spool is unavailable", code=ErrorCode.INTERNAL, status=500)
+    if spooled.object_set_digest != str(spool_meta.get("objectSetDigest") or ""):  # pragma: no cover
+        raise AppError("verified object-set spool commitment mismatch", code=ErrorCode.INTERNAL, status=500)
+    set_digest = spooled.object_set_digest
+    control_digest = spooled.control.ciphertext_digest
+
+    journal: dict[str, Any] = {
+        "schemaVersion": 2,
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "runId": run_id,
+        "policyId": policy_id,
+        "scheduleSlot": schedule_slot,
+        "slotDigest": slot_digest,
+        "fencingToken": int(fencing_token),
+        "backupId": spooled.backup_id,
+        "objectSetDigest": set_digest,
+        "controlObjectDigest": control_digest,
+        "objects": backup_object_set.remote_object_inventory(spooled.components),
+        "phase": "started",
+        "updatedAt": _utc_iso(),
+    }
+    try:
+        put_json_if_absent(store, transaction_key(run_id), journal)
+
+        def _converge_or_conflict(existing: dict[str, Any]) -> PublishResult:
+            if _object_set_commit_fields_valid(existing, object_set_digest=set_digest, control_digest=control_digest):
+                existing_receipt_key = receipt_key(str(existing.get("backupId") or ""))
+                existing_receipt = read_json(store, existing_receipt_key) or {}
+                existing_receipt_bytes = store.get_bytes(existing_receipt_key) if existing_receipt else b""
+                if (
+                    existing_receipt_bytes
+                    and hashlib.sha256(existing_receipt_bytes).hexdigest() == str(existing.get("receiptDigest") or "")
+                    and _object_set_receipt_fields_valid(existing_receipt, object_set_digest=set_digest, control_digest=control_digest)
+                ):
+                    journal.update(phase="converged", convergedToRunId=str(existing.get("runId") or ""), updatedAt=_utc_iso())
+                    _replace_journal(store, journal)
+                    backup_scheduler.record_target_health(target.target_id, "ok", None)
+                    backup_spool.clear_slot(policy_id, slot_digest)
+                    return PublishResult(
+                        receipt=existing_receipt,
+                        path=None,
+                        receipt_path=None,
+                        commit=existing,
+                        converged=True,
+                        object_key=object_key(control_digest),
+                        receipt_key=existing_receipt_key,
+                    )
+            detail = "stale-fencing-token" if int(existing.get("fencingToken") or 0) > int(fencing_token) else "different-object-set"
+            journal.update(phase="slot-commit-conflict", conflict=detail, updatedAt=_utc_iso())
+            try:
+                _replace_journal(store, journal)
+            except AppError:  # pragma: no cover
+                pass
+            raise AppError(f"slot-commit-conflict ({detail}): schedule slot is already committed", code=ErrorCode.INVALID_REQUEST, status=409)
+
+        existing_marker = _read_commit_marker(store, policy_id, schedule_slot)
+        if existing_marker is not None:
+            return _converge_or_conflict(existing_marker)
+
+        for component in spooled.components:
+            _checkpoint()
+            key = object_key(component.ciphertext_digest)
+            metadata = store.stat(key)
+            if metadata is None:
+                _upload_object_resumable(
+                    store,
+                    component,
+                    obj_key=key,
+                    policy_id=policy_id,
+                    slot_digest=slot_digest,
+                    checkpoint=checkpoint,
+                    multipart_digest=component.ciphertext_digest,
+                )
+                metadata = store.stat(key)
+            if metadata is None or metadata.size != component.ciphertext_size:
+                raise AppError("Committed object-set component is missing or truncated", code=ErrorCode.INTERNAL, status=500)
+            digest = hashlib.sha256()
+            observed_size = 0
+            for chunk in store.get_stream(key):
+                _checkpoint()
+                digest.update(chunk)
+                observed_size += len(chunk)
+            if observed_size != component.ciphertext_size or digest.hexdigest() != component.ciphertext_digest:
+                raise AppError("Content-addressed component on target fails its digest", code=ErrorCode.INTERNAL, status=500)
+        journal.update(phase="objects-published", updatedAt=_utc_iso())
+        _replace_journal(store, journal)
+
+        receipt_data = receipt_for(
+            spooled,
+            run_id=run_id,
+            policy_id=policy_id,
+            target_id=target.target_id,
+            schedule_slot=schedule_slot,
+        )
+        receipt_data.update(
+            schemaVersion=RECEIPT_SCHEMA_VERSION,
+            storageProtocol=backup_object_set.OBJECT_SET_V1,
+            controlObjectDigest=control_digest,
+            objectSetDigest=set_digest,
+            objects=backup_object_set.remote_object_inventory(spooled.components),
+        )
+        receipt_data.pop("objectDigest", None)
+        receipt_data.pop("ciphertextSha256", None)
+        receipt_bytes = (json.dumps(receipt_data, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        receipt_digest = hashlib.sha256(receipt_bytes).hexdigest()
+        r_key = receipt_key(spooled.backup_id)
+        _checkpoint()
+        try:
+            store.put_if_absent(r_key, receipt_bytes, checksum_sha256=receipt_digest, content_type="application/json")
+        except AppError as exc:
+            if exc.status not in {409, 412}:
+                raise
+            existing_receipt_bytes = store.get_bytes(r_key)
+            if existing_receipt_bytes is None or hashlib.sha256(existing_receipt_bytes).hexdigest() != receipt_digest:
+                raise
+        journal.update(phase="receipt-published", receiptDigest=receipt_digest, receipt=receipt_data, updatedAt=_utc_iso())
+        _replace_journal(store, journal)
+
+        _checkpoint()
+        latest = latest_commit_store(store)
+        generation = int(latest["targetGeneration"]) + 1 if latest is not None else 1
+        marker: dict[str, Any] = {
+            "schemaVersion": COMMIT_SCHEMA_VERSION,
+            "policyId": policy_id,
+            "scheduleSlot": schedule_slot,
+            "slotDigest": slot_digest,
+            "runId": run_id,
+            "fencingToken": int(fencing_token),
+            "backupId": spooled.backup_id,
+            "storageProtocol": backup_object_set.OBJECT_SET_V1,
+            "objectSetDigest": set_digest,
+            "controlObjectDigest": control_digest,
+            "receiptDigest": receipt_digest,
+            "targetGeneration": generation,
+            "previousCommitHash": str(latest["commitHash"]) if latest is not None else GENESIS_COMMIT_HASH,
+        }
+        marker["commitHash"] = _commit_hash(marker)
+        marker_bytes = (json.dumps(marker, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        try:
+            store.put_if_absent(marker_key, marker_bytes, checksum_sha256=hashlib.sha256(marker_bytes).hexdigest(), content_type="application/json")
+        except AppError as exc:
+            if exc.status in {409, 412}:
+                existing = _read_commit_marker(store, policy_id, schedule_slot)
+                if existing is not None:
+                    return _converge_or_conflict(existing)
+            raise
+        journal.update(phase="committed", commitHash=marker["commitHash"], updatedAt=_utc_iso())
+        _replace_journal(store, journal)
+        backup_targets.record_remote_target_head(
+            store,
+            target_id=target.target_id,
+            generation=int(marker["targetGeneration"]),
+            commit_hash=str(marker["commitHash"]),
+        )
+        backup_scheduler.record_target_health(target.target_id, "ok", None)
+        backup_spool.clear_slot(policy_id, slot_digest)
+        return PublishResult(
+            receipt=receipt_data,
+            path=None,
+            receipt_path=None,
+            commit=marker,
+            converged=False,
+            object_key=object_key(control_digest),
+            receipt_key=r_key,
+        )
+    except AppError:
+        backup_scheduler.record_target_health(target.target_id, "error", "publish-failed")
+        raise
 
 
 def _publish_via_store(
@@ -572,7 +1011,7 @@ def _publish_via_store(
         latest = latest_commit_store(store)
         generation = int(latest["targetGeneration"]) + 1 if latest is not None else 1
         marker = {
-            "schemaVersion": COMMIT_SCHEMA_VERSION,
+            "schemaVersion": LEGACY_COMMIT_SCHEMA_VERSION,
             "policyId": policy_id,
             "scheduleSlot": schedule_slot,
             "slotDigest": slot_digest,
@@ -643,14 +1082,28 @@ def _upload_object_resumable(
     policy_id: str,
     slot_digest: str,
     checkpoint: Callable[[], None] | None = None,
+    multipart_digest: str | None = None,
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     default_part_size = 16 * 1024 * 1024
     workers = 4
-    digest = str(package.ciphertext_sha256)
-    size = int(package.size)
-    state = backup_spool.read_multipart_state(policy_id, slot_digest) or {}
+    digest = str(getattr(package, "ciphertext_sha256", None) or getattr(package, "ciphertext_digest", ""))
+    raw_size = getattr(package, "size", None)
+    if raw_size is None:
+        raw_size = getattr(package, "ciphertext_size", 0)
+    size = int(str(raw_size if raw_size is not None else 0))
+    state = (
+        backup_spool.read_component_multipart_state(policy_id, slot_digest, multipart_digest)
+        if multipart_digest is not None
+        else backup_spool.read_multipart_state(policy_id, slot_digest)
+    ) or {}
+
+    def _write_state(value: dict[str, Any]) -> None:
+        if multipart_digest is not None:
+            backup_spool.write_component_multipart_state(policy_id, slot_digest, multipart_digest, value)
+        else:
+            backup_spool.write_multipart_state(policy_id, slot_digest, value)
     upload = None
     if state.get("uploadId") and str(state.get("key") or "") == obj_key:
         part_size = int(state.get("partSize") or (8 * 1024 * 1024))
@@ -681,7 +1134,7 @@ def _upload_object_resumable(
             "maxInFlightBytes": workers * part_size,
             "phase": "uploading",
         }
-        backup_spool.write_multipart_state(policy_id, slot_digest, state)
+        _write_state(state)
 
     completed_parts = {int(item["partNumber"]): item for item in upload.parts}
     list_parts = getattr(store, "list_multipart_parts", None)
@@ -693,7 +1146,7 @@ def _upload_object_resumable(
                 raise
     upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
     state["parts"] = upload.parts
-    backup_spool.write_multipart_state(policy_id, slot_digest, state)
+    _write_state(state)
 
     def upload_one(part_number: int, offset: int, length: int) -> dict[str, Any]:
         with Path(package.path).open("rb") as handle:
@@ -722,11 +1175,11 @@ def _upload_object_resumable(
             upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
             state["parts"] = upload.parts
             state["completedParts"] = len(upload.parts)
-            backup_spool.write_multipart_state(policy_id, slot_digest, state)
+            _write_state(state)
     if checkpoint is not None:
         checkpoint()
     state["phase"] = "completing"
-    backup_spool.write_multipart_state(policy_id, slot_digest, state)
+    _write_state(state)
     store.complete_multipart_if_absent(upload)
 
 
@@ -749,7 +1202,7 @@ def latest_commit_store(store: BackupTargetStore) -> dict[str, Any] | None:
     return max(markers, key=lambda marker: int(marker.get("targetGeneration") or 0))
 
 
-INCOMPLETE_JOURNAL_PHASES = ("started", "object-published", "receipt-published")
+INCOMPLETE_JOURNAL_PHASES = ("started", "object-published", "objects-published", "receipt-published")
 
 
 def slot_has_incomplete_journal(root: Path, *, policy_id: str, schedule_slot: str, exclude_run_id: str | None = None) -> bool:

@@ -178,8 +178,8 @@ class PackRangePayloadSource:
     def copy_to(self, output: BinaryIO, *, expected_sha256: str, expected_length: int) -> None:
         entry = self.cache.entry(self.blob_id)
         length = int(entry["length"])
-        digest = str(entry["sha256"])
-        if length != expected_length or digest != expected_sha256:
+        indexed_digest = str(entry.get("sha256") or "")
+        if length != expected_length or (indexed_digest and indexed_digest != expected_sha256):
             raise AppError(f"Delta pack blob metadata mismatch: {self.blob_id}", code=ErrorCode.INVALID_PAYLOAD)
         source = self.cache.handle(str(entry["pack"]))
         _copy_verified_range(
@@ -187,7 +187,7 @@ class PackRangePayloadSource:
             output,
             offset=int(entry["offset"]),
             length=length,
-            expected_sha256=digest,
+            expected_sha256=expected_sha256,
             label=self.blob_id,
         )
 

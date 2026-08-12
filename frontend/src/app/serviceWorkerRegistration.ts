@@ -136,7 +136,7 @@ function waitForStagedWorker(
 ): Promise<ServiceWorkerLike> {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const watched = new Set<ServiceWorkerLike>();
+    const watched = new Map<ServiceWorkerLike, EventListener>();
     const finish = (worker: ServiceWorkerLike | null | undefined, error?: Error) => {
       if (settled) return;
       if (error) {
@@ -160,21 +160,34 @@ function waitForStagedWorker(
         return;
       }
       const installing = registration.installing;
-      if (!installing || watched.has(installing)) return;
-      watched.add(installing);
+      if (!installing || !workerMatchesBuild(installing, buildId)) return;
+      if (["installed", "activating", "activated"].includes(installing.state ?? "")) {
+        finish(installing);
+        return;
+      }
+      if (watched.has(installing)) return;
       const onStateChange: EventListener = () => {
         if (installing.state === "redundant") {
           finish(null, new Error("更新 Worker 安装失败"));
           return;
         }
+        if (["installed", "activating", "activated"].includes(installing.state ?? "")) {
+          finish(installing);
+          return;
+        }
         inspect();
       };
+      watched.set(installing, onStateChange);
       installing.addEventListener?.("statechange", onStateChange);
     };
     const onUpdateFound: EventListener = () => inspect();
     const cleanup = () => {
       windowValue.clearTimeout(timer);
       registration.removeEventListener?.("updatefound", onUpdateFound);
+      for (const [worker, listener] of watched) {
+        worker.removeEventListener?.("statechange", listener);
+      }
+      watched.clear();
     };
     const timer = windowValue.setTimeout(
       () => finish(null, new Error("等待更新 Worker 超时")),

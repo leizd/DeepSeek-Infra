@@ -14,6 +14,7 @@ from deepseek_infra.infra.workspace import (
     backup_catalog,
     backup_crypto,
     backup_executor,
+    backup_object_set,
     backup_policies,
     backup_publish,
     backup_retention,
@@ -280,7 +281,7 @@ def test_retention_cannot_move_files_after_writer_loss(tmp_settings: Path, stub_
     assert backup_executor.execute_run(first, instance_id="w1", now=NOW)["phase"] == "complete"
     root = backups.BACKUP_DIR
     older = next(iter(backup_catalog.catalog_state(root).values()))
-    older_digest = str(older["objectDigest"])
+    older_digests = backup_object_set.committed_object_digests(older)
     backup_retention.put_retention_policy("aggressive", {"keepLast": 1, "keepHourly": 0, "keepDaily": 0, "keepWeekly": 0, "keepMonthly": 0, "minimumHealthyCopies": 1})
     policy = _policy(tmp_settings, retentionPolicyId="aggressive")
     later = NOW + timedelta(days=1, minutes=5)
@@ -297,7 +298,8 @@ def test_retention_cannot_move_files_after_writer_loss(tmp_settings: Path, stub_
     outcome = backup_executor.execute_run(run, instance_id="w1", now=later)
     assert outcome["phase"] == "abandoned"
     assert "lease" in str(outcome["error"]).casefold()
-    assert backup_publish.object_path(root, older_digest).is_file()
+    assert older_digests
+    assert all(backup_publish.object_path(root, digest).is_file() for digest in older_digests)
     assert not (root / ".trash" / str(older["backupId"])).exists()
     assert backup_catalog.catalog_state(root)[str(older["backupId"])]["trashed"] is False
 

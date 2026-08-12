@@ -31,6 +31,7 @@ from deepseek_infra.web.server import create_server  # noqa: E402
 
 
 VERSION = APP_VERSION
+UPDATE_READY_TIMEOUT_MS = 60_000
 
 
 def wait_until_ready(url: str, timeout: float = 15.0) -> None:
@@ -821,7 +822,7 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
                     .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
                   return Boolean(banner?.textContent?.includes('bbbbbbbbbbbbbbbb') && button && !button.disabled);
                 }""",
-                timeout=30_000,
+                timeout=UPDATE_READY_TIMEOUT_MS,
             )
         except Exception as error:
             staged_b_state = await page.evaluate(
@@ -900,7 +901,7 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
                     .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
                   return Boolean(banner?.textContent?.includes('cccccccccccccccc') && button && !button.disabled);
                 }""",
-                timeout=30_000,
+                timeout=UPDATE_READY_TIMEOUT_MS,
             )
         except Exception as error:
             staged_state = await page.evaluate(

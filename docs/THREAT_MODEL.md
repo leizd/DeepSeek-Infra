@@ -155,6 +155,13 @@
 - **测试**：[test_backup_projection.py](../tests/test_backup_projection.py) 覆盖选择冻结/依赖闭包/Support 分离/完整逻辑链；[test_backup_remote_restore_projection_e2e.py](../tests/test_backup_remote_restore_projection_e2e.py) 覆盖投影 Round-Trip、Rollback 范围、Hold 生命周期与 Preview；[test_backup_production_remote_restore_e2e.py](../tests/test_backup_production_remote_restore_e2e.py) 在真实 MinIO + 真实 Age Helper 上覆盖生产全链路。
 - **残余风险**：网络层仍须下载整条 Whole-Age 密文链（选择性物化不减少下载量）；网络级 Selective Fetch 需要独立加密 Pack 协议，推迟到 4.4.14 及以后。
 
+### T14 · Object Set 元数据泄漏、外来组件与集合 GC（v4.4.14）
+
+- **路径**：对象集让远端观察到 Component 数量/大小；被篡改 Control 可能引用 Receipt 外对象；缺少任一已提交成员会产生不完整恢复；失败 Publisher 的孤儿组件或 Retention 误删共享/Held 成员会破坏可恢复性。
+- **缓解**：Receipt/Commit v4 绑定 role-blind ciphertext digest/size 集合、Control digest 与 Receipt digest；Control 内部映射只能解析到该集合，缺失/外来/大小不符全部 Fail Closed。每个 Component 使用 fresh Age randomness，Key 只用 ciphertext SHA-256。Restore Hold 列出每个成员；Retention 标记所有 live、trash-grace 与 active-hold 对象；旧未提交事务只在 orphan grace 后回收。
+- **测试**：[test_backup_object_set_contracts.py](../tests/test_backup_object_set_contracts.py) 覆盖独立随机加密、Receipt/Commit v4、Control-first、精确 GET、外来/缺失组件、真实进程退出恢复、Hold 与 Orphan GC；[test_backup_production_remote_restore_e2e.py](../tests/test_backup_production_remote_restore_e2e.py) 在真实 MinIO/Age/三进程链路统计 Payload GET。
+- **残余风险**：远端仍能看到 Component count 与 coarse ciphertext size；本版不加 Padding。约 64 MiB 粒度可能把同一恢复边界的无关文件放进同一 Required Component，但不会允许非 Required Component GET，也不会泄露其明文身份。
+
 ## 非目标（明确不在防护范围内）
 
 - 运行后端的本机已被攻陷（恶意进程可直接读本地数据目录）；

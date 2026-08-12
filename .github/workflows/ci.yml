@@ -283,11 +283,29 @@ jobs:
           name: evidence-producer-packed-delta-s3-e2e
           path: artifacts/evidence-producer-packed-delta-s3-e2e
           if-no-files-found: error
+      - name: Run independently attributed object-set selective restore gates
+        run: >-
+          python scripts/run_object_set_s3_e2e.py
+          --out docs/evidence/object-set-s3-v$RELEASE_VERSION.json
+      - name: Stage object-set exact-merge Evidence
+        run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer object-set-s3-e2e
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-object-set-s3-e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-object-set-s3-e2e
+          path: artifacts/evidence-producer-object-set-s3-e2e
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: packed-delta-s3-e2e
-          path: docs/evidence/packed-delta-s3-v${{ env.RELEASE_VERSION }}.json
+          path: |
+            docs/evidence/packed-delta-s3-v${{ env.RELEASE_VERSION }}.json
+            docs/evidence/object-set-s3-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: warn
       - name: Collect MinIO diagnostics
         if: always()
@@ -514,7 +532,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build Rust sidecar image for RAG parity
-        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:parity .
+        run: |
+          for attempt in 1 2 3; do
+            if docker build -f rust/Dockerfile -t deepseek-rust-gateway:parity .; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
       - name: Start Rust sidecar for RAG parity
         run: |
           docker run --detach \

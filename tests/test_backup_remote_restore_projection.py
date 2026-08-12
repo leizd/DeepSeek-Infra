@@ -75,6 +75,22 @@ def test_resume_unknown_restore_id_404(tmp_settings: Path) -> None:
     assert excinfo.value.status == 404
 
 
+@pytest.mark.parametrize(
+    ("target_id", "backup_id"),
+    (("target-other", "backup-b"), ("target-t", "backup-other")),
+)
+def test_resume_rejects_session_from_another_source(tmp_settings: Path, target_id: str, backup_id: str) -> None:
+    _write_session("restore_wrong_source")
+    with pytest.raises(AppError) as excinfo:
+        backup_remote_restore.create_restore_from_target(
+            target_id=target_id,
+            backup_id=backup_id,
+            restore_id="restore_wrong_source",
+        )
+    assert excinfo.value.status == 409
+    assert "source does not match" in str(excinfo.value)
+
+
 def test_first_resume_freezes_selection_digest(tmp_settings: Path) -> None:
     _write_session("restore_unfrozen", selection=None, digest=None)
     selection = _selection()
@@ -101,6 +117,6 @@ def test_resume_without_selection_keeps_frozen_digest(tmp_settings: Path) -> Non
     assert result["selection"] == selection.canonical()
 
 
-def test_session_schema_version_is_three() -> None:
-    assert backup_remote_restore.SESSION_SCHEMA_VERSION == 3
+def test_session_schema_version_is_four() -> None:
+    assert backup_remote_restore.SESSION_SCHEMA_VERSION == 4
     assert backups.capabilities()["restoreProjection"]["projects"]["granularity"] == "project"

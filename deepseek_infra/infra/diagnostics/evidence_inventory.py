@@ -65,6 +65,7 @@ EVIDENCE_SPECS = (
     EvidenceSpec("docs/evidence/rust-coverage-v{version}.json", "rust-coverage", "exact-merge"),
     EvidenceSpec("docs/evidence/rust-sidecar-performance-v{version}.json", "rust-sidecar-performance", "exact-merge"),
     EvidenceSpec("docs/evidence/packed-delta-s3-v{version}.json", "packed-delta-s3-e2e", "exact-merge"),
+    EvidenceSpec("docs/evidence/object-set-s3-v{version}.json", "object-set-s3-e2e", "exact-merge"),
     EvidenceSpec("docs/evidence/python-coverage-stability-v{version}.json", "test", "optional", required_for_ga=False),
 )
 

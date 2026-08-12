@@ -18,6 +18,7 @@ from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
     backup_catalog,
     backup_incremental,
+    backup_object_set,
     backup_policies,
     backup_publish,
     backup_run_plan,
@@ -59,7 +60,9 @@ def _record_committed_index(
     """Persist a committed snapshot into the rebuildable index (best effort)."""
     try:
         manifest = getattr(package, "manifest", None) or {}
-        files = manifest.get("files") or []
+        files = manifest.get("files")
+        if not isinstance(files, list):
+            raise AppError("Verified spool has no plaintext index material; rebuild is required")
         records = [
             backup_incremental.FileRecord(
                 contributor_id=str(item.get("contributorId") or ""),
@@ -83,6 +86,7 @@ def _record_committed_index(
             "recipient_set_digest": backup_incremental.recipient_set_digest(policy_dict),
             "schema_digest": backup_incremental.schema_digest(contributor_schemas),
             "chunk_protocol": backup_incremental.CURRENT_CDC_PROTOCOL,
+            "storage_protocol": str(getattr(package, "storage_protocol", backup_object_set.WHOLE_AGE_V1)),
         }
         parent: str | None = None
         base = backup_id
@@ -324,20 +328,58 @@ def execute_run(
             outcome["spoolReused"] = True
         else:
             backup_scheduler.record_run_phase(run.run_id, "snapshotting", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
-            package = backup_scheduled.build_scheduled_backup(
-                policy,
-                run_id=run.run_id,
-                staging_root=backup_scheduler.staging_root(),
-                schedule_slot=run.schedule_slot,
-                cancel_event=guard.cancel_event,
-                backup_id=None if conflicting_slot else str(run_plan.get("backupId") or ""),
-                contributor_plan=contributor_plan,
-                snapshot_kind=str(run_plan.get("snapshotKind") or "full"),
-                parent_backup_id=run_plan.get("parentBackupId"),
-                base_backup_id=run_plan.get("baseBackupId"),
-                lineage_id=run_plan.get("lineageId"),
-                chain_depth=int(run_plan.get("chainDepth") or 0),
+            max_delta_ratio = float((policy.get("incremental") or {}).get("maxDeltaRatio") or backup_incremental.DEFAULT_MAX_DELTA_RATIO)
+            adaptive_delta_ratio = (
+                max_delta_ratio
+                if run_plan.get("plannedSnapshotKind") == "adaptive"
+                and str(run_plan.get("resolvedSnapshotKind") or "incremental") == "incremental"
+                and not run_plan.get("resolutionReason")
+                else None
             )
+            try:
+                package = backup_scheduled.build_scheduled_backup(
+                    policy,
+                    run_id=run.run_id,
+                    staging_root=backup_scheduler.staging_root(),
+                    schedule_slot=run.schedule_slot,
+                    cancel_event=guard.cancel_event,
+                    backup_id=None if conflicting_slot else str(run_plan.get("backupId") or ""),
+                    contributor_plan=contributor_plan,
+                    snapshot_kind=str(run_plan.get("snapshotKind") or "full"),
+                    parent_backup_id=run_plan.get("parentBackupId"),
+                    base_backup_id=run_plan.get("baseBackupId"),
+                    lineage_id=run_plan.get("lineageId"),
+                    chain_depth=int(run_plan.get("chainDepth") or 0),
+                    adaptive_max_delta_ratio=adaptive_delta_ratio,
+                    storage_protocol=backup_object_set.CURRENT_STORAGE_PROTOCOL,
+                )
+            except backup_scheduled.DeltaCostExceeded as exc:
+                run_plan = backup_run_plan.resolve_adaptive_plan(
+                    policy_id,
+                    slot_digest,
+                    resolved_snapshot_kind="full",
+                    reason="delta-ratio",
+                )
+                outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
+                outcome["snapshotKind"] = "full"
+                outcome["forceFullReason"] = "delta-ratio"
+                outcome["adaptiveCostBasis"] = "unencrypted-archive-bytes"
+                outcome["adaptiveDeltaLimitBytes"] = exc.byte_limit
+                package = backup_scheduled.build_scheduled_backup(
+                    policy,
+                    run_id=run.run_id,
+                    staging_root=backup_scheduler.staging_root(),
+                    schedule_slot=run.schedule_slot,
+                    cancel_event=guard.cancel_event,
+                    backup_id=str(run_plan.get("backupId") or ""),
+                    contributor_plan=contributor_plan,
+                    snapshot_kind="full",
+                    parent_backup_id=None,
+                    base_backup_id=None,
+                    lineage_id=None,
+                    chain_depth=0,
+                    storage_protocol=backup_object_set.CURRENT_STORAGE_PROTOCOL,
+                )
             savings = getattr(package, "savings", None) or {}
             logical_bytes = int(savings.get("logicalBytes") or 0)
             physical_bytes = int(
@@ -346,7 +388,6 @@ def execute_run(
                 or savings.get("physicalPayloadBytes")
                 or 0
             )
-            max_delta_ratio = float((policy.get("incremental") or {}).get("maxDeltaRatio") or backup_incremental.DEFAULT_MAX_DELTA_RATIO)
             cost_basis = "unencrypted-archive-bytes" if savings.get("unencryptedArchiveBytes") else ("packed-delta-bytes" if savings.get("physicalDeltaBytes") else "raw-payload-bytes")
             if (
                 run_plan.get("plannedSnapshotKind") == "adaptive"
@@ -378,6 +419,7 @@ def execute_run(
                     base_backup_id=None,
                     lineage_id=None,
                     chain_depth=0,
+                    storage_protocol=backup_object_set.CURRENT_STORAGE_PROTOCOL,
                 )
             elif run_plan.get("plannedSnapshotKind") == "adaptive" and not run_plan.get("resolutionReason"):
                 run_plan = backup_run_plan.resolve_adaptive_plan(
@@ -401,6 +443,9 @@ def execute_run(
             backup_scheduler.record_run_phase(run.run_id, "verifying", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
             backup_scheduler.record_run_phase(run.run_id, "publishing", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
         savings = getattr(package, "savings", None)
+        outcome["storageProtocol"] = str(
+            getattr(package, "storage_protocol", backup_object_set.WHOLE_AGE_V1)
+        )
         if savings:
             outcome["incrementalSavings"] = savings
 

@@ -1465,22 +1465,23 @@ def prepare_restore(
                 staged = staged_root / contributor_id
                 project_scope = [str(item) for item in operation.get("projectScope") or []]
                 if project_scope:
+                    # A frozen project projection is a complete snapshot of
+                    # each selected project.  Stage it from an empty root so
+                    # post-backup files and conflicting live bytes do not turn
+                    # into merge collision copies inside the restored project.
                     staged.mkdir(parents=True)
-                    for project in project_scope:
-                        source_project = destination / project
-                        if source_project.exists():
-                            shutil.copytree(source_project, staged / project)
                 elif destination.exists():
                     shutil.copytree(destination, staged)
                 else:
                     staged.mkdir(parents=True)
                 current = dict(operation)
+                operation_identity_map = identity_map | {project: project for project in project_scope}
                 current.update(
                     {
                         "source": str(projected_source_root / "payload" / contributor_id),
                         "destination": str(staged),
                         "mode": mode,
-                        "identityMap": identity_map,
+                        "identityMap": operation_identity_map,
                         "sourceBackupId": str(plan["manifest"].get("backupId") or ""),
                     }
                 )
@@ -1928,8 +1929,27 @@ def apply_restore(restore_id: str, *, mode: str = "merge") -> dict[str, Any]:
     }
 
 
+class _NonSeekableZipSink:
+    """Force ZIP data descriptors when the destination is a process pipe.
+
+    Windows ``Popen.stdin`` can expose a misleading seek/tell surface: zipfile
+    then tries to rewrite local headers, but pipe writes append a second header
+    instead. Hiding seek/tell makes zipfile use its correct streaming format.
+    """
+
+    def __init__(self, output: BinaryIO) -> None:
+        self._output = output
+
+    def write(self, value: bytes) -> int:
+        return self._output.write(value)
+
+    def flush(self) -> None:
+        self._output.flush()
+
+
 def _write_zip_tree(staging: Path, output: BinaryIO) -> None:
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+    sink = _NonSeekableZipSink(output)
+    with zipfile.ZipFile(cast(BinaryIO, sink), "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for path in sorted((item for item in staging.rglob("*") if item.is_file()), key=lambda item: item.relative_to(staging).as_posix()):
             info = zipfile.ZipInfo(path.relative_to(staging).as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
@@ -2144,6 +2164,8 @@ _METADATA_ENTRIES = frozenset(
         "checksums.sha256",
         "delta/operations.json",
         "payload/packs/index.json",
+        "payload-index.json",
+        "component-map.json",
     }
 )
 

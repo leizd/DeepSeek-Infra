@@ -13,6 +13,8 @@ import hashlib
 import json
 import os
 import random
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,7 @@ from deepseek_infra.infra.workspace import (
     backup_scheduler,
     backups,
 )
+from deepseek_infra.infra.workspace.backup_target_store import object_key
 
 UTC = timezone.utc
 
@@ -110,13 +113,43 @@ def _run_clock(base: datetime) -> datetime:
     return datetime.now(timezone.utc).replace(hour=base.hour, minute=base.minute, second=0, microsecond=0, tzinfo=timezone.utc)
 
 
+def _create_bucket_if_needed(client: Any, bucket: str) -> None:
+    try:
+        client.create_bucket(Bucket=bucket)
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if not isinstance(error, dict) or str(error.get("Code") or "") != "BucketAlreadyOwnedByYou":
+            raise
+
+
+def test_create_bucket_if_needed_only_accepts_owned_bucket() -> None:
+    class S3Error(Exception):
+        def __init__(self, code: str) -> None:
+            self.response = {"Error": {"Code": code}}
+
+    class Client:
+        def __init__(self, code: str | None) -> None:
+            self.code = code
+
+        def create_bucket(self, *, Bucket: str) -> None:
+            assert Bucket == "bucket"
+            if self.code is not None:
+                raise S3Error(self.code)
+
+    _create_bucket_if_needed(Client(None), "bucket")
+    _create_bucket_if_needed(Client("BucketAlreadyOwnedByYou"), "bucket")
+    with pytest.raises(S3Error, match="BucketAlreadyExists"):
+        _create_bucket_if_needed(Client("BucketAlreadyExists"), "bucket")
+
+
 def _register_s3_target() -> str:
     from deepseek_infra.infra.workspace import backup_targets
 
     endpoint = os.environ["DEEPSEEK_TEST_S3_ENDPOINT"]
     bucket = os.environ.get("DEEPSEEK_TEST_S3_BUCKET", "deepseek-production-e2e")
     client = _s3_client()
-    client.create_bucket(Bucket=bucket)
+    _create_bucket_if_needed(client, bucket)
     record = backup_targets.init_s3_target(
         bucket=bucket,
         prefix=f"e2e-{random.Random(11).randint(0, 10**6)}",
@@ -137,6 +170,28 @@ def _cleanup_s3() -> None:
         client.delete_objects(Bucket=bucket, Delete={"Objects": objects})
     for upload in client.list_multipart_uploads(Bucket=bucket).get("Uploads") or []:
         client.abort_multipart_upload(Bucket=bucket, Key=upload["Key"], UploadId=upload["UploadId"])
+
+
+def _run_restart_probe(tmp_settings: Path, command: dict[str, object]) -> dict[str, Any]:
+    environment = os.environ.copy()
+    environment["DEEPSEEK_INFRA_ROOT"] = str(tmp_settings)
+    repository_root = Path(__file__).resolve().parents[1]
+    existing_pythonpath = environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = str(repository_root) + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
+    completed = subprocess.run(
+        [sys.executable, "scripts/object_set_restart_probe.py"],
+        cwd=repository_root,
+        env=environment,
+        input=json.dumps(command),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    value = json.loads(completed.stdout)
+    assert isinstance(value, dict)
+    return value
 
 
 @pytest.mark.integration
@@ -168,6 +223,7 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
         first = _claim_and_run(policy, now=first_now)
         assert first["phase"] == "complete", first.get("error")
         assert first["snapshotKind"] == "full"
+        assert first["storageProtocol"] == "object-set-v1"
 
         # The changed file must be large and moderately compressible: the
         # adaptive-full delta ratio divides the real packed archive bytes by the
@@ -177,44 +233,76 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
         # compression-ratio guard below 100 while making the delta cheap.
         changed = bytes(range(256)) * 3686 + random.Random(3).randbytes(100 * 1024)
         (config.PROJECTS_DIR / "proj-a" / "plan.bin").write_bytes(changed)
-        config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"after"}]}', encoding="utf-8")
+        config.MEMORY_FILE.write_text('{"items":[{"id":"m1","text":"snapshot-value"}]}', encoding="utf-8")
         second = _claim_and_run(policy, now=first_now + timedelta(days=1))
         assert second["phase"] == "complete", second.get("error")
         assert second["snapshotKind"] == "incremental", second.get("forceFullReason") or second.get("error")
+        assert second["storageProtocol"] == "object-set-v1"
 
-        # Simulate a fresh process: a new HTTP client and store with no local
-        # index state. Lineage is resolved from target receipts only.
-        restore = backup_remote_restore.create_restore_from_target(
-            target_id=target_id,
-            backup_id=str(second["backupId"]),
-            selection={"contributors": ["projects"], "projectIds": ["proj-a"]},
+        # Diverge both selected and unselected live state after the target
+        # snapshot is committed. A no-op restore can no longer satisfy the
+        # project assertion, and an accidental full restore can no longer
+        # satisfy the memory assertion.
+        (config.PROJECTS_DIR / "proj-a" / "plan.bin").write_bytes(b"live-project-diverged-after-backup")
+        live_memory = '{"items":[{"id":"m1","text":"live-diverged-after-backup"}]}'
+        config.MEMORY_FILE.write_text(live_memory, encoding="utf-8")
+
+        process_a = _run_restart_probe(
+            tmp_settings,
+            {
+                "action": "create-partial-fetch",
+                "targetId": target_id,
+                "backupId": str(second["backupId"]),
+                "selection": {"contributors": ["projects"], "projectIds": ["proj-a"]},
+            },
         )
-        restore_id = str(restore["restoreId"])
-        fetched = backup_remote_restore.fetch_restore_session(restore_id)
-        while str(fetched.get("phase") or "") not in {"fetched", "chain-fetched"}:
-            fetched = backup_remote_restore.fetch_restore_session(restore_id)
-        assert str(fetched.get("phase") or "") in {"fetched", "chain-fetched"}
-
-        # Real Age decrypt via the real helper using the generated identity.
-        backup_crypto.put_secret(restore_id, "age-identity", identity_text)
+        assert process_a["phase"] == "fetching-controls"
+        restore_id = str(process_a["restoreId"])
+        process_b = _run_restart_probe(
+            tmp_settings,
+            {
+                "action": "resume-and-prepare",
+                "restoreId": restore_id,
+                "secretKind": "age-identity",
+                "secret": identity_text,
+                "auditObjectGets": True,
+            },
+        )
+        assert process_b["phase"] == "prepared"
+        assert process_b["projection"]["networkSelective"] is True
         session = backup_remote_restore.read_restore_session(restore_id)
         assert session is not None and session.get("selection") is not None, "projected selection was not frozen"
-        prepared = backup_remote_restore.materialize_federated_restore(restore_id, mode="merge", owner_document_id="server")
-        assert prepared["phase"] == "prepared"
+        required_payload_keys = {
+            object_key(str(component["objectDigest"]))
+            for member in session["chain"]
+            for component in member.get("requiredComponents") or []
+        }
+        all_payload_keys = {
+            object_key(str(item["digest"]))
+            for member in session["chain"]
+            for item in member["objects"]
+            if str(item["digest"]) != str(member["controlObjectDigest"])
+        }
+        object_gets = [str(key) for key in process_b["objectGets"]]
+        observed_payload_gets = [key for key in object_gets if key in all_payload_keys]
+        assert set(observed_payload_gets) == required_payload_keys
+        assert all(observed_payload_gets.count(key) == 1 for key in required_payload_keys)
+        assert (all_payload_keys - required_payload_keys).isdisjoint(observed_payload_gets)
         import json as _json
 
         _plan = _json.loads((backups.RESTORE_DIR / restore_id / "plan.json").read_text(encoding="utf-8"))
         assert _plan.get("projected") is True, f"restore did not freeze a projection: {_plan.get('requiresFrontendApply')}"
-        assert prepared.get("requiresFrontendApply") is False, "projected restore must not require frontend apply"
-        committed = backups.commit_restore(restore_id)
-        assert committed["phase"] == "backend-committed"
-        completed = backups.complete_restore(restore_id)
-        backup_remote_restore.advance_federated_phase(restore_id, "complete")
-        assert completed["phase"] == "complete"
+        assert _plan.get("requiresFrontendApply") is False, "projected restore must not require frontend apply"
+        process_c = _run_restart_probe(
+            tmp_settings,
+            {"action": "resume-commit-complete", "restoreId": restore_id},
+        )
+        assert process_c["commitPhase"] == "backend-committed"
+        assert process_c["phase"] == "complete"
 
-        # The selected project is byte-for-byte identical to the I1 snapshot.
+        # The selected project is byte-for-byte identical to the I1 snapshot,
+        # while the unselected contributor retains its post-backup live state.
         assert (config.PROJECTS_DIR / "proj-a" / "plan.bin").read_bytes() == changed
-        # Unselected contributors are never mutated.
-        assert config.MEMORY_FILE.read_text(encoding="utf-8") == '{"items":[{"id":"m1","text":"after"}]}'
+        assert config.MEMORY_FILE.read_text(encoding="utf-8") == live_memory
     finally:
         _cleanup_s3()

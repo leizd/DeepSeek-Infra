@@ -9,13 +9,14 @@ inspect pipeline (including the sealed frontend mirror), record
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_catalog, backup_crypto, backup_publish, backup_targets, backup_unattended, backups
+from deepseek_infra.infra.workspace import backup_catalog, backup_crypto, backup_object_set, backup_publish, backup_targets, backup_unattended, backups
 
 UNLOCK_VERIFICATION_WARNING_DAYS = 30
 
@@ -42,10 +43,22 @@ def _ciphertext_path(root: Path, record: dict[str, Any]) -> Path:
     return root / "backups" / str(record.get("filename") or "")
 
 
+def _ciphertext_members(root: Path, record: dict[str, Any]) -> list[tuple[Path, str, int]]:
+    inventory = backup_object_set.committed_object_inventory(record)
+    if str(record.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
+        return [
+            (backup_publish.object_path(root, str(item["digest"])), str(item["digest"]), int(item["size"]))
+            for item in inventory
+        ]
+    if not inventory:
+        return []
+    item = inventory[0]
+    return [(_ciphertext_path(root, record), str(item["digest"]), int(item["size"]))]
+
+
 def scrub_backup(root: Path, backup_id: str, *, target_id: str | None = None) -> dict[str, Any]:
-    """Re-verify one ciphertext against its receipt without unlocking it."""
+    """Re-verify every committed ciphertext object without unlocking it."""
     record = _catalog_record(root, backup_id)
-    path = _ciphertext_path(root, record)
     checks: dict[str, str] = {}
     ok = True
 
@@ -54,15 +67,24 @@ def scrub_backup(root: Path, backup_id: str, *, target_id: str | None = None) ->
         checks[name] = "PASS" if passed else f"FAIL: {detail}"
         ok = ok and passed
 
-    _check("exists", path.is_file(), "missing")
-    if path.is_file():
-        _check("not-symlink", not backup_targets._is_reparse_point(path), "reparse point")
-        _check("size", path.stat().st_size == int(record.get("size") or -1), "size mismatch")
-        digest = backup_unattended.sha256_file(path)
-        _check("sha256", digest == str(record.get("ciphertextSha256") or ""), "digest mismatch")
+    try:
+        members = _ciphertext_members(root, record)
+    except AppError as exc:
+        members = []
+        _check("exists", False, str(exc)[:80])
+    if "exists" not in checks:
+        missing = [path.name for path, _, _ in members if not path.is_file()]
+        _check("exists", bool(members) and not missing, f"missing {', '.join(missing[:3])}")
+    if members and all(path.is_file() for path, _, _ in members):
+        reparsed = [path.name for path, _, _ in members if backup_targets._is_reparse_point(path)]
+        _check("not-symlink", not reparsed, f"reparse point {', '.join(reparsed[:3])}")
+        wrong_sizes = [path.name for path, _, size in members if path.stat().st_size != size]
+        _check("size", not wrong_sizes, f"size mismatch {', '.join(wrong_sizes[:3])}")
+        wrong_digests = [path.name for path, digest, _ in members if backup_unattended.sha256_file(path) != digest]
+        _check("sha256", not wrong_digests, f"digest mismatch {', '.join(wrong_digests[:3])}")
         try:
-            header = backup_crypto.inspect_header(path)
-            _check("age-header", bool(header.get("age")), "invalid header")
+            invalid_headers = [path.name for path, _, _ in members if not bool(backup_crypto.inspect_header(path).get("age"))]
+            _check("age-header", not invalid_headers, f"invalid header {', '.join(invalid_headers[:3])}")
         except AppError as exc:
             _check("age-header", False, str(exc)[:80])
     if target_id and target_id != "managed-local":
@@ -72,7 +94,7 @@ def scrub_backup(root: Path, backup_id: str, *, target_id: str | None = None) ->
         except AppError as exc:
             _check("target-marker", False, str(exc)[:80])
     backup_catalog.record_scrub(root, backup_id, ok=ok, detail="; ".join(f"{k}={v}" for k, v in checks.items() if v != "PASS"))
-    return {"backupId": backup_id, "ok": ok, "checks": checks, "scrubbedAt": _utc_iso()}
+    return {"backupId": backup_id, "ok": ok, "checks": checks, "objectsScrubbed": len(members), "scrubbedAt": _utc_iso()}
 
 
 def scrub_all(root: Path, *, target_id: str | None = None) -> dict[str, Any]:
@@ -80,6 +102,79 @@ def scrub_all(root: Path, *, target_id: str | None = None) -> dict[str, Any]:
     for record in backup_catalog.list_backups(root):
         results.append(scrub_backup(root, str(record["backupId"]), target_id=target_id))
     return {"scrubbed": len(results), "ok": all(item["ok"] for item in results), "results": results}
+
+
+def _unlock_object_set(
+    root: Path,
+    record: dict[str, Any],
+    identity: bytearray,
+    *,
+    staged: Path,
+) -> tuple[dict[str, Any], str]:
+    inventory = backup_object_set.committed_object_inventory(record)
+    committed = {str(item["digest"]): item for item in inventory}
+    control_digest = str(record.get("controlObjectDigest") or "")
+    if control_digest not in committed:
+        raise AppError("Object-set control ciphertext is not committed", code=ErrorCode.INVALID_PAYLOAD)
+    for digest, item in committed.items():
+        source = backup_publish.object_path(root, digest)
+        if not source.is_file():
+            raise AppError("Backup object-set member is missing", code=ErrorCode.NOT_FOUND, status=404)
+        if source.stat().st_size != int(item["size"]) or backup_unattended.sha256_file(source) != digest:
+            raise AppError("Backup object-set member no longer matches its receipt", code=ErrorCode.INVALID_REQUEST, status=409)
+
+    extracted = staged / "extracted"
+    control_plaintext = staged / "unlocked-control.zip"
+    backup_crypto.decrypt_file(
+        backup_publish.object_path(root, control_digest),
+        control_plaintext,
+        kind="age-identity",
+        secret=identity,
+    )
+    manifest = backups.extract_archive_metadata(control_plaintext, extracted)
+    backup_object_set.verify_control_metadata(extracted)
+    manifest_digest = backups._sha256_file(extracted / "manifest.json")
+    try:
+        payload_index = json.loads((extracted / "payload-index.json").read_text(encoding="utf-8"))
+        component_map = json.loads((extracted / "component-map.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AppError("Object-set control metadata is invalid", code=ErrorCode.INVALID_PAYLOAD) from exc
+    descriptors = payload_index.get("payloadComponents") if isinstance(payload_index, dict) else None
+    components = component_map.get("components") if isinstance(component_map, dict) else None
+    if not isinstance(descriptors, dict) or not isinstance(components, dict) or set(descriptors) != set(components):
+        raise AppError("Object-set component inventory is invalid", code=ErrorCode.INVALID_PAYLOAD)
+    payload_digests: set[str] = set()
+    for component_id in sorted(descriptors):
+        descriptor = descriptors[component_id]
+        expected_paths = components[component_id]
+        if not isinstance(descriptor, dict) or not isinstance(expected_paths, list) or any(not isinstance(path, str) for path in expected_paths):
+            raise AppError("Object-set component metadata is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        digest = str(descriptor.get("ciphertextDigest") or "")
+        committed_item = committed.get(digest)
+        if committed_item is None or int(committed_item["size"]) != int(descriptor.get("ciphertextSize") or -1) or digest in payload_digests:
+            raise AppError("Object-set payload is not exactly committed", code=ErrorCode.INVALID_PAYLOAD)
+        payload_digests.add(digest)
+        plaintext = staged / f"unlocked-{component_id}.zip"
+        backup_crypto.decrypt_file(
+            backup_publish.object_path(root, digest),
+            plaintext,
+            kind="age-identity",
+            secret=identity,
+        )
+        if (
+            plaintext.stat().st_size != int(descriptor.get("plaintextSize") or -1)
+            or backup_unattended.sha256_file(plaintext) != str(descriptor.get("plaintextSha256") or "")
+        ):
+            raise AppError("Object-set payload plaintext commitment mismatch", code=ErrorCode.INVALID_PAYLOAD)
+        backup_object_set.extract_component_archive(plaintext, extracted, expected_paths)
+        backup_unattended.scrub_plaintext_file(plaintext)
+    if payload_digests != (set(committed) - {control_digest}):
+        raise AppError("Object-set receipt contains a foreign payload", code=ErrorCode.INVALID_PAYLOAD)
+    (extracted / "payload-index.json").unlink()
+    (extracted / "component-map.json").unlink()
+    manifest = backups._verify_manifest_tree(extracted)
+    backup_unattended.scrub_plaintext_file(control_plaintext)
+    return manifest, manifest_digest
 
 
 def verify_unlock_drill(
@@ -95,11 +190,6 @@ def verify_unlock_drill(
     applies anything, records ``userUnlockVerifiedAt`` and destroys plaintext.
     """
     record = _catalog_record(root, backup_id)
-    source = _ciphertext_path(root, record)
-    if not source.is_file():
-        raise AppError("Backup file is missing", code=ErrorCode.NOT_FOUND, status=404)
-    if backup_unattended.sha256_file(source) != str(record.get("ciphertextSha256") or ""):
-        raise AppError("Backup ciphertext no longer matches its receipt", code=ErrorCode.INVALID_REQUEST, status=409)
     staged = staged_root / f"drill_{backup_id}"
     extracted = staged / "extracted"
     decrypted = staged / "unlocked.dsibackup"
@@ -107,11 +197,19 @@ def verify_unlock_drill(
     staged.mkdir(parents=True)
     frontend: dict[str, Any] | None = None
     try:
-        backup_crypto.decrypt_file(source, decrypted, kind="age-identity", secret=identity)
-        manifest = backups._safe_extract_and_verify(decrypted, extracted)
-        manifest_digest = backups._sha256_file(extracted / "manifest.json")
-        if manifest_digest != str(record.get("manifestDigest") or ""):
-            raise AppError("Backup manifest digest does not match its receipt", code=ErrorCode.INVALID_PAYLOAD)
+        if str(record.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
+            manifest, manifest_digest = _unlock_object_set(root, record, identity, staged=staged)
+        else:
+            source = _ciphertext_path(root, record)
+            if not source.is_file():
+                raise AppError("Backup file is missing", code=ErrorCode.NOT_FOUND, status=404)
+            if backup_unattended.sha256_file(source) != str(record.get("ciphertextSha256") or ""):
+                raise AppError("Backup ciphertext no longer matches its receipt", code=ErrorCode.INVALID_REQUEST, status=409)
+            backup_crypto.decrypt_file(source, decrypted, kind="age-identity", secret=identity)
+            manifest = backups._safe_extract_and_verify(decrypted, extracted)
+            manifest_digest = backups._sha256_file(extracted / "manifest.json")
+            if manifest_digest != str(record.get("manifestDigest") or ""):
+                raise AppError("Backup manifest digest does not match its receipt", code=ErrorCode.INVALID_PAYLOAD)
         sealed = extracted / "frontend" / "sealed-state.age"
         if sealed.is_file():
             frontend = backups._unlock_sealed_frontend(staged, "age-identity", identity)
@@ -129,6 +227,8 @@ def verify_unlock_drill(
     finally:
         if decrypted.exists():
             backup_unattended.scrub_plaintext_file(decrypted)
+        for plaintext in staged.glob("unlocked-*.zip"):
+            backup_unattended.scrub_plaintext_file(plaintext)
         verified_frontend = staged / "verified" / "frontend" / "state.json"
         if verified_frontend.exists():
             backup_unattended.scrub_plaintext_file(verified_frontend)

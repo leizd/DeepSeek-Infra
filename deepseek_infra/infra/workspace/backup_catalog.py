@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.workspace import backup_object_set
 from deepseek_infra.infra.workspace import backup_writer_lease
 
 CATALOG_SCHEMA_VERSION = 1
@@ -147,8 +148,11 @@ def _assert_writer_ownership(writer: backup_writer_lease.TargetWriterLease | Non
 
 
 def append_receipt(root: Path, receipt: dict[str, Any], *, writer: backup_writer_lease.TargetWriterLease | None = None, precondition: CatalogPrecondition | None = None) -> dict[str, Any]:
-    if not receipt.get("backupId") or not receipt.get("filename"):
+    is_object_set = str(receipt.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1
+    if not receipt.get("backupId") or (not is_object_set and not receipt.get("filename")):
         raise AppError("Backup receipt is incomplete", code=ErrorCode.INVALID_PAYLOAD)
+    if is_object_set:
+        backup_object_set.committed_object_inventory(receipt)
     return _append_entry(root, "receipt", receipt, writer=writer, precondition=precondition)
 
 
@@ -321,7 +325,7 @@ def rebuild_catalog_from_receipts(root: Path, *, writer: backup_writer_lease.Tar
 
 
 def find_orphans_and_missing(root: Path) -> dict[str, list[str]]:
-    from deepseek_infra.infra.workspace import backup_publish
+    from deepseek_infra.infra.workspace import backup_object_set, backup_publish
 
     records = [record for record in catalog_state(root).values() if not record.get("deleted")]
     referenced: set[Path] = set()
@@ -344,13 +348,22 @@ def find_orphans_and_missing(root: Path) -> dict[str, list[str]]:
     if backups_dir.is_dir():
         on_disk.extend(backups_dir.glob("*.dsibackup*"))
     orphans = sorted(path.name for path in on_disk if path not in referenced)
-    missing = sorted(
-        str(record.get("filename") or record.get("backupId"))
-        for record in records
-        if not record.get("trashed")
-        and backup_publish.backup_file_candidates(root, record)
-        and not any(candidate.is_file() for candidate in backup_publish.backup_file_candidates(root, record))
-    )
+    missing: list[str] = []
+    for record in records:
+        if record.get("trashed"):
+            continue
+        candidates = backup_publish.backup_file_candidates(root, record)
+        if not candidates:
+            if str(record.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
+                missing.append(str(record.get("filename") or record.get("backupId")))
+            continue
+        object_set = str(record.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1
+        unavailable = not all(candidate.is_file() for candidate in candidates) if object_set else not any(
+            candidate.is_file() for candidate in candidates
+        )
+        if unavailable:
+            missing.append(str(record.get("filename") or record.get("backupId")))
+    missing.sort()
     return {"orphans": orphans, "missing": missing}
 
 
@@ -464,6 +477,11 @@ def catalog_state_store(store: Any) -> dict[str, dict[str, Any]]:
 
 
 def append_receipt_store(store: Any, receipt: dict[str, Any], *, writer: backup_writer_lease.TargetWriterLease | None = None) -> dict[str, Any]:
+    is_object_set = str(receipt.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1
+    if is_object_set:
+        if not receipt.get("backupId"):
+            raise AppError("Backup receipt is incomplete", code=ErrorCode.INVALID_PAYLOAD)
+        backup_object_set.committed_object_inventory(receipt)
     return _append_entry_store(store, "receipt", receipt, writer=writer)
 
 
