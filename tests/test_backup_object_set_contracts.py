@@ -2108,6 +2108,10 @@ def test_object_set_federated_restore_keeps_unselected_live_contributor(
     config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     live_memory = b'[{"id":"live","text":"live-diverged-after-backup"}]'
     config.MEMORY_FILE.write_bytes(live_memory)
+    live_project = config.PROJECTS_DIR / "p1"
+    live_project.mkdir(parents=True, exist_ok=True)
+    (live_project / "a.bin").write_bytes(b"live-project-diverged-after-backup")
+    (live_project / "post-backup.bin").write_bytes(b"must-be-removed")
     created = backup_remote_restore.create_restore_from_target(
         target_id="managed-local",
         backup_id=package.backup_id,
@@ -2128,6 +2132,7 @@ def test_object_set_federated_restore_keeps_unselected_live_contributor(
     backup_remote_restore.advance_federated_phase(restore_id, "complete")
 
     assert (config.PROJECTS_DIR / "p1" / "a.bin").read_bytes() == b"project-one-snapshot"
+    assert not (config.PROJECTS_DIR / "p1" / "post-backup.bin").exists()
     assert not (config.PROJECTS_DIR / "p2").exists()
     assert config.MEMORY_FILE.read_bytes() == live_memory
 
@@ -2259,6 +2264,10 @@ def test_object_set_restore_resumes_across_real_process_exits(tmp_settings: Path
     config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     live_memory = b'[{"id":"live","text":"live-diverged-after-backup"}]'
     config.MEMORY_FILE.write_bytes(live_memory)
+    live_project = config.PROJECTS_DIR / "p1"
+    live_project.mkdir(parents=True, exist_ok=True)
+    (live_project / "a.bin").write_bytes(b"live-project-diverged-after-backup")
+    (live_project / "post-backup.bin").write_bytes(b"must-be-removed")
 
     process_a = _run_restart_probe(
         tmp_settings,
@@ -2291,6 +2300,7 @@ def test_object_set_restore_resumes_across_real_process_exits(tmp_settings: Path
         "phase": "complete",
     }
     assert (config.PROJECTS_DIR / "p1" / "a.bin").read_bytes() == b"project-one-snapshot"
+    assert not (config.PROJECTS_DIR / "p1" / "post-backup.bin").exists()
     assert not (config.PROJECTS_DIR / "p2").exists()
     assert config.MEMORY_FILE.read_bytes() == live_memory
 

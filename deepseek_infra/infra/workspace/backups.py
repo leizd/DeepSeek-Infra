@@ -1465,22 +1465,23 @@ def prepare_restore(
                 staged = staged_root / contributor_id
                 project_scope = [str(item) for item in operation.get("projectScope") or []]
                 if project_scope:
+                    # A frozen project projection is a complete snapshot of
+                    # each selected project.  Stage it from an empty root so
+                    # post-backup files and conflicting live bytes do not turn
+                    # into merge collision copies inside the restored project.
                     staged.mkdir(parents=True)
-                    for project in project_scope:
-                        source_project = destination / project
-                        if source_project.exists():
-                            shutil.copytree(source_project, staged / project)
                 elif destination.exists():
                     shutil.copytree(destination, staged)
                 else:
                     staged.mkdir(parents=True)
                 current = dict(operation)
+                operation_identity_map = identity_map | {project: project for project in project_scope}
                 current.update(
                     {
                         "source": str(projected_source_root / "payload" / contributor_id),
                         "destination": str(staged),
                         "mode": mode,
-                        "identityMap": identity_map,
+                        "identityMap": operation_identity_map,
                         "sourceBackupId": str(plan["manifest"].get("backupId") or ""),
                     }
                 )
