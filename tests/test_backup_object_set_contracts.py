@@ -73,6 +73,40 @@ def object_set_crypto(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(backup_crypto, "decrypt_file", decrypt_file)
     monkeypatch.setattr(backup_crypto, "generate_identity", lambda: {"identity": "AGE-SECRET-KEY-1EPH", "recipient": "age1eph"})
     monkeypatch.setattr(backup_crypto, "inspect_header", lambda _path: {"age": True})
+    monkeypatch.setattr(
+        backup_crypto,
+        "capabilities",
+        lambda: {
+            "encryptedBackupAvailable": True,
+            "formats": ["age-v1"],
+            "protectionModes": ["none", "passphrase", "age-recipient"],
+        },
+    )
+
+
+def test_object_set_crypto_fixture_is_independent_of_installed_helper(
+    object_set_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_crypto, "helper_path", lambda: None)
+    assert backup_crypto.capabilities()["encryptedBackupAvailable"] is True
+
+
+def test_restart_probe_counts_each_s3_object_get_once() -> None:
+    from deepseek_infra.infra.workspace.backup_target_s3 import S3TargetStore
+    from scripts import object_set_restart_probe
+
+    class FakeS3Client:
+        def get_object(self, **_kwargs: object) -> dict[str, object]:
+            return {"Body": io.BytesIO(b"ciphertext")}
+
+    store = S3TargetStore(bucket="test", client=FakeS3Client())
+    object_gets, restore_audit = object_set_restart_probe._install_s3_object_get_audit()
+    try:
+        assert b"".join(store.get_stream("objects/sha256/ab/ciphertext.age")) == b"ciphertext"
+        assert object_gets == ["objects/sha256/ab/ciphertext.age"]
+    finally:
+        restore_audit()
 
 
 def _component(tmp_path: Path, component_id: str, payload: bytes, *, control: bool = False) -> backup_object_set.EncryptedComponent:

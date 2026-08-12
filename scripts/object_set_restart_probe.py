@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from deepseek_infra.infra.workspace import backup_crypto, backup_remote_restore, backups
 
@@ -22,6 +22,31 @@ def _read_command() -> dict[str, Any]:
 
 def _emit(value: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(value, sort_keys=True) + "\n")
+
+
+def _install_s3_object_get_audit() -> tuple[list[str], Callable[[], None]]:
+    from deepseek_infra.infra.workspace.backup_target_s3 import S3TargetStore
+
+    object_gets: list[str] = []
+    original_get_bytes = S3TargetStore.get_bytes
+
+    def counted_get_bytes(
+        store: S3TargetStore,
+        key: str,
+        *,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> bytes | None:
+        if key.startswith("objects/sha256/"):
+            object_gets.append(key)
+        return original_get_bytes(store, key, offset=offset, length=length)
+
+    setattr(S3TargetStore, "get_bytes", counted_get_bytes)
+
+    def restore() -> None:
+        setattr(S3TargetStore, "get_bytes", original_get_bytes)
+
+    return object_gets, restore
 
 
 def main() -> int:
@@ -40,29 +65,7 @@ def main() -> int:
     if action == "resume-and-prepare":
         object_gets: list[str] = []
         if bool(command.get("auditObjectGets")):
-            from deepseek_infra.infra.workspace.backup_target_s3 import S3TargetStore
-
-            original_get_bytes = S3TargetStore.get_bytes
-            original_get_stream = S3TargetStore.get_stream
-
-            def counted_get_bytes(
-                store: S3TargetStore,
-                key: str,
-                *,
-                offset: int = 0,
-                length: int | None = None,
-            ) -> bytes | None:
-                if key.startswith("objects/sha256/"):
-                    object_gets.append(key)
-                return original_get_bytes(store, key, offset=offset, length=length)
-
-            def counted_get_stream(store: S3TargetStore, key: str, *, offset: int = 0) -> Any:
-                if key.startswith("objects/sha256/"):
-                    object_gets.append(key)
-                return original_get_stream(store, key, offset=offset)
-
-            setattr(S3TargetStore, "get_bytes", counted_get_bytes)
-            setattr(S3TargetStore, "get_stream", counted_get_stream)
+            object_gets, _restore_object_get_audit = _install_s3_object_get_audit()
         while True:
             fetched = backup_remote_restore.fetch_restore_session(restore_id)
             if str(fetched.get("phase") or "") == "controls-fetched":
