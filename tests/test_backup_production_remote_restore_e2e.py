@@ -113,13 +113,43 @@ def _run_clock(base: datetime) -> datetime:
     return datetime.now(timezone.utc).replace(hour=base.hour, minute=base.minute, second=0, microsecond=0, tzinfo=timezone.utc)
 
 
+def _create_bucket_if_needed(client: Any, bucket: str) -> None:
+    try:
+        client.create_bucket(Bucket=bucket)
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if not isinstance(error, dict) or str(error.get("Code") or "") != "BucketAlreadyOwnedByYou":
+            raise
+
+
+def test_create_bucket_if_needed_only_accepts_owned_bucket() -> None:
+    class S3Error(Exception):
+        def __init__(self, code: str) -> None:
+            self.response = {"Error": {"Code": code}}
+
+    class Client:
+        def __init__(self, code: str | None) -> None:
+            self.code = code
+
+        def create_bucket(self, *, Bucket: str) -> None:
+            assert Bucket == "bucket"
+            if self.code is not None:
+                raise S3Error(self.code)
+
+    _create_bucket_if_needed(Client(None), "bucket")
+    _create_bucket_if_needed(Client("BucketAlreadyOwnedByYou"), "bucket")
+    with pytest.raises(S3Error, match="BucketAlreadyExists"):
+        _create_bucket_if_needed(Client("BucketAlreadyExists"), "bucket")
+
+
 def _register_s3_target() -> str:
     from deepseek_infra.infra.workspace import backup_targets
 
     endpoint = os.environ["DEEPSEEK_TEST_S3_ENDPOINT"]
     bucket = os.environ.get("DEEPSEEK_TEST_S3_BUCKET", "deepseek-production-e2e")
     client = _s3_client()
-    client.create_bucket(Bucket=bucket)
+    _create_bucket_if_needed(client, bucket)
     record = backup_targets.init_s3_target(
         bucket=bucket,
         prefix=f"e2e-{random.Random(11).randint(0, 10**6)}",
