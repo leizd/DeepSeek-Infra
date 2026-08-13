@@ -657,7 +657,25 @@ def _build_candidate(
             else:
                 backups._write_zip_tree(staging, output)
 
-        if snapshot_kind == "incremental":
+        prepared_object_set: backup_object_set.PreparedObjectSet | None = None
+        if storage_protocol == backup_object_set.OBJECT_SET_V1:
+            logical_bytes = int((manifest.get("incrementalSavings") or {}).get("logicalBytes") or 0)
+            byte_limit = (
+                int(logical_bytes * adaptive_max_delta_ratio)
+                if snapshot_kind == "incremental" and adaptive_max_delta_ratio is not None and logical_bytes > 0
+                else None
+            )
+            try:
+                prepared_object_set = backup_object_set.prepare_object_set(
+                    staging,
+                    run_dir / "object-set",
+                    manifest=manifest,
+                    plaintext_byte_limit=byte_limit,
+                    cancel_event=cancel_event,
+                )
+            except backup_object_set.PreparedObjectSetTooLarge as exc:
+                raise DeltaCostExceeded(byte_limit=exc.byte_limit, attempted_size=exc.attempted_size) from exc
+        elif snapshot_kind == "incremental":
             # Keep exact container-cost accounting without retaining the delta
             # archive in RAM. The verified temporary archive is streamed into
             # Age and removed whether encryption succeeds or fails.
@@ -681,11 +699,15 @@ def _build_candidate(
         if snapshot_kind == "incremental":
             final_savings = dict(manifest.get("incrementalSavings") or {})
             final_savings["physicalDeltaBytes"] = sum(int(item.get("size") or 0) for item in (manifest.get("deltaFiles") or []))
-            final_savings["unencryptedArchiveBytes"] = plaintext_archive_bytes
+            if prepared_object_set is not None:
+                final_savings["preparedComponentBytes"] = prepared_object_set.plaintext_bytes
+            else:
+                final_savings["unencryptedArchiveBytes"] = plaintext_archive_bytes
         if storage_protocol == backup_object_set.OBJECT_SET_V1:
-            return backup_object_set.build_encrypted_object_set(
-                staging,
-                run_dir / "object-set",
+            if prepared_object_set is None:  # pragma: no cover - protocol branch prepares above
+                raise AppError("Object-set preparation is unavailable", code=ErrorCode.INTERNAL, status=500)
+            return backup_object_set.encrypt_prepared_object_set(
+                prepared_object_set,
                 backup_id=backup_id,
                 recipients=tuple(str(item) for item in (policy.get("protection") or {}).get("recipients") or []),
                 manifest=manifest,

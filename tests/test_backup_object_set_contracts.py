@@ -811,6 +811,178 @@ def test_build_object_set_independently_encrypts_control_and_payloads(
     assert [item.ciphertext_digest for item in package.components] != [item.ciphertext_digest for item in second.components]
 
 
+def test_prepared_object_set_components_feed_age_without_recompression(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    object_set_crypto: None,
+) -> None:
+    del object_set_crypto
+    staging = tmp_path / "prepared-staging"
+    files = {
+        "payload/projects/p1/a.bin": b"first-payload",
+        "payload/projects/p2/b.bin": b"second-payload",
+    }
+    manifest_files = []
+    for relative, content in files.items():
+        source = staging / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(content)
+        manifest_files.append(
+            {
+                "contributorId": "projects",
+                "path": relative,
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    manifest = {"backupId": "backup_prepared", "snapshotKind": "incremental", "deltaFiles": manifest_files}
+    zip_calls: list[tuple[str, ...]] = []
+    original_write = backup_object_set._write_zip_entries
+
+    def count_zip(output: BinaryIO, **kwargs: object) -> None:
+        entries = kwargs.get("file_entries") or kwargs.get("byte_entries") or {}
+        zip_calls.append(tuple(sorted(entries)))  # type: ignore[arg-type]
+        original_write(output, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backup_object_set, "_write_zip_entries", count_zip)
+    prepared = backup_object_set.prepare_object_set(
+        staging,
+        tmp_path / "prepared-output",
+        manifest=manifest,
+        component_target_bytes=1,
+    )
+    prepared_bytes = sum(item.plaintext_size for item in prepared.components)
+    assert prepared.plaintext_bytes == prepared_bytes > 0
+    assert len(zip_calls) == 2
+
+    encrypted = backup_object_set.encrypt_prepared_object_set(
+        prepared,
+        backup_id="backup_prepared",
+        recipients=("age1test",),
+        manifest=manifest,
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+    )
+
+    assert len(encrypted.components) == 3
+    assert len(zip_calls) == 3  # two prepared Payload ZIPs plus one Control ZIP
+    assert not list((tmp_path / "prepared-output").glob("*.plaintext.tmp"))
+
+
+def test_prepared_object_set_threshold_stops_early_and_scrubs_plaintext(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging = tmp_path / "threshold-staging"
+    manifest_files = []
+    for project_id in ("p1", "p2"):
+        relative = f"payload/projects/{project_id}/data.bin"
+        content = project_id.encode("ascii") * 32
+        source = staging / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(content)
+        manifest_files.append(
+            {
+                "contributorId": "projects",
+                "path": relative,
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    manifest = {"backupId": "backup_threshold", "snapshotKind": "incremental", "deltaFiles": manifest_files}
+    zip_calls = 0
+    original_write = backup_object_set._write_zip_entries
+
+    def count_zip(output: BinaryIO, **kwargs: object) -> None:
+        nonlocal zip_calls
+        zip_calls += 1
+        original_write(output, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backup_object_set, "_write_zip_entries", count_zip)
+    with pytest.raises(backup_object_set.PreparedObjectSetTooLarge) as raised:
+        backup_object_set.prepare_object_set(
+            staging,
+            tmp_path / "threshold-output",
+            manifest=manifest,
+            component_target_bytes=1,
+            plaintext_byte_limit=0,
+        )
+
+    assert raised.value.byte_limit == 0
+    assert raised.value.attempted_size > 0
+    assert zip_calls == 1
+    assert not list((tmp_path / "threshold-output").glob("*.plaintext.tmp"))
+
+
+def test_prepared_object_set_scrubs_all_plaintext_when_age_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging = tmp_path / "failure-staging"
+    relative = "payload/projects/p1/data.bin"
+    content = b"plaintext-must-not-survive"
+    source = staging / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(content)
+    manifest = {
+        "backupId": "backup_failure",
+        "snapshotKind": "incremental",
+        "deltaFiles": [
+            {
+                "contributorId": "projects",
+                "path": relative,
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        ],
+    }
+    output_dir = tmp_path / "failure-output"
+    prepared = backup_object_set.prepare_object_set(staging, output_dir, manifest=manifest)
+
+    def fail_encrypt(*_args: object, **_kwargs: object) -> object:
+        raise AppError("injected Age failure")
+
+    monkeypatch.setattr(backup_object_set.backup_unattended, "encrypt_unattended", fail_encrypt)
+    with pytest.raises(AppError, match="injected Age failure"):
+        backup_object_set.encrypt_prepared_object_set(
+            prepared,
+            backup_id="backup_failure",
+            recipients=("age1test",),
+            manifest=manifest,
+            manifest_digest="a" * 64,
+            coverage_digest="b" * 64,
+        )
+
+    assert not list(output_dir.glob("*.plaintext.tmp"))
+
+
+def test_prepared_object_set_retry_scrubs_crash_leftovers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "retry-output"
+    output_dir.mkdir()
+    stale = output_dir / ".p0000.plaintext.tmp"
+    stale.write_bytes(b"crash-leftover")
+    scrubbed: list[Path] = []
+    original_scrub = backup_object_set.backup_unattended.scrub_plaintext_file
+
+    def record_scrub(path: Path) -> None:
+        scrubbed.append(path)
+        original_scrub(path)
+
+    monkeypatch.setattr(backup_object_set.backup_unattended, "scrub_plaintext_file", record_scrub)
+    prepared = backup_object_set.prepare_object_set(
+        tmp_path / "empty-staging",
+        output_dir,
+        manifest={"backupId": "backup_retry", "snapshotKind": "full", "files": []},
+    )
+
+    assert stale in scrubbed
+    assert not stale.exists()
+    assert prepared.components == ()
+
+
 def test_object_set_spool_reuses_exact_verified_ciphertexts(tmp_settings: Path) -> None:
     control = _component(tmp_settings, "control", b"control", control=True)
     payload = _component(tmp_settings, "p0000", b"payload")
