@@ -52,6 +52,15 @@ def _install_s3_object_get_audit() -> tuple[list[str], Callable[[], None]]:
 def main() -> int:
     command = _read_command()
     action = str(command.get("action") or "")
+    if action in {"pause-job", "resume-job", "abort-job"}:
+        restore_id = str(command["restoreId"])
+        operation = {
+            "pause-job": backup_remote_restore.request_restore_pause,
+            "resume-job": backup_remote_restore.resume_restore_session,
+            "abort-job": backup_remote_restore.request_restore_abort,
+        }[action]
+        _emit(operation(restore_id))
+        return 0
     if action == "create-partial-fetch":
         created = backup_remote_restore.create_restore_from_target(
             target_id=str(command["targetId"]),

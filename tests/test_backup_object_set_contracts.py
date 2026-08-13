@@ -2784,6 +2784,57 @@ def _run_restart_probe(tmp_settings: Path, command: dict[str, object]) -> dict[s
 
 
 @pytest.mark.integration
+def test_recovery_job_control_survives_real_process_exits(tmp_settings: Path) -> None:
+    restore_id = "restore-job-control-restart"
+    restore_root = backups.RESTORE_DIR / restore_id
+    restore_root.mkdir(parents=True)
+    partial = restore_root / "payload-partial.age"
+    partial.write_bytes(b"1234")
+    digest = "a" * 64
+    session = {
+        "schemaVersion": 4,
+        "restoreId": restore_id,
+        "source": "remote-target",
+        "phase": "fetching-selected-components",
+        "chain": [
+            {
+                "requiredComponents": [
+                    {
+                        "componentId": "p0000",
+                        "objectDigest": digest,
+                        "expectedBytes": 10,
+                        "remoteETag": "etag",
+                        "remoteVersionId": None,
+                        "ciphertextPath": str(partial),
+                    }
+                ]
+            }
+        ],
+        "componentStates": {
+            digest: {
+                "state": "partial",
+                "downloadedBytes": 4,
+                "expectedBytes": 10,
+                "remoteETag": "etag",
+                "remoteVersionId": None,
+            }
+        },
+    }
+    (restore_root / "remote-fetch.json").write_text(json.dumps(session), encoding="utf-8")
+
+    paused = _run_restart_probe(tmp_settings, {"action": "pause-job", "restoreId": restore_id})
+    assert paused == {"restoreId": restore_id, "phase": "paused", "pauseRequested": True}
+    partial.write_bytes(b"bad")
+    resumed = _run_restart_probe(tmp_settings, {"action": "resume-job", "restoreId": restore_id})
+    assert resumed == {"restoreId": restore_id, "phase": "fetching-selected-components"}
+    resumed_session = json.loads((restore_root / "remote-fetch.json").read_text(encoding="utf-8"))
+    assert resumed_session["componentStates"][digest]["state"] == "queued"
+    assert not partial.exists()
+    aborted = _run_restart_probe(tmp_settings, {"action": "abort-job", "restoreId": restore_id})
+    assert aborted == {"restoreId": restore_id, "phase": "aborted", "abortRequested": False}
+
+
+@pytest.mark.integration
 @pytest.mark.slow
 def test_object_set_restore_resumes_across_real_process_exits(tmp_settings: Path) -> None:
     if not bool(backup_crypto.capabilities().get("encryptedBackupAvailable")):
