@@ -27,6 +27,7 @@ from deepseek_infra.infra.workspace import (
     backup_pack,
     backup_publish,
     backup_reconcile,
+    backup_recovery_drill,
     backup_remote_restore,
     backup_retention,
     backup_scrub,
@@ -2562,6 +2563,58 @@ def test_object_set_preview_plans_and_fetches_only_selected_component(
     assert (tree / "payload/projects/p1/a.bin").read_bytes() == b"project-one-snapshot"
     assert not (tree / "payload/projects/p2").exists()
     assert not (tree / "payload/memory").exists()
+
+
+def test_object_set_recovery_drill_runs_production_materialize_without_mutating_live_workspace(
+    tmp_settings: Path,
+    object_set_crypto: None,
+) -> None:
+    package = _full_object_set_package(tmp_settings)
+    backup_publish.publish_backup(
+        backup_publish.resolve_target("managed-local"),
+        package,
+        run_id="run-production-drill",
+        policy_id="policy-production-drill",
+        schedule_slot="slot-production-drill",
+        fencing_token=1,
+    )
+    config.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    live_path = config.PROJECTS_DIR / "live-after-backup.bin"
+    live_path.write_bytes(b"live-workspace-must-not-change")
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection={"contributors": ["projects"], "projectIds": ["p1"]},
+    )
+    restore_id = str(created["restoreId"])
+    assert backup_remote_restore.fetch_restore_session(restore_id)["phase"] == "controls-fetched"
+    backup_crypto.put_secret(restore_id, "passphrase", "test-secret")
+
+    result = backup_recovery_drill.run_recovery_drill(restore_id)
+
+    assert result["result"] == "success"
+    assert result["chainLength"] == 1
+    assert result["components"] == 2
+    assert result["logicalBytes"] > 0
+    assert result["verifiedContributors"] == 1
+    assert live_path.read_bytes() == b"live-workspace-must-not-change"
+    root = backups.RESTORE_DIR / restore_id
+    assert not any(root.glob("metadata-*"))
+    assert not any(root.glob("object-layer-*"))
+    assert not (root / "extracted").exists()
+    assert not (root / "plan.json").exists()
+    assert not (root / "verified-plan.json").exists()
+    assert (root / "drill-result.json").is_file()
+    assert not backup_crypto.has_secret(restore_id)
+    with pytest.raises(AppError, match="Recovery Drill job cannot enter live restore"):
+        backup_remote_restore.materialize_restore_session(
+            restore_id,
+            kind="passphrase",
+            secret=bytearray(b"test-secret"),
+        )
+    with pytest.raises(AppError, match="Recovery Drill job cannot enter live restore"):
+        backup_remote_restore.materialize_federated_restore(restore_id)
+    assert not (root / "transaction.json").exists()
 
 
 def test_valid_verified_plan_skips_control_redecrypt_and_tamper_replans(

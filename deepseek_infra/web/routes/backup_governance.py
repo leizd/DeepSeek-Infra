@@ -19,6 +19,7 @@ from deepseek_infra.infra.workspace import (
     backup_executor,
     backup_policies,
     backup_publish,
+    backup_recovery_drill,
     backup_remote_restore,
     backup_retention,
     backup_scheduler,
@@ -203,6 +204,19 @@ def create_backup_governance_router() -> APIRouter:
     async def api_disaster_recovery_status(request: Request) -> JSONResponse:
         require_api_auth(request)
         return json_response(backup_dr_readiness.readiness_status())
+
+    @router.post("/api/workspace/disaster-recovery/drills")
+    async def api_disaster_recovery_drill_create(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=16_000)
+        if set(payload) != {"restoreId"}:
+            raise AppError("Recovery Drill accepts only restoreId", code=ErrorCode.INVALID_PAYLOAD)
+        return json_response(backup_recovery_drill.run_recovery_drill(str(payload.get("restoreId") or "")))
+
+    @router.get("/api/workspace/disaster-recovery/drills/{restore_id}")
+    async def api_disaster_recovery_drill_get(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(backup_recovery_drill.get_recovery_drill(restore_id))
 
     @router.get("/api/workspace/backup-catalog")
     async def api_backup_catalog(request: Request) -> JSONResponse:

@@ -69,6 +69,11 @@ def _session_path(restore_id: str) -> Path:
     return _session_dir(restore_id) / "remote-fetch.json"
 
 
+def _assert_live_restore_allowed(root: Path, session: dict[str, Any]) -> None:
+    if bool(session.get("drillOnly")) or any((root / name).is_file() for name in ("drill-running.json", "drill-result.json")):
+        raise AppError("Recovery Drill job cannot enter live restore", code=ErrorCode.INVALID_REQUEST, status=409)
+
+
 def _atomic_write_json(
     path: Path,
     payload: dict[str, Any],
@@ -2130,6 +2135,7 @@ def materialize_restore_session(
     kind: str = "passphrase",
     secret: bytearray,
     client: Any | None = None,
+    _drill: bool = False,
 ) -> dict[str, Any]:
     """Decrypt the fetched chain, materialize the workspace and verify every root.
 
@@ -2141,6 +2147,8 @@ def materialize_restore_session(
     session = read_restore_session(restore_id)
     if session is None:
         raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+    if not _drill:
+        _assert_live_restore_allowed(_session_dir(restore_id), session)
     if str(session.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
         return _materialize_object_set_session(session, kind=kind, secret=secret, client=client)
     phase = str(session.get("phase") or "")
@@ -2258,6 +2266,7 @@ def materialize_federated_restore(
     session = read_restore_session(restore_id)
     if session is None:
         raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+    _assert_live_restore_allowed(_session_dir(restore_id), session)
     controlled_phase = _converge_job_control(session)
     if controlled_phase in {"paused", "aborted", "rolled-back", "recovery-required"}:
         return {"restoreId": restore_id, "phase": controlled_phase, "remoteRestorePhase": controlled_phase}
