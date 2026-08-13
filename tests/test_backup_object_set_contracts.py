@@ -11,7 +11,7 @@ import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 import pytest
 
@@ -2289,6 +2289,89 @@ def test_object_set_preview_plans_and_fetches_only_selected_component(
     assert (tree / "payload/projects/p1/a.bin").read_bytes() == b"project-one-snapshot"
     assert not (tree / "payload/projects/p2").exists()
     assert not (tree / "payload/memory").exists()
+
+
+def test_valid_verified_plan_skips_control_redecrypt_and_tamper_replans(
+    tmp_settings: Path,
+    object_set_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _full_object_set_package(tmp_settings)
+    backup_publish.publish_backup(
+        backup_publish.resolve_target("managed-local"),
+        package,
+        run_id="run-plan-reuse",
+        policy_id="policy-plan-reuse",
+        schedule_slot="slot-plan-reuse",
+        fencing_token=1,
+    )
+    selection = {"contributors": ["projects"], "projectIds": ["p1"]}
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=selection,
+    )
+    restore_id = str(created["restoreId"])
+    backup_remote_restore.fetch_restore_session(restore_id)
+    backup_crypto.put_secret(restore_id, "passphrase", "test-secret")
+    backup_remote_restore.preview_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=selection,
+        restore_id=restore_id,
+    )
+    backup_remote_restore.fetch_restore_session(restore_id)
+    control_path = package.control.path
+    original_decrypt = backup_remote_restore.backup_crypto.decrypt_file
+    control_decrypts = 0
+
+    def counted_decrypt(
+        source: Path,
+        target: Path,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        nonlocal control_decrypts
+        if source.name.startswith("control-") or source == control_path:
+            control_decrypts += 1
+        original_decrypt(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(backup_remote_restore.backup_crypto, "decrypt_file", counted_decrypt)
+
+    backup_remote_restore.materialize_restore_session(
+        restore_id,
+        kind="passphrase",
+        secret=bytearray(b"test-secret"),
+    )
+    assert control_decrypts == 0
+
+    second = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=selection,
+    )
+    second_id = str(second["restoreId"])
+    backup_remote_restore.fetch_restore_session(second_id)
+    backup_crypto.put_secret(second_id, "passphrase", "test-secret")
+    backup_remote_restore.preview_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=selection,
+        restore_id=second_id,
+    )
+    backup_remote_restore.fetch_restore_session(second_id)
+    plan_path = backups.RESTORE_DIR / second_id / "verified-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["body"]["bindings"]["selectionDigest"] = "0" * 64
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    before = control_decrypts
+
+    backup_remote_restore.materialize_restore_session(
+        second_id,
+        kind="passphrase",
+        secret=bytearray(b"test-secret"),
+    )
+    assert control_decrypts > before
 
 
 def test_object_set_selective_restore_issues_gets_for_required_payload_only(

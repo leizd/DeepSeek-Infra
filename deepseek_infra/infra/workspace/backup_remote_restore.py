@@ -33,6 +33,7 @@ from deepseek_infra.infra.workspace import (
     backup_publish,
     backup_recovery_state,
     backup_targets,
+    backup_verified_plan,
     backups,
 )
 from deepseek_infra.infra.workspace.backup_target_store import (
@@ -1376,6 +1377,7 @@ def _plan_object_set_projection(
         if isinstance(component, dict)
     ]
     backup_component_cache.ComponentCache().pin(restore_id, required_digests)
+    backup_verified_plan.write_verified_plan(base, session, projection, report)
     session["phase"] = "components-fetched" if every_required_component_fetched else "fetching-selected-components"
     _atomic_write_json(_session_path(restore_id), session)
     return projection, report
@@ -1437,7 +1439,12 @@ def _materialize_object_set_session(
     client: Any | None,
 ) -> dict[str, Any]:
     restore_id = str(session["restoreId"])
-    projection, projection_report = _plan_object_set_projection(session, kind=kind, secret=secret)
+    base = _session_dir(restore_id)
+    loaded_plan = backup_verified_plan.load_verified_plan(base, session)
+    if loaded_plan is None:
+        projection, projection_report = _plan_object_set_projection(session, kind=kind, secret=secret)
+    else:
+        projection, projection_report = loaded_plan
     session = read_restore_session(restore_id) or session
     while str(session.get("phase") or "") != "components-fetched":
         fetch_result = fetch_restore_session(restore_id, client=client)
@@ -1445,16 +1452,20 @@ def _materialize_object_set_session(
             raise AppError("Object-set component fetch did not advance", code=ErrorCode.INTERNAL, status=500)
         session = read_restore_session(restore_id) or session
     members = restore_members(session)
-    base = _session_dir(restore_id)
     secret_kind: Literal["passphrase", "age-identity"] = "passphrase" if kind != "age-identity" else "age-identity"
     extracted_dirs: list[Path] = []
     _set_phase(session, "decrypting-components")
     for index, member in enumerate(members):
-        control = member["control"]
-        control_decrypted = base / f"control-decrypted-{index}.zip"
-        backup_crypto.decrypt_file(Path(str(control["ciphertextPath"])), control_decrypted, kind=secret_kind, secret=secret)
         layer = base / f"object-layer-{index}"
-        backups.extract_archive_metadata(control_decrypted, layer)
+        shutil.rmtree(layer, ignore_errors=True)
+        metadata = base / f"metadata-{index}"
+        if metadata.is_dir():
+            shutil.copytree(metadata, layer)
+        else:
+            control = member["control"]
+            control_decrypted = base / f"control-decrypted-{index}.zip"
+            backup_crypto.decrypt_file(Path(str(control["ciphertextPath"])), control_decrypted, kind=secret_kind, secret=secret)
+            backups.extract_archive_metadata(control_decrypted, layer)
         try:
             component_map = json.loads((layer / "component-map.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:

@@ -29,8 +29,8 @@
 
 ## Gate C — Pipeline
 
-- [ ] Persist strongly bound verified Projection Plans
-- [ ] Reuse Control metadata without redecode
+- [x] Persist strongly bound verified Projection Plans
+- [x] Reuse Control metadata without redecode
 - [ ] Overlap network/crypto and scrub plaintext Component ZIPs immediately
 - [ ] Checkpoint C: plan reuse and plaintext-lifetime tests green
 
