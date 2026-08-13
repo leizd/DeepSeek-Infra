@@ -42,6 +42,14 @@ class ErrorTests(unittest.TestCase):
 
         self.assertEqual(error.to_response(), {"error": "Missing key", "code": "missing_api_key"})
 
+    def test_app_error_to_response_includes_optional_details(self) -> None:
+        error = AppError("Blocked", code=ErrorCode.RECOVERY_PREFLIGHT_CAPACITY, status=409, details={"requiredBytes": 10})
+
+        self.assertEqual(
+            error.to_response(),
+            {"error": "Blocked", "code": "recovery_preflight_capacity", "details": {"requiredBytes": 10}},
+        )
+
     def test_default_app_error_code_tracks_status_family(self) -> None:
         self.assertEqual(AppError("Bad payload").code, ErrorCode.INVALID_PAYLOAD)
         self.assertEqual(AppError("Broken", status=500).code, ErrorCode.INTERNAL)
