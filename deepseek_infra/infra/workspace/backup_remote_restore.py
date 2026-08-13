@@ -33,6 +33,7 @@ from deepseek_infra.infra.workspace import (
     backup_projection,
     backup_publish,
     backup_recovery_lease,
+    backup_recovery_job,
     backup_recovery_state,
     backup_targets,
     backup_unattended,
@@ -65,9 +66,50 @@ def _session_path(restore_id: str) -> Path:
     return _session_dir(restore_id) / "remote-fetch.json"
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def _atomic_write_json(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    clear_pause: bool = False,
+    clear_abort: bool = False,
+    allow_control_transition: bool = False,
+) -> None:
+    """Atomically persist a session without losing concurrent job intents."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with backup_recovery_job.session_lock(path):
+        existing: dict[str, Any] = {}
+        if path.is_file():
+            try:
+                decoded = json.loads(path.read_text(encoding="utf-8"))
+                existing = decoded if isinstance(decoded, dict) else {}
+            except (OSError, json.JSONDecodeError):
+                existing = {}
+        if existing.get("pauseRequested") and not clear_pause:
+            payload["pauseRequested"] = True
+        if existing.get("abortRequested") and not clear_abort:
+            payload["abortRequested"] = True
+        existing_generation = int(existing.get("controlGeneration") or 0)
+        payload_generation = int(payload.get("controlGeneration") or 0)
+        if existing_generation > payload_generation:
+            payload["controlGeneration"] = existing_generation
+            payload["phase"] = str(existing.get("phase") or payload.get("phase") or "")
+            for key in ("pauseRequested", "abortRequested", "pausedFromPhase"):
+                if key in existing:
+                    payload[key] = existing[key]
+                else:
+                    payload.pop(key, None)
+        existing_phase = str(existing.get("phase") or "")
+        if existing_phase in backup_recovery_job.CONTROLLED_STOP_PHASES and not (
+            allow_control_transition and payload_generation >= existing_generation
+        ):
+            payload["phase"] = existing_phase
+            if existing.get("pausedFromPhase"):
+                payload["pausedFromPhase"] = existing["pausedFromPhase"]
+        _write_json_unlocked(path, payload)
+
+
+def _write_json_unlocked(path: Path, payload: dict[str, Any]) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
     with tmp.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         handle.flush()
@@ -85,6 +127,130 @@ def _renew_session_holds(store: Any, session: dict[str, Any]) -> None:
     if backup_recovery_lease.renew_session(store, session):
         session["updatedAt"] = _utc_iso()
         _atomic_write_json(_session_path(str(session["restoreId"])), session)
+
+
+def _converge_job_control(session: dict[str, Any]) -> str:
+    restore_id = str(session["restoreId"])
+    session["scratchRoot"] = str(_session_dir(restore_id))
+    session["transactionPath"] = str(_session_dir(restore_id) / "transaction.json")
+
+    def _abort_prepared() -> None:
+        backups.abort_restore(restore_id)
+
+    phase = backup_recovery_job.converge(
+        session,
+        abort_prepared=_abort_prepared,
+        release=lambda: _release_session_holds(session),
+    )
+    session["updatedAt"] = _utc_iso()
+    _atomic_write_json(
+        _session_path(restore_id),
+        session,
+        clear_pause=phase in {"aborted", "rolled-back"},
+        clear_abort=phase in {"aborted", "rolled-back"},
+        allow_control_transition=True,
+    )
+    return str(session.get("phase") or phase)
+
+
+def _checkpoint_job_control(session: dict[str, Any], store: Any) -> None:
+    """Observe durable control intent at a chunk/component boundary."""
+    restore_id = str(session["restoreId"])
+    latest = read_restore_session(restore_id)
+    if latest is not None:
+        session["controlGeneration"] = int(latest.get("controlGeneration") or 0)
+        for key in ("pauseRequested", "abortRequested"):
+            if latest.get(key):
+                session[key] = True
+        latest_phase = str(latest.get("phase") or "")
+        if latest_phase in backup_recovery_job.CONTROLLED_STOP_PHASES:
+            session["phase"] = latest_phase
+            if latest.get("pausedFromPhase"):
+                session["pausedFromPhase"] = latest["pausedFromPhase"]
+    phase = _converge_job_control(session)
+    if phase in {"paused", "recovery-required"}:
+        _renew_session_holds(store, session)
+    if phase in backup_recovery_job.CONTROLLED_STOP_PHASES:
+        raise backup_recovery_job.RecoveryJobStopped(phase)
+    _renew_session_holds(store, session)
+
+
+def request_restore_pause(restore_id: str) -> dict[str, Any]:
+    path = _session_path(restore_id)
+    with backup_recovery_job.session_lock(path):
+        session = read_restore_session(restore_id)
+        if session is None:
+            raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+        current_phase = str(session.get("phase") or "")
+        if session.get("abortRequested") or current_phase == "aborting":
+            return {"restoreId": restore_id, "phase": "aborting", "pauseRequested": bool(session.get("pauseRequested"))}
+        if current_phase in backup_recovery_job.TERMINAL_PHASES | {"paused", "recovery-required"}:
+            return {"restoreId": restore_id, "phase": current_phase, "pauseRequested": bool(session.get("pauseRequested"))}
+        backup_recovery_job.request_pause(session)
+        session["controlGeneration"] = int(session.get("controlGeneration") or 0) + 1
+        session["scratchRoot"] = str(_session_dir(restore_id))
+        session["transactionPath"] = str(_session_dir(restore_id) / "transaction.json")
+        phase = backup_recovery_job.converge(session)
+        session["updatedAt"] = _utc_iso()
+        _write_json_unlocked(path, session)
+        return {"restoreId": restore_id, "phase": phase, "pauseRequested": bool(session.get("pauseRequested"))}
+
+
+def resume_restore_session(restore_id: str) -> dict[str, Any]:
+    path = _session_path(restore_id)
+    with backup_recovery_job.session_lock(path):
+        session = read_restore_session(restore_id)
+        if session is None:
+            raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+        current_phase = str(session.get("phase") or "")
+        if current_phase != "paused":
+            return {"restoreId": restore_id, "phase": current_phase}
+        phase = backup_recovery_job.resume(session)
+        session["controlGeneration"] = int(session.get("controlGeneration") or 0) + 1
+        session["updatedAt"] = _utc_iso()
+        _write_json_unlocked(path, session)
+        return {"restoreId": restore_id, "phase": phase}
+
+
+def request_restore_abort(restore_id: str) -> dict[str, Any]:
+    path = _session_path(restore_id)
+    with backup_recovery_job.session_lock(path):
+        session = read_restore_session(restore_id)
+        if session is None:
+            raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+        current_phase = str(session.get("phase") or "")
+        if current_phase in backup_recovery_job.TERMINAL_PHASES:
+            return {"restoreId": restore_id, "phase": current_phase, "abortRequested": bool(session.get("abortRequested"))}
+        if not session.get("abortRequested"):
+            backup_recovery_job.request_abort(session)
+            session["controlGeneration"] = int(session.get("controlGeneration") or 0) + 1
+        abort_from_phase = str(session.get("pausedFromPhase") or current_phase) if current_phase == "paused" else current_phase
+        session["abortFromPhase"] = str(session.get("abortFromPhase") or abort_from_phase)
+        session["phase"] = "aborting"
+        session["scratchRoot"] = str(_session_dir(restore_id))
+        session["transactionPath"] = str(_session_dir(restore_id) / "transaction.json")
+        session["updatedAt"] = _utc_iso()
+        _write_json_unlocked(path, session)
+
+    abort_result: dict[str, Any] = {}
+
+    def _abort_prepared() -> None:
+        abort_result.update(backups.abort_restore(restore_id))
+
+    phase = backup_recovery_job.converge(
+        session,
+        abort_prepared=_abort_prepared,
+        release=lambda: _release_session_holds(session),
+    )
+    session["updatedAt"] = _utc_iso()
+    _atomic_write_json(
+        path,
+        session,
+        clear_pause=phase in {"aborted", "rolled-back"},
+        clear_abort=phase in {"aborted", "rolled-back"},
+        allow_control_transition=True,
+    )
+    return {**abort_result, "restoreId": restore_id, "phase": phase, "abortRequested": bool(session.get("abortRequested"))}
 
 
 def read_restore_session(restore_id: str) -> dict[str, Any] | None:
@@ -615,7 +781,10 @@ def _fetch_object_set_controls(
         expected_version = control.get("remoteVersionId")
         if expected_version and meta.version_id and meta.version_id != expected_version:
             raise AppError("remote control object version changed since restore session started", code=ErrorCode.INVALID_REQUEST, status=409)
-        done = _download_member(store, control, max_bytes, checkpoint=lambda: _renew_session_holds(store, session))
+        try:
+            done = _download_member(store, control, max_bytes, checkpoint=lambda: _checkpoint_job_control(session, store))
+        except backup_recovery_job.RecoveryJobStopped as stopped:
+            return {"restoreId": restore_id, "phase": stopped.phase}
         session["updatedAt"] = _utc_iso()
         if not done:
             session["controlIndex"] = index
@@ -704,7 +873,14 @@ def _fetch_object_set_components(
             )
             session["updatedAt"] = _utc_iso()
             _atomic_write_json(_session_path(restore_id), session)
-            done = _download_member(store, component, max_bytes, checkpoint=lambda: _renew_session_holds(store, session))
+            try:
+                done = _download_member(store, component, max_bytes, checkpoint=lambda: _checkpoint_job_control(session, store))
+            except backup_recovery_job.RecoveryJobStopped as stopped:
+                downloaded = Path(str(component.get("ciphertextPath") or "")).stat().st_size
+                component["downloadedBytes"] = downloaded
+                backup_recovery_state.update_component_state(session, component, state="partial", downloaded_bytes=downloaded)
+                _atomic_write_json(_session_path(restore_id), session)
+                return {"restoreId": restore_id, "phase": stopped.phase}
             downloaded = int(component.get("downloadedBytes") or 0)
             backup_recovery_state.update_component_state(
                 session,
@@ -730,11 +906,16 @@ def _fetch_object_set_components(
     else:
         state_lock = threading.Lock()
 
+        def _parallel_checkpoint() -> None:
+            with state_lock:
+                _checkpoint_job_control(session, store)
+
         def _make_download_task(component: dict[str, Any]) -> backup_component_transport.TransferTask:
             digest = str(component.get("objectDigest") or "")
             state = states[digest]
 
             def _execute() -> None:
+                _parallel_checkpoint()
                 expected_bytes = int(component.get("expectedBytes") or 0)
                 cached = component_cache.get(digest, expected_bytes)
                 if cached is not None:
@@ -793,7 +974,7 @@ def _fetch_object_set_components(
                         )
                         session["updatedAt"] = _utc_iso()
                         _atomic_write_json(_session_path(restore_id), session)
-                        _renew_session_holds(store, session)
+                    _parallel_checkpoint()
 
                 try:
                     cached = component_cache.fetch(
@@ -802,6 +983,20 @@ def _fetch_object_set_components(
                         lambda offset: store.get_stream(object_key(digest), offset=offset),
                         progress=_checkpoint,
                     )
+                except backup_recovery_job.RecoveryJobStopped:
+                    partial_path = component_cache.partial_path(digest)
+                    downloaded = partial_path.stat().st_size if partial_path.is_file() else 0
+                    with state_lock:
+                        component["downloadedBytes"] = downloaded
+                        backup_recovery_state.update_component_state(
+                            session,
+                            component,
+                            state="partial",
+                            downloaded_bytes=downloaded,
+                        )
+                        session["updatedAt"] = _utc_iso()
+                        _atomic_write_json(_session_path(restore_id), session)
+                    raise
                 except BaseException:
                     partial_path = component_cache.partial_path(digest)
                     downloaded = partial_path.stat().st_size if partial_path.is_file() else 0
@@ -845,6 +1040,11 @@ def _fetch_object_set_components(
         tasks = [_make_download_task(component) for component in pending if not component["fetched"]]
         try:
             telemetry = backup_component_transport.default_scheduler().run(tasks)
+        except backup_recovery_job.RecoveryJobStopped as stopped:
+            latest = read_restore_session(restore_id) or session
+            latest["updatedAt"] = _utc_iso()
+            _atomic_write_json(_session_path(restore_id), latest)
+            return {"restoreId": restore_id, "phase": stopped.phase}
         except BaseException:
             session["phase"] = "fetching-selected-components"
             session["updatedAt"] = _utc_iso()
@@ -879,6 +1079,10 @@ def fetch_restore_session(
     if session is None:
         raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
     phase = str(session.get("phase") or "")
+    controlled_phase = _converge_job_control(session)
+    if controlled_phase in {"paused", "aborted", "rolled-back", "recovery-required"}:
+        return {"restoreId": restore_id, "phase": controlled_phase}
+    phase = controlled_phase
     target_id = str(session.get("targetId") or "")
     target = backup_publish.resolve_target(target_id, write_intent=False)
     store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False, client=client)
@@ -910,7 +1114,10 @@ def fetch_restore_session(
                 raise AppError(f"Backup ciphertext object is missing on target: {member['backupId']}", code=ErrorCode.NOT_FOUND, status=404)
             if expected_etag and meta.etag and meta.etag != expected_etag:
                 raise AppError("remote object changed since restore session started", code=ErrorCode.INVALID_REQUEST, status=409)
-            done = _download_member(store, member, max_bytes, checkpoint=lambda: _renew_session_holds(store, session))
+            try:
+                done = _download_member(store, member, max_bytes, checkpoint=lambda: _checkpoint_job_control(session, store))
+            except backup_recovery_job.RecoveryJobStopped as stopped:
+                return {"restoreId": restore_id, "phase": stopped.phase}
             session["updatedAt"] = _utc_iso()
             if not done:
                 session["chainIndex"] = index
@@ -962,7 +1169,10 @@ def fetch_restore_session(
         "ciphertextPath": str(session.get("ciphertextPath") or (_session_dir(restore_id) / str(session.get("filename") or "package.age"))),
         "downloadedBytes": int(session.get("downloadedBytes") or 0),
     }
-    done = _download_member(store, member, max_bytes, checkpoint=lambda: _renew_session_holds(store, session))
+    try:
+        done = _download_member(store, member, max_bytes, checkpoint=lambda: _checkpoint_job_control(session, store))
+    except backup_recovery_job.RecoveryJobStopped as stopped:
+        return {"restoreId": restore_id, "phase": stopped.phase}
     session["downloadedBytes"] = int(member["downloadedBytes"] or 0)
     session["updatedAt"] = _utc_iso()
     if done:
@@ -1783,6 +1993,9 @@ def materialize_federated_restore(
     session = read_restore_session(restore_id)
     if session is None:
         raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+    controlled_phase = _converge_job_control(session)
+    if controlled_phase in {"paused", "aborted", "rolled-back", "recovery-required"}:
+        return {"restoreId": restore_id, "phase": controlled_phase, "remoteRestorePhase": controlled_phase}
     phase = str(session.get("phase") or "")
     if phase in {"preparing", "prepared", "committing", "complete"}:
         restored = backups.get_restore(restore_id)
