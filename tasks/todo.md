@@ -36,7 +36,7 @@
 
 ## Gate D — Safety
 
-- [ ] Replace fixed holds with renewable generationed leases
+- [x] Replace fixed holds with renewable generationed leases
 - [ ] Add durable pause/resume/phase-aware abort
 - [ ] Add disk/dependency Recovery preflight
 - [ ] Checkpoint D: restart, long-lease, and insufficient-disk tests green

@@ -307,7 +307,7 @@ def test_restore_holds_released_on_complete(tmp_settings: Path, stub_crypto: Non
 
 def test_hold_release_respects_recovery_required(tmp_settings: Path) -> None:
     restore_id = "restore_hold_policy"
-    hold_keys = [f"holds/restore/{restore_id}:0.json", f"holds/restore/{restore_id}:1.json"]
+    hold_keys = [f"holds/restore/{restore_id}-0.json", f"holds/restore/{restore_id}-1.json"]
     session = {
         "schemaVersion": 3,
         "restoreId": restore_id,
@@ -322,7 +322,10 @@ def test_hold_release_respects_recovery_required(tmp_settings: Path) -> None:
     for key in hold_keys:
         path = backups.BACKUP_DIR / key
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{"schemaVersion":1}', encoding="utf-8")
+        path.write_text(
+            json.dumps({"schemaVersion": 3, "generation": 0, "expiresAt": "2099-01-01T00:00:00Z"}),
+            encoding="utf-8",
+        )
     backup_remote_restore.advance_federated_phase(restore_id, "recovery-required")
     assert all((backups.BACKUP_DIR / key).is_file() for key in hold_keys)
     backup_remote_restore.advance_federated_phase(restore_id, "complete")

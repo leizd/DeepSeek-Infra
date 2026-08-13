@@ -32,6 +32,7 @@ from deepseek_infra.infra.workspace import (
     backup_pack,
     backup_projection,
     backup_publish,
+    backup_recovery_lease,
     backup_recovery_state,
     backup_targets,
     backup_unattended,
@@ -78,6 +79,12 @@ def _set_phase(session: dict[str, Any], phase: str) -> None:
     session["phase"] = phase
     session["updatedAt"] = _utc_iso()
     _atomic_write_json(_session_path(str(session["restoreId"])), session)
+
+
+def _renew_session_holds(store: Any, session: dict[str, Any]) -> None:
+    if backup_recovery_lease.renew_session(store, session):
+        session["updatedAt"] = _utc_iso()
+        _atomic_write_json(_session_path(str(session["restoreId"])), session)
 
 
 def read_restore_session(restore_id: str) -> dict[str, Any] | None:
@@ -287,7 +294,7 @@ def _create_object_set_restore(
     hold_keys: list[str] = []
     for index, member in enumerate(members):
         hold = {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "storageProtocol": backup_object_set.OBJECT_SET_V1,
             "restoreId": restore_id,
             "backupId": member["backupId"],
@@ -295,9 +302,10 @@ def _create_object_set_restore(
             "objects": [{"digest": item["digest"], "size": item["size"]} for item in member["objects"]],
             "targetId": target_id,
             "createdAt": _utc_iso(),
+            "generation": 0,
             "expiresAt": _utc_iso(datetime.now(tz=timezone.utc) + timedelta(seconds=HOLD_TTL_SECONDS)),
         }
-        key = restore_hold_key(f"{restore_id}:{index}")
+        key = restore_hold_key(f"{restore_id}-{index}")
         put_json_if_absent(store, key, hold)
         hold_keys.append(key)
     session = {
@@ -426,19 +434,20 @@ def create_restore_from_target(
         members = [_chain_member(store, item, staging_root) for item in chain]
         for index, member in enumerate(members):
             hold = {
-                "schemaVersion": 1,
+                "schemaVersion": 3,
                 "restoreId": restore_id,
                 "backupId": str(member["backupId"]),
                 "objectDigest": str(member["objectDigest"]),
                 "targetId": target_id,
                 "createdAt": _utc_iso(),
+                "generation": 0,
                 "expiresAt": _utc_iso(datetime.now(tz=timezone.utc) + timedelta(seconds=HOLD_TTL_SECONDS)),
             }
             try:
-                put_json_if_absent(store, restore_hold_key(f"{restore_id}:{index}"), hold)
+                put_json_if_absent(store, restore_hold_key(f"{restore_id}-{index}"), hold)
             except AppError:  # pragma: no cover
                 pass
-            hold_keys.append(restore_hold_key(f"{restore_id}:{index}"))
+            hold_keys.append(restore_hold_key(f"{restore_id}-{index}"))
         session = {
             "schemaVersion": SESSION_SCHEMA_VERSION,
             "restoreId": restore_id,
@@ -472,12 +481,13 @@ def create_restore_from_target(
     if meta is None:
         raise AppError("Backup ciphertext object is missing on target", code=ErrorCode.NOT_FOUND, status=404)
     hold = {
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "restoreId": restore_id,
         "backupId": backup_id,
         "objectDigest": digest,
         "targetId": target_id,
         "createdAt": _utc_iso(),
+        "generation": 0,
         "expiresAt": _utc_iso(datetime.now(tz=timezone.utc) + timedelta(seconds=HOLD_TTL_SECONDS)),
     }
     try:
@@ -527,6 +537,7 @@ def _download_member(
     max_bytes: int | None,
     *,
     progress: Callable[[int], None] | None = None,
+    checkpoint: Callable[[], None] | None = None,
 ) -> bool:
     """Resume-download one chain member; returns True when fully fetched."""
     digest = str(member["objectDigest"])
@@ -567,6 +578,8 @@ def _download_member(
                 handle.flush()
                 os.fsync(handle.fileno())
                 progress(position)
+            if checkpoint is not None:
+                checkpoint()
         handle.flush()
         os.fsync(handle.fileno())
     downloaded = ciphertext_path.stat().st_size if ciphertext_path.is_file() else 0
@@ -602,7 +615,7 @@ def _fetch_object_set_controls(
         expected_version = control.get("remoteVersionId")
         if expected_version and meta.version_id and meta.version_id != expected_version:
             raise AppError("remote control object version changed since restore session started", code=ErrorCode.INVALID_REQUEST, status=409)
-        done = _download_member(store, control, max_bytes)
+        done = _download_member(store, control, max_bytes, checkpoint=lambda: _renew_session_holds(store, session))
         session["updatedAt"] = _utc_iso()
         if not done:
             session["controlIndex"] = index
@@ -691,7 +704,7 @@ def _fetch_object_set_components(
             )
             session["updatedAt"] = _utc_iso()
             _atomic_write_json(_session_path(restore_id), session)
-            done = _download_member(store, component, max_bytes)
+            done = _download_member(store, component, max_bytes, checkpoint=lambda: _renew_session_holds(store, session))
             downloaded = int(component.get("downloadedBytes") or 0)
             backup_recovery_state.update_component_state(
                 session,
@@ -780,6 +793,7 @@ def _fetch_object_set_components(
                         )
                         session["updatedAt"] = _utc_iso()
                         _atomic_write_json(_session_path(restore_id), session)
+                        _renew_session_holds(store, session)
 
                 try:
                     cached = component_cache.fetch(
@@ -865,6 +879,10 @@ def fetch_restore_session(
     if session is None:
         raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
     phase = str(session.get("phase") or "")
+    target_id = str(session.get("targetId") or "")
+    target = backup_publish.resolve_target(target_id, write_intent=False)
+    store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False, client=client)
+    _renew_session_holds(store, session)
     if phase in {"fetched", "chain-fetched", "controls-fetched", "components-fetched"} and not (
         phase == "components-fetched" and _on_component_verified is not None
     ):
@@ -876,10 +894,6 @@ def fetch_restore_session(
             "path": str(session.get("ciphertextPath") or ""),
             "next": "inspect-or-unlock",
         }
-    target_id = str(session.get("targetId") or "")
-    target = backup_publish.resolve_target(target_id, write_intent=False)
-    store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False, client=client)
-
     if str(session.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
         if str(session.get("phase") or "") in {"fetching-selected-components", "components-fetched", "decrypting-components"}:
             return _fetch_object_set_components(session, store, max_bytes=max_bytes, on_verified=_on_component_verified)
@@ -896,7 +910,7 @@ def fetch_restore_session(
                 raise AppError(f"Backup ciphertext object is missing on target: {member['backupId']}", code=ErrorCode.NOT_FOUND, status=404)
             if expected_etag and meta.etag and meta.etag != expected_etag:
                 raise AppError("remote object changed since restore session started", code=ErrorCode.INVALID_REQUEST, status=409)
-            done = _download_member(store, member, max_bytes)
+            done = _download_member(store, member, max_bytes, checkpoint=lambda: _renew_session_holds(store, session))
             session["updatedAt"] = _utc_iso()
             if not done:
                 session["chainIndex"] = index
@@ -948,7 +962,7 @@ def fetch_restore_session(
         "ciphertextPath": str(session.get("ciphertextPath") or (_session_dir(restore_id) / str(session.get("filename") or "package.age"))),
         "downloadedBytes": int(session.get("downloadedBytes") or 0),
     }
-    done = _download_member(store, member, max_bytes)
+    done = _download_member(store, member, max_bytes, checkpoint=lambda: _renew_session_holds(store, session))
     session["downloadedBytes"] = int(member["downloadedBytes"] or 0)
     session["updatedAt"] = _utc_iso()
     if done:
@@ -1089,6 +1103,7 @@ def restore_from_target(*, target_id: str, backup_id: str, client: Any | None = 
 
 
 def release_restore_hold(store: Any, restore_id: str) -> None:
+    backup_component_cache.ComponentCache().unpin(restore_id)
     try:
         store.delete_if_match(restore_hold_key(restore_id))
     except AppError:  # pragma: no cover
@@ -1500,7 +1515,9 @@ def _materialize_component_pipeline(
             expected_paths = components.get(component_id)
             if not isinstance(expected_paths, list) or any(not isinstance(path, str) for path in expected_paths):
                 raise AppError("Object-set component path map is invalid", code=ErrorCode.INVALID_PAYLOAD)
-            component_paths[str(required.get("objectDigest") or component_id)] = (layer, expected_paths, layer_locks[index])
+            binding = (layer, expected_paths, layer_locks[index])
+            component_paths[str(required.get("objectDigest") or component_id)] = binding
+            component_paths[component_id] = binding
 
     def _worker() -> None:
         while True:
@@ -1545,7 +1562,7 @@ def _materialize_component_pipeline(
             if digest in queued:
                 return
             queued.add(digest)
-        binding = component_paths.get(digest)
+        binding = component_paths.get(digest) or component_paths.get(str(required.get("componentId") or ""))
         if binding is None:
             raise AppError("Object-set required component is foreign", code=ErrorCode.INVALID_PAYLOAD)
         layer, expected_paths, layer_lock = binding
@@ -1594,6 +1611,11 @@ def _materialize_object_set_session(
 ) -> dict[str, Any]:
     restore_id = str(session["restoreId"])
     base = _session_dir(restore_id)
+    target_id = str(session.get("targetId") or "")
+    if target_id:
+        target = backup_publish.resolve_target(target_id, write_intent=False)
+        store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False, client=client)
+        _renew_session_holds(store, session)
     loaded_plan = backup_verified_plan.load_verified_plan(base, session)
     if loaded_plan is None:
         projection, projection_report = _plan_object_set_projection(session, kind=kind, secret=secret)
@@ -1853,3 +1875,9 @@ def advance_federated_phase(restore_id: str, phase: str) -> None:
         _set_phase(session, phase)
         if phase in {"complete", "aborted", "rolled-back", "failed"}:
             _release_session_holds(session)
+        elif phase in {"paused", "recovery-required"}:
+            target_id = str(session.get("targetId") or "")
+            if target_id:
+                target = backup_publish.resolve_target(target_id, write_intent=False)
+                store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False)
+                _renew_session_holds(store, session)
