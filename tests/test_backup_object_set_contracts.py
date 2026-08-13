@@ -2374,6 +2374,117 @@ def test_valid_verified_plan_skips_control_redecrypt_and_tamper_replans(
     assert control_decrypts > before
 
 
+def test_component_pipeline_overlaps_network_and_crypto_and_scrubs_plaintext(
+    tmp_settings: Path,
+    object_set_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _full_object_set_package(tmp_settings)
+    backup_publish.publish_backup(
+        backup_publish.resolve_target("managed-local"),
+        package,
+        run_id="run-pipeline-overlap",
+        policy_id="policy-pipeline-overlap",
+        schedule_slot="slot-pipeline-overlap",
+        fencing_token=1,
+    )
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=None,
+    )
+    restore_id = str(created["restoreId"])
+    backup_remote_restore.fetch_restore_session(restore_id)
+    payloads = [component for component in package.components if not component.control]
+    slow_key = backup_target_store.object_key(payloads[-1].ciphertext_digest)
+    slow_waiting = threading.Event()
+    crypto_started = threading.Event()
+    overlap_observed = threading.Event()
+    original_stream = backup_target_store.FilesystemTargetStore.get_stream
+    original_decrypt = backup_remote_restore.backup_crypto.decrypt_file
+
+    def delayed_stream(
+        store: backup_target_store.FilesystemTargetStore,
+        key: str,
+        *,
+        offset: int = 0,
+    ):
+        pieces = original_stream(store, key, offset=offset)
+
+        def delayed():
+            if key == slow_key:
+                slow_waiting.set()
+                crypto_started.wait(timeout=2)
+            yield from pieces
+
+        return delayed()
+
+    def observed_decrypt(source: Path, target: Path, *args: Any, **kwargs: Any) -> None:
+        if ".backup-component-cache" in str(source):
+            crypto_started.set()
+            if slow_waiting.is_set():
+                overlap_observed.set()
+        original_decrypt(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(backup_target_store.FilesystemTargetStore, "get_stream", delayed_stream)
+    monkeypatch.setattr(backup_remote_restore.backup_crypto, "decrypt_file", observed_decrypt)
+
+    backup_remote_restore.materialize_restore_session(
+        restore_id,
+        kind="passphrase",
+        secret=bytearray(b"test-secret"),
+    )
+
+    assert overlap_observed.is_set()
+    assert not list((backups.RESTORE_DIR / restore_id).glob("payload-decrypted-*.zip"))
+    completed = backup_remote_restore.read_restore_session(restore_id)
+    assert completed is not None
+    assert completed["cryptoPipeline"]["maxQueuedComponents"] <= completed["cryptoPipeline"]["queueCapacity"] == 2
+
+
+def test_component_pipeline_scrubs_plaintext_on_decrypt_failure(
+    tmp_settings: Path,
+    object_set_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _full_object_set_package(tmp_settings)
+    backup_publish.publish_backup(
+        backup_publish.resolve_target("managed-local"),
+        package,
+        run_id="run-pipeline-failure",
+        policy_id="policy-pipeline-failure",
+        schedule_slot="slot-pipeline-failure",
+        fencing_token=1,
+    )
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=None,
+    )
+    restore_id = str(created["restoreId"])
+    backup_remote_restore.fetch_restore_session(restore_id)
+    original_decrypt = backup_remote_restore.backup_crypto.decrypt_file
+    injected = threading.Event()
+
+    def failing_decrypt(source: Path, target: Path, *args: Any, **kwargs: Any) -> None:
+        original_decrypt(source, target, *args, **kwargs)
+        if ".backup-component-cache" in str(source) and not injected.is_set():
+            injected.set()
+            raise AppError("injected payload decrypt failure")
+
+    monkeypatch.setattr(backup_remote_restore.backup_crypto, "decrypt_file", failing_decrypt)
+
+    with pytest.raises(AppError, match="injected payload decrypt failure"):
+        backup_remote_restore.materialize_restore_session(
+            restore_id,
+            kind="passphrase",
+            secret=bytearray(b"test-secret"),
+        )
+
+    assert injected.is_set()
+    assert not list((backups.RESTORE_DIR / restore_id).glob("payload-decrypted-*.zip"))
+
+
 def test_object_set_selective_restore_issues_gets_for_required_payload_only(
     tmp_settings: Path,
     object_set_crypto: None,

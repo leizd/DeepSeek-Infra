@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
 import shutil
 import threading
 import uuid
@@ -33,6 +34,7 @@ from deepseek_infra.infra.workspace import (
     backup_publish,
     backup_recovery_state,
     backup_targets,
+    backup_unattended,
     backup_verified_plan,
     backups,
 )
@@ -46,6 +48,7 @@ from deepseek_infra.infra.workspace.backup_target_store import (
 
 HOLD_TTL_SECONDS = 6 * 3600
 SESSION_SCHEMA_VERSION = 4
+CRYPTO_QUEUE_MAX_COMPONENTS = 2
 
 
 def _utc_iso(value: datetime | None = None) -> str:
@@ -637,6 +640,7 @@ def _fetch_object_set_components(
     store: Any,
     *,
     max_bytes: int | None,
+    on_verified: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     restore_id = str(session["restoreId"])
     chain = restore_members(session)
@@ -665,6 +669,8 @@ def _fetch_object_set_components(
         state = states[digest]
         component["downloadedBytes"] = int(state.get("downloadedBytes") or 0)
         component["fetched"] = str(state.get("state") or "") == "verified"
+        if component["fetched"] and on_verified is not None:
+            on_verified(component)
 
     if max_bytes is not None:
         for component in pending:
@@ -706,6 +712,8 @@ def _fetch_object_set_components(
                     "expectedBytes": int(component.get("expectedBytes") or 0),
                     "requiredComponents": len(pending),
                 }
+            if on_verified is not None:
+                on_verified(component)
     else:
         state_lock = threading.Lock()
 
@@ -730,6 +738,8 @@ def _fetch_object_set_components(
                         session["chain"] = chain
                         session["updatedAt"] = _utc_iso()
                         _atomic_write_json(_session_path(restore_id), session)
+                    if on_verified is not None:
+                        on_verified(component)
                     return
                 prior_path = Path(str(component.get("ciphertextPath") or ""))
                 cache_partial = component_cache.partial_path(digest)
@@ -805,6 +815,8 @@ def _fetch_object_set_components(
                     session["chain"] = chain
                     session["updatedAt"] = _utc_iso()
                     _atomic_write_json(_session_path(restore_id), session)
+                if on_verified is not None:
+                    on_verified(component)
 
             priority = state.get("priority")
             return backup_component_transport.TransferTask(
@@ -841,12 +853,21 @@ def _fetch_object_set_components(
     }
 
 
-def fetch_restore_session(restore_id: str, *, client: Any | None = None, max_bytes: int | None = None) -> dict[str, Any]:
+def fetch_restore_session(
+    restore_id: str,
+    *,
+    client: Any | None = None,
+    max_bytes: int | None = None,
+    _on_component_verified: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     """Idempotently continue a durable remote download until complete."""
     session = read_restore_session(restore_id)
     if session is None:
         raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
-    if str(session.get("phase") or "") in {"fetched", "chain-fetched", "controls-fetched", "components-fetched"}:
+    phase = str(session.get("phase") or "")
+    if phase in {"fetched", "chain-fetched", "controls-fetched", "components-fetched"} and not (
+        phase == "components-fetched" and _on_component_verified is not None
+    ):
         return {
             "restoreId": restore_id,
             "phase": str(session.get("phase") or "fetched"),
@@ -860,8 +881,8 @@ def fetch_restore_session(restore_id: str, *, client: Any | None = None, max_byt
     store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False, client=client)
 
     if str(session.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
-        if str(session.get("phase") or "") == "fetching-selected-components":
-            return _fetch_object_set_components(session, store, max_bytes=max_bytes)
+        if str(session.get("phase") or "") in {"fetching-selected-components", "components-fetched", "decrypting-components"}:
+            return _fetch_object_set_components(session, store, max_bytes=max_bytes, on_verified=_on_component_verified)
         return _fetch_object_set_controls(session, store, max_bytes=max_bytes)
 
     if str(session.get("snapshotKind") or "full") == "incremental":
@@ -1431,6 +1452,139 @@ def _sha256_path(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _materialize_component_pipeline(
+    session: dict[str, Any],
+    *,
+    secret_kind: Literal["passphrase", "age-identity"],
+    secret: bytearray,
+    client: Any | None,
+    components_ready: bool,
+    queue_observer: Callable[[int], None] | None = None,
+) -> list[Path]:
+    """Overlap verified ciphertext delivery with bounded decrypt/extract work."""
+    restore_id = str(session["restoreId"])
+    base = _session_dir(restore_id)
+    members = restore_members(session)
+    component_queue: queue.Queue[tuple[dict[str, Any], Path, list[str], threading.Lock] | None] = queue.Queue(
+        maxsize=CRYPTO_QUEUE_MAX_COMPONENTS
+    )
+    worker_count = 2
+    errors: list[BaseException] = []
+    error_lock = threading.Lock()
+    queued: set[str] = set()
+    enqueue_lock = threading.Lock()
+    max_queued = 0
+    layer_locks = [threading.Lock() for _ in members]
+    layers: list[Path] = []
+    component_paths: dict[str, tuple[Path, list[str], threading.Lock]] = {}
+
+    for index, member in enumerate(members):
+        layer = base / f"object-layer-{index}"
+        shutil.rmtree(layer, ignore_errors=True)
+        metadata = base / f"metadata-{index}"
+        if not metadata.is_dir():
+            raise AppError("Verified object-set Control metadata is unavailable", code=ErrorCode.INVALID_PAYLOAD)
+        shutil.copytree(metadata, layer)
+        layers.append(layer)
+        try:
+            component_map = json.loads((layer / "component-map.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AppError("Object-set component map is invalid", code=ErrorCode.INVALID_PAYLOAD) from exc
+        components = component_map.get("components") if isinstance(component_map, dict) else None
+        if not isinstance(components, dict):
+            raise AppError("Object-set component map is invalid", code=ErrorCode.INVALID_PAYLOAD)
+        for required in member.get("requiredComponents") or []:
+            if not isinstance(required, dict):
+                raise AppError("Object-set required component is invalid", code=ErrorCode.INVALID_PAYLOAD)
+            component_id = str(required.get("componentId") or "")
+            expected_paths = components.get(component_id)
+            if not isinstance(expected_paths, list) or any(not isinstance(path, str) for path in expected_paths):
+                raise AppError("Object-set component path map is invalid", code=ErrorCode.INVALID_PAYLOAD)
+            component_paths[str(required.get("objectDigest") or component_id)] = (layer, expected_paths, layer_locks[index])
+
+    def _worker() -> None:
+        while True:
+            item = component_queue.get()
+            if item is None:
+                component_queue.task_done()
+                return
+            required, layer, expected_paths, layer_lock = item
+            component_id = str(required.get("componentId") or "")
+            digest = str(required.get("objectDigest") or "")
+            safe_token = digest if len(digest) == 64 else hashlib.sha256(component_id.encode("utf-8")).hexdigest()
+            decrypted = base / f"payload-decrypted-{safe_token}.zip"
+            try:
+                with error_lock:
+                    if errors:
+                        continue
+                ciphertext = Path(str(required.get("ciphertextPath") or ""))
+                backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
+                if (
+                    decrypted.stat().st_size != int(required.get("plaintextSize") or -1)
+                    or _sha256_path(decrypted) != str(required.get("plaintextSha256") or "")
+                ):
+                    raise AppError("Object-set component plaintext commitment mismatch", code=ErrorCode.INVALID_PAYLOAD)
+                with layer_lock:
+                    backup_object_set.extract_component_archive(decrypted, layer, expected_paths)
+            except BaseException as exc:
+                with error_lock:
+                    if not errors:
+                        errors.append(exc)
+            finally:
+                backup_unattended.scrub_plaintext_file(decrypted)
+                component_queue.task_done()
+
+    workers = [threading.Thread(target=_worker, name=f"restore-crypto-{index}", daemon=True) for index in range(worker_count)]
+    for worker in workers:
+        worker.start()
+
+    def _enqueue(required: dict[str, Any]) -> None:
+        nonlocal max_queued
+        digest = str(required.get("objectDigest") or "")
+        with enqueue_lock:
+            if digest in queued:
+                return
+            queued.add(digest)
+        binding = component_paths.get(digest)
+        if binding is None:
+            raise AppError("Object-set required component is foreign", code=ErrorCode.INVALID_PAYLOAD)
+        layer, expected_paths, layer_lock = binding
+        component_queue.put((required, layer, expected_paths, layer_lock))
+        with enqueue_lock:
+            max_queued = max(max_queued, component_queue.qsize())
+        if queue_observer is not None:
+            queue_observer(component_queue.qsize())
+
+    try:
+        if components_ready:
+            for member in members:
+                for required in member.get("requiredComponents") or []:
+                    if isinstance(required, dict):
+                        _enqueue(required)
+        else:
+            fetch_restore_session(restore_id, client=client, _on_component_verified=_enqueue)
+        component_queue.join()
+    finally:
+        for _worker_thread in workers:
+            component_queue.put(None)
+        component_queue.join()
+        for worker in workers:
+            worker.join()
+        for path in base.glob("payload-decrypted-*.zip"):
+            backup_unattended.scrub_plaintext_file(path)
+    if errors:
+        raise errors[0]
+    latest_session = read_restore_session(restore_id) or session
+    latest_session["cryptoPipeline"] = {
+        "maxQueuedComponents": max_queued,
+        "queueCapacity": CRYPTO_QUEUE_MAX_COMPONENTS,
+        "workers": worker_count,
+    }
+    latest_session["updatedAt"] = _utc_iso()
+    _atomic_write_json(_session_path(restore_id), latest_session)
+    return layers
+
+
 def _materialize_object_set_session(
     session: dict[str, Any],
     *,
@@ -1446,50 +1600,27 @@ def _materialize_object_set_session(
     else:
         projection, projection_report = loaded_plan
     session = read_restore_session(restore_id) or session
-    while str(session.get("phase") or "") != "components-fetched":
-        fetch_result = fetch_restore_session(restore_id, client=client)
-        if str(fetch_result.get("phase") or "") not in {"fetching-selected-components", "components-fetched"}:
-            raise AppError("Object-set component fetch did not advance", code=ErrorCode.INTERNAL, status=500)
-        session = read_restore_session(restore_id) or session
-    members = restore_members(session)
     secret_kind: Literal["passphrase", "age-identity"] = "passphrase" if kind != "age-identity" else "age-identity"
-    extracted_dirs: list[Path] = []
-    _set_phase(session, "decrypting-components")
+    members = restore_members(session)
     for index, member in enumerate(members):
-        layer = base / f"object-layer-{index}"
-        shutil.rmtree(layer, ignore_errors=True)
         metadata = base / f"metadata-{index}"
         if metadata.is_dir():
-            shutil.copytree(metadata, layer)
-        else:
-            control = member["control"]
-            control_decrypted = base / f"control-decrypted-{index}.zip"
-            backup_crypto.decrypt_file(Path(str(control["ciphertextPath"])), control_decrypted, kind=secret_kind, secret=secret)
-            backups.extract_archive_metadata(control_decrypted, layer)
-        try:
-            component_map = json.loads((layer / "component-map.json").read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise AppError("Object-set component map is invalid", code=ErrorCode.INVALID_PAYLOAD) from exc
-        components = component_map.get("components") if isinstance(component_map, dict) else None
-        if not isinstance(components, dict):
-            raise AppError("Object-set component map is invalid", code=ErrorCode.INVALID_PAYLOAD)
-        for required in member.get("requiredComponents") or []:
-            if not isinstance(required, dict):
-                raise AppError("Object-set required component is invalid", code=ErrorCode.INVALID_PAYLOAD)
-            component_id = str(required.get("componentId") or "")
-            expected_paths = components.get(component_id)
-            if not isinstance(expected_paths, list) or any(not isinstance(path, str) for path in expected_paths):
-                raise AppError("Object-set component path map is invalid", code=ErrorCode.INVALID_PAYLOAD)
-            ciphertext = Path(str(required.get("ciphertextPath") or ""))
-            decrypted = base / f"payload-decrypted-{index:04d}-{component_id}.zip"
-            backup_crypto.decrypt_file(ciphertext, decrypted, kind=secret_kind, secret=secret)
-            if (
-                decrypted.stat().st_size != int(required.get("plaintextSize") or -1)
-                or _sha256_path(decrypted) != str(required.get("plaintextSha256") or "")
-            ):
-                raise AppError("Object-set component plaintext commitment mismatch", code=ErrorCode.INVALID_PAYLOAD)
-            backup_object_set.extract_component_archive(decrypted, layer, expected_paths)
-        extracted_dirs.append(layer)
+            continue
+        control = member["control"]
+        control_decrypted = base / f"control-decrypted-{index}.zip"
+        backup_crypto.decrypt_file(Path(str(control["ciphertextPath"])), control_decrypted, kind=secret_kind, secret=secret)
+        backups.extract_archive_metadata(control_decrypted, metadata)
+    components_ready = str(session.get("phase") or "") == "components-fetched"
+    _set_phase(session, "decrypting-components")
+    extracted_dirs = _materialize_component_pipeline(
+        session,
+        secret_kind=secret_kind,
+        secret=secret,
+        client=client,
+        components_ready=components_ready,
+    )
+    session = read_restore_session(restore_id) or session
+    members = restore_members(session)
     _set_phase(session, "materializing")
     extracted = base / "extracted"
     shutil.rmtree(extracted, ignore_errors=True)

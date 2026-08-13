@@ -31,8 +31,8 @@
 
 - [x] Persist strongly bound verified Projection Plans
 - [x] Reuse Control metadata without redecode
-- [ ] Overlap network/crypto and scrub plaintext Component ZIPs immediately
-- [ ] Checkpoint C: plan reuse and plaintext-lifetime tests green
+- [x] Overlap network/crypto and scrub plaintext Component ZIPs immediately
+- [x] Checkpoint C: plan reuse and plaintext-lifetime tests green
 
 ## Gate D — Safety
 
