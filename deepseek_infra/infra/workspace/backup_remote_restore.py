@@ -14,6 +14,7 @@ import os
 import queue
 import shutil
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,7 @@ from deepseek_infra.infra.workspace import (
     backup_recovery_job,
     backup_recovery_preflight,
     backup_recovery_state,
+    backup_recovery_telemetry,
     backup_targets,
     backup_unattended,
     backup_verified_plan,
@@ -110,6 +112,14 @@ def _atomic_write_json(
 
 
 def _write_json_unlocked(path: Path, payload: dict[str, Any]) -> None:
+    existing: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            decoded = json.loads(path.read_text(encoding="utf-8"))
+            existing = decoded if isinstance(decoded, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    backup_recovery_telemetry.update_for_persist(existing, payload)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
     with tmp.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
@@ -124,8 +134,28 @@ def _set_phase(session: dict[str, Any], phase: str) -> None:
     _atomic_write_json(_session_path(str(session["restoreId"])), session)
 
 
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.monotonic() - started) * 1_000))
+
+
+def _manifest_work(manifest: dict[str, Any]) -> tuple[int, int]:
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        return 0, 0
+    valid = [item for item in files if isinstance(item, dict)]
+    return sum(max(0, int(item.get("size") or 0)) for item in valid), len(valid)
+
+
 def _renew_session_holds(store: Any, session: dict[str, Any]) -> None:
-    if backup_recovery_lease.renew_session(store, session):
+    try:
+        renewed = backup_recovery_lease.renew_session(store, session)
+    except BaseException:
+        backup_recovery_telemetry.increment_counter(session, "holdRenewalFailure")
+        session["updatedAt"] = _utc_iso()
+        _atomic_write_json(_session_path(str(session["restoreId"])), session)
+        raise
+    if renewed:
+        backup_recovery_telemetry.increment_counter(session, "holdRenewalSuccess")
         session["updatedAt"] = _utc_iso()
         _atomic_write_json(_session_path(str(session["restoreId"])), session)
 
@@ -705,6 +735,8 @@ def _download_member(
     *,
     progress: Callable[[int], None] | None = None,
     checkpoint: Callable[[], None] | None = None,
+    transferred: Callable[[int], None] | None = None,
+    integrity_failure: Callable[[], None] | None = None,
 ) -> bool:
     """Resume-download one chain member; returns True when fully fetched."""
     digest = str(member["objectDigest"])
@@ -741,6 +773,8 @@ def _download_member(
             hasher.update(piece)
             position += len(piece)
             consumed += len(piece)
+            if transferred is not None:
+                transferred(len(piece))
             if progress is not None:
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -753,10 +787,62 @@ def _download_member(
     member["downloadedBytes"] = downloaded
     if downloaded >= expected:
         if hasher.hexdigest() != digest:
+            if integrity_failure is not None:
+                integrity_failure()
             raise AppError(f"Downloaded backup digest mismatch: {member['backupId']}", code=ErrorCode.INTERNAL, status=500)
         member["fetched"] = True
         return True
     return False
+
+
+def _download_member_with_telemetry(
+    session: dict[str, Any],
+    store: Any,
+    member: dict[str, Any],
+    max_bytes: int | None,
+) -> bool:
+    started = time.monotonic()
+    transferred_bytes = 0
+    initial_bytes = int(member.get("downloadedBytes") or 0)
+
+    def _transferred(amount: int) -> None:
+        nonlocal transferred_bytes
+        transferred_bytes += amount
+        backup_recovery_telemetry.increment_counter(session, "transferBytes", amount)
+
+    try:
+        done = _download_member(
+            store,
+            member,
+            max_bytes,
+            checkpoint=lambda: _checkpoint_job_control(session, store),
+            transferred=_transferred,
+            integrity_failure=lambda: backup_recovery_telemetry.increment_counter(session, "integrityFailure"),
+        )
+    except backup_recovery_job.RecoveryJobStopped:
+        result = "paused"
+        raise
+    except BaseException:
+        result = "failed"
+        raise
+    else:
+        result = "success"
+        return done
+    finally:
+        if transferred_bytes:
+            backup_recovery_telemetry.increment_counter(session, "componentsTransferred")
+            if initial_bytes:
+                backup_recovery_telemetry.increment_counter(session, "transferRetry")
+        backup_recovery_telemetry.record_stage(
+            session,
+            stage="transfer",
+            result=result,
+            duration_ms=_elapsed_ms(started),
+            byte_count=transferred_bytes,
+            components=int(transferred_bytes > 0),
+        )
+        session["updatedAt"] = _utc_iso()
+        _atomic_write_json(_session_path(str(session["restoreId"])), session)
 
 
 def _fetch_object_set_controls(
@@ -783,7 +869,7 @@ def _fetch_object_set_controls(
         if expected_version and meta.version_id and meta.version_id != expected_version:
             raise AppError("remote control object version changed since restore session started", code=ErrorCode.INVALID_REQUEST, status=409)
         try:
-            done = _download_member(store, control, max_bytes, checkpoint=lambda: _checkpoint_job_control(session, store))
+            done = _download_member_with_telemetry(session, store, control, max_bytes)
         except backup_recovery_job.RecoveryJobStopped as stopped:
             return {"restoreId": restore_id, "phase": stopped.phase}
         session["updatedAt"] = _utc_iso()
@@ -875,7 +961,7 @@ def _fetch_object_set_components(
             session["updatedAt"] = _utc_iso()
             _atomic_write_json(_session_path(restore_id), session)
             try:
-                done = _download_member(store, component, max_bytes, checkpoint=lambda: _checkpoint_job_control(session, store))
+                done = _download_member_with_telemetry(session, store, component, max_bytes)
             except backup_recovery_job.RecoveryJobStopped as stopped:
                 downloaded = Path(str(component.get("ciphertextPath") or "")).stat().st_size
                 component["downloadedBytes"] = downloaded
@@ -906,6 +992,8 @@ def _fetch_object_set_components(
                 on_verified(component)
     else:
         state_lock = threading.Lock()
+        network_bytes = 0
+        network_components = 0
 
         def _parallel_checkpoint() -> None:
             with state_lock:
@@ -916,11 +1004,14 @@ def _fetch_object_set_components(
             state = states[digest]
 
             def _execute() -> None:
+                nonlocal network_bytes, network_components
                 _parallel_checkpoint()
                 expected_bytes = int(component.get("expectedBytes") or 0)
+                cache_entry_existed = component_cache.path_for(digest).is_file()
                 cached = component_cache.get(digest, expected_bytes)
                 if cached is not None:
                     with state_lock:
+                        backup_recovery_telemetry.increment_counter(session, "cacheHit")
                         component["ciphertextPath"] = str(cached)
                         component["downloadedBytes"] = expected_bytes
                         component["fetched"] = True
@@ -936,6 +1027,11 @@ def _fetch_object_set_components(
                     if on_verified is not None:
                         on_verified(component)
                     return
+                with state_lock:
+                    backup_recovery_telemetry.increment_counter(
+                        session,
+                        "cacheCorruption" if cache_entry_existed else "cacheMiss",
+                    )
                 prior_path = Path(str(component.get("ciphertextPath") or ""))
                 cache_partial = component_cache.partial_path(digest)
                 if (
@@ -964,8 +1060,24 @@ def _fetch_object_set_components(
                     )
                     session["updatedAt"] = _utc_iso()
                     _atomic_write_json(_session_path(restore_id), session)
+                progress_position = component_cache.partial_path(digest).stat().st_size if component_cache.partial_path(digest).is_file() else 0
+                resumed_transfer = progress_position > 0
+                component_used_network = False
+
                 def _checkpoint(downloaded: int) -> None:
+                    nonlocal component_used_network, network_bytes, network_components, progress_position
                     with state_lock:
+                        transferred = max(0, downloaded - progress_position)
+                        progress_position = max(progress_position, downloaded)
+                        if transferred:
+                            if not component_used_network:
+                                component_used_network = True
+                                network_components += 1
+                                backup_recovery_telemetry.increment_counter(session, "componentsTransferred")
+                                if resumed_transfer:
+                                    backup_recovery_telemetry.increment_counter(session, "transferRetry")
+                            network_bytes += transferred
+                            backup_recovery_telemetry.increment_counter(session, "transferBytes", transferred)
                         component["downloadedBytes"] = downloaded
                         backup_recovery_state.update_component_state(
                             session,
@@ -998,10 +1110,12 @@ def _fetch_object_set_components(
                         session["updatedAt"] = _utc_iso()
                         _atomic_write_json(_session_path(restore_id), session)
                     raise
-                except BaseException:
+                except BaseException as exc:
                     partial_path = component_cache.partial_path(digest)
                     downloaded = partial_path.stat().st_size if partial_path.is_file() else 0
                     with state_lock:
+                        if isinstance(exc, AppError) and str(exc) == "Component cache digest mismatch":
+                            backup_recovery_telemetry.increment_counter(session, "integrityFailure")
                         component["downloadedBytes"] = downloaded
                         backup_recovery_state.update_component_state(
                             session,
@@ -1039,18 +1153,44 @@ def _fetch_object_set_components(
             )
 
         tasks = [_make_download_task(component) for component in pending if not component["fetched"]]
+        transfer_started = time.monotonic()
         try:
             telemetry = backup_component_transport.default_scheduler().run(tasks)
         except backup_recovery_job.RecoveryJobStopped as stopped:
             latest = read_restore_session(restore_id) or session
+            backup_recovery_telemetry.record_stage(
+                latest,
+                stage="transfer",
+                result="paused",
+                duration_ms=_elapsed_ms(transfer_started),
+                byte_count=network_bytes,
+                components=network_components,
+            )
             latest["updatedAt"] = _utc_iso()
             _atomic_write_json(_session_path(restore_id), latest)
             return {"restoreId": restore_id, "phase": stopped.phase}
         except BaseException:
+            backup_recovery_telemetry.record_stage(
+                session,
+                stage="transfer",
+                result="failed",
+                duration_ms=_elapsed_ms(transfer_started),
+                byte_count=network_bytes,
+                components=network_components,
+            )
             session["phase"] = "fetching-selected-components"
             session["updatedAt"] = _utc_iso()
             _atomic_write_json(_session_path(restore_id), session)
             raise
+        if tasks:
+            backup_recovery_telemetry.record_stage(
+                session,
+                stage="transfer",
+                result="success",
+                duration_ms=_elapsed_ms(transfer_started),
+                byte_count=network_bytes,
+                components=network_components,
+            )
         session["componentTransfer"] = telemetry.as_dict()
     session["phase"] = "components-fetched"
     control_bytes = sum(int(member["control"].get("downloadedBytes") or 0) for member in chain)
@@ -1116,7 +1256,7 @@ def fetch_restore_session(
             if expected_etag and meta.etag and meta.etag != expected_etag:
                 raise AppError("remote object changed since restore session started", code=ErrorCode.INVALID_REQUEST, status=409)
             try:
-                done = _download_member(store, member, max_bytes, checkpoint=lambda: _checkpoint_job_control(session, store))
+                done = _download_member_with_telemetry(session, store, member, max_bytes)
             except backup_recovery_job.RecoveryJobStopped as stopped:
                 return {"restoreId": restore_id, "phase": stopped.phase}
             session["updatedAt"] = _utc_iso()
@@ -1171,7 +1311,7 @@ def fetch_restore_session(
         "downloadedBytes": int(session.get("downloadedBytes") or 0),
     }
     try:
-        done = _download_member(store, member, max_bytes, checkpoint=lambda: _checkpoint_job_control(session, store))
+        done = _download_member_with_telemetry(session, store, member, max_bytes)
     except backup_recovery_job.RecoveryJobStopped as stopped:
         return {"restoreId": restore_id, "phase": stopped.phase}
     session["downloadedBytes"] = int(member["downloadedBytes"] or 0)
@@ -1904,6 +2044,7 @@ def _materialize_object_set_session(
         target = backup_publish.resolve_target(target_id, write_intent=False)
         store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False, client=client)
         _renew_session_holds(store, session)
+    crypto_started = time.monotonic()
     loaded_plan = backup_verified_plan.load_verified_plan(base, session)
     if loaded_plan is None:
         projection, projection_report = _plan_object_set_projection(session, kind=kind, secret=secret)
@@ -1931,7 +2072,25 @@ def _materialize_object_set_session(
     )
     session = read_restore_session(restore_id) or session
     members = restore_members(session)
+    crypto_bytes = sum(
+        int(item.get("expectedBytes") or 0)
+        for member in members
+        for item in [member.get("control"), *(member.get("requiredComponents") or [])]
+        if isinstance(item, dict)
+    )
+    crypto_components = sum(1 + len(member.get("requiredComponents") or []) for member in members)
+    backup_recovery_telemetry.record_stage(
+        session,
+        stage="crypto",
+        result="success",
+        duration_ms=_elapsed_ms(crypto_started),
+        byte_count=crypto_bytes,
+        components=crypto_components,
+    )
+    session["updatedAt"] = _utc_iso()
+    _atomic_write_json(_session_path(restore_id), session)
     _set_phase(session, "materializing")
+    materialization_started = time.monotonic()
     extracted = base / "extracted"
     shutil.rmtree(extracted, ignore_errors=True)
     final_manifest = backup_incremental_restore.materialize_chain(extracted_dirs, extracted, projection=projection)
@@ -1940,6 +2099,15 @@ def _materialize_object_set_session(
         final_manifest = _normalized_full_manifest(final_manifest)
         _write_checksums(extracted, final_manifest)
         backups._verify_manifest_tree(extracted)
+    materialized_bytes, materialized_files = _manifest_work(final_manifest)
+    backup_recovery_telemetry.record_stage(
+        session,
+        stage="materialization",
+        result="success",
+        duration_ms=_elapsed_ms(materialization_started),
+        byte_count=materialized_bytes,
+        components=materialized_files,
+    )
     _set_phase(session, "verified")
     result: dict[str, Any] = {
         "restoreId": restore_id,
@@ -1994,6 +2162,7 @@ def materialize_restore_session(
     base = _session_dir(restore_id)
     secret_kind: Literal["passphrase", "age-identity"] = "passphrase" if str(kind) != "age-identity" else "age-identity"
     _set_phase(session, "decrypting-chain")
+    crypto_started = time.monotonic()
     members = restore_members(session)
     decrypted_paths: list[Path] = []
     for index, member in enumerate(members):
@@ -2026,7 +2195,16 @@ def materialize_restore_session(
             selection_digest_value=computed_digest,
         )
 
+    backup_recovery_telemetry.record_stage(
+        session,
+        stage="crypto",
+        result="success",
+        duration_ms=_elapsed_ms(crypto_started),
+        byte_count=sum(int(item.get("expectedBytes") or 0) for item in members),
+        components=len(members),
+    )
     _set_phase(session, "materializing")
+    materialization_started = time.monotonic()
     extracted = base / "extracted"
     shutil.rmtree(extracted, ignore_errors=True)
     if projection is not None:
@@ -2043,6 +2221,15 @@ def materialize_restore_session(
         final_manifest = _normalized_full_manifest(final_manifest)
         _write_checksums(extracted, final_manifest)
         backups._verify_manifest_tree(extracted)
+    materialized_bytes, materialized_files = _manifest_work(final_manifest)
+    backup_recovery_telemetry.record_stage(
+        session,
+        stage="materialization",
+        result="success",
+        duration_ms=_elapsed_ms(materialization_started),
+        byte_count=materialized_bytes,
+        components=materialized_files,
+    )
     _set_phase(session, "verified")
     result: dict[str, Any] = {
         "restoreId": restore_id,
@@ -2143,8 +2330,10 @@ def materialize_federated_restore(
         session["federatedPhase"] = str(prepared.get("phase") or "backend-staged")
         _set_phase(session, "prepared")
         return {**prepared, "phase": "prepared", "remoteRestorePhase": "prepared", "materializedTreeVerified": True}
-    except Exception:
+    except Exception as exc:
         session = read_restore_session(restore_id) or session
+        if isinstance(exc, AppError) and exc.code == ErrorCode.INVALID_PAYLOAD:
+            backup_recovery_telemetry.increment_counter(session, "integrityFailure")
         transaction_exists = (_session_dir(restore_id) / "transaction.json").is_file()
         _set_phase(session, "recovery-required" if transaction_exists else "failed")
         if not transaction_exists:
