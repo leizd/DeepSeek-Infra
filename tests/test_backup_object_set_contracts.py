@@ -3198,18 +3198,33 @@ def test_object_set_restore_resumes_across_real_process_exits(tmp_settings: Path
     process_b = _run_restart_probe(
         tmp_settings,
         {
+            "action": "plan-and-partial-component",
+            "restoreId": restore_id,
+            "secretKind": "age-identity",
+            "secret": recovery_identity,
+        },
+    )
+    assert process_b == {
+        "restoreId": restore_id,
+        "phase": "fetching-selected-components",
+        "partialComponents": 1,
+        "partialBytes": 1,
+    }
+    process_c = _run_restart_probe(
+        tmp_settings,
+        {
             "action": "resume-and-prepare",
             "restoreId": restore_id,
             "secretKind": "age-identity",
             "secret": recovery_identity,
         },
     )
-    assert process_b["phase"] == "prepared"
-    process_c = _run_restart_probe(
+    assert process_c["phase"] == "prepared"
+    process_d = _run_restart_probe(
         tmp_settings,
         {"action": "resume-commit-complete", "restoreId": restore_id},
     )
-    assert process_c == {
+    assert process_d == {
         "restoreId": restore_id,
         "commitPhase": "backend-committed",
         "phase": "complete",

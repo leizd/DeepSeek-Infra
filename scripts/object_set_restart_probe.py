@@ -87,12 +87,42 @@ def main() -> int:
         _emit({"restoreId": created["restoreId"], "phase": fetched["phase"]})
         return 0
     restore_id = str(command["restoreId"])
+    if action == "plan-and-partial-component":
+        while True:
+            fetched = backup_remote_restore.fetch_restore_session(restore_id)
+            if str(fetched.get("phase") or "") == "controls-fetched":
+                break
+        secret_kind = str(command.get("secretKind") or "age-identity")
+        backup_crypto.put_secret(restore_id, secret_kind, str(command["secret"]))
+        session = backup_remote_restore.read_restore_session(restore_id)
+        if session is None:
+            raise ValueError("restore session disappeared")
+        backup_remote_restore.preview_restore_from_target(
+            target_id=str(session["targetId"]),
+            backup_id=str(session["backupId"]),
+            selection=session.get("selection"),
+            restore_id=restore_id,
+        )
+        fetched = backup_remote_restore.fetch_restore_session(restore_id, max_bytes=1)
+        latest = backup_remote_restore.read_restore_session(restore_id) or {}
+        raw_states = latest.get("componentStates")
+        states: dict[str, Any] = raw_states if isinstance(raw_states, dict) else {}
+        partial = [item for item in states.values() if isinstance(item, dict) and item.get("state") == "partial"]
+        _emit(
+            {
+                "restoreId": restore_id,
+                "phase": fetched.get("phase"),
+                "partialComponents": len(partial),
+                "partialBytes": sum(int(item.get("downloadedBytes") or 0) for item in partial),
+            }
+        )
+        return 0
     if action == "resume-and-prepare":
         object_gets: list[str] = []
         object_get_concurrency = {"active": 0, "maxActive": 0}
         while True:
             fetched = backup_remote_restore.fetch_restore_session(restore_id)
-            if str(fetched.get("phase") or "") == "controls-fetched":
+            if str(fetched.get("phase") or "") in {"controls-fetched", "components-fetched"}:
                 break
         secret_kind = str(command.get("secretKind") or "age-identity")
         backup_crypto.put_secret(restore_id, secret_kind, str(command["secret"]))
