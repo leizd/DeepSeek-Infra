@@ -808,8 +808,10 @@ def preview_restore_from_target(
     """Fetch the whole chain, metadata-extract it and report the projected plan.
 
     Whole-Age sessions download every member before reporting accurate byte
-    counts, so ``networkSelective`` is ``False`` for this legacy storage
-    protocol. The client provides a secret first so the metadata plane can be
+    counts, so both ``selectiveFetchSupported`` and ``networkSelective`` are
+    ``False`` for this legacy storage protocol. Object-set-v1 sessions report
+    ``selectiveFetchSupported: True`` and set ``networkSelective`` to whether
+    the required-component closure is a strict subset of the chain. The client provides a secret first so the metadata plane can be
     decrypted; the preview re-puts it so the later materialize step can still
     consume it.
     """
@@ -1187,8 +1189,10 @@ def _plan_object_set_projection(
 
     required_bytes = control_bytes + required_payload_bytes
     saved = max(0, whole_chain_bytes - required_bytes)
+    network_selective = required_count < total_payload_count
     network_report = {
-        "networkSelective": True,
+        "selectiveFetchSupported": True,
+        "networkSelective": network_selective,
         "wholeChainCiphertextBytes": whole_chain_bytes,
         "requiredCiphertextBytes": required_bytes,
         "networkBytesSaved": saved,
@@ -1198,7 +1202,6 @@ def _plan_object_set_projection(
     }
     if projection is not None:
         report = dict(projection.report)
-        report["networkSelective"] = True
         report["networkSelectivityReason"] = "object-set-component-closure"
         report.update(network_report)
         bytes_report = dict(report.get("bytes") or {})

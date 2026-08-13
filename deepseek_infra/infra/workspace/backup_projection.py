@@ -8,8 +8,12 @@ F0->I1->...->In chain (verifying every Merkle root), and derives the strict
 dependency closure over cross-file ``parent-range`` references.
 
 The metadata plane is always verified in full; only payload-byte
-materialization is projected. Because this release keeps the whole-age-object
-network model, every report carries ``networkSelective: false``.
+materialization is projected. Reports carry two distinct fields:
+``selectiveFetchSupported`` (a protocol capability — true for object-set-v1,
+false for whole-age-v1) and ``networkSelective`` (whether *this* run actually
+transports fewer bytes than the whole chain). A raw plan is pre-transport, so
+``networkSelective`` defaults to ``False``; the restore transport layer
+resolves the actual required-component closure and sets the real value.
 """
 
 from __future__ import annotations
@@ -435,6 +439,7 @@ def plan_projection(
             "estimatedMaterializedBytes": estimated_materialized,
         },
         "networkSelective": False,
+        "selectiveFetchSupported": False,
         "networkSelectivityReason": NETWORK_SELECTIVITY_REASON,
         "requiresFrontendApply": FRONTEND_CONTRIBUTOR in selection.contributors,
         "requiresExternalMcp": STATELESS_MCP_CONTRIBUTOR in selection.contributors,

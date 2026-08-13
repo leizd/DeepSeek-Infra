@@ -1547,7 +1547,8 @@ def test_object_set_projection_rejects_invalid_control_session(
         secret=bytearray(b"secret"),
     )
     assert projection is None
-    assert network["networkSelective"] is True
+    assert network["selectiveFetchSupported"] is True
+    assert network["networkSelective"] is False
     assert network["requiredComponents"] == len([component for component in package.components if not component.control])
 
     invalid_descriptor = json.loads(json.dumps(original))
@@ -2006,6 +2007,7 @@ def test_object_set_preview_plans_and_fetches_only_selected_component(
     )
 
     assert preview["phase"] == "preview-planned"
+    assert preview["projection"]["selectiveFetchSupported"] is True
     assert preview["projection"]["networkSelective"] is True
     assert preview["projection"]["requiredComponents"] == 1
     assert preview["projection"]["totalComponents"] == 3
