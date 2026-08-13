@@ -5,9 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.4.15.
+Applicable version: v4.5.0.
 
-## 4.4.15 candidate evidence contract
+## 4.5.0 development evidence contract
+
+4.5.0 Evidence is pending while Gates A-G are implemented. Real MinIO, real Age,
+subprocess restart, fault injection, and exact-merge artifacts are recorded only
+by their owning workflows after they execute. No 4.4.15 artifact below is reused
+or relabelled as 4.5.0 PASS evidence.
+
+## Historical 4.4.15 evidence contract
 
 The following paths are the required CI output contract for 4.4.15. Files that depend on
 exact-merge, Chromium, Rust Docker, or release packaging are produced by their owning

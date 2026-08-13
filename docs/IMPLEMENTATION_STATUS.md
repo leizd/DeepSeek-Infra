@@ -5,7 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.15。
+适用版本：v4.5.0。
+
+> 4.5.0 正按已批准的 Gate A-G 规格开发。此页面仍以已落地代码和测试为准；未完成的 Recovery Orchestration / DR Readiness 能力不会提前标记为 GA。
 
 > 4.4.13 freezes remote restores into Contributor/Project projections whose `selectionDigest` is durable across retries. The metadata plane applies the full F0→I1→…→In logical chain and verifies every Merkle root; only payload materialization is projected. Cross-file `parent-range` dependencies enter a read-only Support set that is materialized in scratch space but never written to the final tree, and unselected contributors are never mutated. Selective extraction touches only required Full entries, Packs and standalone blobs; unused packs are verified lazily. Remote ancestor holds are released at terminal states and retained during `recovery-required`. A real HTTP MinIO production Backup → Age → S3 → Receipt → Restore → Federated-commit gate uses the real Rust Age helper.
 

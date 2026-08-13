@@ -5,12 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.4.15-blue)
+![Version](https://img.shields.io/badge/version-4.5.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
+
+> **4.5.0 in development — Production Recovery Orchestration & DR Readiness.** The approved milestone freezes object-set-v1, Receipt v4, Commit v4, and randomized Age ciphertext while adding production recovery orchestration in verified Gates. Release readiness remains pending until real Evidence is complete.
 
 ## 4.4.15 at a glance
 
@@ -97,7 +99,7 @@ npm run check --prefix stateless-mcp
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.4.15 --ga
+python scripts/preflight_release.py --version 4.5.0 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

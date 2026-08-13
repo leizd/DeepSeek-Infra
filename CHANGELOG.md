@@ -4,6 +4,15 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.5.0] - Production Recovery Orchestration and DR Readiness (in development)
+
+### Compatibility
+
+- Freezes `object-set-v1`, Receipt v4, Commit v4, randomized Age encryption,
+  Projection semantics, and permanent Whole-Age v2-v5 restore compatibility.
+- Tracks implementation against the approved Gate A-G specification; no
+  production-readiness Evidence is claimed until its real owning gate runs.
+
 ## [4.4.15] - Parallel Component Transport and Encrypted Restore Cache
 
 ### Transport
