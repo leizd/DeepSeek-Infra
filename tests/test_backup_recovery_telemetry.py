@@ -97,7 +97,7 @@ def test_recovery_telemetry_merge_and_redaction_fail_closed() -> None:
             ],
             "currentPhase": "paused",
             "phaseStartedAt": "2026-08-13T00:00:00Z",
-            "secret": "age1-private",
+            "secret": "age1-private",  # pragma: allowlist secret
         },
     }
     payload: dict[str, Any] = {

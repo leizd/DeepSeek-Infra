@@ -59,7 +59,7 @@ def _projection() -> backup_projection.ProjectionPlan:
 
 def test_verified_plan_round_trips_and_contains_no_secret(tmp_path: Path) -> None:
     session = _session(tmp_path)
-    session["secret"] = "must-never-be-persisted"
+    session["secret"] = "must-never-be-persisted"  # pragma: allowlist secret
     projection = _projection()
 
     path = backup_verified_plan.write_verified_plan(tmp_path, session, projection, projection.report)

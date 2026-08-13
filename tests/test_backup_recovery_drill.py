@@ -214,7 +214,7 @@ def test_recovery_drill_routes_are_authenticated_and_server_owned(tmp_settings: 
     fetched = client.get("/api/workspace/disaster-recovery/drills/restore_drillroute")
     invalid = client.post(
         "/api/workspace/disaster-recovery/drills",
-        json={"restoreId": "restore_drillroute", "secret": "forbidden", "root": "C:/live"},
+        json={"restoreId": "restore_drillroute", "secret": "forbidden", "root": "C:/live"},  # pragma: allowlist secret
     )
 
     assert created.status_code == fetched.status_code == 200
