@@ -196,10 +196,15 @@ def test_recovery_preflight_route_has_server_owned_inputs(client: TestClient, mo
     from deepseek_infra.infra.workspace import backup_remote_restore
 
     calls: list[str] = []
+
+    def record_preflight(restore_id: str) -> dict[str, object]:
+        calls.append(restore_id)
+        return {"restoreId": restore_id, "phase": "preflighted", "ready": True}
+
     monkeypatch.setattr(
         backup_remote_restore,
         "preflight_restore_session",
-        lambda restore_id: calls.append(restore_id) or {"restoreId": restore_id, "phase": "preflighted", "ready": True},
+        record_preflight,
     )
 
     response = client.post(

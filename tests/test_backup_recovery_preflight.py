@@ -234,10 +234,16 @@ def test_object_set_materialize_requires_preflight_before_secret_consumption(tmp
     monkeypatch.setattr(backups, "RESTORE_DIR", tmp_path)
     backup_remote_restore._atomic_write_json(tmp_path / restore_id / "remote-fetch.json", session)
     calls: list[str] = []
+
+    def record_preflight(value: str, client: object = None) -> dict[str, object]:
+        del client
+        calls.append(value)
+        return {"restoreId": value, "ready": True}
+
     monkeypatch.setattr(
         backup_remote_restore,
         "preflight_restore_session",
-        lambda value, client=None: calls.append(value) or {"restoreId": value, "ready": True},
+        record_preflight,
     )
     monkeypatch.setattr(
         backup_remote_restore.backup_crypto,

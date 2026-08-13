@@ -842,7 +842,8 @@ def test_prepared_object_set_components_feed_age_without_recompression(
 
     def count_zip(output: BinaryIO, **kwargs: object) -> None:
         entries = kwargs.get("file_entries") or kwargs.get("byte_entries") or {}
-        zip_calls.append(tuple(sorted(entries)))  # type: ignore[arg-type]
+        assert isinstance(entries, dict)
+        zip_calls.append(tuple(sorted(str(key) for key in entries)))
         original_write(output, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(backup_object_set, "_write_zip_entries", count_zip)
