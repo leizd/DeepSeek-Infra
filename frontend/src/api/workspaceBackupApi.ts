@@ -578,6 +578,48 @@ export function fetchRemoteRestore(restoreId: string, request: { maxBytes?: numb
   }>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/fetch`, request);
 }
 
+export interface RecoveryPreflightReport {
+  schemaVersion: 1;
+  restoreId: string;
+  phase: "preflighted";
+  ready: boolean;
+  closure: {
+    chainLength: number;
+    selectedLogicalBytes: number;
+    requiredComponents: number;
+    totalComponents: number;
+    localComponents: number;
+  };
+  cache: { hitComponents: number; missComponents: number; hitBytes: number };
+  network: { remoteBytes: number };
+  scratch: {
+    materializedTreeBytes: number;
+    uncachedCiphertextBytes: number;
+    boundedCryptoPlaintextBytes: number;
+    estimatedPeakBytes: number;
+  };
+  disk: { freeBytes: number | null; reserveBytes: number; requiredBytes: number; sufficient: boolean };
+  safetyBackup: { liveLogicalBytes: number; archiveBytes: number; estimatedPeakBytes: number; externalBytesKnown: boolean };
+  targetHealth: { status: "ok" | "blocked"; kind: string; receiptPresent: boolean };
+  projectionRecoverability: {
+    status: "recoverable" | "blocked";
+    requiredComponents: number;
+    availableComponents: number;
+    missingComponents: number;
+  };
+  lastWholeSnapshotHealth: {
+    status: "ok" | "warning" | "error" | "unavailable";
+    source: string;
+    ciphertextScrubbedAt?: string | null;
+    userUnlockVerifiedAt?: string | null;
+  };
+  blockingReasons: Array<{ code: string; message: string }>;
+}
+
+export function preflightWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
+  return client.postJson<RecoveryPreflightReport>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/preflight`, {});
+}
+
 export function materializeRemoteRestore(
   restoreId: string,
   request: { mode?: "merge" | "project-copy" | "replace-empty"; previousEpoch?: string; targetEpoch?: string; ownerDocumentId?: string },

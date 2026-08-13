@@ -1045,6 +1045,7 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 | `POST` | `/api/workspace/restores/inspect` | 上传明文包后只读校验；age 包只返回 `locked` 与密文摘要。 |
 | `POST` | `/api/workspace/restores/from-target` | 从已注册 Target 与 Backup ID 创建耐久 Remote Restore Session。 |
 | `POST` | `/api/workspace/restores/{restoreId}/fetch` | 按 Receipt Lineage 有界下载 Full + Delta 密文链，并逐对象校验摘要。 |
+| `POST` | `/api/workspace/restores/{restoreId}/preflight` | 构建/复用强绑定 Projection Plan，只读核对 closure、cache、target、safety backup 与磁盘容量；不足时返回 `409 recovery_preflight_capacity`。 |
 | `PUT` | `/api/workspace/restores/{restoreId}/secret` | 为 locked 上传提供一次性密码或 Identity。 |
 | `POST` | `/api/workspace/restores/{restoreId}/unlock` | 完整认证 age 消息后进入既有 ZIP/Manifest Inspect。 |
 | `POST` | `/api/workspace/restores/{restoreId}/materialize` | 消费 Secret，流式解密/应用 Chain，验证完整 Tree 后接入 Federated Restore Prepare。 |
@@ -1053,6 +1054,8 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 | `POST` | `/api/workspace/restores/{restoreId}/commit` | 先记录 commit intent；浏览器切换 Epoch 后以 `frontendCommitted=true` 幂等提交后端。 |
 | `POST` | `/api/workspace/restores/{restoreId}/complete` | 核对摘要、标记完成并释放服务端 Fence。 |
 | `POST` | `/api/workspace/restores/{restoreId}/abort` | 幂等回滚已交换 Contributor；不删除 Safety Backup。 |
+| `POST` | `/api/workspace/restores/{restoreId}/pause` | 持久化 pause intent，在 Component checkpoint 后停止接纳新工作。 |
+| `POST` | `/api/workspace/restores/{restoreId}/resume` | 重验 partial 长度/来源后清除 pause intent 并恢复。 |
 | `GET` | `/api/workspace/restores/{restoreId}` | 查询持久事务状态，供浏览器启动恢复。 |
 | `GET` | `/api/workspace/restores` | 列出恢复事务。 |
 | `DELETE` | `/api/workspace/restores/{restoreId}` | 仅删除非活动、非 Fence 引用的记录。 |
@@ -1061,6 +1064,12 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 Restore Fence 活跃时读请求继续；非 Restore Owner 的业务写请求返回 HTTP 423。`commit`、
 `complete` 与 `abort` 可安全重试。浏览器状态存在时，旧
 `/api/workspace/restores/{restoreId}/apply` 会拒绝单阶段提交。
+
+Preflight 成功响应返回 `closure`、`cache`、`network`、`scratch`、`disk`、`safetyBackup`、
+`targetHealth`、`projectionRecoverability`、`lastWholeSnapshotHealth` 与 `blockingReasons`。
+容量计算包含 materialized tree、完整 live Workspace safety backup 峰值、未命中 cache 的密文、
+有界 crypto plaintext 与默认 1 GiB reserve。探测不会删除 cache、下载 Payload、写 Target 或修改 live Workspace。
+容量/磁盘探测阻断的错误 `details.preflight` 使用同一报告结构；不返回凭据、Secret 或逻辑路径。
 
 Whole-Age 远端恢复的持久相位为 `fetching-chain → chain-fetched → decrypting-chain → materializing → verified → preparing → prepared → committing → complete`。`object-set-v1` 使用 `fetching-controls → controls-fetched → decrypting-controls → planning-projection → fetching-selected-components → components-fetched → decrypting-components → materializing → verified → prepared → committing → complete`。`materialize` 不接受原始密码，只消费先前写入的临时 Secret Slot；失败或超时后 Slot 清空。所有层的 Component/Pack/Chunk/File SHA 与 Merkle 转移通过后才允许进入 Prepare。
 

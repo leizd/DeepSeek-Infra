@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { HttpClient } from "./httpClient";
-import { abortWorkspaceRestore, pauseWorkspaceRestore, resumeWorkspaceRestore } from "./workspaceBackupApi";
+import { abortWorkspaceRestore, pauseWorkspaceRestore, preflightWorkspaceRestore, resumeWorkspaceRestore } from "./workspaceBackupApi";
 
 function fakeClient() {
   const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ restoreId: "restore/1", phase: "paused" }), { status: 200 }));
@@ -13,6 +13,7 @@ describe("workspace recovery job controls", () => {
     [pauseWorkspaceRestore, "pause"],
     [resumeWorkspaceRestore, "resume"],
     [abortWorkspaceRestore, "abort"],
+    [preflightWorkspaceRestore, "preflight"],
   ] as const)("posts the durable %s intent", async (operation, action) => {
     const { client, fetchImpl } = fakeClient();
 
