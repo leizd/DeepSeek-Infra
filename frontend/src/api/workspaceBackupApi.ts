@@ -671,8 +671,33 @@ export interface DisasterRecoveryStatus {
   };
 }
 
+interface RecoveryDrillEvidence {
+  schemaVersion: 1;
+  restoreId: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  chainLength: number;
+  components: number;
+  ciphertextBytes: number;
+  logicalBytes: number;
+  verifiedContributors: number;
+}
+
+export type RecoveryDrillResult =
+  | (RecoveryDrillEvidence & { result: "success" })
+  | (RecoveryDrillEvidence & { result: "failed"; failureCode: "drill-validation-failed" | "drill-cleanup-failed" });
+
 export function getDisasterRecoveryStatus(client: HttpClient = httpClient) {
   return client.json<DisasterRecoveryStatus>("/api/workspace/disaster-recovery/status");
+}
+
+export function runRecoveryDrill(restoreId: string, client: HttpClient = httpClient) {
+  return client.postJson<RecoveryDrillResult>("/api/workspace/disaster-recovery/drills", { restoreId });
+}
+
+export function getRecoveryDrill(restoreId: string, client: HttpClient = httpClient) {
+  return client.json<RecoveryDrillResult>(`/api/workspace/disaster-recovery/drills/${encodeURIComponent(restoreId)}`);
 }
 
 export function preflightWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {

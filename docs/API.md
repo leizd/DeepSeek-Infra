@@ -1057,6 +1057,8 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 | `POST` | `/api/workspace/restores/{restoreId}/pause` | 持久化 pause intent，在 Component checkpoint 后停止接纳新工作。 |
 | `POST` | `/api/workspace/restores/{restoreId}/resume` | 重验 partial 长度/来源后清除 pause intent 并恢复。 |
 | `GET` | `/api/workspace/disaster-recovery/status` | 返回经 Commit/Receipt/Lineage 验证的 actual RPO、Scrub/Drill/Target/Index/Cache 健康与显式 estimated/unavailable RTO。 |
+| `POST` | `/api/workspace/disaster-recovery/drills` | 对已有 Recovery Job 执行手动隔离 Drill；请求只接受 `{"restoreId":"..."}`。 |
+| `GET` | `/api/workspace/disaster-recovery/drills/{restoreId}` | 读取持久、聚合且脱敏的 Drill 结果。 |
 | `GET` | `/api/workspace/restores/{restoreId}` | 查询持久事务状态，供浏览器启动恢复。 |
 | `GET` | `/api/workspace/restores` | 列出恢复事务。 |
 | `DELETE` | `/api/workspace/restores/{restoreId}` | 仅删除非活动、非 Fence 引用的记录。 |
@@ -1084,6 +1086,15 @@ materialization 三阶段吞吐：增量链的传输/解密工作量为整条链
 GET 不运行 capability probe 或开启 Target 写意图；它可能通过只读 LIST/GET 验证已注册远端
 Target 的 Commit/Receipt。查询不创建索引、不运行 cache GC，也不修改 Workspace。尚无手动
 隔离 Drill 证据时 `drill.status=unavailable`，不会用旧式 unlock verification 代替 4.5.0 Recovery Drill。
+
+Recovery Drill 复用既有 Recovery Job 的 production preflight、fetch、decrypt、Merkle verify、
+materialize 与 Contributor inspect 路径。Operator 必须先经 Restore Secret Slot 提供解锁材料；Drill
+请求不接受 Secret、凭据或 Workspace root。Drill 只在 `.restore-staging/<restoreId>` 内物化，结构上
+不能进入 federated prepare/commit；成功和失败都会清空 Secret、scrub 并删除全部明文与物化树、
+释放远端 hold 和 Component cache pin，同时保留已校验密文与 `drill-result.json`。结果只记录
+`restoreId`、起止时间、耗时、chain/component/ciphertext/logical byte 计数、验证的 Contributor 数和
+稳定失败码，不持久化异常文本、逻辑路径、摘要、Secret 或凭据。同一 `restoreId` 的终态请求幂等
+返回原结果；并发执行返回 `409`，而该 Drill Job 后续不能被普通 materialize/commit 入口复用。
 
 Whole-Age 远端恢复的持久相位为 `fetching-chain → chain-fetched → decrypting-chain → materializing → verified → preparing → prepared → committing → complete`。`object-set-v1` 使用 `fetching-controls → controls-fetched → decrypting-controls → planning-projection → fetching-selected-components → components-fetched → decrypting-components → materializing → verified → prepared → committing → complete`。`materialize` 不接受原始密码，只消费先前写入的临时 Secret Slot；失败或超时后 Slot 清空。所有层的 Component/Pack/Chunk/File SHA 与 Merkle 转移通过后才允许进入 Prepare。
 

@@ -4,9 +4,11 @@ import { HttpClient } from "./httpClient";
 import {
   abortWorkspaceRestore,
   getDisasterRecoveryStatus,
+  getRecoveryDrill,
   pauseWorkspaceRestore,
   preflightWorkspaceRestore,
   resumeWorkspaceRestore,
+  runRecoveryDrill,
 } from "./workspaceBackupApi";
 
 function fakeClient() {
@@ -38,6 +40,28 @@ describe("workspace recovery job controls", () => {
 
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/workspace/disaster-recovery/status");
+    expect(init.method).toBeUndefined();
+    expect(init.body).toBeUndefined();
+  });
+
+  it("runs a server-owned recovery drill with only the restore id", async () => {
+    const { client, fetchImpl } = fakeClient();
+
+    await runRecoveryDrill("restore/1", client);
+
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/workspace/disaster-recovery/drills");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ restoreId: "restore/1" });
+  });
+
+  it("gets a durable recovery drill result", async () => {
+    const { client, fetchImpl } = fakeClient();
+
+    await getRecoveryDrill("restore/1", client);
+
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/workspace/disaster-recovery/drills/restore%2F1");
     expect(init.method).toBeUndefined();
     expect(init.body).toBeUndefined();
   });
