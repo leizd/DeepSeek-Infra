@@ -13,6 +13,42 @@
 - Tracks implementation against the approved Gate A-G specification; no
   production-readiness Evidence is claimed until its real owning gate runs.
 
+### Recovery orchestration
+
+- Adds durable Recovery Jobs with priority-aware bounded Component transfer,
+  digest-keyed checkpoints, deferred Payload discovery, pause/resume/abort,
+  restart-safe federated phases, renewable generationed holds, and capacity and
+  dependency preflight.
+- Adds a verified ciphertext-only Component cache with per-job pins, a 20 GiB
+  LRU quota, corruption eviction/refetch, and zero remote Payload GETs on a
+  fully warm required set.
+- Persists strongly bound Projection Plans and pipelines Payload fetch,
+  authentication, materialization, and immediate plaintext scrub without
+  weakening Merkle, selection, or commit barriers.
+
+### DR readiness and operations
+
+- Exposes bounded, redacted Recovery telemetry plus read-only readiness for
+  actual RPO, explicitly estimated RTO, latest drill outcome, hold protection,
+  cache activity, retries, and integrity failures.
+- Adds isolated manual Recovery Drills that reuse the production fetch,
+  decrypt, verification, and materialization engine while making the live
+  federated commit path unreachable and preserving the live Workspace byte for
+  byte.
+- Removes object-set double compression through Prepared Object Sets and only
+  skips Payload readback when single-part and multipart canaries prove an
+  authoritative full-object SHA-256 capability; ETag and composite claims fail
+  closed to full readback.
+
+### Evidence and release status
+
+- Adds independent exact-merge CI producers for real MinIO + real Rust Age
+  cold/warm/corrupt-cache recovery and for subprocess restart plus disk, lease,
+  cache, remote-mutation, and partial-commit fault injection.
+- The implementation is complete through Gate F and the Gate G evidence paths
+  are wired. 4.5.0 remains unreleased until those producers and the full
+  Python, frontend, eval, security, and release gates pass on the exact merge.
+
 ## [4.4.15] - Parallel Component Transport and Encrypted Restore Cache
 
 ### Transport
