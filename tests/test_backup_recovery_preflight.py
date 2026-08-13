@@ -353,3 +353,21 @@ def test_disk_probe_deduplicates_devices_and_missing_files(tmp_path: Path, monke
     monkeypatch.setattr(backup_recovery_preflight.shutil, "disk_usage", disk_usage)
     assert backup_recovery_preflight._disk_free_bytes((tmp_path / "missing" / "a", tmp_path / "missing" / "b")) == 123
     assert len(observed) == 1
+
+
+def test_preflight_rejects_malformed_projection_byte_estimates(tmp_path: Path) -> None:
+    store = MemoryTargetStore()
+    store.put_if_absent(receipt_key("full"), b"{}")
+    report = backup_recovery_preflight.evaluate_preflight(
+        {"restoreId": "malformed-plan", "backupId": "full", "chain": []},
+        {"bytes": "invalid"},
+        store=store,
+        target_kind="memory",
+        cache=backup_component_cache.ComponentCache(tmp_path / "cache"),
+        safety_backup={**backup_recovery_preflight.estimate_safety_backup_peak(0), "externalBytesKnown": True},
+        free_disk_bytes=10_000_000_000,
+        reserve_bytes=0,
+    )
+    assert report["ready"] is False
+    assert {item["code"] for item in report["blockingReasons"]} == {"projection-plan-invalid"}
+    assert report["scratch"]["materializedTreeBytes"] == 0

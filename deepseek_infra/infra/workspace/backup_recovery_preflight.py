@@ -160,6 +160,13 @@ def evaluate_preflight(
     plaintext_sizes: list[int] = []
     target_reachable = store is not None
     receipt_present = False
+    raw_bytes_report = projection_report.get("bytes")
+    bytes_report: dict[str, Any]
+    if isinstance(raw_bytes_report, dict):
+        bytes_report = raw_bytes_report
+    else:
+        bytes_report = {}
+        blockers.append({"code": "projection-plan-invalid", "message": "Verified Projection Plan byte estimates are invalid."})
 
     if store is not None:
         try:
@@ -225,7 +232,7 @@ def evaluate_preflight(
         except OSError:
             disk_probe_failed = True
     capacity = capacity_report(
-        materialized_tree_bytes=max(0, int((projection_report.get("bytes") or {}).get("estimatedMaterializedBytes") or 0)),
+        materialized_tree_bytes=max(0, int(bytes_report.get("estimatedMaterializedBytes") or 0)),
         safety_backup_peak_bytes=max(0, int(safety.get("estimatedPeakBytes") or 0)),
         uncached_ciphertext_bytes=remote_bytes,
         plaintext_component_bytes=plaintext_sizes,
@@ -237,9 +244,6 @@ def evaluate_preflight(
     elif not bool(capacity["disk"]["sufficient"]):
         blockers.append({"code": "insufficient-disk", "message": "Recovery disk capacity is insufficient."})
 
-    report_counts = projection_report
-    raw_bytes_report = report_counts.get("bytes")
-    bytes_report: dict[str, Any] = raw_bytes_report if isinstance(raw_bytes_report, dict) else {}
     required_count = len(components)
     available = local_components + available_remote
     target_status = "ok" if target_reachable and receipt_present else "blocked"
