@@ -50,10 +50,10 @@
 
 ## Gate F — DR readiness
 
-- [ ] Persist bounded/redacted Recovery telemetry
-- [ ] Expose actual RPO and explicitly estimated RTO readiness
-- [ ] Add isolated manual Recovery Drill
-- [ ] Checkpoint F: live Workspace remains byte-identical in every drill test
+- [x] Persist bounded/redacted Recovery telemetry
+- [x] Expose actual RPO and explicitly estimated RTO readiness
+- [x] Add isolated manual Recovery Drill
+- [x] Checkpoint F: live Workspace remains byte-identical in every drill test
 
 ## Gate G — Evidence and release
 

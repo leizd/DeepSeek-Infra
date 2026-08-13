@@ -300,6 +300,8 @@ Prepared Object Set              Verified ciphertext cache
 
 ### Task 18: Persist recovery telemetry and readiness inputs
 
+**Status:** Complete (`bb6b2f6`).
+
 **Acceptance criteria:**
 - Bounded-cardinality counters/histograms answer job phase, transport/cache, lease, and stage-throughput questions.
 - No secret, logical metadata, digest, path, or error string becomes a metric label.
@@ -311,6 +313,8 @@ Prepared Object Set              Verified ciphertext cache
 **Scope:** Medium.
 
 ### Task 19: Expose DR readiness
+
+**Status:** Complete (`3cfd62e`, `86afae3`).
 
 **Acceptance criteria:**
 - Status reports actual RPO and latest committed/Scrub/Drill health.
@@ -324,6 +328,8 @@ Prepared Object Set              Verified ciphertext cache
 
 ### Task 20: Add isolated manual Recovery Drill
 
+**Status:** Complete (`5c27e29`, `3c7fcc4`, `5e2ca9a`).
+
 **Acceptance criteria:**
 - Drill uses production fetch/decrypt/verify/materialize paths but cannot invoke live commit.
 - Drill root and plaintext are destroyed; result records chain/components/bytes/duration and releases safe holds/pins.
@@ -336,8 +342,9 @@ Prepared Object Set              Verified ciphertext cache
 
 ### Checkpoint F
 
-- Readiness, RPO, estimated-RTO, and isolated Drill contracts green.
-- Security review confirms drill has no live-commit capability.
+- [x] Readiness, RPO, estimated-RTO, and isolated Drill contracts green (15 focused tests).
+- [x] Security review confirms the Drill module has no prepare, federated materialize, or commit call path.
+- [x] Success and injected-failure tests preserve a byte-identical live Workspace and scrub Drill plaintext.
 
 ## Phase 7 — Gate G: real Evidence and release
 
