@@ -38,8 +38,8 @@
 
 - [x] Replace fixed holds with renewable generationed leases
 - [x] Add durable pause/resume/phase-aware abort
-- [ ] Add disk/dependency Recovery preflight
-- [ ] Checkpoint D: restart, long-lease, and insufficient-disk tests green
+- [x] Add disk/dependency Recovery preflight
+- [x] Checkpoint D: restart, long-lease, and insufficient-disk tests green
 
 ## Gate E — Cost and integrity
 
