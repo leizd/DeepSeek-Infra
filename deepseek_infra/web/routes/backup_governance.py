@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_catalog,
+    backup_dr_readiness,
     backup_executor,
     backup_policies,
     backup_publish,
@@ -197,6 +198,11 @@ def create_backup_governance_router() -> APIRouter:
         require_api_auth(request)
         policy_id = request.query_params.get("policyId") or None
         return json_response({"runs": backup_scheduler.list_runs(policy_id=policy_id)})
+
+    @router.get("/api/workspace/disaster-recovery/status")
+    async def api_disaster_recovery_status(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(backup_dr_readiness.readiness_status())
 
     @router.get("/api/workspace/backup-catalog")
     async def api_backup_catalog(request: Request) -> JSONResponse:
