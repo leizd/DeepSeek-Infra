@@ -616,6 +616,65 @@ export interface RecoveryPreflightReport {
   blockingReasons: Array<{ code: string; message: string }>;
 }
 
+export type DisasterRecoveryHealth = {
+  status: "ok" | "warning" | "error" | "unavailable";
+  source?: string;
+  checkedAt?: string | null;
+  reason?: string | null;
+  [key: string]: unknown;
+};
+
+export type DisasterRecoveryPoint =
+  | {
+      status: "available";
+      backupId: string;
+      targetId: string;
+      policyId: string;
+      snapshotKind: "full" | "incremental";
+      chainLength: number;
+      recoveryPointAt: string;
+      rpoSeconds: number;
+      source: "validated-commit-and-receipt";
+    }
+  | { status: "unavailable"; reason: string; source: "validated-commit-and-receipt" };
+
+export type DisasterRecoveryRtoEstimate =
+  | {
+      status: "estimated";
+      estimatedSeconds: number;
+      isSla: false;
+      method: "recent-successful-stage-throughput";
+      stages: Record<"transfer" | "crypto" | "materialization", { estimatedSeconds: number }>;
+      evidence: { windowDays: number; samplesByStage: Record<"transfer" | "crypto" | "materialization", number> };
+    }
+  | {
+      status: "unavailable";
+      isSla: false;
+      reason: string;
+      missingStages?: Array<"transfer" | "crypto" | "materialization">;
+      missingWorkload?: string[];
+      evidenceWindowDays?: number;
+    };
+
+export interface DisasterRecoveryStatus {
+  schemaVersion: 1;
+  status: "ok" | "warning" | "error";
+  calculatedAt: string;
+  recoveryPoint: DisasterRecoveryPoint;
+  rtoEstimate: DisasterRecoveryRtoEstimate;
+  scrub: DisasterRecoveryHealth & { latestCheckedAt?: string; latestSuccessfulAt?: string | null };
+  drill: DisasterRecoveryHealth & { latestCheckedAt?: string; latestSuccessfulAt?: string | null };
+  health: {
+    target: DisasterRecoveryHealth;
+    index: DisasterRecoveryHealth;
+    cache: DisasterRecoveryHealth;
+  };
+}
+
+export function getDisasterRecoveryStatus(client: HttpClient = httpClient) {
+  return client.json<DisasterRecoveryStatus>("/api/workspace/disaster-recovery/status");
+}
+
 export function preflightWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
   return client.postJson<RecoveryPreflightReport>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/preflight`, {});
 }

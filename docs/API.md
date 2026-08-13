@@ -1056,6 +1056,7 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 | `POST` | `/api/workspace/restores/{restoreId}/abort` | 幂等回滚已交换 Contributor；不删除 Safety Backup。 |
 | `POST` | `/api/workspace/restores/{restoreId}/pause` | 持久化 pause intent，在 Component checkpoint 后停止接纳新工作。 |
 | `POST` | `/api/workspace/restores/{restoreId}/resume` | 重验 partial 长度/来源后清除 pause intent 并恢复。 |
+| `GET` | `/api/workspace/disaster-recovery/status` | 返回经 Commit/Receipt/Lineage 验证的 actual RPO、Scrub/Drill/Target/Index/Cache 健康与显式 estimated/unavailable RTO。 |
 | `GET` | `/api/workspace/restores/{restoreId}` | 查询持久事务状态，供浏览器启动恢复。 |
 | `GET` | `/api/workspace/restores` | 列出恢复事务。 |
 | `DELETE` | `/api/workspace/restores/{restoreId}` | 仅删除非活动、非 Fence 引用的记录。 |
@@ -1070,6 +1071,19 @@ Preflight 成功响应返回 `closure`、`cache`、`network`、`scratch`、`disk
 容量计算包含 materialized tree、完整 live Workspace safety backup 峰值、未命中 cache 的密文、
 有界 crypto plaintext 与默认 1 GiB reserve。探测不会删除 cache、下载 Payload、写 Target 或修改 live Workspace。
 容量/磁盘探测阻断的错误 `details.preflight` 使用同一报告结构；不返回凭据、Secret 或逻辑路径。
+
+Disaster Recovery status 是只读且需要普通 API 鉴权。`recoveryPoint` 只有在 Commit hash chain、
+Commit 绑定的 Receipt 摘要、`creationVerified` 与完整增量祖先链都有效时才为 `available`；
+`recoveryPointAt` 来自该正式 Receipt 的 `createdAt`，`rpoSeconds` 以响应的 `calculatedAt`
+为基准计算。被 trash/delete、未验证、缺父链或 Receipt/Commit 被篡改的点不会进入 RPO。
+
+`rtoEstimate.status=estimated` 仅使用最近 30 天成功 Recovery Job 的 transfer、crypto、
+materialization 三阶段吞吐：增量链的传输/解密工作量为整条链密文字节，物化工作量为最终
+逻辑树字节，三阶段估时相加并向上取整。缺任一近期阶段样本或缺逻辑工作量时返回
+`status=unavailable` 与稳定原因；`isSla` 始终为 `false`。Target health 使用已持久 probe，
+GET 不运行 capability probe 或开启 Target 写意图；它可能通过只读 LIST/GET 验证已注册远端
+Target 的 Commit/Receipt。查询不创建索引、不运行 cache GC，也不修改 Workspace。尚无手动
+隔离 Drill 证据时 `drill.status=unavailable`，不会用旧式 unlock verification 代替 4.5.0 Recovery Drill。
 
 Whole-Age 远端恢复的持久相位为 `fetching-chain → chain-fetched → decrypting-chain → materializing → verified → preparing → prepared → committing → complete`。`object-set-v1` 使用 `fetching-controls → controls-fetched → decrypting-controls → planning-projection → fetching-selected-components → components-fetched → decrypting-components → materializing → verified → prepared → committing → complete`。`materialize` 不接受原始密码，只消费先前写入的临时 Secret Slot；失败或超时后 Slot 清空。所有层的 Component/Pack/Chunk/File SHA 与 Merkle 转移通过后才允许进入 Prepare。
 
