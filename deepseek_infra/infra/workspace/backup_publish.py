@@ -31,6 +31,7 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_component_transport, backup_object_set, backup_scheduler, backup_spool, backup_targets, backup_unattended, backups
 from deepseek_infra.infra.workspace.backup_target_store import (
     BackupTargetStore,
+    STRONG_PROVIDER_CHECKSUM,
     commit_marker_key,
     commit_marker_keys,
     commit_slot_digest,
@@ -830,6 +831,13 @@ def _publish_object_set_via_store(
                 metadata = store.stat(key)
             if metadata is None or metadata.size != component.ciphertext_size:
                 raise AppError("Committed object-set component is missing or truncated", code=ErrorCode.INTERNAL, status=500)
+            if not component.control and store.capabilities().integrity_mode == STRONG_PROVIDER_CHECKSUM:
+                if (
+                    metadata.provider_checksum_type != "FULL_OBJECT"
+                    or metadata.provider_sha256 != component.ciphertext_digest
+                ):
+                    raise AppError("Committed object-set provider checksum is unproven", code=ErrorCode.INTERNAL, status=500)
+                return
             digest = hashlib.sha256()
             observed_size = 0
             for chunk in store.get_stream(key):

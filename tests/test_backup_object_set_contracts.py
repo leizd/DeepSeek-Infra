@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import zipfile
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -1275,6 +1276,105 @@ def test_publish_v4_store_component_readbacks_overlap(tmp_settings: Path) -> Non
 
     assert published.commit["objectSetDigest"] == package.object_set_digest
     assert store.max_active_reads >= 2, "remote component verification must actually overlap"
+
+
+@pytest.mark.parametrize(
+    ("integrity_mode", "payload_readbacks"),
+    (("strong-provider-checksum", 0), ("full-readback", 1)),
+)
+def test_publish_v4_provider_integrity_mode_controls_payload_readback(
+    tmp_settings: Path,
+    integrity_mode: str,
+    payload_readbacks: int,
+) -> None:
+    class CountingIntegrityStore(backup_target_store.MemoryTargetStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.read_keys: list[str] = []
+
+        def capabilities(self) -> backup_target_store.TargetCapabilities:
+            return replace(super().capabilities(), integrity_mode=integrity_mode)  # type: ignore[arg-type]
+
+        def stat(self, key: str) -> backup_target_store.ObjectMeta | None:
+            meta = super().stat(key)
+            if meta is None:
+                return None
+            return replace(
+                meta,
+                provider_sha256=meta.sha256,
+                provider_checksum_type="FULL_OBJECT",
+            )
+
+        def get_stream(self, key: str, *, offset: int = 0):
+            self.read_keys.append(key)
+            return super().get_stream(key, offset=offset)
+
+    store = CountingIntegrityStore()
+    target = backup_publish.ResolvedTarget(target_id="target-provider-integrity", root=None, managed=False, kind="s3", store=store)
+    control = _component(tmp_settings, "control-provider-integrity", b"control", control=True)
+    payload = _component(tmp_settings, "payload-provider-integrity", b"payload")
+    package = backup_object_set.ObjectSetPackage(
+        backup_id=f"backup_provider_{integrity_mode}",
+        components=(control, payload),
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+        manifest={"snapshotKind": "full"},
+    )
+
+    backup_publish.publish_backup(
+        target,
+        package,
+        run_id=f"run-provider-{integrity_mode}",
+        policy_id="policy-provider-integrity",
+        schedule_slot=f"slot-provider-{integrity_mode}",
+        fencing_token=1,
+    )
+
+    payload_key = backup_target_store.object_key(payload.ciphertext_digest)
+    control_key = backup_target_store.object_key(control.ciphertext_digest)
+    assert store.read_keys.count(payload_key) == payload_readbacks
+    assert store.read_keys.count(control_key) == 1
+
+
+@pytest.mark.parametrize(("provider_digest", "provider_type"), (("0" * 64, "FULL_OBJECT"), (None, None), ("0" * 64, "COMPOSITE")))
+def test_publish_v4_strong_provider_claim_fails_closed(
+    tmp_settings: Path,
+    provider_digest: str | None,
+    provider_type: str | None,
+) -> None:
+    class BadClaimStore(backup_target_store.MemoryTargetStore):
+        def capabilities(self) -> backup_target_store.TargetCapabilities:
+            return replace(super().capabilities(), integrity_mode="strong-provider-checksum")
+
+        def stat(self, key: str) -> backup_target_store.ObjectMeta | None:
+            meta = super().stat(key)
+            if meta is None:
+                return None
+            return replace(meta, provider_sha256=provider_digest, provider_checksum_type=provider_type)
+
+    store = BadClaimStore()
+    target = backup_publish.ResolvedTarget(target_id="target-bad-provider", root=None, managed=False, kind="s3", store=store)
+    control = _component(tmp_settings, "control-bad-provider", b"control", control=True)
+    payload = _component(tmp_settings, "payload-bad-provider", b"payload")
+    package = backup_object_set.ObjectSetPackage(
+        backup_id="backup_bad_provider",
+        components=(control, payload),
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+        manifest={"snapshotKind": "full"},
+    )
+
+    with pytest.raises(AppError, match="provider checksum"):
+        backup_publish.publish_backup(
+            target,
+            package,
+            run_id=f"run-bad-provider-{provider_type}",
+            policy_id="policy-bad-provider",
+            schedule_slot=f"slot-bad-provider-{provider_type}",
+            fencing_token=1,
+        )
+
+    assert backup_publish.latest_commit_store(store) is None
 
 
 def test_reconcile_store_rebuilds_object_set_receipt_and_catalog(tmp_settings: Path) -> None:
