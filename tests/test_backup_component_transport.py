@@ -1,4 +1,4 @@
-"""Tests for the bounded component transfer scheduler (4.4.15).
+"""Tests for the bounded component transfer scheduler.
 
 These tests use instrumented active/max-active counters rather than elapsed
 time, so they are stable under CI jitter. The scheduler's contract is:
