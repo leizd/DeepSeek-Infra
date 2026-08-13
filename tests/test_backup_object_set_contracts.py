@@ -1528,7 +1528,14 @@ def test_object_set_fetch_fails_closed_and_resumes_partial_members(tmp_settings:
     }
     partial_payload = backup_remote_restore._fetch_object_set_components(payload_session, store, max_bytes=1)
     assert partial_payload["phase"] == "fetching-selected-components"
+    component_states = payload_session["componentStates"]
+    assert isinstance(component_states, dict)
+    assert component_states[digest]["state"] == "partial"
+    assert "componentFetchIndex" not in payload_session
     assert backup_remote_restore._fetch_object_set_components(payload_session, store, max_bytes=None)["phase"] == "components-fetched"
+    completed_states = payload_session["componentStates"]
+    assert isinstance(completed_states, dict)
+    assert completed_states[digest]["state"] == "verified"
 
     for field, value, message in (
         ("objectDigest", "f" * 64, "component is missing"),

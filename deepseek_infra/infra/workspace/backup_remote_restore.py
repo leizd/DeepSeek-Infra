@@ -27,6 +27,7 @@ from deepseek_infra.infra.workspace import (
     backup_pack,
     backup_projection,
     backup_publish,
+    backup_recovery_state,
     backup_targets,
     backups,
 )
@@ -631,16 +632,18 @@ def _fetch_object_set_components(
 ) -> dict[str, Any]:
     restore_id = str(session["restoreId"])
     chain = restore_members(session)
-    pending = [
-        component
-        for member in chain
-        for component in (member.get("requiredComponents") or [])
-        if isinstance(component, dict)
-    ]
-    index = int(session.get("componentFetchIndex") or 0)
-    while index < len(pending):
-        component = pending[index]
+    pending = backup_recovery_state.required_components(session)
+    states = backup_recovery_state.ensure_component_states(session)
+    session["chain"] = chain
+    session["updatedAt"] = _utc_iso()
+    _atomic_write_json(_session_path(restore_id), session)
+    for component in pending:
         digest = str(component.get("objectDigest") or "")
+        state = states[digest]
+        component["downloadedBytes"] = int(state.get("downloadedBytes") or 0)
+        component["fetched"] = str(state.get("state") or "") == "verified"
+        if component["fetched"]:
+            continue
         meta = store.stat(object_key(digest))
         if meta is None or meta.size != int(component.get("expectedBytes") or -1):
             raise AppError("Required object-set component is missing", code=ErrorCode.NOT_FOUND, status=404)
@@ -650,9 +653,26 @@ def _fetch_object_set_components(
         expected_version = component.get("remoteVersionId")
         if expected_version and meta.version_id and meta.version_id != expected_version:
             raise AppError("remote payload component version changed since restore session started", code=ErrorCode.INVALID_REQUEST, status=409)
+        backup_recovery_state.update_component_state(
+            session,
+            component,
+            state="downloading",
+            downloaded_bytes=int(component.get("downloadedBytes") or 0),
+        )
+        session["updatedAt"] = _utc_iso()
+        _atomic_write_json(_session_path(restore_id), session)
         done = _download_member(store, component, max_bytes)
+        downloaded = int(component.get("downloadedBytes") or 0)
+        backup_recovery_state.update_component_state(
+            session,
+            component,
+            state="verified" if done else "partial",
+            downloaded_bytes=downloaded,
+        )
+        session["chain"] = chain
+        session["updatedAt"] = _utc_iso()
+        _atomic_write_json(_session_path(restore_id), session)
         if not done:
-            session["componentFetchIndex"] = index
             session["phase"] = "fetching-selected-components"
             _atomic_write_json(_session_path(restore_id), session)
             return {
@@ -662,12 +682,6 @@ def _fetch_object_set_components(
                 "expectedBytes": int(component.get("expectedBytes") or 0),
                 "requiredComponents": len(pending),
             }
-        index += 1
-        session["componentFetchIndex"] = index
-        session["chain"] = chain
-        session["updatedAt"] = _utc_iso()
-        _atomic_write_json(_session_path(restore_id), session)
-    session["componentFetchIndex"] = index
     session["phase"] = "components-fetched"
     control_bytes = sum(int(member["control"].get("downloadedBytes") or 0) for member in chain)
     component_bytes = sum(int(item.get("downloadedBytes") or 0) for item in pending)
@@ -1211,7 +1225,7 @@ def _plan_object_set_projection(
         report = network_report
     session["chain"] = members
     session["projectionPlan"] = report
-    session["componentFetchIndex"] = required_count if every_required_component_fetched else 0
+    backup_recovery_state.ensure_component_states(session)
     session["phase"] = "components-fetched" if every_required_component_fetched else "fetching-selected-components"
     _atomic_write_json(_session_path(restore_id), session)
     return projection, report

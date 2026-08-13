@@ -16,7 +16,7 @@
 - [x] Freeze compatibility fixtures and prepare 4.5.0 development version
 - [x] Enforce Scheduler priority and FD budgets
 - [x] Parallelize remote object-set upload
-- [ ] Persist digest-keyed per-Component restore states
+- [x] Persist digest-keyed per-Component restore states
 - [ ] Defer Payload HEAD until verified Projection closure
 - [ ] Parallelize required Component download
 - [ ] Checkpoint A: focused tests, ruff, and mypy green
