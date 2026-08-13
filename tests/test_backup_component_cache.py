@@ -156,3 +156,51 @@ def test_cache_gc_refuses_malformed_pin_and_reports_pressure_when_all_pinned(tmp
     (pin_dir / "corrupt.json").write_text("not-json", encoding="utf-8")
     with pytest.raises(AppError, match="pin metadata"):
         cache.gc(quota_bytes=0)
+
+
+def test_cache_rejects_invalid_control_inputs_and_pin_shapes(tmp_path: Path) -> None:
+    cache = backup_component_cache.ComponentCache(tmp_path / "cache")
+    assert backup_component_cache._digest_file(tmp_path / "missing") == (0, "")
+    with pytest.raises(ValueError, match="owner_id"):
+        cache.pin("", [])
+    with pytest.raises(ValueError, match="non-negative"):
+        cache.gc(quota_bytes=-1)
+    with pytest.raises(ValueError, match="non-negative"):
+        cache.inspect("a" * 64, -1)
+    cache.unpin("")
+
+    pin_dir = cache.root / "pins"
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / "bad.json"
+    for payload in ({"schemaVersion": 2, "digests": []}, {"schemaVersion": 1, "digests": [1]}, {"schemaVersion": 1, "digests": ["z" * 64]}):
+        pin.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(AppError, match="pin metadata"):
+            cache.pinned_digests()
+
+
+def test_cache_promotes_complete_partial_and_bounds_stream_pieces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cache = backup_component_cache.ComponentCache(tmp_path / "cache")
+    data = b"complete-partial"
+    digest = hashlib.sha256(data).hexdigest()
+    partial = cache.partial_path(digest)
+    partial.parent.mkdir(parents=True)
+    partial.write_bytes(data)
+    assert cache.fetch(digest, len(data), lambda _offset: (_ for _ in ()).throw(AssertionError("must not read"))).read_bytes() == data
+
+    second = b"bounded-stream"
+    second_digest = hashlib.sha256(second).hexdigest()
+    oversized = cache.partial_path(second_digest)
+    oversized.parent.mkdir(parents=True, exist_ok=True)
+    oversized.write_bytes(second + b"stale")
+    progress: list[int] = []
+    path = cache.fetch(
+        second_digest,
+        len(second),
+        lambda offset: iter((b"", second[offset:] + b"ignored")),
+        progress=progress.append,
+    )
+    assert path.read_bytes() == second
+    assert progress == [len(second)]
+
+    monkeypatch.setattr(backup_component_cache.os, "utime", lambda *_args: (_ for _ in ()).throw(OSError("readonly")))
+    assert cache.get(second_digest, len(second)) == path

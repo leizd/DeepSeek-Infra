@@ -171,3 +171,31 @@ def test_concurrent_pause_and_abort_serialize_to_safe_terminal_state(tmp_path: P
     assert session["phase"] == "aborted"
     assert session["controlGeneration"] in {1, 2}
     assert "aborted" in results
+
+
+def test_job_stop_signal_and_abort_without_prepared_handler_fail_closed(tmp_path: Path) -> None:
+    stopped = backup_recovery_job.RecoveryJobStopped("paused")
+    assert stopped.phase == "paused"
+    assert "paused" in str(stopped)
+
+    transaction = tmp_path / "transaction.json"
+    transaction.write_text(json.dumps({"phase": "prepared"}), encoding="utf-8")
+    session = _session(tmp_path, phase="prepared")
+    session["transactionPath"] = str(transaction)
+    backup_recovery_job.request_abort(session)
+    assert backup_recovery_job.converge(session) == "recovery-required"
+
+
+def test_job_handles_invalid_transaction_and_repeated_pause(tmp_path: Path) -> None:
+    transaction = tmp_path / "transaction.json"
+    transaction.write_text("not-json", encoding="utf-8")
+    session = _session(tmp_path)
+    session["transactionPath"] = str(transaction)
+    backup_recovery_job.request_abort(session)
+    assert backup_recovery_job.converge(session) == "recovery-required"
+
+    paused = _session(tmp_path, phase="paused")
+    paused["pauseRequested"] = True
+    assert backup_recovery_job.converge(paused) == "paused"
+    with pytest.raises(AppError, match="Terminal"):
+        backup_recovery_job.request_abort(_session(tmp_path, phase="failed"))

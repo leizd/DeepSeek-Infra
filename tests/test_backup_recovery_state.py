@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from deepseek_infra.infra.workspace import backup_recovery_state
 
 
@@ -150,3 +152,35 @@ def test_fsynced_full_download_promotes_to_verified_after_restart(tmp_path: Path
     states = backup_recovery_state.ensure_component_states(session)
 
     assert states[digest]["state"] == "verified"
+
+
+def test_required_components_ignores_malformed_members() -> None:
+    assert backup_recovery_state.required_components({}) == []
+    assert backup_recovery_state.required_components({"chain": "bad"}) == []
+    assert backup_recovery_state.required_components(
+        {"chain": [None, {"requiredComponents": "bad"}, {"requiredComponents": [None, {"objectDigest": "a" * 64}]}]}
+    ) == [{"objectDigest": "a" * 64}]
+
+
+def test_state_rejects_bad_digest_and_update_rehydrates_missing_entry(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="canonical"):
+        backup_recovery_state.ensure_component_states(
+            {"chain": [{"requiredComponents": [_component(tmp_path, "bad")]}]}
+        )
+
+    digest = "a" * 64
+    component = _component(tmp_path, digest)
+    session: dict[str, object] = {"componentStates": {}, "chain": [{"requiredComponents": [component]}]}
+    state = backup_recovery_state.update_component_state(session, component, state="failed", downloaded_bytes=3)
+    assert state["state"] == "failed"
+    assert state["downloadedBytes"] == 3
+    with pytest.raises(ValueError, match="invalid component state"):
+        backup_recovery_state.update_component_state(session, component, state="complete", downloaded_bytes=10)
+
+
+def test_state_defaults_priority_and_ignores_empty_scrub_path(tmp_path: Path) -> None:
+    component = _component(tmp_path, "b" * 64)
+    component["priority"] = "high"
+    session: dict[str, object] = {"chain": [{"requiredComponents": [component]}]}
+    assert backup_recovery_state.ensure_component_states(session)["b" * 64]["priority"] == 2
+    backup_recovery_state._scrub_partial({"ciphertextPath": ""})

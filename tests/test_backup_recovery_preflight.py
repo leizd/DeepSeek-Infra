@@ -255,3 +255,101 @@ def test_object_set_materialize_requires_preflight_before_secret_consumption(tmp
         backup_remote_restore.materialize_federated_restore(restore_id)
 
     assert calls == [restore_id]
+
+
+def test_local_safety_estimate_tracks_external_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Contributor:
+        def inventory(self, context: object) -> dict[str, int]:
+            assert getattr(context, "mode") == "full"
+            return {"bytes": 25}
+
+    monkeypatch.setattr(backups, "_registered_contributors", lambda: [Contributor(), Contributor()])
+    monkeypatch.setenv("STATELESS_MCP_BACKUP_URL", "https://mcp.invalid")
+    report = backup_recovery_preflight.estimate_local_safety_backup()
+    assert report["liveLogicalBytes"] == 50
+    assert report["externalBytesKnown"] is False
+    with pytest.raises(ValueError, match="non-negative"):
+        backup_recovery_preflight.estimate_safety_backup_peak(-1)
+
+
+def test_preflight_accepts_verified_local_component_and_reports_unhealthy_snapshot(tmp_path: Path) -> None:
+    raw = b"local-component"
+    digest = hashlib.sha256(raw).hexdigest()
+    local = tmp_path / "local.age"
+    local.write_bytes(raw)
+    store = MemoryTargetStore()
+    store.put_if_absent(receipt_key("full"), b"{}")
+    session = {
+        "restoreId": "local",
+        "chain": [
+            {
+                "backupId": "full",
+                "snapshotKind": "full",
+                "requiredComponents": [
+                    {
+                        "objectDigest": digest,
+                        "expectedBytes": len(raw),
+                        "plaintextSize": 2,
+                        "ciphertextPath": str(local),
+                    }
+                ],
+            }
+        ],
+    }
+    report = backup_recovery_preflight.evaluate_preflight(
+        session,
+        {"bytes": {}},
+        store=store,
+        target_kind="memory",
+        catalog={"full": {"scrubOk": False}},
+        cache=backup_component_cache.ComponentCache(tmp_path / "cache"),
+        safety_backup={**backup_recovery_preflight.estimate_safety_backup_peak(0), "externalBytesKnown": True},
+        free_disk_bytes=10_000_000_000,
+        reserve_bytes=0,
+    )
+    assert report["ready"] is True
+    assert report["closure"]["localComponents"] == 1
+    assert report["lastWholeSnapshotHealth"]["status"] == "error"
+
+
+def test_preflight_fails_closed_on_receipt_probe_and_safety_inventory_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenStore:
+        def stat(self, _key: str) -> object:
+            raise OSError("offline")
+
+    monkeypatch.setattr(
+        backup_recovery_preflight,
+        "estimate_local_safety_backup",
+        lambda: (_ for _ in ()).throw(OSError("inventory")),
+    )
+    report = backup_recovery_preflight.evaluate_preflight(
+        {"restoreId": "blocked", "backupId": "full", "chain": []},
+        {"bytes": {}},
+        store=BrokenStore(),
+        target_kind="broken",
+        cache=backup_component_cache.ComponentCache(tmp_path / "cache"),
+        free_disk_bytes=0,
+        reserve_bytes=1,
+    )
+    assert {item["code"] for item in report["blockingReasons"]} == {
+        "target-unavailable",
+        "safety-backup-estimate-unavailable",
+        "external-safety-backup-size-unavailable",
+        "insufficient-disk",
+    }
+    assert report["targetHealth"]["status"] == "blocked"
+
+
+def test_disk_probe_deduplicates_devices_and_missing_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: list[Path] = []
+
+    def disk_usage(path: Path) -> object:
+        observed.append(path)
+        return type("Usage", (), {"free": 123})()
+
+    monkeypatch.setattr(backup_recovery_preflight.shutil, "disk_usage", disk_usage)
+    assert backup_recovery_preflight._disk_free_bytes((tmp_path / "missing" / "a", tmp_path / "missing" / "b")) == 123
+    assert len(observed) == 1
