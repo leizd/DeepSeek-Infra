@@ -9,6 +9,26 @@ export type BackupProtection =
 export type CoveragePolicy = "strict" | "best-effort";
 export type RestoreMode = "merge" | "project-copy" | "replace-empty";
 export type RestoreSecretState = "not-required" | "available" | "expired" | "required-for-safety-backup";
+export type RecoveryJobPhase =
+  | "created"
+  | "preflighted"
+  | "fetching"
+  | "fetching-chain"
+  | "fetching-controls"
+  | "controls-fetched"
+  | "fetching-selected-components"
+  | "components-fetched"
+  | "materializing"
+  | "verified"
+  | "prepared"
+  | "committing"
+  | "paused"
+  | "aborting"
+  | "aborted"
+  | "rolled-back"
+  | "complete"
+  | "failed"
+  | "recovery-required";
 export type RestorePhase =
   | "inspected"
   | "preparing"
@@ -18,7 +38,9 @@ export type RestorePhase =
   | "frontend-committed"
   | "backend-committed"
   | "complete"
+  | "paused"
   | "aborting"
+  | "aborted"
   | "rolled-back"
   | "recovery-required"
   | "failed";
@@ -295,6 +317,21 @@ export function abortWorkspaceRestore(restoreId: string, client: HttpClient = ht
   return client.postJson<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/abort`, {});
 }
 
+export interface RecoveryJobControlResult {
+  restoreId: string;
+  phase: RecoveryJobPhase;
+  pauseRequested?: boolean;
+  abortRequested?: boolean;
+}
+
+export function pauseWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
+  return client.postJson<RecoveryJobControlResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/pause`, {});
+}
+
+export function resumeWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
+  return client.postJson<RecoveryJobControlResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/resume`, {});
+}
+
 export function getWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
   return client.json<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}`);
 }
@@ -532,9 +569,9 @@ export function previewRestoreFromTarget(
 export function fetchRemoteRestore(restoreId: string, request: { maxBytes?: number } = {}, client: HttpClient = httpClient) {
   return client.postJson<{
     restoreId: string;
-    phase: string;
-    downloadedBytes: number;
-    expectedBytes: number;
+    phase: RecoveryJobPhase;
+    downloadedBytes?: number;
+    expectedBytes?: number;
     requiredComponents?: number;
     path?: string;
     next?: string;

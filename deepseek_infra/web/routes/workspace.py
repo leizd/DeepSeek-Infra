@@ -508,12 +508,13 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
     async def api_workspace_restore_commit(request: Request, restore_id: str) -> JSONResponse:
         require_api_auth(request)
         payload = await read_json_body(request)
+        # Persist the uncertainty boundary before any participant can commit.
+        workspace_backup_remote_restore.advance_federated_phase(restore_id, "committing")
         result = workspace_backups.commit_restore(
             restore_id,
             frontend_committed=bool(payload.get("frontendCommitted")),
             frontend_digest=str(payload.get("frontendDigest") or "") or None,
         )
-        workspace_backup_remote_restore.advance_federated_phase(restore_id, "committing")
         return json_response(result)
 
     @router.post("/api/workspace/restores/{restore_id}/complete")
@@ -530,9 +531,21 @@ def create_workspace_router(deps: WorkspaceRouteDeps) -> APIRouter:
     @router.post("/api/workspace/restores/{restore_id}/abort")
     async def api_workspace_restore_abort(request: Request, restore_id: str) -> JSONResponse:
         require_api_auth(request)
+        if workspace_backup_remote_restore.read_restore_session(restore_id) is not None:
+            return json_response(workspace_backup_remote_restore.request_restore_abort(restore_id))
         result = workspace_backups.abort_restore(restore_id)
         workspace_backup_remote_restore.advance_federated_phase(restore_id, "rolled-back")
         return json_response(result)
+
+    @router.post("/api/workspace/restores/{restore_id}/pause")
+    async def api_workspace_restore_pause(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backup_remote_restore.request_restore_pause(restore_id))
+
+    @router.post("/api/workspace/restores/{restore_id}/resume")
+    async def api_workspace_restore_resume(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(workspace_backup_remote_restore.resume_restore_session(restore_id))
 
     @router.post("/api/workspace/restores/{restore_id}/apply")
     async def api_workspace_restore_apply(request: Request, restore_id: str) -> JSONResponse:
