@@ -17,7 +17,7 @@
 - [x] Enforce Scheduler priority and FD budgets
 - [x] Parallelize remote object-set upload
 - [x] Persist digest-keyed per-Component restore states
-- [ ] Defer Payload HEAD until verified Projection closure
+- [x] Defer Payload HEAD until verified Projection closure
 - [ ] Parallelize required Component download
 - [ ] Checkpoint A: focused tests, ruff, and mypy green
 

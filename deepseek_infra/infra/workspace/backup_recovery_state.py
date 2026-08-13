@@ -147,6 +147,9 @@ def update_component_state(
     current = dict(states[digest])
     current["state"] = state
     current["downloadedBytes"] = int(downloaded_bytes)
+    current["expectedBytes"] = int(component.get("expectedBytes") or 0)
+    current["remoteETag"] = component.get("remoteETag")
+    current["remoteVersionId"] = component.get("remoteVersionId")
     states[digest] = current
     session["componentStates"] = states
     return current

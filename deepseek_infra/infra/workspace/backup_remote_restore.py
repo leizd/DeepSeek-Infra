@@ -158,28 +158,21 @@ def _object_set_member(store: Any, receipt: dict[str, Any], staging_root: Path, 
     by_digest = {str(item["digest"]): item for item in objects}
     if control_digest not in by_digest:
         raise AppError(f"Backup receipt {backup_id} control object is foreign", code=ErrorCode.INVALID_REQUEST, status=409)
-    remote_objects: list[dict[str, Any]] = []
-    for item in objects:
-        digest = str(item["digest"])
-        meta = store.stat(object_key(digest))
-        if meta is None or meta.size != int(item["size"]):
-            raise AppError(f"Committed object-set component is missing: {backup_id}", code=ErrorCode.NOT_FOUND, status=404)
-        remote_objects.append(
-            {
-                "digest": digest,
-                "size": int(item["size"]),
-                "remoteETag": meta.etag,
-                "remoteVersionId": meta.version_id,
-            }
-        )
-    control_meta = next(item for item in remote_objects if item["digest"] == control_digest)
+    control_receipt = by_digest[control_digest]
+    control_meta = store.stat(object_key(control_digest))
+    if control_meta is None or control_meta.size != int(control_receipt["size"]):
+        raise AppError(f"Committed object-set control is missing: {backup_id}", code=ErrorCode.NOT_FOUND, status=404)
+    # Receipt/Commit validation authenticates the full inventory. Payload
+    # existence is intentionally probed only after Projection closure selects
+    # it, avoiding one remote HEAD per unselected Component.
+    remote_objects = [{"digest": str(item["digest"]), "size": int(item["size"])} for item in objects]
     control = {
         "backupId": backup_id,
         "objectDigest": control_digest,
-        "expectedBytes": int(control_meta["size"]),
+        "expectedBytes": int(control_meta.size),
         "downloadedBytes": 0,
-        "remoteETag": control_meta["remoteETag"],
-        "remoteVersionId": control_meta["remoteVersionId"],
+        "remoteETag": control_meta.etag,
+        "remoteVersionId": control_meta.version_id,
         "ciphertextPath": str(staging_root / f"control-{index:04d}.age"),
         "fetched": False,
     }
@@ -653,6 +646,10 @@ def _fetch_object_set_components(
         expected_version = component.get("remoteVersionId")
         if expected_version and meta.version_id and meta.version_id != expected_version:
             raise AppError("remote payload component version changed since restore session started", code=ErrorCode.INVALID_REQUEST, status=409)
+        if not expected_etag:
+            component["remoteETag"] = meta.etag
+        if not expected_version:
+            component["remoteVersionId"] = meta.version_id
         backup_recovery_state.update_component_state(
             session,
             component,
@@ -1188,8 +1185,8 @@ def _plan_object_set_projection(
                     "objectDigest": digest,
                     "expectedBytes": size,
                     "downloadedBytes": int(existing.get("downloadedBytes") or 0),
-                    "remoteETag": remote.get("remoteETag"),
-                    "remoteVersionId": remote.get("remoteVersionId"),
+                    "remoteETag": existing.get("remoteETag") or remote.get("remoteETag"),
+                    "remoteVersionId": existing.get("remoteVersionId") or remote.get("remoteVersionId"),
                     "ciphertextPath": str(base / f"payload-{index:04d}-{component_id}.age"),
                     "fetched": bool(existing.get("fetched")),
                     "plaintextSize": int(descriptor.get("plaintextSize") or -1),

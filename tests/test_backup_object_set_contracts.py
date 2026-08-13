@@ -606,8 +606,51 @@ def test_object_set_member_validates_receipt_commitment(tmp_path: Path) -> None:
     with pytest.raises(AppError, match="control object is foreign"):
         backup_remote_restore._object_set_member(store, {**receipt, "controlObjectDigest": "e" * 64}, tmp_path, 0)
     store.delete_if_match(backup_target_store.object_key(payload.ciphertext_digest))
-    with pytest.raises(AppError, match="component is missing"):
-        backup_remote_restore._object_set_member(store, receipt, tmp_path, 0)
+    member_without_payload = backup_remote_restore._object_set_member(store, receipt, tmp_path, 0)
+    assert {item["digest"] for item in member_without_payload["objects"]} == {
+        control.ciphertext_digest,
+        payload.ciphertext_digest,
+    }
+
+
+def test_object_set_member_heads_only_control_for_large_inventory(tmp_path: Path) -> None:
+    class CountingStore(backup_target_store.MemoryTargetStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stat_keys: list[str] = []
+
+        def stat(self, key: str) -> backup_target_store.ObjectMeta | None:
+            self.stat_keys.append(key)
+            return super().stat(key)
+
+    store = CountingStore()
+    objects = [
+        {"digest": hashlib.sha256(f"component-{index}".encode()).hexdigest(), "size": index + 1}
+        for index in range(5_000)
+    ]
+    control = objects[2_500]
+    control_size = control["size"]
+    assert isinstance(control_size, int)
+    control_bytes = b"c" * control_size
+    control["digest"] = hashlib.sha256(control_bytes).hexdigest()
+    store.put_if_absent(
+        backup_target_store.object_key(str(control["digest"])),
+        control_bytes,
+        checksum_sha256=str(control["digest"]),
+    )
+    receipt = {
+        "backupId": "backup-large-inventory",
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "controlObjectDigest": control["digest"],
+        "objectSetDigest": backup_object_set.object_inventory_digest(objects),
+        "objects": objects,
+        "snapshotKind": "full",
+    }
+
+    member = backup_remote_restore._object_set_member(store, receipt, tmp_path, 0)
+
+    assert len(member["objects"]) == 5_000
+    assert store.stat_keys == [backup_target_store.object_key(str(control["digest"]))]
 
 
 def test_object_set_spool_cleanup_and_multipart_state_fail_closed(
@@ -1531,6 +1574,7 @@ def test_object_set_fetch_fails_closed_and_resumes_partial_members(tmp_settings:
     component_states = payload_session["componentStates"]
     assert isinstance(component_states, dict)
     assert component_states[digest]["state"] == "partial"
+    assert component_states[digest]["remoteETag"] == meta.etag
     assert "componentFetchIndex" not in payload_session
     assert backup_remote_restore._fetch_object_set_components(payload_session, store, max_bytes=None)["phase"] == "components-fetched"
     completed_states = payload_session["componentStates"]
@@ -1976,7 +2020,7 @@ def test_object_set_restore_fetches_control_before_any_payload(tmp_settings: Pat
     assert not list((backups.RESTORE_DIR / str(created["restoreId"])).glob("payload-*.age"))
 
 
-def test_object_set_restore_fails_closed_when_committed_component_is_missing(
+def test_object_set_restore_defers_missing_required_component_until_fetch(
     tmp_settings: Path,
     object_set_crypto: None,
 ) -> None:
@@ -1989,15 +2033,26 @@ def test_object_set_restore_fails_closed_when_committed_component_is_missing(
         schedule_slot="slot-missing-set",
         fencing_token=1,
     )
-    missing = next(item for item in package.components if not item.control)
+    missing = next(item for item in package.components if item.component_id == "p0001")
     backup_publish.object_path(backups.BACKUP_DIR, missing.ciphertext_digest).unlink()
 
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection={"contributors": ["projects"], "projectIds": ["p1"]},
+    )
+    restore_id = str(created["restoreId"])
+    backup_remote_restore.fetch_restore_session(restore_id)
+    backup_crypto.put_secret(restore_id, "passphrase", "test-secret")
+    backup_remote_restore.preview_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection={"contributors": ["projects"], "projectIds": ["p1"]},
+        restore_id=restore_id,
+    )
+
     with pytest.raises(AppError, match="component is missing"):
-        backup_remote_restore.create_restore_from_target(
-            target_id="managed-local",
-            backup_id=package.backup_id,
-            selection={"contributors": ["projects"], "projectIds": ["p1"]},
-        )
+        backup_remote_restore.fetch_restore_session(restore_id)
 
 
 def test_object_set_control_cannot_select_foreign_component(
@@ -2106,8 +2161,19 @@ def test_object_set_selective_restore_issues_gets_for_required_payload_only(
         fencing_token=1,
     )
     get_keys: list[str] = []
+    head_keys: list[str] = []
     original_get = backup_target_store.FilesystemTargetStore.get_bytes
     original_stream = backup_target_store.FilesystemTargetStore.get_stream
+    original_stat = backup_target_store.FilesystemTargetStore.stat
+
+    def counted_stat(
+        store: backup_target_store.FilesystemTargetStore,
+        key: str,
+    ) -> backup_target_store.ObjectMeta | None:
+        head_keys.append(key)
+        return original_stat(store, key)
+
+    monkeypatch.setattr(backup_target_store.FilesystemTargetStore, "stat", counted_stat)
 
     def counted_get(
         store: backup_target_store.FilesystemTargetStore,
@@ -2137,6 +2203,8 @@ def test_object_set_selective_restore_issues_gets_for_required_payload_only(
         selection={"contributors": ["projects"], "projectIds": ["p1"]},
     )
     restore_id = str(created["restoreId"])
+    payload_by_id = {item.component_id: item for item in package.components if not item.control}
+    assert all(backup_target_store.object_key(item.ciphertext_digest) not in head_keys for item in payload_by_id.values())
     backup_remote_restore.fetch_restore_session(restore_id)
     backup_crypto.put_secret(restore_id, "passphrase", "test-secret")
     backup_remote_restore.preview_restore_from_target(
@@ -2145,13 +2213,16 @@ def test_object_set_selective_restore_issues_gets_for_required_payload_only(
         selection={"contributors": ["projects"], "projectIds": ["p1"]},
         restore_id=restore_id,
     )
+    assert all(backup_target_store.object_key(item.ciphertext_digest) not in head_keys for item in payload_by_id.values())
     backup_remote_restore.fetch_restore_session(restore_id)
 
-    payload_by_id = {item.component_id: item for item in package.components if not item.control}
     assert get_keys.count(backup_target_store.object_key(package.control.ciphertext_digest)) == 1
     assert get_keys.count(backup_target_store.object_key(payload_by_id["p0001"].ciphertext_digest)) == 1
+    assert head_keys.count(backup_target_store.object_key(payload_by_id["p0001"].ciphertext_digest)) == 1
     assert backup_target_store.object_key(payload_by_id["p0000"].ciphertext_digest) not in get_keys
     assert backup_target_store.object_key(payload_by_id["p0002"].ciphertext_digest) not in get_keys
+    assert backup_target_store.object_key(payload_by_id["p0000"].ciphertext_digest) not in head_keys
+    assert backup_target_store.object_key(payload_by_id["p0002"].ciphertext_digest) not in head_keys
 
 
 def test_object_set_federated_restore_keeps_unselected_live_contributor(
