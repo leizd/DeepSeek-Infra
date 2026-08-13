@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -803,8 +804,16 @@ def _publish_object_set_via_store(
         if existing_marker is not None:
             return _converge_or_conflict(existing_marker)
 
-        for component in spooled.components:
-            _checkpoint()
+        checkpoint_lock = threading.Lock()
+
+        def _component_checkpoint() -> None:
+            # Writer-lease implementations are not required to be re-entrant;
+            # serialize checkpoints while component I/O remains parallel.
+            with checkpoint_lock:
+                _checkpoint()
+
+        def _publish_component(component: backup_object_set.EncryptedComponent) -> None:
+            _component_checkpoint()
             key = object_key(component.ciphertext_digest)
             metadata = store.stat(key)
             if metadata is None:
@@ -814,8 +823,9 @@ def _publish_object_set_via_store(
                     obj_key=key,
                     policy_id=policy_id,
                     slot_digest=slot_digest,
-                    checkpoint=checkpoint,
+                    checkpoint=_component_checkpoint,
                     multipart_digest=component.ciphertext_digest,
+                    workers=1,
                 )
                 metadata = store.stat(key)
             if metadata is None or metadata.size != component.ciphertext_size:
@@ -823,11 +833,28 @@ def _publish_object_set_via_store(
             digest = hashlib.sha256()
             observed_size = 0
             for chunk in store.get_stream(key):
-                _checkpoint()
+                _component_checkpoint()
                 digest.update(chunk)
                 observed_size += len(chunk)
             if observed_size != component.ciphertext_size or digest.hexdigest() != component.ciphertext_digest:
                 raise AppError("Content-addressed component on target fails its digest", code=ErrorCode.INTERNAL, status=500)
+
+        def _make_upload_task(component: backup_object_set.EncryptedComponent) -> backup_component_transport.TransferTask:
+            def _execute() -> None:
+                _publish_component(component)
+
+            return backup_component_transport.TransferTask(
+                component_id=component.component_id,
+                ciphertext_digest=component.ciphertext_digest,
+                ciphertext_size=component.ciphertext_size,
+                execute=_execute,
+                working_set_bytes=16 * 1024 * 1024,
+                open_files=1,
+                priority=0 if component.control else 2,
+            )
+
+        upload_tasks = [_make_upload_task(component) for component in spooled.components]
+        backup_component_transport.default_scheduler().run(upload_tasks)
         journal.update(phase="objects-published", updatedAt=_utc_iso())
         _replace_journal(store, journal)
 
@@ -1100,11 +1127,12 @@ def _upload_object_resumable(
     slot_digest: str,
     checkpoint: Callable[[], None] | None = None,
     multipart_digest: str | None = None,
+    workers: int = 4,
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     default_part_size = 16 * 1024 * 1024
-    workers = 4
+    workers = max(1, workers)
     digest = str(getattr(package, "ciphertext_sha256", None) or getattr(package, "ciphertext_digest", ""))
     raw_size = getattr(package, "size", None)
     if raw_size is None:

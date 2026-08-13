@@ -6,6 +6,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1006,6 +1008,57 @@ def test_publish_v4_store_commits_and_converges_exact_ciphertext_set(tmp_setting
             schedule_slot="slot-object-set-store",
             fencing_token=3,
         )
+
+
+def test_publish_v4_store_component_readbacks_overlap(tmp_settings: Path) -> None:
+    class OverlapStore(backup_target_store.MemoryTargetStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self._active_lock = threading.Lock()
+            self.active_reads = 0
+            self.max_active_reads = 0
+
+        def get_stream(self, key: str, *, offset: int = 0):
+            data = self.get_bytes(key, offset=offset)
+            if data is None:
+                return iter(())
+
+            def chunks():
+                with self._active_lock:
+                    self.active_reads += 1
+                    self.max_active_reads = max(self.max_active_reads, self.active_reads)
+                try:
+                    time.sleep(0.03)
+                    yield data
+                finally:
+                    with self._active_lock:
+                        self.active_reads -= 1
+
+            return chunks()
+
+    store = OverlapStore()
+    target = backup_publish.ResolvedTarget(target_id="target-parallel-store", root=None, managed=False, kind="s3", store=store)
+    control = _component(tmp_settings, "control-parallel-store", b"control", control=True)
+    payloads = tuple(_component(tmp_settings, f"payload-parallel-store-{index}", f"payload-{index}".encode()) for index in range(5))
+    package = backup_object_set.ObjectSetPackage(
+        backup_id="backup_parallel_store",
+        components=(control, *payloads),
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+        manifest={"snapshotKind": "full"},
+    )
+
+    published = backup_publish.publish_backup(
+        target,
+        package,
+        run_id="run-parallel-store",
+        policy_id="policy-parallel-store",
+        schedule_slot="slot-parallel-store",
+        fencing_token=1,
+    )
+
+    assert published.commit["objectSetDigest"] == package.object_set_digest
+    assert store.max_active_reads >= 2, "remote component verification must actually overlap"
 
 
 def test_reconcile_store_rebuilds_object_set_receipt_and_catalog(tmp_settings: Path) -> None:
