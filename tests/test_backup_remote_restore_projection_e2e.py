@@ -243,6 +243,7 @@ def test_from_target_preview_reports_honest_projection(tmp_settings: Path, stub_
     )
     assert preview["phase"] == "preview-planned"
     projection = preview["projection"]
+    assert projection["selectiveFetchSupported"] is False
     assert projection["networkSelective"] is False
     assert projection["networkSelectivityReason"] == "whole-age-object"
     assert projection["selected"]["projects"] == 1

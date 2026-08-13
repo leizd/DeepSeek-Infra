@@ -290,6 +290,7 @@ def test_projection_needed_standalone() -> None:
 def test_projection_network_report_is_honest() -> None:
     _, baseline = _baseline()
     plan = plan_projection(RestoreSelection(contributors=("projects",), project_ids=("p1",)), [baseline], ciphertext_download_bytes=123456)
+    assert plan.report["selectiveFetchSupported"] is False
     assert plan.report["networkSelective"] is False
     assert plan.report["networkSelectivityReason"] == "whole-age-object"
     assert plan.report["bytes"]["ciphertextDownloadBytes"] == 123456
