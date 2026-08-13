@@ -14,7 +14,7 @@
 ## Gate A — Transport
 
 - [x] Freeze compatibility fixtures and prepare 4.5.0 development version
-- [ ] Enforce Scheduler priority and FD budgets
+- [x] Enforce Scheduler priority and FD budgets
 - [ ] Parallelize remote object-set upload
 - [ ] Persist digest-keyed per-Component restore states
 - [ ] Defer Payload HEAD until verified Projection closure

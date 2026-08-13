@@ -5,6 +5,7 @@ time, so they are stable under CI jitter. The scheduler's contract is:
 
 * bounded concurrency (max_workers)
 * bounded in-flight bytes (max_in_flight_bytes)
+* stable priority admission and bounded open files (max_open_files)
 * first error propagates, in-flight tasks drain cleanly
 * cancel stops new tasks
 * completion order is irrelevant to the result
@@ -30,7 +31,14 @@ def _counting_task_factory():
     lock = threading.Lock()
     state = {"active": 0, "max_active": 0, "started": 0, "finished": 0}
 
-    def make_task(component_id: str, *, hold: float = 0.03, working_set: int = DEFAULT_WORKING_SET_BYTES):
+    def make_task(
+        component_id: str,
+        *,
+        hold: float = 0.03,
+        working_set: int = DEFAULT_WORKING_SET_BYTES,
+        open_files: int = 1,
+        priority: int = 1,
+    ):
         def execute() -> None:
             with lock:
                 state["active"] += 1
@@ -49,6 +57,8 @@ def _counting_task_factory():
             ciphertext_size=working_set,
             execute=execute,
             working_set_bytes=working_set,
+            open_files=open_files,
+            priority=priority,
         )
 
     def snapshot() -> tuple[int, int, int, int]:
@@ -90,6 +100,42 @@ def test_scheduler_respects_byte_budget():
     assert max_active <= 2, "byte budget must cap concurrency below max_workers"
     assert telemetry.max_in_flight_bytes <= 16 * 1024 * 1024
     assert telemetry.completed == 10
+
+
+def test_scheduler_honors_stable_priority_order():
+    started: list[str] = []
+    tasks = []
+    for component_id, priority in (("output-a", 2), ("support-a", 1), ("control", 0), ("support-b", 1), ("output-b", 2)):
+        tasks.append(
+            TransferTask(
+                component_id=component_id,
+                ciphertext_digest=component_id.rjust(64, "0"),
+                ciphertext_size=DEFAULT_WORKING_SET_BYTES,
+                execute=lambda value=component_id: started.append(value),
+                priority=priority,
+            )
+        )
+
+    scheduler = ComponentTransferScheduler(SchedulerConfig(max_workers=1))
+    scheduler.run(tasks)
+
+    assert started == ["control", "support-a", "support-b", "output-a", "output-b"]
+
+
+def test_scheduler_respects_independent_fd_budget():
+    make_task, snapshot = _counting_task_factory()
+    scheduler = ComponentTransferScheduler(
+        SchedulerConfig(max_workers=6, max_in_flight_bytes=1024 * 1024 * 1024, max_open_files=3)
+    )
+    tasks = [make_task(f"p{i:04d}", open_files=1) for i in range(12)]
+
+    telemetry = scheduler.run(tasks)
+
+    _, max_active, _, _ = snapshot()
+    assert max_active <= 3, "FD budget must cap concurrency independently of workers and bytes"
+    assert telemetry.max_open_files <= 3
+    assert telemetry.open_files == 0
+    assert telemetry.completed == 12
 
 
 def test_scheduler_barrier_propagates_first_error():
@@ -199,7 +245,18 @@ def test_scheduler_config_validates():
     with pytest.raises(ValueError):
         SchedulerConfig(max_in_flight_bytes=1024)
     with pytest.raises(ValueError):
-        SchedulerConfig(max_open_files=1, max_workers=4)
+        SchedulerConfig(max_open_files=0)
+
+
+def test_transfer_task_validates_open_files():
+    with pytest.raises(ValueError):
+        TransferTask(
+            component_id="invalid",
+            ciphertext_digest="0" * 64,
+            ciphertext_size=1,
+            execute=lambda: None,
+            open_files=0,
+        )
 
 
 def test_scheduler_config_byte_permits():
@@ -212,4 +269,5 @@ def test_scheduler_config_as_dict_is_transport_profile():
     profile = config.as_dict()
     assert profile["maxWorkers"] == 4
     assert profile["maxInFlightBytes"] == 256 * 1024 * 1024
+    assert profile["maxOpenFiles"] == 64
     assert profile["workingSetBytes"] == DEFAULT_WORKING_SET_BYTES
