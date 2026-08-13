@@ -5,58 +5,58 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.4.14.
+Applicable version: v4.4.15.
 
-## 4.4.14 candidate evidence contract
+## 4.4.15 candidate evidence contract
 
-The following paths are the required CI output contract for 4.4.14. Files that depend on
+The following paths are the required CI output contract for 4.4.15. Files that depend on
 exact-merge, Chromium, Rust Docker, or release packaging are produced by their owning
 workflow and are not represented as locally verified until that workflow succeeds.
 
 - `docs/evidence/headless-mcp-bridge.json`
 - `docs/evidence/a2a-external-peer.json`
-- `docs/evidence/ga-v4.4.14.json`
-- `docs/evidence/workspace-v4.4.14.json`
-- `docs/evidence/edge-router-v4.4.14.json`
-- `docs/evidence/media-v4.4.14.json`
-- `docs/evidence/browser-v4.4.14.json`
-- `docs/evidence/automation-v4.4.14.json`
-- `docs/evidence/skills-v4.4.14.json`
-- `docs/evidence/skills-ui-v4.4.14.json`
-- `docs/evidence/skill-builder-v4.4.14.json`
-- `docs/evidence/skill-packs-v4.4.14.json`
-- `docs/evidence/skill-eval-dashboard-v4.4.14.json`
-- `docs/evidence/skill-versioning-v4.4.14.json`
-- `docs/evidence/skill-analytics-v4.4.14.json`
-- `docs/evidence/skill-security-v4.4.14.json`
-- `docs/evidence/skill-catalog-v4.4.14.json`
-- `docs/evidence/context-taint-v4.4.14.json`
-- `docs/evidence/semantic-cache-onnx-v4.4.14.json`
-- `docs/evidence/upgrade-rollback-v4.4.14.json`
-- `docs/evidence/protocol-contract-v4.4.14.json`
-- `docs/evidence/frontend-bundle-v4.4.14.json`
-- `docs/evidence/frontend-browser-v4.4.14.json`
+- `docs/evidence/ga-v4.4.15.json`
+- `docs/evidence/workspace-v4.4.15.json`
+- `docs/evidence/edge-router-v4.4.15.json`
+- `docs/evidence/media-v4.4.15.json`
+- `docs/evidence/browser-v4.4.15.json`
+- `docs/evidence/automation-v4.4.15.json`
+- `docs/evidence/skills-v4.4.15.json`
+- `docs/evidence/skills-ui-v4.4.15.json`
+- `docs/evidence/skill-builder-v4.4.15.json`
+- `docs/evidence/skill-packs-v4.4.15.json`
+- `docs/evidence/skill-eval-dashboard-v4.4.15.json`
+- `docs/evidence/skill-versioning-v4.4.15.json`
+- `docs/evidence/skill-analytics-v4.4.15.json`
+- `docs/evidence/skill-security-v4.4.15.json`
+- `docs/evidence/skill-catalog-v4.4.15.json`
+- `docs/evidence/context-taint-v4.4.15.json`
+- `docs/evidence/semantic-cache-onnx-v4.4.15.json`
+- `docs/evidence/upgrade-rollback-v4.4.15.json`
+- `docs/evidence/protocol-contract-v4.4.15.json`
+- `docs/evidence/frontend-bundle-v4.4.15.json`
+- `docs/evidence/frontend-browser-v4.4.15.json`
 - `evals/reports/latest.json`
 - `evals/reports/agent-latest.json`
 - `evals/reports/baseline-compare-latest.json`
 - `evals/reports/security-latest.json`
-- `evals/reports/skills-v4.4.14.json`
-- `evals/reports/media-v4.4.14.json`
-- `evals/reports/browser-v4.4.14.json`
-- `evals/reports/automation-v4.4.14.json`
-- `docs/evidence/rust-sidecar-image-v4.4.14.json`
-- `docs/evidence/hybrid-runtime-e2e-v4.4.14.json`
-- `docs/evidence/gateway-request-parity-v4.4.14.json`
-- `docs/evidence/mcp-protocol-parity-v4.4.14.json`
-- `docs/evidence/rag-parity-v4.4.14.json`
-- `docs/evidence/rag-document-preparation-parity-v4.4.14.json`
-- `docs/evidence/rag-vector-binary-parity-v4.4.14.json`
-- `docs/evidence/rust-coverage-v4.4.14.json`
-- `docs/evidence/rust-sidecar-performance-v4.4.14.json`
-- `docs/evidence/packed-delta-s3-v4.4.14.json`
-- `docs/evidence/object-set-s3-v4.4.14.json`
+- `evals/reports/skills-v4.4.15.json`
+- `evals/reports/media-v4.4.15.json`
+- `evals/reports/browser-v4.4.15.json`
+- `evals/reports/automation-v4.4.15.json`
+- `docs/evidence/rust-sidecar-image-v4.4.15.json`
+- `docs/evidence/hybrid-runtime-e2e-v4.4.15.json`
+- `docs/evidence/gateway-request-parity-v4.4.15.json`
+- `docs/evidence/mcp-protocol-parity-v4.4.15.json`
+- `docs/evidence/rag-parity-v4.4.15.json`
+- `docs/evidence/rag-document-preparation-parity-v4.4.15.json`
+- `docs/evidence/rag-vector-binary-parity-v4.4.15.json`
+- `docs/evidence/rust-coverage-v4.4.15.json`
+- `docs/evidence/rust-sidecar-performance-v4.4.15.json`
+- `docs/evidence/packed-delta-s3-v4.4.15.json`
+- `docs/evidence/object-set-s3-v4.4.15.json`
 
-4.4.14 is the encrypted-object-set and true-selective-fetch release. Full and Incremental snapshots share one projection pipeline; selection is validated against the verified final snapshot; adaptive deltas use bounded temporary archives and stop before encryption when oversized. New object-set lineages fetch independently encrypted controls first and only GET payload components in the Merkle-verified dependency closure. Receipt/Commit v4 exposes ciphertext digests and sizes without plaintext identity, while real process restart, holds, retention/GC and legacy Whole-Age v2-v5 compatibility remain hard gates. It retains the 4.4.13 projected-recovery contracts, 4.4.12 packed-delta index/container contracts, earlier fenced backup/restore and portability contracts, all 4.3.7 convergence contracts, and the frozen 4.0 protocol surface. The root `VERSION` file is canonical, and CI derives candidate/exact-merge evidence names and Docker tags from `RELEASE_VERSION`.
+4.4.15 is the encrypted-object-set and true-selective-fetch release. Full and Incremental snapshots share one projection pipeline; selection is validated against the verified final snapshot; adaptive deltas use bounded temporary archives and stop before encryption when oversized. New object-set lineages fetch independently encrypted controls first and only GET payload components in the Merkle-verified dependency closure. Receipt/Commit v4 exposes ciphertext digests and sizes without plaintext identity, while real process restart, holds, retention/GC and legacy Whole-Age v2-v5 compatibility remain hard gates. It retains the 4.4.13 projected-recovery contracts, 4.4.12 packed-delta index/container contracts, earlier fenced backup/restore and portability contracts, all 4.3.7 convergence contracts, and the frozen 4.0 protocol surface. The root `VERSION` file is canonical, and CI derives candidate/exact-merge evidence names and Docker tags from `RELEASE_VERSION`.
 
 The typed source of truth is `deepseek_infra/infra/diagnostics/evidence_inventory.py`. Candidate and exact-merge entries below are all required for GA; the optional Python stability report is informative.
 
