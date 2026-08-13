@@ -14,6 +14,15 @@ DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines
 
 > **4.5.0 in development — Production Recovery Orchestration & DR Readiness.** The approved milestone freezes object-set-v1, Receipt v4, Commit v4, and randomized Age ciphertext while adding production recovery orchestration in verified Gates. Release readiness remains pending until real Evidence is complete.
 
+## 4.5.0 at a glance
+
+- Durable Recovery Jobs add bounded priority-aware Component transfer, restart checkpoints, pause/resume/abort, renewable holds, preflight, and redacted telemetry.
+- A ciphertext-only verified Component cache, frozen Projection Plans, and bounded fetch/decrypt/materialize pipelining improve recovery without weakening Merkle or federated commit barriers.
+- Read-only DR readiness reports actual RPO, explicitly estimated RTO, protection state, and drill history; isolated manual Drills reuse production verification while making live commit unreachable.
+- Independent exact-merge CI producers own real MinIO/Rust Age cold and warm cache Evidence plus subprocess restart and fault injection. 4.5.0 remains unreleased until those and all release gates pass.
+
+See the [4.5.0 development release notes](docs/releases/4.5.0.md), [approved specification](docs/specs/4.5.0-production-recovery-orchestration.md), and [Evidence index](docs/EVIDENCE_INDEX.md).
+
 ## 4.4.15 at a glance
 
 - Full and Incremental snapshots share one projection pipeline, and project selection is validated against the fully verified target snapshot rather than only the Full baseline.

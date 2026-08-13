@@ -12,7 +12,7 @@
 
 > **4.4.15 Encrypted Object Sets & True Selective Fetch：** Full 与 Incremental 统一 Projection 语义，Adaptive Full 使用有界临时归档并在超阈值后停止 Incremental 加密。新 `object-set-v1` 把加密 Control 与随机独立 Age Payload Components 分离，Restore 先解密完整 Metadata Plane，再只 GET Merkle-verified Dependency Closure 所需的密文 Components。远端只观察密文摘要、大小和粗粒度组件数量；不得出现 plaintext hash、路径、项目或 Contributor 元数据。旧 Whole-Age 链永久可恢复。参见 [4.4.15 发布说明](docs/releases/4.4.15.md)（上一版 [4.4.13](docs/releases/4.4.13.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
 
-> **4.5.0 开发中 — Production Recovery Orchestration & DR Readiness：** 冻结 object-set-v1、Receipt v4、Commit v4 与随机 Age 密文，按 [已批准规格](docs/specs/4.5.0-production-recovery-orchestration.md) 分 Gate 实现生产级恢复编排。真实 Evidence 未完成前不会标记发布就绪。
+> **4.5.0 开发中 — Production Recovery Orchestration & DR Readiness：** 冻结 object-set-v1、Receipt v4、Commit v4 与随机 Age 密文，按 [已批准规格](docs/specs/4.5.0-production-recovery-orchestration.md) 分 Gate 实现生产级恢复编排。真实 Evidence 未完成前不会标记发布就绪；当前范围与运行/回滚边界见 [4.5.0 发布草案](docs/releases/4.5.0.md)。
 
 历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)。
 
