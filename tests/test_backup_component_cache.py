@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 from pathlib import Path
 
 import pytest
@@ -94,3 +96,63 @@ def test_cache_fsyncs_partial_when_source_raises(tmp_path: Path, monkeypatch: py
 
     assert fsync_calls
     assert cache.partial_path(digest).read_bytes() == data
+
+
+def _put(cache: backup_component_cache.ComponentCache, data: bytes) -> tuple[str, Path]:
+    digest = hashlib.sha256(data).hexdigest()
+    return digest, cache.fetch(digest, len(data), lambda offset: iter((data[offset:],)))
+
+
+def test_cache_pins_contain_only_ciphertext_digests_and_survive_new_instance(tmp_path: Path) -> None:
+    root = tmp_path / "cache"
+    cache = backup_component_cache.ComponentCache(root)
+    first, _ = _put(cache, b"first")
+    second, _ = _put(cache, b"second")
+
+    pin_path = cache.pin("restore-private-project-name", [second, first, second])
+
+    assert backup_component_cache.ComponentCache(root).pinned_digests() == {first, second}
+    raw = pin_path.read_text(encoding="utf-8")
+    assert "private-project" not in raw
+    assert json.loads(raw) == {"digests": sorted([first, second]), "schemaVersion": 1}
+    cache.unpin("restore-private-project-name")
+    assert cache.pinned_digests() == set()
+
+
+def test_cache_gc_is_lru_over_verified_unpinned_entries_only(tmp_path: Path) -> None:
+    cache = backup_component_cache.ComponentCache(tmp_path / "cache")
+    oldest, oldest_path = _put(cache, b"oldest")
+    pinned, pinned_path = _put(cache, b"pinned")
+    newest, newest_path = _put(cache, b"newest")
+    os.utime(oldest_path, (10, 10))
+    os.utime(pinned_path, (20, 20))
+    os.utime(newest_path, (30, 30))
+    partial = cache.partial_path("f" * 64)
+    partial.parent.mkdir(parents=True, exist_ok=True)
+    partial.write_bytes(b"partial-is-not-gc-candidate")
+    cache.pin("active-restore", [pinned])
+
+    report = cache.gc(quota_bytes=len(b"pinned") + len(b"newest"))
+
+    assert report == {"beforeBytes": 18, "afterBytes": 12, "evicted": 1, "freedBytes": 6}
+    assert not oldest_path.exists()
+    assert pinned_path.exists()
+    assert newest_path.exists()
+    assert partial.exists()
+    assert oldest not in cache.pinned_digests()
+
+
+def test_cache_gc_refuses_malformed_pin_and_reports_pressure_when_all_pinned(tmp_path: Path) -> None:
+    cache = backup_component_cache.ComponentCache(tmp_path / "cache")
+    digest, path = _put(cache, b"cannot-evict")
+    cache.pin("active", [digest])
+
+    report = cache.gc(quota_bytes=0)
+
+    assert report["afterBytes"] == len(b"cannot-evict")
+    assert report["overQuotaBytes"] == len(b"cannot-evict")
+    assert path.exists()
+    pin_dir = cache.root / "pins"
+    (pin_dir / "corrupt.json").write_text("not-json", encoding="utf-8")
+    with pytest.raises(AppError, match="pin metadata"):
+        cache.gc(quota_bytes=0)

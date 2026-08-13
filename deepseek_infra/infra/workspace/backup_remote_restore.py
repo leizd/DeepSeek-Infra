@@ -1075,6 +1075,7 @@ def release_restore_hold(store: Any, restore_id: str) -> None:
 
 def _release_session_holds(session: dict[str, Any]) -> None:
     """Release every remote hold this restore session created."""
+    backup_component_cache.ComponentCache().unpin(str(session.get("restoreId") or ""))
     target_id = str(session.get("targetId") or "")
     if not target_id:
         return
@@ -1368,6 +1369,13 @@ def _plan_object_set_projection(
     session["chain"] = members
     session["projectionPlan"] = report
     backup_recovery_state.ensure_component_states(session)
+    required_digests = [
+        str(component.get("objectDigest") or "")
+        for member in members
+        for component in member.get("requiredComponents") or []
+        if isinstance(component, dict)
+    ]
+    backup_component_cache.ComponentCache().pin(restore_id, required_digests)
     session["phase"] = "components-fetched" if every_required_component_fetched else "fetching-selected-components"
     _atomic_write_json(_session_path(restore_id), session)
     return projection, report

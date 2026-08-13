@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -14,6 +16,7 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 
 CACHE_DIR = config.ROOT / ".backup-component-cache"
 READ_CHUNK_BYTES = 1024 * 1024
+DEFAULT_QUOTA_BYTES = 20 * 1024 * 1024 * 1024
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: dict[str, threading.RLock] = {}
 
@@ -86,6 +89,99 @@ class ComponentCache:
     def partial_path(self, digest: str) -> Path:
         canonical = _canonical_digest(digest)
         return self.path_for(canonical).with_name(f".{canonical}.partial")
+
+    def _pin_path(self, owner_id: str) -> Path:
+        owner_hash = hashlib.sha256(owner_id.encode("utf-8")).hexdigest()
+        return self.root / "pins" / f"{owner_hash}.json"
+
+    def pin(self, owner_id: str, digests: list[str]) -> Path:
+        if not owner_id:
+            raise ValueError("owner_id must be non-empty")
+        canonical = sorted({_canonical_digest(digest) for digest in digests})
+        with self._lock_for("cache-control"):
+            with _process_lock(self.root, "cache-control"):
+                path = self._pin_path(owner_id)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                payload = {"digests": canonical, "schemaVersion": 1}
+                tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+                with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp, path)
+                return path
+
+    def unpin(self, owner_id: str) -> None:
+        if not owner_id:
+            return
+        with self._lock_for("cache-control"):
+            with _process_lock(self.root, "cache-control"):
+                self._pin_path(owner_id).unlink(missing_ok=True)
+
+    def _pinned_digests_unlocked(self) -> set[str]:
+        pinned: set[str] = set()
+        pin_dir = self.root / "pins"
+        if not pin_dir.is_dir():
+            return pinned
+        for path in sorted(pin_dir.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise AppError("Component cache pin metadata is invalid", code=ErrorCode.INTERNAL, status=500) from exc
+            raw = payload.get("digests") if isinstance(payload, dict) and payload.get("schemaVersion") == 1 else None
+            if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
+                raise AppError("Component cache pin metadata is invalid", code=ErrorCode.INTERNAL, status=500)
+            try:
+                pinned.update(_canonical_digest(item) for item in raw)
+            except ValueError as exc:
+                raise AppError("Component cache pin metadata is invalid", code=ErrorCode.INTERNAL, status=500) from exc
+        return pinned
+
+    def pinned_digests(self) -> set[str]:
+        with self._lock_for("cache-control"):
+            with _process_lock(self.root, "cache-control"):
+                return self._pinned_digests_unlocked()
+
+    def gc(self, *, quota_bytes: int = DEFAULT_QUOTA_BYTES) -> dict[str, int]:
+        if quota_bytes < 0:
+            raise ValueError("quota_bytes must be non-negative")
+        with self._lock_for("cache-control"):
+            with _process_lock(self.root, "cache-control"):
+                pattern = re.compile(r"^[0-9a-f]{64}\.age$")
+                candidates: list[tuple[int, str, Path, int]] = []
+                before = 0
+                object_root = self.root / "sha256"
+                if object_root.is_dir():
+                    for path in object_root.glob("*/*.age"):
+                        if not pattern.fullmatch(path.name):
+                            continue
+                        try:
+                            stat = path.stat()
+                        except OSError:
+                            continue
+                        before += stat.st_size
+                        candidates.append((stat.st_mtime_ns, path.name, path, stat.st_size))
+                pinned = self._pinned_digests_unlocked()
+                after = before
+                freed = 0
+                evicted = 0
+                for _mtime, name, path, size in sorted(candidates):
+                    if after <= quota_bytes:
+                        break
+                    digest = name[:-4]
+                    if digest in pinned:
+                        continue
+                    try:
+                        path.unlink()
+                    except OSError:
+                        continue
+                    after -= size
+                    freed += size
+                    evicted += 1
+                report = {"beforeBytes": before, "afterBytes": after, "evicted": evicted, "freedBytes": freed}
+                if after > quota_bytes:
+                    report["overQuotaBytes"] = after - quota_bytes
+                return report
 
     def get(self, digest: str, expected_bytes: int) -> Path | None:
         canonical = _canonical_digest(digest)

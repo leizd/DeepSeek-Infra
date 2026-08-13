@@ -2408,6 +2408,7 @@ def test_warm_object_set_restore_uses_cache_without_payload_get(
     first_session = backup_remote_restore.read_restore_session(first_restore_id)
     assert first_session is not None
     digest = str(first_session["chain"][0]["requiredComponents"][0]["objectDigest"])
+    backup_remote_restore.advance_federated_phase(first_restore_id, "complete")
     payload_key = backup_target_store.object_key(digest)
     payload_gets: list[str] = []
     original_stream = backup_target_store.FilesystemTargetStore.get_stream
@@ -2430,6 +2431,9 @@ def test_warm_object_set_restore_uses_cache_without_payload_get(
     required = second_session["chain"][0]["requiredComponents"][0]
     assert payload_gets == []
     assert ".backup-component-cache" in str(required["ciphertextPath"])
+    assert digest in backup_component_cache.ComponentCache().pinned_digests()
+    backup_remote_restore.advance_federated_phase(second_restore_id, "complete")
+    assert digest not in backup_component_cache.ComponentCache().pinned_digests()
 
 
 def test_object_set_federated_restore_keeps_unselected_live_contributor(
