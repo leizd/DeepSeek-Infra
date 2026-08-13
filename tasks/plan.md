@@ -251,6 +251,8 @@ Prepared Object Set              Verified ciphertext cache
 
 ### Task 15: Introduce Prepared Object Sets
 
+**Status:** Complete (`3204dfb`).
+
 **Acceptance criteria:**
 - Exact prepared Component bytes determine Adaptive Full and feed Age directly.
 - Threshold crossing can stop component preparation early; every plaintext path is scrubbed.
@@ -262,6 +264,8 @@ Prepared Object Set              Verified ciphertext cache
 **Scope:** Medium; split preparation from executor integration.
 
 ### Task 16: Add authoritative provider-checksum capability
+
+**Status:** Complete (`54c5490`).
 
 **Acceptance criteria:**
 - Capability probe distinguishes proven full-object SHA-256 from fallback.
@@ -275,6 +279,8 @@ Prepared Object Set              Verified ciphertext cache
 
 ### Task 17: Use provider integrity mode in parallel publish
 
+**Status:** Complete (`07f87a5`).
+
 **Acceptance criteria:**
 - Proven checksum avoids Payload full readback.
 - Fallback preserves current streaming full SHA-256 readback and atomic publish barrier.
@@ -287,8 +293,8 @@ Prepared Object Set              Verified ciphertext cache
 
 ### Checkpoint E
 
-- No object-set double compression.
-- Provider checksum and fallback contracts green without wire-format changes.
+- [x] No object-set double compression.
+- [x] Provider checksum and fallback contracts green without wire-format changes.
 
 ## Phase 6 — Gate F: DR readiness
 

@@ -43,10 +43,10 @@
 
 ## Gate E — Cost and integrity
 
-- [ ] Introduce Prepared Object Sets and remove object-set double compression
-- [ ] Probe authoritative provider full-object SHA-256
-- [ ] Avoid readback only when strong checksum is proven
-- [ ] Checkpoint E: fallback and multipart-ETag rejection tests green
+- [x] Introduce Prepared Object Sets and remove object-set double compression
+- [x] Probe authoritative provider full-object SHA-256
+- [x] Avoid readback only when strong checksum is proven
+- [x] Checkpoint E: fallback and multipart-ETag rejection tests green
 
 ## Gate F — DR readiness
 

@@ -9,6 +9,8 @@
 
 > 4.5.0 正按已批准的 Gate A-G 规格开发。此页面仍以已落地代码和测试为准；未完成的 Recovery Orchestration / DR Readiness 能力不会提前标记为 GA。
 
+> Gate E 已落地备份成本与提供商完整性边界：`object-set-v1` 的增量构建先生成最终 `PreparedObjectSet`，用精确 Component 明文字节冻结 Adaptive Full 决策，再将同一批 ZIP 直接送入 Age；越界、失败、取消和重试会 scrub 明文。S3 能力只有在单段与 multipart canary 都返回 `FULL_OBJECT` SHA-256 且精确匹配时才升级为 `strong-provider-checksum`；ETag、用户 metadata、缺失/错误/`COMPOSITE` claim 均保持 `full-readback`。并行发布仅对 Payload 省略完整 GET，Control 仍完整读回，且任何强 claim 漂移都会在 commit marker 前失败。
+
 > 4.4.13 freezes remote restores into Contributor/Project projections whose `selectionDigest` is durable across retries. The metadata plane applies the full F0→I1→…→In logical chain and verifies every Merkle root; only payload materialization is projected. Cross-file `parent-range` dependencies enter a read-only Support set that is materialized in scratch space but never written to the final tree, and unselected contributors are never mutated. Selective extraction touches only required Full entries, Packs and standalone blobs; unused packs are verified lazily. Remote ancestor holds are released at terminal states and retained during `recovery-required`. A real HTTP MinIO production Backup → Age → S3 → Receipt → Restore → Federated-commit gate uses the real Rust Age helper.
 
 README 把 DeepSeek Infra 描述成一个 local-first agentic AI infrastructure platform。这一页回答一个更重要的问题：**每个模块到底落地到什么程度**——代码在哪、测试在哪、怎么亲手验证。所有链接都指向仓库内真实存在的文件；如果某格是 🟡 或 ❌，说明那部分还没做完，我们直接写出来，而不是让 README 替它画饼。
