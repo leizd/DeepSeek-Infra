@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_object_set, backup_scheduler, backup_spool, backup_targets, backup_unattended, backups
+from deepseek_infra.infra.workspace import backup_component_transport, backup_object_set, backup_scheduler, backup_spool, backup_targets, backup_unattended, backups
 from deepseek_infra.infra.workspace.backup_target_store import (
     BackupTargetStore,
     commit_marker_key,
@@ -563,7 +563,8 @@ def _publish_object_set_filesystem(
     }
     try:
         _write_journal(root, journal)
-        for component in package.components:
+
+        def _publish_component(component: backup_object_set.EncryptedComponent) -> None:
             if (
                 not component.path.is_file()
                 or component.path.stat().st_size != component.ciphertext_size
@@ -588,6 +589,20 @@ def _publish_object_set_filesystem(
                 _fsync_dir(destination.parent)
             elif backup_unattended.sha256_file(destination, checkpoint=checkpoint) != component.ciphertext_digest:
                 raise AppError("Content-addressed component on target fails its digest", code=ErrorCode.INTERNAL, status=500)
+
+        upload_tasks = [
+            backup_component_transport.TransferTask(
+                component_id=component.component_id,
+                ciphertext_digest=component.ciphertext_digest,
+                ciphertext_size=component.ciphertext_size,
+                execute=(lambda c=component: _publish_component(c)),
+            )
+            for component in package.components
+        ]
+        backup_component_transport.default_scheduler().run(upload_tasks)
+        # Barrier: the journal advances only after every component is verified
+        # and in place. A crash mid-transfer leaves the journal at "started";
+        # restart re-verifies completed components via the destination branch.
         journal.update(phase="objects-published", updatedAt=_utc_iso())
         _write_journal(root, journal)
 
