@@ -57,6 +57,14 @@
 
 ## Gate G — Evidence and release
 
+Local checkpoint (2026-08-13; not release Evidence): full Python coverage
+passed at 95.02%; frontend check passed 607 tests plus build/bundle gates;
+ruff, mypy, vendor JavaScript syntax, strict offline eval/baseline/security,
+dependency audit, Bandit, and baseline-aware secret scanning passed. Release
+version surfaces agree on 4.5.0. Preflight remains intentionally red with 24
+required Evidence failures and 5 optional warnings, so no item below is promoted
+from local results.
+
 - [ ] Real MinIO + real Age cold selective recovery
 - [ ] Real MinIO warm-cache recovery with zero Payload GET
 - [ ] Real subprocess per-Component and pause/resume recovery
