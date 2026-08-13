@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from deepseek_infra.infra.workspace import backup_projection, backup_verified_plan
 
@@ -128,3 +131,65 @@ def test_verified_plan_supports_full_restore_without_projection(tmp_path: Path) 
 
     assert path.is_file()
     assert loaded == (None, {"requiredComponents": 1})
+
+
+def _rewrite_body(path: Path, mutate: object) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert callable(mutate)
+    mutate(payload["body"])
+    payload["bodySha256"] = hashlib.sha256(backup_verified_plan._stable_json(payload["body"])).hexdigest()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_verified_plan_rejects_malformed_projection_collections(tmp_path: Path) -> None:
+    mutations = (
+        lambda body: body.__setitem__("projection", "bad"),
+        lambda body: body["projection"].__setitem__("selection", None),
+        lambda body: body["projection"].__setitem__("outputFiles", "bad"),
+        lambda body: body["projection"].__setitem__("supportFiles", [1]),
+        lambda body: body["projection"].__setitem__("neededAfterLayer", "bad"),
+        lambda body: body["projection"].__setitem__("producedByLayer", [[1]]),
+        lambda body: body.__setitem__("report", "bad"),
+        lambda body: body.__setitem__("plannerSchemaVersion", 999),
+    )
+    for index, mutation in enumerate(mutations):
+        case = tmp_path / str(index)
+        session = _session(case)
+        path = backup_verified_plan.write_verified_plan(case, session, _projection(), _projection().report)
+        _rewrite_body(path, mutation)
+        assert backup_verified_plan.load_verified_plan(case, session) is None
+
+
+def test_verified_plan_metadata_digest_and_bindings_handle_missing_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert backup_verified_plan._metadata_digest(tmp_path / "missing") == ""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert backup_verified_plan._metadata_digest(empty) == ""
+    assert backup_verified_plan._chain({"chain": "bad"}) == []
+
+    session = _session(tmp_path / "binding")
+    chain = session["chain"]
+    assert isinstance(chain, list) and isinstance(chain[0], dict)
+    chain[0].pop("controlObjectDigest")
+    chain[0]["requiredComponents"].extend([None, {"priority": "urgent"}])
+    bindings = backup_verified_plan._bindings(tmp_path / "binding", session)
+    assert bindings["controlDigests"] == ["c" * 64]
+    assert bindings["requiredComponents"][-1]["priority"] == 2
+
+    manifest = tmp_path / "binding" / "metadata-0" / "manifest.json"
+    real_open = Path.open
+
+    def fail_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path == manifest:
+            raise OSError("unreadable")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_open)
+    assert backup_verified_plan._metadata_digest(manifest.parent) == ""
+
+
+def test_verified_plan_load_handles_missing_and_non_object_payload(tmp_path: Path) -> None:
+    session = _session(tmp_path)
+    assert backup_verified_plan.load_verified_plan(tmp_path, session) is None
+    (tmp_path / backup_verified_plan.PLAN_NAME).write_text("[]", encoding="utf-8")
+    assert backup_verified_plan.load_verified_plan(tmp_path, session) is None

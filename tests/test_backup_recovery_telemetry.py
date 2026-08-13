@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from deepseek_infra.infra.observability import metrics as observability_metrics
 from deepseek_infra.infra.workspace import backup_recovery_telemetry, backup_remote_restore, backups
 from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore, object_key
@@ -250,3 +252,79 @@ def test_remote_download_telemetry_counts_only_new_bytes_after_resume(tmp_settin
         "components": 1,
         "observedAt": telemetry["samples"][-1]["observedAt"],
     }
+
+
+def test_telemetry_sanitizers_reject_unbounded_and_invalid_values() -> None:
+    assert backup_recovery_telemetry._nonnegative(True) == 0
+    assert backup_recovery_telemetry._phase("attacker") == "unknown"
+    assert backup_recovery_telemetry._stage("attacker") is None
+    assert backup_recovery_telemetry._result("attacker") is None
+    assert backup_recovery_telemetry._timestamp("not-a-time") is None
+    assert backup_recovery_telemetry._timestamp("2026-08-13T00:00:00") is None
+    assert backup_recovery_telemetry._timestamp(None) is None
+    assert backup_recovery_telemetry._component_keys({}, "verified") == frozenset()
+    assert backup_recovery_telemetry._sanitize_sample("bad") is None
+    assert backup_recovery_telemetry._sanitize_sample({"stage": "bad", "result": "success"}) is None
+    sanitized = backup_recovery_telemetry._sanitize_sample(
+        {"sequence": 0, "stage": "transfer", "result": "success", "durationMs": -1, "observedAt": "bad"}
+    )
+    assert sanitized == {"sequence": 1, "stage": "transfer", "result": "success", "durationMs": 0, "bytes": 0, "components": 0}
+    with pytest.raises(ValueError, match="invalid recovery telemetry counter"):
+        backup_recovery_telemetry.increment_counter({}, "secret")
+    with pytest.raises(ValueError, match="non-negative"):
+        backup_recovery_telemetry.increment_counter({}, "cacheHit", -1)
+    with pytest.raises(ValueError, match="invalid recovery telemetry stage"):
+        backup_recovery_telemetry.record_stage({}, stage="bad", result="success", duration_ms=1)
+
+
+def test_telemetry_derives_failed_pause_and_abort_outcomes() -> None:
+    existing: dict[str, Any] = {
+        "phase": "fetching",
+        "componentStates": {"a": {"state": "downloading"}},
+        "recoveryTelemetry": {"currentPhase": "fetching", "counters": {}, "samples": []},
+    }
+    paused = json.loads(json.dumps(existing))
+    paused["phase"] = "paused"
+    paused["componentStates"] = {"a": {"state": "failed"}, "bad": "ignored"}
+    backup_recovery_telemetry.update_for_persist(existing, paused)
+    assert paused["recoveryTelemetry"]["counters"] == {"componentsFailed": 1, "pauseOutcome": 1}
+
+    rolled_back = json.loads(json.dumps(paused))
+    rolled_back["phase"] = "rolled-back"
+    backup_recovery_telemetry.update_for_persist(paused, rolled_back)
+    assert rolled_back["recoveryTelemetry"]["counters"]["abortOutcome"] == 1
+
+
+def test_metrics_snapshot_ignores_bad_files_and_zero_work(tmp_path: Path) -> None:
+    assert backup_recovery_telemetry.metrics_snapshot(tmp_path / "missing") == {
+        "jobsByPhase": {},
+        "counters": {},
+        "stageDuration": {},
+        "stageThroughput": {},
+    }
+    for index, raw in enumerate(("not-json", "[]")):
+        root = tmp_path / str(index)
+        root.mkdir()
+        (root / "remote-fetch.json").write_text(raw, encoding="utf-8")
+    valid = tmp_path / "valid"
+    valid.mkdir()
+    (valid / "remote-fetch.json").write_text(
+        json.dumps(
+            {
+                "phase": "complete",
+                "recoveryTelemetry": {
+                    "counters": {"cacheHit": 1},
+                    "samples": [
+                        {"sequence": 1, "stage": "crypto", "result": "failed", "durationMs": 1, "bytes": 10},
+                        {"sequence": 2, "stage": "crypto", "result": "success", "durationMs": 0, "bytes": 10},
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    snapshot = backup_recovery_telemetry.metrics_snapshot(tmp_path)
+    assert snapshot["jobsByPhase"] == {"complete": 1}
+    assert snapshot["counters"] == {"cacheHit": 1}
+    assert snapshot["stageDuration"]["crypto"]["count"] == 1
+    assert snapshot["stageThroughput"] == {}

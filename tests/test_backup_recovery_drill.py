@@ -222,3 +222,135 @@ def test_recovery_drill_routes_are_authenticated_and_server_owned(tmp_settings: 
     assert calls == ["restore_drillroute"]
     assert invalid.status_code == 400
     assert auth.call_count == 3
+
+
+def test_recovery_drill_metadata_and_phase_guards_fail_closed(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for invalid in ("bad", "restore_bad-id", "../restore_escape"):
+        with pytest.raises(AppError, match="Invalid restore id"):
+            backup_recovery_drill.get_recovery_drill(invalid)
+    with pytest.raises(AppError) as missing:
+        backup_recovery_drill.get_recovery_drill("restore_missing")
+    assert missing.value.status == 404
+
+    restore_id = "restore_guarded"
+    session = _write_session(restore_id, phase="prepared")
+    root = backups.RESTORE_DIR / restore_id
+    backup_crypto.put_secret(restore_id, "passphrase", "secret")
+    with pytest.raises(AppError, match="pre-commit") as disallowed:
+        backup_recovery_drill.run_recovery_drill(restore_id)
+    assert disallowed.value.status == 409
+
+    session["phase"] = "controls-fetched"
+    backup_remote_restore._atomic_write_json(root / "remote-fetch.json", session)
+    backup_crypto.clear_secret(restore_id)
+    with pytest.raises(AppError, match="unlock secret"):
+        backup_recovery_drill.run_recovery_drill(restore_id)
+
+    (root / backup_recovery_drill.RESULT_NAME).write_text("[]", encoding="utf-8")
+    with pytest.raises(AppError, match="metadata"):
+        backup_recovery_drill.get_recovery_drill(restore_id)
+    (root / backup_recovery_drill.RESULT_NAME).write_text("not-json", encoding="utf-8")
+    with pytest.raises(AppError, match="metadata"):
+        backup_recovery_drill.get_recovery_drill(restore_id)
+
+
+def test_recovery_drill_work_and_projected_inspection_are_bounded(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    restore_id = "restore_projected"
+    _write_session(restore_id)
+    root = backups.RESTORE_DIR / restore_id
+    tree = root / "extracted"
+    tree.mkdir()
+    session = {
+        "chain": [
+            {"expectedBytes": 5, "requiredComponents": [None, {"expectedBytes": -1}, {"expectedBytes": 7}]},
+            "bad",
+        ]
+    }
+    monkeypatch.setattr(backup_remote_restore, "restore_members", lambda _session: session["chain"][:1])
+    work = backup_recovery_drill._work(
+        session,
+        {"manifest": {"files": [None, {"size": -1}, {"size": 9}], "contributors": [None, {"id": "projects"}]}},
+        {"operations": []},
+    )
+    assert work == {"chainLength": 1, "components": 3, "ciphertextBytes": 12, "logicalBytes": 9, "verifiedContributors": 1}
+
+    inspected: list[str] = []
+
+    def inspect_projected(value: str, *_args: Any, **_kwargs: Any) -> dict[str, bool]:
+        inspected.append(value)
+        return {"compatible": True}
+
+    monkeypatch.setattr(
+        backups,
+        "inspect_projected_restore_tree",
+        inspect_projected,
+    )
+    assert backup_recovery_drill._inspect_materialized(
+        restore_id,
+        {"tree": str(tree), "manifest": {}, "projection": {}},
+        kind="identity",
+    ) == {"compatible": True}
+    assert inspected == [restore_id]
+    with pytest.raises(AppError, match="outside"):
+        backup_recovery_drill._inspect_materialized(
+            restore_id,
+            {"tree": str(root.parent), "manifest": {}},
+            kind="passphrase",
+        )
+
+
+def test_recovery_drill_rejects_unverified_fetch_and_incompatible_tree(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for suffix, fetch_phase, compatible in (("fetch", "fetching", True), ("compat", "components-fetched", False)):
+        restore_id = f"restore_{suffix}failure"
+        _write_session(restore_id)
+        root = backups.RESTORE_DIR / restore_id
+        tree = root / "extracted"
+        backup_crypto.put_secret(restore_id, "passphrase", "secret")
+        monkeypatch.setattr(backup_remote_restore, "preflight_restore_session", lambda *_args, **_kwargs: {"ready": True})
+        monkeypatch.setattr(
+            backup_remote_restore,
+            "fetch_restore_session",
+            lambda *_args, phase=fetch_phase, **_kwargs: {"phase": phase},
+        )
+        monkeypatch.setattr(
+            backup_remote_restore,
+            "materialize_restore_session",
+            lambda *_args, **_kwargs: _materialized_tree(tree),
+        )
+        monkeypatch.setattr(backups, "inspect_verified_restore_tree", lambda *_args, value=compatible, **_kwargs: {"compatible": value})
+        monkeypatch.setattr(backup_remote_restore, "_release_session_holds", lambda _session: None)
+        with pytest.raises(AppError, match="Recovery Drill failed"):
+            backup_recovery_drill.run_recovery_drill(restore_id)
+        result = backup_recovery_drill.get_recovery_drill(restore_id)
+        assert result["result"] == "failed"
+        assert result["failureCode"] == "drill-validation-failed"
+
+
+def test_recovery_drill_cleanup_failure_overrides_success(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    restore_id = "restore_cleanupfailure"
+    _write_session(restore_id)
+    root = backups.RESTORE_DIR / restore_id
+    tree = root / "extracted"
+    backup_crypto.put_secret(restore_id, "passphrase", "secret")
+    monkeypatch.setattr(backup_remote_restore, "preflight_restore_session", lambda *_args, **_kwargs: {"ready": True})
+    monkeypatch.setattr(backup_remote_restore, "fetch_restore_session", lambda *_args, **_kwargs: {"phase": "components-fetched"})
+
+    def materialize(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        tree.mkdir()
+        (tree / "plain.txt").write_text("plain", encoding="utf-8")
+        return {"tree": str(tree), "manifest": {}}
+
+    monkeypatch.setattr(backup_remote_restore, "materialize_restore_session", materialize)
+    monkeypatch.setattr(backups, "inspect_verified_restore_tree", lambda *_args, **_kwargs: {"compatible": True})
+    monkeypatch.setattr(backup_recovery_drill, "_scrub_plaintext", lambda _root: (_ for _ in ()).throw(OSError("locked")))
+    monkeypatch.setattr(backup_remote_restore, "_release_session_holds", lambda _session: (_ for _ in ()).throw(RuntimeError("offline")))
+    with pytest.raises(AppError, match="Recovery Drill failed"):
+        backup_recovery_drill.run_recovery_drill(restore_id)
+    result = backup_recovery_drill.get_recovery_drill(restore_id)
+    assert result["failureCode"] == "drill-cleanup-failed"
+    assert backup_recovery_drill._plaintext_remains(root) is True
+
+
+def _materialized_tree(tree: Path) -> dict[str, Any]:
+    tree.mkdir(exist_ok=True)
+    return {"tree": str(tree), "manifest": {}}
