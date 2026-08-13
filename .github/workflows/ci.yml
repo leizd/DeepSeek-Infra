@@ -226,9 +226,9 @@ jobs:
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
       MINIO_ROOT_USER: deepseekci
-      MINIO_ROOT_PASSWORD: ci-packed-delta-${{ github.run_id }}
+      MINIO_ROOT_PASSWORD: ci-packed-delta-${{ github.run_id }} # pragma: allowlist secret
       AWS_ACCESS_KEY_ID: deepseekci
-      AWS_SECRET_ACCESS_KEY: ci-packed-delta-${{ github.run_id }}
+      AWS_SECRET_ACCESS_KEY: ci-packed-delta-${{ github.run_id }} # pragma: allowlist secret
       DEEPSEEK_TEST_S3_ENDPOINT: http://127.0.0.1:9000
       DEEPSEEK_TEST_S3_BUCKET: deepseek-packed-e2e
     steps:
@@ -302,9 +302,9 @@ jobs:
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
       MINIO_ROOT_USER: deepseekci
-      MINIO_ROOT_PASSWORD: ci-object-set-${{ github.run_id }}
+      MINIO_ROOT_PASSWORD: ci-object-set-${{ github.run_id }} # pragma: allowlist secret
       AWS_ACCESS_KEY_ID: deepseekci
-      AWS_SECRET_ACCESS_KEY: ci-object-set-${{ github.run_id }}
+      AWS_SECRET_ACCESS_KEY: ci-object-set-${{ github.run_id }} # pragma: allowlist secret
       DEEPSEEK_TEST_S3_ENDPOINT: http://127.0.0.1:9000
       DEEPSEEK_TEST_S3_BUCKET: deepseek-object-set-e2e
     steps:

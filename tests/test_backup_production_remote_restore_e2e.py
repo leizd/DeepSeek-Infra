@@ -264,7 +264,7 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
             {
                 "action": "resume-and-prepare",
                 "restoreId": restore_id,
-                "secretKind": "age-identity",
+                "secretKind": "age-identity",  # pragma: allowlist secret
                 "secret": identity_text,
                 "auditObjectGets": True,
             },
@@ -321,7 +321,7 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
                 {
                     "action": "resume-and-prepare",
                     "restoreId": next_restore_id,
-                    "secretKind": "age-identity",
+                    "secretKind": "age-identity",  # pragma: allowlist secret
                     "secret": identity_text,
                     "auditObjectGets": True,
                 },

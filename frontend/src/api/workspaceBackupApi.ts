@@ -8,7 +8,7 @@ export type BackupProtection =
   | { mode: "age-recipient"; recipients: string[] };
 export type CoveragePolicy = "strict" | "best-effort";
 export type RestoreMode = "merge" | "project-copy" | "replace-empty";
-export type RestoreSecretState = "not-required" | "available" | "expired" | "required-for-safety-backup";
+export type RestoreSecretState = "not-required" | "available" | "expired" | "required-for-safety-backup"; // pragma: allowlist secret
 export type RecoveryJobPhase =
   | "created"
   | "preflighted"

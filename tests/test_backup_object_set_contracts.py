@@ -3201,7 +3201,7 @@ def test_object_set_restore_resumes_across_real_process_exits(tmp_settings: Path
         {
             "action": "plan-and-partial-component",
             "restoreId": restore_id,
-            "secretKind": "age-identity",
+            "secretKind": "age-identity",  # pragma: allowlist secret
             "secret": recovery_identity,
         },
     )
@@ -3216,7 +3216,7 @@ def test_object_set_restore_resumes_across_real_process_exits(tmp_settings: Path
         {
             "action": "resume-and-prepare",
             "restoreId": restore_id,
-            "secretKind": "age-identity",
+            "secretKind": "age-identity",  # pragma: allowlist secret
             "secret": recovery_identity,
         },
     )
