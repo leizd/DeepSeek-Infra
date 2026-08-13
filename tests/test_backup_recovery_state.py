@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from deepseek_infra.infra.workspace import backup_recovery_state
@@ -16,10 +17,11 @@ def _component(tmp_path: Path, digest: str, *, size: int = 10, etag: str = "etag
 
 
 def test_legacy_fetch_index_migrates_to_digest_keyed_states(tmp_path: Path) -> None:
-    first = "a" * 64
+    first_bytes = b"x" * 10
+    first = hashlib.sha256(first_bytes).hexdigest()
     second = "b" * 64
     first_component = _component(tmp_path, first)
-    Path(str(first_component["ciphertextPath"])).write_bytes(b"x" * 10)
+    Path(str(first_component["ciphertextPath"])).write_bytes(first_bytes)
     session: dict[str, object] = {
         "componentFetchIndex": 1,
         "chain": [{"requiredComponents": [first_component, _component(tmp_path, second)]}],
@@ -100,3 +102,51 @@ def test_invalid_partial_is_scrubbed_when_length_or_source_changes(tmp_path: Pat
         assert states[digest]["state"] == "queued"
         assert states[digest]["downloadedBytes"] == 0
         assert not path.exists()
+
+
+def test_same_length_tampering_invalidates_verified_state(tmp_path: Path) -> None:
+    good = b"verified!"
+    digest = hashlib.sha256(good).hexdigest()
+    component = _component(tmp_path, digest, size=len(good))
+    path = Path(str(component["ciphertextPath"]))
+    path.write_bytes(b"tampered!")
+    session: dict[str, object] = {
+        "componentStates": {
+            digest: {
+                "state": "verified",
+                "downloadedBytes": len(good),
+                "expectedBytes": len(good),
+                "remoteETag": "etag",
+                "remoteVersionId": None,
+            }
+        },
+        "chain": [{"requiredComponents": [component]}],
+    }
+
+    states = backup_recovery_state.ensure_component_states(session)
+
+    assert states[digest]["state"] == "queued"
+    assert not path.exists()
+
+
+def test_fsynced_full_download_promotes_to_verified_after_restart(tmp_path: Path) -> None:
+    data = b"download-complete"
+    digest = hashlib.sha256(data).hexdigest()
+    component = _component(tmp_path, digest, size=len(data))
+    Path(str(component["ciphertextPath"])).write_bytes(data)
+    session: dict[str, object] = {
+        "componentStates": {
+            digest: {
+                "state": "downloading",
+                "downloadedBytes": len(data),
+                "expectedBytes": len(data),
+                "remoteETag": "etag",
+                "remoteVersionId": None,
+            }
+        },
+        "chain": [{"requiredComponents": [component]}],
+    }
+
+    states = backup_recovery_state.ensure_component_states(session)
+
+    assert states[digest]["state"] == "verified"

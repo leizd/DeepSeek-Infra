@@ -12,7 +12,9 @@ import hashlib
 import json
 import os
 import shutil
+import threading
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -20,6 +22,7 @@ from typing import Any, Literal
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_catalog,
+    backup_component_transport,
     backup_crypto,
     backup_incremental,
     backup_incremental_restore,
@@ -513,7 +516,13 @@ def create_restore_from_target(
     }
 
 
-def _download_member(store: Any, member: dict[str, Any], max_bytes: int | None) -> bool:
+def _download_member(
+    store: Any,
+    member: dict[str, Any],
+    max_bytes: int | None,
+    *,
+    progress: Callable[[int], None] | None = None,
+) -> bool:
     """Resume-download one chain member; returns True when fully fetched."""
     digest = str(member["objectDigest"])
     ciphertext_path = Path(str(member["ciphertextPath"]))
@@ -549,6 +558,10 @@ def _download_member(store: Any, member: dict[str, Any], max_bytes: int | None) 
             hasher.update(piece)
             position += len(piece)
             consumed += len(piece)
+            if progress is not None:
+                handle.flush()
+                os.fsync(handle.fileno())
+                progress(position)
         handle.flush()
         os.fsync(handle.fileno())
     downloaded = ciphertext_path.stat().st_size if ciphertext_path.is_file() else 0
@@ -630,13 +643,9 @@ def _fetch_object_set_components(
     session["chain"] = chain
     session["updatedAt"] = _utc_iso()
     _atomic_write_json(_session_path(restore_id), session)
-    for component in pending:
+
+    def _validate_source(component: dict[str, Any]) -> Any:
         digest = str(component.get("objectDigest") or "")
-        state = states[digest]
-        component["downloadedBytes"] = int(state.get("downloadedBytes") or 0)
-        component["fetched"] = str(state.get("state") or "") == "verified"
-        if component["fetched"]:
-            continue
         meta = store.stat(object_key(digest))
         if meta is None or meta.size != int(component.get("expectedBytes") or -1):
             raise AppError("Required object-set component is missing", code=ErrorCode.NOT_FOUND, status=404)
@@ -646,39 +655,141 @@ def _fetch_object_set_components(
         expected_version = component.get("remoteVersionId")
         if expected_version and meta.version_id and meta.version_id != expected_version:
             raise AppError("remote payload component version changed since restore session started", code=ErrorCode.INVALID_REQUEST, status=409)
-        if not expected_etag:
-            component["remoteETag"] = meta.etag
-        if not expected_version:
-            component["remoteVersionId"] = meta.version_id
-        backup_recovery_state.update_component_state(
-            session,
-            component,
-            state="downloading",
-            downloaded_bytes=int(component.get("downloadedBytes") or 0),
-        )
-        session["updatedAt"] = _utc_iso()
-        _atomic_write_json(_session_path(restore_id), session)
-        done = _download_member(store, component, max_bytes)
-        downloaded = int(component.get("downloadedBytes") or 0)
-        backup_recovery_state.update_component_state(
-            session,
-            component,
-            state="verified" if done else "partial",
-            downloaded_bytes=downloaded,
-        )
-        session["chain"] = chain
-        session["updatedAt"] = _utc_iso()
-        _atomic_write_json(_session_path(restore_id), session)
-        if not done:
-            session["phase"] = "fetching-selected-components"
+        return meta
+
+    for component in pending:
+        digest = str(component.get("objectDigest") or "")
+        state = states[digest]
+        component["downloadedBytes"] = int(state.get("downloadedBytes") or 0)
+        component["fetched"] = str(state.get("state") or "") == "verified"
+
+    if max_bytes is not None:
+        for component in pending:
+            if component["fetched"]:
+                continue
+            meta = _validate_source(component)
+            expected_etag = str(component.get("remoteETag") or "")
+            expected_version = component.get("remoteVersionId")
+            if not expected_etag:
+                component["remoteETag"] = meta.etag
+            if not expected_version:
+                component["remoteVersionId"] = meta.version_id
+            backup_recovery_state.update_component_state(
+                session,
+                component,
+                state="downloading",
+                downloaded_bytes=int(component.get("downloadedBytes") or 0),
+            )
+            session["updatedAt"] = _utc_iso()
             _atomic_write_json(_session_path(restore_id), session)
-            return {
-                "restoreId": restore_id,
-                "phase": "fetching-selected-components",
-                "downloadedBytes": int(component.get("downloadedBytes") or 0),
-                "expectedBytes": int(component.get("expectedBytes") or 0),
-                "requiredComponents": len(pending),
-            }
+            done = _download_member(store, component, max_bytes)
+            downloaded = int(component.get("downloadedBytes") or 0)
+            backup_recovery_state.update_component_state(
+                session,
+                component,
+                state="verified" if done else "partial",
+                downloaded_bytes=downloaded,
+            )
+            session["chain"] = chain
+            session["updatedAt"] = _utc_iso()
+            _atomic_write_json(_session_path(restore_id), session)
+            if not done:
+                session["phase"] = "fetching-selected-components"
+                _atomic_write_json(_session_path(restore_id), session)
+                return {
+                    "restoreId": restore_id,
+                    "phase": "fetching-selected-components",
+                    "downloadedBytes": int(component.get("downloadedBytes") or 0),
+                    "expectedBytes": int(component.get("expectedBytes") or 0),
+                    "requiredComponents": len(pending),
+                }
+    else:
+        state_lock = threading.Lock()
+
+        def _make_download_task(component: dict[str, Any]) -> backup_component_transport.TransferTask:
+            digest = str(component.get("objectDigest") or "")
+            state = states[digest]
+
+            def _execute() -> None:
+                meta = _validate_source(component)
+                working = dict(component)
+                if not str(working.get("remoteETag") or ""):
+                    working["remoteETag"] = meta.etag
+                if not working.get("remoteVersionId"):
+                    working["remoteVersionId"] = meta.version_id
+                with state_lock:
+                    component["remoteETag"] = working.get("remoteETag")
+                    component["remoteVersionId"] = working.get("remoteVersionId")
+                    backup_recovery_state.update_component_state(
+                        session,
+                        component,
+                        state="downloading",
+                        downloaded_bytes=int(component.get("downloadedBytes") or 0),
+                    )
+                    session["updatedAt"] = _utc_iso()
+                    _atomic_write_json(_session_path(restore_id), session)
+                def _checkpoint(downloaded: int) -> None:
+                    with state_lock:
+                        component["downloadedBytes"] = downloaded
+                        backup_recovery_state.update_component_state(
+                            session,
+                            component,
+                            state="partial" if downloaded < int(component.get("expectedBytes") or 0) else "downloading",
+                            downloaded_bytes=downloaded,
+                        )
+                        session["updatedAt"] = _utc_iso()
+                        _atomic_write_json(_session_path(restore_id), session)
+
+                try:
+                    done = _download_member(store, working, None, progress=_checkpoint)
+                    if not done:
+                        raise AppError("Required object-set component download was truncated", code=ErrorCode.INTERNAL, status=500)
+                except BaseException:
+                    partial_path = Path(str(working.get("ciphertextPath") or ""))
+                    downloaded = partial_path.stat().st_size if partial_path.is_file() else 0
+                    with state_lock:
+                        component["downloadedBytes"] = downloaded
+                        backup_recovery_state.update_component_state(
+                            session,
+                            component,
+                            state="failed",
+                            downloaded_bytes=downloaded,
+                        )
+                        session["updatedAt"] = _utc_iso()
+                        _atomic_write_json(_session_path(restore_id), session)
+                    raise
+                with state_lock:
+                    component["downloadedBytes"] = int(working.get("downloadedBytes") or 0)
+                    component["fetched"] = done
+                    backup_recovery_state.update_component_state(
+                        session,
+                        component,
+                        state="verified" if done else "partial",
+                        downloaded_bytes=int(component["downloadedBytes"]),
+                    )
+                    session["chain"] = chain
+                    session["updatedAt"] = _utc_iso()
+                    _atomic_write_json(_session_path(restore_id), session)
+
+            priority = state.get("priority")
+            return backup_component_transport.TransferTask(
+                component_id=str(component.get("componentId") or digest),
+                ciphertext_digest=digest,
+                ciphertext_size=int(component.get("expectedBytes") or 0),
+                execute=_execute,
+                open_files=1,
+                priority=int(priority) if isinstance(priority, int) else 2,
+            )
+
+        tasks = [_make_download_task(component) for component in pending if not component["fetched"]]
+        try:
+            telemetry = backup_component_transport.default_scheduler().run(tasks)
+        except BaseException:
+            session["phase"] = "fetching-selected-components"
+            session["updatedAt"] = _utc_iso()
+            _atomic_write_json(_session_path(restore_id), session)
+            raise
+        session["componentTransfer"] = telemetry.as_dict()
     session["phase"] = "components-fetched"
     control_bytes = sum(int(member["control"].get("downloadedBytes") or 0) for member in chain)
     component_bytes = sum(int(item.get("downloadedBytes") or 0) for item in pending)

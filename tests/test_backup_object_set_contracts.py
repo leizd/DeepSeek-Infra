@@ -1622,6 +1622,148 @@ def test_object_set_fetch_fails_closed_and_resumes_partial_members(tmp_settings:
         backup_remote_restore._download_member(wrong_store, wrong_member, None)
 
 
+def test_required_object_set_component_downloads_overlap_and_verify(tmp_settings: Path) -> None:
+    class OverlapStore(backup_target_store.MemoryTargetStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.lock = threading.Lock()
+            self.ready = threading.Event()
+            self.active = 0
+            self.max_active = 0
+
+        def get_stream(self, key: str, *, offset: int = 0):
+            pieces = super().get_stream(key, offset=offset)
+
+            def observed():
+                with self.lock:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                    if self.active >= 2:
+                        self.ready.set()
+                try:
+                    self.ready.wait(timeout=2)
+                    time.sleep(0.02)
+                    yield from pieces
+                finally:
+                    with self.lock:
+                        self.active -= 1
+
+            return observed()
+
+    store = OverlapStore()
+    components: list[dict[str, object]] = []
+    expected_data: dict[str, bytes] = {}
+    for index in range(4):
+        data = (f"encrypted-component-{index}" * 512).encode()
+        digest = hashlib.sha256(data).hexdigest()
+        store.put_if_absent(backup_target_store.object_key(digest), data, checksum_sha256=digest)
+        expected_data[digest] = data
+        components.append(
+            {
+                "backupId": "backup-parallel-fetch",
+                "componentId": f"p{index:04d}",
+                "objectDigest": digest,
+                "expectedBytes": len(data),
+                "downloadedBytes": 0,
+                "remoteETag": None,
+                "remoteVersionId": None,
+                "ciphertextPath": str(tmp_settings / f"parallel-{index}.age"),
+                "fetched": False,
+                "priority": 2,
+            }
+        )
+    session: dict[str, object] = {
+        "restoreId": "restore-parallel-components",
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "chain": [{"control": {"downloadedBytes": 0}, "requiredComponents": components}],
+    }
+
+    result = backup_remote_restore._fetch_object_set_components(session, store, max_bytes=None)
+
+    assert result["phase"] == "components-fetched"
+    assert store.max_active >= 2
+    states = session["componentStates"]
+    assert isinstance(states, dict)
+    assert {state["state"] for state in states.values()} == {"verified"}
+    for component in components:
+        digest = str(component["objectDigest"])
+        assert Path(str(component["ciphertextPath"])).read_bytes() == expected_data[digest]
+
+
+def test_parallel_component_failure_drains_and_checkpoints_completed_peers(tmp_settings: Path) -> None:
+    store = backup_target_store.MemoryTargetStore()
+    components: list[dict[str, object]] = []
+    corrupt_digest = "0" * 64
+    for index in range(3):
+        data = (f"parallel-drain-{index}" * 1024).encode()
+        digest = corrupt_digest if index == 1 else hashlib.sha256(data).hexdigest()
+        store.put_if_absent(backup_target_store.object_key(digest), data)
+        components.append(
+            {
+                "backupId": "backup-parallel-drain",
+                "componentId": f"p{index:04d}",
+                "objectDigest": digest,
+                "expectedBytes": len(data),
+                "downloadedBytes": 0,
+                "remoteETag": None,
+                "remoteVersionId": None,
+                "ciphertextPath": str(tmp_settings / f"drain-{index}.age"),
+                "fetched": False,
+            }
+        )
+    session: dict[str, object] = {
+        "restoreId": "restore-parallel-drain",
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "chain": [{"control": {"downloadedBytes": 0}, "requiredComponents": components}],
+    }
+
+    with pytest.raises(AppError, match="digest mismatch"):
+        backup_remote_restore._fetch_object_set_components(session, store, max_bytes=None)
+
+    assert session["phase"] == "fetching-selected-components"
+    states = session["componentStates"]
+    assert isinstance(states, dict)
+    assert states[corrupt_digest]["state"] == "failed"
+    good_states = [state for digest, state in states.items() if digest != corrupt_digest]
+    assert all(state["state"] == "verified" for state in good_states)
+
+
+def test_parallel_component_short_read_fails_instead_of_crossing_barrier(tmp_settings: Path) -> None:
+    class ShortReadStore(backup_target_store.MemoryTargetStore):
+        def get_stream(self, key: str, *, offset: int = 0):
+            data = b"".join(super().get_stream(key, offset=offset))
+            return iter((data[: len(data) // 2],))
+
+    store = ShortReadStore()
+    data = b"short-read-component" * 1024
+    digest = hashlib.sha256(data).hexdigest()
+    store.put_if_absent(backup_target_store.object_key(digest), data, checksum_sha256=digest)
+    component = {
+        "backupId": "backup-short-read",
+        "componentId": "p0000",
+        "objectDigest": digest,
+        "expectedBytes": len(data),
+        "downloadedBytes": 0,
+        "remoteETag": None,
+        "remoteVersionId": None,
+        "ciphertextPath": str(tmp_settings / "short-read.age"),
+        "fetched": False,
+    }
+    session: dict[str, object] = {
+        "restoreId": "restore-short-read",
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "chain": [{"control": {"downloadedBytes": 0}, "requiredComponents": [component]}],
+    }
+
+    with pytest.raises(AppError, match="truncated"):
+        backup_remote_restore._fetch_object_set_components(session, store, max_bytes=None)
+
+    assert session["phase"] == "fetching-selected-components"
+    states = session["componentStates"]
+    assert isinstance(states, dict)
+    assert states[digest]["state"] == "failed"
+
+
 def test_object_set_projection_rejects_invalid_control_session(
     tmp_settings: Path,
     object_set_crypto: None,

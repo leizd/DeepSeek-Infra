@@ -18,8 +18,8 @@
 - [x] Parallelize remote object-set upload
 - [x] Persist digest-keyed per-Component restore states
 - [x] Defer Payload HEAD until verified Projection closure
-- [ ] Parallelize required Component download
-- [ ] Checkpoint A: focused tests, ruff, and mypy green
+- [x] Parallelize required Component download
+- [x] Checkpoint A: focused tests, ruff, and mypy green
 
 ## Gate B — Cache
 

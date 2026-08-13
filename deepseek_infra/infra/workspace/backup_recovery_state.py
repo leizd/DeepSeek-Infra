@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,18 @@ def _local_length(component: dict[str, Any]) -> int:
         return path.stat().st_size if path.is_file() else 0
     except OSError:
         return 0
+
+
+def _local_digest_matches(component: dict[str, Any], expected_digest: str) -> bool:
+    path = Path(str(component.get("ciphertextPath") or ""))
+    hasher = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                hasher.update(chunk)
+    except OSError:
+        return False
+    return hasher.hexdigest() == expected_digest
 
 
 def _scrub_partial(component: dict[str, Any]) -> None:
@@ -93,7 +106,7 @@ def ensure_component_states(session: dict[str, Any]) -> dict[str, dict[str, Any]
         if existing is None:
             state = _queued_state(component)
             local_length = _local_length(component)
-            if legacy_verified and local_length == expected:
+            if legacy_verified and local_length == expected and _local_digest_matches(component, digest):
                 state.update(state="verified", downloadedBytes=expected)
             elif local_length:
                 _scrub_partial(component)
@@ -104,7 +117,13 @@ def ensure_component_states(session: dict[str, Any]) -> dict[str, dict[str, Any]
         downloaded = int(existing.get("downloadedBytes") or 0)
         valid_source = _source_matches(existing, component)
         local_length = _local_length(component)
-        valid_verified = state_name == "verified" and valid_source and downloaded == expected and local_length == expected
+        valid_verified = (
+            state_name in {"verified", "downloading"}
+            and valid_source
+            and downloaded == expected
+            and local_length == expected
+            and _local_digest_matches(component, digest)
+        )
         valid_partial = (
             state_name in {"partial", "downloading"}
             and valid_source
