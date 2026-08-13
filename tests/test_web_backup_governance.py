@@ -28,7 +28,7 @@ def _app() -> FastAPI:
 
     @app.exception_handler(AppError)
     async def _app_error_handler(request: Any, exc: AppError) -> JSONResponse:
-        return JSONResponse({"error": str(exc), "code": exc.code.value}, status_code=exc.status or 400)
+        return JSONResponse(exc.to_response(), status_code=exc.status or 400)
 
     app.include_router(create_backup_governance_router())
     return app
@@ -190,6 +190,29 @@ def test_from_target_preview_route(client: TestClient, monkeypatch: pytest.Monke
     )
     assert resp.status_code == 200
     assert resp.json()["restoreId"] == "restore_p"
+
+
+def test_recovery_preflight_route_has_server_owned_inputs(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_remote_restore
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        backup_remote_restore,
+        "preflight_restore_session",
+        lambda restore_id: calls.append(restore_id) or {"restoreId": restore_id, "phase": "preflighted", "ready": True},
+    )
+
+    response = client.post(
+        "/api/workspace/restores/restore_preflight/preflight",
+        json={"freeDiskBytes": 999999999999, "reserveBytes": 0},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_payload"
+    accepted = client.post("/api/workspace/restores/restore_preflight/preflight", json={})
+    assert accepted.status_code == 200
+    assert accepted.json()["ready"] is True
+    assert calls == ["restore_preflight"]
 
 
 def test_find_backup_session_skips_empty_and_failed_targets(monkeypatch: pytest.MonkeyPatch) -> None:

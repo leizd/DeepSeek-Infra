@@ -366,6 +366,14 @@ def create_backup_governance_router() -> APIRouter:
             )
         )
 
+    @router.post("/api/workspace/restores/{restore_id}/preflight")
+    async def api_restore_preflight(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=64_000)
+        if payload:
+            raise AppError("Recovery preflight does not accept client capacity overrides", code=ErrorCode.INVALID_PAYLOAD)
+        return json_response(backup_remote_restore.preflight_restore_session(restore_id))
+
     @router.post("/api/workspace/restores/{restore_id}/materialize")
     async def api_restore_materialize(request: Request, restore_id: str) -> JSONResponse:
         require_api_auth(request)

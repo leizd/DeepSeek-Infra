@@ -99,6 +99,7 @@ def test_workspace_routes_are_registered() -> None:
         "/api/workspace/restores/{restore_id}/abort",
         "/api/workspace/restores/{restore_id}/pause",
         "/api/workspace/restores/{restore_id}/resume",
+        "/api/workspace/restores/{restore_id}/preflight",
         "/api/workspace/restores/{restore_id}/apply",
     }:
         assert expected in paths
