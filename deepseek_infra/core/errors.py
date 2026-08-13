@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 
 class ErrorCode(str, Enum):
@@ -35,6 +36,7 @@ class ErrorCode(str, Enum):
     MEMORY_CONFLICT = "memory_conflict"
     RATE_LIMITED = "rate_limited"
     NOT_FOUND = "not_found"
+    RECOVERY_PREFLIGHT_CAPACITY = "recovery_preflight_capacity"
     TOOL_POLICY_DENIED = "tool_policy_denied"
     TOOL_SCHEMA_INVALID = "tool_schema_invalid"
     TOOL_RISK_BLOCKED = "tool_risk_blocked"
@@ -43,12 +45,16 @@ class ErrorCode(str, Enum):
 
 
 class AppError(Exception):
-    def __init__(self, message: str, *, code: ErrorCode | None = None, status: int = 400):
+    def __init__(self, message: str, *, code: ErrorCode | None = None, status: int = 400, details: dict[str, Any] | None = None):
         super().__init__(message)
         self.code = code or (ErrorCode.INTERNAL if status >= 500 else ErrorCode.INVALID_PAYLOAD)
         self.status = status
+        self.details = details
 
-    def to_response(self) -> dict[str, str]:
-        return {"error": str(self), "code": self.code.value}
+    def to_response(self) -> dict[str, Any]:
+        response: dict[str, Any] = {"error": str(self), "code": self.code.value}
+        if self.details is not None:
+            response["details"] = self.details
+        return response
 
 

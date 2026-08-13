@@ -198,6 +198,15 @@ class ComponentCache:
                 path.unlink(missing_ok=True)
             return None
 
+    def inspect(self, digest: str, expected_bytes: int) -> bool:
+        """Verify a cache entry without touching LRU state or deleting it."""
+        canonical = _canonical_digest(digest)
+        if expected_bytes < 0:
+            raise ValueError("expected_bytes must be non-negative")
+        with self._lock_for(canonical):
+            size, observed_digest = _digest_file(self.path_for(canonical))
+        return size == expected_bytes and observed_digest == canonical
+
     def fetch(
         self,
         digest: str,

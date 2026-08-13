@@ -34,6 +34,7 @@ from deepseek_infra.infra.workspace import (
     backup_publish,
     backup_recovery_lease,
     backup_recovery_job,
+    backup_recovery_preflight,
     backup_recovery_state,
     backup_targets,
     backup_unattended,
@@ -1292,6 +1293,73 @@ def preview_restore_from_target(
         secret[:] = b"\x00" * len(secret)
 
 
+def preflight_restore_session(
+    restore_id: str,
+    *,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    """Build/reuse a verified plan and perform read-only recovery checks."""
+    session = read_restore_session(restore_id)
+    if session is None:
+        raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+    if str(session.get("storageProtocol") or "") != backup_object_set.OBJECT_SET_V1:
+        raise AppError("Recovery preflight requires object-set-v1", code=ErrorCode.INVALID_REQUEST, status=409)
+
+    base = _session_dir(restore_id)
+    loaded_plan = backup_verified_plan.load_verified_plan(base, session)
+    if loaded_plan is None:
+        if not backup_crypto.has_secret(restore_id):
+            raise AppError(
+                "Recovery preflight requires a verified plan or available unlock secret",
+                code=ErrorCode.INVALID_REQUEST,
+                status=409,
+            )
+        kind, secret = backup_crypto.consume_secret(restore_id)
+        try:
+            _projection, projection_report = _plan_object_set_projection(session, kind=kind, secret=secret)
+        finally:
+            backup_crypto.put_secret_bytes(restore_id, kind, bytearray(secret))
+            secret[:] = b"\x00" * len(secret)
+        session = read_restore_session(restore_id) or session
+    else:
+        _projection, projection_report = loaded_plan
+
+    target_id = str(session.get("targetId") or "")
+    target_kind = "unavailable"
+    store: Any | None = None
+    catalog: dict[str, dict[str, Any]] | None = None
+    try:
+        target = backup_publish.resolve_target(target_id, write_intent=False)
+        target_kind = target.kind
+        store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False, client=client)
+        catalog = backup_catalog.catalog_state(target.root) if target.root is not None else backup_catalog.catalog_state_store(store)
+    except AppError:
+        store = None
+
+    report = backup_recovery_preflight.evaluate_preflight(
+        session,
+        projection_report,
+        store=store,
+        target_kind=target_kind,
+        catalog=catalog,
+    )
+    session["preflight"] = report
+    session["preflightedAt"] = _utc_iso()
+    _atomic_write_json(_session_path(restore_id), session)
+    if not bool(report.get("ready")):
+        raw_reasons = report.get("blockingReasons")
+        reasons = [item for item in raw_reasons if isinstance(item, dict)] if isinstance(raw_reasons, list) else []
+        reason_codes = {str(item.get("code") or "") for item in reasons}
+        capacity_blocked = "insufficient-disk" in reason_codes or "disk-probe-failed" in reason_codes
+        raise AppError(
+            "Recovery preflight is blocked",
+            code=ErrorCode.RECOVERY_PREFLIGHT_CAPACITY if capacity_blocked else ErrorCode.INVALID_REQUEST,
+            status=409,
+            details={"preflight": report},
+        )
+    return report
+
+
 def restore_from_target(*, target_id: str, backup_id: str, client: Any | None = None) -> dict[str, Any]:  # pragma: no cover - thin wrapper
     """Compatibility helper: create session and fetch to completion in one call."""
     created = create_restore_from_target(target_id=target_id, backup_id=backup_id, client=client)
@@ -1612,7 +1680,17 @@ def _plan_object_set_projection(
         bytes_report["ciphertextDownloadBytes"] = required_bytes
         report["bytes"] = bytes_report
     else:
-        report = network_report
+        final_files = backup_projection._chain_roots(packages)[-1]
+        materialized_bytes = sum(int(item.size) for item in final_files)
+        report = {
+            **network_report,
+            "bytes": {
+                "selectedLogicalBytes": materialized_bytes,
+                "dependencyBytes": 0,
+                "ciphertextDownloadBytes": required_bytes,
+                "estimatedMaterializedBytes": materialized_bytes,
+            },
+        }
     session["chain"] = members
     session["projectionPlan"] = report
     backup_recovery_state.ensure_component_states(session)
@@ -2014,6 +2092,9 @@ def materialize_federated_restore(
         "verified",
     }:
         raise AppError("Restore session has not finished fetching", code=ErrorCode.INVALID_REQUEST, status=409)
+    if str(session.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
+        preflight_restore_session(restore_id, client=client)
+        session = read_restore_session(restore_id) or session
     kind, secret = backup_crypto.consume_secret(restore_id)
     try:
         materialized = materialize_restore_session(restore_id, kind=kind, secret=secret, client=client)
