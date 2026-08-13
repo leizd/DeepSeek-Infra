@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -204,3 +205,27 @@ def test_cache_promotes_complete_partial_and_bounds_stream_pieces(tmp_path: Path
 
     monkeypatch.setattr(backup_component_cache.os, "utime", lambda *_args: (_ for _ in ()).throw(OSError("readonly")))
     assert cache.get(second_digest, len(second)) == path
+
+
+def test_cache_empty_gc_ignores_noncanonical_files_and_unlink_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cache = backup_component_cache.ComponentCache(tmp_path / "cache")
+    assert cache.pinned_digests() == set()
+    assert cache.gc(quota_bytes=0) == {"beforeBytes": 0, "afterBytes": 0, "evicted": 0, "freedBytes": 0}
+
+    object_root = cache.root / "sha256" / "aa"
+    object_root.mkdir(parents=True)
+    (object_root / "not-a-digest.age").write_bytes(b"ignored")
+    digest, path = _put(cache, b"locked-entry")
+    real_unlink = Path.unlink
+
+    def fail_target_unlink(target: Path, *args: Any, **kwargs: Any) -> None:
+        if target == path:
+            raise OSError("locked")
+        real_unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_target_unlink)
+    report = cache.gc(quota_bytes=0)
+    assert report["afterBytes"] == len(b"locked-entry")
+    assert report["overQuotaBytes"] == len(b"locked-entry")
+    assert report["evicted"] == 0
+    assert digest not in cache.pinned_digests()

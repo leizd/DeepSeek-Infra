@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -184,3 +185,42 @@ def test_state_defaults_priority_and_ignores_empty_scrub_path(tmp_path: Path) ->
     session: dict[str, object] = {"chain": [{"requiredComponents": [component]}]}
     assert backup_recovery_state.ensure_component_states(session)["b" * 64]["priority"] == 2
     backup_recovery_state._scrub_partial({"ciphertextPath": ""})
+
+
+def test_state_file_helpers_fail_closed_on_io_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "component.age"
+    path.write_bytes(b"data")
+    component = {"ciphertextPath": str(path)}
+
+    real_stat = Path.stat
+
+    def fail_stat(target: Path, *args: Any, **kwargs: Any) -> Any:
+        if target == path:
+            raise OSError("unreadable")
+        return real_stat(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_stat)
+    assert backup_recovery_state._local_length(component) == 0
+    monkeypatch.setattr(Path, "stat", real_stat)
+
+    real_open = Path.open
+
+    def fail_open(target: Path, *args: Any, **kwargs: Any) -> Any:
+        if target == path:
+            raise OSError("unreadable")
+        return real_open(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_open)
+    assert backup_recovery_state._local_digest_matches(component, "a" * 64) is False
+    monkeypatch.setattr(Path, "open", real_open)
+
+    real_unlink = Path.unlink
+
+    def fail_unlink(target: Path, *args: Any, **kwargs: Any) -> None:
+        if target == path:
+            raise OSError("locked")
+        real_unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    backup_recovery_state._scrub_partial(component)
+    assert path.exists()

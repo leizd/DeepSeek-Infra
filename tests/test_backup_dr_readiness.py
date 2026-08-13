@@ -512,3 +512,169 @@ def test_root_reader_and_readiness_status_fail_closed_on_unreadable_targets(
     monkeypatch.setattr(backup_dr_readiness.backup_targets, "open_target_store", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("offline")))
     report = backup_dr_readiness.readiness_status(now=NOW)
     assert report["health"]["target"]["status"] in {"unavailable", "error"}
+
+
+def test_recoverable_chain_rejects_cycles_scope_changes_and_incremental_roots() -> None:
+    committed = {("target-a", "a"), ("target-a", "b")}
+    for records, candidate in (
+        (
+            {
+                ("target-a", "policy-a", "a"): {
+                    "backupId": "a",
+                    "targetId": "target-a",
+                    "policyId": "policy-a",
+                    "parentBackupId": "b",
+                    "creationVerified": True,
+                },
+                ("target-a", "policy-a", "b"): {
+                    "backupId": "b",
+                    "targetId": "target-a",
+                    "policyId": "policy-a",
+                    "parentBackupId": "a",
+                    "creationVerified": True,
+                },
+            },
+            "a",
+        ),
+        (
+            {
+                ("target-a", "policy-a", "a"): {
+                    "backupId": "a",
+                    "targetId": "target-a",
+                    "policyId": "policy-a",
+                    "parentBackupId": "b",
+                    "creationVerified": True,
+                },
+                ("target-a", "policy-a", "b"): {
+                    "backupId": "b",
+                    "targetId": "target-b",
+                    "policyId": "policy-a",
+                    "creationVerified": True,
+                },
+            },
+            "a",
+        ),
+        (
+            {
+                ("target-a", "policy-a", "a"): {
+                    "backupId": "a",
+                    "targetId": "target-a",
+                    "policyId": "policy-a",
+                    "snapshotKind": "incremental",
+                    "creationVerified": True,
+                }
+            },
+            "a",
+        ),
+    ):
+        item = records[("target-a", "policy-a", candidate)]
+        assert backup_dr_readiness._resolve_recoverable_chain(item, records, committed) is None
+
+
+def test_latest_outcome_records_explicit_absence_of_success() -> None:
+    outcome = backup_dr_readiness._latest_outcome(
+        [{"completedAt": "2026-08-13T11:00:00Z", "result": "failed"}],
+        time_key="completedAt",
+        success=lambda item: item.get("result") == "success",
+        source="test",
+        now=NOW,
+    )
+    assert outcome == {
+        "status": "error",
+        "latestCheckedAt": "2026-08-13T11:00:00Z",
+        "latestSuccessfulAt": None,
+        "source": "test",
+    }
+
+
+def test_root_commit_reader_rejects_non_object_marker_and_missing_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "target"
+    commits = root / "commits" / "policy-a"
+    commits.mkdir(parents=True)
+    (commits / "array.json").write_text("[]", encoding="utf-8")
+    assert backup_dr_readiness._commit_records_for_root(root, "target-a") == ([], set(), False)
+
+    (commits / "array.json").unlink()
+    receipt = _receipt_bytes("missing-receipt")
+    marker = _commit_marker("missing-receipt", receipt)
+    (commits / "marker.json").write_text(json.dumps(marker), encoding="utf-8")
+    monkeypatch.setattr(backup_dr_readiness.backup_catalog, "catalog_state", lambda _root: {})
+    assert backup_dr_readiness._commit_records_for_root(root, "target-a") == ([], set(), False)
+
+
+def test_remote_commit_reader_marks_catalog_and_marker_failures_unhealthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    receipt = _receipt_bytes("backup-1")
+    marker = _commit_marker("backup-1", receipt)
+    marker_key = "commits/policy-a/one.json"
+    store = _ReadOnlyStore(
+        {marker_key: json.dumps(marker).encode(), "receipts/backup-1.json": receipt},
+        [(marker_key, "commits/policy-a/not-json")],
+    )
+    monkeypatch.setattr(
+        backup_dr_readiness.backup_catalog,
+        "catalog_state_store",
+        lambda _store: (_ for _ in ()).throw(OSError("catalog")),
+    )
+    records, committed, healthy = backup_dr_readiness._commit_records_for_store(store, "remote-a")
+    assert records[0]["backupId"] == "backup-1"
+    assert committed == {("remote-a", "backup-1")}
+    assert healthy is False
+
+
+def test_index_health_reports_persisted_stale_and_legacy_file_scope(tmp_settings: Path) -> None:
+    record = {"targetId": "target-a", "policyId": "policy-a", "backupId": "backup-1"}
+    with backup_incremental._connect() as connection:
+        _insert_lineage(connection)
+        connection.execute(
+            "INSERT INTO index_health (target_id, policy_id, status, reason, updated_at) VALUES (?, ?, ?, ?, ?)",
+            ("target-a", "policy-a", "stale", "manual-stale", "2026-08-13T11:30:00Z"),
+        )
+        connection.commit()
+    stale = backup_dr_readiness._read_index([record], NOW)[("target-a", "policy-a")]
+    assert stale["status"] == "error"
+    assert stale["reason"] == "manual-stale"
+
+    with sqlite3.connect(backup_incremental.INDEX_DB) as connection:
+        connection.execute("DELETE FROM index_health")
+        connection.execute(
+            "INSERT INTO snapshot_files (target_id, policy_id, backup_id, contributor_id, logical_path, size, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("target-a", "policy-a", "backup-1", "projects", "p1.json", 1, "a" * 64),
+        )
+        connection.commit()
+    legacy = backup_dr_readiness._read_index([record], NOW)[("target-a", "policy-a")]
+    assert legacy["status"] == "ok"
+
+
+def test_drill_scanner_skips_malformed_json(tmp_settings: Path) -> None:
+    root = backups.RESTORE_DIR / "restore-bad"
+    root.mkdir(parents=True)
+    (root / "drill-result.json").write_text("not-json", encoding="utf-8")
+    assert backup_dr_readiness._drill_records() == []
+
+
+def test_readiness_status_reads_registered_filesystem_and_remote_targets(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    filesystem_root = tmp_settings / "filesystem-target"
+    remote_store = _ReadOnlyStore({}, [()])
+    monkeypatch.setattr(
+        backup_dr_readiness.backup_targets,
+        "list_targets",
+        lambda: [
+            {"targetId": "filesystem-a", "kind": "filesystem", "path": str(filesystem_root)},
+            {
+                "targetId": "remote-a",
+                "kind": "s3",
+                "lastProbe": {"scheduledBackupReady": True, "probedAt": "2026-08-13T11:00:00Z"},
+            },
+        ],
+    )
+    monkeypatch.setattr(backup_dr_readiness.backup_targets, "open_target_store", lambda *_args, **_kwargs: remote_store)
+    monkeypatch.setattr(backup_dr_readiness.backup_catalog, "catalog_state_store", lambda _store: {})
+    report = backup_dr_readiness.readiness_status(now=NOW)
+    assert report["status"] == "warning"
+    assert report["recoveryPoint"]["status"] == "unavailable"
