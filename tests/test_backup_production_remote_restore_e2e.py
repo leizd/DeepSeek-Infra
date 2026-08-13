@@ -23,6 +23,7 @@ import pytest
 
 from deepseek_infra.core import config
 from deepseek_infra.infra.workspace import (
+    backup_component_cache,
     backup_crypto,
     backup_executor,
     backup_mirror,
@@ -299,6 +300,56 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
         )
         assert process_c["commitPhase"] == "backend-committed"
         assert process_c["phase"] == "complete"
+
+        assert len(required_payload_keys) >= 2
+        assert int(process_b["maxConcurrentObjectGets"]) >= 2
+        assert int(process_b["componentTransfer"]["maxActive"]) >= 2
+
+        def prepare_again() -> tuple[str, dict[str, Any], dict[str, Any]]:
+            started = _run_restart_probe(
+                tmp_settings,
+                {
+                    "action": "create-partial-fetch",
+                    "targetId": target_id,
+                    "backupId": str(second["backupId"]),
+                    "selection": {"contributors": ["projects"], "projectIds": ["proj-a"]},
+                },
+            )
+            next_restore_id = str(started["restoreId"])
+            prepared = _run_restart_probe(
+                tmp_settings,
+                {
+                    "action": "resume-and-prepare",
+                    "restoreId": next_restore_id,
+                    "secretKind": "age-identity",
+                    "secret": identity_text,
+                    "auditObjectGets": True,
+                },
+            )
+            next_session = backup_remote_restore.read_restore_session(next_restore_id)
+            assert next_session is not None
+            return next_restore_id, prepared, next_session
+
+        warm_restore_id, warm, warm_session = prepare_again()
+        warm_payload_gets = [str(key) for key in warm["objectGets"] if str(key) in all_payload_keys]
+        assert warm_payload_gets == []
+        assert int(warm["recoveryCounters"]["cacheHit"]) >= len(required_payload_keys)
+        assert {
+            object_key(str(component["objectDigest"]))
+            for member in warm_session["chain"]
+            for component in member.get("requiredComponents") or []
+        } == required_payload_keys
+        warm_complete = _run_restart_probe(tmp_settings, {"action": "resume-commit-complete", "restoreId": warm_restore_id})
+        assert warm_complete["phase"] == "complete"
+
+        corrupt_digest = sorted(key.rsplit("/", 1)[-1] for key in required_payload_keys)[0]
+        backup_component_cache.ComponentCache().path_for(corrupt_digest).write_bytes(b"corrupt-cache-entry")
+        corrupt_restore_id, corrupt, _corrupt_session = prepare_again()
+        corrupt_payload_gets = [str(key) for key in corrupt["objectGets"] if str(key) in all_payload_keys]
+        assert corrupt_payload_gets == [object_key(corrupt_digest)]
+        assert int(corrupt["recoveryCounters"]["cacheCorruption"]) >= 1
+        corrupt_complete = _run_restart_probe(tmp_settings, {"action": "resume-commit-complete", "restoreId": corrupt_restore_id})
+        assert corrupt_complete["phase"] == "complete"
 
         # The selected project is byte-for-byte identical to the I1 snapshot,
         # while the unselected contributor retains its post-backup live state.

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 from typing import Any, Callable
 
 from deepseek_infra.infra.workspace import backup_crypto, backup_remote_restore, backups
@@ -24,10 +26,12 @@ def _emit(value: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(value, sort_keys=True) + "\n")
 
 
-def _install_s3_object_get_audit() -> tuple[list[str], Callable[[], None]]:
+def _install_s3_object_get_audit() -> tuple[list[str], dict[str, int], Callable[[], None]]:
     from deepseek_infra.infra.workspace.backup_target_s3 import S3TargetStore
 
     object_gets: list[str] = []
+    concurrency = {"active": 0, "maxActive": 0}
+    lock = threading.Lock()
     original_get_bytes = S3TargetStore.get_bytes
 
     def counted_get_bytes(
@@ -37,16 +41,28 @@ def _install_s3_object_get_audit() -> tuple[list[str], Callable[[], None]]:
         offset: int = 0,
         length: int | None = None,
     ) -> bytes | None:
-        if key.startswith("objects/sha256/"):
-            object_gets.append(key)
-        return original_get_bytes(store, key, offset=offset, length=length)
+        tracked = key.startswith("objects/sha256/")
+        if tracked:
+            with lock:
+                object_gets.append(key)
+                concurrency["active"] += 1
+                concurrency["maxActive"] = max(concurrency["maxActive"], concurrency["active"])
+            # Make real concurrent requests observable even for small local
+            # MinIO objects without changing the scheduler or response bytes.
+            time.sleep(0.05)
+        try:
+            return original_get_bytes(store, key, offset=offset, length=length)
+        finally:
+            if tracked:
+                with lock:
+                    concurrency["active"] -= 1
 
     setattr(S3TargetStore, "get_bytes", counted_get_bytes)
 
     def restore() -> None:
         setattr(S3TargetStore, "get_bytes", original_get_bytes)
 
-    return object_gets, restore
+    return object_gets, concurrency, restore
 
 
 def main() -> int:
@@ -73,8 +89,7 @@ def main() -> int:
     restore_id = str(command["restoreId"])
     if action == "resume-and-prepare":
         object_gets: list[str] = []
-        if bool(command.get("auditObjectGets")):
-            object_gets, _restore_object_get_audit = _install_s3_object_get_audit()
+        object_get_concurrency = {"active": 0, "maxActive": 0}
         while True:
             fetched = backup_remote_restore.fetch_restore_session(restore_id)
             if str(fetched.get("phase") or "") == "controls-fetched":
@@ -91,21 +106,35 @@ def main() -> int:
             selection=selection,
             restore_id=restore_id,
         )
-        while True:
-            fetched = backup_remote_restore.fetch_restore_session(restore_id)
-            if str(fetched.get("phase") or "") == "components-fetched":
-                break
-        prepared = backup_remote_restore.materialize_federated_restore(
-            restore_id,
-            mode="merge",
-            owner_document_id="restart-probe",
-        )
+        def restore_audit() -> None:
+            return None
+
+        if bool(command.get("auditObjectGets")):
+            object_gets, object_get_concurrency, restore_audit = _install_s3_object_get_audit()
+        try:
+            while True:
+                fetched = backup_remote_restore.fetch_restore_session(restore_id)
+                if str(fetched.get("phase") or "") == "components-fetched":
+                    break
+            prepared = backup_remote_restore.materialize_federated_restore(
+                restore_id,
+                mode="merge",
+                owner_document_id="restart-probe",
+            )
+        finally:
+            restore_audit()
+        latest = backup_remote_restore.read_restore_session(restore_id) or {}
+        raw_telemetry = latest.get("recoveryTelemetry")
+        recovery_telemetry: dict[str, Any] = raw_telemetry if isinstance(raw_telemetry, dict) else {}
         _emit(
             {
                 "restoreId": restore_id,
                 "phase": prepared["phase"],
                 "projection": preview.get("projection"),
                 "objectGets": object_gets,
+                "maxConcurrentObjectGets": object_get_concurrency["maxActive"],
+                "componentTransfer": latest.get("componentTransfer"),
+                "recoveryCounters": recovery_telemetry.get("counters") or {},
             }
         )
         return 0

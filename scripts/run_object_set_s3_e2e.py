@@ -93,6 +93,9 @@ CHECK_SCENARIOS = {
     "orphanComponentsCollectedAfterGrace": "object-lifecycle",
     "legacyWholeAgeV2ThroughV5RestoreCompatible": "legacy-whole-age",
     "realMinioObjectSetSelectiveRestoreE2E": "real-minio",
+    "realMinioColdRestoreUsesParallelRequiredOnlyPayloadGets": "real-minio",
+    "realMinioWarmCacheUsesZeroPayloadGets": "real-minio",
+    "realMinioCorruptCacheRefetchesOnlyCorruptPayload": "real-minio",
 }
 
 CRYPTO_SCENARIOS = frozenset({"real-process-restart", "real-minio"})
