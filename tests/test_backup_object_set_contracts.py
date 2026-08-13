@@ -106,10 +106,11 @@ def test_restart_probe_counts_each_s3_object_get_once() -> None:
             return {"Body": io.BytesIO(b"ciphertext")}
 
     store = S3TargetStore(bucket="test", client=FakeS3Client())
-    object_gets, restore_audit = object_set_restart_probe._install_s3_object_get_audit()
+    object_gets, concurrency, restore_audit = object_set_restart_probe._install_s3_object_get_audit()
     try:
         assert b"".join(store.get_stream("objects/sha256/ab/ciphertext.age")) == b"ciphertext"
         assert object_gets == ["objects/sha256/ab/ciphertext.age"]
+        assert concurrency == {"active": 0, "maxActive": 1}
     finally:
         restore_audit()
 
