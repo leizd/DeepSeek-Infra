@@ -24,6 +24,9 @@ from typing import Any, BinaryIO, Literal, Protocol, runtime_checkable
 from deepseek_infra.core.errors import AppError, ErrorCode
 
 PutMode = Literal["if_absent", "if_match", "overwrite"]
+IntegrityMode = Literal["strong-provider-checksum", "full-readback"]
+STRONG_PROVIDER_CHECKSUM: IntegrityMode = "strong-provider-checksum"
+FULL_READBACK: IntegrityMode = "full-readback"
 
 
 def _utc_iso() -> str:
@@ -102,6 +105,7 @@ class TargetCapabilities:
     server_date: bool = False
     versioning: bool | None = None
     kind: str = "filesystem"
+    integrity_mode: IntegrityMode = FULL_READBACK
 
     @property
     def scheduled_backup_ready(self) -> bool:
@@ -119,6 +123,7 @@ class TargetCapabilities:
             "delete": self.delete,
             "serverDate": self.server_date,
             "versioning": self.versioning,
+            "integrityMode": self.integrity_mode,
             "scheduledBackupReady": self.scheduled_backup_ready,
         }
 
@@ -131,6 +136,8 @@ class ObjectMeta:
     sha256: str | None = None
     last_modified: str | None = None
     version_id: str | None = None
+    provider_sha256: str | None = None
+    provider_checksum_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,6 +485,18 @@ def probe_store_capabilities(store: BackupTargetStore, *, prefix: str = "control
 
     if created is not None:
         try:
+            single = store.stat(key)
+            results["single-provider-sha256"] = (
+                "PASS"
+                if single is not None
+                and single.size == len(payload)
+                and single.provider_checksum_type == "FULL_OBJECT"
+                and single.provider_sha256 == _sha256_bytes(payload)
+                else "FAIL"
+            )
+        except Exception as exc:  # noqa: BLE001
+            results["single-provider-sha256"] = f"FAIL:{type(exc).__name__}"
+        try:
             store.put_if_match(key, replace_payload, expected_etag=created.etag, checksum_sha256=_sha256_bytes(replace_payload))
             results["conditional-replace"] = "PASS"
         except Exception as exc:  # noqa: BLE001  # pragma: no cover
@@ -505,17 +524,35 @@ def probe_store_capabilities(store: BackupTargetStore, *, prefix: str = "control
                 if completed is not None and completed.sha256 == _sha256_bytes(payload) and completed.size == len(payload)
                 else "FAIL"
             )
+            results["multipart-provider-sha256"] = (
+                "PASS"
+                if completed is not None
+                and completed.size == len(payload)
+                and completed.provider_checksum_type == "FULL_OBJECT"
+                and completed.provider_sha256 == _sha256_bytes(payload)
+                else "FAIL"
+            )
             store.delete_if_match(mp_key)
         except Exception as exc:  # noqa: BLE001  # pragma: no cover
             results["multipart-upload"] = f"FAIL:{type(exc).__name__}"
             results["multipart-checksum"] = results.get("multipart-checksum", f"FAIL:{type(exc).__name__}")
+            results["multipart-provider-sha256"] = results.get("multipart-provider-sha256", f"FAIL:{type(exc).__name__}")
         try:
             store.delete_if_match(key)
             results["delete"] = "PASS"
         except Exception as exc:  # noqa: BLE001  # pragma: no cover
             results["delete"] = f"FAIL:{type(exc).__name__}"
     else:
-        for name in ("conditional-replace", "range-get", "list-pagination", "multipart-upload", "multipart-checksum", "delete"):
+        for name in (
+            "single-provider-sha256",
+            "conditional-replace",
+            "range-get",
+            "list-pagination",
+            "multipart-upload",
+            "multipart-checksum",
+            "multipart-provider-sha256",
+            "delete",
+        ):
             results.setdefault(name, "SKIP")
 
     try:
@@ -524,6 +561,13 @@ def probe_store_capabilities(store: BackupTargetStore, *, prefix: str = "control
     except Exception as exc:  # noqa: BLE001  # pragma: no cover
         results["server-date"] = f"FAIL:{type(exc).__name__}"
 
+    provider_checksum_proven = (
+        results.get("single-provider-sha256") == "PASS"
+        and results.get("multipart-provider-sha256") == "PASS"
+    )
+    set_integrity_mode = getattr(store, "set_integrity_mode", None)
+    if callable(set_integrity_mode):
+        set_integrity_mode(STRONG_PROVIDER_CHECKSUM if provider_checksum_proven else FULL_READBACK)
     caps = store.capabilities()
     conditional_ok = results.get("conditional-create") == "PASS" and results.get("conditional-replace") == "PASS"
     multipart_ok = not caps.multipart_upload or results.get("multipart-checksum") == "PASS"

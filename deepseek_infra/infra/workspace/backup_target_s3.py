@@ -7,13 +7,17 @@ never enter target JSON — only a credential provider descriptor is stored.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, BinaryIO, NoReturn
 from urllib.parse import urlparse
 
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace.backup_target_store import (
+    IntegrityMode,
     ListPage,
     MultipartUpload,
     ObjectMeta,
@@ -135,11 +139,50 @@ class S3TargetStore:
     def capabilities(self) -> TargetCapabilities:
         return self._caps
 
-    def stat(self, key: str) -> ObjectMeta | None:
+    def set_integrity_mode(self, mode: IntegrityMode) -> None:
+        self._caps = replace(self._caps, integrity_mode=mode)
+
+    @staticmethod
+    def _provider_checksum(response: dict[str, Any]) -> tuple[str | None, str | None]:
+        # HeadObject may return a composite multipart SHA-256; only the
+        # provider-owned FULL_OBJECT value is a direct digest of all bytes.
+        # Source: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html
+        checksum_type = str(response.get("ChecksumType") or "")
+        encoded = response.get("ChecksumSHA256")
+        if checksum_type != "FULL_OBJECT" or not isinstance(encoded, str):
+            return None, checksum_type or None
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            return None, checksum_type
+        return (raw.hex() if len(raw) == hashlib.sha256().digest_size else None), checksum_type
+
+    def _head(self, key: str) -> dict[str, Any]:
         client = self._client_or_create()
         full = self._full_key(key)
         try:
-            response = client.head_object(Bucket=self.bucket, Key=full, **self._owner_args())
+            return client.head_object(Bucket=self.bucket, Key=full, ChecksumMode="ENABLED", **self._owner_args())
+        except Exception as checksum_exc:  # noqa: BLE001
+            response = getattr(checksum_exc, "response", {}) or {}
+            status = int((response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0)
+            code = str((response.get("Error") or {}).get("Code") or "")
+            if status == 404 or code in {"404", "NoSuchKey", "NotFound"}:
+                raise
+            unsupported = status in {400, 501} and code in {
+                "InvalidArgument",
+                "InvalidRequest",
+                "NotImplemented",
+                "XNotImplemented",
+            }
+            if not unsupported:
+                raise
+            # S3-compatible providers may not implement ChecksumMode. A plain
+            # HEAD remains usable but can never prove provider checksum mode.
+            return client.head_object(Bucket=self.bucket, Key=full, **self._owner_args())
+
+    def stat(self, key: str) -> ObjectMeta | None:
+        try:
+            response = self._head(key)
         except Exception as exc:  # noqa: BLE001
             error = getattr(exc, "response", {}) or {}
             status = int((error.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0)
@@ -152,13 +195,17 @@ class S3TargetStore:
         metadata = response.get("Metadata") or {}
         if isinstance(metadata, dict):
             checksum = metadata.get("sha256") or metadata.get("checksum-sha256")
+        provider_sha256, provider_checksum_type = self._provider_checksum(response)
+        last_modified = response.get("LastModified")
         return ObjectMeta(
             key=key,
             size=int(response.get("ContentLength") or 0),
             etag=_normalize_etag(response.get("ETag")),
             sha256=checksum,
-            last_modified=response.get("LastModified").astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if response.get("LastModified") else None,
+            last_modified=last_modified.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if last_modified is not None else None,
             version_id=response.get("VersionId"),
+            provider_sha256=provider_sha256,
+            provider_checksum_type=provider_checksum_type,
         )
 
     def get_bytes(self, key: str, *, offset: int = 0, length: int | None = None) -> bytes | None:
