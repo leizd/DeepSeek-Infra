@@ -28,6 +28,7 @@
 .reminders/
 .backups/
 .restore-staging/
+.backup-component-cache/
 .backup-policies/
 .backup-mirror/
 .backup-scheduler/

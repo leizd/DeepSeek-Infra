@@ -22,6 +22,7 @@ from typing import Any, Literal
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_catalog,
+    backup_component_cache,
     backup_component_transport,
     backup_crypto,
     backup_incremental,
@@ -640,6 +641,7 @@ def _fetch_object_set_components(
     chain = restore_members(session)
     pending = backup_recovery_state.required_components(session)
     states = backup_recovery_state.ensure_component_states(session)
+    component_cache = backup_component_cache.ComponentCache()
     session["chain"] = chain
     session["updatedAt"] = _utc_iso()
     _atomic_write_json(_session_path(restore_id), session)
@@ -711,6 +713,33 @@ def _fetch_object_set_components(
             state = states[digest]
 
             def _execute() -> None:
+                expected_bytes = int(component.get("expectedBytes") or 0)
+                cached = component_cache.get(digest, expected_bytes)
+                if cached is not None:
+                    with state_lock:
+                        component["ciphertextPath"] = str(cached)
+                        component["downloadedBytes"] = expected_bytes
+                        component["fetched"] = True
+                        backup_recovery_state.update_component_state(
+                            session,
+                            component,
+                            state="verified",
+                            downloaded_bytes=expected_bytes,
+                        )
+                        session["chain"] = chain
+                        session["updatedAt"] = _utc_iso()
+                        _atomic_write_json(_session_path(restore_id), session)
+                    return
+                prior_path = Path(str(component.get("ciphertextPath") or ""))
+                cache_partial = component_cache.partial_path(digest)
+                if (
+                    int(component.get("downloadedBytes") or 0) > 0
+                    and prior_path.is_file()
+                    and prior_path not in {cache_partial, component_cache.path_for(digest)}
+                    and not cache_partial.exists()
+                ):
+                    cache_partial.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(prior_path, cache_partial)
                 meta = _validate_source(component)
                 working = dict(component)
                 if not str(working.get("remoteETag") or ""):
@@ -718,6 +747,7 @@ def _fetch_object_set_components(
                 if not working.get("remoteVersionId"):
                     working["remoteVersionId"] = meta.version_id
                 with state_lock:
+                    component["ciphertextPath"] = str(component_cache.partial_path(digest))
                     component["remoteETag"] = working.get("remoteETag")
                     component["remoteVersionId"] = working.get("remoteVersionId")
                     backup_recovery_state.update_component_state(
@@ -741,11 +771,14 @@ def _fetch_object_set_components(
                         _atomic_write_json(_session_path(restore_id), session)
 
                 try:
-                    done = _download_member(store, working, None, progress=_checkpoint)
-                    if not done:
-                        raise AppError("Required object-set component download was truncated", code=ErrorCode.INTERNAL, status=500)
+                    cached = component_cache.fetch(
+                        digest,
+                        expected_bytes,
+                        lambda offset: store.get_stream(object_key(digest), offset=offset),
+                        progress=_checkpoint,
+                    )
                 except BaseException:
-                    partial_path = Path(str(working.get("ciphertextPath") or ""))
+                    partial_path = component_cache.partial_path(digest)
                     downloaded = partial_path.stat().st_size if partial_path.is_file() else 0
                     with state_lock:
                         component["downloadedBytes"] = downloaded
@@ -759,12 +792,13 @@ def _fetch_object_set_components(
                         _atomic_write_json(_session_path(restore_id), session)
                     raise
                 with state_lock:
-                    component["downloadedBytes"] = int(working.get("downloadedBytes") or 0)
-                    component["fetched"] = done
+                    component["ciphertextPath"] = str(cached)
+                    component["downloadedBytes"] = expected_bytes
+                    component["fetched"] = True
                     backup_recovery_state.update_component_state(
                         session,
                         component,
-                        state="verified" if done else "partial",
+                        state="verified",
                         downloaded_bytes=int(component["downloadedBytes"]),
                     )
                     session["chain"] = chain
@@ -1298,7 +1332,7 @@ def _plan_object_set_projection(
                     "downloadedBytes": int(existing.get("downloadedBytes") or 0),
                     "remoteETag": existing.get("remoteETag") or remote.get("remoteETag"),
                     "remoteVersionId": existing.get("remoteVersionId") or remote.get("remoteVersionId"),
-                    "ciphertextPath": str(base / f"payload-{index:04d}-{component_id}.age"),
+                    "ciphertextPath": str(existing.get("ciphertextPath") or base / f"payload-{index:04d}-{component_id}.age"),
                     "fetched": bool(existing.get("fetched")),
                     "plaintextSize": int(descriptor.get("plaintextSize") or -1),
                     "plaintextSha256": str(descriptor.get("plaintextSha256") or ""),

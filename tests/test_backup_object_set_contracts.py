@@ -19,6 +19,7 @@ from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
     backup_crypto,
+    backup_component_cache,
     backup_catalog,
     backup_incremental,
     backup_object_set,
@@ -1585,6 +1586,8 @@ def test_object_set_fetch_fails_closed_and_resumes_partial_members(tmp_settings:
         ("objectDigest", "f" * 64, "component is missing"),
         ("remoteETag", '"different"', "payload component changed"),
     ):
+        if field == "remoteETag":
+            backup_component_cache.ComponentCache().path_for(digest).unlink(missing_ok=True)
         invalid_component = {**component, field: value, "ciphertextPath": str(tmp_settings / f"invalid-{field}.age")}
         invalid_session = {
             "restoreId": f"restore-invalid-{field}",
@@ -2365,6 +2368,68 @@ def test_object_set_selective_restore_issues_gets_for_required_payload_only(
     assert backup_target_store.object_key(payload_by_id["p0002"].ciphertext_digest) not in get_keys
     assert backup_target_store.object_key(payload_by_id["p0000"].ciphertext_digest) not in head_keys
     assert backup_target_store.object_key(payload_by_id["p0002"].ciphertext_digest) not in head_keys
+
+
+def test_warm_object_set_restore_uses_cache_without_payload_get(
+    tmp_settings: Path,
+    object_set_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _full_object_set_package(tmp_settings)
+    backup_publish.publish_backup(
+        backup_publish.resolve_target("managed-local"),
+        package,
+        run_id="run-warm-cache",
+        policy_id="policy-warm-cache",
+        schedule_slot="slot-warm-cache",
+        fencing_token=1,
+    )
+    selection = {"contributors": ["projects"], "projectIds": ["p1"]}
+
+    def fetch_selected() -> str:
+        created = backup_remote_restore.create_restore_from_target(
+            target_id="managed-local",
+            backup_id=package.backup_id,
+            selection=selection,
+        )
+        restore_id = str(created["restoreId"])
+        backup_remote_restore.fetch_restore_session(restore_id)
+        backup_crypto.put_secret(restore_id, "passphrase", "test-secret")
+        backup_remote_restore.preview_restore_from_target(
+            target_id="managed-local",
+            backup_id=package.backup_id,
+            selection=selection,
+            restore_id=restore_id,
+        )
+        backup_remote_restore.fetch_restore_session(restore_id)
+        return restore_id
+
+    first_restore_id = fetch_selected()
+    first_session = backup_remote_restore.read_restore_session(first_restore_id)
+    assert first_session is not None
+    digest = str(first_session["chain"][0]["requiredComponents"][0]["objectDigest"])
+    payload_key = backup_target_store.object_key(digest)
+    payload_gets: list[str] = []
+    original_stream = backup_target_store.FilesystemTargetStore.get_stream
+
+    def counted_stream(
+        store: backup_target_store.FilesystemTargetStore,
+        key: str,
+        *,
+        offset: int = 0,
+    ):
+        if key == payload_key:
+            payload_gets.append(key)
+        return original_stream(store, key, offset=offset)
+
+    monkeypatch.setattr(backup_target_store.FilesystemTargetStore, "get_stream", counted_stream)
+
+    second_restore_id = fetch_selected()
+    second_session = backup_remote_restore.read_restore_session(second_restore_id)
+    assert second_session is not None
+    required = second_session["chain"][0]["requiredComponents"][0]
+    assert payload_gets == []
+    assert ".backup-component-cache" in str(required["ciphertextPath"])
 
 
 def test_object_set_federated_restore_keeps_unselected_live_contributor(

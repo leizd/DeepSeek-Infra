@@ -23,7 +23,7 @@
 
 ## Gate B — Cache
 
-- [ ] Add verified encrypted Component cache
+- [x] Add verified encrypted Component cache
 - [ ] Add active/recovery-required pins and 20 GiB LRU quota
 - [ ] Checkpoint B: warm restore has zero remote Payload GET
 
