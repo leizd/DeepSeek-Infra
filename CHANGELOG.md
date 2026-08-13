@@ -4,6 +4,21 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.4.15] - Parallel Component Transport and Encrypted Restore Cache
+
+### Transport
+
+- Introduced `ComponentTransferScheduler` with bounded workers, in-flight byte
+  budget, cancel event, and thread-safe telemetry.
+- Parallelized encrypted component upload in the object-set filesystem publish
+  path; journal barrier and CAS commit semantics preserved.
+
+### Restore metrics
+
+- Split `networkSelective` into `selectiveFetchSupported` (protocol capability)
+  and `networkSelective` (actual this-run savings). Full restore now reports
+  `networkSelective: false` when `requiredComponents == totalComponents`.
+
 ## [4.4.14] - Encrypted Object Sets and True Selective Fetch
 
 ### Projection correctness

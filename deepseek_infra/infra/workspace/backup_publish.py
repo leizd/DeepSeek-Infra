@@ -590,15 +590,17 @@ def _publish_object_set_filesystem(
             elif backup_unattended.sha256_file(destination, checkpoint=checkpoint) != component.ciphertext_digest:
                 raise AppError("Content-addressed component on target fails its digest", code=ErrorCode.INTERNAL, status=500)
 
-        upload_tasks = [
-            backup_component_transport.TransferTask(
+        def _make_upload_task(component: backup_object_set.EncryptedComponent) -> backup_component_transport.TransferTask:
+            def _execute() -> None:
+                _publish_component(component)
+            return backup_component_transport.TransferTask(
                 component_id=component.component_id,
                 ciphertext_digest=component.ciphertext_digest,
                 ciphertext_size=component.ciphertext_size,
-                execute=(lambda c=component: _publish_component(c)),
+                execute=_execute,
             )
-            for component in package.components
-        ]
+
+        upload_tasks = [_make_upload_task(component) for component in package.components]
         backup_component_transport.default_scheduler().run(upload_tasks)
         # Barrier: the journal advances only after every component is verified
         # and in place. A crash mid-transfer leaves the journal at "started";

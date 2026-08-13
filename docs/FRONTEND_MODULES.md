@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.14。
+适用版本：v4.4.15。
 
 > 4.4.13 的 Restore Projection（`selectionDigest`、Dependency Closure、Support/Output 分离）、Pack Index/Range、Bloom、Rust Worker Pool、Adaptive Cost 与 Index 迁移全部属于后端/本地索引边界。Frontend 只提交临时 Secret Slot 引用并消费 Federated Restore 状态，从 `from-target` 创建请求携带 `selection`，按返回的 `requiresFrontendApply` / `requiresExternalMcp` 决定是否弹 Frontend 确认或触发 external 准备；不持有 File/Chunk Hash、Pack Offset、投影闭包、Bloom、Index DB 或 Multipart 状态，也不采集、不回显、不持久化 Access Key。
 
