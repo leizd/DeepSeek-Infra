@@ -106,7 +106,7 @@ def _claim(root: Path, restore_id: str) -> dict[str, Any] | None:
             raise AppError("Recovery Drill requires an available unlock secret", code=ErrorCode.INVALID_REQUEST, status=409)
         _atomic_write(
             claim_path,
-            {"schemaVersion": SCHEMA_VERSION, "restoreId": restore_id, "startedAt": _utc_iso()},
+            {"schemaVersion": SCHEMA_VERSION, "restoreId": restore_id, "result": "running", "startedAt": _utc_iso()},
         )
     return None
 
@@ -244,6 +244,8 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
     known_work = _work(session, {}, {})
     result: dict[str, Any] | None = None
     failure: BaseException | None = None
+    materialized: dict[str, Any] = {}
+    inspected: dict[str, Any] = {}
     try:
         if str(session.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
             backup_remote_restore.preflight_restore_session(restore_id, client=client)
@@ -274,7 +276,7 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
             "durationMs": max(0, int((time.monotonic() - started) * 1_000)),
             **_work(session, materialized, inspected),
         }
-    except Exception as exc:
+    except BaseException as exc:
         failure = exc
         result = {
             "schemaVersion": SCHEMA_VERSION,
@@ -298,6 +300,8 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
             backup_remote_restore._release_session_holds(session)
         except Exception:
             cleanup_failed = True
+        current = backup_remote_restore.read_restore_session(restore_id) or session
+        latest_work = _work(current, materialized, inspected)
         if cleanup_failed:
             result = {
                 "schemaVersion": SCHEMA_VERSION,
@@ -307,13 +311,14 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
                 "startedAt": started_at,
                 "completedAt": _utc_iso(),
                 "durationMs": max(0, int((time.monotonic() - started) * 1_000)),
-                **known_work,
+                **latest_work,
             }
             if failure is None:
                 failure = AppError("Recovery Drill cleanup failed", code=ErrorCode.INTERNAL, status=500)
         assert result is not None
+        if result["result"] == "failed":
+            result.update(latest_work)
         _atomic_write(root / RESULT_NAME, result)
-        current = backup_remote_restore.read_restore_session(restore_id) or session
         current["drillOnly"] = True
         current["drillResult"] = str(result["result"])
         current["phase"] = "complete" if result["result"] == "success" else "failed"
@@ -335,6 +340,9 @@ def run_recovery_drill(restore_id: str, *, client: Any | None = None) -> dict[st
 def get_recovery_drill(restore_id: str) -> dict[str, Any]:
     root = _root(restore_id)
     path = root / RESULT_NAME
-    if not path.is_file():
-        raise AppError("Recovery Drill result not found", code=ErrorCode.NOT_FOUND, status=404)
-    return _read_json(path)
+    if path.is_file():
+        return _read_json(path)
+    claim = root / CLAIM_NAME
+    if claim.is_file():
+        return _read_json(claim)
+    raise AppError("Recovery Drill result not found", code=ErrorCode.NOT_FOUND, status=404)

@@ -164,6 +164,7 @@ def test_recovery_drill_failure_is_redacted_and_still_cleans_up(tmp_settings: Pa
     persisted = json.loads((root / "drill-result.json").read_text(encoding="utf-8"))
     assert persisted["result"] == "failed"
     assert persisted["failureCode"] == "drill-validation-failed"
+    assert (persisted["chainLength"], persisted["components"], persisted["ciphertextBytes"]) == (1, 2, 30)
     serialized = json.dumps(persisted)
     for forbidden in ("secret-value", "private/project", "a" * 64):
         assert forbidden not in serialized
@@ -171,6 +172,22 @@ def test_recovery_drill_failure_is_redacted_and_still_cleans_up(tmp_settings: Pa
     assert not backup_crypto.has_secret(restore_id)
     assert released == [restore_id]
     assert _workspace_bytes() == before
+
+
+def test_recovery_drill_reports_running_and_rejects_a_concurrent_run(tmp_settings: Path) -> None:
+    restore_id = "restore_drillrunning"
+    _write_session(restore_id)
+    backup_crypto.put_secret(restore_id, "passphrase", "drill-secret")
+    root = backups.RESTORE_DIR / restore_id
+
+    with backup_recovery_drill._exclusive_drill_lock(root):
+        assert backup_recovery_drill._claim(root, restore_id) is None
+        assert backup_recovery_drill.get_recovery_drill(restore_id)["result"] == "running"
+        with pytest.raises(AppError, match="Recovery Drill is already running") as captured:
+            backup_recovery_drill.run_recovery_drill(restore_id)
+
+    assert captured.value.status == 409
+    backup_crypto.clear_secret(restore_id)
 
 
 def test_recovery_drill_routes_are_authenticated_and_server_owned(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:

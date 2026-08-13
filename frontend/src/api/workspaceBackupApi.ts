@@ -685,6 +685,7 @@ interface RecoveryDrillEvidence {
 }
 
 export type RecoveryDrillResult =
+  | (Pick<RecoveryDrillEvidence, "schemaVersion" | "restoreId" | "startedAt"> & { result: "running" })
   | (RecoveryDrillEvidence & { result: "success" })
   | (RecoveryDrillEvidence & { result: "failed"; failureCode: "drill-validation-failed" | "drill-cleanup-failed" });
 

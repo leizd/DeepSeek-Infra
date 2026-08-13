@@ -1094,7 +1094,8 @@ materialize 与 Contributor inspect 路径。Operator 必须先经 Restore Secre
 释放远端 hold 和 Component cache pin，同时保留已校验密文与 `drill-result.json`。结果只记录
 `restoreId`、起止时间、耗时、chain/component/ciphertext/logical byte 计数、验证的 Contributor 数和
 稳定失败码，不持久化异常文本、逻辑路径、摘要、Secret 或凭据。同一 `restoreId` 的终态请求幂等
-返回原结果；并发执行返回 `409`，而该 Drill Job 后续不能被普通 materialize/commit 入口复用。
+返回原结果；执行中 GET 返回 `result=running`，并发执行返回 `409`，而该 Drill Job 后续不能被普通
+materialize/commit 入口复用。
 
 Whole-Age 远端恢复的持久相位为 `fetching-chain → chain-fetched → decrypting-chain → materializing → verified → preparing → prepared → committing → complete`。`object-set-v1` 使用 `fetching-controls → controls-fetched → decrypting-controls → planning-projection → fetching-selected-components → components-fetched → decrypting-components → materializing → verified → prepared → committing → complete`。`materialize` 不接受原始密码，只消费先前写入的临时 Secret Slot；失败或超时后 Slot 清空。所有层的 Component/Pack/Chunk/File SHA 与 Merkle 转移通过后才允许进入 Prepare。
 
