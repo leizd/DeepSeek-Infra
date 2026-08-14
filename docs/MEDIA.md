@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v2.9.1.
+Applicable version: v4.5.0.
 
 DeepSeek Infra v2.8.0 makes media a first-class workspace object. A media item can belong to a project, keep source metadata, move through a processing lifecycle, emit citable segments, enter Local RAG, and travel with Project Export.
 

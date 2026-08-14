@@ -4,7 +4,7 @@
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
-适用版本：v4.4.13。
+适用版本：v4.5.0。
 
 Release v4.4.13 — **Projected Recovery & Production Remote Restore**。本版让远端恢复冻结为明确的 Contributor/Project 投影：`selectionDigest` 跨重试不可变，跨文件 `parent-range` 依赖进入只读 Support 集，Metadata 平面完整校验而 Payload 平面选择性物化；未选中 Contributor 不被改动。API/UI 如实上报 `networkSelective: false`（Whole-Age Object）。真实 MinIO + 真实 Age Helper + Executor + Slot Commit + Receipt/Catalog + Federated Complete 全链路成为 CI 门禁。根 `VERSION` 仍是版本事实源；正式 PASS 只来自对应提交的 CI 与 exact-merge Evidence。
 
