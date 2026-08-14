@@ -6,10 +6,13 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 import zipfile
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 import pytest
 
@@ -17,12 +20,14 @@ from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
     backup_crypto,
+    backup_component_cache,
     backup_catalog,
     backup_incremental,
     backup_object_set,
     backup_pack,
     backup_publish,
     backup_reconcile,
+    backup_recovery_drill,
     backup_remote_restore,
     backup_retention,
     backup_scrub,
@@ -101,10 +106,11 @@ def test_restart_probe_counts_each_s3_object_get_once() -> None:
             return {"Body": io.BytesIO(b"ciphertext")}
 
     store = S3TargetStore(bucket="test", client=FakeS3Client())
-    object_gets, restore_audit = object_set_restart_probe._install_s3_object_get_audit()
+    object_gets, concurrency, restore_audit = object_set_restart_probe._install_s3_object_get_audit()
     try:
         assert b"".join(store.get_stream("objects/sha256/ab/ciphertext.age")) == b"ciphertext"
         assert object_gets == ["objects/sha256/ab/ciphertext.age"]
+        assert concurrency == {"active": 0, "maxActive": 1}
     finally:
         restore_audit()
 
@@ -604,8 +610,51 @@ def test_object_set_member_validates_receipt_commitment(tmp_path: Path) -> None:
     with pytest.raises(AppError, match="control object is foreign"):
         backup_remote_restore._object_set_member(store, {**receipt, "controlObjectDigest": "e" * 64}, tmp_path, 0)
     store.delete_if_match(backup_target_store.object_key(payload.ciphertext_digest))
-    with pytest.raises(AppError, match="component is missing"):
-        backup_remote_restore._object_set_member(store, receipt, tmp_path, 0)
+    member_without_payload = backup_remote_restore._object_set_member(store, receipt, tmp_path, 0)
+    assert {item["digest"] for item in member_without_payload["objects"]} == {
+        control.ciphertext_digest,
+        payload.ciphertext_digest,
+    }
+
+
+def test_object_set_member_heads_only_control_for_large_inventory(tmp_path: Path) -> None:
+    class CountingStore(backup_target_store.MemoryTargetStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stat_keys: list[str] = []
+
+        def stat(self, key: str) -> backup_target_store.ObjectMeta | None:
+            self.stat_keys.append(key)
+            return super().stat(key)
+
+    store = CountingStore()
+    objects = [
+        {"digest": hashlib.sha256(f"component-{index}".encode()).hexdigest(), "size": index + 1}
+        for index in range(5_000)
+    ]
+    control = objects[2_500]
+    control_size = control["size"]
+    assert isinstance(control_size, int)
+    control_bytes = b"c" * control_size
+    control["digest"] = hashlib.sha256(control_bytes).hexdigest()
+    store.put_if_absent(
+        backup_target_store.object_key(str(control["digest"])),
+        control_bytes,
+        checksum_sha256=str(control["digest"]),
+    )
+    receipt = {
+        "backupId": "backup-large-inventory",
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "controlObjectDigest": control["digest"],
+        "objectSetDigest": backup_object_set.object_inventory_digest(objects),
+        "objects": objects,
+        "snapshotKind": "full",
+    }
+
+    member = backup_remote_restore._object_set_member(store, receipt, tmp_path, 0)
+
+    assert len(member["objects"]) == 5_000
+    assert store.stat_keys == [backup_target_store.object_key(str(control["digest"]))]
 
 
 def test_object_set_spool_cleanup_and_multipart_state_fail_closed(
@@ -763,6 +812,179 @@ def test_build_object_set_independently_encrypts_control_and_payloads(
         component_target_bytes=1,
     )
     assert [item.ciphertext_digest for item in package.components] != [item.ciphertext_digest for item in second.components]
+
+
+def test_prepared_object_set_components_feed_age_without_recompression(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    object_set_crypto: None,
+) -> None:
+    del object_set_crypto
+    staging = tmp_path / "prepared-staging"
+    files = {
+        "payload/projects/p1/a.bin": b"first-payload",
+        "payload/projects/p2/b.bin": b"second-payload",
+    }
+    manifest_files = []
+    for relative, content in files.items():
+        source = staging / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(content)
+        manifest_files.append(
+            {
+                "contributorId": "projects",
+                "path": relative,
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    manifest = {"backupId": "backup_prepared", "snapshotKind": "incremental", "deltaFiles": manifest_files}
+    zip_calls: list[tuple[str, ...]] = []
+    original_write = backup_object_set._write_zip_entries
+
+    def count_zip(output: BinaryIO, **kwargs: object) -> None:
+        entries = kwargs.get("file_entries") or kwargs.get("byte_entries") or {}
+        assert isinstance(entries, dict)
+        zip_calls.append(tuple(sorted(str(key) for key in entries)))
+        original_write(output, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backup_object_set, "_write_zip_entries", count_zip)
+    prepared = backup_object_set.prepare_object_set(
+        staging,
+        tmp_path / "prepared-output",
+        manifest=manifest,
+        component_target_bytes=1,
+    )
+    prepared_bytes = sum(item.plaintext_size for item in prepared.components)
+    assert prepared.plaintext_bytes == prepared_bytes > 0
+    assert len(zip_calls) == 2
+
+    encrypted = backup_object_set.encrypt_prepared_object_set(
+        prepared,
+        backup_id="backup_prepared",
+        recipients=("age1test",),
+        manifest=manifest,
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+    )
+
+    assert len(encrypted.components) == 3
+    assert len(zip_calls) == 3  # two prepared Payload ZIPs plus one Control ZIP
+    assert not list((tmp_path / "prepared-output").glob("*.plaintext.tmp"))
+
+
+def test_prepared_object_set_threshold_stops_early_and_scrubs_plaintext(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging = tmp_path / "threshold-staging"
+    manifest_files = []
+    for project_id in ("p1", "p2"):
+        relative = f"payload/projects/{project_id}/data.bin"
+        content = project_id.encode("ascii") * 32
+        source = staging / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(content)
+        manifest_files.append(
+            {
+                "contributorId": "projects",
+                "path": relative,
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    manifest = {"backupId": "backup_threshold", "snapshotKind": "incremental", "deltaFiles": manifest_files}
+    zip_calls = 0
+    original_write = backup_object_set._write_zip_entries
+
+    def count_zip(output: BinaryIO, **kwargs: object) -> None:
+        nonlocal zip_calls
+        zip_calls += 1
+        original_write(output, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backup_object_set, "_write_zip_entries", count_zip)
+    with pytest.raises(backup_object_set.PreparedObjectSetTooLarge) as raised:
+        backup_object_set.prepare_object_set(
+            staging,
+            tmp_path / "threshold-output",
+            manifest=manifest,
+            component_target_bytes=1,
+            plaintext_byte_limit=0,
+        )
+
+    assert raised.value.byte_limit == 0
+    assert raised.value.attempted_size > 0
+    assert zip_calls == 1
+    assert not list((tmp_path / "threshold-output").glob("*.plaintext.tmp"))
+
+
+def test_prepared_object_set_scrubs_all_plaintext_when_age_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging = tmp_path / "failure-staging"
+    relative = "payload/projects/p1/data.bin"
+    content = b"plaintext-must-not-survive"
+    source = staging / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(content)
+    manifest = {
+        "backupId": "backup_failure",
+        "snapshotKind": "incremental",
+        "deltaFiles": [
+            {
+                "contributorId": "projects",
+                "path": relative,
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        ],
+    }
+    output_dir = tmp_path / "failure-output"
+    prepared = backup_object_set.prepare_object_set(staging, output_dir, manifest=manifest)
+
+    def fail_encrypt(*_args: object, **_kwargs: object) -> object:
+        raise AppError("injected Age failure")
+
+    monkeypatch.setattr(backup_object_set.backup_unattended, "encrypt_unattended", fail_encrypt)
+    with pytest.raises(AppError, match="injected Age failure"):
+        backup_object_set.encrypt_prepared_object_set(
+            prepared,
+            backup_id="backup_failure",
+            recipients=("age1test",),
+            manifest=manifest,
+            manifest_digest="a" * 64,
+            coverage_digest="b" * 64,
+        )
+
+    assert not list(output_dir.glob("*.plaintext.tmp"))
+
+
+def test_prepared_object_set_retry_scrubs_crash_leftovers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "retry-output"
+    output_dir.mkdir()
+    stale = output_dir / ".p0000.plaintext.tmp"
+    stale.write_bytes(b"crash-leftover")
+    scrubbed: list[Path] = []
+    original_scrub = backup_object_set.backup_unattended.scrub_plaintext_file
+
+    def record_scrub(path: Path) -> None:
+        scrubbed.append(path)
+        original_scrub(path)
+
+    monkeypatch.setattr(backup_object_set.backup_unattended, "scrub_plaintext_file", record_scrub)
+    prepared = backup_object_set.prepare_object_set(
+        tmp_path / "empty-staging",
+        output_dir,
+        manifest={"backupId": "backup_retry", "snapshotKind": "full", "files": []},
+    )
+
+    assert stale in scrubbed
+    assert not stale.exists()
+    assert prepared.components == ()
 
 
 def test_object_set_spool_reuses_exact_verified_ciphertexts(tmp_settings: Path) -> None:
@@ -1006,6 +1228,156 @@ def test_publish_v4_store_commits_and_converges_exact_ciphertext_set(tmp_setting
             schedule_slot="slot-object-set-store",
             fencing_token=3,
         )
+
+
+def test_publish_v4_store_component_readbacks_overlap(tmp_settings: Path) -> None:
+    class OverlapStore(backup_target_store.MemoryTargetStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self._active_lock = threading.Lock()
+            self.active_reads = 0
+            self.max_active_reads = 0
+
+        def get_stream(self, key: str, *, offset: int = 0):
+            data = self.get_bytes(key, offset=offset)
+            if data is None:
+                return iter(())
+
+            def chunks():
+                with self._active_lock:
+                    self.active_reads += 1
+                    self.max_active_reads = max(self.max_active_reads, self.active_reads)
+                try:
+                    time.sleep(0.03)
+                    yield data
+                finally:
+                    with self._active_lock:
+                        self.active_reads -= 1
+
+            return chunks()
+
+    store = OverlapStore()
+    target = backup_publish.ResolvedTarget(target_id="target-parallel-store", root=None, managed=False, kind="s3", store=store)
+    control = _component(tmp_settings, "control-parallel-store", b"control", control=True)
+    payloads = tuple(_component(tmp_settings, f"payload-parallel-store-{index}", f"payload-{index}".encode()) for index in range(5))
+    package = backup_object_set.ObjectSetPackage(
+        backup_id="backup_parallel_store",
+        components=(control, *payloads),
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+        manifest={"snapshotKind": "full"},
+    )
+
+    published = backup_publish.publish_backup(
+        target,
+        package,
+        run_id="run-parallel-store",
+        policy_id="policy-parallel-store",
+        schedule_slot="slot-parallel-store",
+        fencing_token=1,
+    )
+
+    assert published.commit["objectSetDigest"] == package.object_set_digest
+    assert store.max_active_reads >= 2, "remote component verification must actually overlap"
+
+
+@pytest.mark.parametrize(
+    ("integrity_mode", "payload_readbacks"),
+    (("strong-provider-checksum", 0), ("full-readback", 1)),
+)
+def test_publish_v4_provider_integrity_mode_controls_payload_readback(
+    tmp_settings: Path,
+    integrity_mode: str,
+    payload_readbacks: int,
+) -> None:
+    class CountingIntegrityStore(backup_target_store.MemoryTargetStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.read_keys: list[str] = []
+
+        def capabilities(self) -> backup_target_store.TargetCapabilities:
+            return replace(super().capabilities(), integrity_mode=integrity_mode)  # type: ignore[arg-type]
+
+        def stat(self, key: str) -> backup_target_store.ObjectMeta | None:
+            meta = super().stat(key)
+            if meta is None:
+                return None
+            return replace(
+                meta,
+                provider_sha256=meta.sha256,
+                provider_checksum_type="FULL_OBJECT",
+            )
+
+        def get_stream(self, key: str, *, offset: int = 0):
+            self.read_keys.append(key)
+            return super().get_stream(key, offset=offset)
+
+    store = CountingIntegrityStore()
+    target = backup_publish.ResolvedTarget(target_id="target-provider-integrity", root=None, managed=False, kind="s3", store=store)
+    control = _component(tmp_settings, "control-provider-integrity", b"control", control=True)
+    payload = _component(tmp_settings, "payload-provider-integrity", b"payload")
+    package = backup_object_set.ObjectSetPackage(
+        backup_id=f"backup_provider_{integrity_mode}",
+        components=(control, payload),
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+        manifest={"snapshotKind": "full"},
+    )
+
+    backup_publish.publish_backup(
+        target,
+        package,
+        run_id=f"run-provider-{integrity_mode}",
+        policy_id="policy-provider-integrity",
+        schedule_slot=f"slot-provider-{integrity_mode}",
+        fencing_token=1,
+    )
+
+    payload_key = backup_target_store.object_key(payload.ciphertext_digest)
+    control_key = backup_target_store.object_key(control.ciphertext_digest)
+    assert store.read_keys.count(payload_key) == payload_readbacks
+    assert store.read_keys.count(control_key) == 1
+
+
+@pytest.mark.parametrize(("provider_digest", "provider_type"), (("0" * 64, "FULL_OBJECT"), (None, None), ("0" * 64, "COMPOSITE")))
+def test_publish_v4_strong_provider_claim_fails_closed(
+    tmp_settings: Path,
+    provider_digest: str | None,
+    provider_type: str | None,
+) -> None:
+    class BadClaimStore(backup_target_store.MemoryTargetStore):
+        def capabilities(self) -> backup_target_store.TargetCapabilities:
+            return replace(super().capabilities(), integrity_mode="strong-provider-checksum")
+
+        def stat(self, key: str) -> backup_target_store.ObjectMeta | None:
+            meta = super().stat(key)
+            if meta is None:
+                return None
+            return replace(meta, provider_sha256=provider_digest, provider_checksum_type=provider_type)
+
+    store = BadClaimStore()
+    target = backup_publish.ResolvedTarget(target_id="target-bad-provider", root=None, managed=False, kind="s3", store=store)
+    control = _component(tmp_settings, "control-bad-provider", b"control", control=True)
+    payload = _component(tmp_settings, "payload-bad-provider", b"payload")
+    package = backup_object_set.ObjectSetPackage(
+        backup_id="backup_bad_provider",
+        components=(control, payload),
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+        manifest={"snapshotKind": "full"},
+    )
+
+    with pytest.raises(AppError, match="provider checksum"):
+        backup_publish.publish_backup(
+            target,
+            package,
+            run_id=f"run-bad-provider-{provider_type}",
+            policy_id="policy-bad-provider",
+            schedule_slot=f"slot-bad-provider-{provider_type}",
+            fencing_token=1,
+        )
+
+    assert backup_publish.latest_commit_store(store) is None
 
 
 def test_reconcile_store_rebuilds_object_set_receipt_and_catalog(tmp_settings: Path) -> None:
@@ -1475,12 +1847,22 @@ def test_object_set_fetch_fails_closed_and_resumes_partial_members(tmp_settings:
     }
     partial_payload = backup_remote_restore._fetch_object_set_components(payload_session, store, max_bytes=1)
     assert partial_payload["phase"] == "fetching-selected-components"
+    component_states = payload_session["componentStates"]
+    assert isinstance(component_states, dict)
+    assert component_states[digest]["state"] == "partial"
+    assert component_states[digest]["remoteETag"] == meta.etag
+    assert "componentFetchIndex" not in payload_session
     assert backup_remote_restore._fetch_object_set_components(payload_session, store, max_bytes=None)["phase"] == "components-fetched"
+    completed_states = payload_session["componentStates"]
+    assert isinstance(completed_states, dict)
+    assert completed_states[digest]["state"] == "verified"
 
     for field, value, message in (
         ("objectDigest", "f" * 64, "component is missing"),
         ("remoteETag", '"different"', "payload component changed"),
     ):
+        if field == "remoteETag":
+            backup_component_cache.ComponentCache().path_for(digest).unlink(missing_ok=True)
         invalid_component = {**component, field: value, "ciphertextPath": str(tmp_settings / f"invalid-{field}.age")}
         invalid_session = {
             "restoreId": f"restore-invalid-{field}",
@@ -1516,6 +1898,148 @@ def test_object_set_fetch_fails_closed_and_resumes_partial_members(tmp_settings:
     }
     with pytest.raises(AppError, match="digest mismatch"):
         backup_remote_restore._download_member(wrong_store, wrong_member, None)
+
+
+def test_required_object_set_component_downloads_overlap_and_verify(tmp_settings: Path) -> None:
+    class OverlapStore(backup_target_store.MemoryTargetStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.lock = threading.Lock()
+            self.ready = threading.Event()
+            self.active = 0
+            self.max_active = 0
+
+        def get_stream(self, key: str, *, offset: int = 0):
+            pieces = super().get_stream(key, offset=offset)
+
+            def observed():
+                with self.lock:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                    if self.active >= 2:
+                        self.ready.set()
+                try:
+                    self.ready.wait(timeout=2)
+                    time.sleep(0.02)
+                    yield from pieces
+                finally:
+                    with self.lock:
+                        self.active -= 1
+
+            return observed()
+
+    store = OverlapStore()
+    components: list[dict[str, object]] = []
+    expected_data: dict[str, bytes] = {}
+    for index in range(4):
+        data = (f"encrypted-component-{index}" * 512).encode()
+        digest = hashlib.sha256(data).hexdigest()
+        store.put_if_absent(backup_target_store.object_key(digest), data, checksum_sha256=digest)
+        expected_data[digest] = data
+        components.append(
+            {
+                "backupId": "backup-parallel-fetch",
+                "componentId": f"p{index:04d}",
+                "objectDigest": digest,
+                "expectedBytes": len(data),
+                "downloadedBytes": 0,
+                "remoteETag": None,
+                "remoteVersionId": None,
+                "ciphertextPath": str(tmp_settings / f"parallel-{index}.age"),
+                "fetched": False,
+                "priority": 2,
+            }
+        )
+    session: dict[str, object] = {
+        "restoreId": "restore-parallel-components",
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "chain": [{"control": {"downloadedBytes": 0}, "requiredComponents": components}],
+    }
+
+    result = backup_remote_restore._fetch_object_set_components(session, store, max_bytes=None)
+
+    assert result["phase"] == "components-fetched"
+    assert store.max_active >= 2
+    states = session["componentStates"]
+    assert isinstance(states, dict)
+    assert {state["state"] for state in states.values()} == {"verified"}
+    for component in components:
+        digest = str(component["objectDigest"])
+        assert Path(str(component["ciphertextPath"])).read_bytes() == expected_data[digest]
+
+
+def test_parallel_component_failure_drains_and_checkpoints_completed_peers(tmp_settings: Path) -> None:
+    store = backup_target_store.MemoryTargetStore()
+    components: list[dict[str, object]] = []
+    corrupt_digest = "0" * 64
+    for index in range(3):
+        data = (f"parallel-drain-{index}" * 1024).encode()
+        digest = corrupt_digest if index == 1 else hashlib.sha256(data).hexdigest()
+        store.put_if_absent(backup_target_store.object_key(digest), data)
+        components.append(
+            {
+                "backupId": "backup-parallel-drain",
+                "componentId": f"p{index:04d}",
+                "objectDigest": digest,
+                "expectedBytes": len(data),
+                "downloadedBytes": 0,
+                "remoteETag": None,
+                "remoteVersionId": None,
+                "ciphertextPath": str(tmp_settings / f"drain-{index}.age"),
+                "fetched": False,
+            }
+        )
+    session: dict[str, object] = {
+        "restoreId": "restore-parallel-drain",
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "chain": [{"control": {"downloadedBytes": 0}, "requiredComponents": components}],
+    }
+
+    with pytest.raises(AppError, match="digest mismatch"):
+        backup_remote_restore._fetch_object_set_components(session, store, max_bytes=None)
+
+    assert session["phase"] == "fetching-selected-components"
+    states = session["componentStates"]
+    assert isinstance(states, dict)
+    assert states[corrupt_digest]["state"] == "failed"
+    good_states = [state for digest, state in states.items() if digest != corrupt_digest]
+    assert all(state["state"] == "verified" for state in good_states)
+
+
+def test_parallel_component_short_read_fails_instead_of_crossing_barrier(tmp_settings: Path) -> None:
+    class ShortReadStore(backup_target_store.MemoryTargetStore):
+        def get_stream(self, key: str, *, offset: int = 0):
+            data = b"".join(super().get_stream(key, offset=offset))
+            return iter((data[: len(data) // 2],))
+
+    store = ShortReadStore()
+    data = b"short-read-component" * 1024
+    digest = hashlib.sha256(data).hexdigest()
+    store.put_if_absent(backup_target_store.object_key(digest), data, checksum_sha256=digest)
+    component = {
+        "backupId": "backup-short-read",
+        "componentId": "p0000",
+        "objectDigest": digest,
+        "expectedBytes": len(data),
+        "downloadedBytes": 0,
+        "remoteETag": None,
+        "remoteVersionId": None,
+        "ciphertextPath": str(tmp_settings / "short-read.age"),
+        "fetched": False,
+    }
+    session: dict[str, object] = {
+        "restoreId": "restore-short-read",
+        "storageProtocol": backup_object_set.OBJECT_SET_V1,
+        "chain": [{"control": {"downloadedBytes": 0}, "requiredComponents": [component]}],
+    }
+
+    with pytest.raises(AppError, match="truncated"):
+        backup_remote_restore._fetch_object_set_components(session, store, max_bytes=None)
+
+    assert session["phase"] == "fetching-selected-components"
+    states = session["componentStates"]
+    assert isinstance(states, dict)
+    assert states[digest]["state"] == "failed"
 
 
 def test_object_set_projection_rejects_invalid_control_session(
@@ -1916,7 +2440,7 @@ def test_object_set_restore_fetches_control_before_any_payload(tmp_settings: Pat
     assert not list((backups.RESTORE_DIR / str(created["restoreId"])).glob("payload-*.age"))
 
 
-def test_object_set_restore_fails_closed_when_committed_component_is_missing(
+def test_object_set_restore_defers_missing_required_component_until_fetch(
     tmp_settings: Path,
     object_set_crypto: None,
 ) -> None:
@@ -1929,15 +2453,26 @@ def test_object_set_restore_fails_closed_when_committed_component_is_missing(
         schedule_slot="slot-missing-set",
         fencing_token=1,
     )
-    missing = next(item for item in package.components if not item.control)
+    missing = next(item for item in package.components if item.component_id == "p0001")
     backup_publish.object_path(backups.BACKUP_DIR, missing.ciphertext_digest).unlink()
 
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection={"contributors": ["projects"], "projectIds": ["p1"]},
+    )
+    restore_id = str(created["restoreId"])
+    backup_remote_restore.fetch_restore_session(restore_id)
+    backup_crypto.put_secret(restore_id, "passphrase", "test-secret")
+    backup_remote_restore.preview_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection={"contributors": ["projects"], "projectIds": ["p1"]},
+        restore_id=restore_id,
+    )
+
     with pytest.raises(AppError, match="component is missing"):
-        backup_remote_restore.create_restore_from_target(
-            target_id="managed-local",
-            backup_id=package.backup_id,
-            selection={"contributors": ["projects"], "projectIds": ["p1"]},
-        )
+        backup_remote_restore.fetch_restore_session(restore_id)
 
 
 def test_object_set_control_cannot_select_foreign_component(
@@ -2031,6 +2566,252 @@ def test_object_set_preview_plans_and_fetches_only_selected_component(
     assert not (tree / "payload/memory").exists()
 
 
+def test_object_set_recovery_drill_runs_production_materialize_without_mutating_live_workspace(
+    tmp_settings: Path,
+    object_set_crypto: None,
+) -> None:
+    package = _full_object_set_package(tmp_settings)
+    backup_publish.publish_backup(
+        backup_publish.resolve_target("managed-local"),
+        package,
+        run_id="run-production-drill",
+        policy_id="policy-production-drill",
+        schedule_slot="slot-production-drill",
+        fencing_token=1,
+    )
+    config.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    live_path = config.PROJECTS_DIR / "live-after-backup.bin"
+    live_path.write_bytes(b"live-workspace-must-not-change")
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection={"contributors": ["projects"], "projectIds": ["p1"]},
+    )
+    restore_id = str(created["restoreId"])
+    assert backup_remote_restore.fetch_restore_session(restore_id)["phase"] == "controls-fetched"
+    backup_crypto.put_secret(restore_id, "passphrase", "test-secret")
+
+    result = backup_recovery_drill.run_recovery_drill(restore_id)
+
+    assert result["result"] == "success"
+    assert result["chainLength"] == 1
+    assert result["components"] == 2
+    assert result["logicalBytes"] > 0
+    assert result["verifiedContributors"] == 1
+    assert live_path.read_bytes() == b"live-workspace-must-not-change"
+    root = backups.RESTORE_DIR / restore_id
+    assert not any(root.glob("metadata-*"))
+    assert not any(root.glob("object-layer-*"))
+    assert not (root / "extracted").exists()
+    assert not (root / "plan.json").exists()
+    assert not (root / "verified-plan.json").exists()
+    assert (root / "drill-result.json").is_file()
+    assert not backup_crypto.has_secret(restore_id)
+    with pytest.raises(AppError, match="Recovery Drill job cannot enter live restore"):
+        backup_remote_restore.materialize_restore_session(
+            restore_id,
+            kind="passphrase",
+            secret=bytearray(b"test-secret"),
+        )
+    with pytest.raises(AppError, match="Recovery Drill job cannot enter live restore"):
+        backup_remote_restore.materialize_federated_restore(restore_id)
+    assert not (root / "transaction.json").exists()
+
+
+def test_valid_verified_plan_skips_control_redecrypt_and_tamper_replans(
+    tmp_settings: Path,
+    object_set_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _full_object_set_package(tmp_settings)
+    backup_publish.publish_backup(
+        backup_publish.resolve_target("managed-local"),
+        package,
+        run_id="run-plan-reuse",
+        policy_id="policy-plan-reuse",
+        schedule_slot="slot-plan-reuse",
+        fencing_token=1,
+    )
+    selection = {"contributors": ["projects"], "projectIds": ["p1"]}
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=selection,
+    )
+    restore_id = str(created["restoreId"])
+    backup_remote_restore.fetch_restore_session(restore_id)
+    backup_crypto.put_secret(restore_id, "passphrase", "test-secret")
+    backup_remote_restore.preview_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=selection,
+        restore_id=restore_id,
+    )
+    backup_remote_restore.fetch_restore_session(restore_id)
+    control_path = package.control.path
+    original_decrypt = backup_remote_restore.backup_crypto.decrypt_file
+    control_decrypts = 0
+
+    def counted_decrypt(
+        source: Path,
+        target: Path,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        nonlocal control_decrypts
+        if source.name.startswith("control-") or source == control_path:
+            control_decrypts += 1
+        original_decrypt(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(backup_remote_restore.backup_crypto, "decrypt_file", counted_decrypt)
+
+    backup_remote_restore.materialize_restore_session(
+        restore_id,
+        kind="passphrase",
+        secret=bytearray(b"test-secret"),
+    )
+    assert control_decrypts == 0
+
+    second = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=selection,
+    )
+    second_id = str(second["restoreId"])
+    backup_remote_restore.fetch_restore_session(second_id)
+    backup_crypto.put_secret(second_id, "passphrase", "test-secret")
+    backup_remote_restore.preview_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=selection,
+        restore_id=second_id,
+    )
+    backup_remote_restore.fetch_restore_session(second_id)
+    plan_path = backups.RESTORE_DIR / second_id / "verified-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["body"]["bindings"]["selectionDigest"] = "0" * 64
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    before = control_decrypts
+
+    backup_remote_restore.materialize_restore_session(
+        second_id,
+        kind="passphrase",
+        secret=bytearray(b"test-secret"),
+    )
+    assert control_decrypts > before
+
+
+def test_component_pipeline_overlaps_network_and_crypto_and_scrubs_plaintext(
+    tmp_settings: Path,
+    object_set_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _full_object_set_package(tmp_settings)
+    backup_publish.publish_backup(
+        backup_publish.resolve_target("managed-local"),
+        package,
+        run_id="run-pipeline-overlap",
+        policy_id="policy-pipeline-overlap",
+        schedule_slot="slot-pipeline-overlap",
+        fencing_token=1,
+    )
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=None,
+    )
+    restore_id = str(created["restoreId"])
+    backup_remote_restore.fetch_restore_session(restore_id)
+    payloads = [component for component in package.components if not component.control]
+    slow_key = backup_target_store.object_key(payloads[-1].ciphertext_digest)
+    slow_waiting = threading.Event()
+    crypto_started = threading.Event()
+    overlap_observed = threading.Event()
+    original_stream = backup_target_store.FilesystemTargetStore.get_stream
+    original_decrypt = backup_remote_restore.backup_crypto.decrypt_file
+
+    def delayed_stream(
+        store: backup_target_store.FilesystemTargetStore,
+        key: str,
+        *,
+        offset: int = 0,
+    ):
+        pieces = original_stream(store, key, offset=offset)
+
+        def delayed():
+            if key == slow_key:
+                slow_waiting.set()
+                crypto_started.wait(timeout=2)
+            yield from pieces
+
+        return delayed()
+
+    def observed_decrypt(source: Path, target: Path, *args: Any, **kwargs: Any) -> None:
+        if ".backup-component-cache" in str(source):
+            crypto_started.set()
+            if slow_waiting.is_set():
+                overlap_observed.set()
+        original_decrypt(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(backup_target_store.FilesystemTargetStore, "get_stream", delayed_stream)
+    monkeypatch.setattr(backup_remote_restore.backup_crypto, "decrypt_file", observed_decrypt)
+
+    backup_remote_restore.materialize_restore_session(
+        restore_id,
+        kind="passphrase",
+        secret=bytearray(b"test-secret"),
+    )
+
+    assert overlap_observed.is_set()
+    assert not list((backups.RESTORE_DIR / restore_id).glob("payload-decrypted-*.zip"))
+    completed = backup_remote_restore.read_restore_session(restore_id)
+    assert completed is not None
+    assert completed["cryptoPipeline"]["maxQueuedComponents"] <= completed["cryptoPipeline"]["queueCapacity"] == 2
+
+
+def test_component_pipeline_scrubs_plaintext_on_decrypt_failure(
+    tmp_settings: Path,
+    object_set_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _full_object_set_package(tmp_settings)
+    backup_publish.publish_backup(
+        backup_publish.resolve_target("managed-local"),
+        package,
+        run_id="run-pipeline-failure",
+        policy_id="policy-pipeline-failure",
+        schedule_slot="slot-pipeline-failure",
+        fencing_token=1,
+    )
+    created = backup_remote_restore.create_restore_from_target(
+        target_id="managed-local",
+        backup_id=package.backup_id,
+        selection=None,
+    )
+    restore_id = str(created["restoreId"])
+    backup_remote_restore.fetch_restore_session(restore_id)
+    original_decrypt = backup_remote_restore.backup_crypto.decrypt_file
+    injected = threading.Event()
+
+    def failing_decrypt(source: Path, target: Path, *args: Any, **kwargs: Any) -> None:
+        original_decrypt(source, target, *args, **kwargs)
+        if ".backup-component-cache" in str(source) and not injected.is_set():
+            injected.set()
+            raise AppError("injected payload decrypt failure")
+
+    monkeypatch.setattr(backup_remote_restore.backup_crypto, "decrypt_file", failing_decrypt)
+
+    with pytest.raises(AppError, match="injected payload decrypt failure"):
+        backup_remote_restore.materialize_restore_session(
+            restore_id,
+            kind="passphrase",
+            secret=bytearray(b"test-secret"),
+        )
+
+    assert injected.is_set()
+    assert not list((backups.RESTORE_DIR / restore_id).glob("payload-decrypted-*.zip"))
+
+
 def test_object_set_selective_restore_issues_gets_for_required_payload_only(
     tmp_settings: Path,
     object_set_crypto: None,
@@ -2046,8 +2827,19 @@ def test_object_set_selective_restore_issues_gets_for_required_payload_only(
         fencing_token=1,
     )
     get_keys: list[str] = []
+    head_keys: list[str] = []
     original_get = backup_target_store.FilesystemTargetStore.get_bytes
     original_stream = backup_target_store.FilesystemTargetStore.get_stream
+    original_stat = backup_target_store.FilesystemTargetStore.stat
+
+    def counted_stat(
+        store: backup_target_store.FilesystemTargetStore,
+        key: str,
+    ) -> backup_target_store.ObjectMeta | None:
+        head_keys.append(key)
+        return original_stat(store, key)
+
+    monkeypatch.setattr(backup_target_store.FilesystemTargetStore, "stat", counted_stat)
 
     def counted_get(
         store: backup_target_store.FilesystemTargetStore,
@@ -2077,6 +2869,8 @@ def test_object_set_selective_restore_issues_gets_for_required_payload_only(
         selection={"contributors": ["projects"], "projectIds": ["p1"]},
     )
     restore_id = str(created["restoreId"])
+    payload_by_id = {item.component_id: item for item in package.components if not item.control}
+    assert all(backup_target_store.object_key(item.ciphertext_digest) not in head_keys for item in payload_by_id.values())
     backup_remote_restore.fetch_restore_session(restore_id)
     backup_crypto.put_secret(restore_id, "passphrase", "test-secret")
     backup_remote_restore.preview_restore_from_target(
@@ -2085,13 +2879,82 @@ def test_object_set_selective_restore_issues_gets_for_required_payload_only(
         selection={"contributors": ["projects"], "projectIds": ["p1"]},
         restore_id=restore_id,
     )
+    assert all(backup_target_store.object_key(item.ciphertext_digest) not in head_keys for item in payload_by_id.values())
     backup_remote_restore.fetch_restore_session(restore_id)
 
-    payload_by_id = {item.component_id: item for item in package.components if not item.control}
     assert get_keys.count(backup_target_store.object_key(package.control.ciphertext_digest)) == 1
     assert get_keys.count(backup_target_store.object_key(payload_by_id["p0001"].ciphertext_digest)) == 1
+    assert head_keys.count(backup_target_store.object_key(payload_by_id["p0001"].ciphertext_digest)) == 1
     assert backup_target_store.object_key(payload_by_id["p0000"].ciphertext_digest) not in get_keys
     assert backup_target_store.object_key(payload_by_id["p0002"].ciphertext_digest) not in get_keys
+    assert backup_target_store.object_key(payload_by_id["p0000"].ciphertext_digest) not in head_keys
+    assert backup_target_store.object_key(payload_by_id["p0002"].ciphertext_digest) not in head_keys
+
+
+def test_warm_object_set_restore_uses_cache_without_payload_get(
+    tmp_settings: Path,
+    object_set_crypto: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _full_object_set_package(tmp_settings)
+    backup_publish.publish_backup(
+        backup_publish.resolve_target("managed-local"),
+        package,
+        run_id="run-warm-cache",
+        policy_id="policy-warm-cache",
+        schedule_slot="slot-warm-cache",
+        fencing_token=1,
+    )
+    selection = {"contributors": ["projects"], "projectIds": ["p1"]}
+
+    def fetch_selected() -> str:
+        created = backup_remote_restore.create_restore_from_target(
+            target_id="managed-local",
+            backup_id=package.backup_id,
+            selection=selection,
+        )
+        restore_id = str(created["restoreId"])
+        backup_remote_restore.fetch_restore_session(restore_id)
+        backup_crypto.put_secret(restore_id, "passphrase", "test-secret")
+        backup_remote_restore.preview_restore_from_target(
+            target_id="managed-local",
+            backup_id=package.backup_id,
+            selection=selection,
+            restore_id=restore_id,
+        )
+        backup_remote_restore.fetch_restore_session(restore_id)
+        return restore_id
+
+    first_restore_id = fetch_selected()
+    first_session = backup_remote_restore.read_restore_session(first_restore_id)
+    assert first_session is not None
+    digest = str(first_session["chain"][0]["requiredComponents"][0]["objectDigest"])
+    backup_remote_restore.advance_federated_phase(first_restore_id, "complete")
+    payload_key = backup_target_store.object_key(digest)
+    payload_gets: list[str] = []
+    original_stream = backup_target_store.FilesystemTargetStore.get_stream
+
+    def counted_stream(
+        store: backup_target_store.FilesystemTargetStore,
+        key: str,
+        *,
+        offset: int = 0,
+    ):
+        if key == payload_key:
+            payload_gets.append(key)
+        return original_stream(store, key, offset=offset)
+
+    monkeypatch.setattr(backup_target_store.FilesystemTargetStore, "get_stream", counted_stream)
+
+    second_restore_id = fetch_selected()
+    second_session = backup_remote_restore.read_restore_session(second_restore_id)
+    assert second_session is not None
+    required = second_session["chain"][0]["requiredComponents"][0]
+    assert payload_gets == []
+    assert ".backup-component-cache" in str(required["ciphertextPath"])
+    assert digest in backup_component_cache.ComponentCache().pinned_digests()
+    backup_remote_restore.advance_federated_phase(second_restore_id, "complete")
+    assert digest not in backup_component_cache.ComponentCache().pinned_digests()
 
 
 def test_object_set_federated_restore_keeps_unselected_live_contributor(
@@ -2248,6 +3111,57 @@ def _run_restart_probe(tmp_settings: Path, command: dict[str, object]) -> dict[s
 
 
 @pytest.mark.integration
+def test_recovery_job_control_survives_real_process_exits(tmp_settings: Path) -> None:
+    restore_id = "restore-job-control-restart"
+    restore_root = backups.RESTORE_DIR / restore_id
+    restore_root.mkdir(parents=True)
+    partial = restore_root / "payload-partial.age"
+    partial.write_bytes(b"1234")
+    digest = "a" * 64
+    session = {
+        "schemaVersion": 4,
+        "restoreId": restore_id,
+        "source": "remote-target",
+        "phase": "fetching-selected-components",
+        "chain": [
+            {
+                "requiredComponents": [
+                    {
+                        "componentId": "p0000",
+                        "objectDigest": digest,
+                        "expectedBytes": 10,
+                        "remoteETag": "etag",
+                        "remoteVersionId": None,
+                        "ciphertextPath": str(partial),
+                    }
+                ]
+            }
+        ],
+        "componentStates": {
+            digest: {
+                "state": "partial",
+                "downloadedBytes": 4,
+                "expectedBytes": 10,
+                "remoteETag": "etag",
+                "remoteVersionId": None,
+            }
+        },
+    }
+    (restore_root / "remote-fetch.json").write_text(json.dumps(session), encoding="utf-8")
+
+    paused = _run_restart_probe(tmp_settings, {"action": "pause-job", "restoreId": restore_id})
+    assert paused == {"restoreId": restore_id, "phase": "paused", "pauseRequested": True}
+    partial.write_bytes(b"bad")
+    resumed = _run_restart_probe(tmp_settings, {"action": "resume-job", "restoreId": restore_id})
+    assert resumed == {"restoreId": restore_id, "phase": "fetching-selected-components"}
+    resumed_session = json.loads((restore_root / "remote-fetch.json").read_text(encoding="utf-8"))
+    assert resumed_session["componentStates"][digest]["state"] == "queued"
+    assert not partial.exists()
+    aborted = _run_restart_probe(tmp_settings, {"action": "abort-job", "restoreId": restore_id})
+    assert aborted == {"restoreId": restore_id, "phase": "aborted", "abortRequested": False}
+
+
+@pytest.mark.integration
 @pytest.mark.slow
 def test_object_set_restore_resumes_across_real_process_exits(tmp_settings: Path) -> None:
     if not bool(backup_crypto.capabilities().get("encryptedBackupAvailable")):
@@ -2285,18 +3199,33 @@ def test_object_set_restore_resumes_across_real_process_exits(tmp_settings: Path
     process_b = _run_restart_probe(
         tmp_settings,
         {
-            "action": "resume-and-prepare",
+            "action": "plan-and-partial-component",
             "restoreId": restore_id,
-            "secretKind": "age-identity",
+            "secretKind": "age-identity",  # pragma: allowlist secret
             "secret": recovery_identity,
         },
     )
-    assert process_b["phase"] == "prepared"
+    assert process_b == {
+        "restoreId": restore_id,
+        "phase": "fetching-selected-components",
+        "partialComponents": 1,
+        "partialBytes": 1,
+    }
     process_c = _run_restart_probe(
+        tmp_settings,
+        {
+            "action": "resume-and-prepare",
+            "restoreId": restore_id,
+            "secretKind": "age-identity",  # pragma: allowlist secret
+            "secret": recovery_identity,
+        },
+    )
+    assert process_c["phase"] == "prepared"
+    process_d = _run_restart_probe(
         tmp_settings,
         {"action": "resume-commit-complete", "restoreId": restore_id},
     )
-    assert process_c == {
+    assert process_d == {
         "restoreId": restore_id,
         "commitPhase": "backend-committed",
         "phase": "complete",

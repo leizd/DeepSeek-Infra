@@ -5,12 +5,23 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.4.15-blue)
+![Version](https://img.shields.io/badge/version-4.5.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
+
+> **4.5.0 in development — Production Recovery Orchestration & DR Readiness.** The approved milestone freezes object-set-v1, Receipt v4, Commit v4, and randomized Age ciphertext while adding production recovery orchestration in verified Gates. Release readiness remains pending until real Evidence is complete.
+
+## 4.5.0 at a glance
+
+- Durable Recovery Jobs add bounded priority-aware Component transfer, restart checkpoints, pause/resume/abort, renewable holds, preflight, and redacted telemetry.
+- A ciphertext-only verified Component cache, frozen Projection Plans, and bounded fetch/decrypt/materialize pipelining improve recovery without weakening Merkle or federated commit barriers.
+- Read-only DR readiness reports actual RPO, explicitly estimated RTO, protection state, and drill history; isolated manual Drills reuse production verification while making live commit unreachable.
+- Independent exact-merge CI producers own real MinIO/Rust Age cold and warm cache Evidence plus subprocess restart and fault injection. 4.5.0 remains unreleased until those and all release gates pass.
+
+See the [4.5.0 development release notes](docs/releases/4.5.0.md), [approved specification](docs/specs/4.5.0-production-recovery-orchestration.md), and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 
@@ -97,7 +108,7 @@ npm run check --prefix stateless-mcp
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95
-python scripts/preflight_release.py --version 4.4.15 --ga
+python scripts/preflight_release.py --version 4.5.0 --ga
 ```
 
 Except for requests explicitly sent to configured providers such as DeepSeek or Tavily, project data remains local by default.

@@ -1,24 +1,75 @@
-# 4.4.13 Checklist
+# 4.5.0 Production Recovery Orchestration Checklist
 
 <!-- docs-language-switcher:start -->
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
-- [x] Version surfaces and ADR-0042
-- [x] Pure projection module (granularity / digest / dependency closure)
-- [x] Durable selection freeze in the remote restore session
-- [x] Retry rejects changed selection (409 restore-selection-mismatch)
-- [x] From-target preview (fetch + metadata extract + plan report)
-- [x] Metadata-only and selective ZIP extraction
-- [x] Lazy pack verification (parse without hashing; verify on first use)
-- [x] Projection-aware chain materializer (output vs support separation)
-- [x] Projected `prepare_restore` / commit / rollback
-- [x] `serverTransactionDigest` includes `selectionDigest`
-- [x] Frontend/external-MCP participation derived from selection
-- [x] Hold lifecycle (release on terminal; retain on recovery-required)
-- [x] Adaptive Full uses packed-container physical cost
-- [x] Index-maintenance migration (rebuild + atomic swap)
-- [x] Real Age + MinIO production restore E2E CI contract
-- [x] Release documentation and Evidence contract
-- [x] Full local gates
-- [ ] Atomic commits, push, PR, and green CI
+## Review gate
+
+- [x] Audit `origin/main` after PR #128 and protect unrelated untracked files
+- [x] Write proposed 4.5.0 specification and ADR
+- [x] Break implementation into dependency-ordered, verifiable slices
+- [x] User approves specification, ADR, and implementation plan
+
+## Gate A — Transport
+
+- [x] Freeze compatibility fixtures and prepare 4.5.0 development version
+- [x] Enforce Scheduler priority and FD budgets
+- [x] Parallelize remote object-set upload
+- [x] Persist digest-keyed per-Component restore states
+- [x] Defer Payload HEAD until verified Projection closure
+- [x] Parallelize required Component download
+- [x] Checkpoint A: focused tests, ruff, and mypy green
+
+## Gate B — Cache
+
+- [x] Add verified encrypted Component cache
+- [x] Add active/recovery-required pins and 20 GiB LRU quota
+- [x] Checkpoint B: warm restore has zero remote Payload GET
+
+## Gate C — Pipeline
+
+- [x] Persist strongly bound verified Projection Plans
+- [x] Reuse Control metadata without redecode
+- [x] Overlap network/crypto and scrub plaintext Component ZIPs immediately
+- [x] Checkpoint C: plan reuse and plaintext-lifetime tests green
+
+## Gate D — Safety
+
+- [x] Replace fixed holds with renewable generationed leases
+- [x] Add durable pause/resume/phase-aware abort
+- [x] Add disk/dependency Recovery preflight
+- [x] Checkpoint D: restart, long-lease, and insufficient-disk tests green
+
+## Gate E — Cost and integrity
+
+- [x] Introduce Prepared Object Sets and remove object-set double compression
+- [x] Probe authoritative provider full-object SHA-256
+- [x] Avoid readback only when strong checksum is proven
+- [x] Checkpoint E: fallback and multipart-ETag rejection tests green
+
+## Gate F — DR readiness
+
+- [x] Persist bounded/redacted Recovery telemetry
+- [x] Expose actual RPO and explicitly estimated RTO readiness
+- [x] Add isolated manual Recovery Drill
+- [x] Checkpoint F: live Workspace remains byte-identical in every drill test
+
+## Gate G — Evidence and release
+
+Local checkpoint (2026-08-13; not release Evidence): full Python coverage
+passed at 95.02%; frontend check passed 607 tests plus build/bundle gates;
+ruff, mypy, vendor JavaScript syntax, strict offline eval/baseline/security,
+dependency audit, Bandit, and baseline-aware secret scanning passed. Release
+version surfaces agree on 4.5.0. Preflight remains intentionally red with 24
+required Evidence failures and 5 optional warnings, so no item below is promoted
+from local results.
+
+- [ ] Real MinIO + real Age cold selective recovery
+- [ ] Real MinIO warm-cache recovery with zero Payload GET
+- [ ] Real subprocess per-Component and pause/resume recovery
+- [ ] Fault injection for disk, lease, cache, remote mutation, and partial commit
+- [ ] Frozen wire-format and legacy compatibility Evidence
+- [ ] Full Python/frontend/eval/security/release gates
+- [ ] Exact-merge CI Evidence only; no fabricated PASS values
+- [ ] Release 4.5.0

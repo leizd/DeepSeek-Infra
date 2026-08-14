@@ -1045,6 +1045,7 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 | `POST` | `/api/workspace/restores/inspect` | 上传明文包后只读校验；age 包只返回 `locked` 与密文摘要。 |
 | `POST` | `/api/workspace/restores/from-target` | 从已注册 Target 与 Backup ID 创建耐久 Remote Restore Session。 |
 | `POST` | `/api/workspace/restores/{restoreId}/fetch` | 按 Receipt Lineage 有界下载 Full + Delta 密文链，并逐对象校验摘要。 |
+| `POST` | `/api/workspace/restores/{restoreId}/preflight` | 构建/复用强绑定 Projection Plan，只读核对 closure、cache、target、safety backup 与磁盘容量；不足时返回 `409 recovery_preflight_capacity`。 |
 | `PUT` | `/api/workspace/restores/{restoreId}/secret` | 为 locked 上传提供一次性密码或 Identity。 |
 | `POST` | `/api/workspace/restores/{restoreId}/unlock` | 完整认证 age 消息后进入既有 ZIP/Manifest Inspect。 |
 | `POST` | `/api/workspace/restores/{restoreId}/materialize` | 消费 Secret，流式解密/应用 Chain，验证完整 Tree 后接入 Federated Restore Prepare。 |
@@ -1053,6 +1054,11 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 | `POST` | `/api/workspace/restores/{restoreId}/commit` | 先记录 commit intent；浏览器切换 Epoch 后以 `frontendCommitted=true` 幂等提交后端。 |
 | `POST` | `/api/workspace/restores/{restoreId}/complete` | 核对摘要、标记完成并释放服务端 Fence。 |
 | `POST` | `/api/workspace/restores/{restoreId}/abort` | 幂等回滚已交换 Contributor；不删除 Safety Backup。 |
+| `POST` | `/api/workspace/restores/{restoreId}/pause` | 持久化 pause intent，在 Component checkpoint 后停止接纳新工作。 |
+| `POST` | `/api/workspace/restores/{restoreId}/resume` | 重验 partial 长度/来源后清除 pause intent 并恢复。 |
+| `GET` | `/api/workspace/disaster-recovery/status` | 返回经 Commit/Receipt/Lineage 验证的 actual RPO、Scrub/Drill/Target/Index/Cache 健康与显式 estimated/unavailable RTO。 |
+| `POST` | `/api/workspace/disaster-recovery/drills` | 对已有 Recovery Job 执行手动隔离 Drill；请求只接受 `{"restoreId":"..."}`。 |
+| `GET` | `/api/workspace/disaster-recovery/drills/{restoreId}` | 读取持久、聚合且脱敏的 Drill 结果。 |
 | `GET` | `/api/workspace/restores/{restoreId}` | 查询持久事务状态，供浏览器启动恢复。 |
 | `GET` | `/api/workspace/restores` | 列出恢复事务。 |
 | `DELETE` | `/api/workspace/restores/{restoreId}` | 仅删除非活动、非 Fence 引用的记录。 |
@@ -1061,6 +1067,35 @@ Word / PDF 生成由 `create_document` 工具完成：用户要求做 Word / PDF
 Restore Fence 活跃时读请求继续；非 Restore Owner 的业务写请求返回 HTTP 423。`commit`、
 `complete` 与 `abort` 可安全重试。浏览器状态存在时，旧
 `/api/workspace/restores/{restoreId}/apply` 会拒绝单阶段提交。
+
+Preflight 成功响应返回 `closure`、`cache`、`network`、`scratch`、`disk`、`safetyBackup`、
+`targetHealth`、`projectionRecoverability`、`lastWholeSnapshotHealth` 与 `blockingReasons`。
+容量计算包含 materialized tree、完整 live Workspace safety backup 峰值、未命中 cache 的密文、
+有界 crypto plaintext 与默认 1 GiB reserve。探测不会删除 cache、下载 Payload、写 Target 或修改 live Workspace。
+容量/磁盘探测阻断的错误 `details.preflight` 使用同一报告结构；不返回凭据、Secret 或逻辑路径。
+
+Disaster Recovery status 是只读且需要普通 API 鉴权。`recoveryPoint` 只有在 Commit hash chain、
+Commit 绑定的 Receipt 摘要、`creationVerified` 与完整增量祖先链都有效时才为 `available`；
+`recoveryPointAt` 来自该正式 Receipt 的 `createdAt`，`rpoSeconds` 以响应的 `calculatedAt`
+为基准计算。被 trash/delete、未验证、缺父链或 Receipt/Commit 被篡改的点不会进入 RPO。
+
+`rtoEstimate.status=estimated` 仅使用最近 30 天成功 Recovery Job 的 transfer、crypto、
+materialization 三阶段吞吐：增量链的传输/解密工作量为整条链密文字节，物化工作量为最终
+逻辑树字节，三阶段估时相加并向上取整。缺任一近期阶段样本或缺逻辑工作量时返回
+`status=unavailable` 与稳定原因；`isSla` 始终为 `false`。Target health 使用已持久 probe，
+GET 不运行 capability probe 或开启 Target 写意图；它可能通过只读 LIST/GET 验证已注册远端
+Target 的 Commit/Receipt。查询不创建索引、不运行 cache GC，也不修改 Workspace。尚无手动
+隔离 Drill 证据时 `drill.status=unavailable`，不会用旧式 unlock verification 代替 4.5.0 Recovery Drill。
+
+Recovery Drill 复用既有 Recovery Job 的 production preflight、fetch、decrypt、Merkle verify、
+materialize 与 Contributor inspect 路径。Operator 必须先经 Restore Secret Slot 提供解锁材料；Drill
+请求不接受 Secret、凭据或 Workspace root。Drill 只在 `.restore-staging/<restoreId>` 内物化，结构上
+不能进入 federated prepare/commit；成功和失败都会清空 Secret、scrub 并删除全部明文与物化树、
+释放远端 hold 和 Component cache pin，同时保留已校验密文与 `drill-result.json`。结果只记录
+`restoreId`、起止时间、耗时、chain/component/ciphertext/logical byte 计数、验证的 Contributor 数和
+稳定失败码，不持久化异常文本、逻辑路径、摘要、Secret 或凭据。同一 `restoreId` 的终态请求幂等
+返回原结果；执行中 GET 返回 `result=running`，并发执行返回 `409`，而该 Drill Job 后续不能被普通
+materialize/commit 入口复用。
 
 Whole-Age 远端恢复的持久相位为 `fetching-chain → chain-fetched → decrypting-chain → materializing → verified → preparing → prepared → committing → complete`。`object-set-v1` 使用 `fetching-controls → controls-fetched → decrypting-controls → planning-projection → fetching-selected-components → components-fetched → decrypting-components → materializing → verified → prepared → committing → complete`。`materialize` 不接受原始密码，只消费先前写入的临时 Secret Slot；失败或超时后 Slot 清空。所有层的 Component/Pack/Chunk/File SHA 与 Merkle 转移通过后才允许进入 Prepare。
 

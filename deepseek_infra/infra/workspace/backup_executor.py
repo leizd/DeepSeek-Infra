@@ -363,7 +363,7 @@ def execute_run(
                 outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
                 outcome["snapshotKind"] = "full"
                 outcome["forceFullReason"] = "delta-ratio"
-                outcome["adaptiveCostBasis"] = "unencrypted-archive-bytes"
+                outcome["adaptiveCostBasis"] = "prepared-component-bytes"
                 outcome["adaptiveDeltaLimitBytes"] = exc.byte_limit
                 package = backup_scheduled.build_scheduled_backup(
                     policy,
@@ -383,12 +383,21 @@ def execute_run(
             savings = getattr(package, "savings", None) or {}
             logical_bytes = int(savings.get("logicalBytes") or 0)
             physical_bytes = int(
-                savings.get("unencryptedArchiveBytes")
+                savings.get("preparedComponentBytes")
+                or savings.get("unencryptedArchiveBytes")
                 or savings.get("physicalDeltaBytes")
                 or savings.get("physicalPayloadBytes")
                 or 0
             )
-            cost_basis = "unencrypted-archive-bytes" if savings.get("unencryptedArchiveBytes") else ("packed-delta-bytes" if savings.get("physicalDeltaBytes") else "raw-payload-bytes")
+            cost_basis = (
+                "prepared-component-bytes"
+                if savings.get("preparedComponentBytes")
+                else (
+                    "unencrypted-archive-bytes"
+                    if savings.get("unencryptedArchiveBytes")
+                    else ("packed-delta-bytes" if savings.get("physicalDeltaBytes") else "raw-payload-bytes")
+                )
+            )
             if (
                 run_plan.get("plannedSnapshotKind") == "adaptive"
                 and str(run_plan.get("resolvedSnapshotKind") or "incremental") == "incremental"

@@ -5,9 +5,62 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.4.15.
+Applicable version: v4.5.0.
 
-## 4.4.15 candidate evidence contract
+## 4.5.0 development evidence contract
+
+4.5.0 product implementation is complete through Gate F and its two new Gate G
+producers are wired. Real MinIO, real Age, subprocess restart, fault injection,
+and exact-merge artifacts are recorded only by their owning workflows after they
+execute. The paths below are the required output contract, not a claim that the
+files already exist or pass. No 4.4.15 artifact is reused or relabelled as
+4.5.0 PASS evidence.
+
+- `docs/evidence/headless-mcp-bridge.json`
+- `docs/evidence/a2a-external-peer.json`
+- `docs/evidence/ga-v4.5.0.json`
+- `docs/evidence/workspace-v4.5.0.json`
+- `docs/evidence/edge-router-v4.5.0.json`
+- `docs/evidence/media-v4.5.0.json`
+- `docs/evidence/browser-v4.5.0.json`
+- `docs/evidence/automation-v4.5.0.json`
+- `docs/evidence/skills-v4.5.0.json`
+- `docs/evidence/skills-ui-v4.5.0.json`
+- `docs/evidence/skill-builder-v4.5.0.json`
+- `docs/evidence/skill-packs-v4.5.0.json`
+- `docs/evidence/skill-eval-dashboard-v4.5.0.json`
+- `docs/evidence/skill-versioning-v4.5.0.json`
+- `docs/evidence/skill-analytics-v4.5.0.json`
+- `docs/evidence/skill-security-v4.5.0.json`
+- `docs/evidence/skill-catalog-v4.5.0.json`
+- `docs/evidence/context-taint-v4.5.0.json`
+- `docs/evidence/semantic-cache-onnx-v4.5.0.json`
+- `docs/evidence/upgrade-rollback-v4.5.0.json`
+- `docs/evidence/protocol-contract-v4.5.0.json`
+- `docs/evidence/frontend-bundle-v4.5.0.json`
+- `docs/evidence/frontend-browser-v4.5.0.json`
+- `evals/reports/latest.json`
+- `evals/reports/agent-latest.json`
+- `evals/reports/baseline-compare-latest.json`
+- `evals/reports/security-latest.json`
+- `evals/reports/skills-v4.5.0.json`
+- `evals/reports/media-v4.5.0.json`
+- `evals/reports/browser-v4.5.0.json`
+- `evals/reports/automation-v4.5.0.json`
+- `docs/evidence/rust-sidecar-image-v4.5.0.json`
+- `docs/evidence/hybrid-runtime-e2e-v4.5.0.json`
+- `docs/evidence/gateway-request-parity-v4.5.0.json`
+- `docs/evidence/mcp-protocol-parity-v4.5.0.json`
+- `docs/evidence/rag-parity-v4.5.0.json`
+- `docs/evidence/rag-document-preparation-parity-v4.5.0.json`
+- `docs/evidence/rag-vector-binary-parity-v4.5.0.json`
+- `docs/evidence/rust-coverage-v4.5.0.json`
+- `docs/evidence/rust-sidecar-performance-v4.5.0.json`
+- `docs/evidence/packed-delta-s3-v4.5.0.json`
+- `docs/evidence/object-set-s3-v4.5.0.json`
+- `docs/evidence/recovery-faults-v4.5.0.json`
+
+## Historical 4.4.15 evidence contract
 
 The following paths are the required CI output contract for 4.4.15. Files that depend on
 exact-merge, Chromium, Rust Docker, or release packaging are produced by their owning
@@ -58,9 +111,13 @@ workflow and are not represented as locally verified until that workflow succeed
 
 4.4.15 is the encrypted-object-set and true-selective-fetch release. Full and Incremental snapshots share one projection pipeline; selection is validated against the verified final snapshot; adaptive deltas use bounded temporary archives and stop before encryption when oversized. New object-set lineages fetch independently encrypted controls first and only GET payload components in the Merkle-verified dependency closure. Receipt/Commit v4 exposes ciphertext digests and sizes without plaintext identity, while real process restart, holds, retention/GC and legacy Whole-Age v2-v5 compatibility remain hard gates. It retains the 4.4.13 projected-recovery contracts, 4.4.12 packed-delta index/container contracts, earlier fenced backup/restore and portability contracts, all 4.3.7 convergence contracts, and the frozen 4.0 protocol surface. The root `VERSION` file is canonical, and CI derives candidate/exact-merge evidence names and Docker tags from `RELEASE_VERSION`.
 
-The typed source of truth is `deepseek_infra/infra/diagnostics/evidence_inventory.py`. Candidate and exact-merge entries below are all required for GA; the optional Python stability report is informative.
+The typed source of truth is `deepseek_infra/infra/diagnostics/evidence_inventory.py`.
+The current required contract is listed above. The detailed matrices below are
+retained as historical ownership and reproduction references; their older
+versioned paths are not 4.5.0 PASS Evidence. The optional Python stability
+report remains informative.
 
-## Workflow-only stateless MCP reliability gates
+## Historical workflow-only stateless MCP reliability gates
 
 The stateless MCP service is validated by workflow checks rather than a committed release-evidence JSON. Do not treat these rows as exact-merge artifacts; the authoritative result is the GitHub check suite for the commit being evaluated.
 
@@ -80,7 +137,7 @@ The stateless MCP service is validated by workflow checks rather than a committe
 | `backup-packed-delta-4.4.13` | Index v3 delta ops/current head, shared File Versions, PackWriter/typed refs, Pack/Blob/File/Merkle checks, persistent bounded scanner, GC/compaction, 100k-file scale and real HTTP S3 multipart restart/restore | `python scripts/run_packed_delta_s3_e2e.py --out docs/evidence/packed-delta-s3-v4.4.13.json` in the dedicated MinIO CI job |
 | `stateless-mcp-portability` | Generation-fenced logical JSONL, no deployment secrets, running/queued to interrupted conversion, deterministic collision remap and retry convergence | `npm run check --prefix stateless-mcp` |
 
-## Candidate tier
+## Historical candidate tier
 
 | Capability | Producer | Evidence / reproduction |
 | --- | --- | --- |
@@ -109,7 +166,7 @@ The stateless MCP service is validated by workflow checks rather than a committe
 | Frontend browser | `frontend-browser` | `docs/evidence/frontend-browser-v4.4.13.json`; `scripts/smoke_frontend_browser.py`; real Chromium |
 | Offline eval suite | `eval` | `evals/reports/latest.json`; `evals/reports/agent-latest.json`; `evals/reports/baseline-compare-latest.json`; `evals/reports/security-latest.json` |
 
-## Exact-merge tier
+## Historical exact-merge tier
 
 | Contract | Producer | Evidence / reproduction |
 | --- | --- | --- |
@@ -124,13 +181,13 @@ The stateless MCP service is validated by workflow checks rather than a committe
 | Rust sidecar performance | `rust-sidecar-performance` | `docs/evidence/rust-sidecar-performance-v4.4.13.json`; `scripts/run_rust_sidecar_benchmarks.py`; `docs/RUST_SIDECAR_PERFORMANCE.md` |
 | Packed Delta real S3 | `packed-delta-s3-e2e` | `docs/evidence/packed-delta-s3-v4.4.13.json`; pinned MinIO HTTP service; 100k-file scale + Multipart restart + v5 byte-exact restore |
 
-## Optional and frozen compatibility evidence
+## Historical optional and frozen compatibility evidence
 
 - Optional test-producer report: `docs/evidence/python-coverage-stability-v4.4.13.json`.
 - Python-owned semantic-cache binary embeddings remain covered by `docs/SEMANTIC_CACHE_BINARY_EMBEDDINGS.md`, `tests/test_semantic_cache_binary_embeddings.py` and `tests/test_semantic_cache_embedding_migration.py`, including direct BLOB assembly.
 - GUI interoperability remains documented for Claude Desktop and Cursor. Third-party A2A ecosystem checks remain optional compatibility submissions and are not silently promoted into the GA inventory.
 
-## Assembly and package outputs
+## Historical assembly and package outputs
 
 - Source context: `docs/evidence/evidence-source-context-v4.4.13.json`.
 - Manifest: `docs/evidence/evidence-manifest-v4.4.13.json`.

@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.14。
+适用版本：v4.5.0（开发中，尚未 release-ready）。
 
 ## 威胁模型
 
@@ -73,6 +73,10 @@ DeepSeek 和 Tavily Key 可以通过环境变量提供，也可以在浏览器�
 4.4.13 的 Backup Pack Index 与内容摘要只存在于 Age 认证密文和可信本地 `.backup-index`；恢复对 Pack Path、Offset/Length、Pack/Blob/File/Merkle 摘要逐层 Fail Closed。远端恢复可冻结为 Contributor/Project 投影：`selectionDigest` 跨重试不可变，跨文件 `parent-range` 依赖进入只读 Support 集（绝不写入最终树），Metadata 平面完整校验而 Payload 平面选择性物化，未选中 Contributor 不被改动。Whole-Age Object 下 API/UI 如实上报 `networkSelective: false`。Pack 不跨 Snapshot 引用，也不引入云端 Chunk CAS、Convergent Encryption 或远端明文 Hash Index。
 
 4.4.14 的 `object-set-v1` 把 Control 与约 64 MiB Payload Components 分别用 fresh randomness 独立 Age 加密；S3 Key 和 Receipt v4 只含密文 SHA-256/大小集合，明文 Path、Project、Contributor、Plaintext/Chunk/Pack SHA 与 Component Role 只存在于加密 Control。新增且明确接受的远端可观察元数据是 **Component 数量与粗粒度密文大小**；本版不做 Privacy Padding。Restore 先拉取 Control，再只 GET Merkle-verified Dependency Closure 所需组件；缺失/外来组件 Fail Closed。Hold、Retention 与 GC 按完整 Object Set 标记，未提交组件只在 Grace 后回收。禁止 Deterministic/Convergent Age、plaintext-derived key 与跨 Backup/Policy/Target CAS。
+
+4.5.0 的 Recovery Job 不把缓存提升为信任根：`.backup-component-cache` 只保存 Age 密文及 digest/size 元数据，每次命中都重新校验，损坏项会被驱逐并从权威 Target 重取。活跃和 `recovery-required` Job 持有 cache pin 与可续租的 generationed Hold；续租 CAS 冲突、远端对象版本/ETag 漂移、空间不足或依赖缺失都会在破坏性阶段前 Fail Closed。耐久 Job 与遥测只记录枚举、阶段、计数和有界错误分类，不记录 Secret、Recovery Identity、Access Key、明文 Path、Project/Contributor 名称、明文/组件 digest、Cache Root 或 Staging Root。
+
+Manual Recovery Drill 的请求体只接受既有 `restoreId`，并经过相同本地鉴权；它复用生产 fetch/decrypt/Merkle/materialize 路径，但只写隔离 Drill Root，不能调用 live federated prepare/commit。成功与注入失败都必须 scrub Drill Root 和已知明文 staging，并释放安全终态的 Hold/pin；部分提交或参与者状态不确定时保持 `recovery-required` 保护。密文 Target、Spool 与可验证 Cache 不是明文清理对象。
 
 Stateless MCP 的 Redis AOF 不直接进入包。逻辑快照排除 Redis URL/密码、MCP token、实例 ID、Lease Owner/TTL、旧 Fencing Token 和 OTel 配置；恢复后的可运行任务变为 `interrupted`，不会自动执行。
 
@@ -217,3 +221,6 @@ PDF 会优先读取可复制文字。OCR 是可选能力，默认关闭，以避
 - FastAPI/uvicorn 服务默认面向个人本地和可信局域网使用，不应直接作为公网服务暴露。
 - 无状态 MCP 的 pytest 工具会执行仓库代码；它不是不可信代码沙箱，必须以最小权限运行并限制可访问的工作区、网络和凭证。
 - 搜索结果和上传文件内容可能包含不可信文本，模型输出仍需用户判断。
+- Recovery Cache 虽只含密文，仍会暴露本地访问时间、对象数量和粗粒度大小；远端提供商也可观察请求时序、对象数量与密文大小。4.5.0 不提供 Privacy Padding。
+- SSD/闪存上的 plaintext staging 删除不承诺物理安全擦除；高敏环境仍需使用受控磁盘加密、最小权限 Runtime Root 和介质销毁策略。
+- 生产发布必须等待 exact-merge CI 的真实 MinIO/Rust Age、子进程重启、故障矩阵和全量门禁 Evidence；本地或 mock PASS 不能替代该证据。

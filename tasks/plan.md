@@ -1,4 +1,4 @@
-# Implementation Plan: 4.4.13 Projected Recovery & Production Remote Restore
+# Implementation Plan: 4.5.0 Production Recovery Orchestration & DR Readiness
 
 <!-- docs-language-switcher:start -->
 [中文](../README.md) / [English](../README.en.md)
@@ -6,128 +6,398 @@
 
 ## Overview
 
-4.4.12 made incremental chain restores fast and correct. 4.4.13 lets a user restore only a selected Contributor / Project instead of the whole Workspace, and replaces the MinIO E2E's assembled stub with a real production Backup → Age → S3 → Receipt → Restore → Federated Commit chain.
+Implement the approved specification in reversible vertical slices while keeping object-set-v1, Receipt v4, Commit v4, randomized Age, and legacy restore compatibility frozen. The existing `restoreId` session becomes the durable Recovery Job; no parallel job identity is introduced.
 
-The restore is frozen into an explicit `selection` whose `selectionDigest` is durable and immutable across retries. Cross-file `parent-range` dependencies automatically enter a read-only Support set that is materialized in scratch space but never written to the final tree. Even for a partial restore, the full F0→I1→…→In logical Merkle chain is still verified layer by layer. Because this release keeps the whole-age-object network model, every preview/API surface reports `networkSelective: false` and never claims network-level selective fetch.
+Specification: `docs/specs/4.5.0-production-recovery-orchestration.md`
+Decision record: `docs/adr/ADR-0044-production-recovery-orchestration.md`
 
-## Architecture Decisions
-
-- Freeze `selectionDigest` at session creation; a resume whose digest differs returns `409 restore-selection-mismatch`. Selection is durable frozen state, like a backup run plan.
-- Scope projection granularity by contributor capability: `projects → project`, every other contributor → `contributor`. No arbitrary glob / path / JSON-subtree selection.
-- Keep `restoreOutputSet` and `restoreDependencySet` strictly separate. Support files are verified but never enter the prepared final mutation list.
-- Metadata plane stays full (logical PUT/DELETE chain + every Merkle root); only payload-byte materialization is projected.
-- Extract selectively: read only `manifest.json`, `delta/operations.json` and `payload/packs/index.json`, then extract only required Full entries, Packs and standalone blobs.
-- Parse the pack index without hashing; verify each pack's size/SHA256 only on first use. A full restore naturally verifies every pack.
-- Thread selection into the federated transaction: project-scoped staging inside `projects`, `requiresFrontendApply`/`requiresExternalMcp` derived from selection, `serverTransactionDigest` includes `selectionDigest`.
-- Safety backup stays always full; restore may be partial, rollback stays complete.
-- Release remote ancestor holds at terminal states; retain them during `recovery-required`.
-- Base adaptive-full decisions on packed-container physical bytes instead of raw logical payload bytes.
-- Add an index-maintenance migration path that rebuilds and atomically swaps the index DB without a full `VACUUM` on the scheduler path.
-- The production remote restore E2E runs through the real executor and the real Rust Age helper against MinIO, including a new-process restart and full federated commit/complete.
-
-## Dependency Graph
+## Dependency graph
 
 ```text
-Projection core (selection/digest/closure)
-        │
-Metadata-first extraction ──→ selective extraction ──→ projection-aware materializer
-        │                                              │
-Selection freeze in remote session ──→ preview endpoint ─┘
-        │
-Projected federated restore (prepare/commit/rollback)
-        │
-Frontend/MCP derivation + hold lifecycle
-        │
-Adaptive-full cost model + index maintenance migration
-        │
-Real Age MinIO production E2E ──→ evidence + release surfaces
+Frozen compatibility fixtures
+        |
+Scheduler priority + FD budget
+        |-------------------------------|
+Remote parallel publish          Per-component restore state
+        |                               |
+Provider checksum capability     Lazy HEAD + parallel download
+        |                               |
+Prepared Object Set              Verified ciphertext cache
+                                        |
+                              Verified Projection Plan
+                                        |
+                              Network/crypto pipeline
+                                        |
+                              Renewable hold leases
+                                        |
+                              Recovery Job controls
+                                        |
+                                  Disk preflight
+                                        |
+                         Readiness + isolated Recovery Drill
+                                        |
+                             Real MinIO/Age/fault Evidence
 ```
 
-## Task List
+## Architecture decisions
 
-### Phase 0: Release and projection foundation
+- Extend the existing restore session and routes additively; `restoreId` remains the authority.
+- Migrate old `componentFetchIndex` on read, but write digest-keyed `componentStates` for object sets.
+- Make cache and provider checksum optimizations fail-safe fallbacks, never trust roots.
+- Keep whole-snapshot health in Scrub/Drill records; a selective preflight reports only Projection recoverability live.
+- Gate polished UI work until transport, cache, pipeline, and safety Gates A-D pass.
 
-- [x] Task 1: Prepare the 4.4.13 version surface and ADR-0042.
-  - Acceptance: every canonical release surface resolves to 4.4.13; the ADR records the projection/digest/whole-age-object decisions.
-  - Verification: `python scripts/check_release_version.py --strict-branch`.
-  - Files: `VERSION`, release surfaces, `docs/adr/`, `docs/releases/`.
+## Phase 0 — Contract foundation
 
-### Phase 1: Projection core
+### Task 1: Freeze compatibility and version-development surfaces
 
-- [x] Task 2: Add the pure projection module.
-  - Acceptance: contributor/project granularity validation, canonical `selection_digest`, and full-logical-chain dependency closure (output set, support set, needed packs/blobs) computed from chain metadata; byte report with `networkSelective: false`.
-  - Verification: offline unit contracts (digest stability, cross-file parent closure, support/output separation).
-  - Files: new `backup_projection.py` + tests.
+**Acceptance criteria:**
+- Protocol fixture tests prove object-set-v1, Receipt v4, Commit v4, and legacy Whole-Age behavior are unchanged.
+- Development version surfaces become 4.5.0 only after the compatibility fixtures are green.
 
-### Phase 2: Durable selection freeze and preview
+**Verification:** `python -m pytest tests/test_backup_object_set_contracts.py --no-cov` and `python scripts/check_release_version.py`.
 
-- [x] Task 3: Freeze selection in the remote restore session (schema v3) and reject retries that change it.
-  - Acceptance: `create_restore_from_target` persists `selection` + `selectionDigest`; resume with a different selection returns `409 restore-selection-mismatch`.
-  - Verification: session-contract tests.
-  - Files: `backup_remote_restore.py`, `backup_governance.py` routes, tests.
-- [x] Task 4: Add the from-target preview endpoint.
-  - Acceptance: fetch + decrypt + metadata-only extract + projection plan + accurate byte report (`ciphertextDownloadBytes` = whole chain), reusing the session so confirm does not re-download.
-  - Verification: preview-contract tests and route coverage.
-  - Files: preview function, routes, frontend API client.
+**Files likely touched:** protocol tests, `VERSION`, version surfaces, release draft.
+**Dependencies:** None.
+**Scope:** Medium; split version/docs from behavioral fixtures if it exceeds five files.
 
-### Phase 3: Selective materialization
+## Phase 1 — Gate A: bounded transport
 
-- [x] Task 5: Split extraction into metadata-only and selective entry extraction.
-  - Acceptance: path/dup/compression validations preserved; only required Full entries, Packs and standalone blobs are extracted.
-  - Verification: extraction-contract tests.
-  - Files: extraction helpers, restore session, tests.
-- [x] Task 6: Lazy pack verification.
-  - Acceptance: `parse_pack_index` (no file I/O) + `verify_pack` on first use; unused packs are not opened or hashed.
-  - Verification: open-handle-count and corruption tests.
-  - Files: `backup_pack.py`, `PackHandleCache`, tests.
-- [x] Task 7: Projection-aware chain materializer.
-  - Acceptance: `projection=None` is byte-identical to 4.4.12; with projection, full logical chain verification is retained, only outputs reach the workspace, support files never do, and selected file SHAs verify.
-  - Verification: projected byte-for-byte, unselected-isolation, support-never-written tests.
-  - Files: `backup_incremental_restore.py`, tests.
+### Task 2: Enforce scheduler priority and FD budgets
 
-### Phase 4: Projected federated restore
+**Acceptance criteria:**
+- Stable ascending priority is observed before task admission.
+- Worker, byte, and declared FD maxima are never exceeded; cancellation drains admitted work.
 
-- [x] Task 8: Projected `prepare_restore`, commit and rollback.
-  - Acceptance: only selected contributors/projects are staged and swapped; `serverTransactionDigest` includes `selectionDigest`; project-scoped commit/rollback via the always-full safety backup.
-  - Verification: transaction/rollback and retry-digest contracts.
-  - Files: `backups.py`, contributor apply, tests.
-- [x] Task 9: Derive frontend/external-MCP participation and complete the hold lifecycle.
-  - Acceptance: `requiresFrontendApply`/`requiresExternalMcp` derive from selection; holds release at complete/abort/failed-before-transaction and are retained at `recovery-required`.
-  - Verification: gating and hold-lifecycle contracts.
-  - Files: `backup_remote_restore.py`, frontend, tests.
+**Verification:** focused RED/GREEN tests in `tests/test_backup_component_transport.py`; `ruff` and `mypy` on changed modules.
 
-### Phase 5: Cost model and maintenance
+**Files likely touched:** `backup_component_transport.py`, its tests.
+**Dependencies:** Task 1.
+**Scope:** Small.
 
-- [x] Task 10: Base adaptive full on packed-container physical cost.
-  - Acceptance: the executor decision uses physical delta bytes vs estimated full archive bytes, with evidence recorded.
-  - Verification: adaptive-ratio contracts.
-  - Files: `backup_scheduled.py`, `backup_executor.py`, tests.
-- [x] Task 11: Add the index-maintenance migration path.
-  - Acceptance: rebuild → copy live state → verify head/root → fsync → atomic swap, keeping the old DB until success; no full `VACUUM` on the scheduler path.
-  - Verification: migration and fail-safe contracts.
-  - Files: `backup_incremental.py`, tests.
+### Task 3: Parallelize remote object-set upload
 
-### Phase 6: Production remote restore E2E and release
+**Acceptance criteria:**
+- S3/ObjectStore Components overlap under the shared scheduler and retain the journal barrier.
+- Completion order leaves Receipt, ObjectSetDigest, and Commit bytes unchanged.
 
-- [x] Task 12: Add the real Age + MinIO production restore E2E and CI wiring.
-  - Acceptance: real executor F0/I1, receipts/catalog, slot commit, new-process restart, real Age decrypt, projection, federated commit/complete; workspace equals the I1 snapshot byte-for-byte.
-  - Verification: dedicated CI job with the Rust helper built and evidence emitted.
-  - Files: E2E test/script, CI workflow, evidence producer.
-- [x] Task 13: Update release-facing documentation, evidence contracts and run the full gates.
-  - Verification: full Python/frontend/Rust/docs gates, coverage ≥ 95%, exact-merge evidence.
+**Verification:** MemoryTargetStore overlap/failure tests plus existing publish contracts.
 
-## Risks and Mitigations
+**Files likely touched:** `backup_publish.py`, publish tests, object-set contract tests.
+**Dependencies:** Task 2.
+**Scope:** Medium.
+
+### Task 4: Persist per-component restore state
+
+**Acceptance criteria:**
+- Digest-keyed queued/downloading/partial/verified/failed states survive process exit.
+- Existing `componentFetchIndex` sessions migrate safely; changed source identity or bad partial length restarts from zero.
+
+**Verification:** session migration and subprocess-style restart contracts.
+
+**Files likely touched:** a focused recovery-state module, `backup_remote_restore.py`, tests.
+**Dependencies:** Task 2.
+**Scope:** Medium.
+
+### Task 5: Defer Payload HEAD until Projection closure
+
+**Acceptance criteria:**
+- Session creation validates Commit/Receipt/inventory and HEADs Controls only.
+- A 5000-Component receipt with three required Components produces HEAD/GET only for Controls plus those three Payloads.
+
+**Verification:** counting-store tests assert zero unselected Payload HEAD and GET.
+
+**Files likely touched:** `backup_remote_restore.py`, object-set tests.
+**Dependencies:** Task 4.
+**Scope:** Medium.
+
+### Task 6: Parallelize selective Component download
+
+**Acceptance criteria:**
+- Required Components overlap under worker/byte/FD limits and complete in arbitrary order.
+- Every completed ciphertext is size/SHA verified before state becomes `verified`.
+
+**Verification:** deterministic concurrency, failure drain, resume, and digest-order tests.
+
+**Files likely touched:** `backup_remote_restore.py`, scheduler integration tests, object-set tests.
+**Dependencies:** Tasks 4-5.
+**Scope:** Medium.
+
+### Checkpoint A
+
+- Focused transport/restore suites green.
+- `ruff check .` and `mypy .` green.
+- Gate A behavioral evidence is local PASS; real MinIO status remains pending.
+
+## Phase 2 — Gate B: verified ciphertext cache
+
+### Task 7: Add verified encrypted Component cache
+
+**Acceptance criteria:**
+- Hits require exact size and streaming SHA-256; misses use fsync plus atomic rename.
+- Corrupt entries are removed/refetched and never change restore output.
+
+**Verification:** cache unit tests with corruption, crash partials, and no-secret metadata assertions.
+
+**Files likely touched:** new cache module, its tests, `.gitignore`, `tests/conftest.py`; update `AGENTS.md` in a separate docs commit if needed.
+**Dependencies:** Task 6.
+**Scope:** Medium.
+
+### Task 8: Add cache pins and quota GC
+
+**Acceptance criteria:**
+- Active, paused, and recovery-required jobs pin required digests.
+- LRU quota GC evicts verified unpinned entries only; default quota is 20 GiB.
+
+**Verification:** deterministic clock/quota tests and concurrent pin/GC contracts.
+
+**Files likely touched:** cache module, recovery state integration, tests.
+**Dependencies:** Task 7.
+**Scope:** Medium.
+
+### Checkpoint B
+
+- Warm in-memory/filesystem restore produces zero remote Payload GET.
+- Corruption and eviction contracts green.
+
+## Phase 3 — Gate C: plan reuse and pipeline
+
+### Task 9: Persist and validate the verified Projection Plan
+
+**Acceptance criteria:**
+- Atomic `verified-plan.json` binds selection, chain/ObjectSet, Control digests, and planner schema.
+- A valid plan is reused; any mismatch fails closed into explicit replanning.
+
+**Verification:** binding-tamper and restart tests.
+
+**Files likely touched:** a plan module, `backup_remote_restore.py`, tests.
+**Dependencies:** Task 6.
+**Scope:** Medium.
+
+### Task 10: Reuse Control metadata during materialize
+
+**Acceptance criteria:**
+- Valid Preview-to-Materialize flow does not decrypt/decode Controls again.
+- Existing no-preview and legacy Whole-Age paths continue to work.
+
+**Verification:** state-based decode-count and byte-identical materialization tests.
+
+**Files likely touched:** `backup_remote_restore.py`, object-set tests.
+**Dependencies:** Task 9.
+**Scope:** Small.
+
+### Task 11: Pipeline network and crypto with prompt plaintext scrubbing
+
+**Acceptance criteria:**
+- A bounded crypto queue overlaps verified downloads with decrypt/verify/extract.
+- Each plaintext Component ZIP is scrubbed immediately after use and on all failures.
+
+**Verification:** overlap, queue-bound, plaintext-lifetime, and injected-decrypt-failure tests.
+
+**Files likely touched:** recovery pipeline module, remote restore integration, tests.
+**Dependencies:** Tasks 8 and 10.
+**Scope:** Medium.
+
+### Checkpoint C
+
+- Preview plan reuse and pipeline contracts green.
+- Actual scratch inspection confirms no retained plaintext Component ZIP.
+
+## Phase 4 — Gate D: protection and job controls
+
+### Task 12: Make recovery holds renewable leases
+
+**Acceptance criteria:**
+- CAS renewal increments generation and extends expiry for all protected phases.
+- Pause and recovery-required retain renewal; safe terminal phases release.
+
+**Verification:** fake-clock, ETag-conflict, long-duration, retention interaction, and restart tests.
+
+**Files likely touched:** recovery lease module, remote restore/retention integration, tests.
+**Dependencies:** Task 4.
+**Scope:** Medium.
+
+### Task 13: Add durable pause, resume, and phase-aware abort
+
+**Acceptance criteria:**
+- Pause stops new admission after checkpoints; resume validates partial state.
+- Abort cleans safely before commit, aborts prepared transactions, and enters recovery-required on uncertain/partial commit.
+
+**Verification:** state-machine/API tests plus process restart between request and convergence.
+
+**Files likely touched:** recovery job module, two route modules, tests, typed frontend client.
+**Dependencies:** Tasks 8, 11-12.
+**Scope:** Medium; split core and route/client slices.
+
+### Task 14: Add disk/dependency Recovery preflight
+
+**Acceptance criteria:**
+- Report covers closure, cache, network, scratch, safety backup, free disk, and health.
+- Insufficient capacity blocks before mutation with a stable error code.
+
+**Verification:** pure arithmetic boundaries, disk-probe failure, and route contract tests.
+
+**Files likely touched:** preflight module, route/client, tests, `docs/API.md`.
+**Dependencies:** Tasks 8-10 and 12.
+**Scope:** Medium; keep docs/client separate if needed.
+
+### Checkpoint D
+
+- Active/paused/recovery-required protection verified.
+- Pause/resume/abort and insufficient-disk preflight pass across restart.
+- Review before any UI work.
+
+## Phase 5 — Gate E: cost and provider integrity
+
+### Task 15: Introduce Prepared Object Sets
+
+**Status:** Complete (`3204dfb`).
+
+**Acceptance criteria:**
+- Exact prepared Component bytes determine Adaptive Full and feed Age directly.
+- Threshold crossing can stop component preparation early; every plaintext path is scrubbed.
+
+**Verification:** compression-call counts, early-abort-before-Age, cleanup, and output compatibility tests.
+
+**Files likely touched:** `backup_object_set.py`, `backup_scheduled.py`, `backup_executor.py`, tests.
+**Dependencies:** Task 1.
+**Scope:** Medium; split preparation from executor integration.
+
+### Task 16: Add authoritative provider-checksum capability
+
+**Status:** Complete (`54c5490`).
+
+**Acceptance criteria:**
+- Capability probe distinguishes proven full-object SHA-256 from fallback.
+- Single/multipart ETag is never accepted; missing/inconsistent checksum forces readback.
+
+**Verification:** fake S3 response matrix and store contract tests.
+
+**Files likely touched:** `backup_target_store.py`, `backup_target_s3.py`, tests.
+**Dependencies:** Task 1.
+**Scope:** Medium.
+
+### Task 17: Use provider integrity mode in parallel publish
+
+**Status:** Complete (`07f87a5`).
+
+**Acceptance criteria:**
+- Proven checksum avoids Payload full readback.
+- Fallback preserves current streaming full SHA-256 readback and atomic publish barrier.
+
+**Verification:** counting-store tests for zero/nonzero readback and corrupted claims.
+
+**Files likely touched:** `backup_publish.py`, publish tests.
+**Dependencies:** Tasks 3 and 16.
+**Scope:** Small.
+
+### Checkpoint E
+
+- [x] No object-set double compression.
+- [x] Provider checksum and fallback contracts green without wire-format changes.
+
+## Phase 6 — Gate F: DR readiness
+
+### Task 18: Persist recovery telemetry and readiness inputs
+
+**Status:** Complete (`bb6b2f6`).
+
+**Acceptance criteria:**
+- Bounded-cardinality counters/histograms answer job phase, transport/cache, lease, and stage-throughput questions.
+- No secret, logical metadata, digest, path, or error string becomes a metric label.
+
+**Verification:** telemetry snapshot tests and a redaction/cardinality review.
+
+**Files likely touched:** recovery telemetry module, observability integration, tests.
+**Dependencies:** Tasks 11-14 and 17.
+**Scope:** Medium.
+
+### Task 19: Expose DR readiness
+
+**Status:** Complete (`3cfd62e`, `86afae3`).
+
+**Acceptance criteria:**
+- Status reports actual RPO and latest committed/Scrub/Drill health.
+- RTO is explicitly estimated from recent successful stage throughput and reports unavailable when evidence is insufficient.
+
+**Verification:** pure aggregation and authenticated route/client tests.
+
+**Files likely touched:** readiness module, route/client, tests, `docs/API.md`.
+**Dependencies:** Task 18.
+**Scope:** Medium.
+
+### Task 20: Add isolated manual Recovery Drill
+
+**Status:** Complete (`5c27e29`, `3c7fcc4`, `5e2ca9a`).
+
+**Acceptance criteria:**
+- Drill uses production fetch/decrypt/verify/materialize paths but cannot invoke live commit.
+- Drill root and plaintext are destroyed; result records chain/components/bytes/duration and releases safe holds/pins.
+
+**Verification:** sentinel live Workspace remains byte-identical under success and injected failure.
+
+**Files likely touched:** drill module, route/client, tests, `docs/API.md`.
+**Dependencies:** Tasks 12-14 and 18.
+**Scope:** Medium.
+
+### Checkpoint F
+
+- [x] Readiness, RPO, estimated-RTO, and isolated Drill contracts green (15 focused tests).
+- [x] Security review confirms the Drill module has no prepare, federated materialize, or commit call path.
+- [x] Success and injected-failure tests preserve a byte-identical live Workspace and scrub Drill plaintext.
+
+## Phase 7 — Gate G: real Evidence and release
+
+### Task 21: Add real MinIO/Age cold and warm recovery Evidence
+
+**Acceptance criteria:**
+- Cold selective restore proves parallel required-only transfer.
+- Warm restore proves zero remote Payload GET and corrupt-cache refetch.
+
+**Verification:** dedicated CI job with real MinIO and real Rust Age helper; version-derived Evidence artifact.
+
+**Files likely touched:** E2E runner/test, CI workflow, Evidence contract.
+**Dependencies:** Checkpoints A-F.
+**Scope:** Medium; separate CI from E2E code.
+
+### Task 22: Add subprocess pause/resume and fault-injection Evidence
+
+**Acceptance criteria:**
+- Real process exit resumes per-Component transfer and paused job.
+- Faults cover disk exhaustion, lease conflict, cache corruption, remote mutation, and partial federated commit.
+
+**Verification:** dedicated CI artifacts with only executed checks marked PASS.
+
+**Files likely touched:** E2E runner/tests, CI workflow, Evidence contract.
+**Dependencies:** Task 21.
+**Scope:** Medium.
+
+### Task 23: Complete release surfaces and full gates
+
+**Acceptance criteria:**
+- Changelog, API/security/architecture/status/release docs describe implemented behavior only.
+- Full Python/frontend/offline eval/security/release gates pass; CI-only evidence is attached and exact-merge.
+
+**Verification:** commands in the specification and `python scripts/preflight_release.py --version 4.5.0`.
+
+**Files likely touched:** release documentation/evidence indices and version-derived generated release artifacts.
+**Dependencies:** Tasks 21-22.
+**Scope:** Medium; documentation and generated Evidence commits remain separate.
+
+## Risks and mitigations
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Projection closure misses a cross-file parent | Corrupt or missing restore | Backward dependency walk over the whole logical chain; support files verified before use |
-| Selection changes mid-restore | Wrong scope restored | Immutable `selectionDigest` + 409 mismatch on resume |
-| Selective materialization weakens integrity | Unverified partial restore | Metadata plane stays full: every Merkle root verified; only payload bytes are projected |
-| Selective extraction drops validation | Malicious archive entry restored | Keep all path/dup/compression validations from `_safe_extract_and_verify` |
-| Support files leak into the workspace | Mutated unselected state | MaterializedNode `role` tracking; only outputs enter the final mutation list |
-| Real Age E2E is flaky in CI | CI noise | Pinned MinIO image, health checks, localhost only, real Rust helper built once |
-| Packed-cost adaptive decision regresses | Wasted full backups | Evidence records container bytes basis; ratio contracts unchanged in semantics |
+| Parallel workers corrupt a shared session journal | Lost/incorrect resume state | Single atomic state coordinator; workers return results and never concurrently rewrite JSON. |
+| Lazy HEAD weakens whole-snapshot health claims | False healthy status | Report Projection recoverability separately; source full health only from Scrub/Drill. |
+| Cache becomes an implicit trust root | Corrupt restore | Verify size/SHA on every hit against Control/Receipt commitments. |
+| Lease renewal races retention | Ancestors collected during recovery | CAS generation, renewal margin, fail-closed protection degradation, fake-clock concurrency tests. |
+| Plan reuse accepts stale selection/chain | Wrong scope restored | Bind selection, chain/ObjectSet, Control digests, and planner schema; mismatch replans. |
+| Pipeline retains plaintext on error | Data exposure | `finally` scrubbing and injected failures at every stage. |
+| Provider claims checksum but returns weak semantics | Undetected corruption | Active probe plus strict full-object SHA-256 equality; otherwise full readback. |
+| DR status overstates readiness/RTO | Unsafe operational decision | Explicit health provenance; RTO labelled estimate/unavailable, never SLA. |
+| Large milestone accumulates unreviewable diff | Review/rollback risk | One task per atomic commit, checkpoints after each Gate, no task over five files without splitting. |
 
-## Open Questions
+## Review checkpoint
 
-None. The supplied release specification defines the compatibility, security, and non-goal boundaries (network-level selective fetch is explicitly deferred to 4.4.14+).
+Approved by the user on 2026-08-13. Implementation may proceed in the listed slices. Any material change to frozen invariants, job identity, cache trust, lease lifecycle, or API compatibility updates the spec/ADR first and returns for review.

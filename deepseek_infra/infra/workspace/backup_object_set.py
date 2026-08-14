@@ -84,6 +84,46 @@ class ObjectSetPackage:
         return self.object_set_digest
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedComponent:
+    """One final plaintext Payload ZIP awaiting randomized Age encryption."""
+
+    component_id: str
+    path: Path
+    plaintext_digest: str
+    plaintext_size: int
+    entries: tuple[str, ...]
+    expected_entries: Mapping[str, tuple[int, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedObjectSet:
+    """Short-lived plaintext object-set preparation owned by one build."""
+
+    output_dir: Path
+    components: tuple[PreparedComponent, ...]
+    control_entries: Mapping[str, bytes]
+    manifest: dict[str, Any]
+    snapshot_format: str
+
+    @property
+    def plaintext_bytes(self) -> int:
+        return sum(item.plaintext_size for item in self.components)
+
+    def scrub(self) -> None:
+        for component in self.components:
+            backup_unattended.scrub_plaintext_file(component.path)
+
+
+class PreparedObjectSetTooLarge(Exception):
+    """Exact prepared Payload bytes crossed the Adaptive Full budget."""
+
+    def __init__(self, *, byte_limit: int, attempted_size: int) -> None:
+        self.byte_limit = byte_limit
+        self.attempted_size = attempted_size
+        super().__init__(f"prepared object set exceeded {byte_limit} byte adaptive limit")
+
+
 def validate_components(components: Sequence[EncryptedComponent]) -> None:
     if sum(1 for item in components if item.control) != 1:
         raise AppError("object set must contain exactly one control object", code=ErrorCode.INVALID_PAYLOAD)
@@ -374,6 +414,222 @@ def _stable_json(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _scrub_prepared_plaintext(output_dir: Path) -> None:
+    if not output_dir.is_dir():
+        return
+    for plaintext in output_dir.glob(".*.plaintext.tmp"):
+        if plaintext.is_file():
+            backup_unattended.scrub_plaintext_file(plaintext)
+
+
+def prepare_object_set(
+    staging: Path,
+    output_dir: Path,
+    *,
+    manifest: dict[str, Any],
+    component_target_bytes: int = DEFAULT_COMPONENT_PLAINTEXT_BYTES,
+    plaintext_byte_limit: int | None = None,
+    cancel_event: Any | None = None,
+) -> PreparedObjectSet:
+    """Build the final plaintext Payload ZIPs exactly once.
+
+    The returned object owns every plaintext path. Callers must either pass it
+    to :func:`encrypt_prepared_object_set` or call ``scrub()`` themselves.
+    """
+    if plaintext_byte_limit is not None and plaintext_byte_limit < 0:
+        raise ValueError("plaintext_byte_limit must be non-negative")
+    _scrub_prepared_plaintext(output_dir)
+    shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True)
+    prepared_components: list[PreparedComponent] = []
+    plaintext_paths: list[Path] = []
+    plaintext_bytes = 0
+    component_paths: dict[str, str] = {}
+    component_entries: dict[str, list[str]] = {}
+    full_payload_map: dict[str, dict[str, dict[str, int | str]]] = {}
+    try:
+        physical_paths = _physical_payload_paths(staging, manifest)
+        groups = _payload_component_groups(staging, physical_paths, int(component_target_bytes))
+        for ordinal, relatives in enumerate(groups):
+            checkpoint = getattr(cancel_event, "backup_checkpoint", None)
+            if callable(checkpoint):
+                checkpoint()
+            if cancel_event is not None and cancel_event.is_set():
+                raise AppError("Object-set preparation cancelled", code=ErrorCode.INVALID_REQUEST, status=499)
+            component_id = f"p{ordinal:04d}"
+            file_entries = {
+                relative: staging.joinpath(*PurePosixPath(relative).parts)
+                for relative in relatives
+            }
+            expected = {
+                relative: (source.stat().st_size, backup_unattended.sha256_file(source))
+                for relative, source in file_entries.items()
+            }
+            plaintext = output_dir / f".{component_id}.plaintext.tmp"
+            plaintext_paths.append(plaintext)
+            with plaintext.open("w+b") as output:
+                _write_zip_entries(output, file_entries=file_entries)
+                output.flush()
+                os.fsync(output.fileno())
+            prepared_component = PreparedComponent(
+                component_id=component_id,
+                path=plaintext,
+                plaintext_digest=backup_unattended.sha256_file(plaintext),
+                plaintext_size=plaintext.stat().st_size,
+                entries=tuple(relatives),
+                expected_entries=expected,
+            )
+            prepared_components.append(prepared_component)
+            plaintext_bytes += prepared_component.plaintext_size
+            if plaintext_byte_limit is not None and plaintext_bytes > plaintext_byte_limit:
+                raise PreparedObjectSetTooLarge(
+                    byte_limit=plaintext_byte_limit,
+                    attempted_size=plaintext_bytes,
+                )
+            component_entries[component_id] = list(relatives)
+            for entry_ordinal, relative in enumerate(relatives):
+                component_paths[relative] = component_id
+                if str(manifest.get("snapshotKind") or "full") == "full":
+                    full_payload_map[relative] = {
+                        "source": {
+                            "kind": "pack-range",
+                            "componentId": component_id,
+                            "entry": entry_ordinal,
+                        }
+                    }
+
+        control_manifest = dict(manifest)
+        control_manifest["storageProtocol"] = OBJECT_SET_V1
+        snapshot = control_manifest.get("snapshot")
+        snapshot_format = str(snapshot.get("format") or "full-v2") if isinstance(snapshot, Mapping) else "full-v2"
+        control_manifest["snapshotFormat"] = snapshot_format
+        component_map = {
+            "schemaVersion": 1,
+            "paths": component_paths,
+            "components": component_entries,
+        }
+        if full_payload_map:
+            component_map["fullPayloadMap"] = full_payload_map
+        control_entries: dict[str, bytes] = {
+            "manifest.json": _stable_json(control_manifest),
+            "component-map.json": _stable_json(component_map),
+        }
+        for relative in ("delta/operations.json", "payload/packs/index.json"):
+            source = staging / relative
+            if source.is_file():
+                control_entries[relative] = source.read_bytes()
+        return PreparedObjectSet(
+            output_dir=output_dir,
+            components=tuple(prepared_components),
+            control_entries=control_entries,
+            manifest=control_manifest,
+            snapshot_format=snapshot_format,
+        )
+    except BaseException:
+        for plaintext in plaintext_paths:
+            backup_unattended.scrub_plaintext_file(plaintext)
+        raise
+
+
+def encrypt_prepared_object_set(
+    prepared: PreparedObjectSet,
+    *,
+    backup_id: str,
+    recipients: tuple[str, ...],
+    manifest: dict[str, Any],
+    manifest_digest: str,
+    coverage_digest: str,
+    frontend: dict[str, Any] | None = None,
+    coverage: dict[str, Any] | None = None,
+    cancel_event: Any | None = None,
+    chunk_records: tuple[Any, ...] = (),
+    effective_files: tuple[Any, ...] = (),
+    savings: dict[str, Any] | None = None,
+) -> ObjectSetPackage:
+    """Age-encrypt prepared Payload ZIPs directly, then build Control."""
+    del manifest_digest  # Object-set metadata changes the committed manifest digest.
+    payload_components: list[EncryptedComponent] = []
+    payload_descriptors: dict[str, dict[str, int | str]] = {}
+    control_plaintext = prepared.output_dir / ".control.plaintext.tmp"
+    try:
+        expected_manifest = dict(manifest)
+        expected_manifest["storageProtocol"] = OBJECT_SET_V1
+        expected_manifest["snapshotFormat"] = prepared.snapshot_format
+        if _stable_json(expected_manifest) != prepared.control_entries.get("manifest.json"):
+            raise AppError("prepared object set manifest mismatch", code=ErrorCode.INVALID_PAYLOAD)
+        for item in prepared.components:
+            try:
+                prepared_matches = (
+                    item.path.stat().st_size == item.plaintext_size
+                    and backup_unattended.sha256_file(item.path) == item.plaintext_digest
+                )
+            except OSError:
+                prepared_matches = False
+            if not prepared_matches:
+                raise AppError("prepared object set changed before encryption", code=ErrorCode.INVALID_REQUEST, status=409)
+            component, descriptor = _encrypt_zip_component(
+                component_id=item.component_id,
+                plaintext_path=item.path,
+                ciphertext_path=prepared.output_dir / f"{item.component_id}.age",
+                recipients=recipients,
+                expected_entries=item.expected_entries,
+                cancel_event=cancel_event,
+            )
+            payload_components.append(component)
+            payload_descriptors[item.component_id] = descriptor
+            backup_unattended.scrub_plaintext_file(item.path)
+
+        payload_index = {
+            "schemaVersion": 1,
+            "storageProtocol": OBJECT_SET_V1,
+            "snapshotFormat": prepared.snapshot_format,
+            "payloadComponents": payload_descriptors,
+        }
+        control_entries = {
+            **prepared.control_entries,
+            "payload-index.json": _stable_json(payload_index),
+        }
+        checksum_lines = [
+            f"{hashlib.sha256(content).hexdigest()}  {relative}"
+            for relative, content in sorted(control_entries.items())
+        ]
+        control_entries["checksums.sha256"] = ("\n".join(checksum_lines) + "\n").encode("utf-8")
+        control_expected = {
+            relative: (len(content), hashlib.sha256(content).hexdigest())
+            for relative, content in control_entries.items()
+        }
+        with control_plaintext.open("w+b") as output:
+            _write_zip_entries(output, byte_entries=control_entries)
+            output.flush()
+            os.fsync(output.fileno())
+        control, _descriptor = _encrypt_zip_component(
+            component_id="control",
+            plaintext_path=control_plaintext,
+            ciphertext_path=prepared.output_dir / "control.age",
+            recipients=recipients,
+            expected_entries=control_expected,
+            control=True,
+            cancel_event=cancel_event,
+        )
+        manifest_bytes = prepared.control_entries["manifest.json"]
+        return ObjectSetPackage(
+            backup_id=backup_id,
+            components=(control, *payload_components),
+            manifest_digest=hashlib.sha256(manifest_bytes).hexdigest(),
+            coverage_digest=coverage_digest,
+            manifest=prepared.manifest,
+            creation_verified=True,
+            frontend=dict(frontend or {}),
+            coverage=dict(coverage or {}),
+            chunk_records=chunk_records,
+            effective_files=effective_files,
+            savings=savings,
+        )
+    finally:
+        backup_unattended.scrub_plaintext_file(control_plaintext)
+        prepared.scrub()
+
+
 def build_encrypted_object_set(
     staging: Path,
     output_dir: Path,
@@ -391,124 +647,25 @@ def build_encrypted_object_set(
     savings: dict[str, Any] | None = None,
     component_target_bytes: int = DEFAULT_COMPONENT_PLAINTEXT_BYTES,
 ) -> ObjectSetPackage:
-    """Build payload ZIPs, independently Age-encrypt them, then encrypt control."""
-    del manifest_digest  # Object-set metadata changes the committed manifest digest.
-    shutil.rmtree(output_dir, ignore_errors=True)
-    output_dir.mkdir(parents=True)
-    plaintext_paths: list[Path] = []
-    payload_components: list[EncryptedComponent] = []
-    payload_descriptors: dict[str, dict[str, int | str]] = {}
-    component_paths: dict[str, str] = {}
-    component_entries: dict[str, list[str]] = {}
-    full_payload_map: dict[str, dict[str, dict[str, int | str]]] = {}
-    try:
-        physical_paths = _physical_payload_paths(staging, manifest)
-        groups = _payload_component_groups(staging, physical_paths, int(component_target_bytes))
-        for ordinal, relatives in enumerate(groups):
-            component_id = f"p{ordinal:04d}"
-            file_entries = {
-                relative: staging.joinpath(*PurePosixPath(relative).parts)
-                for relative in relatives
-            }
-            expected = {
-                relative: (source.stat().st_size, backup_unattended.sha256_file(source))
-                for relative, source in file_entries.items()
-            }
-            plaintext = output_dir / f".{component_id}.plaintext.tmp"
-            plaintext_paths.append(plaintext)
-            with plaintext.open("w+b") as output:
-                _write_zip_entries(output, file_entries=file_entries)
-                output.flush()
-                os.fsync(output.fileno())
-            component, descriptor = _encrypt_zip_component(
-                component_id=component_id,
-                plaintext_path=plaintext,
-                ciphertext_path=output_dir / f"{component_id}.age",
-                recipients=recipients,
-                expected_entries=expected,
-                cancel_event=cancel_event,
-            )
-            payload_components.append(component)
-            payload_descriptors[component_id] = descriptor
-            component_entries[component_id] = list(relatives)
-            for entry_ordinal, relative in enumerate(relatives):
-                component_paths[relative] = component_id
-                if str(manifest.get("snapshotKind") or "full") == "full":
-                    full_payload_map[relative] = {
-                        "source": {
-                            "kind": "pack-range",
-                            "componentId": component_id,
-                            "entry": entry_ordinal,
-                        }
-                    }
-            backup_unattended.scrub_plaintext_file(plaintext)
-
-        control_manifest = dict(manifest)
-        control_manifest["storageProtocol"] = OBJECT_SET_V1
-        snapshot = control_manifest.get("snapshot")
-        snapshot_format = str(snapshot.get("format") or "full-v2") if isinstance(snapshot, Mapping) else "full-v2"
-        control_manifest["snapshotFormat"] = snapshot_format
-        manifest_bytes = _stable_json(control_manifest)
-        payload_index = {
-            "schemaVersion": 1,
-            "storageProtocol": OBJECT_SET_V1,
-            "snapshotFormat": snapshot_format,
-            "payloadComponents": payload_descriptors,
-        }
-        component_map = {
-            "schemaVersion": 1,
-            "paths": component_paths,
-            "components": component_entries,
-        }
-        if full_payload_map:
-            component_map["fullPayloadMap"] = full_payload_map
-        control_entries: dict[str, bytes] = {
-            "manifest.json": manifest_bytes,
-            "payload-index.json": _stable_json(payload_index),
-            "component-map.json": _stable_json(component_map),
-        }
-        for relative in ("delta/operations.json", "payload/packs/index.json"):
-            source = staging / relative
-            if source.is_file():
-                control_entries[relative] = source.read_bytes()
-        checksum_lines = [
-            f"{hashlib.sha256(content).hexdigest()}  {relative}"
-            for relative, content in sorted(control_entries.items())
-        ]
-        control_entries["checksums.sha256"] = ("\n".join(checksum_lines) + "\n").encode("utf-8")
-        control_expected = {
-            relative: (len(content), hashlib.sha256(content).hexdigest())
-            for relative, content in control_entries.items()
-        }
-        control_plaintext = output_dir / ".control.plaintext.tmp"
-        plaintext_paths.append(control_plaintext)
-        with control_plaintext.open("w+b") as output:
-            _write_zip_entries(output, byte_entries=control_entries)
-            output.flush()
-            os.fsync(output.fileno())
-        control, _descriptor = _encrypt_zip_component(
-            component_id="control",
-            plaintext_path=control_plaintext,
-            ciphertext_path=output_dir / "control.age",
-            recipients=recipients,
-            expected_entries=control_expected,
-            control=True,
-            cancel_event=cancel_event,
-        )
-        backup_unattended.scrub_plaintext_file(control_plaintext)
-        return ObjectSetPackage(
-            backup_id=backup_id,
-            components=(control, *payload_components),
-            manifest_digest=hashlib.sha256(manifest_bytes).hexdigest(),
-            coverage_digest=coverage_digest,
-            manifest=control_manifest,
-            creation_verified=True,
-            frontend=dict(frontend or {}),
-            coverage=dict(coverage or {}),
-            chunk_records=chunk_records,
-            effective_files=effective_files,
-            savings=savings,
-        )
-    finally:
-        for plaintext in plaintext_paths:
-            backup_unattended.scrub_plaintext_file(plaintext)
+    """Compatibility wrapper that prepares once and encrypts directly."""
+    prepared = prepare_object_set(
+        staging,
+        output_dir,
+        manifest=manifest,
+        component_target_bytes=component_target_bytes,
+        cancel_event=cancel_event,
+    )
+    return encrypt_prepared_object_set(
+        prepared,
+        backup_id=backup_id,
+        recipients=recipients,
+        manifest=manifest,
+        manifest_digest=manifest_digest,
+        coverage_digest=coverage_digest,
+        frontend=frontend,
+        coverage=coverage,
+        cancel_event=cancel_event,
+        chunk_records=chunk_records,
+        effective_files=effective_files,
+        savings=savings,
+    )

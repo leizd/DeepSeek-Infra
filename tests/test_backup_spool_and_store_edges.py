@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import tempfile
 import time
 from pathlib import Path
@@ -147,6 +148,13 @@ def test_init_s3_target_with_fake_client(tmp_settings: Path, monkeypatch: pytest
     assert "secretAccessKey" not in str(record)
     store = backup_targets.open_target_store(record["targetId"], write_intent=False, client=client)
     assert store.capabilities().kind == "s3"
+    assert store.capabilities().integrity_mode == "strong-provider-checksum"
+    registry_path = backup_targets._registry_path(str(record["targetId"]))
+    persisted = json.loads(registry_path.read_text(encoding="utf-8"))
+    persisted["lastProbe"]["results"]["multipart-provider-sha256"] = "FAIL"
+    registry_path.write_text(json.dumps(persisted), encoding="utf-8")
+    reopened = backup_targets.open_target_store(record["targetId"], write_intent=False, client=client)
+    assert reopened.capabilities().integrity_mode == "full-readback"
     from deepseek_infra.infra.workspace.backup_target_s3 import open_s3_store
 
     monkeypatch.setattr(

@@ -32,6 +32,8 @@ class FakeS3Client:
         self.multipart: dict[str, dict[str, Any]] = {}
         self.versioning = "Enabled"
         self.fail_next: dict[str, Exception] = {}
+        self.provider_checksum_mode = "full"
+        self.multipart_objects: set[str] = set()
 
     def _etag(self, data: bytes | bytearray) -> str:
         return f'"{hashlib.md5(bytes(data)).hexdigest()}"'
@@ -46,7 +48,7 @@ class FakeS3Client:
         if key not in self.objects:
             raise _ClientError(code="404", status=404)
         data = self.objects[key]
-        return {
+        response = {
             "ContentLength": len(data),
             "ETag": self.etags[key],
             "Metadata": dict(self.meta.get(key) or {}),
@@ -54,6 +56,23 @@ class FakeS3Client:
             "VersionId": "v1",
             "ResponseMetadata": {"HTTPHeaders": {"date": format_datetime(datetime.now(tz=timezone.utc))}},
         }
+        if kwargs.get("ChecksumMode") == "ENABLED":
+            mode = self.provider_checksum_mode
+            if mode == "single-only":
+                mode = "missing" if key in self.multipart_objects else "full"
+            if mode == "full":
+                response["ChecksumSHA256"] = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
+                response["ChecksumType"] = "FULL_OBJECT"
+            elif self.provider_checksum_mode == "composite":
+                response["ChecksumSHA256"] = base64.b64encode(hashlib.sha256(b"composite" + data).digest()).decode("ascii") + "-2"
+                response["ChecksumType"] = "COMPOSITE"
+            elif self.provider_checksum_mode == "wrong":
+                response["ChecksumSHA256"] = base64.b64encode(b"x" * 32).decode("ascii")
+                response["ChecksumType"] = "FULL_OBJECT"
+            elif self.provider_checksum_mode == "etag":
+                response["ChecksumSHA256"] = self.etags[key].strip('"')
+                response["ChecksumType"] = "FULL_OBJECT"
+        return response
 
     def get_object(self, **kwargs: Any) -> dict[str, Any]:
         self._maybe_fail("get")
@@ -158,6 +177,7 @@ class FakeS3Client:
         self.objects[key] = data
         self.etags[key] = etag
         self.meta[key] = dict(state.get("meta") or {})
+        self.multipart_objects.add(key)
         del self.multipart[upload_id]
         return {
             "ETag": etag,
@@ -225,6 +245,44 @@ def test_s3_multipart_and_probe() -> None:
     assert store.server_time() is not None
     probe = probe_store_capabilities(store, prefix="control/probe/")
     assert probe["scheduledBackupReady"] is True
+    assert probe["capabilities"]["integrityMode"] == "strong-provider-checksum"
+    assert probe["results"]["single-provider-sha256"] == "PASS"
+    assert probe["results"]["multipart-provider-sha256"] == "PASS"
+
+
+@pytest.mark.parametrize("provider_mode", ("missing", "composite", "wrong", "etag", "single-only"))
+def test_s3_probe_rejects_unproven_provider_checksum(provider_mode: str) -> None:
+    client = FakeS3Client()
+    client.provider_checksum_mode = provider_mode
+    store = _store(client)
+
+    probe = probe_store_capabilities(store, prefix="control/probe/")
+
+    assert probe["scheduledBackupReady"] is True
+    assert probe["capabilities"]["integrityMode"] == "full-readback"
+    if provider_mode == "single-only":
+        assert probe["results"]["single-provider-sha256"] == "PASS"
+        assert probe["results"]["multipart-provider-sha256"] == "FAIL"
+    else:
+        assert "PASS" not in {
+            probe["results"]["single-provider-sha256"],
+            probe["results"]["multipart-provider-sha256"],
+        }
+
+
+def test_s3_stat_separates_provider_checksum_from_user_metadata() -> None:
+    client = FakeS3Client()
+    store = _store(client)
+    payload = b"provider-owned-checksum"
+    digest = hashlib.sha256(payload).hexdigest()
+    store.put_if_absent("objects/provider.bin", payload, checksum_sha256=digest)
+
+    meta = store.stat("objects/provider.bin")
+
+    assert meta is not None
+    assert meta.sha256 == digest  # compatibility metadata is not provider proof
+    assert meta.provider_sha256 == digest
+    assert meta.provider_checksum_type == "FULL_OBJECT"
 
 
 def test_s3_error_mapping_and_open_helpers() -> None:

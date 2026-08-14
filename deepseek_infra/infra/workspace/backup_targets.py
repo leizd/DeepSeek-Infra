@@ -392,8 +392,21 @@ def open_target_store(target_id: str, *, write_intent: bool = True, client: Any 
         return open_filesystem_store(root)
     if kind == "s3":
         store = backup_target_s3.open_s3_store(record, client=client)
+        last = record.get("lastProbe") if isinstance(record.get("lastProbe"), dict) else None
+        last_results: dict[str, Any] = dict(last["results"]) if isinstance(last, dict) and isinstance(last.get("results"), dict) else {}
+        last_capabilities: dict[str, Any] = (
+            dict(last["capabilities"])
+            if isinstance(last, dict) and isinstance(last.get("capabilities"), dict)
+            else {}
+        )
+        provider_checksum_proven = (
+            last_results.get("single-provider-sha256") == "PASS"
+            and last_results.get("multipart-provider-sha256") == "PASS"
+            and last_capabilities.get("integrityMode") == "strong-provider-checksum"
+        )
+        if provider_checksum_proven:
+            store.set_integrity_mode("strong-provider-checksum")
         if write_intent:
-            last = record.get("lastProbe") if isinstance(record.get("lastProbe"), dict) else None
             if not last or not last.get("scheduledBackupReady"):
                 probe = probe_store_capabilities(store)
                 record = {**record, "lastProbe": probe}

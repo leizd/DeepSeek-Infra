@@ -299,7 +299,14 @@ def metrics_snapshot() -> dict[str, Any]:
         "a2a_stream_disconnects_total": 0,
         "tokens_total": 0,
         "run_latency_ms_avg": 0.0,
+        "recovery": {"jobsByPhase": {}, "counters": {}, "stageDuration": {}, "stageThroughput": {}},
     }
+    try:
+        from deepseek_infra.infra.workspace import backup_recovery_telemetry, backups
+
+        snapshot["recovery"] = backup_recovery_telemetry.metrics_snapshot(backups.RESTORE_DIR)
+    except Exception:
+        pass
     try:
         from deepseek_infra.infra.agent_runtime.a2a import a2a_status
 

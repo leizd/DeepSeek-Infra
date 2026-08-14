@@ -15,6 +15,7 @@ from deepseek_infra.infra.workspace import (
     backup_executor,
     backup_incremental,
     backup_mirror,
+    backup_object_set,
     backup_policies,
     backup_publish,
     backup_run_plan,
@@ -166,7 +167,7 @@ def test_execute_run_with_wrong_instance_abandons(tmp_settings: Path, stub_crypt
     assert not list((backups.BACKUP_DIR / "objects").rglob("*.age")) if (backups.BACKUP_DIR / "objects").is_dir() else True
 
 
-def test_incremental_archive_is_spooled_to_disk_before_encryption(
+def test_incremental_object_set_uses_prepared_component_cost_without_monolithic_zip(
     tmp_settings: Path,
     stub_crypto: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -207,10 +208,12 @@ def test_incremental_archive_is_spooled_to_disk_before_encryption(
         base_backup_id="F0",
         lineage_id="F0",
         chain_depth=1,
+        storage_protocol=backup_object_set.OBJECT_SET_V1,
     )
 
-    assert observed_file_backing == [True]
-    assert package.savings is not None and int(package.savings["unencryptedArchiveBytes"]) > 0
+    assert observed_file_backing == []
+    assert package.savings is not None and int(package.savings["preparedComponentBytes"]) > 0
+    assert "unencryptedArchiveBytes" not in package.savings
     assert not list((tmp_settings / ".staging" / "run_disk_delta").glob("*.tmp"))
 
 
@@ -329,8 +332,8 @@ def test_execute_run_freezes_actual_delta_ratio(
         finally:
             encryption_by_kind.append((kind, len(encryption_calls) - before))
         savings = getattr(package, "savings", None)
-        if isinstance(savings, dict) and int(savings.get("unencryptedArchiveBytes") or 0) > 0:
-            savings["logicalBytes"] = int(savings["unencryptedArchiveBytes"]) * logical_multiplier
+        if isinstance(savings, dict) and int(savings.get("preparedComponentBytes") or 0) > 0:
+            savings["logicalBytes"] = int(savings["preparedComponentBytes"]) * logical_multiplier
         return package
 
     monkeypatch.setattr(backup_executor.backup_scheduled, "build_scheduled_backup", build_with_ratio)
@@ -400,6 +403,7 @@ def test_incremental_run_records_packed_container_cost(
     savings = second.get("incrementalSavings")
     assert isinstance(savings, dict)
     assert int(savings["physicalDeltaBytes"]) > 0
-    assert int(savings["unencryptedArchiveBytes"]) > 0
-    assert int(savings["unencryptedArchiveBytes"]) >= int(savings["physicalDeltaBytes"])
+    assert int(savings["preparedComponentBytes"]) > 0
+    assert int(savings["preparedComponentBytes"]) > 0
+    assert "unencryptedArchiveBytes" not in savings
     assert int(savings["logicalBytes"]) > 0

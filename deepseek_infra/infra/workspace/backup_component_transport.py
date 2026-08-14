@@ -46,8 +46,8 @@ class SchedulerConfig:
             raise ValueError("max_workers must be >= 1")
         if self.max_in_flight_bytes < DEFAULT_WORKING_SET_BYTES:
             raise ValueError("max_in_flight_bytes must cover at least one working set")
-        if self.max_open_files < self.max_workers:
-            raise ValueError("max_open_files must be >= max_workers")
+        if self.max_open_files < 1:
+            raise ValueError("max_open_files must be >= 1")
 
     @property
     def byte_permits(self) -> int:
@@ -71,17 +71,30 @@ class TransferTask:
     ciphertext_size: int
     execute: Callable[[], None]
     working_set_bytes: int = DEFAULT_WORKING_SET_BYTES
+    open_files: int = 1
     priority: int = 1
 
     def __post_init__(self) -> None:
         if self.working_set_bytes <= 0:
             raise ValueError("working_set_bytes must be positive")
+        if self.open_files <= 0:
+            raise ValueError("open_files must be positive")
 
 
 class TransferTelemetry:
     """Thread-safe counters observed by tests and reported to run telemetry."""
 
-    __slots__ = ("_lock", "active", "max_active", "in_flight_bytes", "max_in_flight_bytes", "completed", "failed")
+    __slots__ = (
+        "_lock",
+        "active",
+        "max_active",
+        "in_flight_bytes",
+        "max_in_flight_bytes",
+        "open_files",
+        "max_open_files",
+        "completed",
+        "failed",
+    )
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -89,10 +102,12 @@ class TransferTelemetry:
         self.max_active = 0
         self.in_flight_bytes = 0
         self.max_in_flight_bytes = 0
+        self.open_files = 0
+        self.max_open_files = 0
         self.completed = 0
         self.failed = 0
 
-    def enter(self, working_set_bytes: int) -> None:
+    def enter(self, working_set_bytes: int, open_files: int) -> None:
         with self._lock:
             self.active += 1
             if self.active > self.max_active:
@@ -100,11 +115,15 @@ class TransferTelemetry:
             self.in_flight_bytes += working_set_bytes
             if self.in_flight_bytes > self.max_in_flight_bytes:
                 self.max_in_flight_bytes = self.in_flight_bytes
+            self.open_files += open_files
+            if self.open_files > self.max_open_files:
+                self.max_open_files = self.open_files
 
-    def exit(self, working_set_bytes: int, *, success: bool) -> None:
+    def exit(self, working_set_bytes: int, open_files: int, *, success: bool) -> None:
         with self._lock:
             self.active -= 1
             self.in_flight_bytes -= working_set_bytes
+            self.open_files -= open_files
             if success:
                 self.completed += 1
             else:
@@ -117,6 +136,8 @@ class TransferTelemetry:
                 "maxActive": self.max_active,
                 "inFlightBytes": self.in_flight_bytes,
                 "maxInFlightBytes": self.max_in_flight_bytes,
+                "openFiles": self.open_files,
+                "maxOpenFiles": self.max_open_files,
                 "completed": self.completed,
                 "failed": self.failed,
             }
@@ -155,15 +176,25 @@ class ComponentTransferScheduler:
         budget_cond = threading.Condition()
         first_error: list[BaseException] = []
         max_bytes = self._config.max_in_flight_bytes
+        max_open_files = self._config.max_open_files
+        ordered_tasks = sorted(enumerate(tasks), key=lambda item: (item[1].priority, item[0]))
+        for _, task in ordered_tasks:
+            if task.working_set_bytes > max_bytes:
+                raise ValueError(f"task {task.component_id} working set exceeds scheduler byte budget")
+            if task.open_files > max_open_files:
+                raise ValueError(f"task {task.component_id} open files exceed scheduler FD budget")
 
         def _run_one(task: TransferTask) -> None:
             # Gate on the in-flight byte budget before claiming a slot.
             with budget_cond:
-                while not cancel.is_set() and telemetry.in_flight_bytes + task.working_set_bytes > max_bytes:
+                while not cancel.is_set() and (
+                    telemetry.in_flight_bytes + task.working_set_bytes > max_bytes
+                    or telemetry.open_files + task.open_files > max_open_files
+                ):
                     budget_cond.wait(timeout=0.1)
                 if cancel.is_set():
                     return
-                telemetry.enter(task.working_set_bytes)
+                telemetry.enter(task.working_set_bytes, task.open_files)
 
             success = False
             try:
@@ -178,14 +209,14 @@ class ComponentTransferScheduler:
                 cancel.set()
             finally:
                 with budget_cond:
-                    telemetry.exit(task.working_set_bytes, success=success)
+                    telemetry.exit(task.working_set_bytes, task.open_files, success=success)
                     budget_cond.notify_all()
 
         import concurrent.futures
 
         max_workers = max(1, self._config.max_workers)
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [pool.submit(_run_one, task) for task in tasks]
+            futures = [pool.submit(_run_one, task) for _, task in ordered_tasks]
             for future in concurrent.futures.as_completed(futures):
                 future.result()
 

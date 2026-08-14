@@ -104,7 +104,7 @@ Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具�
 
 ### 版本说明
 
-- **Current release:** `4.4.13`。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。远端恢复可冻结为 Contributor/Project 投影，跨文件 `parent-range` 依赖进入只读 Support 集，Metadata 平面完整校验而 Payload 平面选择性物化。
+- **Current development version:** `4.5.0`（尚未 release-ready）。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。生产恢复编排在冻结的 `object-set-v1`、Receipt v4、Commit v4 与投影语义之上增加耐久 Job、缓存、流水线、安全控制和 DR Readiness，不迁移或重写线格式。
 - **Historical qualification:** `v4.0.0-rc.1` 已被 rc.2 supersede，只保留为历史架构预览；stable `4.0.0` 从已验证的 rc.2 提升。
 - **Patch boundary:** Python-first 所有权、默认关闭的 Rust delegates 和冻结协议均不改变。
 
@@ -203,6 +203,27 @@ flowchart LR
 ## 独立加密对象集与真正的选择性拉取（v4.4.14）
 
 `object-set-v1` 将每个 Snapshot 提交为一个独立随机 Age 加密 Control 与若干约 64 MiB Payload Components。Full 按 Contributor/Project 恢复边界分组；Incremental 的 Pack/Standalone 由加密 Control 映射到组件。Receipt/Commit v4 只暴露 role-blind ciphertext digest/size 集合。Restore 的耐久状态机先获取整条 Lineage 的 Controls，完整应用并 Merkle 校验 Metadata，再把 Output/Support File Closure 映射为 Required Component Set；只有该集合允许触发对象 GET。Spool、Multipart、Fetch、Federated Prepare/Commit 与 Hold 均可跨真实进程退出恢复。旧 Whole-Age Lineage 走永久兼容路径，升级边界强制 Full。
+
+## 生产恢复编排与 DR Readiness（v4.5.0 development）
+
+```mermaid
+flowchart LR
+    J["durable Recovery Job"] --> C["Control fetch + verified cache"]
+    C --> P["frozen Projection Plan"]
+    P --> T["bounded Payload transfer"]
+    T --> A["Age authenticate + materialize"]
+    A --> F["federated prepare + commit"]
+    J --> H["renewable holds + cache pins"]
+    J --> R["redacted telemetry + readiness"]
+    P --> D["isolated drill root"]
+    D --> X["verify + scrub; never live commit"]
+```
+
+Recovery Job 是生产恢复的耐久编排层，而不是第二套恢复实现。它持久化 Component 状态、阶段、重试和有界计数；Scheduler 同时限制 Worker、FD 与 in-flight bytes，并让 Control/交互恢复优先于后台 Payload。Control 完整验证后才冻结绑定 Target、Lineage、Selection 与 Control 摘要的 Projection Plan，只有 Required Payload Set 可以被发现和并行 GET。密文缓存以 ciphertext digest/size 为身份，每次命中重新校验，活跃与 `recovery-required` Job 通过 pin 阻止 LRU 淘汰；任何损坏都会逐项驱逐并从权威 Target 重新获取。
+
+网络、Age 认证与物化可以有界重叠，但明文 Component ZIP 在消费后立即 scrub；Federated prepare/commit、selection/Merkle 校验与 Hold 保护仍是不可跨越的屏障。Hold 通过 generation CAS 续租；冲突会停止破坏性进展。Readiness 只读聚合实际 RPO、估算 RTO、最近 Drill 与保护状态。Manual Drill 复用相同的 fetch/decrypt/verify/materialize 路径，但在独立 Root 结束并清理，类型与运行时守卫都禁止进入 live federated commit。
+
+发布证据被拆成两个独立 exact-merge CI producer：真实 MinIO + 真实 Rust Age 的冷/热/缓存损坏路径，以及真实子进程重启与 disk/lease/cache/remote-mutation/partial-commit 故障矩阵。架构实现或本地模拟通过都不能替代这些 producer 的 PASS。
 
 ## 分层架构
 

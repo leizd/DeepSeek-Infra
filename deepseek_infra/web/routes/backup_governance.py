@@ -15,9 +15,11 @@ from fastapi.responses import JSONResponse
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_catalog,
+    backup_dr_readiness,
     backup_executor,
     backup_policies,
     backup_publish,
+    backup_recovery_drill,
     backup_remote_restore,
     backup_retention,
     backup_scheduler,
@@ -198,6 +200,24 @@ def create_backup_governance_router() -> APIRouter:
         policy_id = request.query_params.get("policyId") or None
         return json_response({"runs": backup_scheduler.list_runs(policy_id=policy_id)})
 
+    @router.get("/api/workspace/disaster-recovery/status")
+    async def api_disaster_recovery_status(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(backup_dr_readiness.readiness_status())
+
+    @router.post("/api/workspace/disaster-recovery/drills")
+    async def api_disaster_recovery_drill_create(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=16_000)
+        if set(payload) != {"restoreId"}:
+            raise AppError("Recovery Drill accepts only restoreId", code=ErrorCode.INVALID_PAYLOAD)
+        return json_response(backup_recovery_drill.run_recovery_drill(str(payload.get("restoreId") or "")))
+
+    @router.get("/api/workspace/disaster-recovery/drills/{restore_id}")
+    async def api_disaster_recovery_drill_get(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(backup_recovery_drill.get_recovery_drill(restore_id))
+
     @router.get("/api/workspace/backup-catalog")
     async def api_backup_catalog(request: Request) -> JSONResponse:
         require_api_auth(request)
@@ -365,6 +385,14 @@ def create_backup_governance_router() -> APIRouter:
                 max_bytes=int(max_bytes) if max_bytes is not None else None,
             )
         )
+
+    @router.post("/api/workspace/restores/{restore_id}/preflight")
+    async def api_restore_preflight(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=64_000)
+        if payload:
+            raise AppError("Recovery preflight does not accept client capacity overrides", code=ErrorCode.INVALID_PAYLOAD)
+        return json_response(backup_remote_restore.preflight_restore_session(restore_id))
 
     @router.post("/api/workspace/restores/{restore_id}/materialize")
     async def api_restore_materialize(request: Request, restore_id: str) -> JSONResponse:

@@ -30,7 +30,7 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
         "tests/test_backup_object_set_contracts.py::test_object_set_federated_restore_keeps_unselected_live_contributor",
     ),
     "adaptive-memory": (
-        "tests/test_backup_executor.py::test_incremental_archive_is_spooled_to_disk_before_encryption",
+        "tests/test_backup_executor.py::test_incremental_object_set_uses_prepared_component_cost_without_monolithic_zip",
         "tests/test_backup_executor.py::test_oversized_delta_aborts_before_incremental_encryption",
     ),
     "protocol-upgrade": (
@@ -44,7 +44,7 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
         "tests/test_backup_object_set_contracts.py::test_publish_v4_commits_every_ciphertext_member",
     ),
     "fail-closed-members": (
-        "tests/test_backup_object_set_contracts.py::test_object_set_restore_fails_closed_when_committed_component_is_missing",
+        "tests/test_backup_object_set_contracts.py::test_object_set_restore_defers_missing_required_component_until_fetch",
         "tests/test_backup_object_set_contracts.py::test_object_set_control_cannot_select_foreign_component",
     ),
     "control-first": (
@@ -93,6 +93,9 @@ CHECK_SCENARIOS = {
     "orphanComponentsCollectedAfterGrace": "object-lifecycle",
     "legacyWholeAgeV2ThroughV5RestoreCompatible": "legacy-whole-age",
     "realMinioObjectSetSelectiveRestoreE2E": "real-minio",
+    "realMinioColdRestoreUsesParallelRequiredOnlyPayloadGets": "real-minio",
+    "realMinioWarmCacheUsesZeroPayloadGets": "real-minio",
+    "realMinioCorruptCacheRefetchesOnlyCorruptPayload": "real-minio",
 }
 
 CRYPTO_SCENARIOS = frozenset({"real-process-restart", "real-minio"})

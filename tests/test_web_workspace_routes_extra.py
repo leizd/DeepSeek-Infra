@@ -198,6 +198,36 @@ def test_restore_transaction_routes_and_legacy_upload(client_with_files: TestCli
         apply.assert_called_once_with(restore_id, mode="replace-empty")
 
 
+def test_remote_restore_job_control_routes_are_phase_aware(client: TestClient) -> None:
+    restore_id = "remote-control"
+    with (
+        patch.object(workspace_routes.workspace_backup_remote_restore, "read_restore_session", return_value={"restoreId": restore_id}),
+        patch.object(
+            workspace_routes.workspace_backup_remote_restore,
+            "request_restore_pause",
+            return_value={"restoreId": restore_id, "phase": "paused", "pauseRequested": True},
+        ) as pause,
+        patch.object(
+            workspace_routes.workspace_backup_remote_restore,
+            "resume_restore_session",
+            return_value={"restoreId": restore_id, "phase": "fetching-selected-components"},
+        ) as resume,
+        patch.object(
+            workspace_routes.workspace_backup_remote_restore,
+            "request_restore_abort",
+            return_value={"restoreId": restore_id, "phase": "aborted", "abortRequested": False},
+        ) as abort,
+        patch.object(workspace_routes.workspace_backups, "abort_restore", side_effect=AssertionError("legacy abort must not run")),
+    ):
+        assert client.post(f"/api/workspace/restores/{restore_id}/pause").json()["phase"] == "paused"
+        assert client.post(f"/api/workspace/restores/{restore_id}/resume").json()["phase"] == "fetching-selected-components"
+        assert client.post(f"/api/workspace/restores/{restore_id}/abort").json()["phase"] == "aborted"
+
+    pause.assert_called_once_with(restore_id)
+    resume.assert_called_once_with(restore_id)
+    abort.assert_called_once_with(restore_id)
+
+
 def test_restore_upload_rejects_empty_multipart_and_digest_mismatch(client: TestClient) -> None:
     missing = client.post(
         "/api/workspace/restores/inspect",

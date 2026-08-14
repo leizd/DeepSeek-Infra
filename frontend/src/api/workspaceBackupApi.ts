@@ -8,7 +8,27 @@ export type BackupProtection =
   | { mode: "age-recipient"; recipients: string[] };
 export type CoveragePolicy = "strict" | "best-effort";
 export type RestoreMode = "merge" | "project-copy" | "replace-empty";
-export type RestoreSecretState = "not-required" | "available" | "expired" | "required-for-safety-backup";
+export type RestoreSecretState = "not-required" | "available" | "expired" | "required-for-safety-backup"; // pragma: allowlist secret
+export type RecoveryJobPhase =
+  | "created"
+  | "preflighted"
+  | "fetching"
+  | "fetching-chain"
+  | "fetching-controls"
+  | "controls-fetched"
+  | "fetching-selected-components"
+  | "components-fetched"
+  | "materializing"
+  | "verified"
+  | "prepared"
+  | "committing"
+  | "paused"
+  | "aborting"
+  | "aborted"
+  | "rolled-back"
+  | "complete"
+  | "failed"
+  | "recovery-required";
 export type RestorePhase =
   | "inspected"
   | "preparing"
@@ -18,7 +38,9 @@ export type RestorePhase =
   | "frontend-committed"
   | "backend-committed"
   | "complete"
+  | "paused"
   | "aborting"
+  | "aborted"
   | "rolled-back"
   | "recovery-required"
   | "failed";
@@ -295,6 +317,21 @@ export function abortWorkspaceRestore(restoreId: string, client: HttpClient = ht
   return client.postJson<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/abort`, {});
 }
 
+export interface RecoveryJobControlResult {
+  restoreId: string;
+  phase: RecoveryJobPhase;
+  pauseRequested?: boolean;
+  abortRequested?: boolean;
+}
+
+export function pauseWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
+  return client.postJson<RecoveryJobControlResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/pause`, {});
+}
+
+export function resumeWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
+  return client.postJson<RecoveryJobControlResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/resume`, {});
+}
+
 export function getWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
   return client.json<RestoreResult>(`/api/workspace/restores/${encodeURIComponent(restoreId)}`);
 }
@@ -532,13 +569,140 @@ export function previewRestoreFromTarget(
 export function fetchRemoteRestore(restoreId: string, request: { maxBytes?: number } = {}, client: HttpClient = httpClient) {
   return client.postJson<{
     restoreId: string;
-    phase: string;
-    downloadedBytes: number;
-    expectedBytes: number;
+    phase: RecoveryJobPhase;
+    downloadedBytes?: number;
+    expectedBytes?: number;
     requiredComponents?: number;
     path?: string;
     next?: string;
   }>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/fetch`, request);
+}
+
+export interface RecoveryPreflightReport {
+  schemaVersion: 1;
+  restoreId: string;
+  phase: "preflighted";
+  ready: boolean;
+  closure: {
+    chainLength: number;
+    selectedLogicalBytes: number;
+    requiredComponents: number;
+    totalComponents: number;
+    localComponents: number;
+  };
+  cache: { hitComponents: number; missComponents: number; hitBytes: number };
+  network: { remoteBytes: number };
+  scratch: {
+    materializedTreeBytes: number;
+    uncachedCiphertextBytes: number;
+    boundedCryptoPlaintextBytes: number;
+    estimatedPeakBytes: number;
+  };
+  disk: { freeBytes: number | null; reserveBytes: number; requiredBytes: number; sufficient: boolean };
+  safetyBackup: { liveLogicalBytes: number; archiveBytes: number; estimatedPeakBytes: number; externalBytesKnown: boolean };
+  targetHealth: { status: "ok" | "blocked"; kind: string; receiptPresent: boolean };
+  projectionRecoverability: {
+    status: "recoverable" | "blocked";
+    requiredComponents: number;
+    availableComponents: number;
+    missingComponents: number;
+  };
+  lastWholeSnapshotHealth: {
+    status: "ok" | "warning" | "error" | "unavailable";
+    source: string;
+    ciphertextScrubbedAt?: string | null;
+    userUnlockVerifiedAt?: string | null;
+  };
+  blockingReasons: Array<{ code: string; message: string }>;
+}
+
+export type DisasterRecoveryHealth = {
+  status: "ok" | "warning" | "error" | "unavailable";
+  source?: string;
+  checkedAt?: string | null;
+  reason?: string | null;
+  [key: string]: unknown;
+};
+
+export type DisasterRecoveryPoint =
+  | {
+      status: "available";
+      backupId: string;
+      targetId: string;
+      policyId: string;
+      snapshotKind: "full" | "incremental";
+      chainLength: number;
+      recoveryPointAt: string;
+      rpoSeconds: number;
+      source: "validated-commit-and-receipt";
+    }
+  | { status: "unavailable"; reason: string; source: "validated-commit-and-receipt" };
+
+export type DisasterRecoveryRtoEstimate =
+  | {
+      status: "estimated";
+      estimatedSeconds: number;
+      isSla: false;
+      method: "recent-successful-stage-throughput";
+      stages: Record<"transfer" | "crypto" | "materialization", { estimatedSeconds: number }>;
+      evidence: { windowDays: number; samplesByStage: Record<"transfer" | "crypto" | "materialization", number> };
+    }
+  | {
+      status: "unavailable";
+      isSla: false;
+      reason: string;
+      missingStages?: Array<"transfer" | "crypto" | "materialization">;
+      missingWorkload?: string[];
+      evidenceWindowDays?: number;
+    };
+
+export interface DisasterRecoveryStatus {
+  schemaVersion: 1;
+  status: "ok" | "warning" | "error";
+  calculatedAt: string;
+  recoveryPoint: DisasterRecoveryPoint;
+  rtoEstimate: DisasterRecoveryRtoEstimate;
+  scrub: DisasterRecoveryHealth & { latestCheckedAt?: string; latestSuccessfulAt?: string | null };
+  drill: DisasterRecoveryHealth & { latestCheckedAt?: string; latestSuccessfulAt?: string | null };
+  health: {
+    target: DisasterRecoveryHealth;
+    index: DisasterRecoveryHealth;
+    cache: DisasterRecoveryHealth;
+  };
+}
+
+interface RecoveryDrillEvidence {
+  schemaVersion: 1;
+  restoreId: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  chainLength: number;
+  components: number;
+  ciphertextBytes: number;
+  logicalBytes: number;
+  verifiedContributors: number;
+}
+
+export type RecoveryDrillResult =
+  | (Pick<RecoveryDrillEvidence, "schemaVersion" | "restoreId" | "startedAt"> & { result: "running" })
+  | (RecoveryDrillEvidence & { result: "success" })
+  | (RecoveryDrillEvidence & { result: "failed"; failureCode: "drill-validation-failed" | "drill-cleanup-failed" });
+
+export function getDisasterRecoveryStatus(client: HttpClient = httpClient) {
+  return client.json<DisasterRecoveryStatus>("/api/workspace/disaster-recovery/status");
+}
+
+export function runRecoveryDrill(restoreId: string, client: HttpClient = httpClient) {
+  return client.postJson<RecoveryDrillResult>("/api/workspace/disaster-recovery/drills", { restoreId });
+}
+
+export function getRecoveryDrill(restoreId: string, client: HttpClient = httpClient) {
+  return client.json<RecoveryDrillResult>(`/api/workspace/disaster-recovery/drills/${encodeURIComponent(restoreId)}`);
+}
+
+export function preflightWorkspaceRestore(restoreId: string, client: HttpClient = httpClient) {
+  return client.postJson<RecoveryPreflightReport>(`/api/workspace/restores/${encodeURIComponent(restoreId)}/preflight`, {});
 }
 
 export function materializeRemoteRestore(
