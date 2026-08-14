@@ -5,68 +5,83 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.13。
+适用版本：v4.5.0。
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 
-## Hybrid Runtime 总览（v4.4.2）
+## Hybrid Runtime 总览（v4.5.0）
 
 > 运维细节、feature flags 与回滚命令见 [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)。
 
 ```mermaid
 flowchart TB
-    subgraph Clients
-        C1[Web UI / PWA]
-        C2[Desktop WebView]
-        C3[Android APK]
-        C4[OpenAI SDK → /v1]
-        C5[MCP Client → /mcp]
-        C6[A2A Peer → /a2a]
+    subgraph Clients["客户端与标准协议接入 (Clients)"]
+        C1["React 应用 (/) · React 别名 (/ui/)"]
+        C2["Desktop WebView (pywebview)"]
+        C3["Android APK (Chaquopy)"]
+        C4["OpenAI SDK → /v1"]
+        C5["MCP Client → /mcp"]
+        C6["A2A Peer → /a2a"]
     end
 
-    subgraph Python["Python 默认运行时 — FastAPI / ASGI"]
-        P1[鉴权]
-        P2[HTTP / SSE / 流式]
-        P3[模型路由 · 重试 / 退避]
-        P4[Agent DAG 编排]
-        P5[MCP 传输与会话]
-        P6[真实工具执行]
-        P7[文件解析与 OCR]
-        P8[embeddings]
-        P9[持久化与索引]
-        P10[可观测性与业务状态]
+    subgraph Python["Python 默认运行时 — FastAPI / ASGI (权威运行时)"]
+        P1["鉴权 & Mutation Gate 变异保护"]
+        P2["HTTP / SSE / 流式传输"]
+        P3["策略驱动模型路由 (Model Router)"]
+        P4["Context Engine (前缀缓存优化) & Taint 注入防火墙"]
+        P5["Agent DAG 编排 (Leader/Worker/Critic) & Runs 事件溯源"]
+        P6["A2A Agent 网格 & 任务生命周期"]
+        P7["受控工具执行 (17+ 本地沙箱) & Tool Policy 引擎"]
+        P8["本地 RAG (BM25+向量) · 文件解析 · PDF 逐页渲染 · OCR"]
+        P9["Workspace Core (Projects / Artifacts) & 导出"]
+        P10["Automation 自动化引擎 & Browser 受控浏览器"]
+        P11["Skills 动态沙箱、版本化与评估"]
+        P12["Object Set v1 加密备份与投影式容灾恢复 (DR Readiness)"]
+        P13["可观测性 (OpenTelemetry Span 树 / /metrics / /healthz)"]
     end
 
-    subgraph Rust["可选 Rust Sidecar — 默认禁用"]
-        R1[Gateway 请求准备<br/>POST /gateway/request/prepare]
-        R2[MCP 协议准备<br/>POST /mcp/request/prepare]
-        R3[工具策略评估<br/>POST /policy/{url,path,capability}]
-        R4[RAG 向量排序 · JSON / compact binary<br/>POST /rag/vectors/rank{-binary}]
-        R5[RAG 文档准备<br/>POST /rag/documents/prepare]
+    subgraph Rust["可选 Rust Sidecar — 默认禁用 · Python 兜底"]
+        R1["网关请求准备<br/>POST /gateway/request/prepare"]
+        R2["MCP 协议准备<br/>POST /mcp/request/prepare"]
+        R3["工具策略评估<br/>POST /policy/{url,path,capability}"]
+        R4["RAG 向量排序 · JSON / compact binary<br/>POST /rag/vectors/rank{-binary}"]
+        R5["RAG 文档准备<br/>POST /rag/documents/prepare"]
+        R6["FastCDC 扫描 & 加密辅助<br/>scan-batch / backup-crypto"]
     end
 
-    subgraph Data["Python 拥有的本地数据"]
-        D1[SQLite 向量 RAG]
-        D2[长期记忆]
-        D3[语义缓存]
-        D4[Trace Runs · Span Tree]
-        D5[请求队列 · DLQ]
-        D6[预算]
+    subgraph StatelessMCP["可选 无状态 MCP 平面 — TS + Redis"]
+        SM1["NGINX (:8010) → 双 MCP 实例"]
+        SM2["Redis AOF (任务租约 / Fencing 令牌 / 幂等)"]
+        SM3["代码检索 · pytest 运行 · 逻辑备份 Contributor"]
     end
 
-    subgraph External["显式外部调用"]
-        E1[DeepSeek API]
-        E2[Tavily Search]
-        E3[Ollama / Edge inference]
+    subgraph Data["Python 拥有的本地私有数据 (.dot-dirs)"]
+        D1["SQLite 向量 RAG (.local-rag)"]
+        D2["长期记忆 (.memory)"]
+        D3["语义缓存 (.semantic-cache)"]
+        D4["工作区与产物 (.projects)"]
+        D5["Agent 运行日志 (.agent-runs / .a2a)"]
+        D6["加密容灾备份 (.backups)"]
+        D7["链路追踪 & 审计 (.traces / .tool-audit)"]
+        D8["请求队列 & 预算 (.request-queue / .budget)"]
+    end
+
+    subgraph External["显式外部调用 (数据默认不出端)"]
+        E1["DeepSeek API (Pro / Flash)"]
+        E2["Tavily Search"]
+        E3["Ollama / 端侧边缘推理"]
     end
 
     Clients --> Python
     Python --> Data
     Python --> External
 
-    Python -. 可选确定性委托 .-> Rust
-    Rust -. 已验证结果 .-> Python
+    Python -. "可选确定性委托" .-> Rust
+    Rust -. "已验证结果" .-> Python
     Rust -. "超时 / 不可用 / 畸形 / 分歧" .-> Python
+
+    Clients -. "独立横向扩展" .-> StatelessMCP
+    StatelessMCP -. "状态与租约" .-> Data
 ```
 
 ### 一句话职责边界
@@ -224,6 +239,103 @@ Recovery Job 是生产恢复的耐久编排层，而不是第二套恢复实现�
 网络、Age 认证与物化可以有界重叠，但明文 Component ZIP 在消费后立即 scrub；Federated prepare/commit、selection/Merkle 校验与 Hold 保护仍是不可跨越的屏障。Hold 通过 generation CAS 续租；冲突会停止破坏性进展。Readiness 只读聚合实际 RPO、估算 RTO、最近 Drill 与保护状态。Manual Drill 复用相同的 fetch/decrypt/verify/materialize 路径，但在独立 Root 结束并清理，类型与运行时守卫都禁止进入 live federated commit。
 
 发布证据被拆成两个独立 exact-merge CI producer：真实 MinIO + 真实 Rust Age 的冷/热/缓存损坏路径，以及真实子进程重启与 disk/lease/cache/remote-mutation/partial-commit 故障矩阵。架构实现或本地模拟通过都不能替代这些 producer 的 PASS。
+
+## 多维核心架构时序与数据流向（v4.5.0）
+
+### 1. 端到端请求与上下文数据流向 (Request Lifecycle & Context Pipeline)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as 客户端 / SDK / Web SPA
+    participant Server as FastAPI Server & Mutation Gate
+    participant Taint as Context Taint 防火墙
+    participant Cache as Semantic Cache 语义缓存
+    participant Router as Model Router & Scheduler
+    participant Engine as Context Engine (Prompt Cache)
+    participant LLM as DeepSeek / Ollama
+    participant Tools as Tool Policy & 沙箱工具
+    participant Obs as OpenTelemetry Trace & SQLite
+
+    Client->>Server: POST /api/chat 或 /v1/chat/completions
+    Server->>Server: Token 鉴权 + 检查写保护栅栏 (Mutation Gate)
+    Server->>Taint: 信任源标注 (System/User=可信, Web/File=不可信)
+    Taint-->>Server: 生成 Taint 诊断报告，加固不可信前缀
+    Server->>Cache: 向量相似度命中查询 (exact & cosine)
+    alt 语义缓存命中
+        Cache-->>Client: 直接返回缓存响应 (无云端调用)
+    else 缓存未命中
+        Server->>Router: 模型路由判定 (Pro / Flash / 端侧) + 调度入队
+        Router->>Engine: 构造 Prompt-cache-aware 上下文 (稳定前缀+滑动窗口)
+        Engine->>LLM: 发送流式推理请求
+        LLM-->>Server: 流式返回 (思考过程 reasoning + text delta)
+        opt 模型发起 Function Calling
+            LLM-->>Server: tool_calls (含参数)
+            Server->>Tools: Tool Policy 检查 (SSRF/路径/敏感凭据拦截)
+            Tools->>Tools: 受控沙箱执行 (本地计算/RAG/文档/PPT)
+            Tools-->>Engine: 清洗结果 (Prompt Injection Sanitization)
+            Engine->>LLM: 追加工具输出，继续下一轮推理
+            LLM-->>Server: 最终综合输出
+        end
+        Server->>Cache: 写入语义缓存 (JSON + f64le BLOB)
+        Server->>Obs: 记录完整 Trace Span 树、Token Usage 与耗时
+        Server-->>Client: 结束流 (done 事件 + 诊断指标)
+    end
+```
+
+### 2. 多 Agent DAG 协作与 A2A 网格交互 (Agent DAG & A2A Mesh)
+
+```mermaid
+flowchart TD
+    UserReq["用户复合任务请求"] --> A2AGate["A2A 网格 / API 入口"]
+    A2AGate --> Leader["Leader / Orchestrator (任务分析与分解)"]
+    
+    subgraph DAGPlanning["DAG 计划与依赖拓扑"]
+        Leader --> Plan["Planner 生成执行图 (DAG Nodes & depends_on)"]
+        Plan --> StorePlan[".agent-runs/ 持久化计划与状态机"]
+    end
+
+    subgraph ParallelExecution["同层并行 Worker 执行"]
+        StorePlan --> Researcher["Researcher (联网搜索 / RAG 检索 / 论文精读)"]
+        StorePlan --> Coder["Coder (代码检索 / 脚本生成 / 沙箱运行)"]
+        StorePlan --> Reasoner["Reasoner (逻辑推理 / 数学分析 / 约束验证)"]
+    end
+
+    subgraph EvaluationLoop["质量评审与修订回环"]
+        Researcher --> Critic["Critic (质量审核 / 事实核验 / 引用检查)"]
+        Coder --> Critic
+        Reasoner --> Critic
+        Critic -- "未通过 (带反馈打回)" --> Researcher
+        Critic -- "通过" --> Synthesizer["Synthesizer (全量成果综合归纳)"]
+    end
+
+    Synthesizer --> FinalOutput["结构化最终产物 & Markdown 回复"]
+    FinalOutput --> EventLog[".agent-runs/ 事件溯源日志持久化"]
+    EventLog --> A2AStream["A2A message/stream SSE Artifact 推送"]
+```
+
+### 3. Object Set v1 加密备份与投影式容灾恢复链路 (Object Set v1 DR & Projected Recovery)
+
+```mermaid
+flowchart LR
+    subgraph BackupPipeline["1. 备份流水线 (Backup Pipeline)"]
+        Scan["工作区文件扫描"] --> CDC["FastCDC 差分分块 (v3 CDC)"]
+        CDC --> Hash["文件 SHA + Chunk SHA 计算"]
+        Hash --> AgeEnc["Age 流式加密 (backup-crypto)"]
+        AgeEnc --> ObjSet["Object Set v1 (独立 Control + Payload Components)"]
+        ObjSet --> S3Store["S3 / 本地备份目标 (Digest + Size 一致性)"]
+    end
+
+    subgraph ProjectionDR["2. 投影式容灾恢复 (Projected DR Readiness)"]
+        S3Store --> ReadCtrl["读取加密 Control 文件 (Metadata Plane)"]
+        ReadCtrl --> MerkleCheck["Merkle Root 链式逐层校验"]
+        MerkleCheck --> Planner["Projection Planner (计算 Output 闭包与 Support 依赖)"]
+        Planner --> SelFetch["Selective Fetch (仅 GET 必需密文 Components)"]
+        SelFetch --> Decrypt["Age 密文解密与 Chunk 拼接"]
+        Decrypt --> MatTree["Projected Materializer (物化有效工作区树)"]
+        MatTree --> FmtCommit["Federated 事务原子提交 & Mutation Gate 解锁"]
+    end
+```
 
 ## 分层架构
 
