@@ -382,7 +382,7 @@ def test_recovery_drill_helpers_detect_each_plaintext_shape_and_missing_session(
 def test_recovery_drill_cleanup_failure_preserves_original_failure(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     restore_id = "restore_doublefailure"
     _write_session(restore_id)
-    backup_crypto.put_secret(restore_id, "passphrase", "secret")
+    backup_crypto.put_secret(restore_id, "passphrase", restore_id)
     monkeypatch.setattr(backup_remote_restore, "preflight_restore_session", lambda *_args, **_kwargs: {"ready": True})
     monkeypatch.setattr(
         backup_remote_restore,
