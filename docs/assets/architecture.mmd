@@ -1,53 +1,71 @@
 flowchart TB
-    subgraph Clients
-        C1[Web UI / PWA]
-        C2[Desktop WebView]
-        C3[Android APK]
-        C4[OpenAI SDK → /v1]
-        C5[MCP Client → /mcp]
-        C6[A2A Peer → /a2a]
+    subgraph Clients["客户端与标准协议接入 (Clients)"]
+        C1["React SPA (/)"]
+        C2["Desktop WebView"]
+        C3["Android APK"]
+        C4["OpenAI SDK → /v1"]
+        C5["MCP Client → /mcp"]
+        C6["A2A Peer → /a2a"]
     end
 
-    subgraph Python["Python 默认运行时 — FastAPI / ASGI"]
-        P1[鉴权]
-        P2[HTTP / SSE / 流式]
-        P3[模型路由 · 重试 / 退避]
-        P4[Agent DAG 编排]
-        P5[MCP 传输与会话]
-        P6[真实工具执行]
-        P7[文件解析与 OCR]
-        P8[embeddings]
-        P9[持久化与索引]
-        P10[可观测性与业务状态]
+    subgraph Python["Python 默认权威运行时 — FastAPI / ASGI"]
+        P1["鉴权 & Mutation Gate 保护"]
+        P2["HTTP / SSE / 流式传输"]
+        P3["策略驱动模型路由 (Model Router)"]
+        P4["Context Engine (前缀缓存优化)"]
+        P5["Context Taint 注入防火墙"]
+        P6["Agent DAG 编排 (Leader/Worker/Critic)"]
+        P7["A2A Agent 网格 & 任务生命周期"]
+        P8["受控工具执行 (17+ 本地工具)"]
+        P9["Tool Policy 策略沙箱引擎"]
+        P10["本地 RAG (BM25 + 向量混合检索)"]
+        P11["文件解析 · PDF 逐页渲染 · OCR"]
+        P12["Workspace Core (Projects / Artifacts)"]
+        P13["Automation 自动化 & Browser 控制"]
+        P14["Skills 动态沙箱与管理"]
+        P15["Object Set v1 加密备份与容灾编排"]
+        P16["可观测性 (Trace Span 树 / /metrics)"]
     end
 
-    subgraph Rust["可选 Rust Sidecar — 默认禁用"]
-        R1[Gateway 请求准备<br/>POST /gateway/request/prepare]
-        R2[MCP 协议准备<br/>POST /mcp/request/prepare]
-        R3[工具策略评估<br/>POST /policy/{url,path,capability}]
-        R4[RAG 向量排序<br/>POST /rag/vectors/rank]
-        R5[RAG 文档准备<br/>POST /rag/documents/prepare]
+    subgraph Rust["可选 Rust 旁车 — 默认禁用 · Python 回退"]
+        R1["网关请求预处理<br/>POST /gateway/request/prepare"]
+        R2["MCP 协议预处理<br/>POST /mcp/request/prepare"]
+        R3["工具策略评估<br/>POST /policy/{url,path,capability}"]
+        R4["RAG 向量排序<br/>POST /rag/vectors/rank"]
+        R5["RAG 文档预处理<br/>POST /rag/documents/prepare"]
+        R6["FastCDC 扫描 & 加密辅助<br/>scan-batch / backup-crypto"]
     end
 
-    subgraph Data["Python 拥有的本地数据"]
-        D1[SQLite 向量 RAG]
-        D2[长期记忆]
-        D3[语义缓存]
-        D4[Trace Runs · Span Tree]
-        D5[请求队列 · DLQ]
-        D6[预算]
+    subgraph StatelessMCP["可选 无状态 MCP 平面 — TS + Redis"]
+        SM1["NGINX (:8010) → 双 MCP 实例"]
+        SM2["Redis AOF (任务租约 / Fencing / 幂等)"]
+        SM3["代码检索 · pytest 运行 · 逻辑备份 Contributor"]
     end
 
-    subgraph External["显式外部调用"]
-        E1[DeepSeek API]
-        E2[Tavily Search]
-        E3[Ollama / Edge inference]
+    subgraph Data["Python 拥有的本地私有数据 (.dot-dirs)"]
+        D1["SQLite 向量 RAG (.local-rag)"]
+        D2["长期记忆 (.memory)"]
+        D3["语义缓存 (.semantic-cache)"]
+        D4["工作区与产物 (.projects)"]
+        D5["Agent 运行日志 (.agent-runs / .a2a)"]
+        D6["加密备份与容灾 (.backups)"]
+        D7["链路追踪 & 审计 (.traces / .tool-audit)"]
+        D8["请求队列 & 预算 (.request-queue / .budget)"]
+    end
+
+    subgraph External["显式外部调用 (数据默认不出端)"]
+        E1["DeepSeek API (Pro / Flash)"]
+        E2["Tavily 联网搜索"]
+        E3["Ollama / 端侧边缘推理"]
     end
 
     Clients --> Python
     Python --> Data
     Python --> External
 
-    Python -. 可选确定性委托 .-> Rust
-    Rust -. 已验证结果 .-> Python
+    Python -. "可选确定性委托" .-> Rust
+    Rust -. "已验证结果" .-> Python
     Rust -. "超时 / 不可用 / 畸形 / 分歧" .-> Python
+
+    Clients -. "独立执行" .-> StatelessMCP
+    StatelessMCP -. "状态与租约" .-> Data
