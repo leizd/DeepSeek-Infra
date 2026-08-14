@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：DeepSeek Infra v2.3.0。
+适用版本：DeepSeek Infra v4.5.0。
 
 本页记录 DeepSeek Infra 的 `A2AClient` 与一个**独立进程 A2A peer** 的互操作验证结果。
 

@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.4.13.
+Applicable version: v4.5.0.
 
 DeepSeek Infra 4.4.13 uses the React workspace as the default UI and keeps projects, memory, skills, media, browser snapshots, automations, saved items, artifacts and exports in the local runtime root unless you explicitly call an upstream API. Workspace Backup can create plaintext or standard age v1 encrypted Full + Delta chains using a passphrase or X25519 Recovery Identity. Index v3 stores only changed/deleted path operations for Incrementals, while `incremental-v5` writes small Whole payloads and every unmatched CDC payload into snapshot-local packs without publishing plaintext hashes. Remote restore can be frozen into a Contributor/Project projection whose `selectionDigest` is durable across retries; the full logical Merkle chain is always verified while only selected payload bytes are materialized, and unselected contributors are never mutated. Because the remote archive stays a single whole-age object, the API/UI report `networkSelective: false` and never claim network-level selective fetch. The packaged `deepseek-backup` helper uses a bounded persistent worker pool with Python per-file fallback; the optional general Rust sidecar remains disabled by default. A separate stateless MCP stack is available for horizontally scaled code search and durable test tasks, and its Redis-backed durable state can be included through the optional logical-snapshot Contributor.
 

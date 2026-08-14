@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.4.13。
+适用版本：v4.5.0。
 
 Use this checklist before tagging a release.
 

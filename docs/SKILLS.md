@@ -5,8 +5,8 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v2.9.1。
-Applicable version: v2.9.1.
+适用版本：v4.5.0。
+Applicable version: v4.5.0.
 
 DeepSeek Infra v2.8.0 对 Skill 的定义如下：
 

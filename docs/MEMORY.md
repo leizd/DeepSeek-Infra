@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.0.3.
+Applicable version: v4.5.0.
 
 Memory is a first-class Personal AI Runtime module in `deepseek_infra/infra/memory/`. It keeps the legacy local JSON store compatible while exposing a stable public object shape for workspace, skills and automations.
 

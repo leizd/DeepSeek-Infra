@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v2.9.1.
+Applicable version: v4.5.0.
 
 Browser Control Runtime lets Agents and Skills read pages, capture screenshots,
 click, type, download, and persist browser evidence into Workspace Media.

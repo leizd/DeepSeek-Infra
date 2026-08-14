@@ -14,18 +14,22 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def test_architecture_svg_version() -> None:
+    svg_text = _read(ROOT / "docs" / "assets" / "architecture.svg")
+    assert f"v{VERSION}" in svg_text
+    assert "v2.1.6" not in svg_text
+
+
 @pytest.mark.parametrize(
     ("substring", "should_contain"),
     [
-        ("v4.5.0", True),
-        ("v4.3.6", False),
-        ("v2.1.6", False),
         ("Optional Rust Sidecar", True),
         ("Python Default Runtime", True),
         ("Python fallback", True),
