@@ -353,6 +353,8 @@ def test_disk_probe_deduplicates_devices_and_missing_files(tmp_path: Path, monke
     monkeypatch.setattr(backup_recovery_preflight.shutil, "disk_usage", disk_usage)
     assert backup_recovery_preflight._disk_free_bytes((tmp_path / "missing" / "a", tmp_path / "missing" / "b")) == 123
     assert len(observed) == 1
+    with pytest.raises(OSError, match="no recovery disk"):
+        backup_recovery_preflight._disk_free_bytes(())
 
 
 def test_preflight_rejects_malformed_projection_byte_estimates(tmp_path: Path) -> None:
@@ -371,3 +373,55 @@ def test_preflight_rejects_malformed_projection_byte_estimates(tmp_path: Path) -
     assert report["ready"] is False
     assert {item["code"] for item in report["blockingReasons"]} == {"projection-plan-invalid"}
     assert report["scratch"]["materializedTreeBytes"] == 0
+
+
+def test_preflight_handles_absent_store_and_component_probe_failure(tmp_path: Path) -> None:
+    raw = b"remote-component"
+    digest = hashlib.sha256(raw).hexdigest()
+    session = {
+        "restoreId": "restore-probe-failure",
+        "backupId": "full",
+        "chain": [
+            {
+                "backupId": "full",
+                "snapshotKind": "full",
+                "requiredComponents": [
+                    {"objectDigest": digest, "expectedBytes": len(raw), "plaintextSize": len(raw)}
+                ],
+            }
+        ],
+    }
+    cache = backup_component_cache.ComponentCache(tmp_path / "cache")
+    safety_backup = {**backup_recovery_preflight.estimate_safety_backup_peak(0), "externalBytesKnown": True}
+    no_store = backup_recovery_preflight.evaluate_preflight(
+        session,
+        {"bytes": {}},
+        store=None,
+        target_kind="memory",
+        cache=cache,
+        safety_backup=safety_backup,
+        free_disk_bytes=10_000_000_000,
+        reserve_bytes=0,
+    )
+    assert "target-unavailable" in {item["code"] for item in no_store["blockingReasons"]}
+
+    class ComponentProbeFails(MemoryTargetStore):
+        def stat(self, key: str):
+            if key == object_key(digest):
+                raise OSError("component probe failed")
+            return super().stat(key)
+
+    store = ComponentProbeFails()
+    store.put_if_absent(receipt_key("full"), b"{}")
+    broken = backup_recovery_preflight.evaluate_preflight(
+        session,
+        {"bytes": {}},
+        store=store,
+        target_kind="memory",
+        cache=cache,
+        safety_backup=safety_backup,
+        free_disk_bytes=10_000_000_000,
+        reserve_bytes=0,
+    )
+    assert broken["targetHealth"]["status"] == "blocked"
+    assert "required-component-unavailable" in {item["code"] for item in broken["blockingReasons"]}

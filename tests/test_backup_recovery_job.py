@@ -199,3 +199,71 @@ def test_job_handles_invalid_transaction_and_repeated_pause(tmp_path: Path) -> N
     assert backup_recovery_job.converge(paused) == "paused"
     with pytest.raises(AppError, match="Terminal"):
         backup_recovery_job.request_abort(_session(tmp_path, phase="failed"))
+
+
+def test_remote_job_control_missing_terminal_and_invalid_metadata_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backups, "RESTORE_DIR", tmp_path)
+    for operation in (
+        backup_remote_restore.request_restore_pause,
+        backup_remote_restore.resume_restore_session,
+        backup_remote_restore.request_restore_abort,
+    ):
+        with pytest.raises(AppError, match="session not found"):
+            operation("restore_missing")
+
+    restore_id = "restore_terminal"
+    session_path = tmp_path / restore_id / "remote-fetch.json"
+    session_path.parent.mkdir()
+    session_path.write_text("not-json", encoding="utf-8")
+    backup_remote_restore._atomic_write_json(session_path, {"restoreId": restore_id, "phase": "complete"})
+
+    assert backup_remote_restore._manifest_work({}) == (0, 0)
+    assert backup_remote_restore.request_restore_pause(restore_id)["phase"] == "complete"
+    assert backup_remote_restore.resume_restore_session(restore_id)["phase"] == "complete"
+    assert backup_remote_restore.request_restore_abort(restore_id)["phase"] == "complete"
+
+
+def test_remote_job_hold_failure_and_controlled_checkpoint_are_durable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backups, "RESTORE_DIR", tmp_path)
+    restore_id = "restore_holdfailure"
+    (tmp_path / restore_id).mkdir()
+    session: dict[str, object] = {"restoreId": restore_id, "phase": "fetching", "controlGeneration": 0}
+    monkeypatch.setattr(
+        backup_remote_restore.backup_recovery_lease,
+        "renew_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AppError("renew failed")),
+    )
+    with pytest.raises(AppError, match="renew failed"):
+        backup_remote_restore._renew_session_holds(object(), session)
+    persisted = backup_remote_restore.read_restore_session(restore_id)
+    assert persisted is not None
+    assert persisted["recoveryTelemetry"]["counters"]["holdRenewalFailure"] == 1
+
+    latest = {
+        "restoreId": restore_id,
+        "phase": "paused",
+        "controlGeneration": 2,
+        "pauseRequested": True,
+        "pausedFromPhase": "fetching",
+    }
+    monkeypatch.setattr(backup_remote_restore, "read_restore_session", lambda _restore_id: latest)
+    monkeypatch.setattr(backup_remote_restore, "_converge_job_control", lambda current: str(current["phase"]))
+    renewals: list[str] = []
+    monkeypatch.setattr(
+        backup_remote_restore,
+        "_renew_session_holds",
+        lambda _store, current: renewals.append(str(current["phase"])),
+    )
+
+    with pytest.raises(backup_recovery_job.RecoveryJobStopped) as stopped:
+        backup_remote_restore._checkpoint_job_control(session, object())
+    assert stopped.value.phase == "paused"
+    assert session["controlGeneration"] == 2
+    assert session["pausedFromPhase"] == "fetching"
+    assert renewals == ["paused"]

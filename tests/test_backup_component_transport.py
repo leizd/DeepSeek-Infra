@@ -23,6 +23,7 @@ from deepseek_infra.infra.workspace.backup_component_transport import (
     ComponentTransferScheduler,
     SchedulerConfig,
     TransferTask,
+    TransferTelemetry,
 )
 
 
@@ -258,6 +259,15 @@ def test_transfer_task_validates_open_files():
             open_files=0,
         )
 
+    with pytest.raises(ValueError, match="working_set_bytes"):
+        TransferTask(
+            component_id="invalid-working-set",
+            ciphertext_digest="0" * 64,
+            ciphertext_size=1,
+            execute=lambda: None,
+            working_set_bytes=0,
+        )
+
 
 def test_scheduler_config_byte_permits():
     config = SchedulerConfig(max_in_flight_bytes=32 * 1024 * 1024)
@@ -266,8 +276,66 @@ def test_scheduler_config_byte_permits():
 
 def test_scheduler_config_as_dict_is_transport_profile():
     config = SchedulerConfig()
+    assert ComponentTransferScheduler(config).config is config
     profile = config.as_dict()
     assert profile["maxWorkers"] == 4
     assert profile["maxInFlightBytes"] == 256 * 1024 * 1024
     assert profile["maxOpenFiles"] == 64
     assert profile["workingSetBytes"] == DEFAULT_WORKING_SET_BYTES
+
+
+def test_scheduler_rejects_tasks_that_exceed_individual_budgets():
+    config = SchedulerConfig(max_in_flight_bytes=DEFAULT_WORKING_SET_BYTES, max_open_files=1)
+    scheduler = ComponentTransferScheduler(config)
+
+    with pytest.raises(ValueError, match="byte budget"):
+        scheduler.run(
+            [
+                TransferTask(
+                    component_id="too-large",
+                    ciphertext_digest="0" * 64,
+                    ciphertext_size=1,
+                    execute=lambda: None,
+                    working_set_bytes=DEFAULT_WORKING_SET_BYTES + 1,
+                )
+            ]
+        )
+    with pytest.raises(ValueError, match="FD budget"):
+        scheduler.run(
+            [
+                TransferTask(
+                    component_id="too-many-files",
+                    ciphertext_digest="1" * 64,
+                    ciphertext_size=1,
+                    execute=lambda: None,
+                    open_files=2,
+                )
+            ]
+        )
+
+
+def test_scheduler_honors_cancel_after_budget_admission(monkeypatch: pytest.MonkeyPatch):
+    cancel = threading.Event()
+    executed: list[str] = []
+    real_enter = TransferTelemetry.enter
+
+    def enter_and_cancel(self: TransferTelemetry, working_set_bytes: int, open_files: int) -> None:
+        real_enter(self, working_set_bytes, open_files)
+        cancel.set()
+
+    monkeypatch.setattr(TransferTelemetry, "enter", enter_and_cancel)
+    telemetry = ComponentTransferScheduler().run(
+        [
+            TransferTask(
+                component_id="cancelled-after-admission",
+                ciphertext_digest="2" * 64,
+                ciphertext_size=1,
+                execute=lambda: executed.append("ran"),
+            )
+        ],
+        cancel_event=cancel,
+    )
+
+    assert executed == []
+    assert telemetry.failed == 1
+    assert telemetry.active == 0

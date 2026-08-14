@@ -26,6 +26,11 @@ def test_cache_fetch_commits_verified_ciphertext_and_reuses_hit(tmp_path: Path) 
 
     assert path == tmp_path / "cache" / "sha256" / digest[:2] / f"{digest}.age"
     assert path.read_bytes() == data
+    assert cache.fetch(
+        digest,
+        len(data),
+        lambda _offset: (_ for _ in ()).throw(AssertionError("cache hit must not read")),
+    ) == path
     assert cache.get(digest, len(data)) == path
     assert offsets == [0]
     assert sorted(item.name for item in path.parent.iterdir()) == [f"{digest}.age"]
@@ -168,6 +173,8 @@ def test_cache_rejects_invalid_control_inputs_and_pin_shapes(tmp_path: Path) -> 
         cache.gc(quota_bytes=-1)
     with pytest.raises(ValueError, match="non-negative"):
         cache.inspect("a" * 64, -1)
+    with pytest.raises(ValueError, match="non-negative"):
+        cache.fetch("a" * 64, -1, lambda _offset: iter(()))
     cache.unpin("")
 
     pin_dir = cache.root / "pins"
@@ -197,7 +204,7 @@ def test_cache_promotes_complete_partial_and_bounds_stream_pieces(tmp_path: Path
     path = cache.fetch(
         second_digest,
         len(second),
-        lambda offset: iter((b"", second[offset:] + b"ignored")),
+        lambda offset: iter((b"", second[offset:] + b"ignored", b"must-not-be-consumed")),
         progress=progress.append,
     )
     assert path.read_bytes() == second
@@ -229,3 +236,17 @@ def test_cache_empty_gc_ignores_noncanonical_files_and_unlink_failure(tmp_path: 
     assert report["overQuotaBytes"] == len(b"locked-entry")
     assert report["evicted"] == 0
     assert digest not in cache.pinned_digests()
+
+
+def test_cache_gc_ignores_candidate_that_disappears_during_stat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cache = backup_component_cache.ComponentCache(tmp_path / "cache")
+    _digest, path = _put(cache, b"disappearing")
+    real_stat = Path.stat
+
+    def fail_candidate_stat(target: Path, *args: Any, **kwargs: Any) -> Any:
+        if target == path:
+            raise OSError("gone")
+        return real_stat(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_candidate_stat)
+    assert cache.gc(quota_bytes=0) == {"beforeBytes": 0, "afterBytes": 0, "evicted": 0, "freedBytes": 0}

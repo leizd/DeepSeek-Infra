@@ -266,13 +266,13 @@ def test_recovery_drill_work_and_projected_inspection_are_bounded(tmp_settings: 
             "bad",
         ]
     }
-    monkeypatch.setattr(backup_remote_restore, "restore_members", lambda _session: session["chain"][:1])
+    monkeypatch.setattr(backup_remote_restore, "restore_members", lambda _session: [session["chain"][0], {}])
     work = backup_recovery_drill._work(
         session,
         {"manifest": {"files": [None, {"size": -1}, {"size": 9}], "contributors": [None, {"id": "projects"}]}},
         {"operations": []},
     )
-    assert work == {"chainLength": 1, "components": 3, "ciphertextBytes": 12, "logicalBytes": 9, "verifiedContributors": 1}
+    assert work == {"chainLength": 2, "components": 3, "ciphertextBytes": 12, "logicalBytes": 9, "verifiedContributors": 1}
 
     inspected: list[str] = []
 
@@ -349,6 +349,52 @@ def test_recovery_drill_cleanup_failure_overrides_success(tmp_settings: Path, mo
     result = backup_recovery_drill.get_recovery_drill(restore_id)
     assert result["failureCode"] == "drill-cleanup-failed"
     assert backup_recovery_drill._plaintext_remains(root) is True
+
+
+def test_recovery_drill_helpers_detect_each_plaintext_shape_and_missing_session(tmp_settings: Path) -> None:
+    missing_root = backups.RESTORE_DIR / "restore_absent"
+    missing_root.mkdir(parents=True)
+    with pytest.raises(AppError, match="session not found"):
+        backup_recovery_drill._claim(missing_root, "restore_absent")
+
+    scratch = tmp_settings / "drill-scratch"
+    scratch.mkdir()
+    backup_recovery_drill._scrub_directory(scratch / "missing")
+
+    plan = scratch / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    assert backup_recovery_drill._plaintext_remains(scratch) is True
+    plan.unlink()
+
+    archive = scratch / "control-decrypted-a.zip"
+    archive.write_bytes(b"plain")
+    assert backup_recovery_drill._plaintext_remains(scratch) is True
+    archive.unlink()
+
+    extracted = scratch / "extracted"
+    extracted.mkdir()
+    (extracted / "plain.txt").write_text("plain", encoding="utf-8")
+    assert backup_recovery_drill._plaintext_remains(scratch) is True
+    backup_recovery_drill._scrub_directory(extracted)
+    assert not extracted.exists()
+
+
+def test_recovery_drill_cleanup_failure_preserves_original_failure(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    restore_id = "restore_doublefailure"
+    _write_session(restore_id)
+    backup_crypto.put_secret(restore_id, "passphrase", "secret")
+    monkeypatch.setattr(backup_remote_restore, "preflight_restore_session", lambda *_args, **_kwargs: {"ready": True})
+    monkeypatch.setattr(
+        backup_remote_restore,
+        "fetch_restore_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fetch failed")),
+    )
+    monkeypatch.setattr(backup_recovery_drill, "_scrub_plaintext", lambda _root: (_ for _ in ()).throw(OSError("locked")))
+    monkeypatch.setattr(backup_remote_restore, "_release_session_holds", lambda _session: None)
+
+    with pytest.raises(AppError, match="Recovery Drill failed"):
+        backup_recovery_drill.run_recovery_drill(restore_id)
+    assert backup_recovery_drill.get_recovery_drill(restore_id)["failureCode"] == "drill-cleanup-failed"
 
 
 def _materialized_tree(tree: Path) -> dict[str, Any]:
