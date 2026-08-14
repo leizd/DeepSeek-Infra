@@ -342,7 +342,11 @@ def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
         warm_complete = _run_restart_probe(tmp_settings, {"action": "resume-commit-complete", "restoreId": warm_restore_id})
         assert warm_complete["phase"] == "complete"
 
-        corrupt_digest = sorted(key.rsplit("/", 1)[-1] for key in required_payload_keys)[0]
+        corrupt_digest = sorted(
+            str(component["objectDigest"])
+            for member in warm_session["chain"]
+            for component in member.get("requiredComponents") or []
+        )[0]
         backup_component_cache.ComponentCache().path_for(corrupt_digest).write_bytes(b"corrupt-cache-entry")
         corrupt_restore_id, corrupt, _corrupt_session = prepare_again()
         corrupt_payload_gets = [str(key) for key in corrupt["objectGets"] if str(key) in all_payload_keys]
