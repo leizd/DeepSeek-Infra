@@ -1,4 +1,4 @@
-"""Final push test coverage for 4.5.1 modules (dr_readiness, recovery_drill, targets, keeper, class)."""
+"""Final push test coverage for 4.5.1 modules (dr_readiness, recovery_drill, targets, keeper, class, audit, creds)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import pytest
 
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
+    backup_dr_audit,
     backup_dr_readiness,
     backup_policies,
     backup_publish,
@@ -18,6 +19,7 @@ from deepseek_infra.infra.workspace import (
     backup_recovery_drill,
     backup_recovery_keeper,
     backup_targets,
+    backups,
 )
 from deepseek_infra.infra.workspace.backup_target_store import ListPage, ObjectMeta
 
@@ -182,3 +184,50 @@ def test_recovery_class_classification_and_calibration() -> None:
     assert cal["isSla"] is False
     assert cal["p50Seconds"] > 0
     assert cal["p90Seconds"] >= cal["p50Seconds"]
+
+
+def test_dr_audit_managed_local_target(tmp_settings: Path) -> None:
+    root = backups.BACKUP_DIR
+    commits_dir = root / "commits" / "pol1"
+    commits_dir.mkdir(parents=True, exist_ok=True)
+    receipts_dir = root / "receipts"
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+
+    commit_data = {
+        "schemaVersion": 4,
+        "backupId": "bk_local_audit",
+        "policyId": "pol1",
+        "committedAt": "2026-08-15T02:00:00Z",
+    }
+    commit_data["commitHash"] = backup_publish._commit_hash(commit_data)
+    (commits_dir / "c1.json").write_text(json.dumps(commit_data), encoding="utf-8")
+
+    receipt_data = {
+        "backupId": "bk_local_audit",
+        "policyId": "pol1",
+        "size": 5000,
+        "logicalBytes": 12000,
+        "chainLength": 1,
+        "createdAt": "2026-08-15T02:00:00Z",
+    }
+    (receipts_dir / "bk_local_audit.json").write_text(json.dumps(receipt_data), encoding="utf-8")
+
+    res = backup_dr_audit.audit_remote_target("managed-local")
+    assert res["status"] == "completed"
+    assert res["recoveryPointsFound"] >= 1
+    assert res["objectsAudited"] >= 1
+
+
+def test_in_memory_recovery_credential_provider() -> None:
+    provider = backup_recovery_credential.InMemoryCredentialProvider()
+    provider.set_secret("my_cred", "my_secret_val")
+    assert provider.has_credential("my_cred") is True
+    assert provider.has_credential("nonexistent") is False
+
+    with provider.open_secret("my_cred") as sec_bytes:
+        assert sec_bytes.decode("utf-8") == "my_secret_val"
+
+    sec_bytes_manual = provider.acquire_secret_bytes("my_cred")
+    assert sec_bytes_manual.decode("utf-8") == "my_secret_val"
+    backup_recovery_credential.zeroize(sec_bytes_manual)
+    assert sec_bytes_manual == bytearray(len(sec_bytes_manual))
