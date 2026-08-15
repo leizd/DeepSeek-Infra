@@ -1,4 +1,4 @@
-"""Final push test coverage for 4.5.1 modules (dr_readiness, recovery_drill, targets, keeper, class, audit, creds)."""
+"""Final push test coverage for disaster recovery modules (dr_readiness, recovery_drill, targets, keeper, class, audit, creds)."""
 
 from __future__ import annotations
 

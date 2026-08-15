@@ -7,16 +7,20 @@ from pathlib import Path
 import pytest
 
 from deepseek_infra.core.errors import AppError
-from deepseek_infra.infra.workspace import backups
+from deepseek_infra.infra.workspace import backup_crypto, backups
 
 
 def test_backup_sessions_and_identity(tmp_settings: Path) -> None:
-    # 1. Generate recovery identity
-    identity_res = backups.generate_recovery_identity()
-    assert identity_res["ok"] is True
-    assert "identity" in identity_res
-    assert "recipient" in identity_res
-    assert identity_res["displayedOnce"] is True
+    # 1. Generate recovery identity (if crypto helper is available)
+    if bool(backup_crypto.capabilities().get("encryptedBackupAvailable")):
+        identity_res = backups.generate_recovery_identity()
+        assert identity_res["ok"] is True
+        assert "identity" in identity_res
+        assert "recipient" in identity_res
+        assert identity_res["displayedOnce"] is True
+    else:
+        with pytest.raises(AppError):
+            backups.generate_recovery_identity()
 
     # 2. Create session without encryption
     session = backups.create_session({

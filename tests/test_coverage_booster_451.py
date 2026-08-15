@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import pytest
 
+from deepseek_infra.core.config import APP_VERSION
 from deepseek_infra.infra.automation import evidence as auto_evidence
 from deepseek_infra.infra.data import projects as legacy_projects
 from deepseek_infra.infra.mcp import adapters as mcp_adapters
@@ -24,14 +26,14 @@ from deepseek_infra.infra.workspace import (
 
 def test_automation_and_media_evidence_payloads() -> None:
     auto_res = auto_evidence.automation_evidence_payload(
-        "4.5.1",
+        APP_VERSION,
         checks={"sample": "PASS"},
         details={"extra": 123},
     )
     assert auto_res["checks"]["sample"] == "PASS"
 
     media_res = media_evidence.evidence_metadata(
-        "4.5.1",
+        APP_VERSION,
         status="ok",
         checks={"ocr": "PASS"},
         details={"extra": 456},
@@ -149,7 +151,10 @@ def test_mutation_gate_and_writer_lease(tmp_settings: Path) -> None:
         lease.renew()
 
 
-def test_backup_targets_reinitialize(tmp_settings: Path) -> None:
+def test_backup_targets_reinitialize(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_temp = tmp_settings / "fake_temp"
+    fake_temp.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_temp))
     t_root = tmp_settings / "new_target_dir"
     t_root.mkdir(parents=True, exist_ok=True)
     target_info = backup_targets.reinitialize_target(t_root, label="External USB")

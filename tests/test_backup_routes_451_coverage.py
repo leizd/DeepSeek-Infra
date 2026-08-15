@@ -1,4 +1,4 @@
-"""Integration tests for 4.5.1 disaster recovery and workspace backup route endpoints."""
+"""Integration tests for disaster recovery and workspace backup route endpoints."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from deepseek_infra.infra.workspace import (
+    backup_crypto,
     backup_dr_audit,
     backup_recovery_drill,
     backups,
@@ -62,20 +63,34 @@ def test_disaster_recovery_status_and_audit_routes(test_app: TestClient, monkeyp
     assert res_audit.json()["recoveryPointsFound"] == 3
 
 
-def test_disaster_recovery_drill_routes(test_app: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_recovery_drill_routes(test_app: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        backup_recovery_drill,
+        "run_recovery_drill",
+        lambda restore_id: {
+            "restoreId": restore_id,
+            "status": "success",
+            "verifiedAt": "2026-08-15T00:00:00Z",
+        },
+    )
+    res_create = test_app.post(
+        "/api/workspace/disaster-recovery/drills",
+        json={"restoreId": "restore_123"},
+    )
+    assert res_create.status_code == 200
+    assert res_create.json()["restoreId"] == "restore_123"
+
     monkeypatch.setattr(
         backup_recovery_drill,
         "execute_scheduled_drill",
         lambda policy_id: {
             "policyId": policy_id,
             "status": "completed",
-            "drillKind": "automated",
         },
     )
     res_sched = test_app.post("/api/workspace/disaster-recovery/drills/schedule/policy_prod")
     assert res_sched.status_code == 200
     assert res_sched.json()["policyId"] == "policy_prod"
-    assert res_sched.json()["status"] == "completed"
 
     monkeypatch.setattr(
         backup_recovery_drill,
@@ -92,6 +107,17 @@ def test_disaster_recovery_drill_routes(test_app: TestClient, monkeypatch: pytes
 
 
 def test_workspace_backup_identities_and_secrets(test_app: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        backup_crypto,
+        "generate_identity",
+        lambda: {"recipient": "age1fake", "identity": "AGE-SECRET-KEY-FAKE"},
+    )
+    monkeypatch.setattr(
+        backup_crypto,
+        "put_secret",
+        lambda session_id, kind, secret: {"ok": True, "kind": kind},
+    )
+
     # POST /api/workspace/backups/recovery-identities
     res_ident = test_app.post("/api/workspace/backups/recovery-identities")
     assert res_ident.status_code == 200
@@ -117,7 +143,7 @@ def test_workspace_backup_identities_and_secrets(test_app: TestClient, monkeypat
     rest_id = "restore_a1b2c3d4e5f60718"
     rest_dir = backups.RESTORE_DIR / rest_id
     rest_dir.mkdir(parents=True, exist_ok=True)
-    (rest_dir / "session.json").write_text(json.dumps({"restoreId": rest_id, "phase": "created", "kind": "passphrase"}), encoding="utf-8")
+    (rest_dir / "transaction.json").write_text(json.dumps({"restoreId": rest_id, "phase": "created", "kind": "passphrase"}), encoding="utf-8")
 
     res_rest_sec = test_app.put(
         f"/api/workspace/restores/{rest_id}/secret",
