@@ -64,3 +64,15 @@ def test_server_app_endpoints(tmp_settings: Path) -> None:
     # 8. Compress context
     resp = client.post("/api/compress-context", json={"apiKey": "sk-fake", "messages": []}, headers=headers)
     assert resp.status_code == 200
+
+    # 9. original_file_media_type
+    assert server.original_file_media_type({"kind": "pdf"}) == "application/pdf"
+    assert server.original_file_media_type({"kind": "image", "type": "image/png"}) == "image/png"
+    assert server.original_file_media_type({"kind": "md"}) == "text/plain; charset=utf-8"
+    assert server.original_file_media_type({"kind": "unknown"}) == "application/octet-stream"
+
+    # 10. redact_sensitive_query
+    redacted_url = server.redact_sensitive_query("https://example.com/api?token=secret123&foo=bar")
+    assert "%5Bredacted%5D" in redacted_url
+    redacted_path = server.redact_sensitive_query("/api/path?token=secret456")
+    assert "%5Bredacted%5D" in redacted_path
