@@ -1,8 +1,9 @@
-"""Final push test coverage for 4.5.1 modules (dr_readiness, recovery_drill, targets)."""
+"""Final push test coverage for 4.5.1 modules (dr_readiness, recovery_drill, targets, keeper, class)."""
 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,10 @@ from deepseek_infra.infra.workspace import (
     backup_dr_readiness,
     backup_policies,
     backup_publish,
+    backup_recovery_class,
     backup_recovery_credential,
     backup_recovery_drill,
+    backup_recovery_keeper,
     backup_targets,
 )
 from deepseek_infra.infra.workspace.backup_target_store import ListPage, ObjectMeta
@@ -119,3 +122,63 @@ def test_backup_targets_open_target_store(tmp_settings: Path) -> None:
     # Open managed-local target store
     store = backup_targets.open_target_store("managed-local")
     assert store is not None
+
+
+def test_recovery_keeper_daemon_and_health(tmp_settings: Path) -> None:
+    health = backup_recovery_keeper.get_recovery_lease_health()
+    assert health["status"] == "ok"
+
+    keeper = backup_recovery_keeper.RecoveryLeaseKeeper(tick_interval_seconds=0.1)
+    assert keeper.is_running is False
+    keeper.start()
+    assert keeper.is_running is True
+    keeper.step()
+    keeper.stop()
+    assert keeper.is_running is False
+
+    glob = backup_recovery_keeper.get_global_recovery_keeper()
+    assert glob is not None
+
+    assert backup_recovery_keeper._parse_iso("invalid-iso") is None
+    assert backup_recovery_keeper._parse_iso(None) is None
+    assert isinstance(backup_recovery_keeper._parse_iso("2026-08-15T12:00:00Z"), datetime)
+
+
+def test_recovery_class_classification_and_calibration() -> None:
+    # Classify buckets
+    assert backup_recovery_class.size_bucket(500) == "small"
+    assert backup_recovery_class.size_bucket(20 * 1024 * 1024) == "medium"
+    assert backup_recovery_class.size_bucket(200 * 1024 * 1024) == "large"
+
+    assert backup_recovery_class.chain_depth_bucket(2) == "shallow"
+    assert backup_recovery_class.chain_depth_bucket(6) == "moderate"
+    assert backup_recovery_class.chain_depth_bucket(15) == "deep"
+
+    rc = backup_recovery_class.classify_recovery(
+        target_kind="filesystem",
+        logical_bytes=150 * 1024 * 1024,
+        chain_length=12,
+    )
+    assert rc.size_category == "large"
+    assert rc.chain_depth == "deep"
+    assert "filesystem" in rc.tag
+    assert str(rc) == rc.tag
+    d = rc.to_dict()
+    assert d["sizeBucket"] == "large"
+
+    # Calibration with percentile and multiple samples
+    samples = [
+        {"stage": "transfer", "bytes": 10_000_000, "durationMs": 200, "recoveryClass": rc.to_dict()}
+        for _ in range(12)
+    ] + [
+        {"stage": "crypto", "bytes": 10_000_000, "durationMs": 100, "recoveryClass": rc.to_dict()}
+        for _ in range(12)
+    ] + [
+        {"stage": "materialize", "bytes": 10_000_000, "durationMs": 50, "recoveryClass": rc.to_dict()}
+        for _ in range(12)
+    ]
+    cal = backup_recovery_class.calibrate_rto(samples, logical_bytes=10_000_000, recovery_class=rc)
+    assert cal["confidence"] == "high"
+    assert cal["isSla"] is False
+    assert cal["p50Seconds"] > 0
+    assert cal["p90Seconds"] >= cal["p50Seconds"]
