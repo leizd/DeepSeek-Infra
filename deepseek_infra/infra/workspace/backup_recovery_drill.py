@@ -325,6 +325,27 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
         current["updatedAt"] = str(result["completedAt"])
         backup_remote_restore._atomic_write_json(root / "remote-fetch.json", current)
         (root / CLAIM_NAME).unlink(missing_ok=True)
+        try:
+            from deepseek_infra.infra.workspace import backup_dr_ledger
+            target_id = str(current.get("targetId") or "managed-local")
+            backup_id = str(current.get("backupId") or "")
+            stage_durations = {
+                "fetchMs": current.get("fetchDurationMs"),
+                "materializeMs": current.get("materializeDurationMs"),
+                "totalMs": result.get("durationMs"),
+            }
+            backup_dr_ledger.record_drill_evidence(
+                target_id=target_id,
+                backup_id=backup_id,
+                drill_kind="automated" if current.get("automatedDrill") else "manual",
+                observed_at=str(result.get("completedAt") or _utc_iso()),
+                result=str(result.get("result") or "failed"),
+                work_class="recovery-drill",
+                details=result,
+                stage_durations=stage_durations,
+            )
+        except Exception:
+            pass
     if failure is not None:
         raise AppError("Recovery Drill failed", code=ErrorCode.INVALID_REQUEST, status=409) from failure
     return result
@@ -346,3 +367,77 @@ def get_recovery_drill(restore_id: str) -> dict[str, Any]:
     if claim.is_file():
         return _read_json(claim)
     raise AppError("Recovery Drill result not found", code=ErrorCode.NOT_FOUND, status=404)
+
+
+def execute_scheduled_drill(policy_id: str, *, client: Any | None = None) -> dict[str, Any]:
+    """Orchestrate an unattended isolated recovery drill for a scheduled policy."""
+    from deepseek_infra.infra.workspace import (
+        backup_dr_ledger,
+        backup_policies,
+        backup_recovery_credential,
+    )
+
+    policy = backup_policies.get_policy(policy_id)
+    drill_conf = policy.get("recoveryDrill") or {}
+    if not drill_conf.get("enabled"):
+        return {"status": "skipped", "reason": "drill-disabled", "policyId": policy_id}
+
+    target_id = str(policy.get("targetId") or "managed-local")
+    provider_name = drill_conf.get("provider")
+    credential_ref = drill_conf.get("credentialRef")
+
+    try:
+        provider = backup_recovery_credential.get_provider(provider_name)
+        if not credential_ref or not provider.has_credential(credential_ref):
+            raise AppError(
+                "unlock-required: automated drill blocked without recovery credential",
+                code=ErrorCode.INVALID_REQUEST,
+                status=428,
+            )
+        secret_bytes = provider.acquire_secret_bytes(credential_ref)
+    except AppError as exc:
+        backup_dr_ledger.record_drill_evidence(
+            target_id=target_id,
+            policy_id=policy_id,
+            backup_id="",
+            drill_kind="scheduled",
+            observed_at=_utc_iso(),
+            result="blocked",
+            work_class="recovery-drill",
+            details={"error": str(exc), "policyId": policy_id},
+        )
+        return {
+            "status": "blocked",
+            "reason": "unlock-required",
+            "error": str(exc),
+            "policyId": policy_id,
+            "targetId": target_id,
+            "backupId": "",
+        }
+
+    latest_pt, _ = backup_dr_ledger.get_latest_recoverable_point(target_id, policy_id)
+    if latest_pt is None:
+        latest_pt, _ = backup_dr_ledger.get_latest_recoverable_point(target_id)
+    if latest_pt is None:
+        raise AppError("No recovery point found for scheduled drill", code=ErrorCode.NOT_FOUND, status=404)
+
+    backup_id = str(latest_pt.get("backupId") or "")
+
+    try:
+        session = backup_remote_restore.create_restore_from_target(
+            target_id=target_id,
+            backup_id=backup_id,
+            client=client,
+        )
+        restore_id = str(session["restoreId"])
+        # Update session with policyId and automatedDrill markers
+        s_data = backup_remote_restore.read_restore_session(restore_id) or session
+        s_data["policyId"] = policy_id
+        s_data["automatedDrill"] = True
+        backup_remote_restore._atomic_write_json(_root(restore_id) / "remote-fetch.json", s_data)
+
+        backup_crypto.put_secret_bytes(restore_id, "age-identity", secret_bytes)
+        return run_recovery_drill(restore_id, client=client)
+    finally:
+        for i in range(len(secret_bytes)):
+            secret_bytes[i] = 0

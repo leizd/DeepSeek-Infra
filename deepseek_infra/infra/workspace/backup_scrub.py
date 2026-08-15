@@ -94,6 +94,18 @@ def scrub_backup(root: Path, backup_id: str, *, target_id: str | None = None) ->
         except AppError as exc:
             _check("target-marker", False, str(exc)[:80])
     backup_catalog.record_scrub(root, backup_id, ok=ok, detail="; ".join(f"{k}={v}" for k, v in checks.items() if v != "PASS"))
+    effective_target_id = str(target_id or "managed-local")
+    try:
+        from deepseek_infra.infra.workspace import backup_dr_ledger
+        backup_dr_ledger.record_scrub_evidence(
+            target_id=effective_target_id,
+            backup_id=backup_id,
+            observed_at=_utc_iso(),
+            result="success" if ok else "failed",
+            details={"checks": checks, "objectsScrubbed": len(members)},
+        )
+    except Exception:
+        pass
     return {"backupId": backup_id, "ok": ok, "checks": checks, "objectsScrubbed": len(members), "scrubbedAt": _utc_iso()}
 
 

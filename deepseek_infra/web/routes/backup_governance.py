@@ -1,4 +1,4 @@
-"""Scheduled backup governance routes (4.4.7)."""
+"""Scheduled backup governance routes (4.5.1)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_catalog,
+    backup_dr_audit,
     backup_dr_readiness,
     backup_executor,
     backup_policies,
@@ -205,6 +206,21 @@ def create_backup_governance_router() -> APIRouter:
         require_api_auth(request)
         return json_response(backup_dr_readiness.readiness_status())
 
+    @router.post("/api/workspace/disaster-recovery/audit")
+    async def api_disaster_recovery_audit(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=16_000)
+        target_id = str(payload.get("targetId") or "managed-local")
+        page_size = int(payload.get("pageSize") or 100)
+        cursor = payload.get("cursor")
+        return json_response(
+            backup_dr_audit.audit_remote_target(
+                target_id,
+                page_size=page_size,
+                cursor=str(cursor) if cursor else None,
+            )
+        )
+
     @router.post("/api/workspace/disaster-recovery/drills")
     async def api_disaster_recovery_drill_create(request: Request) -> JSONResponse:
         require_api_auth(request)
@@ -212,6 +228,11 @@ def create_backup_governance_router() -> APIRouter:
         if set(payload) != {"restoreId"}:
             raise AppError("Recovery Drill accepts only restoreId", code=ErrorCode.INVALID_PAYLOAD)
         return json_response(backup_recovery_drill.run_recovery_drill(str(payload.get("restoreId") or "")))
+
+    @router.post("/api/workspace/disaster-recovery/drills/schedule/{policy_id}")
+    async def api_disaster_recovery_drill_schedule(request: Request, policy_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(backup_recovery_drill.execute_scheduled_drill(policy_id))
 
     @router.get("/api/workspace/disaster-recovery/drills/{restore_id}")
     async def api_disaster_recovery_drill_get(request: Request, restore_id: str) -> JSONResponse:

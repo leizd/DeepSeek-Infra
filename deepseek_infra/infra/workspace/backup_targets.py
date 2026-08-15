@@ -53,6 +53,10 @@ _TARGET_ID = re.compile(r"^target_[a-z0-9][a-z0-9._-]{0,63}$")
 _WINDOWS_REPARSE_POINT = 0x400
 
 
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -510,6 +514,19 @@ def probe_target(target_id: str) -> dict[str, Any]:
             updated = {**record, "lastProbe": result}
             _assert_no_secrets(updated)
             _atomic_write_json(_registry_path(target_id), updated)
+            try:
+                from deepseek_infra.infra.workspace import backup_dr_ledger
+                backup_dr_ledger.record_target_evidence(
+                    target_id=target_id,
+                    observed_at=str(result.get("probedAt") or _now_iso()),
+                    scheduled_ready=bool(result.get("scheduledBackupReady")),
+                    integrity_mode=str((result.get("capabilities") or {}).get("integrityMode") or ""),
+                    status="ok" if result.get("scheduledBackupReady") else "error",
+                    reason=None if result.get("scheduledBackupReady") else str(result.get("status") or "target-not-ready"),
+                    details=result,
+                )
+            except Exception:
+                pass
             return {
                 "targetId": target_id,
                 "ready": bool(result.get("scheduledBackupReady")),
@@ -519,6 +536,17 @@ def probe_target(target_id: str) -> dict[str, Any]:
                 "probe": result,
             }
         except AppError as exc:
+            try:
+                from deepseek_infra.infra.workspace import backup_dr_ledger
+                backup_dr_ledger.record_target_evidence(
+                    target_id=target_id,
+                    observed_at=_now_iso(),
+                    scheduled_ready=False,
+                    status="error",
+                    reason=str(exc)[:100],
+                )
+            except Exception:
+                pass
             return {
                 "targetId": target_id,
                 "ready": False,
@@ -536,7 +564,30 @@ def probe_target(target_id: str) -> dict[str, Any]:
             if code in detail:
                 status = code
                 break
+        try:
+            from deepseek_infra.infra.workspace import backup_dr_ledger
+            backup_dr_ledger.record_target_evidence(
+                target_id=target_id,
+                observed_at=_now_iso(),
+                scheduled_ready=False,
+                status="error",
+                reason=status,
+                details={"detail": detail},
+            )
+        except Exception:
+            pass
         return {"targetId": target_id, "ready": False, "status": status, "detail": detail, "kind": "filesystem", "scheduledBackupReady": False}
+    try:
+        from deepseek_infra.infra.workspace import backup_dr_ledger
+        backup_dr_ledger.record_target_evidence(
+            target_id=target_id,
+            observed_at=_now_iso(),
+            scheduled_ready=True,
+            status="ok",
+            details={"path": str(path)},
+        )
+    except Exception:
+        pass
     return {"targetId": target_id, "ready": True, "status": "ok", "path": str(path), "kind": "filesystem", "scheduledBackupReady": True}
 
 

@@ -4,7 +4,20 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
-## [4.5.0] - Production Recovery Orchestration and DR Readiness (in development)
+## [4.5.1] - Recovery Assurance Automation & DR Evidence Ledger (2026-08-15)
+
+### Recovery Assurance & Automation
+
+- Autonomous `RecoveryLeaseKeeper` daemon loop continuously renewing durable recovery holds on active, paused, and `recovery-required` jobs without API traffic.
+- Remote retention interlock with `expiredHoldGrace = 24h` preventing remote GC from pruning unexpired holds during recovery disruptions.
+- Zero remote I/O DR Evidence Ledger (`.backup-dr/evidence.sqlite3`) backing fast `GET /disaster-recovery/status`.
+- Scope-aware readiness `(targetId, policyId)` with configurable recovery objectives (`maxRpoSeconds`, `maxScrubAgeSeconds`, `maxDrillAgeSeconds`) and worst-status workspace rollup.
+- Low-cardinality `RecoveryClass` calibration with statistical P50/P90 RTO estimation.
+- Unattended recovery credential provider abstraction (`RecoveryCredentialProvider`) with ephemeral zeroized memory buffers for scheduled recovery drills.
+- Explicit resumable remote target audit endpoint `POST /api/workspace/disaster-recovery/audit`.
+- Component cache pin reconciliation against durable recovery job state.
+
+## [4.5.0] - Production Recovery Orchestration and DR Readiness
 
 ### Compatibility
 
