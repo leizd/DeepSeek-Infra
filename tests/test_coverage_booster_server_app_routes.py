@@ -45,3 +45,22 @@ def test_server_app_endpoints(tmp_settings: Path) -> None:
     # 5. OPTIONS preflight route
     resp = client.options("/api/test-route", headers={"Origin": "http://localhost:8000"})
     assert resp.status_code == 204
+
+    # 6. Healthz, Readyz, and Metrics
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+
+    resp = client.get("/readyz")
+    assert resp.status_code == 200
+
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+
+    # 7. Reminders due
+    resp = client.post("/api/reminders/due", json={}, headers=headers)
+    assert resp.status_code == 200
+    assert "reminders" in resp.json()
+
+    # 8. Compress context
+    resp = client.post("/api/compress-context", json={"apiKey": "sk-fake", "messages": []}, headers=headers)
+    assert resp.status_code == 200
