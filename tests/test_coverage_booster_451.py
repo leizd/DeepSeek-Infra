@@ -11,7 +11,10 @@ from deepseek_infra.infra.data import projects as legacy_projects
 from deepseek_infra.infra.mcp import adapters as mcp_adapters
 from deepseek_infra.infra.media import evidence as media_evidence
 from deepseek_infra.infra.memory import search as mem_search
+from deepseek_infra.infra.memory import store as mem_store
+from deepseek_infra.infra.rag import context_compressor
 from deepseek_infra.infra.workspace import (
+    backup_targets,
     backup_writer_lease,
     home as ws_home,
     mutation_gate as ws_mutation,
@@ -49,6 +52,43 @@ def test_memory_search_and_context(tmp_settings: Path) -> None:
     }
     ctx = mem_search.memory_context_for_skill(skill_with_policy, "query", project_id="proj_1")
     assert isinstance(ctx, str)
+
+    # Search memories
+    mem_list = mem_search.search_memories("query", project_id="proj_1", limit=5)
+    assert isinstance(mem_list, list)
+
+
+def test_memory_store_operations(tmp_settings: Path) -> None:
+    added = mem_store.add_memory(
+        "Remember this important testing fact",
+        scope="global",
+        memory_type="fact",
+        confidence=0.95,
+        pinned=True,
+    )
+    assert added["content"] == "Remember this important testing fact"
+    mem_id = str(added["id"])
+
+    listed = mem_store.list_memories(scope="global")
+    assert any(m["id"] == mem_id for m in listed)
+
+
+def test_context_compressor_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+    summary_ctx = context_compressor.format_context_summary_context("Summary text")
+    assert "Summary text" in summary_ctx
+
+    empty_res = context_compressor.compress_context_payload({"messages": [], "apiKey": "test-key"})
+    assert empty_res["compressedMessageCount"] == 0
+
+    # Serialization
+    serialized = context_compressor.serialize_messages_for_context_summary(
+        [
+            {"role": "user", "content": "Hello world"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+    )
+    assert "Hello world" in serialized
+    assert "Hi there" in serialized
 
 
 def test_mcp_hub_web_search_callback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,3 +147,11 @@ def test_mutation_gate_and_writer_lease(tmp_settings: Path) -> None:
     with lease:
         lease.assert_owned()
         lease.renew()
+
+
+def test_backup_targets_reinitialize(tmp_settings: Path) -> None:
+    t_root = tmp_settings / "new_target_dir"
+    t_root.mkdir(parents=True, exist_ok=True)
+    target_info = backup_targets.reinitialize_target(t_root, label="External USB")
+    assert target_info["label"] == "External USB"
+    assert "targetId" in target_info
