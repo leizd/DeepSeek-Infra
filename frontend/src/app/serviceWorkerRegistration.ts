@@ -12,7 +12,7 @@ import { flushReloadPersistence } from "./reloadBlockers";
 
 const BUILD_ID_PATTERN = /^[0-9a-f]{16}$/;
 const ASSET_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
-const HANDSHAKE_TIMEOUT_MS = 15000;
+const HANDSHAKE_TIMEOUT_MS = 30000;
 const LEASE_HEARTBEAT_MS = 60_000;
 const LEASE_HEARTBEAT_DEAD_MS = 2 * LEASE_HEARTBEAT_MS;
 
