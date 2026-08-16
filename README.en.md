@@ -5,23 +5,24 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.5.1-blue)
+![Version](https://img.shields.io/badge/version-4.5.2-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.5.1 in development — Recovery Assurance Automation & DR Evidence Ledger.** The approved milestone freezes object-set-v1, Receipt v4, Commit v4, and randomized Age ciphertext while adding recovery assurance automation and DR evidence ledger in verified Gates. Release readiness remains pending until real Evidence is complete.
+> **4.5.2 — Recovery Replica Sets and Automatic Target Failover.** Encrypt-once multi-target replication, durable replication jobs, ledger-only recovery planning, and pre-prepare automatic target failover on frozen object-set-v1 / Receipt v4 / Commit v4 / randomized Age. Also closes 4.5.1 P0 lifecycle gaps (global lease keeper, strict policy evidence, durable audit, honest RTO).
 
-## 4.5.1 at a glance
+## 4.5.2 at a glance
 
-- Autonomous Recovery Lease Keeper runs a background loop continuously renewing CAS leases for active, paused, and recovery-required jobs.
-- DR Evidence Ledger (.backup-dr/evidence.sqlite3) provides a zero remote I/O durable local read model for GET /disaster-recovery/status.
-- Scope-aware DR Readiness evaluates (targetId, policyId) against configured recovery objectives (RPO, scrub, drill) with worst-status workspace rollup.
-- Secure unattended RecoveryCredentialProvider enables automated isolated recovery drills with zero on-disk private key exposure.
+- Recovery Replica Sets: Primary + required/best-effort replicas share identical ciphertext digests with independent target-local Receipt/Commit chains.
+- Durable BackupReplicationJob + spool retention for required copies; primary commit never rolls back on replica failure.
+- Ledger-only Recovery Planner (zero remote I/O) with deterministic ranking and reason codes.
+- Automatic source-target failover before live prepare (new hold before old release; forbidden after prepared).
+- Global RecoveryLeaseKeeper wired into app lifecycle; keeper failure degrades readiness.
 
-See the [4.5.1 development release notes](docs/releases/4.5.1.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.5.2 release notes](docs/releases/4.5.2.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

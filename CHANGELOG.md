@@ -4,6 +4,27 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.5.2] - Recovery Replica Sets and Automatic Target Failover (2026-08-16)
+
+### Recovery Replica Sets & Failover
+
+- Encrypt-once multi-target replication: Primary + required/best-effort replicas share identical ciphertext digests; each target keeps independent Receipt v4 / Commit v4 / writer lease / generation chain.
+- Durable `BackupReplicationJob` state machine (`queued` → `committed`/`failed`) with restart-safe spool retention for required replicas.
+- Replica-aware DR Evidence Ledger logical recovery points with `committedCopies` / `requiredCopies` / `replicationCompliance`.
+- Ledger-only Recovery Planner (zero remote I/O) with deterministic ranking and explicit reason codes.
+- Automatic source-target failover before live prepare: new hold before old hold release; maxFailovers; forbidden after `prepared`/`committing`/`recovery-required`.
+- Cross-target ciphertext cache reuse by digest after failover.
+- Scheduled Recovery Drill rotation across replica targets via durable cron slots.
+
+### 4.5.1 P0 hardening
+
+- Global `RecoveryLeaseKeeper` wired into application startup/shutdown with startup reconciliation.
+- Lease protection inverted to terminal-only exclusion (all non-terminal phases with remote holds protected).
+- Real lease health (`lastTickAt`, consecutive failures, keeperRunning); keeper failure degrades DR readiness.
+- Strict policy-scoped evidence (no cross-policy fallback); calibrated RTO unavailable without matching samples.
+- Durable remote audit jobs with auditId/cursor resume; invalid receipts cannot promote recoverable points.
+- Production recovery stage samples written to the DR Evidence Ledger.
+
 ## [4.5.1] - Recovery Assurance Automation & DR Evidence Ledger (2026-08-15)
 
 ### Recovery Assurance & Automation

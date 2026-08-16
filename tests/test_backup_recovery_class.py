@@ -66,11 +66,11 @@ def test_calibrate_rto_no_samples(tmp_settings: Path) -> None:
         recovery_class=rclass,
     )
     assert estimate["isSla"] is False
-    assert estimate["confidence"] == "low"
+    assert estimate["status"] == "unavailable"
+    assert estimate["reason"] == "insufficient-matching-evidence"
     assert estimate["sampleCount"] == 0
-    assert estimate["p50Seconds"] > 0
-    assert estimate["p90Seconds"] >= estimate["p50Seconds"]
     assert estimate["recoveryClass"] == "s3:object-set-v1:medium:shallow"
+    assert estimate["planningHeuristic"]["p50Seconds"] > 0
 
 
 def test_calibrate_rto_with_historical_samples(tmp_settings: Path) -> None:

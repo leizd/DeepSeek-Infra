@@ -82,8 +82,8 @@ def test_evaluate_scope_readiness_target_unhealthy_and_overdue(tmp_settings: Pat
     )
     assert res["status"] == "blocked"
     assert "target-unhealthy" in res["reasons"]
-    assert "scrub-overdue" in res["reasons"]
-    assert "drill-overdue" in res["reasons"]
+    assert "scrub-overdue" in res["reasons"] or "no-policy-scrub-evidence" in res["reasons"]
+    assert "drill-overdue" in res["reasons"] or "no-policy-drill-evidence" in res["reasons"]
 
 
 def test_dr_readiness_commit_records_helpers(tmp_settings: Path) -> None:

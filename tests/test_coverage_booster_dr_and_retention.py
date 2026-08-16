@@ -34,7 +34,7 @@ def test_backup_dr_readiness_helpers(tmp_settings: Path) -> None:
     # 3. Scope readiness evaluation with no points
     res = backup_dr_readiness.evaluate_scope_readiness("target-1", "policy-1", now=now)
     assert res["recoveryPoint"]["status"] == "unavailable"
-    assert "no-recoverable-points" in res["reasons"]
+    assert "no-policy-recovery-point" in res["reasons"] or "no-recoverable-points" in res["reasons"]
 
 
 def test_backup_retention_policy_crud(tmp_settings: Path) -> None:

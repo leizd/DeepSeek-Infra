@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "version": "4.5.2",
+  "title": "Recovery Replica Sets and Automatic Target Failover",
+  "generatedAt": "2026-08-16T01:17:43Z",
+  "pytestExitCode": 0,
+  "results": [
+    {
+      "id": "recoveryLeaseKeeperStartsWithApplication",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "allNonTerminalRecoveryPhasesRemainProtected",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "keeperFailureDegradesReadiness",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "scheduledDrillRunsFromDurableCronSlot",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "policyEvidenceNeverFallsBackToAnotherPolicy",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "remoteAuditPersistsAuditIdAndCursor",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "remoteAuditResumesAfterProcessRestart",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "remoteAuditRejectsReceiptDigestMismatch",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "productionRecoveryTelemetryFeedsLedger",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "rtoWithoutMatchingEvidenceIsUnavailable",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "filesystemTargetIsNotClassifiedAsS3",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "replicasReuseIdenticalCiphertext",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "requiredCopyObjectiveDegradesReadiness",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "recoveryPlannerUsesLedgerWithoutRemoteIo",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "failoverOccursBeforeLivePrepare",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "newTargetHoldExistsBeforeOldHoldRelease",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "failoverIsForbiddenAfterPrepared",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "objectSetV1WireFormatUnchanged",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "receiptV4Unchanged",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "commitV4Unchanged",
+      "status": "PASS",
+      "source": "pytest tests/test_backup_452_replica_failover.py (+keeper/class/audit)"
+    },
+    {
+      "id": "wireFormatsFrozen",
+      "status": "PASS",
+      "detail": {
+        "objectSet": "object-set-v1",
+        "receipt": 4,
+        "commit": 4
+      }
+    }
+  ],
+  "summary": {
+    "total": 21,
+    "passed": 21,
+    "failed": 0
+  },
+  "notes": [
+    "Real two-target MinIO E2E requires CI MinIO service and is owned by object-set-s3 / recovery-fault producers.",
+    "This runner executes production-module unit/integration evidence under tmp isolation."
+  ]
+}

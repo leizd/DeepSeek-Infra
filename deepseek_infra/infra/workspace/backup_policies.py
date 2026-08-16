@@ -314,6 +314,59 @@ def _normalize_recovery_drill(raw: Any) -> dict[str, Any]:
     }
 
 
+def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any]:
+    """Backward-compatible replication block. Default disabled preserves legacy behavior."""
+    if raw is None:
+        return {"enabled": False, "targets": [], "minCommittedCopies": 1}
+    section = _require_mapping(raw, "replication")
+    enabled = _require_bool(section.get("enabled"), "replication.enabled", False)
+    raw_targets = section.get("targets")
+    if raw_targets is None:
+        targets: list[dict[str, Any]] = []
+    elif not isinstance(raw_targets, list):
+        raise AppError("Backup policy field replication.targets must be an array", code=ErrorCode.INVALID_PAYLOAD)
+    else:
+        targets = []
+        seen: set[str] = set()
+        for index, item in enumerate(raw_targets):
+            if not isinstance(item, dict):
+                raise AppError(
+                    f"Backup policy field replication.targets[{index}] must be an object",
+                    code=ErrorCode.INVALID_PAYLOAD,
+                )
+            tid = str(item.get("targetId") or "").strip()
+            if tid != MANAGED_LOCAL_TARGET and not _TARGET_ID.match(tid):
+                raise AppError(
+                    f"Backup policy replication.targets[{index}].targetId must be a registered target_... id",
+                    code=ErrorCode.INVALID_PAYLOAD,
+                )
+            if tid == primary_target_id:
+                raise AppError(
+                    "Backup policy replication target must not repeat the primary targetId",
+                    code=ErrorCode.INVALID_PAYLOAD,
+                )
+            if tid in seen:
+                raise AppError(
+                    "Backup policy replication targets must be unique",
+                    code=ErrorCode.INVALID_PAYLOAD,
+                )
+            seen.add(tid)
+            mode = _require_choice(item.get("mode"), f"replication.targets[{index}].mode", ("required", "best-effort"), "required")
+            targets.append({"targetId": tid, "mode": mode})
+    min_copies = _require_int(section.get("minCommittedCopies"), "replication.minCommittedCopies", 1, 1, 16)
+    if enabled and targets:
+        # Primary + replicas: required copies cannot exceed total configured targets + primary
+        max_possible = 1 + len(targets)
+        if min_copies > max_possible:
+            raise AppError(
+                "Backup policy replication.minCommittedCopies exceeds configured targets",
+                code=ErrorCode.INVALID_PAYLOAD,
+            )
+    if not enabled:
+        return {"enabled": False, "targets": targets, "minCommittedCopies": min_copies}
+    return {"enabled": True, "targets": targets, "minCommittedCopies": min_copies}
+
+
 def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, created_at: str | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AppError("Backup policy payload must be an object", code=ErrorCode.INVALID_PAYLOAD)
@@ -338,6 +391,7 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
         "frontendMirror": _normalize_frontend_mirror(payload.get("frontendMirror")),
         "protection": _normalize_protection(payload.get("protection")),
         "targetId": target_id,
+        "replication": _normalize_replication(payload.get("replication"), primary_target_id=target_id),
         "retentionPolicyId": _require_safe_id(payload.get("retentionPolicyId") or DEFAULT_RETENTION_POLICY_ID, "retentionPolicyId"),
         "retry": _normalize_retry(payload.get("retry")),
         "incremental": _normalize_incremental(payload.get("incremental")),
@@ -401,6 +455,7 @@ def update_policy(policy_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         "incremental",
         "recoveryObjectives",
         "recoveryDrill",
+        "replication",
     ):
         if key in patch:
             merged[key] = patch[key]

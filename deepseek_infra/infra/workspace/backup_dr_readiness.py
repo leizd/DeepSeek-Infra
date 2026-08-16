@@ -59,6 +59,76 @@ def _parse_time(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else None
 
 
+def _resolve_target_kind(target_id: str) -> str:
+    """Resolve target kind from the real target registry — never from id prefix."""
+    if target_id == "managed-local":
+        return "managed-local"
+    try:
+        target = backup_targets.get_target(target_id)
+    except Exception:
+        target = None
+    if isinstance(target, dict):
+        kind = str(target.get("kind") or "").strip().lower()
+        if kind in {"s3", "filesystem", "managed-local"}:
+            return kind
+        if kind:
+            return kind
+    return "filesystem"
+
+
+def _replication_summary(
+    target_id: str,
+    policy_id: str,
+    latest_pt: dict[str, Any] | None,
+    *,
+    policy: dict[str, Any] | None,
+    now: datetime,
+) -> dict[str, Any]:
+    """Summarize logical recovery-point copy counts across replica targets."""
+    del now
+    replication_cfg = (policy or {}).get("replication") if isinstance(policy, dict) else None
+    if not isinstance(replication_cfg, dict) or not replication_cfg.get("enabled"):
+        copies = 1 if latest_pt is not None else 0
+        return {
+            "enabled": False,
+            "committedCopies": copies,
+            "healthyCopies": copies,
+            "requiredCopies": 1 if latest_pt is not None else 0,
+            "compliance": "healthy" if latest_pt is not None else "unavailable",
+            "copies": [],
+        }
+    backup_id = str((latest_pt or {}).get("backupId") or "")
+    object_set_digest = str((latest_pt or {}).get("objectSetDigest") or (latest_pt or {}).get("chainDigest") or "")
+    required = int(replication_cfg.get("minCommittedCopies") or 1)
+    logical = backup_dr_ledger.list_logical_recovery_copies(
+        policy_id=policy_id or None,
+        backup_id=backup_id or None,
+        object_set_digest=object_set_digest or None,
+    ) if backup_id else []
+    committed = [c for c in logical if c.get("recoverable")]
+    healthy = [c for c in committed if str(c.get("targetId") or "")]
+    compliance = "healthy" if len(committed) >= required else "degraded"
+    reason = None if compliance == "healthy" else "required-copy-objective-breached"
+    return {
+        "enabled": True,
+        "committedCopies": len(committed),
+        "healthyCopies": len(healthy),
+        "requiredCopies": required,
+        "compliance": compliance if latest_pt is not None else "unavailable",
+        "reason": reason,
+        "primaryTargetId": target_id,
+        "copies": [
+            {
+                "targetId": c.get("targetId"),
+                "backupId": c.get("backupId"),
+                "recoverable": bool(c.get("recoverable")),
+                "committedAt": c.get("committedAt"),
+            }
+            for c in logical
+        ],
+    }
+
+
 def _cache_health(now: datetime) -> dict[str, Any]:
     root = backup_component_cache.CACHE_DIR
     if not root.is_dir():
@@ -116,10 +186,12 @@ def evaluate_scope_readiness(
     reasons: list[str] = []
     scope_status = "available"
 
-    # 1. Recovery Point from local ledger (0 remote I/O)
-    latest_pt, chain = backup_dr_ledger.get_latest_recoverable_point(target_id, policy_id if policy_id else None, now=current)
-    if latest_pt is None and (target_id == "managed-local" or not policy_id):
-        latest_pt, chain = backup_dr_ledger.get_latest_recoverable_point(target_id, now=current)
+    # 1. Recovery Point from local ledger (0 remote I/O) — strict policy scope, no cross-policy fallback
+    latest_pt, chain = backup_dr_ledger.get_latest_recoverable_point(
+        target_id,
+        policy_id if policy_id else None,
+        now=current,
+    )
 
     if latest_pt is not None:
         committed_at = _parse_time(latest_pt.get("committedAt"))
@@ -136,12 +208,13 @@ def evaluate_scope_readiness(
             "source": "dr-evidence-ledger",
         }
     else:
+        rp_reason = "no-policy-recovery-point" if policy_id else "no-committed-recoverable-point"
         recovery_point = {
             "status": "unavailable",
-            "reason": "no-committed-recoverable-point",
+            "reason": rp_reason,
             "source": "dr-evidence-ledger",
         }
-        reasons.append("no-recoverable-points")
+        reasons.append(rp_reason if policy_id else "no-recoverable-points")
         scope_status = "blocked"
 
     # 2. Recovery Objectives check
@@ -157,10 +230,8 @@ def evaluate_scope_readiness(
             if scope_status == "available":
                 scope_status = "objective-breached"
 
-    # 3. Scrub Outcome & Age
+    # 3. Scrub Outcome & Age — strict policy scope
     scrub_record = backup_dr_ledger.get_latest_scrub_outcome(target_id, policy_id if policy_id else None, now=current)
-    if scrub_record is None and policy_id:
-        scrub_record = backup_dr_ledger.get_latest_scrub_outcome(target_id, now=current)
 
     if scrub_record is not None:
         observed_at = _parse_time(scrub_record.get("observedAt"))
@@ -181,16 +252,15 @@ def evaluate_scope_readiness(
             if scope_status == "available":
                 scope_status = "objective-breached"
     else:
-        scrub = {"status": "unavailable", "reason": "no-evidence", "source": "dr-evidence-ledger"}
+        scrub_reason = "no-policy-scrub-evidence" if policy_id else "no-evidence"
+        scrub = {"status": "unavailable", "reason": scrub_reason, "source": "dr-evidence-ledger"}
         if max_scrub is not None and latest_pt is not None:
-            reasons.append("scrub-overdue")
+            reasons.append("scrub-overdue" if scrub_reason == "no-evidence" else scrub_reason)
             if scope_status == "available":
                 scope_status = "objective-breached"
 
-    # 4. Drill Outcome & Age
+    # 4. Drill Outcome & Age — strict policy scope
     drill_record = backup_dr_ledger.get_latest_drill_outcome(target_id, policy_id if policy_id else None, now=current)
-    if drill_record is None and policy_id:
-        drill_record = backup_dr_ledger.get_latest_drill_outcome(target_id, now=current)
 
     if drill_record is not None:
         observed_at = _parse_time(drill_record.get("observedAt"))
@@ -216,9 +286,10 @@ def evaluate_scope_readiness(
             if scope_status == "available":
                 scope_status = "objective-breached"
     else:
-        drill = {"status": "unavailable", "reason": "no-evidence", "source": "dr-evidence-ledger"}
+        drill_reason = "no-policy-drill-evidence" if policy_id else "no-evidence"
+        drill = {"status": "unavailable", "reason": drill_reason, "source": "dr-evidence-ledger"}
         if max_drill is not None and latest_pt is not None:
-            reasons.append("drill-overdue")
+            reasons.append("drill-overdue" if drill_reason == "no-evidence" else drill_reason)
             if scope_status == "available":
                 scope_status = "objective-breached"
 
@@ -237,12 +308,12 @@ def evaluate_scope_readiness(
     else:
         target_health = {"status": "ok", "source": "persisted-target-probe"}
 
-    # 6. RTO Calibration (RecoveryClass-aware)
+    # 6. RTO Calibration (RecoveryClass-aware) — kind from target registry, never id-prefix heuristics
     if latest_pt is not None:
         logical_bytes = int(latest_pt.get("logicalBytes") or latest_pt.get("ciphertextBytes") or 0)
         chain_len = int(latest_pt.get("chainLength") or 1)
         storage_proto = str(latest_pt.get("storageProtocol") or "object-set-v1")
-        t_kind = "s3" if target_id.startswith("target_") or target_id.startswith("s3") else "managed-local"
+        t_kind = _resolve_target_kind(target_id)
 
         rclass = backup_recovery_class.classify_recovery(
             target_kind=t_kind,
@@ -265,6 +336,20 @@ def evaluate_scope_readiness(
             "sampleCount": 0,
         }
 
+    # 7. Replica / replication compliance from ledger (logical recovery point copies)
+    replication = _replication_summary(target_id, policy_id, latest_pt, policy=policy, now=current)
+    if replication.get("compliance") == "degraded":
+        reasons.append(str(replication.get("reason") or "replication-objective-breached"))
+        if scope_status == "available":
+            scope_status = "degraded"
+
+    # 8. Lease keeper health can degrade readiness
+    lease_h = backup_recovery_keeper.get_recovery_lease_health()
+    if lease_h.get("status") == "degraded":
+        reasons.append(str(lease_h.get("reason") or "recovery-lease-keeper-degraded"))
+        if scope_status == "available":
+            scope_status = "degraded"
+
     return {
         "scope": {"targetId": target_id, "policyId": policy_id},
         "targetId": target_id,
@@ -277,8 +362,14 @@ def evaluate_scope_readiness(
         "rtoEstimate": rto_estimate,
         "scrub": scrub,
         "drill": drill,
+        "replication": replication,
+        "committedCopies": replication.get("committedCopies"),
+        "healthyCopies": replication.get("healthyCopies"),
+        "requiredCopies": replication.get("requiredCopies"),
+        "replicationCompliance": replication.get("compliance"),
         "health": {
             "target": target_health,
+            "recoveryLeases": lease_h,
         },
         "evaluatedAt": _utc_iso(current),
         "source": "dr-evidence-ledger",

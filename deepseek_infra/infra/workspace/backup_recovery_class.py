@@ -166,6 +166,38 @@ def calibrate_rto(
             materialize_speeds.append(speed)
 
     sample_count = max(len(transfer_speeds), len(crypto_speeds), len(materialize_speeds))
+    matching_stages = sum(1 for speeds in (transfer_speeds, crypto_speeds, materialize_speeds) if speeds)
+    l_bytes = max(1000, logical_bytes)
+
+    # Planning heuristic uses defaults only — never labelled calibrated RTO/SLA.
+    t_default = DEFAULT_TRANSFER_SPEED
+    c_default = DEFAULT_CRYPTO_SPEED
+    m_default = DEFAULT_MATERIALIZE_SPEED
+    planning_p50 = max(
+        1,
+        int(round((l_bytes / t_default) + (l_bytes / c_default) + (l_bytes / m_default) + MIN_OVERHEAD_SECONDS)),
+    )
+    planning_heuristic = {
+        "status": "planning-heuristic",
+        "isSla": False,
+        "p50Seconds": planning_p50,
+        "estimatedSeconds": planning_p50,
+        "transferBytesPerSecond": t_default,
+        "cryptoBytesPerSecond": c_default,
+        "materializeBytesPerSecond": m_default,
+    }
+
+    if matching_stages < 3 or sample_count < 1:
+        return {
+            "status": "unavailable",
+            "reason": "insufficient-matching-evidence",
+            "isSla": False,
+            "confidence": "none",
+            "sampleCount": sample_count,
+            "recoveryClass": active_class.key,
+            "planningHeuristic": planning_heuristic,
+        }
+
     if sample_count >= 10:
         confidence = "high"
     elif sample_count >= 3:
@@ -173,9 +205,7 @@ def calibrate_rto(
     else:
         confidence = "low"
 
-    l_bytes = max(1000, logical_bytes)
-
-    # P50 calculation
+    # P50 calculation from matching evidence only
     t_speed_p50 = _percentile(transfer_speeds, 0.50) if transfer_speeds else DEFAULT_TRANSFER_SPEED
     c_speed_p50 = _percentile(crypto_speeds, 0.50) if crypto_speeds else DEFAULT_CRYPTO_SPEED
     m_speed_p50 = _percentile(materialize_speeds, 0.50) if materialize_speeds else DEFAULT_MATERIALIZE_SPEED
@@ -190,7 +220,7 @@ def calibrate_rto(
     p90_seconds = max(p50_seconds, int(round((l_bytes / t_speed_p90) + (l_bytes / c_speed_p90) + (l_bytes / m_speed_p90) + MIN_OVERHEAD_SECONDS * 1.5)))
 
     return {
-        "status": "estimated",
+        "status": "calibrated",
         "isSla": False,
         "confidence": confidence,
         "sampleCount": sample_count,
@@ -203,4 +233,5 @@ def calibrate_rto(
             "crypto": {"p50Seconds": max(1, int(round(l_bytes / c_speed_p50)))},
             "materialization": {"p50Seconds": max(1, int(round(l_bytes / m_speed_p50)))},
         },
+        "planningHeuristic": planning_heuristic,
     }

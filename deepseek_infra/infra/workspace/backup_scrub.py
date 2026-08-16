@@ -97,9 +97,16 @@ def scrub_backup(root: Path, backup_id: str, *, target_id: str | None = None) ->
     effective_target_id = str(target_id or "managed-local")
     try:
         from deepseek_infra.infra.workspace import backup_dr_ledger
+        policy_id = ""
+        try:
+            state = backup_catalog.catalog_state(root)
+            policy_id = str((state.get(backup_id) or {}).get("policyId") or "")
+        except Exception:
+            policy_id = ""
         backup_dr_ledger.record_scrub_evidence(
             target_id=effective_target_id,
             backup_id=backup_id,
+            policy_id=policy_id,
             observed_at=_utc_iso(),
             result="success" if ok else "failed",
             details={"checks": checks, "objectsScrubbed": len(members)},

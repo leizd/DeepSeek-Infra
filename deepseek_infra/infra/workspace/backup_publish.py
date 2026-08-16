@@ -370,11 +370,13 @@ def _record_publish_to_dr_ledger(
         size_val = getattr(package, "size", 0) or 0
         logical_bytes = int(receipt.get("logicalBytes") or receipt.get("size") or size_val)
         ciphertext_bytes = int(receipt.get("size") or size_val)
+        committed_at = str(commit.get("committedAt") or receipt.get("createdAt") or _utc_iso())
+        object_set_digest = str(receipt.get("objectSetDigest") or commit.get("objectSetDigest") or "")
         backup_dr_ledger.record_recovery_point(
             target_id=target_id,
             policy_id=policy_id,
             backup_id=backup_id,
-            committed_at=str(commit.get("committedAt") or receipt.get("createdAt") or _utc_iso()),
+            committed_at=committed_at,
             snapshot_kind=str(receipt.get("snapshotKind") or "full"),
             parent_backup_id=receipt.get("parentBackupId"),
             chain_digest=str(commit.get("commitHash") or ""),
@@ -382,10 +384,26 @@ def _record_publish_to_dr_ledger(
             ciphertext_bytes=ciphertext_bytes,
             logical_bytes=logical_bytes,
             recoverable=True,
-            verified_at=str(commit.get("committedAt") or receipt.get("createdAt") or _utc_iso()),
+            verified_at=committed_at,
             storage_protocol=str(receipt.get("storageProtocol") or ""),
             metadata=receipt,
         )
+        try:
+            backup_dr_ledger.record_logical_recovery_copy(
+                target_id=target_id,
+                policy_id=policy_id,
+                backup_id=backup_id,
+                committed_at=committed_at,
+                object_set_digest=object_set_digest or None,
+                recoverable=True,
+                role="primary",
+                mode="required",
+                snapshot_kind=str(receipt.get("snapshotKind") or "full"),
+                verified_at=committed_at,
+                metadata={"objectSetDigest": object_set_digest} if object_set_digest else None,
+            )
+        except Exception:
+            pass
     except Exception:
         pass
 

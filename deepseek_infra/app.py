@@ -47,7 +47,7 @@ def main() -> None:
     try:
         handle.server.serve_forever()
     finally:
-        handle.stop_cache_cleanup.set()
+        shutdown_handle(handle)
 
 
 def prepare_and_start(
@@ -118,8 +118,14 @@ def prepare_and_start(
 
 
 def shutdown_handle(handle: ServerHandle) -> None:
-    """Stop the HTTP server and the cache cleanup thread."""
+    """Stop the HTTP server, recovery lease keeper, and the cache cleanup thread."""
     handle.stop_cache_cleanup.set()
+    try:
+        from deepseek_infra.infra.workspace import backup_recovery_keeper
+
+        backup_recovery_keeper.stop_global_recovery_keeper()
+    except Exception:
+        logger.exception("recovery_lease_keeper_stop_failed")
     try:
         handle.server.shutdown()
     finally:
@@ -135,6 +141,12 @@ def ensure_startup_dependencies() -> None:
     recovery = recover_interrupted_restores()
     if recovery["recoveryRequired"]:
         logger.error("workspace_restore_recovery_required", extra={"restores": recovery["recoveryRequired"]})
+    try:
+        from deepseek_infra.infra.workspace import backup_recovery_keeper
+
+        backup_recovery_keeper.start_global_recovery_keeper(reconcile_first=True)
+    except Exception:
+        logger.exception("recovery_lease_keeper_start_failed")
     from deepseek_infra.backup_worker import start_embedded_worker
 
     start_embedded_worker()

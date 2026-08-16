@@ -369,6 +369,37 @@ def get_recovery_drill(restore_id: str) -> dict[str, Any]:
     raise AppError("Recovery Drill result not found", code=ErrorCode.NOT_FOUND, status=404)
 
 
+def _select_drill_rotation_target(policy: dict[str, Any], policy_id: str, *, fallback_target_id: str) -> str:
+    """Rotate scheduled drills across primary + required replicas (durable, deterministic)."""
+    from deepseek_infra.infra.workspace import backup_dr_ledger
+
+    candidates = [fallback_target_id]
+    replication = policy.get("replication") if isinstance(policy.get("replication"), dict) else {}
+    if isinstance(replication, dict) and replication.get("enabled"):
+        for entry in list(replication.get("targets") or []):
+            if isinstance(entry, dict) and entry.get("targetId"):
+                candidates.append(str(entry["targetId"]))
+    # Stable unique order
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for tid in candidates:
+        if tid not in seen:
+            seen.add(tid)
+            ordered.append(tid)
+    if len(ordered) <= 1:
+        return fallback_target_id
+
+    def _drill_age_key(target_id: str) -> tuple[int, str]:
+        outcome = backup_dr_ledger.get_latest_drill_outcome(target_id, policy_id)
+        if outcome is None or outcome.get("result") != "success":
+            return (0, target_id)  # never drilled → highest priority
+        observed = str(outcome.get("observedAt") or outcome.get("latestSuccessfulAt") or "")
+        return (1, observed)  # older first among drilled
+
+    ordered.sort(key=_drill_age_key)
+    return ordered[0]
+
+
 def execute_scheduled_drill(policy_id: str, *, client: Any | None = None) -> dict[str, Any]:
     """Orchestrate an unattended isolated recovery drill for a scheduled policy."""
     from deepseek_infra.infra.workspace import (
@@ -415,13 +446,21 @@ def execute_scheduled_drill(policy_id: str, *, client: Any | None = None) -> dic
             "backupId": "",
         }
 
+    # Strict policy scope — never fall back to another policy's recovery point.
     latest_pt, _ = backup_dr_ledger.get_latest_recoverable_point(target_id, policy_id)
+    # Replica-aware drill rotation: prefer the replica with oldest successful drill evidence.
+    drill_target_id = _select_drill_rotation_target(policy, policy_id, fallback_target_id=target_id)
+    if latest_pt is None and drill_target_id != target_id:
+        latest_pt, _ = backup_dr_ledger.get_latest_recoverable_point(drill_target_id, policy_id)
     if latest_pt is None:
-        latest_pt, _ = backup_dr_ledger.get_latest_recoverable_point(target_id)
-    if latest_pt is None:
-        raise AppError("No recovery point found for scheduled drill", code=ErrorCode.NOT_FOUND, status=404)
+        raise AppError(
+            "No policy recovery point found for scheduled drill",
+            code=ErrorCode.NOT_FOUND,
+            status=404,
+        )
 
     backup_id = str(latest_pt.get("backupId") or "")
+    target_id = drill_target_id
 
     try:
         session = backup_remote_restore.create_restore_from_target(

@@ -546,6 +546,34 @@ def execute_run(
             policy=policy,
         )
         backup_run_plan.clear_run_plan(policy_id, slot_digest)
+        # 4.5.2: enqueue replica publication jobs (encrypt-once). Keep spool while
+        # required replica jobs are open; best-effort failures never roll back primary.
+        replication_jobs: list[dict[str, Any]] = []
+        try:
+            from deepseek_infra.infra.workspace import backup_replication
+
+            replication_jobs = backup_replication.enqueue_replica_jobs(
+                policy=policy,
+                primary_target_id=target_id,
+                backup_id=str(published.receipt.get("backupId") or package.backup_id),
+                package=package,
+                run_id=run.run_id,
+                schedule_slot=run.schedule_slot,
+                slot_digest=slot_digest,
+                primary_receipt=published.receipt,
+            )
+            if replication_jobs:
+                backup_replication.process_pending_jobs(instance_id=instance_id, limit=max(1, len(replication_jobs)))
+        except Exception:
+            replication_jobs = []
+        # Clear spool only when no required replica jobs remain open for this slot.
+        try:
+            from deepseek_infra.infra.workspace import backup_replication as _repl
+
+            if not _repl.has_open_required_jobs(policy_id=policy_id, slot_digest=slot_digest):
+                backup_spool.clear_slot(policy_id, slot_digest)
+        except Exception:
+            backup_spool.clear_slot(policy_id, slot_digest)
         return {
             **outcome,
             "phase": "complete",
@@ -553,6 +581,7 @@ def execute_run(
             "filename": filename,
             "packing": (getattr(package, "manifest", None) or {}).get("packing") or {},
             "index": committed_index,
+            "replicationJobs": [str(j.get("jobId") or "") for j in replication_jobs],
         }
     except AppError as exc:
         message = str(exc)
