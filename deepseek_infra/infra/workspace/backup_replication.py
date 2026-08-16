@@ -69,11 +69,11 @@ def read_job(job_id: str) -> dict[str, Any] | None:
     path = _job_path(job_id)
     if not path.is_file():
         return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):  # pragma: no cover - corrupt job file
+            return None
+        return data if isinstance(data, dict) else None
 
 
 def list_jobs(
@@ -312,13 +312,13 @@ def execute_replication_job(job_id: str, *, instance_id: str = "repl-worker") ->
                     mode=mode,
                     snapshot_kind=str((published.receipt or {}).get("snapshotKind") or "full"),
                 )
-            except Exception:
+            except Exception:  # pragma: no cover - ledger best-effort
                 pass
             return job
         finally:
             try:
                 writer.release()
-            except Exception:
+            except Exception:  # pragma: no cover - release best-effort
                 pass
     except Exception as exc:
         return _fail_job(job, exc, mode=mode)

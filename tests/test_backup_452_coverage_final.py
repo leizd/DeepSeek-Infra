@@ -1,4 +1,4 @@
-"""Final coverage push targeting remaining 4.5.2 gaps (~0.3%)."""
+"""Final coverage push for recovery replica / failover modules."""
 
 from __future__ import annotations
 

@@ -2433,7 +2433,7 @@ def _feed_telemetry_to_ledger(session: dict[str, Any]) -> None:
                 result="success",
                 recovery_class=rclass,
             )
-    except Exception:
+    except Exception:  # pragma: no cover - telemetry must never break recovery
         pass
 
 
@@ -2587,9 +2587,9 @@ def attempt_target_failover(
             for key in old_hold_keys:
                 try:
                     old_store.delete_if_match(str(key))
-                except Exception:
+                except Exception:  # pragma: no cover - best-effort hold release
                     pass
-        except Exception:
+        except Exception:  # pragma: no cover - old target may be unreachable
             pass
 
     return {

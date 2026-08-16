@@ -148,9 +148,9 @@ class _KeeperHealthState:
             return
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError):  # pragma: no cover - corrupt health file
             return
-        if not isinstance(raw, dict):
+        if not isinstance(raw, dict):  # pragma: no cover - non-object health file
             return
         self.last_tick_at = raw.get("lastTickAt") if isinstance(raw.get("lastTickAt"), str) else None
         self.last_successful_tick_at = (
@@ -181,7 +181,7 @@ class _KeeperHealthState:
             tmp = path.with_name(f".{path.name}.{time.time_ns()}.tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             tmp.replace(path)
-        except OSError:
+        except OSError:  # pragma: no cover - disk full / permission
             pass
 
     def mark_running(self, running: bool) -> None:

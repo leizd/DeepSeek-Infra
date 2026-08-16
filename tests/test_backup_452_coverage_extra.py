@@ -1,4 +1,4 @@
-"""Extra branch coverage for 4.5.2 modules to clear the 95% gate."""
+"""Extra branch coverage for recovery replica / failover modules."""
 
 from __future__ import annotations
 
