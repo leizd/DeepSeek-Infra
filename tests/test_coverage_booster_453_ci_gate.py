@@ -130,9 +130,8 @@ def test_replication_compliance_and_lag_evaluations(tmp_settings: Path, monkeypa
     p_path.mkdir(parents=True, exist_ok=True)
     r_path.mkdir(parents=True, exist_ok=True)
 
-    p_t = backup_targets.init_target(p_path, label="Primary")
+    backup_targets.init_target(p_path, label="Primary")
     r_t = backup_targets.init_target(r_path, label="Replica")
-    p_id = p_t["targetId"]
     r_id = r_t["targetId"]
 
     # Policy disabled replication compliance
