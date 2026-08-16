@@ -105,23 +105,47 @@ def _replication_summary(
         backup_id=backup_id or None,
         object_set_digest=object_set_digest or None,
     ) if backup_id else []
-    committed = [c for c in logical if c.get("recoverable")]
+    committed = [c for c in logical if c.get("recoverable") and c.get("state") == "healthy"]
     healthy = [c for c in committed if str(c.get("targetId") or "")]
     compliance = "healthy" if len(committed) >= required else "degraded"
-    reason = None if compliance == "healthy" else "required-copy-objective-breached"
+    reasons: list[str] = []
+    if len(committed) < required:
+        reasons.append("required-copy-objective-breached")
+
+    max_lag = (policy or {}).get("recoveryObjectives", {}).get("maxReplicaLagSeconds") or replication_cfg.get("maxReplicaLagSeconds")
+    targets_info: list[dict[str, Any]] = []
+    from deepseek_infra.infra.workspace import backup_replication
+
+    for t_entry in list(replication_cfg.get("targets") or []):
+        if isinstance(t_entry, dict) and t_entry.get("targetId"):
+            tid = str(t_entry["targetId"])
+            lag = backup_replication.calculate_replica_lag(policy_id, tid, primary_target_id=target_id)
+            targets_info.append({
+                "targetId": tid,
+                "mode": str(t_entry.get("mode") or "required"),
+                "lagRecoveryPoints": lag.get("lagRecoveryPoints", 0),
+                "lagSeconds": lag.get("lagSeconds", 0),
+            })
+            if max_lag is not None and lag.get("lagSeconds", 0) > int(max_lag):
+                compliance = "degraded"
+                reasons.append(f"replica-lag-exceeded:{tid}")
+
     return {
         "enabled": True,
         "committedCopies": len(committed),
         "healthyCopies": len(healthy),
         "requiredCopies": required,
         "compliance": compliance if latest_pt is not None else "unavailable",
-        "reason": reason,
+        "reason": reasons[0] if reasons else None,
+        "reasons": reasons,
         "primaryTargetId": target_id,
+        "targets": targets_info,
         "copies": [
             {
                 "targetId": c.get("targetId"),
                 "backupId": c.get("backupId"),
                 "recoverable": bool(c.get("recoverable")),
+                "state": c.get("state", "healthy"),
                 "committedAt": c.get("committedAt"),
             }
             for c in logical

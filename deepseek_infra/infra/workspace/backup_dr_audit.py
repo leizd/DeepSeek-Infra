@@ -23,12 +23,16 @@ def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+GENESIS_COMMIT_HASH = "0" * 64
+
+
 def _validate_commit_receipt_binding(
     *,
     target_id: str,
     commit: dict[str, Any],
     receipt: dict[str, Any] | None,
-    previous_commit_hash: str | None,
+    raw_receipt_bytes: bytes | None = None,
+    previous_commit_hash: str | None = None,
 ) -> list[str]:
     anomalies: list[str] = []
     if not backup_publish.commit_marker_valid(commit):
@@ -41,8 +45,9 @@ def _validate_commit_receipt_binding(
     if not isinstance(receipt, dict) or not receipt:
         anomalies.append(f"missing-receipt:{backup_id}")
         return anomalies
-    raw_receipt = (json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    receipt_digest = hashlib.sha256(raw_receipt).hexdigest()
+    if raw_receipt_bytes is None:
+        raw_receipt_bytes = (json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    receipt_digest = hashlib.sha256(raw_receipt_bytes).hexdigest()
     expected = str(commit.get("receiptDigest") or "")
     if expected and receipt_digest != expected:
         anomalies.append(f"receipt-digest-mismatch:{backup_id}")
@@ -117,6 +122,8 @@ def audit_remote_target(
             details={},
         )
 
+    scanned_commits: list[dict[str, Any]] = []
+
     if target_id == "managed-local":
         root = backups.BACKUP_DIR
         commits_dir = root / "commits"
@@ -128,17 +135,20 @@ def audit_remote_target(
                     commit_data = json.loads(c_path.read_text(encoding="utf-8"))
                     backup_id = str(commit_data.get("backupId") or "")
                     r_path = receipts_dir / f"{backup_id}.json"
-                    receipt_data = json.loads(r_path.read_text(encoding="utf-8")) if r_path.is_file() else {}
-                    # managed-local may hold legacy markers; require backupId + receipt binding
-                    # but do not require full remote Commit v4 CAS fields.
+                    raw_receipt_fs = r_path.read_bytes() if r_path.is_file() else None
+                    receipt_data = json.loads(raw_receipt_fs.decode("utf-8")) if raw_receipt_fs is not None else {}
                     bind_anomalies = []
                     if not isinstance(commit_data, dict) or not backup_id:
                         bind_anomalies.append("invalid-commit-marker")
                     else:
-                        if not isinstance(receipt_data, dict) or not receipt_data:
+                        if raw_receipt_fs is None or not receipt_data:
                             bind_anomalies.append(f"missing-receipt:{backup_id}")
-                        elif str(receipt_data.get("backupId") or "") != backup_id:
-                            bind_anomalies.append(f"receipt-backup-id-mismatch:{backup_id}")
+                        else:
+                            exp_digest = str(commit_data.get("receiptDigest") or "")
+                            if exp_digest and hashlib.sha256(raw_receipt_fs).hexdigest() != exp_digest:
+                                bind_anomalies.append(f"receipt-digest-mismatch:{backup_id}")
+                            if str(receipt_data.get("backupId") or "") != backup_id:
+                                bind_anomalies.append(f"receipt-backup-id-mismatch:{backup_id}")
                     anomalies.extend(bind_anomalies)
                     recoverable = not bind_anomalies and bool(backup_id)
                     if backup_id:
@@ -171,10 +181,7 @@ def audit_remote_target(
                                 recoverable=True,
                                 role="primary",
                             )
-                        previous_commit_hash = str(commit_data.get("commitHash") or previous_commit_hash or "")
-                        gen = commit_data.get("targetGeneration")
-                        if isinstance(gen, int):
-                            target_generation = gen
+                        scanned_commits.append(commit_data)
                 except Exception as exc:
                     anomalies.append(f"malformed-commit-{c_path.name}: {exc}")
         next_cursor = None
@@ -221,11 +228,33 @@ def audit_remote_target(
                 anomalies.append(f"missing-backup-id:{meta.key}")
                 continue
             r_key = f"receipts/{backup_id}.json"
-            receipt = read_json(store, r_key)
+            raw_receipt: bytes | None = None
+            if hasattr(store, "get_bytes"):
+                try:
+                    raw_receipt = store.get_bytes(r_key)
+                except Exception:
+                    raw_receipt = None
+            receipt: dict[str, Any] | None = None
+            if raw_receipt is not None:
+                try:
+                    parsed = json.loads(raw_receipt.decode("utf-8"))
+                    if isinstance(parsed, dict):
+                        receipt = parsed
+                except Exception:
+                    receipt = None
+            else:
+                try:
+                    parsed = read_json(store, r_key)
+                    if isinstance(parsed, dict):
+                        receipt = parsed
+                        raw_receipt = (json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                except Exception:
+                    receipt = None
             bind_anomalies = _validate_commit_receipt_binding(
                 target_id=target_id,
                 commit=commit,
-                receipt=receipt if isinstance(receipt, dict) else None,
+                receipt=receipt,
+                raw_receipt_bytes=raw_receipt,
                 previous_commit_hash=previous_commit_hash,
             )
             anomalies.extend(bind_anomalies)
@@ -260,10 +289,55 @@ def audit_remote_target(
                     recoverable=True,
                     role="replica",
                 )
-            previous_commit_hash = str(commit.get("commitHash") or previous_commit_hash or "")
-            gen = commit.get("targetGeneration")
-            if isinstance(gen, int):
-                target_generation = gen
+            scanned_commits.append(commit)
+
+    # Phase 2: Index/sort by targetGeneration -> validate generation continuity -> validate commit chain continuity -> validate control/head
+    if scanned_commits:
+        # Separate commits with targetGeneration for chain validation
+        generation_commits = [c for c in scanned_commits if isinstance(c.get("targetGeneration"), int)]
+        generation_commits.sort(key=lambda c: int(c["targetGeneration"]))
+
+        prev_hash = previous_commit_hash
+        prev_gen = target_generation
+
+        for c in generation_commits:
+            curr_gen = int(c["targetGeneration"])
+            curr_hash = str(c.get("commitHash") or "")
+            curr_prev = str(c.get("previousCommitHash") or "")
+            b_id = str(c.get("backupId") or "")
+
+            if prev_gen is not None:
+                if curr_gen != prev_gen + 1:
+                    anomalies.append(f"generation-gap:{prev_gen}->{curr_gen}")
+                if prev_hash and curr_prev and curr_prev != prev_hash:
+                    anomalies.append(f"broken-commit-chain:{b_id}")
+            else:
+                if curr_gen == 1 and curr_prev and curr_prev != GENESIS_COMMIT_HASH:
+                    anomalies.append(f"broken-genesis-commit-hash:{b_id}")
+
+            prev_gen = curr_gen
+            prev_hash = curr_hash
+
+        target_generation = prev_gen
+        previous_commit_hash = prev_hash
+
+    # Validate control/head.json if audit scan reached completion
+    if target_id != "managed-local" and not next_cursor:
+        try:
+            head_data = read_json(store, "control/head.json")
+            if isinstance(head_data, dict) and generation_commits:
+                latest_c = generation_commits[-1]
+                latest_commit_hash = str(latest_c.get("commitHash") or "")
+                latest_gen = int(latest_c.get("targetGeneration") or 0)
+                head_commit_hash = str(head_data.get("latestCommitHash") or "")
+                head_gen = head_data.get("targetGeneration")
+
+                if head_commit_hash and latest_commit_hash and head_commit_hash != latest_commit_hash:
+                    anomalies.append(f"head-commit-hash-mismatch:head={head_commit_hash},audited={latest_commit_hash}")
+                if head_gen is not None and int(head_gen) != latest_gen:
+                    anomalies.append(f"head-generation-mismatch:head={head_gen},audited={latest_gen}")
+        except Exception:
+            pass
 
     status = "completed" if not next_cursor else "in-progress"
     phase = "completed" if status == "completed" else "scanning"

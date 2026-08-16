@@ -4,6 +4,20 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.5.3] - Replica Self-Healing & Lifecycle Governance (2026-08-16)
+
+### Replica Self-Healing & Lifecycle Governance
+
+- **Durable Replication Retry & Spool Protection**: Required replica failures transition to `retry-wait` with exponential backoff and `repair-needed`; encrypted local spool is retained until durable repair intent exists.
+- **Replication Orchestration Visibility**: Enqueue/orchestration errors surface in DR readiness/ledger (`replicationCompliance: degraded`, `replica-enqueue-failed`) rather than silent success.
+- **Remote DR Audit Enhancements**: Remote audit validates `receiptDigest` against raw receipt bytes and validates strict commit chain continuity, target generation continuity, genesis root, and `control/head.json`.
+- **Policy Target Bindings & Atomic Drill Selection**: Reject unregistered replica targets on policy create/update; scheduled drill selects `(targetId, backupId, objectSetDigest)` tuples atomically from available copies.
+- **Ciphertext-Plane Self-Healing (`ReplicaReconciler` & `ReplicaRepairJob`)**: Desired-state convergence with zero Age decrypts/encrypts; source holds acquired before reading; in-place missing component repairs vs full copy creation; unsafe destination corruption quarantined.
+- **Target-Local Replica Catalogs & Mirrored Retention**: Replicas maintain target-local catalog appends; retention mirrors primary across replicas with a hard `minCommittedCopies` safety gate; retired recovery points are never recreated.
+- **Deterministic Recovery Planner**: Lexicographic ranking with target-specific calibrated RTO and zero remote I/O.
+- **Replica Lag Telemetry & Objective**: Track per-target replica lag (`lagRecoveryPoints`, `lagSeconds`) and evaluate `maxReplicaLagSeconds` objective.
+- **Two-Target MinIO E2E Evidence**: Verified two-target MinIO replication, corruption detection, ciphertext repair, failover restore, and process restart resumption.
+
 ## [4.5.2] - Recovery Replica Sets and Automatic Target Failover (2026-08-16)
 
 ### Recovery Replica Sets & Failover

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from deepseek_infra.infra.workspace import (
     backup_dr_ledger,
     backup_dr_readiness,
@@ -153,7 +155,8 @@ def test_evaluate_scope_readiness_scrub_and_drill_failures(tmp_settings: Path) -
     assert "drill-failed" in res_drill["reasons"]
 
 
-def test_readiness_status_rollup_worst_status(tmp_settings: Path) -> None:
+def test_readiness_status_rollup_worst_status(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backup_policies.backup_targets, "get_target", lambda tid: {"targetId": tid, "kind": "filesystem"})
     # Target 1 is available
     backup_dr_ledger.record_recovery_point(
         target_id="target_1",

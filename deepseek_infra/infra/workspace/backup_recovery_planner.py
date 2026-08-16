@@ -134,17 +134,27 @@ def plan_recovery(
         points = backup_dr_ledger.list_recovery_points(policy_id=policy_id, limit=500)
         match = next((p for p in points if str(p.get("backupId")) == backup_id and p.get("recoverable")), None)
         if match is None:
-            raise AppError(
-                "No authenticated recoverable point for backupId under policy",
-                code=ErrorCode.NOT_FOUND,
-                status=404,
-            )
-        logical_backup_id = backup_id
-        object_set_digest = str((match.get("metadata") or {}).get("objectSetDigest") or match.get("chainDigest") or "")
-        committed_at = str(match.get("committedAt") or "")
-        chain_length = int(match.get("chainLength") or 1)
-        logical_bytes = int(match.get("logicalBytes") or 0)
-        storage_protocol = str(match.get("storageProtocol") or "object-set-v1")
+            copies_for_backup = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id, limit=50)
+            copy_match = next((c for c in copies_for_backup if str(c.get("backupId")) == backup_id and c.get("recoverable")), None)
+            if copy_match is None:
+                raise AppError(
+                    "No authenticated recoverable point for backupId under policy",
+                    code=ErrorCode.NOT_FOUND,
+                    status=404,
+                )
+            logical_backup_id = backup_id
+            object_set_digest = str(copy_match.get("objectSetDigest") or "")
+            committed_at = str(copy_match.get("committedAt") or "")
+            chain_length = 1
+            logical_bytes = int((copy_match.get("metadata") or {}).get("logicalBytes") or (copy_match.get("metadata") or {}).get("size") or 0)
+            storage_protocol = str((copy_match.get("metadata") or {}).get("storageProtocol") or "object-set-v1")
+        else:
+            logical_backup_id = backup_id
+            object_set_digest = str((match.get("metadata") or {}).get("objectSetDigest") or match.get("chainDigest") or "")
+            committed_at = str(match.get("committedAt") or "")
+            chain_length = int(match.get("chainLength") or 1)
+            logical_bytes = int(match.get("logicalBytes") or 0)
+            storage_protocol = str(match.get("storageProtocol") or "object-set-v1")
     else:
         latest, chain = backup_dr_ledger.get_latest_recoverable_point(primary_target, policy_id, now=current)
         if latest is None:
@@ -232,24 +242,27 @@ def plan_recovery(
         reasons.append(f"target-kind:{kind}")
         reasons.append("credential-compatible")
 
-        score = 0
-        if preferred_target_id and target_id == preferred_target_id:
-            score += 100
-            rank_reasons.append("explicit-preference")
-        if target_id == primary_target:
-            score += 40
-            rank_reasons.append("primary-target")
         tev = backup_dr_ledger.get_target_evidence(target_id)
-        if tev and tev.get("status") == "ok":
-            score += 20
+        is_healthy = bool(tev and tev.get("status") == "ok")
+        if is_healthy:
             rank_reasons.append("target-health-ok")
+
+        is_preferred = bool(preferred_target_id and target_id == preferred_target_id)
+        if is_preferred:
+            rank_reasons.append("explicit-preference")
+
+        is_primary = bool(target_id == primary_target)
+        if is_primary:
+            rank_reasons.append("primary-target")
+
         scrub = backup_dr_ledger.get_latest_scrub_outcome(target_id, policy_id, now=current)
-        if scrub and scrub.get("result") == "success":
-            score += 15
+        scrub_ok = bool(scrub and scrub.get("result") == "success")
+        if scrub_ok:
             rank_reasons.append("scrub-fresh")
+
         drill = backup_dr_ledger.get_latest_drill_outcome(target_id, policy_id, now=current)
-        if drill and drill.get("result") == "success":
-            score += 15
+        drill_ok = bool(drill and drill.get("result") == "success")
+        if drill_ok:
             rank_reasons.append("drill-fresh")
 
         rclass = backup_recovery_class.classify_recovery(
@@ -265,8 +278,35 @@ def plan_recovery(
             recovery_class=rclass,
         )
         if rto.get("status") == "calibrated":
-            score += 10
             rank_reasons.append("matching-rto-evidence")
+
+        # Deterministic Lexicographic Ranking Key
+        # 1. Hard health class: healthy (0) vs degraded/unknown (1)
+        # 2. Explicit preference: preferred (0) vs unselected (1)
+        # 3. Cache/Primary advantage: primary/local (0) vs replica (1)
+        # 4. Drill freshness: fresh (0) vs none (1)
+        # 5. Scrub freshness: fresh (0) vs none (1)
+        # 6. Calibrated RTO P50 seconds (lower is faster)
+        # 7. Stable targetId string tiebreak
+        rto_seconds = int(rto.get("p50Seconds") or rto.get("estimatedSeconds") or 999999)
+        lex_key = (
+            0 if is_healthy else 1,
+            0 if is_preferred else 1,
+            0 if is_primary or target_id == "managed-local" else 1,
+            0 if drill_ok else 1,
+            0 if scrub_ok else 1,
+            rto_seconds,
+            str(target_id),
+        )
+
+        score = (
+            (100 if is_preferred else 0)
+            + (40 if is_primary else 0)
+            + (20 if is_healthy else 0)
+            + (15 if scrub_ok else 0)
+            + (15 if drill_ok else 0)
+            + (10 if rto.get("status") == "calibrated" else 0)
+        )
 
         ordered.append(
             {
@@ -274,6 +314,7 @@ def plan_recovery(
                 "role": "primary" if target_id == primary_target else "replica",
                 "kind": kind,
                 "score": score,
+                "rankKey": lex_key,
                 "filterReasons": reasons,
                 "rankReasons": rank_reasons,
                 "rtoEstimate": rto,
@@ -281,7 +322,7 @@ def plan_recovery(
             }
         )
 
-    ordered.sort(key=lambda item: (-int(item["score"]), str(item["targetId"])))
+    ordered.sort(key=lambda item: item["rankKey"])
     if not ordered:
         raise AppError("No compatible recovery target candidates", code=ErrorCode.NOT_FOUND, status=404)
 

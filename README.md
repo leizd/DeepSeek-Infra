@@ -5,16 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.5.2-blue)
+![版本](https://img.shields.io/badge/version-4.5.3-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.4.15 Encrypted Object Sets & True Selective Fetch：** Full 与 Incremental 统一 Projection 语义，Adaptive Full 使用有界临时归档并在超阈值后停止 Incremental 加密。新 `object-set-v1` 把加密 Control 与随机独立 Age Payload Components 分离，Restore 先解密完整 Metadata Plane，再只 GET Merkle-verified Dependency Closure 所需的密文 Components。远端只观察密文摘要、大小和粗粒度组件数量；不得出现 plaintext hash、路径、项目或 Contributor 元数据。旧 Whole-Age 链永久可恢复。参见 [4.4.15 发布说明](docs/releases/4.4.15.md)（上一版 [4.4.13](docs/releases/4.4.13.md)）、[Evidence 索引](docs/EVIDENCE_INDEX.md)和[安全模型](docs/THREAT_MODEL.md)。
+> **4.5.3 — Replica Self-Healing & Lifecycle Governance (副本自愈与生命周期治理)：** 在冻结的 `object-set-v1` / `Receipt v4` / `Commit v4` / 随机 Age 上实现副本 Desired-State 持续收敛、密文层自愈（0 Age decrypt / 0 Age encrypt）、Remote Audit 原始 bytes 摘要与 Commit 链连续性校验、多 Target 生命周期与镜像 Retention 安全门禁、原子 Drill 副本选择与确定性字典序恢复规划。详见 [4.5.3 发布说明](docs/releases/4.5.3.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
 
-> **4.5.2 — Recovery Replica Sets and Automatic Target Failover：** 在冻结的 object-set-v1 / Receipt v4 / Commit v4 / 随机 Age 上实现加密一次多 Target 复制、耐久 Replication Job、Ledger-only Recovery Planner 与 prepare 前自动 Target 故障切换，并闭合 4.5.1 Keeper/Drill/Audit/RTO P0。详见 [4.5.2 发布说明](docs/releases/4.5.2.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
-
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md)、[4.5.2](docs/releases/4.5.2.md)。
 
 **4.4.15 validation target:** Full/Incremental Projection 同义、最终快照中新建 Project 可选、未选且已分叉 Contributor 零改动、Adaptive Delta O(buffer) 且超阈值前终止加密、Object Set 精确提交、Control-first Preview、未选 Component 零 GET、真实进程退出后恢复续传、Object Set Holds/GC 和旧 Whole-Age 永久兼容。
 

@@ -24,7 +24,8 @@ from deepseek_infra.infra.workspace import (
 from deepseek_infra.infra.workspace.backup_target_store import ListPage, ObjectMeta
 
 
-def test_scheduled_drill_missing_credentials_and_recovery_points(tmp_settings: Path) -> None:
+def test_scheduled_drill_missing_credentials_and_recovery_points(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backup_policies.backup_targets, "get_target", lambda tid: {"targetId": tid, "kind": "filesystem"})
     # 1. Blocked drill due to missing credential
     backup_policies.create_policy(
         {

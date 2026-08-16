@@ -617,11 +617,37 @@ def finalize_retention(
             if trashed_at is None or current - trashed_at < grace:
                 kept.append(backup_id)
                 continue
+            policy_id = str(record.get("policyId") or retention.get("retentionPolicyId") or "")
+            target_id = str(target_root)
+            is_held = False
+            try:
+                from deepseek_infra.infra.workspace import backup_replication
+
+                is_held = backup_replication.is_source_held(target_id, policy_id, backup_id)
+            except Exception:
+                is_held = False
+
+            min_healthy_copies = int(retention.get("minimumHealthyCopies") or 1)
+            remaining_healthy_count = min_healthy_copies
+            try:
+                from deepseek_infra.infra.workspace import backup_dr_ledger
+
+                copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
+                if copies:
+                    remaining_healthy_count = len([
+                        c for c in copies
+                        if str(c.get("targetId")) != target_id and c.get("recoverable") and c.get("state") == "healthy"
+                    ])
+            except Exception:
+                pass
+
             rescued = (
                 backup_id in still_protected
                 or bool(record.get("pinned"))
+                or is_held
                 or str(record.get("filename") or "") in references
                 or bool(backup_object_set.committed_object_digests(record) & references)
+                or (remaining_healthy_count < min_healthy_copies and min_healthy_copies > 1)
             )
             if rescued:
                 backup_catalog.record_restore_from_trash(target_root, backup_id, at=_utc_iso(current), writer=writer)
@@ -631,6 +657,12 @@ def finalize_retention(
             shutil.rmtree(entry, ignore_errors=True)
             backup_catalog.record_delete(target_root, backup_id, retention_run_id=str(record.get("retentionRunId") or ""), at=_utc_iso(current), writer=writer)
             deleted.append(backup_id)
+            try:
+                from deepseek_infra.infra.workspace import backup_dr_ledger
+
+                backup_dr_ledger.mark_logical_recovery_point_retired(policy_id, backup_id, retired_at=_utc_iso(current))
+            except Exception:
+                pass
     return {"deleted": deleted, "kept": kept, "recoveredTrash": recovered}
 
 

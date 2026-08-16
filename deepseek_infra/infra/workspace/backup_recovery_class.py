@@ -135,11 +135,18 @@ def calibrate_rto(
             chain_length=chain_length,
         )
 
+    t_id = target_id or (samples_or_target_id if isinstance(samples_or_target_id, str) else None)
     active_samples: list[dict[str, Any]] = []
     if isinstance(samples_or_target_id, list):
         active_samples = samples_or_target_id
     elif samples is not None:
         active_samples = samples
+    elif t_id is not None:
+        target_samples = backup_dr_ledger.list_stage_samples(target_id=t_id)
+        if len(target_samples) >= 3:
+            active_samples = target_samples
+        else:
+            active_samples = backup_dr_ledger.list_stage_samples()
     else:
         active_samples = backup_dr_ledger.list_stage_samples()
 

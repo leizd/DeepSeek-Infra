@@ -19,6 +19,7 @@ from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.workspace import backup_targets
 from deepseek_infra.infra.workspace.backup_cron import load_timezone, parse_cron
 
 POLICY_SCHEMA_VERSION = 2
@@ -289,12 +290,15 @@ def _normalize_recovery_objectives(raw: Any) -> dict[str, Any]:
     max_rpo = section.get("maxRpoSeconds")
     max_scrub = section.get("maxScrubAgeSeconds")
     max_drill = section.get("maxDrillAgeSeconds")
+    max_replica_lag = section.get("maxReplicaLagSeconds")
     if max_rpo is not None:
         normalized["maxRpoSeconds"] = _require_int(max_rpo, "recoveryObjectives.maxRpoSeconds", 3600, 60, 86400 * 365)
     if max_scrub is not None:
         normalized["maxScrubAgeSeconds"] = _require_int(max_scrub, "recoveryObjectives.maxScrubAgeSeconds", 86400, 60, 86400 * 365)
     if max_drill is not None:
         normalized["maxDrillAgeSeconds"] = _require_int(max_drill, "recoveryObjectives.maxDrillAgeSeconds", 604800, 60, 86400 * 365)
+    if max_replica_lag is not None:
+        normalized["maxReplicaLagSeconds"] = _require_int(max_replica_lag, "recoveryObjectives.maxReplicaLagSeconds", 3600, 1, 86400 * 365)
     return normalized
 
 
@@ -362,9 +366,11 @@ def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any
                 "Backup policy replication.minCommittedCopies exceeds configured targets",
                 code=ErrorCode.INVALID_PAYLOAD,
             )
-    if not enabled:
-        return {"enabled": False, "targets": targets, "minCommittedCopies": min_copies}
-    return {"enabled": True, "targets": targets, "minCommittedCopies": min_copies}
+    normalized_res: dict[str, Any] = {"enabled": bool(enabled), "targets": targets, "minCommittedCopies": min_copies}
+    max_lag = section.get("maxReplicaLagSeconds")
+    if max_lag is not None:
+        normalized_res["maxReplicaLagSeconds"] = _require_int(max_lag, "replication.maxReplicaLagSeconds", 3600, 1, 86400 * 365)
+    return normalized_res
 
 
 def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, created_at: str | None = None) -> dict[str, Any]:
@@ -402,9 +408,33 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
     }
 
 
+def validate_target_bindings(policy: dict[str, Any]) -> None:
+    """Ensure all primary and replica targets referenced by policy exist in Target Registry."""
+    primary_id = str(policy.get("targetId") or "").strip()
+    if primary_id and primary_id != MANAGED_LOCAL_TARGET and primary_id != UNBOUND_TARGET:
+        try:
+            backup_targets.get_target(primary_id)
+        except AppError as exc:
+            raise AppError(f"Unregistered primary targetId '{primary_id}'", code=ErrorCode.INVALID_PAYLOAD, status=400) from exc
+
+    replication = policy.get("replication")
+    if isinstance(replication, dict):
+        targets = replication.get("targets")
+        if isinstance(targets, list):
+            for entry in targets:
+                if isinstance(entry, dict):
+                    tid = str(entry.get("targetId") or "").strip()
+                    if tid and tid != MANAGED_LOCAL_TARGET:
+                        try:
+                            backup_targets.get_target(tid)
+                        except AppError as exc:
+                            raise AppError(f"Unregistered replica targetId '{tid}'", code=ErrorCode.INVALID_PAYLOAD, status=400) from exc
+
+
 def create_policy(payload: dict[str, Any]) -> dict[str, Any]:
     raw_id = payload.get("policyId") if isinstance(payload, dict) else None
     policy = normalize_policy(payload, policy_id=str(raw_id) if raw_id else None)
+    validate_target_bindings(policy)
     _ensure_dir()
     if _policy_path(policy["policyId"]).exists():
         raise AppError("Backup policy id collision; retry", code=ErrorCode.INVALID_REQUEST, status=409)
@@ -460,6 +490,7 @@ def update_policy(policy_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         if key in patch:
             merged[key] = patch[key]
     normalized = normalize_policy(merged, policy_id=existing["policyId"], created_at=str(existing.get("createdAt") or ""))
+    validate_target_bindings(normalized)
     _atomic_write_json(_policy_path(policy_id), normalized)
     return normalized
 

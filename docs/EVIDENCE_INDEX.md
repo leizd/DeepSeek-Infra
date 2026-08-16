@@ -5,67 +5,67 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.5.2.
+Applicable version: v4.5.3.
 
-## 4.5.2 development evidence contract
+## 4.5.3 development evidence contract
 
-4.5.2 product implementation covers Recovery Replica Sets, Automatic Target
-Failover, and 4.5.1 P0 lifecycle hardening. Living behavioral evidence is
-produced locally by `python scripts/run_452_evidence.py` (real pytest against
-production modules — not a static PASS map). That living report is **not** part
+4.5.3 product implementation covers Replica Self-Healing & Lifecycle Governance.
+Living behavioral evidence is produced locally by `python scripts/run_453_evidence.py`
+and `python scripts/run_replica_healing_s3_e2e.py`. That living report is **not** part
 of the exact-merge package inventory in
 `deepseek_infra/infra/diagnostics/evidence_inventory.py` and must not be
-committed as a versioned `docs/evidence/*-v4.5.2.json` file (unlisted current
+committed as a versioned `docs/evidence/*-v4.5.3.json` file (unlisted current
 Evidence fails `verify_release_package`). Real two-target MinIO E2E, subprocess
 restart, fault injection, and exact-merge artifacts remain owned by their CI
-producers. No prior-version artifact is reused or relabelled as 4.5.2 PASS
+producers. No prior-version artifact is reused or relabelled as 4.5.3 PASS
 evidence.
 
-- `scripts/run_452_evidence.py` (local living evidence; do not package)
+- `scripts/run_453_evidence.py` (local living evidence; do not package)
+- `scripts/run_replica_healing_s3_e2e.py` (local living evidence; do not package)
 
 - `docs/evidence/headless-mcp-bridge.json`
 - `docs/evidence/a2a-external-peer.json`
-- `docs/evidence/ga-v4.5.2.json`
-- `docs/evidence/workspace-v4.5.2.json`
-- `docs/evidence/edge-router-v4.5.2.json`
-- `docs/evidence/media-v4.5.2.json`
-- `docs/evidence/browser-v4.5.2.json`
-- `docs/evidence/automation-v4.5.2.json`
-- `docs/evidence/skills-v4.5.2.json`
-- `docs/evidence/skills-ui-v4.5.2.json`
-- `docs/evidence/skill-builder-v4.5.2.json`
-- `docs/evidence/skill-packs-v4.5.2.json`
-- `docs/evidence/skill-eval-dashboard-v4.5.2.json`
-- `docs/evidence/skill-versioning-v4.5.2.json`
-- `docs/evidence/skill-analytics-v4.5.2.json`
-- `docs/evidence/skill-security-v4.5.2.json`
-- `docs/evidence/skill-catalog-v4.5.2.json`
-- `docs/evidence/context-taint-v4.5.2.json`
-- `docs/evidence/semantic-cache-onnx-v4.5.2.json`
-- `docs/evidence/upgrade-rollback-v4.5.2.json`
-- `docs/evidence/protocol-contract-v4.5.2.json`
-- `docs/evidence/frontend-bundle-v4.5.2.json`
-- `docs/evidence/frontend-browser-v4.5.2.json`
+- `docs/evidence/ga-v4.5.3.json`
+- `docs/evidence/workspace-v4.5.3.json`
+- `docs/evidence/edge-router-v4.5.3.json`
+- `docs/evidence/media-v4.5.3.json`
+- `docs/evidence/browser-v4.5.3.json`
+- `docs/evidence/automation-v4.5.3.json`
+- `docs/evidence/skills-v4.5.3.json`
+- `docs/evidence/skills-ui-v4.5.3.json`
+- `docs/evidence/skill-builder-v4.5.3.json`
+- `docs/evidence/skill-packs-v4.5.3.json`
+- `docs/evidence/skill-eval-dashboard-v4.5.3.json`
+- `docs/evidence/skill-versioning-v4.5.3.json`
+- `docs/evidence/skill-analytics-v4.5.3.json`
+- `docs/evidence/skill-security-v4.5.3.json`
+- `docs/evidence/skill-catalog-v4.5.3.json`
+- `docs/evidence/context-taint-v4.5.3.json`
+- `docs/evidence/semantic-cache-onnx-v4.5.3.json`
+- `docs/evidence/upgrade-rollback-v4.5.3.json`
+- `docs/evidence/protocol-contract-v4.5.3.json`
+- `docs/evidence/frontend-bundle-v4.5.3.json`
+- `docs/evidence/frontend-browser-v4.5.3.json`
 - `evals/reports/latest.json`
 - `evals/reports/agent-latest.json`
 - `evals/reports/baseline-compare-latest.json`
 - `evals/reports/security-latest.json`
-- `evals/reports/skills-v4.5.2.json`
-- `evals/reports/media-v4.5.2.json`
-- `evals/reports/browser-v4.5.2.json`
-- `evals/reports/automation-v4.5.2.json`
-- `docs/evidence/rust-sidecar-image-v4.5.2.json`
-- `docs/evidence/hybrid-runtime-e2e-v4.5.2.json`
-- `docs/evidence/gateway-request-parity-v4.5.2.json`
-- `docs/evidence/mcp-protocol-parity-v4.5.2.json`
-- `docs/evidence/rag-parity-v4.5.2.json`
-- `docs/evidence/rag-document-preparation-parity-v4.5.2.json`
-- `docs/evidence/rag-vector-binary-parity-v4.5.2.json`
-- `docs/evidence/rust-coverage-v4.5.2.json`
-- `docs/evidence/rust-sidecar-performance-v4.5.2.json`
-- `docs/evidence/packed-delta-s3-v4.5.2.json`
-- `docs/evidence/object-set-s3-v4.5.2.json`
-- `docs/evidence/recovery-faults-v4.5.2.json`
+- `evals/reports/skills-v4.5.3.json`
+- `evals/reports/media-v4.5.3.json`
+- `evals/reports/browser-v4.5.3.json`
+- `evals/reports/automation-v4.5.3.json`
+- `docs/evidence/rust-sidecar-image-v4.5.3.json`
+- `docs/evidence/hybrid-runtime-e2e-v4.5.3.json`
+- `docs/evidence/gateway-request-parity-v4.5.3.json`
+- `docs/evidence/mcp-protocol-parity-v4.5.3.json`
+- `docs/evidence/rag-parity-v4.5.3.json`
+- `docs/evidence/rag-document-preparation-parity-v4.5.3.json`
+- `docs/evidence/rag-vector-binary-parity-v4.5.3.json`
+- `docs/evidence/rust-coverage-v4.5.3.json`
+- `docs/evidence/rust-sidecar-performance-v4.5.3.json`
+- `docs/evidence/packed-delta-s3-v4.5.3.json`
+- `docs/evidence/object-set-s3-v4.5.3.json`
+- `docs/evidence/recovery-faults-v4.5.3.json`
 
 ## Historical 4.4.15 evidence contract
 

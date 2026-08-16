@@ -105,7 +105,7 @@ def test_replication_spool_missing_and_process(tmp_settings: Path, monkeypatch: 
 
     monkeypatch.setattr(backup_spool, "lookup_verified_package", lambda **k: None)
     failed = backup_replication.execute_replication_job(jobs[0]["jobId"])
-    assert failed["phase"] == "failed"
+    assert failed["phase"] in ("failed", "repair-needed", "failed-terminal")
     summary = backup_replication.process_pending_jobs(limit=10)
     assert summary["processed"] >= 0
 
