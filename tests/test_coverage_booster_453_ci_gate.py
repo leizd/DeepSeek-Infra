@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 from pathlib import Path
 from typing import Any
@@ -599,8 +600,63 @@ def test_workspace_restores_and_governance_edge_cases(tmp_settings: Path, monkey
     assert client.put("/api/workspace/restores/r-1/secret", json={"secret": "abc"}).status_code == 200
     assert client.post("/api/workspace/restores/r-1/unlock").status_code == 200
 
+    # finalize session
+    monkeypatch.setattr(workspace_backups, "finalize_session", lambda _id, **_k: {"backupId": _id, "state": "committed"})
+    assert client.post("/api/workspace/backups/b1/finalize").status_code == 200
+
     # inspect with multipart but invalid bytes data -> 400
     assert client.post("/api/workspace/restores/inspect", headers={"Content-Type": "multipart/form-data; boundary=xyz"}).status_code == 400
+
+
+def test_governance_store_backed_branches(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web.routes.backup_governance import BackupTargetSession, create_backup_governance_router
+    from deepseek_infra.infra.workspace import backup_policies, backup_retention, backup_catalog
+
+    class DummyStore:
+        def read(self) -> bytes:
+            return b""
+
+        def write(self, _b: bytes) -> None:
+            pass
+
+    dummy_session = BackupTargetSession(
+        target_id="target-remote",
+        kind="s3",
+        root=None,
+        store=DummyStore(),
+    )
+
+    monkeypatch.setattr("deepseek_infra.web.routes.backup_governance.require_api_auth", lambda _req: None)
+    monkeypatch.setattr("deepseek_infra.web.routes.backup_governance.open_target_session", lambda _t, **_k: dummy_session)
+    monkeypatch.setattr(backup_catalog, "catalog_state_store", lambda _s: {"b1": {"backupId": "b1", "policyId": "p1"}})
+    monkeypatch.setattr(backup_policies, "get_policy", lambda _p: {"policyId": "p1", "retentionPolicyId": "ret1", "targetId": "target-remote"})
+    monkeypatch.setattr(backup_retention, "get_retention_policy", lambda _r: {"keepLast": 5})
+    monkeypatch.setattr(backup_retention, "apply_retention_store", lambda *_a, **_k: {"deleted": []})
+    monkeypatch.setattr(backup_retention, "finalize_retention_store", lambda *_a, **_k: {"purged": 0})
+    monkeypatch.setattr("deepseek_infra.web.routes.backup_governance._target_writer", lambda *_a, **_k: nullcontext())
+
+    app = FastAPI()
+    app.include_router(create_backup_governance_router())
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # catalog with store-backed session and policy_id filter
+    res_cat = client.get("/api/workspace/backup-catalog?targetId=target-remote&policyId=p1")
+    assert res_cat.status_code == 200
+
+    # retention preview with store-backed session
+    res_prev = client.post("/api/workspace/retention/preview", json={"policyId": "p1"})
+    assert res_prev.status_code == 200
+
+    # retention apply with store-backed session
+    res_apply = client.post("/api/workspace/retention/apply", json={"policyId": "p1"})
+    assert res_apply.status_code == 200
+
+    # pin and unpin with store-backed session
+    monkeypatch.setattr(backup_catalog, "_append_entry_store", lambda *_a, **_k: None)
+    monkeypatch.setattr("deepseek_infra.web.routes.backup_governance._find_backup_session", lambda _b: (dummy_session, {"backupId": _b}))
+    assert client.post("/api/workspace/backup-catalog/b1/pin").status_code == 200
+    assert client.delete("/api/workspace/backup-catalog/b1/pin").status_code == 200
+
 
 
 
