@@ -106,7 +106,7 @@ def test_keeper_local_and_no_hold_and_terminal(tmp_settings: Path) -> None:
     ]:
         d = root / name
         d.mkdir(parents=True)
-        payload = {"restoreId": name, "phase": phase, "targetId": tid}
+        payload: dict[str, Any] = {"restoreId": name, "phase": phase, "targetId": tid}
         if holds:
             payload["holds"] = holds
         (d / "remote-fetch.json").write_text(json.dumps(payload), encoding="utf-8")
