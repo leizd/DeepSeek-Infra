@@ -270,7 +270,11 @@ def test_failover_success_full_path(tmp_settings: Path, monkeypatch: pytest.Monk
         "resolve_target",
         lambda tid, write_intent=False: type("T", (), {"store": stores[tid], "require_store": lambda self: stores[tid], "root": None, "target_id": tid})(),
     )
-    monkeypatch.setattr(backup_remote_restore, "put_json_if_absent", lambda store, key, hold: events.append(f"put:{getattr(store,'name','')}") or True)
+    def _put(store: Any, key: str, hold: Any) -> bool:
+        events.append(f"put:{getattr(store, 'name', '')}")
+        return True
+
+    monkeypatch.setattr(backup_remote_restore, "put_json_if_absent", _put)
     out = backup_remote_restore.attempt_target_failover(rid, failure_reason="remote-5xx")
     assert out["activeSourceTargetId"] == "target_b"
     assert any(e.startswith("put:b") for e in events)
