@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
-from deepseek_infra.core.errors import AppError
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_policies,
     backup_recovery_class,
@@ -699,6 +699,100 @@ def test_server_bind_socket_helpers() -> None:
     port = sock.getsockname()[1]
     assert port > 0
     sock.close()
+
+
+def test_home_and_projects_edge_cases(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import home, projects
+    from deepseek_infra.infra.data import projects as legacy_projects
+
+    # home with empty project id and failing loaders
+    def failing_loader(_p: str) -> list[dict[str, Any]]:
+        raise RuntimeError("boom")
+
+    res = home._collect_project_items(["", "valid-p1"], failing_loader)
+    assert res == []
+
+    res_runs = home._collect_skill_runs(["", "valid-p1"])
+    assert res_runs == []
+
+    # projects edge cases
+    monkeypatch.setattr(legacy_projects, "list_projects", lambda: [{"id": "proj-1"}, {"id": "proj-2"}])
+    monkeypatch.setattr(legacy_projects, "require_project", lambda pid: {"id": pid, "name": "P", "createdAt": 100} if pid == "proj-1" else (_ for _ in ()).throw(RuntimeError("fail")))
+
+    projs = projects.list_projects()
+    assert len(projs) == 1
+
+    # rename project with empty name
+    monkeypatch.setattr(legacy_projects, "require_project", lambda pid: {"id": pid, "name": "Old", "createdAt": 100, "updatedAt": 100})
+    monkeypatch.setattr(legacy_projects, "write_project", lambda _p: None)
+    renamed = projects.rename_project("proj-1", "   ", description="New desc")
+    assert renamed["name"] == "Old"
+    assert renamed["description"] == "New desc"
+
+    # _coerce_timestamp_ms with invalid types
+    assert projects._coerce_timestamp_ms("invalid", default=999) == 999
+    assert projects._coerce_timestamp_ms(-5, default=999) == 999
+
+    # safe artifacts / saved items / memories error fallbacks
+    monkeypatch.setattr("deepseek_infra.infra.workspace.saved_items.list_saved_items", lambda _p: (_ for _ in ()).throw(RuntimeError("err")))
+    assert projects._safe_saved_items("proj-1") == []
+
+    monkeypatch.setattr("deepseek_infra.infra.workspace.artifacts.list_artifacts", lambda _p: (_ for _ in ()).throw(RuntimeError("err")))
+    assert projects._safe_artifacts("proj-1") == []
+
+    monkeypatch.setattr("deepseek_infra.infra.data.memory.load_memories", lambda: (_ for _ in ()).throw(RuntimeError("err")))
+    assert projects._project_memories("proj-1") == []
+
+
+def test_recovery_lease_and_job_edge_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_recovery_job
+    from deepseek_infra.infra.workspace.backup_recovery_lease import renew_session, renew_recovery_hold
+
+    class MockStore:
+        def __init__(self) -> None:
+            self.data: dict[str, Any] = {}
+
+        def get_bytes(self, key: str) -> bytes | None:
+            val = self.data.get(key)
+            if val is None:
+                return None
+            return json.dumps(val).encode("utf-8")
+
+        def stat(self, key: str) -> Any:
+            if key not in self.data:
+                return None
+            class Meta:
+                etag = "etag-1"
+            return Meta()
+
+        def delete_if_match(self, key: str) -> None:
+            self.data.pop(key, None)
+
+    store = MockStore()
+
+    # renew_recovery_hold empty key -> 400
+    with pytest.raises(AppError) as exc_hold:
+        renew_recovery_hold(store, {})
+    assert exc_hold.value.status == 400
+
+    # renew_session with colon key but missing in store -> 404
+    with pytest.raises(AppError) as exc_colon:
+        renew_session(store, {"holdKeys": ["hold:key1"]})
+    assert exc_colon.value.status == 404
+
+    # renew_session with colon key and put_json_if_absent error
+    store.data["hold:key2"] = {"generation": 1, "expiresAt": "2026-08-16T12:00:00Z"}
+    monkeypatch.setattr("deepseek_infra.infra.workspace.backup_recovery_lease.read_json", lambda _s, _k: store.data.get(_k))
+    monkeypatch.setattr("deepseek_infra.infra.workspace.backup_recovery_lease.put_json_if_absent", lambda *_a, **_k: (_ for _ in ()).throw(AppError("conflict", code=ErrorCode.INVALID_REQUEST, status=409)))
+    monkeypatch.setattr("deepseek_infra.infra.workspace.backup_recovery_lease.renew", lambda *_a, **_k: {"generation": 2})
+
+    session = {"holdKeys": ["hold:key2"]}
+    assert renew_session(store, session) is True
+    assert session["holdKeys"] == ["hold-key2"]
+
+    # backup_recovery_job._scrub_plaintext_scratch with non-dir
+    backup_recovery_job._scrub_plaintext_scratch({"scratchRoot": str(tmp_path / "does-not-exist")})
+
 
 
 
