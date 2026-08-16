@@ -1,4 +1,4 @@
-"""Extra branch coverage for the py3.11 95% CI gate (4.5.2)."""
+"""Extra branch coverage for the py3.11 95% CI gate."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from deepseek_infra.core.config import APP_VERSION
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.diagnostics import evidence_revision as revision_module
 from deepseek_infra.infra.media import evidence as media_evidence
@@ -110,7 +111,7 @@ def test_evidence_revision_git_errors_and_validate(monkeypatch: pytest.MonkeyPat
 
     base = {
         "schemaVersion": 2,
-        "version": "4.5.2",
+        "version": APP_VERSION,
         "testedRevision": "abc",
         "sourceTreeDirty": False,
         "capturedAt": "2026-08-16T00:00:00Z",
@@ -125,7 +126,7 @@ def test_evidence_revision_git_errors_and_validate(monkeypatch: pytest.MonkeyPat
         revision_module.validate_source_context(base, version="9.9.9", expected_revision="abc")
     )
     assert "testedRevision mismatch" in " ".join(
-        revision_module.validate_source_context(base, version="4.5.2", expected_revision="zzz")
+        revision_module.validate_source_context(base, version=APP_VERSION, expected_revision="zzz")
     )
     missing_v2 = {**base, "repository": ""}
     assert any("missing repository" in e for e in revision_module.validate_source_context(missing_v2))
@@ -133,7 +134,7 @@ def test_evidence_revision_git_errors_and_validate(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(revision_module, "_git", lambda root, *args: "" if args[:1] == ("rev-parse",) else "")
     monkeypatch.delenv("GITHUB_SHA", raising=False)
     with pytest.raises(ValueError, match="known Git HEAD"):
-        revision_module.capture_source_context(tmp_path, "4.5.2", generator="test")
+        revision_module.capture_source_context(tmp_path, APP_VERSION, generator="test")
 
     def clean_git(root: Path, *args: str) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -141,7 +142,7 @@ def test_evidence_revision_git_errors_and_validate(monkeypatch: pytest.MonkeyPat
         return ""
 
     monkeypatch.setattr(revision_module, "_git", clean_git)
-    ctx = revision_module.capture_source_context(tmp_path, "4.5.2", generator="test", schema_version=1)
+    ctx = revision_module.capture_source_context(tmp_path, APP_VERSION, generator="test", schema_version=1)
     assert ctx["schemaVersion"] == 1
     assert "repository" not in ctx
 
@@ -149,20 +150,21 @@ def test_evidence_revision_git_errors_and_validate(monkeypatch: pytest.MonkeyPat
 def test_media_evidence_prefers_source_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     context_path = tmp_path / "ctx.json"
     context_path.write_text(
-        """{
-  "schemaVersion": 1,
-  "version": "4.5.2",
-  "testedRevision": "context-sha-xyz",
-  "sourceTreeDirty": false,
-  "capturedAt": "2026-08-16T00:00:00Z",
-  "generator": "test"
-}
-""",
+        (
+            "{\n"
+            '  "schemaVersion": 1,\n'
+            f'  "version": "{APP_VERSION}",\n'
+            '  "testedRevision": "context-sha-xyz",\n'
+            '  "sourceTreeDirty": false,\n'
+            '  "capturedAt": "2026-08-16T00:00:00Z",\n'
+            '  "generator": "test"\n'
+            "}\n"
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv(revision_module.EVIDENCE_SOURCE_CONTEXT_ENV, str(context_path))
     assert media_evidence.git_short_sha() == "context-sha-xyz"
-    payload = media_evidence.evidence_metadata("4.5.2", status="PASS", checks={"x": "PASS"}, details=None)
+    payload = media_evidence.evidence_metadata(APP_VERSION, status="PASS", checks={"x": "PASS"}, details=None)
     assert payload["commit"] == "context-sha-xyz"
     assert "details" not in payload
 
@@ -179,4 +181,4 @@ def test_capture_source_context_invalid_after_build(monkeypatch: pytest.MonkeyPa
     monkeypatch.delenv("GITHUB_SHA", raising=False)
     monkeypatch.setattr(revision_module, "validate_source_context", lambda *a, **k: ["forced"])
     with pytest.raises(ValueError, match="invalid captured"):
-        revision_module.capture_source_context(tmp_path, "4.5.2", generator="test", schema_version=1)
+        revision_module.capture_source_context(tmp_path, APP_VERSION, generator="test", schema_version=1)
