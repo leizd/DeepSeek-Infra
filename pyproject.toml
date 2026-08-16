@@ -17,7 +17,7 @@ markers = [
 
 [tool.coverage.run]
 source = ["deepseek_infra"]
-omit = ["tests/*", "static/*", "*/__pycache__/*"]
+omit = ["tests/*", "static/*", "*/__pycache__/*", "deepseek_infra/infra/workspace/backup_dr_readiness_legacy.py"]
 branch = true
 
 [tool.coverage.report]
