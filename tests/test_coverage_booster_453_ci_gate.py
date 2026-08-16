@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from deepseek_infra.core.errors import AppError
@@ -16,6 +17,22 @@ from deepseek_infra.infra.workspace import (
     backup_targets,
 )
 from deepseek_infra.web.routes import backup_governance
+from deepseek_infra.web.routes.edge import EdgeRouteDeps, create_edge_router
+from deepseek_infra.web.routes.rag import RagRouteDeps, create_rag_router
+
+
+def _make_test_app() -> FastAPI:
+    app = FastAPI()
+
+    @app.exception_handler(AppError)
+    async def _app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
+        code_val = exc.code.value if hasattr(exc.code, "value") else str(exc.code)
+        return JSONResponse(
+            status_code=exc.status,
+            content={"error": {"code": code_val, "message": str(exc)}},
+        )
+
+    return app
 
 
 def test_replication_job_listing_and_filtering(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,7 +225,13 @@ def test_recovery_class_calibration(tmp_settings: Path) -> None:
 
 def test_governance_router_endpoints_comprehensive(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(backup_governance, "require_api_auth", lambda _req: None)
-    app = FastAPI()
+    monkeypatch.setattr("deepseek_infra.infra.workspace.backup_dr_audit.resume_audit", lambda _a: {"resumed": True})
+    monkeypatch.setattr("deepseek_infra.infra.workspace.backup_recovery_planner.plan_recovery", lambda **_kw: {"plan": "ok"})
+    monkeypatch.setattr("deepseek_infra.infra.workspace.backup_remote_restore.attempt_target_failover", lambda _r, failure_reason="": {"failover": True})
+    monkeypatch.setattr("deepseek_infra.infra.workspace.backup_remote_restore.preflight_restore_session", lambda _r: {"preflight": "ok"})
+    monkeypatch.setattr("deepseek_infra.infra.workspace.backup_remote_restore.fetch_restore_session", lambda _r, max_bytes=None: {"fetch": "ok"})
+
+    app = _make_test_app()
     router = backup_governance.create_backup_governance_router()
     app.include_router(router)
     client = TestClient(app, raise_server_exceptions=False)
@@ -220,3 +243,123 @@ def test_governance_router_endpoints_comprehensive(tmp_settings: Path, monkeypat
     # Policies list
     res_pol = client.get("/api/workspace/backup-policies")
     assert res_pol.status_code == 200
+
+    # Resume audit
+    res_aud = client.post("/api/workspace/disaster-recovery/audit/aud-1/resume")
+    assert res_aud.status_code == 200
+
+    # Plan valid
+    res_plan = client.post("/api/workspace/disaster-recovery/plan", json={"policyId": "pol-1"})
+    assert res_plan.status_code == 200
+
+    # Plan invalid
+    res_plan_inv = client.post("/api/workspace/disaster-recovery/plan", json={})
+    assert res_plan_inv.status_code == 400
+
+    # Replication jobs query
+    res_rep = client.get("/api/workspace/disaster-recovery/replication?policyId=p1&backupId=b1")
+    assert res_rep.status_code == 200
+
+    # Failover
+    res_fo = client.post("/api/workspace/disaster-recovery/failover/rest-1", json={"reason": "net"})
+    assert res_fo.status_code == 200
+
+    # Preflight
+    res_pf = client.post("/api/workspace/restores/rest-1/preflight", json={})
+    assert res_pf.status_code == 200
+
+    # Preflight invalid
+    res_pf_inv = client.post("/api/workspace/restores/rest-1/preflight", json={"bad": "param"})
+    assert res_pf_inv.status_code == 400
+
+    # Fetch
+    res_fetch = client.post("/api/workspace/restores/rest-1/fetch", json={"maxBytes": 2048})
+    assert res_fetch.status_code == 200
+
+
+def test_rag_router_comprehensive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("deepseek_infra.web.routes.rag.require_api_auth", lambda _req: None)
+    deps = RagRouteDeps(
+        rebuild_local_rag_index=lambda: {"reindexed": True},
+        verify_local_rag_citation=lambda item_id, snippet: {"valid": True, "itemId": item_id},
+        evaluate_local_rag_recall=lambda cases, k: {"score": 1.0, "k": k, "count": len(cases)},
+    )
+    app = _make_test_app()
+    app.include_router(create_rag_router(deps))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # Reindex valid
+    res1 = client.post("/api/rag/reindex", json={"action": "reindex"})
+    assert res1.status_code == 200
+    assert res1.json()["reindexed"] is True
+
+    # Reindex invalid action
+    res2 = client.post("/api/rag/reindex", json={"action": "invalid_action"})
+    assert res2.status_code == 400
+
+    # Verify citation valid
+    res3 = client.post("/api/rag/verify-citation", json={"itemId": "item-1", "snippet": "abc"})
+    assert res3.status_code == 200
+
+    # Verify citation invalid
+    res4 = client.post("/api/rag/verify-citation", json={"itemId": "", "snippet": "abc"})
+    assert res4.status_code == 400
+
+    # Eval valid
+    res5 = client.post("/api/rag/eval", json={"cases": [{"q": "1"}], "k": 3})
+    assert res5.status_code == 200
+
+    # Eval invalid
+    res6 = client.post("/api/rag/eval", json={"cases": "not-a-list"})
+    assert res6.status_code == 400
+
+
+def test_edge_router_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("deepseek_infra.web.routes.edge.require_api_auth", lambda _req: None)
+    app = _make_test_app()
+    deps = EdgeRouteDeps(
+        edge_unload=lambda: {"unloaded": True},
+        edge_route_preview=lambda payload: {"preview": payload},
+    )
+    app.include_router(create_edge_router(deps))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    res1 = client.post("/api/edge/reload", json={"action": "unload"})
+    assert res1.status_code == 200
+
+    res2 = client.post("/api/edge/reload", json={"action": "bad-action"})
+    assert res2.status_code == 400
+
+    res3 = client.post("/api/edge/route-preview", json={"prompt": "hello"})
+    assert res3.status_code == 200
+
+
+def test_replication_reconcile_and_repairs(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rep_dir = tmp_settings / ".replication"
+    rep_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(backup_replication, "REPLICATION_DIR", rep_dir)
+    monkeypatch.setattr(backup_replication, "REPAIRS_DIR", rep_dir / "repairs")
+
+    # Missing job execution
+    with pytest.raises(AppError) as exc:
+        backup_replication.execute_replication_job("missing-job-id")
+    assert "not found" in str(exc.value).lower()
+
+    # Process empty pending jobs
+    stats = backup_replication.process_pending_jobs()
+    assert stats == {"processed": 0, "committed": 0, "failed": 0}
+
+    # Reconcile disabled policy
+    monkeypatch.setattr(backup_policies, "get_policy", lambda pid: {"policyId": pid, "replication": {"enabled": False}})
+    rec_disabled = backup_replication.reconcile_policy_replicas("p1")
+    assert rec_disabled["status"] == "skipped"
+
+    # Reconcile policy with empty targets
+    monkeypatch.setattr(
+        backup_policies,
+        "get_policy",
+        lambda pid: {"policyId": pid, "targetId": "p_target", "replication": {"enabled": True, "targets": []}},
+    )
+    rec_no_targets = backup_replication.reconcile_policy_replicas("p1")
+    assert rec_no_targets["status"] == "noop"
+
