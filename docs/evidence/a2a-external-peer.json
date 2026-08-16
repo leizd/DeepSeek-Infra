@@ -1,37 +1,37 @@
 {
   "schemaVersion": "a2a-external-peer-evidence.v1",
-  "version": "4.4.13",
-  "commit": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
-  "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
-  "sourceRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "version": "4.5.2",
+  "commit": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "sourceRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
   "sourceTreeDirty": false,
   "releaseRevision": null,
   "ciRevision": null,
   "sourceContext": {
     "schemaVersion": 2,
-    "version": "4.4.13",
-    "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+    "version": "4.5.2",
+    "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
     "sourceTreeDirty": false,
-    "capturedAt": "2026-08-10T10:41:18Z",
+    "capturedAt": "2026-08-16T06:04:20Z",
     "generator": "scripts/generate_release_evidence.py",
     "repository": "local",
     "workflowRunId": "local",
     "workflowAttempt": 1,
     "eventName": "local",
-    "ref": "refs/heads/codex/4.4.13-projected-recovery"
+    "ref": "refs/heads/release/4.5.2-recovery-replica-failover"
   },
-  "generatedAt": "2026-08-10T10:42:09Z",
+  "generatedAt": "2026-08-16T06:05:08Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
-  "gitSha": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "gitSha": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
   "gitDirty": false,
   "peer": {
     "name": "A2A Interop Peer",
-    "url": "http://127.0.0.1:58279",
-    "endpoint": "http://127.0.0.1:58279/a2a/agents/interop-peer",
+    "url": "http://127.0.0.1:61732",
+    "endpoint": "http://127.0.0.1:61732/a2a/agents/interop-peer",
     "type": "independent-process",
     "protocolVersion": "0.3.0"
   },
@@ -54,23 +54,23 @@
       "detail": "name=A2A Interop Peer protocol=0.3.0",
       "data": {
         "skills": 1,
-        "endpoint": "http://127.0.0.1:58279/a2a/agents/interop-peer"
+        "endpoint": "http://127.0.0.1:61732/a2a/agents/interop-peer"
       }
     },
     {
       "name": "a2a.message_send",
       "status": "pass",
-      "detail": "task=task_fdfeefed28b957e27d1f1d77 state=working",
+      "detail": "task=task_ebc94613ef11d16c2d3afe5c state=working",
       "data": {
-        "taskId": "task_fdfeefed28b957e27d1f1d77"
+        "taskId": "task_ebc94613ef11d16c2d3afe5c"
       }
     },
     {
       "name": "a2a.tasks_get",
       "status": "pass",
-      "detail": "task=task_fdfeefed28b957e27d1f1d77",
+      "detail": "task=task_ebc94613ef11d16c2d3afe5c",
       "data": {
-        "taskId": "task_fdfeefed28b957e27d1f1d77"
+        "taskId": "task_ebc94613ef11d16c2d3afe5c"
       }
     },
     {
@@ -84,7 +84,7 @@
           0,
           1
         ],
-        "taskId": "task_7c4543adac30a8822a584a99",
+        "taskId": "task_c835b538fea6b19ef5e84a5f",
         "finalState": "completed"
       }
     },
@@ -99,7 +99,7 @@
           0,
           1
         ],
-        "taskId": "task_7c4543adac30a8822a584a99",
+        "taskId": "task_c835b538fea6b19ef5e84a5f",
         "finalState": "completed"
       }
     },
@@ -114,7 +114,7 @@
           0,
           1
         ],
-        "taskId": "task_7c4543adac30a8822a584a99",
+        "taskId": "task_c835b538fea6b19ef5e84a5f",
         "finalState": "completed"
       }
     },
@@ -124,15 +124,15 @@
       "detail": "2 tasks listed",
       "data": {
         "taskCount": 2,
-        "taskId": "task_fdfeefed28b957e27d1f1d77"
+        "taskId": "task_ebc94613ef11d16c2d3afe5c"
       }
     },
     {
       "name": "a2a.tasks_cancel",
       "status": "pass",
-      "detail": "task=task_1e930ec137ce3e349e7f870d state=canceling",
+      "detail": "task=task_5fd16ceb23e530122ab95477 state=canceling",
       "data": {
-        "taskId": "task_1e930ec137ce3e349e7f870d",
+        "taskId": "task_5fd16ceb23e530122ab95477",
         "state": "canceling"
       }
     }

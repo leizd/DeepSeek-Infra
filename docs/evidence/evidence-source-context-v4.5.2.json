@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "version": "4.5.2",
+  "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "sourceTreeDirty": false,
+  "capturedAt": "2026-08-16T06:04:20Z",
+  "generator": "scripts/generate_release_evidence.py",
+  "repository": "local",
+  "workflowRunId": "local",
+  "workflowAttempt": 1,
+  "eventName": "local",
+  "ref": "refs/heads/release/4.5.2-recovery-replica-failover"
+}

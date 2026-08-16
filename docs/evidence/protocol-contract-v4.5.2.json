@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "protocol-freeze.v1",
+  "version": "4.5.2",
+  "commit": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "sourceRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "sourceTreeDirty": false,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "sourceContext": {
+    "schemaVersion": 2,
+    "version": "4.5.2",
+    "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+    "sourceTreeDirty": false,
+    "capturedAt": "2026-08-16T06:04:20Z",
+    "generator": "scripts/generate_release_evidence.py",
+    "repository": "local",
+    "workflowRunId": "local",
+    "workflowAttempt": 1,
+    "eventName": "local",
+    "ref": "refs/heads/release/4.5.2-recovery-replica-failover"
+  },
+  "generatedAt": "2026-08-16T06:05:11Z",
+  "status": "PASS",
+  "testFile": "tests/test_4_0_protocol_contract.py",
+  "testCount": 5,
+  "checks": {
+    "endpoint_inventory": "PASS",
+    "schema_and_content_types": "PASS",
+    "payload_limits_and_error_codes": "PASS",
+    "fallback_and_business_ownership": "PASS",
+    "binary_magic_DSVRNK01_DSVRSP01": "PASS"
+  },
+  "command": [
+    "D:\\python\\python.exe",
+    "-m",
+    "pytest",
+    "--no-cov",
+    "-o",
+    "addopts=",
+    "-p",
+    "no:cacheprovider",
+    "--basetemp",
+    "D:\\deepseek\\artifacts\\pytest-protocol-contract",
+    "-v",
+    "tests/test_4_0_protocol_contract.py"
+  ]
+}

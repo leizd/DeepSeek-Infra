@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "semantic-cache-onnx-evidence.v1",
+  "version": "4.5.2",
+  "commit": "507fa2d",
+  "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "sourceRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "sourceTreeDirty": false,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "sourceContext": {
+    "schemaVersion": 2,
+    "version": "4.5.2",
+    "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+    "sourceTreeDirty": false,
+    "capturedAt": "2026-08-16T06:04:20Z",
+    "generator": "scripts/generate_release_evidence.py",
+    "repository": "local",
+    "workflowRunId": "local",
+    "workflowAttempt": 1,
+    "eventName": "local",
+    "ref": "refs/heads/release/4.5.2-recovery-replica-failover"
+  },
+  "suite": "semantic-cache-onnx",
+  "generatedAt": "2026-08-16T06:05:03Z",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "onnxAvailable": false,
+  "hash": {
+    "exactHitRate": 1.0,
+    "paraphraseHitRate": 0.0,
+    "unrelatedFalseHitRate": 0.0,
+    "provider": "hash",
+    "dimensions": 64
+  },
+  "decision": "ONNX remains optional; hash embedding is zero-dependency default"
+}

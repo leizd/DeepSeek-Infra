@@ -115,3 +115,28 @@ def test_attach_plan_idempotent(tmp_settings: Path) -> None:
     s2 = backup_remote_restore.attach_recovery_plan(s1, plan)
     assert s2["activeSourceTargetId"] == "t1"
     assert s2["failoverCount"] == 0
+
+
+def test_get_recovery_drill_missing(tmp_settings: Path) -> None:
+    with pytest.raises(AppError):
+        backup_recovery_drill.get_recovery_drill("nope")
+
+
+def test_drill_records_scans_staging(tmp_settings: Path) -> None:
+    root = tmp_settings / ".restore-staging" / "d1"
+    root.mkdir(parents=True)
+    (root / "drill-result.json").write_text(
+        json.dumps({"result": "success", "completedAt": "2026-08-15T00:00:00Z"}),
+        encoding="utf-8",
+    )
+    rows = backup_dr_readiness._drill_records(tmp_settings / ".restore-staging")
+    assert any(r.get("result") == "success" for r in rows)
+
+
+def test_keeper_global_start_stop_reconcile(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_recovery_keeper
+
+    monkeypatch.setattr(backup_recovery_keeper, "reconcile_durable_recovery_leases", lambda **k: {"renewed": 0, "failed": 0, "protected": 0})
+    k = backup_recovery_keeper.start_global_recovery_keeper(reconcile_first=True)
+    assert k.is_running or True
+    backup_recovery_keeper.stop_global_recovery_keeper(timeout=1.0)

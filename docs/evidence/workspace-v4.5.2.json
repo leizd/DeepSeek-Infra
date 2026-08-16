@@ -1,0 +1,69 @@
+{
+  "version": "4.5.2",
+  "commit": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "sourceRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+  "sourceTreeDirty": false,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "sourceContext": {
+    "schemaVersion": 2,
+    "version": "4.5.2",
+    "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
+    "sourceTreeDirty": false,
+    "capturedAt": "2026-08-16T06:04:20Z",
+    "generator": "scripts/generate_release_evidence.py",
+    "repository": "local",
+    "workflowRunId": "local",
+    "workflowAttempt": 1,
+    "eventName": "local",
+    "ref": "refs/heads/release/4.5.2-recovery-replica-failover"
+  },
+  "generatedAt": "2026-08-16T06:04:23Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "projectCreate": "PASS",
+    "projectRename": "PASS",
+    "savedItemCreate": "PASS",
+    "artifactList": "PASS",
+    "conversationExport": "PASS",
+    "projectExportZip": "PASS",
+    "secretRedaction": "PASS",
+    "projectDeleteScope": "PASS"
+  },
+  "details": {
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-av_zpls0",
+    "projectId": "proj-257af1d311d0",
+    "projectExport": {
+      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-av_zpls0\\.projects\\proj-257af1d311d0\\exports\\export_80f31f648fb51ea0-Workspace-Smoke-Renamed-project-export.zip",
+      "entries": [
+        "artifacts/Workspace-Summary.md",
+        "conversations/conversation-conv-smoke.md",
+        "files/source-files/source.txt.txt",
+        "media/media.json",
+        "metadata.json",
+        "project.md",
+        "saved-items/saved-items.json"
+      ]
+    },
+    "conversationExport": {
+      "exportId": "export_e7984bbd6952982f",
+      "projectId": "proj-257af1d311d0",
+      "kind": "conversation",
+      "format": "markdown",
+      "filename": "Workspace-smoke-conversation.md",
+      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-av_zpls0\\.projects\\proj-257af1d311d0\\exports\\export_e7984bbd6952982f-Workspace-smoke-conversation.md",
+      "size": 180,
+      "includes": {
+        "projectId": "proj-257af1d311d0"
+      },
+      "createdAt": "2026-08-16T06:04:23Z",
+      "downloadUrl": "/api/workspace/exports/export_e7984bbd6952982f/downloadprojectId=proj-257af1d311d0"
+    }
+  }
+}
