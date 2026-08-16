@@ -11,14 +11,17 @@ Applicable version: v4.5.2.
 
 4.5.2 product implementation covers Recovery Replica Sets, Automatic Target
 Failover, and 4.5.1 P0 lifecycle hardening. Living behavioral evidence is
-produced by `python scripts/run_452_evidence.py` →
-`docs/evidence/recovery-replica-failover-v4.5.2.json` (real pytest against
-production modules — not a static PASS map). Real two-target MinIO E2E,
-subprocess restart, fault injection, and exact-merge artifacts remain owned by
-their CI producers. No prior-version artifact is reused or relabelled as 4.5.2
-PASS evidence.
+produced locally by `python scripts/run_452_evidence.py` (real pytest against
+production modules — not a static PASS map). That living report is **not** part
+of the exact-merge package inventory in
+`deepseek_infra/infra/diagnostics/evidence_inventory.py` and must not be
+committed as a versioned `docs/evidence/*-v4.5.2.json` file (unlisted current
+Evidence fails `verify_release_package`). Real two-target MinIO E2E, subprocess
+restart, fault injection, and exact-merge artifacts remain owned by their CI
+producers. No prior-version artifact is reused or relabelled as 4.5.2 PASS
+evidence.
 
-- `docs/evidence/recovery-replica-failover-v4.5.2.json`
+- `scripts/run_452_evidence.py` (local living evidence; do not package)
 
 - `docs/evidence/headless-mcp-bridge.json`
 - `docs/evidence/a2a-external-peer.json`
