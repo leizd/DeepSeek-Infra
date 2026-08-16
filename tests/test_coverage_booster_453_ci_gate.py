@@ -1,4 +1,4 @@
-"""Extra branch coverage for 4.5.3 CI gate (Python 3.10/3.11/3.12 >=95.00%)."""
+"""Extra branch coverage booster for replication and governance CI gate."""
 
 from __future__ import annotations
 
