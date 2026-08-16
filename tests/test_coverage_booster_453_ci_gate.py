@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import nullcontext
 import json
 from pathlib import Path
@@ -545,6 +546,12 @@ def test_server_additional_edge_cases(tmp_settings: Path, monkeypatch: pytest.Mo
     res_fc_ok = client.post("/api/file-chunk", json={"chunkIndex": 0, "fileId": "fid"})
     assert res_fc_ok.status_code == 200
 
+    # file-chunk out of bounds index
+    assert client.post("/api/file-chunk", json={"chunkIndex": 10, "fileId": "fid"}).status_code == 404
+
+    # auth logout
+    assert client.post("/api/auth/logout").status_code == 200
+
     # healthz & readyz
     assert client.get("/healthz").status_code == 200
     assert client.get("/readyz").status_code == 200
@@ -656,6 +663,43 @@ def test_governance_store_backed_branches(tmp_settings: Path, monkeypatch: pytes
     monkeypatch.setattr("deepseek_infra.web.routes.backup_governance._find_backup_session", lambda _b: (dummy_session, {"backupId": _b}))
     assert client.post("/api/workspace/backup-catalog/b1/pin").status_code == 200
     assert client.delete("/api/workspace/backup-catalog/b1/pin").status_code == 200
+
+
+def test_server_multipart_edge_cases() -> None:
+    from deepseek_infra.web.server import read_multipart_form
+
+    class DummyReq:
+        def __init__(self, headers: dict[str, str], body: bytes = b""):
+            self.headers = headers
+            self._body = body
+
+        async def body(self) -> bytes:
+            return self._body
+
+    # missing multipart in content-type
+    with pytest.raises(AppError) as exc1:
+        asyncio.run(read_multipart_form(DummyReq({"Content-Type": "application/json"})))  # type: ignore[arg-type]
+    assert "Expected multipart/form-data" in str(exc1.value)
+
+    # empty content length
+    with pytest.raises(AppError) as exc2:
+        asyncio.run(read_multipart_form(DummyReq({"Content-Type": "multipart/form-data; boundary=xyz", "Content-Length": "0"})))  # type: ignore[arg-type]
+    assert "Upload body is empty" in str(exc2.value)
+
+    # boundary missing
+    with pytest.raises(AppError) as exc3:
+        asyncio.run(read_multipart_form(DummyReq({"Content-Type": "multipart/form-data", "Content-Length": "10"})))  # type: ignore[arg-type]
+    assert "not multipart/form-data" in str(exc3.value)
+
+
+def test_server_bind_socket_helpers() -> None:
+    from deepseek_infra.web.server import open_bind_socket
+    sock = open_bind_socket("127.0.0.1", 0)
+    assert sock is not None
+    port = sock.getsockname()[1]
+    assert port > 0
+    sock.close()
+
 
 
 
