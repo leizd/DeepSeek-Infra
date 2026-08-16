@@ -1,4 +1,4 @@
-"""4.5.2 Recovery Replica Sets & Automatic Target Failover — behavioral tests."""
+"""Recovery Replica Sets & Automatic Target Failover — behavioral tests."""
 
 from __future__ import annotations
 

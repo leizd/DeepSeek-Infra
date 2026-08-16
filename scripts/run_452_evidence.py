@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Execute living 4.5.2 behavioral evidence against production modules.
+"""Execute living Recovery Replica / Failover behavioral evidence.
 
-Writes docs/evidence/recovery-replica-failover-v4.5.2.json with real PASS/FAIL
-results — no static PASS map.
+Writes docs/evidence/recovery-replica-failover-v*.json with real PASS/FAIL
+results — no static PASS map. Version is read from the root VERSION file.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def _utc() -> str:
@@ -84,7 +85,7 @@ def main() -> int:
 
     payload = {
         "schemaVersion": 1,
-        "version": "4.5.2",
+        "version": VERSION,
         "title": "Recovery Replica Sets and Automatic Target Failover",
         "generatedAt": _utc(),
         "pytestExitCode": code,
@@ -99,7 +100,7 @@ def main() -> int:
             "This runner executes production-module unit/integration evidence under tmp isolation.",
         ],
     }
-    out = ROOT / "docs" / "evidence" / "recovery-replica-failover-v4.5.2.json"
+    out = ROOT / "docs" / "evidence" / f"recovery-replica-failover-v{VERSION}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     summary = payload["summary"]

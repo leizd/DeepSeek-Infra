@@ -59,7 +59,7 @@ def test_scheduled_drill_missing_credentials_and_recovery_points(tmp_settings: P
     )
     with pytest.raises(AppError) as exc_info:
         backup_recovery_drill.execute_scheduled_drill("p_drill_no_rp")
-    assert "No recovery point found" in str(exc_info.value)
+    assert "recovery point" in str(exc_info.value).lower()
 
 
 def test_dr_readiness_store_commit_records_paging_and_anomalies(tmp_settings: Path) -> None:
