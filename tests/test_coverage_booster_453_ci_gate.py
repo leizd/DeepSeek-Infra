@@ -581,7 +581,7 @@ def test_workspace_restores_and_governance_edge_cases(tmp_settings: Path, monkey
         return ([{"data": None, "filename": "b.zip"}], {}, None)
 
     deps = WorkspaceRouteDeps(
-        read_multipart_files=mock_read_multipart,  # type: ignore[arg-type]
+        read_multipart_files=mock_read_multipart,
     )
     router = create_workspace_router(deps)
     app = FastAPI()
