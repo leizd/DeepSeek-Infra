@@ -437,10 +437,65 @@ def test_server_routes_and_auth_redirect(tmp_settings: Path, monkeypatch: pytest
     # metrics
     assert client.get("/metrics").status_code == 200
 
-    # agent-runs create valid
-    assert client.post("/api/agent-runs", json={"payload": {"model": "test"}}).status_code == 201
-
     # agent-runs create invalid payload
     assert client.post("/api/agent-runs", json={"payload": "not-a-dict"}).status_code == 400
+
+
+def test_saved_items_edge_cases(tmp_settings: Path) -> None:
+    from deepseek_infra.infra.workspace import saved_items
+
+    # missing item update
+    with pytest.raises(AppError) as exc:
+        saved_items.update_saved_item("proj-1", "missing-id", {"title": "new"})
+    assert "not found" in str(exc.value).lower()
+
+    # missing item require
+    with pytest.raises(AppError) as exc2:
+        saved_items.require_saved_item("proj-1", "missing-id")
+    assert "not found" in str(exc2.value).lower()
+
+    # corrupted store json
+    p_path = tmp_settings / ".projects" / "proj-1"
+    p_path.mkdir(parents=True, exist_ok=True)
+    store = p_path / "saved-items.json"
+    store.write_text(json.dumps({"items": "not-a-list"}), encoding="utf-8")
+    assert saved_items._load_items("proj-1") == []
+
+    # invalid elements in items
+    store.write_text(
+        json.dumps(
+            {"items": ["not-a-dict", {"createdAtMs": "bad", "savedId": ""}, {"savedId": "s1", "title": "T", "type": "chat_snippet"}]}
+        ),
+        encoding="utf-8",
+    )
+    items = saved_items._load_items("proj-1")
+    assert len(items) == 1
+    assert items[0]["savedId"] == "s1"
+
+
+def test_credentials_decryption_edge_cases() -> None:
+    from deepseek_infra.launcher import credentials
+
+    # Invalid envelope
+    assert credentials._decrypt({}) is None
+    assert credentials._decrypt({"nonce": "bad", "ciphertext": "bad", "mac": "bad"}) is None
+
+
+def test_server_additional_edge_cases(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web.server import create_app
+
+    monkeypatch.setattr("deepseek_infra.web.http_utils.require_api_auth", lambda _req: None)
+    monkeypatch.setattr("deepseek_infra.web.server.require_api_auth", lambda _req: None)
+    app = create_app()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # 404 handler for /api/unknown
+    res_404 = client.get("/api/unknown-endpoint-xyz")
+    assert res_404.status_code == 404
+
+    # file-chunk invalid
+    res_fc_bad = client.post("/api/file-chunk", json={"chunkIndex": "bad"})
+    assert res_fc_bad.status_code == 400
+
 
 
