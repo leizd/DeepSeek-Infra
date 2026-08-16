@@ -521,6 +521,14 @@ def test_server_additional_edge_cases(tmp_settings: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setattr("deepseek_infra.web.http_utils.require_api_auth", lambda _req: None)
     monkeypatch.setattr("deepseek_infra.web.server.require_api_auth", lambda _req: None)
+    monkeypatch.setattr("deepseek_infra.web.server.load_cached_file", lambda *_a, **_k: {"name": "f.txt", "chunks": [{"index": 0, "text": "chunk0"}]})
+    monkeypatch.setattr("deepseek_infra.web.server.load_agent_run", lambda _r: {"status": "awaiting_plan", "requestPayload": {}})
+    monkeypatch.setattr("deepseek_infra.web.server.public_agent_run", lambda r: r)
+    monkeypatch.setattr("deepseek_infra.web.server.agent_run_registry.ensure_started", lambda *_a, **_k: True)
+    monkeypatch.setattr("deepseek_infra.web.server.preflight_deepseek_payload", lambda _p: None)
+    monkeypatch.setattr("deepseek_infra.web.server.agent_run_events_after", lambda _r, _a: [])
+    monkeypatch.setattr("deepseek_infra.web.server.agent_run_event_stream", lambda _r, _a: iter([b"event: data\n\n"]))
+
     app = create_app()
     client = TestClient(app, raise_server_exceptions=False)
 
@@ -531,6 +539,70 @@ def test_server_additional_edge_cases(tmp_settings: Path, monkeypatch: pytest.Mo
     # file-chunk invalid
     res_fc_bad = client.post("/api/file-chunk", json={"chunkIndex": "bad"})
     assert res_fc_bad.status_code == 400
+
+    # file-chunk valid
+    res_fc_ok = client.post("/api/file-chunk", json={"chunkIndex": 0, "fileId": "fid"})
+    assert res_fc_ok.status_code == 200
+
+    # healthz & readyz
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/readyz").status_code == 200
+
+    # agent-runs action plan
+    assert client.post("/api/agent-runs/run-1/plan", json={"plan": []}).status_code == 200
+
+    # agent-runs detail, events, stream
+    assert client.get("/api/agent-runs/run-1").status_code == 200
+    assert client.get("/api/agent-runs/run-1/events").status_code == 200
+    assert client.get("/api/agent-runs/run-1/stream").status_code == 200
+
+    # agent-runs action rerun & resume
+    monkeypatch.setattr("deepseek_infra.web.server.load_agent_run", lambda _r: {"status": "failed", "requestPayload": {}})
+    assert client.post("/api/agent-runs/run-1/rerun", json={"agentId": "a1"}).status_code == 200
+    assert client.post("/api/agent-runs/run-1/resume", json={}).status_code == 200
+
+    # agent-runs invalid action
+    assert client.post("/api/agent-runs/run-1/invalid-action", json={}).status_code == 404
+
+
+def test_workspace_restores_and_governance_edge_cases(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web.http_utils import json_response
+    from deepseek_infra.web.routes.workspace import WorkspaceRouteDeps, create_workspace_router
+    from deepseek_infra.infra.workspace import backups as workspace_backups
+
+    monkeypatch.setattr("deepseek_infra.web.routes.workspace.require_api_auth", lambda _req: None)
+    monkeypatch.setattr(workspace_backups, "put_session_secret", lambda _r, _b: {"ok": True})
+    monkeypatch.setattr(workspace_backups, "unlock_restore", lambda _r: {"unlocked": True})
+    monkeypatch.setattr(workspace_backups, "cleanup_restores", lambda: {"cleaned": 1})
+    monkeypatch.setattr(workspace_backups, "list_restores", lambda: [])
+    monkeypatch.setattr(workspace_backups, "get_restore", lambda _r: {"restoreId": _r})
+
+    async def mock_read_multipart(_r: Any) -> tuple[list[dict[str, Any]], dict[str, list[str]], None]:
+        return ([{"data": None, "filename": "b.zip"}], {}, None)
+
+    deps = WorkspaceRouteDeps(
+        read_multipart_files=mock_read_multipart,  # type: ignore[arg-type]
+    )
+    router = create_workspace_router(deps)
+    app = FastAPI()
+
+    @app.exception_handler(AppError)
+    async def _app_err(_: Request, exc: AppError) -> JSONResponse:
+        return json_response(exc.to_response(), status=exc.status)
+
+    app.include_router(router)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    assert client.get("/api/workspace/restores").status_code == 200
+    assert client.post("/api/workspace/restores/cleanup").status_code == 200
+    assert client.get("/api/workspace/restores/r-1").status_code == 200
+    assert client.put("/api/workspace/restores/r-1/secret", json={"secret": "abc"}).status_code == 200
+    assert client.post("/api/workspace/restores/r-1/unlock").status_code == 200
+
+    # inspect with multipart but invalid bytes data -> 400
+    assert client.post("/api/workspace/restores/inspect", headers={"Content-Type": "multipart/form-data; boundary=xyz"}).status_code == 400
+
+
 
 
 
