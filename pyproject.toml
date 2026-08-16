@@ -27,7 +27,7 @@ branch = true
 
 [tool.coverage.report]
 fail_under = 95
-precision = 2
+precision = 1
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",
