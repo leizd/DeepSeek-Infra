@@ -39,11 +39,14 @@ def test_audit_managed_local(tmp_settings: Path) -> None:
     receipt_data = {
         "backupId": "bk_local_1",
         "policyId": "policy_a",
+        "targetId": "managed-local",
         "snapshotKind": "full",
         "chainLength": 1,
         "size": 5000,
         "logicalBytes": 12000,
         "storageProtocol": "object-set-v1",
+        "objectSetDigest": "a" * 64,
+        "objects": [{"digest": "b" * 64, "size": 5000}],
         "createdAt": "2026-08-15T00:00:00Z",
     }
     receipt_file.write_text(json.dumps(receipt_data), encoding="utf-8")
@@ -79,47 +82,60 @@ class _MockStore:
 
 
 def test_audit_remote_target_paged_and_anomalies(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import hashlib
+
     from deepseek_infra.infra.workspace import backup_publish
 
     target_id = "target_rem_1"
-    commit_1 = {
-        "schemaVersion": 4,
-        "backupId": "bk1",
-        "policyId": "p1",
-        "committedAt": "2026-08-15T01:00:00Z",
-    }
-    commit_1["commitHash"] = backup_publish._commit_hash(commit_1)
+
+    def _receipt_bytes(receipt: dict[str, Any]) -> bytes:
+        return (json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
     receipt_1 = {
         "backupId": "bk1",
         "policyId": "p1",
+        "targetId": target_id,
         "snapshotKind": "full",
         "chainLength": 1,
         "size": 200,
         "logicalBytes": 400,
     }
-    commit_2 = {
+    receipt_1_bytes = _receipt_bytes(receipt_1)
+    commit_1 = {
         "schemaVersion": 4,
-        "backupId": "bk2",
+        "backupId": "bk1",
         "policyId": "p1",
-        "parentCommitHash": commit_1["commitHash"],
-        "committedAt": "2026-08-15T02:00:00Z",
+        "committedAt": "2026-08-15T01:00:00Z",
+        "receiptDigest": hashlib.sha256(receipt_1_bytes).hexdigest(),
     }
-    commit_2["commitHash"] = backup_publish._commit_hash(commit_2)
+    commit_1["commitHash"] = backup_publish._commit_hash(commit_1)
+
     receipt_2 = {
         "backupId": "bk2",
         "policyId": "p1",
+        "targetId": target_id,
         "snapshotKind": "incremental",
         "parentBackupId": "bk1",
         "chainLength": 2,
         "size": 300,
         "logicalBytes": 600,
     }
+    receipt_2_bytes = _receipt_bytes(receipt_2)
+    commit_2 = {
+        "schemaVersion": 4,
+        "backupId": "bk2",
+        "policyId": "p1",
+        "parentCommitHash": commit_1["commitHash"],
+        "committedAt": "2026-08-15T02:00:00Z",
+        "receiptDigest": hashlib.sha256(receipt_2_bytes).hexdigest(),
+    }
+    commit_2["commitHash"] = backup_publish._commit_hash(commit_2)
 
     objects = {
         "commits/p1/c1.json": json.dumps(commit_1).encode("utf-8"),
-        "receipts/bk1.json": json.dumps(receipt_1).encode("utf-8"),
+        "receipts/bk1.json": receipt_1_bytes,
         "commits/p1/c2.json": json.dumps(commit_2).encode("utf-8"),
-        "receipts/bk2.json": json.dumps(receipt_2).encode("utf-8"),
+        "receipts/bk2.json": receipt_2_bytes,
         "commits/p1/invalid.json": b"bad-json",
         "commits/p1/other.txt": b"ignored",
     }
@@ -130,19 +146,22 @@ def test_audit_remote_target_paged_and_anomalies(tmp_settings: Path, monkeypatch
     store = _MockStore(objects, cursor_map)
 
     monkeypatch.setattr(backup_targets, "open_target_store", lambda *args, **kwargs: store)
+    monkeypatch.setattr(backup_publish, "commit_marker_valid", lambda m: isinstance(m, dict) and bool(m.get("backupId")))
 
     # First page
     res1 = backup_dr_audit.audit_remote_target(target_id, cursor=None)
     assert res1["status"] == "in-progress"
     assert res1["cursor"] == "cur2"
     assert res1["recoveryPointsFound"] == 1
+    assert res1["auditId"]
 
-    # Second page
-    res2 = backup_dr_audit.audit_remote_target(target_id, cursor="cur2")
+    # Second page resumes durable job
+    res2 = backup_dr_audit.audit_remote_target(target_id, audit_id=res1["auditId"])
     assert res2["status"] == "completed"
     assert res2["cursor"] is None
-    assert res2["recoveryPointsFound"] == 1
-    assert any("invalid-commit-marker" in a for a in res2["anomalies"])
+    assert res2["recoveryPointsFound"] == 2
+    assert res2["auditId"] == res1["auditId"]
+    assert any("malformed" in a or "invalid" in a for a in res2["anomalies"])
 
 
 def test_audit_remote_target_open_error(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -21,7 +21,9 @@ from deepseek_infra.infra.workspace import (
     backup_policies,
     backup_publish,
     backup_recovery_drill,
+    backup_recovery_planner,
     backup_remote_restore,
+    backup_replication,
     backup_retention,
     backup_scheduler,
     backup_scrub,
@@ -213,13 +215,55 @@ def create_backup_governance_router() -> APIRouter:
         target_id = str(payload.get("targetId") or "managed-local")
         page_size = int(payload.get("pageSize") or 100)
         cursor = payload.get("cursor")
+        audit_id = payload.get("auditId")
         return json_response(
             backup_dr_audit.audit_remote_target(
                 target_id,
                 page_size=page_size,
                 cursor=str(cursor) if cursor else None,
+                audit_id=str(audit_id) if audit_id else None,
             )
         )
+
+    @router.post("/api/workspace/disaster-recovery/audit/{audit_id}/resume")
+    async def api_disaster_recovery_audit_resume(request: Request, audit_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(backup_dr_audit.resume_audit(audit_id))
+
+    @router.post("/api/workspace/disaster-recovery/plan")
+    async def api_disaster_recovery_plan(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=32_000)
+        policy_id = str(payload.get("policyId") or "")
+        if not policy_id:
+            raise AppError("policyId is required", code=ErrorCode.INVALID_PAYLOAD)
+        return json_response(
+            backup_recovery_planner.plan_recovery(
+                policy_id=policy_id,
+                backup_id=str(payload["backupId"]) if payload.get("backupId") else None,
+                restore_selection=payload.get("selection") if isinstance(payload.get("selection"), dict) else None,
+                preferred_target_id=str(payload["preferredTargetId"]) if payload.get("preferredTargetId") else None,
+            )
+        )
+
+    @router.get("/api/workspace/disaster-recovery/replication")
+    async def api_disaster_recovery_replication(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        policy_id = request.query_params.get("policyId") or ""
+        backup_id = request.query_params.get("backupId") or ""
+        jobs = backup_replication.list_jobs(
+            policy_id=policy_id or None,
+            backup_id=backup_id or None,
+            limit=100,
+        )
+        return json_response({"jobs": jobs})
+
+    @router.post("/api/workspace/disaster-recovery/failover/{restore_id}")
+    async def api_disaster_recovery_failover(request: Request, restore_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=16_000)
+        reason = str(payload.get("reason") or "network-unavailable")
+        return json_response(backup_remote_restore.attempt_target_failover(restore_id, failure_reason=reason))
 
     @router.post("/api/workspace/disaster-recovery/drills")
     async def api_disaster_recovery_drill_create(request: Request) -> JSONResponse:

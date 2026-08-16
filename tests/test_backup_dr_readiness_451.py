@@ -17,7 +17,7 @@ def test_evaluate_scope_readiness_no_recovery_points(tmp_settings: Path) -> None
         policy_id="policy_1",
     )
     assert scope_eval["status"] == "blocked"
-    assert scope_eval["reason"] == "no-recoverable-points"
+    assert scope_eval["reason"] == "no-policy-recovery-point"
     assert scope_eval["recoverable"] is False
 
 
@@ -48,10 +48,11 @@ def test_evaluate_scope_readiness_available_and_objectives(tmp_settings: Path) -
         storage_protocol="object-set-v1",
     )
 
-    # Record scrub evidence
+    # Record scrub evidence (policy-scoped)
     backup_dr_ledger.record_scrub_evidence(
         target_id="target_1",
         backup_id="bk_001",
+        policy_id="policy_1",
         observed_at="2026-08-15T00:00:00Z",
         result="success",
     )
@@ -59,6 +60,7 @@ def test_evaluate_scope_readiness_available_and_objectives(tmp_settings: Path) -
     # Record drill evidence
     backup_dr_ledger.record_drill_evidence(
         target_id="target_1",
+        policy_id="policy_1",
         backup_id="bk_001",
         drill_kind="manual",
         observed_at="2026-08-15T00:00:00Z",
@@ -130,6 +132,7 @@ def test_evaluate_scope_readiness_scrub_and_drill_failures(tmp_settings: Path) -
     backup_dr_ledger.record_scrub_evidence(
         target_id=target_id,
         backup_id="bk_deg",
+        policy_id=policy_id,
         observed_at="2026-08-15T00:00:00Z",
         result="failed",
     )

@@ -131,7 +131,7 @@ function workerMatchesBuild(worker: ServiceWorkerLike | null | undefined, buildI
 function waitForStagedWorker(
   registration: ServiceWorkerRegistrationLike,
   buildId: string,
-  windowValue: Pick<RuntimeWindowLike, "setTimeout" | "clearTimeout">,
+  windowValue: Pick<RuntimeWindowLike, "setTimeout" | "clearTimeout" | "setInterval" | "clearInterval">,
   timeoutMs = HANDSHAKE_TIMEOUT_MS * 3,
 ): Promise<ServiceWorkerLike> {
   return new Promise((resolve, reject) => {
@@ -181,8 +181,10 @@ function waitForStagedWorker(
       installing.addEventListener?.("statechange", onStateChange);
     };
     const onUpdateFound: EventListener = () => inspect();
+    const pollInterval = windowValue.setInterval ? windowValue.setInterval(() => inspect(), 100) : undefined;
     const cleanup = () => {
       windowValue.clearTimeout(timer);
+      if (pollInterval !== undefined) windowValue.clearInterval?.(pollInterval);
       registration.removeEventListener?.("updatefound", onUpdateFound);
       for (const [worker, listener] of watched) {
         worker.removeEventListener?.("statechange", listener);
@@ -201,7 +203,7 @@ function waitForStagedWorker(
 function waitForControllerIdentity(
   container: ServiceWorkerContainerLike,
   build: DeployedBuild,
-  windowValue: Pick<RuntimeWindowLike, "setTimeout" | "clearTimeout">,
+  windowValue: Pick<RuntimeWindowLike, "setTimeout" | "clearTimeout" | "setInterval" | "clearInterval">,
   createMessageChannel?: () => MessageChannel,
   timeoutMs = HANDSHAKE_TIMEOUT_MS * 3,
 ): Promise<WorkerBuildIdentity> {
@@ -239,8 +241,12 @@ function waitForControllerIdentity(
     const onControllerChange: EventListener = () => {
       void inspect();
     };
+    const pollInterval = windowValue.setInterval ? windowValue.setInterval(() => {
+      void inspect();
+    }, 100) : undefined;
     const cleanup = () => {
       windowValue.clearTimeout(timer);
+      if (pollInterval !== undefined) windowValue.clearInterval?.(pollInterval);
       container.removeEventListener("controllerchange", onControllerChange);
     };
     const timer = windowValue.setTimeout(
@@ -281,7 +287,19 @@ export function createBuildUpdateDriver(
     async stage(build) {
       const registration = await rootRegistrationFor(build);
       const worker = await waitForStagedWorker(registration, build.buildId, windowValue);
-      const identity = await requestWorkerBuildIdentity(worker, windowValue, createMessageChannel);
+      let identity: WorkerBuildIdentity | null = null;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        identity = await requestWorkerBuildIdentity(worker, windowValue, createMessageChannel);
+        if (
+          identity
+          && identity.buildId === build.buildId
+          && identity.assetSetDigest === build.assetSetDigest
+          && identity.cacheReady
+        ) {
+          return identity;
+        }
+        await new Promise((resolve) => windowValue.setTimeout(resolve as () => void, 100));
+      }
       if (
         !identity
         || identity.buildId !== build.buildId
@@ -305,7 +323,19 @@ export function createBuildUpdateDriver(
       }
       const registration = await rootRegistrationFor(build);
       const worker = await waitForStagedWorker(registration, build.buildId, windowValue);
-      const waitingIdentity = await requestWorkerBuildIdentity(worker, windowValue, createMessageChannel);
+      let waitingIdentity: WorkerBuildIdentity | null = null;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        waitingIdentity = await requestWorkerBuildIdentity(worker, windowValue, createMessageChannel);
+        if (
+          waitingIdentity
+          && waitingIdentity.buildId === build.buildId
+          && waitingIdentity.assetSetDigest === build.assetSetDigest
+          && waitingIdentity.cacheReady
+        ) {
+          break;
+        }
+        await new Promise((resolve) => windowValue.setTimeout(resolve as () => void, 100));
+      }
       if (
         !waitingIdentity
         || waitingIdentity.buildId !== build.buildId

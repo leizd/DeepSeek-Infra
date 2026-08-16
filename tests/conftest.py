@@ -151,6 +151,10 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_backup_incremental, "INDEX_DB", tmp_path / ".backup-index" / "index.db")
     monkeypatch.setattr(workspace_backup_recovery_keeper, "STAGING_ROOT", restore_dir)
 
+    from deepseek_infra.infra.workspace import backup_replication as workspace_backup_replication
+
+    monkeypatch.setattr(workspace_backup_replication, "REPLICATION_DIR", tmp_path / ".backup-replication")
+
     skills_dir = tmp_path / ".skills"
     monkeypatch.setattr(config, "SKILLS_DIR", skills_dir)
     monkeypatch.setattr(skill_registry, "SKILLS_DIR", skills_dir)

@@ -857,6 +857,94 @@ def instance_id_from_environment() -> str:
     return os.environ.get("DEEPSEEK_BACKUP_INSTANCE_ID") or f"instance_{uuid.uuid4().hex[:12]}"
 
 
+def claim_due_drill_slots(
+    policies: list[dict[str, Any]],
+    *,
+    instance_id: str,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Claim durable recovery-drill schedule slots (separate from backup slots).
+
+    Slot keys are prefixed with ``recovery-drill/`` so they never collide with
+    backup runs. UNIQUE(policy_id, slot_key) prevents duplicate execution across
+    workers and process restarts.
+    """
+    del instance_id
+    current = now or datetime.now(tz=timezone.utc)
+    claimed: list[dict[str, Any]] = []
+    with _connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        for policy in policies:
+            drill_cfg = policy.get("recoveryDrill") if isinstance(policy.get("recoveryDrill"), dict) else {}
+            if not drill_cfg or not drill_cfg.get("enabled"):
+                continue
+            cron_text = str(drill_cfg.get("cron") or "").strip()
+            if not cron_text:
+                continue
+            policy_id = str(policy.get("policyId") or "")
+            try:
+                schedule = parse_cron(cron_text)
+            except AppError:
+                continue
+            # Prefer schedule timezone; fall back to policy schedule timezone then UTC.
+            timezone_name = str(
+                drill_cfg.get("timezone")
+                or (policy.get("schedule") or {}).get("timezone")
+                or "UTC"
+            )
+            catchup = 86400
+            # Prefer last recovery-drill slot as iteration anchor
+            catchup_start = current - timedelta(seconds=catchup)
+            iter_start = catchup_start
+            drill_latest = connection.execute(
+                "SELECT * FROM backup_schedule_slots WHERE policy_id = ? AND slot_key LIKE 'recovery-drill/%' ORDER BY scheduled_for DESC LIMIT 1",
+                (policy_id,),
+            ).fetchone()
+            if drill_latest is not None:
+                parsed = _parse_iso(str(drill_latest["scheduled_for"]))
+                if parsed is not None:
+                    iter_start = parsed
+            slots = list(
+                iter_slots(
+                    schedule,
+                    timezone_name,
+                    start_utc=iter_start,
+                    end_utc=current + timedelta(seconds=1),
+                    misfire_policy="skip",
+                )
+            )
+            due = [slot for slot in slots if slot.scheduled_for <= current]
+            if not due:
+                continue
+            slot = due[-1]
+            drill_slot_key = f"recovery-drill/{slot.slot_key}"
+            if _slot_recorded(connection, policy_id, drill_slot_key):
+                continue
+            if slot.scheduled_for < catchup_start:
+                _record_skipped_slot(
+                    connection,
+                    policy_id,
+                    type("S", (), {"slot_key": drill_slot_key, "scheduled_for": slot.scheduled_for, "local_iso": slot.local_iso, "timezone": slot.timezone})(),
+                    "outside-catchup-window",
+                )
+                continue
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO backup_schedule_slots(policy_id, slot_key, scheduled_for, local_date_time, timezone, status, run_id, created_at) VALUES (?,?,?,?,?,'claimed',?,?)",
+                (policy_id, drill_slot_key, _utc_iso(slot.scheduled_for), slot.local_iso, slot.timezone, f"drill_{uuid.uuid4().hex[:12]}", _utc_iso()),
+            )
+            if cursor.rowcount == 0:
+                continue
+            claimed.append(
+                {
+                    "policyId": policy_id,
+                    "slotKey": drill_slot_key,
+                    "scheduledFor": _utc_iso(slot.scheduled_for),
+                    "timezone": timezone_name,
+                }
+            )
+    return claimed
+
+
 def worker_tick(
     *,
     instance_id: str,
@@ -875,7 +963,40 @@ def worker_tick(
     for run in [*reclaimed, *blocked, *deferred, *claimed]:
         executor(run)
         executed += 1
-    return {"reclaimed": len(reclaimed), "blocked": len(blocked), "deferred": len(deferred), "claimed": len(claimed), "executed": executed}
+    # Durable recovery-drill slots (bounded, no unbounded timers)
+    drill_claimed = claim_due_drill_slots(policies, instance_id=instance_id, now=current)
+    drills_executed = 0
+    if drill_claimed:
+        try:
+            from deepseek_infra.infra.workspace import backup_recovery_drill
+
+            for item in drill_claimed:
+                try:
+                    backup_recovery_drill.execute_scheduled_drill(str(item["policyId"]))
+                    drills_executed += 1
+                except Exception:
+                    _logger.exception("scheduled recovery drill failed", extra={"policyId": item.get("policyId")})
+        except Exception:
+            _logger.exception("scheduled recovery drill driver failed")
+    # Advance pending replication jobs (bounded)
+    repl_processed = 0
+    try:
+        from deepseek_infra.infra.workspace import backup_replication
+
+        summary = backup_replication.process_pending_jobs(instance_id=instance_id, limit=5)
+        repl_processed = int(summary.get("processed") or 0)
+    except Exception:
+        pass
+    return {
+        "reclaimed": len(reclaimed),
+        "blocked": len(blocked),
+        "deferred": len(deferred),
+        "claimed": len(claimed),
+        "executed": executed,
+        "drillsClaimed": len(drill_claimed),
+        "drillsExecuted": drills_executed,
+        "replicationProcessed": repl_processed,
+    }
 
 
 class BackupWorker:

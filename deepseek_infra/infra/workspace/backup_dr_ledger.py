@@ -47,11 +47,61 @@ ON recovery_points (target_id, policy_id, committed_at DESC);
 CREATE TABLE IF NOT EXISTS scrub_evidence (
     target_id TEXT NOT NULL,
     backup_id TEXT NOT NULL,
+    policy_id TEXT NOT NULL DEFAULT '',
     observed_at TEXT NOT NULL,
     result TEXT NOT NULL,
     details_json TEXT,
-    PRIMARY KEY (target_id, backup_id)
+    PRIMARY KEY (target_id, backup_id, policy_id)
 );
+
+CREATE TABLE IF NOT EXISTS logical_recovery_points (
+    logical_id TEXT PRIMARY KEY,
+    policy_id TEXT NOT NULL,
+    backup_id TEXT NOT NULL,
+    object_set_digest TEXT,
+    committed_at TEXT NOT NULL,
+    snapshot_kind TEXT NOT NULL DEFAULT 'full',
+    metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_logical_rp_policy_backup
+ON logical_recovery_points (policy_id, backup_id, committed_at DESC);
+
+CREATE TABLE IF NOT EXISTS recovery_point_copies (
+    target_id TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    backup_id TEXT NOT NULL,
+    logical_id TEXT NOT NULL,
+    object_set_digest TEXT,
+    committed_at TEXT NOT NULL,
+    recoverable INTEGER NOT NULL DEFAULT 0,
+    role TEXT NOT NULL DEFAULT 'primary',
+    mode TEXT NOT NULL DEFAULT 'required',
+    verified_at TEXT,
+    metadata_json TEXT,
+    PRIMARY KEY (target_id, policy_id, backup_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rp_copies_logical
+ON recovery_point_copies (logical_id, recoverable);
+
+CREATE TABLE IF NOT EXISTS audit_jobs (
+    audit_id TEXT PRIMARY KEY,
+    target_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    cursor TEXT,
+    target_generation INTEGER,
+    previous_commit_hash TEXT,
+    records_checked INTEGER NOT NULL DEFAULT 0,
+    anomalies_json TEXT,
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    details_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_jobs_target
+ON audit_jobs (target_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS drill_evidence (
     drill_id TEXT PRIMARY KEY,
@@ -183,32 +233,61 @@ def record_recovery_point(
         )
 
 
+def _ensure_scrub_policy_column(conn: sqlite3.Connection) -> None:
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(scrub_evidence)").fetchall()}
+    if "policy_id" not in cols:
+        conn.execute("ALTER TABLE scrub_evidence ADD COLUMN policy_id TEXT NOT NULL DEFAULT ''")
+
+
 def record_scrub_evidence(
     *,
     target_id: str,
     backup_id: str,
     observed_at: str,
     result: str,
+    policy_id: str = "",
     details: dict[str, Any] | None = None,
 ) -> None:
     with _DB_LOCK, _get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO scrub_evidence (target_id, backup_id, observed_at, result, details_json)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(target_id, backup_id) DO UPDATE SET
-                observed_at = excluded.observed_at,
-                result = excluded.result,
-                details_json = excluded.details_json
-            """,
-            (
-                str(target_id),
-                str(backup_id),
-                str(observed_at),
-                str(result),
-                json.dumps(details, ensure_ascii=False, sort_keys=True) if details else None,
-            ),
-        )
+        _ensure_scrub_policy_column(conn)
+        # Prefer new composite key; fall back for legacy DBs that still use (target, backup)
+        try:
+            conn.execute(
+                """
+                INSERT INTO scrub_evidence (target_id, backup_id, policy_id, observed_at, result, details_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(target_id, backup_id, policy_id) DO UPDATE SET
+                    observed_at = excluded.observed_at,
+                    result = excluded.result,
+                    details_json = excluded.details_json
+                """,
+                (
+                    str(target_id),
+                    str(backup_id),
+                    str(policy_id or ""),
+                    str(observed_at),
+                    str(result),
+                    json.dumps(details, ensure_ascii=False, sort_keys=True) if details else None,
+                ),
+            )
+        except sqlite3.OperationalError:
+            conn.execute(
+                """
+                INSERT INTO scrub_evidence (target_id, backup_id, observed_at, result, details_json)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(target_id, backup_id) DO UPDATE SET
+                    observed_at = excluded.observed_at,
+                    result = excluded.result,
+                    details_json = excluded.details_json
+                """,
+                (
+                    str(target_id),
+                    str(backup_id),
+                    str(observed_at),
+                    str(result),
+                    json.dumps(details, ensure_ascii=False, sort_keys=True) if details else None,
+                ),
+            )
 
 
 def record_drill_evidence(
@@ -558,9 +637,15 @@ def get_latest_scrub_outcome(
     if target_id is not None:
         query += " AND target_id = ?"
         params.append(target_id)
-    query += " ORDER BY observed_at DESC LIMIT 500"
-
+    # Strict policy scope: when policy_id is provided, only that policy's scrub counts.
+    # Legacy rows without policy_id are only used when policy_id is empty/None.
     with _DB_LOCK, _get_connection() as conn:
+        _ensure_scrub_policy_column(conn)
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(scrub_evidence)").fetchall()}
+        if policy_id is not None and "policy_id" in cols:
+            query += " AND policy_id = ?"
+            params.append(policy_id)
+        query += " ORDER BY observed_at DESC LIMIT 500"
         rows = conn.execute(query, params).fetchall()
 
     if not rows:
@@ -569,6 +654,11 @@ def get_latest_scrub_outcome(
     latest = rows[0]
     successful = [r for r in rows if str(r["result"]) == "success"]
     details = json.loads(latest["details_json"]) if latest["details_json"] else {}
+    latest_policy = ""
+    try:
+        latest_policy = str(latest["policy_id"] or "")
+    except (IndexError, KeyError):
+        latest_policy = ""
     return {
         "status": "ok" if str(latest["result"]) == "success" else "error",
         "result": str(latest["result"]),
@@ -577,6 +667,7 @@ def get_latest_scrub_outcome(
         "latestSuccessfulAt": str(successful[0]["observed_at"]) if successful else None,
         "targetId": str(latest["target_id"]),
         "backupId": str(latest["backup_id"]),
+        "policyId": latest_policy,
         "details": details,
         "source": "dr-evidence-ledger",
     }
@@ -753,3 +844,219 @@ def get_latest_audit_evidence(target_id: str) -> dict[str, Any] | None:
             "error": str(row["error"]) if row["error"] else None,
             "details": json.loads(row["details_json"]) if row["details_json"] else {},
         }
+
+
+def get_audit_job(audit_id: str) -> dict[str, Any] | None:
+    with _DB_LOCK, _get_connection() as conn:
+        row = conn.execute("SELECT * FROM audit_jobs WHERE audit_id = ?", (str(audit_id),)).fetchone()
+        if row is None:
+            return None
+        return _audit_job_row(row)
+
+
+def get_open_audit_job(target_id: str) -> dict[str, Any] | None:
+    with _DB_LOCK, _get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM audit_jobs
+            WHERE target_id = ? AND phase NOT IN ('completed', 'failed')
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (str(target_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        return _audit_job_row(row)
+
+
+def _audit_job_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "auditId": str(row["audit_id"]),
+        "targetId": str(row["target_id"]),
+        "phase": str(row["phase"]),
+        "cursor": str(row["cursor"]) if row["cursor"] else None,
+        "targetGeneration": int(row["target_generation"]) if row["target_generation"] is not None else None,
+        "previousCommitHash": str(row["previous_commit_hash"]) if row["previous_commit_hash"] else None,
+        "recordsChecked": int(row["records_checked"] or 0),
+        "anomalies": json.loads(row["anomalies_json"]) if row["anomalies_json"] else [],
+        "startedAt": str(row["started_at"]),
+        "updatedAt": str(row["updated_at"]),
+        "completedAt": str(row["completed_at"]) if row["completed_at"] else None,
+        "details": json.loads(row["details_json"]) if row["details_json"] else {},
+    }
+
+
+def upsert_audit_job(
+    *,
+    audit_id: str,
+    target_id: str,
+    phase: str,
+    cursor: str | None = None,
+    target_generation: int | None = None,
+    previous_commit_hash: str | None = None,
+    records_checked: int = 0,
+    anomalies: list[Any] | None = None,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    now = _utc_iso()
+    started = started_at or now
+    with _DB_LOCK, _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO audit_jobs (
+                audit_id, target_id, phase, cursor, target_generation, previous_commit_hash,
+                records_checked, anomalies_json, started_at, updated_at, completed_at, details_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(audit_id) DO UPDATE SET
+                phase = excluded.phase,
+                cursor = excluded.cursor,
+                target_generation = excluded.target_generation,
+                previous_commit_hash = excluded.previous_commit_hash,
+                records_checked = excluded.records_checked,
+                anomalies_json = excluded.anomalies_json,
+                updated_at = excluded.updated_at,
+                completed_at = excluded.completed_at,
+                details_json = excluded.details_json
+            """,
+            (
+                str(audit_id),
+                str(target_id),
+                str(phase),
+                str(cursor) if cursor else None,
+                int(target_generation) if target_generation is not None else None,
+                str(previous_commit_hash) if previous_commit_hash else None,
+                max(0, int(records_checked)),
+                json.dumps(anomalies or [], ensure_ascii=False, sort_keys=True),
+                str(started),
+                now,
+                str(completed_at) if completed_at else None,
+                json.dumps(details or {}, ensure_ascii=False, sort_keys=True) if details else None,
+            ),
+        )
+    job = get_audit_job(audit_id)
+    assert job is not None
+    return job
+
+
+def record_logical_recovery_copy(
+    *,
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    committed_at: str,
+    object_set_digest: str | None = None,
+    recoverable: bool = True,
+    role: str = "primary",
+    mode: str = "required",
+    snapshot_kind: str = "full",
+    verified_at: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    """Record one target-local copy of a logical recovery point (same backupId + commitment)."""
+    digest = str(object_set_digest or "")
+    logical_id = f"lrp_{policy_id}_{backup_id}_{digest[:16] if digest else 'na'}"
+    with _DB_LOCK, _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO logical_recovery_points (
+                logical_id, policy_id, backup_id, object_set_digest, committed_at, snapshot_kind, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(logical_id) DO UPDATE SET
+                committed_at = CASE
+                    WHEN excluded.committed_at > logical_recovery_points.committed_at
+                    THEN excluded.committed_at ELSE logical_recovery_points.committed_at END,
+                metadata_json = COALESCE(excluded.metadata_json, logical_recovery_points.metadata_json)
+            """,
+            (
+                logical_id,
+                str(policy_id),
+                str(backup_id),
+                digest or None,
+                str(committed_at),
+                str(snapshot_kind or "full"),
+                json.dumps(metadata, ensure_ascii=False, sort_keys=True) if metadata else None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO recovery_point_copies (
+                target_id, policy_id, backup_id, logical_id, object_set_digest, committed_at,
+                recoverable, role, mode, verified_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(target_id, policy_id, backup_id) DO UPDATE SET
+                logical_id = excluded.logical_id,
+                object_set_digest = excluded.object_set_digest,
+                committed_at = excluded.committed_at,
+                recoverable = excluded.recoverable,
+                role = excluded.role,
+                mode = excluded.mode,
+                verified_at = excluded.verified_at,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                str(target_id),
+                str(policy_id),
+                str(backup_id),
+                logical_id,
+                digest or None,
+                str(committed_at),
+                1 if recoverable else 0,
+                str(role or "primary"),
+                str(mode or "required"),
+                str(verified_at or _utc_iso()),
+                json.dumps(metadata, ensure_ascii=False, sort_keys=True) if metadata else None,
+            ),
+        )
+    return logical_id
+
+
+def list_logical_recovery_copies(
+    *,
+    policy_id: str | None = None,
+    backup_id: str | None = None,
+    object_set_digest: str | None = None,
+    logical_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM recovery_point_copies"
+    params: list[Any] = []
+    clauses: list[str] = []
+    if logical_id is not None:
+        clauses.append("logical_id = ?")
+        params.append(logical_id)
+    if policy_id is not None:
+        clauses.append("policy_id = ?")
+        params.append(policy_id)
+    if backup_id is not None:
+        clauses.append("backup_id = ?")
+        params.append(backup_id)
+    if object_set_digest is not None:
+        clauses.append("object_set_digest = ?")
+        params.append(object_set_digest)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY committed_at DESC LIMIT ?"
+    params.append(limit)
+    with _DB_LOCK, _get_connection() as conn:
+        try:
+            rows = conn.execute(query, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [
+            {
+                "targetId": str(row["target_id"]),
+                "policyId": str(row["policy_id"]),
+                "backupId": str(row["backup_id"]),
+                "logicalId": str(row["logical_id"]),
+                "objectSetDigest": str(row["object_set_digest"]) if row["object_set_digest"] else None,
+                "committedAt": str(row["committed_at"]),
+                "recoverable": bool(row["recoverable"]),
+                "role": str(row["role"] or "primary"),
+                "mode": str(row["mode"] or "required"),
+                "verifiedAt": str(row["verified_at"]) if row["verified_at"] else None,
+                "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
+            }
+            for row in rows
+        ]

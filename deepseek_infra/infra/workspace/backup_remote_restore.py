@@ -516,6 +516,10 @@ def _create_object_set_restore(
         "restoreId": restore_id,
         "source": "remote-target",
         "targetId": target_id,
+        "activeSourceTargetId": target_id,
+        "attemptedSourceTargets": [target_id],
+        "failoverCount": 0,
+        "targetSwitchEvents": [],
         "backupId": backup_id,
         "snapshotKind": snapshot_kind,
         "chain": members,
@@ -535,6 +539,7 @@ def _create_object_set_restore(
         "chain": [str(item["backupId"]) for item in members],
         "phase": "fetching-controls",
         "targetId": target_id,
+        "activeSourceTargetId": target_id,
         "backupId": backup_id,
         "selection": session["selection"],
         "selectionDigest": selection_digest_value,
@@ -2367,9 +2372,233 @@ def advance_federated_phase(restore_id: str, phase: str) -> None:
         _set_phase(session, phase)
         if phase in {"complete", "aborted", "rolled-back", "failed"}:
             _release_session_holds(session)
+            _feed_telemetry_to_ledger(session)
         elif phase in {"paused", "recovery-required"}:
-            target_id = str(session.get("targetId") or "")
+            target_id = str(session.get("activeSourceTargetId") or session.get("targetId") or "")
             if target_id:
                 target = backup_publish.resolve_target(target_id, write_intent=False)
                 store = target.require_store() if target.store is not None else backup_targets.open_target_store(target_id, write_intent=False)
                 _renew_session_holds(store, session)
+
+
+def _feed_telemetry_to_ledger(session: dict[str, Any]) -> None:
+    """Persist successful production recovery stage samples into the DR ledger."""
+    try:
+        from deepseek_infra.infra.workspace import backup_dr_ledger, backup_recovery_class
+
+        raw_telemetry = session.get("recoveryTelemetry")
+        telemetry: dict[str, Any] = raw_telemetry if isinstance(raw_telemetry, dict) else {}
+        samples = list(telemetry.get("samples") or [])
+        if not samples:
+            return
+        phase = str(session.get("phase") or "")
+        if phase not in {"complete"} and not session.get("automatedDrill"):
+            # Only feed durable success samples from completed recoveries/drills
+            successful = [s for s in samples if str(s.get("result") or "") == "success"]
+            if not successful or phase not in {"complete", "verified", "components-fetched"}:
+                if not session.get("drillResult") == "success":
+                    return
+        target_id = str(session.get("activeSourceTargetId") or session.get("targetId") or "managed-local")
+        kind = "managed-local" if target_id == "managed-local" else "filesystem"
+        try:
+            from deepseek_infra.infra.workspace import backup_targets as _bt
+
+            t = _bt.get_target(target_id)
+            if isinstance(t, dict) and t.get("kind"):
+                kind = str(t["kind"])
+        except Exception:
+            pass
+        logical_bytes = int(session.get("expectedBytes") or session.get("logicalBytes") or 0)
+        chain_length = len(session.get("chain") or []) or 1
+        storage_proto = str(session.get("storageProtocol") or "object-set-v1")
+        rclass = backup_recovery_class.classify_recovery(
+            target_kind=kind,
+            storage_protocol=storage_proto,
+            logical_bytes=logical_bytes,
+            chain_length=chain_length,
+        )
+        for sample in samples:
+            if str(sample.get("result") or "") != "success":
+                continue
+            stage = str(sample.get("stage") or "")
+            if stage not in {"transfer", "crypto", "materialization", "materialize"}:
+                continue
+            if stage == "materialize":
+                stage = "materialization"
+            backup_dr_ledger.record_stage_sample(
+                stage=stage,
+                bytes_transferred=int(sample.get("bytes") or 0),
+                duration_ms=float(sample.get("durationMs") or 0),
+                observed_at=str(sample.get("observedAt") or ""),
+                result="success",
+                recovery_class=rclass,
+            )
+    except Exception:  # pragma: no cover - telemetry must never break recovery
+        pass
+
+
+def attach_recovery_plan(session: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    """Freeze planner output onto a durable recovery session."""
+    session = dict(session)
+    session["recoveryPlan"] = {
+        "selectedTargetId": plan.get("selectedTargetId"),
+        "orderedCandidates": plan.get("orderedCandidates") or [],
+        "logicalRecoveryPoint": plan.get("logicalRecoveryPoint") or {},
+        "maxFailovers": int(plan.get("maxFailovers") or 3),
+        "selectionReasons": plan.get("selectionReasons") or [],
+    }
+    session["activeSourceTargetId"] = str(plan.get("selectedTargetId") or session.get("targetId") or "")
+    session["attemptedSourceTargets"] = list(session.get("attemptedSourceTargets") or [])
+    if session["activeSourceTargetId"] and session["activeSourceTargetId"] not in session["attemptedSourceTargets"]:
+        session["attemptedSourceTargets"].append(session["activeSourceTargetId"])
+    session["failoverCount"] = int(session.get("failoverCount") or 0)
+    session["targetSwitchEvents"] = list(session.get("targetSwitchEvents") or [])
+    _atomic_write_json(_session_path(str(session["restoreId"])), session)
+    return session
+
+
+def attempt_target_failover(
+    restore_id: str,
+    *,
+    failure_reason: str,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    """Failover active source target before live prepare; holds ordering is critical.
+
+    1. Select next frozen candidate
+    2. Establish holds on the new target
+    3. Durable write target switch event
+    4. Switch activeSourceTarget
+    5. Only then release old target holds
+    """
+    from deepseek_infra.infra.workspace import backup_recovery_planner
+
+    session = read_restore_session(restore_id)
+    if session is None:
+        raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
+    phase = str(session.get("phase") or "")
+    if not backup_recovery_planner.failover_allowed(phase):
+        raise AppError(
+            f"Automatic target failover forbidden in phase {phase}",
+            code=ErrorCode.INVALID_REQUEST,
+            status=409,
+        )
+    if failure_reason not in backup_recovery_planner.RETRYABLE_FAILOVER_REASONS:
+        raise AppError(
+            f"Failure reason is not retryable via target failover: {failure_reason}",
+            code=ErrorCode.INVALID_REQUEST,
+            status=409,
+        )
+    plan = session.get("recoveryPlan") if isinstance(session.get("recoveryPlan"), dict) else None
+    if plan is None:
+        raise AppError("Recovery plan is required for automatic failover", code=ErrorCode.INVALID_REQUEST, status=409)
+
+    current_target = str(session.get("activeSourceTargetId") or session.get("targetId") or "")
+    attempted = list(session.get("attemptedSourceTargets") or [])
+    next_candidate = backup_recovery_planner.select_failover_target(
+        plan,
+        current_target_id=current_target,
+        attempted_targets=attempted,
+        failure_reason=failure_reason,
+    )
+    if next_candidate is None:
+        raise AppError("No remaining failover candidates", code=ErrorCode.INVALID_REQUEST, status=409)
+
+    new_target_id = str(next_candidate["targetId"])
+    backup_id = str(session.get("backupId") or "")
+    old_hold_keys = list(session.get("holdKeys") or [])
+    if not old_hold_keys and session.get("holdKey"):
+        old_hold_keys = [str(session["holdKey"])]
+    # Establish holds on new target BEFORE releasing old holds.
+    new_target = backup_publish.resolve_target(new_target_id, write_intent=False)
+    new_store = new_target.require_store() if new_target.store is not None else backup_targets.open_target_store(new_target_id, write_intent=False, client=client)
+    new_hold_keys: list[str] = []
+    new_holds: list[dict[str, Any]] = []
+    chain = list(session.get("chain") or [])
+    if chain:
+        for index, member in enumerate(chain):
+            hold = {
+                "schemaVersion": 3,
+                "storageProtocol": session.get("storageProtocol"),
+                "restoreId": restore_id,
+                "backupId": str(member.get("backupId") or backup_id),
+                "objectSetDigest": member.get("objectSetDigest"),
+                "objectDigest": member.get("objectDigest"),
+                "objects": member.get("objects") if isinstance(member.get("objects"), list) else None,
+                "targetId": new_target_id,
+                "createdAt": _utc_iso(),
+                "generation": 0,
+                "expiresAt": _utc_iso(datetime.now(tz=timezone.utc) + timedelta(seconds=HOLD_TTL_SECONDS)),
+            }
+            key = restore_hold_key(f"{restore_id}-fo{int(session.get('failoverCount') or 0) + 1}-{index}")
+            put_json_if_absent(new_store, key, hold)
+            new_hold_keys.append(key)
+            new_holds.append({**hold, "holdKey": key})
+    else:
+        hold = {
+            "schemaVersion": 3,
+            "restoreId": restore_id,
+            "backupId": backup_id,
+            "objectDigest": session.get("objectDigest"),
+            "targetId": new_target_id,
+            "createdAt": _utc_iso(),
+            "generation": 0,
+            "expiresAt": _utc_iso(datetime.now(tz=timezone.utc) + timedelta(seconds=HOLD_TTL_SECONDS)),
+        }
+        key = restore_hold_key(f"{restore_id}-fo{int(session.get('failoverCount') or 0) + 1}")
+        put_json_if_absent(new_store, key, hold)
+        new_hold_keys.append(key)
+        new_holds.append({**hold, "holdKey": key})
+
+    switch_event = {
+        "fromTargetId": current_target,
+        "toTargetId": new_target_id,
+        "reason": failure_reason,
+        "phase": phase,
+        "at": _utc_iso(),
+        "failoverIndex": int(session.get("failoverCount") or 0) + 1,
+        "oldHoldKeys": old_hold_keys,
+        "newHoldKeys": new_hold_keys,
+    }
+    # Durable switch: write new holds + active source BEFORE releasing old holds.
+    session["previousSourceTargetId"] = current_target
+    session["activeSourceTargetId"] = new_target_id
+    session["targetId"] = new_target_id  # single active source
+    session["holdKeys"] = new_hold_keys
+    session["holds"] = new_holds
+    session["holdKey"] = new_hold_keys[0] if new_hold_keys else None
+    session["attemptedSourceTargets"] = list(dict.fromkeys([*attempted, current_target, new_target_id]))
+    session["failoverCount"] = int(session.get("failoverCount") or 0) + 1
+    events = list(session.get("targetSwitchEvents") or [])
+    events.append(switch_event)
+    session["targetSwitchEvents"] = events
+    session["updatedAt"] = _utc_iso()
+    # Reset fetch progress for target-specific state; verified ciphertext cache survives by digest.
+    if session.get("downloadedBytes") is not None:
+        session["downloadedBytes"] = 0
+    session["phase"] = "fetching-controls" if session.get("storageProtocol") == backup_object_set.OBJECT_SET_V1 else "fetching"
+    _atomic_write_json(_session_path(restore_id), session)
+
+    # Release old holds only after durable switch (never reverse the order).
+    if current_target and old_hold_keys:
+        try:
+            old_target = backup_publish.resolve_target(current_target, write_intent=False)
+            old_store = old_target.require_store() if old_target.store is not None else backup_targets.open_target_store(current_target, write_intent=False, client=client)
+            for key in old_hold_keys:
+                try:
+                    old_store.delete_if_match(str(key))
+                except Exception:  # pragma: no cover - best-effort hold release
+                    pass
+        except Exception:  # pragma: no cover - old target may be unreachable
+            pass
+
+    return {
+        "restoreId": restore_id,
+        "phase": session["phase"],
+        "activeSourceTargetId": new_target_id,
+        "previousSourceTargetId": current_target,
+        "failoverCount": session["failoverCount"],
+        "switchEvent": switch_event,
+        "holdKeys": new_hold_keys,
+        "newHoldBeforeOldRelease": True,
+    }
