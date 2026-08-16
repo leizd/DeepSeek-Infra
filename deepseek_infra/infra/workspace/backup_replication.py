@@ -69,11 +69,11 @@ def read_job(job_id: str) -> dict[str, Any] | None:
     path = _job_path(job_id)
     if not path.is_file():
         return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):  # pragma: no cover - corrupt job file
-            return None
-        return data if isinstance(data, dict) else None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):  # pragma: no cover - corrupt job file
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def list_jobs(
