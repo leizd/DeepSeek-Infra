@@ -86,9 +86,15 @@ def test_lease_guard_heartbeat_renews_lease(tmp_settings: Path) -> None:
     guard = backup_scheduler.RunLeaseGuard(run.run_id, "w1", run.fencing_token, heartbeat_seconds=0.05, clock=_clock_from(box))
     guard.start_heartbeat()
     try:
-        for step in range(5):
+        deadline = time.monotonic() + 5.0
+        step = 1
+        while time.monotonic() < deadline:
+            box[0] = NOW + timedelta(seconds=10 * step)
             time.sleep(0.06)
-            box[0] = NOW + timedelta(seconds=10 * (step + 1))
+            step += 1
+            renewed_until = str(backup_scheduler.get_run(run.run_id)["leaseUntil"])
+            if renewed_until > initial_until:
+                break
     finally:
         guard.stop()
     renewed_until = str(backup_scheduler.get_run(run.run_id)["leaseUntil"])
