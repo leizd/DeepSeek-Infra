@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -440,6 +441,40 @@ def test_server_routes_and_auth_redirect(tmp_settings: Path, monkeypatch: pytest
     # agent-runs create invalid payload
     assert client.post("/api/agent-runs", json={"payload": "not-a-dict"}).status_code == 400
 
+    # agent-runs create valid
+    assert (
+        client.post(
+            "/api/agent-runs",
+            json={"payload": {"model": "test"}, "confirmPlan": True, "agentPreset": "full"},
+        ).status_code
+        == 201
+    )
+
+    # share-target
+    monkeypatch.setattr("deepseek_infra.web.server.require_allowed_host", lambda _req: None)
+    monkeypatch.setattr("deepseek_infra.web.server.store_share_target_payload", lambda _p: "share-123")
+    r_share = client.post(
+        "/share-target",
+        files={"title": (None, "Shared Title"), "text": (None, "Some text"), "url": (None, "http://example.com")},
+        follow_redirects=False,
+    )
+    assert r_share.status_code == 303
+
+
+def test_emit_cascade_as_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web.server import emit_cascade_as_stream
+
+    monkeypatch.setattr(
+        "deepseek_infra.web.server.call_deepseek_cascade",
+        lambda _p: {"id": "c1", "content": "hello", "reasoning": "thought", "usage": {"tokens": 10}},
+    )
+    events: list[dict[str, Any]] = []
+    emit_cascade_as_stream({}, events.append)
+    assert len(events) == 3
+    assert events[0]["type"] == "reasoning"
+    assert events[1]["type"] == "content"
+    assert events[2]["type"] == "done"
+
 
 def test_saved_items_edge_cases(tmp_settings: Path) -> None:
     from deepseek_infra.infra.workspace import saved_items
@@ -496,6 +531,7 @@ def test_server_additional_edge_cases(tmp_settings: Path, monkeypatch: pytest.Mo
     # file-chunk invalid
     res_fc_bad = client.post("/api/file-chunk", json={"chunkIndex": "bad"})
     assert res_fc_bad.status_code == 400
+
 
 
 
