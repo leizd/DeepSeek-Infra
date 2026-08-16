@@ -68,7 +68,7 @@ def _parse_iso(raw: str | None) -> datetime | None:
     try:
         cleaned = raw.replace("Z", "+00:00")
         return datetime.fromisoformat(cleaned).astimezone(timezone.utc)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError):  # pragma: no cover - defensive parse
         return None
 
 
@@ -308,7 +308,7 @@ def reconcile_durable_recovery_leases(
                         hold_keys = list(session.get("holdKeys") or [])
                         if not hold_keys and session.get("holdKey"):
                             hold_keys = [str(session["holdKey"])]
-                except (OSError, json.JSONDecodeError):
+                except (OSError, json.JSONDecodeError):  # pragma: no cover - racy session file
                     pass
 
                 did_renew = False
@@ -362,7 +362,7 @@ def reconcile_durable_recovery_leases(
                         encoding="utf-8",
                     )
                     tmp.replace(path)
-                except OSError:
+                except OSError:  # pragma: no cover - best-effort session write
                     pass
             failed.append({"restoreId": restore_id, "error": str(exc)})
 

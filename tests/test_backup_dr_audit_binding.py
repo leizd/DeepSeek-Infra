@@ -5,11 +5,6 @@ from __future__ import annotations
 from deepseek_infra.infra.workspace import backup_dr_audit, backup_publish
 
 
-def test_receipt_bytes_digest() -> None:
-    d = backup_dr_audit._receipt_bytes_digest({"a": 1})
-    assert len(d) == 64
-
-
 def test_validate_binding_all_anomaly_branches(monkeypatch) -> None:
     monkeypatch.setattr(backup_publish, "commit_marker_valid", lambda m: False)
     assert backup_dr_audit._validate_commit_receipt_binding(

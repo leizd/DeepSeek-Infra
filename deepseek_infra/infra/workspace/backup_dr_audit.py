@@ -23,11 +23,6 @@ def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _receipt_bytes_digest(receipt: dict[str, Any]) -> str:
-    raw = (json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
-
-
 def _validate_commit_receipt_binding(
     *,
     target_id: str,
@@ -43,13 +38,6 @@ def _validate_commit_receipt_binding(
     if not backup_id:
         anomalies.append("missing-backup-id")
         return anomalies
-    if previous_commit_hash is not None:
-        prev = str(commit.get("previousCommitHash") or "")
-        # Continuity is checked when previous is known from chain walk; genesis is allowed.
-        if prev and previous_commit_hash and prev not in {previous_commit_hash, backup_publish.GENESIS_COMMIT_HASH}:
-            # Soft continuity: only flag if both sides claim a non-genesis previous and disagree
-            # when walking the ordered page (handled by caller when ordering is known).
-            pass
     if not isinstance(receipt, dict) or not receipt:
         anomalies.append(f"missing-receipt:{backup_id}")
         return anomalies
