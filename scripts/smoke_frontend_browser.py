@@ -3842,19 +3842,20 @@ window.__v3SnapshotWriteTimes = [];
         winner_head_2 = await wait_settled_head(page_a, "胜者编辑二", 3)
         winner_revision = winner_head_2["revision"]
         await send_message(page_c, "第三标签页失败分支")
-        await page_c.locator(".chat-notice", has_text="隔离冲突分支").wait_for(timeout=10_000)
-        ledger_ids = await page_c.evaluate(
+        ledger_handle = await page_c.wait_for_function(
             """(conversationId) => {
               try {
                 const value = JSON.parse(
                   localStorage.getItem(`deepseek-infra.session.v3.conflict-index.${conversationId}`) || '{}'
                 );
-                return Array.isArray(value.conflictIds) ? value.conflictIds : [];
-              } catch (error) { return []; }
+                return Array.isArray(value.conflictIds) && value.conflictIds.length === 2 ? value.conflictIds : null;
+              } catch (error) { return null; }
             }""",
-            conflict_cid,
+            arg=conflict_cid,
+            timeout=10_000,
         )
-        if len(ledger_ids) != 2:
+        ledger_ids = await ledger_handle.json_value()
+        if not isinstance(ledger_ids, list) or len(ledger_ids) != 2:
             raise AssertionError(f"concurrent conflict branches overwrote each other: {ledger_ids}")
         checks["multipleConflictBranchesRetained"] = "PASS"
 
