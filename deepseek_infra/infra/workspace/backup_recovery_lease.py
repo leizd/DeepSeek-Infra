@@ -10,6 +10,8 @@ from deepseek_infra.infra.workspace.backup_target_store import put_json_if_absen
 
 DEFAULT_TTL_SECONDS = 6 * 3600
 DEFAULT_RENEW_INTERVAL_SECONDS = 15 * 60
+DEFAULT_EXPIRED_HOLD_GRACE_SECONDS = 24 * 3600
+RECOVERY_REQUIRED_TTL_SECONDS = 24 * 3600
 TERMINAL_PHASES = frozenset({"complete", "aborted", "rolled-back", "failed"})
 
 
@@ -101,3 +103,26 @@ def renew_session(
         session["holdKeys"] = normalized_keys
     session["lastHoldRenewedAt"] = _utc_iso(current_time)
     return True
+
+
+def renew_recovery_hold(
+    store: Any,
+    hold_entry: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    ttl_seconds: int = DEFAULT_TTL_SECONDS,
+) -> dict[str, Any]:
+    """Renew a specific recovery hold entry by its holdKey using CAS."""
+    key = str(hold_entry.get("holdKey") or "")
+    if not key:
+        raise AppError("Missing holdKey in hold_entry", code=ErrorCode.INVALID_REQUEST, status=400)
+    renewed = renew(store, key, now=now, ttl_seconds=ttl_seconds)
+    meta = store.stat(key)
+    return {
+        **hold_entry,
+        "generation": renewed.get("generation", int(hold_entry.get("generation", 1)) + 1),
+        "etag": meta.etag if meta else hold_entry.get("etag"),
+        "expiresAt": renewed.get("expiresAt", hold_entry.get("expiresAt")),
+        "renewedAt": renewed.get("renewedAt"),
+    }
+

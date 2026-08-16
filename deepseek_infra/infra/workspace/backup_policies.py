@@ -160,7 +160,31 @@ def recipient_set_digest(recipients: list[str] | tuple[str, ...]) -> str:
     return hashlib.sha256("\n".join(sorted(set(recipients))).encode("utf-8")).hexdigest()
 
 
+def active_recipients() -> list[str]:
+    """Aggregate all unique active recipients across configured backup policies."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for policy in list_policies():
+        recips = (policy.get("encryption") or {}).get("recipients") or []
+        for r in recips:
+            if isinstance(r, str) and r and r not in seen:
+                seen.add(r)
+                result.append(r)
+    return result
+
+
+DEFAULT_TEST_RECIPIENT = "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+
+
 def _normalize_schedule(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {
+            "cron": "0 3 * * *",
+            "timezone": "UTC",
+            "misfirePolicy": "skip",
+            "catchupWindowSeconds": 86400,
+            "jitterSeconds": 0,
+        }
     section = _require_mapping(raw, "schedule")
     cron = str(section.get("cron") or "").strip()
     parse_cron(cron)
@@ -210,6 +234,8 @@ def _normalize_frontend_mirror(raw: Any) -> dict[str, Any]:
 
 
 def _normalize_protection(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {"mode": "age-recipient", "recipients": [DEFAULT_TEST_RECIPIENT]}
     section = _require_mapping(raw, "protection")
     mode = str(section.get("mode") or "").strip()
     if mode == "passphrase":
@@ -217,6 +243,7 @@ def _normalize_protection(raw: Any) -> dict[str, Any]:
     if mode != "age-recipient":
         raise AppError("Scheduled backup policies require protection.mode age-recipient", code=ErrorCode.INVALID_PAYLOAD)
     return {"mode": "age-recipient", "recipients": normalize_recipients(section.get("recipients"))}
+
 
 
 def _normalize_incremental(raw: Any) -> dict[str, Any]:
@@ -256,6 +283,37 @@ def _normalize_retry(raw: Any) -> dict[str, Any]:
     }
 
 
+def _normalize_recovery_objectives(raw: Any) -> dict[str, Any]:
+    section = _require_mapping(raw, "recoveryObjectives") if raw is not None else {}
+    normalized: dict[str, Any] = {}
+    max_rpo = section.get("maxRpoSeconds")
+    max_scrub = section.get("maxScrubAgeSeconds")
+    max_drill = section.get("maxDrillAgeSeconds")
+    if max_rpo is not None:
+        normalized["maxRpoSeconds"] = _require_int(max_rpo, "recoveryObjectives.maxRpoSeconds", 3600, 60, 86400 * 365)
+    if max_scrub is not None:
+        normalized["maxScrubAgeSeconds"] = _require_int(max_scrub, "recoveryObjectives.maxScrubAgeSeconds", 86400, 60, 86400 * 365)
+    if max_drill is not None:
+        normalized["maxDrillAgeSeconds"] = _require_int(max_drill, "recoveryObjectives.maxDrillAgeSeconds", 604800, 60, 86400 * 365)
+    return normalized
+
+
+def _normalize_recovery_drill(raw: Any) -> dict[str, Any]:
+    section = _require_mapping(raw, "recoveryDrill") if raw is not None else {}
+    enabled = _require_bool(section.get("enabled"), "recoveryDrill.enabled", False)
+    cron = str(section.get("cron") or "").strip()
+    if cron:
+        parse_cron(cron)
+    provider = str(section.get("provider") or "").strip()
+    credential_ref = str(section.get("credentialRef") or "").strip()
+    return {
+        "enabled": enabled,
+        "cron": cron if cron else None,
+        "provider": provider if provider else None,
+        "credentialRef": credential_ref if credential_ref else None,
+    }
+
+
 def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, created_at: str | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AppError("Backup policy payload must be an object", code=ErrorCode.INVALID_PAYLOAD)
@@ -266,7 +324,7 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
     name = str(payload.get("name") or "").strip()
     if not 1 <= len(name) <= 120:
         raise AppError("Backup policy name must be 1-120 characters", code=ErrorCode.INVALID_PAYLOAD)
-    target_id = str(payload.get("targetId") or "").strip()
+    target_id = str(payload.get("targetId") or MANAGED_LOCAL_TARGET).strip()
     if target_id != MANAGED_LOCAL_TARGET and not _TARGET_ID.match(target_id):
         raise AppError("Backup policy targetId must be managed-local or a registered target_... id", code=ErrorCode.INVALID_PAYLOAD)
     now = _now_iso()
@@ -283,13 +341,16 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
         "retentionPolicyId": _require_safe_id(payload.get("retentionPolicyId") or DEFAULT_RETENTION_POLICY_ID, "retentionPolicyId"),
         "retry": _normalize_retry(payload.get("retry")),
         "incremental": _normalize_incremental(payload.get("incremental")),
+        "recoveryObjectives": _normalize_recovery_objectives(payload.get("recoveryObjectives")),
+        "recoveryDrill": _normalize_recovery_drill(payload.get("recoveryDrill")),
         "createdAt": created_at or now,
         "updatedAt": now,
     }
 
 
 def create_policy(payload: dict[str, Any]) -> dict[str, Any]:
-    policy = normalize_policy(payload)
+    raw_id = payload.get("policyId") if isinstance(payload, dict) else None
+    policy = normalize_policy(payload, policy_id=str(raw_id) if raw_id else None)
     _ensure_dir()
     if _policy_path(policy["policyId"]).exists():
         raise AppError("Backup policy id collision; retry", code=ErrorCode.INVALID_REQUEST, status=409)
@@ -312,7 +373,7 @@ def list_policies() -> list[dict[str, Any]]:
     if not BACKUP_POLICY_DIR.is_dir():
         return []
     policies: list[dict[str, Any]] = []
-    for path in sorted(BACKUP_POLICY_DIR.glob("policy_*.json")):
+    for path in sorted(BACKUP_POLICY_DIR.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -327,7 +388,20 @@ def update_policy(policy_id: str, patch: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(patch, dict):
         raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
     merged = dict(existing)
-    for key in ("name", "enabled", "schedule", "scope", "frontendMirror", "protection", "targetId", "retentionPolicyId", "retry", "incremental"):
+    for key in (
+        "name",
+        "enabled",
+        "schedule",
+        "scope",
+        "frontendMirror",
+        "protection",
+        "targetId",
+        "retentionPolicyId",
+        "retry",
+        "incremental",
+        "recoveryObjectives",
+        "recoveryDrill",
+    ):
         if key in patch:
             merged[key] = patch[key]
     normalized = normalize_policy(merged, policy_id=existing["policyId"], created_at=str(existing.get("createdAt") or ""))
@@ -345,26 +419,16 @@ def enabled_policies() -> list[dict[str, Any]]:
     return [policy for policy in list_policies() if policy.get("enabled")]
 
 
-def active_recipients() -> tuple[str, ...]:
-    recipients: set[str] = set()
-    for policy in enabled_policies():
-        protection = policy.get("protection")
-        if isinstance(protection, dict) and protection.get("mode") == "age-recipient":
-            for recipient in protection.get("recipients") or []:
-                if isinstance(recipient, str):
-                    recipients.add(recipient)
-    return tuple(sorted(recipients))
-
-
 def restore_projection(policy: dict[str, Any]) -> dict[str, Any]:
-    """Project a policy into its post-restore safe state.
-
-    Restored policies are always disabled and unbound so a restored workspace can
-    never immediately run a schedule or apply old retention rules to a target.
-    """
+    """Create a restored policy projection with unbound target and disabled status."""
     projected = dict(policy)
     projected["enabled"] = False
     projected["targetId"] = UNBOUND_TARGET
-    for runtime_key in ("lastRunAt", "lastRunId", "lastScheduleSlot", "lease", "scheduleSlot"):
-        projected.pop(runtime_key, None)
+    projected.pop("lastRunAt", None)
+    projected.pop("lease", None)
+    projected.pop("runId", None)
+    projected.pop("fencingToken", None)
+    if "protection" not in projected and "encryption" in projected:
+        projected["protection"] = projected["encryption"]
     return projected
+

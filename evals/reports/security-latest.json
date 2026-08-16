@@ -1,13 +1,13 @@
 {
   "schemaVersion": "security-corpus-report.v1",
-  "version": "4.4.13",
-  "commit": "6dcd843f",
-  "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
-  "sourceRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "version": "4.5.1",
+  "commit": "7a99d7a",
+  "testedRevision": "7a99d7ab0916f9f95160060b236676fec09947c9",
+  "sourceRevision": "7a99d7ab0916f9f95160060b236676fec09947c9",
   "sourceTreeDirty": true,
   "releaseRevision": null,
   "ciRevision": null,
-  "generatedAt": "2026-08-10T10:45:03Z",
+  "generatedAt": "2026-08-15T06:25:51Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -89,7 +89,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.095,
+        "latencyMs": 0.138,
         "suite": "prompt_injection"
       },
       {
@@ -102,7 +102,7 @@
         "injectionHits": 1,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.026,
+        "latencyMs": 0.04,
         "suite": "prompt_injection"
       },
       {
@@ -115,7 +115,7 @@
         "injectionHits": 2,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.046,
+        "latencyMs": 0.072,
         "suite": "prompt_injection"
       },
       {
@@ -128,7 +128,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.033,
+        "latencyMs": 0.057,
         "suite": "prompt_injection"
       },
       {
@@ -141,7 +141,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 1,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.033,
+        "latencyMs": 0.05,
         "suite": "prompt_injection"
       },
       {
@@ -154,7 +154,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 2,
-        "latencyMs": 0.034,
+        "latencyMs": 0.053,
         "suite": "prompt_injection"
       }
     ],
@@ -169,7 +169,7 @@
           "ssrf_blocked:private or local ip is not allowed: 169.254.169.254"
         ],
         "passed": true,
-        "latencyMs": 0.126,
+        "latencyMs": 0.183,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -183,7 +183,7 @@
           "ssrf_blocked:local host is not allowed"
         ],
         "passed": true,
-        "latencyMs": 0.033,
+        "latencyMs": 0.057,
         "suite": "tool_policy_attacks",
         "category": "ssrf"
       },
@@ -197,7 +197,7 @@
           "path_blocked:fileId contains illegal characters"
         ],
         "passed": true,
-        "latencyMs": 0.014,
+        "latencyMs": 0.021,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -211,7 +211,7 @@
           "path_blocked:projectId path traversal"
         ],
         "passed": true,
-        "latencyMs": 0.007,
+        "latencyMs": 0.011,
         "suite": "tool_policy_attacks",
         "category": "path_traversal"
       },
@@ -225,7 +225,7 @@
           "secret_exfiltration_blocked"
         ],
         "passed": true,
-        "latencyMs": 0.056,
+        "latencyMs": 0.085,
         "suite": "tool_policy_attacks",
         "category": "secret_exfiltration"
       },
@@ -239,7 +239,7 @@
           "unknown_tool"
         ],
         "passed": true,
-        "latencyMs": 0.004,
+        "latencyMs": 0.007,
         "suite": "tool_policy_attacks",
         "category": "tool_policy"
       }
@@ -255,7 +255,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.05,
+        "latencyMs": 0.078,
         "suite": "benign_false_positive"
       },
       {
@@ -268,7 +268,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.045,
+        "latencyMs": 0.073,
         "suite": "benign_false_positive"
       },
       {
@@ -281,7 +281,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.042,
+        "latencyMs": 0.073,
         "suite": "benign_false_positive"
       },
       {
@@ -294,7 +294,7 @@
         "injectionHits": 0,
         "exfiltrationHits": 0,
         "toolDirectiveHits": 0,
-        "latencyMs": 0.04,
+        "latencyMs": 0.088,
         "suite": "benign_false_positive"
       }
     ]

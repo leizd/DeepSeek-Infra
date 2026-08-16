@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
 export const FRONTEND_BUILD_IDENTITY_SCHEMA_VERSION = 1;
-export const FRONTEND_BUILD_CONFIGURATION_VERSION = "4.5.0-recovery-orchestration-object-set-v1";
+export const FRONTEND_BUILD_CONFIGURATION_VERSION = "4.5.1-recovery-assurance-dr-evidence-ledger";
 
 export interface FrontendBuildIdentity {
   schemaVersion: 1;

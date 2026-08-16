@@ -35,6 +35,10 @@
 .backup-targets/
 .backup-catalog/
 .backup-retention/
+.backup-dr/
+.backup-spool/
+.backup-run-plans/
+.backup-index/
 .workspace-mutation.lock
 .workspace-generation
 
@@ -91,7 +95,11 @@ tests/tmp/
 tmp_tests/
 /design-qa.md
 .codex-remote-attachments/
+.codex/
+.workbuddy/
 graphify-out/
+outputs/
+*.patch
 
 # Rust build artifacts
 rust/target/

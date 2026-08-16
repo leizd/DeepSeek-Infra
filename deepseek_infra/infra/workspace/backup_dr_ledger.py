@@ -1,0 +1,755 @@
+"""Durable local read model for disaster recovery evidence (4.5.1).
+
+Maintains an incremental SQLite ledger at .backup-dr/evidence.sqlite3
+recording verified backup commits, scrubs, target probes, isolated drills,
+recovery stage throughput samples, and remote audit runs.
+Readiness queries read exclusively from this local projection with zero remote I/O.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from deepseek_infra.core import config
+
+BACKUP_DR_DIR = config.ROOT / ".backup-dr"
+EVIDENCE_DB = BACKUP_DR_DIR / "evidence.sqlite3"
+
+_DB_LOCK = threading.RLock()
+
+_INIT_SQL = """
+CREATE TABLE IF NOT EXISTS recovery_points (
+    target_id TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    backup_id TEXT NOT NULL,
+    committed_at TEXT NOT NULL,
+    snapshot_kind TEXT NOT NULL,
+    parent_backup_id TEXT,
+    chain_digest TEXT,
+    chain_length INTEGER NOT NULL DEFAULT 1,
+    ciphertext_bytes INTEGER NOT NULL DEFAULT 0,
+    logical_bytes INTEGER NOT NULL DEFAULT 0,
+    recoverable INTEGER NOT NULL DEFAULT 1,
+    verified_at TEXT NOT NULL,
+    storage_protocol TEXT,
+    metadata_json TEXT,
+    PRIMARY KEY (target_id, policy_id, backup_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_recovery_points_scope_time 
+ON recovery_points (target_id, policy_id, committed_at DESC);
+
+CREATE TABLE IF NOT EXISTS scrub_evidence (
+    target_id TEXT NOT NULL,
+    backup_id TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    result TEXT NOT NULL,
+    details_json TEXT,
+    PRIMARY KEY (target_id, backup_id)
+);
+
+CREATE TABLE IF NOT EXISTS drill_evidence (
+    drill_id TEXT PRIMARY KEY,
+    target_id TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    backup_id TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    result TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    details_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_drill_evidence_scope_time 
+ON drill_evidence (target_id, policy_id, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS target_evidence (
+    target_id TEXT PRIMARY KEY,
+    observed_at TEXT NOT NULL,
+    scheduled_ready INTEGER NOT NULL DEFAULT 0,
+    integrity_mode TEXT,
+    status TEXT NOT NULL,
+    reason TEXT,
+    details_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS recovery_stage_samples (
+    sample_id TEXT PRIMARY KEY,
+    recovery_class_json TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    observed_at TEXT NOT NULL,
+    result TEXT NOT NULL DEFAULT 'success'
+);
+
+CREATE INDEX IF NOT EXISTS idx_stage_samples_stage_time 
+ON recovery_stage_samples (stage, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS audit_evidence (
+    audit_id TEXT PRIMARY KEY,
+    target_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    cursor TEXT,
+    records_checked INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    details_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_evidence_target_time 
+ON audit_evidence (target_id, started_at DESC);
+"""
+
+
+def _utc_iso(value: datetime | None = None) -> str:
+    current = value or datetime.now(tz=timezone.utc)
+    return current.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _get_connection() -> sqlite3.Connection:
+    BACKUP_DR_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(EVIDENCE_DB), timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    with conn:
+        conn.executescript(_INIT_SQL)
+    return conn
+
+
+# ── Incremental Evidence Recording ──────────────────────────────────────────
+
+
+def record_recovery_point(
+    *,
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    committed_at: str,
+    snapshot_kind: str = "full",
+    parent_backup_id: str | None = None,
+    chain_digest: str | None = None,
+    chain_length: int = 1,
+    ciphertext_bytes: int = 0,
+    logical_bytes: int = 0,
+    recoverable: bool = True,
+    verified_at: str | None = None,
+    storage_protocol: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    with _DB_LOCK, _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO recovery_points (
+                target_id, policy_id, backup_id, committed_at, snapshot_kind,
+                parent_backup_id, chain_digest, chain_length, ciphertext_bytes,
+                logical_bytes, recoverable, verified_at, storage_protocol, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(target_id, policy_id, backup_id) DO UPDATE SET
+                committed_at = excluded.committed_at,
+                snapshot_kind = excluded.snapshot_kind,
+                parent_backup_id = excluded.parent_backup_id,
+                chain_digest = excluded.chain_digest,
+                chain_length = excluded.chain_length,
+                ciphertext_bytes = excluded.ciphertext_bytes,
+                logical_bytes = excluded.logical_bytes,
+                recoverable = excluded.recoverable,
+                verified_at = excluded.verified_at,
+                storage_protocol = excluded.storage_protocol,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                str(target_id),
+                str(policy_id),
+                str(backup_id),
+                str(committed_at),
+                str(snapshot_kind),
+                str(parent_backup_id) if parent_backup_id else None,
+                str(chain_digest) if chain_digest else None,
+                max(1, int(chain_length)),
+                max(0, int(ciphertext_bytes)),
+                max(0, int(logical_bytes)),
+                1 if recoverable else 0,
+                str(verified_at or _utc_iso()),
+                str(storage_protocol) if storage_protocol else None,
+                json.dumps(metadata, ensure_ascii=False, sort_keys=True) if metadata else None,
+            ),
+        )
+
+
+def record_scrub_evidence(
+    *,
+    target_id: str,
+    backup_id: str,
+    observed_at: str,
+    result: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    with _DB_LOCK, _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO scrub_evidence (target_id, backup_id, observed_at, result, details_json)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(target_id, backup_id) DO UPDATE SET
+                observed_at = excluded.observed_at,
+                result = excluded.result,
+                details_json = excluded.details_json
+            """,
+            (
+                str(target_id),
+                str(backup_id),
+                str(observed_at),
+                str(result),
+                json.dumps(details, ensure_ascii=False, sort_keys=True) if details else None,
+            ),
+        )
+
+
+def record_drill_evidence(
+    *,
+    drill_id: str | None = None,
+    target_id: str,
+    policy_id: str = "",
+    backup_id: str = "",
+    drill_kind: str = "manual",
+    observed_at: str,
+    result: str,
+    duration_ms: int = 0,
+    stage_durations: dict[str, Any] | None = None,
+    work_class: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    d_id = drill_id or f"drill_{uuid.uuid4().hex[:12]}"
+    full_details = dict(details or {})
+    if drill_kind:
+        full_details["drillKind"] = drill_kind
+    if stage_durations:
+        full_details["stageDurations"] = stage_durations
+    if work_class:
+        full_details["workClass"] = work_class
+    if duration_ms == 0 and stage_durations and "totalMs" in stage_durations:
+        duration_ms = int(stage_durations["totalMs"])
+
+    with _DB_LOCK, _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO drill_evidence (drill_id, target_id, policy_id, backup_id, observed_at, result, duration_ms, details_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(drill_id) DO UPDATE SET
+                target_id = excluded.target_id,
+                policy_id = excluded.policy_id,
+                backup_id = excluded.backup_id,
+                observed_at = excluded.observed_at,
+                result = excluded.result,
+                duration_ms = excluded.duration_ms,
+                details_json = excluded.details_json
+            """,
+            (
+                str(d_id),
+                str(target_id),
+                str(policy_id),
+                str(backup_id),
+                str(observed_at),
+                str(result),
+                max(0, int(duration_ms)),
+                json.dumps(full_details, ensure_ascii=False, sort_keys=True) if full_details else None,
+            ),
+        )
+
+
+def record_target_evidence(
+    *,
+    target_id: str,
+    observed_at: str,
+    scheduled_ready: bool,
+    integrity_mode: str | None = None,
+    status: str = "ok",
+    reason: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    with _DB_LOCK, _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO target_evidence (target_id, observed_at, scheduled_ready, integrity_mode, status, reason, details_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(target_id) DO UPDATE SET
+                observed_at = excluded.observed_at,
+                scheduled_ready = excluded.scheduled_ready,
+                integrity_mode = excluded.integrity_mode,
+                status = excluded.status,
+                reason = excluded.reason,
+                details_json = excluded.details_json
+            """,
+            (
+                str(target_id),
+                str(observed_at),
+                1 if scheduled_ready else 0,
+                str(integrity_mode) if integrity_mode else None,
+                str(status),
+                str(reason) if reason else None,
+                json.dumps(details, ensure_ascii=False, sort_keys=True) if details else None,
+            ),
+        )
+
+
+def record_stage_sample(
+    *,
+    sample_id: str | None = None,
+    stage: str,
+    bytes_transferred: int = 0,
+    bytes_count: int = 0,
+    duration_ms: float = 0.0,
+    observed_at: str = "",
+    result: str = "success",
+    recovery_class: Any = None,
+) -> None:
+    s_id = sample_id or f"sample_{uuid.uuid4().hex[:12]}"
+    actual_bytes = bytes_transferred or bytes_count
+    rc_data = recovery_class if isinstance(recovery_class, dict) else (recovery_class.to_dict() if hasattr(recovery_class, "to_dict") else {"tag": str(recovery_class or "default")})
+    with _DB_LOCK, _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO recovery_stage_samples (sample_id, recovery_class_json, stage, bytes, duration_ms, observed_at, result)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(sample_id) DO UPDATE SET
+                recovery_class_json = excluded.recovery_class_json,
+                stage = excluded.stage,
+                bytes = excluded.bytes,
+                duration_ms = excluded.duration_ms,
+                observed_at = excluded.observed_at,
+                result = excluded.result
+            """,
+            (
+                str(s_id),
+                json.dumps(rc_data, ensure_ascii=False, sort_keys=True),
+                str(stage),
+                max(0, int(actual_bytes)),
+                max(0, int(duration_ms)),
+                str(observed_at or _utc_iso()),
+                str(result),
+            ),
+        )
+
+
+def record_audit_evidence(
+    *,
+    audit_id: str | None = None,
+    target_id: str,
+    started_at: str | None = None,
+    observed_at: str | None = None,
+    status: str | None = None,
+    result: str | None = None,
+    completed_at: str | None = None,
+    cursor: str | None = None,
+    records_checked: int = 0,
+    anomalies_count: int = 0,
+    error: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    a_id = audit_id or f"audit_{uuid.uuid4().hex[:12]}"
+    t_start = started_at or observed_at or _utc_iso()
+    t_status = status or result or "completed"
+    full_details = dict(details or {})
+    if anomalies_count:
+        full_details["anomaliesCount"] = anomalies_count
+    with _DB_LOCK, _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO audit_evidence (audit_id, target_id, started_at, completed_at, status, cursor, records_checked, error, details_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(audit_id) DO UPDATE SET
+                target_id = excluded.target_id,
+                started_at = excluded.started_at,
+                completed_at = excluded.completed_at,
+                status = excluded.status,
+                cursor = excluded.cursor,
+                records_checked = excluded.records_checked,
+                error = excluded.error,
+                details_json = excluded.details_json
+            """,
+            (
+                str(a_id),
+                str(target_id),
+                str(t_start),
+                str(completed_at) if completed_at else None,
+                str(t_status),
+                str(cursor) if cursor else None,
+                max(0, int(records_checked)),
+                str(error) if error else None,
+                json.dumps(full_details, ensure_ascii=False, sort_keys=True) if full_details else None,
+            ),
+        )
+
+
+# ── Query APIs (Zero Remote I/O) ────────────────────────────────────────────
+
+
+def list_scopes() -> list[tuple[str, str]]:
+    """Return all known (target_id, policy_id) scopes observed in the ledger."""
+    with _DB_LOCK, _get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT target_id, policy_id FROM recovery_points ORDER BY target_id, policy_id"
+        ).fetchall()
+        return [(str(row["target_id"]), str(row["policy_id"])) for row in rows]
+
+
+def list_recovery_points(
+    *,
+    target_id: str | None = None,
+    policy_id: str | None = None,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM recovery_points"
+    params: list[Any] = []
+    clauses: list[str] = []
+    if target_id is not None:
+        clauses.append("target_id = ?")
+        params.append(target_id)
+    if policy_id is not None:
+        clauses.append("policy_id = ?")
+        params.append(policy_id)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY committed_at DESC LIMIT ?"
+    params.append(limit)
+
+    with _DB_LOCK, _get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "targetId": str(row["target_id"]),
+                "policyId": str(row["policy_id"]),
+                "backupId": str(row["backup_id"]),
+                "committedAt": str(row["committed_at"]),
+                "snapshotKind": str(row["snapshot_kind"]),
+                "parentBackupId": str(row["parent_backup_id"]) if row["parent_backup_id"] else None,
+                "chainDigest": str(row["chain_digest"]) if row["chain_digest"] else None,
+                "chainLength": int(row["chain_length"]),
+                "ciphertextBytes": int(row["ciphertext_bytes"]),
+                "logicalBytes": int(row["logical_bytes"]),
+                "recoverable": bool(row["recoverable"]),
+                "verifiedAt": str(row["verified_at"]),
+                "storageProtocol": str(row["storage_protocol"]) if row["storage_protocol"] else None,
+                "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
+            }
+            for row in rows
+        ]
+
+
+def resolve_recoverable_chain(
+    target_id: str,
+    policy_id: str,
+    head_backup_id: str,
+) -> list[dict[str, Any]] | None:
+    """Resolve full ancestor chain from the local ledger."""
+    all_points = list_recovery_points(target_id=target_id, policy_id=policy_id, limit=2000)
+    by_id = {item["backupId"]: item for item in all_points}
+    chain: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    current_id: str | None = head_backup_id
+
+    while current_id:
+        if current_id in seen:
+            return None
+        seen.add(current_id)
+        point = by_id.get(current_id)
+        if point is None or not point["recoverable"]:
+            return None
+        chain.append(point)
+        parent_id = point.get("parentBackupId")
+        if not parent_id:
+            if point.get("snapshotKind") == "incremental":
+                return None
+            break
+        current_id = parent_id
+
+    chain.reverse()
+    return chain
+
+
+def get_latest_recoverable_point(
+    target_id: str,
+    policy_id: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    current_iso = _utc_iso(now)
+    query = "SELECT * FROM recovery_points WHERE target_id = ? AND recoverable = 1 AND committed_at <= ?"
+    params: list[Any] = [target_id, current_iso]
+    if policy_id:
+        query += " AND policy_id = ?"
+        params.append(policy_id)
+    query += " ORDER BY committed_at DESC LIMIT 50"
+
+    with _DB_LOCK, _get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+
+    for row in rows:
+        backup_id = str(row["backup_id"])
+        row_policy = str(row["policy_id"])
+        chain = resolve_recoverable_chain(target_id, row_policy, backup_id)
+        if chain is not None:
+            point = {
+                "targetId": str(row["target_id"]),
+                "policyId": row_policy,
+                "backupId": backup_id,
+                "committedAt": str(row["committed_at"]),
+                "snapshotKind": str(row["snapshot_kind"]),
+                "chainLength": len(chain),
+                "ciphertextBytes": sum(int(item["ciphertextBytes"]) for item in chain),
+                "logicalBytes": int(chain[-1]["logicalBytes"]),
+                "recoverable": True,
+                "storageProtocol": str(row["storage_protocol"]) if row["storage_protocol"] else None,
+            }
+            return point, chain
+
+    return None, []
+
+
+def get_scrub_evidence(
+    *,
+    target_id: str | None = None,
+    backup_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM scrub_evidence"
+    params: list[Any] = []
+    clauses: list[str] = []
+    if target_id is not None:
+        clauses.append("target_id = ?")
+        params.append(target_id)
+    if backup_id is not None:
+        clauses.append("backup_id = ?")
+        params.append(backup_id)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY observed_at DESC LIMIT ?"
+    params.append(limit)
+
+    with _DB_LOCK, _get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "targetId": str(row["target_id"]),
+                "backupId": str(row["backup_id"]),
+                "observedAt": str(row["observed_at"]),
+                "result": str(row["result"]),
+                "details": json.loads(row["details_json"]) if row["details_json"] else {},
+            }
+            for row in rows
+        ]
+
+
+def get_latest_scrub_outcome(
+    target_id: str | None = None,
+    policy_id: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    current_iso = _utc_iso(now)
+    query = "SELECT * FROM scrub_evidence WHERE observed_at <= ?"
+    params: list[Any] = [current_iso]
+    if target_id is not None:
+        query += " AND target_id = ?"
+        params.append(target_id)
+    query += " ORDER BY observed_at DESC LIMIT 500"
+
+    with _DB_LOCK, _get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+
+    if not rows:
+        return None
+
+    latest = rows[0]
+    successful = [r for r in rows if str(r["result"]) == "success"]
+    details = json.loads(latest["details_json"]) if latest["details_json"] else {}
+    return {
+        "status": "ok" if str(latest["result"]) == "success" else "error",
+        "result": str(latest["result"]),
+        "observedAt": str(latest["observed_at"]),
+        "latestCheckedAt": str(latest["observed_at"]),
+        "latestSuccessfulAt": str(successful[0]["observed_at"]) if successful else None,
+        "targetId": str(latest["target_id"]),
+        "backupId": str(latest["backup_id"]),
+        "details": details,
+        "source": "dr-evidence-ledger",
+    }
+
+
+def get_drill_evidence(
+    *,
+    target_id: str | None = None,
+    policy_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM drill_evidence"
+    params: list[Any] = []
+    clauses: list[str] = []
+    if target_id is not None:
+        clauses.append("target_id = ?")
+        params.append(target_id)
+    if policy_id is not None:
+        clauses.append("policy_id = ?")
+        params.append(policy_id)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY observed_at DESC LIMIT ?"
+    params.append(limit)
+
+    with _DB_LOCK, _get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "drillId": str(row["drill_id"]),
+                "targetId": str(row["target_id"]),
+                "policyId": str(row["policy_id"]),
+                "backupId": str(row["backup_id"]),
+                "observedAt": str(row["observed_at"]),
+                "result": str(row["result"]),
+                "durationMs": int(row["duration_ms"]),
+                "details": json.loads(row["details_json"]) if row["details_json"] else {},
+            }
+            for row in rows
+        ]
+
+
+def get_latest_drill_outcome(
+    target_id: str | None = None,
+    policy_id: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    current_iso = _utc_iso(now)
+    query = "SELECT * FROM drill_evidence WHERE observed_at <= ?"
+    params: list[Any] = [current_iso]
+    if target_id is not None:
+        query += " AND target_id = ?"
+        params.append(target_id)
+    if policy_id is not None:
+        query += " AND policy_id = ?"
+        params.append(policy_id)
+    query += " ORDER BY observed_at DESC LIMIT 500"
+
+    with _DB_LOCK, _get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+
+    if not rows:
+        return None
+
+    latest = rows[0]
+    successful = [r for r in rows if str(r["result"]) == "success"]
+    details = json.loads(latest["details_json"]) if latest["details_json"] else {}
+    return {
+        "status": "ok" if str(latest["result"]) == "success" else "error",
+        "result": str(latest["result"]),
+        "drillKind": details.get("drillKind", "manual"),
+        "observedAt": str(latest["observed_at"]),
+        "latestCheckedAt": str(latest["observed_at"]),
+        "latestSuccessfulAt": str(successful[0]["observed_at"]) if successful else None,
+        "targetId": str(latest["target_id"]),
+        "policyId": str(latest["policy_id"]),
+        "backupId": str(latest["backup_id"]),
+        "durationMs": int(latest["duration_ms"]),
+        "stageDurations": details.get("stageDurations", {}),
+        "details": details,
+        "source": "dr-evidence-ledger",
+    }
+
+
+def get_target_evidence(target_id: str) -> dict[str, Any] | None:
+    with _DB_LOCK, _get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM target_evidence WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "targetId": str(row["target_id"]),
+            "observedAt": str(row["observed_at"]),
+            "scheduledReady": bool(row["scheduled_ready"]),
+            "integrityMode": str(row["integrity_mode"]) if row["integrity_mode"] else None,
+            "status": str(row["status"]),
+            "reason": str(row["reason"]) if row["reason"] else None,
+            "details": json.loads(row["details_json"]) if row["details_json"] else {},
+        }
+
+
+def list_target_evidence() -> list[dict[str, Any]]:
+    with _DB_LOCK, _get_connection() as conn:
+        rows = conn.execute("SELECT * FROM target_evidence ORDER BY target_id").fetchall()
+        return [
+            {
+                "targetId": str(row["target_id"]),
+                "observedAt": str(row["observed_at"]),
+                "scheduledReady": bool(row["scheduled_ready"]),
+                "integrityMode": str(row["integrity_mode"]) if row["integrity_mode"] else None,
+                "status": str(row["status"]),
+                "reason": str(row["reason"]) if row["reason"] else None,
+                "details": json.loads(row["details_json"]) if row["details_json"] else {},
+            }
+            for row in rows
+        ]
+
+
+def list_stage_samples(
+    *,
+    stage: str | None = None,
+    since_iso: str | None = None,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM recovery_stage_samples"
+    params: list[Any] = []
+    clauses: list[str] = []
+    if stage is not None:
+        clauses.append("stage = ?")
+        params.append(stage)
+    if since_iso is not None:
+        clauses.append("observed_at >= ?")
+        params.append(since_iso)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY observed_at DESC LIMIT ?"
+    params.append(limit)
+
+    with _DB_LOCK, _get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "sampleId": str(row["sample_id"]),
+                "recoveryClass": json.loads(row["recovery_class_json"]) if row["recovery_class_json"] else {},
+                "stage": str(row["stage"]),
+                "bytes": int(row["bytes"]),
+                "durationMs": int(row["duration_ms"]),
+                "observedAt": str(row["observed_at"]),
+                "result": str(row["result"]),
+            }
+            for row in rows
+        ]
+
+
+def get_latest_audit_evidence(target_id: str) -> dict[str, Any] | None:
+    with _DB_LOCK, _get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM audit_evidence WHERE target_id = ? ORDER BY started_at DESC LIMIT 1",
+            (target_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "auditId": str(row["audit_id"]),
+            "targetId": str(row["target_id"]),
+            "startedAt": str(row["started_at"]),
+            "completedAt": str(row["completed_at"]) if row["completed_at"] else None,
+            "status": str(row["status"]),
+            "cursor": str(row["cursor"]) if row["cursor"] else None,
+            "recordsChecked": int(row["records_checked"]),
+            "error": str(row["error"]) if row["error"] else None,
+            "details": json.loads(row["details_json"]) if row["details_json"] else {},
+        }

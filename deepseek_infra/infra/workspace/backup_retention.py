@@ -771,11 +771,20 @@ def finalize_retention_store(
     return {"deleted": deleted, "kept": kept, "recoveredTrash": []}
 
 
-def _restore_hold_digests(store: Any, *, now: datetime | None = None) -> set[str]:
+DEFAULT_EXPIRED_HOLD_GRACE_SECONDS = 24 * 3600
+
+
+def _restore_hold_digests(
+    store: Any,
+    *,
+    now: datetime | None = None,
+    grace_seconds: int = DEFAULT_EXPIRED_HOLD_GRACE_SECONDS,
+) -> set[str]:
     from deepseek_infra.infra.workspace.backup_target_store import read_json
 
     digests: set[str] = set()
     current = now or datetime.now(tz=timezone.utc)
+    hold_grace = timedelta(seconds=max(0, grace_seconds))
     cursor = None
     while True:
         page = store.list_objects("holds/restore/", cursor=cursor)
@@ -786,7 +795,7 @@ def _restore_hold_digests(store: Any, *, now: datetime | None = None) -> set[str
             if not isinstance(data, dict):
                 continue
             expires_at = _parse_iso(data.get("expiresAt"))
-            if expires_at is not None and expires_at <= current:
+            if expires_at is not None and current > expires_at + hold_grace:
                 continue
             digest = str(data.get("objectDigest") or "")
             if len(digest) == 64:

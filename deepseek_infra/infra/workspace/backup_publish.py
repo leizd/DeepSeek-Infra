@@ -354,6 +354,42 @@ def _read_commit_marker(store: BackupTargetStore, policy_id: str, schedule_slot:
     return None
 
 
+def _record_publish_to_dr_ledger(
+    target_id: str,
+    policy_id: str,
+    result: PublishResult,
+    package: Any,
+) -> None:
+    try:
+        from deepseek_infra.infra.workspace import backup_dr_ledger
+        receipt = result.receipt or {}
+        commit = result.commit or {}
+        backup_id = str(receipt.get("backupId") or getattr(package, "backup_id", ""))
+        if not backup_id:
+            return
+        size_val = getattr(package, "size", 0) or 0
+        logical_bytes = int(receipt.get("logicalBytes") or receipt.get("size") or size_val)
+        ciphertext_bytes = int(receipt.get("size") or size_val)
+        backup_dr_ledger.record_recovery_point(
+            target_id=target_id,
+            policy_id=policy_id,
+            backup_id=backup_id,
+            committed_at=str(commit.get("committedAt") or receipt.get("createdAt") or _utc_iso()),
+            snapshot_kind=str(receipt.get("snapshotKind") or "full"),
+            parent_backup_id=receipt.get("parentBackupId"),
+            chain_digest=str(commit.get("commitHash") or ""),
+            chain_length=int(receipt.get("chainLength") or 1),
+            ciphertext_bytes=ciphertext_bytes,
+            logical_bytes=logical_bytes,
+            recoverable=True,
+            verified_at=str(commit.get("committedAt") or receipt.get("createdAt") or _utc_iso()),
+            storage_protocol=str(receipt.get("storageProtocol") or ""),
+            metadata=receipt,
+        )
+    except Exception:
+        pass
+
+
 def publish_backup(
     target: ResolvedTarget,
     package: Any,
@@ -366,9 +402,10 @@ def publish_backup(
     checkpoint: Callable[[], None] | None = None,
 ) -> PublishResult:
     """Publish a verified package as an immutable object plus slot commit."""
+    result: PublishResult
     if isinstance(package, backup_object_set.ObjectSetPackage):
         if target.kind != "filesystem" or target.root is None:
-            return _publish_object_set_via_store(
+            result = _publish_object_set_via_store(
                 target,
                 package,
                 run_id=run_id,
@@ -378,7 +415,19 @@ def publish_backup(
                 receipt=receipt,
                 checkpoint=checkpoint,
             )
-        return _publish_object_set_filesystem(
+        else:
+            result = _publish_object_set_filesystem(
+                target,
+                package,
+                run_id=run_id,
+                policy_id=policy_id,
+                schedule_slot=schedule_slot,
+                fencing_token=fencing_token,
+                receipt=receipt,
+                checkpoint=checkpoint,
+            )
+    elif target.kind != "filesystem" or target.root is None:
+        result = _publish_via_store(
             target,
             package,
             run_id=run_id,
@@ -388,8 +437,8 @@ def publish_backup(
             receipt=receipt,
             checkpoint=checkpoint,
         )
-    if target.kind != "filesystem" or target.root is None:
-        return _publish_via_store(
+    else:
+        result = _publish_filesystem(
             target,
             package,
             run_id=run_id,
@@ -399,6 +448,21 @@ def publish_backup(
             receipt=receipt,
             checkpoint=checkpoint,
         )
+    _record_publish_to_dr_ledger(target.target_id, policy_id, result, package)
+    return result
+
+
+def _publish_filesystem(
+    target: ResolvedTarget,
+    package: Any,
+    *,
+    run_id: str,
+    policy_id: str,
+    schedule_slot: str,
+    fencing_token: int,
+    receipt: dict[str, Any] | None = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> PublishResult:
     root = target.require_root()
     _ensure_layout(root)
     digest = str(package.ciphertext_sha256)
