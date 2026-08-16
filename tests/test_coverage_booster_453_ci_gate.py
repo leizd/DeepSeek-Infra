@@ -363,3 +363,84 @@ def test_replication_reconcile_and_repairs(tmp_settings: Path, monkeypatch: pyte
     rec_no_targets = backup_replication.reconcile_policy_replicas("p1")
     assert rec_no_targets["status"] == "noop"
 
+
+def test_server_routes_and_auth_redirect(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web.server import create_app, handle_auth_token_redirect
+
+    # Auth redirect tests
+    import dataclasses
+    from deepseek_infra.core.config import settings
+    new_auth = dataclasses.replace(settings.auth, enabled=True, token="secret-token")
+    new_settings = dataclasses.replace(settings, auth=new_auth)
+    monkeypatch.setattr("deepseek_infra.web.server.settings", new_settings)
+    monkeypatch.setattr("deepseek_infra.web.http_utils.settings", new_settings)
+
+    # Invalid token -> 401
+    class DummyURL:
+        path = "/"
+
+    class DummyRequest:
+        url = DummyURL()
+        query_params = {"token": "wrong-token"}
+
+    r_bad = handle_auth_token_redirect(DummyRequest())  # type: ignore[arg-type]
+    assert r_bad is not None
+    assert r_bad.status_code == 401
+
+    # Valid token redirect -> 302
+    class DummyValidRequest:
+        url = DummyURL()
+        query_params = {"token": "secret-token"}
+
+    r_ok = handle_auth_token_redirect(DummyValidRequest())  # type: ignore[arg-type]
+    assert r_ok is not None
+    assert r_ok.status_code == 302
+
+    # Server API routes
+    monkeypatch.setattr("deepseek_infra.web.http_utils.require_api_auth", lambda _req: None)
+    monkeypatch.setattr("deepseek_infra.web.server.require_api_auth", lambda _req: None)
+    monkeypatch.setattr("deepseek_infra.web.server.save_generated_file_to_downloads", lambda _id, filename="": {"path": "/downloads/f.txt"})
+    monkeypatch.setattr("deepseek_infra.web.server.fetch_url", lambda _u: {"title": "Page", "text": "Content"})
+    monkeypatch.setattr("deepseek_infra.web.server.reminder_action", lambda _p: {"action": "ok"})
+    monkeypatch.setattr("deepseek_infra.web.server.due_reminders", lambda: [{"reminderId": "r1"}])
+    monkeypatch.setattr("deepseek_infra.web.server.file_reader_window", lambda _f, **_k: {"chunks": []})
+    monkeypatch.setattr("deepseek_infra.web.server.file_page_text", lambda _f, **_k: {"text": "page1"})
+    monkeypatch.setattr("deepseek_infra.web.server.compress_context_payload", lambda _p: {"compressed": True})
+    monkeypatch.setattr("deepseek_infra.web.server.preflight_deepseek_payload", lambda _p: None)
+    monkeypatch.setattr("deepseek_infra.web.server.create_agent_run", lambda _p, **_k: {"runId": "run-1", "phase": "running"})
+    monkeypatch.setattr("deepseek_infra.web.server.agent_run_registry.ensure_started", lambda *_a, **_k: None)
+
+    app = create_app()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # download-save
+    assert client.post("/api/download-save", json={"id": "file-1", "filename": "file.txt"}).status_code == 200
+
+    # fetch-url
+    assert client.post("/api/fetch-url", json={"url": "http://example.com"}).status_code == 200
+
+    # reminders
+    assert client.post("/api/reminders", json={"action": "list"}).status_code == 200
+
+    # reminders due
+    assert client.post("/api/reminders/due", json={}).status_code == 200
+
+    # file-reader
+    assert client.post("/api/file-reader", json={"fileId": "fid"}).status_code == 200
+
+    # file-page-text
+    assert client.post("/api/file-page-text", json={"fileId": "fid", "page": 1}).status_code == 200
+
+    # compress-context
+    assert client.post("/api/compress-context", json={"messages": []}).status_code == 200
+
+    # metrics
+    assert client.get("/metrics").status_code == 200
+
+    # agent-runs create valid
+    assert client.post("/api/agent-runs", json={"payload": {"model": "test"}}).status_code == 201
+
+    # agent-runs create invalid payload
+    assert client.post("/api/agent-runs", json={"payload": "not-a-dict"}).status_code == 400
+
+
