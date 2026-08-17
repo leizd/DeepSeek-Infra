@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS logical_recovery_points (
     object_set_digest TEXT,
     committed_at TEXT NOT NULL,
     snapshot_kind TEXT NOT NULL DEFAULT 'full',
+    retained INTEGER NOT NULL DEFAULT 1,
+    retired_at TEXT,
     metadata_json TEXT
 );
 
@@ -77,6 +79,12 @@ CREATE TABLE IF NOT EXISTS recovery_point_copies (
     recoverable INTEGER NOT NULL DEFAULT 0,
     role TEXT NOT NULL DEFAULT 'primary',
     mode TEXT NOT NULL DEFAULT 'required',
+    state TEXT NOT NULL DEFAULT 'healthy',
+    last_verified_at TEXT,
+    last_scrub_at TEXT,
+    last_drill_at TEXT,
+    last_repair_at TEXT,
+    last_failure TEXT,
     verified_at TEXT,
     metadata_json TEXT,
     PRIMARY KEY (target_id, policy_id, backup_id)
@@ -129,6 +137,7 @@ CREATE TABLE IF NOT EXISTS target_evidence (
 
 CREATE TABLE IF NOT EXISTS recovery_stage_samples (
     sample_id TEXT PRIMARY KEY,
+    target_id TEXT,
     recovery_class_json TEXT NOT NULL,
     stage TEXT NOT NULL,
     bytes INTEGER NOT NULL,
@@ -162,6 +171,33 @@ def _utc_iso(value: datetime | None = None) -> str:
     return current.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("ALTER TABLE logical_recovery_points ADD COLUMN retained INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE logical_recovery_points ADD COLUMN retired_at TEXT")
+    except sqlite3.OperationalError:
+        pass
+    for col, col_type in [
+        ("state", "TEXT NOT NULL DEFAULT 'healthy'"),
+        ("last_verified_at", "TEXT"),
+        ("last_scrub_at", "TEXT"),
+        ("last_drill_at", "TEXT"),
+        ("last_repair_at", "TEXT"),
+        ("last_failure", "TEXT"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE recovery_point_copies ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass
+    try:
+        conn.execute("ALTER TABLE recovery_stage_samples ADD COLUMN target_id TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+
 def _get_connection() -> sqlite3.Connection:
     BACKUP_DR_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(EVIDENCE_DB), timeout=30.0)
@@ -170,6 +206,7 @@ def _get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL;")
     with conn:
         conn.executescript(_INIT_SQL)
+        _migrate_schema(conn)
     return conn
 
 
@@ -387,6 +424,7 @@ def record_stage_sample(
     observed_at: str = "",
     result: str = "success",
     recovery_class: Any = None,
+    target_id: str | None = None,
 ) -> None:
     s_id = sample_id or f"sample_{uuid.uuid4().hex[:12]}"
     actual_bytes = bytes_transferred or bytes_count
@@ -394,9 +432,10 @@ def record_stage_sample(
     with _DB_LOCK, _get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO recovery_stage_samples (sample_id, recovery_class_json, stage, bytes, duration_ms, observed_at, result)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO recovery_stage_samples (sample_id, target_id, recovery_class_json, stage, bytes, duration_ms, observed_at, result)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(sample_id) DO UPDATE SET
+                target_id = COALESCE(excluded.target_id, recovery_stage_samples.target_id),
                 recovery_class_json = excluded.recovery_class_json,
                 stage = excluded.stage,
                 bytes = excluded.bytes,
@@ -406,6 +445,7 @@ def record_stage_sample(
             """,
             (
                 str(s_id),
+                str(target_id) if target_id else None,
                 json.dumps(rc_data, ensure_ascii=False, sort_keys=True),
                 str(stage),
                 max(0, int(actual_bytes)),
@@ -793,6 +833,7 @@ def list_stage_samples(
     *,
     stage: str | None = None,
     since_iso: str | None = None,
+    target_id: str | None = None,
     limit: int = 1000,
 ) -> list[dict[str, Any]]:
     query = "SELECT * FROM recovery_stage_samples"
@@ -804,6 +845,9 @@ def list_stage_samples(
     if since_iso is not None:
         clauses.append("observed_at >= ?")
         params.append(since_iso)
+    if target_id is not None:
+        clauses.append("target_id = ?")
+        params.append(target_id)
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY observed_at DESC LIMIT ?"
@@ -814,6 +858,7 @@ def list_stage_samples(
         return [
             {
                 "sampleId": str(row["sample_id"]),
+                "targetId": str(row["target_id"]) if "target_id" in row.keys() and row["target_id"] else None,
                 "recoveryClass": json.loads(row["recovery_class_json"]) if row["recovery_class_json"] else {},
                 "stage": str(row["stage"]),
                 "bytes": int(row["bytes"]),
@@ -951,6 +996,12 @@ def record_logical_recovery_copy(
     role: str = "primary",
     mode: str = "required",
     snapshot_kind: str = "full",
+    state: str = "healthy",
+    last_verified_at: str | None = None,
+    last_scrub_at: str | None = None,
+    last_drill_at: str | None = None,
+    last_repair_at: str | None = None,
+    last_failure: str | None = None,
     verified_at: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> str:
@@ -961,8 +1012,8 @@ def record_logical_recovery_copy(
         conn.execute(
             """
             INSERT INTO logical_recovery_points (
-                logical_id, policy_id, backup_id, object_set_digest, committed_at, snapshot_kind, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                logical_id, policy_id, backup_id, object_set_digest, committed_at, snapshot_kind, retained, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
             ON CONFLICT(logical_id) DO UPDATE SET
                 committed_at = CASE
                     WHEN excluded.committed_at > logical_recovery_points.committed_at
@@ -983,8 +1034,9 @@ def record_logical_recovery_copy(
             """
             INSERT INTO recovery_point_copies (
                 target_id, policy_id, backup_id, logical_id, object_set_digest, committed_at,
-                recoverable, role, mode, verified_at, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                recoverable, role, mode, state, last_verified_at, last_scrub_at, last_drill_at,
+                last_repair_at, last_failure, verified_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(target_id, policy_id, backup_id) DO UPDATE SET
                 logical_id = excluded.logical_id,
                 object_set_digest = excluded.object_set_digest,
@@ -992,6 +1044,12 @@ def record_logical_recovery_copy(
                 recoverable = excluded.recoverable,
                 role = excluded.role,
                 mode = excluded.mode,
+                state = excluded.state,
+                last_verified_at = COALESCE(excluded.last_verified_at, recovery_point_copies.last_verified_at),
+                last_scrub_at = COALESCE(excluded.last_scrub_at, recovery_point_copies.last_scrub_at),
+                last_drill_at = COALESCE(excluded.last_drill_at, recovery_point_copies.last_drill_at),
+                last_repair_at = COALESCE(excluded.last_repair_at, recovery_point_copies.last_repair_at),
+                last_failure = COALESCE(excluded.last_failure, recovery_point_copies.last_failure),
                 verified_at = excluded.verified_at,
                 metadata_json = excluded.metadata_json
             """,
@@ -1005,6 +1063,12 @@ def record_logical_recovery_copy(
                 1 if recoverable else 0,
                 str(role or "primary"),
                 str(mode or "required"),
+                str(state or "healthy"),
+                str(last_verified_at) if last_verified_at else None,
+                str(last_scrub_at) if last_scrub_at else None,
+                str(last_drill_at) if last_drill_at else None,
+                str(last_repair_at) if last_repair_at else None,
+                str(last_failure) if last_failure else None,
                 str(verified_at or _utc_iso()),
                 json.dumps(metadata, ensure_ascii=False, sort_keys=True) if metadata else None,
             ),
@@ -1055,8 +1119,107 @@ def list_logical_recovery_copies(
                 "recoverable": bool(row["recoverable"]),
                 "role": str(row["role"] or "primary"),
                 "mode": str(row["mode"] or "required"),
+                "state": str(row["state"] if "state" in row.keys() and row["state"] else "healthy"),
+                "lastVerifiedAt": str(row["last_verified_at"]) if "last_verified_at" in row.keys() and row["last_verified_at"] else None,
+                "lastScrubAt": str(row["last_scrub_at"]) if "last_scrub_at" in row.keys() and row["last_scrub_at"] else None,
+                "lastDrillAt": str(row["last_drill_at"]) if "last_drill_at" in row.keys() and row["last_drill_at"] else None,
+                "lastRepairAt": str(row["last_repair_at"]) if "last_repair_at" in row.keys() and row["last_repair_at"] else None,
+                "lastFailure": str(row["last_failure"]) if "last_failure" in row.keys() and row["last_failure"] else None,
                 "verifiedAt": str(row["verified_at"]) if row["verified_at"] else None,
                 "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
             }
             for row in rows
         ]
+
+
+def update_recovery_copy_state(
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    *,
+    state: str,
+    recoverable: bool | None = None,
+    last_verified_at: str | None = None,
+    last_scrub_at: str | None = None,
+    last_drill_at: str | None = None,
+    last_repair_at: str | None = None,
+    last_failure: str | None = None,
+) -> None:
+    with _DB_LOCK, _get_connection() as conn:
+        updates: list[str] = ["state = ?"]
+        params: list[Any] = [str(state)]
+        if recoverable is not None:
+            updates.append("recoverable = ?")
+            params.append(1 if recoverable else 0)
+        if last_verified_at is not None:
+            updates.append("last_verified_at = ?")
+            params.append(last_verified_at)
+        if last_scrub_at is not None:
+            updates.append("last_scrub_at = ?")
+            params.append(last_scrub_at)
+        if last_drill_at is not None:
+            updates.append("last_drill_at = ?")
+            params.append(last_drill_at)
+        if last_repair_at is not None:
+            updates.append("last_repair_at = ?")
+            params.append(last_repair_at)
+        if last_failure is not None:
+            updates.append("last_failure = ?")
+            params.append(last_failure)
+        params.extend([str(target_id), str(policy_id), str(backup_id)])
+        conn.execute(
+            f"UPDATE recovery_point_copies SET {', '.join(updates)} WHERE target_id = ? AND policy_id = ? AND backup_id = ?",
+            params,
+        )
+
+
+def mark_logical_recovery_point_retired(
+    policy_id: str,
+    backup_id: str,
+    *,
+    retired_at: str | None = None,
+) -> None:
+    """Mark a logical recovery point as retired, so it is never repaired or resurrected."""
+    at = retired_at or _utc_iso()
+    with _DB_LOCK, _get_connection() as conn:
+        conn.execute(
+            "UPDATE logical_recovery_points SET retained = 0, retired_at = ? WHERE policy_id = ? AND backup_id = ?",
+            (at, str(policy_id), str(backup_id)),
+        )
+        conn.execute(
+            "UPDATE recovery_point_copies SET state = 'retired', recoverable = 0 WHERE policy_id = ? AND backup_id = ?",
+            (str(policy_id), str(backup_id)),
+        )
+
+
+def is_logical_recovery_point_retired(policy_id: str, backup_id: str) -> bool:
+    with _DB_LOCK, _get_connection() as conn:
+        row = conn.execute(
+            "SELECT retained, retired_at FROM logical_recovery_points WHERE policy_id = ? AND backup_id = ? LIMIT 1",
+            (str(policy_id), str(backup_id)),
+        ).fetchone()
+        if row is None:
+            return False
+        return int(row["retained"] or 0) == 0 or row["retired_at"] is not None
+
+
+def get_logical_recovery_point(policy_id: str, backup_id: str) -> dict[str, Any] | None:
+    with _DB_LOCK, _get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM logical_recovery_points WHERE policy_id = ? AND backup_id = ? LIMIT 1",
+            (str(policy_id), str(backup_id)),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "logicalId": str(row["logical_id"]),
+            "policyId": str(row["policy_id"]),
+            "backupId": str(row["backup_id"]),
+            "objectSetDigest": str(row["object_set_digest"]) if row["object_set_digest"] else None,
+            "committedAt": str(row["committed_at"]),
+            "snapshotKind": str(row["snapshot_kind"]),
+            "retained": bool(row["retained"]) if "retained" in row.keys() else True,
+            "retiredAt": str(row["retired_at"]) if "retired_at" in row.keys() and row["retired_at"] else None,
+            "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
+        }
+

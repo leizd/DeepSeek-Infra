@@ -16,7 +16,7 @@
   <text x="48" y="54" font-size="26" font-weight="700" fill="#0f172a">DeepSeek Infra</text>
   <text x="48" y="78" font-size="13.5" fill="#64748b">Local-first Agentic AI Infrastructure Platform — LLM Gateway · Agent DAG · MCP · A2A · Local RAG · Workspace · DR · Observability</text>
   <rect x="1070" y="34" width="82" height="28" rx="14" fill="#2563eb"/>
-  <text x="1111" y="53" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v4.5.2</text>
+  <text x="1111" y="53" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v4.5.3</text>
 
   <!-- clients layer -->
   <rect x="48" y="98" width="1104" height="68" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
@@ -173,5 +173,5 @@
   </g>
 
   <!-- footer -->
-  <text x="600" y="890" font-size="10" fill="#94a3b8" text-anchor="middle">v4.5.2: Production DR orchestration · Object Set v1 · Single React SPA · Isolated Rust/Stateless MCP scale-out</text>
+  <text x="600" y="890" font-size="10" fill="#94a3b8" text-anchor="middle">v4.5.3: Production DR orchestration · Object Set v1 · Single React SPA · Isolated Rust/Stateless MCP scale-out</text>
 </svg>

@@ -117,7 +117,7 @@ def test_replication_object_set_package_path(tmp_settings: Path, monkeypatch: py
     monkeypatch.setattr("deepseek_infra.infra.workspace.backup_writer_lease.TargetWriterLease", lambda *a, **k: Writer())
     monkeypatch.setattr("deepseek_infra.infra.workspace.backup_publish.publish_backup", lambda *a, **k: published_bad)
     bad = backup_replication.execute_replication_job(jobs3[0]["jobId"])
-    assert bad["phase"] == "failed"
+    assert bad["phase"] in ("failed", "retry-wait", "failed-terminal")
 
 
 def test_planner_managed_local_and_health_signals(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -117,7 +117,8 @@ def test_create_policy_validates_scope_and_mirror(tmp_settings: Path) -> None:
     assert policy["frontendMirror"]["profileId"] == "mirror_main"
 
 
-def test_create_policy_validates_target_and_retry(tmp_settings: Path) -> None:
+def test_create_policy_validates_target_and_retry(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backup_policies.backup_targets, "get_target", lambda tid: {"targetId": tid, "kind": "filesystem"})
     with pytest.raises(AppError):
         backup_policies.create_policy(_payload(targetId="/mnt/backup"))
     with pytest.raises(AppError):
@@ -180,7 +181,8 @@ def test_recipient_set_digest_is_order_independent() -> None:
     assert len(first) == 64
 
 
-def test_restore_projection_disables_and_unbinds(tmp_settings: Path) -> None:
+def test_restore_projection_disables_and_unbinds(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backup_policies.backup_targets, "get_target", lambda tid: {"targetId": tid, "kind": "filesystem"})
     policy = backup_policies.create_policy(_payload(targetId="target_usb1"))
     policy["lastRunAt"] = "2026-01-01T00:00:00Z"
     policy["lease"] = {"owner": "worker-1"}

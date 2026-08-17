@@ -5,24 +5,24 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.5.2-blue)
+![Version](https://img.shields.io/badge/version-4.5.3-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.5.2 — Recovery Replica Sets and Automatic Target Failover.** Encrypt-once multi-target replication, durable replication jobs, ledger-only recovery planning, and pre-prepare automatic target failover on frozen object-set-v1 / Receipt v4 / Commit v4 / randomized Age. Also closes 4.5.1 P0 lifecycle gaps (global lease keeper, strict policy evidence, durable audit, honest RTO).
+> **4.5.3 — Replica Self-Healing & Lifecycle Governance.** Desired-state convergence, ciphertext-plane self-healing (0 Age decrypts/encrypts), raw-bytes receipt digest and commit chain continuity audits, mirrored retention with minimum-healthy-copies safety gates, atomic copy-first drill selection, and deterministic lexicographic recovery planning.
 
-## 4.5.2 at a glance
+## 4.5.3 at a glance
 
-- Recovery Replica Sets: Primary + required/best-effort replicas share identical ciphertext digests with independent target-local Receipt/Commit chains.
-- Durable BackupReplicationJob + spool retention for required copies; primary commit never rolls back on replica failure.
-- Ledger-only Recovery Planner (zero remote I/O) with deterministic ranking and reason codes.
-- Automatic source-target failover before live prepare (new hold before old release; forbidden after prepared).
-- Global RecoveryLeaseKeeper wired into app lifecycle; keeper failure degrades readiness.
+- Replica Self-Healing: Pure ciphertext streaming (`0 Age decrypt / 0 Age encrypt`) with quarantine of corrupted destination components and target-local catalog synchronization.
+- Mirrored Retention & Lifecycle Governance: Safety gate enforces `healthyCopiesAfterDelete >= minCommittedCopies`; marks retired points in DR ledger and permanently blocks resurrection.
+- Remote DR Audits: Direct SHA-256 validation of raw receipt bytes against commit binding, targetGeneration gaps, commit hash chain continuity, genesis hash, and `control/head.json` match.
+- Atomic Copy-First Drill: Scheduled drill selects `(targetId, backupId)` atomically from authenticated recoverable copies.
+- Deterministic Lexicographic Recovery Planner: Ranking by `(health, preference, cache, drill, scrub, target-calibrated RTO, targetId)` with zero remote I/O.
 
-See the [4.5.2 release notes](docs/releases/4.5.2.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.5.3 release notes](docs/releases/4.5.3.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

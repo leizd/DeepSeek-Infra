@@ -369,8 +369,8 @@ def get_recovery_drill(restore_id: str) -> dict[str, Any]:
     raise AppError("Recovery Drill result not found", code=ErrorCode.NOT_FOUND, status=404)
 
 
-def _select_drill_rotation_target(policy: dict[str, Any], policy_id: str, *, fallback_target_id: str) -> str:
-    """Rotate scheduled drills across primary + required replicas (durable, deterministic)."""
+def _select_drill_candidate_copy(policy: dict[str, Any], policy_id: str, *, fallback_target_id: str) -> tuple[str, str] | None:
+    """Select (targetId, backupId) tuple atomically from authenticated recoverable copies."""
     from deepseek_infra.infra.workspace import backup_dr_ledger
 
     candidates = [fallback_target_id]
@@ -379,25 +379,85 @@ def _select_drill_rotation_target(policy: dict[str, Any], policy_id: str, *, fal
         for entry in list(replication.get("targets") or []):
             if isinstance(entry, dict) and entry.get("targetId"):
                 candidates.append(str(entry["targetId"]))
-    # Stable unique order
+
     seen: set[str] = set()
-    ordered: list[str] = []
+    unique_targets: list[str] = []
     for tid in candidates:
         if tid not in seen:
             seen.add(tid)
-            ordered.append(tid)
-    if len(ordered) <= 1:
-        return fallback_target_id
+            unique_targets.append(tid)
 
-    def _drill_age_key(target_id: str) -> tuple[int, str]:
-        outcome = backup_dr_ledger.get_latest_drill_outcome(target_id, policy_id)
-        if outcome is None or outcome.get("result") != "success":
-            return (0, target_id)  # never drilled → highest priority
-        observed = str(outcome.get("observedAt") or outcome.get("latestSuccessfulAt") or "")
-        return (1, observed)  # older first among drilled
+    # For each candidate target, resolve its latest recoverable point for this policy
+    available_copies: list[dict[str, Any]] = []
+    for tid in unique_targets:
+        pt, _ = backup_dr_ledger.get_latest_recoverable_point(tid, policy_id)
+        if pt is None:
+            # Check logical copies in ledger
+            copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=50)
+            target_copies = [c for c in copies if str(c.get("targetId")) == tid and c.get("recoverable")]
+            if target_copies:
+                pt = target_copies[0]
+        if pt is not None and pt.get("backupId"):
+            outcome = backup_dr_ledger.get_latest_drill_outcome(tid, policy_id)
+            has_success = outcome is not None and outcome.get("result") == "success"
+            observed = str((outcome or {}).get("observedAt") or (outcome or {}).get("latestSuccessfulAt") or "")
+            available_copies.append({
+                "targetId": tid,
+                "backupId": str(pt["backupId"]),
+                "neverDrilled": not has_success,
+                "observedAt": observed,
+            })
 
-    ordered.sort(key=_drill_age_key)
-    return ordered[0]
+    if not available_copies:
+        return None
+
+    def _copy_priority_key(item: dict[str, Any]) -> tuple[int, str, str]:
+        # Priority: 0 if never drilled (highest priority), 1 if drilled (older first)
+        drill_prio = 0 if item["neverDrilled"] else 1
+        return (drill_prio, str(item["observedAt"]), str(item["targetId"]))
+
+    available_copies.sort(key=_copy_priority_key)
+    chosen = available_copies[0]
+    return (str(chosen["targetId"]), str(chosen["backupId"]))
+
+
+def _select_drill_rotation_target(
+    policy: dict[str, Any],
+    policy_id: str,
+    *,
+    fallback_target_id: str = "managed-local",
+) -> str:
+    """Select the rotation target for a drill."""
+    res = _select_drill_candidate_copy(policy, policy_id, fallback_target_id=fallback_target_id)
+    if res is not None:
+        return res[0]
+
+    from deepseek_infra.infra.workspace import backup_dr_ledger
+
+    candidates = [fallback_target_id]
+    replication = policy.get("replication") if isinstance(policy.get("replication"), dict) else {}
+    if isinstance(replication, dict) and replication.get("enabled"):
+        for entry in list(replication.get("targets") or []):
+            if isinstance(entry, dict) and entry.get("targetId"):
+                candidates.append(str(entry["targetId"]))
+
+    seen: set[str] = set()
+    unique_targets: list[str] = []
+    for tid in candidates:
+        if tid not in seen:
+            seen.add(tid)
+            unique_targets.append(tid)
+
+    scored: list[tuple[int, str, str]] = []
+    for tid in unique_targets:
+        outcome = backup_dr_ledger.get_latest_drill_outcome(tid, policy_id)
+        has_success = outcome is not None and outcome.get("result") == "success"
+        observed = str((outcome or {}).get("observedAt") or (outcome or {}).get("latestSuccessfulAt") or "")
+        drill_prio = 0 if not has_success else 1
+        scored.append((drill_prio, observed, tid))
+
+    scored.sort()
+    return scored[0][2] if scored else fallback_target_id
 
 
 def execute_scheduled_drill(policy_id: str, *, client: Any | None = None) -> dict[str, Any]:
@@ -446,21 +506,16 @@ def execute_scheduled_drill(policy_id: str, *, client: Any | None = None) -> dic
             "backupId": "",
         }
 
-    # Strict policy scope — never fall back to another policy's recovery point.
-    latest_pt, _ = backup_dr_ledger.get_latest_recoverable_point(target_id, policy_id)
-    # Replica-aware drill rotation: prefer the replica with oldest successful drill evidence.
-    drill_target_id = _select_drill_rotation_target(policy, policy_id, fallback_target_id=target_id)
-    if latest_pt is None and drill_target_id != target_id:
-        latest_pt, _ = backup_dr_ledger.get_latest_recoverable_point(drill_target_id, policy_id)
-    if latest_pt is None:
+    # Strict policy scope + atomic copy-first selection across primary and replicas
+    candidate = _select_drill_candidate_copy(policy, policy_id, fallback_target_id=target_id)
+    if candidate is None:
         raise AppError(
             "No policy recovery point found for scheduled drill",
             code=ErrorCode.NOT_FOUND,
             status=404,
         )
 
-    backup_id = str(latest_pt.get("backupId") or "")
-    target_id = drill_target_id
+    target_id, backup_id = candidate
 
     try:
         session = backup_remote_restore.create_restore_from_target(
