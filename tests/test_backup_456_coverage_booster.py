@@ -16,11 +16,12 @@ import asyncio
 import hashlib
 import json
 import tempfile
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import APIRouter, Request
@@ -1564,6 +1565,63 @@ def test_backup_reconcile_all_targets_and_store_reconciliation(tmp_path: Path) -
         now=datetime.now(tz=timezone.utc),
     )
     assert rep_store["targetId"] == t_fs["targetId"]
+
+
+def test_backup_policies_helpers_and_projections(tmp_path: Path) -> None:
+    t = _init_local_target("target_pol_hlp", tmp_path)
+    pol = backup_policies.create_policy({
+        "policyId": "pol-helpers-1",
+        "name": "Helper Policy",
+        "primaryTargetId": t["targetId"],
+        "enabled": True,
+        "encryption": {
+            "recipients": [backup_policies.DEFAULT_TEST_RECIPIENT],
+        },
+    })
+
+    # active_recipients
+    recips = backup_policies.active_recipients()
+    assert backup_policies.DEFAULT_TEST_RECIPIENT in recips
+
+    # enabled_policies
+    enb = backup_policies.enabled_policies()
+    assert any(p["policyId"] == "pol-helpers-1" for p in enb)
+
+    # restore_projection
+    proj = backup_policies.restore_projection(pol)
+    assert proj["enabled"] is False
+    assert proj["targetId"] == backup_policies.UNBOUND_TARGET
+
+    # delete_policy
+    res_del = backup_policies.delete_policy("pol-helpers-1")
+    assert res_del["deleted"] is True
+
+
+@pytest.mark.anyio
+async def test_workspace_backup_finalize_disconnect(tmp_path: Path) -> None:
+    from deepseek_infra.web.routes import workspace
+
+    deps = workspace.WorkspaceRouteDeps(read_multipart_files=MagicMock())
+    router = workspace.create_workspace_router(deps)
+
+    # Find the finalize route
+    finalize_route = None
+    for route in router.routes:
+        if isinstance(route, APIRoute) and route.path == "/api/workspace/backups/{backup_id}/finalize":
+            finalize_route = route
+            break
+    assert finalize_route is not None
+
+    mock_req = MagicMock(spec=Request)
+    mock_req.headers = {"Authorization": "Bearer test-auth"}
+    mock_req.is_disconnected = AsyncMock(return_value=True)
+
+    with patch("deepseek_infra.web.routes.workspace.require_api_auth"):
+        with patch("deepseek_infra.web.routes.workspace.workspace_backups.finalize_session", side_effect=lambda *a, **kw: time.sleep(0.5)):
+            with pytest.raises(AppError) as exc:
+                await finalize_route.endpoint(mock_req, backup_id="bk-disc-1")
+            assert exc.value.status == 499
+
 
 
 

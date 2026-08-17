@@ -166,7 +166,7 @@ def active_recipients() -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
     for policy in list_policies():
-        recips = (policy.get("encryption") or {}).get("recipients") or []
+        recips = (policy.get("protection") or policy.get("encryption") or {}).get("recipients") or []
         for r in recips:
             if isinstance(r, str) and r and r not in seen:
                 seen.add(r)
