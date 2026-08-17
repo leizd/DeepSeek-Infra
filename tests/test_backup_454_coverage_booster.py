@@ -511,3 +511,197 @@ def test_write_failover_and_dr_readiness(tmp_settings, monkeypatch) -> None:
     readiness = backup_dr_readiness.evaluate_scope_readiness("replica-target-healthy")
     assert "writeContinuity" in readiness
     assert "status" in readiness["writeContinuity"]
+
+
+def test_backup_replication_extra_edge_cases(tmp_settings, monkeypatch) -> None:
+    """Cover additional edge cases in backup_replication."""
+    store_dir = tmp_settings / "extra_store"
+    store_dir.mkdir(parents=True)
+    store = MockTargetStore(store_dir, target_id="extra-target")
+    target = MockTarget("extra-target", root=store_dir, store=store)
+
+    # 1. SourceHold model methods and serialization
+    now = datetime.now(timezone.utc)
+    hold = backup_replication.SourceHold(
+        hold_id="test-h-1",
+        target_id="extra-target",
+        policy_id="pol-1",
+        backup_id="bk-1",
+        holder_id="repair-job-1",
+        expires_at=(now + timedelta(seconds=60)).isoformat(),
+    )
+    d = hold.to_dict()
+    assert d["holdId"] == "test-h-1"
+
+    # 2. Acquire, check, and release hold via store
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda tid: target)
+    acquired = backup_replication.acquire_source_hold(
+        target_id="extra-target",
+        policy_id="pol-1",
+        backup_id="bk-1",
+        holder_id="repair-job-1",
+        target_root=store_dir,
+        target_store=store,
+        hold_seconds=30,
+    )
+    assert acquired is not None
+    assert backup_replication.is_source_held("extra-target", "pol-1", "bk-1")
+
+    # Renew hold
+    acquired.renew(duration_seconds=60)
+    assert backup_replication.is_source_held("extra-target", "pol-1", "bk-1")
+
+    # Release hold
+    backup_replication.release_source_hold(acquired)
+
+    # Check non-existent hold
+    assert not backup_replication.is_source_held("extra-target", "pol-1", "non-existent")
+
+    # 3. Stream ciphertext transfer with multi-chunk buffer
+    data = b"X" * (16 * 1024)  # 16 KiB
+    (store_dir / "source.dat").write_bytes(data)
+    dest_dir = tmp_settings / "extra_dest"
+    dest_dir.mkdir(parents=True)
+    dest_target = MockTarget("dest-target", root=dest_dir)
+
+    bytes_trans = backup_replication.stream_ciphertext_transfer(
+        target,
+        dest_target,
+        "source.dat",
+        "dest.dat",
+        expected_digest=_sha256(data),
+        chunk_size=4096,  # 4 KiB chunks -> 4 iterations
+    )
+    assert bytes_trans == len(data)
+    assert (dest_dir / "dest.dat").read_bytes() == data
+
+    # Corrupt source checksum mismatch
+    with pytest.raises(AppError) as exc_info:
+        backup_replication.stream_ciphertext_transfer(
+            target,
+            dest_target,
+            "source.dat",
+            "dest-corrupt.dat",
+            expected_digest="wrong_checksum",
+            chunk_size=4096,
+        )
+    assert "digest mismatch" in str(exc_info.value)
+
+    # 4. Quarantine and replace corrupt remote object
+    (dest_dir / "corrupt-target.dat").write_bytes(b"corrupt-content")
+    replaced_bytes = backup_replication.quarantine_and_replace_corrupt_remote_object(
+        dest_target,
+        "corrupt-target.dat",
+        _sha256(data),
+        target,
+        "source.dat",
+    )
+    assert replaced_bytes == len(data)
+    assert (dest_dir / "corrupt-target.dat").read_bytes() == data
+
+
+def test_backup_governance_router_booster(tmp_settings, monkeypatch) -> None:
+    """Test backup governance router endpoints for recovery status and replication."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from deepseek_infra.web.routes.backup_governance import create_backup_governance_router
+
+    monkeypatch.setattr("deepseek_infra.web.routes.backup_governance.require_api_auth", lambda _req: None)
+    app = FastAPI()
+    app.include_router(create_backup_governance_router())
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # Recovery status
+    resp = client.get("/api/workspace/disaster-recovery/status")
+    assert resp.status_code == 200
+
+    # Policy list
+    resp_pol = client.get("/api/workspace/backup-policies")
+    assert resp_pol.status_code == 200
+
+
+def test_backup_replication_repair_jobs_query_and_compliance(tmp_settings, monkeypatch) -> None:
+    """Test repair job listings, non-existent reads, and replication compliance calculations."""
+    # 1. Non-existent and corrupt repair jobs
+    assert backup_replication.read_repair_job("non-existent-repair-job") is None
+
+    # Corrupt repair job file
+    corrupt_file = tmp_settings / ".backup-replication" / "repairs" / "repair_corrupt.json"
+    corrupt_file.parent.mkdir(parents=True, exist_ok=True)
+    corrupt_file.write_text("{bad json", encoding="utf-8")
+    assert backup_replication.read_repair_job("repair_corrupt") is None
+
+    # 2. Replication compliance scenarios
+    # A: Disabled replication
+    pol_disabled = {"policyId": "p-dis", "replication": {"enabled": False}}
+    comp_dis = backup_replication.replication_compliance(policy=pol_disabled, backup_id="bk-1")
+    assert comp_dis["enabled"] is False
+    assert comp_dis["compliance"] == "healthy"
+
+    # B: Enabled replication with lag threshold
+    pol_lag = {
+        "policyId": "p-lag",
+        "targetId": "p-target",
+        "replication": {
+            "enabled": True,
+            "minCommittedCopies": 2,
+            "maxReplicaLagSeconds": 100,
+            "targets": [{"targetId": "r-target", "mode": "required"}],
+        },
+    }
+    backup_dr_ledger.record_logical_recovery_copy(
+        target_id="p-target",
+        policy_id="p-lag",
+        backup_id="bk-comp-1",
+        committed_at="2026-08-17T02:00:00Z",
+        recoverable=True,
+    )
+    backup_dr_ledger.record_logical_recovery_copy(
+        target_id="r-target",
+        policy_id="p-lag",
+        backup_id="bk-comp-1",
+        committed_at="2026-08-17T01:00:00Z",
+        recoverable=True,
+    )
+    comp_lag = backup_replication.replication_compliance(policy=pol_lag, backup_id="bk-comp-1")
+    assert comp_lag["enabled"] is True
+    assert comp_lag["compliance"] == "degraded"
+    assert any("replica-lag-exceeded" in r for r in comp_lag["reasons"])
+
+
+def test_backup_retention_copy_safety_edge_cases(tmp_settings, monkeypatch) -> None:
+    """Test retention effective min copies derivation and copy safety."""
+    from deepseek_infra.infra.workspace import backup_retention, backup_policies, backup_targets
+
+    # Create policy with minCommittedCopies
+    policy_id = "pol-ret-copy"
+    monkeypatch.setattr(backup_targets, "get_target", lambda tid: {"targetId": tid, "status": "active"})
+    backup_policies.create_policy({
+        "policyId": policy_id,
+        "name": "Retention Policy",
+        "cron": "0 0 * * *",
+        "targetId": "managed-local",
+        "keepLast": 5,
+        "replication": {
+            "enabled": True,
+            "minCommittedCopies": 3,
+            "targets": [
+                {"targetId": "target_replica_01", "mode": "required"},
+                {"targetId": "target_replica_02", "mode": "required"},
+            ],
+        },
+    })
+
+    # Effective min copies should be derived from policy replication
+    ret = {"keepLast": 5, "minCommittedCopies": 1}
+    effective = backup_retention._effective_min_copies(ret, policy_id)
+    assert effective == 3
+
+    # Fallback to retention config if policy does not exist
+    effective_fallback = backup_retention._effective_min_copies(ret, "non-existent-pol")
+    assert effective_fallback == 1
+
+
+
+
+
