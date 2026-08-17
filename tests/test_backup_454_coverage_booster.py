@@ -702,6 +702,80 @@ def test_backup_retention_copy_safety_edge_cases(tmp_settings, monkeypatch) -> N
     assert effective_fallback == 1
 
 
+def test_backup_replication_repair_execution_branches(tmp_settings, monkeypatch) -> None:
+    """Cover repair execution edge cases, retired skips, terminal status, and reconciler."""
+    from deepseek_infra.infra.workspace import backup_dr_ledger, backup_replication, backup_policies
+
+    # 1. Retired point skip
+    monkeypatch.setattr(backup_dr_ledger, "is_logical_recovery_point_retired", lambda p, b: True)
+    res_retired = backup_replication.execute_replica_repair(
+        policy_id="pol-ret",
+        backup_id="bk-retired",
+        dest_target_id="target-r1",
+    )
+    assert res_retired["status"] == "skipped"
+    assert res_retired["reason"] == "retired"
+
+    # 2. Terminal job return
+    monkeypatch.setattr(backup_dr_ledger, "is_logical_recovery_point_retired", lambda p, b: False)
+    job_term = backup_replication.create_repair_job(
+        policy_id="pol-term",
+        backup_id="bk-term",
+        dest_target_id="target-r1",
+        repair_id="repair-term-01",
+    )
+    backup_replication._set_repair_phase(job_term, "healthy")
+    res_term = backup_replication.execute_replica_repair(
+        policy_id="pol-term",
+        backup_id="bk-term",
+        dest_target_id="target-r1",
+        run_id="repair-term-01",
+    )
+    assert res_term["status"] == "success"
+
+    # 3. No healthy source copy available -> raises 404
+    job_no_src = backup_replication.create_repair_job(
+        policy_id="pol-no-src",
+        backup_id="bk-no-src",
+        dest_target_id="target-r1",
+        repair_id="repair-no-src-01",
+    )
+    monkeypatch.setattr(backup_dr_ledger, "list_logical_recovery_copies", lambda **k: [])
+    with pytest.raises(AppError) as exc_info:
+        backup_replication.execute_repair_job_instance("repair-no-src-01")
+    assert "No healthy source copy available" in str(exc_info.value)
+    assert exc_info.value.status == 404
+
+    # 4. process_pending_repairs
+    res_proc = backup_replication.process_pending_repairs(limit=5)
+    assert "processed" in res_proc
+
+    # 5. reconcile_policy_replicas
+    # Policy with replication disabled
+    monkeypatch.setattr(
+        backup_policies,
+        "get_policy",
+        lambda pid: {"policyId": pid, "replication": {"enabled": False}},
+    )
+    res_recon_dis = backup_replication.reconcile_policy_replicas("p-dis")
+    assert res_recon_dis["status"] == "skipped"
+
+    # Policy with no replica targets
+    monkeypatch.setattr(
+        backup_policies,
+        "get_policy",
+        lambda pid: {"policyId": pid, "replication": {"enabled": True, "targets": []}},
+    )
+    res_recon_noop = backup_replication.reconcile_policy_replicas("p-noop")
+    assert res_recon_noop["status"] == "noop"
+
+    # Cursor persistence
+    cursors = {"pol-1": "bk-100"}
+    backup_replication._save_cursors(cursors)
+    assert backup_replication._load_cursors() == cursors
+
+
+
 
 
 
