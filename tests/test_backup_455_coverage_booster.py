@@ -1561,6 +1561,61 @@ def test_backup_governance_continuity_routes(tmp_settings: Path) -> None:
     assert good_resp.json()["status"] == "promoted"
 
 
+def test_server_additional_endpoints_coverage(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cover server.py download-save, file-chunk, file-reader, file-page-text, fetch-url, compress-context, reminders, healthz, readyz, options."""
+    from starlette.testclient import TestClient
+    from deepseek_infra.core import config
+    from deepseek_infra.web import server as server_module
+
+    auth_token = config.settings.auth.token or "test_secret_token"
+    auth_headers = {"Authorization": f"Bearer {auth_token}"}
+
+    srv, _ = server_module.create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, base_url="http://127.0.0.1")
+
+    # 1. Healthz and Readyz
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/readyz").status_code == 200
+
+    # 2. OPTIONS request
+    opt_resp = client.options("/api/status", headers={"Origin": "http://127.0.0.1"})
+    assert opt_resp.status_code == 204
+
+    # 3. Unhandled error handler
+    err_resp = client.get("/api/causes-unhandled-error", headers=auth_headers)
+    assert err_resp.status_code == 404
+
+    # 4. /api/download-save
+    monkeypatch.setattr(server_module, "save_generated_file_to_downloads", lambda *a, **kw: {"saved": True, "path": "/fake/path"})
+    assert client.post("/api/download-save", json={"id": "gen_123", "filename": "out.txt"}, headers=auth_headers).status_code == 200
+
+    # 5. /api/file-chunk, file-reader, file-page-text
+    monkeypatch.setattr(server_module, "load_cached_file", lambda *a, **kw: {"name": "test.txt", "kind": "text", "chunks": [{"index": 1, "text": "hello"}]})
+    monkeypatch.setattr(server_module, "file_reader_window", lambda *a, **kw: {"window": []})
+    monkeypatch.setattr(server_module, "file_page_text", lambda *a, **kw: {"text": "page content"})
+    assert client.post("/api/file-chunk", json={"fileId": "f123", "chunkIndex": 1}, headers=auth_headers).status_code == 200
+    assert client.post("/api/file-reader", json={"fileId": "f123"}, headers=auth_headers).status_code == 200
+    assert client.post("/api/file-page-text", json={"fileId": "f123", "page": 1}, headers=auth_headers).status_code == 200
+
+    # 6. /api/fetch-url
+    monkeypatch.setattr(server_module, "fetch_url", lambda u: {"url": u, "content": "fetched"})
+    assert client.post("/api/fetch-url", json={"url": "https://example.com"}, headers=auth_headers).status_code == 200
+
+    # 7. /api/compress-context
+    monkeypatch.setattr(server_module, "compress_context_payload", lambda p: {"compressed": True})
+    assert client.post("/api/compress-context", json={"context": "long text"}, headers=auth_headers).status_code == 200
+
+    # 8. /api/reminders and /api/reminders/due
+    monkeypatch.setattr(server_module, "reminder_action", lambda p: {"ok": True})
+    monkeypatch.setattr(server_module, "due_reminders", lambda: [])
+    assert client.post("/api/reminders", json={"action": "list"}, headers=auth_headers).status_code == 200
+    assert client.post("/api/reminders/due", json={}, headers=auth_headers).status_code == 200
+
+    # 9. Static asset traversal returns 404
+    assert client.get("/ui/../secret.txt").status_code == 404
+
+
+
 
 
 
