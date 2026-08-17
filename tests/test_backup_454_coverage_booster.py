@@ -972,6 +972,139 @@ def test_server_routes_booster_coverage(tmp_settings, monkeypatch) -> None:
     assert resp_chunk.status_code == 200
 
 
+def test_backup_replication_uncovered_branches_booster(tmp_path, tmp_settings, monkeypatch) -> None:
+    """Test all edge case branches in backup_replication."""
+    from unittest.mock import MagicMock
+    from types import SimpleNamespace
+    from deepseek_infra.infra.workspace import backup_replication
+    from deepseek_infra.infra.workspace import backup_policies
+    from deepseek_infra.infra.workspace import backup_dr_ledger
+
+    # 1. Acquire and release holds with target_store
+    mock_store = MagicMock()
+    mock_store.put_if_absent = MagicMock(return_value=True)
+    mock_store.delete_if_match = MagicMock(return_value=True)
+
+    hold_store = backup_replication.acquire_source_hold(
+        "policy-boost", "backup-boost-01", "tgt-boost-s3", "repair-boost-01", target_store=mock_store
+    )
+    assert hold_store.target_store is mock_store
+    backup_replication.release_source_hold(hold_store)
+    mock_store.delete_if_match.assert_called_once()
+
+    # 2. Acquire and release hold with target_root
+    tgt_root = tmp_path / "tgt_root"
+    tgt_root.mkdir(parents=True, exist_ok=True)
+    hold_root = backup_replication.acquire_source_hold(
+        "policy-boost", "backup-boost-02", "tgt-boost-local", "repair-boost-02", target_root=tgt_root
+    )
+    assert (tgt_root / "holds" / "repair" / f"{hold_root.hold_id}.json").is_file()
+    backup_replication.release_source_hold(hold_root)
+    assert not (tgt_root / "holds" / "repair" / f"{hold_root.hold_id}.json").is_file()
+
+    # 3. is_source_held with target.root and target.store
+    # Local target root check
+    target_with_root = SimpleNamespace(root=tgt_root, store=None)
+    hold_file = tgt_root / "holds" / "repair" / "manual-hold.json"
+    hold_file.parent.mkdir(parents=True, exist_ok=True)
+    hold_file.write_text(
+        json.dumps({
+            "policyId": "pol-manual",
+            "backupId": "bk-manual",
+            "targetId": "tgt-root",
+            "expiresAt": "2099-01-01T00:00:00Z",
+        }),
+        encoding="utf-8",
+    )
+    assert backup_replication.is_source_held("tgt-root", "pol-manual", "bk-manual", target=target_with_root)
+    assert not backup_replication.is_source_held("tgt-root", "pol-manual", "bk-other", target=target_with_root)
+
+    # Store target check
+    mock_store_holds = MagicMock()
+    mock_store_holds.list_objects = MagicMock(return_value=SimpleNamespace(objects=[SimpleNamespace(key="holds/repair/h1.json")]))
+    mock_store_holds.get_bytes = MagicMock(return_value=json.dumps({
+        "policyId": "pol-store",
+        "backupId": "bk-store",
+        "expiresAt": "2099-01-01T00:00:00Z",
+    }).encode("utf-8"))
+    target_with_store = SimpleNamespace(root=None, store=mock_store_holds)
+    assert backup_replication.is_source_held("tgt-s3", "pol-store", "bk-store", target=target_with_store)
+
+    # 4. list_repair_jobs with filters and invalid files
+    repairs_dir = tmp_path / ".backup-replication" / "repairs"
+    repairs_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(backup_replication, "REPAIRS_DIR", repairs_dir)
+
+    (repairs_dir / ".hidden.json").write_text("{}", encoding="utf-8")
+    (repairs_dir / "invalid.json").write_text("not-json", encoding="utf-8")
+    (repairs_dir / "no-id.json").write_text(json.dumps({"repairId": ""}), encoding="utf-8")
+    (repairs_dir / "rep-1.json").write_text(
+        json.dumps({
+            "repairId": "rep-1",
+            "policyId": "pol-a",
+            "backupId": "bk-1",
+            "destTargetId": "dest-1",
+            "sourceTargetId": "src-1",
+            "phase": "completed",
+        }),
+        encoding="utf-8",
+    )
+    (repairs_dir / "rep-2.json").write_text(
+        json.dumps({
+            "repairId": "rep-2",
+            "policyId": "pol-b",
+            "backupId": "bk-2",
+            "destTargetId": "dest-2",
+            "sourceTargetId": "src-2",
+            "phase": "failed",
+        }),
+        encoding="utf-8",
+    )
+
+    assert len(backup_replication.list_repair_jobs(policy_id="pol-a")) == 1
+    assert len(backup_replication.list_repair_jobs(dest_target_id="dest-2")) == 1
+    assert len(backup_replication.list_repair_jobs(source_target_id="src-1")) == 1
+    assert len(backup_replication.list_repair_jobs(phase="failed")) == 1
+    assert len(backup_replication.list_repair_jobs(limit=1)) == 1
+
+    # 5. reconcile_policy_replicas branches
+    monkeypatch.setattr(backup_policies, "get_policy", lambda pid: {"replication": {"enabled": False}})
+    res_dis = backup_replication.reconcile_policy_replicas("pol-disabled")
+    assert res_dis["status"] == "skipped"
+
+    monkeypatch.setattr(backup_policies, "get_policy", lambda pid: {"replication": {"enabled": True, "targets": []}})
+    res_noop = backup_replication.reconcile_policy_replicas("pol-noop")
+    assert res_noop["status"] == "noop"
+
+    # With targets and copies
+    monkeypatch.setattr(
+        backup_policies,
+        "get_policy",
+        lambda pid: {"replication": {"enabled": True, "targets": [{"targetId": "tgt-d1"}]}},
+    )
+    monkeypatch.setattr(
+        backup_dr_ledger,
+        "list_logical_recovery_copies",
+        lambda **k: [
+            {"backupId": "b1", "targetId": "tgt-s1", "recoverable": True, "state": "healthy"},
+            {"backupId": "b2", "targetId": "tgt-s1", "recoverable": False, "state": "degraded"},
+        ],
+    )
+    monkeypatch.setattr(
+        backup_dr_ledger,
+        "is_logical_recovery_point_retired",
+        lambda p, b: False,
+    )
+    monkeypatch.setattr(
+        backup_replication,
+        "execute_replica_repair",
+        lambda **k: {"status": "success", "repairId": "rep-rec-01"},
+    )
+    res_rec = backup_replication.reconcile_policy_replicas("pol-rec", max_points=1, max_repairs=1)
+    assert res_rec["status"] == "completed"
+
+
+
 
 
 
