@@ -374,6 +374,36 @@ def evaluate_scope_readiness(
         if scope_status == "available":
             scope_status = "degraded"
 
+    # 9. Write Placement & Failover Continuity (4.5.4)
+    from deepseek_infra.infra.workspace import backup_scheduler
+
+    write_continuity = {
+        "status": "nominal",
+        "configuredPrimaryTargetId": target_id,
+        "activeWriteTargetId": target_id,
+        "primaryStatus": "healthy",
+        "isFailover": False,
+    }
+    if policy:
+        try:
+            placement = backup_scheduler.evaluate_write_placement(policy)
+            is_failover = bool(placement.get("isFailover"))
+            write_continuity = {
+                "status": "failed-over" if is_failover else "nominal",
+                "configuredPrimaryTargetId": str(placement.get("configuredPrimaryTargetId") or target_id),
+                "activeWriteTargetId": str(placement.get("selectedWriteTargetId") or target_id),
+                "primaryStatus": "healthy" if not is_failover else "unavailable",
+                "isFailover": is_failover,
+                "reason": placement.get("reason"),
+                "candidateTargetIds": placement.get("candidateTargetIds", [target_id]),
+            }
+            if is_failover:
+                reasons.append("write-target-failover")
+                if scope_status == "available":
+                    scope_status = "degraded"
+        except Exception:
+            pass
+
     return {
         "scope": {"targetId": target_id, "policyId": policy_id},
         "targetId": target_id,
@@ -387,6 +417,7 @@ def evaluate_scope_readiness(
         "scrub": scrub,
         "drill": drill,
         "replication": replication,
+        "writeContinuity": write_continuity,
         "committedCopies": replication.get("committedCopies"),
         "healthyCopies": replication.get("healthyCopies"),
         "requiredCopies": replication.get("requiredCopies"),

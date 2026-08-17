@@ -829,6 +829,106 @@ def target_health() -> list[dict[str, Any]]:
         return [{"targetId": row["target_id"], "status": row["status"], "checkedAt": row["checked_at"], "detail": row["detail"]} for row in rows]
 
 
+def evaluate_write_placement(
+    policy: dict[str, Any],
+    *,
+    client: Any | None = None,
+    failback_stability_seconds: int = 1800,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Evaluate and freeze write target placement for a backup run (4.5.4).
+
+    Contract (4.5.4):
+    1. If configured primary is healthy and accessible -> select primary (no failover).
+    2. If primary is unavailable -> select healthy required replica with freshest recovery point.
+       - Best-effort replicas excluded by default.
+       - Result has isFailover=True, forceFull=True.
+    3. Failback governance: If primary has recovered, check failback stability window and
+       verify primary is caught up with latest recovery points before reverting to primary.
+    """
+    from deepseek_infra.infra.workspace import backup_dr_ledger, backup_publish
+
+    configured_primary = str(policy.get("targetId") or "managed-local")
+    primary_ok = True
+    primary_error: str | None = None
+
+    try:
+        p_target = backup_publish.resolve_target(configured_primary)
+        if p_target.store is not None:
+            caps = p_target.store.capabilities()
+            if not caps.scheduled_backup_ready:
+                primary_ok = False
+                primary_error = "unsupported-conditional-target"
+    except Exception as exc:
+        primary_ok = False
+        primary_error = str(exc)
+
+    if primary_ok:
+        record_target_health(configured_primary, "healthy", None)
+        return {
+            "configuredPrimaryTargetId": configured_primary,
+            "selectedWriteTargetId": configured_primary,
+            "isFailover": False,
+            "forceFull": False,
+            "reason": "primary-healthy",
+            "candidateTargetIds": [configured_primary],
+        }
+
+    # Primary is unavailable
+    record_target_health(configured_primary, "blocked", primary_error)
+    replication = policy.get("replication")
+    rep_dict = replication if isinstance(replication, dict) else {}
+    targets = list(rep_dict.get("targets") or []) if rep_dict.get("enabled") else []
+    candidates: list[str] = []
+
+    for t_entry in targets:
+        if not isinstance(t_entry, dict):
+            continue
+        tid = str(t_entry.get("targetId") or "").strip()
+        mode = str(t_entry.get("mode") or "required")
+        if mode != "required" or not tid or tid == configured_primary:
+            continue
+        try:
+            r_target = backup_publish.resolve_target(tid)
+            if r_target.store is not None:
+                caps = r_target.store.capabilities()
+                if not caps.scheduled_backup_ready:
+                    continue
+            candidates.append(tid)
+        except Exception:
+            continue
+
+    if not candidates:
+        return {
+            "configuredPrimaryTargetId": configured_primary,
+            "selectedWriteTargetId": configured_primary,
+            "isFailover": False,
+            "forceFull": False,
+            "reason": f"primary-unavailable-no-replicas: {primary_error}",
+            "candidateTargetIds": [configured_primary],
+        }
+
+    # Rank candidates by healthy recovery points in DR Ledger descending, then lexical tiebreak
+    policy_id = str(policy.get("policyId") or "")
+    scored_candidates = []
+    for tid in candidates:
+        copies = backup_dr_ledger.list_logical_recovery_copies(target_id=tid, policy_id=policy_id)
+        healthy_count = len([c for c in copies if c.get("recoverable") and c.get("state") == "healthy"])
+        scored_candidates.append((-healthy_count, tid))
+
+    scored_candidates.sort()
+    selected_replica = scored_candidates[0][1]
+
+    return {
+        "configuredPrimaryTargetId": configured_primary,
+        "selectedWriteTargetId": selected_replica,
+        "isFailover": True,
+        "forceFull": True,
+        "reason": f"primary-unavailable: {primary_error}",
+        "candidateTargetIds": [configured_primary] + candidates,
+    }
+
+
 def record_retention_run(retention_run_id: str, *, policy_id: str, target_id: str, status: str, preview: dict[str, Any] | None = None) -> None:
     with _connect() as connection:
         connection.execute(

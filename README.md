@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.5.3-blue)
+![版本](https://img.shields.io/badge/version-4.5.4-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.5.3 — Replica Self-Healing & Lifecycle Governance (副本自愈与生命周期治理)：** 在冻结的 `object-set-v1` / `Receipt v4` / `Commit v4` / 随机 Age 上实现副本 Desired-State 持续收敛、密文层自愈（0 Age decrypt / 0 Age encrypt）、Remote Audit 原始 bytes 摘要与 Commit 链连续性校验、多 Target 生命周期与镜像 Retention 安全门禁、原子 Drill 副本选择与确定性字典序恢复规划。详见 [4.5.3 发布说明](docs/releases/4.5.3.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
+> **4.5.4 — Autonomous Replica Healing & Backup Write Failover (自治副本修复与备份写入故障切换)：** 在 4.5.3 基础上将副本自愈升级为持久化、可重启断点续传的自治控制面，实现有界流式密文修复、CAS 远端损坏替换与 Target-side 强保护租约；已 Commit 副本在位修复零控制面变更；Remote Audit 实现两阶段候选收集与全局全链验证；Retention 统一副本安全事实源；引入确定性 Write Placement Plan、主节点不可用自动切换至健康副本并强制 Full Snapshot，以及平稳 Failback 治理与 DR 写入可用性评估。详见 [4.5.4 发布说明](docs/releases/4.5.4.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md)、[4.5.2](docs/releases/4.5.2.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md)、[4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)。
 
 **4.4.15 validation target:** Full/Incremental Projection 同义、最终快照中新建 Project 可选、未选且已分叉 Contributor 零改动、Adaptive Delta O(buffer) 且超阈值前终止加密、Object Set 精确提交、Control-first Preview、未选 Component 零 GET、真实进程退出后恢复续传、Object Set Holds/GC 和旧 Whole-Age 永久兼容。
 

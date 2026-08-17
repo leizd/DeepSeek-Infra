@@ -4,6 +4,21 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.5.4] - Autonomous Replica Healing & Backup Write Failover (2026-08-17)
+
+### Autonomous Replica Healing & Backup Write Failover
+
+- **Durable Resumable Replica Repair**: State machine with per-component checkpointing (`queued` → `selecting-source` → `acquiring-source-hold` → `validating-source-control` → `scanning-destination` → `transferring-components` → `verifying-components` → `finalizing` → `healthy`) and restart recovery.
+- **In-Place Committed Copy Healing**: Disables Receipt v4 / Commit v4 re-creation and generation advancement when repairing components for already-committed copies.
+- **Bounded Streaming Ciphertext Transfer**: Pure bounded streaming ($O(\text{buffer}\times\text{workers})$ RAM) for all repair transfers, eliminating unbounded `get_bytes()` in-memory buffering.
+- **Safe Remote Corrupt-Object Replacement**: CAS-guarded quarantine and conditional replacement for corrupted objects on remote stores with fail-closed semantics.
+- **Target-Side Durable Protection Leases**: Heartbeated protection leases on remote and filesystem targets to prevent retention garbage collection during repair.
+- **Autonomous Bounded Reconciler**: Background supervisor integration with persistent cursors and bounded per-tick workload limits.
+- **Two-Phase DR Remote Audit**: Paged scans stage unverified candidates; global sorting by `targetGeneration` validates the full commit chain and `control/head.json` before atomic promotion to `recoverable`.
+- **Retention Copy Safety Single Source of Truth**: Unified minimum copy safety derived strictly from `policy.replication.minCommittedCopies` and canonical `target_id`.
+- **Deterministic Backup Write Failover**: Frozen Write Placement Plans select healthy Required Replicas when configured Primary is unavailable, forcing Full snapshots (`write-target-failover`) and reusing single-encryption packages.
+- **Failback Stability & Continuity Readiness**: Enforces stability windows before failback, reconciles ambiguous commits, and exposes `writeContinuity` in DR readiness.
+
 ## [4.5.3] - Replica Self-Healing & Lifecycle Governance (2026-08-16)
 
 ### Replica Self-Healing & Lifecycle Governance

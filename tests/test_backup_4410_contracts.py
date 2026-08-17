@@ -200,6 +200,7 @@ def test_native_chunk_engine_contract_and_helper_discovery(tmp_path: Path, monke
 
     discovered = tmp_path / "path-helper"
     discovered.write_bytes(b"helper")
+    monkeypatch.setattr(backup_chunk_engine, "__file__", str(tmp_path / "a" / "b" / "c" / "mod.py"))
     monkeypatch.setattr(shutil, "which", lambda _name: str(discovered))
     assert backup_chunk_engine.native_helper_path() == discovered.resolve()
 

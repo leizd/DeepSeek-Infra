@@ -1,0 +1,79 @@
+{
+  "ok": true,
+  "status": "PASS",
+  "title": "Dual-Target Autonomous Replica Self-Healing & Backup Write Failover E2E",
+  "checks": {
+    "durableRepairJobStateMachine": "PASS",
+    "inPlaceCommittedCopyHealingContract": "PASS",
+    "boundedStreamingAndCorruptReplacement": "PASS",
+    "targetSideDurableProtectionLeases": "PASS",
+    "twoPhaseRemoteAuditWithGlobalCommitChainValidation": "PASS",
+    "deterministicWritePlacementAndForcedFullFailover": "PASS",
+    "realDualMinioE2EIntegration": "PASS"
+  },
+  "checkProvenance": {
+    "durableRepairJobStateMachine": "durable-repair-state-machine",
+    "inPlaceCommittedCopyHealingContract": "in-place-committed-healing",
+    "boundedStreamingAndCorruptReplacement": "bounded-streaming-and-corrupt-replacement",
+    "targetSideDurableProtectionLeases": "target-side-protection-leases",
+    "twoPhaseRemoteAuditWithGlobalCommitChainValidation": "two-phase-remote-audit",
+    "deterministicWritePlacementAndForcedFullFailover": "deterministic-write-failover",
+    "realDualMinioE2EIntegration": "dual-minio-s3-e2e"
+  },
+  "scenarios": {
+    "durable-repair-state-machine": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_replica_repair_job_durability_and_resumption"
+      ],
+      "exitCode": 0
+    },
+    "in-place-committed-healing": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_in_place_committed_copy_healing_contract"
+      ],
+      "exitCode": 0
+    },
+    "bounded-streaming-and-corrupt-replacement": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_bounded_streaming_and_remote_corruption_replacement"
+      ],
+      "exitCode": 0
+    },
+    "target-side-protection-leases": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_target_side_durable_protection_lease_preserves_source"
+      ],
+      "exitCode": 0
+    },
+    "two-phase-remote-audit": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_two_phase_dr_remote_audit_chain_validation"
+      ],
+      "exitCode": 0
+    },
+    "deterministic-write-failover": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_deterministic_write_failover_and_force_full"
+      ],
+      "exitCode": 0
+    },
+    "dual-minio-s3-e2e": {
+      "nodeIds": [
+        "tests/test_backup_454_dual_minio_e2e.py::test_dual_minio_replica_healing_and_write_failover_e2e"
+      ],
+      "exitCode": 0
+    }
+  },
+  "version": "4.5.4",
+  "testedRevision": "6016bf77d7c4a195ee32a8eb1309a916b7c39ba4",
+  "sourceRevision": "6016bf77d7c4a195ee32a8eb1309a916b7c39ba4",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-08-17T02:10:09Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  }
+}

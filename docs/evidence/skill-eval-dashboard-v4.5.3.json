@@ -1,0 +1,57 @@
+{
+  "version": "4.5.3",
+  "commit": "6f2cc6c86018",
+  "testedRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-08-17T00:38:38+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "reactSkillSurface": "PASS",
+    "evalCaseBuilder": "PASS",
+    "skillEvalApiActions": "PASS",
+    "skillEvalReport": "PASS",
+    "packLevelEval": "PASS",
+    "regressionCompare": "PASS",
+    "skillEvalAssets": "PASS",
+    "skillEvalRunner": "PASS",
+    "frontendTypecheckGate": "PASS",
+    "ciReleaseGate": "PASS"
+  },
+  "details": {
+    "report": {
+      "path": "D:\\deepseek\\evals\\reports\\skills-v4.5.3.json",
+      "summary": {
+        "scope": "all",
+        "skillCount": 18,
+        "packCount": 4,
+        "caseCount": 18,
+        "passRate": 1.0,
+        "overallScore": 100.0,
+        "failedCases": 0,
+        "regressionCount": 0
+      },
+      "checks": {
+        "skillEvalCases": "PASS",
+        "schemaScoring": "PASS",
+        "toolPolicyScoring": "PASS",
+        "artifactScoring": "PASS",
+        "projectBindingScoring": "PASS",
+        "contentScoring": "PASS",
+        "packLevelEval": "PASS",
+        "regressionCompare": "PASS"
+      }
+    },
+    "assets": [
+      "docs/assets/skill-eval-dashboard.png",
+      "docs/assets/skill-eval-case-builder.png"
+    ]
+  }
+}

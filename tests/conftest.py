@@ -153,7 +153,11 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
 
     from deepseek_infra.infra.workspace import backup_replication as workspace_backup_replication
 
-    monkeypatch.setattr(workspace_backup_replication, "REPLICATION_DIR", tmp_path / ".backup-replication")
+    repl_dir = tmp_path / ".backup-replication"
+    monkeypatch.setattr(workspace_backup_replication, "REPLICATION_DIR", repl_dir)
+    monkeypatch.setattr(workspace_backup_replication, "HOLDS_DIR", repl_dir / "holds")
+    monkeypatch.setattr(workspace_backup_replication, "REPAIRS_DIR", repl_dir / "repairs")
+    monkeypatch.setattr(workspace_backup_replication, "CURSORS_PATH", repl_dir / "cursors.json")
 
     skills_dir = tmp_path / ".skills"
     monkeypatch.setattr(config, "SKILLS_DIR", skills_dir)

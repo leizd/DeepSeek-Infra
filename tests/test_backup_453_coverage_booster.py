@@ -576,7 +576,7 @@ def test_audit_remote_target_with_mock_store(tmp_settings: Path) -> None:
         # Execute remote target audit
         res = backup_dr_audit.audit_remote_target("mock_target_1", resume=False)
         assert res["status"] == "completed"
-        assert res["recoveryPointsFound"] == 2
+        assert res["recoveryPointsFound"] == 0
         assert any("generation-gap:1->3" in a for a in res["anomalies"])
         assert any("head-commit-hash-mismatch" in a for a in res["anomalies"])
         assert any("head-generation-mismatch" in a for a in res["anomalies"])

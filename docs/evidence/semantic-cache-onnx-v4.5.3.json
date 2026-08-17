@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "semantic-cache-onnx-evidence.v1",
+  "version": "4.5.3",
+  "commit": "6f2cc6c",
+  "testedRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "suite": "semantic-cache-onnx",
+  "generatedAt": "2026-08-17T00:39:33Z",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "onnxAvailable": false,
+  "hash": {
+    "exactHitRate": 1.0,
+    "paraphraseHitRate": 0.0,
+    "unrelatedFalseHitRate": 0.0,
+    "provider": "hash",
+    "dimensions": 64
+  },
+  "decision": "ONNX remains optional; hash embedding is zero-dependency default"
+}
