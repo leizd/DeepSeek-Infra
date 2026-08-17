@@ -1078,6 +1078,7 @@ def record_logical_recovery_copy(
 
 def list_logical_recovery_copies(
     *,
+    target_id: str | None = None,
     policy_id: str | None = None,
     backup_id: str | None = None,
     object_set_digest: str | None = None,
@@ -1087,6 +1088,9 @@ def list_logical_recovery_copies(
     query = "SELECT * FROM recovery_point_copies"
     params: list[Any] = []
     clauses: list[str] = []
+    if target_id is not None:
+        clauses.append("target_id = ?")
+        params.append(target_id)
     if logical_id is not None:
         clauses.append("logical_id = ?")
         params.append(logical_id)

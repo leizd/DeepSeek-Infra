@@ -1,9 +1,13 @@
-"""Durable resumable remote disaster recovery audit (4.5.1/4.5.2).
+"""Durable resumable remote disaster recovery audit (4.5.4).
 
-Persists auditId, phase, cursor, targetGeneration, previousCommitHash,
-recordsChecked and anomalies so process restarts resume without client-held
-cursors. Recovery points are only marked recoverable after full control-plane
-validation (commit marker, chain continuity, receipt digest binding).
+Two-phase commit chain authentication & global sorting:
+Phase 1: Paged remote scan stages unverified candidates; never promotes prematurely.
+Phase 2: Global sort by targetGeneration decouples S3 key lexical listing order;
+         validates generation continuity (1..N), commit hash chain, genesis root,
+         and control/head.json binding.
+Phase 3: Atomic promotion: only after the whole commit chain passes are recovery
+         points and logical copies promoted to recoverable=True in DR Evidence Ledger.
+         Any chain break leaves candidates unpromoted and fails the audit.
 """
 
 from __future__ import annotations
@@ -79,12 +83,7 @@ def audit_remote_target(
     audit_id: str | None = None,
     resume: bool = True,
 ) -> dict[str, Any]:
-    """Execute paged audit of remote target objects and update DR Evidence Ledger.
-
-    When ``resume`` is true (default), an open durable audit job for the target
-    is continued from its stored cursor unless an explicit ``audit_id`` is given.
-    Client-supplied ``cursor`` is only used to start a fresh job when no open job exists.
-    """
+    """Execute two-phase paged audit of target objects and update DR Evidence Ledger."""
     started_at = _utc_iso()
     anomalies: list[str] = []
     audited_count = 0
@@ -92,6 +91,7 @@ def audit_remote_target(
     next_cursor: str | None = None
     previous_commit_hash: str | None = None
     target_generation: int | None = None
+    staged_candidates: list[dict[str, Any]] = []
 
     existing: dict[str, Any] | None = None
     if audit_id:
@@ -108,6 +108,7 @@ def audit_remote_target(
         target_generation = existing.get("targetGeneration")
         started_at = str(existing.get("startedAt") or started_at)
         recovery_points_found = int((existing.get("details") or {}).get("recoveryPointsFound") or 0)
+        staged_candidates = list((existing.get("details") or {}).get("candidates") or [])
     else:
         a_id = audit_id or f"audit_{uuid.uuid4().hex[:16]}"
         start_cursor = cursor
@@ -119,10 +120,10 @@ def audit_remote_target(
             records_checked=0,
             anomalies=[],
             started_at=started_at,
-            details={},
+            details={"candidates": []},
         )
 
-    scanned_commits: list[dict[str, Any]] = []
+    store = None
 
     if target_id == "managed-local":
         root = backups.BACKUP_DIR
@@ -150,38 +151,25 @@ def audit_remote_target(
                             if str(receipt_data.get("backupId") or "") != backup_id:
                                 bind_anomalies.append(f"receipt-backup-id-mismatch:{backup_id}")
                     anomalies.extend(bind_anomalies)
-                    recoverable = not bind_anomalies and bool(backup_id)
-                    if backup_id:
-                        logical_bytes = int(receipt_data.get("logicalBytes") or receipt_data.get("size") or 0)
-                        ciphertext_bytes = int(receipt_data.get("size") or 0)
-                        backup_dr_ledger.record_recovery_point(
-                            target_id="managed-local",
-                            policy_id=str(receipt_data.get("policyId") or ""),
-                            backup_id=backup_id,
-                            committed_at=str(commit_data.get("committedAt") or receipt_data.get("createdAt") or _utc_iso()),
-                            snapshot_kind=str(receipt_data.get("snapshotKind") or "full"),
-                            parent_backup_id=receipt_data.get("parentBackupId"),
-                            chain_digest=str(commit_data.get("commitHash") or ""),
-                            chain_length=int(receipt_data.get("chainLength") or 1),
-                            ciphertext_bytes=ciphertext_bytes,
-                            logical_bytes=logical_bytes,
-                            recoverable=recoverable,
-                            verified_at=_utc_iso(),
-                            storage_protocol=str(receipt_data.get("storageProtocol") or ""),
-                            metadata=receipt_data if recoverable else {"auditRejected": True, "anomalies": bind_anomalies},
-                        )
-                        if recoverable:
-                            recovery_points_found += 1
-                            backup_dr_ledger.record_logical_recovery_copy(
-                                target_id="managed-local",
-                                policy_id=str(receipt_data.get("policyId") or ""),
-                                backup_id=backup_id,
-                                committed_at=str(commit_data.get("committedAt") or receipt_data.get("createdAt") or _utc_iso()),
-                                object_set_digest=str(receipt_data.get("objectSetDigest") or "") or None,
-                                recoverable=True,
-                                role="primary",
-                            )
-                        scanned_commits.append(commit_data)
+                    if backup_id and isinstance(commit_data, dict):
+                        staged_candidates.append({
+                            "commit": commit_data,
+                            "receipt": receipt_data,
+                            "backupId": backup_id,
+                            "policyId": str(receipt_data.get("policyId") or commit_data.get("policyId") or ""),
+                            "bindAnomalies": bind_anomalies,
+                            "targetGeneration": commit_data.get("targetGeneration"),
+                            "commitHash": str(commit_data.get("commitHash") or ""),
+                            "previousCommitHash": str(commit_data.get("previousCommitHash") or ""),
+                            "committedAt": str(commit_data.get("committedAt") or receipt_data.get("createdAt") or _utc_iso()),
+                            "snapshotKind": str(receipt_data.get("snapshotKind") or "full"),
+                            "parentBackupId": receipt_data.get("parentBackupId"),
+                            "chainLength": int(receipt_data.get("chainLength") or 1),
+                            "ciphertextBytes": int(receipt_data.get("size") or 0),
+                            "logicalBytes": int(receipt_data.get("logicalBytes") or receipt_data.get("size") or 0),
+                            "storageProtocol": str(receipt_data.get("storageProtocol") or ""),
+                            "objectSetDigest": str(receipt_data.get("objectSetDigest") or commit_data.get("objectSetDigest") or "") or None,
+                        })
                 except Exception as exc:
                     anomalies.append(f"malformed-commit-{c_path.name}: {exc}")
         next_cursor = None
@@ -258,47 +246,34 @@ def audit_remote_target(
                 previous_commit_hash=previous_commit_hash,
             )
             anomalies.extend(bind_anomalies)
-            recoverable = not bind_anomalies
             receipt_dict = receipt if isinstance(receipt, dict) else {}
-            logical_bytes = int(receipt_dict.get("logicalBytes") or receipt_dict.get("size") or 0)
-            ciphertext_bytes = int(receipt_dict.get("size") or 0)
-            backup_dr_ledger.record_recovery_point(
-                target_id=target_id,
-                policy_id=str(receipt_dict.get("policyId") or commit.get("policyId") or ""),
-                backup_id=backup_id,
-                committed_at=str(commit.get("committedAt") or receipt_dict.get("createdAt") or _utc_iso()),
-                snapshot_kind=str(receipt_dict.get("snapshotKind") or "full"),
-                parent_backup_id=receipt_dict.get("parentBackupId"),
-                chain_digest=str(commit.get("commitHash") or ""),
-                chain_length=int(receipt_dict.get("chainLength") or 1),
-                ciphertext_bytes=ciphertext_bytes,
-                logical_bytes=logical_bytes,
-                recoverable=recoverable,
-                verified_at=_utc_iso(),
-                storage_protocol=str(receipt_dict.get("storageProtocol") or ""),
-                metadata=receipt_dict if recoverable else {"auditRejected": True, "anomalies": bind_anomalies},
-            )
-            if recoverable:
-                recovery_points_found += 1
-                backup_dr_ledger.record_logical_recovery_copy(
-                    target_id=target_id,
-                    policy_id=str(receipt_dict.get("policyId") or commit.get("policyId") or ""),
-                    backup_id=backup_id,
-                    committed_at=str(commit.get("committedAt") or receipt_dict.get("createdAt") or _utc_iso()),
-                    object_set_digest=str(receipt_dict.get("objectSetDigest") or commit.get("objectSetDigest") or "") or None,
-                    recoverable=True,
-                    role="replica",
-                )
-            scanned_commits.append(commit)
+            staged_candidates.append({
+                "commit": commit,
+                "receipt": receipt_dict,
+                "backupId": backup_id,
+                "policyId": str(receipt_dict.get("policyId") or commit.get("policyId") or ""),
+                "bindAnomalies": bind_anomalies,
+                "targetGeneration": commit.get("targetGeneration"),
+                "commitHash": str(commit.get("commitHash") or ""),
+                "previousCommitHash": str(commit.get("previousCommitHash") or ""),
+                "committedAt": str(commit.get("committedAt") or receipt_dict.get("createdAt") or _utc_iso()),
+                "snapshotKind": str(receipt_dict.get("snapshotKind") or "full"),
+                "parentBackupId": receipt_dict.get("parentBackupId"),
+                "chainLength": int(receipt_dict.get("chainLength") or 1),
+                "ciphertextBytes": int(receipt_dict.get("size") or 0),
+                "logicalBytes": int(receipt_dict.get("logicalBytes") or receipt_dict.get("size") or 0),
+                "storageProtocol": str(receipt_dict.get("storageProtocol") or ""),
+                "objectSetDigest": str(receipt_dict.get("objectSetDigest") or commit.get("objectSetDigest") or "") or None,
+            })
 
-    # Phase 2: Index/sort by targetGeneration -> validate generation continuity -> validate commit chain continuity -> validate control/head
-    if scanned_commits:
-        # Separate commits with targetGeneration for chain validation
-        generation_commits = [c for c in scanned_commits if isinstance(c.get("targetGeneration"), int)]
+    # Phase 2: Once paged scan is complete, global sort & validate complete commit chain
+    chain_anomalies: list[str] = []
+    if not next_cursor and staged_candidates:
+        generation_commits = [c for c in staged_candidates if isinstance(c.get("targetGeneration"), int)]
         generation_commits.sort(key=lambda c: int(c["targetGeneration"]))
 
-        prev_hash = previous_commit_hash
-        prev_gen = target_generation
+        prev_hash: str | None = None
+        prev_gen: int | None = None
 
         for c in generation_commits:
             curr_gen = int(c["targetGeneration"])
@@ -308,12 +283,12 @@ def audit_remote_target(
 
             if prev_gen is not None:
                 if curr_gen != prev_gen + 1:
-                    anomalies.append(f"generation-gap:{prev_gen}->{curr_gen}")
+                    chain_anomalies.append(f"generation-gap:{prev_gen}->{curr_gen}")
                 if prev_hash and curr_prev and curr_prev != prev_hash:
-                    anomalies.append(f"broken-commit-chain:{b_id}")
+                    chain_anomalies.append(f"broken-commit-chain:{b_id}")
             else:
                 if curr_gen == 1 and curr_prev and curr_prev != GENESIS_COMMIT_HASH:
-                    anomalies.append(f"broken-genesis-commit-hash:{b_id}")
+                    chain_anomalies.append(f"broken-genesis-commit-hash:{b_id}")
 
             prev_gen = curr_gen
             prev_hash = curr_hash
@@ -321,23 +296,66 @@ def audit_remote_target(
         target_generation = prev_gen
         previous_commit_hash = prev_hash
 
-    # Validate control/head.json if audit scan reached completion
-    if target_id != "managed-local" and not next_cursor:
-        try:
-            head_data = read_json(store, "control/head.json")
-            if isinstance(head_data, dict) and generation_commits:
-                latest_c = generation_commits[-1]
-                latest_commit_hash = str(latest_c.get("commitHash") or "")
-                latest_gen = int(latest_c.get("targetGeneration") or 0)
-                head_commit_hash = str(head_data.get("latestCommitHash") or "")
-                head_gen = head_data.get("targetGeneration")
+        # Validate control/head.json
+        if target_id != "managed-local" and store is not None:
+            try:
+                head_data = read_json(store, "control/head.json")
+                if isinstance(head_data, dict) and generation_commits:
+                    latest_c = generation_commits[-1]
+                    latest_commit_hash = str(latest_c.get("commitHash") or "")
+                    latest_gen = int(latest_c.get("targetGeneration") or 0)
+                    head_commit_hash = str(head_data.get("latestCommitHash") or "")
+                    head_gen = head_data.get("targetGeneration")
 
-                if head_commit_hash and latest_commit_hash and head_commit_hash != latest_commit_hash:
-                    anomalies.append(f"head-commit-hash-mismatch:head={head_commit_hash},audited={latest_commit_hash}")
-                if head_gen is not None and int(head_gen) != latest_gen:
-                    anomalies.append(f"head-generation-mismatch:head={head_gen},audited={latest_gen}")
-        except Exception:
-            pass
+                    if head_commit_hash and latest_commit_hash and head_commit_hash != latest_commit_hash:
+                        chain_anomalies.append(f"head-commit-hash-mismatch:head={head_commit_hash},audited={latest_commit_hash}")
+                    if head_gen is not None and int(head_gen) != latest_gen:
+                        chain_anomalies.append(f"head-generation-mismatch:head={head_gen},audited={latest_gen}")
+            except Exception:
+                pass
+
+        anomalies.extend(chain_anomalies)
+
+        # Phase 3: Promotion: Promote candidates to recoverable ONLY IF chain is valid
+        chain_valid = not chain_anomalies
+        recovery_points_found = 0
+        for cand in staged_candidates:
+            b_id = cand["backupId"]
+            p_id = cand["policyId"]
+            b_anomalies = list(cand.get("bindAnomalies") or [])
+            recoverable = chain_valid and not b_anomalies
+            all_cand_anomalies = b_anomalies + (chain_anomalies if not chain_valid else [])
+
+            backup_dr_ledger.record_recovery_point(
+                target_id=target_id,
+                policy_id=p_id,
+                backup_id=b_id,
+                committed_at=cand["committedAt"],
+                snapshot_kind=cand["snapshotKind"],
+                parent_backup_id=cand["parentBackupId"],
+                chain_digest=cand["commitHash"],
+                chain_length=cand["chainLength"],
+                ciphertext_bytes=cand["ciphertextBytes"],
+                logical_bytes=cand["logicalBytes"],
+                recoverable=recoverable,
+                verified_at=_utc_iso(),
+                storage_protocol=cand["storageProtocol"],
+                metadata=cand["receipt"] if recoverable else {"auditRejected": True, "anomalies": all_cand_anomalies},
+            )
+            if recoverable:
+                recovery_points_found += 1
+                backup_dr_ledger.record_logical_recovery_copy(
+                    target_id=target_id,
+                    policy_id=p_id,
+                    backup_id=b_id,
+                    committed_at=cand["committedAt"],
+                    object_set_digest=cand["objectSetDigest"],
+                    recoverable=True,
+                    role="replica" if target_id != "managed-local" else "primary",
+                )
+
+    if next_cursor:
+        recovery_points_found = len([c for c in staged_candidates if not c.get("bindAnomalies")])
 
     status = "completed" if not next_cursor else "in-progress"
     phase = "completed" if status == "completed" else "scanning"
@@ -368,7 +386,7 @@ def audit_remote_target(
         anomalies=anomalies,
         started_at=started_at,
         completed_at=_utc_iso() if phase == "completed" else None,
-        details={"recoveryPointsFound": recovery_points_found, "objectsAudited": audited_count},
+        details={"recoveryPointsFound": recovery_points_found, "objectsAudited": audited_count, "candidates": staged_candidates},
     )
     backup_dr_ledger.record_audit_evidence(
         audit_id=a_id,

@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "openai-compatible-sdks-evidence.v1",
+  "version": "4.5.3",
+  "commit": "6f2cc6c",
+  "gitSha": "6f2cc6c",
+  "gitDirty": true,
+  "generatedAt": "2026-08-17T00:42:02Z",
+  "environment": {
+    "os": "win32",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "baseUrl": "http://127.0.0.1:8000/v1",
+  "model": "deepseek-v4-pro",
+  "status": "FAIL",
+  "sdks": {
+    "langchain": {
+      "modelsList": "SKIPPED",
+      "chatCompletion": "SKIPPED",
+      "streaming": "SKIPPED"
+    },
+    "litellm": {
+      "modelsList": "SKIPPED",
+      "chatCompletion": "SKIPPED",
+      "streaming": "SKIPPED"
+    },
+    "llamaindex": {
+      "chatCompletion": "SKIPPED"
+    }
+  },
+  "steps": [
+    {
+      "name": "openai.healthz",
+      "status": "pass",
+      "detail": "starting SDK smoke",
+      "data": {
+        "baseUrl": "http://127.0.0.1:8000/v1"
+      }
+    },
+    {
+      "name": "sdk.langchain",
+      "status": "warn",
+      "detail": "langchain-openai not installed; install via requirements-sdk-smoke.txt",
+      "data": {}
+    },
+    {
+      "name": "sdk.litellm",
+      "status": "warn",
+      "detail": "litellm not installed; install via requirements-sdk-smoke.txt",
+      "data": {}
+    },
+    {
+      "name": "sdk.llamaindex",
+      "status": "warn",
+      "detail": "llama-index / llama-index-llms-openai-like not installed; install via requirements-sdk-smoke.txt",
+      "data": {}
+    }
+  ]
+}

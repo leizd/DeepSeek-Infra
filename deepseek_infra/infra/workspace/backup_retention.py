@@ -580,10 +580,26 @@ def apply_retention(
     return {"retentionRunId": retention_run_id, "trashed": moved, "recoveredTrash": recovered, "preview": {key: preview[key] for key in ("keep", "protected")}}
 
 
+def _effective_min_copies(retention: dict[str, Any], policy_id: str) -> int:
+    policy_min = 1
+    try:
+        from deepseek_infra.infra.workspace import backup_policies
+        pol = backup_policies.get_policy(policy_id)
+        if isinstance(pol, dict):
+            repl = pol.get("replication")
+            if isinstance(repl, dict) and repl.get("enabled"):
+                policy_min = int(repl.get("minCommittedCopies") or 1)
+    except Exception:
+        pass
+    ret_min = int(retention.get("minimumHealthyCopies") or 1)
+    return max(ret_min, policy_min)
+
+
 def finalize_retention(
     retention: dict[str, Any],
     target_root: Path,
     *,
+    target_id: str | None = None,
     policy_timezone: str = "UTC",
     now: datetime | None = None,
     checkpoint: Callable[[], None] | None = None,
@@ -600,6 +616,7 @@ def finalize_retention(
     trash_dir = target_root / ".trash"
     deleted: list[str] = []
     kept: list[str] = []
+    effective_target_id = target_id or "managed-local"
     if trash_dir.is_dir():
         preview = preview_retention(retention, target_root, policy_timezone=policy_timezone, now=current)
         still_protected = {item["backupId"] for item in preview["protected"]} | set(preview["keep"])
@@ -618,16 +635,15 @@ def finalize_retention(
                 kept.append(backup_id)
                 continue
             policy_id = str(record.get("policyId") or retention.get("retentionPolicyId") or "")
-            target_id = str(target_root)
             is_held = False
             try:
                 from deepseek_infra.infra.workspace import backup_replication
 
-                is_held = backup_replication.is_source_held(target_id, policy_id, backup_id)
+                is_held = backup_replication.is_source_held(effective_target_id, policy_id, backup_id)
             except Exception:
                 is_held = False
 
-            min_healthy_copies = int(retention.get("minimumHealthyCopies") or 1)
+            min_healthy_copies = _effective_min_copies(retention, policy_id)
             remaining_healthy_count = min_healthy_copies
             try:
                 from deepseek_infra.infra.workspace import backup_dr_ledger
@@ -636,7 +652,7 @@ def finalize_retention(
                 if copies:
                     remaining_healthy_count = len([
                         c for c in copies
-                        if str(c.get("targetId")) != target_id and c.get("recoverable") and c.get("state") == "healthy"
+                        if str(c.get("targetId")) != effective_target_id and c.get("recoverable") and c.get("state") == "healthy"
                     ])
             except Exception:
                 pass
@@ -747,6 +763,7 @@ def finalize_retention_store(
     retention: dict[str, Any],
     store: Any,
     *,
+    target_id: str | None = None,
     policy_timezone: str = "UTC",
     now: datetime | None = None,
     checkpoint: Callable[[], None] | None = None,
@@ -761,6 +778,7 @@ def finalize_retention_store(
     state = backup_catalog.catalog_state_store(store)
     deleted: list[str] = []
     kept: list[str] = []
+    effective_target_id = target_id or "remote-target"
     recoverable_digests: set[str] = set()
     for record in state.values():
         if record.get("deleted"):
@@ -768,7 +786,7 @@ def finalize_retention_store(
         trashed_at = _parse_iso(record.get("trashedAt")) if record.get("trashed") else None
         if not record.get("trashed") or trashed_at is None or current - trashed_at < grace:
             recoverable_digests.update(backup_object_set.committed_object_digests(record))
-    # Protect objects held by active restores.
+    # Protect objects held by active restores or repairs.
     hold_digests = _restore_hold_digests(store, now=current)
     for backup_id, record in list(state.items()):
         if checkpoint is not None:
@@ -779,8 +797,31 @@ def finalize_retention_store(
         if trashed_at is None or current - trashed_at < grace:
             kept.append(backup_id)
             continue
+        policy_id = str(record.get("policyId") or retention.get("retentionPolicyId") or "")
+        is_held = False
+        try:
+            from deepseek_infra.infra.workspace import backup_replication
+
+            is_held = backup_replication.is_source_held(effective_target_id, policy_id, backup_id)
+        except Exception:
+            is_held = False
+
+        min_healthy_copies = _effective_min_copies(retention, policy_id)
+        remaining_healthy_count = min_healthy_copies
+        try:
+            from deepseek_infra.infra.workspace import backup_dr_ledger
+
+            copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
+            if copies:
+                remaining_healthy_count = len([
+                    c for c in copies
+                    if str(c.get("targetId")) != effective_target_id and c.get("recoverable") and c.get("state") == "healthy"
+                ])
+        except Exception:
+            pass
+
         digests = backup_object_set.committed_object_digests(record)
-        if digests & hold_digests:
+        if (digests & hold_digests) or is_held or (remaining_healthy_count < min_healthy_copies and min_healthy_copies > 1):
             kept.append(backup_id)
             continue
         if writer is not None:
@@ -800,6 +841,12 @@ def finalize_retention_store(
             writer=writer,
         )
         deleted.append(backup_id)
+        try:
+            from deepseek_infra.infra.workspace import backup_dr_ledger
+
+            backup_dr_ledger.mark_logical_recovery_point_retired(policy_id, backup_id, retired_at=_utc_iso(current))
+        except Exception:
+            pass
     return {"deleted": deleted, "kept": kept, "recoveredTrash": []}
 
 
@@ -817,28 +864,33 @@ def _restore_hold_digests(
     digests: set[str] = set()
     current = now or datetime.now(tz=timezone.utc)
     hold_grace = timedelta(seconds=max(0, grace_seconds))
-    cursor = None
-    while True:
-        page = store.list_objects("holds/restore/", cursor=cursor)
-        for meta in page.objects:
-            if not str(meta.key).endswith(".json"):
-                continue
-            data = read_json(store, meta.key)
-            if not isinstance(data, dict):
-                continue
-            expires_at = _parse_iso(data.get("expiresAt"))
-            if expires_at is not None and current > expires_at + hold_grace:
-                continue
-            digest = str(data.get("objectDigest") or "")
-            if len(digest) == 64:
-                digests.add(digest)
-            for item in data.get("objects") or []:
-                if not isinstance(item, dict):
+    for prefix in ("holds/restore/", "holds/repair/", "holds/protection/"):
+        cursor = None
+        while True:
+            try:
+                page = store.list_objects(prefix, cursor=cursor)
+            except Exception:
+                break
+            for meta in page.objects:
+                if not str(meta.key).endswith(".json"):
                     continue
-                component_digest = str(item.get("digest") or "")
-                if len(component_digest) == 64:
-                    digests.add(component_digest)
-        if not page.cursor:
-            break
-        cursor = page.cursor
+                data = read_json(store, meta.key)
+                if not isinstance(data, dict):
+                    continue
+                expires_at = _parse_iso(data.get("expiresAt"))
+                if expires_at is not None and current > expires_at + hold_grace:
+                    continue
+                digest = str(data.get("objectDigest") or data.get("objectSetDigest") or "")
+                if len(digest) == 64:
+                    digests.add(digest)
+                for item in data.get("objects") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    component_digest = str(item.get("digest") or "")
+                    if len(component_digest) == 64:
+                        digests.add(component_digest)
+            if not page.cursor:
+                break
+            cursor = page.cursor
     return digests
+

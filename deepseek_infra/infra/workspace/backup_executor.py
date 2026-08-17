@@ -237,14 +237,34 @@ def execute_run(
             )
             return {**outcome, "phase": "deferred", "reason": "workspace-restore-active"}
         guard.checkpoint()
-        target_id = str(policy.get("targetId") or "managed-local")
+        existing_plan = backup_run_plan.read_run_plan(policy_id, slot_digest)
+        if existing_plan is not None:
+            write_target_id = str(existing_plan.get("selectedWriteTargetId") or existing_plan.get("targetId") or "managed-local")
+            is_failover = bool(existing_plan.get("isFailover"))
+            failover_reason = existing_plan.get("failoverReason")
+            placement = {
+                "configuredPrimaryTargetId": str(existing_plan.get("configuredPrimaryTargetId") or policy.get("targetId") or "managed-local"),
+                "selectedWriteTargetId": write_target_id,
+                "isFailover": is_failover,
+                "forceFull": is_failover,
+                "reason": failover_reason or ("failover" if is_failover else "primary-healthy"),
+                "candidateTargetIds": list(existing_plan.get("candidateTargetIds") or [write_target_id]),
+            }
+        else:
+            placement = backup_scheduler.evaluate_write_placement(policy)
+            write_target_id = str(placement["selectedWriteTargetId"])
+            is_failover = bool(placement.get("isFailover"))
+            failover_reason = placement.get("reason")
+
         try:
-            target = backup_publish.resolve_target(target_id)
+            target = backup_publish.resolve_target(write_target_id)
         except AppError as exc:
             if "blocked-target-unavailable" in str(exc) or "unsupported-conditional-target" in str(exc):
-                backup_scheduler.record_target_health(target_id, "blocked", str(exc)[:200])
+                backup_scheduler.record_target_health(write_target_id, "blocked", str(exc)[:200])
                 return _blocked_target_outcome(run, policy, current, guard, str(exc), outcome)
             raise  # pragma: no cover - other resolve errors bubble to outer handler
+
+        target_id = write_target_id
 
         # Select snapshot kind / lineage once, then freeze; retries reuse it.
         context = backup_scheduled._context_from_policy(policy)
@@ -258,20 +278,46 @@ def execute_run(
             # force-full schema comparison mismatched.
             if isinstance(item, dict) and item.get("status") == "selected":
                 contributor_schemas[str(item.get("id") or "")] = int(item.get("schemaVersion") or 0)
-        selected = backup_incremental.select_snapshot_plan(
-            policy=policy,
-            target_id=target_id,
-            policy_id=policy_id,
-            index_available=index_available,
-            contributor_schemas=contributor_schemas,
-        )
-        snapshot_kind, lineage_id, parent_backup_id, chain_depth, parent_commit_hash, parent_receipt_digest, force_full_reason = selected
+
+        snapshot_kind: str
+        lineage_id: str | None
+        parent_backup_id: str | None
+        chain_depth: int
+        parent_commit_hash: str | None
+        parent_receipt_digest: str | None
+        force_full_reason: str | None
+        if is_failover:
+            snapshot_kind = "full"
+            lineage_id = None
+            parent_backup_id = None
+            chain_depth = 0
+            parent_commit_hash = None
+            parent_receipt_digest = None
+            force_full_reason = "write-target-failover"
+        else:
+            selected = backup_incremental.select_snapshot_plan(
+                policy=policy,
+                target_id=target_id,
+                policy_id=policy_id,
+                index_available=index_available,
+                contributor_schemas=contributor_schemas,
+            )
+            snapshot_kind, lineage_id, parent_backup_id, chain_depth, parent_commit_hash, parent_receipt_digest, force_full_reason = selected
+
+        cand_ids_raw = placement.get("candidateTargetIds")
+        cand_ids = [str(x) for x in cand_ids_raw] if isinstance(cand_ids_raw, list) else [write_target_id]
+
         run_plan = backup_run_plan.freeze_run_plan(
             policy=policy,
             schedule_slot=run.schedule_slot,
             slot_digest=slot_digest,
             contributor_plan=contributor_plan,
             target_id=target_id,
+            configured_primary_target_id=str(placement.get("configuredPrimaryTargetId") or policy.get("targetId") or "managed-local"),
+            selected_write_target_id=write_target_id,
+            candidate_target_ids=cand_ids,
+            failover_reason=failover_reason if is_failover else None,
+            is_failover=is_failover,
             target_head_hash=_target_head_hash(target),
             snapshot_kind=str(snapshot_kind or "full"),
             lineage_id=lineage_id,
@@ -495,7 +541,7 @@ def execute_run(
             policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
             backup_retention.apply_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
             finalized = backup_retention.finalize_retention(
-                retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
+                retention, target.root, target_id=target_id, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
             )
             catalog_after_retention = backup_catalog.catalog_state(target.root)
         else:  # pragma: no cover - remote full-executor path requires a live adapter
@@ -506,7 +552,7 @@ def execute_run(
             policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
             backup_retention.apply_retention_store(retention, target.require_store(), policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
             finalized = backup_retention.finalize_retention_store(
-                retention, target.require_store(), policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
+                retention, target.require_store(), target_id=target_id, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
             )
             catalog_after_retention = backup_catalog.catalog_state_store(target.require_store())
         deleted_snapshots = [

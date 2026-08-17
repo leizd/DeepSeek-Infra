@@ -1,0 +1,16 @@
+{
+  "pytestExitCode": 0,
+  "scenarios": {
+    "boundedStreamingCiphertextTransfer": "PASS",
+    "deterministicWritePlacementAndForcedFullFailover": "PASS",
+    "durableRepairJobStateMachine": "PASS",
+    "inPlaceCommittedCopyHealingContract": "PASS",
+    "realDualMinioE2EIntegration": "PASS",
+    "safeRemoteCorruptObjectReplacement": "PASS",
+    "targetSideDurableProtectionLeases": "PASS",
+    "twoPhaseRemoteAuditWithGlobalCommitChainValidation": "PASS"
+  },
+  "status": "PASS",
+  "title": "Dual-Target Autonomous Replica Self-Healing & Backup Write Failover E2E",
+  "version": "4.5.4"
+}

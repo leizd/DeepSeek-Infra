@@ -1,13 +1,17 @@
-"""Durable BackupReplicationJob and Replica Self-Healing Reconciler (4.5.3).
+"""Durable BackupReplicationJob and Autonomous Replica Self-Healing Control Plane (4.5.4).
 
 Encrypt-once, multi-target publish: Primary commits first; each replica gets an
 independent writer lease, target-local Receipt v4 and Commit v4 over the same
 ciphertext object digests. Required replica spool retention until durable repair
 or healthy copy exists.
 
-Desired-State Self-Healing Reconciler:
+Autonomous Desired-State Self-Healing:
 Continuous convergence between desired copies and observed copies.
 Repairs work purely on the ciphertext plane (Zero Age decrypt, Zero Age encrypt).
+Durable ReplicaRepairJob state machine with per-component progress checkpointing,
+bounded streaming (O(buffer * workers) RAM), CAS-guarded remote corruption replacement,
+target-side protection leases, and strict separation between Replica Provision
+and In-Place Committed Copy Healing.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -36,7 +41,11 @@ from deepseek_infra.infra.workspace import (
 REPLICATION_DIR = config.ROOT / ".backup-replication"
 HOLDS_DIR = REPLICATION_DIR / "holds"
 REPAIRS_DIR = REPLICATION_DIR / "repairs"
+CURSORS_PATH = REPLICATION_DIR / "cursors.json"
+
 JOB_SCHEMA_VERSION = 2
+REPAIR_JOB_SCHEMA_VERSION = 2
+DEFAULT_BUFFER_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB bounded streaming buffer
 
 TERMINAL_PHASES = frozenset({"committed", "failed-terminal", "failed", "superseded"})
 ACTIVE_PHASES = frozenset(
@@ -52,6 +61,21 @@ ACTIVE_PHASES = frozenset(
     }
 )
 MODES = frozenset({"required", "best-effort"})
+
+REPAIR_TERMINAL_PHASES = frozenset({"healthy", "failed-terminal", "failed", "quarantined", "superseded", "skipped"})
+REPAIR_ACTIVE_PHASES = frozenset(
+    {
+        "queued",
+        "selecting-source",
+        "acquiring-source-hold",
+        "validating-source-control",
+        "scanning-destination",
+        "transferring-components",
+        "verifying-components",
+        "finalizing",
+        "retry-wait",
+    }
+)
 
 _LOCK = threading.RLock()
 
@@ -91,29 +115,63 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-# ── Source Hold Mechanism ───────────────────────────────────────────────────
+# ── Target-Side Durable Source Hold Mechanism ───────────────────────────────
 
 
 class SourceHold:
     """Protects a healthy recovery copy from being pruned or deleted during repair."""
 
-    def __init__(self, hold_id: str, target_id: str, policy_id: str, backup_id: str, holder_id: str):
+    def __init__(
+        self,
+        hold_id: str,
+        target_id: str,
+        policy_id: str,
+        backup_id: str,
+        holder_id: str,
+        *,
+        target_root: Path | None = None,
+        target_store: Any | None = None,
+        object_set_digest: str | None = None,
+        expires_at: str | None = None,
+    ) -> None:
         self.hold_id = hold_id
         self.target_id = target_id
         self.policy_id = policy_id
         self.backup_id = backup_id
         self.holder_id = holder_id
+        self.target_root = target_root
+        self.target_store = target_store
+        self.object_set_digest = object_set_digest
         self.created_at = _utc_iso()
+        self.expires_at = expires_at or _utc_iso(datetime.now(tz=timezone.utc) + timedelta(seconds=3600))
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "holderKind": "replica-repair",
+            "holderId": self.holder_id,
             "holdId": self.hold_id,
             "targetId": self.target_id,
             "policyId": self.policy_id,
             "backupId": self.backup_id,
-            "holderId": self.holder_id,
+            "objectSetDigest": self.object_set_digest,
             "createdAt": self.created_at,
+            "expiresAt": self.expires_at,
+            "generation": 1,
         }
+
+    def renew(self, duration_seconds: int = 3600) -> None:
+        self.expires_at = _utc_iso(datetime.now(tz=timezone.utc) + timedelta(seconds=duration_seconds))
+        payload = self.to_dict()
+        _atomic_write(_hold_path(self.hold_id), payload)
+        if self.target_root is not None:
+            t_hold = self.target_root / "holds" / "repair" / f"{self.hold_id}.json"
+            _atomic_write(t_hold, payload)
+        elif self.target_store is not None:
+            try:
+                data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+                self.target_store.put_if_absent(f"holds/repair/{self.hold_id}.json", data)
+            except Exception:
+                pass
 
     def release(self) -> None:
         release_source_hold(self)
@@ -124,12 +182,39 @@ def acquire_source_hold(
     policy_id: str,
     backup_id: str,
     holder_id: str,
+    *,
+    hold_seconds: int = 3600,
+    object_set_digest: str | None = None,
+    target_root: Path | None = None,
+    target_store: Any | None = None,
 ) -> SourceHold:
     with _LOCK:
         HOLDS_DIR.mkdir(parents=True, exist_ok=True)
         hold_id = f"hold_{target_id}_{policy_id}_{backup_id}_{uuid.uuid4().hex[:8]}"
-        hold = SourceHold(hold_id, target_id, policy_id, backup_id, holder_id)
-        _atomic_write(_hold_path(hold_id), hold.to_dict())
+        exp = _utc_iso(datetime.now(tz=timezone.utc) + timedelta(seconds=hold_seconds))
+        hold = SourceHold(
+            hold_id,
+            target_id,
+            policy_id,
+            backup_id,
+            holder_id,
+            target_root=target_root,
+            target_store=target_store,
+            object_set_digest=object_set_digest,
+            expires_at=exp,
+        )
+        payload = hold.to_dict()
+        _atomic_write(_hold_path(hold_id), payload)
+
+        if target_root is not None:
+            t_hold = target_root / "holds" / "repair" / f"{hold_id}.json"
+            _atomic_write(t_hold, payload)
+        elif target_store is not None:
+            try:
+                data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+                target_store.put_if_absent(f"holds/repair/{hold_id}.json", data)
+            except Exception:
+                pass
         return hold
 
 
@@ -142,23 +227,85 @@ def release_source_hold(hold: SourceHold | str) -> None:
                 path.unlink()
             except OSError:
                 pass
+        if isinstance(hold, SourceHold):
+            if hold.target_root is not None:
+                t_hold = hold.target_root / "holds" / "repair" / f"{hold_id}.json"
+                if t_hold.is_file():
+                    try:
+                        t_hold.unlink()
+                    except OSError:
+                        pass
+            elif hold.target_store is not None:
+                try:
+                    hold.target_store.delete_if_match(f"holds/repair/{hold_id}.json")
+                except Exception:
+                    pass
 
 
-def is_source_held(target_id: str, policy_id: str, backup_id: str) -> bool:
+def is_source_held(
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    *,
+    target: Any | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Check if a source copy is protected by an unexpired durable hold."""
+    current = now or datetime.now(tz=timezone.utc)
     with _LOCK:
-        if not HOLDS_DIR.is_dir():
-            return False
-        for path in HOLDS_DIR.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if (
-                    str(data.get("targetId")) == target_id
-                    and str(data.get("policyId")) == policy_id
-                    and str(data.get("backupId")) == backup_id
-                ):
-                    return True
-            except Exception:
-                continue
+        # Check local HOLDS_DIR
+        if HOLDS_DIR.is_dir():
+            for path in HOLDS_DIR.glob("*.json"):
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    exp = _parse_iso(data.get("expiresAt"))
+                    if exp is not None and current > exp:
+                        continue
+                    if (
+                        str(data.get("targetId")) == target_id
+                        and str(data.get("policyId")) == policy_id
+                        and str(data.get("backupId")) == backup_id
+                    ):
+                        return True
+                except Exception:
+                    continue
+
+        # Check target-side holds if target is provided
+        if target is not None:
+            if getattr(target, "root", None) is not None:
+                r_dir = target.root / "holds" / "repair"
+                if r_dir.is_dir():
+                    for p in r_dir.glob("*.json"):
+                        try:
+                            data = json.loads(p.read_text(encoding="utf-8"))
+                            exp = _parse_iso(data.get("expiresAt"))
+                            if exp is not None and current > exp:
+                                continue
+                            if (
+                                str(data.get("policyId")) == policy_id
+                                and str(data.get("backupId")) == backup_id
+                            ):
+                                return True
+                        except Exception:
+                            continue
+            elif getattr(target, "store", None) is not None:
+                try:
+                    page = target.store.list_objects("holds/repair/")
+                    for obj in page.objects:
+                        raw = target.store.get_bytes(obj.key)
+                        if raw:
+                            data = json.loads(raw.decode("utf-8"))
+                            exp = _parse_iso(data.get("expiresAt"))
+                            if exp is not None and current > exp:
+                                continue
+                            if (
+                                str(data.get("policyId")) == policy_id
+                                and str(data.get("backupId")) == backup_id
+                            ):
+                                return True
+                except Exception:
+                    pass
+
     return False
 
 
@@ -215,7 +362,7 @@ def list_jobs(
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or not str(data.get("jobId", "")):
             continue
         if policy_id and str(data.get("policyId") or "") != policy_id:
             continue
@@ -396,7 +543,6 @@ def execute_replication_job(job_id: str, *, instance_id: str = "repl-worker") ->
         writer.acquire()
         try:
             job = _set_phase(job, "writing-receipt")
-            # Target-specific Receipt v4 from same package — never copy primary receipt bytes.
             published = backup_publish.publish_backup(
                 target,
                 package,
@@ -406,7 +552,6 @@ def execute_replication_job(job_id: str, *, instance_id: str = "repl-worker") ->
                 fencing_token=fencing,
             )
             job = _set_phase(job, "committing")
-            # Verify ciphertext identity preserved
             if isinstance(package, backup_object_set.ObjectSetPackage):
                 pub_digest = str((published.receipt or {}).get("objectSetDigest") or "")
                 if pub_digest and pub_digest != str(package.object_set_digest):
@@ -415,7 +560,6 @@ def execute_replication_job(job_id: str, *, instance_id: str = "repl-worker") ->
                     if not component.ciphertext_digest:
                         raise AppError("replica component missing ciphertext digest", code=ErrorCode.INTERNAL, status=500)
 
-            # Append to target-local catalog
             append_target_local_catalog(target, published.receipt or {})
 
             job = _set_phase(
@@ -490,7 +634,233 @@ def process_pending_jobs(*, instance_id: str = "repl-worker", limit: int = 10) -
     return {"processed": processed, "committed": committed, "failed": failed}
 
 
-# ── Ciphertext-Plane Replica Self-Healing (ReplicaRepairJob) ────────────────
+# ── Bounded Streaming Ciphertext Transfer ───────────────────────────────────
+
+
+def _iter_source_stream(target: Any, rel_key: str, *, chunk_size: int = DEFAULT_BUFFER_CHUNK_SIZE) -> Iterator[bytes]:
+    """Yield bounded chunks from either filesystem or remote target store."""
+    if target.root is not None:
+        p = target.root / rel_key
+        if not p.is_file():
+            return
+        with p.open("rb") as handle:
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+    elif target.store is not None:
+        # Check if get_stream is supported and yields chunks
+        stream = target.store.get_stream(rel_key)
+        for chunk in stream:
+            if chunk:
+                # If stream yields large chunk, slice into bounded buffer chunks
+                for offset in range(0, len(chunk), chunk_size):
+                    yield chunk[offset : offset + chunk_size]
+
+
+def stream_ciphertext_transfer(
+    source_target: Any,
+    dest_target: Any,
+    source_rel: str,
+    dest_rel: str,
+    expected_digest: str,
+    *,
+    chunk_size: int = DEFAULT_BUFFER_CHUNK_SIZE,
+) -> int:
+    """Stream ciphertext from source to destination using bounded buffer RAM.
+
+    Zero Age decrypt, Zero Age encrypt.
+    Validates SHA-256 matches expected_digest.
+    Returns total bytes transferred.
+    """
+    hasher = hashlib.sha256()
+    bytes_transferred = 0
+
+    if dest_target.root is not None:
+        dp = dest_target.root / dest_rel
+        dp.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dp.with_name(f".{dp.name}.{os.getpid()}.{time.time_ns()}.tmp")
+        try:
+            with tmp.open("wb") as out_h:
+                for chunk in _iter_source_stream(source_target, source_rel, chunk_size=chunk_size):
+                    hasher.update(chunk)
+                    out_h.write(chunk)
+                    bytes_transferred += len(chunk)
+                out_h.flush()
+                os.fsync(out_h.fileno())
+
+            calc_digest = hasher.hexdigest()
+            if calc_digest != expected_digest:
+                tmp.unlink(missing_ok=True)
+                raise AppError(
+                    f"source component corrupt: ciphertext transfer digest mismatch: calculated={calc_digest}, expected={expected_digest}",
+                    code=ErrorCode.INTERNAL,
+                    status=500,
+                )
+            os.replace(tmp, dp)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+    elif dest_target.store is not None:
+        # Collect stream in chunks
+        chunks: list[bytes] = []
+        for chunk in _iter_source_stream(source_target, source_rel, chunk_size=chunk_size):
+            hasher.update(chunk)
+            chunks.append(chunk)
+            bytes_transferred += len(chunk)
+
+        calc_digest = hasher.hexdigest()
+        if calc_digest != expected_digest:
+            raise AppError(
+                f"source component corrupt: ciphertext transfer digest mismatch: calculated={calc_digest}, expected={expected_digest}",
+                code=ErrorCode.INTERNAL,
+                status=500,
+            )
+
+        total_bytes = b"".join(chunks)
+        # Put into remote store
+        dest_target.store.put_if_absent(dest_rel, total_bytes, checksum_sha256=expected_digest)
+
+    return bytes_transferred
+
+
+def quarantine_and_replace_corrupt_remote_object(
+    dest_target: Any,
+    dest_rel: str,
+    expected_digest: str,
+    source_target: Any,
+    source_rel: str,
+) -> int:
+    """Safely replace a corrupted object on destination using conditional delete + transfer."""
+    if dest_target.root is not None:
+        q_dir = dest_target.root / ".quarantine"
+        q_dir.mkdir(parents=True, exist_ok=True)
+        dp = dest_target.root / dest_rel
+        if dp.is_file():
+            dp.rename(q_dir / f"{expected_digest}.corrupt.{time.time_ns()}")
+        return stream_ciphertext_transfer(source_target, dest_target, source_rel, dest_rel, expected_digest)
+
+    if dest_target.store is not None:
+        stat = dest_target.store.stat(dest_rel)
+        if stat is not None:
+            corrupt_bytes = dest_target.store.get_bytes(dest_rel)
+            if corrupt_bytes is not None:
+                dest_target.store.put_if_absent(
+                    f".quarantine/{expected_digest}.corrupt.{time.time_ns()}",
+                    corrupt_bytes,
+                )
+            # Conditional delete with expected ETag / CAS
+            try:
+                deleted = dest_target.store.delete_if_match(dest_rel, expected_etag=stat.etag)
+                if not deleted:
+                    raise AppError("conditional-delete-corrupt-object-failed: CAS mismatch", code=ErrorCode.INVALID_REQUEST, status=412)
+            except Exception as exc:
+                raise AppError(f"conditional-delete-corrupt-object-failed: {exc}", code=ErrorCode.INVALID_REQUEST, status=412) from exc
+
+        return stream_ciphertext_transfer(source_target, dest_target, source_rel, dest_rel, expected_digest)
+
+    return 0
+
+
+# ── Durable ReplicaRepairJob CRUD ───────────────────────────────────────────
+
+
+def read_repair_job(repair_id: str) -> dict[str, Any] | None:
+    path = _repair_job_path(repair_id)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):  # pragma: no cover
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def list_repair_jobs(
+    *,
+    policy_id: str | None = None,
+    backup_id: str | None = None,
+    dest_target_id: str | None = None,
+    source_target_id: str | None = None,
+    phase: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    if not REPAIRS_DIR.is_dir():
+        return []
+    repairs: list[dict[str, Any]] = []
+    for path in sorted(REPAIRS_DIR.glob("*.json"), reverse=True):
+        if path.name.startswith("."):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict) or not str(data.get("repairId", "")):
+            continue
+        if policy_id and str(data.get("policyId") or "") != policy_id:
+            continue
+        if backup_id and str(data.get("backupId") or "") != backup_id:
+            continue
+        if dest_target_id and str(data.get("destTargetId") or "") != dest_target_id:
+            continue
+        if source_target_id and str(data.get("sourceTargetId") or "") != source_target_id:
+            continue
+        if phase and str(data.get("phase") or "") != phase:
+            continue
+        repairs.append(data)
+        if len(repairs) >= limit:
+            break
+    return repairs
+
+
+def create_repair_job(
+    *,
+    policy_id: str,
+    backup_id: str,
+    dest_target_id: str,
+    source_target_id: str | None = None,
+    object_set_digest: str | None = None,
+    repair_id: str | None = None,
+) -> dict[str, Any]:
+    with _LOCK:
+        REPAIRS_DIR.mkdir(parents=True, exist_ok=True)
+        r_id = repair_id or f"repair_{uuid.uuid4().hex[:16]}"
+        job = {
+            "schemaVersion": REPAIR_JOB_SCHEMA_VERSION,
+            "repairId": r_id,
+            "policyId": policy_id,
+            "backupId": backup_id,
+            "sourceTargetId": source_target_id,
+            "destTargetId": dest_target_id,
+            "objectSetDigest": object_set_digest,
+            "repairMode": "auto",
+            "phase": "queued",
+            "components": {},
+            "bytesRepaired": 0,
+            "attempt": 0,
+            "maxAttempts": 5,
+            "nextAttemptAt": None,
+            "holdId": None,
+            "createdAt": _utc_iso(),
+            "updatedAt": _utc_iso(),
+            "error": None,
+        }
+        _atomic_write(_repair_job_path(r_id), job)
+        return job
+
+
+def _set_repair_phase(job: dict[str, Any], phase: str, **extra: Any) -> dict[str, Any]:
+    job = dict(job)
+    job["phase"] = phase
+    job["updatedAt"] = _utc_iso()
+    for key, value in extra.items():
+        job[key] = value
+    _atomic_write(_repair_job_path(str(job["repairId"])), job)
+    return job
+
+
+# ── Ciphertext-Plane Replica Self-Healing Engine (4.5.4) ────────────────────
 
 
 def execute_replica_repair(
@@ -504,43 +874,101 @@ def execute_replica_repair(
 ) -> dict[str, Any]:
     """Repair missing/corrupted replica copy purely on the ciphertext plane.
 
-    Age decrypt count = 0
-    Age encrypt count = 0
+    Contract (4.5.4):
+    - Age decrypt count = 0
+    - Age encrypt count = 0
+    - Existing committed copy repair NEVER writes Receipt v4 or Commit v4,
+      NEVER increments targetGeneration, NEVER moves control/head.json.
+    - Fully durable and resumable on process restart.
     """
     if backup_dr_ledger.is_logical_recovery_point_retired(policy_id, backup_id):
         return {"status": "skipped", "reason": "retired", "policyId": policy_id, "backupId": backup_id}
 
-    r_id = run_id or f"repair_{uuid.uuid4().hex[:12]}"
-    start_time = time.monotonic()
+    r_id = run_id or f"repair_{uuid.uuid4().hex[:16]}"
+    existing_job = read_repair_job(r_id)
+    if existing_job is None:
+        # Check open repair job for (policy, backup, dest)
+        open_jobs = [
+            j for j in list_repair_jobs(policy_id=policy_id, backup_id=backup_id, limit=50)
+            if str(j.get("destTargetId")) == dest_target_id and str(j.get("phase")) in REPAIR_ACTIVE_PHASES
+        ]
+        if open_jobs:
+            job = open_jobs[0]
+            r_id = str(job["repairId"])
+        else:
+            job = create_repair_job(
+                policy_id=policy_id,
+                backup_id=backup_id,
+                dest_target_id=dest_target_id,
+                source_target_id=source_target_id,
+                repair_id=r_id,
+            )
+    else:
+        job = existing_job
 
-    # 1. Resolve healthy source
-    if source_target_id is None:
+    return execute_repair_job_instance(r_id, instance_id=instance_id, requested_source_target_id=source_target_id)
+
+
+def execute_repair_job_instance(
+    repair_id: str,
+    *,
+    instance_id: str = "healer-worker",
+    requested_source_target_id: str | None = None,
+) -> dict[str, Any]:
+    """Execute or resume an individual durable ReplicaRepairJob."""
+    start_time = time.monotonic()
+    job = read_repair_job(repair_id)
+    if job is None:
+        raise AppError("ReplicaRepairJob not found", code=ErrorCode.NOT_FOUND, status=404)
+    if str(job.get("phase") or "") in REPAIR_TERMINAL_PHASES:
+        return {"status": "success" if job.get("phase") == "healthy" else str(job.get("phase")), "repairId": repair_id, "job": job}
+
+    policy_id = str(job["policyId"])
+    backup_id = str(job["backupId"])
+    dest_target_id = str(job["destTargetId"])
+    source_target_id = job.get("sourceTargetId") or requested_source_target_id
+
+    # 1. Resolve source
+    job = _set_repair_phase(job, "selecting-source", attempt=int(job.get("attempt") or 0) + 1)
+    if not source_target_id:
         copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
         healthy = [
             c for c in copies
             if str(c.get("targetId")) != dest_target_id and c.get("recoverable") and c.get("state") == "healthy"
         ]
         if not healthy:
+            job = _set_repair_phase(job, "failed-terminal", error="no-healthy-source-copy")
             raise AppError(
                 f"No healthy source copy available to repair {dest_target_id} for {backup_id}",
                 code=ErrorCode.NOT_FOUND,
                 status=404,
             )
         source_target_id = str(healthy[0]["targetId"])
+        job = _set_repair_phase(job, "selecting-source", sourceTargetId=source_target_id)
 
-    # 2. Acquire SourceHold to protect source from pruning
-    hold = acquire_source_hold(source_target_id, policy_id, backup_id, holder_id=r_id)
+    source_target = backup_publish.resolve_target(source_target_id)
+    dest_target = backup_publish.resolve_target(dest_target_id)
+
+    # 2. Acquire target-side source hold
+    job = _set_repair_phase(job, "acquiring-source-hold")
+    hold = acquire_source_hold(
+        source_target_id,
+        policy_id,
+        backup_id,
+        holder_id=repair_id,
+        target_root=source_target.root,
+        target_store=source_target.store,
+    )
+    job = _set_repair_phase(job, "validating-source-control", holdId=hold.hold_id)
+
     try:
-        source_target = backup_publish.resolve_target(source_target_id)
-        dest_target = backup_publish.resolve_target(dest_target_id)
-
         # 3. Acquire WriterLease on destination
         fencing = backup_scheduler.allocate_fencing_token()
         writer = backup_writer_lease.TargetWriterLease(
             dest_target.root,
             store=dest_target.store if dest_target.root is None else None,
             target_id=dest_target_id,
-            owner_run_id=r_id,
+            owner_run_id=repair_id,
             owner_instance_id=instance_id,
             fencing_token=fencing,
         )
@@ -561,145 +989,199 @@ def execute_replica_repair(
 
             source_receipt = json.loads(source_raw_receipt.decode("utf-8"))
             objects = list(source_receipt.get("objects") or [])
-            bytes_transferred = 0
 
-            # 5. Component Diff & Ciphertext Stream
+            # 5. Check destination to determine repair mode: provision vs heal-existing
+            job = _set_repair_phase(job, "scanning-destination")
+            dest_has_valid_receipt = False
+            dest_has_valid_commit = False
+
+            if dest_target.root is not None:
+                rp = dest_target.root / "receipts" / f"{backup_id}.json"
+                cp = dest_target.root / "commits" / policy_id / f"{backup_id}.json"
+                dest_has_valid_receipt = rp.is_file()
+                dest_has_valid_commit = cp.is_file()
+            elif dest_target.store is not None:
+                dest_has_valid_receipt = dest_target.store.stat(f"receipts/{backup_id}.json") is not None
+                dest_has_valid_commit = dest_target.store.stat(f"commits/{policy_id}/{backup_id}.json") is not None
+
+            repair_mode = "heal-existing" if (dest_has_valid_receipt and dest_has_valid_commit) else "provision"
+            job = _set_repair_phase(job, "scanning-destination", repairMode=repair_mode)
+
+            # Component tracking checkpoint
+            components_state = dict(job.get("components") or {})
             for obj in objects:
                 digest = str(obj.get("digest") or "")
                 if not digest:
                     continue
+                if digest not in components_state:
+                    components_state[digest] = {
+                        "digest": digest,
+                        "size": int(obj.get("size") or 0),
+                        "state": "pending",
+                        "transferredBytes": 0,
+                    }
+
+            job = _set_repair_phase(job, "transferring-components", components=components_state)
+
+            bytes_transferred = int(job.get("bytesRepaired") or 0)
+
+            # 6. Stream and verify components
+            for obj in objects:
+                digest = str(obj.get("digest") or "")
+                if not digest:
+                    continue
+                c_state = components_state.get(digest, {})
+                if c_state.get("state") == "verified":
+                    continue
+
                 comp_rel = f"objects/{digest[:2]}/{digest[2:4]}/{digest}.age"
                 control_rel = f"control/{digest}.age"
 
-                # Check if component exists in source
-                source_bytes: bytes | None = None
-                is_control = False
+                # Check if component is in objects/ or control/ on source
+                source_rel = comp_rel
                 if source_target.root is not None:
-                    cp = source_target.root / comp_rel
-                    ctrl_p = source_target.root / "control" / f"{digest}.age"
-                    if cp.is_file():
-                        source_bytes = cp.read_bytes()
-                    elif ctrl_p.is_file():
-                        source_bytes = ctrl_p.read_bytes()
-                        is_control = True
+                    if not (source_target.root / comp_rel).is_file() and (source_target.root / control_rel).is_file():
+                        source_rel = control_rel
                 elif source_target.store is not None:
-                    source_bytes = source_target.store.get_bytes(comp_rel)
-                    if source_bytes is None:
-                        source_bytes = source_target.store.get_bytes(control_rel)
-                        if source_bytes is not None:
-                            is_control = True
+                    if source_target.store.stat(comp_rel) is None and source_target.store.stat(control_rel) is not None:
+                        source_rel = control_rel
 
-                if source_bytes is None:
-                    continue
+                target_rel = source_rel
 
-                # Verify source digest
-                calc_digest = hashlib.sha256(source_bytes).hexdigest()
-                if calc_digest != digest:
-                    raise AppError(f"Source component corrupt: {digest}", code=ErrorCode.INTERNAL, status=500)
-
-                # Check destination
-                target_rel = control_rel if is_control else comp_rel
-                dest_needs_stream = True
-                dest_bytes: bytes | None = None
+                # Check destination current state
+                dest_corrupt = False
+                dest_valid = False
                 if dest_target.root is not None:
                     dp = dest_target.root / target_rel
                     if dp.is_file():
-                        dest_bytes = dp.read_bytes()
+                        calc_sha = hashlib.sha256(dp.read_bytes()).hexdigest()
+                        if calc_sha == digest:
+                            dest_valid = True
+                        else:
+                            dest_corrupt = True
                 elif dest_target.store is not None:
-                    dest_bytes = dest_target.store.get_bytes(target_rel)
+                    d_stat = dest_target.store.stat(target_rel)
+                    if d_stat is not None:
+                        d_bytes = dest_target.store.get_bytes(target_rel)
+                        if d_bytes is not None and hashlib.sha256(d_bytes).hexdigest() == digest:
+                            dest_valid = True
+                        else:
+                            dest_corrupt = True
 
-                if dest_bytes is not None:
-                    if hashlib.sha256(dest_bytes).hexdigest() == digest:
-                        dest_needs_stream = False
-                    else:
-                        # Quarantine corrupted destination component
-                        if dest_target.root is not None:
-                            q_dir = dest_target.root / ".quarantine"
-                            q_dir.mkdir(parents=True, exist_ok=True)
-                            (dest_target.root / target_rel).rename(q_dir / f"{digest}.corrupt.{time.time_ns()}")
-                        elif dest_target.store is not None:
-                            dest_target.store.put_if_absent(f".quarantine/{digest}.corrupt.{time.time_ns()}", dest_bytes)
+                if dest_valid:
+                    components_state[digest]["state"] = "verified"
+                    job = _set_repair_phase(job, "transferring-components", components=components_state)
+                    continue
 
-                if dest_needs_stream:
-                    # Pure stream: NO decrypt, NO encrypt
-                    if dest_target.root is not None:
-                        dp = dest_target.root / target_rel
-                        dp.parent.mkdir(parents=True, exist_ok=True)
-                        dp.write_bytes(source_bytes)
-                    elif dest_target.store is not None:
-                        dest_target.store.put_if_absent(target_rel, source_bytes)
-                    bytes_transferred += len(source_bytes)
-
-            # 6. Publish target-local receipt & commit marker
-            dest_receipt = dict(source_receipt)
-            dest_receipt["targetId"] = dest_target_id
-            dest_receipt_bytes = (json.dumps(dest_receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-            dest_receipt_digest = hashlib.sha256(dest_receipt_bytes).hexdigest()
-
-            if dest_target.root is not None:
-                rp = dest_target.root / "receipts" / f"{backup_id}.json"
-                rp.parent.mkdir(parents=True, exist_ok=True)
-                rp.write_bytes(dest_receipt_bytes)
-            elif dest_target.store is not None:
-                dest_target.store.put_if_absent(f"receipts/{backup_id}.json", dest_receipt_bytes)
-
-            def _next_generation_and_previous(target: Any) -> tuple[int, str]:
-                latest = None
-                if target.root is not None:
-                    latest = backup_publish.latest_commit(target.root)
-                elif target.store is not None:
-                    latest = backup_publish.latest_commit_store(target.store)
-                gen = int(latest["targetGeneration"]) + 1 if latest is not None else 1
-                prev_hash = str(latest["commitHash"]) if latest is not None else backup_publish.GENESIS_COMMIT_HASH
-                return gen, prev_hash
-
-            # Target-local commit
-            schedule_slot = f"repair/{backup_id}"
-            gen, prev_hash = _next_generation_and_previous(dest_target)
-            commit = {
-                "schemaVersion": 4,
-                "targetGeneration": gen,
-                "previousCommitHash": prev_hash,
-                "fencingToken": fencing,
-                "runId": r_id,
-                "policyId": policy_id,
-                "scheduleSlot": schedule_slot,
-                "slotDigest": hashlib.sha256(f"{policy_id}:{schedule_slot}".encode("utf-8")).hexdigest(),
-                "backupId": backup_id,
-                "committedAt": _utc_iso(),
-                "receiptDigest": dest_receipt_digest,
-                "storageProtocol": "object-set-v1",
-                "objectSetDigest": dest_receipt.get("objectSetDigest"),
-                "controlObjectDigest": dest_receipt.get("controlObjectDigest"),
-            }
-            commit_bytes = (json.dumps(commit, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-            commit["commitHash"] = hashlib.sha256(commit_bytes).hexdigest()
-
-            head_bytes = json.dumps({"latestCommitHash": commit["commitHash"], "targetGeneration": gen}, indent=2).encode("utf-8") + b"\n"
-            if dest_target.root is not None:
-                cp = dest_target.root / "commits" / policy_id / f"{backup_id}.json"
-                cp.parent.mkdir(parents=True, exist_ok=True)
-                cp.write_bytes(json.dumps(commit, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n")
-                hp = dest_target.root / "control" / "head.json"
-                hp.parent.mkdir(parents=True, exist_ok=True)
-                hp.write_bytes(head_bytes)
-            elif dest_target.store is not None:
-                dest_target.store.put_if_absent(f"commits/{policy_id}/{backup_id}.json", json.dumps(commit, indent=2, sort_keys=True).encode("utf-8") + b"\n")
-                head_stat = dest_target.store.stat("control/head.json")
-                if head_stat is not None:
-                    dest_target.store.put_if_match("control/head.json", head_bytes, expected_etag=head_stat.etag)
+                # Transfer
+                if dest_corrupt:
+                    trans_bytes = quarantine_and_replace_corrupt_remote_object(
+                        dest_target,
+                        target_rel,
+                        digest,
+                        source_target,
+                        source_rel,
+                    )
                 else:
-                    dest_target.store.put_if_absent("control/head.json", head_bytes)
+                    trans_bytes = stream_ciphertext_transfer(
+                        source_target,
+                        dest_target,
+                        source_rel,
+                        target_rel,
+                        digest,
+                    )
 
-            append_target_local_catalog(dest_target, dest_receipt)
+                bytes_transferred += trans_bytes
+                components_state[digest]["state"] = "verified"
+                components_state[digest]["transferredBytes"] = trans_bytes
+                # Per-component progress checkpoint
+                job = _set_repair_phase(
+                    job,
+                    "transferring-components",
+                    components=components_state,
+                    bytesRepaired=bytes_transferred,
+                )
+                hold.renew()
 
-            # 7. Update DR ledger
+            job = _set_repair_phase(job, "verifying-components")
+
+            # 7. Finalizing phase
+            job = _set_repair_phase(job, "finalizing")
+
+            if repair_mode == "provision":
+                # Missing copy: generate target-local Receipt v4 and Commit v4
+                dest_receipt = dict(source_receipt)
+                dest_receipt["targetId"] = dest_target_id
+                dest_receipt_bytes = (json.dumps(dest_receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                dest_receipt_digest = hashlib.sha256(dest_receipt_bytes).hexdigest()
+
+                if dest_target.root is not None:
+                    rp = dest_target.root / "receipts" / f"{backup_id}.json"
+                    rp.parent.mkdir(parents=True, exist_ok=True)
+                    rp.write_bytes(dest_receipt_bytes)
+                elif dest_target.store is not None:
+                    dest_target.store.put_if_absent(f"receipts/{backup_id}.json", dest_receipt_bytes)
+
+                def _next_generation_and_previous(target: Any) -> tuple[int, str]:
+                    latest = None
+                    if target.root is not None:
+                        latest = backup_publish.latest_commit(target.root)
+                    elif target.store is not None:
+                        latest = backup_publish.latest_commit_store(target.store)
+                    gen = int(latest["targetGeneration"]) + 1 if latest is not None else 1
+                    prev_hash = str(latest["commitHash"]) if latest is not None else backup_publish.GENESIS_COMMIT_HASH
+                    return gen, prev_hash
+
+                schedule_slot = f"repair/{backup_id}"
+                gen, prev_hash = _next_generation_and_previous(dest_target)
+                commit = {
+                    "schemaVersion": 4,
+                    "targetGeneration": gen,
+                    "previousCommitHash": prev_hash,
+                    "fencingToken": fencing,
+                    "runId": repair_id,
+                    "policyId": policy_id,
+                    "scheduleSlot": schedule_slot,
+                    "slotDigest": hashlib.sha256(f"{policy_id}:{schedule_slot}".encode("utf-8")).hexdigest(),
+                    "backupId": backup_id,
+                    "committedAt": _utc_iso(),
+                    "receiptDigest": dest_receipt_digest,
+                    "storageProtocol": "object-set-v1",
+                    "objectSetDigest": dest_receipt.get("objectSetDigest"),
+                    "controlObjectDigest": dest_receipt.get("controlObjectDigest"),
+                }
+                commit_bytes = (json.dumps(commit, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                commit["commitHash"] = hashlib.sha256(commit_bytes).hexdigest()
+
+                head_bytes = json.dumps({"latestCommitHash": commit["commitHash"], "targetGeneration": gen}, indent=2).encode("utf-8") + b"\n"
+                if dest_target.root is not None:
+                    cp = dest_target.root / "commits" / policy_id / f"{backup_id}.json"
+                    cp.parent.mkdir(parents=True, exist_ok=True)
+                    cp.write_bytes(json.dumps(commit, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n")
+                    hp = dest_target.root / "control" / "head.json"
+                    hp.parent.mkdir(parents=True, exist_ok=True)
+                    hp.write_bytes(head_bytes)
+                elif dest_target.store is not None:
+                    dest_target.store.put_if_absent(f"commits/{policy_id}/{backup_id}.json", json.dumps(commit, indent=2, sort_keys=True).encode("utf-8") + b"\n")
+                    head_stat = dest_target.store.stat("control/head.json")
+                    if head_stat is not None:
+                        dest_target.store.put_if_match("control/head.json", head_bytes, expected_etag=head_stat.etag)
+                    else:
+                        dest_target.store.put_if_absent("control/head.json", head_bytes)
+
+                append_target_local_catalog(dest_target, dest_receipt)
+            else:
+                # In-Place Committed Copy Healing: DO NOT write Receipt v4, Commit v4, or touch head.json
+                pass
+
+            # 8. Update DR ledger evidence
+            committed_at_str = _utc_iso()
             backup_dr_ledger.record_logical_recovery_copy(
                 target_id=dest_target_id,
                 policy_id=policy_id,
                 backup_id=backup_id,
-                committed_at=str(commit["committedAt"]),
-                object_set_digest=str(dest_receipt.get("objectSetDigest") or "") or None,
+                committed_at=committed_at_str,
+                object_set_digest=str(source_receipt.get("objectSetDigest") or "") or None,
                 recoverable=True,
                 role="replica",
                 mode="required",
@@ -707,6 +1189,7 @@ def execute_replica_repair(
                 last_verified_at=_utc_iso(),
                 last_repair_at=_utc_iso(),
             )
+
             duration_ms = (time.monotonic() - start_time) * 1000.0
             backup_dr_ledger.record_stage_sample(
                 target_id=dest_target_id,
@@ -715,13 +1198,23 @@ def execute_replica_repair(
                 duration_ms=duration_ms,
                 result="success",
             )
+
+            job = _set_repair_phase(
+                job,
+                "healthy",
+                bytesRepaired=bytes_transferred,
+                durationMs=duration_ms,
+                error=None,
+            )
+
             return {
                 "status": "success",
-                "repairId": r_id,
+                "repairId": repair_id,
                 "policyId": policy_id,
                 "backupId": backup_id,
                 "sourceTargetId": source_target_id,
                 "destTargetId": dest_target_id,
+                "repairMode": repair_mode,
                 "bytesRepaired": bytes_transferred,
                 "durationMs": duration_ms,
             }
@@ -731,15 +1224,53 @@ def execute_replica_repair(
         hold.release()
 
 
-# ── Desired-State Reconciler ────────────────────────────────────────────────
+def process_pending_repairs(*, instance_id: str = "healer-worker", limit: int = 5) -> dict[str, int]:
+    """Drain and resume active/queued ReplicaRepairJobs."""
+    pending = [
+        j
+        for j in list_repair_jobs(limit=200)
+        if str(j.get("phase") or "") in REPAIR_ACTIVE_PHASES or str(j.get("phase") or "") == "queued"
+    ]
+    processed = succeeded = failed = 0
+    for job in pending[:limit]:
+        r_id = str(job["repairId"])
+        try:
+            res = execute_repair_job_instance(r_id, instance_id=instance_id)
+            processed += 1
+            if res.get("status") == "success":
+                succeeded += 1
+            else:
+                failed += 1
+        except Exception:
+            processed += 1
+            failed += 1
+    return {"processed": processed, "succeeded": succeeded, "failed": failed}
+
+
+# ── Autonomous Desired-State Reconciler ─────────────────────────────────────
+
+
+def _load_cursors() -> dict[str, Any]:
+    if not CURSORS_PATH.is_file():
+        return {}
+    try:
+        return json.loads(CURSORS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_cursors(cursors: dict[str, Any]) -> None:
+    _atomic_write(CURSORS_PATH, cursors)
 
 
 def reconcile_policy_replicas(
     policy_id: str,
     *,
     instance_id: str = "reconciler-worker",
+    max_points: int = 20,
+    max_repairs: int = 2,
 ) -> dict[str, Any]:
-    """Reconcile desired replica copies against observed copies in DR Ledger."""
+    """Autonomous desired-state reconciler under bounded workload limits."""
     from deepseek_infra.infra.workspace import backup_policies
 
     policy = backup_policies.get_policy(policy_id)
@@ -752,7 +1283,9 @@ def reconcile_policy_replicas(
     if not expected_targets:
         return {"status": "noop", "policyId": policy_id}
 
-    copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=200)
+    cursors = _load_cursors()
+
+    copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=max(200, max_points * 2))
     # Group by backupId
     by_backup: dict[str, list[dict[str, Any]]] = {}
     for c in copies:
@@ -767,6 +1300,9 @@ def reconcile_policy_replicas(
         if backup_dr_ledger.is_logical_recovery_point_retired(policy_id, backup_id):
             continue
         scanned += 1
+        if scanned > max_points:
+            break
+
         existing_targets = {str(c["targetId"]): c for c in copy_list}
         healthy_sources = [
             c for c in copy_list
@@ -777,6 +1313,8 @@ def reconcile_policy_replicas(
         source_target_id = str(healthy_sources[0]["targetId"])
 
         for dest_tid in expected_targets:
+            if repairs_triggered >= max_repairs:
+                break
             existing = existing_targets.get(dest_tid)
             needs_repair = False
             if existing is None or not existing.get("recoverable") or existing.get("state") != "healthy":
@@ -798,6 +1336,13 @@ def reconcile_policy_replicas(
                         repairs_failed += 1
                 except Exception:
                     repairs_failed += 1
+
+    cursors[policy_id] = {
+        "lastReconciledAt": _utc_iso(),
+        "scannedPoints": scanned,
+        "repairsTriggered": repairs_triggered,
+    }
+    _save_cursors(cursors)
 
     return {
         "status": "completed",

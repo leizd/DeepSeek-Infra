@@ -416,10 +416,100 @@ jobs:
           path: docs/evidence/recovery-faults-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: warn
 
+  replica-healing-s3-e2e:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+      MINIO_ROOT_USER: deepseekci
+      MINIO_ROOT_PASSWORD: ci-healing-${{ github.run_id }} # pragma: allowlist secret
+      AWS_ACCESS_KEY_ID: deepseekci
+      AWS_SECRET_ACCESS_KEY: ci-healing-${{ github.run_id }} # pragma: allowlist secret
+      DEEPSEEK_TEST_S3_ENDPOINT_A: http://127.0.0.1:9000
+      DEEPSEEK_TEST_S3_ENDPOINT_B: http://127.0.0.1:9001
+      DEEPSEEK_TEST_S3_BUCKET_A: deepseek-healing-pri
+      DEEPSEEK_TEST_S3_BUCKET_B: deepseek-healing-rep
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+      - name: Build the real Age backup crypto helper
+        uses: dtolnay/rust-toolchain@1.85.0
+      - run: python scripts/build_backup_crypto.py
+      - name: Start Primary MinIO server (Target A)
+        run: >-
+          docker run --detach --name deepseek-minio-pri
+          --publish 9000:9000
+          --env MINIO_ROOT_USER
+          --env MINIO_ROOT_PASSWORD
+          quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+          server /data --address ":9000"
+      - name: Start Replica MinIO server (Target B)
+        run: >-
+          docker run --detach --name deepseek-minio-rep
+          --publish 9001:9001
+          --env MINIO_ROOT_USER
+          --env MINIO_ROOT_PASSWORD
+          quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+          server /data --address ":9001"
+      - name: Wait for MinIO health endpoints
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null && \
+               curl --fail --silent http://127.0.0.1:9001/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs deepseek-minio-pri
+          docker logs deepseek-minio-rep
+          exit 1
+      - name: Run dual MinIO autonomous healing and write failover gates
+        run: >-
+          python scripts/run_replica_healing_s3_e2e.py
+          --out docs/evidence/replica-healing-s3-v$RELEASE_VERSION.json
+      - name: Stage replica-healing exact-merge Evidence
+        run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer replica-healing-s3-e2e
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-replica-healing-s3-e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-replica-healing-s3-e2e
+          path: artifacts/evidence-producer-replica-healing-s3-e2e
+          if-no-files-found: error
+      - name: Upload replica-healing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replica-healing-s3-e2e
+          path: docs/evidence/replica-healing-s3-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Collect MinIO diagnostics
+        if: always()
+        run: |
+          docker logs deepseek-minio-pri || true
+          docker logs deepseek-minio-rep || true
+
   eval:
     needs:
       - evidence-context
       - release-version
+
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
@@ -1091,6 +1181,7 @@ jobs:
       - packed-delta-s3-e2e
       - object-set-s3-e2e
       - recovery-fault-evidence
+      - replica-healing-s3-e2e
       - security
       - eval
       - release-readiness

@@ -1,33 +1,20 @@
 {
   "schemaVersion": "headless-mcp-bridge-evidence.v1",
-  "version": "4.5.2",
-  "commit": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
-  "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
-  "sourceRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
-  "sourceTreeDirty": false,
+  "version": "4.5.3",
+  "commit": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "testedRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceTreeDirty": true,
   "releaseRevision": null,
   "ciRevision": null,
-  "sourceContext": {
-    "schemaVersion": 2,
-    "version": "4.5.2",
-    "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
-    "sourceTreeDirty": false,
-    "capturedAt": "2026-08-16T06:04:20Z",
-    "generator": "scripts/generate_release_evidence.py",
-    "repository": "local",
-    "workflowRunId": "local",
-    "workflowAttempt": 1,
-    "eventName": "local",
-    "ref": "refs/heads/release/4.5.2-recovery-replica-failover"
-  },
-  "generatedAt": "2026-08-16T06:05:05Z",
+  "generatedAt": "2026-08-17T00:39:19Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
-  "gitSha": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
-  "gitDirty": false,
+  "gitSha": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "gitDirty": true,
   "status": "PASS",
   "transport": {
     "server": "embedded-or-local-http",
@@ -68,7 +55,7 @@
         "serverInfo": {
           "name": "deepseek-infra",
           "title": "DeepSeek Infra MCP Tool Hub",
-          "version": "4.5.2"
+          "version": "4.5.3"
         }
       }
     },

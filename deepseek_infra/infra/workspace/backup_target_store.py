@@ -93,6 +93,14 @@ def restore_hold_key(restore_id: str) -> str:
     return f"holds/restore/{restore_id}.json"
 
 
+def repair_hold_key(repair_id: str) -> str:
+    return f"holds/repair/{repair_id}.json"
+
+
+def protection_hold_key(hold_id: str) -> str:
+    return f"holds/protection/{hold_id}.json"
+
+
 @dataclass(frozen=True, slots=True)
 class TargetCapabilities:
     conditional_create: bool = False

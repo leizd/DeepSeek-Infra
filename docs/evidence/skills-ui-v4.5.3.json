@@ -1,0 +1,42 @@
+{
+  "version": "4.5.3",
+  "commit": "6f2cc6c86018",
+  "testedRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-08-17T00:38:29+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "skillWorkbenchEntrypoint": "PASS",
+    "skillCreateEditDelete": "PASS",
+    "skillApiActions": "PASS",
+    "projectSkillBindingUi": "PASS",
+    "skillPanelLifecycle": "PASS",
+    "skillPanelStyles": "PASS",
+    "reactPwaOwnership": "PASS",
+    "frontendTypecheckGate": "PASS",
+    "skillUiAssets": "PASS"
+  },
+  "details": {
+    "skillUiAssets": {
+      "assets": [
+        "docs/assets/skill-workbench.png",
+        "docs/assets/skill-run-result.png"
+      ],
+      "missingOrEmpty": []
+    },
+    "uiSources": [
+      "frontend/src/features/skills/SkillsDrawer.tsx",
+      "frontend/src/features/skills/useSkillController.ts",
+      "frontend/src/api/skillsApi.ts",
+      "frontend/src/features/projects/ProjectsDrawer.tsx"
+    ]
+  }
+}

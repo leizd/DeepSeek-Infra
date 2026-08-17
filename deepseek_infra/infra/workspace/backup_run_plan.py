@@ -85,15 +85,24 @@ def freeze_run_plan(
     force_full_reason: str | None = None,
     frontend_generation_id: str | None = None,
     backup_id: str | None = None,
+    configured_primary_target_id: str | None = None,
+    selected_write_target_id: str | None = None,
+    candidate_target_ids: list[str] | None = None,
+    failover_reason: str | None = None,
+    is_failover: bool = False,
 ) -> dict[str, Any]:
     """Return existing plan for the slot or create and persist a new frozen plan.
 
-    Once frozen, retries never re-select the parent or snapshot kind.
+    Once frozen, retries never re-select the parent, snapshot kind, or write target.
     """
     existing = read_run_plan(str(policy.get("policyId") or ""), slot_digest)
     if existing is not None:
         return existing
     import uuid
+
+    primary_id = configured_primary_target_id or target_id
+    write_id = selected_write_target_id or target_id
+    is_failover_bool = bool(is_failover or write_id != primary_id)
 
     body: dict[str, Any] = {
         "schemaVersion": RUN_PLAN_SCHEMA_VERSION,
@@ -101,7 +110,12 @@ def freeze_run_plan(
         "scheduleSlot": schedule_slot,
         "slotDigest": slot_digest,
         "policyDigest": policy_digest(policy),
-        "targetId": target_id,
+        "targetId": write_id,
+        "configuredPrimaryTargetId": primary_id,
+        "selectedWriteTargetId": write_id,
+        "candidateTargetIds": candidate_target_ids or [primary_id, write_id] if is_failover_bool else [primary_id],
+        "failoverReason": failover_reason if is_failover_bool else None,
+        "isFailover": is_failover_bool,
         "targetHeadHash": target_head_hash or ("0" * 64),
         "contributorPlanDigest": hashlib.sha256(_stable_json(contributor_plan)).hexdigest(),
         "recipientSetDigest": recipient_set_digest(policy),

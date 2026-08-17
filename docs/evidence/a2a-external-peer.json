@@ -1,37 +1,24 @@
 {
   "schemaVersion": "a2a-external-peer-evidence.v1",
-  "version": "4.5.2",
-  "commit": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
-  "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
-  "sourceRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
-  "sourceTreeDirty": false,
+  "version": "4.5.3",
+  "commit": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "testedRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceTreeDirty": true,
   "releaseRevision": null,
   "ciRevision": null,
-  "sourceContext": {
-    "schemaVersion": 2,
-    "version": "4.5.2",
-    "testedRevision": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
-    "sourceTreeDirty": false,
-    "capturedAt": "2026-08-16T06:04:20Z",
-    "generator": "scripts/generate_release_evidence.py",
-    "repository": "local",
-    "workflowRunId": "local",
-    "workflowAttempt": 1,
-    "eventName": "local",
-    "ref": "refs/heads/release/4.5.2-recovery-replica-failover"
-  },
-  "generatedAt": "2026-08-16T06:05:08Z",
+  "generatedAt": "2026-08-17T00:39:21Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
-  "gitSha": "507fa2dee2e1169cccabf5c8cdd6e3cc64ed7bfd",
-  "gitDirty": false,
+  "gitSha": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "gitDirty": true,
   "peer": {
     "name": "A2A Interop Peer",
-    "url": "http://127.0.0.1:61732",
-    "endpoint": "http://127.0.0.1:61732/a2a/agents/interop-peer",
+    "url": "http://127.0.0.1:65225",
+    "endpoint": "http://127.0.0.1:65225/a2a/agents/interop-peer",
     "type": "independent-process",
     "protocolVersion": "0.3.0"
   },
@@ -54,23 +41,23 @@
       "detail": "name=A2A Interop Peer protocol=0.3.0",
       "data": {
         "skills": 1,
-        "endpoint": "http://127.0.0.1:61732/a2a/agents/interop-peer"
+        "endpoint": "http://127.0.0.1:65225/a2a/agents/interop-peer"
       }
     },
     {
       "name": "a2a.message_send",
       "status": "pass",
-      "detail": "task=task_ebc94613ef11d16c2d3afe5c state=working",
+      "detail": "task=task_fc54cc0b7a8390620092ea0e state=working",
       "data": {
-        "taskId": "task_ebc94613ef11d16c2d3afe5c"
+        "taskId": "task_fc54cc0b7a8390620092ea0e"
       }
     },
     {
       "name": "a2a.tasks_get",
       "status": "pass",
-      "detail": "task=task_ebc94613ef11d16c2d3afe5c",
+      "detail": "task=task_fc54cc0b7a8390620092ea0e",
       "data": {
-        "taskId": "task_ebc94613ef11d16c2d3afe5c"
+        "taskId": "task_fc54cc0b7a8390620092ea0e"
       }
     },
     {
@@ -84,7 +71,7 @@
           0,
           1
         ],
-        "taskId": "task_c835b538fea6b19ef5e84a5f",
+        "taskId": "task_a7a14d0884a91c9d77f369e9",
         "finalState": "completed"
       }
     },
@@ -99,7 +86,7 @@
           0,
           1
         ],
-        "taskId": "task_c835b538fea6b19ef5e84a5f",
+        "taskId": "task_a7a14d0884a91c9d77f369e9",
         "finalState": "completed"
       }
     },
@@ -114,7 +101,7 @@
           0,
           1
         ],
-        "taskId": "task_c835b538fea6b19ef5e84a5f",
+        "taskId": "task_a7a14d0884a91c9d77f369e9",
         "finalState": "completed"
       }
     },
@@ -124,15 +111,15 @@
       "detail": "2 tasks listed",
       "data": {
         "taskCount": 2,
-        "taskId": "task_ebc94613ef11d16c2d3afe5c"
+        "taskId": "task_fc54cc0b7a8390620092ea0e"
       }
     },
     {
       "name": "a2a.tasks_cancel",
       "status": "pass",
-      "detail": "task=task_5fd16ceb23e530122ab95477 state=canceling",
+      "detail": "task=task_e7d897a809df52dd3e6478e9 state=canceling",
       "data": {
-        "taskId": "task_5fd16ceb23e530122ab95477",
+        "taskId": "task_e7d897a809df52dd3e6478e9",
         "state": "canceling"
       }
     }

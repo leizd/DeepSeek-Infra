@@ -1,0 +1,513 @@
+"""Comprehensive Coverage Booster for Autonomous Replica Self-Healing and DR Control Plane."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from deepseek_infra.core.errors import AppError
+from deepseek_infra.infra.workspace import (
+    backup_dr_ledger,
+    backup_dr_readiness,
+    backup_publish,
+    backup_replication,
+    backup_scheduler,
+    backup_target_store,
+)
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+class MockTargetStore(backup_target_store.FilesystemTargetStore):
+    def __init__(self, root: Path, target_id: str = "mock-target") -> None:
+        super().__init__(root)
+        self.target_id = target_id
+        self._etags: dict[str, str] = {}
+        self.deleted_keys: list[str] = []
+
+    def stat(self, key: str) -> backup_target_store.ObjectMeta | None:
+        p = self.root / key
+        if not p.is_file():
+            return None
+        etag = self._etags.get(key) or _sha256(p.read_bytes())[:16]
+        self._etags[key] = etag
+        return backup_target_store.ObjectMeta(key=key, size=p.stat().st_size, etag=etag)
+
+    def get_bytes(self, key: str, offset: int = 0, length: int | None = None) -> bytes | None:
+        p = self.root / key
+        if not p.is_file():
+            return None
+        data = p.read_bytes()
+        if length is not None:
+            return data[offset : offset + length]
+        return data[offset:]
+
+    def put_if_absent(self, key: str, source: Any, *, checksum_sha256: str | None = None, content_type: str = "application/octet-stream", **kwargs: Any) -> backup_target_store.PutResult:
+        data = source if isinstance(source, bytes) else source.read()
+        if checksum_sha256:
+            calc = _sha256(data)
+            if calc != checksum_sha256:
+                raise AppError(f"Checksum mismatch: {calc} != {checksum_sha256}", status=400)
+        p = self.root / key
+        if p.exists():
+            raise AppError(f"Precondition failed: {key} exists", status=412)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        etag = _sha256(data)[:16]
+        self._etags[key] = etag
+        return backup_target_store.PutResult(key=key, etag=etag, size=len(data), created=True, version_id="1")
+
+    def put_if_match(self, key: str, source: Any, *, expected_etag: str, checksum_sha256: str | None = None, content_type: str = "application/octet-stream", **kwargs: Any) -> backup_target_store.PutResult:
+        data = source if isinstance(source, bytes) else source.read()
+        p = self.root / key
+        current_etag = self._etags.get(key) or (_sha256(p.read_bytes())[:16] if p.is_file() else None)
+        if current_etag != expected_etag:
+            raise AppError(f"Precondition failed: ETag mismatch ({current_etag} != {expected_etag})", status=412)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        etag = _sha256(data)[:16]
+        self._etags[key] = etag
+        return backup_target_store.PutResult(key=key, etag=etag, size=len(data), created=False, version_id="2")
+
+    def delete_if_match(self, key: str, expected_etag: str | None = None) -> bool:
+        p = self.root / key
+        if not p.exists():
+            return False
+        if expected_etag is not None:
+            current_etag = self._etags.get(key) or _sha256(p.read_bytes())[:16]
+            if current_etag != expected_etag:
+                return False
+        p.unlink()
+        self._etags.pop(key, None)
+        self.deleted_keys.append(key)
+        return True
+
+
+class MockTarget:
+    def __init__(self, target_id: str, root: Path | None = None, store: Any | None = None) -> None:
+        self.target_id = target_id
+        self.root = root
+        self.store = store
+
+    def require_store(self) -> Any:
+        return self.store
+
+
+def test_source_hold_lifecycle_store_and_filesystem(tmp_settings) -> None:
+    """Test source hold acquire, query, expiration, and release on store and filesystem."""
+    root = tmp_settings / "t_store"
+    root.mkdir(parents=True)
+    store = MockTargetStore(root, "store-hold-target")
+    target_mock = MockTarget("store-hold-target", store=store)
+
+    # 1. Acquire hold with store
+    hold = backup_replication.acquire_source_hold(
+        target_id="store-hold-target",
+        policy_id="pol-1",
+        backup_id="bk-1",
+        holder_id="test-holder",
+        target_store=store,
+        hold_seconds=60,
+    )
+    assert hold.hold_id
+    assert backup_replication.is_source_held("store-hold-target", "pol-1", "bk-1") is True
+    assert backup_replication.is_source_held("store-hold-target", "pol-1", "bk-1", target=target_mock) is True
+
+    # Renew hold
+    hold.renew(duration_seconds=120)
+    assert backup_replication.is_source_held("store-hold-target", "pol-1", "bk-1") is True
+
+    # 2. Release hold
+    backup_replication.release_source_hold(hold)
+    assert backup_replication.is_source_held("store-hold-target", "pol-1", "bk-1") is False
+
+    # 3. Acquire hold with local target_root
+    fs_root = tmp_settings / "fs_root"
+    fs_root.mkdir(parents=True)
+    fs_target_mock = MockTarget("fs-target", root=fs_root)
+    hold_fs = backup_replication.acquire_source_hold(
+        target_id="fs-target",
+        policy_id="pol-2",
+        backup_id="bk-2",
+        holder_id="fs-holder",
+        target_root=fs_root,
+        hold_seconds=60,
+    )
+    assert (fs_root / "holds" / "repair" / f"{hold_fs.hold_id}.json").is_file()
+    assert backup_replication.is_source_held("fs-target", "pol-2", "bk-2") is True
+    assert backup_replication.is_source_held("fs-target", "pol-2", "bk-2", target=fs_target_mock) is True
+
+    # Expired check
+    future_time = datetime.now(tz=timezone.utc) + timedelta(seconds=1000)
+    assert backup_replication.is_source_held("fs-target", "pol-2", "bk-2", target=fs_target_mock, now=future_time) is False
+
+    # Release fs hold via method
+    hold_fs.release()
+    assert not (fs_root / "holds" / "repair" / f"{hold_fs.hold_id}.json").is_file()
+    assert backup_replication.is_source_held("fs-target", "pol-2", "bk-2") is False
+
+
+def test_repair_job_crud_and_listing(tmp_settings) -> None:
+    """Test create, read, list, and phase transitions of ReplicaRepairJob."""
+    # Non-existent job
+    assert backup_replication.read_repair_job("non-existent-id") is None
+
+    # Corrupt job json file
+    bad_file = backup_replication.REPAIRS_DIR / "bad_job.json"
+    bad_file.parent.mkdir(parents=True, exist_ok=True)
+    bad_file.write_text("invalid json content", encoding="utf-8")
+    assert backup_replication.read_repair_job("bad_job") is None
+
+    # Create valid job
+    job = backup_replication.create_repair_job(
+        policy_id="pol_crud",
+        backup_id="bk_crud",
+        dest_target_id="dest_target",
+        source_target_id="src_target",
+        repair_id="rep_crud_001",
+    )
+    assert job["repairId"] == "rep_crud_001"
+    assert job["phase"] == "queued"
+
+    read_back = backup_replication.read_repair_job("rep_crud_001")
+    assert read_back is not None
+    assert read_back["policyId"] == "pol_crud"
+
+    # List jobs with filters
+    jobs = backup_replication.list_repair_jobs(policy_id="pol_crud")
+    assert len(jobs) >= 1
+    assert any(j["repairId"] == "rep_crud_001" for j in jobs)
+
+    jobs_bk = backup_replication.list_repair_jobs(backup_id="bk_crud")
+    assert len(jobs_bk) >= 1
+
+    jobs_dest = backup_replication.list_repair_jobs(dest_target_id="dest_target")
+    assert len(jobs_dest) >= 1
+
+    jobs_src = backup_replication.list_repair_jobs(source_target_id="src_target")
+    assert len(jobs_src) >= 1
+
+    jobs_stage = backup_replication.list_repair_jobs(phase="queued")
+    assert len(jobs_stage) >= 1
+
+    # Phase update
+    updated = backup_replication._set_repair_phase(
+        job,
+        phase="transferring-components",
+        progress={"completed": 1, "total": 2},
+    )
+    assert updated["phase"] == "transferring-components"
+    assert updated["progress"]["completed"] == 1
+
+
+def test_replication_job_crud_and_enqueue(tmp_settings) -> None:
+    """Test replication job CRUD, filters, and enqueue helpers."""
+    # List jobs when dir empty
+    assert backup_replication.list_jobs(policy_id="none") == []
+
+    # Write job
+    j_dir = backup_replication.REPLICATION_DIR
+    j_dir.mkdir(parents=True, exist_ok=True)
+    (j_dir / "bad.json").write_text("corrupted", encoding="utf-8")
+    assert backup_replication.list_jobs() == []
+
+    # Enqueue replica jobs
+    policy_disabled = {"policyId": "p-dis", "replication": {"enabled": False}}
+    assert backup_replication.enqueue_replica_jobs(
+        policy=policy_disabled,
+        primary_target_id="p-target",
+        backup_id="bk-1",
+        package=None,
+        run_id="run-1",
+        schedule_slot="slot-1",
+        slot_digest="dig-1",
+    ) == []
+
+    policy_empty = {"policyId": "p-emp", "replication": {"enabled": True, "targets": []}}
+    assert backup_replication.enqueue_replica_jobs(
+        policy=policy_empty,
+        primary_target_id="p-target",
+        backup_id="bk-1",
+        package=None,
+        run_id="run-1",
+        schedule_slot="slot-1",
+        slot_digest="dig-1",
+    ) == []
+
+    policy_valid = {
+        "policyId": "p-val",
+        "replication": {
+            "enabled": True,
+            "targets": [
+                {"targetId": "r-target-1", "mode": "required"},
+                {"targetId": "p-target", "mode": "required"},  # primary self skipped
+            ],
+        },
+    }
+    receipt = {
+        "schemaVersion": 4,
+        "backupId": "bk-val-1",
+        "policyId": "p-val",
+        "targetId": "p-target",
+        "objectSetDigest": "os-dig",
+        "controlObjectDigest": "ctrl-dig",
+        "objects": [{"digest": "os-dig", "size": 100, "kind": "data"}],
+    }
+    enqueued = backup_replication.enqueue_replica_jobs(
+        policy=policy_valid,
+        primary_target_id="p-target",
+        backup_id="bk-val-1",
+        package=None,
+        run_id="run-val",
+        schedule_slot="slot-val",
+        slot_digest="dig-val",
+        primary_receipt=receipt,
+    )
+    assert len(enqueued) == 1
+    job_id = enqueued[0]["jobId"]
+
+    # Test read_job and list_jobs filters
+    read_back = backup_replication.read_job(job_id)
+    assert read_back is not None
+    assert read_back["policyId"] == "p-val"
+
+    assert backup_replication.has_open_required_jobs(policy_id="p-val") is True
+    assert backup_replication.has_open_required_jobs(policy_id="p-val", slot_digest="dig-val") is True
+    assert backup_replication.has_open_required_jobs(policy_id="p-val", slot_digest="diff-dig") is False
+
+
+def test_quarantine_and_replace_corrupt_remote_object_branches(tmp_settings) -> None:
+    """Test remote corrupt object replacement branches: non-existent corrupt object, ETag mismatch."""
+    src_root = tmp_settings / "src_remote_store"
+    dest_root = tmp_settings / "dest_remote_store"
+    src_root.mkdir(parents=True)
+    dest_root.mkdir(parents=True)
+
+    src_store = MockTargetStore(src_root, "src_store")
+    dest_store = MockTargetStore(dest_root, "dest_store")
+
+    key = "objects/ab/cd/abcd1234.age"
+    valid_bytes = b"valid-ciphertext-payload-bytes"
+    valid_digest = _sha256(valid_bytes)
+
+    # Put valid object in source
+    src_store.put_if_absent(key, valid_bytes, checksum_sha256=valid_digest)
+
+    src_target = MockTarget("src_store", store=src_store)
+    dest_target = MockTarget("dest_store", store=dest_store)
+
+    # 1. Non-existent corrupt object (direct stream transfer)
+    bytes_trans = backup_replication.quarantine_and_replace_corrupt_remote_object(
+        dest_target=dest_target,
+        dest_rel=key,
+        expected_digest=valid_digest,
+        source_target=src_target,
+        source_rel=key,
+    )
+    assert bytes_trans == len(valid_bytes)
+    assert dest_store.get_bytes(key) == valid_bytes
+
+    # 2. Corrupt object exists (quarantine + replace path)
+    dest_store.delete_if_match(key)
+    dest_store.put_if_absent(key, b"corrupted-bytes")
+
+    bytes_trans2 = backup_replication.quarantine_and_replace_corrupt_remote_object(
+        dest_target=dest_target,
+        dest_rel=key,
+        expected_digest=valid_digest,
+        source_target=src_target,
+        source_rel=key,
+    )
+    assert bytes_trans2 == len(valid_bytes)
+    assert dest_store.get_bytes(key) == valid_bytes
+
+    # 3. Source corruption causes digest mismatch
+    src_store.delete_if_match(key)
+    src_store.put_if_absent(key, b"corrupted-source-bytes")
+
+    with pytest.raises(AppError) as exc_info:
+        backup_replication.quarantine_and_replace_corrupt_remote_object(
+            dest_target=dest_target,
+            dest_rel=key,
+            expected_digest=valid_digest,
+            source_target=src_target,
+            source_rel=key,
+        )
+    assert "source component corrupt" in str(exc_info.value) or "ciphertext transfer digest mismatch" in str(exc_info.value)
+
+
+def test_process_pending_repairs_and_reconcile_replicas(tmp_settings, monkeypatch) -> None:
+    """Test process_pending_repairs and reconcile_policy_replicas controller flows."""
+    # Setup source and dest directories
+    src_dir = tmp_settings / "src_box"
+    dest_dir = tmp_settings / "dest_box"
+    src_dir.mkdir(parents=True)
+    dest_dir.mkdir(parents=True)
+
+    target_map = {
+        "src-target": MockTarget("src-target", root=src_dir),
+        "dest-target": MockTarget("dest-target", root=dest_dir),
+    }
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda tid: target_map[tid])
+
+    # Put a valid backup point in source
+    p_id = "pol-auto"
+    b_id = "bk-auto-1"
+    chunk = b"hello-world-chunk"
+    c_dig = _sha256(chunk)
+    c_rel = f"objects/{c_dig[:2]}/{c_dig[2:4]}/{c_dig}.age"
+    (src_dir / c_rel).parent.mkdir(parents=True, exist_ok=True)
+    (src_dir / c_rel).write_bytes(chunk)
+
+    receipt = {
+        "schemaVersion": 4,
+        "backupId": b_id,
+        "policyId": p_id,
+        "targetId": "src-target",
+        "snapshotKind": "full",
+        "storageProtocol": "object-set-v1",
+        "objectSetDigest": c_dig,
+        "objects": [{"digest": c_dig, "size": len(chunk), "kind": "data"}],
+    }
+    (src_dir / "receipts").mkdir(parents=True, exist_ok=True)
+    (src_dir / "receipts" / f"{b_id}.json").write_text(json.dumps(receipt), encoding="utf-8")
+
+    # Record source copy in DR ledger
+    backup_dr_ledger.record_logical_recovery_copy(
+        target_id="src-target",
+        policy_id=p_id,
+        backup_id=b_id,
+        committed_at="2026-08-17T00:00:00Z",
+        object_set_digest=c_dig,
+        recoverable=True,
+        state="healthy",
+    )
+
+    # 1. Create a queued repair job and run execute_repair_job_instance
+    job = backup_replication.create_repair_job(
+        policy_id=p_id,
+        backup_id=b_id,
+        dest_target_id="dest-target",
+        source_target_id="src-target",
+        repair_id="rep_pending_01",
+    )
+    assert job["phase"] == "queued"
+
+    res = backup_replication.execute_repair_job_instance("rep_pending_01")
+    assert res["status"] == "success"
+
+    # Also test process_pending_repairs
+    _ = backup_replication.create_repair_job(
+        policy_id=p_id,
+        backup_id=b_id,
+        dest_target_id="dest-target",
+        source_target_id="src-target",
+        repair_id="rep_pending_02",
+    )
+    processed = backup_replication.process_pending_repairs(limit=5)
+    assert processed["processed"] >= 1
+
+    # Verify dest now has the object
+    assert (dest_dir / c_rel).is_file()
+    assert (dest_dir / c_rel).read_bytes() == chunk
+
+    # 2. Test reconcile_policy_replicas
+    policy = {
+        "policyId": p_id,
+        "targetId": "src-target",
+        "replication": {
+            "enabled": True,
+            "minCommittedCopies": 2,
+            "targets": [
+                {"targetId": "dest-target", "mode": "required"},
+            ],
+        },
+    }
+    from deepseek_infra.infra.workspace import backup_policies
+    monkeypatch.setattr(backup_policies, "get_policy", lambda pid: policy)
+
+    reconcile_res = backup_replication.reconcile_policy_replicas(p_id)
+    assert reconcile_res["status"] == "completed"
+    assert reconcile_res["scannedPoints"] >= 1
+
+    # Test replication_compliance
+    comp = backup_replication.replication_compliance(policy=policy, backup_id=b_id)
+    assert comp["enabled"] is True
+    assert "compliance" in comp
+
+
+def test_replica_lag_calculation_branches(tmp_settings) -> None:
+    """Test calculate_replica_lag for no-primary, no-replica, and calculated scenarios."""
+    # 1. No primary
+    lag1 = backup_replication.calculate_replica_lag("pol-lag", "rep-1", primary_target_id="p-1")
+    assert lag1["status"] == "no-primary"
+
+    # 2. Primary exists, no replica
+    backup_dr_ledger.record_logical_recovery_copy(
+        target_id="p-1",
+        policy_id="pol-lag",
+        backup_id="bk-lag-1",
+        committed_at="2026-08-17T01:00:00Z",
+        recoverable=True,
+    )
+    lag2 = backup_replication.calculate_replica_lag("pol-lag", "rep-1", primary_target_id="p-1")
+    assert lag2["status"] == "no-replica"
+    assert lag2["lagRecoveryPoints"] == 999
+
+    # 3. Both exist
+    backup_dr_ledger.record_logical_recovery_copy(
+        target_id="rep-1",
+        policy_id="pol-lag",
+        backup_id="bk-lag-1",
+        committed_at="2026-08-17T00:55:00Z",
+        recoverable=True,
+    )
+    lag3 = backup_replication.calculate_replica_lag("pol-lag", "rep-1", primary_target_id="p-1")
+    assert lag3["status"] == "calculated"
+    assert lag3["lagRecoveryPoints"] == 0
+    assert lag3["lagSeconds"] == 300
+
+
+def test_write_failover_and_dr_readiness(tmp_settings, monkeypatch) -> None:
+    """Test write placement failover and DR readiness writeContinuity block."""
+    policy = {
+        "policyId": "pol-stability",
+        "targetId": "primary-target-unavailable",
+        "replication": {
+            "enabled": True,
+            "minCommittedCopies": 2,
+            "targets": [
+                {"targetId": "replica-target-healthy", "mode": "required"},
+            ],
+        },
+    }
+
+    replica_dir = tmp_settings / "replica_store"
+    replica_dir.mkdir(parents=True)
+
+    def mock_resolve(tid: str) -> Any:
+        if tid == "primary-target-unavailable":
+            raise AppError("connection failed", status=503)
+        if tid == "replica-target-healthy":
+            return MockTarget(tid, root=replica_dir)
+        raise AppError("unknown", status=404)
+
+    monkeypatch.setattr(backup_publish, "resolve_target", mock_resolve)
+
+    # Evaluate write placement
+    placement = backup_scheduler.evaluate_write_placement(policy)
+    assert placement["isFailover"] is True
+    assert placement["selectedWriteTargetId"] == "replica-target-healthy"
+    assert placement["forceFull"] is True
+
+    # Test DR readiness writeContinuity block
+    readiness = backup_dr_readiness.evaluate_scope_readiness("replica-target-healthy")
+    assert "writeContinuity" in readiness
+    assert "status" in readiness["writeContinuity"]
