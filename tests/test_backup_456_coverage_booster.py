@@ -1623,6 +1623,84 @@ async def test_workspace_backup_finalize_disconnect(tmp_path: Path) -> None:
             assert exc.value.status == 499
 
 
+def test_server_share_target_and_multipart_handling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from starlette.testclient import TestClient
+    from deepseek_infra.web import server as server_module
+
+    srv, _ = server_module.create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, base_url="http://127.0.0.1")
+
+    # 1. Share target with error fallback
+    with patch("deepseek_infra.web.server.extract_uploaded_file", side_effect=AppError("mocked extract failure", status=400)):
+        resp = client.post(
+            "/share-target",
+            data={},
+            files={"file": ("invalid.txt", b"corrupted content", "text/plain")},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert "share=" in resp.headers.get("location", "")
+
+    # 2. read_multipart_files with ocrEnabled and apiKey
+    mock_req = MagicMock(spec=Request)
+    mock_req.headers = {"Content-Type": "multipart/form-data; boundary=xyz", "Content-Length": "100"}
+
+    async def _mock_read_form(req: Request) -> tuple[dict[str, list[str]], list[dict[str, Any]]]:
+        return {"ocrEnabled": ["true"], "apiKey": ["test-ocr-key"]}, [{"filename": "doc.pdf", "data": b"123", "content_type": "application/pdf"}]
+
+    with patch("deepseek_infra.web.server.read_multipart_form", _mock_read_form):
+        uploads, ocr_en, api_key = asyncio.run(server_module.read_multipart_files(mock_req))
+        assert ocr_en is True
+        assert api_key == "test-ocr-key"
+        assert len(uploads) == 1
+
+
+def test_agent_state_edge_cases() -> None:
+    from deepseek_infra.infra.agent_runtime import agent_state
+
+    # _usage_int
+    assert agent_state._usage_int({"prompt_tokens": "invalid_num"}, "prompt_tokens") == 0
+    assert agent_state._usage_int({"prompt_tokens": "-5"}, "prompt_tokens") == 0
+    assert agent_state._usage_int({"promptTokens": "42"}, "prompt_tokens", "promptTokens") == 42
+
+    # _plan_dependencies with invalid items
+    deps = agent_state._plan_dependencies([None, 123, {"no_id": True}, {"id": "n1", "depends_on": ["n0", ""]}])
+    assert deps == {"n1": {"n0"}}
+
+    # incomplete_plan_nodes and completed_node_ids
+    plan = [None, "str_item", {"no_id": 1}, {"id": "n1"}, {"id": "n2"}]
+    nodes = {"n1": {"state": "succeeded"}, "n2": {"state": "failed"}}
+    assert agent_state.incomplete_plan_nodes(plan, nodes) == [{"id": "n2"}]
+    assert agent_state.completed_node_ids(plan, nodes) == ["n1"]
+
+    plan_test = [{"id": "n1"}, {"id": "n2", "depends_on": ["n1"]}]
+    events = [
+        {"type": "agent", "phase": "planning", "status": "running"},
+        {"type": "agent_reset", "phase": "planning"},
+        {"type": "agent_output", "phase": "n1", "output": {"failed": False, "duration_ms": 100, "usage": {"prompt_tokens": 10}}},
+        {"type": "run_status", "status": "cancelled"},
+    ]
+    replayed = agent_state.reduce_node_states(plan_test, events)
+    assert replayed["n1"]["state"] == "succeeded"
+    assert replayed["n2"]["state"] == "cancelled"
+
+
+def test_browser_actions_edge_cases() -> None:
+    from deepseek_infra.infra.browser import actions as browser_actions
+
+    st = browser_actions.browser_status()
+    assert isinstance(st, dict)
+    assert st["engine"] == "playwright"
+
+    assert browser_actions._int("invalid", default=99) == 99
+    assert browser_actions._int(42, default=0) == 42
+
+    assert browser_actions._optional_bool(None) is None
+    assert browser_actions._optional_bool("true") is True
+    assert browser_actions._optional_bool(False) is False
+
+
+
 
 
 
