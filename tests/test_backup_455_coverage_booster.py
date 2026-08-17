@@ -1400,6 +1400,108 @@ def test_server_web_share_target_and_agent_runs_extra(tmp_settings: Path, monkey
     assert resp.json()["runId"] == "run_fake_455"
 
 
+def test_write_continuity_full_lifecycle_and_cas_errors(tmp_settings: Path) -> None:
+    """Cover backup_write_continuity.py liveness, failover, failback, promotion and CAS failures."""
+    from deepseek_infra.infra.workspace import backup_write_continuity, backup_policies
+
+    # 1. perform_liveness_preflight with unavailable targets
+    non_existent_root = MockTargetWrapper("missing", root=tmp_settings / "non-existent-dir")
+    ev1 = backup_write_continuity.perform_liveness_preflight("missing", target=non_existent_root)
+    assert ev1["status"] == "unavailable"
+
+    no_root_no_store = MockTargetWrapper("empty")
+    ev2 = backup_write_continuity.perform_liveness_preflight("empty", target=no_root_no_store)
+    assert ev2["status"] == "unavailable"
+
+    # Store with error
+    class ErrorStore(backup_target_store.MemoryTargetStore):
+        def check_liveness(self, *, timeout_seconds: float = 5.0) -> dict[str, Any]:
+            return {"status": "error", "error": "simulated liveness failure"}
+
+    err_store = ErrorStore()
+    err_wrapper = MockTargetWrapper("err-store", store=err_store)
+    ev3 = backup_write_continuity.perform_liveness_preflight("err-store", target=err_wrapper, policy_id="pol-test")
+    assert ev3["status"] == "unavailable"
+
+    # 2. evaluate_failback_eligibility branches
+    # 2a. Already primary
+    eligible, reason, _ = backup_write_continuity.evaluate_failback_eligibility("pol-test")
+    assert eligible is False
+    assert reason == "already-primary"
+
+    # 2b. Failover transition
+    backup_write_continuity.execute_failover_transition("pol-test", "secondary-target", reason="primary-down")
+    state = backup_write_continuity.get_write_continuity_state("pol-test")
+    assert state["activeWriteTargetId"] == "secondary-target"
+    assert state["activeWriteTargetRole"] == "failover"
+
+    # 2c. Primary not healthy
+    backup_write_continuity.record_target_liveness("pol-test", "managed-local", status="unavailable")
+    eligible, reason, _ = backup_write_continuity.evaluate_failback_eligibility("pol-test")
+    assert eligible is False
+    assert reason == "primary-not-healthy"
+
+    # 2d. Primary stability insufficient
+    now = datetime.now(tz=timezone.utc)
+    backup_write_continuity.record_target_liveness("pol-test", "managed-local", status="available", now=now)
+    eligible, reason, _ = backup_write_continuity.evaluate_failback_eligibility("pol-test", stability_window_seconds=1800, now=now + timedelta(seconds=10))
+    assert eligible is False
+    assert "primary-stability-insufficient" in reason
+
+    # 2e. Execute failback transition
+    fb_state = backup_write_continuity.execute_failback_transition("pol-test")
+    assert fb_state["activeWriteTargetRole"] == "primary"
+
+    # 3. promote_primary_target and CAS mismatches
+    # Register secondary target in target registry
+    sec_dir = tmp_settings / ".sec-target-dir"
+    sec_dir.mkdir(parents=True, exist_ok=True)
+    target_record = {
+        "schemaVersion": 1,
+        "targetId": "target_secondary_01",
+        "kind": "filesystem",
+        "label": "Secondary Target",
+        "path": str(sec_dir),
+    }
+    backup_targets._atomic_write_json(backup_targets._registry_path("target_secondary_01"), target_record)
+
+    # Create policy with replication
+    pol_id = "pol-prom-test"
+    backup_policies.create_policy({
+        "policyId": pol_id,
+        "name": "Promotion Test Policy",
+        "enabled": True,
+        "schedule": {"cron": "0 3 * * *", "timezone": "UTC"},
+        "protection": {"mode": "age-recipient", "recipients": ["age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"]},
+        "targetId": "managed-local",
+        "primaryTargetId": "managed-local",
+        "policyRevision": 1,
+        "replication": {
+            "enabled": True,
+            "targets": [{"targetId": "target_secondary_01", "mode": "required"}],
+        },
+    })
+
+    # CAS failure on policy revision
+    with pytest.raises(AppError, match="CAS mismatch on policyRevision"):
+        backup_write_continuity.promote_primary_target(pol_id, "target_secondary_01", expected_policy_revision=999)
+
+    # CAS failure on failover epoch
+    with pytest.raises(AppError, match="CAS mismatch on failoverEpoch"):
+        backup_write_continuity.promote_primary_target(pol_id, "target_secondary_01", expected_failover_epoch=999)
+
+    # Successful promotion
+    prom_res = backup_write_continuity.promote_primary_target(
+        pol_id,
+        "target_secondary_01",
+        expected_policy_revision=1,
+        expected_failover_epoch=0,
+    )
+    assert prom_res["status"] == "promoted"
+    assert prom_res["newPrimaryTargetId"] == "target_secondary_01"
+    assert prom_res["previousPrimaryTargetId"] == "managed-local"
+
+
 
 
 
