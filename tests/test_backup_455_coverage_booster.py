@@ -1177,6 +1177,176 @@ def test_target_store_get_bytes_offset_on_filesystem(tmp_settings: Path) -> None
     assert result_all == b"ABCDEF"
 
 
+def test_backup_reconcile_assert_catalog_committed_corrupt(tmp_settings: Path) -> None:
+    """Cover assert_catalog_committed and catalog_corrupt_backup_ids (lines 60-76 of backup_reconcile.py)."""
+    from deepseek_infra.infra.workspace import backup_catalog, backup_reconcile, backup_writer_lease
+
+    root = tmp_settings / ".reconcile-corrupt-target"
+    root.mkdir(parents=True, exist_ok=True)
+
+    # 1. Empty catalog -> no corrupt
+    backup_reconcile.assert_catalog_committed(root)
+    assert backup_reconcile.catalog_corrupt_backup_ids(root) == []
+
+    # 2. Append a catalog record using backup_catalog.append_receipt without matching commit marker
+    rec = {
+        "schemaVersion": 2,
+        "backupId": "uncommitted-backup-123",
+        "filename": "uncommitted-backup-123.tar.age",
+        "policyId": "pol-1",
+        "createdAt": _utc_iso(),
+    }
+    writer = backup_writer_lease.TargetWriterLease(
+        root=root,
+        target_id="managed-local",
+        owner_run_id="run-c",
+        owner_instance_id="inst-c",
+        fencing_token=1,
+    )
+    writer.acquire()
+    try:
+        backup_catalog.append_receipt(root, rec, writer=writer)
+    finally:
+        writer.release()
+
+    corrupt = backup_reconcile.catalog_corrupt_backup_ids(root)
+    assert "uncommitted-backup-123" in corrupt
+    with pytest.raises(AppError, match="catalog-corrupt"):
+        backup_reconcile.assert_catalog_committed(root)
+
+
+def test_backup_reconcile_target_orphaned_and_rebuild(tmp_settings: Path) -> None:
+    """Cover reconcile_target orphaned objects/receipts and catalog rebuild (lines 120-220)."""
+    from deepseek_infra.infra.workspace import backup_reconcile, backup_writer_lease
+    import os
+
+    root = tmp_settings / ".reconcile-orphans-target"
+    root.mkdir(parents=True, exist_ok=True)
+
+    # Write an uncommitted old object (> 24h ago)
+    obj_dir = root / "objects" / "sha256" / "ab"
+    obj_dir.mkdir(parents=True, exist_ok=True)
+    old_obj = obj_dir / ("ab" + "0" * 62 + ".age")
+    old_obj.write_bytes(b"old-orphan-content")
+    old_time = (datetime.now(tz=timezone.utc) - timedelta(days=2)).timestamp()
+    os.utime(old_obj, (old_time, old_time))
+
+    # Write an uncommitted old receipt (> 24h ago)
+    rec_dir = root / "receipts"
+    rec_dir.mkdir(parents=True, exist_ok=True)
+    old_rec = rec_dir / "old-orphan-backup.json"
+    old_rec.write_text(json.dumps({"backupId": "old-orphan-backup"}), encoding="utf-8")
+    os.utime(old_rec, (old_time, old_time))
+
+    # Reconcile target with writer lease
+    writer = backup_writer_lease.TargetWriterLease(
+        root=root,
+        target_id="managed-local",
+        owner_run_id="run-rec",
+        owner_instance_id="inst-rec",
+        fencing_token=1,
+    )
+    writer.acquire()
+    try:
+        report = backup_reconcile.reconcile_target(root, target_id="managed-local", writer=writer, orphan_grace_seconds=3600)
+        assert len(report["orphanedObjects"]) >= 1
+        assert len(report["orphanedReceipts"]) >= 1
+    finally:
+        writer.release()
+
+
+def test_backup_reconcile_target_store_head_advancement(tmp_settings: Path) -> None:
+    """Cover reconcile_target_store remote head advancement (lines 250-330)."""
+    from deepseek_infra.infra.workspace import backup_reconcile, backup_writer_lease
+
+    store = backup_target_store.MemoryTargetStore()
+
+    # Write a commit marker with high generation
+    commit_data = {
+        "schemaVersion": 4,
+        "commitHash": "c" * 64,
+        "backupId": "b-store-1",
+        "runId": "run-store-1",
+        "targetGeneration": 10,
+        "committedAt": _utc_iso(),
+        "objectSetDigest": "d" * 64,
+        "controlObjectDigest": "ctrl" + "0" * 60,
+        "receiptDigest": "rec" + "0" * 61,
+        "storageProtocol": "object-set-v1",
+    }
+    store.put_if_absent("commits/c.json", json.dumps(commit_data).encode())
+
+    # Write receipt
+    receipt_data = {
+        "schemaVersion": 4,
+        "backupId": "b-store-1",
+        "policyId": "pol-1",
+        "storageProtocol": "object-set-v1",
+        "objectSetDigest": "d" * 64,
+        "controlObjectDigest": "ctrl" + "0" * 60,
+        "objects": [{"digest": "obj1" + "0" * 60, "size": 10}],
+        "controlObject": {"digest": "ctrl" + "0" * 60, "size": 10},
+    }
+    r_bytes = json.dumps(receipt_data).encode()
+    store.put_if_absent("receipts/b-store-1.json", r_bytes)
+    # Update commit's receiptDigest to match actual sha256
+    actual_rd = hashlib.sha256(r_bytes).hexdigest()
+    commit_data["receiptDigest"] = actual_rd
+    store.delete_if_match("commits/c.json")
+    store.put_if_absent("commits/c.json", json.dumps(commit_data).encode())
+
+    # Write object files
+    store.put_if_absent("objects/sha256/ob/obj1" + "0" * 60 + ".age", b"content1")
+    store.put_if_absent("objects/sha256/ct/ctrl" + "0" * 60 + ".age", b"content2")
+
+    writer = backup_writer_lease.TargetWriterLease(
+        store=store,
+        target_id="remote-store-target",
+        owner_run_id="run-rec-s",
+        owner_instance_id="inst-rec-s",
+        fencing_token=1,
+    )
+    writer.acquire()
+    try:
+        report = backup_reconcile.reconcile_target_store(store, target_id="remote-store-target", writer=writer)
+        assert report["headAdvanced"] is True
+    finally:
+        writer.release()
+
+
+def test_backup_replication_hold_protection_and_catalog_store(tmp_settings: Path) -> None:
+    """Cover is_source_held on store and append_target_local_catalog (lines 330-371 of backup_replication.py)."""
+    store = backup_target_store.MemoryTargetStore()
+    target_store_wrapper = MockTargetWrapper("store-target", store=store)
+
+    # 1. Put an active repair hold into store
+    now = datetime.now(tz=timezone.utc)
+    hold_data = {
+        "schemaVersion": 3,
+        "policyId": "pol-hold",
+        "backupId": "b-hold-1",
+        "expiresAt": _utc_iso(now + timedelta(hours=2)),
+    }
+    store.put_if_absent("holds/repair/hold1.json", json.dumps(hold_data).encode())
+
+    # 2. Check hold protection
+    assert backup_replication.is_source_held("store-target", "pol-hold", "b-hold-1", target=target_store_wrapper) is True
+    assert backup_replication.is_source_held("store-target", "pol-hold", "b-other", target=target_store_wrapper) is False
+
+    # 3. Test append_target_local_catalog on root and store
+    rec = {
+        "policyId": "pol-cat",
+        "backupId": "b-cat-1",
+        "createdAt": _utc_iso(),
+    }
+    root_target = MockTargetWrapper("local-root", root=tmp_settings / ".cat-root")
+    backup_replication.append_target_local_catalog(root_target, rec)
+    assert (tmp_settings / ".cat-root" / "catalogs" / "pol-cat.jsonl").is_file()
+
+    backup_replication.append_target_local_catalog(target_store_wrapper, rec)
+    assert store.stat("catalogs/pol-cat/b-cat-1.json") is not None
+
+
 
 
 
