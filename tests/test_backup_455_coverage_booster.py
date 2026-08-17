@@ -1502,6 +1502,66 @@ def test_write_continuity_full_lifecycle_and_cas_errors(tmp_settings: Path) -> N
     assert prom_res["previousPrimaryTargetId"] == "managed-local"
 
 
+def test_backup_governance_continuity_routes(tmp_settings: Path) -> None:
+    """Cover /api/workspace/backup-policies/{policy_id}/continuity and /promote-primary routes."""
+    from starlette.testclient import TestClient
+    from deepseek_infra.core import config
+    from deepseek_infra.web import server as server_module
+
+    auth_token = config.settings.auth.token or "test_secret_token"
+    auth_headers = {"Authorization": f"Bearer {auth_token}"}
+
+    srv, _ = server_module.create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, base_url="http://127.0.0.1")
+
+    # 1. Register secondary target and policy
+    sec_dir = tmp_settings / ".sec-target-dir-2"
+    sec_dir.mkdir(parents=True, exist_ok=True)
+    target_record = {
+        "schemaVersion": 1,
+        "targetId": "target_sec_route",
+        "kind": "filesystem",
+        "label": "Secondary Route Target",
+        "path": str(sec_dir),
+    }
+    backup_targets._atomic_write_json(backup_targets._registry_path("target_sec_route"), target_record)
+
+    pol_id = "pol_route_test"
+    backup_policies.create_policy({
+        "policyId": pol_id,
+        "name": "Route Test Policy",
+        "enabled": True,
+        "schedule": {"cron": "0 3 * * *", "timezone": "UTC"},
+        "protection": {"mode": "age-recipient", "recipients": ["age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"]},
+        "targetId": "managed-local",
+        "primaryTargetId": "managed-local",
+        "policyRevision": 1,
+        "replication": {
+            "enabled": True,
+            "targets": [{"targetId": "target_sec_route", "mode": "required"}],
+        },
+    })
+
+    # GET /continuity
+    resp = client.get(f"/api/workspace/backup-policies/{pol_id}/continuity", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["policyId"] == pol_id
+
+    # POST /promote-primary missing targetId
+    bad_resp = client.post(f"/api/workspace/backup-policies/{pol_id}/promote-primary", json={}, headers=auth_headers)
+    assert bad_resp.status_code == 400
+
+    # POST /promote-primary success
+    good_resp = client.post(
+        f"/api/workspace/backup-policies/{pol_id}/promote-primary",
+        json={"targetId": "target_sec_route", "expectedPolicyRevision": 1, "expectedFailoverEpoch": 0},
+        headers=auth_headers,
+    )
+    assert good_resp.status_code == 200
+    assert good_resp.json()["status"] == "promoted"
+
+
+
 
 
 

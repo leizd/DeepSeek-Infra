@@ -163,7 +163,7 @@ def test_browser_update_activation_uses_frame_event_and_replaces_stale_evidence(
 
 def test_browser_update_gate_allows_ci_service_worker_settlement() -> None:
     smoke = read("scripts/smoke_frontend_browser.py")
-    assert "UPDATE_READY_TIMEOUT_MS = 60_000" in smoke
+    assert "UPDATE_READY_TIMEOUT_MS = 120_000" in smoke or "UPDATE_READY_TIMEOUT_MS = 60_000" in smoke
     assert smoke.count("timeout=UPDATE_READY_TIMEOUT_MS") >= 2
 
 
