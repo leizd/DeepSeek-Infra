@@ -1347,6 +1347,59 @@ def test_backup_replication_hold_protection_and_catalog_store(tmp_settings: Path
     assert store.stat("catalogs/pol-cat/b-cat-1.json") is not None
 
 
+def test_server_web_share_target_and_agent_runs_extra(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cover server.py web share target (lines 712-735) and agent-runs action endpoints."""
+    from starlette.testclient import TestClient
+    from deepseek_infra.core import config
+    from deepseek_infra.web import server as server_module
+
+    auth_token = config.settings.auth.token or "test_secret_token"
+    auth_headers = {"Authorization": f"Bearer {auth_token}"}
+
+    srv, _ = server_module.create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, base_url="http://127.0.0.1")
+
+    # 1. Test /share-target multipart upload
+    response = client.post(
+        "/share-target",
+        data={"title": "Test Title", "text": "Test body", "url": "https://example.com"},
+        files={"file": ("shared.txt", b"hello world from shared file", "text/plain")},
+        headers=auth_headers,
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "share=" in response.headers.get("location", "")
+
+    # 2. Test /api/agent-runs with confirmPlan
+    monkeypatch.setattr(
+        server_module,
+        "create_agent_run",
+        lambda p, **kw: {"runId": "run_fake_455", "status": "planned", "plan": []},
+    )
+    monkeypatch.setattr(
+        server_module.agent_run_registry,
+        "ensure_started",
+        lambda *a, **kw: None,
+    )
+    resp = client.post(
+        "/api/agent-runs",
+        json={
+            "payload": {
+                "apiKey": "sk-dummy-key-455",
+                "model": "deepseek-v4-pro",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            "confirmPlan": True,
+            "agentPreset": "full",
+            "conversationId": "c-123",
+            "messageId": "m-456",
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["runId"] == "run_fake_455"
+
+
 
 
 
