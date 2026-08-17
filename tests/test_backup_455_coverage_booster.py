@@ -1615,6 +1615,72 @@ def test_server_additional_endpoints_coverage(tmp_settings: Path, monkeypatch: p
     assert client.get("/ui/../secret.txt").status_code == 404
 
 
+def test_server_module_direct_helpers(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Directly test server.py helper functions for 100% statement execution."""
+    from deepseek_infra.web import server as server_module
+
+    # 1. handle_auth_token_redirect
+    from starlette.requests import Request
+
+    def _make_req(path: str, token: str = "", desktop: str = "") -> Request:
+        query = []
+        if token:
+            query.append(f"token={token}")
+        if desktop:
+            query.append(f"desktop={desktop}")
+        qs = "&".join(query).encode("utf-8")
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": path,
+            "query_string": qs,
+            "headers": [],
+        }
+        return Request(scope)
+
+    # Disabled / wrong path
+    assert server_module.handle_auth_token_redirect(_make_req("/api/status")) is None
+
+    # Invalid token
+    import dataclasses
+    from deepseek_infra.core.config import AuthSettings
+    monkeypatch.setattr(server_module, "settings", dataclasses.replace(server_module.settings, auth=AuthSettings(enabled=True, token="valid-secret-tok", allowed_hosts=())))
+    res_bad = server_module.handle_auth_token_redirect(_make_req("/", token="wrong-tok"))
+    assert res_bad is not None and res_bad.status_code == 401
+
+    # Valid token redirect
+    res_good = server_module.handle_auth_token_redirect(_make_req("/ui", token="valid-secret-tok"))
+    assert res_good is not None and res_good.status_code == 302
+
+    # Valid desktop token
+    monkeypatch.setattr(server_module, "frontend_index_path", lambda: tmp_settings / "index.html")
+    (tmp_settings / "index.html").write_text("<html></html>", encoding="utf-8")
+    res_desk = server_module.handle_auth_token_redirect(_make_req("/", token="valid-secret-tok", desktop="1"))
+    assert res_desk is not None and res_desk.status_code == 200
+
+    # 2. encode_stream_event and emit_cascade_as_stream
+    ev = server_module.encode_stream_event({"type": "test", "num": 123})
+    assert b"123" in ev
+
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(server_module, "call_deepseek_cascade", lambda p: {"content": "output", "reasoning": "thought"})
+    server_module.emit_cascade_as_stream({"prompt": "hi"}, events.append)
+    assert len(events) >= 2
+
+    # 3. static_media_type and clean_filename
+    assert server_module.static_media_type(Path("test.css")) in ("text/css", "text/css; charset=utf-8")
+    assert server_module.static_media_type(Path("test.js")) in ("text/javascript", "application/javascript")
+    assert server_module.clean_filename("../../../etc/passwd") == "passwd"
+
+    # 4. share_target_prompt and store/get payload
+    p = server_module.share_target_prompt(title="T", text="body", url="https://example.com")
+    assert "https://example.com" in p
+    s_id = server_module.store_share_target_payload({"msg": "hello"})
+    loaded = server_module.pop_share_target_payload(s_id)
+    assert loaded == {"msg": "hello"}
+
+
+
 
 
 
