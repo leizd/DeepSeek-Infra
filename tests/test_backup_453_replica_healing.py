@@ -220,6 +220,19 @@ def test_replica_repair_pure_ciphertext_plane(tmp_settings: Path, monkeypatch: p
     receipt_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
     (pri_root / "receipts").mkdir(parents=True, exist_ok=True)
     (pri_root / "receipts" / "bk_repair_1.json").write_bytes(receipt_bytes)
+    commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "policyId": "pol_repair",
+        "backupId": "bk_repair_1",
+        "receiptDigest": hashlib.sha256(receipt_bytes).hexdigest(),
+        "objectSetDigest": receipt["objectSetDigest"],
+        "storageProtocol": "object-set-v1",
+        "committedAt": _utc_iso(),
+    }
+    (pri_root / "commits" / "pol_repair").mkdir(parents=True, exist_ok=True)
+    (pri_root / "commits" / "pol_repair" / "bk_repair_1.json").write_text(json.dumps(commit), encoding="utf-8")
 
     # Record source copy in ledger
     backup_dr_ledger.record_logical_recovery_copy(
@@ -312,7 +325,21 @@ def test_desired_state_reconciler_converges_and_skips_retired(tmp_settings: Path
         "objects": [{"digest": comp_digest, "size": len(comp_data)}],
     }
     (pri_root / "receipts").mkdir(parents=True, exist_ok=True)
-    (pri_root / "receipts" / "bk_rec_1.json").write_bytes(json.dumps(receipt).encode("utf-8"))
+    r_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (pri_root / "receipts" / "bk_rec_1.json").write_bytes(r_bytes)
+    commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "policyId": "pol_reconcile",
+        "backupId": "bk_rec_1",
+        "receiptDigest": hashlib.sha256(r_bytes).hexdigest(),
+        "objectSetDigest": receipt["objectSetDigest"],
+        "storageProtocol": "object-set-v1",
+        "committedAt": _utc_iso(),
+    }
+    (pri_root / "commits" / "pol_reconcile").mkdir(parents=True, exist_ok=True)
+    (pri_root / "commits" / "pol_reconcile" / "bk_rec_1.json").write_text(json.dumps(commit), encoding="utf-8")
 
     backup_dr_ledger.record_logical_recovery_copy(
         target_id=p_id,

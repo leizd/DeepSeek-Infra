@@ -14,7 +14,7 @@ from fastapi import APIRouter, Request
 from fastapi.routing import APIRoute
 
 from deepseek_infra.core.errors import AppError
-from deepseek_infra.web.routes import a2a, backup_governance, edge, memory, rag, skills
+from deepseek_infra.web.routes import a2a, backup_governance, chat, edge, mcp, memory, rag, skills
 
 
 def _request(payload: dict[str, Any] | None = None, *, query: str = "") -> Request:
@@ -187,3 +187,108 @@ def test_skills_thread_sensitive_actions_are_direct(monkeypatch: pytest.MonkeyPa
     assert _json(_call(endpoint, {"action": "eval_report", "version": skills.APP_VERSION}))["report"]["version"] == skills.APP_VERSION
     assert _json(_call(endpoint, {"action": "security_review", "skillId": "s1"}))["review"]["skillId"] == "s1"
     assert _json(_call(endpoint, {"action": "security_review_pack", "packId": "p1"}))["review"]["packId"] == "p1"
+
+
+def test_backup_governance_continuity_and_promotion_direct(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_write_continuity
+    monkeypatch.setattr(backup_governance, "require_api_auth", lambda _request: None)
+    monkeypatch.setattr(
+        backup_write_continuity,
+        "promote_primary_target",
+        lambda policy_id, target_id, **kw: {"status": "promoted", "targetId": target_id, "policyId": policy_id},
+    )
+    monkeypatch.setattr(
+        backup_write_continuity,
+        "get_write_continuity_state",
+        lambda policy_id: {"policyId": policy_id, "state": "healthy"},
+    )
+    router = backup_governance.create_backup_governance_router()
+
+    # GET /api/workspace/backup-policies/{policy_id}/continuity
+    continuity_ep = _endpoint(router, "/api/workspace/backup-policies/{policy_id}/continuity", method="GET")
+    assert _json(_call(continuity_ep, policy_id="pol_1"))["policyId"] == "pol_1"
+
+    # POST /api/workspace/backup-policies/{policy_id}/promote-primary
+    promote_ep = _endpoint(router, "/api/workspace/backup-policies/{policy_id}/promote-primary", method="POST")
+    with pytest.raises(AppError, match="targetId is required"):
+        _call(promote_ep, {}, policy_id="pol_1")
+
+    res = _json(_call(promote_ep, {"targetId": "target_01", "expectedPolicyRevision": 1, "expectedFailoverEpoch": 0}, policy_id="pol_1"))
+    assert res["status"] == "promoted"
+
+
+def test_chat_and_mcp_direct_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chat, "require_api_auth", lambda _req: None)
+    monkeypatch.setattr(chat, "call_deepseek_cascade", lambda p: {"role": "assistant", "content": "hello response"})
+    chat_router = chat.create_chat_router(chat.ChatRouteDeps(
+        chat_event_stream=lambda p: iter([b"data: ok\n\n"]),
+        conversation_search=lambda p: {"results": []},
+    ))
+    chat_ep = _endpoint(chat_router, "/api/chat")
+    res = _json(_call(chat_ep, {"messages": [{"role": "user", "content": "hi"}]}))
+    assert res["content"] == "hello response"
+
+    # MCP 202 response
+    monkeypatch.setattr(mcp, "require_api_auth", lambda _req: None)
+    mcp_router = mcp.create_mcp_router(mcp.McpRouteDeps(
+        mcp_enabled=lambda: True,
+        list_external_mcp_tools=lambda: {"tools": []},
+        handle_mcp_message=lambda msg: None,
+    ))
+    mcp_ep = _endpoint(mcp_router, "/mcp")
+    mcp_res = asyncio.run(mcp_ep(_request({"jsonrpc": "2.0", "method": "notifications/initialized"})))
+    assert mcp_res.status_code == 202
+
+
+def test_server_direct_route_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web import server as server_module
+
+    monkeypatch.setattr(server_module, "require_api_auth", lambda _req: None)
+    monkeypatch.setattr(server_module, "preflight_deepseek_payload", lambda p: None)
+    monkeypatch.setattr(server_module, "create_agent_run", lambda *a, **k: {"runId": "r123", "status": "running"})
+    monkeypatch.setattr(server_module.agent_run_registry, "ensure_started", lambda *a, **k: None)
+    monkeypatch.setattr(server_module, "load_agent_run", lambda run_id: {"runId": run_id, "requestPayload": {}})
+    monkeypatch.setattr(server_module, "save_generated_file_to_downloads", lambda *a, **k: {"saved": True})
+    monkeypatch.setattr(server_module, "load_cached_file", lambda *a, **k: {"name": "f.txt", "kind": "text", "chunks": [{"index": 0, "text": "t"}]})
+    monkeypatch.setattr(server_module, "file_reader_window", lambda *a, **k: {"window": []})
+    monkeypatch.setattr(server_module, "file_page_text", lambda *a, **k: {"text": "page"})
+    monkeypatch.setattr(server_module, "fetch_url", lambda u: {"url": u, "content": "c"})
+    monkeypatch.setattr(server_module, "compress_context_payload", lambda p: {"compressed": True})
+    monkeypatch.setattr(server_module, "reminder_action", lambda p: {"ok": True})
+    monkeypatch.setattr(server_module, "due_reminders", lambda: [])
+
+    srv, _ = server_module.create_server(0, host="127.0.0.1")
+    app_router = srv.app.router
+
+    def _app_ep(path: str, method: str = "POST") -> Callable[..., Any]:
+        for route in app_router.routes:
+            if isinstance(route, APIRoute) and route.path == path and method in (route.methods or set()):
+                return route.endpoint
+        raise AssertionError(f"route not found: {method} {path}")
+
+    # 1. /api/agent-runs
+    agent_runs_ep = _app_ep("/api/agent-runs")
+    with pytest.raises(AppError, match="payload must be an object"):
+        _call(agent_runs_ep, {"payload": "invalid"})
+    res = _json(_call(agent_runs_ep, {"payload": {"prompt": "hi"}}))
+    assert res["runId"] == "r123"
+
+    # 2. /api/download-save
+    assert _json(_call(_app_ep("/api/download-save"), {"id": "g1", "filename": "o.txt"}))["saved"] is True
+
+    # 3. /api/file-chunk, file-reader, file-page-text
+    assert _json(_call(_app_ep("/api/file-chunk"), {"fileId": "f1", "chunkIndex": 1}))["file"]["kind"] == "text"
+    assert _json(_call(_app_ep("/api/file-reader"), {"fileId": "f1"}))["window"] == []
+    assert _json(_call(_app_ep("/api/file-page-text"), {"fileId": "f1", "page": 1}))["text"] == "page"
+
+    # 4. /api/fetch-url
+    assert _json(_call(_app_ep("/api/fetch-url"), {"url": "https://example.com"}))["ok"] is True
+
+    # 5. /api/compress-context
+    assert _json(_call(_app_ep("/api/compress-context"), {"context": "test"}))["compressed"] is True
+
+    # 6. /api/reminders and /api/reminders/due
+    assert _json(_call(_app_ep("/api/reminders"), {"action": "list"}))["ok"] is True
+    assert _call(_app_ep("/api/reminders/due"), {}) is not None
+
+

@@ -210,6 +210,12 @@ def evaluate_scope_readiness(
     reasons: list[str] = []
     scope_status = "available"
 
+    if policy is None and policy_id:
+        try:
+            policy = backup_policies.get_policy(policy_id)
+        except Exception:
+            policy = None
+
     # 1. Recovery Point from local ledger (0 remote I/O) — strict policy scope, no cross-policy fallback
     latest_pt, chain = backup_dr_ledger.get_latest_recoverable_point(
         target_id,
@@ -374,8 +380,8 @@ def evaluate_scope_readiness(
         if scope_status == "available":
             scope_status = "degraded"
 
-    # 9. Write Placement & Failover Continuity (4.5.4)
-    from deepseek_infra.infra.workspace import backup_scheduler
+    # 9. Write Placement & Failover Continuity (4.5.5)
+    from deepseek_infra.infra.workspace import backup_write_continuity
 
     write_continuity = {
         "status": "nominal",
@@ -386,16 +392,27 @@ def evaluate_scope_readiness(
     }
     if policy:
         try:
-            placement = backup_scheduler.evaluate_write_placement(policy)
-            is_failover = bool(placement.get("isFailover"))
+            continuity = backup_write_continuity.get_write_continuity_state(policy_id)
+            primary_id = str(continuity.get("configuredPrimaryTargetId") or policy.get("primaryTargetId") or policy.get("targetId") or target_id)
+            active_id = str(continuity.get("activeWriteTargetId") or primary_id)
+            is_failover = bool(active_id != primary_id or continuity.get("activeWriteTargetRole") == "failover")
+            p_live = (continuity.get("targetLiveness") or {}).get(primary_id, {})
+            p_status = p_live.get("status") or ("healthy" if not is_failover else "unavailable")
+            if p_status == "available":
+                p_status = "healthy"
+
             write_continuity = {
                 "status": "failed-over" if is_failover else "nominal",
-                "configuredPrimaryTargetId": str(placement.get("configuredPrimaryTargetId") or target_id),
-                "activeWriteTargetId": str(placement.get("selectedWriteTargetId") or target_id),
-                "primaryStatus": "healthy" if not is_failover else "unavailable",
+                "configuredPrimaryTargetId": primary_id,
+                "activeWriteTargetId": active_id,
+                "primaryStatus": p_status,
                 "isFailover": is_failover,
-                "reason": placement.get("reason"),
-                "candidateTargetIds": placement.get("candidateTargetIds", [target_id]),
+                "failoverEpoch": int(continuity.get("failoverEpoch") or 0),
+                "policyRevision": int(continuity.get("policyRevision") or 1),
+                "lastFailoverAt": continuity.get("lastFailoverAt"),
+                "lastFailbackAt": continuity.get("lastFailbackAt"),
+                "reason": continuity.get("lastFailoverReason") or ("failover-active" if is_failover else "nominal"),
+                "candidateTargetIds": [primary_id, active_id] if is_failover else [primary_id],
             }
             if is_failover:
                 reasons.append("write-target-failover")

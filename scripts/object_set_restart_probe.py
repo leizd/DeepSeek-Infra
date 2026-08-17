@@ -33,6 +33,7 @@ def _install_s3_object_get_audit() -> tuple[list[str], dict[str, int], Callable[
     concurrency = {"active": 0, "maxActive": 0}
     lock = threading.Lock()
     original_get_bytes = S3TargetStore.get_bytes
+    original_get_stream = S3TargetStore.get_stream
 
     def counted_get_bytes(
         store: S3TargetStore,
@@ -47,8 +48,6 @@ def _install_s3_object_get_audit() -> tuple[list[str], dict[str, int], Callable[
                 object_gets.append(key)
                 concurrency["active"] += 1
                 concurrency["maxActive"] = max(concurrency["maxActive"], concurrency["active"])
-            # Make real concurrent requests observable even for small local
-            # MinIO objects without changing the scheduler or response bytes.
             time.sleep(0.05)
         try:
             return original_get_bytes(store, key, offset=offset, length=length)
@@ -57,10 +56,33 @@ def _install_s3_object_get_audit() -> tuple[list[str], dict[str, int], Callable[
                 with lock:
                     concurrency["active"] -= 1
 
+    def counted_get_stream(
+        store: S3TargetStore,
+        key: str,
+        *,
+        offset: int = 0,
+        **kwargs: Any,
+    ) -> Any:
+        tracked = key.startswith("objects/sha256/")
+        if tracked:
+            with lock:
+                object_gets.append(key)
+                concurrency["active"] += 1
+                concurrency["maxActive"] = max(concurrency["maxActive"], concurrency["active"])
+            time.sleep(0.05)
+        try:
+            yield from original_get_stream(store, key, offset=offset, **kwargs)
+        finally:
+            if tracked:
+                with lock:
+                    concurrency["active"] -= 1
+
     setattr(S3TargetStore, "get_bytes", counted_get_bytes)
+    setattr(S3TargetStore, "get_stream", counted_get_stream)
 
     def restore() -> None:
         setattr(S3TargetStore, "get_bytes", original_get_bytes)
+        setattr(S3TargetStore, "get_stream", original_get_stream)
 
     return object_gets, concurrency, restore
 

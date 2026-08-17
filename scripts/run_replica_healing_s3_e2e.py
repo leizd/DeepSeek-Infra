@@ -34,8 +34,14 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
     "deterministic-write-failover": (
         "tests/test_backup_454_replica_healing_contract.py::test_deterministic_write_failover_and_force_full",
     ),
+    "verified-write-continuity-and-governed-failback": (
+        "tests/test_backup_455_verified_write_continuity_contract.py::test_governed_failback_lifecycle",
+    ),
+    "explicit-primary-promotion-cas": (
+        "tests/test_backup_455_verified_write_continuity_contract.py::test_promote_primary_target_cas_endpoint",
+    ),
     "dual-minio-s3-e2e": (
-        "tests/test_backup_454_dual_minio_e2e.py::test_dual_minio_replica_healing_and_write_failover_e2e",
+        "tests/test_backup_455_real_dual_minio_e2e.py::test_dual_minio_s3_write_continuity_governed_failback_and_promotion_e2e",
     ),
 }
 
@@ -46,6 +52,8 @@ CHECK_SCENARIOS = {
     "targetSideDurableProtectionLeases": "target-side-protection-leases",
     "twoPhaseRemoteAuditWithGlobalCommitChainValidation": "two-phase-remote-audit",
     "deterministicWritePlacementAndForcedFullFailover": "deterministic-write-failover",
+    "verifiedWriteContinuityAndGovernedFailback": "verified-write-continuity-and-governed-failback",
+    "explicitPrimaryPromotionWithCAS": "explicit-primary-promotion-cas",
     "realDualMinioE2EIntegration": "dual-minio-s3-e2e",
 }
 

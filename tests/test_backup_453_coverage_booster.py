@@ -344,7 +344,21 @@ def test_replica_repair_auto_source_and_quarantine(tmp_settings: Path) -> None:
         "objects": [{"digest": comp_digest, "size": len(comp_bytes)}],
     }
     (t_s_dir / "receipts").mkdir(parents=True, exist_ok=True)
-    (t_s_dir / "receipts" / "bk_auto_1.json").write_bytes(json.dumps(receipt).encode("utf-8"))
+    r_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (t_s_dir / "receipts" / "bk_auto_1.json").write_bytes(r_bytes)
+    commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "policyId": "pol_auto",
+        "backupId": "bk_auto_1",
+        "receiptDigest": hashlib.sha256(r_bytes).hexdigest(),
+        "objectSetDigest": receipt["objectSetDigest"],
+        "storageProtocol": "object-set-v1",
+        "committedAt": _utc_iso(),
+    }
+    (t_s_dir / "commits" / "pol_auto").mkdir(parents=True, exist_ok=True)
+    (t_s_dir / "commits" / "pol_auto" / "bk_auto_1.json").write_text(json.dumps(commit), encoding="utf-8")
 
     # 3. Create corrupted component on destination to test quarantine
     bad_comp_path = t_d_dir / "objects" / comp_digest[:2] / comp_digest[2:4] / f"{comp_digest}.age"
@@ -818,7 +832,25 @@ def test_replica_repair_missing_source_or_corrupted_component(tmp_settings: Path
     }
     r_path = s_root / "receipts" / "bk_bad_src_comp.json"
     r_path.parent.mkdir(parents=True, exist_ok=True)
-    r_path.write_text(json.dumps(receipt), encoding="utf-8")
+    r_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    r_path.write_bytes(r_bytes)
+    commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "policyId": "pol_bad_comp",
+        "backupId": "bk_bad_src_comp",
+        "receiptDigest": hashlib.sha256(r_bytes).hexdigest(),
+        "objectSetDigest": "objset_bad",
+        "storageProtocol": "object-set-v1",
+        "committedAt": _utc_iso(),
+    }
+    receipt["objectSetDigest"] = "objset_bad"
+    r_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    r_path.write_bytes(r_bytes)
+    commit["receiptDigest"] = hashlib.sha256(r_bytes).hexdigest()
+    (s_root / "commits" / "pol_bad_comp").mkdir(parents=True, exist_ok=True)
+    (s_root / "commits" / "pol_bad_comp" / "bk_bad_src_comp.json").write_text(json.dumps(commit), encoding="utf-8")
 
     with pytest.raises(AppError) as exc3:
         backup_replication.execute_replica_repair(

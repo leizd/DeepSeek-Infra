@@ -31,7 +31,7 @@ from deepseek_infra.web.server import create_server  # noqa: E402
 
 
 VERSION = APP_VERSION
-UPDATE_READY_TIMEOUT_MS = 60_000
+UPDATE_READY_TIMEOUT_MS = 120_000
 
 
 def wait_until_ready(url: str, timeout: float = 15.0) -> None:
