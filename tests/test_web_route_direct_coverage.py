@@ -187,3 +187,32 @@ def test_skills_thread_sensitive_actions_are_direct(monkeypatch: pytest.MonkeyPa
     assert _json(_call(endpoint, {"action": "eval_report", "version": skills.APP_VERSION}))["report"]["version"] == skills.APP_VERSION
     assert _json(_call(endpoint, {"action": "security_review", "skillId": "s1"}))["review"]["skillId"] == "s1"
     assert _json(_call(endpoint, {"action": "security_review_pack", "packId": "p1"}))["review"]["packId"] == "p1"
+
+
+def test_backup_governance_continuity_and_promotion_direct(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_write_continuity
+    monkeypatch.setattr(backup_governance, "require_api_auth", lambda _request: None)
+    monkeypatch.setattr(
+        backup_write_continuity,
+        "promote_primary_target",
+        lambda policy_id, target_id, **kw: {"status": "promoted", "targetId": target_id, "policyId": policy_id},
+    )
+    monkeypatch.setattr(
+        backup_write_continuity,
+        "get_write_continuity_state",
+        lambda policy_id: {"policyId": policy_id, "state": "healthy"},
+    )
+    router = backup_governance.create_backup_governance_router()
+
+    # GET /api/workspace/backup-policies/{policy_id}/continuity
+    continuity_ep = _endpoint(router, "/api/workspace/backup-policies/{policy_id}/continuity", method="GET")
+    assert _json(_call(continuity_ep, policy_id="pol_1"))["policyId"] == "pol_1"
+
+    # POST /api/workspace/backup-policies/{policy_id}/promote-primary
+    promote_ep = _endpoint(router, "/api/workspace/backup-policies/{policy_id}/promote-primary", method="POST")
+    with pytest.raises(AppError, match="targetId is required"):
+        _call(promote_ep, {}, policy_id="pol_1")
+
+    res = _json(_call(promote_ep, {"targetId": "target_01", "expectedPolicyRevision": 1, "expectedFailoverEpoch": 0}, policy_id="pol_1"))
+    assert res["status"] == "promoted"
+
