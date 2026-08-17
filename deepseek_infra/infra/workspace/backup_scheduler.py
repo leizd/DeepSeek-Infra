@@ -830,25 +830,31 @@ def target_health() -> list[dict[str, Any]]:
 
 
 def evaluate_write_placement(
-    policy: dict[str, Any],
+    policy: dict[str, Any] | str,
     *,
     client: Any | None = None,
     failback_stability_seconds: int = 1800,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Evaluate and freeze write target placement for a backup run (4.5.4).
+    """Evaluate and freeze write target placement for a backup run (4.5.5).
 
-    Contract (4.5.4):
-    1. If configured primary is healthy and accessible -> select primary (no failover).
-    2. If primary is unavailable -> select healthy required replica with freshest recovery point.
-       - Best-effort replicas excluded by default.
+    Contract (4.5.5):
+    1. If configured primary is healthy and accessible:
+       - If currently operating in failover mode, evaluate failback governance
+         (continuous primary stability >= stability window AND point convergence).
+       - If failback eligible, revert to primary; otherwise remain on active failover target.
+       - If not in failover, select primary.
+    2. If primary is unavailable:
+       - Transition to healthy required replica with freshest recovery point.
        - Result has isFailover=True, forceFull=True.
-    3. Failback governance: If primary has recovered, check failback stability window and
-       verify primary is caught up with latest recovery points before reverting to primary.
     """
-    from deepseek_infra.infra.workspace import backup_dr_ledger, backup_publish
+    from deepseek_infra.infra.workspace import backup_dr_ledger, backup_policies, backup_publish, backup_write_continuity
 
-    configured_primary = str(policy.get("targetId") or "managed-local")
+    if isinstance(policy, str):
+        policy = backup_policies.get_policy(policy)
+
+    policy_id = str(policy.get("policyId") or "")
+    configured_primary = str(policy.get("primaryTargetId") or policy.get("targetId") or "managed-local")
     primary_ok = True
     primary_error: str | None = None
 
@@ -859,12 +865,47 @@ def evaluate_write_placement(
             if not caps.scheduled_backup_ready:
                 primary_ok = False
                 primary_error = "unsupported-conditional-target"
+        if primary_ok:
+            live = backup_write_continuity.perform_liveness_preflight(configured_primary, policy_id=policy_id, target=p_target)
+            if live.get("status") != "available":
+                primary_ok = False
+                primary_error = live.get("error") or "primary-unreachable"
     except Exception as exc:
         primary_ok = False
         primary_error = str(exc)
 
     if primary_ok:
         record_target_health(configured_primary, "healthy", None)
+        continuity = backup_write_continuity.get_write_continuity_state(policy_id)
+        active_id = str(continuity.get("activeWriteTargetId") or configured_primary)
+
+        if active_id != configured_primary and continuity.get("activeWriteTargetRole") == "failover":
+            # Check failback governance
+            eligible, fb_reason, _ = backup_write_continuity.evaluate_failback_eligibility(
+                policy_id,
+                stability_window_seconds=failback_stability_seconds,
+                now=now,
+            )
+            if eligible:
+                backup_write_continuity.execute_failback_transition(policy_id)
+                return {
+                    "configuredPrimaryTargetId": configured_primary,
+                    "selectedWriteTargetId": configured_primary,
+                    "isFailover": False,
+                    "forceFull": False,
+                    "reason": "governed-failback-reverted",
+                    "candidateTargetIds": [configured_primary],
+                }
+            else:
+                return {
+                    "configuredPrimaryTargetId": configured_primary,
+                    "selectedWriteTargetId": active_id,
+                    "isFailover": True,
+                    "forceFull": True,
+                    "reason": f"failover-active-awaiting-failback-governance: {fb_reason}",
+                    "candidateTargetIds": [configured_primary, active_id],
+                }
+
         return {
             "configuredPrimaryTargetId": configured_primary,
             "selectedWriteTargetId": configured_primary,
@@ -876,6 +917,13 @@ def evaluate_write_placement(
 
     # Primary is unavailable
     record_target_health(configured_primary, "blocked", primary_error)
+    backup_write_continuity.record_target_liveness(
+        policy_id,
+        configured_primary,
+        status="unavailable",
+        error=primary_error,
+    )
+
     replication = policy.get("replication")
     rep_dict = replication if isinstance(replication, dict) else {}
     targets = list(rep_dict.get("targets") or []) if rep_dict.get("enabled") else []
@@ -894,7 +942,9 @@ def evaluate_write_placement(
                 caps = r_target.store.capabilities()
                 if not caps.scheduled_backup_ready:
                     continue
-            candidates.append(tid)
+            live = backup_write_continuity.perform_liveness_preflight(tid, policy_id=policy_id, target=r_target)
+            if live.get("status") == "available":
+                candidates.append(tid)
         except Exception:
             continue
 
@@ -909,7 +959,6 @@ def evaluate_write_placement(
         }
 
     # Rank candidates by healthy recovery points in DR Ledger descending, then lexical tiebreak
-    policy_id = str(policy.get("policyId") or "")
     scored_candidates = []
     for tid in candidates:
         copies = backup_dr_ledger.list_logical_recovery_copies(target_id=tid, policy_id=policy_id)
@@ -918,6 +967,13 @@ def evaluate_write_placement(
 
     scored_candidates.sort()
     selected_replica = scored_candidates[0][1]
+
+    # Record failover in write continuity state
+    backup_write_continuity.execute_failover_transition(
+        policy_id,
+        selected_replica,
+        reason=f"primary-unavailable: {primary_error}",
+    )
 
     return {
         "configuredPrimaryTargetId": configured_primary,

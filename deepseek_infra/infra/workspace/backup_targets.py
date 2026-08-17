@@ -242,7 +242,17 @@ def init_target(path: Path | str, *, label: str = "") -> dict[str, Any]:
     return record
 
 
-def _register(resolved: Path, target_id: str, nonce: str, *, label: str, created_at: object = "") -> dict[str, Any]:
+def _register(
+    resolved: Path,
+    target_id: str,
+    nonce: str,
+    *,
+    label: str,
+    created_at: object = "",
+    failure_domain: str | None = None,
+    priority: int = 0,
+    cost_class: str | None = None,
+) -> dict[str, Any]:
     if not _TARGET_ID.match(target_id):
         raise AppError("Backup target marker carries an invalid target id", code=ErrorCode.INVALID_PAYLOAD)
     record = {
@@ -252,6 +262,9 @@ def _register(resolved: Path, target_id: str, nonce: str, *, label: str, created
         "path": str(resolved),
         "targetNonce": nonce,
         "label": label,
+        "failureDomain": failure_domain or "local",
+        "priority": int(priority),
+        "costClass": cost_class or "standard",
         "createdAt": str(created_at or "") or _utc_iso(),
         "registeredAt": _utc_iso(),
     }
@@ -280,6 +293,9 @@ def init_s3_target(
     endpoint_url: str | None = None,
     expected_bucket_owner: str | None = None,
     label: str = "",
+    failure_domain: str | None = None,
+    priority: int = 0,
+    cost_class: str | None = None,
     credential_provider: dict[str, Any] | None = None,
     client: Any | None = None,
     probe: bool = True,
@@ -362,6 +378,9 @@ def init_s3_target(
         "region": record_preview["region"],
         "endpointUrl": record_preview["endpointUrl"],
         "expectedBucketOwner": record_preview["expectedBucketOwner"],
+        "failureDomain": failure_domain or record_preview["region"] or "remote-s3",
+        "priority": int(priority),
+        "costClass": cost_class or "standard",
         "credentialProvider": provider,
         "createdAt": str(identity.get("createdAt") or _utc_iso()),
         "registeredAt": _utc_iso(),

@@ -44,7 +44,11 @@ def plan_path(policy_id: str, slot_digest: str) -> Path:
 
 
 def compute_run_plan_digest(body: dict[str, Any]) -> str:
-    material = {key: value for key, value in body.items() if key not in {"runPlanDigest", "createdAt", "backupId"}}
+    material = {
+        key: value
+        for key, value in body.items()
+        if key not in {"runPlanDigest", "createdAt", "backupId", "placementJournal", "placementGeneration"}
+    }
     return hashlib.sha256(_stable_json(material)).hexdigest()
 
 
@@ -54,9 +58,12 @@ def policy_digest(policy: dict[str, Any]) -> str:
         "scope": policy.get("scope"),
         "protection": policy.get("protection"),
         "targetId": policy.get("targetId"),
+        "primaryTargetId": policy.get("primaryTargetId"),
         "frontendMirror": policy.get("frontendMirror"),
         "retentionPolicyId": policy.get("retentionPolicyId"),
         "incremental": policy.get("incremental"),
+        "replication": policy.get("replication"),
+        "recoveryObjectives": policy.get("recoveryObjectives"),
     }
     return hashlib.sha256(_stable_json(material)).hexdigest()
 
@@ -93,7 +100,7 @@ def freeze_run_plan(
 ) -> dict[str, Any]:
     """Return existing plan for the slot or create and persist a new frozen plan.
 
-    Once frozen, retries never re-select the parent, snapshot kind, or write target.
+    Once frozen, retries never re-select the parent, snapshot kind, or backupId.
     """
     existing = read_run_plan(str(policy.get("policyId") or ""), slot_digest)
     if existing is not None:
@@ -116,6 +123,8 @@ def freeze_run_plan(
         "candidateTargetIds": candidate_target_ids or [primary_id, write_id] if is_failover_bool else [primary_id],
         "failoverReason": failover_reason if is_failover_bool else None,
         "isFailover": is_failover_bool,
+        "placementGeneration": 1,
+        "placementJournal": [],
         "targetHeadHash": target_head_hash or ("0" * 64),
         "contributorPlanDigest": hashlib.sha256(_stable_json(contributor_plan)).hexdigest(),
         "recipientSetDigest": recipient_set_digest(policy),
@@ -142,6 +151,38 @@ def freeze_run_plan(
     path = plan_path(body["policyId"], slot_digest)
     _atomic_write_json(path, body)
     return body
+
+
+def transition_run_plan_target(
+    policy_id: str,
+    slot_digest: str,
+    *,
+    new_target_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Transition write target of an existing run plan while preserving backupId, objectSet and encryption."""
+    plan = read_run_plan(policy_id, slot_digest)
+    if plan is None:
+        raise AppError("backup run plan is unavailable", code=ErrorCode.NOT_FOUND, status=404)
+
+    journal = list(plan.get("placementJournal") or [])
+    current_target = plan.get("selectedWriteTargetId") or plan.get("targetId")
+    journal.append({
+        "fromTargetId": current_target,
+        "toTargetId": new_target_id,
+        "reason": reason,
+        "transitionedAt": _utc_iso(),
+    })
+
+    plan["selectedWriteTargetId"] = new_target_id
+    plan["targetId"] = new_target_id
+    plan["isFailover"] = (new_target_id != plan.get("configuredPrimaryTargetId"))
+    plan["failoverReason"] = reason if plan["isFailover"] else None
+    plan["placementGeneration"] = int(plan.get("placementGeneration") or 1) + 1
+    plan["placementJournal"] = journal
+    plan["runPlanDigest"] = compute_run_plan_digest(plan)
+    _atomic_write_json(plan_path(policy_id, slot_digest), plan)
+    return plan
 
 
 def resolve_adaptive_plan(

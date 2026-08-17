@@ -154,7 +154,22 @@ def test_replica_repair_job_durability_and_resumption(tmp_settings, monkeypatch)
         ],
     }
     (source_dir / "receipts").mkdir(parents=True, exist_ok=True)
-    (source_dir / "receipts" / f"{backup_id}.json").write_text(json.dumps(source_receipt, indent=2), encoding="utf-8")
+    r_bytes = (json.dumps(source_receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (source_dir / "receipts" / f"{backup_id}.json").write_bytes(r_bytes)
+
+    source_commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "receiptDigest": _sha256(r_bytes),
+        "objectSetDigest": source_receipt["objectSetDigest"],
+        "storageProtocol": "object-set-v1",
+        "committedAt": "2026-08-17T00:00:00Z",
+    }
+    (source_dir / "commits" / policy_id).mkdir(parents=True, exist_ok=True)
+    (source_dir / "commits" / policy_id / f"{backup_id}.json").write_text(json.dumps(source_commit, indent=2, sort_keys=True), encoding="utf-8")
 
     # Record source copy in DR ledger
     backup_dr_ledger.record_logical_recovery_copy(
@@ -252,7 +267,22 @@ def test_in_place_committed_copy_healing_contract(tmp_settings, monkeypatch) -> 
         "objects": [{"digest": digest, "size": len(data_bytes), "kind": "data"}],
     }
     (source_dir / "receipts").mkdir(parents=True, exist_ok=True)
-    (source_dir / "receipts" / f"{backup_id}.json").write_text(json.dumps(source_receipt, indent=2), encoding="utf-8")
+    r_bytes = (json.dumps(source_receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (source_dir / "receipts" / f"{backup_id}.json").write_bytes(r_bytes)
+
+    source_commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "receiptDigest": _sha256(r_bytes),
+        "objectSetDigest": source_receipt["objectSetDigest"],
+        "storageProtocol": "object-set-v1",
+        "committedAt": "2026-08-17T01:00:00Z",
+    }
+    (source_dir / "commits" / policy_id).mkdir(parents=True, exist_ok=True)
+    (source_dir / "commits" / policy_id / f"{backup_id}.json").write_text(json.dumps(source_commit, indent=2, sort_keys=True), encoding="utf-8")
 
     # Destination already has valid Receipt v4, Commit v4 (gen 5), and head.json (gen 5)
     dest_receipt = dict(source_receipt)
@@ -270,9 +300,10 @@ def test_in_place_committed_copy_healing_contract(tmp_settings, monkeypatch) -> 
         "policyId": policy_id,
         "committedAt": "2026-08-17T01:05:00Z",
         "receiptDigest": _sha256(dest_receipt_bytes),
+        "objectSetDigest": digest,
     }
     (dest_dir / "commits" / policy_id).mkdir(parents=True, exist_ok=True)
-    (dest_dir / "commits" / policy_id / f"{backup_id}.json").write_text(json.dumps(dest_commit, indent=2), encoding="utf-8")
+    (dest_dir / "commits" / policy_id / f"{backup_id}.json").write_text(json.dumps(dest_commit, indent=2, sort_keys=True), encoding="utf-8")
 
     head_content = b'{"latestCommitHash": "commit_hash_fixed_555", "targetGeneration": 5}\n'
     (dest_dir / "control").mkdir(parents=True, exist_ok=True)

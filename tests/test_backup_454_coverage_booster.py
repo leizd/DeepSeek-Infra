@@ -377,7 +377,21 @@ def test_process_pending_repairs_and_reconcile_replicas(tmp_settings, monkeypatc
         "objects": [{"digest": c_dig, "size": len(chunk), "kind": "data"}],
     }
     (src_dir / "receipts").mkdir(parents=True, exist_ok=True)
-    (src_dir / "receipts" / f"{b_id}.json").write_text(json.dumps(receipt), encoding="utf-8")
+    r_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (src_dir / "receipts" / f"{b_id}.json").write_bytes(r_bytes)
+    commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "policyId": p_id,
+        "backupId": b_id,
+        "receiptDigest": _sha256(r_bytes),
+        "objectSetDigest": receipt["objectSetDigest"],
+        "storageProtocol": "object-set-v1",
+        "committedAt": "2026-08-17T00:00:00Z",
+    }
+    (src_dir / "commits" / p_id).mkdir(parents=True, exist_ok=True)
+    (src_dir / "commits" / p_id / f"{b_id}.json").write_text(json.dumps(commit), encoding="utf-8")
 
     # Record source copy in DR ledger
     backup_dr_ledger.record_logical_recovery_copy(
@@ -832,7 +846,21 @@ def test_backup_replication_heal_existing_and_provision_modes(tmp_settings, monk
     }
     rcpt_path = src_root / "receipts" / f"{backup_id}.json"
     rcpt_path.parent.mkdir(parents=True, exist_ok=True)
-    rcpt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    r_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    rcpt_path.write_bytes(r_bytes)
+    commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "receiptDigest": hashlib.sha256(r_bytes).hexdigest(),
+        "objectSetDigest": receipt["objectSetDigest"],
+        "storageProtocol": "object-set-v1",
+        "committedAt": "2026-08-17T02:00:00Z",
+    }
+    (src_root / "commits" / policy_id).mkdir(parents=True, exist_ok=True)
+    (src_root / "commits" / policy_id / f"{backup_id}.json").write_text(json.dumps(commit), encoding="utf-8")
 
     # Record recovery copy on source
     backup_dr_ledger.record_logical_recovery_copy(

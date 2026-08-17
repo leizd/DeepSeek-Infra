@@ -28,6 +28,11 @@ from deepseek_infra.infra.workspace.backup_target_store import (
 )
 
 
+def _utc_iso(dt: datetime | None = None) -> str:
+    current = dt or datetime.now(tz=timezone.utc)
+    return current.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def s3_sdk_available() -> bool:
     try:
         import boto3  # noqa: F401
@@ -231,11 +236,38 @@ class S3TargetStore:
         body = response["Body"].read()
         return body
 
-    def get_stream(self, key: str, *, offset: int = 0):
-        data = self.get_bytes(key, offset=offset)
-        if data is None:
-            return iter(())
-        return iter((data,))
+    def get_stream(self, key: str, *, offset: int = 0, chunk_size: int = 8 * 1024 * 1024):
+        client = self._client_or_create()
+        full = self._full_key(key)
+        args: dict[str, Any] = {"Bucket": self.bucket, "Key": full, **self._owner_args()}
+        if offset:
+            args["Range"] = f"bytes={offset}-"
+        try:
+            response = client.get_object(**args)
+        except Exception as exc:  # noqa: BLE001
+            error = getattr(exc, "response", {}) or {}
+            status = int((error.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0)
+            code = str((error.get("Error") or {}).get("Code") or "")
+            if status == 404 or code in {"NoSuchKey", "404", "NotFound"}:
+                return
+            _raise_from_client_error(exc, action="get")
+            return
+        body = response.get("Body")
+        if body is None:
+            return
+        if hasattr(body, "iter_chunks"):
+            try:
+                for chunk in body.iter_chunks(chunk_size):
+                    if chunk:
+                        yield chunk
+            finally:
+                if hasattr(body, "close"):
+                    body.close()
+        else:
+            data = body.read() if hasattr(body, "read") else bytes(body)
+            if data:
+                for idx in range(0, len(data), chunk_size):
+                    yield data[idx : idx + chunk_size]
 
     def put_if_absent(
         self,
@@ -535,6 +567,28 @@ class S3TargetStore:
             kind="s3",
         )
         return versioning
+
+    def check_liveness(self, *, timeout_seconds: float = 2.0) -> dict[str, Any]:
+        """Perform a fast, lightweight liveness check."""
+        import time
+
+        t0 = time.monotonic()
+        try:
+            client = self._client_or_create()
+            # Fast HEAD on control/head.json
+            client.head_object(Bucket=self.bucket, Key=self._full_key("control/head.json"), **self._owner_args())
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            return {"status": "available", "observedAt": _utc_iso(), "latencyMs": latency_ms}
+        except Exception as exc:
+            response = getattr(exc, "response", None) or {}
+            status = int((response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0) if isinstance(response, dict) else 0
+            code = str(((response.get("Error") or {}) if isinstance(response, dict) else {}).get("Code") or "")
+            if status == 404 or code in {"404", "NoSuchKey", "NotFound"}:
+                # 404 means the target endpoint and bucket exist and are responsive
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                return {"status": "available", "observedAt": _utc_iso(), "latencyMs": latency_ms}
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            return {"status": "unavailable", "observedAt": _utc_iso(), "latencyMs": latency_ms, "error": str(exc)}
 
 
 def _b64_sha256(data: bytes) -> str:

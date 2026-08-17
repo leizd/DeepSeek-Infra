@@ -131,6 +131,33 @@ def create_backup_governance_router() -> APIRouter:
         require_api_auth(request)
         return json_response(backup_policies.delete_policy(policy_id))
 
+    @router.post("/api/workspace/backup-policies/{policy_id}/promote-primary")
+    async def api_backup_policies_promote_primary(request: Request, policy_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=16_000)
+        target_id = str(payload.get("targetId") or "").strip()
+        if not target_id:
+            raise AppError("targetId is required for primary promotion", code=ErrorCode.INVALID_PAYLOAD, status=400)
+        exp_rev = payload.get("expectedPolicyRevision")
+        exp_epoch = payload.get("expectedFailoverEpoch")
+        from deepseek_infra.infra.workspace import backup_write_continuity
+
+        res = backup_write_continuity.promote_primary_target(
+            policy_id,
+            target_id,
+            expected_policy_revision=int(exp_rev) if exp_rev is not None else None,
+            expected_failover_epoch=int(exp_epoch) if exp_epoch is not None else None,
+        )
+        return json_response(res)
+
+    @router.get("/api/workspace/backup-policies/{policy_id}/continuity")
+    async def api_backup_policies_continuity(request: Request, policy_id: str) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import backup_write_continuity
+
+        state = backup_write_continuity.get_write_continuity_state(policy_id)
+        return json_response(state)
+
     @router.post("/api/workspace/backup-policies/{policy_id}/run")
     async def api_backup_policies_run(request: Request, policy_id: str) -> JSONResponse:
         require_api_auth(request)
@@ -152,6 +179,10 @@ def create_backup_governance_router() -> APIRouter:
         require_api_auth(request)
         payload = await read_json_body(request, max_bytes=64_000)
         kind = str(payload.get("kind") or "filesystem").strip().lower()
+        failure_domain = str(payload.get("failureDomain") or "").strip() or None
+        priority = int(payload.get("priority") or 0)
+        cost_class = str(payload.get("costClass") or "").strip() or None
+
         if kind in {"s3", "s3-compatible"}:
             provider = payload.get("credentialProvider") if isinstance(payload.get("credentialProvider"), dict) else None
             return json_response(
@@ -162,6 +193,9 @@ def create_backup_governance_router() -> APIRouter:
                     endpoint_url=str(payload.get("endpointUrl") or "") or None,
                     expected_bucket_owner=str(payload.get("expectedBucketOwner") or "") or None,
                     label=str(payload.get("label") or ""),
+                    failure_domain=failure_domain,
+                    priority=priority,
+                    cost_class=cost_class,
                     credential_provider=provider,
                     probe=bool(payload.get("probe", True)),
                 )

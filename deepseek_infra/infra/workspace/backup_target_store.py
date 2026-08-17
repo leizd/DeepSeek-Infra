@@ -218,6 +218,8 @@ class BackupTargetStore(Protocol):  # pragma: no cover - structural interface on
 
     def server_time(self) -> datetime | None: ...
 
+    def check_liveness(self, *, timeout_seconds: float = 2.0) -> dict[str, Any]: ...
+
 
 def _read_source(source: BinaryIO | bytes) -> bytes:
     if isinstance(source, (bytes, bytearray, memoryview)):
@@ -451,6 +453,18 @@ class FilesystemTargetStore:
 
     def server_time(self) -> datetime | None:
         return datetime.now(tz=timezone.utc)
+
+    def check_liveness(self, *, timeout_seconds: float = 2.0) -> dict[str, Any]:
+        import time
+
+        t0 = time.monotonic()
+        try:
+            if not self.root.is_dir():
+                return {"status": "unavailable", "observedAt": _utc_iso(), "latencyMs": 0, "error": "directory-missing"}
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            return {"status": "available", "observedAt": _utc_iso(), "latencyMs": latency_ms}
+        except Exception as exc:
+            return {"status": "unavailable", "observedAt": _utc_iso(), "latencyMs": 0, "error": str(exc)}
 
 
 def put_json_if_absent(store: BackupTargetStore, key: str, payload: dict[str, Any]) -> PutResult:
@@ -753,6 +767,17 @@ class MemoryTargetStore:
 
     def server_time(self) -> datetime | None:
         return datetime.now(tz=timezone.utc)
+
+    def check_liveness(self, *, timeout_seconds: float = 2.0) -> dict[str, Any]:
+        import time
+
+        t0 = time.monotonic()
+        try:
+            self._maybe_fail("check_liveness")
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            return {"status": "available", "observedAt": _utc_iso(), "latencyMs": latency_ms}
+        except Exception as exc:
+            return {"status": "unavailable", "observedAt": _utc_iso(), "latencyMs": 0, "error": str(exc)}
 
 
 StreamFactory = Callable[[], BinaryIO]

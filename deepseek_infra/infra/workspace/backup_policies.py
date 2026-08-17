@@ -383,7 +383,7 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
     name = str(payload.get("name") or "").strip()
     if not 1 <= len(name) <= 120:
         raise AppError("Backup policy name must be 1-120 characters", code=ErrorCode.INVALID_PAYLOAD)
-    target_id = str(payload.get("targetId") or MANAGED_LOCAL_TARGET).strip()
+    target_id = str(payload.get("primaryTargetId") or payload.get("targetId") or MANAGED_LOCAL_TARGET).strip()
     if target_id != MANAGED_LOCAL_TARGET and not _TARGET_ID.match(target_id):
         raise AppError("Backup policy targetId must be managed-local or a registered target_... id", code=ErrorCode.INVALID_PAYLOAD)
     now = _now_iso()
@@ -397,6 +397,8 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
         "frontendMirror": _normalize_frontend_mirror(payload.get("frontendMirror")),
         "protection": _normalize_protection(payload.get("protection")),
         "targetId": target_id,
+        "primaryTargetId": target_id,
+        "policyRevision": max(1, int(payload.get("policyRevision") or 1)),
         "replication": _normalize_replication(payload.get("replication"), primary_target_id=target_id),
         "retentionPolicyId": _require_safe_id(payload.get("retentionPolicyId") or DEFAULT_RETENTION_POLICY_ID, "retentionPolicyId"),
         "retry": _normalize_retry(payload.get("retry")),
@@ -480,6 +482,8 @@ def update_policy(policy_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         "frontendMirror",
         "protection",
         "targetId",
+        "primaryTargetId",
+        "policyRevision",
         "retentionPolicyId",
         "retry",
         "incremental",

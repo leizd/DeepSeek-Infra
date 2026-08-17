@@ -4,6 +4,22 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.5.5] - Verified Write Continuity & Primary Promotion (2026-08-17)
+
+### Verified Write Continuity & Primary Promotion
+
+- **True Multipart Streaming Remote Repair**: Eliminates in-memory ciphertext buffering ($O(\text{buffer}\times\text{workers})$ RAM) across remote S3 stores using S3 multipart upload streaming.
+- **CAS Protection Lease with Immediate Fail-Closed**: Target-side repair source holds renewed via conditional `put_if_match`; any lease loss or CAS mismatch aborts repair before subsequent source reads.
+- **Control-Plane Authentication Helper**: Comprehensive `authenticate_recovery_copy` validates Receipt, Commit, and `objectSetDigest` binding before repair; corrupted control planes are quarantined.
+- **Durable Repair Retry Policy & Keyset Reconciler**: Classified errors with exponential backoff and jitter; durable keyset cursor `(policyId, afterCommittedAt, afterLogicalId)` visits historical retained points.
+- **Capability vs Liveness Decoupling**: Separates static capability evidence from fresh liveness preflight (<=120s caching); DR readiness polling operates with zero remote I/O and zero side effects.
+- **Immutable Package Plan with Mutable Placement Journal**: Transitions frozen encrypted packages across targets without re-encrypting or re-snapshoting; preserves `backupId` and `objectSetDigest`.
+- **Ambiguous Commit Reconciliation**: Verifies primary target commit status before target transition to prevent duplicate commits or premature failover.
+- **Governed Automatic Failback**: Requires primary continuous stability window and latest recovery point convergence before reverting write target on the next schedule slot.
+- **Explicit Primary Promotion**: `POST /backup-policies/{policyId}/promote-primary` with CAS preconditions upgrades replica to primary and preserves former primary as required replica.
+- **Failure Domain Redundancy & Metadata**: Target placement metadata (`region`, `failureDomain`, `priority`, `costClass`) and policy `minFailureDomains` compliance checking.
+- **Real Dual-MinIO Production E2E**: End-to-end multi-target validation against live MinIO endpoints with real Age encryption, process interruptions, live outages, and restore verification.
+
 ## [4.5.4] - Autonomous Replica Healing & Backup Write Failover (2026-08-17)
 
 ### Autonomous Replica Healing & Backup Write Failover
