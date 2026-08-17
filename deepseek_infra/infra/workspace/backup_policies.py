@@ -358,6 +358,11 @@ def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any
             mode = _require_choice(item.get("mode"), f"replication.targets[{index}].mode", ("required", "best-effort"), "required")
             targets.append({"targetId": tid, "mode": mode})
     min_copies = _require_int(section.get("minCommittedCopies"), "replication.minCommittedCopies", 1, 1, 16)
+    min_failure_domains = _require_int(section.get("minFailureDomains"), "replication.minFailureDomains", 1, 1, 16)
+    max_copies_per_fd = section.get("maxCopiesPerFailureDomain")
+    if max_copies_per_fd is not None:
+        max_copies_per_fd = _require_int(max_copies_per_fd, "replication.maxCopiesPerFailureDomain", 1, 1, 16)
+
     if enabled and targets:
         # Primary + replicas: required copies cannot exceed total configured targets + primary
         max_possible = 1 + len(targets)
@@ -366,7 +371,19 @@ def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any
                 "Backup policy replication.minCommittedCopies exceeds configured targets",
                 code=ErrorCode.INVALID_PAYLOAD,
             )
-    normalized_res: dict[str, Any] = {"enabled": bool(enabled), "targets": targets, "minCommittedCopies": min_copies}
+        if min_failure_domains > max_possible:
+            raise AppError(
+                "Backup policy replication.minFailureDomains exceeds configured targets",
+                code=ErrorCode.INVALID_PAYLOAD,
+            )
+    normalized_res: dict[str, Any] = {
+        "enabled": bool(enabled),
+        "targets": targets,
+        "minCommittedCopies": min_copies,
+        "minFailureDomains": min_failure_domains,
+    }
+    if max_copies_per_fd is not None:
+        normalized_res["maxCopiesPerFailureDomain"] = max_copies_per_fd
     max_lag = section.get("maxReplicaLagSeconds")
     if max_lag is not None:
         normalized_res["maxReplicaLagSeconds"] = _require_int(max_lag, "replication.maxReplicaLagSeconds", 3600, 1, 86400 * 365)
@@ -469,10 +486,24 @@ def list_policies() -> list[dict[str, Any]]:
     return policies
 
 
-def update_policy(policy_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+def update_policy(
+    policy_id: str,
+    patch: dict[str, Any],
+    *,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
     existing = get_policy(policy_id)
     if not isinstance(patch, dict):
         raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
+
+    curr_rev = int(existing.get("policyRevision") or 1)
+    if expected_revision is not None and curr_rev != expected_revision:
+        raise AppError(
+            f"CAS mismatch on policyRevision: expected {expected_revision}, actual {curr_rev}",
+            code=ErrorCode.INVALID_REQUEST,
+            status=412,
+        )
+
     merged = dict(existing)
     for key in (
         "name",

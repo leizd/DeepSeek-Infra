@@ -39,6 +39,8 @@
 .backup-spool/
 .backup-run-plans/
 .backup-index/
+.backup-continuity/
+.backup-rebalance/
 .workspace-mutation.lock
 .workspace-generation
 

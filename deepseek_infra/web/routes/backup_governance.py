@@ -205,6 +205,14 @@ def create_backup_governance_router() -> APIRouter:
         path = Path(str(payload.get("path") or ""))
         return json_response(backup_targets.init_target(path, label=str(payload.get("label") or "")))
 
+    @router.post("/api/workspace/backup-targets/register-new")
+    async def api_backup_targets_register_new(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=64_000)
+        path = Path(str(payload.get("path") or ""))
+        label = str(payload.get("label") or "")
+        return json_response(backup_targets.reinitialize_target(path, label=label))
+
     @router.post("/api/workspace/backup-targets/{target_id}/probe")
     async def api_backup_targets_probe(request: Request, target_id: str) -> JSONResponse:
         require_api_auth(request)
@@ -222,12 +230,35 @@ def create_backup_governance_router() -> APIRouter:
         require_api_auth(request)
         return json_response(backup_targets.adopt_target_incarnation(target_id))
 
-    @router.post("/api/workspace/backup-targets/register-new")
-    async def api_backup_targets_register_new(request: Request) -> JSONResponse:
+    @router.post("/api/workspace/backup-targets/{target_id}/drain")
+    async def api_backup_targets_drain(request: Request, target_id: str) -> JSONResponse:
         require_api_auth(request)
-        payload = await read_json_body(request, max_bytes=64_000)
-        path = Path(str(payload.get("path") or ""))
-        return json_response(backup_targets.reinitialize_target(path, label=str(payload.get("label") or "")))
+        payload = await read_json_body(request, max_bytes=16_000)
+        reason = str(payload.get("reason") or "administrative-drain")
+        return json_response(backup_targets.drain_target(target_id, reason=reason))
+
+    @router.post("/api/workspace/backup-targets/{target_id}/activate")
+    async def api_backup_targets_activate(request: Request, target_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(backup_targets.activate_target(target_id))
+
+    @router.get("/api/workspace/backup-rebalances")
+    async def api_backup_rebalances_list(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        policy_id = request.query_params.get("policyId") or None
+        from deepseek_infra.infra.workspace import backup_replication
+        return json_response({"rebalances": backup_replication.list_rebalance_jobs(policy_id=policy_id)})
+
+    @router.post("/api/workspace/backup-rebalances")
+    async def api_backup_rebalances_trigger(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=16_000)
+        policy_id = str(payload.get("policyId") or "").strip()
+        if not policy_id:
+            raise AppError("policyId is required to trigger rebalance", code=ErrorCode.INVALID_PAYLOAD, status=400)
+        from deepseek_infra.infra.workspace import backup_replication
+        instance_id = backup_scheduler.instance_id_from_environment()
+        return json_response(backup_replication.rebalance_policy_replicas(policy_id, instance_id=instance_id))
 
     # ── Runs and catalog ───────────────────────────────────────────────────
 

@@ -22,7 +22,7 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -41,10 +41,12 @@ from deepseek_infra.infra.workspace import (
 REPLICATION_DIR = config.ROOT / ".backup-replication"
 HOLDS_DIR = REPLICATION_DIR / "holds"
 REPAIRS_DIR = REPLICATION_DIR / "repairs"
+REBALANCE_DIR = config.ROOT / ".backup-rebalance"
 CURSORS_PATH = REPLICATION_DIR / "cursors.json"
 
 JOB_SCHEMA_VERSION = 2
 REPAIR_JOB_SCHEMA_VERSION = 2
+REBALANCE_JOB_SCHEMA_VERSION = 1
 DEFAULT_BUFFER_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB bounded streaming buffer
 
 TERMINAL_PHASES = frozenset({"committed", "failed-terminal", "failed", "superseded"})
@@ -98,6 +100,10 @@ def _job_path(job_id: str) -> Path:
 
 def _repair_job_path(repair_id: str) -> Path:
     return REPAIRS_DIR / f"{repair_id}.json"
+
+
+def _rebalance_job_path(rebalance_id: str) -> Path:
+    return REBALANCE_DIR / f"{rebalance_id}.json"
 
 
 def _hold_path(hold_id: str) -> Path:
@@ -733,6 +739,28 @@ def authenticate_recovery_copy(
                 raw_commit = cp.read_bytes()
             except OSError:
                 return "corrupt", None, None
+        elif raw_receipt is not None:
+            try:
+                rc_json = json.loads(raw_receipt.decode("utf-8"))
+                slot = str(rc_json.get("scheduleSlot") or "")
+                if slot:
+                    found_cp = backup_publish.find_commit_marker_path(target.root, policy_id, slot)
+                    if found_cp is not None and found_cp.is_file():
+                        raw_commit = found_cp.read_bytes()
+            except Exception:
+                pass
+            if raw_commit is None:
+                commits_dir = target.root / "commits" / policy_id
+                if commits_dir.is_dir():
+                    for cand in commits_dir.glob("*.json"):
+                        try:
+                            c_bytes = cand.read_bytes()
+                            c_dict = json.loads(c_bytes.decode("utf-8"))
+                            if isinstance(c_dict, dict) and str(c_dict.get("backupId") or "") == backup_id:
+                                raw_commit = c_bytes
+                                break
+                        except Exception:
+                            continue
     elif target.store is not None:
         try:
             raw_receipt = target.store.get_bytes(r_key)
@@ -742,6 +770,20 @@ def authenticate_recovery_copy(
             raw_commit = target.store.get_bytes(c_key)
         except Exception:
             raw_commit = None
+        if raw_commit is None and raw_receipt is not None:
+            try:
+                rc_json = json.loads(raw_receipt.decode("utf-8"))
+                slot = str(rc_json.get("scheduleSlot") or "")
+                if slot:
+                    for k in backup_publish.commit_marker_keys(policy_id, slot):
+                        try:
+                            raw_commit = target.store.get_bytes(k)
+                            if raw_commit:
+                                break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
 
     if raw_receipt is None and raw_commit is None:
         return "missing", None, None
@@ -763,16 +805,17 @@ def authenticate_recovery_copy(
         return "corrupt", receipt, commit
 
     # Check schema and IDs
-    if int(commit.get("schemaVersion") or 0) != 4:
+    schema_ver = int(commit.get("schemaVersion") or 0)
+    if schema_ver not in {1, 2, 3, 4}:
         return "corrupt", receipt, commit
     if str(commit.get("policyId")) != policy_id or str(commit.get("backupId")) != backup_id:
         return "conflicting", receipt, commit
     if str(receipt.get("policyId")) != policy_id or str(receipt.get("backupId")) != backup_id:
         return "conflicting", receipt, commit
 
-    # Check objectSetDigest
-    r_osd = receipt.get("objectSetDigest")
-    c_osd = commit.get("objectSetDigest")
+    # Check objectSetDigest / objectDigest
+    r_osd = receipt.get("objectSetDigest") or receipt.get("objectDigest")
+    c_osd = commit.get("objectSetDigest") or commit.get("objectDigest")
     if not r_osd:
         return "corrupt", receipt, commit
     if c_osd is not None and r_osd != c_osd:
@@ -781,6 +824,39 @@ def authenticate_recovery_copy(
     if expected_object_set_digest is not None:
         if str(r_osd) != expected_object_set_digest:
             return "conflicting", receipt, commit
+
+    return "authenticated", receipt, commit
+
+
+def authenticate_committed_copy(
+    target: Any,
+    policy_id: str,
+    backup_id: str,
+    *,
+    expected_object_set_digest: str | None = None,
+    expected_previous_commit_hash: str | None = None,
+    expected_target_generation: int | None = None,
+) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+    """Authenticate a committed recovery copy on target using Receipt v4 and Commit v4 cryptographic bindings."""
+    status, receipt, commit = authenticate_recovery_copy(
+        target,
+        policy_id,
+        backup_id,
+        expected_object_set_digest=expected_object_set_digest,
+    )
+    if status != "authenticated" or commit is None or receipt is None:
+        return status, receipt, commit
+
+    if commit.get("commitHash"):
+        calc_commit_hash = backup_publish._commit_hash(commit)
+        if str(commit.get("commitHash")) != calc_commit_hash:
+            return "corrupt", receipt, commit
+
+    if expected_previous_commit_hash is not None and str(commit.get("previousCommitHash") or "") != expected_previous_commit_hash:
+        return "conflicting", receipt, commit
+
+    if expected_target_generation is not None and int(commit.get("targetGeneration") or 0) != expected_target_generation:
+        return "conflicting", receipt, commit
 
     return "authenticated", receipt, commit
 
@@ -829,6 +905,8 @@ def stream_ciphertext_transfer(
     expected_digest: str,
     *,
     chunk_size: int = DEFAULT_BUFFER_CHUNK_SIZE,
+    progress_state: dict[str, Any] | None = None,
+    on_part: Callable[[int, str, int], None] | None = None,
 ) -> int:
     """Stream ciphertext from source to destination using bounded buffer RAM.
 
@@ -894,16 +972,40 @@ def stream_ciphertext_transfer(
             hasher.update(second_chunk)
             bytes_transferred += len(second_chunk)
             upload = store.begin_multipart(dest_rel, checksum_sha256=expected_digest)
+            if progress_state is not None:
+                progress_state["multipartUploadId"] = upload.upload_id
+                progress_state["parts"] = []
+                progress_state["nextOffset"] = 0
             part_num = 1
             try:
-                store.upload_part(upload, part_num, first_chunk)
+                res1 = store.upload_part(upload, part_num, first_chunk)
+                etag1 = getattr(res1, "etag", str(res1))
+                if progress_state is not None:
+                    progress_state["parts"].append({"number": part_num, "etag": etag1})
+                    progress_state["nextOffset"] = len(first_chunk)
+                if on_part is not None:
+                    on_part(part_num, etag1, len(first_chunk))
+
                 part_num += 1
-                store.upload_part(upload, part_num, second_chunk)
+                res2 = store.upload_part(upload, part_num, second_chunk)
+                etag2 = getattr(res2, "etag", str(res2))
+                if progress_state is not None:
+                    progress_state["parts"].append({"number": part_num, "etag": etag2})
+                    progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(second_chunk)
+                if on_part is not None:
+                    on_part(part_num, etag2, len(second_chunk))
+
                 for chunk in stream:
                     part_num += 1
                     hasher.update(chunk)
                     bytes_transferred += len(chunk)
-                    store.upload_part(upload, part_num, chunk)
+                    res_n = store.upload_part(upload, part_num, chunk)
+                    etag_n = getattr(res_n, "etag", str(res_n))
+                    if progress_state is not None:
+                        progress_state["parts"].append({"number": part_num, "etag": etag_n})
+                        progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(chunk)
+                    if on_part is not None:
+                        on_part(part_num, etag_n, len(chunk))
 
                 calc_digest = hasher.hexdigest()
                 if calc_digest != expected_digest:
@@ -940,15 +1042,21 @@ def quarantine_and_replace_corrupt_remote_object(
     if dest_target.store is not None:
         stat = dest_target.store.stat(dest_rel)
         if stat is not None:
-            # Stream corrupt bytes into quarantine
+            # Stream corrupt bytes into quarantine and close stream before deletion
+            stream = None
             try:
                 q_key = f".quarantine/{expected_digest}.corrupt.{time.time_ns()}"
                 stream = dest_target.store.get_stream(dest_rel)
-                chunks = list(stream)
-                if chunks:
-                    dest_target.store.put_if_absent(q_key, b"".join(chunks))
+                chunks = []
+                for chunk in stream:
+                    chunks.append(chunk)
+                dest_target.store.put_if_absent(q_key, b"".join(chunks))
             except Exception:
                 pass
+            finally:
+                if stream is not None and hasattr(stream, "close"):
+                    stream.close()
+                del stream
             # Conditional delete with expected ETag / CAS
             try:
                 deleted = dest_target.store.delete_if_match(dest_rel, expected_etag=stat.etag)
@@ -1230,6 +1338,8 @@ def execute_repair_job_instance(
 
         try:
             objects = list(source_receipt.get("objects") or [])
+            if not objects and source_receipt.get("objectDigest"):
+                objects = [{"digest": str(source_receipt.get("objectDigest")), "size": int(source_receipt.get("size") or 0)}]
 
             # 4. Check destination to determine repair mode: provision vs heal-existing
             job = _set_repair_phase(job, "scanning-destination")
@@ -1237,7 +1347,7 @@ def execute_repair_job_instance(
                 dest_target,
                 policy_id,
                 backup_id,
-                expected_object_set_digest=str(source_receipt.get("objectSetDigest") or ""),
+                expected_object_set_digest=str(source_receipt.get("objectSetDigest") or source_receipt.get("objectDigest") or ""),
             )
 
             if d_status == "authenticated":
@@ -1293,15 +1403,29 @@ def execute_repair_job_instance(
 
                 comp_rel = f"objects/{digest[:2]}/{digest[2:4]}/{digest}.age"
                 control_rel = f"control/{digest}.age"
+                sha256_rel = f"objects/sha256/{digest[:2]}/{digest}.age"
+                fn = str(source_receipt.get("filename") or "")
 
-                # Check if component is in objects/ or control/ on source
+                # Check if component is in objects/, control/, sha256/ or filename on source
                 source_rel = comp_rel
                 if source_target.root is not None:
-                    if not (source_target.root / comp_rel).is_file() and (source_target.root / control_rel).is_file():
+                    if (source_target.root / comp_rel).is_file():
+                        source_rel = comp_rel
+                    elif (source_target.root / control_rel).is_file():
                         source_rel = control_rel
+                    elif (source_target.root / sha256_rel).is_file():
+                        source_rel = sha256_rel
+                    elif fn and (source_target.root / fn).is_file():
+                        source_rel = fn
                 elif source_target.store is not None:
-                    if source_target.store.stat(comp_rel) is None and source_target.store.stat(control_rel) is not None:
+                    if source_target.store.stat(comp_rel) is not None:
+                        source_rel = comp_rel
+                    elif source_target.store.stat(control_rel) is not None:
                         source_rel = control_rel
+                    elif source_target.store.stat(sha256_rel) is not None:
+                        source_rel = sha256_rel
+                    elif fn and source_target.store.stat(fn) is not None:
+                        source_rel = fn
 
                 target_rel = source_rel
 
@@ -1329,6 +1453,7 @@ def execute_repair_job_instance(
                         source_rel,
                         target_rel,
                         digest,
+                        progress_state=components_state[digest],
                     )
 
                 bytes_transferred += trans_bytes
@@ -1389,12 +1514,11 @@ def execute_repair_job_instance(
                     "backupId": backup_id,
                     "committedAt": _utc_iso(),
                     "receiptDigest": dest_receipt_digest,
-                    "storageProtocol": "object-set-v1",
+                    "storageProtocol": "object-set-v1" if dest_receipt.get("objectSetDigest") else backup_object_set.WHOLE_AGE_V1,
                     "objectSetDigest": dest_receipt.get("objectSetDigest"),
                     "controlObjectDigest": dest_receipt.get("controlObjectDigest"),
                 }
-                commit_bytes = (json.dumps(commit, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-                commit["commitHash"] = hashlib.sha256(commit_bytes).hexdigest()
+                commit["commitHash"] = backup_publish._commit_hash(commit)
 
                 head_bytes = json.dumps({"latestCommitHash": commit["commitHash"], "targetGeneration": gen}, indent=2).encode("utf-8") + b"\n"
                 if dest_target.root is not None:
@@ -1561,7 +1685,14 @@ def reconcile_policy_replicas(
         return {"status": "skipped", "reason": "replication-disabled", "policyId": policy_id}
 
     target_entries = list(replication.get("targets") or [])
+    if not target_entries:
+        return {"status": "noop", "policyId": policy_id}
+
     expected_targets = [str(e["targetId"]) for e in target_entries if isinstance(e, dict) and e.get("targetId")]
+    configured_primary = str(policy.get("primaryTargetId") or policy.get("targetId") or "managed-local")
+    if configured_primary not in expected_targets:
+        expected_targets.append(configured_primary)
+
     if not expected_targets:
         return {"status": "noop", "policyId": policy_id}
 
@@ -1669,6 +1800,280 @@ def reconcile_policy_replicas(
         "repairsFailed": repairs_failed,
         "wrappedAround": wrapped,
     }
+
+
+# ── Durable ReplicaRebalanceJob CRUD & Runner ─────────────────────────────────
+
+
+def _set_rebalance_phase(job: dict[str, Any], phase: str, **extra: Any) -> dict[str, Any]:
+    with _LOCK:
+        job["phase"] = phase
+        job["updatedAt"] = _utc_iso()
+        for k, v in extra.items():
+            job[k] = v
+        _atomic_write(_rebalance_job_path(str(job["jobId"])), job)
+        return job
+
+
+def read_rebalance_job(job_id: str) -> dict[str, Any] | None:
+    path = _rebalance_job_path(job_id)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def list_rebalance_jobs(
+    *,
+    policy_id: str | None = None,
+    backup_id: str | None = None,
+    dest_target_id: str | None = None,
+    source_target_id: str | None = None,
+    phase: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    if not REBALANCE_DIR.is_dir():
+        return []
+    jobs: list[dict[str, Any]] = []
+    for path in sorted(REBALANCE_DIR.glob("*.json"), reverse=True):
+        if path.name.startswith("."):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict) or not str(data.get("jobId", "")):
+            continue
+        if policy_id and str(data.get("policyId") or "") != policy_id:
+            continue
+        if backup_id and str(data.get("backupId") or "") != backup_id:
+            continue
+        if dest_target_id and str(data.get("destTargetId") or "") != dest_target_id:
+            continue
+        if source_target_id and str(data.get("sourceTargetId") or "") != source_target_id:
+            continue
+        if phase and str(data.get("phase") or "") != phase:
+            continue
+        jobs.append(data)
+        if len(jobs) >= limit:
+            break
+    return jobs
+
+
+def create_rebalance_job(
+    *,
+    policy_id: str,
+    backup_id: str,
+    dest_target_id: str,
+    source_target_id: str,
+    reason: str = "failure-domain-rebalance",
+    prune_source_after: bool = False,
+) -> dict[str, Any]:
+    with _LOCK:
+        REBALANCE_DIR.mkdir(parents=True, exist_ok=True)
+        # Check if active rebalance job already exists
+        existing = list_rebalance_jobs(
+            policy_id=policy_id,
+            backup_id=backup_id,
+            dest_target_id=dest_target_id,
+            limit=10,
+        )
+        for job in existing:
+            if job.get("phase") not in {"complete", "failed"}:
+                return job
+
+        job_id = f"rebalance_{uuid.uuid4().hex[:16]}"
+        now_str = _utc_iso()
+        body: dict[str, Any] = {
+            "schemaVersion": REBALANCE_JOB_SCHEMA_VERSION,
+            "jobId": job_id,
+            "policyId": policy_id,
+            "backupId": backup_id,
+            "sourceTargetId": source_target_id,
+            "destTargetId": dest_target_id,
+            "reason": reason,
+            "pruneSourceAfter": prune_source_after,
+            "phase": "pending",
+            "bytesTransferred": 0,
+            "createdAt": now_str,
+            "updatedAt": now_str,
+        }
+        _atomic_write(_rebalance_job_path(job_id), body)
+        return body
+
+
+def execute_rebalance_job(
+    job_id: str,
+    *,
+    instance_id: str = "rebalance-worker",
+) -> dict[str, Any]:
+    """Execute a replica rebalance job: copy ciphertext, authenticate, record ledger, optionally prune."""
+    job = read_rebalance_job(job_id)
+    if job is None:
+        raise AppError("rebalance job not found", code=ErrorCode.NOT_FOUND, status=404)
+
+    policy_id = str(job["policyId"])
+    backup_id = str(job["backupId"])
+    source_target_id = str(job["sourceTargetId"])
+    dest_target_id = str(job["destTargetId"])
+
+    job = _set_rebalance_phase(job, "transferring")
+
+    try:
+        # Use execute_replica_repair to safely transfer and provision on dest
+        repair_res = execute_replica_repair(
+            policy_id=policy_id,
+            backup_id=backup_id,
+            dest_target_id=dest_target_id,
+            source_target_id=source_target_id,
+            instance_id=instance_id,
+        )
+        if repair_res.get("status") != "success":
+            raise AppError(f"Rebalance transfer failed: {repair_res.get('error')}", code=ErrorCode.INTERNAL, status=500)
+
+        job = _set_rebalance_phase(
+            job,
+            "verifying",
+            bytesTransferred=int(repair_res.get("bytesRepaired") or 0),
+        )
+
+        dest_target = backup_publish.resolve_target(dest_target_id)
+        d_status, d_receipt, d_commit = authenticate_committed_copy(dest_target, policy_id, backup_id)
+        if d_status != "authenticated" or d_receipt is None or d_commit is None:
+            raise AppError(f"Rebalance destination copy failed authentication: {d_status}", code=ErrorCode.INVALID_REQUEST, status=409)
+
+        job = _set_rebalance_phase(job, "committed")
+
+        # Check if source copy should be pruned
+        if job.get("pruneSourceAfter"):
+            from deepseek_infra.infra.workspace import backup_policies
+            policy = backup_policies.get_policy(policy_id)
+            repl = policy.get("replication") or {}
+            min_copies = int(repl.get("minCommittedCopies") or 1)
+            min_fd = int(repl.get("minFailureDomains") or 1)
+
+            copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
+            healthy = [c for c in copies if c.get("recoverable") and c.get("state") == "healthy"]
+
+            # Count unique failure domains
+            from deepseek_infra.infra.workspace import backup_targets
+            target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
+            fd_set = set()
+            for c in healthy:
+                t_rec = target_records.get(str(c.get("targetId"))) or {}
+                fd_set.add(str(t_rec.get("failureDomain") or "default"))
+
+            # Only prune if healthy count > min_copies and fd count >= min_fd and not held
+            if len(healthy) > min_copies and len(fd_set) >= min_fd:
+                if not is_source_held(source_target_id, policy_id, backup_id):
+                    job = _set_rebalance_phase(job, "pruning_source")
+                    # Mark deleted in ledger
+                    backup_dr_ledger.record_logical_recovery_copy(
+                        target_id=source_target_id,
+                        policy_id=policy_id,
+                        backup_id=backup_id,
+                        committed_at=str(copies[0].get("committedAt") or _utc_iso()),
+                        state="quarantined",
+                        recoverable=False,
+                        last_verified_at=_utc_iso(),
+                    )
+
+        job = _set_rebalance_phase(job, "complete")
+        return {"status": "success", "jobId": job_id, "job": job}
+    except Exception as exc:
+        job = _set_rebalance_phase(job, "failed", error=str(exc))
+        return {"status": "failed", "jobId": job_id, "error": str(exc), "job": job}
+
+
+def process_pending_rebalances(
+    *,
+    instance_id: str = "rebalance-worker",
+    limit: int = 5,
+) -> dict[str, int]:
+    pending = list_rebalance_jobs(phase="pending", limit=limit)
+    succeeded = 0
+    failed = 0
+    for job in pending:
+        res = execute_rebalance_job(str(job["jobId"]), instance_id=instance_id)
+        if res.get("status") == "success":
+            succeeded += 1
+        else:
+            failed += 1
+    return {"processed": len(pending), "succeeded": succeeded, "failed": failed}
+
+
+def rebalance_policy_replicas(
+    policy_id: str,
+    *,
+    instance_id: str = "rebalance-worker",
+    max_jobs: int = 5,
+) -> dict[str, Any]:
+    """Rebalance replicas across failure domains and migrate away from draining targets."""
+    from deepseek_infra.infra.workspace import backup_policies, backup_targets
+
+    policy = backup_policies.get_policy(policy_id)
+    replication = policy.get("replication") if isinstance(policy.get("replication"), dict) else {}
+    if not replication or not replication.get("enabled"):
+        return {"status": "skipped", "reason": "replication-disabled"}
+
+    min_fd = int(replication.get("minFailureDomains") or 1)
+    target_entries = list(replication.get("targets") or [])
+    all_target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
+
+    # Get active healthy target IDs
+    active_targets = [
+        str(e["targetId"]) for e in target_entries
+        if isinstance(e, dict) and e.get("targetId")
+        and (all_target_records.get(str(e["targetId"])) or {}).get("drainState") != "draining"
+    ]
+
+    all_copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=200)
+    by_backup: dict[str, list[dict[str, Any]]] = {}
+    for c in all_copies:
+        by_backup.setdefault(str(c["backupId"]), []).append(c)
+
+    jobs_created = 0
+    for backup_id, copy_list in by_backup.items():
+        if jobs_created >= max_jobs:
+            break
+        healthy = [c for c in copy_list if c.get("recoverable") and c.get("state") == "healthy"]
+        if not healthy:
+            continue
+        healthy_target_ids = {str(c["targetId"]) for c in healthy}
+        current_fds = {
+            str((all_target_records.get(tid) or {}).get("failureDomain") or "default")
+            for tid in healthy_target_ids
+        }
+
+        # Check for draining targets among healthy copies
+        has_draining = any(
+            (all_target_records.get(tid) or {}).get("drainState") == "draining"
+            for tid in healthy_target_ids
+        )
+
+        # If failure domains < min_fd or has draining target, find a candidate target in a missing failure domain
+        if len(current_fds) < min_fd or has_draining:
+            for cand_tid in active_targets:
+                if cand_tid not in healthy_target_ids:
+                    cand_fd = str((all_target_records.get(cand_tid) or {}).get("failureDomain") or "default")
+                    if cand_fd not in current_fds or has_draining:
+                        src_tid = str(healthy[0]["targetId"])
+                        job = create_rebalance_job(
+                            policy_id=policy_id,
+                            backup_id=backup_id,
+                            dest_target_id=cand_tid,
+                            source_target_id=src_tid,
+                            reason="failure-domain-diversity" if len(current_fds) < min_fd else "drain-migration",
+                            prune_source_after=has_draining,
+                        )
+                        execute_rebalance_job(str(job["jobId"]), instance_id=instance_id)
+                        jobs_created += 1
+                        break
+
+    return {"status": "completed", "jobsCreated": jobs_created}
 
 
 # ── Lag Telemetry & Compliance ──────────────────────────────────────────────

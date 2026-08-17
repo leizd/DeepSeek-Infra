@@ -193,7 +193,14 @@ def validate_target_location(path: Path, *, exclude_target_id: str | None = None
     return resolved
 
 
-def init_target(path: Path | str, *, label: str = "") -> dict[str, Any]:
+def init_target(
+    path: Path | str,
+    *,
+    label: str = "",
+    failure_domain: str | None = None,
+    priority: int = 0,
+    cost_class: str | None = None,
+) -> dict[str, Any]:
     """Initialize a directory as a backup target and register it."""
     resolved = _resolve_basic(Path(path))
     marker = resolved / TARGET_MARKER_NAME
@@ -219,7 +226,16 @@ def init_target(path: Path | str, *, label: str = "") -> dict[str, Any]:
                         code=ErrorCode.INVALID_REQUEST,
                         status=409,
                     )
-            return _register(resolved, target_id, str(existing.get("targetNonce") or ""), label=label, created_at=str(existing.get("createdAt") or ""))
+            return _register(
+                resolved,
+                target_id,
+                str(existing.get("targetNonce") or ""),
+                label=label,
+                created_at=str(existing.get("createdAt") or ""),
+                failure_domain=failure_domain,
+                priority=priority,
+                cost_class=cost_class,
+            )
         raise AppError("Backup target marker is invalid", code=ErrorCode.INVALID_PAYLOAD)
     violation = _containment_violation(resolved)
     if violation:
@@ -237,7 +253,16 @@ def init_target(path: Path | str, *, label: str = "") -> dict[str, Any]:
         "createdAt": _utc_iso(),
     }
     _atomic_write_json(marker, marker_payload)
-    record = _register(resolved, target_id, nonce, label=label, created_at=marker_payload["createdAt"])
+    record = _register(
+        resolved,
+        target_id,
+        nonce,
+        label=label,
+        created_at=marker_payload["createdAt"],
+        failure_domain=failure_domain,
+        priority=priority,
+        cost_class=cost_class,
+    )
     _write_checkpoint(target_id, marker_payload)
     return record
 
@@ -265,6 +290,7 @@ def _register(
         "failureDomain": failure_domain or "local",
         "priority": int(priority),
         "costClass": cost_class or "standard",
+        "drainState": "active",
         "createdAt": str(created_at or "") or _utc_iso(),
         "registeredAt": _utc_iso(),
     }
@@ -381,6 +407,7 @@ def init_s3_target(
         "failureDomain": failure_domain or record_preview["region"] or "remote-s3",
         "priority": int(priority),
         "costClass": cost_class or "standard",
+        "drainState": "active",
         "credentialProvider": provider,
         "createdAt": str(identity.get("createdAt") or _utc_iso()),
         "registeredAt": _utc_iso(),
@@ -766,3 +793,41 @@ def reinitialize_target(path: Path | str, *, label: str = "") -> dict[str, Any]:
     record = _register(resolved, target_id, nonce, label=label, created_at=marker_payload["createdAt"])
     _write_checkpoint(target_id, marker_payload)
     return record
+
+
+def drain_target(target_id: str, *, reason: str = "") -> dict[str, Any]:
+    """Set target drain state to draining."""
+    target = get_target(target_id)
+    target["drainState"] = "draining"
+    target["drainReason"] = reason
+    target["drainingAt"] = _utc_iso()
+    _atomic_write_json(_registry_path(target_id), target)
+    return target
+
+
+def activate_target(target_id: str) -> dict[str, Any]:
+    """Set target drain state back to active."""
+    target = get_target(target_id)
+    target["drainState"] = "active"
+    target.pop("drainReason", None)
+    target.pop("drainingAt", None)
+    _atomic_write_json(_registry_path(target_id), target)
+    return target
+
+
+def mark_target_drained(target_id: str) -> dict[str, Any]:
+    """Mark a draining target as drained."""
+    target = get_target(target_id)
+    target["drainState"] = "drained"
+    target["drainedAt"] = _utc_iso()
+    _atomic_write_json(_registry_path(target_id), target)
+    return target
+
+
+def get_target_drain_state(target_id: str) -> str:
+    try:
+        target = get_target(target_id)
+        return str(target.get("drainState") or "active")
+    except Exception:
+        return "unknown"
+

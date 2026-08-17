@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from deepseek_infra.core.errors import AppError
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_catalog,
     backup_incremental,
@@ -26,6 +26,7 @@ from deepseek_infra.infra.workspace import (
     backup_scheduled,
     backup_scheduler,
     backup_spool,
+    backup_write_continuity,
     backup_writer_lease,
     backups,
     mutation_gate,
@@ -265,6 +266,8 @@ def execute_run(
             raise  # pragma: no cover - other resolve errors bubble to outer handler
 
         target_id = write_target_id
+        outcome["isFailover"] = is_failover
+        outcome["targetId"] = target_id
 
         # Select snapshot kind / lineage once, then freeze; retries reuse it.
         context = backup_scheduled._context_from_policy(policy)
@@ -504,60 +507,202 @@ def execute_run(
         if savings:
             outcome["incrementalSavings"] = savings
 
-        if target.root is not None:
-            incomplete = backup_publish.slot_has_incomplete_journal(target.root, policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
-        else:  # pragma: no cover - remote full-executor path
-            incomplete = backup_publish.slot_has_incomplete_journal_store(target.require_store(), policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
-        if incomplete:
-            backup_scheduler.record_run_phase(run.run_id, "reconciling", instance_id=instance_id, fencing_token=run.fencing_token, reason="interrupted-target-transaction", now=guard.now())
-        writer = backup_writer_lease.TargetWriterLease(
-            target.root,
-            store=target.store if target.root is None else None,
-            target_id=target_id,
-            owner_run_id=run.run_id,
-            owner_instance_id=instance_id,
-            fencing_token=run.fencing_token,
-            clock=clock,
-        )
-        writer.acquire()
-        guard.attach_writer(writer)
-        published = backup_publish.publish_backup(
-            target,
-            package,
-            run_id=run.run_id,
-            policy_id=policy_id,
-            schedule_slot=run.schedule_slot,
-            fencing_token=run.fencing_token,
-            checkpoint=guard.checkpoint,
-        )
+        # Target Publishing with Formal Commit Reconcile and Transactional Failover
+        published = None
+        current_target_id = target_id
+        current_target = target
+
+        while True:
+            if current_target.root is not None:
+                incomplete = backup_publish.slot_has_incomplete_journal(current_target.root, policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
+            else:  # pragma: no cover - remote full-executor path
+                incomplete = backup_publish.slot_has_incomplete_journal_store(current_target.require_store(), policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
+            if incomplete:
+                backup_scheduler.record_run_phase(run.run_id, "reconciling", instance_id=instance_id, fencing_token=run.fencing_token, reason="interrupted-target-transaction", now=guard.now())
+
+            writer = backup_writer_lease.TargetWriterLease(
+                current_target.root,
+                store=current_target.store if current_target.root is None else None,
+                target_id=current_target_id,
+                owner_run_id=run.run_id,
+                owner_instance_id=instance_id,
+                fencing_token=run.fencing_token,
+                clock=clock,
+            )
+
+            publish_exc: Exception | None = None
+            try:
+                writer.acquire()
+                guard.attach_writer(writer)
+                published = backup_publish.publish_backup(
+                    current_target,
+                    package,
+                    run_id=run.run_id,
+                    policy_id=policy_id,
+                    schedule_slot=run.schedule_slot,
+                    fencing_token=run.fencing_token,
+                    checkpoint=guard.checkpoint,
+                )
+                target_id = current_target_id
+                target = current_target
+                break
+            except Exception as exc:
+                publish_exc = exc
+                if writer is not None:
+                    writer.release()
+                    writer = None
+
+            # Publish failed on current_target. Reconcile commit status before deciding to failover.
+            commit_status = "unknown"
+            from deepseek_infra.infra.workspace import backup_replication
+            try:
+                commit_status, _, _ = backup_replication.authenticate_recovery_copy(
+                    current_target,
+                    policy_id,
+                    package.backup_id,
+                    expected_object_set_digest=getattr(package, "object_set_digest", None),
+                )
+            except Exception:
+                commit_status = "unreachable"
+
+            if commit_status == "authenticated":
+                # Target actually committed before connection drop; converge
+                target_id = current_target_id
+                target = current_target
+                writer = backup_writer_lease.TargetWriterLease(
+                    current_target.root,
+                    store=current_target.store if current_target.root is None else None,
+                    target_id=current_target_id,
+                    owner_run_id=run.run_id,
+                    owner_instance_id=instance_id,
+                    fencing_token=run.fencing_token,
+                    clock=clock,
+                )
+                writer.acquire()
+                guard.attach_writer(writer)
+                published = backup_publish.publish_backup(
+                    current_target,
+                    package,
+                    run_id=run.run_id,
+                    policy_id=policy_id,
+                    schedule_slot=run.schedule_slot,
+                    fencing_token=run.fencing_token,
+                    checkpoint=guard.checkpoint,
+                )
+                break
+            elif commit_status in {"missing", "corrupt"}:
+                # Definitively not committed on current_target. Look for candidate failover target.
+                candidate_ids = [
+                    tid for tid in list((run_plan or {}).get("candidateTargetIds") or [])
+                    if tid != current_target_id
+                ]
+                if not candidate_ids:
+                    repl = policy.get("replication") if isinstance(policy, dict) and isinstance(policy.get("replication"), dict) else {}
+                    if repl and repl.get("enabled"):
+                        for t in list(repl.get("targets") or []):
+                            if isinstance(t, dict) and t.get("mode") == "required":
+                                r_tid = str(t.get("targetId"))
+                                if r_tid != current_target_id and r_tid not in candidate_ids:
+                                    candidate_ids.append(r_tid)
+
+                failover_target_id: str | None = None
+                for cand_id in candidate_ids:
+                    is_incremental = str((run_plan or {}).get("snapshotKind") or getattr(package, "snapshot_kind", "full")) == "incremental"
+                    if is_incremental:
+                        parent_backup_id = str((run_plan or {}).get("parentBackupId") or "")
+                        if not parent_backup_id:
+                            continue
+                        cand_target = backup_publish.resolve_target(cand_id)
+                        p_status, _, _ = backup_replication.authenticate_recovery_copy(
+                            cand_target,
+                            policy_id,
+                            parent_backup_id,
+                        )
+                        if p_status != "authenticated":
+                            continue
+
+                    try:
+                        cand_target = backup_publish.resolve_target(cand_id)
+                        live = backup_write_continuity.perform_liveness_preflight(cand_id, policy_id=policy_id, target=cand_target)
+                        if live.get("status") == "available":
+                            failover_target_id = cand_id
+                            break
+                    except Exception:
+                        continue
+
+                if failover_target_id is not None:
+                    run_plan = backup_run_plan.transition_run_plan_target(
+                        policy_id,
+                        slot_digest,
+                        new_target_id=failover_target_id,
+                        reason=f"failover-from-{current_target_id}:{publish_exc}",
+                    )
+                    backup_write_continuity.execute_failover_transition(
+                        policy_id,
+                        failover_target_id,
+                        reason=f"target-publish-failed:{publish_exc}",
+                    )
+                    current_target_id = failover_target_id
+                    current_target = backup_publish.resolve_target(failover_target_id)
+                    writer = backup_writer_lease.TargetWriterLease(
+                        current_target.root,
+                        store=current_target.store if current_target.root is None else None,
+                        target_id=current_target_id,
+                        owner_run_id=run.run_id,
+                        owner_instance_id=instance_id,
+                        fencing_token=run.fencing_token,
+                        clock=clock,
+                    )
+                    outcome["targetId"] = failover_target_id
+                    outcome["isFailover"] = True
+                    outcome["failoverTransitioned"] = True
+                    continue
+
+            if commit_status in {"unreachable", "unknown"}:
+                backup_scheduler.fail_run(
+                    run.run_id,
+                    error=f"ambiguous-target-commit:{publish_exc}",
+                    instance_id=instance_id,
+                    fencing_token=run.fencing_token,
+                    phase="failed",
+                    reason="ambiguous-target-commit",
+                    now=guard.now(),
+                )
+                raise AppError(
+                    f"ambiguous-target-commit: Target {current_target_id} commit status could not be proven; safely blocking: {publish_exc}",
+                    code=ErrorCode.INTERNAL,
+                    status=500,
+                )
+
+            raise publish_exc or AppError("Publish failed on target", code=ErrorCode.INTERNAL, status=500)
         guard.checkpoint()
         backup_scheduler.record_run_phase(run.run_id, "cataloging", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
-        if target.root is not None:
-            if not published.converged or str(published.receipt.get("backupId") or "") not in backup_catalog.catalog_state(target.root):
-                backup_catalog.append_receipt(target.root, published.receipt, writer=writer, precondition=backup_catalog.catalog_precondition(target.root))
+        if current_target.root is not None:
+            if not published.converged or str(published.receipt.get("backupId") or "") not in backup_catalog.catalog_state(current_target.root):
+                backup_catalog.append_receipt(current_target.root, published.receipt, writer=writer, precondition=backup_catalog.catalog_precondition(current_target.root))
             guard.checkpoint()
             backup_scheduler.record_run_phase(run.run_id, "pruning", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
             retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
             policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
-            backup_retention.apply_retention(retention, target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
+            backup_retention.apply_retention(retention, current_target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
             finalized = backup_retention.finalize_retention(
-                retention, target.root, target_id=target_id, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
+                retention, current_target.root, target_id=current_target_id, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
             )
-            catalog_after_retention = backup_catalog.catalog_state(target.root)
+            catalog_after_retention = backup_catalog.catalog_state(current_target.root)
         else:  # pragma: no cover - remote full-executor path requires a live adapter
-            backup_catalog.append_receipt_store(target.require_store(), published.receipt, writer=writer)
+            backup_catalog.append_receipt_store(current_target.require_store(), published.receipt, writer=writer)
             guard.checkpoint()
             backup_scheduler.record_run_phase(run.run_id, "pruning", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
             retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
             policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
-            backup_retention.apply_retention_store(retention, target.require_store(), policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
+            backup_retention.apply_retention_store(retention, current_target.require_store(), policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
             finalized = backup_retention.finalize_retention_store(
-                retention, target.require_store(), target_id=target_id, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
+                retention, current_target.require_store(), target_id=current_target_id, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
             )
-            catalog_after_retention = backup_catalog.catalog_state_store(target.require_store())
+            catalog_after_retention = backup_catalog.catalog_state_store(current_target.require_store())
         deleted_snapshots = [
             (
-                target_id,
+                current_target_id,
                 str((catalog_after_retention.get(str(backup_id)) or {}).get("policyId") or policy_id),
                 str(backup_id),
             )
@@ -571,7 +716,7 @@ def execute_run(
                 # The index is rebuildable; retention has already completed and
                 # must not be reported as failed because its local GC lagged.
                 for _, deleted_policy_id, _ in deleted_snapshots:
-                    backup_incremental.mark_index_stale(target_id, deleted_policy_id, "chunk-map-gc-failed")
+                    backup_incremental.mark_index_stale(current_target_id, deleted_policy_id, "chunk-map-gc-failed")
         guard.checkpoint()
         filename = str(published.receipt.get("filename") or (published.path.name if published.path is not None else package.filename))
         backup_scheduler.complete_run(
@@ -584,7 +729,7 @@ def execute_run(
         )
         # Successful commit: persist index lineage (best effort), then clear plan.
         committed_index = _record_committed_index(
-            target_id=target_id,
+            target_id=current_target_id,
             policy_id=policy_id,
             backup_id=str(published.receipt.get("backupId") or package.backup_id),
             package=package,
@@ -602,7 +747,7 @@ def execute_run(
 
             replication_jobs = backup_replication.enqueue_replica_jobs(
                 policy=policy,
-                primary_target_id=target_id,
+                primary_target_id=current_target_id,
                 backup_id=backup_id,
                 package=package,
                 run_id=run.run_id,
@@ -640,6 +785,7 @@ def execute_run(
 
         return {
             **outcome,
+            "targetId": current_target_id,
             "phase": "complete",
             "backupId": backup_id,
             "filename": filename,
@@ -653,6 +799,20 @@ def execute_run(
         message = str(exc)
         if exc.status == 499 or (exc.status == 409 and "lease" in message.casefold()):
             return {**outcome, "phase": "abandoned", "error": message}
+        if "ambiguous-target-commit" in message:
+            try:
+                backup_scheduler.fail_run(
+                    run.run_id,
+                    error=message,
+                    instance_id=instance_id,
+                    fencing_token=run.fencing_token,
+                    phase="failed",
+                    reason="ambiguous-target-commit",
+                    now=guard.now(),
+                )
+            except AppError:  # pragma: no cover
+                pass
+            return {**outcome, "phase": "failed", "reason": "ambiguous-target-commit", "error": message}
         if exc.status == 409 and "slot-commit-conflict" in message:
             try:
                 backup_scheduler.fail_run(run.run_id, error=message, instance_id=instance_id, fencing_token=run.fencing_token, phase="superseded", reason="slot-commit-conflict", now=guard.now())

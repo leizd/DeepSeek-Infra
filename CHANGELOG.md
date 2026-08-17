@@ -4,6 +4,20 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.5.6] - Transactional Write Failover & Failure-Domain Rebalancing (2026-08-17)
+
+### Transactional Write Failover & Failure-Domain Rebalancing
+
+- **Production Executor Write Target Transition**: Integrates `transition_run_plan_target` directly into `BackupExecutor` publish phase with formal commit reconcile before target transition.
+- **Formal Commit Reconcile & Ambiguous Write Guard**: Explicitly proves absence of commit on original target before failover; enters `ambiguous-write` phase on unconfirmable commits, eliminating split-brain dual commits.
+- **Parent Lineage Compatibility for Incremental Transitions**: Strictly enforces that incremental frozen packages only transition to failover targets with verified, authenticated parent commit chains; safely blocks otherwise.
+- **Failover Catch-up Desired State**: Incorporates configured primary into desired replica targets during failover, automatically triggering reverse catch-up repair to primary upon its recovery.
+- **Governed Failback & Strict Point Convergence**: Eliminates loose logical point fallbacks; failback strictly requires an exact authenticated healthy copy on the configured primary.
+- **Governed Primary Promotion with Precondition Guards**: Requires target to be a configured required replica, writable with fresh liveness, possessing latest authenticated recovery point, with durable CAS verification.
+- **Failure-Domain-Aware Placement & Online Rebalancing**: Ranks candidate targets across failure domains; manages durable `ReplicaRebalanceJob` migrations without ever dropping below minimum healthy copy thresholds.
+- **Target Drain Lifecycle**: Provides `drain_target` lifecycle (`active` -> `draining` -> `drained`) with graceful copy migration before target decommissioning.
+- **Bounded Streaming Corrupt Quarantine & Resumable Multipart Repair**: Eliminates memory blowup in corrupt object quarantine; persists multipart upload progress in `RepairJob` for cross-process resumption.
+
 ## [4.5.5] - Verified Write Continuity & Primary Promotion (2026-08-17)
 
 ### Verified Write Continuity & Primary Promotion

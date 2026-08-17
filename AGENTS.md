@@ -73,7 +73,7 @@ detect-secrets scan --baseline .secrets.baseline           # ALWAYS pass --basel
 ## Runtime data dirs (never commit)
 
 These repo-root dirs are gitignored runtime state — do not stage, package, or assume they exist on a fresh clone:
-`.file-cache .projects .local-rag .traces .semantic-cache .request-queue .generated .tool-audit .scheduler .a2a .budget .memory .reminders .agent-runs .search-cache .auth-token .backups .restore-staging .backup-policies .backup-mirror .backup-scheduler .backup-targets .backup-catalog .backup-retention .backup-spool .backup-run-plans .backup-index`
+`.file-cache .projects .local-rag .traces .semantic-cache .request-queue .generated .tool-audit .scheduler .a2a .budget .memory .reminders .agent-runs .search-cache .auth-token .backups .restore-staging .backup-policies .backup-mirror .backup-scheduler .backup-targets .backup-catalog .backup-retention .backup-spool .backup-run-plans .backup-index .backup-continuity .backup-rebalance`
 - For a clean distributable archive use `python scripts/release.py --clean-workspace` (emits `dist/deepseek-infra-<version>.zip`).
 - `.env` holds secrets and is gitignored; only `.env.example` is tracked.
 

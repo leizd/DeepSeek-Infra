@@ -5,80 +5,80 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.5.4.
+Applicable version: v4.5.6.
 
-## 4.5.4 development evidence contract
+## 4.5.6 development evidence contract
 
-4.5.4 product implementation covers Autonomous Replica Healing & Backup Write Failover.
+4.5.6 product implementation covers Transactional Write Failover & Failure-Domain Rebalancing.
 Living behavioral evidence is produced locally by `python scripts/run_453_evidence.py`
 and `python scripts/run_replica_healing_s3_e2e.py`. That living report is **not** part
 of the exact-merge package inventory in
 `deepseek_infra/infra/diagnostics/evidence_inventory.py` and must not be
-committed as a versioned `docs/evidence/*-v4.5.4.json` file (unlisted current
+committed as a versioned `docs/evidence/*-v4.5.6.json` file (unlisted current
 Evidence fails `verify_release_package`). Real two-target MinIO E2E, subprocess
 restart, fault injection, and exact-merge artifacts remain owned by their CI
-producers. No prior-version artifact is reused or relabelled as 4.5.4 PASS
-Applicable version: v4.5.5.
+producers. No prior-version artifact is reused or relabelled as 4.5.6 PASS
+Evidence.
 For development setup, test execution, and quality gates, see [AGENTS.md](../AGENTS.md).
 For project architecture, see [architecture.svg](assets/architecture.svg).
 
 ## Evidence Manifest
 
 Every release artifact digest produced during CI and release builds is
-committed as a versioned `docs/evidence/*-v4.5.5.json` file (unlisted current
+committed as a versioned `docs/evidence/*-v4.5.6.json` file (unlisted current
 evidence should not block normal validation):
 
-- `docs/evidence/release-v4.5.5.json`
-- `docs/evidence/release-provenance-v4.5.5.json`
-- `docs/evidence/reproducible-build-v4.5.5.json`
-- `docs/evidence/sbom-v4.5.5.json`
-- `docs/evidence/security-scan-v4.5.5.json`
-- `docs/evidence/strict-security-v4.5.5.json`
-- `docs/evidence/security-corpus-v4.5.5.json`
-- `docs/evidence/eval-v4.5.5.json`
-- `docs/evidence/agent-eval-v4.5.5.json`
-- `docs/evidence/ga-v4.5.5.json`
-- `docs/evidence/workspace-v4.5.5.json`
-- `docs/evidence/edge-router-v4.5.5.json`
-- `docs/evidence/media-v4.5.5.json`
-- `docs/evidence/browser-v4.5.5.json`
-- `docs/evidence/automation-v4.5.5.json`
-- `docs/evidence/skills-v4.5.5.json`
-- `docs/evidence/skills-ui-v4.5.5.json`
-- `docs/evidence/skill-builder-v4.5.5.json`
-- `docs/evidence/skill-packs-v4.5.5.json`
-- `docs/evidence/skill-eval-dashboard-v4.5.5.json`
-- `docs/evidence/skill-versioning-v4.5.5.json`
-- `docs/evidence/skill-analytics-v4.5.5.json`
-- `docs/evidence/skill-security-v4.5.5.json`
-- `docs/evidence/skill-catalog-v4.5.5.json`
-- `docs/evidence/context-taint-v4.5.5.json`
-- `docs/evidence/semantic-cache-onnx-v4.5.5.json`
-- `docs/evidence/upgrade-rollback-v4.5.5.json`
-- `docs/evidence/protocol-contract-v4.5.5.json`
-- `docs/evidence/frontend-bundle-v4.5.5.json`
-- `docs/evidence/frontend-browser-v4.5.5.json`
-- `docs/evidence/cross-platform-v4.5.5.json`
-- `docs/evidence/clean-install-v4.5.5.json`
-- `docs/evidence/eval-regression-v4.5.5.json`
+- `docs/evidence/release-v4.5.6.json`
+- `docs/evidence/release-provenance-v4.5.6.json`
+- `docs/evidence/reproducible-build-v4.5.6.json`
+- `docs/evidence/sbom-v4.5.6.json`
+- `docs/evidence/security-scan-v4.5.6.json`
+- `docs/evidence/strict-security-v4.5.6.json`
+- `docs/evidence/security-corpus-v4.5.6.json`
+- `docs/evidence/eval-v4.5.6.json`
+- `docs/evidence/agent-eval-v4.5.6.json`
+- `docs/evidence/ga-v4.5.6.json`
+- `docs/evidence/workspace-v4.5.6.json`
+- `docs/evidence/edge-router-v4.5.6.json`
+- `docs/evidence/media-v4.5.6.json`
+- `docs/evidence/browser-v4.5.6.json`
+- `docs/evidence/automation-v4.5.6.json`
+- `docs/evidence/skills-v4.5.6.json`
+- `docs/evidence/skills-ui-v4.5.6.json`
+- `docs/evidence/skill-builder-v4.5.6.json`
+- `docs/evidence/skill-packs-v4.5.6.json`
+- `docs/evidence/skill-eval-dashboard-v4.5.6.json`
+- `docs/evidence/skill-versioning-v4.5.6.json`
+- `docs/evidence/skill-analytics-v4.5.6.json`
+- `docs/evidence/skill-security-v4.5.6.json`
+- `docs/evidence/skill-catalog-v4.5.6.json`
+- `docs/evidence/context-taint-v4.5.6.json`
+- `docs/evidence/semantic-cache-onnx-v4.5.6.json`
+- `docs/evidence/upgrade-rollback-v4.5.6.json`
+- `docs/evidence/protocol-contract-v4.5.6.json`
+- `docs/evidence/frontend-bundle-v4.5.6.json`
+- `docs/evidence/frontend-browser-v4.5.6.json`
+- `docs/evidence/cross-platform-v4.5.6.json`
+- `docs/evidence/clean-install-v4.5.6.json`
+- `docs/evidence/eval-regression-v4.5.6.json`
 - `evals/reports/latest.json`
-- `evals/reports/skills-v4.5.5.json`
-- `evals/reports/media-v4.5.5.json`
-- `evals/reports/browser-v4.5.5.json`
-- `evals/reports/automation-v4.5.5.json`
-- `docs/evidence/rust-sidecar-image-v4.5.5.json`
-- `docs/evidence/hybrid-runtime-e2e-v4.5.5.json`
-- `docs/evidence/gateway-request-parity-v4.5.5.json`
-- `docs/evidence/mcp-protocol-parity-v4.5.5.json`
-- `docs/evidence/rag-parity-v4.5.5.json`
-- `docs/evidence/rag-document-preparation-parity-v4.5.5.json`
-- `docs/evidence/rag-vector-binary-parity-v4.5.5.json`
-- `docs/evidence/rust-coverage-v4.5.5.json`
-- `docs/evidence/rust-sidecar-performance-v4.5.5.json`
-- `docs/evidence/packed-delta-s3-v4.5.5.json`
-- `docs/evidence/object-set-s3-v4.5.5.json`
-- `docs/evidence/recovery-faults-v4.5.5.json`
-- `docs/evidence/replica-healing-s3-v4.5.5.json`
+- `evals/reports/skills-v4.5.6.json`
+- `evals/reports/media-v4.5.6.json`
+- `evals/reports/browser-v4.5.6.json`
+- `evals/reports/automation-v4.5.6.json`
+- `docs/evidence/rust-sidecar-image-v4.5.6.json`
+- `docs/evidence/hybrid-runtime-e2e-v4.5.6.json`
+- `docs/evidence/gateway-request-parity-v4.5.6.json`
+- `docs/evidence/mcp-protocol-parity-v4.5.6.json`
+- `docs/evidence/rag-parity-v4.5.6.json`
+- `docs/evidence/rag-document-preparation-parity-v4.5.6.json`
+- `docs/evidence/rag-vector-binary-parity-v4.5.6.json`
+- `docs/evidence/rust-coverage-v4.5.6.json`
+- `docs/evidence/rust-sidecar-performance-v4.5.6.json`
+- `docs/evidence/packed-delta-s3-v4.5.6.json`
+- `docs/evidence/object-set-s3-v4.5.6.json`
+- `docs/evidence/recovery-faults-v4.5.6.json`
+- `docs/evidence/replica-healing-s3-v4.5.6.json`
 
 ## Historical 4.4.15 evidence contract
 
@@ -163,43 +163,43 @@ The stateless MCP service is validated by workflow checks rather than a committe
 | --- | --- | --- |
 | Headless MCP bridge | `release-readiness` | `docs/evidence/headless-mcp-bridge.json`; `scripts/smoke_mcp_headless_bridge.py` |
 | A2A external peer | `release-readiness` | `docs/evidence/a2a-external-peer.json`; `scripts/smoke_a2a_external_peer.py` |
-| Personal AI Runtime GA | `release-readiness` | `docs/evidence/ga-v4.4.13.json`; `scripts/smoke_ga.py` |
-| Workspace Core | `release-readiness` | `docs/evidence/workspace-v4.4.13.json`; `scripts/smoke_workspace.py` |
-| Edge Router stabilization | `release-readiness` | `docs/evidence/edge-router-v4.4.13.json`; `scripts/smoke_edge_router.py` |
-| Media Layer | `release-readiness` / `eval` | `docs/evidence/media-v4.4.13.json`; `evals/reports/media-v4.4.13.json`; `scripts/smoke_media.py`; `run_media_eval.py` |
-| Browser Control | `release-readiness` / `eval` | `docs/evidence/browser-v4.4.13.json`; `evals/reports/browser-v4.4.13.json`; `scripts/smoke_browser.py`; `run_browser_eval.py` |
-| Automation Runtime | `release-readiness` / `eval` | `docs/evidence/automation-v4.4.13.json`; `evals/reports/automation-v4.4.13.json`; `scripts/smoke_automation.py`; `run_automation_eval.py` |
-| Skill System | `release-readiness` | `docs/evidence/skills-v4.4.13.json`; `scripts/smoke_skills.py` |
-| Skill Workbench UI | `release-readiness` | `docs/evidence/skills-ui-v4.4.13.json`; `scripts/smoke_skills_ui.py` |
-| Skill Builder | `release-readiness` | `docs/evidence/skill-builder-v4.4.13.json`; `scripts/smoke_skill_builder.py` |
-| Skill Packs | `release-readiness` | `docs/evidence/skill-packs-v4.4.13.json`; `scripts/smoke_skill_packs.py` |
-| Skill Eval Dashboard | `release-readiness` / `eval` | `docs/evidence/skill-eval-dashboard-v4.4.13.json`; `evals/reports/skills-v4.4.13.json`; `scripts/smoke_skill_eval_dashboard.py` |
-| Skill Versioning | `release-readiness` | `docs/evidence/skill-versioning-v4.4.13.json`; `scripts/smoke_skill_versioning.py` |
-| Skill Analytics | `release-readiness` | `docs/evidence/skill-analytics-v4.4.13.json`; `scripts/smoke_skill_analytics.py` |
-| Skill Security | `release-readiness` | `docs/evidence/skill-security-v4.4.13.json`; `scripts/smoke_skill_security.py` |
-| Skill Catalog | `release-readiness` | `docs/evidence/skill-catalog-v4.4.13.json`; `scripts/smoke_skill_catalog.py` |
-| Context Taint | `release-readiness` | `docs/evidence/context-taint-v4.4.13.json`; `scripts/smoke_context_taint.py` |
-| Semantic Cache ONNX | `release-readiness` | `docs/evidence/semantic-cache-onnx-v4.4.13.json`; `benchmarks/bench_semantic_cache.py`; `docs/RUST_CANDIDATE_AUDIT_3_4.md` |
-| Upgrade / rollback | `release-readiness` | `docs/evidence/upgrade-rollback-v4.4.13.json`; `scripts/generate_4_0_contract_evidence.py` |
-| Protocol freeze | `release-readiness` | `docs/evidence/protocol-contract-v4.4.13.json`; `scripts/generate_4_0_contract_evidence.py` |
-| Frontend bundle | `frontend` | `docs/evidence/frontend-bundle-v4.4.13.json`; `scripts/check_frontend_bundle.py`; Vite manifest |
-| Frontend browser | `frontend-browser` | `docs/evidence/frontend-browser-v4.4.13.json`; `scripts/smoke_frontend_browser.py`; real Chromium |
+| Personal AI Runtime GA | `release-readiness` | `docs/evidence/ga-v4.5.6.json`; `scripts/smoke_ga.py` |
+| Workspace Core | `release-readiness` | `docs/evidence/workspace-v4.5.6.json`; `scripts/smoke_workspace.py` |
+| Edge Router stabilization | `release-readiness` | `docs/evidence/edge-router-v4.5.6.json`; `scripts/smoke_edge_router.py` |
+| Media Layer | `release-readiness` / `eval` | `docs/evidence/media-v4.5.6.json`; `evals/reports/media-v4.5.6.json`; `scripts/smoke_media.py`; `run_media_eval.py` |
+| Browser Control | `release-readiness` / `eval` | `docs/evidence/browser-v4.5.6.json`; `evals/reports/browser-v4.5.6.json`; `scripts/smoke_browser.py`; `run_browser_eval.py` |
+| Automation Runtime | `release-readiness` / `eval` | `docs/evidence/automation-v4.5.6.json`; `evals/reports/automation-v4.5.6.json`; `scripts/smoke_automation.py`; `run_automation_eval.py` |
+| Skill System | `release-readiness` | `docs/evidence/skills-v4.5.6.json`; `scripts/smoke_skills.py` |
+| Skill Workbench UI | `release-readiness` | `docs/evidence/skills-ui-v4.5.6.json`; `scripts/smoke_skills_ui.py` |
+| Skill Builder | `release-readiness` | `docs/evidence/skill-builder-v4.5.6.json`; `scripts/smoke_skill_builder.py` |
+| Skill Packs | `release-readiness` | `docs/evidence/skill-packs-v4.5.6.json`; `scripts/smoke_skill_packs.py` |
+| Skill Eval Dashboard | `release-readiness` / `eval` | `docs/evidence/skill-eval-dashboard-v4.5.6.json`; `evals/reports/skills-v4.5.6.json`; `scripts/smoke_skill_eval_dashboard.py` |
+| Skill Versioning | `release-readiness` | `docs/evidence/skill-versioning-v4.5.6.json`; `scripts/smoke_skill_versioning.py` |
+| Skill Analytics | `release-readiness` | `docs/evidence/skill-analytics-v4.5.6.json`; `scripts/smoke_skill_analytics.py` |
+| Skill Security | `release-readiness` | `docs/evidence/skill-security-v4.5.6.json`; `scripts/smoke_skill_security.py` |
+| Skill Catalog | `release-readiness` | `docs/evidence/skill-catalog-v4.5.6.json`; `scripts/smoke_skill_catalog.py` |
+| Context Taint | `release-readiness` | `docs/evidence/context-taint-v4.5.6.json`; `scripts/smoke_context_taint.py` |
+| Semantic Cache ONNX | `release-readiness` | `docs/evidence/semantic-cache-onnx-v4.5.6.json`; `benchmarks/bench_semantic_cache.py`; `docs/RUST_CANDIDATE_AUDIT_3_4.md` |
+| Upgrade / rollback | `release-readiness` | `docs/evidence/upgrade-rollback-v4.5.6.json`; `scripts/generate_4_0_contract_evidence.py` |
+| Protocol freeze | `release-readiness` | `docs/evidence/protocol-contract-v4.5.6.json`; `scripts/generate_4_0_contract_evidence.py` |
+| Frontend bundle | `frontend` | `docs/evidence/frontend-bundle-v4.5.6.json`; `scripts/check_frontend_bundle.py`; Vite manifest |
+| Frontend browser | `frontend-browser` | `docs/evidence/frontend-browser-v4.5.6.json`; `scripts/smoke_frontend_browser.py`; real Chromium |
 | Offline eval suite | `eval` | `evals/reports/latest.json`; `evals/reports/agent-latest.json`; `evals/reports/baseline-compare-latest.json`; `evals/reports/security-latest.json` |
 
 ## Historical exact-merge tier
 
 | Contract | Producer | Evidence / reproduction |
 | --- | --- | --- |
-| Rust sidecar image | `rust-docker` | `docs/evidence/rust-sidecar-image-v4.4.13.json`; immutable digest from the exact merge job |
-| Hybrid runtime E2E | `hybrid-runtime-e2e` | `docs/evidence/hybrid-runtime-e2e-v4.4.13.json`; `scripts/smoke_hybrid_runtime.py` |
-| Gateway request preparation | `gateway-request-parity` | `docs/evidence/gateway-request-parity-v4.4.13.json`; `docs/GATEWAY_REQUEST_PREPARATION_PARITY.md`; `fixtures/gateway/request_preparation_cases.json`; `scripts/check_gateway_request_parity.py` |
-| MCP protocol preparation | `mcp-protocol-parity` | `docs/evidence/mcp-protocol-parity-v4.4.13.json`; `docs/MCP_PROTOCOL_PREPARATION_PARITY.md`; `scripts/check_mcp_protocol_parity.py` |
-| RAG parity | `rag-parity` | `docs/evidence/rag-parity-v4.4.13.json`; `docs/RAG_PARITY_BASELINE.md`; `scripts/check_rag_parity.py` |
-| RAG document preparation | `rag-document-preparation-parity` | `docs/evidence/rag-document-preparation-parity-v4.4.13.json`; `docs/RAG_DOCUMENT_PREPARATION_PARITY.md`; `fixtures/rag/document_preparation_cases.json`; `scripts/check_rag_document_preparation_parity.py` |
-| RAG vector binary transport | `rag-vector-binary-parity` | `docs/evidence/rag-vector-binary-parity-v4.4.13.json`; `scripts/check_rag_vector_binary_parity.py`; `docs/RAG_VECTOR_BINARY_TRANSPORT.md` |
-| Rust coverage | `rust-coverage` | `docs/evidence/rust-coverage-v4.4.13.json`; `scripts/run_rust_coverage.py`; line coverage >= 80% |
-| Rust sidecar performance | `rust-sidecar-performance` | `docs/evidence/rust-sidecar-performance-v4.4.13.json`; `scripts/run_rust_sidecar_benchmarks.py`; `docs/RUST_SIDECAR_PERFORMANCE.md` |
-| Packed Delta real S3 | `packed-delta-s3-e2e` | `docs/evidence/packed-delta-s3-v4.4.13.json`; pinned MinIO HTTP service; 100k-file scale + Multipart restart + v5 byte-exact restore |
+| Rust sidecar image | `rust-docker` | `docs/evidence/rust-sidecar-image-v4.5.6.json`; immutable digest from the exact merge job |
+| Hybrid runtime E2E | `hybrid-runtime-e2e` | `docs/evidence/hybrid-runtime-e2e-v4.5.6.json`; `scripts/smoke_hybrid_runtime.py` |
+| Gateway request preparation | `gateway-request-parity` | `docs/evidence/gateway-request-parity-v4.5.6.json`; `docs/GATEWAY_REQUEST_PREPARATION_PARITY.md`; `fixtures/gateway/request_preparation_cases.json`; `scripts/check_gateway_request_parity.py` |
+| MCP protocol preparation | `mcp-protocol-parity` | `docs/evidence/mcp-protocol-parity-v4.5.6.json`; `docs/MCP_PROTOCOL_PREPARATION_PARITY.md`; `scripts/check_mcp_protocol_parity.py` |
+| RAG parity | `rag-parity` | `docs/evidence/rag-parity-v4.5.6.json`; `docs/RAG_PARITY_BASELINE.md`; `scripts/check_rag_parity.py` |
+| RAG document preparation | `rag-document-preparation-parity` | `docs/evidence/rag-document-preparation-parity-v4.5.6.json`; `docs/RAG_DOCUMENT_PREPARATION_PARITY.md`; `fixtures/rag/document_preparation_cases.json`; `scripts/check_rag_document_preparation_parity.py` |
+| RAG vector binary transport | `rag-vector-binary-parity` | `docs/evidence/rag-vector-binary-parity-v4.5.6.json`; `scripts/check_rag_vector_binary_parity.py`; `docs/RAG_VECTOR_BINARY_TRANSPORT.md` |
+| Rust coverage | `rust-coverage` | `docs/evidence/rust-coverage-v4.5.6.json`; `scripts/run_rust_coverage.py`; line coverage >= 80% |
+| Rust sidecar performance | `rust-sidecar-performance` | `docs/evidence/rust-sidecar-performance-v4.5.6.json`; `scripts/run_rust_sidecar_benchmarks.py`; `docs/RUST_SIDECAR_PERFORMANCE.md` |
+| Packed Delta real S3 | `packed-delta-s3-e2e` | `docs/evidence/packed-delta-s3-v4.5.6.json`; pinned MinIO HTTP service; 100k-file scale + Multipart restart + v5 byte-exact restore |
 
 ## Historical optional and frozen compatibility evidence
 

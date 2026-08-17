@@ -158,6 +158,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_backup_replication, "REPLICATION_DIR", repl_dir)
     monkeypatch.setattr(workspace_backup_replication, "HOLDS_DIR", repl_dir / "holds")
     monkeypatch.setattr(workspace_backup_replication, "REPAIRS_DIR", repl_dir / "repairs")
+    monkeypatch.setattr(workspace_backup_replication, "REBALANCE_DIR", tmp_path / ".backup-rebalance")
     monkeypatch.setattr(workspace_backup_replication, "CURSORS_PATH", repl_dir / "cursors.json")
     monkeypatch.setattr(workspace_backup_write_continuity, "CONTINUITY_DIR", tmp_path / ".backup-continuity")
 

@@ -100,6 +100,7 @@ def _replication_summary(
     backup_id = str((latest_pt or {}).get("backupId") or "")
     object_set_digest = str((latest_pt or {}).get("objectSetDigest") or (latest_pt or {}).get("chainDigest") or "")
     required = int(replication_cfg.get("minCommittedCopies") or 1)
+    min_fd = int(replication_cfg.get("minFailureDomains") or 1)
     logical = backup_dr_ledger.list_logical_recovery_copies(
         policy_id=policy_id or None,
         backup_id=backup_id or None,
@@ -111,6 +112,16 @@ def _replication_summary(
     reasons: list[str] = []
     if len(committed) < required:
         reasons.append("required-copy-objective-breached")
+
+    from deepseek_infra.infra.workspace import backup_targets
+    all_target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
+    unique_fds = {
+        str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
+        for c in committed
+    }
+    if len(unique_fds) < min_fd and latest_pt is not None:
+        compliance = "degraded"
+        reasons.append("insufficient-failure-domain-diversity")
 
     max_lag = (policy or {}).get("recoveryObjectives", {}).get("maxReplicaLagSeconds") or replication_cfg.get("maxReplicaLagSeconds")
     targets_info: list[dict[str, Any]] = []

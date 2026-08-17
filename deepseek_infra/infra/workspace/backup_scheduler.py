@@ -929,6 +929,9 @@ def evaluate_write_placement(
     targets = list(rep_dict.get("targets") or []) if rep_dict.get("enabled") else []
     candidates: list[str] = []
 
+    from deepseek_infra.infra.workspace import backup_replication, backup_targets
+    all_target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
+
     for t_entry in targets:
         if not isinstance(t_entry, dict):
             continue
@@ -936,6 +939,11 @@ def evaluate_write_placement(
         mode = str(t_entry.get("mode") or "required")
         if mode != "required" or not tid or tid == configured_primary:
             continue
+        # Filter out draining/drained targets
+        t_meta = all_target_records.get(tid) or {}
+        if t_meta.get("drainState") in {"draining", "drained"}:
+            continue
+
         try:
             r_target = backup_publish.resolve_target(tid)
             if r_target.store is not None:
@@ -958,12 +966,28 @@ def evaluate_write_placement(
             "candidateTargetIds": [configured_primary],
         }
 
-    # Rank candidates by healthy recovery points in DR Ledger descending, then lexical tiebreak
+    # Rank candidates by:
+    # 1. Failure-domain diversity
+    # 2. Replica lag (points lag ascending)
+    # 3. Target priority descending
+    # 4. Target costClass (standard before low-cost)
+    # 5. Stable lexical tie-break
     scored_candidates = []
     for tid in candidates:
+        t_meta = all_target_records.get(tid) or {}
+        priority = int(t_meta.get("priority") or 0)
+        cost_class = str(t_meta.get("costClass") or "standard")
+        cost_weight = 0 if cost_class == "standard" else 1
+
+        lag_info = backup_replication.calculate_replica_lag(policy_id, tid, primary_target_id=configured_primary)
+        lag_pts = int(lag_info.get("lagRecoveryPoints") or 0)
+
         copies = backup_dr_ledger.list_logical_recovery_copies(target_id=tid, policy_id=policy_id)
         healthy_count = len([c for c in copies if c.get("recoverable") and c.get("state") == "healthy"])
-        scored_candidates.append((-healthy_count, tid))
+
+        # Score tuple: (lag_points, -priority, cost_weight, -healthy_count, tid)
+        score = (lag_pts, -priority, cost_weight, -healthy_count, tid)
+        scored_candidates.append((score, tid))
 
     scored_candidates.sort()
     selected_replica = scored_candidates[0][1]
@@ -981,7 +1005,7 @@ def evaluate_write_placement(
         "isFailover": True,
         "forceFull": True,
         "reason": f"primary-unavailable: {primary_error}",
-        "candidateTargetIds": [configured_primary] + candidates,
+        "candidateTargetIds": [configured_primary] + [c[1] for c in scored_candidates],
     }
 
 

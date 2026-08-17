@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import tempfile
 import pytest
 
 from deepseek_infra.core.errors import AppError
@@ -18,6 +19,13 @@ from deepseek_infra.infra.workspace import (
     backup_targets,
     backup_write_continuity,
 )
+
+
+@pytest.fixture(autouse=True)
+def _tempdir_outside_targets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake_temp = tmp_path / ".sys-temp"
+    fake_temp.mkdir(exist_ok=True)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_temp))
 
 
 def _utc_iso(dt: datetime | None = None) -> str:
@@ -453,7 +461,7 @@ def test_write_continuity_additional_branches(tmp_settings: Path) -> None:
 
     state_fo2 = backup_write_continuity.execute_failover_transition(policy_id, "sec_tgt", reason="test-failover-2")
     assert state_fo2["failoverActiveSince"] == since1
-    assert state_fo2["failoverEpoch"] == 2
+    assert state_fo2["failoverEpoch"] == 1
 
     # 4. evaluate_failback_eligibility when no active copies exist and get_latest_recoverable_point returns None
     pol_empty = "pol_empty_failback"
@@ -1456,14 +1464,8 @@ def test_write_continuity_full_lifecycle_and_cas_errors(tmp_settings: Path) -> N
     # Register secondary target in target registry
     sec_dir = tmp_settings / ".sec-target-dir"
     sec_dir.mkdir(parents=True, exist_ok=True)
-    target_record = {
-        "schemaVersion": 1,
-        "targetId": "target_secondary_01",
-        "kind": "filesystem",
-        "label": "Secondary Target",
-        "path": str(sec_dir),
-    }
-    backup_targets._atomic_write_json(backup_targets._registry_path("target_secondary_01"), target_record)
+    sec_target = backup_targets.init_target(sec_dir, label="Secondary Target")
+    sec_id = str(sec_target["targetId"])
 
     # Create policy with replication
     pol_id = "pol-prom-test"
@@ -1478,27 +1480,27 @@ def test_write_continuity_full_lifecycle_and_cas_errors(tmp_settings: Path) -> N
         "policyRevision": 1,
         "replication": {
             "enabled": True,
-            "targets": [{"targetId": "target_secondary_01", "mode": "required"}],
+            "targets": [{"targetId": sec_id, "mode": "required"}],
         },
     })
 
     # CAS failure on policy revision
     with pytest.raises(AppError, match="CAS mismatch on policyRevision"):
-        backup_write_continuity.promote_primary_target(pol_id, "target_secondary_01", expected_policy_revision=999)
+        backup_write_continuity.promote_primary_target(pol_id, sec_id, expected_policy_revision=999)
 
     # CAS failure on failover epoch
     with pytest.raises(AppError, match="CAS mismatch on failoverEpoch"):
-        backup_write_continuity.promote_primary_target(pol_id, "target_secondary_01", expected_failover_epoch=999)
+        backup_write_continuity.promote_primary_target(pol_id, sec_id, expected_failover_epoch=999)
 
     # Successful promotion
     prom_res = backup_write_continuity.promote_primary_target(
         pol_id,
-        "target_secondary_01",
+        sec_id,
         expected_policy_revision=1,
         expected_failover_epoch=0,
     )
     assert prom_res["status"] == "promoted"
-    assert prom_res["newPrimaryTargetId"] == "target_secondary_01"
+    assert prom_res["newPrimaryTargetId"] == sec_id
     assert prom_res["previousPrimaryTargetId"] == "managed-local"
 
 
@@ -1517,14 +1519,8 @@ def test_backup_governance_continuity_routes(tmp_settings: Path) -> None:
     # 1. Register secondary target and policy
     sec_dir = tmp_settings / ".sec-target-dir-2"
     sec_dir.mkdir(parents=True, exist_ok=True)
-    target_record = {
-        "schemaVersion": 1,
-        "targetId": "target_sec_route",
-        "kind": "filesystem",
-        "label": "Secondary Route Target",
-        "path": str(sec_dir),
-    }
-    backup_targets._atomic_write_json(backup_targets._registry_path("target_sec_route"), target_record)
+    sec_target = backup_targets.init_target(sec_dir, label="Secondary Route Target")
+    sec_id = str(sec_target["targetId"])
 
     pol_id = "pol_route_test"
     backup_policies.create_policy({
@@ -1538,7 +1534,7 @@ def test_backup_governance_continuity_routes(tmp_settings: Path) -> None:
         "policyRevision": 1,
         "replication": {
             "enabled": True,
-            "targets": [{"targetId": "target_sec_route", "mode": "required"}],
+            "targets": [{"targetId": sec_id, "mode": "required"}],
         },
     })
 
@@ -1554,7 +1550,7 @@ def test_backup_governance_continuity_routes(tmp_settings: Path) -> None:
     # POST /promote-primary success
     good_resp = client.post(
         f"/api/workspace/backup-policies/{pol_id}/promote-primary",
-        json={"targetId": "target_sec_route", "expectedPolicyRevision": 1, "expectedFailoverEpoch": 0},
+        json={"targetId": sec_id, "expectedPolicyRevision": 1, "expectedFailoverEpoch": 0},
         headers=auth_headers,
     )
     assert good_resp.status_code == 200

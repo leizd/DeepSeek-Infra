@@ -303,13 +303,6 @@ def evaluate_failback_eligibility(
         c.get("recoverable") and c.get("state") == "healthy"
         for c in primary_copies
     )
-    if not healthy_primary_copy:
-        try:
-            pri_pt = backup_dr_ledger.get_logical_recovery_point(policy_id, active_backup_id)
-            if pri_pt and pri_pt.get("recoverable"):
-                healthy_primary_copy = True
-        except Exception:
-            pass
 
     info["latestFailoverPointConverged"] = healthy_primary_copy
     if not healthy_primary_copy:
@@ -328,6 +321,12 @@ def execute_failover_transition(
     with _LOCK:
         state = get_write_continuity_state(policy_id)
         now_str = _utc_iso()
+
+        if state.get("activeWriteTargetId") == new_active_target_id and state.get("activeWriteTargetRole") == "failover":
+            state["lastFailoverAt"] = now_str
+            state["lastFailoverReason"] = reason
+            save_write_continuity_state(policy_id, state)
+            return state
 
         state["activeWriteTargetId"] = new_active_target_id
         state["activeWriteTargetRole"] = "failover"
@@ -370,8 +369,8 @@ def promote_primary_target(
     expected_policy_revision: int | None = None,
     expected_failover_epoch: int | None = None,
 ) -> dict[str, Any]:
-    """Explicit administrative primary promotion with CAS validation."""
-    from deepseek_infra.infra.workspace import backup_policies
+    """Explicit administrative primary promotion with CAS validation and strict safety preconditions."""
+    from deepseek_infra.infra.workspace import backup_policies, backup_publish, backup_replication, backup_targets
 
     with _LOCK:
         policy = backup_policies.get_policy(policy_id)
@@ -394,25 +393,71 @@ def promote_primary_target(
                 status=412,
             )
 
+        # Precondition a: Must be a configured replica target if replication is enabled
+        repl = dict(policy.get("replication") or {})
+        if repl.get("enabled"):
+            target_entries = list(repl.get("targets") or [])
+            is_member = any(
+                isinstance(t, dict) and str(t.get("targetId")) == target_id
+                for t in target_entries
+            )
+            if not is_member and target_id != str(policy.get("primaryTargetId") or policy.get("targetId")):
+                raise AppError(
+                    f"Target {target_id} is not a configured replica in policy {policy_id}",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=400,
+                )
+
+        # Precondition b: Fresh liveness / write capability check
+        target = backup_publish.resolve_target(target_id)
+        if target.root is None and target.store is not None:
+            caps = target.store.capabilities()
+            if not getattr(caps, "scheduled_backup_ready", True):
+                raise AppError(f"Target {target_id} is not scheduled_backup_ready", code=ErrorCode.INVALID_REQUEST, status=400)
+
+        # Precondition c: Fresh liveness check
+        liveness = perform_liveness_preflight(target_id, policy_id=policy_id)
+        if liveness.get("status") != "available":
+            raise AppError(f"Target {target_id} liveness preflight failed: {liveness}", code=ErrorCode.INVALID_REQUEST, status=400)
+
+        # Precondition d: Target has healthy copy of latest recovery point (if any points exist)
+        latest_pt, _ = backup_dr_ledger.get_latest_recoverable_point(target_id, policy_id)
+        all_latest = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=1)
+        if all_latest and latest_pt is None:
+            raise AppError(f"Target {target_id} has no recoverable points for policy {policy_id}", code=ErrorCode.INVALID_REQUEST, status=400)
+
+        # Precondition e: Target is not in draining state
+        target_info = backup_targets.get_target(target_id)
+        if target_info and target_info.get("drainState") in {"draining", "drained"}:
+            raise AppError(f"Target {target_id} is in {target_info.get('drainState')} state", code=ErrorCode.INVALID_REQUEST, status=400)
+
+        # Precondition f: No active repair job on target for policy
+        active_repairs = backup_replication.list_repair_jobs(
+            policy_id=policy_id,
+            dest_target_id=target_id,
+            limit=10,
+        )
+        if any(r.get("phase") not in {"complete", "healthy", "failed", "failed-terminal"} for r in active_repairs):
+            raise AppError(f"Target {target_id} has active repair jobs for policy {policy_id}", code=ErrorCode.INVALID_REQUEST, status=409)
+
         # Update backup_policies
-        prev_primary = str(policy.get("primaryTargetId") or "managed-local")
+        prev_primary = str(policy.get("primaryTargetId") or policy.get("targetId") or "managed-local")
         updated_policy = dict(policy)
         updated_policy["targetId"] = target_id
         updated_policy["primaryTargetId"] = target_id
         updated_policy["policyRevision"] = curr_rev + 1
 
         # If replica targets existed, ensure previous primary is added as replica target
-        repl = dict(policy.get("replication") or {})
         if repl.get("enabled"):
             targets = list(repl.get("targets") or [])
-            # Remove target_id from replica targets if present
+            # Remove new target_id from replica targets
             targets = [t for t in targets if isinstance(t, dict) and str(t.get("targetId")) != target_id]
             # Add prev_primary as replica target if not already present
             if prev_primary != target_id and not any(isinstance(t, dict) and str(t.get("targetId")) == prev_primary for t in targets):
                 targets.append({"targetId": prev_primary, "mode": "required"})
             repl["targets"] = targets
             updated_policy["replication"] = repl
-        backup_policies.update_policy(policy_id, updated_policy)
+        backup_policies.update_policy(policy_id, updated_policy, expected_revision=curr_rev)
 
         # Update continuity state
         now_str = _utc_iso()

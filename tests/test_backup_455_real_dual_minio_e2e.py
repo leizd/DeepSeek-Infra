@@ -419,20 +419,12 @@ def test_dual_minio_s3_write_continuity_governed_failback_and_promotion_e2e(tmp_
     # Reconciler replicates Point 2 from Target B back onto Target A
     recon2 = backup_replication.reconcile_policy_replicas(policy_id, max_points=10)
     assert recon2["scannedPoints"] >= 1
+    assert recon2["repairsTriggered"] >= 1
+    assert recon2["repairsSucceeded"] >= 1
 
-    # Record replicated point on Target A
-    store_a.put_if_absent(c2_rel, c2_bytes, checksum_sha256=c2_digest)
-    store_a.put_if_absent(f"receipts/{backup_id_2}.json", r2_bytes)
-    store_a.put_if_absent(f"commits/{policy_id}/{backup_id_2}.json", c2_commit_bytes)
-    backup_dr_ledger.record_logical_recovery_copy(
-        target_id=target_a_id,
-        policy_id=policy_id,
-        backup_id=backup_id_2,
-        committed_at=_utc_iso(t1),
-        object_set_digest=c2_digest,
-        recoverable=True,
-        state="healthy",
-    )
+    # Verify Target A now has authenticated copy
+    status_a, r_a, c_a = backup_replication.authenticate_recovery_copy(target_map[target_a_id], policy_id, backup_id_2)
+    assert status_a == "authenticated"
 
     # 8. Governed Failback Validation
     # At t2 + 10 min (total 10 min < 30 min stability window) -> Ineligible
