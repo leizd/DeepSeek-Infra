@@ -790,6 +790,100 @@ def test_backup_replication_repair_execution_branches(tmp_settings, monkeypatch)
     assert backup_replication._load_cursors() == cursors
 
 
+def test_backup_replication_heal_existing_and_provision_modes(tmp_settings, monkeypatch) -> None:
+    """Test full execution of heal-existing and provision modes with filesystem targets."""
+    from deepseek_infra.infra.workspace import backup_dr_ledger, backup_replication, backup_publish
+
+    src_root = tmp_settings / "targets" / "src_target"
+    src_root.mkdir(parents=True, exist_ok=True)
+    dst_root = tmp_settings / "targets" / "dst_target"
+    dst_root.mkdir(parents=True, exist_ok=True)
+
+    src_target = MockTarget("target_src", root=src_root)
+    dst_target = MockTarget("target_dst", root=dst_root)
+
+    def mock_resolve(tid: str):
+        if tid == "target_src":
+            return src_target
+        if tid == "target_dst":
+            return dst_target
+        return MockTarget(tid, root=tmp_settings / tid)
+
+    monkeypatch.setattr(backup_publish, "resolve_target", mock_resolve)
+    monkeypatch.setattr(backup_dr_ledger, "is_logical_recovery_point_retired", lambda p, b: False)
+
+    policy_id = "pol-heal-test"
+    backup_id = "bk-heal-01"
+
+    # Setup source receipt and components
+    comp1_data = b"COMPONENT-CONTENT-1"
+    comp1_sha = hashlib.sha256(comp1_data).hexdigest()
+    comp1_path = src_root / "objects" / comp1_sha[:2] / comp1_sha[2:4] / f"{comp1_sha}.age"
+    comp1_path.parent.mkdir(parents=True, exist_ok=True)
+    comp1_path.write_bytes(comp1_data)
+
+    receipt = {
+        "schemaVersion": 4,
+        "backupId": backup_id,
+        "policyId": policy_id,
+        "targetId": "target_src",
+        "objects": [{"digest": comp1_sha, "size": len(comp1_data)}],
+        "objectSetDigest": "obj-digest-1",
+    }
+    rcpt_path = src_root / "receipts" / f"{backup_id}.json"
+    rcpt_path.parent.mkdir(parents=True, exist_ok=True)
+    rcpt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    # Record recovery copy on source
+    backup_dr_ledger.record_logical_recovery_copy(
+        target_id="target_src",
+        policy_id=policy_id,
+        backup_id=backup_id,
+        committed_at="2026-08-17T02:00:00Z",
+        recoverable=True,
+    )
+
+    # 1. Provision mode: Destination has no receipt/commit yet
+    res_prov = backup_replication.execute_replica_repair(
+        policy_id=policy_id,
+        backup_id=backup_id,
+        dest_target_id="target_dst",
+        source_target_id="target_src",
+        run_id="repair-prov-01",
+    )
+    assert res_prov["status"] == "success"
+    assert (dst_root / "receipts" / f"{backup_id}.json").is_file()
+    assert (dst_root / "objects" / comp1_sha[:2] / comp1_sha[2:4] / f"{comp1_sha}.age").read_bytes() == comp1_data
+
+    # 2. Heal-existing mode: Destination already has receipt & commit, but component is corrupted
+    (dst_root / "objects" / comp1_sha[:2] / comp1_sha[2:4] / f"{comp1_sha}.age").write_bytes(b"CORRUPTED-DATA")
+    res_heal = backup_replication.execute_replica_repair(
+        policy_id=policy_id,
+        backup_id=backup_id,
+        dest_target_id="target_dst",
+        source_target_id="target_src",
+        run_id="repair-heal-01",
+    )
+    assert res_heal["status"] == "success"
+    # Verify corrupted data was repaired
+    assert (dst_root / "objects" / comp1_sha[:2] / comp1_sha[2:4] / f"{comp1_sha}.age").read_bytes() == comp1_data
+
+    # 3. Missing source receipt -> 404
+    (src_root / "receipts" / f"{backup_id}.json").unlink()
+    backup_replication.create_repair_job(
+        policy_id=policy_id,
+        backup_id=backup_id,
+        dest_target_id="target_dst",
+        source_target_id="target_src",
+        repair_id="repair-bad-rcpt-01",
+    )
+    with pytest.raises(AppError) as exc_bad_rcpt:
+        backup_replication.execute_repair_job_instance("repair-bad-rcpt-01")
+    assert "Source receipt missing" in str(exc_bad_rcpt.value)
+    assert exc_bad_rcpt.value.status == 404
+
+
+
 
 
 
