@@ -734,7 +734,7 @@ def test_backup_replication_repair_execution_branches(tmp_settings, monkeypatch)
     assert res_term["status"] == "success"
 
     # 3. No healthy source copy available -> raises 404
-    job_no_src = backup_replication.create_repair_job(
+    backup_replication.create_repair_job(
         policy_id="pol-no-src",
         backup_id="bk-no-src",
         dest_target_id="target-r1",
@@ -745,6 +745,21 @@ def test_backup_replication_repair_execution_branches(tmp_settings, monkeypatch)
         backup_replication.execute_repair_job_instance("repair-no-src-01")
     assert "No healthy source copy available" in str(exc_info.value)
     assert exc_info.value.status == 404
+
+    # 4. Replication jobs edge cases (non-existent, terminal)
+    with pytest.raises(AppError) as repl_exc:
+        backup_replication.execute_replication_job("non-existent-job-id")
+    assert repl_exc.value.status == 404
+
+    # Terminal replication job
+    term_job = {
+        "jobId": "repl_term_01",
+        "policyId": "pol-1",
+        "backupId": "bk-1",
+        "phase": "committed",
+    }
+    backup_replication._atomic_write(backup_replication._job_path("repl_term_01"), term_job)
+    assert backup_replication.execute_replication_job("repl_term_01")["phase"] == "committed"
 
     # 4. process_pending_repairs
     res_proc = backup_replication.process_pending_repairs(limit=5)
