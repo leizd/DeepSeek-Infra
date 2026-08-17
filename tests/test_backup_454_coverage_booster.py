@@ -883,6 +883,107 @@ def test_backup_replication_heal_existing_and_provision_modes(tmp_settings, monk
     assert exc_bad_rcpt.value.status == 404
 
 
+@pytest.mark.integration
+def test_server_routes_booster_coverage(tmp_settings, monkeypatch) -> None:
+    """Test server endpoints for agent runs, share-target, and fallback 404."""
+    import http.client
+    import threading
+    import contextlib
+    from deepseek_infra.core import config
+    from deepseek_infra.web import server as server_module
+
+    auth_token = config.settings.auth.token or "test_secret_token"
+    auth_headers = {"Authorization": f"Bearer {auth_token}"}
+
+    @contextlib.contextmanager
+    def _running_srv():
+        srv, _ = server_module.create_server(0, host="127.0.0.1")
+        th = threading.Thread(target=srv.serve_forever, daemon=True)
+        th.start()
+        try:
+            yield srv
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            th.join(timeout=5)
+
+    def _req(srv, method: str, path: str, body: bytes | None = None, headers: dict[str, str] | None = None):
+        conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+        try:
+            req_headers = dict(auth_headers)
+            if headers:
+                req_headers.update(headers)
+            conn.request(method, path, body=body, headers=req_headers)
+            resp = conn.getresponse()
+            return resp.status, resp.read()
+        finally:
+            conn.close()
+
+    with _running_srv() as srv:
+        # 1. 404 fallback
+        st_404, _ = _req(srv, "GET", "/api/unknown-endpoint-404-coverage")
+        assert st_404 == 404
+
+        # 2. Agent runs invalid payload
+        st_bad_run, _ = _req(
+            srv,
+            "POST",
+            "/api/agent-runs",
+            body=json.dumps({"payload": "not-a-dict"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        assert st_bad_run in (400, 422)
+
+        # 3. Agent runs valid payload
+        monkeypatch.setattr(
+            server_module,
+            "create_agent_run",
+            lambda p, **kw: {"runId": "run_fake_01", "status": "planned", "plan": []},
+        )
+        monkeypatch.setattr(
+            server_module.agent_run_registry,
+            "ensure_started",
+            lambda *a, **kw: None,
+        )
+        st_good_run, res_body = _req(
+            srv,
+            "POST",
+            "/api/agent-runs",
+            body=json.dumps({
+                "payload": {
+                    "apiKey": "sk-fake-test-key-coverage",
+                    "model": "deepseek-v4-pro",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+                "confirmPlan": False,
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        assert st_good_run == 201
+        assert b"run_fake_01" in res_body
+
+        # 4. Share target upload
+        boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
+        body_parts = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="title"\r\n\r\n'
+            f"Shared Title\r\n"
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="text"\r\n\r\n'
+            f"Shared Text\r\n"
+            f"--{boundary}--\r\n"
+        ).encode("utf-8")
+        st_share, _ = _req(
+            srv,
+            "POST",
+            "/share-target",
+            body=body_parts,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        assert st_share == 303
+
+
+
 
 
 
