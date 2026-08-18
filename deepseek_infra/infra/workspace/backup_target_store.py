@@ -398,7 +398,7 @@ class FilesystemTargetStore:
         next_cursor = page[-1].key if len(page) == limit and start + limit < len(matches) else None
         return ListPage(objects=tuple(page), cursor=next_cursor)
 
-    def begin_multipart(self, key: str, *, checksum_sha256: str) -> MultipartUpload:
+    def begin_multipart(self, key: str, *, checksum_sha256: str = "") -> MultipartUpload:
         upload_id = uuid.uuid4().hex
         staging = self.root / ".multipart" / upload_id
         staging.mkdir(parents=True, exist_ok=True)
@@ -439,9 +439,9 @@ class FilesystemTargetStore:
             part_path = staging / f"part-{int(part['partNumber']):05d}"
             buffer.write(part_path.read_bytes())
         data = buffer.getvalue()
-        if _sha256_bytes(data) != upload.checksum_sha256:
+        if upload.checksum_sha256 and _sha256_bytes(data) != upload.checksum_sha256:
             raise AppError("multipart object checksum mismatch", code=ErrorCode.INTERNAL, status=500)
-        result = self.put_if_absent(upload.key, data, checksum_sha256=upload.checksum_sha256)
+        result = self.put_if_absent(upload.key, data, checksum_sha256=upload.checksum_sha256 or None)
         shutil.rmtree(staging, ignore_errors=True)
         self._multipart.pop(upload.upload_id, None)
         return result

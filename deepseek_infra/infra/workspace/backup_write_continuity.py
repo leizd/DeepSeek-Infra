@@ -368,6 +368,9 @@ def promote_primary_target(
     *,
     expected_policy_revision: int | None = None,
     expected_failover_epoch: int | None = None,
+    expected_latest_logical_id: str | None = None,
+    expected_latest_backup_id: str | None = None,
+    expected_latest_object_set_digest: str | None = None,
 ) -> dict[str, Any]:
     """Explicit administrative primary promotion with CAS validation and strict safety preconditions."""
     from deepseek_infra.infra.workspace import backup_policies, backup_publish, backup_replication, backup_targets
@@ -420,11 +423,38 @@ def promote_primary_target(
         if liveness.get("status") != "available":
             raise AppError(f"Target {target_id} liveness preflight failed: {liveness}", code=ErrorCode.INVALID_REQUEST, status=400)
 
-        # Precondition d: Target has healthy copy of latest recovery point (if any points exist)
-        latest_pt, _ = backup_dr_ledger.get_latest_recoverable_point(target_id, policy_id)
-        all_latest = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=1)
-        if all_latest and latest_pt is None:
-            raise AppError(f"Target {target_id} has no recoverable points for policy {policy_id}", code=ErrorCode.INVALID_REQUEST, status=400)
+        # Precondition d: Target must possess the GLOBAL latest logical recovery point across the policy
+        all_copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=200)
+        recoverable_copies = [c for c in all_copies if c.get("recoverable") and c.get("state") == "healthy"]
+        if recoverable_copies:
+            global_latest = max(recoverable_copies, key=lambda c: str(c.get("committedAt") or ""))
+            global_latest_backup_id = str(global_latest.get("backupId") or "")
+            global_latest_osd = str(global_latest.get("objectSetDigest") or global_latest.get("chainDigest") or "")
+
+            if expected_latest_backup_id is not None and global_latest_backup_id != expected_latest_backup_id:
+                raise AppError(
+                    f"CAS mismatch on expected_latest_backup_id: expected {expected_latest_backup_id}, global actual {global_latest_backup_id}",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=412,
+                )
+            if expected_latest_object_set_digest is not None and global_latest_osd and global_latest_osd != expected_latest_object_set_digest:
+                raise AppError(
+                    f"CAS mismatch on expected_latest_object_set_digest: expected {expected_latest_object_set_digest}, global actual {global_latest_osd}",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=412,
+                )
+
+            target_has_latest = any(
+                str(c.get("targetId")) == target_id and str(c.get("backupId")) == global_latest_backup_id
+                for c in recoverable_copies
+            )
+            if not target_has_latest:
+                raise AppError(
+                    f"primary-promotion-rejected: Target {target_id} does not possess global latest logical recovery point {global_latest_backup_id}",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
+
 
         # Precondition e: Target is not in draining state
         target_info = backup_targets.get_target(target_id)
@@ -483,5 +513,6 @@ def promote_primary_target(
             "failoverEpoch": curr_epoch + 1,
             "previousPrimaryTargetId": prev_primary,
             "newPrimaryTargetId": target_id,
+            "promotedPrimaryTargetId": target_id,
             "promotedAt": now_str,
         }

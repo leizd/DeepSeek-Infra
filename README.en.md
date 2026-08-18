@@ -5,25 +5,25 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.5.6-blue)
+![Version](https://img.shields.io/badge/version-4.5.7-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.5.6 — Transactional Write Failover & Failure-Domain Rebalancing.** Integrates write continuity failover directly into the production `BackupExecutor`, with formal commit reconcile before failover, parent lineage eligibility checks for incremental packages, failover catch-up desired state convergence, governed primary promotion with strict health preconditions, failure-domain-aware placement, online replica rebalance jobs, and target drain lifecycles.
+> **4.5.7 — Topology Safety, Capacity Governance & Bandwidth QoS.** Builds upon 4.5.6 write failover with formal commit closure, exact incremental parent commitment authentication, bounded streaming quarantine, resumable multipart repairs, post-delete topology simulation, reference-counted physical GC, deterministic placement planning, autonomous target draining, capacity watermarks, and token-bucket bandwidth QoS.
 
-## 4.5.6 at a glance
+## 4.5.7 at a glance
 
-- Production Write Failover Integration: Connects `transition_run_plan_target` into `BackupExecutor` with formal commit reconcile and zero re-encryption / re-snapshotting.
-- Parent Lineage Compatibility for Incremental Transitions: Enforces exact parent lineage presence before transitioning incremental packages to failover targets.
-- Failover Catch-up Desired State: Incorporates configured primary in replication desired state during failover, automatically triggering reverse catch-up repair upon recovery.
-- Governed Primary Promotion: Requires required replica membership, fresh liveness, latest healthy point existence, and durable CAS validation.
-- Failure-Domain-Aware Placement & Online Rebalancing: Selects write targets and balances replicas across failure domains while strictly preserving minimum healthy copy constraints.
-- Target Drain Lifecycle: Manages planned target retirement through `active -> draining -> drained` lifecycle.
+- Failover Commit Reconciliation & Closure: Only `absent` permits auto failover; `corrupt`/`conflicting` enters `write-reconciliation-required` and quarantines; `unreachable` fails closed.
+- Exact Incremental Parent Commitment: Validates parent backup ID, receipt digest, commit hash, lineage ID, and object set digest before incremental transition.
+- Post-Delete Topology Simulation & Safe Copy Retirement: Simulates topology post-deletion before pruning; coordinates reference-counted physical GC for shared ciphertext objects.
+- Deterministic Placement Planner: Ranks candidates by failure-domain diversity gain, replica lag, priority, capacity headroom, and cost class.
+- Capacity Governance & Watermarks: Enforces soft/hard watermarks, P90 backup size predictions, proactive rebalancing, and maintenance window checks.
+- Bandwidth QoS: Token-bucket traffic classes (P0 DR Restore to P6 Best Effort) with reserved DR bandwidth and zero-remote-I/O DR readiness projections.
 
-See the [4.5.6 release notes](docs/releases/4.5.6.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.5.7 release notes](docs/releases/4.5.7.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 
@@ -38,7 +38,7 @@ See the [4.5.6 release notes](docs/releases/4.5.6.md) and [Evidence index](docs/
 - Every Rust delegate is opt-in and protected by Python fallback.
 - DeepSeek and Tavily credentials stay in memory in the React application.
 
-Historical baseline: [4.3.6](docs/releases/4.3.6.md), [4.3.7](docs/releases/4.3.7.md), [4.4.0](docs/releases/4.4.0.md), [4.4.1](docs/releases/4.4.1.md), [4.4.2](docs/releases/4.4.2.md), [4.4.3](docs/releases/4.4.3.md), [4.4.4](docs/releases/4.4.4.md), [4.4.5](docs/releases/4.4.5.md), [4.4.6](docs/releases/4.4.6.md), [4.4.7](docs/releases/4.4.7.md), [4.4.8](docs/releases/4.4.8.md), [4.4.9](docs/releases/4.4.9.md), [4.4.10](docs/releases/4.4.10.md), [4.4.11](docs/releases/4.4.11.md), [4.4.12](docs/releases/4.4.12.md), [4.4.13](docs/releases/4.4.13.md), [4.5.0](docs/releases/4.5.0.md), [4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md), [4.5.3](docs/releases/4.5.3.md), [4.5.4](docs/releases/4.5.4.md), [4.5.5](docs/releases/4.5.5.md), [4.5.6](docs/releases/4.5.6.md).
+Historical baseline: [4.3.6](docs/releases/4.3.6.md), [4.3.7](docs/releases/4.3.7.md), [4.4.0](docs/releases/4.4.0.md), [4.4.1](docs/releases/4.4.1.md), [4.4.2](docs/releases/4.4.2.md), [4.4.3](docs/releases/4.4.3.md), [4.4.4](docs/releases/4.4.4.md), [4.4.5](docs/releases/4.4.5.md), [4.4.6](docs/releases/4.4.6.md), [4.4.7](docs/releases/4.4.7.md), [4.4.8](docs/releases/4.4.8.md), [4.4.9](docs/releases/4.4.9.md), [4.4.10](docs/releases/4.4.10.md), [4.4.11](docs/releases/4.4.11.md), [4.4.12](docs/releases/4.4.12.md), [4.4.13](docs/releases/4.4.13.md), [4.5.0](docs/releases/4.5.0.md), [4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md), [4.5.3](docs/releases/4.5.3.md), [4.5.4](docs/releases/4.5.4.md), [4.5.5](docs/releases/4.5.5.md), [4.5.6](docs/releases/4.5.6.md), [4.5.7](docs/releases/4.5.7.md).
 
 See the [4.4.15 release notes](docs/releases/4.4.15.md) (previous [4.4.13](docs/releases/4.4.13.md)), [Evidence index](docs/EVIDENCE_INDEX.md), [frontend boundaries](docs/FRONTEND_MODULES.md), and [support policy](docs/4_0_SUPPORT_POLICY.md).
 

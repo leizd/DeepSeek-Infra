@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.5.6。
+适用版本：v4.5.7。
 
 > 4.5.0 的产品实现已完成 Gate A-F，Gate G 的真实 MinIO/Rust Age 与故障矩阵 exact-merge CI producer 已接线。当前仍不是 GA：只有这些独立 producer、冻结兼容合同和全量 Python/frontend/eval/security/release 门禁在精确合并提交上全部通过后，才会标记 release-ready。
 

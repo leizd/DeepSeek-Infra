@@ -522,6 +522,61 @@ def readiness_status(*, now: datetime | None = None) -> dict[str, Any]:
     if not policies and all(s.get("recoveryPoint", {}).get("status") != "available" for s in evaluated_scopes):
         final_status = "warning"
 
+    # 4.5.7: Aggregate topology, capacity, and transferControl projections (zero remote I/O)
+    from deepseek_infra.infra.workspace import backup_capacity, backup_transfer_budget
+
+    # 1. Topology
+    all_target_records = {t["targetId"]: t for t in targets}
+    all_logical_copies = backup_dr_ledger.list_logical_recovery_copies(limit=500)
+    healthy_copies = [c for c in all_logical_copies if c.get("recoverable") and c.get("state") == "healthy"]
+    unique_fds = {
+        str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
+        for c in healthy_copies
+    }
+    counts_by_fd: dict[str, int] = {}
+    for c in healthy_copies:
+        fd_name = str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
+        counts_by_fd[fd_name] = counts_by_fd.get(fd_name, 0) + 1
+    max_fd_copies = max(counts_by_fd.values()) if counts_by_fd else 0
+    topology_status = "healthy" if len(unique_fds) >= 1 and len(healthy_copies) >= 1 else ("degraded" if healthy_copies else "unavailable")
+
+    topology_projection = {
+        "healthyCopies": len(healthy_copies),
+        "failureDomains": len(unique_fds),
+        "maxCopiesInSingleDomain": max_fd_copies,
+        "status": topology_status,
+    }
+
+    # 2. Capacity
+    constrained_target = None
+    min_free_pct = None
+    min_days_to_full = 9999
+    capacity_status = "healthy"
+    for target in targets:
+        tid = str(target.get("targetId"))
+        c_info = backup_capacity.estimate_target_exhaustion_horizon(tid, policy_id="")
+        fp = c_info.get("freePercent")
+        dtf = c_info.get("estimatedDaysToFull", 9999)
+        if fp is not None:
+            if min_free_pct is None or fp < min_free_pct:
+                min_free_pct = fp
+                constrained_target = tid
+            if dtf < min_days_to_full:
+                min_days_to_full = dtf
+        if c_info.get("status") in {"critical", "degraded"}:
+            if c_info.get("status") == "critical" or capacity_status != "critical":
+                capacity_status = str(c_info.get("status") or "degraded")
+
+    capacity_projection = {
+        "status": capacity_status,
+        "mostConstrainedTarget": constrained_target or (targets[0]["targetId"] if targets else "managed-local"),
+        "freePercent": min_free_pct,
+        "estimatedDaysToFull": min_days_to_full if min_days_to_full < 9999 else None,
+    }
+
+    # 3. Transfer Control
+    transfer_control_projection = backup_transfer_budget.get_global_transfer_budget_manager().transfer_control_summary()
+
     return {
         "status": final_status,
         "reason": worst_reason,
@@ -532,6 +587,9 @@ def readiness_status(*, now: datetime | None = None) -> dict[str, Any]:
         "rtoEstimate": primary_rto,
         "scrub": primary_scrub,
         "drill": primary_drill,
+        "topology": topology_projection,
+        "capacity": capacity_projection,
+        "transferControl": transfer_control_projection,
         "health": {
             **primary_health,
             "target": {"status": overall_target_health, "source": "persisted-target-probe"},
@@ -540,6 +598,7 @@ def readiness_status(*, now: datetime | None = None) -> dict[str, Any]:
         "cache": cache_h,
         "recoveryLeases": lease_h,
     }
+
 
 
 def aggregate_readiness(*args: Any, **kwargs: Any) -> dict[str, Any]:

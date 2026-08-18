@@ -122,7 +122,7 @@ def _save_memories_unlocked(memories: list[dict[str, Any]]) -> None:
 
     cleaned = cleaned[:MEMORY_MAX_ITEMS]
     with mutation_gate.mutation_scope(root=MEMORY_DIR.parent):
-        temp_path = MEMORY_FILE.with_suffix(".tmp")
+        temp_path = MEMORY_FILE.with_name(f"{MEMORY_FILE.name}.{os.getpid()}.tmp")
         temp_path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
         temp_path.replace(MEMORY_FILE)
         try:

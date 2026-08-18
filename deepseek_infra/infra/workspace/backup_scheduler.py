@@ -848,7 +848,7 @@ def evaluate_write_placement(
        - Transition to healthy required replica with freshest recovery point.
        - Result has isFailover=True, forceFull=True.
     """
-    from deepseek_infra.infra.workspace import backup_dr_ledger, backup_policies, backup_publish, backup_write_continuity
+    from deepseek_infra.infra.workspace import backup_policies, backup_publish, backup_write_continuity
 
     if isinstance(policy, str):
         policy = backup_policies.get_policy(policy)
@@ -873,6 +873,15 @@ def evaluate_write_placement(
     except Exception as exc:
         primary_ok = False
         primary_error = str(exc)
+
+        if primary_ok:
+            from deepseek_infra.infra.workspace import backup_capacity
+
+            pred_bytes = backup_capacity.predict_next_backup_bytes(policy_id)
+            admitted, adm_reason = backup_capacity.check_target_capacity_admission(configured_primary, pred_bytes, policy=policy)
+            if not admitted:
+                primary_ok = False
+                primary_error = f"primary-capacity-admission-failed: {adm_reason}"
 
     if primary_ok:
         record_target_health(configured_primary, "healthy", None)
@@ -929,7 +938,7 @@ def evaluate_write_placement(
     targets = list(rep_dict.get("targets") or []) if rep_dict.get("enabled") else []
     candidates: list[str] = []
 
-    from deepseek_infra.infra.workspace import backup_replication, backup_targets
+    from deepseek_infra.infra.workspace import backup_targets
     all_target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
 
     for t_entry in targets:
@@ -966,30 +975,24 @@ def evaluate_write_placement(
             "candidateTargetIds": [configured_primary],
         }
 
-    # Rank candidates by:
-    # 1. Failure-domain diversity
-    # 2. Replica lag (points lag ascending)
-    # 3. Target priority descending
-    # 4. Target costClass (standard before low-cost)
-    # 5. Stable lexical tie-break
-    scored_candidates = []
-    for tid in candidates:
-        t_meta = all_target_records.get(tid) or {}
-        priority = int(t_meta.get("priority") or 0)
-        cost_class = str(t_meta.get("costClass") or "standard")
-        cost_weight = 0 if cost_class == "standard" else 1
+    # Rank candidates using deterministic placement planner
+    scored_candidates = plan_target_placement(
+        policy,
+        candidate_target_ids=candidates,
+        primary_target_id=configured_primary,
+        snapshot_kind="full",
+    )
 
-        lag_info = backup_replication.calculate_replica_lag(policy_id, tid, primary_target_id=configured_primary)
-        lag_pts = int(lag_info.get("lagRecoveryPoints") or 0)
+    if not scored_candidates:
+        return {
+            "configuredPrimaryTargetId": configured_primary,
+            "selectedWriteTargetId": configured_primary,
+            "isFailover": False,
+            "forceFull": False,
+            "reason": f"primary-unavailable-no-eligible-candidates: {primary_error}",
+            "candidateTargetIds": [configured_primary],
+        }
 
-        copies = backup_dr_ledger.list_logical_recovery_copies(target_id=tid, policy_id=policy_id)
-        healthy_count = len([c for c in copies if c.get("recoverable") and c.get("state") == "healthy"])
-
-        # Score tuple: (lag_points, -priority, cost_weight, -healthy_count, tid)
-        score = (lag_pts, -priority, cost_weight, -healthy_count, tid)
-        scored_candidates.append((score, tid))
-
-    scored_candidates.sort()
     selected_replica = scored_candidates[0][1]
 
     # Record failover in write continuity state
@@ -1007,6 +1010,102 @@ def evaluate_write_placement(
         "reason": f"primary-unavailable: {primary_error}",
         "candidateTargetIds": [configured_primary] + [c[1] for c in scored_candidates],
     }
+
+
+def plan_target_placement(
+    policy: dict[str, Any],
+    *,
+    candidate_target_ids: list[str],
+    primary_target_id: str,
+    snapshot_kind: str = "full",
+) -> list[tuple[tuple[Any, ...], str]]:
+    """Deterministic ranking function for write / failover target placement (4.5.7).
+
+    Ranking Criteria (tuple order):
+    1. Failure-domain diversity gain (-1 if new domain, 0 if already represented)
+    2. Replica point lag ascending
+    3. Target priority descending (-priority)
+    4. Capacity headroom score (-freePercent)
+    5. Cost class (standard 0 before low-cost 1)
+    6. Healthy copy count descending (-healthy_count)
+    7. Lexical targetId tie-break
+    """
+    from deepseek_infra.infra.workspace import (
+        backup_capacity,
+        backup_dr_ledger,
+        backup_replication,
+        backup_targets,
+    )
+
+    policy_id = str(policy.get("policyId") or "")
+    all_target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
+    replication = policy.get("replication") or {}
+    placement = policy.get("placement") or {}
+    max_copies_per_fd = placement.get("maxCopiesPerFailureDomain") or replication.get("maxCopiesPerFailureDomain")
+
+    existing_copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=200)
+    healthy_copies = [c for c in existing_copies if c.get("recoverable") and c.get("state") == "healthy"]
+    existing_fds = {
+        str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
+        for c in healthy_copies
+    }
+
+    predicted_bytes = backup_capacity.predict_next_backup_bytes(policy_id, snapshot_kind=snapshot_kind)
+
+    scored: list[tuple[tuple[Any, ...], str]] = []
+    for tid in candidate_target_ids:
+        t_meta = all_target_records.get(tid) or {}
+        if t_meta.get("drainState") in {"draining", "drained"}:
+            continue
+
+        cand_fd = str(t_meta.get("failureDomain") or "default")
+
+        # 1. Check maxCopiesPerFailureDomain constraint
+        existing_in_fd = sum(
+            1 for c in healthy_copies
+            if str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default") == cand_fd
+        )
+        if max_copies_per_fd is not None and int(max_copies_per_fd) > 0:
+            if existing_in_fd + 1 > int(max_copies_per_fd):
+                continue
+
+        # 2. Check capacity admission
+        admitted, _ = backup_capacity.check_target_capacity_admission(tid, predicted_bytes, policy=policy)
+        if not admitted:
+            continue
+
+        # Compute score components
+        fd_gain = -1 if cand_fd not in existing_fds else 0
+
+        lag_info = backup_replication.calculate_replica_lag(policy_id, tid, primary_target_id=primary_target_id)
+        lag_pts = int(lag_info.get("lagRecoveryPoints") or 0)
+
+        priority = int(t_meta.get("priority") or 0)
+
+        cap = backup_targets.probe_target_capacity(tid)
+        free_pct = float(cap.get("freePercent") or 100.0)
+        cap_score = -free_pct  # higher free% -> more negative -> ranked higher
+
+        cost_class = str(t_meta.get("costClass") or "standard")
+        cost_weight = 0 if cost_class == "standard" else 1
+
+        copies = [c for c in healthy_copies if str(c.get("targetId")) == tid]
+        healthy_count = len(copies)
+
+        score_tuple = (
+            fd_gain,
+            lag_pts,
+            -priority,
+            cap_score,
+            cost_weight,
+            -healthy_count,
+            tid,
+        )
+        scored.append((score_tuple, tid))
+
+    scored.sort()
+    return scored
+
 
 
 def record_retention_run(retention_run_id: str, *, policy_id: str, target_id: str, status: str, preview: dict[str, Any] | None = None) -> None:

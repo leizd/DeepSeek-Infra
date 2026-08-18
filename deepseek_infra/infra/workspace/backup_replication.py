@@ -861,6 +861,52 @@ def authenticate_committed_copy(
     return "authenticated", receipt, commit
 
 
+def authenticate_transition_parent(
+    target: Any,
+    policy_id: str,
+    *,
+    expected_parent_backup_id: str,
+    expected_receipt_digest: str | None = None,
+    expected_commit_hash: str | None = None,
+    expected_lineage_id: str | None = None,
+    expected_object_set_digest: str | None = None,
+) -> tuple[bool, str]:
+    """Strictly authenticate that candidate target possesses the exact expected parent commitment."""
+    status, receipt, commit = authenticate_recovery_copy(
+        target,
+        policy_id,
+        expected_parent_backup_id,
+        expected_object_set_digest=expected_object_set_digest,
+    )
+    if status != "authenticated" or commit is None or receipt is None:
+        return False, f"parent-copy-status-{status}"
+
+    if expected_receipt_digest is not None:
+        if str(commit.get("receiptDigest") or "") != expected_receipt_digest:
+            return False, "parent-receipt-digest-mismatch"
+
+    if expected_commit_hash is not None:
+        if str(commit.get("commitHash") or "") != expected_commit_hash:
+            return False, "parent-commit-hash-mismatch"
+
+    if expected_lineage_id is not None:
+        c_lineage = commit.get("lineageId") or receipt.get("lineageId")
+        if c_lineage and str(c_lineage) != expected_lineage_id:
+            return False, "parent-lineage-mismatch"
+
+    if expected_object_set_digest is not None:
+        c_osd = (
+            commit.get("objectSetDigest")
+            or receipt.get("objectSetDigest")
+            or commit.get("objectDigest")
+            or receipt.get("objectDigest")
+        )
+        if str(c_osd or "") != expected_object_set_digest:
+            return False, "parent-object-set-digest-mismatch"
+
+    return True, "authenticated"
+
+
 def _verify_destination_component(dest_target: Any, target_rel: str, expected_digest: str) -> tuple[bool, bool]:
     """Check if component on destination is valid or corrupt using streaming/provider hashes.
 
@@ -946,6 +992,57 @@ def stream_ciphertext_transfer(
     elif dest_target.store is not None:
         store = dest_target.store
         stream = _iter_source_stream(source_target, source_rel, chunk_size=chunk_size)
+
+        # Check if resuming existing multipart upload
+        if (
+            progress_state is not None
+            and progress_state.get("multipartUploadId")
+            and int(progress_state.get("nextOffset") or 0) > 0
+        ):
+            from deepseek_infra.infra.workspace.backup_target_store import MultipartUpload
+
+            upload_id = str(progress_state["multipartUploadId"])
+            next_offset = int(progress_state["nextOffset"])
+            existing_parts = list(progress_state.get("parts") or [])
+            upload = MultipartUpload(key=dest_rel, upload_id=upload_id, checksum_sha256=expected_digest)
+
+            offset_skipped = 0
+            while offset_skipped < next_offset:
+                try:
+                    c = next(stream)
+                except StopIteration:
+                    break
+                hasher.update(c)
+                bytes_transferred += len(c)
+                offset_skipped += len(c)
+
+            part_num = len(existing_parts)
+            try:
+                for chunk in stream:
+                    part_num += 1
+                    hasher.update(chunk)
+                    bytes_transferred += len(chunk)
+                    res_n = store.upload_part(upload, part_num, chunk)
+                    etag_n = getattr(res_n, "etag", str(res_n))
+                    progress_state["parts"].append({"number": part_num, "etag": etag_n})
+                    progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(chunk)
+                    if on_part is not None:
+                        on_part(part_num, etag_n, len(chunk))
+
+                calc_digest = hasher.hexdigest()
+                if calc_digest != expected_digest:
+                    store.abort_multipart(upload)
+                    raise AppError(
+                        f"source component corrupt: ciphertext transfer digest mismatch: calculated={calc_digest}, expected={expected_digest}",
+                        code=ErrorCode.INTERNAL,
+                        status=500,
+                    )
+                store.complete_multipart_if_absent(upload)
+                return bytes_transferred
+            except Exception:
+                store.abort_multipart(upload)
+                raise
+
         try:
             first_chunk = next(stream)
         except StopIteration:
@@ -1042,15 +1139,36 @@ def quarantine_and_replace_corrupt_remote_object(
     if dest_target.store is not None:
         stat = dest_target.store.stat(dest_rel)
         if stat is not None:
-            # Stream corrupt bytes into quarantine and close stream before deletion
+            # Stream corrupt bytes into quarantine in bounded memory
+            q_key = f".quarantine/{expected_digest}.corrupt.{time.time_ns()}"
             stream = None
             try:
-                q_key = f".quarantine/{expected_digest}.corrupt.{time.time_ns()}"
                 stream = dest_target.store.get_stream(dest_rel)
-                chunks = []
-                for chunk in stream:
-                    chunks.append(chunk)
-                dest_target.store.put_if_absent(q_key, b"".join(chunks))
+                try:
+                    first_chunk = next(stream)
+                except StopIteration:
+                    first_chunk = b""
+                try:
+                    second_chunk = next(stream)
+                except StopIteration:
+                    second_chunk = None
+
+                if second_chunk is None:
+                    dest_target.store.put_if_absent(q_key, first_chunk)
+                else:
+                    upload = dest_target.store.begin_multipart(q_key, checksum_sha256=stat.sha256 or stat.provider_sha256 or "")
+                    try:
+                        p_num = 1
+                        dest_target.store.upload_part(upload, p_num, first_chunk)
+                        p_num += 1
+                        dest_target.store.upload_part(upload, p_num, second_chunk)
+                        for chunk in stream:
+                            p_num += 1
+                            dest_target.store.upload_part(upload, p_num, chunk)
+                        dest_target.store.complete_multipart_if_absent(upload)
+                    except Exception:
+                        dest_target.store.abort_multipart(upload)
+                        raise
             except Exception:
                 pass
             finally:
@@ -1068,7 +1186,6 @@ def quarantine_and_replace_corrupt_remote_object(
         return stream_ciphertext_transfer(source_target, dest_target, source_rel, dest_rel, expected_digest)
     return 0
 
-    return 0
 
 
 # ── Durable ReplicaRepairJob CRUD ───────────────────────────────────────────
@@ -1905,6 +2022,108 @@ def create_rebalance_job(
         return body
 
 
+def simulate_copy_removal(
+    policy_id: str,
+    backup_id: str,
+    target_id: str,
+    *,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Simulate post-deletion topology invariants before removing a recovery copy."""
+    from deepseek_infra.infra.workspace import backup_policies, backup_targets
+
+    if policy is None:
+        try:
+            policy = backup_policies.get_policy(policy_id)
+        except Exception:
+            policy = {}
+
+    repl = (policy or {}).get("replication") or {}
+    placement = (policy or {}).get("placement") or {}
+    min_copies = int(repl.get("minCommittedCopies") or 1)
+    min_fd = int(repl.get("minFailureDomains") or 1)
+    max_copies_per_fd = placement.get("maxCopiesPerFailureDomain") or repl.get("maxCopiesPerFailureDomain")
+
+    all_target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
+    copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
+    healthy_before = [c for c in copies if c.get("recoverable") and c.get("state") == "healthy"]
+    healthy_after = [c for c in healthy_before if str(c.get("targetId")) != target_id]
+
+    fd_before = {
+        str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
+        for c in healthy_before
+    }
+    fd_after = {
+        str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
+        for c in healthy_after
+    }
+
+    counts_by_fd_after: dict[str, int] = {}
+    for c in healthy_after:
+        fd_name = str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
+        counts_by_fd_after[fd_name] = counts_by_fd_after.get(fd_name, 0) + 1
+
+    policy_safe = len(healthy_after) >= min_copies and len(fd_after) >= min_fd
+    if max_copies_per_fd is not None and int(max_copies_per_fd) > 0:
+        if any(cnt > int(max_copies_per_fd) for cnt in counts_by_fd_after.values()):
+            policy_safe = False
+
+    protected_by_hold = is_source_held(target_id, policy_id, backup_id)
+
+    return {
+        "healthyCopiesBefore": len(healthy_before),
+        "healthyCopiesAfter": len(healthy_after),
+        "failureDomainsBefore": len(fd_before),
+        "failureDomainsAfter": len(fd_after),
+        "copiesInEachDomainAfter": counts_by_fd_after,
+        "policySafe": policy_safe and not protected_by_hold,
+        "protectedByHold": protected_by_hold,
+        "targetId": target_id,
+        "backupId": backup_id,
+    }
+
+
+def is_inside_maintenance_window(
+    policy: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Check if current time falls within the configured policy maintenance window."""
+    placement = (policy or {}).get("placement") or {}
+    mw = placement.get("maintenanceWindow")
+    if not mw or not isinstance(mw, dict):
+        return True
+
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+
+    tz_str = str(mw.get("timezone") or "UTC")
+    tz: Any
+    try:
+        tz = ZoneInfo(tz_str)
+    except Exception:
+        tz = timezone.utc
+
+    current = (now or datetime.now(tz=timezone.utc)).astimezone(tz)
+    start_str = str(mw.get("start") or "00:00")
+    end_str = str(mw.get("end") or "23:59")
+
+    try:
+        s_h, s_m = [int(x) for x in start_str.split(":")]
+        e_h, e_m = [int(x) for x in end_str.split(":")]
+        cur_mins = current.hour * 60 + current.minute
+        start_mins = s_h * 60 + s_m
+        end_mins = e_h * 60 + e_m
+
+        if start_mins <= end_mins:
+            return start_mins <= cur_mins <= end_mins
+        else:
+            # Wraps around midnight
+            return cur_mins >= start_mins or cur_mins <= end_mins
+    except Exception:
+        return True
+
+
 def execute_rebalance_job(
     job_id: str,
     *,
@@ -1947,39 +2166,22 @@ def execute_rebalance_job(
 
         job = _set_rebalance_phase(job, "committed")
 
-        # Check if source copy should be pruned
+        # Check if source copy should be pruned using post-delete simulation
         if job.get("pruneSourceAfter"):
-            from deepseek_infra.infra.workspace import backup_policies
-            policy = backup_policies.get_policy(policy_id)
-            repl = policy.get("replication") or {}
-            min_copies = int(repl.get("minCommittedCopies") or 1)
-            min_fd = int(repl.get("minFailureDomains") or 1)
-
-            copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
-            healthy = [c for c in copies if c.get("recoverable") and c.get("state") == "healthy"]
-
-            # Count unique failure domains
-            from deepseek_infra.infra.workspace import backup_targets
-            target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
-            fd_set = set()
-            for c in healthy:
-                t_rec = target_records.get(str(c.get("targetId"))) or {}
-                fd_set.add(str(t_rec.get("failureDomain") or "default"))
-
-            # Only prune if healthy count > min_copies and fd count >= min_fd and not held
-            if len(healthy) > min_copies and len(fd_set) >= min_fd:
-                if not is_source_held(source_target_id, policy_id, backup_id):
-                    job = _set_rebalance_phase(job, "pruning_source")
-                    # Mark deleted in ledger
-                    backup_dr_ledger.record_logical_recovery_copy(
-                        target_id=source_target_id,
-                        policy_id=policy_id,
-                        backup_id=backup_id,
-                        committed_at=str(copies[0].get("committedAt") or _utc_iso()),
-                        state="quarantined",
-                        recoverable=False,
-                        last_verified_at=_utc_iso(),
-                    )
+            sim = simulate_copy_removal(policy_id, backup_id, source_target_id)
+            if sim.get("policySafe") and not sim.get("protectedByHold"):
+                job = _set_rebalance_phase(job, "pruning_source")
+                # Mark retired in ledger
+                copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
+                backup_dr_ledger.record_logical_recovery_copy(
+                    target_id=source_target_id,
+                    policy_id=policy_id,
+                    backup_id=backup_id,
+                    committed_at=str(copies[0].get("committedAt") if copies else _utc_iso()),
+                    state="retired",
+                    recoverable=False,
+                    last_verified_at=_utc_iso(),
+                )
 
         job = _set_rebalance_phase(job, "complete")
         return {"status": "success", "jobId": job_id, "job": job}
@@ -2010,8 +2212,9 @@ def rebalance_policy_replicas(
     *,
     instance_id: str = "rebalance-worker",
     max_jobs: int = 5,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Rebalance replicas across failure domains and migrate away from draining targets."""
+    """Rebalance replicas across failure domains, handle capacity watermarks, and migrate away from draining targets."""
     from deepseek_infra.infra.workspace import backup_policies, backup_targets
 
     policy = backup_policies.get_policy(policy_id)
@@ -2019,7 +2222,14 @@ def rebalance_policy_replicas(
     if not replication or not replication.get("enabled"):
         return {"status": "skipped", "reason": "replication-disabled"}
 
+    if not is_inside_maintenance_window(policy, now=now):
+        return {"status": "skipped", "reason": "outside-maintenance-window"}
+
     min_fd = int(replication.get("minFailureDomains") or 1)
+    placement = policy.get("placement") or {}
+    max_copies_per_fd = placement.get("maxCopiesPerFailureDomain") or replication.get("maxCopiesPerFailureDomain")
+    soft_watermark = float(placement.get("softWatermarkPercent") or 80.0)
+
     target_entries = list(replication.get("targets") or [])
     all_target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
 
@@ -2054,26 +2264,68 @@ def rebalance_policy_replicas(
             for tid in healthy_target_ids
         )
 
-        # If failure domains < min_fd or has draining target, find a candidate target in a missing failure domain
-        if len(current_fds) < min_fd or has_draining:
+        # Check for high capacity utilization (proactive capacity rebalance)
+        has_capacity_pressure = False
+        constrained_source_tid = None
+        for tid in healthy_target_ids:
+            cap = backup_targets.probe_target_capacity(tid)
+            free_pct = cap.get("freePercent")
+            if free_pct is not None and (100.0 - float(free_pct)) >= soft_watermark:
+                has_capacity_pressure = True
+                constrained_source_tid = tid
+                break
+
+        # If failure domains < min_fd or draining or capacity pressure: find candidate target
+        needs_rebalance = (len(current_fds) < min_fd) or has_draining or has_capacity_pressure
+        if needs_rebalance:
             for cand_tid in active_targets:
                 if cand_tid not in healthy_target_ids:
                     cand_fd = str((all_target_records.get(cand_tid) or {}).get("failureDomain") or "default")
-                    if cand_fd not in current_fds or has_draining:
-                        src_tid = str(healthy[0]["targetId"])
+
+                    # Check maxCopiesPerFailureDomain constraint on candidate
+                    existing_in_fd = sum(
+                        1 for tid in healthy_target_ids
+                        if str((all_target_records.get(tid) or {}).get("failureDomain") or "default") == cand_fd
+                    )
+                    if max_copies_per_fd is not None and int(max_copies_per_fd) > 0:
+                        if existing_in_fd + 1 > int(max_copies_per_fd):
+                            continue
+
+                    # Check candidate capacity admission
+                    cand_cap = backup_targets.probe_target_capacity(cand_tid)
+                    cand_free_pct = cand_cap.get("freePercent")
+                    if cand_free_pct is not None and (100.0 - float(cand_free_pct)) >= soft_watermark:
+                        continue
+
+                    if (
+                        (cand_fd not in current_fds)
+                        or has_draining
+                        or has_capacity_pressure
+                    ):
+                        src_tid = constrained_source_tid or str(healthy[0]["targetId"])
+                        reason = (
+                            "drain-migration"
+                            if has_draining
+                            else (
+                                "proactive-capacity-rebalance"
+                                if has_capacity_pressure
+                                else "failure-domain-diversity"
+                            )
+                        )
                         job = create_rebalance_job(
                             policy_id=policy_id,
                             backup_id=backup_id,
                             dest_target_id=cand_tid,
                             source_target_id=src_tid,
-                            reason="failure-domain-diversity" if len(current_fds) < min_fd else "drain-migration",
-                            prune_source_after=has_draining,
+                            reason=reason,
+                            prune_source_after=(has_draining or has_capacity_pressure),
                         )
                         execute_rebalance_job(str(job["jobId"]), instance_id=instance_id)
                         jobs_created += 1
                         break
 
     return {"status": "completed", "jobsCreated": jobs_created}
+
 
 
 # ── Lag Telemetry & Compliance ──────────────────────────────────────────────

@@ -554,7 +554,7 @@ def execute_run(
 
             # Publish failed on current_target. Reconcile commit status before deciding to failover.
             commit_status = "unknown"
-            from deepseek_infra.infra.workspace import backup_replication
+            from deepseek_infra.infra.workspace import backup_capacity, backup_replication
             try:
                 commit_status, _, _ = backup_replication.authenticate_recovery_copy(
                     current_target,
@@ -590,7 +590,7 @@ def execute_run(
                     checkpoint=guard.checkpoint,
                 )
                 break
-            elif commit_status in {"missing", "corrupt"}:
+            elif commit_status in {"missing", "absent"}:
                 # Definitively not committed on current_target. Look for candidate failover target.
                 candidate_ids = [
                     tid for tid in list((run_plan or {}).get("candidateTargetIds") or [])
@@ -613,13 +613,23 @@ def execute_run(
                         if not parent_backup_id:
                             continue
                         cand_target = backup_publish.resolve_target(cand_id)
-                        p_status, _, _ = backup_replication.authenticate_recovery_copy(
+                        p_ok, _ = backup_replication.authenticate_transition_parent(
                             cand_target,
                             policy_id,
-                            parent_backup_id,
+                            expected_parent_backup_id=parent_backup_id,
+                            expected_receipt_digest=(run_plan or {}).get("parentReceiptDigest"),
+                            expected_commit_hash=(run_plan or {}).get("parentCommitHash"),
+                            expected_lineage_id=(run_plan or {}).get("lineageId"),
+                            expected_object_set_digest=(run_plan or {}).get("parentObjectSetDigest"),
                         )
-                        if p_status != "authenticated":
+                        if not p_ok:
                             continue
+
+                    # Capacity check for candidate
+                    pred_size = backup_capacity.predict_next_backup_bytes(policy_id, snapshot_kind="full" if not is_incremental else "incremental")
+                    admitted, _ = backup_capacity.check_target_capacity_admission(cand_id, pred_size, policy=policy)
+                    if not admitted:
+                        continue
 
                     try:
                         cand_target = backup_publish.resolve_target(cand_id)
@@ -657,6 +667,23 @@ def execute_run(
                     outcome["isFailover"] = True
                     outcome["failoverTransitioned"] = True
                     continue
+            elif commit_status in {"corrupt", "conflicting"}:
+                # Corrupt / conflicting control plane state on current target; fail closed, quarantine target
+                backup_scheduler.record_target_health(current_target_id, "quarantined", f"control-plane-{commit_status}:{publish_exc}")
+                backup_scheduler.fail_run(
+                    run.run_id,
+                    error=f"write-reconciliation-required: Target {current_target_id} has {commit_status} control plane state; auto-failover blocked",
+                    instance_id=instance_id,
+                    fencing_token=run.fencing_token,
+                    phase="failed",
+                    reason="write-reconciliation-required",
+                    now=guard.now(),
+                )
+                raise AppError(
+                    f"write-reconciliation-required: Target {current_target_id} control plane is {commit_status}; auto failover blocked",
+                    code=ErrorCode.INTERNAL,
+                    status=500,
+                )
 
             if commit_status in {"unreachable", "unknown"}:
                 backup_scheduler.fail_run(

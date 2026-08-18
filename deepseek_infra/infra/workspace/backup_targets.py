@@ -267,6 +267,61 @@ def init_target(
     return record
 
 
+def register_filesystem_target(
+    target_id: str,
+    *,
+    path: Path | str,
+    label: str = "",
+    failure_domain: str | None = None,
+    priority: int = 0,
+    cost_class: str | None = None,
+) -> dict[str, Any]:
+    p = Path(path)
+    p.mkdir(parents=True, exist_ok=True)
+    resolved = _resolve_basic(p)
+    marker = resolved / TARGET_MARKER_NAME
+    if marker.is_file():
+        try:
+            existing = json.loads(marker.read_text(encoding="utf-8"))
+            if isinstance(existing, dict) and existing.get("targetId") == target_id:
+                return _register(
+                    resolved,
+                    target_id,
+                    str(existing.get("targetNonce") or ""),
+                    label=label,
+                    created_at=str(existing.get("createdAt") or ""),
+                    failure_domain=failure_domain,
+                    priority=priority,
+                    cost_class=cost_class,
+                )
+        except Exception:
+            pass
+    nonce = secrets.token_hex(16)
+    marker_payload = {
+        "schemaVersion": TARGET_SCHEMA_VERSION,
+        "targetId": target_id,
+        "targetNonce": nonce,
+        "incarnationId": f"inc_{secrets.token_hex(8)}",
+        "ownerInstallationId": installation_id(),
+        "targetGeneration": 0,
+        "latestCommitHash": TARGET_GENESIS_HASH,
+        "createdAt": _utc_iso(),
+    }
+    _atomic_write_json(marker, marker_payload)
+    record = _register(
+        resolved,
+        target_id,
+        nonce,
+        label=label,
+        created_at=marker_payload["createdAt"],
+        failure_domain=failure_domain,
+        priority=priority,
+        cost_class=cost_class,
+    )
+    _write_checkpoint(target_id, marker_payload)
+    return record
+
+
 def _register(
     resolved: Path,
     target_id: str,
@@ -522,7 +577,9 @@ def list_targets() -> list[dict[str, Any]]:
     if not BACKUP_TARGET_DIR.is_dir():
         return []
     targets: list[dict[str, Any]] = []
-    for path in sorted(BACKUP_TARGET_DIR.glob("target_*.json")):
+    for path in sorted(BACKUP_TARGET_DIR.glob("*.json")):
+        if path.name.endswith(".checkpoint.json"):
+            continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -830,4 +887,75 @@ def get_target_drain_state(target_id: str) -> str:
         return str(target.get("drainState") or "active")
     except Exception:
         return "unknown"
+
+
+def probe_target_capacity(target_id: str) -> dict[str, Any]:
+    """Probe physical or configured capacity for a target without forging fake disk sizes."""
+    import shutil
+
+    try:
+        target = get_target(target_id)
+    except Exception:
+        return {
+            "targetId": target_id,
+            "totalBytes": None,
+            "usedBytes": None,
+            "freeBytes": None,
+            "freePercent": None,
+            "observedAt": _utc_iso(),
+            "source": "unknown",
+        }
+
+    kind = str(target.get("kind") or "filesystem")
+    quota_bytes = target.get("quotaBytes")
+
+    if kind == "filesystem" or target.get("path"):
+        target_path = Path(str(target.get("path") or ""))
+        if target_path.is_dir():
+            try:
+                usage = shutil.disk_usage(target_path)
+                total = usage.total
+                free = usage.free
+                used = usage.used
+                free_pct = round((free / total) * 100.0, 2) if total > 0 else 0.0
+                return {
+                    "targetId": target_id,
+                    "totalBytes": total,
+                    "usedBytes": used,
+                    "freeBytes": free,
+                    "freePercent": free_pct,
+                    "observedAt": _utc_iso(),
+                    "source": "filesystem",
+                }
+            except OSError:
+                pass
+
+    if quota_bytes is not None and int(quota_bytes) > 0:
+        quota = int(quota_bytes)
+        # Approximate used bytes from known copy sizes or zero
+        from deepseek_infra.infra.workspace import backup_dr_ledger
+        copies = backup_dr_ledger.list_logical_recovery_copies(target_id=target_id)
+        used = sum(int(c.get("logicalBytes") or c.get("physicalBytes") or 0) for c in copies if c.get("recoverable"))
+        free = max(0, quota - used)
+        free_pct = round((free / quota) * 100.0, 2) if quota > 0 else 0.0
+        return {
+            "targetId": target_id,
+            "totalBytes": quota,
+            "usedBytes": used,
+            "freeBytes": free,
+            "freePercent": free_pct,
+            "observedAt": _utc_iso(),
+            "source": "configured-quota",
+        }
+
+    return {
+        "targetId": target_id,
+        "totalBytes": None,
+        "usedBytes": None,
+        "freeBytes": None,
+        "freePercent": None,
+        "observedAt": _utc_iso(),
+        "source": "unknown",
+    }
+
 

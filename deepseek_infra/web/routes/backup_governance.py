@@ -140,6 +140,8 @@ def create_backup_governance_router() -> APIRouter:
             raise AppError("targetId is required for primary promotion", code=ErrorCode.INVALID_PAYLOAD, status=400)
         exp_rev = payload.get("expectedPolicyRevision")
         exp_epoch = payload.get("expectedFailoverEpoch")
+        exp_bid = payload.get("expectedLatestBackupId")
+        exp_osd = payload.get("expectedLatestObjectSetDigest")
         from deepseek_infra.infra.workspace import backup_write_continuity
 
         res = backup_write_continuity.promote_primary_target(
@@ -147,6 +149,8 @@ def create_backup_governance_router() -> APIRouter:
             target_id,
             expected_policy_revision=int(exp_rev) if exp_rev is not None else None,
             expected_failover_epoch=int(exp_epoch) if exp_epoch is not None else None,
+            expected_latest_backup_id=str(exp_bid) if exp_bid is not None else None,
+            expected_latest_object_set_digest=str(exp_osd) if exp_osd is not None else None,
         )
         return json_response(res)
 
@@ -235,7 +239,9 @@ def create_backup_governance_router() -> APIRouter:
         require_api_auth(request)
         payload = await read_json_body(request, max_bytes=16_000)
         reason = str(payload.get("reason") or "administrative-drain")
-        return json_response(backup_targets.drain_target(target_id, reason=reason))
+        force = bool(payload.get("force", False))
+        from deepseek_infra.infra.workspace import backup_drain
+        return json_response(backup_drain.initiate_target_drain(target_id, reason=reason, force=force))
 
     @router.post("/api/workspace/backup-targets/{target_id}/activate")
     async def api_backup_targets_activate(request: Request, target_id: str) -> JSONResponse:
@@ -551,5 +557,88 @@ def create_backup_governance_router() -> APIRouter:
                 "reservedKinds": ["webdav"],
             }
         )
+
+    # ── 4.5.7 Target Drain Routes ───────────────────────────────────────────
+
+    @router.post("/api/workspace/backup-targets/{target_id}/drain/cancel")
+    async def api_target_drain_cancel(request: Request, target_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=16_000)
+        from deepseek_infra.infra.workspace import backup_drain
+
+        job = backup_drain.cancel_target_drain(
+            target_id,
+            reason=str(payload.get("reason") or "operator-cancelled"),
+        )
+        return json_response(job)
+
+    @router.get("/api/workspace/backup-targets/{target_id}/drain")
+    async def api_target_drain_get(request: Request, target_id: str) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import backup_drain
+
+        job = backup_drain.get_target_drain_job(target_id)
+        if job is None:
+            raise AppError("No drain job for target", code=ErrorCode.NOT_FOUND, status=404)
+        return json_response(job)
+
+    # ── 4.5.7 Copy Retirement Routes ────────────────────────────────────────
+
+    @router.post("/api/workspace/backup-retirements")
+    async def api_backup_retirement_create(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=16_000)
+        policy_id = str(payload.get("policyId") or "").strip()
+        backup_id = str(payload.get("backupId") or "").strip()
+        target_id = str(payload.get("targetId") or "").strip()
+        if not policy_id or not backup_id or not target_id:
+            raise AppError("policyId, backupId, and targetId are required", code=ErrorCode.INVALID_PAYLOAD, status=400)
+        from deepseek_infra.infra.workspace import backup_retirement
+
+        job = backup_retirement.create_copy_retirement_job(
+            policy_id=policy_id,
+            backup_id=backup_id,
+            target_id=target_id,
+            reason=str(payload.get("reason") or "api-retirement-request"),
+        )
+        return json_response(job)
+
+    @router.get("/api/workspace/backup-retirements/{job_id}")
+    async def api_backup_retirement_get(request: Request, job_id: str) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import backup_retirement
+
+        job = backup_retirement.get_copy_retirement_job(job_id)
+        if job is None:
+            raise AppError("Retirement job not found", code=ErrorCode.NOT_FOUND, status=404)
+        return json_response(job)
+
+    @router.get("/api/workspace/backup-retirements")
+    async def api_backup_retirements_list(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        policy_id = request.query_params.get("policyId")
+        target_id = request.query_params.get("targetId")
+        phase = request.query_params.get("phase")
+        from deepseek_infra.infra.workspace import backup_retirement
+
+        jobs = backup_retirement.list_copy_retirement_jobs(policy_id=policy_id, target_id=target_id, phase=phase)
+        return json_response({"jobs": jobs})
+
+    # ── 4.5.7 Capacity & QoS Routes ─────────────────────────────────────────
+
+    @router.get("/api/workspace/backup-capacity/summary")
+    async def api_backup_capacity_summary(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import backup_capacity
+
+        return json_response(backup_capacity.capacity_summary())
+
+    @router.get("/api/workspace/backup-transfer-budget")
+    async def api_backup_transfer_budget_get(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import backup_transfer_budget
+
+        summary = backup_transfer_budget.get_global_transfer_budget_manager().transfer_control_summary()
+        return json_response(summary)
 
     return router

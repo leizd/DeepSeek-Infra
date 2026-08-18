@@ -102,6 +102,9 @@ class MockMemoryTargetStore(backup_target_store.FilesystemTargetStore):
         self._etags.pop(key, None)
         return True
 
+    def complete_multipart_if_absent(self, upload: Any, **kwargs: Any) -> backup_target_store.PutResult:
+        return super().complete_multipart_if_absent(upload)
+
 
 class MockResolvedTarget:
     def __init__(self, target_id: str, root: Path | None, store: Any | None = None) -> None:

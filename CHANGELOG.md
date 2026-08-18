@@ -4,6 +4,19 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.5.7] - Topology Safety, Capacity Governance & Bandwidth QoS (2026-08-18)
+
+### Topology Safety, Capacity Governance & Bandwidth QoS
+
+- **Failover Commit Reconciliation & Closure**: Strictly distinguishes `absent` from `corrupt`/`conflicting` and `unreachable` in `BackupExecutor`. Only `absent` permits automatic write failover; `corrupt`/`conflicting` enters `write-reconciliation-required` + quarantine and fails closed; `unreachable` fails closed with `ambiguous-target-commit`.
+- **Exact Incremental Parent Commitment Authentication**: Enforces `authenticate_transition_parent()` verifying exact match of parent backup ID, receipt digest, commit hash, lineage ID, object set digest, and cryptographic chain binding before incremental failover.
+- **Bounded Remote Corrupt Quarantine Streaming & Resumable Multipart Repair**: Streams corrupt objects into quarantine via multipart uploads in bounded memory with ETag conditional deletion; persists multipart upload state (`multipartUploadId`, parts, offsets) across restarts.
+- **Post-Delete Topology Simulation & Safe Copy Retirement**: Implements `simulate_copy_removal()` and durable `CopyRetirementJob` state machine ensuring post-deletion topology invariants (`healthyCopiesAfter >= minCommittedCopies`, `failureDomainsAfter >= minFailureDomains`, `copiesInEachDomainAfter <= maxCopiesPerFailureDomain`), with reference-counted physical GC for shared ciphertext deduplication objects.
+- **Deterministic Failure-Domain Write Placement**: Evaluates write placement via `plan_target_placement()` ranking candidates by failure-domain diversity gain, replica point lag, priority, capacity headroom, and cost class.
+- **Autonomous Target Drain & Promotion Hardening**: Implements durable `TargetDrainJob` evacuation supervisor and hardens `promote_primary_target()` to bind global latest recovery points.
+- **Capacity Governance & Watermarks**: Enforces soft and hard watermarks, P90 size predictions for Force Full admission, proactive capacity rebalancing, and maintenance window checks.
+- **Bandwidth QoS & Transfer Budget**: Manages token-bucket rate limiting across traffic classes P0 (DR Restore) through P6 (Best Effort), with reserved disaster recovery bandwidth and zero-remote-I/O DR readiness projections.
+
 ## [4.5.6] - Transactional Write Failover & Failure-Domain Rebalancing (2026-08-17)
 
 ### Transactional Write Failover & Failure-Domain Rebalancing

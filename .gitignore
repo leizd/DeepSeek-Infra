@@ -41,6 +41,8 @@
 .backup-index/
 .backup-continuity/
 .backup-rebalance/
+.backup-drains/
+.backup-retirements/
 .workspace-mutation.lock
 .workspace-generation
 

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -56,7 +57,7 @@ _SECRET_MARKERS = (
     "fencingtoken",
 )
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-_TARGET_ID = re.compile(r"^target_[a-z0-9][a-z0-9._-]{0,63}$")
+_TARGET_ID = re.compile(r"^(?:managed-local|target_[a-z0-9][a-z0-9._-]{0,63})$")
 
 
 def _now_iso() -> str:
@@ -390,6 +391,43 @@ def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any
     return normalized_res
 
 
+def _normalize_placement(raw: Any) -> dict[str, Any]:
+    """Normalize placement and capacity objectives."""
+    if raw is None:
+        return {
+            "minFreeBytes": 10 * 1024 * 1024 * 1024,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0,
+            "hardWatermarkPercent": 90.0,
+            "maxCopiesPerFailureDomain": None,
+            "maintenanceWindow": None,
+        }
+    section = _require_mapping(raw, "placement")
+    min_free_bytes = _require_int(section.get("minFreeBytes"), "placement.minFreeBytes", 10 * 1024 * 1024 * 1024, 0, 1024 * 1024 * 1024 * 1024 * 100)
+    min_free_pct = float(str(section.get("minFreePercent") if section.get("minFreePercent") is not None else 10.0))
+    soft_watermark = float(str(section.get("softWatermarkPercent") if section.get("softWatermarkPercent") is not None else 80.0))
+    hard_watermark = float(str(section.get("hardWatermarkPercent") if section.get("hardWatermarkPercent") is not None else 90.0))
+    max_copies_per_fd = section.get("maxCopiesPerFailureDomain")
+    if max_copies_per_fd is not None:
+        max_copies_per_fd = _require_int(max_copies_per_fd, "placement.maxCopiesPerFailureDomain", 1, 1, 16)
+    mw = section.get("maintenanceWindow")
+    normalized_mw = None
+    if isinstance(mw, dict):
+        normalized_mw = {
+            "timezone": str(mw.get("timezone") or "UTC"),
+            "start": str(mw.get("start") or "00:00"),
+            "end": str(mw.get("end") or "23:59"),
+        }
+    return {
+        "minFreeBytes": min_free_bytes,
+        "minFreePercent": min_free_pct,
+        "softWatermarkPercent": soft_watermark,
+        "hardWatermarkPercent": hard_watermark,
+        "maxCopiesPerFailureDomain": max_copies_per_fd,
+        "maintenanceWindow": normalized_mw,
+    }
+
+
 def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, created_at: str | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AppError("Backup policy payload must be an object", code=ErrorCode.INVALID_PAYLOAD)
@@ -417,6 +455,7 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
         "primaryTargetId": target_id,
         "policyRevision": max(1, int(payload.get("policyRevision") or 1)),
         "replication": _normalize_replication(payload.get("replication"), primary_target_id=target_id),
+        "placement": _normalize_placement(payload.get("placement")),
         "retentionPolicyId": _require_safe_id(payload.get("retentionPolicyId") or DEFAULT_RETENTION_POLICY_ID, "retentionPolicyId"),
         "retry": _normalize_retry(payload.get("retry")),
         "incremental": _normalize_incremental(payload.get("incremental")),
@@ -486,48 +525,54 @@ def list_policies() -> list[dict[str, Any]]:
     return policies
 
 
+_POLICY_LOCK = threading.RLock()
+
+
 def update_policy(
     policy_id: str,
     patch: dict[str, Any],
     *,
     expected_revision: int | None = None,
 ) -> dict[str, Any]:
-    existing = get_policy(policy_id)
-    if not isinstance(patch, dict):
-        raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
+    with _POLICY_LOCK:
+        existing = get_policy(policy_id)
+        if not isinstance(patch, dict):
+            raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
 
-    curr_rev = int(existing.get("policyRevision") or 1)
-    if expected_revision is not None and curr_rev != expected_revision:
-        raise AppError(
-            f"CAS mismatch on policyRevision: expected {expected_revision}, actual {curr_rev}",
-            code=ErrorCode.INVALID_REQUEST,
-            status=412,
-        )
+        curr_rev = int(existing.get("policyRevision") or 1)
+        if expected_revision is not None and curr_rev != expected_revision:
+            raise AppError(
+                f"CAS mismatch on policyRevision: expected {expected_revision}, actual {curr_rev}",
+                code=ErrorCode.INVALID_REQUEST,
+                status=412,
+            )
 
-    merged = dict(existing)
-    for key in (
-        "name",
-        "enabled",
-        "schedule",
-        "scope",
-        "frontendMirror",
-        "protection",
-        "targetId",
-        "primaryTargetId",
-        "policyRevision",
-        "retentionPolicyId",
-        "retry",
-        "incremental",
-        "recoveryObjectives",
-        "recoveryDrill",
-        "replication",
-    ):
-        if key in patch:
-            merged[key] = patch[key]
-    normalized = normalize_policy(merged, policy_id=existing["policyId"], created_at=str(existing.get("createdAt") or ""))
-    validate_target_bindings(normalized)
-    _atomic_write_json(_policy_path(policy_id), normalized)
-    return normalized
+        merged = dict(existing)
+        for key in (
+            "name",
+            "enabled",
+            "schedule",
+            "scope",
+            "frontendMirror",
+            "protection",
+            "targetId",
+            "primaryTargetId",
+            "policyRevision",
+            "retentionPolicyId",
+            "retry",
+            "incremental",
+            "recoveryObjectives",
+            "recoveryDrill",
+            "replication",
+            "placement",
+        ):
+            if key in patch:
+                merged[key] = patch[key]
+        normalized = normalize_policy(merged, policy_id=existing["policyId"], created_at=str(existing.get("createdAt") or ""))
+        validate_target_bindings(normalized)
+        _atomic_write_json(_policy_path(policy_id), normalized)
+        return normalized
+
 
 
 def delete_policy(policy_id: str) -> dict[str, Any]:
