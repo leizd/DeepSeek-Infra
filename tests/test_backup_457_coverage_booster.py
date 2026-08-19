@@ -3451,3 +3451,124 @@ def test_server_unhandled_and_import_error_branches(tmp_settings: Path) -> None:
         resp = client.get("/api/agent-runs/123")
         assert resp.status_code == 500
         assert resp.json().get("error") == "Server error"
+
+
+def test_backup_policies_validation_and_secret_rejections(tmp_settings: Path) -> None:
+    from deepseek_infra.infra.workspace import backup_policies
+
+    # 1. Secret markers rejection
+    with pytest.raises(AppError) as exc_sec_str:
+        backup_policies._reject_secret_markers("contains begin private key inside")
+    assert exc_sec_str.value.status == 400
+
+    with pytest.raises(AppError) as exc_sec_dict:
+        backup_policies._reject_secret_markers({"token": "bearer my_secret_token"})
+    assert exc_sec_dict.value.status == 400
+
+    with pytest.raises(AppError) as exc_sec_list:
+        backup_policies._reject_secret_markers(["safe", "age-secret-key-12345"])
+    assert exc_sec_list.value.status == 400
+
+    # 2. Scope validation errors
+    with pytest.raises(AppError) as exc_scope_map:
+        backup_policies._require_mapping("not a dict", "test_sec")
+    assert exc_scope_map.value.status == 400
+
+    with pytest.raises(AppError) as exc_bool:
+        backup_policies._require_bool("not_a_bool", "test_bool", True)
+    assert exc_bool.value.status == 400
+
+    with pytest.raises(AppError) as exc_int:
+        backup_policies._require_int("not_an_int", "test_int", 10, 1, 100)
+    assert exc_int.value.status == 400
+
+    with pytest.raises(AppError) as exc_int_bounds:
+        backup_policies._require_int(999, "test_int", 10, 1, 100)
+    assert exc_int_bounds.value.status == 400
+
+    with pytest.raises(AppError) as exc_choice:
+        backup_policies._require_choice("invalid_opt", "test_choice", ("a", "b"))
+    assert exc_choice.value.status == 400
+
+    with pytest.raises(AppError) as exc_safe_id:
+        backup_policies._require_safe_id("invalid/id/with/slash", "test_id")
+    assert exc_safe_id.value.status == 400
+
+    # 3. Recipients validation
+    with pytest.raises(AppError) as exc_rec_empty:
+        backup_policies.normalize_recipients([])
+    assert exc_rec_empty.value.status == 400
+
+    with pytest.raises(AppError) as exc_rec_non_age:
+        backup_policies.normalize_recipients(["ssh-rsa AAAA..."])
+    assert exc_rec_non_age.value.status == 400
+
+    # 4. Scope mode project without projects
+    with pytest.raises(AppError) as exc_proj_mode:
+        backup_policies._normalize_scope({"mode": "project", "projectIds": []})
+    assert exc_proj_mode.value.status == 400
+
+    # 5. active_recipients aggregation
+    pol_rec = {
+        "policyId": "pol_with_rec",
+        "protection": {"recipients": [backup_policies.DEFAULT_TEST_RECIPIENT]},
+    }
+    with patch.object(backup_policies, "list_policies", return_value=[pol_rec]):
+        recs = backup_policies.active_recipients()
+        assert len(recs) == 1
+        assert recs[0] == backup_policies.DEFAULT_TEST_RECIPIENT
+
+
+def test_backup_dr_readiness_objectives_breaches_and_failures(tmp_settings: Path) -> None:
+    from deepseek_infra.infra.workspace import backup_dr_readiness, backup_dr_ledger
+
+    now_dt = datetime.now(tz=timezone.utc)
+    old_time_iso = (now_dt - timedelta(days=10)).isoformat().replace("+00:00", "Z")
+    recent_time_iso = now_dt.isoformat().replace("+00:00", "Z")
+
+    fake_point = {
+        "targetId": "t1",
+        "policyId": "p1",
+        "backupId": "b1",
+        "committedAt": old_time_iso,
+        "snapshotKind": "full",
+        "chainLength": 1,
+    }
+
+    # 1. RPO objective breached
+    with patch.object(backup_dr_ledger, "get_latest_recoverable_point", return_value=(fake_point, [fake_point])):
+        with patch.object(backup_dr_ledger, "get_latest_scrub_outcome", return_value=None):
+            with patch.object(backup_dr_ledger, "get_latest_drill_outcome", return_value=None):
+                res_rpo = backup_dr_readiness.evaluate_scope_readiness(
+                    "t1",
+                    "p1",
+                    recovery_objectives={"maxRpoSeconds": 3600, "maxScrubAgeSeconds": 86400, "maxDrillAgeSeconds": 86400},
+                    now=now_dt,
+                )
+                assert res_rpo["status"] == "objective-breached"
+                assert "rpo-objective-breached" in res_rpo["reasons"]
+
+    # 2. Scrub failed and overdue
+    scrub_failed = {"targetId": "t1", "policyId": "p1", "observedAt": recent_time_iso, "result": "failed"}
+    with patch.object(backup_dr_ledger, "get_latest_recoverable_point", return_value=(fake_point, [fake_point])):
+        with patch.object(backup_dr_ledger, "get_latest_scrub_outcome", return_value=scrub_failed):
+            with patch.object(backup_dr_ledger, "get_latest_drill_outcome", return_value=None):
+                res_scrub_fail = backup_dr_readiness.evaluate_scope_readiness(
+                    "t1",
+                    "p1",
+                    now=now_dt,
+                )
+                assert "scrub-failed" in res_scrub_fail["reasons"]
+                assert res_scrub_fail["status"] == "degraded"
+
+    # 3. Drill failed and drill blocked
+    drill_fail = {"targetId": "t1", "policyId": "p1", "observedAt": recent_time_iso, "result": "failed", "drillKind": "dry-run"}
+    with patch.object(backup_dr_ledger, "get_latest_recoverable_point", return_value=(fake_point, [fake_point])):
+        with patch.object(backup_dr_ledger, "get_latest_scrub_outcome", return_value=None):
+            with patch.object(backup_dr_ledger, "get_latest_drill_outcome", return_value=drill_fail):
+                res_drill_fail = backup_dr_readiness.evaluate_scope_readiness(
+                    "t1",
+                    "p1",
+                    now=now_dt,
+                )
+                assert "drill-failed" in res_drill_fail["reasons"]
