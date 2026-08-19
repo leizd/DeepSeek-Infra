@@ -3377,14 +3377,13 @@ def test_server_share_target_post_coverage(tmp_settings: Path) -> None:
     from deepseek_infra.web import server as server_module
 
     srv, _ = server_module.create_server(0, host="127.0.0.1")
-    client = TestClient(srv.app, follow_redirects=False)
+    client = TestClient(srv.app, base_url="http://127.0.0.1", follow_redirects=False)
 
     # 1. Share target with text and title as multipart
     resp1 = client.post(
         "/share-target",
         data={"title": "Shared Title", "text": "Shared Text", "url": "https://example.com"},
-        files={"dummy": ("", b"", "application/octet-stream")},
-        headers={"Host": "127.0.0.1"},
+        files={"dummy": ("sample.txt", b"sample content", "text/plain")},
     )
     assert resp1.status_code == 303
     assert "/?share=" in resp1.headers.get("Location", "")
@@ -3395,7 +3394,6 @@ def test_server_share_target_post_coverage(tmp_settings: Path) -> None:
         "/share-target",
         data={"title": "File Title"},
         files={"file": fake_file},
-        headers={"Host": "127.0.0.1"},
     )
     assert resp2.status_code == 303
 
@@ -3404,9 +3402,54 @@ def test_server_share_target_post_coverage(tmp_settings: Path) -> None:
         resp3 = client.post(
             "/share-target",
             files={"file": ("corrupt.bin", b"xyz", "application/octet-stream")},
-            headers={"Host": "127.0.0.1"},
         )
         assert resp3.status_code == 303
+
+    # 4. File text endpoint and projects list action
+    from deepseek_infra.core.config import settings
+    auth_headers = {"Authorization": f"Bearer {settings.auth.token}"}
+    resp4 = client.post(
+        "/api/file-text",
+        files={"file": ("hello.txt", b"some text", "text/plain")},
+        headers=auth_headers,
+    )
+    assert resp4.status_code == 200
+
+    resp5 = client.post(
+        "/api/projects",
+        json={"action": "list"},
+        headers=auth_headers,
+    )
+    assert resp5.status_code == 200
+
+
+def test_server_static_paths_and_redaction(tmp_settings: Path) -> None:
+    from deepseek_infra.web import server as server_module
+
+    # 1. resolve_static_file branches
+    assert server_module.resolve_static_file("/../secret.txt") is None
+    assert server_module.resolve_static_file("/legacy/old.html") is None
+    assert server_module.resolve_static_file("") is not None
+    assert server_module.resolve_static_file("/ui") is not None
+
+    # 2. redact_sensitive_query branches
+    assert server_module.redact_sensitive_query("http://localhost:8000/api?token=secret123") == "http://localhost:8000/api?token=%5Bredacted%5D"
+    assert server_module.redact_sensitive_query("/share?not_token=456") == "/share?not_token=456"
+
+
+def test_http_utils_cors_and_body_limits(tmp_settings: Path) -> None:
+    from dataclasses import replace
+    from deepseek_infra.web import http_utils
+
+    # 1. allowed_cors_origin with unlisted host
+    assert http_utils.allowed_cors_origin("http://malicious.domain.com:8080", 8080) == ""
+
+    # 2. allowed_auth_hosts with 0.0.0.0 and no lan_ip
+    fake_settings = replace(http_utils.settings, default_host="0.0.0.0")
+    with patch.object(http_utils, "settings", fake_settings):
+        with patch.object(http_utils, "local_ip", return_value=""):
+            hosts = http_utils.allowed_auth_hosts()
+            assert "0.0.0.0" not in hosts
 
 
 def test_launcher_credentials_restrict_permissions_posix_and_nt(tmp_settings: Path) -> None:
