@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
-from deepseek_infra.core.errors import AppError
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_capacity,
     backup_drain,
@@ -3371,3 +3371,61 @@ def test_backup_scheduler_reclaim_blocked_runs_all_terminal_and_retry_branches(t
         assert len(reclaimed) == 1
         assert reclaimed[0].policy_id == "pol_ok"
         assert reclaimed[0].attempt == 2
+
+
+def test_server_share_target_post_coverage(tmp_settings: Path) -> None:
+    from deepseek_infra.web import server as server_module
+
+    srv, _ = server_module.create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, follow_redirects=False)
+
+    # 1. Share target with text and title as multipart
+    resp1 = client.post(
+        "/share-target",
+        data={"title": "Shared Title", "text": "Shared Text", "url": "https://example.com"},
+        files={"dummy": ("", b"", "application/octet-stream")},
+        headers={"Host": "127.0.0.1"},
+    )
+    assert resp1.status_code == 303
+    assert "/?share=" in resp1.headers.get("Location", "")
+
+    # 2. Share target with uploaded file and with extraction
+    fake_file = ("test.txt", b"hello shared file", "text/plain")
+    resp2 = client.post(
+        "/share-target",
+        data={"title": "File Title"},
+        files={"file": fake_file},
+        headers={"Host": "127.0.0.1"},
+    )
+    assert resp2.status_code == 303
+
+    # 3. Share target with invalid/unextractable file error handling
+    with patch("deepseek_infra.web.server.extract_uploaded_file", side_effect=AppError("Cannot extract", code=ErrorCode.INVALID_REQUEST, status=400)):
+        resp3 = client.post(
+            "/share-target",
+            files={"file": ("corrupt.bin", b"xyz", "application/octet-stream")},
+            headers={"Host": "127.0.0.1"},
+        )
+        assert resp3.status_code == 303
+
+
+def test_launcher_credentials_restrict_permissions_posix_and_nt(tmp_settings: Path) -> None:
+    import os
+    from deepseek_infra.launcher import credentials as creds_module
+
+    target_file = tmp_settings / "test_creds.json"
+    target_file.write_text("{}", encoding="utf-8")
+
+    # 1. Test NT branch
+    with patch.object(os, "name", "nt"):
+        creds_module._restrict_permissions(target_file)
+
+    # 2. Test POSIX branch with chmod
+    with patch.object(os, "name", "posix"):
+        with patch.object(Path, "chmod"):
+            creds_module._restrict_permissions(target_file)
+
+    # 3. Test POSIX branch with OSError
+    with patch.object(os, "name", "posix"):
+        with patch.object(Path, "chmod", side_effect=OSError("Permission denied")):
+            creds_module._restrict_permissions(target_file)
