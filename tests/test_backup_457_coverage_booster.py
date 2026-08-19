@@ -3429,3 +3429,25 @@ def test_launcher_credentials_restrict_permissions_posix_and_nt(tmp_settings: Pa
     with patch.object(os, "name", "posix"):
         with patch.object(Path, "chmod", side_effect=OSError("Permission denied")):
             creds_module._restrict_permissions(target_file)
+
+
+def test_server_unhandled_and_import_error_branches(tmp_settings: Path) -> None:
+    from deepseek_infra.web import server as server_module
+
+    # 1. load_multipart_module with issue
+    with patch("deepseek_infra.web.server.multipart_module_issue", return_value="Incompatible version"):
+        assert server_module.load_multipart_module() is None
+
+    # 2. _list_external_mcp_tools with import exception
+    with patch.dict("sys.modules", {"deepseek_infra.infra.mcp.bridge": None}):
+        res = server_module._list_external_mcp_tools()
+        assert res["ok"] is True
+        assert res["servers"] == []
+
+    # 3. unhandled_error_handler
+    srv, _ = server_module.create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, raise_server_exceptions=False)
+    with patch("deepseek_infra.web.server.require_api_auth", side_effect=RuntimeError("unexpected boom")):
+        resp = client.get("/api/agent-runs/123")
+        assert resp.status_code == 500
+        assert resp.json().get("error") == "Server error"
