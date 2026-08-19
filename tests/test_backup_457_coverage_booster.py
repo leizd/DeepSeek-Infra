@@ -3615,3 +3615,56 @@ def test_backup_dr_readiness_objectives_breaches_and_failures(tmp_settings: Path
                     now=now_dt,
                 )
                 assert "drill-failed" in res_drill_fail["reasons"]
+
+
+def test_http_utils_require_api_auth_disabled_and_large_body(tmp_settings: Path) -> None:
+    import asyncio
+    from dataclasses import replace
+    from fastapi import Request
+    from deepseek_infra.web import http_utils
+
+    # 1. require_api_auth with auth disabled (line 81)
+    fake_settings = replace(http_utils.settings, auth=replace(http_utils.settings.auth, enabled=False))
+    with patch.object(http_utils, "settings", fake_settings):
+        http_utils.require_api_auth(Request({"type": "http"}))
+
+    # 2. read_json_body with body exceeding limit (line 99)
+    async def run_body_check() -> None:
+        req = Request({"type": "http", "headers": [(b"content-length", b"5000")]})
+        with pytest.raises(AppError) as exc_too_large:
+            await http_utils.read_json_body(req, max_bytes=100)
+        assert exc_too_large.value.status == 413
+
+    asyncio.run(run_body_check())
+
+
+def test_server_port_scan_oserror_handling(tmp_settings: Path) -> None:
+    from deepseek_infra.web import server as server_module
+
+    # Covers server.py lines 808-816
+    mock_sock = MagicMock()
+    mock_sock.getsockname.side_effect = OSError("sock error")
+    mock_sock.close.side_effect = OSError("close error")
+    with patch("deepseek_infra.web.server.open_bind_socket", return_value=mock_sock):
+        with pytest.raises(SystemExit):
+            server_module.create_server(49152)
+
+
+def test_backup_governance_target_drain_404_and_empty_candidate(tmp_settings: Path) -> None:
+    from deepseek_infra.core.config import settings
+    from deepseek_infra.web import server as server_module
+
+    srv, _ = server_module.create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, base_url="http://127.0.0.1")
+    auth_headers = {"Authorization": f"Bearer {settings.auth.token}"}
+
+    # 1. Drain 404
+    resp = client.get("/api/workspace/backup-targets/non_existent_target/drain", headers=auth_headers)
+    assert resp.status_code == 404
+
+    # 2. _find_backup_session with empty targetId in candidates (line 89)
+    from deepseek_infra.web.routes import backup_governance
+    with patch("deepseek_infra.infra.workspace.backup_targets.list_targets", return_value=[{"targetId": ""}]):
+        with pytest.raises(AppError) as exc_nf:
+            backup_governance._find_backup_session("bk_nonexistent")
+        assert exc_nf.value.status == 404
