@@ -28,7 +28,16 @@ from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_component_transport, backup_object_set, backup_scheduler, backup_spool, backup_targets, backup_unattended, backups
+from deepseek_infra.infra.workspace import (
+    backup_component_transport,
+    backup_object_set,
+    backup_scheduler,
+    backup_spool,
+    backup_targets,
+    backup_transfer_budget,
+    backup_unattended,
+    backups,
+)
 from deepseek_infra.infra.workspace.backup_target_store import (
     BackupTargetStore,
     STRONG_PROVIDER_CHECKSUM,
@@ -434,6 +443,7 @@ def publish_backup(
     fencing_token: int,
     receipt: dict[str, Any] | None = None,
     checkpoint: Callable[[], None] | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
 ) -> PublishResult:
     """Publish a verified package as an immutable object plus slot commit."""
     result: PublishResult
@@ -448,6 +458,7 @@ def publish_backup(
                 fencing_token=fencing_token,
                 receipt=receipt,
                 checkpoint=checkpoint,
+                traffic_class=traffic_class,
             )
         else:
             result = _publish_object_set_filesystem(
@@ -459,6 +470,7 @@ def publish_backup(
                 fencing_token=fencing_token,
                 receipt=receipt,
                 checkpoint=checkpoint,
+                traffic_class=traffic_class,
             )
     elif target.kind != "filesystem" or target.root is None:
         result = _publish_via_store(
@@ -470,6 +482,7 @@ def publish_backup(
             fencing_token=fencing_token,
             receipt=receipt,
             checkpoint=checkpoint,
+            traffic_class=traffic_class,
         )
     else:
         result = _publish_filesystem(
@@ -481,6 +494,7 @@ def publish_backup(
             fencing_token=fencing_token,
             receipt=receipt,
             checkpoint=checkpoint,
+            traffic_class=traffic_class,
         )
     _record_publish_to_dr_ledger(target.target_id, policy_id, result, package)
     return result
@@ -496,6 +510,7 @@ def _publish_filesystem(
     fencing_token: int,
     receipt: dict[str, Any] | None = None,
     checkpoint: Callable[[], None] | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
 ) -> PublishResult:
     root = target.require_root()
     _ensure_layout(root)
@@ -523,12 +538,19 @@ def _publish_filesystem(
     try:
         _write_journal(root, journal)
         if not obj.is_file():
-            with package.path.open("rb") as source, partial.open("wb") as output:
+            manager = backup_transfer_budget.get_global_transfer_budget_manager()
+            with manager.track_transfer(
+                traffic_class=traffic_class,
+                source_target_id="managed-local",
+                dest_target_id=target.target_id,
+                estimated_bytes=int(package.size),
+            ) as transfer_id, package.path.open("rb") as source, partial.open("wb") as output:
                 while True:
                     _checkpoint()
                     chunk = source.read(1024 * 1024)
                     if not chunk:
                         break
+                    manager.wait_for_bandwidth(transfer_id, len(chunk))
                     output.write(chunk)
                 output.flush()
                 os.fsync(output.fileno())
@@ -636,6 +658,7 @@ def _publish_object_set_filesystem(
     fencing_token: int,
     receipt: dict[str, Any] | None,
     checkpoint: Callable[[], None] | None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
 ) -> PublishResult:
     root = target.require_root()
     _ensure_layout(root)
@@ -675,9 +698,16 @@ def _publish_object_set_filesystem(
             partial = root / ".partial" / f"{run_id}-{component.ciphertext_digest}.part"
             partials.append(partial)
             if not destination.is_file():
-                with component.path.open("rb") as source, partial.open("wb") as output:
+                manager = backup_transfer_budget.get_global_transfer_budget_manager()
+                with manager.track_transfer(
+                    traffic_class=traffic_class,
+                    source_target_id="managed-local",
+                    dest_target_id=target.target_id,
+                    estimated_bytes=component.ciphertext_size,
+                ) as transfer_id, component.path.open("rb") as source, partial.open("wb") as output:
                     while chunk := source.read(1024 * 1024):
                         _checkpoint()
+                        manager.wait_for_bandwidth(transfer_id, len(chunk))
                         output.write(chunk)
                     output.flush()
                     os.fsync(output.fileno())
@@ -827,6 +857,7 @@ def _publish_object_set_via_store(
     fencing_token: int,
     receipt: dict[str, Any] | None,
     checkpoint: Callable[[], None] | None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
 ) -> PublishResult:
     store = target.require_store()
     slot_digest = commit_slot_digest(schedule_slot)
@@ -925,6 +956,9 @@ def _publish_object_set_via_store(
                     checkpoint=_component_checkpoint,
                     multipart_digest=component.ciphertext_digest,
                     workers=1,
+                    traffic_class=traffic_class,
+                    source_target_id="managed-local",
+                    dest_target_id=target.target_id,
                 )
                 metadata = store.stat(key)
             if metadata is None or metadata.size != component.ciphertext_size:
@@ -938,7 +972,13 @@ def _publish_object_set_via_store(
                 return
             digest = hashlib.sha256()
             observed_size = 0
-            for chunk in store.get_stream(key):
+            manager = backup_transfer_budget.get_global_transfer_budget_manager()
+            verified_stream = manager.throttled_generator(
+                store.get_stream(key),
+                traffic_class=traffic_class,
+                source_target_id=target.target_id,
+            )
+            for chunk in verified_stream:
                 _component_checkpoint()
                 digest.update(chunk)
                 observed_size += len(chunk)
@@ -1057,6 +1097,7 @@ def _publish_via_store(
     fencing_token: int,
     receipt: dict[str, Any] | None = None,
     checkpoint: Callable[[], None] | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
 ) -> PublishResult:
     store = target.require_store()
     digest = str(package.ciphertext_sha256)
@@ -1130,7 +1171,17 @@ def _publish_via_store(
 
         _checkpoint()
         if store.stat(obj_key) is None:
-            _upload_object_resumable(store, package_view, obj_key=obj_key, policy_id=policy_id, slot_digest=slot_digest, checkpoint=checkpoint)
+            _upload_object_resumable(
+                store,
+                package_view,
+                obj_key=obj_key,
+                policy_id=policy_id,
+                slot_digest=slot_digest,
+                checkpoint=checkpoint,
+                traffic_class=traffic_class,
+                source_target_id="managed-local",
+                dest_target_id=target.target_id,
+            )
         else:
             # Verify remote object when present.
             remote = store.get_bytes(obj_key)
@@ -1234,6 +1285,9 @@ def _upload_object_resumable(
     checkpoint: Callable[[], None] | None = None,
     multipart_digest: str | None = None,
     workers: int = 4,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
+    source_target_id: str | None = "managed-local",
+    dest_target_id: str | None = None,
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1305,7 +1359,15 @@ def _upload_object_resumable(
             chunk = handle.read(length)
         if len(chunk) != length:
             raise AppError("spooled multipart package was truncated", code=ErrorCode.INTERNAL, status=500)
-        return store.upload_part(upload, part_number, chunk, checksum_sha256=hashlib.sha256(chunk).hexdigest())
+        manager = backup_transfer_budget.get_global_transfer_budget_manager()
+        with manager.track_transfer(
+            traffic_class=traffic_class,
+            source_target_id=source_target_id,
+            dest_target_id=dest_target_id,
+            estimated_bytes=length,
+        ) as transfer_id:
+            manager.wait_for_bandwidth(transfer_id, length)
+            return store.upload_part(upload, part_number, chunk, checksum_sha256=hashlib.sha256(chunk).hexdigest())
 
     pending = [
         (part_number, offset, min(part_size, size - offset))

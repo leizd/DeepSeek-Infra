@@ -42,13 +42,13 @@
 
 ## Gate E — Production QoS
 
-- [ ] Implement independent global/source-read/destination-write buckets
-- [ ] Share tokens and DR reservation across processes
-- [ ] Wire P1 Primary Publish
-- [ ] Wire P0 Restore
-- [ ] Wire P2/P3 Repair and required Replication
-- [ ] Wire P4 Scrub/Drill and P5/P6 Rebalance/Drain/best effort
-- [ ] Prove measured foreground reservation and background throttling
+- [x] Implement independent global/source-read/destination-write buckets
+- [x] Share tokens and DR reservation across processes
+- [x] Wire P1 Primary Publish
+- [x] Wire P0 Restore
+- [x] Wire P2/P3 Repair and required Replication
+- [x] Wire P4 Scrub/Drill and P5/P6 Rebalance/Drain/best effort
+- [x] Prove measured foreground reservation and background throttling
 
 ## Gate F — Maintenance and Drain
 

@@ -36,6 +36,7 @@ from deepseek_infra.infra.workspace import (
     backup_publish,
     backup_scheduler,
     backup_spool,
+    backup_transfer_budget,
     backup_writer_lease,
 )
 
@@ -596,6 +597,11 @@ def execute_replication_job(job_id: str, *, instance_id: str = "repl-worker") ->
                 policy_id=policy_id,
                 schedule_slot=schedule_slot,
                 fencing_token=fencing,
+                traffic_class=(
+                    backup_transfer_budget.TrafficClass.P3_REQUIRED_REPLICATION
+                    if mode == "required"
+                    else backup_transfer_budget.TrafficClass.P6_BEST_EFFORT
+                ),
             )
             job = _set_phase(job, "committing")
             if isinstance(package, backup_object_set.ObjectSetPackage):
@@ -703,6 +709,23 @@ def _iter_source_stream(target: Any, rel_key: str, *, chunk_size: int = DEFAULT_
                 # If stream yields large chunk, slice into bounded buffer chunks
                 for offset in range(0, len(chunk), chunk_size):
                     yield chunk[offset : offset + chunk_size]
+
+
+def _managed_source_stream(
+    source_target: Any,
+    dest_target: Any,
+    rel_key: str,
+    *,
+    chunk_size: int,
+    traffic_class: backup_transfer_budget.TrafficClass,
+) -> Iterator[bytes]:
+    manager = backup_transfer_budget.get_global_transfer_budget_manager()
+    return manager.throttled_generator(
+        _iter_source_stream(source_target, rel_key, chunk_size=chunk_size),
+        traffic_class=traffic_class,
+        source_target_id=str(getattr(source_target, "target_id", "") or "") or None,
+        dest_target_id=str(getattr(dest_target, "target_id", "") or "") or None,
+    )
 
 
 def authenticate_recovery_copy(
@@ -1039,6 +1062,7 @@ def stream_ciphertext_transfer(
     chunk_size: int = DEFAULT_BUFFER_CHUNK_SIZE,
     progress_state: dict[str, Any] | None = None,
     on_part: Callable[[int, str, int], None] | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR,
 ) -> int:
     """Stream ciphertext from source to destination using bounded buffer RAM.
 
@@ -1056,7 +1080,13 @@ def stream_ciphertext_transfer(
         tmp = dp.with_name(f".{dp.name}.{os.getpid()}.{time.time_ns()}.tmp")
         try:
             with tmp.open("wb") as out_h:
-                for chunk in _iter_source_stream(source_target, source_rel, chunk_size=chunk_size):
+                for chunk in _managed_source_stream(
+                    source_target,
+                    dest_target,
+                    source_rel,
+                    chunk_size=chunk_size,
+                    traffic_class=traffic_class,
+                ):
                     hasher.update(chunk)
                     out_h.write(chunk)
                     bytes_transferred += len(chunk)
@@ -1077,7 +1107,13 @@ def stream_ciphertext_transfer(
             raise
     elif dest_target.store is not None:
         store = dest_target.store
-        stream = _iter_source_stream(source_target, source_rel, chunk_size=chunk_size)
+        stream = _managed_source_stream(
+            source_target,
+            dest_target,
+            source_rel,
+            chunk_size=chunk_size,
+            traffic_class=traffic_class,
+        )
 
         # Reconcile the durable local checkpoint with provider ListParts before
         # sending any resumed bytes. Provider parts are accepted only after
@@ -1221,7 +1257,13 @@ def stream_ciphertext_transfer(
                 return bytes_transferred
 
         # A missing provider upload is restarted from byte zero.
-        stream = _iter_source_stream(source_target, source_rel, chunk_size=chunk_size)
+        stream = _managed_source_stream(
+            source_target,
+            dest_target,
+            source_rel,
+            chunk_size=chunk_size,
+            traffic_class=traffic_class,
+        )
         hasher = hashlib.sha256()
         bytes_transferred = 0
 
@@ -1322,6 +1364,8 @@ def quarantine_and_replace_corrupt_remote_object(
     expected_digest: str,
     source_target: Any,
     source_rel: str,
+    *,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR,
 ) -> int:
     """Safely replace a corrupted object on destination using conditional delete + transfer."""
     if dest_target.root is not None:
@@ -1330,7 +1374,14 @@ def quarantine_and_replace_corrupt_remote_object(
         dp = dest_target.root / dest_rel
         if dp.is_file():
             dp.rename(q_dir / f"{expected_digest}.corrupt.{time.time_ns()}")
-        return stream_ciphertext_transfer(source_target, dest_target, source_rel, dest_rel, expected_digest)
+        return stream_ciphertext_transfer(
+            source_target,
+            dest_target,
+            source_rel,
+            dest_rel,
+            expected_digest,
+            traffic_class=traffic_class,
+        )
 
     if dest_target.store is not None:
         stat = dest_target.store.stat(dest_rel)
@@ -1379,7 +1430,14 @@ def quarantine_and_replace_corrupt_remote_object(
             except Exception as exc:
                 raise AppError(f"conditional-delete-corrupt-object-failed: {exc}", code=ErrorCode.INVALID_REQUEST, status=412) from exc
 
-        return stream_ciphertext_transfer(source_target, dest_target, source_rel, dest_rel, expected_digest)
+        return stream_ciphertext_transfer(
+            source_target,
+            dest_target,
+            source_rel,
+            dest_rel,
+            expected_digest,
+            traffic_class=traffic_class,
+        )
     return 0
 
 
@@ -1443,6 +1501,7 @@ def create_repair_job(
     source_target_id: str | None = None,
     object_set_digest: str | None = None,
     repair_id: str | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR,
 ) -> dict[str, Any]:
     with _LOCK:
         REPAIRS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1456,6 +1515,7 @@ def create_repair_job(
             "destTargetId": dest_target_id,
             "objectSetDigest": object_set_digest,
             "repairMode": "auto",
+            "trafficClass": int(traffic_class),
             "phase": "queued",
             "components": {},
             "bytesRepaired": 0,
@@ -1492,6 +1552,7 @@ def execute_replica_repair(
     source_target_id: str | None = None,
     run_id: str | None = None,
     instance_id: str = "healer-worker",
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR,
 ) -> dict[str, Any]:
     """Repair missing/corrupted replica copy purely on the ciphertext plane.
 
@@ -1523,6 +1584,7 @@ def execute_replica_repair(
                 dest_target_id=dest_target_id,
                 source_target_id=source_target_id,
                 repair_id=r_id,
+                traffic_class=traffic_class,
             )
     else:
         job = existing_job
@@ -1554,6 +1616,10 @@ def execute_repair_job_instance(
     backup_id = str(job["backupId"])
     dest_target_id = str(job["destTargetId"])
     source_target_id = job.get("sourceTargetId") or requested_source_target_id
+    try:
+        transfer_class = backup_transfer_budget.TrafficClass(int(job.get("trafficClass", 2)))
+    except ValueError:
+        transfer_class = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR
     attempt = int(job.get("attempt") or 0) + 1
     max_attempts = int(job.get("maxAttempts") or 5)
 
@@ -1758,6 +1824,7 @@ def execute_repair_job_instance(
                         digest,
                         source_target,
                         source_rel,
+                        traffic_class=transfer_class,
                     )
                 else:
                     def _checkpoint_multipart_part(part_number: int, etag: str, part_bytes: int) -> None:
@@ -1782,6 +1849,7 @@ def execute_repair_job_instance(
                         digest,
                         progress_state=components_state[digest],
                         on_part=_checkpoint_multipart_part,
+                        traffic_class=transfer_class,
                     )
 
                 bytes_transferred += trans_bytes
@@ -2360,6 +2428,7 @@ def execute_rebalance_job(
             dest_target_id=dest_target_id,
             source_target_id=source_target_id,
             instance_id=instance_id,
+            traffic_class=backup_transfer_budget.TrafficClass.P5_REBALANCE_DRAIN,
         )
         if repair_res.get("status") != "success":
             raise AppError(f"Rebalance transfer failed: {repair_res.get('error')}", code=ErrorCode.INTERNAL, status=500)

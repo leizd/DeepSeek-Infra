@@ -39,6 +39,7 @@ from deepseek_infra.infra.workspace import (
     backup_recovery_state,
     backup_recovery_telemetry,
     backup_targets,
+    backup_transfer_budget,
     backup_unattended,
     backup_verified_plan,
     backups,
@@ -747,6 +748,8 @@ def _download_member(
     checkpoint: Callable[[], None] | None = None,
     transferred: Callable[[int], None] | None = None,
     integrity_failure: Callable[[], None] | None = None,
+    source_target_id: str | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P0_DISASTER_RECOVERY,
 ) -> bool:
     """Resume-download one chain member; returns True when fully fetched."""
     digest = str(member["objectDigest"])
@@ -765,12 +768,26 @@ def _download_member(
     mode = "ab" if offset else "wb"
     remaining = max(0, expected - offset)
     budget = remaining if max_bytes is None else min(remaining, max(0, int(max_bytes)))
-    with ciphertext_path.open(mode) as handle:
+    manager = backup_transfer_budget.get_global_transfer_budget_manager()
+    with manager.track_transfer(
+        traffic_class=traffic_class,
+        source_target_id=source_target_id,
+        dest_target_id="restore-staging",
+        estimated_bytes=budget,
+    ) as transfer_id, ciphertext_path.open(mode) as handle:
         position = offset
         consumed = 0
         if max_bytes is None:
-            pieces = store.get_stream(object_key(digest), offset=position)
+            pieces = manager.throttled_generator(
+                store.get_stream(object_key(digest), offset=position),
+                transfer_id=transfer_id,
+                traffic_class=traffic_class,
+                source_target_id=source_target_id,
+                dest_target_id="restore-staging",
+            )
         else:
+            if budget > 0:
+                manager.wait_for_bandwidth(transfer_id, budget)
             fetched = store.get_bytes(object_key(digest), offset=position, length=budget)
             pieces = iter((fetched,)) if fetched else iter(())
         for raw_piece in pieces:
@@ -828,6 +845,12 @@ def _download_member_with_telemetry(
             checkpoint=lambda: _checkpoint_job_control(session, store),
             transferred=_transferred,
             integrity_failure=lambda: backup_recovery_telemetry.increment_counter(session, "integrityFailure"),
+            source_target_id=str(session.get("targetId") or "") or None,
+            traffic_class=(
+                backup_transfer_budget.TrafficClass.P4_SCRUB_DRILL
+                if session.get("drillOnly")
+                else backup_transfer_budget.TrafficClass.P0_DISASTER_RECOVERY
+            ),
         )
     except backup_recovery_job.RecoveryJobStopped:
         result = "paused"
@@ -1100,10 +1123,25 @@ def _fetch_object_set_components(
                     _parallel_checkpoint()
 
                 try:
+                    transfer_class = (
+                        backup_transfer_budget.TrafficClass.P4_SCRUB_DRILL
+                        if session.get("drillOnly")
+                        else backup_transfer_budget.TrafficClass.P0_DISASTER_RECOVERY
+                    )
+                    manager = backup_transfer_budget.get_global_transfer_budget_manager()
+
+                    def _managed_component_stream(offset: int) -> Any:
+                        return manager.throttled_generator(
+                            store.get_stream(object_key(digest), offset=offset),
+                            traffic_class=transfer_class,
+                            source_target_id=str(session.get("targetId") or "") or None,
+                            dest_target_id="restore-staging",
+                        )
+
                     cached = component_cache.fetch(
                         digest,
                         expected_bytes,
-                        lambda offset: store.get_stream(object_key(digest), offset=offset),
+                        _managed_component_stream,
                         progress=_checkpoint,
                     )
                 except backup_recovery_job.RecoveryJobStopped:

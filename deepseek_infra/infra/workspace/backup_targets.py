@@ -71,6 +71,14 @@ def _operator_cost(value: float | int | None, field: str) -> float | None:
     return parsed
 
 
+def _positive_qos(value: int | None, field: str, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AppError(f"Backup target {field} must be a positive integer", code=ErrorCode.INVALID_PAYLOAD)
+    return value
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -239,9 +247,17 @@ def init_target(
     path: Path | str,
     *,
     label: str = "",
+    region: str | None = None,
     failure_domain: str | None = None,
+    provider: str | None = None,
+    jurisdiction: str | None = None,
     priority: int = 0,
     cost_class: str | None = None,
+    storage_cost_per_gib_month: float | int | None = None,
+    egress_cost_per_gib: float | int | None = None,
+    max_read_bytes_per_second: int | None = None,
+    max_write_bytes_per_second: int | None = None,
+    max_concurrent_transfers: int | None = None,
 ) -> dict[str, Any]:
     """Initialize a directory as a backup target and register it."""
     resolved = _resolve_basic(Path(path))
@@ -274,9 +290,17 @@ def init_target(
                 str(existing.get("targetNonce") or ""),
                 label=label,
                 created_at=str(existing.get("createdAt") or ""),
+                region=region,
                 failure_domain=failure_domain,
+                provider=provider,
+                jurisdiction=jurisdiction,
                 priority=priority,
                 cost_class=cost_class,
+                storage_cost_per_gib_month=storage_cost_per_gib_month,
+                egress_cost_per_gib=egress_cost_per_gib,
+                max_read_bytes_per_second=max_read_bytes_per_second,
+                max_write_bytes_per_second=max_write_bytes_per_second,
+                max_concurrent_transfers=max_concurrent_transfers,
             )
         raise AppError("Backup target marker is invalid", code=ErrorCode.INVALID_PAYLOAD)
     violation = _containment_violation(resolved)
@@ -301,9 +325,17 @@ def init_target(
         nonce,
         label=label,
         created_at=marker_payload["createdAt"],
+        region=region,
         failure_domain=failure_domain,
+        provider=provider,
+        jurisdiction=jurisdiction,
         priority=priority,
         cost_class=cost_class,
+        storage_cost_per_gib_month=storage_cost_per_gib_month,
+        egress_cost_per_gib=egress_cost_per_gib,
+        max_read_bytes_per_second=max_read_bytes_per_second,
+        max_write_bytes_per_second=max_write_bytes_per_second,
+        max_concurrent_transfers=max_concurrent_transfers,
     )
     _write_checkpoint(target_id, marker_payload)
     return record
@@ -322,6 +354,9 @@ def register_filesystem_target(
     cost_class: str | None = None,
     storage_cost_per_gib_month: float | int | None = None,
     egress_cost_per_gib: float | int | None = None,
+    max_read_bytes_per_second: int | None = None,
+    max_write_bytes_per_second: int | None = None,
+    max_concurrent_transfers: int | None = None,
 ) -> dict[str, Any]:
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
@@ -345,6 +380,9 @@ def register_filesystem_target(
                     cost_class=cost_class,
                     storage_cost_per_gib_month=storage_cost_per_gib_month,
                     egress_cost_per_gib=egress_cost_per_gib,
+                    max_read_bytes_per_second=max_read_bytes_per_second,
+                    max_write_bytes_per_second=max_write_bytes_per_second,
+                    max_concurrent_transfers=max_concurrent_transfers,
                 )
         except Exception:
             pass
@@ -374,6 +412,9 @@ def register_filesystem_target(
         cost_class=cost_class,
         storage_cost_per_gib_month=storage_cost_per_gib_month,
         egress_cost_per_gib=egress_cost_per_gib,
+        max_read_bytes_per_second=max_read_bytes_per_second,
+        max_write_bytes_per_second=max_write_bytes_per_second,
+        max_concurrent_transfers=max_concurrent_transfers,
     )
     _write_checkpoint(target_id, marker_payload)
     return record
@@ -394,6 +435,9 @@ def _register(
     cost_class: str | None = None,
     storage_cost_per_gib_month: float | int | None = None,
     egress_cost_per_gib: float | int | None = None,
+    max_read_bytes_per_second: int | None = None,
+    max_write_bytes_per_second: int | None = None,
+    max_concurrent_transfers: int | None = None,
 ) -> dict[str, Any]:
     if not _TARGET_ID.match(target_id):
         raise AppError("Backup target marker carries an invalid target id", code=ErrorCode.INVALID_PAYLOAD)
@@ -412,6 +456,9 @@ def _register(
         "costClass": cost_class or "standard",
         "storageCostPerGiBMonth": _operator_cost(storage_cost_per_gib_month, "storageCostPerGiBMonth"),
         "egressCostPerGiB": _operator_cost(egress_cost_per_gib, "egressCostPerGiB"),
+        "maxReadBytesPerSecond": _positive_qos(max_read_bytes_per_second, "maxReadBytesPerSecond", 100 * 1024 * 1024),
+        "maxWriteBytesPerSecond": _positive_qos(max_write_bytes_per_second, "maxWriteBytesPerSecond", 100 * 1024 * 1024),
+        "maxConcurrentTransfers": _positive_qos(max_concurrent_transfers, "maxConcurrentTransfers", 4),
         "drainState": "active",
         "createdAt": str(created_at or "") or _utc_iso(),
         "registeredAt": _utc_iso(),
@@ -447,6 +494,9 @@ def init_s3_target(
     cost_class: str | None = None,
     storage_cost_per_gib_month: float | int | None = None,
     egress_cost_per_gib: float | int | None = None,
+    max_read_bytes_per_second: int | None = None,
+    max_write_bytes_per_second: int | None = None,
+    max_concurrent_transfers: int | None = None,
     credential_provider: dict[str, Any] | None = None,
     client: Any | None = None,
     probe: bool = True,
@@ -536,6 +586,9 @@ def init_s3_target(
         "costClass": cost_class or "standard",
         "storageCostPerGiBMonth": _operator_cost(storage_cost_per_gib_month, "storageCostPerGiBMonth"),
         "egressCostPerGiB": _operator_cost(egress_cost_per_gib, "egressCostPerGiB"),
+        "maxReadBytesPerSecond": _positive_qos(max_read_bytes_per_second, "maxReadBytesPerSecond", 100 * 1024 * 1024),
+        "maxWriteBytesPerSecond": _positive_qos(max_write_bytes_per_second, "maxWriteBytesPerSecond", 100 * 1024 * 1024),
+        "maxConcurrentTransfers": _positive_qos(max_concurrent_transfers, "maxConcurrentTransfers", 4),
         "drainState": "active",
         "credentialProvider": credential_config,
         "createdAt": str(identity.get("createdAt") or _utc_iso()),

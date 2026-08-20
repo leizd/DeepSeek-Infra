@@ -8,7 +8,9 @@ evidence, and shared transfer-budget state.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -423,6 +425,182 @@ def list_capacity_evidence(
         }
         for row in rows
     ]
+
+
+def acquire_qos_transfer(
+    *,
+    transfer_id: str,
+    traffic_class: int,
+    source_target_id: str | None,
+    dest_target_id: str | None,
+    estimated_bytes: int,
+    source_concurrency_limit: int,
+    dest_concurrency_limit: int,
+    lease_seconds: float = 60.0,
+    owner_instance_id: str | None = None,
+) -> None:
+    now = time.time()
+    owner = owner_instance_id or f"pid-{os.getpid()}"
+    with _connect() as conn:
+        _begin_immediate(conn)
+        conn.execute("DELETE FROM qos_transfers WHERE lease_until < ?", (now,))
+        if int(traffic_class) != 0:
+            for target_id, limit in (
+                (source_target_id, source_concurrency_limit),
+                (dest_target_id, dest_concurrency_limit),
+            ):
+                if not target_id:
+                    continue
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS active_count
+                    FROM qos_transfers
+                    WHERE source_target_id = ? OR dest_target_id = ?
+                    """,
+                    (target_id, target_id),
+                ).fetchone()
+                active_count = int(row["active_count"] if row is not None else 0)
+                if active_count >= max(1, int(limit)):
+                    conn.execute("ROLLBACK")
+                    raise AppError(
+                        f"target-transfer-concurrency-exceeded: target {target_id} has {active_count} active transfers (max {limit})",
+                        code=ErrorCode.RATE_LIMITED,
+                        status=429,
+                    )
+        conn.execute(
+            """
+            INSERT INTO qos_transfers(
+                transfer_id, owner_instance_id, traffic_class,
+                source_target_id, dest_target_id, estimated_bytes,
+                bytes_transferred, lease_until, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+            ON CONFLICT(transfer_id) DO UPDATE SET
+                owner_instance_id = excluded.owner_instance_id,
+                traffic_class = excluded.traffic_class,
+                source_target_id = excluded.source_target_id,
+                dest_target_id = excluded.dest_target_id,
+                estimated_bytes = excluded.estimated_bytes,
+                lease_until = excluded.lease_until,
+                updated_at = excluded.updated_at
+            """,
+            (
+                transfer_id,
+                owner,
+                int(traffic_class),
+                source_target_id,
+                dest_target_id,
+                max(0, int(estimated_bytes)),
+                now + max(5.0, float(lease_seconds)),
+                _utc_iso(),
+            ),
+        )
+        conn.execute("COMMIT")
+
+
+def release_qos_transfer(transfer_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM qos_transfers WHERE transfer_id = ?", (str(transfer_id),))
+
+
+def list_qos_transfers(*, now: float | None = None) -> list[dict[str, Any]]:
+    current = time.time() if now is None else float(now)
+    with _connect() as conn:
+        conn.execute("DELETE FROM qos_transfers WHERE lease_until < ?", (current,))
+        rows = conn.execute("SELECT * FROM qos_transfers ORDER BY transfer_id").fetchall()
+    return [
+        {
+            "transferId": str(row["transfer_id"]),
+            "ownerInstanceId": str(row["owner_instance_id"]),
+            "trafficClass": int(row["traffic_class"]),
+            "sourceTargetId": str(row["source_target_id"]) if row["source_target_id"] else None,
+            "destTargetId": str(row["dest_target_id"]) if row["dest_target_id"] else None,
+            "estimatedBytes": int(row["estimated_bytes"]),
+            "bytesTransferred": int(row["bytes_transferred"]),
+            "leaseUntil": float(row["lease_until"]),
+            "updatedAt": str(row["updated_at"]),
+        }
+        for row in rows
+    ]
+
+
+def consume_qos_tokens(
+    *,
+    transfer_id: str,
+    requested_bytes: int,
+    bucket_specs: list[dict[str, Any]],
+    traffic_class: int,
+    reserved_global_tokens: int = 0,
+    now: float | None = None,
+    lease_seconds: float = 60.0,
+) -> dict[str, Any]:
+    """Atomically reserve one chunk from every hierarchical QoS bucket."""
+    current = time.time() if now is None else float(now)
+    lease_clock = time.time()
+    amount = max(1, int(requested_bytes))
+    with _connect() as conn:
+        _begin_immediate(conn)
+        conn.execute("DELETE FROM qos_transfers WHERE lease_until < ?", (lease_clock,))
+        p0_row = conn.execute(
+            "SELECT COUNT(*) AS active_count FROM qos_transfers WHERE traffic_class = 0"
+        ).fetchone()
+        active_recovery = int(p0_row["active_count"] if p0_row is not None else 0) > 0
+
+        states: list[dict[str, Any]] = []
+        max_wait = 0.0
+        for spec in bucket_specs:
+            key = str(spec["bucketKey"])
+            rate = max(1.0, float(spec["rateBytesPerSecond"]))
+            capacity = max(float(amount), float(spec.get("capacityBytes") or rate))
+            row = conn.execute("SELECT tokens, last_refill_at FROM qos_buckets WHERE bucket_key = ?", (key,)).fetchone()
+            if row is None:
+                tokens = capacity
+                last_refill = current
+            else:
+                last_refill = float(row["last_refill_at"])
+                tokens = min(capacity, float(row["tokens"]) + max(0.0, current - last_refill) * rate)
+            floor = 0.0
+            if key == "global" and int(traffic_class) != 0 and active_recovery:
+                floor = min(capacity, max(0.0, float(reserved_global_tokens)))
+            available = max(0.0, tokens - floor)
+            if available < amount:
+                max_wait = max(max_wait, (amount - available) / rate)
+            states.append({"key": key, "tokens": tokens, "rate": rate, "capacity": capacity})
+
+        for state in states:
+            next_tokens = float(state["tokens"]) if max_wait > 0 else float(state["tokens"]) - amount
+            conn.execute(
+                """
+                INSERT INTO qos_buckets(bucket_key, tokens, last_refill_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(bucket_key) DO UPDATE SET
+                    tokens = excluded.tokens,
+                    last_refill_at = excluded.last_refill_at,
+                    updated_at = excluded.updated_at
+                """,
+                (state["key"], next_tokens, current, _utc_iso()),
+            )
+
+        if max_wait <= 0:
+            conn.execute(
+                """
+                UPDATE qos_transfers
+                SET bytes_transferred = bytes_transferred + ?, lease_until = ?, updated_at = ?
+                WHERE transfer_id = ?
+                """,
+                (amount, lease_clock + max(5.0, float(lease_seconds)), _utc_iso(), transfer_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE qos_transfers SET lease_until = ?, updated_at = ? WHERE transfer_id = ?",
+                (lease_clock + max(5.0, float(lease_seconds)), _utc_iso(), transfer_id),
+            )
+        conn.execute("COMMIT")
+    return {
+        "granted": max_wait <= 0,
+        "waitSeconds": max(0.0, max_wait),
+        "activeRecovery": active_recovery,
+        "requestedBytes": amount,
+    }
 
 
 def database_path() -> Path:

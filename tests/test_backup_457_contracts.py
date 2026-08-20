@@ -31,6 +31,10 @@ def _isolate_target_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     fake_temp = tmp_path / "fake_temp"
     fake_temp.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_temp))
+    from deepseek_infra.infra.workspace import backup_control
+
+    monkeypatch.setattr(backup_control, "CONTROL_DIR", tmp_path / ".backup-control")
+    monkeypatch.setattr(backup_control, "CONTROL_DB", tmp_path / ".backup-control" / "control.sqlite3")
 
 
 # ── Gate F: Bandwidth QoS & TransferBudgetManager ───────────────────────────

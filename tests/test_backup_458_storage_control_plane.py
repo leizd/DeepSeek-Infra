@@ -4,6 +4,7 @@ import hashlib
 import json
 import multiprocessing
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -21,6 +22,7 @@ from deepseek_infra.infra.workspace import (
     backup_retirement,
     backup_scheduler,
     backup_targets,
+    backup_transfer_budget,
 )
 from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore, object_key, put_json_if_absent
 
@@ -100,6 +102,34 @@ def _target_cas_worker(
         results.put(("error", suffix, int(exc.status)))  # type: ignore[attr-defined]
     except Exception as exc:
         results.put(("exception", suffix, type(exc).__name__))  # type: ignore[attr-defined]
+
+
+def _qos_consume_worker(
+    control_dir: str,
+    suffix: str,
+    ready: object,
+    start: object,
+    results: object,
+) -> None:
+    from pathlib import Path
+
+    from deepseek_infra.infra.workspace import backup_control, backup_transfer_budget
+
+    backup_control.CONTROL_DIR = Path(control_dir)
+    backup_control.CONTROL_DB = Path(control_dir) / "control.sqlite3"
+    manager = backup_transfer_budget.TransferBudgetManager(
+        global_bytes_per_second=1024 * 1024,
+        reserved_recovery_bytes_per_sec=256 * 1024,
+        background_max_bytes_per_sec=1024 * 1024,
+        max_burst_bytes=1024 * 1024,
+    )
+    transfer_id = f"qos-process-{suffix}"
+    manager.acquire_transfer_token(transfer_id, backup_transfer_budget.TrafficClass.P5_REBALANCE_DRAIN)
+    ready.put(suffix)  # type: ignore[attr-defined]
+    start.wait(timeout=10)  # type: ignore[attr-defined]
+    wait_seconds = manager.consume_bandwidth(transfer_id, 1024 * 1024, now=1000.0)
+    results.put((suffix, wait_seconds))  # type: ignore[attr-defined]
+    manager.release_transfer_token(transfer_id)
 
 
 def test_copy_retirement_preserves_formal_history_and_writes_bound_marker(tmp_settings: Path) -> None:
@@ -687,3 +717,78 @@ def test_multipart_reconciliation_aborts_and_quarantines_part_conflict(tmp_setti
     assert "remote-part-1" in progress["multipartQuarantine"]["reason"]
     assert progress.get("multipartUploadId") is None
     assert store.list_multipart_parts(upload) == []
+
+
+def test_qos_global_bucket_is_shared_across_processes(tmp_settings: Path) -> None:
+    from deepseek_infra.infra.workspace import backup_control
+
+    context = multiprocessing.get_context("spawn")
+    ready = context.Queue()
+    results = context.Queue()
+    start = context.Event()
+    workers = [
+        context.Process(
+            target=_qos_consume_worker,
+            args=(str(backup_control.CONTROL_DIR), suffix, ready, start, results),
+        )
+        for suffix in ("a", "b")
+    ]
+    for worker in workers:
+        worker.start()
+    assert {ready.get(timeout=10), ready.get(timeout=10)} == {"a", "b"}
+    start.set()
+    outcomes = [results.get(timeout=10), results.get(timeout=10)]
+    for worker in workers:
+        worker.join(timeout=10)
+        assert worker.exitcode == 0
+
+    waits = sorted(float(outcome[1]) for outcome in outcomes)
+    assert waits[0] == 0.0
+    assert waits[1] >= 1.0
+
+
+def test_qos_reserves_p0_bandwidth_and_enforces_independent_target_buckets(tmp_settings: Path) -> None:
+    manager = backup_transfer_budget.TransferBudgetManager(
+        global_bytes_per_second=1024 * 1024,
+        reserved_recovery_bytes_per_sec=256 * 1024,
+        background_max_bytes_per_sec=1024 * 1024,
+        max_burst_bytes=1024 * 1024,
+    )
+    manager.acquire_transfer_token("qos-p0", backup_transfer_budget.TrafficClass.P0_DISASTER_RECOVERY)
+    manager.acquire_transfer_token("qos-p5", backup_transfer_budget.TrafficClass.P5_REBALANCE_DRAIN)
+    assert manager.consume_bandwidth("qos-p5", 768 * 1024) == 0.0
+    started = time.monotonic()
+    throttled = b"".join(manager.throttled_generator(iter((b"x" * (64 * 1024),)), transfer_id="qos-p5"))
+    elapsed = time.monotonic() - started
+    assert len(throttled) == 64 * 1024
+    assert elapsed >= 0.04
+    assert manager.consume_bandwidth("qos-p0", 256 * 1024) == 0.0
+    manager.release_transfer_token("qos-p5")
+    manager.release_transfer_token("qos-p0")
+
+    source_id = "target_qos_source"
+    dest_id = "target_qos_dest"
+    backup_targets.register_filesystem_target(
+        source_id,
+        path=tmp_settings / "qos-source",
+        max_read_bytes_per_second=512 * 1024,
+    )
+    backup_targets.register_filesystem_target(
+        dest_id,
+        path=tmp_settings / "qos-dest",
+        max_write_bytes_per_second=128 * 1024,
+    )
+    target_manager = backup_transfer_budget.TransferBudgetManager(
+        global_bytes_per_second=4 * 1024 * 1024,
+        reserved_recovery_bytes_per_sec=0,
+        max_burst_bytes=4 * 1024 * 1024,
+    )
+    target_manager.acquire_transfer_token(
+        "qos-targets",
+        backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR,
+        source_target_id=source_id,
+        dest_target_id=dest_id,
+    )
+    target_manager.wait_for_bandwidth("qos-targets", 128 * 1024)
+    assert target_manager.consume_bandwidth("qos-targets", 128 * 1024) >= 0.9
+    target_manager.release_transfer_token("qos-targets")
