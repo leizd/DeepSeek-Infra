@@ -859,7 +859,7 @@ def evaluate_write_placement(
        - Transition to healthy required replica with freshest recovery point.
        - Result has isFailover=True, forceFull=True.
     """
-    from deepseek_infra.infra.workspace import backup_dr_ledger, backup_policies, backup_publish, backup_write_continuity
+    from deepseek_infra.infra.workspace import backup_policies, backup_publish, backup_write_continuity
 
     if isinstance(policy, str):
         policy = backup_policies.get_policy(policy)
@@ -988,14 +988,15 @@ def evaluate_write_placement(
         }
 
     # Rank candidates using deterministic placement planner
-    latest_copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=1)
-    current_logical_id = str(latest_copies[0].get("logicalId") or "") if latest_copies else None
     scored_candidates = plan_target_placement(
         policy,
         candidate_target_ids=candidates,
         primary_target_id=configured_primary,
         snapshot_kind="full",
-        logical_recovery_point_id=current_logical_id or None,
+        # This is placement for the next Full recovery point. Existing copies
+        # belong to the parent/history and must not disqualify the very replica
+        # that is eligible to receive the failover write.
+        logical_recovery_point_id=None,
         required_bytes=None,
         force_full=True,
     )

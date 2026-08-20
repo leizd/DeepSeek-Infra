@@ -27,6 +27,7 @@ from deepseek_infra.infra.workspace import (
     backup_scheduler,
     backup_targets,
     backup_transfer_budget,
+    backup_write_continuity,
 )
 from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore, object_key, put_json_if_absent
 
@@ -681,6 +682,67 @@ def test_placement_counts_only_the_selected_logical_recovery_point(tmp_settings:
     )
 
     assert [target_id for _, target_id in ranked] == [candidate_id]
+
+
+def test_next_full_failover_can_reuse_target_holding_parent_copy(tmp_settings: Path) -> None:
+    primary_id = "target_next_full_primary"
+    candidate_id = "target_next_full_candidate"
+    policy_id = "policy_next_full_failover"
+    backup_targets.register_filesystem_target(
+        primary_id,
+        path=tmp_settings / "next-full-primary",
+        region="region-a",
+        failure_domain="region-a-1",
+    )
+    backup_targets.register_filesystem_target(
+        candidate_id,
+        path=tmp_settings / "next-full-candidate",
+        region="region-b",
+        failure_domain="region-b-1",
+    )
+    backup_dr_ledger.record_logical_recovery_copy(
+        target_id=candidate_id,
+        policy_id=policy_id,
+        backup_id="backup_parent_on_candidate",
+        committed_at="2026-08-20T00:00:00Z",
+        object_set_digest="parent-object-set",
+        state="healthy",
+        recoverable=True,
+    )
+    backup_capacity.record_physical_size_evidence(
+        policy_id=policy_id,
+        backup_id="backup_parent_on_candidate",
+        snapshot_kind="full",
+        physical_bytes=1024,
+    )
+    policy = {
+        "policyId": policy_id,
+        "targetId": primary_id,
+        "replication": {
+            "enabled": True,
+            "minCommittedCopies": 2,
+            "targets": [{"targetId": candidate_id, "mode": "required"}],
+        },
+    }
+
+    def _resolve(target_id: str) -> SimpleNamespace:
+        if target_id == primary_id:
+            raise AppError("primary unavailable", status=503)
+        return SimpleNamespace(store=None)
+
+    with (
+        patch.object(backup_publish, "resolve_target", side_effect=_resolve),
+        patch.object(
+            backup_write_continuity,
+            "perform_liveness_preflight",
+            return_value={"status": "available"},
+        ),
+    ):
+        placement = backup_scheduler.evaluate_write_placement(policy)
+
+    assert placement["selectedWriteTargetId"] == candidate_id
+    assert placement["isFailover"] is True
+    assert placement["forceFull"] is True
 
 
 def test_placement_enforces_region_and_failure_domain_independently(tmp_settings: Path) -> None:

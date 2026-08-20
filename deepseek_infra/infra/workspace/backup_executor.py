@@ -626,7 +626,18 @@ def execute_run(
                             continue
 
                     # Capacity check for candidate
-                    pred_size = backup_capacity.predict_next_backup_bytes(policy_id, snapshot_kind="full" if not is_incremental else "incremental")
+                    # The verified encrypted spool already exists at this point,
+                    # so its ciphertext byte count is stronger admission evidence
+                    # than a historical prediction for the failover candidate.
+                    package_size = getattr(package, "size", None)
+                    pred_size = (
+                        int(package_size)
+                        if isinstance(package_size, int) and not isinstance(package_size, bool) and package_size > 0
+                        else backup_capacity.predict_next_backup_bytes(
+                            policy_id,
+                            snapshot_kind="full" if not is_incremental else "incremental",
+                        )
+                    )
                     admitted, _ = backup_capacity.check_target_capacity_admission(
                         cand_id,
                         pred_size,
