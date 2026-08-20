@@ -1,13 +1,13 @@
 {
   "schemaVersion": "agent-eval-report.v1",
-  "version": "4.5.7",
-  "commit": "5acf354",
-  "testedRevision": "5acf3540e123cd1b0396ecd2dd5b142bde40b525",
-  "sourceRevision": "5acf3540e123cd1b0396ecd2dd5b142bde40b525",
+  "version": "4.5.8",
+  "commit": "c35e4be",
+  "testedRevision": "c35e4bef935d20980206f0a80b94046b16619263",
+  "sourceRevision": "c35e4bef935d20980206f0a80b94046b16619263",
   "sourceTreeDirty": true,
   "releaseRevision": null,
   "ciRevision": null,
-  "generatedAt": "2026-08-18T15:20:15Z",
+  "generatedAt": "2026-08-20T13:17:29Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
