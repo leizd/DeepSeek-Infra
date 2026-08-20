@@ -627,7 +627,12 @@ def execute_run(
 
                     # Capacity check for candidate
                     pred_size = backup_capacity.predict_next_backup_bytes(policy_id, snapshot_kind="full" if not is_incremental else "incremental")
-                    admitted, _ = backup_capacity.check_target_capacity_admission(cand_id, pred_size, policy=policy)
+                    admitted, _ = backup_capacity.check_target_capacity_admission(
+                        cand_id,
+                        pred_size,
+                        policy=policy,
+                        force_full=not is_incremental,
+                    )
                     if not admitted:
                         continue
 

@@ -848,7 +848,7 @@ def evaluate_write_placement(
        - Transition to healthy required replica with freshest recovery point.
        - Result has isFailover=True, forceFull=True.
     """
-    from deepseek_infra.infra.workspace import backup_policies, backup_publish, backup_write_continuity
+    from deepseek_infra.infra.workspace import backup_dr_ledger, backup_policies, backup_publish, backup_write_continuity
 
     if isinstance(policy, str):
         policy = backup_policies.get_policy(policy)
@@ -874,10 +874,11 @@ def evaluate_write_placement(
         primary_ok = False
         primary_error = str(exc)
 
-        if primary_ok:
-            from deepseek_infra.infra.workspace import backup_capacity
+    if primary_ok:
+        from deepseek_infra.infra.workspace import backup_capacity
 
-            pred_bytes = backup_capacity.predict_next_backup_bytes(policy_id)
+        pred_bytes = backup_capacity.predict_next_backup_bytes(policy_id)
+        if pred_bytes is not None:
             admitted, adm_reason = backup_capacity.check_target_capacity_admission(configured_primary, pred_bytes, policy=policy)
             if not admitted:
                 primary_ok = False
@@ -976,11 +977,16 @@ def evaluate_write_placement(
         }
 
     # Rank candidates using deterministic placement planner
+    latest_copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=1)
+    current_logical_id = str(latest_copies[0].get("logicalId") or "") if latest_copies else None
     scored_candidates = plan_target_placement(
         policy,
         candidate_target_ids=candidates,
         primary_target_id=configured_primary,
         snapshot_kind="full",
+        logical_recovery_point_id=current_logical_id or None,
+        required_bytes=None,
+        force_full=True,
     )
 
     if not scored_candidates:
@@ -1018,21 +1024,24 @@ def plan_target_placement(
     candidate_target_ids: list[str],
     primary_target_id: str,
     snapshot_kind: str = "full",
+    logical_recovery_point_id: str | None,
+    required_bytes: int | None = None,
+    force_full: bool = False,
 ) -> list[tuple[tuple[Any, ...], str]]:
-    """Deterministic ranking function for write / failover target placement (4.5.7).
+    """Rank targets against one explicit logical recovery point replica set.
 
     Ranking Criteria (tuple order):
-    1. Failure-domain diversity gain (-1 if new domain, 0 if already represented)
-    2. Replica point lag ascending
-    3. Target priority descending (-priority)
-    4. Capacity headroom score (-freePercent)
-    5. Cost class (standard 0 before low-cost 1)
-    6. Healthy copy count descending (-healthy_count)
-    7. Lexical targetId tie-break
+    1. Recoverability / replica point lag ascending
+    2. Failure-domain and region diversity gain
+    3. Capacity headroom descending
+    4. Matching RecoveryClass RTO evidence ascending
+    5. Operator-supplied storage / egress estimate ascending
+    6. Target priority descending and lexical targetId tie-break
     """
     from deepseek_infra.infra.workspace import (
         backup_capacity,
         backup_dr_ledger,
+        backup_recovery_class,
         backup_replication,
         backup_targets,
     )
@@ -1042,23 +1051,46 @@ def plan_target_placement(
     replication = policy.get("replication") or {}
     placement = policy.get("placement") or {}
     max_copies_per_fd = placement.get("maxCopiesPerFailureDomain") or replication.get("maxCopiesPerFailureDomain")
+    min_failure_domains = int(replication.get("minFailureDomains") or 1)
+    min_regions = int(replication.get("minRegions") or 1)
 
-    existing_copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=200)
+    existing_copies = (
+        backup_dr_ledger.list_logical_recovery_copies(logical_id=logical_recovery_point_id, limit=100)
+        if logical_recovery_point_id
+        else []
+    )
     healthy_copies = [c for c in existing_copies if c.get("recoverable") and c.get("state") == "healthy"]
     existing_fds = {
         str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
         for c in healthy_copies
     }
+    existing_regions = {
+        str((all_target_records.get(str(c.get("targetId"))) or {}).get("region") or "default-region")
+        for c in healthy_copies
+    }
+    existing_target_ids = {str(c.get("targetId") or "") for c in healthy_copies}
 
-    predicted_bytes = backup_capacity.predict_next_backup_bytes(policy_id, snapshot_kind=snapshot_kind)
+    prediction = backup_capacity.predict_next_backup_size(policy_id, snapshot_kind=snapshot_kind)
+    predicted_value = prediction.get("predictedBytes")
+    predicted_bytes = required_bytes if required_bytes is not None else (
+        int(predicted_value) if isinstance(predicted_value, int) and not isinstance(predicted_value, bool) else None
+    )
+    recovery_objectives = policy.get("recoveryObjectives") or {}
+    max_rto_seconds = recovery_objectives.get("maxRtoSeconds")
+    cost_objectives = policy.get("costObjectives") or {}
+    max_storage_cost = cost_objectives.get("maxEstimatedMonthlyStorageUsd")
+    max_egress_cost = cost_objectives.get("maxEstimatedMonthlyEgressUsd")
 
     scored: list[tuple[tuple[Any, ...], str]] = []
     for tid in candidate_target_ids:
         t_meta = all_target_records.get(tid) or {}
         if t_meta.get("drainState") in {"draining", "drained"}:
             continue
+        if tid in existing_target_ids:
+            continue
 
         cand_fd = str(t_meta.get("failureDomain") or "default")
+        cand_region = str(t_meta.get("region") or "default-region")
 
         # 1. Check maxCopiesPerFailureDomain constraint
         existing_in_fd = sum(
@@ -1069,13 +1101,26 @@ def plan_target_placement(
             if existing_in_fd + 1 > int(max_copies_per_fd):
                 continue
 
+        # While a current replica set is below a diversity objective, only a
+        # candidate that advances that objective is eligible.
+        if len(existing_fds) < min_failure_domains and cand_fd in existing_fds:
+            continue
+        if len(existing_regions) < min_regions and cand_region in existing_regions:
+            continue
+
         # 2. Check capacity admission
-        admitted, _ = backup_capacity.check_target_capacity_admission(tid, predicted_bytes, policy=policy)
+        admitted, _ = backup_capacity.check_target_capacity_admission(
+            tid,
+            predicted_bytes,
+            policy=policy,
+            force_full=force_full,
+        )
         if not admitted:
             continue
 
         # Compute score components
         fd_gain = -1 if cand_fd not in existing_fds else 0
+        region_gain = -1 if cand_region not in existing_regions else 0
 
         lag_info = backup_replication.calculate_replica_lag(policy_id, tid, primary_target_id=primary_target_id)
         lag_pts = int(lag_info.get("lagRecoveryPoints") or 0)
@@ -1086,18 +1131,51 @@ def plan_target_placement(
         free_pct = float(cap.get("freePercent") or 100.0)
         cap_score = -free_pct  # higher free% -> more negative -> ranked higher
 
-        cost_class = str(t_meta.get("costClass") or "standard")
-        cost_weight = 0 if cost_class == "standard" else 1
+        rto_p90 = 0
+        if max_rto_seconds is not None:
+            if predicted_bytes is None:
+                continue
+            recovery_class = backup_recovery_class.classify_recovery(
+                target_kind=str(t_meta.get("kind") or "filesystem"),
+                format_kind="object-set-v1",
+                logical_bytes=predicted_bytes,
+                chain_length=1,
+                storage_protocol="s3" if t_meta.get("kind") == "s3" else "local",
+            )
+            rto = backup_recovery_class.calibrate_rto(
+                target_id=tid,
+                logical_bytes=predicted_bytes,
+                recovery_class=recovery_class,
+            )
+            if rto.get("status") != "calibrated":
+                continue
+            rto_p90 = int(rto.get("p90Seconds") or 0)
+            if rto_p90 <= 0 or rto_p90 > int(max_rto_seconds):
+                continue
+
+        cost = backup_capacity.estimate_transfer_cost(
+            predicted_bytes or 0,
+            source_target_id=primary_target_id,
+            dest_target_id=tid,
+        )
+        monthly_storage_cost = float(cost.get("estimatedMonthlyStorageCostDelta") or 0.0)
+        estimated_egress_cost = float(cost.get("estimatedOneTimeTransferCost") or 0.0)
+        if max_storage_cost is not None and monthly_storage_cost > float(max_storage_cost):
+            continue
+        if max_egress_cost is not None and estimated_egress_cost > float(max_egress_cost):
+            continue
 
         copies = [c for c in healthy_copies if str(c.get("targetId")) == tid]
         healthy_count = len(copies)
 
         score_tuple = (
-            fd_gain,
             lag_pts,
-            -priority,
+            fd_gain,
+            region_gain,
             cap_score,
-            cost_weight,
+            rto_p90,
+            monthly_storage_cost + estimated_egress_cost,
+            -priority,
             -healthy_count,
             tid,
         )

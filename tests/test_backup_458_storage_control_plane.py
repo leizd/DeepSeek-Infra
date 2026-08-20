@@ -10,11 +10,14 @@ from unittest.mock import patch
 import pytest
 
 from deepseek_infra.infra.workspace import (
+    backup_capacity,
     backup_dr_audit,
     backup_dr_ledger,
+    backup_policies,
     backup_publish,
     backup_replication,
     backup_retirement,
+    backup_scheduler,
     backup_targets,
 )
 from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore, object_key, put_json_if_absent
@@ -364,3 +367,224 @@ def test_target_topology_generation_allows_only_one_cross_process_winner(tmp_set
     final = backup_targets.get_target(target_id)
     assert final["topologyGeneration"] == 2
     assert final["drainReason"] in {"drain-a", "drain-b"}
+
+
+def test_placement_counts_only_the_selected_logical_recovery_point(tmp_settings: Path) -> None:
+    primary_id = "target_scope_primary"
+    candidate_id = "target_scope_candidate"
+    backup_targets.register_filesystem_target(
+        primary_id,
+        path=tmp_settings / "scope-primary",
+        region="region-a",
+        failure_domain="region-a-1",
+    )
+    backup_targets.register_filesystem_target(
+        candidate_id,
+        path=tmp_settings / "scope-candidate",
+        region="region-b",
+        failure_domain="region-b-1",
+    )
+    policy_id = "policy_scope_current_lrp"
+
+    # Historical copies in the candidate failure domain must not consume the
+    # current replica set's maxCopiesPerFailureDomain budget.
+    for index in range(5):
+        backup_dr_ledger.record_logical_recovery_copy(
+            target_id=candidate_id,
+            policy_id=policy_id,
+            backup_id=f"backup_historical_{index}",
+            committed_at=f"2026-08-{10 + index:02d}T00:00:00Z",
+            object_set_digest=f"historical-{index}",
+            state="healthy",
+            recoverable=True,
+        )
+    current_logical_id = backup_dr_ledger.record_logical_recovery_copy(
+        target_id=primary_id,
+        policy_id=policy_id,
+        backup_id="backup_current",
+        committed_at="2026-08-20T00:00:00Z",
+        object_set_digest="current-object-set",
+        state="healthy",
+        recoverable=True,
+    )
+    policy = {
+        "policyId": policy_id,
+        "replication": {"minFailureDomains": 2, "maxCopiesPerFailureDomain": 1},
+        "placement": {"maxCopiesPerFailureDomain": 1, "minFreeBytes": 0, "minFreePercent": 0},
+    }
+
+    ranked = backup_scheduler.plan_target_placement(
+        policy,
+        candidate_target_ids=[candidate_id],
+        primary_target_id=primary_id,
+        logical_recovery_point_id=current_logical_id,
+        required_bytes=1024,
+    )
+
+    assert [target_id for _, target_id in ranked] == [candidate_id]
+
+
+def test_placement_enforces_region_and_failure_domain_independently(tmp_settings: Path) -> None:
+    primary_id = "target_region_primary"
+    same_region_id = "target_region_same"
+    second_region_id = "target_region_second"
+    backup_targets.register_filesystem_target(
+        primary_id,
+        path=tmp_settings / "region-primary",
+        region="region-a",
+        failure_domain="region-a-1",
+    )
+    backup_targets.register_filesystem_target(
+        same_region_id,
+        path=tmp_settings / "region-same",
+        region="region-a",
+        failure_domain="region-a-2",
+    )
+    backup_targets.register_filesystem_target(
+        second_region_id,
+        path=tmp_settings / "region-second",
+        region="region-b",
+        failure_domain="region-b-1",
+    )
+    policy_id = "policy_region_scope"
+    logical_id = backup_dr_ledger.record_logical_recovery_copy(
+        target_id=primary_id,
+        policy_id=policy_id,
+        backup_id="backup_region_current",
+        committed_at="2026-08-20T00:00:00Z",
+        object_set_digest="region-current-object-set",
+        state="healthy",
+        recoverable=True,
+    )
+    policy = {
+        "policyId": policy_id,
+        "replication": {"minFailureDomains": 2, "minRegions": 2, "maxCopiesPerFailureDomain": 2},
+        "placement": {"minFreeBytes": 0, "minFreePercent": 0},
+    }
+
+    ranked = backup_scheduler.plan_target_placement(
+        policy,
+        candidate_target_ids=[same_region_id, second_region_id],
+        primary_target_id=primary_id,
+        logical_recovery_point_id=logical_id,
+        required_bytes=1024,
+    )
+
+    assert [target_id for _, target_id in ranked] == [second_region_id]
+
+
+def test_capacity_prediction_prefers_physical_evidence_and_force_full_unknown_fails_closed(tmp_settings: Path) -> None:
+    unknown = backup_capacity.predict_next_backup_size("policy_capacity_unknown", snapshot_kind="full")
+    assert unknown == {
+        "predictedBytes": None,
+        "capacityConfidence": "unavailable",
+        "source": "no-physical-evidence",
+        "isEstimate": True,
+        "snapshotKind": "full",
+        "sampleCount": 0,
+    }
+
+    admitted, reason = backup_capacity.check_target_capacity_admission(
+        "managed-local",
+        None,
+        force_full=True,
+    )
+    assert admitted is False
+    assert reason == "capacity-evidence-unavailable"
+
+    policy_id = "policy_capacity_physical"
+    backup_dr_ledger.record_logical_recovery_copy(
+        target_id="target_capacity_physical",
+        policy_id=policy_id,
+        backup_id="backup_capacity_physical",
+        committed_at="2026-08-20T00:00:00Z",
+        object_set_digest="capacity-physical-object-set",
+        state="healthy",
+        recoverable=True,
+        metadata={"logicalBytes": 600 * 1024**3, "physicalBytes": 120 * 1024**3},
+    )
+    prediction = backup_capacity.predict_next_backup_size(policy_id, snapshot_kind="full")
+    assert prediction["predictedBytes"] == 120 * 1024**3
+    assert prediction["source"] == "historical-physical-p90"
+    assert prediction["capacityConfidence"] == "low"
+
+    backup_capacity.record_physical_size_evidence(
+        policy_id="policy_capacity_durable",
+        backup_id="backup_capacity_durable",
+        snapshot_kind="full",
+        physical_bytes=321 * 1024**2,
+        observed_at="2026-08-20T02:00:00Z",
+    )
+    durable_prediction = backup_capacity.predict_next_backup_size("policy_capacity_durable", snapshot_kind="full")
+    assert durable_prediction["predictedBytes"] == 321 * 1024**2
+    assert durable_prediction["capacityConfidence"] == "low"
+
+
+def test_policy_and_placement_use_matching_rto_and_operator_cost_evidence(tmp_settings: Path) -> None:
+    primary_id = "target_objectives_primary"
+    slow_id = "target_objectives_slow"
+    eligible_id = "target_objectives_eligible"
+    for target_id, region, suffix in (
+        (primary_id, "region-a", "primary"),
+        (slow_id, "region-b", "slow"),
+        (eligible_id, "region-c", "eligible"),
+    ):
+        backup_targets.register_filesystem_target(
+            target_id,
+            path=tmp_settings / f"objectives-{suffix}",
+            region=region,
+            failure_domain=f"{region}-1",
+            provider="operator-filesystem",
+            jurisdiction=region,
+            storage_cost_per_gib_month=0.02,
+            egress_cost_per_gib=0.01,
+        )
+
+    normalized = backup_policies.normalize_policy(
+        {
+            "name": "objective-policy",
+            "targetId": primary_id,
+            "replication": {
+                "enabled": True,
+                "targets": [
+                    {"targetId": slow_id, "mode": "required"},
+                    {"targetId": eligible_id, "mode": "required"},
+                ],
+                "minCommittedCopies": 2,
+                "minFailureDomains": 2,
+                "minRegions": 2,
+            },
+            "recoveryObjectives": {"maxRtoSeconds": 7200},
+            "costObjectives": {
+                "maxEstimatedMonthlyStorageUsd": 50,
+                "maxEstimatedMonthlyEgressUsd": 20,
+            },
+        }
+    )
+    assert normalized["replication"]["minRegions"] == 2
+    assert normalized["recoveryObjectives"]["maxRtoSeconds"] == 7200
+    assert normalized["costObjectives"]["maxEstimatedMonthlyStorageUsd"] == 50.0
+
+    def _rto_for_target(*args: object, **kwargs: object) -> dict[str, object]:
+        target_id = str(kwargs.get("target_id") or "")
+        return {
+            "status": "calibrated",
+            "isSla": False,
+            "confidence": "medium",
+            "sampleCount": 5,
+            "p90Seconds": 14_400 if target_id == slow_id else 3600,
+        }
+
+    with patch(
+        "deepseek_infra.infra.workspace.backup_recovery_class.calibrate_rto",
+        side_effect=_rto_for_target,
+    ):
+        ranked = backup_scheduler.plan_target_placement(
+            normalized,
+            candidate_target_ids=[slow_id, eligible_id],
+            primary_target_id=primary_id,
+            logical_recovery_point_id=None,
+            required_bytes=10 * 1024**3,
+        )
+
+    assert [target_id for _, target_id in ranked] == [eligible_id]

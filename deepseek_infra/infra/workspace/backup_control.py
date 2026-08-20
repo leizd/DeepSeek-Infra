@@ -361,5 +361,69 @@ def delete_target(target_id: str, *, expected_generation: int | None = None) -> 
     return payload
 
 
+def record_capacity_evidence(
+    *,
+    policy_id: str,
+    backup_id: str | None,
+    snapshot_kind: str,
+    physical_bytes: int,
+    confidence: str,
+    source: str,
+    observed_at: str | None = None,
+) -> None:
+    if physical_bytes <= 0:
+        return
+    with _connect() as conn:
+        _begin_immediate(conn)
+        conn.execute(
+            """
+            INSERT INTO capacity_evidence(
+                policy_id, backup_id, snapshot_kind, physical_bytes,
+                confidence, source, observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(policy_id),
+                str(backup_id) if backup_id else None,
+                str(snapshot_kind or "full"),
+                int(physical_bytes),
+                str(confidence or "low"),
+                str(source or "unknown"),
+                str(observed_at or _utc_iso()),
+            ),
+        )
+        conn.execute("COMMIT")
+
+
+def list_capacity_evidence(
+    policy_id: str,
+    *,
+    snapshot_kind: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM capacity_evidence WHERE policy_id = ?"
+    params: list[Any] = [str(policy_id)]
+    if snapshot_kind is not None:
+        query += " AND snapshot_kind = ?"
+        params.append(str(snapshot_kind))
+    query += " ORDER BY observed_at DESC, evidence_id DESC LIMIT ?"
+    params.append(max(1, min(int(limit), 1000)))
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        {
+            "evidenceId": int(row["evidence_id"]),
+            "policyId": str(row["policy_id"]),
+            "backupId": str(row["backup_id"]) if row["backup_id"] else None,
+            "snapshotKind": str(row["snapshot_kind"]),
+            "physicalBytes": int(row["physical_bytes"]),
+            "confidence": str(row["confidence"]),
+            "source": str(row["source"]),
+            "observedAt": str(row["observed_at"]),
+        }
+        for row in rows
+    ]
+
+
 def database_path() -> Path:
     return CONTROL_DB

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -124,6 +125,17 @@ def _require_int(value: Any, name: str, default: int, minimum: int, maximum: int
     if value < minimum or value > maximum:
         raise AppError(f"Backup policy field {name} must be between {minimum} and {maximum}", code=ErrorCode.INVALID_PAYLOAD)
     return value
+
+
+def _require_nonnegative_number(value: Any, name: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise AppError(f"Backup policy field {name} must be a number", code=ErrorCode.INVALID_PAYLOAD)
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        raise AppError(f"Backup policy field {name} must be a finite non-negative number", code=ErrorCode.INVALID_PAYLOAD)
+    return parsed
 
 
 def _require_choice(value: Any, name: str, choices: tuple[str, ...], default: str | None = None) -> str:
@@ -291,6 +303,7 @@ def _normalize_recovery_objectives(raw: Any) -> dict[str, Any]:
     max_scrub = section.get("maxScrubAgeSeconds")
     max_drill = section.get("maxDrillAgeSeconds")
     max_replica_lag = section.get("maxReplicaLagSeconds")
+    max_rto = section.get("maxRtoSeconds")
     if max_rpo is not None:
         normalized["maxRpoSeconds"] = _require_int(max_rpo, "recoveryObjectives.maxRpoSeconds", 3600, 60, 86400 * 365)
     if max_scrub is not None:
@@ -299,6 +312,26 @@ def _normalize_recovery_objectives(raw: Any) -> dict[str, Any]:
         normalized["maxDrillAgeSeconds"] = _require_int(max_drill, "recoveryObjectives.maxDrillAgeSeconds", 604800, 60, 86400 * 365)
     if max_replica_lag is not None:
         normalized["maxReplicaLagSeconds"] = _require_int(max_replica_lag, "recoveryObjectives.maxReplicaLagSeconds", 3600, 1, 86400 * 365)
+    if max_rto is not None:
+        normalized["maxRtoSeconds"] = _require_int(max_rto, "recoveryObjectives.maxRtoSeconds", 3600, 1, 86400 * 365)
+    return normalized
+
+
+def _normalize_cost_objectives(raw: Any) -> dict[str, Any]:
+    section = _require_mapping(raw, "costObjectives") if raw is not None else {}
+    normalized: dict[str, Any] = {}
+    monthly_storage = _require_nonnegative_number(
+        section.get("maxEstimatedMonthlyStorageUsd"),
+        "costObjectives.maxEstimatedMonthlyStorageUsd",
+    )
+    monthly_egress = _require_nonnegative_number(
+        section.get("maxEstimatedMonthlyEgressUsd"),
+        "costObjectives.maxEstimatedMonthlyEgressUsd",
+    )
+    if monthly_storage is not None:
+        normalized["maxEstimatedMonthlyStorageUsd"] = monthly_storage
+    if monthly_egress is not None:
+        normalized["maxEstimatedMonthlyEgressUsd"] = monthly_egress
     return normalized
 
 
@@ -321,7 +354,13 @@ def _normalize_recovery_drill(raw: Any) -> dict[str, Any]:
 def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any]:
     """Backward-compatible replication block. Default disabled preserves legacy behavior."""
     if raw is None:
-        return {"enabled": False, "targets": [], "minCommittedCopies": 1}
+        return {
+            "enabled": False,
+            "targets": [],
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+        }
     section = _require_mapping(raw, "replication")
     enabled = _require_bool(section.get("enabled"), "replication.enabled", False)
     raw_targets = section.get("targets")
@@ -359,6 +398,7 @@ def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any
             targets.append({"targetId": tid, "mode": mode})
     min_copies = _require_int(section.get("minCommittedCopies"), "replication.minCommittedCopies", 1, 1, 16)
     min_failure_domains = _require_int(section.get("minFailureDomains"), "replication.minFailureDomains", 1, 1, 16)
+    min_regions = _require_int(section.get("minRegions"), "replication.minRegions", 1, 1, 16)
     max_copies_per_fd = section.get("maxCopiesPerFailureDomain")
     if max_copies_per_fd is not None:
         max_copies_per_fd = _require_int(max_copies_per_fd, "replication.maxCopiesPerFailureDomain", 1, 1, 16)
@@ -376,11 +416,17 @@ def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any
                 "Backup policy replication.minFailureDomains exceeds configured targets",
                 code=ErrorCode.INVALID_PAYLOAD,
             )
+        if min_regions > max_possible:
+            raise AppError(
+                "Backup policy replication.minRegions exceeds configured targets",
+                code=ErrorCode.INVALID_PAYLOAD,
+            )
     normalized_res: dict[str, Any] = {
         "enabled": bool(enabled),
         "targets": targets,
         "minCommittedCopies": min_copies,
         "minFailureDomains": min_failure_domains,
+        "minRegions": min_regions,
     }
     if max_copies_per_fd is not None:
         normalized_res["maxCopiesPerFailureDomain"] = max_copies_per_fd
@@ -459,6 +505,7 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
         "retry": _normalize_retry(payload.get("retry")),
         "incremental": _normalize_incremental(payload.get("incremental")),
         "recoveryObjectives": _normalize_recovery_objectives(payload.get("recoveryObjectives")),
+        "costObjectives": _normalize_cost_objectives(payload.get("costObjectives")),
         "recoveryDrill": _normalize_recovery_drill(payload.get("recoveryDrill")),
         "createdAt": created_at or now,
         "updatedAt": now,
@@ -578,6 +625,7 @@ def update_policy(
             "retry",
             "incremental",
             "recoveryObjectives",
+            "costObjectives",
             "recoveryDrill",
             "replication",
             "placement",

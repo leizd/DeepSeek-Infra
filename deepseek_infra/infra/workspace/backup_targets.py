@@ -21,6 +21,7 @@ listing and scrubbing stay allowed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import secrets
@@ -59,6 +60,15 @@ def _now_iso() -> str:
 
 def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _operator_cost(value: float | int | None, field: str) -> float | None:
+    if value is None:
+        return None
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        raise AppError(f"Backup target {field} must be a finite non-negative number", code=ErrorCode.INVALID_PAYLOAD)
+    return parsed
 
 
 def _repo_root() -> Path:
@@ -304,9 +314,14 @@ def register_filesystem_target(
     *,
     path: Path | str,
     label: str = "",
+    region: str | None = None,
     failure_domain: str | None = None,
+    provider: str | None = None,
+    jurisdiction: str | None = None,
     priority: int = 0,
     cost_class: str | None = None,
+    storage_cost_per_gib_month: float | int | None = None,
+    egress_cost_per_gib: float | int | None = None,
 ) -> dict[str, Any]:
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
@@ -322,9 +337,14 @@ def register_filesystem_target(
                     str(existing.get("targetNonce") or ""),
                     label=label,
                     created_at=str(existing.get("createdAt") or ""),
+                    region=region,
                     failure_domain=failure_domain,
+                    provider=provider,
+                    jurisdiction=jurisdiction,
                     priority=priority,
                     cost_class=cost_class,
+                    storage_cost_per_gib_month=storage_cost_per_gib_month,
+                    egress_cost_per_gib=egress_cost_per_gib,
                 )
         except Exception:
             pass
@@ -346,9 +366,14 @@ def register_filesystem_target(
         nonce,
         label=label,
         created_at=marker_payload["createdAt"],
+        region=region,
         failure_domain=failure_domain,
+        provider=provider,
+        jurisdiction=jurisdiction,
         priority=priority,
         cost_class=cost_class,
+        storage_cost_per_gib_month=storage_cost_per_gib_month,
+        egress_cost_per_gib=egress_cost_per_gib,
     )
     _write_checkpoint(target_id, marker_payload)
     return record
@@ -361,9 +386,14 @@ def _register(
     *,
     label: str,
     created_at: object = "",
+    region: str | None = None,
     failure_domain: str | None = None,
+    provider: str | None = None,
+    jurisdiction: str | None = None,
     priority: int = 0,
     cost_class: str | None = None,
+    storage_cost_per_gib_month: float | int | None = None,
+    egress_cost_per_gib: float | int | None = None,
 ) -> dict[str, Any]:
     if not _TARGET_ID.match(target_id):
         raise AppError("Backup target marker carries an invalid target id", code=ErrorCode.INVALID_PAYLOAD)
@@ -374,9 +404,14 @@ def _register(
         "path": str(resolved),
         "targetNonce": nonce,
         "label": label,
+        "region": str(region or "local").strip() or "local",
         "failureDomain": failure_domain or "local",
+        "provider": str(provider or "operator-filesystem").strip() or "operator-filesystem",
+        "jurisdiction": str(jurisdiction or "local").strip() or "local",
         "priority": int(priority),
         "costClass": cost_class or "standard",
+        "storageCostPerGiBMonth": _operator_cost(storage_cost_per_gib_month, "storageCostPerGiBMonth"),
+        "egressCostPerGiB": _operator_cost(egress_cost_per_gib, "egressCostPerGiB"),
         "drainState": "active",
         "createdAt": str(created_at or "") or _utc_iso(),
         "registeredAt": _utc_iso(),
@@ -406,8 +441,12 @@ def init_s3_target(
     expected_bucket_owner: str | None = None,
     label: str = "",
     failure_domain: str | None = None,
+    provider: str | None = None,
+    jurisdiction: str | None = None,
     priority: int = 0,
     cost_class: str | None = None,
+    storage_cost_per_gib_month: float | int | None = None,
+    egress_cost_per_gib: float | int | None = None,
     credential_provider: dict[str, Any] | None = None,
     client: Any | None = None,
     probe: bool = True,
@@ -423,16 +462,16 @@ def init_s3_target(
 
     if not backup_target_s3.s3_sdk_available() and client is None:
         raise AppError("s3TargetAvailable=false: install boto3 to use S3 targets", code=ErrorCode.INVALID_REQUEST, status=503)
-    provider = dict(credential_provider or {"type": "aws-default-chain"})
-    if provider.get("type") == "aws-default-chain" and provider.get("profile"):
-        provider = {"type": "aws-profile", "profile": str(provider.get("profile"))}
+    credential_config = dict(credential_provider or {"type": "aws-default-chain"})
+    if credential_config.get("type") == "aws-default-chain" and credential_config.get("profile"):
+        credential_config = {"type": "aws-profile", "profile": str(credential_config.get("profile"))}
     record_preview = {
         "bucket": str(bucket or "").strip(),
         "prefix": str(prefix or "").strip().strip("/"),
         "region": str(region or "").strip() or None,
         "endpointUrl": str(endpoint_url or "").strip() or None,
         "expectedBucketOwner": str(expected_bucket_owner or "").strip() or None,
-        "credentialProvider": provider,
+        "credentialProvider": credential_config,
     }
     _assert_no_secrets(record_preview)
     if not record_preview["bucket"]:
@@ -491,10 +530,14 @@ def init_s3_target(
         "endpointUrl": record_preview["endpointUrl"],
         "expectedBucketOwner": record_preview["expectedBucketOwner"],
         "failureDomain": failure_domain or record_preview["region"] or "remote-s3",
+        "provider": str(provider or "s3-compatible").strip() or "s3-compatible",
+        "jurisdiction": str(jurisdiction or record_preview["region"] or "unknown").strip() or "unknown",
         "priority": int(priority),
         "costClass": cost_class or "standard",
+        "storageCostPerGiBMonth": _operator_cost(storage_cost_per_gib_month, "storageCostPerGiBMonth"),
+        "egressCostPerGiB": _operator_cost(egress_cost_per_gib, "egressCostPerGiB"),
         "drainState": "active",
-        "credentialProvider": provider,
+        "credentialProvider": credential_config,
         "createdAt": str(identity.get("createdAt") or _utc_iso()),
         "registeredAt": _utc_iso(),
         "lastProbe": probe_result,

@@ -119,8 +119,8 @@ def test_capacity_prediction_and_summary_details(tmp_settings: Path) -> None:
     # 1. Predict size with no prior copies
     full_sz = backup_capacity.predict_next_backup_bytes("pol-none", snapshot_kind="full")
     inc_sz = backup_capacity.predict_next_backup_bytes("pol-none", snapshot_kind="incremental")
-    assert full_sz >= 50 * 1024 * 1024
-    assert inc_sz >= 10 * 1024 * 1024
+    assert full_sz is None
+    assert inc_sz is None
 
     # 2. Predict size with prior copies
     for i in range(5):

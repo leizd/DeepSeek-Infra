@@ -361,7 +361,7 @@ def _record_publish_to_dr_ledger(
     package: Any,
 ) -> None:
     try:
-        from deepseek_infra.infra.workspace import backup_dr_ledger
+        from deepseek_infra.infra.workspace import backup_capacity, backup_dr_ledger
         receipt = result.receipt or {}
         commit = result.commit or {}
         backup_id = str(receipt.get("backupId") or getattr(package, "backup_id", ""))
@@ -400,7 +400,23 @@ def _record_publish_to_dr_ledger(
                 mode="required",
                 snapshot_kind=str(receipt.get("snapshotKind") or "full"),
                 verified_at=committed_at,
-                metadata={"objectSetDigest": object_set_digest} if object_set_digest else None,
+                metadata={
+                    "objectSetDigest": object_set_digest or None,
+                    "logicalBytes": logical_bytes,
+                    "physicalBytes": ciphertext_bytes,
+                    "ciphertextBytes": ciphertext_bytes,
+                    "snapshotKind": str(receipt.get("snapshotKind") or "full"),
+                },
+            )
+        except Exception:
+            pass
+        try:
+            backup_capacity.record_physical_size_evidence(
+                policy_id=policy_id,
+                backup_id=backup_id,
+                snapshot_kind=str(receipt.get("snapshotKind") or "full"),
+                physical_bytes=ciphertext_bytes,
+                observed_at=committed_at,
             )
         except Exception:
             pass

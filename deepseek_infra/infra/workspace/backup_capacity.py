@@ -10,13 +10,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from deepseek_infra.infra.workspace import backup_dr_ledger, backup_targets
+from deepseek_infra.infra.workspace import backup_control, backup_dr_ledger, backup_targets
 
 DEFAULT_MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024     # 10 GiB
 DEFAULT_MIN_FREE_PERCENT = 10.0                       # 10%
 DEFAULT_SOFT_WATERMARK_PERCENT = 80.0                 # 80%
 DEFAULT_HARD_WATERMARK_PERCENT = 90.0                 # 90%
-DEFAULT_PREDICTED_BACKUP_BYTES = 500 * 1024 * 1024    # 500 MiB fallback
+WORKSPACE_ESTIMATOR_SAFETY_FACTOR = 1.20
 
 
 def _utc_iso() -> str:
@@ -28,53 +28,142 @@ def get_target_capacity(target_id: str) -> dict[str, Any]:
     return backup_targets.probe_target_capacity(target_id)
 
 
+def predict_next_backup_size(
+    policy_id: str,
+    *,
+    snapshot_kind: str = "full",
+    workspace_physical_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Return a confidence-labelled physical ciphertext size prediction.
+
+    Logical workspace bytes are deliberately not used as ciphertext evidence.
+    When no physical evidence or explicit workspace estimator is available the
+    result remains unavailable; callers must not substitute a small constant.
+    """
+    sizes: list[int] = []
+    source = "historical-physical-p90"
+    evidence = backup_control.list_capacity_evidence(policy_id, snapshot_kind=snapshot_kind, limit=20)
+    seen_evidence_backups: set[str] = set()
+    for item in evidence:
+        evidence_backup_id = str(item.get("backupId") or f"evidence-{item.get('evidenceId')}")
+        if evidence_backup_id in seen_evidence_backups:
+            continue
+        seen_evidence_backups.add(evidence_backup_id)
+        sz = item.get("physicalBytes")
+        if isinstance(sz, int) and not isinstance(sz, bool) and sz > 0:
+            sizes.append(sz)
+
+    if not sizes:
+        recovery_points = backup_dr_ledger.list_recovery_points(policy_id=policy_id, limit=40)
+        seen_backups: set[str] = set()
+        for point in recovery_points:
+            if str(point.get("snapshotKind") or "full") != str(snapshot_kind or "full"):
+                continue
+            backup_id = str(point.get("backupId") or "")
+            if backup_id in seen_backups:
+                continue
+            seen_backups.add(backup_id)
+            sz = point.get("ciphertextBytes")
+            if isinstance(sz, int) and not isinstance(sz, bool) and sz > 0:
+                sizes.append(sz)
+
+    if not sizes:
+        copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=20)
+        for copy in copies:
+            meta_val = copy.get("metadata") if isinstance(copy, dict) else None
+            meta: dict[str, Any] = meta_val if isinstance(meta_val, dict) else {}
+            sz = (
+                (copy.get("physicalBytes") if isinstance(copy, dict) else None)
+                or (copy.get("ciphertextBytes") if isinstance(copy, dict) else None)
+                or meta.get("physicalBytes")
+                or meta.get("ciphertextBytes")
+            )
+            if isinstance(sz, int) and not isinstance(sz, bool) and sz > 0:
+                sizes.append(sz)
+
+    if sizes:
+        sizes.sort()
+        idx = int(len(sizes) * 0.9)
+        p90 = sizes[min(idx, len(sizes) - 1)]
+        confidence = "high" if len(sizes) >= 10 else "medium" if len(sizes) >= 3 else "low"
+        return {
+            "predictedBytes": p90,
+            "capacityConfidence": confidence,
+            "source": source,
+            "isEstimate": True,
+            "snapshotKind": str(snapshot_kind or "full"),
+            "sampleCount": len(sizes),
+        }
+
+    if workspace_physical_bytes is not None and workspace_physical_bytes > 0:
+        predicted = max(1, int(workspace_physical_bytes * WORKSPACE_ESTIMATOR_SAFETY_FACTOR))
+        return {
+            "predictedBytes": predicted,
+            "capacityConfidence": "medium",
+            "source": "workspace-physical-estimator-with-safety-factor",
+            "isEstimate": True,
+            "snapshotKind": str(snapshot_kind or "full"),
+            "sampleCount": 1,
+        }
+
+    return {
+        "predictedBytes": None,
+        "capacityConfidence": "unavailable",
+        "source": "no-physical-evidence",
+        "isEstimate": True,
+        "snapshotKind": str(snapshot_kind or "full"),
+        "sampleCount": 0,
+    }
+
+
 def predict_next_backup_bytes(
     policy_id: str,
     *,
     snapshot_kind: str = "full",
-) -> int:
-    """Calculate P90 predicted physical ciphertext size from recent backups."""
-    copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=20)
-    if not copies:
-        return DEFAULT_PREDICTED_BACKUP_BYTES
+    workspace_physical_bytes: int | None = None,
+) -> int | None:
+    """Compatibility wrapper returning the confidence-aware prediction bytes."""
+    prediction = predict_next_backup_size(
+        policy_id,
+        snapshot_kind=snapshot_kind,
+        workspace_physical_bytes=workspace_physical_bytes,
+    )
+    value = prediction.get("predictedBytes")
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) else None
 
-    # Look for sizes in copies
-    sizes: list[int] = []
-    for c in copies:
-        meta_val = c.get("metadata") if isinstance(c, dict) else None
-        meta: dict[str, Any] = meta_val if isinstance(meta_val, dict) else {}
-        sz = (
-            (c.get("logicalBytes") if isinstance(c, dict) else None)
-            or (c.get("physicalBytes") if isinstance(c, dict) else None)
-            or (c.get("ciphertextBytes") if isinstance(c, dict) else None)
-            or meta.get("logicalBytes")
-            or meta.get("physicalBytes")
-            or meta.get("ciphertextBytes")
-        )
-        if sz and isinstance(sz, int) and sz > 0:
-            sizes.append(sz)
 
-    if not sizes:
-        return DEFAULT_PREDICTED_BACKUP_BYTES
-
-    sizes.sort()
-    # P90 index
-    idx = int(len(sizes) * 0.9)
-    p90 = sizes[min(idx, len(sizes) - 1)]
-
-    if snapshot_kind == "incremental":
-        # Incremental typical footprint is ~20% of full
-        return max(10 * 1024 * 1024, int(p90 * 0.3))
-    return max(50 * 1024 * 1024, p90)
+def record_physical_size_evidence(
+    *,
+    policy_id: str,
+    backup_id: str,
+    snapshot_kind: str,
+    physical_bytes: int,
+    observed_at: str | None = None,
+    source: str = "formal-receipt-v4",
+) -> None:
+    """Persist observed ciphertext bytes for later confidence-aware admission."""
+    backup_control.record_capacity_evidence(
+        policy_id=policy_id,
+        backup_id=backup_id,
+        snapshot_kind=snapshot_kind,
+        physical_bytes=physical_bytes,
+        confidence="high",
+        source=source,
+        observed_at=observed_at,
+    )
 
 
 def check_target_capacity_admission(
     target_id: str,
-    required_bytes: int,
+    required_bytes: int | None,
     *,
     policy: dict[str, Any] | None = None,
+    force_full: bool = False,
 ) -> tuple[bool, str]:
     """Check if target can admit a write of required_bytes without breaching policy watermarks."""
+    if required_bytes is None and force_full:
+        return False, "capacity-evidence-unavailable"
+
     policy_dict = policy or {}
     placement = policy_dict.get("placement") or {}
     hard_watermark = float(placement.get("hardWatermarkPercent") or DEFAULT_HARD_WATERMARK_PERCENT)
@@ -83,8 +172,14 @@ def check_target_capacity_admission(
 
     cap = get_target_capacity(target_id)
     if cap.get("freeBytes") is None:
-        # S3 target without operator quota: admit
+        # A target without an operator quota is not bounded by this admission
+        # layer, but the prediction remains explicitly unavailable upstream.
         return True, "unconstrained"
+
+    if required_bytes is None:
+        return False, "capacity-evidence-unavailable"
+    if required_bytes < 0:
+        return False, "invalid-required-bytes"
 
     free_bytes = int(cap["freeBytes"])
     total_bytes = int(cap.get("totalBytes") or 0)
@@ -135,8 +230,11 @@ def estimate_target_exhaustion_horizon(
     copies = backup_dr_ledger.list_logical_recovery_copies(target_id=target_id, policy_id=policy_id, limit=30)
     total_ingested = 0
     for c in copies:
-        sz = c.get("logicalBytes") or c.get("physicalBytes") or 50 * 1024 * 1024
-        total_ingested += int(sz)
+        meta_val = c.get("metadata") if isinstance(c, dict) else None
+        meta = meta_val if isinstance(meta_val, dict) else {}
+        sz = c.get("physicalBytes") or c.get("ciphertextBytes") or meta.get("physicalBytes") or meta.get("ciphertextBytes")
+        if isinstance(sz, int) and not isinstance(sz, bool) and sz > 0:
+            total_ingested += sz
 
     daily_rate = max(10 * 1024 * 1024, total_ingested // max(1, len(copies)))
     days_to_full = max(0, int(free_bytes // daily_rate))
@@ -166,8 +264,8 @@ def estimate_transfer_cost(
     dest_target_id: str | None = None,
 ) -> dict[str, Any]:
     """Calculate operator-supplied cost estimates for transfer and storage delta."""
-    src_record = backup_targets.get_target(source_target_id) if source_target_id else {}
-    dst_record = backup_targets.get_target(dest_target_id) if dest_target_id else {}
+    src_record = backup_targets.get_target(source_target_id) if source_target_id and source_target_id != "managed-local" else {}
+    dst_record = backup_targets.get_target(dest_target_id) if dest_target_id and dest_target_id != "managed-local" else {}
 
     gib = bytes_to_transfer / (1024.0 * 1024.0 * 1024.0)
 

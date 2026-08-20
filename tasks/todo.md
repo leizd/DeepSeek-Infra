@@ -25,13 +25,13 @@
 
 ## Gate C — Placement and capacity
 
-- [ ] Pass `logicalRecoveryPointId` through placement calls
-- [ ] Compute copy/Failure Domain constraints from one replica set
-- [ ] Add independent `minRegions` enforcement
-- [ ] Add provider/jurisdiction/cost metadata and operator-estimate validation
-- [ ] Replace 500 MiB fallback with confidence-aware physical evidence
-- [ ] Fail closed on unknown Force Full capacity
-- [ ] Apply matching RecoveryClass P90 RTO eligibility
+- [x] Pass `logicalRecoveryPointId` through placement calls
+- [x] Compute copy/Failure Domain constraints from one replica set
+- [x] Add independent `minRegions` enforcement
+- [x] Add provider/jurisdiction/cost metadata and operator-estimate validation
+- [x] Replace 500 MiB fallback with confidence-aware physical evidence
+- [x] Fail closed on unknown Force Full capacity
+- [x] Apply matching RecoveryClass P90 RTO eligibility
 
 ## Gate D — Multipart reconciliation
 
