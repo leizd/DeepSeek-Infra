@@ -5,10 +5,12 @@ import json
 import multiprocessing
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_capacity,
     backup_dr_audit,
@@ -588,3 +590,100 @@ def test_policy_and_placement_use_matching_rto_and_operator_cost_evidence(tmp_se
         )
 
     assert [target_id for _, target_id in ranked] == [eligible_id]
+
+
+def test_multipart_reconciliation_adopts_verified_remote_ahead_parts(tmp_settings: Path) -> None:
+    data = b"abcdefghijkl"
+    source_root = tmp_settings / "multipart-source-ahead"
+    source_root.mkdir(parents=True, exist_ok=True)
+    (source_root / "ciphertext.age").write_bytes(data)
+    source_target = SimpleNamespace(root=source_root, store=None)
+    store = MemoryTargetStore()
+    upload = store.begin_multipart("ciphertext.age", checksum_sha256=hashlib.sha256(data).hexdigest())
+    first = store.upload_part(upload, 1, data[:4], checksum_sha256=hashlib.sha256(data[:4]).hexdigest())
+    store.upload_part(upload, 2, data[4:8], checksum_sha256=hashlib.sha256(data[4:8]).hexdigest())
+    progress = {
+        "multipartUploadId": upload.upload_id,
+        "parts": [{"number": 1, "etag": first["etag"], "size": 4, "checksumSha256": hashlib.sha256(data[:4]).hexdigest()}],
+        "nextOffset": 4,
+    }
+
+    transferred = backup_replication.stream_ciphertext_transfer(
+        source_target,
+        SimpleNamespace(root=None, store=store),
+        "ciphertext.age",
+        "ciphertext.age",
+        hashlib.sha256(data).hexdigest(),
+        chunk_size=4,
+        progress_state=progress,
+    )
+
+    assert transferred == len(data)
+    assert store.get_bytes("ciphertext.age") == data
+    assert progress["multipartReconciliation"]["status"] == "remote-ahead-adopted"
+    assert progress["nextOffset"] == len(data)
+    assert [part["number"] for part in progress["parts"]] == [1, 2, 3]
+
+
+def test_multipart_reconciliation_restarts_missing_provider_upload(tmp_settings: Path) -> None:
+    class MissingUploadStore(MemoryTargetStore):
+        def list_multipart_parts(self, upload: object) -> list[dict[str, object]]:
+            del upload
+            raise AppError("multipart-upload-not-found", code=ErrorCode.NOT_FOUND, status=404)
+
+    data = b"restart-from-zero"
+    source_root = tmp_settings / "multipart-source-missing"
+    source_root.mkdir(parents=True, exist_ok=True)
+    (source_root / "ciphertext.age").write_bytes(data)
+    store = MissingUploadStore()
+    progress = {
+        "multipartUploadId": "provider-aborted-upload",
+        "parts": [{"number": 1, "etag": "stale", "size": 4}],
+        "nextOffset": 4,
+    }
+
+    transferred = backup_replication.stream_ciphertext_transfer(
+        SimpleNamespace(root=source_root, store=None),
+        SimpleNamespace(root=None, store=store),
+        "ciphertext.age",
+        "ciphertext.age",
+        hashlib.sha256(data).hexdigest(),
+        chunk_size=4,
+        progress_state=progress,
+    )
+
+    assert transferred == len(data)
+    assert store.get_bytes("ciphertext.age") == data
+    assert progress["multipartRestart"]["previousUploadId"] == "provider-aborted-upload"
+    assert progress["multipartUploadId"] != "provider-aborted-upload"
+
+
+def test_multipart_reconciliation_aborts_and_quarantines_part_conflict(tmp_settings: Path) -> None:
+    data = b"abcdefgh"
+    source_root = tmp_settings / "multipart-source-conflict"
+    source_root.mkdir(parents=True, exist_ok=True)
+    (source_root / "ciphertext.age").write_bytes(data)
+    store = MemoryTargetStore()
+    upload = store.begin_multipart("ciphertext.age", checksum_sha256=hashlib.sha256(data).hexdigest())
+    store.upload_part(upload, 1, b"zzzz", checksum_sha256=hashlib.sha256(b"zzzz").hexdigest())
+    progress = {
+        "multipartUploadId": upload.upload_id,
+        "parts": [{"number": 1, "etag": hashlib.sha256(data[:4]).hexdigest(), "size": 4}],
+        "nextOffset": 4,
+    }
+
+    with pytest.raises(AppError, match="multipart-reconciliation-conflict"):
+        backup_replication.stream_ciphertext_transfer(
+            SimpleNamespace(root=source_root, store=None),
+            SimpleNamespace(root=None, store=store),
+            "ciphertext.age",
+            "ciphertext.age",
+            hashlib.sha256(data).hexdigest(),
+            chunk_size=4,
+            progress_state=progress,
+        )
+
+    assert progress["multipartQuarantine"]["uploadId"] == upload.upload_id
+    assert "remote-part-1" in progress["multipartQuarantine"]["reason"]
+    assert progress.get("multipartUploadId") is None
+    assert store.list_multipart_parts(upload) == []

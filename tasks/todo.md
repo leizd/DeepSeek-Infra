@@ -35,10 +35,10 @@
 
 ## Gate D — Multipart reconciliation
 
-- [ ] RED: remote-ahead, missing-upload, and conflicting-part cases
-- [ ] Reconcile local checkpoint against provider `ListParts`
-- [ ] Restart missing uploads from zero
-- [ ] Abort/quarantine ETag or size conflicts
+- [x] RED: remote-ahead, missing-upload, and conflicting-part cases
+- [x] Reconcile local checkpoint against provider `ListParts`
+- [x] Restart missing uploads from zero
+- [x] Abort/quarantine ETag or size conflicts
 
 ## Gate E — Production QoS
 

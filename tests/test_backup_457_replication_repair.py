@@ -237,6 +237,10 @@ def test_stream_ciphertext_transfer_and_authentication(tmp_settings: Path) -> No
 
     # Resuming multi-part streaming
     mock_store.reset_mock()
+    mock_store.list_multipart_parts.return_value = [
+        {"partNumber": 1, "etag": hashlib.sha256(payload[:4]).hexdigest(), "size": 4},
+        {"partNumber": 2, "etag": hashlib.sha256(payload[4:8]).hexdigest(), "size": 4},
+    ]
     prog_resume = {
         "multipartUploadId": "mp-1",
         "nextOffset": 8,
@@ -947,7 +951,14 @@ def test_backup_replication_committed_auth_and_resumed_stream(tmp_settings: Path
     d_total_hex = hashlib.sha256(data_total).hexdigest()
 
     fake_store = SimpleNamespace(
-        upload_part=lambda upload, num, chunk: SimpleNamespace(etag=f"etag_{num}"),
+        list_multipart_parts=lambda upload: [
+            {
+                "partNumber": 1,
+                "etag": hashlib.sha256(b"part1_content").hexdigest(),
+                "size": len(b"part1_content"),
+            }
+        ],
+        upload_part=lambda upload, num, chunk, **kwargs: SimpleNamespace(etag=f"etag_{num}"),
         abort_multipart=lambda upload: None,
         complete_multipart_if_absent=lambda upload: None,
     )

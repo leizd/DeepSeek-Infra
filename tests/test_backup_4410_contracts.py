@@ -572,6 +572,22 @@ def test_s3_list_parts_paginates_and_normalizes() -> None:
     with pytest.raises(AppError, match="list-parts"):
         broken.list_multipart_parts(upload)
 
+    class NoSuchUploadError(RuntimeError):
+        response = {
+            "Error": {"Code": "NoSuchUpload"},
+            "ResponseMetadata": {"HTTPStatusCode": 404},
+        }
+
+    class MissingUploadClient:
+        def list_parts(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            raise NoSuchUploadError("gone")
+
+    missing = backup_target_s3.S3TargetStore(bucket="bucket", client=MissingUploadClient())
+    with pytest.raises(AppError, match="multipart-upload-not-found") as missing_exc:
+        missing.list_multipart_parts(upload)
+    assert missing_exc.value.status == 404
+
     class NoDateClient:
         def list_objects_v2(self, **kwargs: Any) -> dict[str, Any]:
             del kwargs

@@ -16,6 +16,7 @@ and In-Place Committed Copy Healing.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -943,6 +944,91 @@ def _verify_destination_component(dest_target: Any, target_rel: str, expected_di
     return False, False
 
 
+def _part_number(part: dict[str, Any]) -> int:
+    return int(part.get("partNumber") or part.get("number") or 0)
+
+
+def _normalized_etag(value: Any) -> str:
+    return str(value or "").strip().strip('"').lower()
+
+
+def _part_matches_source(part: dict[str, Any], chunk: bytes) -> tuple[bool, str]:
+    size = int(part.get("size") or 0)
+    if size != len(chunk):
+        return False, f"size-mismatch:{size}!={len(chunk)}"
+    checksum_b64 = str(part.get("checksumSHA256") or "")
+    expected_sha256 = hashlib.sha256(chunk).hexdigest()
+    if checksum_b64:
+        expected_b64 = base64.b64encode(hashlib.sha256(chunk).digest()).decode("ascii")
+        if checksum_b64 != expected_b64:
+            return False, "checksum-mismatch"
+        return True, "provider-checksum"
+    etag = _normalized_etag(part.get("etag"))
+    expected_md5 = hashlib.md5(chunk, usedforsecurity=False).hexdigest()
+    if etag not in {expected_sha256, expected_md5}:
+        return False, "etag-unverifiable-or-mismatch"
+    return True, "etag-content-binding"
+
+
+def _canonical_progress_part(part: dict[str, Any], chunk: bytes) -> dict[str, Any]:
+    return {
+        "number": _part_number(part),
+        "etag": str(part.get("etag") or ""),
+        "size": len(chunk),
+        "checksumSha256": hashlib.sha256(chunk).hexdigest(),
+    }
+
+
+def _provider_upload_part(part: dict[str, Any], chunk: bytes) -> dict[str, Any]:
+    result = {
+        "partNumber": _part_number(part),
+        "etag": str(part.get("etag") or ""),
+        "size": len(chunk),
+    }
+    if part.get("checksumSHA256"):
+        result["checksumSHA256"] = str(part["checksumSHA256"])
+    return result
+
+
+def _upload_result_part(result: Any, part_number: int, chunk: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
+    if isinstance(result, dict):
+        provider = dict(result)
+    else:
+        provider = {
+            "partNumber": int(getattr(result, "part_number", part_number) or part_number),
+            "etag": str(getattr(result, "etag", "") or ""),
+            "size": int(getattr(result, "size", len(chunk)) or len(chunk)),
+        }
+    provider["partNumber"] = int(provider.get("partNumber") or part_number)
+    provider["etag"] = str(provider.get("etag") or "")
+    provider["size"] = int(provider.get("size") or len(chunk))
+    return provider, _canonical_progress_part(provider, chunk)
+
+
+def _multipart_upload_missing(exc: BaseException) -> bool:
+    return int(getattr(exc, "status", 0) or 0) == 404 or "multipart-upload-not-found" in str(exc).lower()
+
+
+def _quarantine_multipart_progress(
+    progress_state: dict[str, Any],
+    *,
+    upload_id: str,
+    reason: str,
+    local_parts: list[dict[str, Any]],
+    remote_parts: list[dict[str, Any]],
+) -> None:
+    progress_state["multipartQuarantine"] = {
+        "uploadId": upload_id,
+        "reason": reason,
+        "localParts": local_parts,
+        "remoteParts": remote_parts,
+        "quarantinedAt": _utc_iso(),
+    }
+    progress_state.pop("multipartUploadId", None)
+    progress_state["parts"] = []
+    progress_state["nextOffset"] = 0
+
+
 def stream_ciphertext_transfer(
     source_target: Any,
     dest_target: Any,
@@ -993,55 +1079,151 @@ def stream_ciphertext_transfer(
         store = dest_target.store
         stream = _iter_source_stream(source_target, source_rel, chunk_size=chunk_size)
 
-        # Check if resuming existing multipart upload
-        if (
-            progress_state is not None
-            and progress_state.get("multipartUploadId")
-            and int(progress_state.get("nextOffset") or 0) > 0
-        ):
+        # Reconcile the durable local checkpoint with provider ListParts before
+        # sending any resumed bytes. Provider parts are accepted only after
+        # they are content-bound to the immutable source ciphertext.
+        if progress_state is not None and progress_state.get("multipartUploadId"):
             from deepseek_infra.infra.workspace.backup_target_store import MultipartUpload
 
             upload_id = str(progress_state["multipartUploadId"])
-            next_offset = int(progress_state["nextOffset"])
-            existing_parts = list(progress_state.get("parts") or [])
+            local_parts = [dict(item) for item in list(progress_state.get("parts") or []) if isinstance(item, dict)]
             upload = MultipartUpload(key=dest_rel, upload_id=upload_id, checksum_sha256=expected_digest)
-
-            offset_skipped = 0
-            while offset_skipped < next_offset:
-                try:
-                    c = next(stream)
-                except StopIteration:
-                    break
-                hasher.update(c)
-                bytes_transferred += len(c)
-                offset_skipped += len(c)
-
-            part_num = len(existing_parts)
             try:
+                remote_parts = sorted(
+                    [dict(item) for item in store.list_multipart_parts(upload) if isinstance(item, dict)],
+                    key=_part_number,
+                )
+            except Exception as exc:
+                if not _multipart_upload_missing(exc):
+                    raise
+                progress_state["multipartRestart"] = {
+                    "previousUploadId": upload_id,
+                    "reason": "provider-upload-not-found",
+                    "restartedAt": _utc_iso(),
+                }
+                progress_state.pop("multipartUploadId", None)
+                progress_state["parts"] = []
+                progress_state["nextOffset"] = 0
+            else:
+                conflict_reason: str | None = None
+                if len(remote_parts) < len(local_parts):
+                    conflict_reason = f"remote-part-count-behind:{len(remote_parts)}<{len(local_parts)}"
+                canonical_remote: list[dict[str, Any]] = []
+                provider_remote: list[dict[str, Any]] = []
+                expected_local_offset = 0
+                for index, remote_part in enumerate(remote_parts, start=1):
+                    if _part_number(remote_part) != index:
+                        conflict_reason = conflict_reason or f"non-contiguous-remote-part:{_part_number(remote_part)}"
+                        break
+                    try:
+                        source_chunk = next(stream)
+                    except StopIteration:
+                        conflict_reason = conflict_reason or "remote-parts-exceed-source"
+                        break
+                    matches, match_reason = _part_matches_source(remote_part, source_chunk)
+                    if not matches:
+                        conflict_reason = conflict_reason or f"remote-part-{index}-{match_reason}"
+                        break
+                    if index <= len(local_parts):
+                        local_part = local_parts[index - 1]
+                        if _part_number(local_part) != index:
+                            conflict_reason = conflict_reason or f"non-contiguous-local-part:{_part_number(local_part)}"
+                            break
+                        local_size = int(local_part.get("size") or len(source_chunk))
+                        if local_size != int(remote_part.get("size") or 0):
+                            conflict_reason = conflict_reason or f"part-{index}-local-remote-size-conflict"
+                            break
+                        local_etag = _normalized_etag(local_part.get("etag"))
+                        remote_etag = _normalized_etag(remote_part.get("etag"))
+                        if len(local_etag) in {32, 64} and local_etag != remote_etag:
+                            conflict_reason = conflict_reason or f"part-{index}-local-remote-etag-conflict"
+                            break
+                        local_checksum = str(local_part.get("checksumSha256") or "")
+                        if local_checksum and local_checksum != hashlib.sha256(source_chunk).hexdigest():
+                            conflict_reason = conflict_reason or f"part-{index}-local-checksum-conflict"
+                            break
+                        expected_local_offset += len(source_chunk)
+                    hasher.update(source_chunk)
+                    bytes_transferred += len(source_chunk)
+                    canonical_remote.append(_canonical_progress_part(remote_part, source_chunk))
+                    provider_remote.append(_provider_upload_part(remote_part, source_chunk))
+
+                local_next_offset = int(progress_state.get("nextOffset") or 0)
+                if conflict_reason is None and local_next_offset != expected_local_offset:
+                    conflict_reason = f"local-offset-conflict:{local_next_offset}!={expected_local_offset}"
+                if conflict_reason is not None:
+                    store.abort_multipart(upload)
+                    _quarantine_multipart_progress(
+                        progress_state,
+                        upload_id=upload_id,
+                        reason=conflict_reason,
+                        local_parts=local_parts,
+                        remote_parts=remote_parts,
+                    )
+                    raise AppError(
+                        f"multipart-reconciliation-conflict:{conflict_reason}",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=409,
+                    )
+
+                upload.parts = provider_remote
+                progress_state["parts"] = canonical_remote
+                progress_state["nextOffset"] = sum(int(item["size"]) for item in canonical_remote)
+                reconcile_status = "remote-ahead-adopted" if len(remote_parts) > len(local_parts) else "remote-matches-local"
+                progress_state["multipartReconciliation"] = {
+                    "status": reconcile_status,
+                    "uploadId": upload_id,
+                    "localPartCount": len(local_parts),
+                    "remotePartCount": len(remote_parts),
+                    "reconciledAt": _utc_iso(),
+                }
+                if on_part is not None:
+                    for adopted in canonical_remote[len(local_parts) :]:
+                        on_part(int(adopted["number"]), str(adopted["etag"]), int(adopted["size"]))
+
+                part_num = len(remote_parts)
                 for chunk in stream:
                     part_num += 1
                     hasher.update(chunk)
                     bytes_transferred += len(chunk)
-                    res_n = store.upload_part(upload, part_num, chunk)
-                    etag_n = getattr(res_n, "etag", str(res_n))
-                    progress_state["parts"].append({"number": part_num, "etag": etag_n})
+                    result = store.upload_part(
+                        upload,
+                        part_num,
+                        chunk,
+                        checksum_sha256=hashlib.sha256(chunk).hexdigest(),
+                    )
+                    provider_part, progress_part = _upload_result_part(result, part_num, chunk)
+                    upload.parts = [item for item in upload.parts if _part_number(item) != part_num]
+                    upload.parts.append(provider_part)
+                    upload.parts.sort(key=_part_number)
+                    progress_state["parts"].append(progress_part)
                     progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(chunk)
                     if on_part is not None:
-                        on_part(part_num, etag_n, len(chunk))
+                        on_part(part_num, str(progress_part["etag"]), len(chunk))
 
                 calc_digest = hasher.hexdigest()
                 if calc_digest != expected_digest:
                     store.abort_multipart(upload)
+                    _quarantine_multipart_progress(
+                        progress_state,
+                        upload_id=upload_id,
+                        reason="source-ciphertext-digest-mismatch",
+                        local_parts=local_parts,
+                        remote_parts=remote_parts,
+                    )
                     raise AppError(
                         f"source component corrupt: ciphertext transfer digest mismatch: calculated={calc_digest}, expected={expected_digest}",
                         code=ErrorCode.INTERNAL,
                         status=500,
                     )
+                upload.expected_size = bytes_transferred
                 store.complete_multipart_if_absent(upload)
                 return bytes_transferred
-            except Exception:
-                store.abort_multipart(upload)
-                raise
+
+        # A missing provider upload is restarted from byte zero.
+        stream = _iter_source_stream(source_target, source_rel, chunk_size=chunk_size)
+        hasher = hashlib.sha256()
+        bytes_transferred = 0
 
         try:
             first_chunk = next(stream)
@@ -1073,36 +1255,46 @@ def stream_ciphertext_transfer(
                 progress_state["multipartUploadId"] = upload.upload_id
                 progress_state["parts"] = []
                 progress_state["nextOffset"] = 0
+                progress_state["multipartReconciliation"] = {
+                    "status": "new-upload",
+                    "uploadId": upload.upload_id,
+                    "localPartCount": 0,
+                    "remotePartCount": 0,
+                    "reconciledAt": _utc_iso(),
+                }
             part_num = 1
             try:
-                res1 = store.upload_part(upload, part_num, first_chunk)
-                etag1 = getattr(res1, "etag", str(res1))
+                res1 = store.upload_part(upload, part_num, first_chunk, checksum_sha256=hashlib.sha256(first_chunk).hexdigest())
+                provider1, progress1 = _upload_result_part(res1, part_num, first_chunk)
+                upload.parts = [provider1]
                 if progress_state is not None:
-                    progress_state["parts"].append({"number": part_num, "etag": etag1})
+                    progress_state["parts"].append(progress1)
                     progress_state["nextOffset"] = len(first_chunk)
                 if on_part is not None:
-                    on_part(part_num, etag1, len(first_chunk))
+                    on_part(part_num, str(progress1["etag"]), len(first_chunk))
 
                 part_num += 1
-                res2 = store.upload_part(upload, part_num, second_chunk)
-                etag2 = getattr(res2, "etag", str(res2))
+                res2 = store.upload_part(upload, part_num, second_chunk, checksum_sha256=hashlib.sha256(second_chunk).hexdigest())
+                provider2, progress2 = _upload_result_part(res2, part_num, second_chunk)
+                upload.parts.append(provider2)
                 if progress_state is not None:
-                    progress_state["parts"].append({"number": part_num, "etag": etag2})
+                    progress_state["parts"].append(progress2)
                     progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(second_chunk)
                 if on_part is not None:
-                    on_part(part_num, etag2, len(second_chunk))
+                    on_part(part_num, str(progress2["etag"]), len(second_chunk))
 
                 for chunk in stream:
                     part_num += 1
                     hasher.update(chunk)
                     bytes_transferred += len(chunk)
-                    res_n = store.upload_part(upload, part_num, chunk)
-                    etag_n = getattr(res_n, "etag", str(res_n))
+                    result = store.upload_part(upload, part_num, chunk, checksum_sha256=hashlib.sha256(chunk).hexdigest())
+                    provider_part, progress_part = _upload_result_part(result, part_num, chunk)
+                    upload.parts.append(provider_part)
                     if progress_state is not None:
-                        progress_state["parts"].append({"number": part_num, "etag": etag_n})
+                        progress_state["parts"].append(progress_part)
                         progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(chunk)
                     if on_part is not None:
-                        on_part(part_num, etag_n, len(chunk))
+                        on_part(part_num, str(progress_part["etag"]), len(chunk))
 
                 calc_digest = hasher.hexdigest()
                 if calc_digest != expected_digest:
@@ -1112,9 +1304,13 @@ def stream_ciphertext_transfer(
                         code=ErrorCode.INTERNAL,
                         status=500,
                     )
+                upload.expected_size = bytes_transferred
                 store.complete_multipart_if_absent(upload)
             except Exception:
-                store.abort_multipart(upload)
+                # A durable checkpoint is intentionally left resumable on
+                # transient transport failures. Untracked uploads are aborted.
+                if progress_state is None:
+                    store.abort_multipart(upload)
                 raise
 
     return bytes_transferred
@@ -1564,6 +1760,20 @@ def execute_repair_job_instance(
                         source_rel,
                     )
                 else:
+                    def _checkpoint_multipart_part(part_number: int, etag: str, part_bytes: int) -> None:
+                        nonlocal job
+                        assert job is not None
+                        components_state[digest]["lastCheckpointPart"] = part_number
+                        components_state[digest]["lastCheckpointEtag"] = etag
+                        components_state[digest]["lastCheckpointPartBytes"] = part_bytes
+                        job = _set_repair_phase(
+                            job,
+                            "transferring-components",
+                            components=components_state,
+                            bytesRepaired=bytes_transferred,
+                        )
+                        hold.renew()
+
                     trans_bytes = stream_ciphertext_transfer(
                         source_target,
                         dest_target,
@@ -1571,6 +1781,7 @@ def execute_repair_job_instance(
                         target_rel,
                         digest,
                         progress_state=components_state[digest],
+                        on_part=_checkpoint_multipart_part,
                     )
 
                 bytes_transferred += trans_bytes
