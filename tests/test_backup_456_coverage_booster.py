@@ -582,6 +582,7 @@ def test_rebalance_policy_replicas_with_draining_and_diversity(tmp_path: Path) -
         "policyId": "pol-reb-drain",
         "name": "Rebalance Drain Policy",
         "primaryTargetId": t_a["targetId"],
+        "placement": {"softWatermarkPercent": 95},
         "replication": {
             "enabled": True,
             "minFailureDomains": 2,

@@ -17,7 +17,7 @@ from deepseek_infra.infra.workspace import (
     backup_recovery_lease,
     backup_targets,
 )
-from deepseek_infra.infra.workspace.backup_target_store import ListPage, ObjectMeta
+from deepseek_infra.infra.workspace.backup_target_store import ListPage, ObjectMeta, object_key
 
 
 def _receipt_bytes(receipt: dict[str, Any]) -> bytes:
@@ -65,9 +65,16 @@ def test_audit_remote_full_success_and_resume(tmp_settings: Path, monkeypatch: p
         def get_bytes(self, key: str) -> bytes | None:
             return None
 
+        def stat(self, key: str) -> ObjectMeta | None:
+            return ObjectMeta(key=key, size=1, etag="payload") if key == object_key("b" * 64) else None
+
     store = Store()
     monkeypatch.setattr(backup_targets, "open_target_store", lambda *a, **k: store)
-    monkeypatch.setattr(backup_dr_audit, "read_json", lambda s, key: commit if key.startswith("commits/") else receipt)
+    monkeypatch.setattr(
+        backup_dr_audit,
+        "read_json",
+        lambda s, key: commit if key.startswith("commits/") else receipt if key.startswith("receipts/") else None,
+    )
     monkeypatch.setattr(backup_publish, "commit_marker_valid", lambda m: True)
 
     first = backup_dr_audit.audit_remote_target(target_id, page_size=10)

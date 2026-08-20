@@ -12,6 +12,7 @@ import pytest
 
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
+    backup_capacity,
     backup_dr_ledger,
     backup_executor,
     backup_policies,
@@ -473,6 +474,12 @@ def test_failure_domain_policy_normalization_and_placement_ranking(tmp_settings:
         },
     })
     assert policy["replication"]["minFailureDomains"] == 2
+    backup_capacity.record_physical_size_evidence(
+        policy_id=str(policy["policyId"]),
+        backup_id="backup_fd_capacity_evidence",
+        snapshot_kind="full",
+        physical_bytes=1024,
+    )
 
     # Drain Target C
     backup_targets.drain_target(tid_c, reason="Maintenance")
@@ -522,6 +529,7 @@ def test_online_replica_rebalancing(tmp_settings: Path) -> None:
         "schedule": {"cron": "0 2 * * *", "timezone": "UTC"},
         "targetId": tid_a,
         "primaryTargetId": tid_a,
+        "placement": {"softWatermarkPercent": 95},
         "replication": {
             "enabled": True,
             "targets": [
@@ -686,12 +694,12 @@ def test_zero_resnapshot_and_zero_reencrypt_invariants(tmp_settings: Path) -> No
 
     run = backup_scheduler.claim_manual_run(policy, instance_id="test-runner")
 
-    published_packages: list[Any] = []
+    published_attempts: list[tuple[str, Any]] = []
     orig_publish = backup_publish.publish_backup
 
     def capture_and_fail_first(target: Any, package: Any, **kwargs: Any) -> Any:
-        published_packages.append(package)
         curr_tid = str(getattr(target, "target_id", None) or (target.root.name if target.root else ""))
+        published_attempts.append((curr_tid, package))
         if curr_tid == tid_a or "target_a" in str(getattr(target, "root", "")):
             raise AppError("Simulated primary I/O failure", status=503)
         return orig_publish(target, package, **kwargs)
@@ -706,11 +714,11 @@ def test_zero_resnapshot_and_zero_reencrypt_invariants(tmp_settings: Path) -> No
     assert outcome["targetId"] == tid_b
     assert outcome["isFailover"] is True
 
-    # We must have attempted publish on A and then published the EXACT SAME package instance/digests on B
-    assert len(published_packages) == 2
-    pkg_a, pkg_b = published_packages[0], published_packages[1]
-    assert pkg_a.backup_id == pkg_b.backup_id == outcome["backupId"]
-    assert pkg_a.object_set_digest == pkg_b.object_set_digest
+    # A fails, B commits, and maintenance may immediately attempt required
+    # primary catch-up. Every attempt must reuse the exact encrypted package.
+    assert [target_id for target_id, _ in published_attempts[:2]] == [tid_a, tid_b]
+    assert all(package.backup_id == outcome["backupId"] for _, package in published_attempts)
+    assert len({package.object_set_digest for _, package in published_attempts}) == 1
 
 
 def test_backup_governance_drain_and_rebalance_lifecycle(tmp_settings: Path) -> None:

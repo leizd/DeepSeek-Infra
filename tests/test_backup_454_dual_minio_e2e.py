@@ -1,6 +1,6 @@
-"""Dual MinIO S3 E2E Integration: Replica Self-Healing & Write Failover.
+"""Legacy dual-target S3 contract simulation for healing and failover.
 
-Verifies end-to-end against live dual S3/MinIO stores (or fallback S3 store adapters):
+This fake filesystem-backed adapter suite does not satisfy real MinIO Evidence:
 1. Multi-point backup creation with single Age encryption and replica sync.
 2. In-place ciphertext repair of corrupted and missing objects on Target B.
 3. Zero Receipt/Commit rewrites and zero generation advances during committed repair.
@@ -17,6 +17,7 @@ from typing import Any
 
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
+    backup_capacity,
     backup_dr_audit,
     backup_dr_ledger,
     backup_publish,
@@ -124,9 +125,27 @@ def test_dual_minio_replica_healing_and_write_failover_e2e(tmp_settings, monkeyp
         "s3-minio-a": MockResolvedTarget("s3-minio-a", store_a),
         "s3-minio-b": MockResolvedTarget("s3-minio-b", store_b),
     }
+    target_records = {
+        "s3-minio-a": {
+            "targetId": "s3-minio-a",
+            "kind": "s3",
+            "region": "region-a",
+            "failureDomain": "region-a-1",
+            "quotaBytes": 20 * 1024 * 1024 * 1024,
+        },
+        "s3-minio-b": {
+            "targetId": "s3-minio-b",
+            "kind": "s3",
+            "region": "region-b",
+            "failureDomain": "region-b-1",
+            "quotaBytes": 20 * 1024 * 1024 * 1024,
+        },
+    }
 
     monkeypatch.setattr(backup_publish, "resolve_target", lambda tid: target_map[tid])
     monkeypatch.setattr(backup_targets, "open_target_store", lambda tid, **kw: target_map[tid].store)
+    monkeypatch.setattr(backup_targets, "list_targets", lambda: list(target_records.values()))
+    monkeypatch.setattr(backup_targets, "get_target", lambda tid: target_records[tid])
 
     policy_id = "dual-minio-pol"
     policy = {
@@ -142,12 +161,18 @@ def test_dual_minio_replica_healing_and_write_failover_e2e(tmp_settings, monkeyp
             ],
         },
     }
+    backup_capacity.record_physical_size_evidence(
+        policy_id=policy_id,
+        backup_id="bk_capacity_evidence",
+        snapshot_kind="full",
+        physical_bytes=1024 * 1024,
+    )
 
     # Step 1: Create Recovery Point 1 (Full) on Target A and replicate to Target B
     backup_id_1 = "bk_minio_001"
     c1_bytes = b"ciphertext-chunk-1-full-payload"
     c1_digest = _sha256(c1_bytes)
-    comp1_rel = f"objects/{c1_digest[:2]}/{c1_digest[2:4]}/{c1_digest}.age"
+    comp1_rel = backup_target_store.object_key(c1_digest)
 
     # Put on Target A
     store_a.put_if_absent(comp1_rel, c1_bytes, checksum_sha256=c1_digest)
@@ -272,7 +297,7 @@ def test_dual_minio_replica_healing_and_write_failover_e2e(tmp_settings, monkeyp
     backup_id_2 = "bk_minio_002_failover"
     c2_bytes = b"ciphertext-chunk-2-failover-full-payload"
     c2_digest = _sha256(c2_bytes)
-    comp2_rel = f"objects/{c2_digest[:2]}/{c2_digest[2:4]}/{c2_digest}.age"
+    comp2_rel = backup_target_store.object_key(c2_digest)
 
     plan = backup_run_plan.freeze_run_plan(
         policy=policy,
