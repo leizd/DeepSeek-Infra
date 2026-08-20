@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.5.7-blue)
+![版本](https://img.shields.io/badge/version-4.5.8-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.5.7 — 拓扑安全、容量治理与传输带宽 QoS**。在 4.5.6 事务化写切换基础上，构建具备形式化 Commit 闭环与精确增量父链认证、有界内存流式隔离与分片续传、删除后拓扑模拟与引用计数 GC、故障域多样性放置规划、自主 Target 排空、容量水位准入预测与 Token-Bucket 带宽 QoS 治理的自治灾备存储控制面。详见 [4.5.7 发布说明](docs/releases/4.5.7.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
+> **4.5.8 — 持久化存储控制平面与跨区域生命周期治理**。将 Repair、Replication、Rebalance、Drain、Retirement、Capacity 与 Transfer QoS 收敛为跨进程安全、可恢复、持续运行的 Storage Control Plane：副本退役保留 Formal Receipt/Commit 历史，Policy/Topology 使用 SQLite CAS，Placement 按单个 Logical Recovery Point 计算 Failure Domain 与 Region 目标，Maintenance Supervisor 以 durable cursor 自主推进，所有生产传输受 global/source/destination 三层 P0-P6 QoS 管理。详见 [4.5.8 发布说明](docs/releases/4.5.8.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)、[4.5.4](docs/releases/4.5.4.md)、[4.5.5](docs/releases/4.5.5.md)、[4.5.6](docs/releases/4.5.6.md)、[4.5.7](docs/releases/4.5.7.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)、[4.5.4](docs/releases/4.5.4.md)、[4.5.5](docs/releases/4.5.5.md)、[4.5.6](docs/releases/4.5.6.md)、[4.5.7](docs/releases/4.5.7.md)、[4.5.8](docs/releases/4.5.8.md)。
 
 **4.4.15 validation target:** Full/Incremental Projection 同义、最终快照中新建 Project 可选、未选且已分叉 Contributor 零改动、Adaptive Delta O(buffer) 且超阈值前终止加密、Object Set 精确提交、Control-first Preview、未选 Component 零 GET、真实进程退出后恢复续传、Object Set Holds/GC 和旧 Whole-Age 永久兼容。
 

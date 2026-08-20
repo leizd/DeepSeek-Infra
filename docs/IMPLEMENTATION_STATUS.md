@@ -5,7 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.5.7。
+适用版本：v4.5.8。
+
+> 4.5.8 已把 Repair、Replication、Rebalance、Drain、Retirement、Capacity 与 Transfer QoS 收敛到持久化 Storage Control Plane：SQLite 提供跨进程 Policy/Topology CAS、Maintenance Supervisor 以 durable cursor 推进后台工作、Copy Retirement 保留 Receipt v4/Commit v4 并用 authenticated retirement marker 管理 Payload GC、Placement 以单个 Logical Recovery Point 计算 Failure Domain/Region 目标、Multipart 恢复与 provider `ListParts` 对账、生产数据流受 global/source/destination 三层 P0-P6 QoS 约束。三个真实 MinIO 与 real Age 的 exact-merge Evidence 只能由独立 CI producer 产出，本地合同测试不能替代它。
 
 > 4.5.0 的产品实现已完成 Gate A-F，Gate G 的真实 MinIO/Rust Age 与故障矩阵 exact-merge CI producer 已接线。当前仍不是 GA：只有这些独立 producer、冻结兼容合同和全量 Python/frontend/eval/security/release 门禁在精确合并提交上全部通过后，才会标记 release-ready。
 

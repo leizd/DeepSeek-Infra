@@ -64,7 +64,7 @@
 - [x] Use three independent MinIO endpoints, boto3, S3TargetStore, production workers, and real Age
 - [x] Remove real-Evidence ownership from legacy fake/stub runner
 - [x] Add CI job and version-derived Evidence contract
-- [ ] Update 4.5.8 version and release surfaces
+- [x] Update 4.5.8 version and release surfaces
 - [ ] Run frontend check, Ruff, Mypy, full pytest >=95%, vendor JS check
 - [ ] Run offline eval/security/release gates
 - [ ] Perform final multi-axis code review
