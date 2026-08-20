@@ -40,9 +40,6 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
     "explicit-primary-promotion-cas": (
         "tests/test_backup_455_verified_write_continuity_contract.py::test_promote_primary_target_cas_endpoint",
     ),
-    "dual-minio-s3-e2e": (
-        "tests/test_backup_455_real_dual_minio_e2e.py::test_dual_minio_s3_write_continuity_governed_failback_and_promotion_e2e",
-    ),
 }
 
 CHECK_SCENARIOS = {
@@ -54,7 +51,6 @@ CHECK_SCENARIOS = {
     "deterministicWritePlacementAndForcedFullFailover": "deterministic-write-failover",
     "verifiedWriteContinuityAndGovernedFailback": "verified-write-continuity-and-governed-failback",
     "explicitPrimaryPromotionWithCAS": "explicit-primary-promotion-cas",
-    "realDualMinioE2EIntegration": "dual-minio-s3-e2e",
 }
 
 
@@ -79,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         {
             "ok": all(value == "PASS" for value in checks.values()),
             "status": "PASS" if all(value == "PASS" for value in checks.values()) else "FAIL",
-            "title": "Dual-Target Autonomous Replica Self-Healing & Backup Write Failover E2E",
+            "title": "Replica Healing and Write Continuity Contract Suite",
             "checks": checks,
             "checkProvenance": dict(CHECK_SCENARIOS),
             "scenarios": results,

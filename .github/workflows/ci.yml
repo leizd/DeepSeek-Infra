@@ -505,6 +505,101 @@ jobs:
           docker logs deepseek-minio-pri || true
           docker logs deepseek-minio-rep || true
 
+  storage-control-plane-minio-e2e:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+      MINIO_ROOT_USER: deepseekci
+      MINIO_ROOT_PASSWORD: ci-storage-control-${{ github.run_id }} # pragma: allowlist secret
+      AWS_ACCESS_KEY_ID: deepseekci
+      AWS_SECRET_ACCESS_KEY: ci-storage-control-${{ github.run_id }} # pragma: allowlist secret
+      DEEPSEEK_TEST_S3_ENDPOINT_A: http://127.0.0.1:9000
+      DEEPSEEK_TEST_S3_ENDPOINT_B: http://127.0.0.1:9001
+      DEEPSEEK_TEST_S3_ENDPOINT_C: http://127.0.0.1:9002
+      DEEPSEEK_TEST_MINIO_CONTAINER_A: deepseek-minio-control-a
+      DEEPSEEK_TEST_MINIO_CONTAINER_B: deepseek-minio-control-b
+      DEEPSEEK_TEST_MINIO_CONTAINER_C: deepseek-minio-control-c
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+      - name: Build the real Age backup crypto helper
+        uses: dtolnay/rust-toolchain@1.85.0
+      - run: python scripts/build_backup_crypto.py
+      - name: Start Storage Control Plane MinIO servers
+        run: |
+          docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_A" \
+            --publish 9000:9000 \
+            --env MINIO_ROOT_USER \
+            --env MINIO_ROOT_PASSWORD \
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            server /data --address ":9000"
+          docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_B" \
+            --publish 9001:9001 \
+            --env MINIO_ROOT_USER \
+            --env MINIO_ROOT_PASSWORD \
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            server /data --address ":9001"
+          docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_C" \
+            --publish 9002:9002 \
+            --env MINIO_ROOT_USER \
+            --env MINIO_ROOT_PASSWORD \
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            server /data --address ":9002"
+      - name: Wait for all MinIO health endpoints
+        run: |
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null && \
+               curl --fail --silent http://127.0.0.1:9001/minio/health/live >/dev/null && \
+               curl --fail --silent http://127.0.0.1:9002/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Run real three-MinIO Storage Control Plane gates
+        run: >-
+          python scripts/run_storage_control_plane_minio_e2e.py
+          --out docs/evidence/storage-control-plane-minio-v$RELEASE_VERSION.json
+      - name: Stage Storage Control Plane exact-merge Evidence
+        run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer storage-control-plane-minio-e2e
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-storage-control-plane-minio-e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-storage-control-plane-minio-e2e
+          path: artifacts/evidence-producer-storage-control-plane-minio-e2e
+          if-no-files-found: error
+      - name: Upload Storage Control Plane report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-control-plane-minio-e2e
+          path: docs/evidence/storage-control-plane-minio-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Collect Storage Control Plane MinIO diagnostics
+        if: always()
+        run: |
+          docker logs "$DEEPSEEK_TEST_MINIO_CONTAINER_A" || true
+          docker logs "$DEEPSEEK_TEST_MINIO_CONTAINER_B" || true
+          docker logs "$DEEPSEEK_TEST_MINIO_CONTAINER_C" || true
+
   eval:
     needs:
       - evidence-context
@@ -1182,6 +1277,7 @@ jobs:
       - object-set-s3-e2e
       - recovery-fault-evidence
       - replica-healing-s3-e2e
+      - storage-control-plane-minio-e2e
       - security
       - eval
       - release-readiness
@@ -1307,6 +1403,7 @@ jobs:
       - packed-delta-s3-e2e
       - object-set-s3-e2e
       - recovery-fault-evidence
+      - storage-control-plane-minio-e2e
       - security
       - eval
       - docker
@@ -1335,6 +1432,7 @@ jobs:
       RC_CI_PACKED_DELTA_S3_E2E: ${{ needs['packed-delta-s3-e2e'].result }}
       RC_CI_OBJECT_SET_S3_E2E: ${{ needs['object-set-s3-e2e'].result }}
       RC_CI_RECOVERY_FAULT_EVIDENCE: ${{ needs['recovery-fault-evidence'].result }}
+      RC_CI_STORAGE_CONTROL_PLANE_MINIO_E2E: ${{ needs['storage-control-plane-minio-e2e'].result }}
       RC_CI_SECURITY: ${{ needs.security.result }}
       RC_CI_EVAL: ${{ needs.eval.result }}
       RC_CI_DOCKER: ${{ needs.docker.result }}
@@ -1366,6 +1464,7 @@ jobs:
           test "$RC_CI_PACKED_DELTA_S3_E2E" = "success"
           test "$RC_CI_OBJECT_SET_S3_E2E" = "success"
           test "$RC_CI_RECOVERY_FAULT_EVIDENCE" = "success"
+          test "$RC_CI_STORAGE_CONTROL_PLANE_MINIO_E2E" = "success"
           test "$RC_CI_EVIDENCE_ASSEMBLY" = "success"
           test "$RC_CI_RELEASE_PACKAGE" = "success"
           mode=--report-only

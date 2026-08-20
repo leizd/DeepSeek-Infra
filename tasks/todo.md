@@ -60,10 +60,10 @@
 
 ## Gates G-H — Evidence, compatibility, release
 
-- [ ] Add `run_storage_control_plane_minio_e2e.py`
-- [ ] Use three independent MinIO endpoints, boto3, S3TargetStore, production workers, and real Age
-- [ ] Remove real-Evidence ownership from legacy fake/stub runner
-- [ ] Add CI job and version-derived Evidence contract
+- [x] Add `run_storage_control_plane_minio_e2e.py`
+- [x] Use three independent MinIO endpoints, boto3, S3TargetStore, production workers, and real Age
+- [x] Remove real-Evidence ownership from legacy fake/stub runner
+- [x] Add CI job and version-derived Evidence contract
 - [ ] Update 4.5.8 version and release surfaces
 - [ ] Run frontend check, Ruff, Mypy, full pytest >=95%, vendor JS check
 - [ ] Run offline eval/security/release gates

@@ -19,6 +19,10 @@ Evidence fails `verify_release_package`). Real two-target MinIO E2E, subprocess
 restart, fault injection, and exact-merge artifacts remain owned by their CI
 producers. No prior-version artifact is reused or relabelled as 4.5.7 PASS
 Evidence.
+The 4.5.8 Storage Control Plane gate is owned by
+`scripts/run_storage_control_plane_minio_e2e.py`; its exact-merge CI producer uses
+three independent MinIO servers plus the real Age helper. A local report is not
+accepted as exact-merge Evidence.
 For development setup, test execution, and quality gates, see [AGENTS.md](../AGENTS.md).
 For project architecture, see [architecture.svg](assets/architecture.svg).
 
@@ -79,6 +83,7 @@ evidence should not block normal validation):
 - `docs/evidence/object-set-s3-v4.5.7.json`
 - `docs/evidence/recovery-faults-v4.5.7.json`
 - `docs/evidence/replica-healing-s3-v4.5.7.json`
+- `docs/evidence/storage-control-plane-minio-v4.5.7.json`
 
 ## Historical 4.4.15 evidence contract
 
