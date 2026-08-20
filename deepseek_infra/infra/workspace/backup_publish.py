@@ -1359,36 +1359,39 @@ def _upload_object_resumable(
             chunk = handle.read(length)
         if len(chunk) != length:
             raise AppError("spooled multipart package was truncated", code=ErrorCode.INTERNAL, status=500)
-        manager = backup_transfer_budget.get_global_transfer_budget_manager()
-        with manager.track_transfer(
-            traffic_class=traffic_class,
-            source_target_id=source_target_id,
-            dest_target_id=dest_target_id,
-            estimated_bytes=length,
-        ) as transfer_id:
-            manager.wait_for_bandwidth(transfer_id, length)
-            return store.upload_part(upload, part_number, chunk, checksum_sha256=hashlib.sha256(chunk).hexdigest())
+        return store.upload_part(upload, part_number, chunk, checksum_sha256=hashlib.sha256(chunk).hexdigest())
 
     pending = [
         (part_number, offset, min(part_size, size - offset))
         for part_number, offset in enumerate(range(0, size, part_size), start=1)
         if part_number not in completed_parts
     ]
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="backup-multipart") as executor:
-        futures = {}
-        for part_number, offset, length in pending:
-            if checkpoint is not None:
-                checkpoint()
-            futures[executor.submit(upload_one, part_number, offset, length)] = part_number
-        for future in as_completed(futures):
-            if checkpoint is not None:
-                checkpoint()
-            part_number = futures[future]
-            completed_parts[part_number] = future.result()
-            upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
-            state["parts"] = upload.parts
-            state["completedParts"] = len(upload.parts)
-            _write_state(state)
+    manager = backup_transfer_budget.get_global_transfer_budget_manager()
+    with manager.track_transfer(
+        traffic_class=traffic_class,
+        source_target_id=source_target_id,
+        dest_target_id=dest_target_id,
+        estimated_bytes=sum(length for _, _, length in pending),
+    ) as transfer_id:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="backup-multipart") as executor:
+            futures = {}
+            for part_number, offset, length in pending:
+                if checkpoint is not None:
+                    checkpoint()
+                # Reserve every part against the hierarchical buckets before
+                # dispatch. Once admitted, provider uploads retain their
+                # bounded parallelism instead of serializing on SQLite setup.
+                manager.wait_for_bandwidth(transfer_id, length)
+                futures[executor.submit(upload_one, part_number, offset, length)] = part_number
+            for future in as_completed(futures):
+                if checkpoint is not None:
+                    checkpoint()
+                part_number = futures[future]
+                completed_parts[part_number] = future.result()
+                upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
+                state["parts"] = upload.parts
+                state["completedParts"] = len(upload.parts)
+                _write_state(state)
     if checkpoint is not None:
         checkpoint()
     state["phase"] = "completing"
