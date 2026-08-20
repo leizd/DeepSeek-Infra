@@ -1,75 +1,71 @@
-# 4.5.0 Production Recovery Orchestration Checklist
+# 4.5.8 Durable Storage Control Plane Checklist
 
-<!-- docs-language-switcher:start -->
-[中文](../README.md) / [English](../README.en.md)
-<!-- docs-language-switcher:end -->
+## Foundation
 
-## Review gate
+- [x] Verify clean 4.5.7 baseline at `008a278984dec1b5d207cde4b7538b24a7d437aa`
+- [x] Freeze object-set-v1, Receipt v4, Commit v4, FastCDC v3, and randomized Age
+- [x] Record dependency-ordered plan and hard Gate matrix
+- [x] Create `codex/4.5.8-storage-control-plane`
 
-- [x] Audit `origin/main` after PR #128 and protect unrelated untracked files
-- [x] Write proposed 4.5.0 specification and ADR
-- [x] Break implementation into dependency-ordered, verifiable slices
-- [x] User approves specification, ADR, and implementation plan
+## Gate A — Chain-preserving retirement
 
-## Gate A — Transport
+- [x] RED: prove current retirement deletes Receipt/Commit
+- [x] Add commitment-bound Target-local retirement marker
+- [x] Keep Formal Receipt/Commit history byte-identical
+- [x] Make payload GC live-copy and active-job reference aware
+- [x] Teach audit governed retirement vs corruption
 
-- [x] Freeze compatibility fixtures and prepare 4.5.0 development version
-- [x] Enforce Scheduler priority and FD budgets
-- [x] Parallelize remote object-set upload
-- [x] Persist digest-keyed per-Component restore states
-- [x] Defer Payload HEAD until verified Projection closure
-- [x] Parallelize required Component download
-- [x] Checkpoint A: focused tests, ruff, and mypy green
+## Gate B — Cross-process authority
 
-## Gate B — Cache
+- [ ] Add `.backup-control/control.sqlite3`
+- [ ] Migrate Policy JSON into SQLite CAS authority
+- [ ] Make update/delete and promotion revisions process safe
+- [ ] Make Target drain/activation/topology generation process safe
+- [ ] Add real multi-process same-revision race tests
 
-- [x] Add verified encrypted Component cache
-- [x] Add active/recovery-required pins and 20 GiB LRU quota
-- [x] Checkpoint B: warm restore has zero remote Payload GET
+## Gate C — Placement and capacity
 
-## Gate C — Pipeline
+- [ ] Pass `logicalRecoveryPointId` through placement calls
+- [ ] Compute copy/Failure Domain constraints from one replica set
+- [ ] Add independent `minRegions` enforcement
+- [ ] Add provider/jurisdiction/cost metadata and operator-estimate validation
+- [ ] Replace 500 MiB fallback with confidence-aware physical evidence
+- [ ] Fail closed on unknown Force Full capacity
+- [ ] Apply matching RecoveryClass P90 RTO eligibility
 
-- [x] Persist strongly bound verified Projection Plans
-- [x] Reuse Control metadata without redecode
-- [x] Overlap network/crypto and scrub plaintext Component ZIPs immediately
-- [x] Checkpoint C: plan reuse and plaintext-lifetime tests green
+## Gate D — Multipart reconciliation
 
-## Gate D — Safety
+- [ ] RED: remote-ahead, missing-upload, and conflicting-part cases
+- [ ] Reconcile local checkpoint against provider `ListParts`
+- [ ] Restart missing uploads from zero
+- [ ] Abort/quarantine ETag or size conflicts
 
-- [x] Replace fixed holds with renewable generationed leases
-- [x] Add durable pause/resume/phase-aware abort
-- [x] Add disk/dependency Recovery preflight
-- [x] Checkpoint D: restart, long-lease, and insufficient-disk tests green
+## Gate E — Production QoS
 
-## Gate E — Cost and integrity
+- [ ] Implement independent global/source-read/destination-write buckets
+- [ ] Share tokens and DR reservation across processes
+- [ ] Wire P1 Primary Publish
+- [ ] Wire P0 Restore
+- [ ] Wire P2/P3 Repair and required Replication
+- [ ] Wire P4 Scrub/Drill and P5/P6 Rebalance/Drain/best effort
+- [ ] Prove measured foreground reservation and background throttling
 
-- [x] Introduce Prepared Object Sets and remove object-set double compression
-- [x] Probe authoritative provider full-object SHA-256
-- [x] Avoid readback only when strong checksum is proven
-- [x] Checkpoint E: fallback and multipart-ETag rejection tests green
+## Gate F — Maintenance and Drain
 
-## Gate F — DR readiness
+- [ ] Add durable StorageMaintenanceSupervisor ownership and tick
+- [ ] Add keyset cursor covering arbitrary Target history
+- [ ] Route Drain destination through production Placement Planner
+- [ ] Block drained on writer/run/recovery/hold/job/retirement dependencies
+- [ ] Prove restart convergence and >500 Recovery Points
 
-- [x] Persist bounded/redacted Recovery telemetry
-- [x] Expose actual RPO and explicitly estimated RTO readiness
-- [x] Add isolated manual Recovery Drill
-- [x] Checkpoint F: live Workspace remains byte-identical in every drill test
+## Gates G-H — Evidence, compatibility, release
 
-## Gate G — Evidence and release
-
-Local checkpoint (2026-08-13; not release Evidence): full Python coverage
-passed at 95.02%; frontend check passed 607 tests plus build/bundle gates;
-ruff, mypy, vendor JavaScript syntax, strict offline eval/baseline/security,
-dependency audit, Bandit, and baseline-aware secret scanning passed. Release
-version surfaces agree on 4.5.0. Preflight remains intentionally red with 24
-required Evidence failures and 5 optional warnings, so no item below is promoted
-from local results.
-
-- [ ] Real MinIO + real Age cold selective recovery
-- [ ] Real MinIO warm-cache recovery with zero Payload GET
-- [ ] Real subprocess per-Component and pause/resume recovery
-- [ ] Fault injection for disk, lease, cache, remote mutation, and partial commit
-- [ ] Frozen wire-format and legacy compatibility Evidence
-- [ ] Full Python/frontend/eval/security/release gates
-- [ ] Exact-merge CI Evidence only; no fabricated PASS values
-- [ ] Release 4.5.0
+- [ ] Add `run_storage_control_plane_minio_e2e.py`
+- [ ] Use three independent MinIO endpoints, boto3, S3TargetStore, production workers, and real Age
+- [ ] Remove real-Evidence ownership from legacy fake/stub runner
+- [ ] Add CI job and version-derived Evidence contract
+- [ ] Update 4.5.8 version and release surfaces
+- [ ] Run frontend check, Ruff, Mypy, full pytest >=95%, vendor JS check
+- [ ] Run offline eval/security/release gates
+- [ ] Perform final multi-axis code review
+- [ ] Report CI-only Evidence as pending unless genuinely executed
