@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -170,19 +171,32 @@ def test_copy_retirement_lifecycle_and_gc(tmp_settings: Path) -> None:
     # Record receipt with obj1 and obj2
     rec_dir = t_dir / "receipts" / policy_id
     rec_dir.mkdir(parents=True, exist_ok=True)
-    (rec_dir / f"{backup_id}.receipt.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": "receipt-v4",
-                "policyId": policy_id,
-                "backupId": backup_id,
-                "components": [
-                    {"digest": obj1.name, "byteSize": 11},
-                    {"digest": obj2.name, "byteSize": 11},
-                ],
-            }
-        )
-    )
+    receipt = {
+        "schemaVersion": 4,
+        "targetId": target_id,
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "components": [
+            {"digest": obj1.name, "byteSize": 11},
+            {"digest": obj2.name, "byteSize": 11},
+        ],
+    }
+    receipt_bytes = (json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (rec_dir / f"{backup_id}.receipt.json").write_bytes(receipt_bytes)
+    commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "targetId": target_id,
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "receiptDigest": hashlib.sha256(receipt_bytes).hexdigest(),
+        "committedAt": "2026-08-18T10:00:00Z",
+    }
+    commit["commitHash"] = backup_publish._commit_hash(commit)
+    commit_path = t_dir / "commits" / policy_id / f"{backup_id}.json"
+    commit_path.parent.mkdir(parents=True, exist_ok=True)
+    commit_path.write_text(json.dumps(commit), encoding="utf-8")
 
     # Another retained backup references obj1
     (rec_dir / "bk-other.receipt.json").write_text(

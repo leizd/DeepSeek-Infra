@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -28,6 +29,72 @@ def _isolate_target_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
 
 def _stable_json_bytes(payload: dict[str, object]) -> bytes:
     return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _policy_cas_worker(
+    policy_dir: str,
+    control_dir: str,
+    suffix: str,
+    ready: object,
+    start: object,
+    results: object,
+) -> None:
+    from pathlib import Path
+
+    from deepseek_infra.core.errors import AppError
+    from deepseek_infra.infra.workspace import backup_policies
+
+    backup_policies.BACKUP_POLICY_DIR = Path(policy_dir)
+    try:
+        from deepseek_infra.infra.workspace import backup_control
+
+        backup_control.CONTROL_DIR = Path(control_dir)
+        backup_control.CONTROL_DB = Path(control_dir) / "control.sqlite3"
+    except ImportError:
+        pass
+    ready.put(suffix)  # type: ignore[attr-defined]
+    start.wait(timeout=10)  # type: ignore[attr-defined]
+    try:
+        updated = backup_policies.update_policy(
+            "policy_process_cas",
+            {"name": f"winner-{suffix}"},
+            expected_revision=1,
+        )
+        results.put(("ok", suffix, int(updated["policyRevision"])))  # type: ignore[attr-defined]
+    except AppError as exc:
+        results.put(("error", suffix, int(exc.status)))  # type: ignore[attr-defined]
+
+
+def _target_cas_worker(
+    registry_dir: str,
+    control_dir: str,
+    target_id: str,
+    suffix: str,
+    ready: object,
+    start: object,
+    results: object,
+) -> None:
+    from pathlib import Path
+
+    from deepseek_infra.core.errors import AppError
+    from deepseek_infra.infra.workspace import backup_control, backup_targets
+
+    backup_targets.BACKUP_TARGET_DIR = Path(registry_dir)
+    backup_control.CONTROL_DIR = Path(control_dir)
+    backup_control.CONTROL_DB = Path(control_dir) / "control.sqlite3"
+    ready.put(suffix)  # type: ignore[attr-defined]
+    start.wait(timeout=10)  # type: ignore[attr-defined]
+    try:
+        updated = backup_targets.drain_target(
+            target_id,
+            reason=f"drain-{suffix}",
+            expected_generation=1,
+        )
+        results.put(("ok", suffix, int(updated["topologyGeneration"])))  # type: ignore[attr-defined]
+    except AppError as exc:
+        results.put(("error", suffix, int(exc.status)))  # type: ignore[attr-defined]
+    except Exception as exc:
+        results.put(("exception", suffix, type(exc).__name__))  # type: ignore[attr-defined]
 
 
 def test_copy_retirement_preserves_formal_history_and_writes_bound_marker(tmp_settings: Path) -> None:
@@ -211,3 +278,89 @@ def test_copy_retirement_waits_while_rebalance_still_references_source(tmp_setti
 
     assert result["phase"] == "waiting-for-dependencies"
     assert "active-job" in str(result["error"])
+
+
+def test_policy_revision_cas_allows_only_one_cross_process_winner(tmp_settings: Path) -> None:
+    from deepseek_infra.infra.workspace import backup_policies
+
+    created = backup_policies.create_policy(
+        {
+            "policyId": "policy_process_cas",
+            "name": "process-cas",
+            "targetId": "managed-local",
+        }
+    )
+    assert created["policyRevision"] == 1
+
+    context = multiprocessing.get_context("spawn")
+    ready = context.Queue()
+    results = context.Queue()
+    start = context.Event()
+    control_dir = tmp_settings / ".backup-control"
+    workers = [
+        context.Process(
+            target=_policy_cas_worker,
+            args=(str(backup_policies.BACKUP_POLICY_DIR), str(control_dir), suffix, ready, start, results),
+        )
+        for suffix in ("a", "b")
+    ]
+    for worker in workers:
+        worker.start()
+    assert {ready.get(timeout=10), ready.get(timeout=10)} == {"a", "b"}
+    start.set()
+    outcomes = [results.get(timeout=10), results.get(timeout=10)]
+    for worker in workers:
+        worker.join(timeout=10)
+        assert worker.exitcode == 0
+
+    assert [outcome[0] for outcome in outcomes].count("ok") == 1
+    assert [outcome[0] for outcome in outcomes].count("error") == 1
+    assert next(outcome[2] for outcome in outcomes if outcome[0] == "ok") == 2
+    assert next(outcome[2] for outcome in outcomes if outcome[0] == "error") == 412
+    final = backup_policies.get_policy("policy_process_cas")
+    assert final["policyRevision"] == 2
+    assert final["name"] in {"winner-a", "winner-b"}
+
+
+def test_target_topology_generation_allows_only_one_cross_process_winner(tmp_settings: Path) -> None:
+    target_id = "target_process_cas"
+    created = backup_targets.register_filesystem_target(target_id, path=tmp_settings / "target-process-cas")
+    assert created.get("topologyGeneration", 1) == 1
+
+    from deepseek_infra.infra.workspace import backup_control
+
+    context = multiprocessing.get_context("spawn")
+    ready = context.Queue()
+    results = context.Queue()
+    start = context.Event()
+    workers = [
+        context.Process(
+            target=_target_cas_worker,
+            args=(
+                str(backup_targets.BACKUP_TARGET_DIR),
+                str(backup_control.CONTROL_DIR),
+                target_id,
+                suffix,
+                ready,
+                start,
+                results,
+            ),
+        )
+        for suffix in ("a", "b")
+    ]
+    for worker in workers:
+        worker.start()
+    assert {ready.get(timeout=10), ready.get(timeout=10)} == {"a", "b"}
+    start.set()
+    outcomes = [results.get(timeout=10), results.get(timeout=10)]
+    for worker in workers:
+        worker.join(timeout=10)
+        assert worker.exitcode == 0
+
+    assert [outcome[0] for outcome in outcomes].count("ok") == 1
+    assert [outcome[0] for outcome in outcomes].count("error") == 1
+    assert next(outcome[2] for outcome in outcomes if outcome[0] == "ok") == 2
+    assert next(outcome[2] for outcome in outcomes if outcome[0] == "error") == 412
+    final = backup_targets.get_target(target_id)
+    assert final["topologyGeneration"] == 2
+    assert final["drainReason"] in {"drain-a", "drain-b"}

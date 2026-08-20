@@ -31,7 +31,7 @@ from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backups
+from deepseek_infra.infra.workspace import backup_control, backups
 
 TARGET_SCHEMA_VERSION = 3
 TARGET_MARKER_NAME = ".deepseek-infra-backup-target.json"
@@ -101,6 +101,38 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(tmp, path)
+
+
+def _project_target(record: dict[str, Any]) -> None:
+    _assert_no_secrets(record)
+    _atomic_write_json(_registry_path(str(record["targetId"])), record)
+
+
+def _store_target(record: dict[str, Any], *, expected_generation: int | None = None) -> dict[str, Any]:
+    authoritative = backup_control.upsert_target(record, expected_generation=expected_generation)
+    _project_target(authoritative)
+    return authoritative
+
+
+def _mutate_target(
+    target_id: str,
+    mutate: Any,
+    *,
+    expected_generation: int | None = None,
+    bump_generation: bool = True,
+) -> dict[str, Any]:
+    # Adopt pre-4.5.8 JSON before entering the cross-process mutation.
+    current = get_target(target_id)
+    if backup_control.get_target(target_id) is None:
+        backup_control.adopt_target_projection(current)
+    authoritative = backup_control.mutate_target(
+        target_id,
+        expected_generation=expected_generation,
+        mutate=mutate,
+        bump_generation=bump_generation,
+    )
+    _project_target(authoritative)
+    return authoritative
 
 
 def installation_id() -> str:
@@ -349,8 +381,7 @@ def _register(
         "createdAt": str(created_at or "") or _utc_iso(),
         "registeredAt": _utc_iso(),
     }
-    _atomic_write_json(_registry_path(target_id), record)
-    return record
+    return _store_target(record)
 
 
 def _assert_no_secrets(payload: dict[str, Any]) -> None:
@@ -469,7 +500,7 @@ def init_s3_target(
         "lastProbe": probe_result,
     }
     _assert_no_secrets(record)
-    _atomic_write_json(_registry_path(target_id), record)
+    record = _store_target(record)
     _write_checkpoint(
         target_id,
         {
@@ -514,9 +545,11 @@ def open_target_store(target_id: str, *, write_intent: bool = True, client: Any 
         if write_intent:
             if not last or not last.get("scheduledBackupReady"):
                 probe = probe_store_capabilities(store)
-                record = {**record, "lastProbe": probe}
-                _assert_no_secrets(record)
-                _atomic_write_json(_registry_path(target_id), record)
+                record = _mutate_target(
+                    target_id,
+                    lambda current: {**current, "lastProbe": probe},
+                    bump_generation=False,
+                )
                 if not probe.get("scheduledBackupReady"):
                     raise AppError("unsupported-conditional-target: conditional writes unavailable", code=ErrorCode.INVALID_REQUEST, status=503)
         return store
@@ -563,34 +596,54 @@ def record_remote_target_head(store: Any, *, target_id: str, generation: int, co
 
 
 def get_target(target_id: str) -> dict[str, Any]:
-    path = _registry_path(str(target_id or ""))
-    if not path.is_file():
-        raise AppError("Backup target not found", code=ErrorCode.NOT_FOUND, status=404)
+    safe_id = str(target_id or "")
+    path = _registry_path(safe_id)
+    authoritative = backup_control.get_target(safe_id)
+    if authoritative is None:
+        if not path.is_file():
+            raise AppError("Backup target not found", code=ErrorCode.NOT_FOUND, status=404)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AppError("Backup target registry is unreadable", code=ErrorCode.INTERNAL, status=500) from exc
+        if not isinstance(data, dict) or not data.get("targetId"):
+            raise AppError("Backup target registry is unreadable", code=ErrorCode.INTERNAL, status=500)
+        authoritative = backup_control.adopt_target_projection(data)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise AppError("Backup target registry is unreadable", code=ErrorCode.INTERNAL, status=500) from exc
-    return data
+        projected = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    except (OSError, json.JSONDecodeError):
+        projected = None
+    if projected != authoritative:
+        _project_target(authoritative)
+    return authoritative
 
 
 def list_targets() -> list[dict[str, Any]]:
-    if not BACKUP_TARGET_DIR.is_dir():
-        return []
-    targets: list[dict[str, Any]] = []
-    for path in sorted(BACKUP_TARGET_DIR.glob("*.json")):
-        if path.name.endswith(".checkpoint.json"):
-            continue
+    if BACKUP_TARGET_DIR.is_dir():
+        for path in sorted(BACKUP_TARGET_DIR.glob("*.json")):
+            if path.name.endswith(".checkpoint.json"):
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict) and data.get("targetId"):
+                backup_control.adopt_target_projection(data)
+    targets = backup_control.list_targets()
+    for target in targets:
+        path = _registry_path(str(target["targetId"]))
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            projected = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
         except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(data, dict) and data.get("targetId"):
-            targets.append(data)
+            projected = None
+        if projected != target:
+            _project_target(target)
     return targets
 
 
-def delete_target(target_id: str) -> dict[str, Any]:
-    record = get_target(target_id)
+def delete_target(target_id: str, *, expected_generation: int | None = None) -> dict[str, Any]:
+    get_target(target_id)
+    record = backup_control.delete_target(target_id, expected_generation=expected_generation)
     _registry_path(target_id).unlink(missing_ok=True)
     return {"deleted": True, "targetId": record["targetId"]}
 
@@ -614,9 +667,11 @@ def probe_target(target_id: str) -> dict[str, Any]:
                     result.setdefault("capabilities", {})["versioning"] = detect()
             except Exception:
                 pass
-            updated = {**record, "lastProbe": result}
-            _assert_no_secrets(updated)
-            _atomic_write_json(_registry_path(target_id), updated)
+            _mutate_target(
+                target_id,
+                lambda current: {**current, "lastProbe": result},
+                bump_generation=False,
+            )
             try:
                 from deepseek_infra.infra.workspace import backup_dr_ledger
                 backup_dr_ledger.record_target_evidence(
@@ -852,33 +907,36 @@ def reinitialize_target(path: Path | str, *, label: str = "") -> dict[str, Any]:
     return record
 
 
-def drain_target(target_id: str, *, reason: str = "") -> dict[str, Any]:
+def drain_target(target_id: str, *, reason: str = "", expected_generation: int | None = None) -> dict[str, Any]:
     """Set target drain state to draining."""
-    target = get_target(target_id)
-    target["drainState"] = "draining"
-    target["drainReason"] = reason
-    target["drainingAt"] = _utc_iso()
-    _atomic_write_json(_registry_path(target_id), target)
-    return target
+    now = _utc_iso()
+    return _mutate_target(
+        target_id,
+        lambda target: {**target, "drainState": "draining", "drainReason": reason, "drainingAt": now},
+        expected_generation=expected_generation,
+    )
 
 
-def activate_target(target_id: str) -> dict[str, Any]:
+def activate_target(target_id: str, *, expected_generation: int | None = None) -> dict[str, Any]:
     """Set target drain state back to active."""
-    target = get_target(target_id)
-    target["drainState"] = "active"
-    target.pop("drainReason", None)
-    target.pop("drainingAt", None)
-    _atomic_write_json(_registry_path(target_id), target)
-    return target
+    def _activate(target: dict[str, Any]) -> dict[str, Any]:
+        updated = {**target, "drainState": "active"}
+        updated.pop("drainReason", None)
+        updated.pop("drainingAt", None)
+        updated.pop("drainedAt", None)
+        return updated
+
+    return _mutate_target(target_id, _activate, expected_generation=expected_generation)
 
 
-def mark_target_drained(target_id: str) -> dict[str, Any]:
+def mark_target_drained(target_id: str, *, expected_generation: int | None = None) -> dict[str, Any]:
     """Mark a draining target as drained."""
-    target = get_target(target_id)
-    target["drainState"] = "drained"
-    target["drainedAt"] = _utc_iso()
-    _atomic_write_json(_registry_path(target_id), target)
-    return target
+    now = _utc_iso()
+    return _mutate_target(
+        target_id,
+        lambda target: {**target, "drainState": "drained", "drainedAt": now},
+        expected_generation=expected_generation,
+    )
 
 
 def get_target_drain_state(target_id: str) -> str:

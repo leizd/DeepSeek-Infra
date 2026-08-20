@@ -142,6 +142,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     from deepseek_infra.infra.workspace import backup_run_plan as workspace_backup_run_plan
     from deepseek_infra.infra.workspace import backup_incremental as workspace_backup_incremental
     from deepseek_infra.infra.workspace import backup_recovery_keeper as workspace_backup_recovery_keeper
+    from deepseek_infra.infra.workspace import backup_control as workspace_backup_control
 
     monkeypatch.setattr(workspace_backup_dr_ledger, "BACKUP_DR_DIR", tmp_path / ".backup-dr")
     monkeypatch.setattr(workspace_backup_dr_ledger, "EVIDENCE_DB", tmp_path / ".backup-dr" / "evidence.sqlite3")
@@ -150,6 +151,8 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_backup_incremental, "INDEX_DIR", tmp_path / ".backup-index")
     monkeypatch.setattr(workspace_backup_incremental, "INDEX_DB", tmp_path / ".backup-index" / "index.db")
     monkeypatch.setattr(workspace_backup_recovery_keeper, "STAGING_ROOT", restore_dir)
+    monkeypatch.setattr(workspace_backup_control, "CONTROL_DIR", tmp_path / ".backup-control")
+    monkeypatch.setattr(workspace_backup_control, "CONTROL_DB", tmp_path / ".backup-control" / "control.sqlite3")
 
     from deepseek_infra.infra.workspace import backup_replication as workspace_backup_replication
     from deepseek_infra.infra.workspace import backup_write_continuity as workspace_backup_write_continuity

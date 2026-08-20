@@ -13,14 +13,13 @@ import json
 import os
 import re
 import secrets
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_targets
+from deepseek_infra.infra.workspace import backup_control, backup_targets
 from deepseek_infra.infra.workspace.backup_cron import load_timezone, parse_cron
 
 POLICY_SCHEMA_VERSION = 2
@@ -495,37 +494,60 @@ def create_policy(payload: dict[str, Any]) -> dict[str, Any]:
     validate_target_bindings(policy)
     _ensure_dir()
     if _policy_path(policy["policyId"]).exists():
+        try:
+            existing = json.loads(_policy_path(policy["policyId"]).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        if isinstance(existing, dict) and existing.get("policyId"):
+            backup_control.adopt_policy_projection(existing)
         raise AppError("Backup policy id collision; retry", code=ErrorCode.INVALID_REQUEST, status=409)
-    _atomic_write_json(_policy_path(policy["policyId"]), policy)
-    return policy
+    authoritative = backup_control.create_policy(policy)
+    _atomic_write_json(_policy_path(policy["policyId"]), authoritative)
+    return authoritative
 
 
 def get_policy(policy_id: str) -> dict[str, Any]:
-    path = _policy_path(_require_safe_id(policy_id, "policyId"))
-    if not path.is_file():
-        raise AppError("Backup policy not found", code=ErrorCode.NOT_FOUND, status=404)
+    safe_id = _require_safe_id(policy_id, "policyId")
+    path = _policy_path(safe_id)
+    authoritative = backup_control.get_policy(safe_id)
+    if authoritative is None:
+        if not path.is_file():
+            raise AppError("Backup policy not found", code=ErrorCode.NOT_FOUND, status=404)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AppError("Backup policy store is unreadable", code=ErrorCode.INTERNAL, status=500) from exc
+        if not isinstance(data, dict) or not data.get("policyId"):
+            raise AppError("Backup policy store is unreadable", code=ErrorCode.INTERNAL, status=500)
+        authoritative = backup_control.adopt_policy_projection(data)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise AppError("Backup policy store is unreadable", code=ErrorCode.INTERNAL, status=500) from exc
-    return data
+        projected = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    except (OSError, json.JSONDecodeError):
+        projected = None
+    if projected != authoritative:
+        _atomic_write_json(path, authoritative)
+    return authoritative
 
 
 def list_policies() -> list[dict[str, Any]]:
-    if not BACKUP_POLICY_DIR.is_dir():
-        return []
-    policies: list[dict[str, Any]] = []
-    for path in sorted(BACKUP_POLICY_DIR.glob("*.json")):
+    if BACKUP_POLICY_DIR.is_dir():
+        for path in sorted(BACKUP_POLICY_DIR.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict) and data.get("policyId"):
+                backup_control.adopt_policy_projection(data)
+    policies = backup_control.list_policies()
+    for policy in policies:
+        path = _policy_path(str(policy["policyId"]))
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            projected = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
         except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(data, dict) and data.get("policyId"):
-            policies.append(data)
+            projected = None
+        if projected != policy:
+            _atomic_write_json(path, policy)
     return policies
-
-
-_POLICY_LOCK = threading.RLock()
 
 
 def update_policy(
@@ -534,19 +556,13 @@ def update_policy(
     *,
     expected_revision: int | None = None,
 ) -> dict[str, Any]:
-    with _POLICY_LOCK:
-        existing = get_policy(policy_id)
-        if not isinstance(patch, dict):
-            raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
+    if not isinstance(patch, dict):
+        raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
+    # Ensure a legacy JSON projection is adopted before entering the authority
+    # transaction. All merge/normalize work below then runs under BEGIN IMMEDIATE.
+    get_policy(policy_id)
 
-        curr_rev = int(existing.get("policyRevision") or 1)
-        if expected_revision is not None and curr_rev != expected_revision:
-            raise AppError(
-                f"CAS mismatch on policyRevision: expected {expected_revision}, actual {curr_rev}",
-                code=ErrorCode.INVALID_REQUEST,
-                status=412,
-            )
-
+    def _mutate(existing: dict[str, Any]) -> dict[str, Any]:
         merged = dict(existing)
         for key in (
             "name",
@@ -570,13 +586,22 @@ def update_policy(
                 merged[key] = patch[key]
         normalized = normalize_policy(merged, policy_id=existing["policyId"], created_at=str(existing.get("createdAt") or ""))
         validate_target_bindings(normalized)
-        _atomic_write_json(_policy_path(policy_id), normalized)
         return normalized
 
+    updated = backup_control.mutate_policy(
+        policy_id,
+        expected_revision=expected_revision,
+        mutate=_mutate,
+        generation_kind="placement",
+    )
+    _atomic_write_json(_policy_path(policy_id), updated)
+    return updated
 
 
-def delete_policy(policy_id: str) -> dict[str, Any]:
-    policy = get_policy(policy_id)
+
+def delete_policy(policy_id: str, *, expected_revision: int | None = None) -> dict[str, Any]:
+    get_policy(policy_id)
+    policy = backup_control.delete_policy(policy_id, expected_revision=expected_revision)
     _policy_path(policy_id).unlink(missing_ok=True)
     return {"deleted": True, "policyId": policy["policyId"]}
 

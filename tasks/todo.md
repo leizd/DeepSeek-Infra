@@ -17,11 +17,11 @@
 
 ## Gate B — Cross-process authority
 
-- [ ] Add `.backup-control/control.sqlite3`
-- [ ] Migrate Policy JSON into SQLite CAS authority
-- [ ] Make update/delete and promotion revisions process safe
-- [ ] Make Target drain/activation/topology generation process safe
-- [ ] Add real multi-process same-revision race tests
+- [x] Add `.backup-control/control.sqlite3`
+- [x] Migrate Policy JSON into SQLite CAS authority
+- [x] Make update/delete and promotion revisions process safe
+- [x] Make Target drain/activation/topology generation process safe
+- [x] Add real multi-process same-revision race tests
 
 ## Gate C — Placement and capacity
 
