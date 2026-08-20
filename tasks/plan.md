@@ -1,5 +1,9 @@
 # Implementation Plan: 4.5.8 Durable Storage Control Plane & Geo-Aware Lifecycle
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 ## Overview
 
 Converge the 4.5.7 Repair, Replication, Rebalance, Drain, Retirement, Capacity,

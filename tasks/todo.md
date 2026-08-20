@@ -1,5 +1,9 @@
 # 4.5.8 Durable Storage Control Plane Checklist
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 ## Foundation
 
 - [x] Verify clean 4.5.7 baseline at `008a278984dec1b5d207cde4b7538b24a7d437aa`
