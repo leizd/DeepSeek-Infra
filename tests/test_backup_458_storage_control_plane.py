@@ -446,6 +446,78 @@ def test_copy_retirement_preserves_formal_history_and_writes_bound_marker(tmp_se
     assert backup_retirement.retirement_marker_valid(marker, receipt_bytes=receipt_bytes, commit=commit)
 
 
+def test_remote_retirement_retries_when_payload_delete_cas_loses_race(tmp_settings: Path) -> None:
+    target_id = "target_retirement_cas"
+    policy_id = "policy_retirement_cas"
+    backup_id = "backup_retirement_cas"
+    payload = b"retirement-cas-payload"
+    digest = hashlib.sha256(payload).hexdigest()
+    payload_key = object_key(digest)
+
+    class RejectingDeleteStore(MemoryTargetStore):
+        reject_delete = True
+
+        def delete_if_match(self, key: str, *, expected_etag: str | None = None) -> bool:
+            if self.reject_delete and key == payload_key:
+                return False
+            return super().delete_if_match(key, expected_etag=expected_etag)
+
+    store = RejectingDeleteStore()
+    receipt = {
+        "schemaVersion": 4,
+        "storageProtocol": "object-set-v1",
+        "targetId": target_id,
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "objectSetDigest": "retirement-cas-object-set",
+        "objects": [{"digest": digest, "size": len(payload)}],
+    }
+    receipt_bytes = _stable_json_bytes(receipt)
+    commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "targetId": target_id,
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "objectSetDigest": receipt["objectSetDigest"],
+        "receiptDigest": hashlib.sha256(receipt_bytes).hexdigest(),
+        "committedAt": "2026-08-20T00:00:00Z",
+    }
+    commit["commitHash"] = backup_publish._commit_hash(commit)
+    store.put_if_absent(payload_key, payload)
+    store.put_if_absent(f"receipts/{backup_id}.json", receipt_bytes)
+    put_json_if_absent(store, f"commits/{policy_id}/0001.json", commit)
+    backup_dr_ledger.record_logical_recovery_copy(
+        target_id=target_id,
+        policy_id=policy_id,
+        backup_id=backup_id,
+        committed_at="2026-08-20T00:00:00Z",
+        object_set_digest=str(receipt["objectSetDigest"]),
+        state="healthy",
+        recoverable=True,
+    )
+    resolved = SimpleNamespace(target_id=target_id, root=None, store=store)
+    with (
+        patch.object(backup_publish, "resolve_target", return_value=resolved),
+        patch.object(backup_replication, "simulate_copy_removal", return_value={"policySafe": True, "protectedByHold": False}),
+    ):
+        job = backup_retirement.create_copy_retirement_job(policy_id, backup_id, target_id)
+        first = backup_retirement.execute_copy_retirement_job(job["jobId"])
+        assert first["phase"] == "gc-pending"
+        assert first["bytesReclaimed"] == 0
+        assert store.stat(payload_key) is not None
+
+        store.reject_delete = False
+        second = backup_retirement.execute_copy_retirement_job(job["jobId"])
+
+    assert second["phase"] == "reclaimed"
+    assert second["bytesReclaimed"] == len(payload)
+    assert store.stat(payload_key) is None
+    assert store.get_bytes(f"receipts/{backup_id}.json") == receipt_bytes
+    assert store.get_bytes(f"commits/{policy_id}/0001.json") is not None
+
+
 def _remote_history_fixture(target_id: str, *, with_retirement_marker: bool) -> tuple[MemoryTargetStore, str, str]:
     policy_id = f"policy_{target_id}"
     backup_id = f"backup_{target_id}"
@@ -920,6 +992,40 @@ def test_policy_and_placement_use_matching_rto_and_operator_cost_evidence(tmp_se
         )
 
     assert [target_id for _, target_id in ranked] == [eligible_id]
+
+
+def test_egress_estimate_uses_region_boundary_not_cost_class_label(tmp_settings: Path) -> None:
+    source_id = "target_cost_source"
+    same_region_id = "target_cost_same_region"
+    remote_region_id = "target_cost_remote_region"
+    for target_id, region in (
+        (source_id, "region-a"),
+        (same_region_id, "region-a"),
+        (remote_region_id, "region-b"),
+    ):
+        backup_targets.register_filesystem_target(
+            target_id,
+            path=tmp_settings / target_id,
+            region=region,
+            failure_domain=f"{region}-1",
+            cost_class="standard",
+            storage_cost_per_gib_month=0.02,
+            egress_cost_per_gib=0.09,
+        )
+
+    same_region = backup_capacity.estimate_transfer_cost(
+        1024**3,
+        source_target_id=source_id,
+        dest_target_id=same_region_id,
+    )
+    cross_region = backup_capacity.estimate_transfer_cost(
+        1024**3,
+        source_target_id=source_id,
+        dest_target_id=remote_region_id,
+    )
+
+    assert same_region["estimatedOneTimeTransferCost"] == 0.0
+    assert cross_region["estimatedOneTimeTransferCost"] == 0.09
 
 
 def test_multipart_reconciliation_adopts_verified_remote_ahead_parts(tmp_settings: Path) -> None:

@@ -273,7 +273,11 @@ def estimate_transfer_cost(
     egress_rate = float((src_record or {}).get("egressCostPerGiB") or 0.09)
     storage_rate = float((dst_record or {}).get("storageCostPerGiBMonth") or 0.023)
 
-    one_time_egress_cost = gib * egress_rate if (src_record or {}).get("costClass") == "cross-region" else 0.0
+    source_region = str((src_record or {}).get("region") or "")
+    dest_region = str((dst_record or {}).get("region") or "")
+    crosses_region = bool(source_region and dest_region and source_region != dest_region)
+    explicitly_metered = str((src_record or {}).get("costClass") or "") == "cross-region"
+    one_time_egress_cost = gib * egress_rate if crosses_region or explicitly_metered else 0.0
     monthly_storage_cost = gib * storage_rate
 
     return {

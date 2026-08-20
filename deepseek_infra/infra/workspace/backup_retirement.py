@@ -569,6 +569,7 @@ def execute_copy_retirement_job(
         return _update_job_phase(job_id, "waiting-for-dependencies", error=reason, sim_metadata=sim)
 
     bytes_reclaimed = 0
+    marker_committed = False
     try:
         target = backup_publish.resolve_target(target_id)
         receipt_bytes, receipt, commit = _read_formal_metadata(target, policy_id, backup_id)
@@ -587,6 +588,7 @@ def execute_copy_retirement_job(
             reason=str(job.get("reason") or "copy-retirement"),
         )
         _write_retirement_marker(target, marker, receipt_bytes=receipt_bytes, commit=commit)
+        marker_committed = True
 
         # 4. Project lifecycle state locally. Formal Receipt/Commit bytes remain
         # untouched on the Target and continue to participate in hash-chain audit.
@@ -623,12 +625,21 @@ def execute_copy_retirement_job(
             elif target.store is not None:
                 meta = target.store.stat(component)
                 if meta is not None:
-                    target.store.delete_if_match(component, expected_etag=meta.etag)
+                    if not target.store.delete_if_match(component, expected_etag=meta.etag):
+                        raise AppError(
+                            f"retirement-payload-delete-cas-mismatch:{component}",
+                            code=ErrorCode.INVALID_REQUEST,
+                            status=409,
+                        )
                     bytes_reclaimed += int(meta.size or 0)
 
         return _update_job_phase(job_id, "reclaimed", bytes_reclaimed=bytes_reclaimed, sim_metadata={**sim, "retirementMarker": marker})
     except Exception as exc:
-        return _update_job_phase(job_id, "failed", error=str(exc))
+        # Once the authenticated marker exists, keep the job resumable. The
+        # next maintenance tick revalidates the marker and retries payload-only
+        # GC without touching the preserved Receipt/Commit bytes.
+        retry_phase = "gc-pending" if marker_committed else "failed"
+        return _update_job_phase(job_id, retry_phase, error=str(exc), bytes_reclaimed=bytes_reclaimed)
 
 
 def process_pending_retirements(
@@ -650,7 +661,16 @@ def process_pending_retirements(
         phase = str(result.get("phase") or "")
         if phase == "reclaimed":
             reclaimed += 1
-        elif phase in {"waiting-for-dependencies", "requested", "checking-topology", "checking-holds"}:
+        elif phase in {
+            "waiting-for-dependencies",
+            "requested",
+            "checking-topology",
+            "checking-holds",
+            "committing-retirement-marker",
+            "retiring-ledger-copy",
+            "gc-pending",
+            "gc-running",
+        }:
             waiting += 1
         else:
             failed += 1
