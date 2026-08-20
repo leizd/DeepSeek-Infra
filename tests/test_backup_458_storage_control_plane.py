@@ -277,6 +277,60 @@ def test_storage_maintenance_supervisor_advances_drains(tmp_settings: Path) -> N
     drain.assert_called_once()
 
 
+def test_legacy_job_workers_advance_durable_bounded_cursors(tmp_settings: Path) -> None:
+    backup_replication.REPLICATION_DIR.mkdir(parents=True, exist_ok=True)
+    for index in range(12):
+        job = {
+            "jobId": f"replication-{index:03d}",
+            "phase": "queued" if index == 11 else "committed",
+        }
+        (backup_replication.REPLICATION_DIR / f"replication-{index:03d}.json").write_text(
+            json.dumps(job),
+            encoding="utf-8",
+        )
+    with patch.object(
+        backup_replication,
+        "execute_replication_job",
+        return_value={"phase": "committed"},
+    ) as execute_replication:
+        assert backup_replication.process_pending_jobs(limit=1)["processed"] == 0
+        first_cursor = backup_control.get_maintenance_cursor("replication-jobs", "global")
+        assert first_cursor["cursor"] == {"fileName": "replication-009.json"}
+        assert backup_replication.process_pending_jobs(limit=1)["processed"] == 1
+    execute_replication.assert_called_once_with("replication-011", instance_id="repl-worker")
+    assert backup_control.get_maintenance_cursor("replication-jobs", "global")["cursor"] is None
+
+    backup_replication.REPAIRS_DIR.mkdir(parents=True, exist_ok=True)
+    backup_replication.REBALANCE_DIR.mkdir(parents=True, exist_ok=True)
+    for index in range(12):
+        repair = {
+            "repairId": f"repair-{index:03d}",
+            "phase": "queued" if index == 11 else "healthy",
+            "attempt": 0,
+            "maxAttempts": 5,
+        }
+        rebalance = {
+            "jobId": f"rebalance-{index:03d}",
+            "phase": "pending" if index == 11 else "complete",
+        }
+        (backup_replication.REPAIRS_DIR / f"repair-{index:03d}.json").write_text(json.dumps(repair), encoding="utf-8")
+        (backup_replication.REBALANCE_DIR / f"rebalance-{index:03d}.json").write_text(
+            json.dumps(rebalance),
+            encoding="utf-8",
+        )
+
+    with (
+        patch.object(backup_replication, "execute_repair_job_instance", return_value={"status": "success"}) as execute_repair,
+        patch.object(backup_replication, "execute_rebalance_job", return_value={"status": "success"}) as execute_rebalance,
+    ):
+        assert backup_replication.process_pending_repairs(limit=1)["processed"] == 0
+        assert backup_replication.process_pending_rebalances(limit=1)["processed"] == 0
+        assert backup_replication.process_pending_repairs(limit=1)["processed"] == 1
+        assert backup_replication.process_pending_rebalances(limit=1)["processed"] == 1
+    execute_repair.assert_called_once_with("repair-011", instance_id="healer-worker")
+    execute_rebalance.assert_called_once_with("rebalance-011", instance_id="rebalance-worker")
+
+
 def _policy_cas_worker(
     policy_dir: str,
     control_dir: str,

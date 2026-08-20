@@ -31,6 +31,7 @@ from typing import Any
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
+    backup_control,
     backup_dr_ledger,
     backup_object_set,
     backup_publish,
@@ -82,6 +83,54 @@ REPAIR_ACTIVE_PHASES = frozenset(
 )
 
 _LOCK = threading.RLock()
+
+
+def _maintenance_job_page(
+    directory: Path,
+    *,
+    cursor_kind: str,
+    scan_limit: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str] | None]:
+    """Read one durable, bounded filename page from a legacy JSON job queue."""
+    cursor_state = backup_control.get_maintenance_cursor(cursor_kind, "global")
+    cursor_value = cursor_state.get("cursor")
+    after_name = str(cursor_value.get("fileName") or "") if isinstance(cursor_value, dict) else ""
+    if not directory.is_dir():
+        return [], cursor_state, None
+
+    page_size = max(1, min(int(scan_limit), 500))
+    paths = [
+        path
+        for path in sorted(directory.glob("*.json"), key=lambda item: item.name)
+        if not path.name.startswith(".") and (not after_name or path.name > after_name)
+    ][:page_size]
+    jobs: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            jobs.append(value)
+    next_cursor = {"fileName": paths[-1].name} if len(paths) >= page_size else None
+    return jobs, cursor_state, next_cursor
+
+
+def _advance_maintenance_job_cursor(
+    cursor_kind: str,
+    cursor_state: dict[str, Any],
+    next_cursor: dict[str, str] | None,
+) -> None:
+    current = cursor_state.get("cursor")
+    normalized_current = current if isinstance(current, dict) else None
+    if normalized_current == next_cursor:
+        return
+    backup_control.update_maintenance_cursor(
+        cursor_kind,
+        "global",
+        next_cursor,
+        expected_generation=int(cursor_state["generation"]),
+    )
 
 
 def _utc_iso(dt: datetime | None = None) -> str:
@@ -720,9 +769,14 @@ def _fail_job(job: dict[str, Any], exc: BaseException, *, mode: str) -> dict[str
 
 def process_pending_jobs(*, instance_id: str = "repl-worker", limit: int = 10) -> dict[str, int]:
     """Drain a bounded batch of queued/active replication jobs."""
+    page, cursor_state, next_cursor = _maintenance_job_page(
+        REPLICATION_DIR,
+        cursor_kind="replication-jobs",
+        scan_limit=max(10, min(int(limit) * 10, 500)),
+    )
     pending = [
         j
-        for j in list_jobs(limit=500)
+        for j in page
         if str(j.get("phase") or "") in ACTIVE_PHASES or str(j.get("phase") or "") == "queued"
     ]
     processed = failed = committed = 0
@@ -739,6 +793,7 @@ def process_pending_jobs(*, instance_id: str = "repl-worker", limit: int = 10) -
             committed += 1
         elif res_phase in {"failed", "failed-terminal"}:
             failed += 1
+    _advance_maintenance_job_cursor("replication-jobs", cursor_state, next_cursor)
     return {"processed": processed, "committed": committed, "failed": failed}
 
 
@@ -2078,8 +2133,13 @@ def execute_repair_job_instance(
 def process_pending_repairs(*, instance_id: str = "healer-worker", limit: int = 5, now: datetime | None = None) -> dict[str, int]:
     """Drain and resume active/queued ReplicaRepairJobs respecting backoff and attempt limits."""
     current = now or datetime.now(tz=timezone.utc)
+    page, cursor_state, next_cursor = _maintenance_job_page(
+        REPAIRS_DIR,
+        cursor_kind="repair-jobs",
+        scan_limit=max(10, min(int(limit) * 10, 500)),
+    )
     pending = []
-    for j in list_repair_jobs(limit=200):
+    for j in page:
         phase = str(j.get("phase") or "")
         if phase not in REPAIR_ACTIVE_PHASES and phase != "queued":
             continue
@@ -2106,6 +2166,7 @@ def process_pending_repairs(*, instance_id: str = "healer-worker", limit: int = 
         except Exception:
             processed += 1
             failed += 1
+    _advance_maintenance_job_cursor("repair-jobs", cursor_state, next_cursor)
     return {"processed": processed, "succeeded": succeeded, "failed": failed}
 
 
@@ -2544,7 +2605,12 @@ def process_pending_rebalances(
     instance_id: str = "rebalance-worker",
     limit: int = 5,
 ) -> dict[str, int]:
-    pending = list_rebalance_jobs(phase="pending", limit=limit)
+    page, cursor_state, next_cursor = _maintenance_job_page(
+        REBALANCE_DIR,
+        cursor_kind="rebalance-jobs",
+        scan_limit=max(10, min(int(limit) * 10, 500)),
+    )
+    pending = [job for job in page if str(job.get("phase") or "") == "pending"][: max(1, int(limit))]
     succeeded = 0
     failed = 0
     for job in pending:
@@ -2553,6 +2619,7 @@ def process_pending_rebalances(
             succeeded += 1
         else:
             failed += 1
+    _advance_maintenance_job_cursor("rebalance-jobs", cursor_state, next_cursor)
     return {"processed": len(pending), "succeeded": succeeded, "failed": failed}
 
 

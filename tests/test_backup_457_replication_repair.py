@@ -492,7 +492,11 @@ def test_replication_fail_job_and_process_pending_branches(tmp_settings: Path) -
         {"jobId": "j_fut", "phase": "retry-wait", "nextRetryAt": future_iso},
         {"jobId": "j_past", "phase": "retry-wait", "nextRetryAt": past_iso},
     ]
-    with patch.object(backup_replication, "list_jobs", return_value=jobs_mock):
+    with patch.object(
+        backup_replication,
+        "_maintenance_job_page",
+        return_value=(jobs_mock, {"cursor": None, "generation": 0}, None),
+    ):
         with patch.object(backup_replication, "execute_replication_job", return_value={"phase": "committed"}):
             summary = backup_replication.process_pending_jobs(limit=10)
             assert summary["processed"] == 1
@@ -514,7 +518,11 @@ def test_replication_fail_job_and_process_pending_branches(tmp_settings: Path) -
 
 def test_replication_repair_exception_branches_and_pending_repairs(tmp_settings: Path) -> None:
     # 1. process_pending_repairs with empty list
-    with patch.object(backup_replication, "list_repair_jobs", return_value=[]):
+    with patch.object(
+        backup_replication,
+        "_maintenance_job_page",
+        return_value=([], {"cursor": None, "generation": 0}, None),
+    ):
         res = backup_replication.process_pending_repairs()
         assert res["processed"] == 0
 
@@ -525,7 +533,11 @@ def test_replication_repair_exception_branches_and_pending_repairs(tmp_settings:
         {"repairId": "rep_fut", "phase": "retry-wait", "nextAttemptAt": future_at},
         {"repairId": "rep_past", "phase": "retry-wait", "nextAttemptAt": past_at, "attempt": 1, "maxAttempts": 5},
     ]
-    with patch.object(backup_replication, "list_repair_jobs", return_value=jobs):
+    with patch.object(
+        backup_replication,
+        "_maintenance_job_page",
+        return_value=(jobs, {"cursor": None, "generation": 0}, None),
+    ):
         with patch.object(backup_replication, "execute_repair_job_instance", return_value={"status": "success"}):
             res_proc = backup_replication.process_pending_repairs()
             assert res_proc["processed"] == 1
@@ -734,7 +746,11 @@ def test_replication_maintenance_window_and_rebalance_execution(tmp_settings: Pa
     assert exc_404.value.status == 404
 
     # 3. process_pending_rebalances empty
-    with patch.object(backup_replication, "list_rebalance_jobs", return_value=[]):
+    with patch.object(
+        backup_replication,
+        "_maintenance_job_page",
+        return_value=([], {"cursor": None, "generation": 0}, None),
+    ):
         res_reb = backup_replication.process_pending_rebalances()
         assert res_reb["processed"] == 0
 
