@@ -619,3 +619,29 @@ def execute_copy_retirement_job(
         return _update_job_phase(job_id, "reclaimed", bytes_reclaimed=bytes_reclaimed, sim_metadata={**sim, "retirementMarker": marker})
     except Exception as exc:
         return _update_job_phase(job_id, "failed", error=str(exc))
+
+
+def process_pending_retirements(
+    *,
+    instance_id: str = "retirement-worker",
+    limit: int = 5,
+) -> dict[str, int]:
+    """Retry a bounded set of non-terminal CopyRetirementJobs."""
+    candidates = [
+        job
+        for job in list_copy_retirement_jobs(limit=max(1, min(limit * 10, 500)))
+        if str(job.get("phase") or "") not in RETIREMENT_TERMINAL_PHASES
+    ][: max(1, limit)]
+    reclaimed = 0
+    waiting = 0
+    failed = 0
+    for job in candidates:
+        result = execute_copy_retirement_job(str(job["jobId"]), instance_id=instance_id)
+        phase = str(result.get("phase") or "")
+        if phase == "reclaimed":
+            reclaimed += 1
+        elif phase in {"waiting-for-dependencies", "requested", "checking-topology", "checking-holds"}:
+            waiting += 1
+        else:
+            failed += 1
+    return {"processed": len(candidates), "reclaimed": reclaimed, "waiting": waiting, "failed": failed}

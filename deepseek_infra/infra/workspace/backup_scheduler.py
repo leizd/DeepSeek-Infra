@@ -781,6 +781,17 @@ def list_runs(*, policy_id: str | None = None, limit: int = 50) -> list[dict[str
         return [_row_to_run(row) for row in rows]
 
 
+def list_active_runs() -> list[dict[str, Any]]:
+    """List only non-terminal writer-capable runs; no historical scan is needed."""
+    placeholders = ",".join("?" for _ in ACTIVE_PHASES)
+    with _connect() as connection:
+        rows = connection.execute(
+            f"SELECT * FROM backup_runs WHERE phase IN ({placeholders}) ORDER BY created_at",  # noqa: S608 - static placeholders
+            ACTIVE_PHASES,
+        ).fetchall()
+    return [_row_to_run(row) for row in rows]
+
+
 def next_run_for_policy(policy: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any] | None:
     schedule_cfg = policy.get("schedule") or {}
     try:
@@ -1335,13 +1346,21 @@ def worker_tick(
                     _logger.exception("scheduled recovery drill failed", extra={"policyId": item.get("policyId")})
         except Exception:
             _logger.exception("scheduled recovery drill driver failed")
-    # Advance pending replication jobs (bounded)
+    # Advance all storage-control maintenance queues (bounded and cross-process leased).
     repl_processed = 0
+    maintenance_processed = 0
     try:
-        from deepseek_infra.infra.workspace import backup_replication
+        from deepseek_infra.infra.workspace import backup_maintenance
 
-        summary = backup_replication.process_pending_jobs(instance_id=instance_id, limit=5)
-        repl_processed = int(summary.get("processed") or 0)
+        maintenance = backup_maintenance.maintenance_tick(instance_id=instance_id, limit_per_worker=5)
+        replication_value = maintenance.get("replication")
+        replication: dict[str, Any] = replication_value if isinstance(replication_value, dict) else {}
+        repl_processed = int(replication.get("processed") or 0)
+        maintenance_processed = int(maintenance.get("drainsProcessed") or 0)
+        for key in ("replication", "repairs", "rebalances", "retirements"):
+            worker_summary = maintenance.get(key)
+            if isinstance(worker_summary, dict):
+                maintenance_processed += int(worker_summary.get("processed") or 0)
     except Exception:
         pass
     return {
@@ -1353,6 +1372,7 @@ def worker_tick(
         "drillsClaimed": len(drill_claimed),
         "drillsExecuted": drills_executed,
         "replicationProcessed": repl_processed,
+        "maintenanceProcessed": maintenance_processed,
     }
 
 

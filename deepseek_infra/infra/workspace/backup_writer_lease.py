@@ -49,6 +49,39 @@ def _utc_iso(value: datetime | None = None) -> str:
     return current.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def active_writer_lease(target: Any, *, now: datetime | None = None) -> bool:
+    """Return True for an unexpired or unreadable existing Target writer lease."""
+    payload: dict[str, Any] | None = None
+    if target.root is not None:
+        path = target.root / ".target-lock" / "writer.json"
+        if not path.is_file():
+            return False
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            payload = value if isinstance(value, dict) else None
+        except (OSError, json.JSONDecodeError):
+            return True
+    elif target.store is not None:
+        from deepseek_infra.infra.workspace.backup_target_store import read_json, writer_lease_key
+
+        if target.store.stat(writer_lease_key()) is None:
+            return False
+        try:
+            payload = read_json(target.store, writer_lease_key())
+        except Exception:
+            return True
+    if payload is None:
+        return True
+    expires_at = payload.get("expiresAt")
+    if not isinstance(expires_at, str):
+        return True
+    try:
+        expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return True
+    return expiry > (now or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
+
+
 def probe_atomic_target(root: Path) -> None:
     """Raise ``unsupported-atomic-target`` (503) when O_EXCL/rename semantics are missing."""
     lock_dir = root / ".target-lock"

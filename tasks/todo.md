@@ -52,11 +52,11 @@
 
 ## Gate F — Maintenance and Drain
 
-- [ ] Add durable StorageMaintenanceSupervisor ownership and tick
-- [ ] Add keyset cursor covering arbitrary Target history
-- [ ] Route Drain destination through production Placement Planner
-- [ ] Block drained on writer/run/recovery/hold/job/retirement dependencies
-- [ ] Prove restart convergence and >500 Recovery Points
+- [x] Add durable StorageMaintenanceSupervisor ownership and tick
+- [x] Add keyset cursor covering arbitrary Target history
+- [x] Route Drain destination through production Placement Planner
+- [x] Block drained on writer/run/recovery/hold/job/retirement dependencies
+- [x] Prove restart convergence and >500 Recovery Points
 
 ## Gates G-H — Evidence, compatibility, release
 

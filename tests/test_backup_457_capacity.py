@@ -136,6 +136,8 @@ def test_capacity_prediction_and_summary_details(tmp_settings: Path) -> None:
 
     p90_full = backup_capacity.predict_next_backup_bytes("pol-history", snapshot_kind="full")
     p90_inc = backup_capacity.predict_next_backup_bytes("pol-history", snapshot_kind="incremental")
+    assert p90_full is not None
+    assert p90_inc is not None
     assert p90_full >= 50 * 1024 * 1024
     assert p90_inc >= 10 * 1024 * 1024
 

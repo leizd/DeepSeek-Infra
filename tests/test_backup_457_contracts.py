@@ -139,6 +139,7 @@ def test_predict_next_backup_bytes_p90(tmp_settings: Path) -> None:
         )
 
     p90_val = backup_capacity.predict_next_backup_bytes(policy_id, snapshot_kind="full")
+    assert p90_val is not None
     assert p90_val >= 1800  # P90 of 1000..1900
 
 

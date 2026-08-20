@@ -12,7 +12,7 @@ import os
 import sqlite3
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS capacity_evidence (
     physical_bytes INTEGER NOT NULL,
     confidence TEXT NOT NULL,
     source TEXT NOT NULL,
+    observed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS target_capacity_observations (
+    target_id TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
     observed_at TEXT NOT NULL
 );
 
@@ -178,6 +184,153 @@ def list_policies() -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute("SELECT * FROM control_policies ORDER BY policy_id").fetchall()
     return [_decode_payload(row) for row in rows]
+
+
+def acquire_maintenance_lease(
+    worker_kind: str,
+    scope_id: str,
+    *,
+    owner_instance_id: str,
+    lease_seconds: int = 60,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Acquire one cross-process maintenance scope with a fencing token."""
+    current = (now or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
+    current_iso = current.isoformat(timespec="seconds").replace("+00:00", "Z")
+    lease_until = (current + timedelta(seconds=max(1, lease_seconds))).isoformat(timespec="seconds").replace("+00:00", "Z")
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute(
+            "SELECT * FROM maintenance_leases WHERE worker_kind = ? AND scope_id = ?",
+            (worker_kind, scope_id),
+        ).fetchone()
+        if row is not None and str(row["lease_until"]) > current_iso:
+            conn.execute("ROLLBACK")
+            return None
+        fencing_token = int(row["fencing_token"] if row is not None else 0) + 1
+        conn.execute(
+            """
+            INSERT INTO maintenance_leases(
+                worker_kind, scope_id, owner_instance_id, fencing_token, lease_until, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(worker_kind, scope_id) DO UPDATE SET
+                owner_instance_id = excluded.owner_instance_id,
+                fencing_token = excluded.fencing_token,
+                lease_until = excluded.lease_until,
+                updated_at = excluded.updated_at
+            """,
+            (worker_kind, scope_id, owner_instance_id, fencing_token, lease_until, current_iso),
+        )
+        conn.execute("COMMIT")
+    return {
+        "workerKind": worker_kind,
+        "scopeId": scope_id,
+        "ownerInstanceId": owner_instance_id,
+        "fencingToken": fencing_token,
+        "leaseUntil": lease_until,
+    }
+
+
+def release_maintenance_lease(
+    worker_kind: str,
+    scope_id: str,
+    *,
+    owner_instance_id: str,
+    fencing_token: int,
+) -> bool:
+    """Release a lease only when owner and fencing token still match."""
+    with _connect() as conn:
+        result = conn.execute(
+            """
+            DELETE FROM maintenance_leases
+            WHERE worker_kind = ? AND scope_id = ?
+              AND owner_instance_id = ? AND fencing_token = ?
+            """,
+            (worker_kind, scope_id, owner_instance_id, int(fencing_token)),
+        )
+    return result.rowcount == 1
+
+
+def renew_maintenance_lease(
+    worker_kind: str,
+    scope_id: str,
+    *,
+    owner_instance_id: str,
+    fencing_token: int,
+    lease_seconds: int = 60,
+) -> bool:
+    """Extend a still-owned, unexpired lease; fenced or stale owners fail."""
+    current = datetime.now(tz=timezone.utc)
+    current_iso = current.isoformat(timespec="seconds").replace("+00:00", "Z")
+    lease_until = (current + timedelta(seconds=max(1, lease_seconds))).isoformat(timespec="seconds").replace("+00:00", "Z")
+    with _connect() as conn:
+        result = conn.execute(
+            """
+            UPDATE maintenance_leases
+            SET lease_until = ?, updated_at = ?
+            WHERE worker_kind = ? AND scope_id = ?
+              AND owner_instance_id = ? AND fencing_token = ? AND lease_until >= ?
+            """,
+            (
+                lease_until,
+                current_iso,
+                worker_kind,
+                scope_id,
+                owner_instance_id,
+                int(fencing_token),
+                current_iso,
+            ),
+        )
+    return result.rowcount == 1
+
+
+def get_maintenance_cursor(worker_kind: str, scope_id: str) -> dict[str, Any]:
+    """Return the durable cursor and its CAS generation."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT cursor_json, generation FROM maintenance_cursors WHERE worker_kind = ? AND scope_id = ?",
+            (worker_kind, scope_id),
+        ).fetchone()
+    if row is None:
+        return {"cursor": None, "generation": 0}
+    value = json.loads(str(row["cursor_json"])) if row["cursor_json"] else None
+    return {"cursor": value if isinstance(value, dict) else None, "generation": int(row["generation"])}
+
+
+def update_maintenance_cursor(
+    worker_kind: str,
+    scope_id: str,
+    cursor: dict[str, Any] | None,
+    *,
+    expected_generation: int,
+) -> dict[str, Any]:
+    """CAS-update a durable cursor so a stale worker cannot rewind progress."""
+    now = _utc_iso()
+    encoded = json.dumps(cursor, ensure_ascii=False, sort_keys=True) if cursor is not None else None
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute(
+            "SELECT generation FROM maintenance_cursors WHERE worker_kind = ? AND scope_id = ?",
+            (worker_kind, scope_id),
+        ).fetchone()
+        generation = int(row["generation"] if row is not None else 0)
+        if generation != int(expected_generation):
+            conn.execute("ROLLBACK")
+            raise AppError("Maintenance cursor generation mismatch", code=ErrorCode.INVALID_REQUEST, status=409)
+        next_generation = generation + 1
+        conn.execute(
+            """
+            INSERT INTO maintenance_cursors(worker_kind, scope_id, cursor_json, generation, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(worker_kind, scope_id) DO UPDATE SET
+                cursor_json = excluded.cursor_json,
+                generation = excluded.generation,
+                updated_at = excluded.updated_at
+            """,
+            (worker_kind, scope_id, encoded, next_generation, now),
+        )
+        conn.execute("COMMIT")
+    return {"cursor": cursor, "generation": next_generation}
 
 
 def mutate_policy(
@@ -307,6 +460,49 @@ def list_targets() -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute("SELECT * FROM control_targets ORDER BY target_id").fetchall()
     return [_decode_payload(row) for row in rows]
+
+
+def list_target_ids_page(*, after_target_id: str | None = None, limit: int = 100) -> list[str]:
+    """Return a keyset page from the authoritative Target registry."""
+    with _connect() as conn:
+        if after_target_id:
+            rows = conn.execute(
+                "SELECT target_id FROM control_targets WHERE target_id > ? ORDER BY target_id LIMIT ?",
+                (after_target_id, max(1, min(int(limit), 500))),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT target_id FROM control_targets ORDER BY target_id LIMIT ?",
+                (max(1, min(int(limit), 500)),),
+            ).fetchall()
+    return [str(row["target_id"]) for row in rows]
+
+
+def record_target_capacity_observation(target_id: str, observation: dict[str, Any]) -> None:
+    """Persist an operator-inspectable result from the bounded capacity probe worker."""
+    observed_at = str(observation.get("observedAt") or _utc_iso())
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO target_capacity_observations(target_id, payload_json, observed_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(target_id) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                observed_at = excluded.observed_at
+            """,
+            (target_id, json.dumps(observation, ensure_ascii=False, sort_keys=True), observed_at),
+        )
+
+
+def get_target_capacity_observation(target_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT payload_json FROM target_capacity_observations WHERE target_id = ?", (target_id,)
+        ).fetchone()
+    if row is None:
+        return None
+    value = json.loads(str(row["payload_json"]))
+    return value if isinstance(value, dict) else None
 
 
 def mutate_target(

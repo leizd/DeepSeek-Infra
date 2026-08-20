@@ -19,6 +19,7 @@ from typing import Any
 
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
+    backup_capacity,
     backup_dr_audit,
     backup_dr_ledger,
     backup_dr_readiness,
@@ -518,6 +519,32 @@ def test_deterministic_write_failover_and_force_full(tmp_settings, monkeypatch) 
         raise AppError("unknown", status=404)
 
     monkeypatch.setattr(backup_publish, "resolve_target", mock_resolve)
+    monkeypatch.setattr(
+        backup_targets,
+        "list_targets",
+        lambda: [{"targetId": "replica-target-healthy", "kind": "filesystem", "drainState": "active"}],
+    )
+    monkeypatch.setattr(
+        backup_targets,
+        "get_target",
+        lambda target_id: {"targetId": target_id, "kind": "filesystem", "drainState": "active"},
+    )
+    monkeypatch.setattr(
+        backup_targets,
+        "probe_target_capacity",
+        lambda _target_id: {
+            "totalBytes": 40 * 1024 * 1024 * 1024,
+            "usedBytes": 10 * 1024 * 1024 * 1024,
+            "freeBytes": 30 * 1024 * 1024 * 1024,
+            "freePercent": 75.0,
+            "source": "filesystem",
+        },
+    )
+    monkeypatch.setattr(
+        backup_capacity,
+        "predict_next_backup_size",
+        lambda *_args, **_kwargs: {"predictedBytes": 1024 * 1024, "confidence": "high", "source": "test-evidence"},
+    )
 
     # Evaluate write placement
     placement = backup_scheduler.evaluate_write_placement(policy)

@@ -356,6 +356,54 @@ def is_source_held(
     return False
 
 
+def has_source_holds_for_target(target_id: str, *, target: Any | None = None, now: datetime | None = None) -> bool:
+    """Fail closed when any durable, unexpired source hold remains on a Target."""
+    current = now or datetime.now(tz=timezone.utc)
+
+    def _active(payload: dict[str, Any]) -> bool:
+        expiry = _parse_iso(payload.get("expiresAt"))
+        return expiry is None or current <= expiry
+
+    if HOLDS_DIR.is_dir():
+        for path in HOLDS_DIR.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return True
+            if isinstance(payload, dict) and str(payload.get("targetId") or "") == target_id and _active(payload):
+                return True
+    if target is None:
+        return False
+    if getattr(target, "root", None) is not None:
+        hold_dir = target.root / "holds" / "repair"
+        if not hold_dir.is_dir():
+            return False
+        for path in hold_dir.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return True
+            if isinstance(payload, dict) and _active(payload):
+                return True
+        return False
+    if getattr(target, "store", None) is not None:
+        cursor: str | None = None
+        try:
+            while True:
+                page = target.store.list_objects("holds/repair/", cursor=cursor, limit=200)
+                for obj in page.objects:
+                    raw = target.store.get_bytes(obj.key)
+                    payload = json.loads(raw.decode("utf-8")) if raw else None
+                    if not isinstance(payload, dict) or _active(payload):
+                        return True
+                cursor = page.cursor
+                if not cursor:
+                    return False
+        except Exception:
+            return True
+    return False
+
+
 # ── Target-Local Catalog Append ─────────────────────────────────────────────
 
 
@@ -1318,7 +1366,9 @@ def stream_ciphertext_transfer(
                 part_num += 1
                 res2 = store.upload_part(upload, part_num, second_chunk, checksum_sha256=hashlib.sha256(second_chunk).hexdigest())
                 provider2, progress2 = _upload_result_part(res2, part_num, second_chunk)
+                upload.parts = [item for item in upload.parts if _part_number(item) != part_num]
                 upload.parts.append(provider2)
+                upload.parts.sort(key=_part_number)
                 if progress_state is not None:
                     progress_state["parts"].append(progress2)
                     progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(second_chunk)
@@ -1331,7 +1381,9 @@ def stream_ciphertext_transfer(
                     bytes_transferred += len(chunk)
                     result = store.upload_part(upload, part_num, chunk, checksum_sha256=hashlib.sha256(chunk).hexdigest())
                     provider_part, progress_part = _upload_result_part(result, part_num, chunk)
+                    upload.parts = [item for item in upload.parts if _part_number(item) != part_num]
                     upload.parts.append(provider_part)
+                    upload.parts.sort(key=_part_number)
                     if progress_state is not None:
                         progress_state["parts"].append(progress_part)
                         progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(chunk)
@@ -2451,17 +2503,15 @@ def execute_rebalance_job(
             sim = simulate_copy_removal(policy_id, backup_id, source_target_id)
             if sim.get("policySafe") and not sim.get("protectedByHold"):
                 job = _set_rebalance_phase(job, "pruning_source")
-                # Mark retired in ledger
-                copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
-                backup_dr_ledger.record_logical_recovery_copy(
-                    target_id=source_target_id,
-                    policy_id=policy_id,
-                    backup_id=backup_id,
-                    committed_at=str(copies[0].get("committedAt") if copies else _utc_iso()),
-                    state="retired",
-                    recoverable=False,
-                    last_verified_at=_utc_iso(),
+                from deepseek_infra.infra.workspace import backup_retirement
+
+                retirement = backup_retirement.create_copy_retirement_job(
+                    policy_id,
+                    backup_id,
+                    source_target_id,
+                    reason="rebalance-prune-source",
                 )
+                job = _set_rebalance_phase(job, "retirement_pending", retirementJobId=retirement["jobId"])
 
         job = _set_rebalance_phase(job, "complete")
         return {"status": "success", "jobId": job_id, "job": job}

@@ -289,11 +289,12 @@ def test_drain_and_transfer_full_coverage(tmp_settings: Path) -> None:
         state="healthy",
         recoverable=True,
     )
-    with patch.object(backup_replication, "create_rebalance_job", return_value={"jobId": "reb-test-1"}):
-        with patch.object(backup_replication, "execute_rebalance_job", return_value={"phase": "completed"}):
-            res_live = backup_drain.process_target_drain(t_src)
-            assert res_live["status"] == "in_progress"
-            assert res_live["rebalancesTriggered"] >= 1
+    with patch.object(backup_scheduler, "plan_target_placement", return_value=[((0,), t_dst)]):
+        with patch.object(backup_replication, "create_rebalance_job", return_value={"jobId": "reb-test-1"}):
+            with patch.object(backup_replication, "execute_rebalance_job", return_value={"phase": "completed"}):
+                res_live = backup_drain.process_target_drain(t_src)
+                assert res_live["status"] == "in_progress"
+                assert res_live["rebalancesTriggered"] >= 1
 
     # 4. TransferBudgetManager concurrency limit & P0 bypass
     mgr = backup_transfer_budget.TransferBudgetManager()
@@ -414,7 +415,7 @@ def test_backup_drain_job_queries_and_waiting_for_gc(tmp_settings: Path) -> None
         state="degraded",
         recoverable=False,
     )
-    with patch.object(backup_replication, "is_source_held", return_value=True):
+    with patch.object(backup_replication, "has_source_holds_for_target", return_value=True):
         res_held = backup_drain.process_target_drain(t_id)
         assert res_held["status"] == "in_progress"
         assert res_held["job"]["phase"] == "waiting-for-gc"
