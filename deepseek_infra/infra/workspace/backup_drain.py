@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -42,7 +44,8 @@ def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     DRAIN_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DRAIN_DB)
     conn.row_factory = sqlite3.Row
@@ -66,7 +69,14 @@ def _connect() -> sqlite3.Connection:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_drain_phase ON target_drain_jobs(phase)")
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def start_target_drain(

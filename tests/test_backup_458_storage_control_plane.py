@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
+import sqlite3
 import tempfile
 import time
 from pathlib import Path
@@ -41,6 +42,16 @@ def _isolate_target_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
 
 def _stable_json_bytes(payload: dict[str, object]) -> bytes:
     return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def test_storage_control_connection_closes_after_transaction_context(tmp_settings: Path) -> None:
+    connection: sqlite3.Connection | None = None
+    with backup_control._connect() as active_connection:
+        connection = active_connection
+        assert active_connection.execute("SELECT 1").fetchone()[0] == 1
+    assert connection is not None
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
 
 
 def test_maintenance_lease_and_cursor_are_durable_cas(tmp_settings: Path) -> None:

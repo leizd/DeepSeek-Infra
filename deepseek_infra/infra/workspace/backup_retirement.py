@@ -12,6 +12,8 @@ import json
 import os
 import secrets
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -49,7 +51,8 @@ def _marker_hash(marker: dict[str, Any]) -> str:
     return hashlib.sha256(_stable_json(body)).hexdigest()
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     RETIREMENT_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(RETIREMENT_DB)
     conn.row_factory = sqlite3.Row
@@ -77,7 +80,14 @@ def _connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE copy_retirement_jobs ADD COLUMN reason TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_retirement_phase ON copy_retirement_jobs(phase)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_retirement_target ON copy_retirement_jobs(target_id, policy_id)")
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def create_copy_retirement_job(

@@ -11,7 +11,8 @@ import json
 import os
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -105,7 +106,8 @@ def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(CONTROL_DB, timeout=30.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
@@ -113,7 +115,14 @@ def _connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=FULL")
     conn.executescript(_SCHEMA)
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _decode_payload(row: sqlite3.Row) -> dict[str, Any]:
