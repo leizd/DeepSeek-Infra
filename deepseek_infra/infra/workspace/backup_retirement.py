@@ -546,7 +546,7 @@ def execute_copy_retirement_job(
 
     sim = backup_replication.simulate_copy_removal(policy_id, backup_id, target_id)
     if not sim.get("policySafe"):
-        reason = "topology-safety-constraint: removal would breach minCommittedCopies or minFailureDomains or maxCopiesPerFailureDomain"
+        reason = "topology-safety-constraint: removal would breach copy, failure-domain, region, or per-domain objectives"
         return _update_job_phase(job_id, "rejected", error=reason, sim_metadata=sim)
 
     # 2. checking-holds

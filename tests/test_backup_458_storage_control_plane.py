@@ -219,6 +219,31 @@ def test_rebalance_prune_creates_chain_preserving_retirement_job(tmp_settings: P
     ledger_write.assert_not_called()
 
 
+def test_failover_publish_enqueues_required_primary_catchup(tmp_settings: Path) -> None:
+    jobs = backup_replication.enqueue_replica_jobs(
+        policy={
+            "policyId": "policy-failover-catchup",
+            "primaryTargetId": "target_primary_catchup",
+            "targetId": "target_primary_catchup",
+            "replication": {
+                "enabled": True,
+                "targets": [{"targetId": "target_failover_active", "mode": "required"}],
+            },
+        },
+        primary_target_id="target_failover_active",
+        backup_id="backup-failover-catchup",
+        package=SimpleNamespace(),
+        run_id="run-failover-catchup",
+        schedule_slot="slot-failover-catchup",
+        slot_digest="digest-failover-catchup",
+        primary_receipt={"objectSetDigest": "a" * 64, "objects": []},
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0]["replicaTargetId"] == "target_primary_catchup"
+    assert jobs[0]["mode"] == "required"
+
+
 def test_storage_maintenance_supervisor_advances_drains(tmp_settings: Path) -> None:
     capacity_target = "target_maintenance_capacity"
     backup_targets.register_filesystem_target(capacity_target, path=tmp_settings / "maintenance-capacity")

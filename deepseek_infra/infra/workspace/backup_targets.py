@@ -79,6 +79,14 @@ def _positive_qos(value: int | None, field: str, default: int) -> int:
     return value
 
 
+def _optional_positive_int(value: int | None, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AppError(f"Backup target {field} must be a positive integer", code=ErrorCode.INVALID_PAYLOAD)
+    return value
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -497,6 +505,7 @@ def init_s3_target(
     max_read_bytes_per_second: int | None = None,
     max_write_bytes_per_second: int | None = None,
     max_concurrent_transfers: int | None = None,
+    quota_bytes: int | None = None,
     credential_provider: dict[str, Any] | None = None,
     client: Any | None = None,
     probe: bool = True,
@@ -589,6 +598,7 @@ def init_s3_target(
         "maxReadBytesPerSecond": _positive_qos(max_read_bytes_per_second, "maxReadBytesPerSecond", 100 * 1024 * 1024),
         "maxWriteBytesPerSecond": _positive_qos(max_write_bytes_per_second, "maxWriteBytesPerSecond", 100 * 1024 * 1024),
         "maxConcurrentTransfers": _positive_qos(max_concurrent_transfers, "maxConcurrentTransfers", 4),
+        "quotaBytes": _optional_positive_int(quota_bytes, "quotaBytes"),
         "drainState": "active",
         "credentialProvider": credential_config,
         "createdAt": str(identity.get("createdAt") or _utc_iso()),

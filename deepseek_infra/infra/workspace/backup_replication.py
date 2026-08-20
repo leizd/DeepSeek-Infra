@@ -499,6 +499,14 @@ def enqueue_replica_jobs(
     if not replication or not replication.get("enabled"):
         return []
     targets = list(replication.get("targets") or [])
+    configured_primary_id = str(policy.get("primaryTargetId") or policy.get("targetId") or "").strip()
+    configured_ids = {
+        str(entry.get("targetId") or "")
+        for entry in targets
+        if isinstance(entry, dict)
+    }
+    if configured_primary_id and configured_primary_id != primary_target_id and configured_primary_id not in configured_ids:
+        targets.append({"targetId": configured_primary_id, "mode": "required", "role": "failback-catchup"})
     if not targets:
         return []
     policy_id = str(policy.get("policyId") or "")
@@ -2373,6 +2381,7 @@ def simulate_copy_removal(
     placement = (policy or {}).get("placement") or {}
     min_copies = int(repl.get("minCommittedCopies") or 1)
     min_fd = int(repl.get("minFailureDomains") or 1)
+    min_regions = int(repl.get("minRegions") or 1)
     max_copies_per_fd = placement.get("maxCopiesPerFailureDomain") or repl.get("maxCopiesPerFailureDomain")
 
     all_target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
@@ -2388,13 +2397,21 @@ def simulate_copy_removal(
         str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
         for c in healthy_after
     }
+    regions_before = {
+        str((all_target_records.get(str(c.get("targetId"))) or {}).get("region") or "default-region")
+        for c in healthy_before
+    }
+    regions_after = {
+        str((all_target_records.get(str(c.get("targetId"))) or {}).get("region") or "default-region")
+        for c in healthy_after
+    }
 
     counts_by_fd_after: dict[str, int] = {}
     for c in healthy_after:
         fd_name = str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
         counts_by_fd_after[fd_name] = counts_by_fd_after.get(fd_name, 0) + 1
 
-    policy_safe = len(healthy_after) >= min_copies and len(fd_after) >= min_fd
+    policy_safe = len(healthy_after) >= min_copies and len(fd_after) >= min_fd and len(regions_after) >= min_regions
     if max_copies_per_fd is not None and int(max_copies_per_fd) > 0:
         if any(cnt > int(max_copies_per_fd) for cnt in counts_by_fd_after.values()):
             policy_safe = False
@@ -2406,6 +2423,8 @@ def simulate_copy_removal(
         "healthyCopiesAfter": len(healthy_after),
         "failureDomainsBefore": len(fd_before),
         "failureDomainsAfter": len(fd_after),
+        "regionsBefore": len(regions_before),
+        "regionsAfter": len(regions_after),
         "copiesInEachDomainAfter": counts_by_fd_after,
         "policySafe": policy_safe and not protected_by_hold,
         "protectedByHold": protected_by_hold,

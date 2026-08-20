@@ -138,8 +138,13 @@ def test_governance_remote_and_target_routes_execute_directly(monkeypatch: pytes
     router = backup_governance.create_backup_governance_router()
 
     create_target = _endpoint(router, "/api/workspace/backup-targets")
-    s3 = _json(_call(create_target, {"kind": "s3", "bucket": "bucket", "credentialProvider": {"kind": "env"}}))
-    assert s3["kind"] == "s3" and s3["bucket"] == "bucket"
+    s3 = _json(
+        _call(
+            create_target,
+            {"kind": "s3", "bucket": "bucket", "quotaBytes": 4096, "credentialProvider": {"kind": "env"}},
+        )
+    )
+    assert s3["kind"] == "s3" and s3["bucket"] == "bucket" and s3["quota_bytes"] == 4096
     with pytest.raises(AppError, match="WebDAV"):
         _call(create_target, {"kind": "webdav"})
 

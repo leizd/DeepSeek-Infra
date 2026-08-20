@@ -193,6 +193,7 @@ def create_backup_governance_router() -> APIRouter:
         max_read = payload.get("maxReadBytesPerSecond")
         max_write = payload.get("maxWriteBytesPerSecond")
         max_concurrent = payload.get("maxConcurrentTransfers")
+        quota_bytes = payload.get("quotaBytes")
 
         if kind in {"s3", "s3-compatible"}:
             provider = payload.get("credentialProvider") if isinstance(payload.get("credentialProvider"), dict) else None
@@ -214,6 +215,7 @@ def create_backup_governance_router() -> APIRouter:
                     max_read_bytes_per_second=max_read,
                     max_write_bytes_per_second=max_write,
                     max_concurrent_transfers=max_concurrent,
+                    quota_bytes=quota_bytes,
                     credential_provider=provider,
                     probe=bool(payload.get("probe", True)),
                 )
