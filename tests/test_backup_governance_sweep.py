@@ -57,14 +57,19 @@ def test_reparse_walk_reaches_filesystem_root(tmp_settings: Path, tmp_path: Path
     assert backup_targets._has_reparse_component(Path(tmp_path.anchor)) in {True, False}
 
 
-def test_target_registry_unreadable(tmp_settings: Path, stub_temp: None, tmp_path: Path) -> None:
+def test_target_registry_projection_is_repaired_from_durable_authority(
+    tmp_settings: Path,
+    stub_temp: None,
+    tmp_path: Path,
+) -> None:
     directory = tmp_path / "usb"
     directory.mkdir()
     record = backup_targets.init_target(directory)
     registry = backup_targets.BACKUP_TARGET_DIR / f"{record['targetId']}.json"
     registry.write_text("{not json", encoding="utf-8")
-    with pytest.raises(AppError, match="unreadable"):
-        backup_targets.get_target(record["targetId"])
+    loaded = backup_targets.get_target(record["targetId"])
+    assert loaded == record
+    assert json.loads(registry.read_text(encoding="utf-8")) == record
 
 
 def test_retention_weekly_and_monthly_buckets(tmp_settings: Path, tmp_path: Path) -> None:
