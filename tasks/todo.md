@@ -69,7 +69,7 @@
 - [x] Remove real-Evidence ownership from legacy fake/stub runner
 - [x] Add CI job and version-derived Evidence contract
 - [x] Update 4.5.8 version and release surfaces
-- [ ] Run frontend check, Ruff, Mypy, full pytest >=95%, vendor JS check
-- [ ] Run offline eval/security/release gates
-- [ ] Perform final multi-axis code review
-- [ ] Report CI-only Evidence as pending unless genuinely executed
+- [x] Run frontend check, Ruff, Mypy, full pytest >=95%, vendor JS check
+- [ ] Run offline eval/security/release gates (local eval/security PASS; exact-revision release Evidence pending CI)
+- [x] Perform final multi-axis code review
+- [x] Report CI-only Evidence as pending unless genuinely executed
