@@ -165,8 +165,12 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_backup_replication, "REBALANCE_DIR", tmp_path / ".backup-rebalance")
     monkeypatch.setattr(workspace_backup_replication, "CURSORS_PATH", repl_dir / "cursors.json")
     monkeypatch.setattr(workspace_backup_write_continuity, "CONTINUITY_DIR", tmp_path / ".backup-continuity")
+    monkeypatch.setattr(workspace_backup_retirement, "RETIREMENT_DIR", retire_dir)
+    monkeypatch.setattr(workspace_backup_retirement, "RETIREMENT_DB", retire_dir / "retirements.sqlite3")
     monkeypatch.setattr(workspace_backup_retirement, "RETIREMENTS_DIR", retire_dir)
     monkeypatch.setattr(workspace_backup_retirement, "RETIREMENTS_DB", retire_dir / "retirements.sqlite3")
+    monkeypatch.setattr(workspace_backup_drain, "DRAIN_DIR", drain_dir)
+    monkeypatch.setattr(workspace_backup_drain, "DRAIN_DB", drain_dir / "drains.sqlite3")
     monkeypatch.setattr(workspace_backup_drain, "DRAINS_DIR", drain_dir)
     monkeypatch.setattr(workspace_backup_drain, "DRAINS_DB", drain_dir / "drains.sqlite3")
 

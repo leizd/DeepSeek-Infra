@@ -19,8 +19,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_dr_ledger, backup_publish, backup_targets, backups
-from deepseek_infra.infra.workspace.backup_target_store import read_json
+from deepseek_infra.infra.workspace import backup_dr_ledger, backup_publish, backup_retirement, backup_targets, backups
+from deepseek_infra.infra.workspace.backup_target_store import object_key, read_json
 
 
 def _utc_iso() -> str:
@@ -72,6 +72,69 @@ def _validate_commit_receipt_binding(
         if objects is not None and (not isinstance(objects, list) or (isinstance(objects, list) and not objects)):
             anomalies.append(f"invalid-object-set-inventory:{backup_id}")
     return anomalies
+
+
+def _payload_keys(receipt: dict[str, Any]) -> list[str]:
+    if str(receipt.get("storageProtocol") or "") == "object-set-v1":
+        result: list[str] = []
+        for item in receipt.get("objects") or []:
+            if isinstance(item, dict) and item.get("digest"):
+                result.append(object_key(str(item["digest"])))
+        return sorted(set(result))
+    digest = str(receipt.get("objectDigest") or "")
+    if digest:
+        return [object_key(digest)]
+    filename = str(receipt.get("filename") or "")
+    return [filename] if filename else []
+
+
+def _validate_payload_lifecycle(
+    *,
+    target_id: str,
+    receipt: dict[str, Any],
+    receipt_bytes: bytes | None,
+    commit: dict[str, Any],
+    root: Any | None = None,
+    store: Any | None = None,
+) -> tuple[list[str], bool, dict[str, Any] | None]:
+    backup_id = str(receipt.get("backupId") or commit.get("backupId") or "")
+    policy_id = str(receipt.get("policyId") or commit.get("policyId") or "")
+    marker: dict[str, Any] | None = None
+    marker_key = backup_retirement.retirement_marker_key(policy_id, backup_id)
+    if root is not None:
+        marker_path = root.joinpath(*marker_key.split("/"))
+        if marker_path.is_file():
+            try:
+                parsed = json.loads(marker_path.read_text(encoding="utf-8"))
+                marker = parsed if isinstance(parsed, dict) else None
+            except (OSError, json.JSONDecodeError):
+                marker = None
+    elif store is not None:
+        marker = read_json(store, marker_key)
+
+    marker_present = marker is not None
+    governed_retirement = False
+    if marker is not None and receipt_bytes is not None:
+        governed_retirement = bool(
+            backup_retirement.retirement_marker_valid(marker, receipt_bytes=receipt_bytes, commit=commit)
+            and str(marker.get("targetId") or "") == target_id
+        )
+    anomalies: list[str] = []
+    if marker_present and not governed_retirement:
+        anomalies.append(f"invalid-retirement-marker:{backup_id}")
+
+    for key in _payload_keys(receipt):
+        present = False
+        try:
+            if root is not None:
+                present = root.joinpath(*key.split("/")).is_file()
+            elif store is not None:
+                present = store.stat(key) is not None
+        except Exception:
+            present = False
+        if not present and not governed_retirement:
+            anomalies.append(f"missing-payload:{backup_id}:{key}")
+    return anomalies, governed_retirement, marker
 
 
 def audit_remote_target(
@@ -150,7 +213,18 @@ def audit_remote_target(
                                 bind_anomalies.append(f"receipt-digest-mismatch:{backup_id}")
                             if str(receipt_data.get("backupId") or "") != backup_id:
                                 bind_anomalies.append(f"receipt-backup-id-mismatch:{backup_id}")
-                    anomalies.extend(bind_anomalies)
+                    payload_anomalies: list[str] = []
+                    governed_retirement = False
+                    retirement_marker = None
+                    if isinstance(commit_data, dict) and isinstance(receipt_data, dict) and receipt_data:
+                        payload_anomalies, governed_retirement, retirement_marker = _validate_payload_lifecycle(
+                            target_id=target_id,
+                            receipt=receipt_data,
+                            receipt_bytes=raw_receipt_fs,
+                            commit=commit_data,
+                            root=root,
+                        )
+                    anomalies.extend(bind_anomalies + payload_anomalies)
                     if backup_id and isinstance(commit_data, dict):
                         staged_candidates.append({
                             "commit": commit_data,
@@ -158,6 +232,9 @@ def audit_remote_target(
                             "backupId": backup_id,
                             "policyId": str(receipt_data.get("policyId") or commit_data.get("policyId") or ""),
                             "bindAnomalies": bind_anomalies,
+                            "payloadAnomalies": payload_anomalies,
+                            "governedRetirement": governed_retirement,
+                            "retirementMarker": retirement_marker,
                             "targetGeneration": commit_data.get("targetGeneration"),
                             "commitHash": str(commit_data.get("commitHash") or ""),
                             "previousCommitHash": str(commit_data.get("previousCommitHash") or ""),
@@ -245,14 +322,28 @@ def audit_remote_target(
                 raw_receipt_bytes=raw_receipt,
                 previous_commit_hash=previous_commit_hash,
             )
-            anomalies.extend(bind_anomalies)
             receipt_dict = receipt if isinstance(receipt, dict) else {}
+            remote_payload_anomalies: list[str] = []
+            governed_retirement = False
+            retirement_marker = None
+            if receipt_dict:
+                remote_payload_anomalies, governed_retirement, retirement_marker = _validate_payload_lifecycle(
+                    target_id=target_id,
+                    receipt=receipt_dict,
+                    receipt_bytes=raw_receipt,
+                    commit=commit,
+                    store=store,
+                )
+            anomalies.extend(bind_anomalies + remote_payload_anomalies)
             staged_candidates.append({
                 "commit": commit,
                 "receipt": receipt_dict,
                 "backupId": backup_id,
                 "policyId": str(receipt_dict.get("policyId") or commit.get("policyId") or ""),
                 "bindAnomalies": bind_anomalies,
+                "payloadAnomalies": remote_payload_anomalies,
+                "governedRetirement": governed_retirement,
+                "retirementMarker": retirement_marker,
                 "targetGeneration": commit.get("targetGeneration"),
                 "commitHash": str(commit.get("commitHash") or ""),
                 "previousCommitHash": str(commit.get("previousCommitHash") or ""),
@@ -323,8 +414,16 @@ def audit_remote_target(
             b_id = cand["backupId"]
             p_id = cand["policyId"]
             b_anomalies = list(cand.get("bindAnomalies") or [])
-            recoverable = chain_valid and not b_anomalies
-            all_cand_anomalies = b_anomalies + (chain_anomalies if not chain_valid else [])
+            payload_anomalies = list(cand.get("payloadAnomalies") or [])
+            governed_retirement = bool(cand.get("governedRetirement"))
+            recoverable = chain_valid and not b_anomalies and not payload_anomalies and not governed_retirement
+            all_cand_anomalies = b_anomalies + payload_anomalies + (chain_anomalies if not chain_valid else [])
+            rejected_metadata: dict[str, Any] = {"auditRejected": True, "anomalies": all_cand_anomalies}
+            if governed_retirement:
+                rejected_metadata = {
+                    "governedRetirement": True,
+                    "retirementMarker": cand.get("retirementMarker") or {},
+                }
 
             backup_dr_ledger.record_recovery_point(
                 target_id=target_id,
@@ -340,7 +439,7 @@ def audit_remote_target(
                 recoverable=recoverable,
                 verified_at=_utc_iso(),
                 storage_protocol=cand["storageProtocol"],
-                metadata=cand["receipt"] if recoverable else {"auditRejected": True, "anomalies": all_cand_anomalies},
+                metadata=cand["receipt"] if recoverable else rejected_metadata,
             )
             if recoverable:
                 recovery_points_found += 1
@@ -352,6 +451,18 @@ def audit_remote_target(
                     object_set_digest=cand["objectSetDigest"],
                     recoverable=True,
                     role="replica" if target_id != "managed-local" else "primary",
+                )
+            elif governed_retirement and chain_valid and not b_anomalies and not payload_anomalies:
+                backup_dr_ledger.record_logical_recovery_copy(
+                    target_id=target_id,
+                    policy_id=p_id,
+                    backup_id=b_id,
+                    committed_at=cand["committedAt"],
+                    object_set_digest=cand["objectSetDigest"],
+                    recoverable=False,
+                    role="replica" if target_id != "managed-local" else "primary",
+                    state="retired",
+                    metadata={"retirementMarker": cand.get("retirementMarker") or {}},
                 )
 
     if next_cursor:
