@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -28,14 +29,14 @@ def test_target_validation_helpers_and_costs(tmp_settings: Path) -> None:
     with pytest.raises(AppError):
         backup_targets._positive_qos(0, "maxReadBytesPerSecond", 1)
     with pytest.raises(AppError):
-        backup_targets._positive_qos(True, "maxReadBytesPerSecond", 1)  # type: ignore[arg-type]
+        backup_targets._positive_qos(cast(int, True), "maxReadBytesPerSecond", 1)
     assert backup_targets._positive_qos(None, "maxReadBytesPerSecond", 9) == 9
     assert backup_targets._positive_qos(3, "maxReadBytesPerSecond", 9) == 3
 
     with pytest.raises(AppError):
         backup_targets._optional_positive_int(0, "quotaBytes")
     with pytest.raises(AppError):
-        backup_targets._optional_positive_int(True, "quotaBytes")  # type: ignore[arg-type]
+        backup_targets._optional_positive_int(cast(int, True), "quotaBytes")
     assert backup_targets._optional_positive_int(None, "quotaBytes") is None
     assert backup_targets._optional_positive_int(8, "quotaBytes") == 8
 
@@ -371,9 +372,9 @@ def test_maintenance_lease_skips_and_supervisor_tick(tmp_settings: Path) -> None
         calls["n"] += 1
         return calls["n"] > 1  # first call continues loop, second exits
 
-    stop2.wait = _wait  # type: ignore[method-assign]
-    with patch.object(backup_maintenance.backup_control, "renew_maintenance_lease", return_value=False):
-        backup_maintenance._lease_heartbeat(stop2, instance_id="h2", fencing_token=2)
+    with patch.object(stop2, "wait", side_effect=_wait):
+        with patch.object(backup_maintenance.backup_control, "renew_maintenance_lease", return_value=False):
+            backup_maintenance._lease_heartbeat(stop2, instance_id="h2", fencing_token=2)
 
     supervisor = backup_maintenance.StorageMaintenanceSupervisor(instance_id="t", tick_seconds=0.1)
     with patch.object(backup_maintenance, "maintenance_tick", return_value={"leaseAcquired": True}) as tick:
