@@ -20,12 +20,16 @@ from scripts.release_evidence import stamp_release_report  # noqa: E402
 
 REAL_SCENARIO = "real-three-minio-storage-control-plane"
 TIER_SCENARIO = "real-three-minio-tiering-control-recovery"
+PLACE_SCENARIO = "real-three-minio-autonomous-placement-control"
 SCENARIOS: dict[str, tuple[str, ...]] = {
     REAL_SCENARIO: (
         "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e",
     ),
     TIER_SCENARIO: (
         "tests/test_backup_459_real_tiering_control_e2e.py::test_real_three_minio_tiering_and_control_recovery_e2e",
+    ),
+    PLACE_SCENARIO: (
+        "tests/test_backup_460_real_placement_control_e2e.py::test_real_three_minio_autonomous_placement_control_e2e",
     ),
 }
 CHECK_SCENARIOS = {
@@ -45,6 +49,14 @@ CHECK_SCENARIOS = {
     "referenceIndexRebuildsFromFormalTargetTruth": TIER_SCENARIO,
     "maintenanceScopesProgressIndependently": TIER_SCENARIO,
     "objectSetV1WireFormatUnchanged": TIER_SCENARIO,
+    # 4.6.0 gates (Gate G planner-mandatory Evidence)
+    "realThreeMinioAutonomousPlacementE2E": PLACE_SCENARIO,
+    "incompleteLineageBlocksChainMigration": PLACE_SCENARIO,
+    "indexCoverageBlocksGcUntilComplete": PLACE_SCENARIO,
+    "placementControllerCorrectnessOrder": PLACE_SCENARIO,
+    "targetShardedRepairScopesProgressIndependently": PLACE_SCENARIO,
+    "capacityReadinessZeroRemoteIo": PLACE_SCENARIO,
+    "randomizedAgeAndObjectSetWireFreeze": PLACE_SCENARIO,
 }
 REQUIRED_ENDPOINTS = (
     "DEEPSEEK_TEST_S3_ENDPOINT_A",
@@ -105,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         {
             "ok": all(value == "PASS" for value in checks.values()),
             "status": "PASS" if all(value == "PASS" for value in checks.values()) else "FAIL",
-            "title": "Real Three-MinIO Storage Control Plane, Tiering, and Control Recovery E2E",
+            "title": "Real Three-MinIO Storage Control Plane, Tiering, Placement, and Control Recovery E2E",
             "checks": checks,
             "checkProvenance": dict(CHECK_SCENARIOS),
             "scenarios": results,

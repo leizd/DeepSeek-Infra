@@ -51,7 +51,11 @@
 - [x] held dest scope skips only that target; free targets progress
 - [x] tests updated for Gate F lease semantics
 
+## Gate G — Planner-mandatory MinIO Evidence
+- [x] tests/test_backup_460_real_placement_control_e2e.py (CI-only real three-MinIO)
+- [x] run_storage_control_plane_minio_e2e.py PLACE_SCENARIO + CHECK_SCENARIOS
+- [x] evidence workflow contract updated for 460 node ids
+
 ## Remaining
 - [ ] Version surface 4.6.0
-- [ ] Gate G Planner-mandatory MinIO Evidence
 - [ ] Full suite green + coverage gate
