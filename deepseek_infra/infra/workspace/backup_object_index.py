@@ -13,7 +13,7 @@ from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_control
-from deepseek_infra.infra.workspace.backup_target_store import object_key, read_json
+from deepseek_infra.infra.workspace.backup_target_store import object_key
 
 
 def _read_json_bytes(raw: bytes | None) -> dict[str, Any] | None:
@@ -251,8 +251,6 @@ def reconcile_inventory_page(
         size = int(getattr(meta, "size", 0) or 0)
         if size and int(indexed.get("sizeBytes") or 0) and size != int(indexed["sizeBytes"]):
             mismatches.append(key)
-    # Missing detection is deferred to full rebuilds; page-local missing is incomplete.
-    _ = read_json  # retained import for future marker-aware inventory
     return {
         "targetId": target_id,
         "examined": examined,

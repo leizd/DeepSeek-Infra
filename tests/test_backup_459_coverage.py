@@ -226,6 +226,105 @@ def test_tiering_chain_closure_execute_and_assert(tmp_settings: Path) -> None:
     assert "ok" in guard
 
 
+def test_micro_branch_coverage_for_coverage_gate(tmp_settings: Path) -> None:
+    """Hit remaining low-cost branches that keep the monorepo just under 95%."""
+    # object_index: skip retiring backup id when scanning live refs
+    tid = "target_micro_cov"
+    backup_control.put_recovery_object_ref(
+        target_id=tid, policy_id="p", backup_id="keep", object_key="k1", ref_state="live", size_bytes=1
+    )
+    backup_control.put_recovery_object_ref(
+        target_id=tid, policy_id="p", backup_id="drop", object_key="k2", ref_state="live", size_bytes=1
+    )
+    retained = backup_object_index.retained_payload_keys_from_index(tid, retiring_backup_id="drop")
+    assert retained is not None and "k1" in retained and "k2" not in retained
+
+    # inventory size mismatch branch
+    store = MemoryTargetStore()
+    store.put_if_absent("payload/m.age", b"12345")
+    backup_control.put_recovery_object_ref(
+        target_id=tid, policy_id="p", backup_id="b", object_key="payload/m.age", ref_state="live", size_bytes=99
+    )
+    inv = backup_object_index.reconcile_inventory_page(
+        SimpleNamespace(target_id=tid, root=None, store=store), prefix="payload/"
+    )
+    assert "payload/m.age" in inv["sizeMismatches"]
+
+    # capacity: skip bad growth observations; total_bytes==0 free-percent path
+    rates = backup_capacity._growth_rates_from_observations(
+        [
+            {"observedAt": "bad", "physicalStoredBytes": 1},
+            {"observedAt": _iso(datetime.now(tz=timezone.utc)), "physicalStoredBytes": True},
+            {"observedAt": _iso(datetime.now(tz=timezone.utc) - timedelta(days=1)), "physicalStoredBytes": 10},
+            {"observedAt": _iso(datetime.now(tz=timezone.utc)), "physicalStoredBytes": 20},
+        ]
+    )
+    assert rates["status"] == "ok"
+    with patch.object(
+        backup_capacity,
+        "get_target_capacity",
+        return_value={"freeBytes": 50, "totalBytes": 0, "usedBytes": 0},
+    ):
+        ok, _ = backup_capacity.check_target_capacity_admission(
+            "t", 1, policy={"placement": {"minFreeBytes": 1, "minFreePercent": 10, "hardWatermarkPercent": 99}}
+        )
+        assert ok is True
+
+    # maintenance: empty target id job skipped; physical growth recorded
+    backup_targets.register_filesystem_target(tid, path=tmp_settings / tid)
+    with patch.object(
+        backup_targets,
+        "probe_target_capacity",
+        return_value={
+            "physicalStoredBytes": 123,
+            "liveReferencedBytes": 100,
+            "retiredPendingGcBytes": 23,
+            "observedAt": _iso(datetime.now(tz=timezone.utc)),
+        },
+    ):
+        assert backup_maintenance._probe_capacity_page(limit=5) >= 1
+    with (
+        patch.object(backup_maintenance.backup_drain, "reconcile_drain_projections", return_value={"recreated": 0, "fenced": 0}),
+        patch.object(
+            backup_maintenance.backup_drain,
+            "list_target_drain_jobs",
+            return_value=[{"targetId": "", "phase": "draining"}, {"targetId": tid, "phase": "draining"}],
+        ),
+        patch.object(backup_maintenance.backup_drain, "process_target_drain", side_effect=RuntimeError("x")),
+    ):
+        summary = backup_maintenance._process_drain_scopes(instance_id="micro", limit=5)
+    assert summary["drainFailures"] >= 1
+
+    # tiering: metadata objectSetDigest path + assert with real copies list iteration
+    with patch.object(
+        backup_tiering.backup_publish,
+        "resolve_target",
+        side_effect=lambda x: SimpleNamespace(root=tmp_settings / x, store=None),
+    ), patch.object(
+        backup_tiering.backup_dr_ledger,
+        "list_logical_recovery_copies",
+        return_value=[{"metadata": {"objectSetDigest": "meta-d"}}, {"backupId": "x", "targetId": tid}],
+    ), patch.object(
+        backup_tiering.backup_replication,
+        "create_rebalance_job",
+        return_value={"jobId": "j", "phase": "pending"},
+    ), patch.object(
+        backup_tiering.backup_replication,
+        "execute_rebalance_job",
+        return_value={"phase": "complete"},
+    ):
+        moved = backup_tiering.execute_tier_migration(
+            policy_id="p", backup_id="b", source_target_id=tid, dest_target_id=tid
+        )
+    assert moved["objectSetDigest"] == "meta-d"
+    guard = backup_tiering.assert_hot_anchor_not_archive_dependent(
+        "p",
+        "b",
+        targets_by_id={tid: {"targetId": tid, "storageTier": "hot"}},
+    )
+    assert "unit" in guard
+
+
 def test_control_checkpoint_and_schema_helpers(tmp_settings: Path) -> None:
     assert backup_control.schema_version() == backup_control.CONTROL_SCHEMA_VERSION
     migrations = backup_control.list_schema_migrations()
