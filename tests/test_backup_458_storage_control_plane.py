@@ -54,6 +54,47 @@ def test_storage_control_connection_closes_after_transaction_context(tmp_setting
         connection.execute("SELECT 1")
 
 
+def test_storage_control_connection_retries_locked_wal_initialization(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LockedOnceConnection:
+        row_factory: object | None = None
+
+        def __init__(self) -> None:
+            self.wal_attempts = 0
+            self.closed = False
+
+        def execute(self, statement: str) -> object:
+            if statement == "PRAGMA journal_mode=WAL":
+                self.wal_attempts += 1
+                if self.wal_attempts == 1:
+                    raise sqlite3.OperationalError("database is locked")
+            return object()
+
+        def executescript(self, _script: str) -> None:
+            return None
+
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = LockedOnceConnection()
+    monkeypatch.setattr(backup_control.sqlite3, "connect", lambda *_args, **_kwargs: connection)
+    monkeypatch.setattr(backup_control.time, "sleep", lambda _seconds: None)
+
+    with backup_control._connect():
+        pass
+
+    assert connection.wal_attempts == 2
+    assert connection.closed is True
+
+
 def test_maintenance_lease_and_cursor_are_durable_cas(tmp_settings: Path) -> None:
     lease = backup_control.acquire_maintenance_lease(
         "target-drain", "target-a", owner_instance_id="worker-a", lease_seconds=60

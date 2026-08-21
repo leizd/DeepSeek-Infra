@@ -106,16 +106,33 @@ def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _retry_locked(operation: Callable[[], Any], *, timeout_seconds: float = 30.0) -> Any:
+    """Retry SQLite startup work while another process initializes the DB."""
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    delay = 0.01
+    while True:
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            message = str(exc).casefold()
+            if "locked" not in message and "busy" not in message:
+                raise
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(delay)
+            delay = min(0.25, delay * 2)
+
+
 @contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
     CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(CONTROL_DB, timeout=30.0, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=FULL")
-    conn.executescript(_SCHEMA)
     try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=30000")
+        _retry_locked(lambda: conn.execute("PRAGMA journal_mode=WAL"))
+        conn.execute("PRAGMA synchronous=FULL")
+        _retry_locked(lambda: conn.executescript(_SCHEMA))
         yield conn
         conn.commit()
     except BaseException:
