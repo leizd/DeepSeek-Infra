@@ -18,6 +18,7 @@ from deepseek_infra.infra.workspace import (
     backup_replication,
     backup_retirement,
     backup_targets,
+    backup_tiering,
     backup_transfer_budget,
 )
 
@@ -237,6 +238,16 @@ def maintenance_tick(*, instance_id: str, limit_per_worker: int = 5) -> dict[str
         qos = backup_transfer_budget.get_global_transfer_budget_manager().transfer_control_summary()
         drain_summary = _process_drain_scopes(instance_id=instance_id, limit=limit)
 
+        acquired_mig, migrations = _run_with_scope_lease(
+            worker_kind="chain-migration",
+            scope_id="global",
+            instance_id=instance_id,
+            lease_seconds=90,
+            work=lambda: backup_tiering.process_pending_chain_migrations(instance_id=instance_id, limit=limit),
+        )
+        if not acquired_mig:
+            migrations = {"leaseSkipped": True}
+
         # Preserve 4.5.8 drain failure isolation when process_target_drain raises.
         # process_target_drain is invoked inside the scope lease lambda; catch there.
         return {
@@ -248,6 +259,7 @@ def maintenance_tick(*, instance_id: str, limit_per_worker: int = 5) -> dict[str
             "rebalances": rebalances,
             "retirements": retirements,
             "capacityProbes": capacity_probes,
+            "chainMigrations": migrations,
             "qos": qos,
             **drain_summary,
             "shardedScopes": True,

@@ -4,7 +4,7 @@
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
-## Gate A — Scale-Safe Correctness (in progress)
+## Gate A — Scale-Safe Correctness
 - [x] Canonical physical ciphertext identity (aliases size=0 / is_physical=0)
 - [x] physical_usage_summary counts unique digest once
 - [x] GC uses SQL-native object_has_live_ref (no 20k set materialization)
@@ -14,12 +14,29 @@
 - [x] Recovery chain exact parent walk; missing parent fail-closed
 - [x] Tier planner requires exact storageTier + hot/warm ancestor eligibility
 - [x] tests/test_backup_460_scale_safe_correctness.py
-- [ ] Version surface 4.6.0
-- [ ] Full suite green + coverage gate
 
-## Gate B–G (pending)
-- [ ] Index coverage generation / incomplete index blocks GC
-- [ ] RecoveryChainMigrationJob durable SM
-- [ ] Autonomous SLO controller
-- [ ] Truly sharded maintenance (repair/rebalance/retirement per target)
-- [ ] Real MinIO planner-mandatory Evidence (no manual fallback)
+## Gate B — Index coverage + pure capacity projections
+- [x] target_index_coverage table + set/get + gc_allowed
+- [x] rebuild_index_from_target sets complete coverage generation
+- [x] incomplete index blocks GC candidate listing / retirement GC
+- [x] capacity_forecast_projections persist on probe; readiness reads projection
+
+## Gate C — Recovery lineage graph
+- [x] recovery_lineage table + upsert/get/clear
+- [x] rebuild_recovery_lineage from DR ledger
+- [x] chain builder prefers lineage graph
+
+## Gate D — RecoveryChainMigrationJob
+- [x] chain_migration_jobs durable table
+- [x] plan_chain_migration with per-member authenticated sources
+- [x] execute_chain_migration phases → converged / failed-terminal
+- [x] intent never executed on failed rebalance
+- [x] process_pending_chain_migrations + maintenance tick wiring
+- [x] tests/test_backup_460_gates_bcd.py
+
+## Remaining
+- [ ] Version surface 4.6.0
+- [ ] Gate E Autonomous SLO controller
+- [ ] Gate F Truly sharded repair/rebalance/retirement by target
+- [ ] Gate G Planner-mandatory MinIO Evidence
+- [ ] Full suite green + coverage gate

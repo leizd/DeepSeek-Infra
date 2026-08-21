@@ -27,7 +27,8 @@ CONTROL_DB = CONTROL_DIR / "control.sqlite3"
 
 # Non-rebuildable authority lives at schema version >= 2 (4.5.9 journal + index).
 # v3 adds canonical physical object identity for scale-safe capacity/GC (4.6.0).
-CONTROL_SCHEMA_VERSION = 3
+# v4 adds index coverage, recovery lineage graph, chain migration jobs (4.6.0 B/C/D).
+CONTROL_SCHEMA_VERSION = 4
 
 REBUILDABLE_TABLES = frozenset(
     {
@@ -39,6 +40,9 @@ REBUILDABLE_TABLES = frozenset(
         "qos_buckets",
         "qos_transfers",
         "maintenance_cursors",
+        "target_index_coverage",
+        "recovery_lineage",
+        "capacity_forecast_projections",
     }
 )
 NON_REBUILDABLE_TABLES = frozenset(
@@ -48,6 +52,7 @@ NON_REBUILDABLE_TABLES = frozenset(
         "lifecycle_intents",
         "maintenance_leases",
         "schema_migrations",
+        "chain_migration_jobs",
     }
 )
 
@@ -200,6 +205,54 @@ ON recovery_object_refs(target_id, policy_id, backup_id);
 
 CREATE INDEX IF NOT EXISTS idx_growth_target_time
 ON capacity_growth_observations(target_id, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS target_index_coverage (
+    target_id TEXT PRIMARY KEY,
+    index_generation INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'empty',
+    formal_receipt_count INTEGER NOT NULL DEFAULT 0,
+    last_receipt_cursor TEXT,
+    source_head_generation INTEGER,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recovery_lineage (
+    policy_id TEXT NOT NULL,
+    backup_id TEXT NOT NULL,
+    snapshot_kind TEXT NOT NULL DEFAULT 'full',
+    parent_backup_id TEXT,
+    base_backup_id TEXT,
+    chain_depth INTEGER NOT NULL DEFAULT 0,
+    object_set_digest TEXT,
+    committed_at TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (policy_id, backup_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lineage_parent
+ON recovery_lineage(policy_id, parent_backup_id);
+
+CREATE TABLE IF NOT EXISTS capacity_forecast_projections (
+    target_id TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chain_migration_jobs (
+    migration_id TEXT PRIMARY KEY,
+    policy_id TEXT NOT NULL,
+    anchor_backup_id TEXT NOT NULL,
+    desired_tier TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chain_migration_phase
+ON chain_migration_jobs(phase, updated_at);
 """
 
 
@@ -254,6 +307,7 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
                 1: "4.5.8-baseline-control-authority",
                 2: "4.5.9-lifecycle-intents-and-object-index",
                 3: "4.6.0-canonical-physical-object-identity",
+                4: "4.6.0-lineage-index-coverage-chain-migration",
             }.get(version, f"schema-v{version}")
             conn.execute(
                 """
@@ -1703,3 +1757,312 @@ def list_capacity_growth_observations(target_id: str, *, limit: int = 60) -> lis
         }
         for row in rows
     ]
+
+
+# ── Gate B: index coverage + capacity forecast projections ──────────────────
+
+
+def set_target_index_coverage(
+    target_id: str,
+    *,
+    state: str,
+    index_generation: int | None = None,
+    formal_receipt_count: int = 0,
+    last_receipt_cursor: str | None = None,
+    source_head_generation: int | None = None,
+) -> dict[str, Any]:
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute(
+            "SELECT index_generation FROM target_index_coverage WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+        gen = int(index_generation) if index_generation is not None else (
+            int(row["index_generation"]) + 1 if row is not None else 1
+        )
+        completed_at = now if state == "complete" else None
+        conn.execute(
+            """
+            INSERT INTO target_index_coverage(
+                target_id, index_generation, state, formal_receipt_count,
+                last_receipt_cursor, source_head_generation, completed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(target_id) DO UPDATE SET
+                index_generation = excluded.index_generation,
+                state = excluded.state,
+                formal_receipt_count = excluded.formal_receipt_count,
+                last_receipt_cursor = excluded.last_receipt_cursor,
+                source_head_generation = excluded.source_head_generation,
+                completed_at = excluded.completed_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                target_id,
+                gen,
+                str(state),
+                max(0, int(formal_receipt_count)),
+                last_receipt_cursor,
+                int(source_head_generation) if source_head_generation is not None else None,
+                completed_at,
+                now,
+            ),
+        )
+        conn.execute("COMMIT")
+    return get_target_index_coverage(target_id) or {}
+
+
+def get_target_index_coverage(target_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM target_index_coverage WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "targetId": str(row["target_id"]),
+        "indexGeneration": int(row["index_generation"]),
+        "state": str(row["state"]),
+        "formalReceiptCount": int(row["formal_receipt_count"]),
+        "lastReceiptCursor": str(row["last_receipt_cursor"]) if row["last_receipt_cursor"] else None,
+        "sourceHeadGeneration": int(row["source_head_generation"]) if row["source_head_generation"] is not None else None,
+        "completedAt": str(row["completed_at"]) if row["completed_at"] else None,
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def index_coverage_allows_gc(target_id: str) -> tuple[bool, str]:
+    cov = get_target_index_coverage(target_id)
+    if cov is None:
+        # Empty index → GC must use conservative receipt scan, not index GC path.
+        return False, "object-reference-index-missing"
+    if str(cov.get("state") or "") != "complete":
+        return False, "object-reference-index-incomplete"
+    return True, "ok"
+
+
+def put_capacity_forecast_projection(target_id: str, projection: dict[str, Any]) -> None:
+    now = _utc_iso()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO capacity_forecast_projections(target_id, payload_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(target_id) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            """,
+            (target_id, json.dumps(projection, ensure_ascii=False, sort_keys=True), now),
+        )
+
+
+def get_capacity_forecast_projection(target_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT payload_json FROM capacity_forecast_projections WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    value = json.loads(str(row["payload_json"]))
+    return value if isinstance(value, dict) else None
+
+
+# ── Gate C: recovery lineage graph ──────────────────────────────────────────
+
+
+def upsert_recovery_lineage(
+    *,
+    policy_id: str,
+    backup_id: str,
+    snapshot_kind: str = "full",
+    parent_backup_id: str | None = None,
+    base_backup_id: str | None = None,
+    chain_depth: int = 0,
+    object_set_digest: str | None = None,
+    committed_at: str | None = None,
+) -> None:
+    now = _utc_iso()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO recovery_lineage(
+                policy_id, backup_id, snapshot_kind, parent_backup_id, base_backup_id,
+                chain_depth, object_set_digest, committed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(policy_id, backup_id) DO UPDATE SET
+                snapshot_kind = excluded.snapshot_kind,
+                parent_backup_id = excluded.parent_backup_id,
+                base_backup_id = excluded.base_backup_id,
+                chain_depth = excluded.chain_depth,
+                object_set_digest = excluded.object_set_digest,
+                committed_at = excluded.committed_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                policy_id,
+                backup_id,
+                str(snapshot_kind or "full"),
+                parent_backup_id,
+                base_backup_id,
+                max(0, int(chain_depth)),
+                object_set_digest,
+                committed_at,
+                now,
+            ),
+        )
+
+
+def get_recovery_lineage(policy_id: str, backup_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM recovery_lineage WHERE policy_id = ? AND backup_id = ?",
+            (policy_id, backup_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "policyId": str(row["policy_id"]),
+        "backupId": str(row["backup_id"]),
+        "snapshotKind": str(row["snapshot_kind"]),
+        "parentBackupId": str(row["parent_backup_id"]) if row["parent_backup_id"] else None,
+        "baseBackupId": str(row["base_backup_id"]) if row["base_backup_id"] else None,
+        "chainDepth": int(row["chain_depth"]),
+        "objectSetDigest": str(row["object_set_digest"]) if row["object_set_digest"] else None,
+        "committedAt": str(row["committed_at"]) if row["committed_at"] else None,
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def clear_recovery_lineage(policy_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM recovery_lineage WHERE policy_id = ?", (policy_id,))
+
+
+# ── Gate D: chain migration jobs ────────────────────────────────────────────
+
+
+CHAIN_MIGRATION_TERMINAL = frozenset({"converged", "failed-terminal", "cancelled"})
+
+
+def create_chain_migration_job(record: dict[str, Any]) -> dict[str, Any]:
+    now = _utc_iso()
+    migration_id = str(record.get("migrationId") or f"mig_{secrets.token_hex(8)}")
+    payload = {**record, "migrationId": migration_id}
+    with _connect() as conn:
+        _begin_immediate(conn)
+        conn.execute(
+            """
+            INSERT INTO chain_migration_jobs(
+                migration_id, policy_id, anchor_backup_id, desired_tier,
+                phase, payload_json, error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                migration_id,
+                str(record["policyId"]),
+                str(record["anchorBackupId"]),
+                str(record.get("desiredTier") or "warm"),
+                str(record.get("phase") or "planned"),
+                json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                now,
+                now,
+            ),
+        )
+        conn.execute("COMMIT")
+    return get_chain_migration_job(migration_id) or {}
+
+
+def get_chain_migration_job(migration_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM chain_migration_jobs WHERE migration_id = ?",
+            (migration_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    payload = json.loads(str(row["payload_json"]))
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        **payload,
+        "migrationId": str(row["migration_id"]),
+        "policyId": str(row["policy_id"]),
+        "anchorBackupId": str(row["anchor_backup_id"]),
+        "desiredTier": str(row["desired_tier"]),
+        "phase": str(row["phase"]),
+        "error": str(row["error"]) if row["error"] else None,
+        "createdAt": str(row["created_at"]),
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def update_chain_migration_job(
+    migration_id: str,
+    *,
+    phase: str,
+    payload: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute(
+            "SELECT payload_json FROM chain_migration_jobs WHERE migration_id = ?",
+            (migration_id,),
+        ).fetchone()
+        if row is None:
+            conn.execute("ROLLBACK")
+            raise AppError("chain migration job not found", code=ErrorCode.NOT_FOUND, status=404)
+        body = json.loads(str(row["payload_json"]))
+        if not isinstance(body, dict):
+            body = {}
+        if payload is not None:
+            body = {**body, **payload}
+        body["phase"] = phase
+        if error is not None:
+            body["error"] = error
+        conn.execute(
+            """
+            UPDATE chain_migration_jobs
+            SET phase = ?, payload_json = ?, error = ?, updated_at = ?
+            WHERE migration_id = ?
+            """,
+            (
+                phase,
+                json.dumps(body, ensure_ascii=False, sort_keys=True),
+                error,
+                now,
+                migration_id,
+            ),
+        )
+        conn.execute("COMMIT")
+    return get_chain_migration_job(migration_id) or {}
+
+
+def list_chain_migration_jobs(
+    *,
+    phase: str | None = None,
+    policy_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    query = "SELECT migration_id FROM chain_migration_jobs WHERE 1=1"
+    params: list[Any] = []
+    if phase:
+        query += " AND phase = ?"
+        params.append(phase)
+    if policy_id:
+        query += " AND policy_id = ?"
+        params.append(policy_id)
+    query += " ORDER BY updated_at ASC LIMIT ?"
+    params.append(max(1, min(int(limit), 500)))
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        job = get_chain_migration_job(str(row["migration_id"]))
+        if job:
+            out.append(job)
+    return out
+

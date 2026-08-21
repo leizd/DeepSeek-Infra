@@ -705,7 +705,20 @@ def execute_copy_retirement_job(
 
         # 5. Physical GC is payload-only and fail-closed. Live refs are checked
         # per key via SQL-native index queries (never a truncated key set).
+        # Incomplete index coverage blocks index-accelerated GC.
+        from deepseek_infra.infra.workspace import backup_object_index as _obj_idx
+
+        allowed, cov_reason = _obj_idx.gc_allowed(target_id)
         _update_job_phase(job_id, "gc-pending")
+        from deepseek_infra.infra.workspace import backup_control as _ctrl
+
+        if not allowed and _ctrl.target_object_index_nonempty(target_id):
+            return _update_job_phase(
+                job_id,
+                "gc-pending",
+                error=f"gc-blocked:{cov_reason}",
+                sim_metadata={**sim, "retirementMarker": marker},
+            )
         _update_job_phase(job_id, "gc-running")
         for component in sorted(_receipt_payload_keys(receipt)):
             if _payload_key_is_retained(target, component, retiring_backup_id=backup_id):

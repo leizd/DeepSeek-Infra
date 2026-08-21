@@ -140,6 +140,7 @@ def test_reference_index_shared_ciphertext_and_retirement(tmp_settings: Path) ->
     assert obj2 is not None
     assert obj2["liveRefCount"] == 0
     assert obj2["state"] in {"retired-pending-gc", "gc-candidate"}
+    backup_control.set_target_index_coverage(target_id, state="complete", formal_receipt_count=2)
     candidates = backup_object_index.gc_candidate_keys(target_id)
     assert "ciphertext/shared.age" in candidates or canon in candidates
 

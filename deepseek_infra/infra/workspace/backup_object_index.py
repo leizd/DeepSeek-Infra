@@ -198,11 +198,18 @@ def object_is_live_referenced(target_id: str, object_key: str, *, excluding_back
     )
 
 
+def gc_allowed(target_id: str) -> tuple[bool, str]:
+    """GC via index only when coverage generation is complete."""
+    return backup_control.index_coverage_allows_gc(target_id)
+
+
 def gc_candidate_keys(target_id: str, *, limit: int = 500) -> list[str]:
+    allowed, _reason = gc_allowed(target_id)
+    if not allowed:
+        return []
     return [str(item["objectKey"]) for item in backup_control.list_target_objects(target_id, gc_candidates_only=True, limit=limit)]
 
-
-def rebuild_index_from_target(target: Any) -> dict[str, int]:
+def rebuild_index_from_target(target: Any) -> dict[str, Any]:
     """Rebuild the object index for one target from formal Receipt truth.
 
     When a valid retirement marker is present the ref is stored as retired;
@@ -214,6 +221,7 @@ def rebuild_index_from_target(target: Any) -> dict[str, int]:
     if not target_id:
         raise AppError("target_id required for index rebuild", code=ErrorCode.INVALID_REQUEST, status=400)
     backup_control.clear_target_object_index(target_id)
+    backup_control.set_target_index_coverage(target_id, state="building", formal_receipt_count=0)
     live = 0
     retired = 0
     scanned = 0
@@ -239,6 +247,7 @@ def rebuild_index_from_target(target: Any) -> dict[str, int]:
         else:
             live += 1
 
+    backup_control.set_target_index_coverage(target_id, state="scanning", formal_receipt_count=0)
     if getattr(target, "root", None) is not None:
         receipts_dir = Path(target.root) / "receipts"
         candidates = sorted(receipts_dir.rglob("*.json")) if receipts_dir.is_dir() else []
@@ -261,8 +270,28 @@ def rebuild_index_from_target(target: Any) -> dict[str, int]:
             if page.cursor is None:
                 break
             cursor = page.cursor
-    return {"scannedReceipts": scanned, "liveRecoveryPoints": live, "retiredRecoveryPoints": retired}
+    head_gen = None
+    try:
+        from deepseek_infra.infra.workspace import backup_targets
 
+        rec = backup_targets.get_target(target_id)
+        if isinstance(rec, dict) and rec.get("topologyGeneration") is not None:
+            head_gen = int(rec["topologyGeneration"])
+    except Exception:
+        head_gen = None
+    coverage = backup_control.set_target_index_coverage(
+        target_id,
+        state="complete",
+        formal_receipt_count=scanned,
+        source_head_generation=head_gen,
+    )
+    return {
+        "scannedReceipts": scanned,
+        "liveRecoveryPoints": live,
+        "retiredRecoveryPoints": retired,
+        "indexGeneration": int(coverage.get("indexGeneration") or 0),
+        "coverageState": "complete",
+    }
 
 def reconcile_inventory_page(
     target: Any,

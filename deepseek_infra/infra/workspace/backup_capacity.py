@@ -335,6 +335,11 @@ def estimate_target_exhaustion_horizon(
     """
     del policy_id  # retained for API compatibility; growth is target-scoped
     should_record = probe if record_observation is None else bool(record_observation)
+    # Pure read path: prefer last persisted forecast projection (zero remote I/O).
+    if not probe and not should_record:
+        persisted = backup_control.get_capacity_forecast_projection(target_id)
+        if persisted is not None:
+            return persisted
     cap = get_target_capacity(target_id, probe=probe)
     free_bytes = cap.get("freeBytes")
     total_bytes = cap.get("totalBytes")
@@ -437,7 +442,7 @@ def estimate_target_exhaustion_horizon(
         elif days_to_full < 30 and status == "healthy":
             status = "degraded"
 
-    return {
+    result = {
         "targetId": target_id,
         "status": status,
         "freeBytes": free_bytes,
@@ -453,7 +458,11 @@ def estimate_target_exhaustion_horizon(
         "forecastStatus": forecast_status,
         "sampleCount": rates.get("sampleCount"),
         "elapsedDays": rates.get("elapsedDays"),
+        "updatedAt": _utc_iso(),
     }
+    if should_record:
+        backup_control.put_capacity_forecast_projection(target_id, result)
+    return result
 
 
 def estimate_transfer_cost(
