@@ -34,9 +34,24 @@
 - [x] process_pending_chain_migrations + maintenance tick wiring
 - [x] tests/test_backup_460_gates_bcd.py
 
+## Gate E — Autonomous Recovery SLO Controller
+- [x] recoveryPlacement policy normalization
+- [x] backup_placement.py desired tier + evaluate/reconcile
+- [x] correctness order: recoverability → lineage → copy/FD → RTO → capacity → cost
+- [x] explainable reasonCodes + lifecycle placement-decision intents
+- [x] drift enqueues plan_chain_migration when execute=True
+- [x] maintenance tick runs reconcile_all_policies
+- [x] tests/test_backup_460_gates_ef.py
+
+## Gate F — Truly sharded maintenance by target
+- [x] repair leases scoped by destTargetId
+- [x] rebalance leases scoped by destTargetId
+- [x] retirement leases scoped by targetId
+- [x] chain-migration leases scoped by destTargetId
+- [x] held dest scope skips only that target; free targets progress
+- [x] tests updated for Gate F lease semantics
+
 ## Remaining
 - [ ] Version surface 4.6.0
-- [ ] Gate E Autonomous SLO controller
-- [ ] Gate F Truly sharded repair/rebalance/retirement by target
 - [ ] Gate G Planner-mandatory MinIO Evidence
 - [ ] Full suite green + coverage gate
