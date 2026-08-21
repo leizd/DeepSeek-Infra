@@ -432,21 +432,31 @@ def _receipt_payload_keys(receipt: dict[str, Any]) -> set[str]:
 def _payload_key_is_retained(target: Any, object_key: str, *, retiring_backup_id: str) -> bool:
     """Return True if object_key must not be GC'd.
 
-    Prefer SQL-native live-ref checks on the rebuildable index. When the index
-    is empty, fall back to a conservative full Receipt scan for that single key
-    membership via scanning all non-retired receipts (fail-closed).
+    Prefer SQL-native live-ref checks only when index coverage is complete.
+    When the index is empty or incomplete, fall back to a conservative full
+    Receipt scan. Incomplete indexes may still *retain* keys they know about
+    (over-retain is safe) but must not alone authorize a delete.
     """
     from deepseek_infra.infra.workspace import backup_object_index
 
     target_id = str(getattr(target, "target_id", "") or "")
-    if target_id and backup_object_index.retained_payload_keys_from_index(
-        target_id, retiring_backup_id=retiring_backup_id
-    ) is not None:
-        return backup_object_index.object_is_live_referenced(
-            target_id, object_key, excluding_backup_id=retiring_backup_id
+    if target_id:
+        index_mode = backup_object_index.retained_payload_keys_from_index(
+            target_id, retiring_backup_id=retiring_backup_id
         )
+        if index_mode is not None:
+            # Complete coverage: index is authoritative for live-ref.
+            return backup_object_index.object_is_live_referenced(
+                target_id, object_key, excluding_backup_id=retiring_backup_id
+            )
+        # Incomplete / empty: over-retain if any indexed live ref exists, then
+        # always consult receipts so unindexed live points stay protected.
+        if backup_object_index.object_is_live_referenced(
+            target_id, object_key, excluding_backup_id=retiring_backup_id
+        ):
+            return True
 
-    # Index empty: conservative receipt scan.
+    # Conservative receipt scan (index empty or incomplete).
     if target.root is not None:
         receipts_dir = target.root / "receipts"
         candidates = sorted(receipts_dir.rglob("*.json")) if receipts_dir.is_dir() else []
@@ -703,22 +713,12 @@ def execute_copy_retirement_job(
             receipt=receipt,
         )
 
-        # 5. Physical GC is payload-only and fail-closed. Live refs are checked
-        # per key via SQL-native index queries (never a truncated key set).
-        # Incomplete index coverage blocks index-accelerated GC.
-        from deepseek_infra.infra.workspace import backup_object_index as _obj_idx
-
-        allowed, cov_reason = _obj_idx.gc_allowed(target_id)
+        # 5. Physical GC is payload-only and fail-closed. Candidate keys come from
+        # the retiring receipt only. Live-ref checks use a complete index when
+        # available, otherwise a conservative full Receipt scan. Incomplete
+        # coverage must not hard-block this path (retirement itself may have
+        # written partial index rows for the retiring point).
         _update_job_phase(job_id, "gc-pending")
-        from deepseek_infra.infra.workspace import backup_control as _ctrl
-
-        if not allowed and _ctrl.target_object_index_nonempty(target_id):
-            return _update_job_phase(
-                job_id,
-                "gc-pending",
-                error=f"gc-blocked:{cov_reason}",
-                sim_metadata={**sim, "retirementMarker": marker},
-            )
         _update_job_phase(job_id, "gc-running")
         for component in sorted(_receipt_payload_keys(receipt)):
             if _payload_key_is_retained(target, component, retiring_backup_id=backup_id):
