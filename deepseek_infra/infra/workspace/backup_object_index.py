@@ -1,8 +1,9 @@
-"""Rebuildable ciphertext reference index for scale-safe retirement/GC (4.5.9).
+"""Rebuildable ciphertext reference index for scale-safe retirement/GC (4.6.0).
 
-Formal Receipt v4 / Commit v4 remain the source of truth. This module only
-accelerates live-reference queries so retirement does not scan entire remote
-receipt history on every GC.
+Formal Receipt v4 / Commit v4 remain the source of truth. Physical capacity
+counts each ciphertext once via canonical object identity; compatibility
+aliases never inflate usage. GC correctness uses SQL-native live-ref checks
+and never materializes a truncated live-key set.
 """
 
 from __future__ import annotations
@@ -26,40 +27,76 @@ def _read_json_bytes(raw: bytes | None) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def canonical_object_key(digest: str) -> str:
+    """Single physical identity for object-set-v1 ciphertext."""
+    return object_key(digest)
+
+
+def is_canonical_object_key(key: str) -> bool:
+    return str(key).startswith("objects/sha256/") and str(key).endswith(".age")
+
+
 def receipt_payload_entries(receipt: dict[str, Any]) -> list[dict[str, Any]]:
-    """Extract payload object keys and optional digests/sizes from a Receipt."""
+    """Extract payload objects with one canonical physical key per digest.
+
+    Compatibility aliases (legacy ``ciphertext/sha256/...`` paths, explicit
+    Receipt paths) are recorded with ``physical=False`` and zero size so they
+    never inflate physicalStoredBytes.
+    """
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def _add(key: str | None, *, digest: str | None = None, size: int | None = None) -> None:
+    def _add(
+        key: str | None,
+        *,
+        digest: str | None = None,
+        size: int | None = None,
+        physical: bool = True,
+    ) -> None:
         if not key or key in seen:
             return
         seen.add(key)
+        size_bytes = int(size) if isinstance(size, int) and not isinstance(size, bool) and size >= 0 else 0
         entries.append(
             {
                 "objectKey": key,
                 "ciphertextDigest": digest,
-                "sizeBytes": int(size) if isinstance(size, int) and not isinstance(size, bool) and size >= 0 else 0,
+                "sizeBytes": size_bytes if physical else 0,
+                "physical": physical,
+                "canonicalObjectKey": canonical_object_key(digest) if digest else (key if is_canonical_object_key(key) else None),
             }
         )
 
     filename = receipt.get("filename")
     if filename:
-        _add(str(filename), digest=str(receipt.get("objectDigest") or "") or None)
+        fname = str(filename)
+        digest = str(receipt.get("objectDigest") or "") or None
+        if digest:
+            _add(canonical_object_key(digest), digest=digest, size=None, physical=True)
+            if fname != canonical_object_key(digest):
+                _add(fname, digest=digest, size=0, physical=False)
+        else:
+            _add(fname, digest=None, size=None, physical=is_canonical_object_key(fname))
     object_digest = str(receipt.get("objectDigest") or "")
     if object_digest:
-        _add(object_key(object_digest), digest=object_digest)
+        _add(canonical_object_key(object_digest), digest=object_digest, physical=True)
     for item in list(receipt.get("objects") or []) + list(receipt.get("components") or []):
         if not isinstance(item, dict):
             continue
         path = item.get("path") or item.get("key")
         digest = str(item.get("digest") or item.get("ciphertextDigest") or "") or None
         size = item.get("size") or item.get("sizeBytes") or item.get("ciphertextBytes")
-        if path:
-            _add(str(path), digest=digest, size=size if isinstance(size, int) else None)
+        size_int = size if isinstance(size, int) and not isinstance(size, bool) else None
         if digest:
-            _add(object_key(digest), digest=digest, size=size if isinstance(size, int) else None)
-            _add(f"ciphertext/sha256/{digest}", digest=digest, size=size if isinstance(size, int) else None)
+            canon = canonical_object_key(digest)
+            _add(canon, digest=digest, size=size_int, physical=True)
+            if path and str(path) != canon:
+                _add(str(path), digest=digest, size=0, physical=False)
+            alias = f"ciphertext/sha256/{digest}"
+            if alias != canon:
+                _add(alias, digest=digest, size=0, physical=False)
+        elif path:
+            _add(str(path), digest=None, size=size_int, physical=is_canonical_object_key(str(path)))
     return entries
 
 
@@ -82,6 +119,8 @@ def index_receipt_objects(
             ref_state=ref_state,
             size_bytes=int(entry.get("sizeBytes") or 0),
             ciphertext_digest=entry.get("ciphertextDigest"),
+            physical=bool(entry.get("physical", True)),
+            canonical_object_key=entry.get("canonicalObjectKey"),
         )
         count += 1
     return count
@@ -95,11 +134,11 @@ def apply_retirement_to_index(
     receipt: dict[str, Any] | None = None,
 ) -> int:
     """Mark indexed refs for a recovery point as retired (live → retired)."""
-    refs = backup_control.list_recovery_object_refs(
+    # Keyset scan — never rely on a hard 20k correctness ceiling.
+    refs = backup_control.list_recovery_object_refs_complete(
         target_id=target_id,
         policy_id=policy_id,
         backup_id=backup_id,
-        limit=20000,
     )
     if not refs and receipt is not None:
         index_receipt_objects(
@@ -109,11 +148,10 @@ def apply_retirement_to_index(
             receipt=receipt,
             ref_state="live",
         )
-        refs = backup_control.list_recovery_object_refs(
+        refs = backup_control.list_recovery_object_refs_complete(
             target_id=target_id,
             policy_id=policy_id,
             backup_id=backup_id,
-            limit=20000,
         )
     changed = 0
     for ref in refs:
@@ -127,29 +165,51 @@ def apply_retirement_to_index(
             ref_state="retired",
             size_bytes=int(ref.get("sizeBytes") or 0),
             ciphertext_digest=ref.get("ciphertextDigest"),
+            physical=bool(ref.get("physical", True)),
+            canonical_object_key=ref.get("canonicalObjectKey"),
         )
         changed += 1
     return changed
 
 
 def retained_payload_keys_from_index(target_id: str, *, retiring_backup_id: str) -> set[str] | None:
-    """Return live object keys from the index, or None when the index is empty."""
-    refs = backup_control.list_recovery_object_refs(target_id=target_id, ref_state="live", limit=20000)
-    if not refs:
+    """Return whether the index has any rows; GC must not use a truncated key set.
+
+    When the index is non-empty, callers should use
+    :func:`object_is_live_referenced` per candidate key instead of materializing
+    all live keys. This helper returns an empty set as a signal that the index
+    is present (prefer SQL-native checks) or None when empty (fallback scan).
+    """
+    if not backup_control.target_object_index_nonempty(target_id):
         return None
-    retained: set[str] = set()
-    for ref in refs:
-        if str(ref.get("backupId") or "") == retiring_backup_id:
-            continue
-        retained.add(str(ref["objectKey"]))
-    return retained
+    # Empty set means "index present; do not use set membership — use per-key SQL".
+    # Callers that still iterate candidate keys from the retiring receipt will
+    # query live refs per key.
+    del retiring_backup_id
+    return set()
+
+
+def object_is_live_referenced(target_id: str, object_key: str, *, excluding_backup_id: str | None = None) -> bool:
+    """SQL-native live-ref check — never page-limited materialization."""
+    return backup_control.object_has_live_ref(
+        target_id,
+        object_key,
+        excluding_backup_id=excluding_backup_id,
+    )
+
+
+def gc_allowed(target_id: str) -> tuple[bool, str]:
+    """GC via index only when coverage generation is complete."""
+    return backup_control.index_coverage_allows_gc(target_id)
 
 
 def gc_candidate_keys(target_id: str, *, limit: int = 500) -> list[str]:
+    allowed, _reason = gc_allowed(target_id)
+    if not allowed:
+        return []
     return [str(item["objectKey"]) for item in backup_control.list_target_objects(target_id, gc_candidates_only=True, limit=limit)]
 
-
-def rebuild_index_from_target(target: Any) -> dict[str, int]:
+def rebuild_index_from_target(target: Any) -> dict[str, Any]:
     """Rebuild the object index for one target from formal Receipt truth.
 
     When a valid retirement marker is present the ref is stored as retired;
@@ -161,6 +221,7 @@ def rebuild_index_from_target(target: Any) -> dict[str, int]:
     if not target_id:
         raise AppError("target_id required for index rebuild", code=ErrorCode.INVALID_REQUEST, status=400)
     backup_control.clear_target_object_index(target_id)
+    backup_control.set_target_index_coverage(target_id, state="building", formal_receipt_count=0)
     live = 0
     retired = 0
     scanned = 0
@@ -186,6 +247,7 @@ def rebuild_index_from_target(target: Any) -> dict[str, int]:
         else:
             live += 1
 
+    backup_control.set_target_index_coverage(target_id, state="scanning", formal_receipt_count=0)
     if getattr(target, "root", None) is not None:
         receipts_dir = Path(target.root) / "receipts"
         candidates = sorted(receipts_dir.rglob("*.json")) if receipts_dir.is_dir() else []
@@ -208,8 +270,28 @@ def rebuild_index_from_target(target: Any) -> dict[str, int]:
             if page.cursor is None:
                 break
             cursor = page.cursor
-    return {"scannedReceipts": scanned, "liveRecoveryPoints": live, "retiredRecoveryPoints": retired}
+    head_gen = None
+    try:
+        from deepseek_infra.infra.workspace import backup_targets
 
+        rec = backup_targets.get_target(target_id)
+        if isinstance(rec, dict) and rec.get("topologyGeneration") is not None:
+            head_gen = int(rec["topologyGeneration"])
+    except Exception:
+        head_gen = None
+    coverage = backup_control.set_target_index_coverage(
+        target_id,
+        state="complete",
+        formal_receipt_count=scanned,
+        source_head_generation=head_gen,
+    )
+    return {
+        "scannedReceipts": scanned,
+        "liveRecoveryPoints": live,
+        "retiredRecoveryPoints": retired,
+        "indexGeneration": int(coverage.get("indexGeneration") or 0),
+        "coverageState": "complete",
+    }
 
 def reconcile_inventory_page(
     target: Any,

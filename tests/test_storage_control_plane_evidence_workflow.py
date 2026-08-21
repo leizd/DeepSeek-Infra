@@ -16,13 +16,17 @@ def _load(path: Path, name: str) -> ModuleType:
     return module
 
 
-def test_storage_control_plane_runner_owns_458_and_459_real_minio_scenarios() -> None:
+def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios() -> None:
     runner = _load(ROOT / "scripts" / "run_storage_control_plane_minio_e2e.py", "storage_control_runner")
     node_458 = "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e"
     node_459 = "tests/test_backup_459_real_tiering_control_e2e.py::test_real_three_minio_tiering_and_control_recovery_e2e"
+    node_460 = (
+        "tests/test_backup_460_real_placement_control_e2e.py::test_real_three_minio_autonomous_placement_control_e2e"
+    )
     assert runner.SCENARIOS == {
         "real-three-minio-storage-control-plane": (node_458,),
         "real-three-minio-tiering-control-recovery": (node_459,),
+        "real-three-minio-autonomous-placement-control": (node_460,),
     }
     assert set(runner.REQUIRED_ENDPOINTS) == {
         "DEEPSEEK_TEST_S3_ENDPOINT_A",
@@ -37,12 +41,22 @@ def test_storage_control_plane_runner_owns_458_and_459_real_minio_scenarios() ->
     assert runner.CHECK_SCENARIOS["tierMigrationPreservesBackupIdAndObjectSetDigest"] == (
         "real-three-minio-tiering-control-recovery"
     )
+    assert runner.CHECK_SCENARIOS["realThreeMinioAutonomousPlacementE2E"] == (
+        "real-three-minio-autonomous-placement-control"
+    )
+    assert runner.CHECK_SCENARIOS["incompleteLineageBlocksChainMigration"] == (
+        "real-three-minio-autonomous-placement-control"
+    )
+    assert runner.CHECK_SCENARIOS["targetShardedRepairScopesProgressIndependently"] == (
+        "real-three-minio-autonomous-placement-control"
+    )
 
 
 def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypatch() -> None:
     for rel in (
         "tests/test_backup_458_real_storage_control_plane_e2e.py",
         "tests/test_backup_459_real_tiering_control_e2e.py",
+        "tests/test_backup_460_real_placement_control_e2e.py",
     ):
         source = (ROOT / rel).read_text(encoding="utf-8")
         assert "ProductionFakeS3Client" not in source

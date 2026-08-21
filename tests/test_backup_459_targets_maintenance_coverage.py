@@ -329,14 +329,17 @@ def test_record_remote_target_head_paths(tmp_settings: Path) -> None:
 
 
 def test_maintenance_lease_skips_and_supervisor_tick(tmp_settings: Path) -> None:
-    # Hold every worker scope so maintenance_tick records leaseSkipped branches
-    tokens = {}
-    for kind in ("replication", "repair", "rebalance", "retirement"):
+    # Hold global replication lease + one target-scoped repair lease (Gate F).
+    tokens: dict[tuple[str, str], int] = {}
+    for kind, scope in (("replication", "global"), ("repair", "target_held")):
         lease = backup_control.acquire_maintenance_lease(
-            kind, "global", owner_instance_id="holder", lease_seconds=120
+            kind, scope, owner_instance_id="holder", lease_seconds=120
         )
         assert lease is not None
-        tokens[kind] = int(lease["fencingToken"])
+        tokens[(kind, scope)] = int(lease["fencingToken"])
+
+    held_repair = [{"repairId": "r-held", "destTargetId": "target_held", "phase": "queued"}]
+    free_repair = [{"repairId": "r-free", "destTargetId": "target_free", "phase": "queued"}]
 
     with (
         patch.object(backup_maintenance.backup_recovery_keeper, "reconcile_durable_recovery_leases", return_value={}),
@@ -347,16 +350,32 @@ def test_maintenance_lease_skips_and_supervisor_tick(tmp_settings: Path) -> None
             return_value={},
         ),
         patch.object(backup_maintenance, "_process_drain_scopes", return_value={"drainsProcessed": 0, "drainFailures": 0, "drainLeaseSkips": 0}),
+        patch.object(
+            backup_maintenance.backup_replication,
+            "list_repair_jobs",
+            return_value=held_repair + free_repair,
+        ),
+        patch.object(
+            backup_maintenance.backup_replication,
+            "execute_repair_job_instance",
+            return_value={"status": "success"},
+        ) as exec_repair,
+        patch.object(backup_maintenance.backup_replication, "list_rebalance_jobs", return_value=[]),
+        patch.object(backup_maintenance.backup_retirement, "list_copy_retirement_jobs", return_value=[]),
+        patch.object(backup_maintenance.backup_control, "list_chain_migration_jobs", return_value=[]),
+        patch.object(backup_maintenance.backup_placement, "reconcile_all_policies", return_value={"policies": 0}),
     ):
         summary = backup_maintenance.maintenance_tick(instance_id="skip-worker", limit_per_worker=2)
     assert summary["leaseAcquired"] is True
     assert summary["replication"] == {"leaseSkipped": True}
-    assert summary["repairs"] == {"leaseSkipped": True}
-    assert summary["rebalances"] == {"leaseSkipped": True}
-    assert summary["retirements"] == {"leaseSkipped": True}
+    # Held dest target skipped; free dest target still advances (true sharding).
+    assert summary["repairs"]["leaseSkips"] >= 1
+    assert summary["repairs"]["processed"] >= 1
+    assert exec_repair.call_count >= 1
+    assert summary.get("shardedByTarget") is True
 
-    for kind, token in tokens.items():
-        backup_control.release_maintenance_lease(kind, "global", owner_instance_id="holder", fencing_token=token)
+    for (kind, scope), token in tokens.items():
+        backup_control.release_maintenance_lease(kind, scope, owner_instance_id="holder", fencing_token=token)
 
     # heartbeat renew failure returns
     stop = __import__("threading").Event()

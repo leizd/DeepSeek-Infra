@@ -72,7 +72,8 @@ def test_storage_control_connection_retries_locked_wal_initialization(
             self.wal_attempts = 0
             self.closed = False
 
-        def execute(self, statement: str) -> object:
+        def execute(self, statement: str, params: object = ()) -> object:
+            del params
             if statement == "PRAGMA journal_mode=WAL":
                 self.wal_attempts += 1
                 if self.wal_attempts == 1:
@@ -80,7 +81,7 @@ def test_storage_control_connection_retries_locked_wal_initialization(
             if statement == "PRAGMA quick_check":
                 return _Cursor("ok")
             if statement.startswith("PRAGMA user_version"):
-                return _Cursor(2)
+                return _Cursor(backup_control.CONTROL_SCHEMA_VERSION)
             return _Cursor(None)
 
         def executescript(self, _script: str) -> None:

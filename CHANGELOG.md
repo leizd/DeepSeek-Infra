@@ -4,6 +4,19 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.6.0] - Autonomous Recovery Placement & Scale-Safe Storage Control (2026-08-21)
+
+### Autonomous Recovery Placement & Scale-Safe Storage Control
+
+- **Scale-Safe Correctness**: Canonical physical ciphertext identity; SQL-native live-ref GC without 20k-set fail-open; readiness capacity `probe=False`; exact parent chain fail-closed.
+- **Index Coverage & Capacity Projections**: `target_index_coverage` gates index-accelerated GC; forecast projections persist on probe and feed pure readiness reads.
+- **Recovery Lineage Graph**: Rebuildable `recovery_lineage` preferred by chain builder.
+- **RecoveryChainMigrationJob**: Durable multi-member chain migration with authenticated sources; intent never executed on failed transfer.
+- **Autonomous Placement SLO Controller**: Policy `recoveryPlacement` + explainable decisions ordered recoverability → lineage → topology → RTO → capacity → cost last.
+- **Target-Sharded Maintenance**: Repair/rebalance/retirement/chain-migration leases scoped by dest/target so one slow scope cannot stall free targets.
+- **Planner-Mandatory MinIO Evidence**: Placement scenario on the three-MinIO storage-control-plane exact-merge producer.
+- **Frozen Compatibility Surface**: `object-set-v1`, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age unchanged.
+
 ## [4.5.9] - Indexed Lifecycle Economics & SLO-Aware Storage Tiering (2026-08-21)
 
 ### Indexed Lifecycle Economics & SLO-Aware Storage Tiering

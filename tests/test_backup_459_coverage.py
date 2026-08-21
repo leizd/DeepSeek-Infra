@@ -236,8 +236,9 @@ def test_micro_branch_coverage_for_coverage_gate(tmp_settings: Path) -> None:
     backup_control.put_recovery_object_ref(
         target_id=tid, policy_id="p", backup_id="drop", object_key="k2", ref_state="live", size_bytes=1
     )
-    retained = backup_object_index.retained_payload_keys_from_index(tid, retiring_backup_id="drop")
-    assert retained is not None and "k1" in retained and "k2" not in retained
+    assert backup_object_index.retained_payload_keys_from_index(tid, retiring_backup_id="drop") is not None
+    assert backup_object_index.object_is_live_referenced(tid, "k1", excluding_backup_id="drop")
+    assert not backup_object_index.object_is_live_referenced(tid, "k2", excluding_backup_id="drop")
 
     # inventory size mismatch branch
     store = MemoryTargetStore()

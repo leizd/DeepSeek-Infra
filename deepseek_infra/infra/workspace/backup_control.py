@@ -26,7 +26,9 @@ CONTROL_DIR = config.ROOT / ".backup-control"
 CONTROL_DB = CONTROL_DIR / "control.sqlite3"
 
 # Non-rebuildable authority lives at schema version >= 2 (4.5.9 journal + index).
-CONTROL_SCHEMA_VERSION = 2
+# v3 adds canonical physical object identity for scale-safe capacity/GC (4.6.0).
+# v4 adds index coverage, recovery lineage graph, chain migration jobs (4.6.0 B/C/D).
+CONTROL_SCHEMA_VERSION = 4
 
 REBUILDABLE_TABLES = frozenset(
     {
@@ -38,6 +40,9 @@ REBUILDABLE_TABLES = frozenset(
         "qos_buckets",
         "qos_transfers",
         "maintenance_cursors",
+        "target_index_coverage",
+        "recovery_lineage",
+        "capacity_forecast_projections",
     }
 )
 NON_REBUILDABLE_TABLES = frozenset(
@@ -47,6 +52,7 @@ NON_REBUILDABLE_TABLES = frozenset(
         "lifecycle_intents",
         "maintenance_leases",
         "schema_migrations",
+        "chain_migration_jobs",
     }
 )
 
@@ -152,6 +158,8 @@ CREATE TABLE IF NOT EXISTS target_objects (
     retired_ref_count INTEGER NOT NULL DEFAULT 0,
     state TEXT NOT NULL DEFAULT 'unknown',
     etag TEXT,
+    is_physical INTEGER NOT NULL DEFAULT 1,
+    canonical_object_key TEXT,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (target_id, object_key)
 );
@@ -164,6 +172,8 @@ CREATE TABLE IF NOT EXISTS recovery_object_refs (
     ref_state TEXT NOT NULL,
     size_bytes INTEGER NOT NULL DEFAULT 0,
     ciphertext_digest TEXT,
+    is_physical INTEGER NOT NULL DEFAULT 1,
+    canonical_object_key TEXT,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (target_id, policy_id, backup_id, object_key)
 );
@@ -195,6 +205,54 @@ ON recovery_object_refs(target_id, policy_id, backup_id);
 
 CREATE INDEX IF NOT EXISTS idx_growth_target_time
 ON capacity_growth_observations(target_id, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS target_index_coverage (
+    target_id TEXT PRIMARY KEY,
+    index_generation INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'empty',
+    formal_receipt_count INTEGER NOT NULL DEFAULT 0,
+    last_receipt_cursor TEXT,
+    source_head_generation INTEGER,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recovery_lineage (
+    policy_id TEXT NOT NULL,
+    backup_id TEXT NOT NULL,
+    snapshot_kind TEXT NOT NULL DEFAULT 'full',
+    parent_backup_id TEXT,
+    base_backup_id TEXT,
+    chain_depth INTEGER NOT NULL DEFAULT 0,
+    object_set_digest TEXT,
+    committed_at TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (policy_id, backup_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lineage_parent
+ON recovery_lineage(policy_id, parent_backup_id);
+
+CREATE TABLE IF NOT EXISTS capacity_forecast_projections (
+    target_id TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chain_migration_jobs (
+    migration_id TEXT PRIMARY KEY,
+    policy_id TEXT NOT NULL,
+    anchor_backup_id TEXT NOT NULL,
+    desired_tier TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chain_migration_phase
+ON chain_migration_jobs(phase, updated_at);
 """
 
 
@@ -232,10 +290,24 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
         )
     if current < CONTROL_SCHEMA_VERSION:
         now = _utc_iso()
+        # Additive columns for pre-v3 DBs (CREATE IF NOT EXISTS leaves old tables intact).
+        if current < 3:
+            for stmt in (
+                "ALTER TABLE target_objects ADD COLUMN is_physical INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE target_objects ADD COLUMN canonical_object_key TEXT",
+                "ALTER TABLE recovery_object_refs ADD COLUMN is_physical INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE recovery_object_refs ADD COLUMN canonical_object_key TEXT",
+            ):
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError:
+                    pass  # column already present
         for version in range(max(1, current + 1), CONTROL_SCHEMA_VERSION + 1):
             description = {
                 1: "4.5.8-baseline-control-authority",
                 2: "4.5.9-lifecycle-intents-and-object-index",
+                3: "4.6.0-canonical-physical-object-identity",
+                4: "4.6.0-lineage-index-coverage-chain-migration",
             }.get(version, f"schema-v{version}")
             conn.execute(
                 """
@@ -1305,8 +1377,14 @@ def put_recovery_object_ref(
     ref_state: str,
     size_bytes: int = 0,
     ciphertext_digest: str | None = None,
+    physical: bool = True,
+    canonical_object_key: str | None = None,
 ) -> None:
     now = _utc_iso()
+    is_physical = 1 if physical else 0
+    # Aliases never contribute physical size.
+    stored_size = max(0, int(size_bytes)) if physical else 0
+    canon = canonical_object_key or (object_key if physical else None)
     with _connect() as conn:
         _begin_immediate(conn)
         existing = conn.execute(
@@ -1321,12 +1399,14 @@ def put_recovery_object_ref(
             """
             INSERT INTO recovery_object_refs(
                 target_id, policy_id, backup_id, object_key, ref_state,
-                size_bytes, ciphertext_digest, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                size_bytes, ciphertext_digest, is_physical, canonical_object_key, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(target_id, policy_id, backup_id, object_key) DO UPDATE SET
                 ref_state = excluded.ref_state,
                 size_bytes = excluded.size_bytes,
                 ciphertext_digest = excluded.ciphertext_digest,
+                is_physical = excluded.is_physical,
+                canonical_object_key = excluded.canonical_object_key,
                 updated_at = excluded.updated_at
             """,
             (
@@ -1335,8 +1415,10 @@ def put_recovery_object_ref(
                 backup_id,
                 object_key,
                 str(ref_state),
-                max(0, int(size_bytes)),
+                stored_size,
                 ciphertext_digest,
+                is_physical,
+                canon,
                 now,
             ),
         )
@@ -1348,8 +1430,6 @@ def put_recovery_object_ref(
             live_delta = -1
         if previous != "retired" and ref_state == "retired":
             retired_delta = 1
-            if previous == "live":
-                pass  # live_delta already -1
         elif previous == "retired" and ref_state != "retired":
             retired_delta = -1
         obj = conn.execute(
@@ -1364,24 +1444,27 @@ def put_recovery_object_ref(
                 """
                 INSERT INTO target_objects(
                     target_id, object_key, ciphertext_digest, size_bytes,
-                    live_ref_count, retired_ref_count, state, etag, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                    live_ref_count, retired_ref_count, state, etag,
+                    is_physical, canonical_object_key, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
                 """,
                 (
                     target_id,
                     object_key,
                     ciphertext_digest,
-                    max(0, int(size_bytes)),
+                    stored_size,
                     live,
                     retired,
                     state,
+                    is_physical,
+                    canon,
                     now,
                 ),
             )
         else:
             live = max(0, int(obj["live_ref_count"]) + live_delta)
             retired = max(0, int(obj["retired_ref_count"]) + retired_delta)
-            next_size = max(int(obj["size_bytes"]), max(0, int(size_bytes)))
+            next_size = max(int(obj["size_bytes"]), stored_size) if physical else int(obj["size_bytes"])
             if live > 0:
                 state = "live"
             elif retired > 0:
@@ -1393,10 +1476,12 @@ def put_recovery_object_ref(
                 UPDATE target_objects
                 SET live_ref_count = ?, retired_ref_count = ?, size_bytes = ?,
                     ciphertext_digest = COALESCE(?, ciphertext_digest),
-                    state = ?, updated_at = ?
+                    state = ?, is_physical = ?,
+                    canonical_object_key = COALESCE(?, canonical_object_key),
+                    updated_at = ?
                 WHERE target_id = ? AND object_key = ?
                 """,
-                (live, retired, next_size, ciphertext_digest, state, now, target_id, object_key),
+                (live, retired, next_size, ciphertext_digest, state, is_physical, canon, now, target_id, object_key),
             )
         conn.execute("COMMIT")
 
@@ -1409,6 +1494,7 @@ def list_recovery_object_refs(
     ref_state: str | None = None,
     limit: int = 5000,
 ) -> list[dict[str, Any]]:
+    """Bounded listing for operator UI — not for GC correctness paths."""
     query = "SELECT * FROM recovery_object_refs WHERE target_id = ?"
     params: list[Any] = [target_id]
     if policy_id:
@@ -1424,42 +1510,180 @@ def list_recovery_object_refs(
     params.append(max(1, min(int(limit), 20000)))
     with _connect() as conn:
         rows = conn.execute(query, params).fetchall()
-    return [
-        {
-            "targetId": str(row["target_id"]),
-            "policyId": str(row["policy_id"]),
-            "backupId": str(row["backup_id"]),
-            "objectKey": str(row["object_key"]),
-            "refState": str(row["ref_state"]),
-            "sizeBytes": int(row["size_bytes"]),
-            "ciphertextDigest": str(row["ciphertext_digest"]) if row["ciphertext_digest"] else None,
-            "updatedAt": str(row["updated_at"]),
-        }
-        for row in rows
-    ]
+    return [_decode_recovery_ref(row) for row in rows]
+
+
+def list_recovery_object_refs_complete(
+    *,
+    target_id: str,
+    policy_id: str | None = None,
+    backup_id: str | None = None,
+    ref_state: str | None = None,
+    page_size: int = 2000,
+) -> list[dict[str, Any]]:
+    """Keyset-complete scan for correctness paths (retirement apply, rebuilds)."""
+    page_size = max(1, min(int(page_size), 5000))
+    results: list[dict[str, Any]] = []
+    after_policy = ""
+    after_backup = ""
+    after_key = ""
+    while True:
+        query = """
+            SELECT * FROM recovery_object_refs
+            WHERE target_id = ?
+              AND (
+                    policy_id > ?
+                 OR (policy_id = ? AND backup_id > ?)
+                 OR (policy_id = ? AND backup_id = ? AND object_key > ?)
+              )
+        """
+        params: list[Any] = [target_id, after_policy, after_policy, after_backup, after_policy, after_backup, after_key]
+        if policy_id:
+            query += " AND policy_id = ?"
+            params.append(policy_id)
+        if backup_id:
+            query += " AND backup_id = ?"
+            params.append(backup_id)
+        if ref_state:
+            query += " AND ref_state = ?"
+            params.append(ref_state)
+        query += " ORDER BY policy_id, backup_id, object_key LIMIT ?"
+        params.append(page_size)
+        with _connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        if not rows:
+            break
+        for row in rows:
+            results.append(_decode_recovery_ref(row))
+        last = rows[-1]
+        after_policy = str(last["policy_id"])
+        after_backup = str(last["backup_id"])
+        after_key = str(last["object_key"])
+        if len(rows) < page_size:
+            break
+    return results
+
+
+def _decode_recovery_ref(row: sqlite3.Row) -> dict[str, Any]:
+    keys = row.keys()
+    return {
+        "targetId": str(row["target_id"]),
+        "policyId": str(row["policy_id"]),
+        "backupId": str(row["backup_id"]),
+        "objectKey": str(row["object_key"]),
+        "refState": str(row["ref_state"]),
+        "sizeBytes": int(row["size_bytes"]),
+        "ciphertextDigest": str(row["ciphertext_digest"]) if row["ciphertext_digest"] else None,
+        "physical": bool(int(row["is_physical"])) if "is_physical" in keys and row["is_physical"] is not None else True,
+        "canonicalObjectKey": str(row["canonical_object_key"]) if "canonical_object_key" in keys and row["canonical_object_key"] else None,
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def object_has_live_ref(
+    target_id: str,
+    object_key: str,
+    *,
+    excluding_backup_id: str | None = None,
+) -> bool:
+    """Return True if any live recovery_object_refs row still points at the key.
+
+    When ``excluding_backup_id`` is set, only the refs table is consulted so a
+    retiring backup's own refs cannot keep its objects artificially live via
+    the aggregated live_ref_count projection.
+    """
+    with _connect() as conn:
+        if excluding_backup_id:
+            row = conn.execute(
+                """
+                SELECT 1 FROM recovery_object_refs
+                WHERE target_id = ? AND object_key = ? AND ref_state = 'live'
+                  AND backup_id != ?
+                LIMIT 1
+                """,
+                (target_id, object_key, excluding_backup_id),
+            ).fetchone()
+            return row is not None
+        row = conn.execute(
+            """
+            SELECT 1 FROM recovery_object_refs
+            WHERE target_id = ? AND object_key = ? AND ref_state = 'live'
+            LIMIT 1
+            """,
+            (target_id, object_key),
+        ).fetchone()
+        if row is not None:
+            return True
+        obj = conn.execute(
+            """
+            SELECT live_ref_count FROM target_objects
+            WHERE target_id = ? AND object_key = ?
+            """,
+            (target_id, object_key),
+        ).fetchone()
+    if obj is None:
+        return False
+    return int(obj["live_ref_count"]) > 0
+
+
+def target_object_index_nonempty(target_id: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM target_objects WHERE target_id = ? LIMIT 1",
+            (target_id,),
+        ).fetchone()
+    return row is not None
 
 
 def physical_usage_summary(target_id: str) -> dict[str, Any]:
-    """Aggregate rebuildable physical accounting for one target."""
+    """Aggregate physical accounting — one ciphertext counted once.
+
+    Only rows with ``is_physical = 1`` contribute size. Compatibility alias
+    rows (legacy ciphertext/ paths) carry size_bytes=0 and is_physical=0.
+    When multiple physical rows share a ciphertext_digest, the max size is
+    taken once per digest.
+    """
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT state, live_ref_count, retired_ref_count, size_bytes
+            SELECT object_key, state, live_ref_count, retired_ref_count, size_bytes,
+                   ciphertext_digest, COALESCE(is_physical, 1) AS is_physical
             FROM target_objects WHERE target_id = ?
             """,
             (target_id,),
         ).fetchall()
+    # digest -> (size, live, retired_pending)
+    by_digest: dict[str, tuple[int, bool, bool]] = {}
     physical = 0
     live_bytes = 0
     retired_pending = 0
+    physical_rows = 0
     for row in rows:
+        if int(row["is_physical"] or 0) != 1:
+            continue
+        physical_rows += 1
         size = max(0, int(row["size_bytes"]))
+        digest = str(row["ciphertext_digest"] or row["object_key"])
+        live = int(row["live_ref_count"]) > 0
+        retired = (not live) and (
+            int(row["retired_ref_count"]) > 0 or str(row["state"]) in {"retired-pending-gc", "gc-candidate"}
+        )
+        prev = by_digest.get(digest)
+        if prev is None:
+            by_digest[digest] = (size, live, retired)
+        else:
+            by_digest[digest] = (
+                max(prev[0], size),
+                prev[1] or live,
+                (prev[2] or retired) and not (prev[1] or live),
+            )
+    for size, live, retired in by_digest.values():
         physical += size
-        if int(row["live_ref_count"]) > 0:
+        if live:
             live_bytes += size
-        elif int(row["retired_ref_count"]) > 0 or str(row["state"]) in {"retired-pending-gc", "gc-candidate"}:
+        elif retired:
             retired_pending += size
-    confidence = "high" if rows else "unavailable"
+    confidence = "high" if physical_rows else "unavailable"
     return {
         "targetId": target_id,
         "physicalStoredBytes": physical,
@@ -1467,7 +1691,8 @@ def physical_usage_summary(target_id: str) -> dict[str, Any]:
         "retiredPendingGcBytes": retired_pending,
         "controlPlaneBytes": 0,
         "unknownExternalBytes": None,
-        "objectCount": len(rows),
+        "objectCount": physical_rows,
+        "uniqueCiphertextCount": len(by_digest),
         "confidence": confidence,
     }
 
@@ -1532,3 +1757,312 @@ def list_capacity_growth_observations(target_id: str, *, limit: int = 60) -> lis
         }
         for row in rows
     ]
+
+
+# ── Gate B: index coverage + capacity forecast projections ──────────────────
+
+
+def set_target_index_coverage(
+    target_id: str,
+    *,
+    state: str,
+    index_generation: int | None = None,
+    formal_receipt_count: int = 0,
+    last_receipt_cursor: str | None = None,
+    source_head_generation: int | None = None,
+) -> dict[str, Any]:
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute(
+            "SELECT index_generation FROM target_index_coverage WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+        gen = int(index_generation) if index_generation is not None else (
+            int(row["index_generation"]) + 1 if row is not None else 1
+        )
+        completed_at = now if state == "complete" else None
+        conn.execute(
+            """
+            INSERT INTO target_index_coverage(
+                target_id, index_generation, state, formal_receipt_count,
+                last_receipt_cursor, source_head_generation, completed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(target_id) DO UPDATE SET
+                index_generation = excluded.index_generation,
+                state = excluded.state,
+                formal_receipt_count = excluded.formal_receipt_count,
+                last_receipt_cursor = excluded.last_receipt_cursor,
+                source_head_generation = excluded.source_head_generation,
+                completed_at = excluded.completed_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                target_id,
+                gen,
+                str(state),
+                max(0, int(formal_receipt_count)),
+                last_receipt_cursor,
+                int(source_head_generation) if source_head_generation is not None else None,
+                completed_at,
+                now,
+            ),
+        )
+        conn.execute("COMMIT")
+    return get_target_index_coverage(target_id) or {}
+
+
+def get_target_index_coverage(target_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM target_index_coverage WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "targetId": str(row["target_id"]),
+        "indexGeneration": int(row["index_generation"]),
+        "state": str(row["state"]),
+        "formalReceiptCount": int(row["formal_receipt_count"]),
+        "lastReceiptCursor": str(row["last_receipt_cursor"]) if row["last_receipt_cursor"] else None,
+        "sourceHeadGeneration": int(row["source_head_generation"]) if row["source_head_generation"] is not None else None,
+        "completedAt": str(row["completed_at"]) if row["completed_at"] else None,
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def index_coverage_allows_gc(target_id: str) -> tuple[bool, str]:
+    cov = get_target_index_coverage(target_id)
+    if cov is None:
+        # Empty index → GC must use conservative receipt scan, not index GC path.
+        return False, "object-reference-index-missing"
+    if str(cov.get("state") or "") != "complete":
+        return False, "object-reference-index-incomplete"
+    return True, "ok"
+
+
+def put_capacity_forecast_projection(target_id: str, projection: dict[str, Any]) -> None:
+    now = _utc_iso()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO capacity_forecast_projections(target_id, payload_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(target_id) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            """,
+            (target_id, json.dumps(projection, ensure_ascii=False, sort_keys=True), now),
+        )
+
+
+def get_capacity_forecast_projection(target_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT payload_json FROM capacity_forecast_projections WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    value = json.loads(str(row["payload_json"]))
+    return value if isinstance(value, dict) else None
+
+
+# ── Gate C: recovery lineage graph ──────────────────────────────────────────
+
+
+def upsert_recovery_lineage(
+    *,
+    policy_id: str,
+    backup_id: str,
+    snapshot_kind: str = "full",
+    parent_backup_id: str | None = None,
+    base_backup_id: str | None = None,
+    chain_depth: int = 0,
+    object_set_digest: str | None = None,
+    committed_at: str | None = None,
+) -> None:
+    now = _utc_iso()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO recovery_lineage(
+                policy_id, backup_id, snapshot_kind, parent_backup_id, base_backup_id,
+                chain_depth, object_set_digest, committed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(policy_id, backup_id) DO UPDATE SET
+                snapshot_kind = excluded.snapshot_kind,
+                parent_backup_id = excluded.parent_backup_id,
+                base_backup_id = excluded.base_backup_id,
+                chain_depth = excluded.chain_depth,
+                object_set_digest = excluded.object_set_digest,
+                committed_at = excluded.committed_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                policy_id,
+                backup_id,
+                str(snapshot_kind or "full"),
+                parent_backup_id,
+                base_backup_id,
+                max(0, int(chain_depth)),
+                object_set_digest,
+                committed_at,
+                now,
+            ),
+        )
+
+
+def get_recovery_lineage(policy_id: str, backup_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM recovery_lineage WHERE policy_id = ? AND backup_id = ?",
+            (policy_id, backup_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "policyId": str(row["policy_id"]),
+        "backupId": str(row["backup_id"]),
+        "snapshotKind": str(row["snapshot_kind"]),
+        "parentBackupId": str(row["parent_backup_id"]) if row["parent_backup_id"] else None,
+        "baseBackupId": str(row["base_backup_id"]) if row["base_backup_id"] else None,
+        "chainDepth": int(row["chain_depth"]),
+        "objectSetDigest": str(row["object_set_digest"]) if row["object_set_digest"] else None,
+        "committedAt": str(row["committed_at"]) if row["committed_at"] else None,
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def clear_recovery_lineage(policy_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM recovery_lineage WHERE policy_id = ?", (policy_id,))
+
+
+# ── Gate D: chain migration jobs ────────────────────────────────────────────
+
+
+CHAIN_MIGRATION_TERMINAL = frozenset({"converged", "failed-terminal", "cancelled"})
+
+
+def create_chain_migration_job(record: dict[str, Any]) -> dict[str, Any]:
+    now = _utc_iso()
+    migration_id = str(record.get("migrationId") or f"mig_{secrets.token_hex(8)}")
+    payload = {**record, "migrationId": migration_id}
+    with _connect() as conn:
+        _begin_immediate(conn)
+        conn.execute(
+            """
+            INSERT INTO chain_migration_jobs(
+                migration_id, policy_id, anchor_backup_id, desired_tier,
+                phase, payload_json, error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                migration_id,
+                str(record["policyId"]),
+                str(record["anchorBackupId"]),
+                str(record.get("desiredTier") or "warm"),
+                str(record.get("phase") or "planned"),
+                json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                now,
+                now,
+            ),
+        )
+        conn.execute("COMMIT")
+    return get_chain_migration_job(migration_id) or {}
+
+
+def get_chain_migration_job(migration_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM chain_migration_jobs WHERE migration_id = ?",
+            (migration_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    payload = json.loads(str(row["payload_json"]))
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        **payload,
+        "migrationId": str(row["migration_id"]),
+        "policyId": str(row["policy_id"]),
+        "anchorBackupId": str(row["anchor_backup_id"]),
+        "desiredTier": str(row["desired_tier"]),
+        "phase": str(row["phase"]),
+        "error": str(row["error"]) if row["error"] else None,
+        "createdAt": str(row["created_at"]),
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def update_chain_migration_job(
+    migration_id: str,
+    *,
+    phase: str,
+    payload: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute(
+            "SELECT payload_json FROM chain_migration_jobs WHERE migration_id = ?",
+            (migration_id,),
+        ).fetchone()
+        if row is None:
+            conn.execute("ROLLBACK")
+            raise AppError("chain migration job not found", code=ErrorCode.NOT_FOUND, status=404)
+        body = json.loads(str(row["payload_json"]))
+        if not isinstance(body, dict):
+            body = {}
+        if payload is not None:
+            body = {**body, **payload}
+        body["phase"] = phase
+        if error is not None:
+            body["error"] = error
+        conn.execute(
+            """
+            UPDATE chain_migration_jobs
+            SET phase = ?, payload_json = ?, error = ?, updated_at = ?
+            WHERE migration_id = ?
+            """,
+            (
+                phase,
+                json.dumps(body, ensure_ascii=False, sort_keys=True),
+                error,
+                now,
+                migration_id,
+            ),
+        )
+        conn.execute("COMMIT")
+    return get_chain_migration_job(migration_id) or {}
+
+
+def list_chain_migration_jobs(
+    *,
+    phase: str | None = None,
+    policy_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    query = "SELECT migration_id FROM chain_migration_jobs WHERE 1=1"
+    params: list[Any] = []
+    if phase:
+        query += " AND phase = ?"
+        params.append(phase)
+    if policy_id:
+        query += " AND policy_id = ?"
+        params.append(policy_id)
+    query += " ORDER BY updated_at ASC LIMIT ?"
+    params.append(max(1, min(int(limit), 500)))
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        job = get_chain_migration_job(str(row["migration_id"]))
+        if job:
+            out.append(job)
+    return out
+
