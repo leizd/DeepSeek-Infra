@@ -38,8 +38,50 @@ def _parse_iso(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def get_target_capacity(target_id: str) -> dict[str, Any]:
-    """Retrieve the latest observed capacity for a target."""
+def get_target_capacity(target_id: str, *, probe: bool = True) -> dict[str, Any]:
+    """Retrieve capacity for a target.
+
+    ``probe=True`` (default) may perform remote/filesystem observation for
+    maintenance workers. ``probe=False`` reads only persisted projections —
+    required for DR Readiness zero-remote-I/O paths.
+    """
+    if not probe:
+        observation = backup_control.get_target_capacity_observation(target_id)
+        if observation is not None:
+            return observation
+        usage = backup_control.physical_usage_summary(target_id)
+        try:
+            target = backup_targets.get_target(target_id)
+        except Exception:
+            target = None
+        quota = (target or {}).get("quotaBytes") if isinstance(target, dict) else None
+        physical = int(usage.get("physicalStoredBytes") or 0)
+        if quota is not None and int(quota) > 0:
+            total = int(quota)
+            free = max(0, total - physical)
+            return {
+                "targetId": target_id,
+                "totalBytes": total,
+                "usedBytes": physical,
+                "freeBytes": free,
+                "freePercent": round((free / total) * 100.0, 2) if total else 0.0,
+                "physicalStoredBytes": physical,
+                "liveReferencedBytes": int(usage.get("liveReferencedBytes") or 0),
+                "retiredPendingGcBytes": int(usage.get("retiredPendingGcBytes") or 0),
+                "capacityConfidence": str(usage.get("confidence") or "unavailable"),
+                "source": "persisted-projection",
+                "observedAt": None,
+            }
+        return {
+            "targetId": target_id,
+            "totalBytes": None,
+            "usedBytes": physical or None,
+            "freeBytes": None,
+            "freePercent": None,
+            "physicalStoredBytes": physical,
+            "source": "persisted-projection-unconstrained",
+            "observedAt": None,
+        }
     return backup_targets.probe_target_capacity(target_id)
 
 
@@ -282,10 +324,18 @@ def _growth_rates_from_observations(observations: list[dict[str, Any]]) -> dict[
 def estimate_target_exhaustion_horizon(
     target_id: str,
     policy_id: str,
+    *,
+    probe: bool = True,
+    record_observation: bool | None = None,
 ) -> dict[str, Any]:
-    """Estimate days until target runs out of space from elapsed-time growth."""
+    """Estimate days until target runs out of space from elapsed-time growth.
+
+    For DR Readiness / pure read models call with ``probe=False`` and
+    ``record_observation=False`` so no remote I/O or control mutations occur.
+    """
     del policy_id  # retained for API compatibility; growth is target-scoped
-    cap = get_target_capacity(target_id)
+    should_record = probe if record_observation is None else bool(record_observation)
+    cap = get_target_capacity(target_id, probe=probe)
     free_bytes = cap.get("freeBytes")
     total_bytes = cap.get("totalBytes")
     free_pct = cap.get("freePercent")
@@ -319,24 +369,25 @@ def estimate_target_exhaustion_horizon(
             "forecastStatus": "exhausted",
         }
 
-    # Record a growth observation whenever capacity is probed with physical facts.
-    physical = cap.get("physicalStoredBytes")
-    if isinstance(physical, int) and not isinstance(physical, bool):
-        backup_control.record_capacity_growth_observation(
-            target_id=target_id,
-            physical_stored_bytes=int(physical),
-            live_referenced_bytes=int(cap.get("liveReferencedBytes") or 0),
-            retired_pending_gc_bytes=int(cap.get("retiredPendingGcBytes") or 0),
-            observed_at=str(cap.get("observedAt") or _utc_iso()),
-        )
-    else:
-        used = cap.get("usedBytes")
-        if isinstance(used, int) and not isinstance(used, bool):
+    # Record a growth observation only when explicitly probing (maintenance).
+    if should_record:
+        physical = cap.get("physicalStoredBytes")
+        if isinstance(physical, int) and not isinstance(physical, bool):
             backup_control.record_capacity_growth_observation(
                 target_id=target_id,
-                physical_stored_bytes=int(used),
+                physical_stored_bytes=int(physical),
+                live_referenced_bytes=int(cap.get("liveReferencedBytes") or 0),
+                retired_pending_gc_bytes=int(cap.get("retiredPendingGcBytes") or 0),
                 observed_at=str(cap.get("observedAt") or _utc_iso()),
             )
+        else:
+            used = cap.get("usedBytes")
+            if isinstance(used, int) and not isinstance(used, bool):
+                backup_control.record_capacity_growth_observation(
+                    target_id=target_id,
+                    physical_stored_bytes=int(used),
+                    observed_at=str(cap.get("observedAt") or _utc_iso()),
+                )
 
     observations = backup_control.list_capacity_growth_observations(target_id, limit=60)
     rates = _growth_rates_from_observations(observations)

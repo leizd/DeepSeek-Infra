@@ -429,22 +429,69 @@ def _receipt_payload_keys(receipt: dict[str, Any]) -> set[str]:
     return keys
 
 
-def _retained_payload_keys(target: Any, *, retiring_backup_id: str) -> set[str]:
-    """Return payload keys still referenced by non-retiring recovery points.
+def _payload_key_is_retained(target: Any, object_key: str, *, retiring_backup_id: str) -> bool:
+    """Return True if object_key must not be GC'd.
 
-    Prefer the rebuildable ciphertext reference index (O(objects in scope)).
-    When the index is empty/unbuilt, fall back to a conservative full Receipt
-    scan so GC remains fail-closed.
+    Prefer SQL-native live-ref checks on the rebuildable index. When the index
+    is empty, fall back to a conservative full Receipt scan for that single key
+    membership via scanning all non-retired receipts (fail-closed).
     """
     from deepseek_infra.infra.workspace import backup_object_index
 
     target_id = str(getattr(target, "target_id", "") or "")
-    if target_id:
-        indexed = backup_object_index.retained_payload_keys_from_index(
-            target_id, retiring_backup_id=retiring_backup_id
+    if target_id and backup_object_index.retained_payload_keys_from_index(
+        target_id, retiring_backup_id=retiring_backup_id
+    ) is not None:
+        return backup_object_index.object_is_live_referenced(
+            target_id, object_key, excluding_backup_id=retiring_backup_id
         )
-        if indexed is not None:
-            return indexed
+
+    # Index empty: conservative receipt scan.
+    if target.root is not None:
+        receipts_dir = target.root / "receipts"
+        candidates = sorted(receipts_dir.rglob("*.json")) if receipts_dir.is_dir() else []
+        for path in candidates:
+            receipt_bytes = path.read_bytes()
+            receipt = _read_json_bytes(receipt_bytes)
+            if receipt is None or str(receipt.get("backupId") or path.stem) == retiring_backup_id:
+                continue
+            if _receipt_has_valid_retirement_marker(target, receipt_bytes, receipt):
+                continue
+            if object_key in _receipt_payload_keys(receipt):
+                return True
+    elif target.store is not None:
+        cursor: str | None = None
+        while True:
+            page = target.store.list_objects("receipts/", cursor=cursor, limit=200)
+            for meta in page.objects:
+                receipt_bytes = target.store.get_bytes(meta.key)
+                receipt = _read_json_bytes(receipt_bytes)
+                if receipt is None or str(receipt.get("backupId") or Path(meta.key).stem) == retiring_backup_id:
+                    continue
+                if receipt_bytes is not None and _receipt_has_valid_retirement_marker(target, receipt_bytes, receipt):
+                    continue
+                if object_key in _receipt_payload_keys(receipt):
+                    return True
+            if page.cursor is None:
+                break
+            cursor = page.cursor
+    return False
+
+
+def _retained_payload_keys(target: Any, *, retiring_backup_id: str) -> set[str]:
+    """Compatibility helper: full retained set via conservative scan only.
+
+    Prefer :func:`_payload_key_is_retained` for GC. This set builder is used by
+    tests and diagnostics; it never uses a truncated index page.
+    """
+    from deepseek_infra.infra.workspace import backup_object_index
+
+    target_id = str(getattr(target, "target_id", "") or "")
+    if target_id and backup_object_index.retained_payload_keys_from_index(
+        target_id, retiring_backup_id=retiring_backup_id
+    ) is not None:
+        # Index present — do not materialize; return empty and force per-key checks.
+        return set()
 
     retained: set[str] = set()
     if target.root is not None:
@@ -474,7 +521,6 @@ def _retained_payload_keys(target: Any, *, retiring_backup_id: str) -> set[str]:
                 break
             cursor = page.cursor
     return retained
-
 
 def _receipt_has_valid_retirement_marker(target: Any, receipt_bytes: bytes, receipt: dict[str, Any]) -> bool:
     policy_id = str(receipt.get("policyId") or "")
@@ -657,13 +703,12 @@ def execute_copy_retirement_job(
             receipt=receipt,
         )
 
-        # 5. Physical GC is payload-only and fail-closed. Unknown formal
-        # receipts are retained references even when the local Ledger is stale.
+        # 5. Physical GC is payload-only and fail-closed. Live refs are checked
+        # per key via SQL-native index queries (never a truncated key set).
         _update_job_phase(job_id, "gc-pending")
-        retained_components = _retained_payload_keys(target, retiring_backup_id=backup_id)
         _update_job_phase(job_id, "gc-running")
         for component in sorted(_receipt_payload_keys(receipt)):
-            if component in retained_components:
+            if _payload_key_is_retained(target, component, retiring_backup_id=backup_id):
                 continue
             if target.root is not None:
                 path = target.root.joinpath(*component.split("/"))

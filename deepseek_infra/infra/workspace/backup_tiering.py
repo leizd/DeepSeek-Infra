@@ -46,37 +46,78 @@ def target_storage_tier(target: dict[str, Any] | None) -> str:
     return tier if tier in VALID_TIERS else "hot"
 
 
+def _lookup_recovery_point(policy_id: str, backup_id: str) -> dict[str, Any] | None:
+    """Exact parent lookup — no history window truncation."""
+    # Prefer a targeted SQL lookup when available.
+    getter = getattr(backup_dr_ledger, "get_recovery_point", None)
+    if callable(getter):
+        point = getter(policy_id, backup_id)
+        if isinstance(point, dict):
+            return point
+    # Fall back to scanning with a large limit but detect missing parents.
+    points = backup_dr_ledger.list_recovery_points(policy_id=policy_id, limit=100_000)
+    for point in points:
+        if str(point.get("backupId") or "") == backup_id:
+            return point
+    return None
+
+
 def build_recovery_chain_placement_unit(
     policy_id: str,
     backup_id: str,
     *,
     target_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return the restore dependency closure for one logical recovery point."""
-    points = backup_dr_ledger.list_recovery_points(policy_id=policy_id, limit=500)
-    by_id = {str(p.get("backupId") or ""): p for p in points if p.get("backupId")}
-    if backup_id not in by_id:
-        # Fall back to a single-node unit when ledger history is sparse.
-        return {
-            "policyId": policy_id,
-            "anchorBackupId": backup_id,
-            "memberBackupIds": [backup_id],
-            "closureComplete": False,
-            "targetId": target_id,
-        }
+    """Return the restore dependency closure for one logical recovery point.
+
+    Walks parent links via exact lookup. Any missing parent fails closed with
+    ``closureComplete=false`` — never treats query truncation as baseline.
+    """
     members: list[str] = []
     seen: set[str] = set()
     cursor: str | None = backup_id
+    missing_parent: str | None = None
+    reached_baseline = False
     while cursor and cursor not in seen:
         seen.add(cursor)
         members.append(cursor)
-        point = by_id.get(cursor) or {}
+        point = _lookup_recovery_point(policy_id, cursor)
+        if point is None:
+            if cursor == backup_id:
+                # Anchor itself unknown — incomplete single-node unit.
+                return {
+                    "policyId": policy_id,
+                    "anchorBackupId": backup_id,
+                    "memberBackupIds": [backup_id],
+                    "closureComplete": False,
+                    "reason": "missing-anchor",
+                    "missingBackupId": backup_id,
+                    "targetId": target_id,
+                }
+            missing_parent = cursor
+            # Remove the missing node from members; parent of previous is missing.
+            members.pop()
+            break
         parent = str(point.get("parentBackupId") or point.get("baseBackupId") or "") or None
+        kind = str(point.get("snapshotKind") or "full")
         if not parent:
-            # Full baseline reached.
+            if kind == "incremental":
+                missing_parent = f"unknown-parent-of-{cursor}"
+                break
+            reached_baseline = True
             break
         cursor = parent
     members.reverse()
+    if missing_parent is not None or not reached_baseline:
+        return {
+            "policyId": policy_id,
+            "anchorBackupId": backup_id,
+            "memberBackupIds": members if members else [backup_id],
+            "closureComplete": False,
+            "reason": "missing-parent",
+            "missingBackupId": missing_parent,
+            "targetId": target_id,
+        }
     return {
         "policyId": policy_id,
         "anchorBackupId": backup_id,
@@ -125,6 +166,14 @@ def plan_tier_placement(
     """Plan a chain-preserving tier migration that still meets topology/RTO gates."""
     desired = normalize_storage_tier(desired_tier) or "warm"
     unit = build_recovery_chain_placement_unit(policy_id, backup_id, target_id=source_target_id)
+    if not unit.get("closureComplete"):
+        return {
+            "status": "rejected",
+            "reason": str(unit.get("reason") or "incomplete-recovery-chain"),
+            "missingBackupId": unit.get("missingBackupId"),
+            "unit": unit,
+            "desiredTier": desired,
+        }
     try:
         policy = backup_policies.get_policy(policy_id)
     except AppError:
@@ -141,18 +190,23 @@ def plan_tier_placement(
             and str(t.get("drainState") or "active") not in {"draining", "drained"}
         ]
     else:
-        candidates = [tid for tid in candidate_target_ids if tid != source_target_id]
+        # Explicit candidates must still match the requested storage tier.
+        candidates = [
+            tid
+            for tid in candidate_target_ids
+            if tid != source_target_id and target_storage_tier(all_targets.get(tid) or backup_targets.get_target(tid) or {}) == desired
+        ]
 
     copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, limit=500)
     by_backup: dict[str, list[dict[str, Any]]] = {}
     for copy in copies:
         by_backup.setdefault(str(copy.get("backupId") or ""), []).append(copy)
 
-    # Reject plans that would leave the anchor "hot" while an ancestor is archive-only.
+    # Hot and Warm both require equal-or-faster ancestors after migration.
     ranked: list[tuple[Any, str, dict[str, Any]]] = []
     for dest_id in candidates:
         dest = all_targets.get(dest_id) or {}
-        if target_storage_tier(dest) != desired and desired not in VALID_TIERS:
+        if target_storage_tier(dest) != desired:
             continue
         # Cost is last; require known rates only when policy demands it.
         raw_cost = policy.get("costObjectives") if isinstance(policy, dict) else None
@@ -172,24 +226,25 @@ def plan_tier_placement(
         )
         if not placement:
             continue
+        # Simulate full chain present on dest at desired tier for eligibility.
+        simulated_copies = {
+            **by_backup,
+            **{
+                str(member): [{"targetId": dest_id, "recoverable": True, "state": "healthy"}]
+                for member in unit["memberBackupIds"]
+            },
+        }
         ok, reason = chain_satisfies_tier(
             unit,
-            required_tier=desired if desired != "archive" else "archive",
-            copies_by_backup={
-                **by_backup,
-                **{
-                    str(member): [{"targetId": dest_id, "recoverable": True, "state": "healthy"}]
-                    for member in unit["memberBackupIds"]
-                },
-            },
+            required_tier=desired,
+            copies_by_backup=simulated_copies,
             targets_by_id={**all_targets, dest_id: {**dest, "storageTier": desired}},
         )
-        if desired == "hot" and not ok:
+        if desired in {"hot", "warm"} and not ok:
             continue
         # plan_target_placement returns ascending (rank_tuple, target_id) pairs.
         rank_key: Any = placement[0][0] if placement and isinstance(placement[0], tuple) else (0,)
         ranked.append((rank_key, dest_id, {"chainOk": ok, "reason": reason if not ok else "ok"}))
-
     ranked.sort(key=lambda item: item[0])
     if not ranked:
         return {

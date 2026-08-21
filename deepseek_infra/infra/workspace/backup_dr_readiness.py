@@ -554,7 +554,10 @@ def readiness_status(*, now: datetime | None = None) -> dict[str, Any]:
     capacity_status = "healthy"
     for target in targets:
         tid = str(target.get("targetId"))
-        c_info = backup_capacity.estimate_target_exhaustion_horizon(tid, policy_id="")
+        # Zero remote I/O / zero side effects: read persisted capacity only.
+        c_info = backup_capacity.estimate_target_exhaustion_horizon(
+            tid, policy_id="", probe=False, record_observation=False
+        )
         fp = c_info.get("freePercent")
         dtf = c_info.get("estimatedDaysToFull", 9999)
         if fp is not None:

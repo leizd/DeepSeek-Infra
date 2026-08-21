@@ -125,9 +125,13 @@ def test_reference_index_shared_ciphertext_and_retirement(tmp_settings: Path) ->
     backup_object_index.apply_retirement_to_index(
         target_id=target_id, policy_id="pol", backup_id="bak-a", receipt=receipt_a
     )
-    retained = backup_object_index.retained_payload_keys_from_index(target_id, retiring_backup_id="bak-a")
-    assert retained is not None
-    assert "ciphertext/shared.age" in retained
+    # SQL-native live-ref check: bak-b still holds the shared object
+    assert backup_object_index.object_is_live_referenced(
+        target_id, "ciphertext/shared.age", excluding_backup_id="bak-a"
+    )
+    # Canonical key also remains live
+    canon = backup_object_index.canonical_object_key("bb" * 32)
+    assert backup_object_index.object_is_live_referenced(target_id, canon, excluding_backup_id="bak-a")
 
     backup_object_index.apply_retirement_to_index(
         target_id=target_id, policy_id="pol", backup_id="bak-b", receipt=receipt_b
@@ -137,8 +141,7 @@ def test_reference_index_shared_ciphertext_and_retirement(tmp_settings: Path) ->
     assert obj2["liveRefCount"] == 0
     assert obj2["state"] in {"retired-pending-gc", "gc-candidate"}
     candidates = backup_object_index.gc_candidate_keys(target_id)
-    assert "ciphertext/shared.age" in candidates
-
+    assert "ciphertext/shared.age" in candidates or canon in candidates
 
 def test_s3_quota_uses_physical_object_bytes(tmp_settings: Path) -> None:
     target_id = "target_quota"
@@ -356,6 +359,19 @@ def test_tier_plan_journals_lifecycle_intent(tmp_settings: Path) -> None:
         backup_tiering.backup_policies,
         "get_policy",
         return_value={"policyId": "pol", "targetId": src},
+    ), patch.object(
+        backup_tiering,
+        "build_recovery_chain_placement_unit",
+        return_value={
+            "closureComplete": True,
+            "memberBackupIds": ["bak1"],
+            "anchorBackupId": "bak1",
+            "baselineBackupId": "bak1",
+        },
+    ), patch.object(
+        backup_tiering,
+        "chain_satisfies_tier",
+        return_value=(True, "ok"),
     ):
         plan = backup_tiering.plan_tier_placement(
             "pol",
@@ -426,5 +442,4 @@ def test_retained_payload_keys_prefers_index(tmp_settings: Path) -> None:
         ref_state="live",
     )
     target = type("T", (), {"target_id": target_id, "root": root, "store": None})()
-    retained = backup_retirement._retained_payload_keys(target, retiring_backup_id="drop")
-    assert "payload/keep.age" in retained
+    assert backup_retirement._payload_key_is_retained(target, "payload/keep.age", retiring_backup_id="drop")

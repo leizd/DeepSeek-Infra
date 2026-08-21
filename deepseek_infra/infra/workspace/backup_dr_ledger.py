@@ -518,6 +518,38 @@ def list_scopes() -> list[tuple[str, str]]:
         return [(str(row["target_id"]), str(row["policy_id"])) for row in rows]
 
 
+def get_recovery_point(policy_id: str, backup_id: str) -> dict[str, Any] | None:
+    """Exact recovery-point lookup by policy + backup id (no history window)."""
+    with _DB_LOCK, _get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM recovery_points
+            WHERE policy_id = ? AND backup_id = ?
+            ORDER BY committed_at DESC
+            LIMIT 1
+            """,
+            (str(policy_id), str(backup_id)),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "targetId": str(row["target_id"]),
+            "policyId": str(row["policy_id"]),
+            "backupId": str(row["backup_id"]),
+            "committedAt": str(row["committed_at"]),
+            "snapshotKind": str(row["snapshot_kind"]),
+            "parentBackupId": str(row["parent_backup_id"]) if row["parent_backup_id"] else None,
+            "chainDigest": str(row["chain_digest"]) if row["chain_digest"] else None,
+            "chainLength": int(row["chain_length"]),
+            "ciphertextBytes": int(row["ciphertext_bytes"]),
+            "logicalBytes": int(row["logical_bytes"]),
+            "recoverable": bool(row["recoverable"]),
+            "verifiedAt": str(row["verified_at"]),
+            "storageProtocol": str(row["storage_protocol"]) if row["storage_protocol"] else None,
+            "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
+        }
+
+
 def list_recovery_points(
     *,
     target_id: str | None = None,
