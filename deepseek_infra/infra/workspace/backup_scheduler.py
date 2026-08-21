@@ -1170,8 +1170,16 @@ def plan_target_placement(
             source_target_id=primary_target_id,
             dest_target_id=tid,
         )
-        monthly_storage_cost = float(cost.get("estimatedMonthlyStorageCostDelta") or 0.0)
-        estimated_egress_cost = float(cost.get("estimatedOneTimeTransferCost") or 0.0)
+        require_known_rates = bool((policy.get("costObjectives") or {}).get("requireKnownRates"))
+        if require_known_rates and str(cost.get("costStatus") or "") == "unavailable":
+            continue
+        storage_delta = cost.get("estimatedMonthlyStorageCostDelta")
+        egress_delta = cost.get("estimatedOneTimeTransferCost")
+        monthly_storage_cost = float(storage_delta) if isinstance(storage_delta, (int, float)) and not isinstance(storage_delta, bool) else 0.0
+        estimated_egress_cost = float(egress_delta) if isinstance(egress_delta, (int, float)) and not isinstance(egress_delta, bool) else 0.0
+        # Unknown economics must not silently win on a zero default when budgets exist.
+        if str(cost.get("costStatus") or "") == "unavailable" and (max_storage_cost is not None or max_egress_cost is not None):
+            continue
         if max_storage_cost is not None and monthly_storage_cost > float(max_storage_cost):
             continue
         if max_egress_cost is not None and estimated_egress_cost > float(max_egress_cost):
