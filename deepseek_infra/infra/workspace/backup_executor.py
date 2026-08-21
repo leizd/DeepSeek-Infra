@@ -542,6 +542,7 @@ def execute_run(
                     schedule_slot=run.schedule_slot,
                     fencing_token=run.fencing_token,
                     checkpoint=guard.checkpoint,
+                    retain_spool=True,
                 )
                 target_id = current_target_id
                 target = current_target
@@ -588,6 +589,7 @@ def execute_run(
                     schedule_slot=run.schedule_slot,
                     fencing_token=run.fencing_token,
                     checkpoint=guard.checkpoint,
+                    retain_spool=True,
                 )
                 break
             elif commit_status in {"missing", "absent"}:

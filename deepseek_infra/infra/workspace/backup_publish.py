@@ -444,8 +444,13 @@ def publish_backup(
     receipt: dict[str, Any] | None = None,
     checkpoint: Callable[[], None] | None = None,
     traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
+    retain_spool: bool = False,
 ) -> PublishResult:
-    """Publish a verified package as an immutable object plus slot commit."""
+    """Publish a verified package as an immutable object plus slot commit.
+
+    ``retain_spool`` transfers cleanup ownership to the replication lifecycle so
+    required replicas can reuse the exact ciphertext after the primary commit.
+    """
     result: PublishResult
     if isinstance(package, backup_object_set.ObjectSetPackage):
         if target.kind != "filesystem" or target.root is None:
@@ -459,6 +464,7 @@ def publish_backup(
                 receipt=receipt,
                 checkpoint=checkpoint,
                 traffic_class=traffic_class,
+                retain_spool=retain_spool,
             )
         else:
             result = _publish_object_set_filesystem(
@@ -483,6 +489,7 @@ def publish_backup(
             receipt=receipt,
             checkpoint=checkpoint,
             traffic_class=traffic_class,
+            retain_spool=retain_spool,
         )
     else:
         result = _publish_filesystem(
@@ -858,6 +865,7 @@ def _publish_object_set_via_store(
     receipt: dict[str, Any] | None,
     checkpoint: Callable[[], None] | None,
     traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
+    retain_spool: bool = False,
 ) -> PublishResult:
     store = target.require_store()
     slot_digest = commit_slot_digest(schedule_slot)
@@ -912,7 +920,8 @@ def _publish_object_set_via_store(
                     journal.update(phase="converged", convergedToRunId=str(existing.get("runId") or ""), updatedAt=_utc_iso())
                     _replace_journal(store, journal)
                     backup_scheduler.record_target_health(target.target_id, "ok", None)
-                    backup_spool.clear_slot(policy_id, slot_digest)
+                    if not retain_spool:
+                        backup_spool.clear_slot(policy_id, slot_digest)
                     return PublishResult(
                         receipt=existing_receipt,
                         path=None,
@@ -1072,7 +1081,8 @@ def _publish_object_set_via_store(
             commit_hash=str(marker["commitHash"]),
         )
         backup_scheduler.record_target_health(target.target_id, "ok", None)
-        backup_spool.clear_slot(policy_id, slot_digest)
+        if not retain_spool:
+            backup_spool.clear_slot(policy_id, slot_digest)
         return PublishResult(
             receipt=receipt_data,
             path=None,
@@ -1098,6 +1108,7 @@ def _publish_via_store(
     receipt: dict[str, Any] | None = None,
     checkpoint: Callable[[], None] | None = None,
     traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
+    retain_spool: bool = False,
 ) -> PublishResult:
     store = target.require_store()
     digest = str(package.ciphertext_sha256)
@@ -1148,7 +1159,8 @@ def _publish_via_store(
                 journal.update(phase="converged", convergedToRunId=str(existing.get("runId") or ""), updatedAt=_utc_iso())
                 _replace_journal(store, journal)
                 backup_scheduler.record_target_health(target.target_id, "ok", None)
-                backup_spool.clear_slot(policy_id, slot_digest)
+                if not retain_spool:
+                    backup_spool.clear_slot(policy_id, slot_digest)
                 return PublishResult(
                     receipt=existing_receipt,
                     path=None,
@@ -1243,7 +1255,8 @@ def _publish_via_store(
             commit_hash=str(marker["commitHash"]),
         )
         backup_scheduler.record_target_health(target.target_id, "ok", None)
-        backup_spool.clear_slot(policy_id, slot_digest)
+        if not retain_spool:
+            backup_spool.clear_slot(policy_id, slot_digest)
         return PublishResult(
             receipt=receipt_data,
             path=None,

@@ -707,6 +707,7 @@ def execute_replication_job(job_id: str, *, instance_id: str = "repl-worker") ->
                     if mode == "required"
                     else backup_transfer_budget.TrafficClass.P6_BEST_EFFORT
                 ),
+                retain_spool=True,
             )
             job = _set_phase(job, "committing")
             if isinstance(package, backup_object_set.ObjectSetPackage):
@@ -740,6 +741,18 @@ def execute_replication_job(job_id: str, *, instance_id: str = "repl-worker") ->
                     snapshot_kind=str((published.receipt or {}).get("snapshotKind") or "full"),
                 )
             except Exception:  # pragma: no cover
+                pass
+            try:
+                job_slot_digest = str(job.get("slotDigest") or "")
+                if job_slot_digest and not has_open_required_jobs(
+                    policy_id=policy_id,
+                    slot_digest=job_slot_digest,
+                    backup_id=backup_id,
+                ):
+                    backup_spool.clear_slot(policy_id, job_slot_digest)
+            except Exception:
+                # Cleanup is retryable and TTL-bounded; it must not downgrade
+                # an authenticated committed replica.
                 pass
             return job
         finally:

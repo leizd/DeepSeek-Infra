@@ -361,9 +361,10 @@ def test_execute_replication_job_full_flow(tmp_settings: Path) -> None:
     mock_pub.converged = True
 
     with patch.object(backup_replication, "_load_package_from_spool", return_value={"package": "mock"}):
-        with patch.object(backup_publish, "publish_backup", return_value=mock_pub):
+        with patch.object(backup_publish, "publish_backup", return_value=mock_pub) as publish:
             res_succ = backup_replication.execute_replication_job("repl_succ_1")
             assert res_succ["phase"] == "committed"
+            assert publish.call_args.kwargs["retain_spool"] is True
 
     # 5. Repair job with missing source receipt
     r_job = backup_replication.create_repair_job(

@@ -1230,6 +1230,43 @@ def test_publish_v4_store_commits_and_converges_exact_ciphertext_set(tmp_setting
         )
 
 
+def test_publish_v4_store_can_retain_spool_for_required_replication(tmp_settings: Path) -> None:
+    store = backup_target_store.MemoryTargetStore()
+    target = backup_publish.ResolvedTarget(
+        target_id="target-object-set-retained-spool",
+        root=None,
+        managed=False,
+        kind="s3",
+        store=store,
+    )
+    control = _component(tmp_settings, "control-retained-spool", b"control-retained", control=True)
+    payload = _component(tmp_settings, "payload-retained-spool", b"payload-retained")
+    package = backup_object_set.ObjectSetPackage(
+        backup_id="backup-object-set-retained-spool",
+        components=(control, payload),
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+        manifest={"snapshotKind": "full"},
+    )
+    policy_id = "policy-object-set-retained-spool"
+    schedule_slot = "slot-object-set-retained-spool"
+
+    backup_publish.publish_backup(
+        target,
+        package,
+        run_id="run-object-set-retained-spool",
+        policy_id=policy_id,
+        schedule_slot=schedule_slot,
+        fencing_token=1,
+        retain_spool=True,
+    )
+
+    assert backup_spool.lookup_verified_package(
+        policy_id=policy_id,
+        slot_digest=backup_target_store.commit_slot_digest(schedule_slot),
+    ) is not None
+
+
 def test_publish_v4_store_component_readbacks_overlap(tmp_settings: Path) -> None:
     class OverlapStore(backup_target_store.MemoryTargetStore):
         def __init__(self) -> None:
