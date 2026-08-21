@@ -17,6 +17,7 @@ readable through :func:`backup_file_candidates` and truncated commit keys.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -1288,6 +1289,73 @@ def _replace_journal(store: BackupTargetStore, journal: dict[str, Any]) -> None:
         pass
 
 
+def _multipart_part_number(part: dict[str, Any]) -> int:
+    return int(part.get("partNumber") or part.get("number") or 0)
+
+
+def _normalized_multipart_etag(value: Any) -> str:
+    return str(value or "").strip().strip('"').lower()
+
+
+def _multipart_upload_missing(exc: BaseException) -> bool:
+    return int(getattr(exc, "status", 0) or 0) == 404 or "multipart-upload-not-found" in str(exc).lower()
+
+
+def _validate_resumable_remote_parts(
+    package: Any,
+    *,
+    size: int,
+    part_size: int,
+    local_parts: list[dict[str, Any]],
+    remote_parts: list[dict[str, Any]],
+) -> str | None:
+    path = Path(package.path)
+    ordered_local = sorted(local_parts, key=_multipart_part_number)
+    ordered_remote = sorted(remote_parts, key=_multipart_part_number)
+    for index, local in enumerate(ordered_local, start=1):
+        if _multipart_part_number(local) != index:
+            return f"non-contiguous-local-part:{_multipart_part_number(local)}"
+    with path.open("rb") as handle:
+        for index, remote in enumerate(ordered_remote, start=1):
+            if _multipart_part_number(remote) != index:
+                return f"non-contiguous-remote-part:{_multipart_part_number(remote)}"
+            offset = (index - 1) * part_size
+            if offset >= size:
+                return "remote-parts-exceed-source"
+            expected_size = min(part_size, size - offset)
+            remote_size = int(remote.get("size") or 0)
+            if remote_size != expected_size:
+                return f"remote-part-{index}-size-mismatch:{remote_size}!={expected_size}"
+            handle.seek(offset)
+            chunk = handle.read(expected_size)
+            if len(chunk) != expected_size:
+                return f"source-part-{index}-truncated"
+            expected_sha = hashlib.sha256(chunk).hexdigest()
+            provider_checksum = str(remote.get("checksumSHA256") or "")
+            if provider_checksum:
+                expected_b64 = base64.b64encode(hashlib.sha256(chunk).digest()).decode("ascii")
+                if provider_checksum != expected_b64:
+                    return f"remote-part-{index}-checksum-mismatch"
+            else:
+                remote_etag = _normalized_multipart_etag(remote.get("etag"))
+                expected_md5 = hashlib.md5(chunk, usedforsecurity=False).hexdigest()
+                if remote_etag not in {expected_sha, expected_md5}:
+                    return f"remote-part-{index}-etag-unverifiable-or-mismatch"
+            if index <= len(ordered_local):
+                local = ordered_local[index - 1]
+                local_size = int(local.get("size") or 0)
+                if local_size != remote_size:
+                    return f"part-{index}-local-remote-size-conflict"
+                local_etag = _normalized_multipart_etag(local.get("etag"))
+                remote_etag = _normalized_multipart_etag(remote.get("etag"))
+                if local_etag and remote_etag and local_etag != remote_etag:
+                    return f"part-{index}-local-remote-etag-conflict"
+                local_checksum = str(local.get("checksumSHA256") or "")
+                if local_checksum and provider_checksum and local_checksum != provider_checksum:
+                    return f"part-{index}-local-remote-checksum-conflict"
+    return None
+
+
 def _upload_object_resumable(
     store: BackupTargetStore,
     package: Any,
@@ -1312,56 +1380,134 @@ def _upload_object_resumable(
         raw_size = getattr(package, "ciphertext_size", 0)
     size = int(str(raw_size if raw_size is not None else 0))
     state = (
-        backup_spool.read_component_multipart_state(policy_id, slot_digest, multipart_digest)
+        backup_spool.read_component_multipart_state(
+            policy_id,
+            slot_digest,
+            multipart_digest,
+            target_id=dest_target_id,
+        )
         if multipart_digest is not None
-        else backup_spool.read_multipart_state(policy_id, slot_digest)
+        else backup_spool.read_multipart_state(policy_id, slot_digest, target_id=dest_target_id)
     ) or {}
 
     def _write_state(value: dict[str, Any]) -> None:
         if multipart_digest is not None:
-            backup_spool.write_component_multipart_state(policy_id, slot_digest, multipart_digest, value)
+            backup_spool.write_component_multipart_state(
+                policy_id,
+                slot_digest,
+                multipart_digest,
+                value,
+                target_id=dest_target_id,
+            )
         else:
-            backup_spool.write_multipart_state(policy_id, slot_digest, value)
-    upload = None
-    if state.get("uploadId") and str(state.get("key") or "") == obj_key:
-        part_size = int(state.get("partSize") or (8 * 1024 * 1024))
-        from deepseek_infra.infra.workspace.backup_target_store import MultipartUpload
+            backup_spool.write_multipart_state(policy_id, slot_digest, value, target_id=dest_target_id)
 
-        upload = MultipartUpload(
-            key=obj_key,
-            upload_id=str(state["uploadId"]),
-            checksum_sha256=digest,
-            parts=list(state.get("parts") or []),
-            expected_size=size,
-        )
-        state["partSize"] = part_size
-        state["workers"] = workers
-        state["maxInFlightBytes"] = workers * part_size
-        state["checksumSha256"] = digest
-    else:
-        part_size = default_part_size
-        upload = store.begin_multipart(obj_key, checksum_sha256=digest)
-        upload.expected_size = size
-        state = {
+    def _new_upload(*, previous_upload_id: str | None = None, reason: str | None = None) -> tuple[Any, dict[str, Any]]:
+        fresh_upload = store.begin_multipart(obj_key, checksum_sha256=digest)
+        fresh_upload.expected_size = size
+        fresh_state: dict[str, Any] = {
             "key": obj_key,
-            "uploadId": upload.upload_id,
+            "uploadId": fresh_upload.upload_id,
             "parts": [],
             "checksumSha256": digest,
             "partSize": part_size,
             "workers": workers,
             "maxInFlightBytes": workers * part_size,
             "phase": "uploading",
+            **({"targetId": dest_target_id} if dest_target_id else {}),
         }
-        _write_state(state)
+        if previous_upload_id and reason:
+            fresh_state["multipartRestart"] = {
+                "previousUploadId": previous_upload_id,
+                "reason": reason,
+                "restartedAt": _utc_iso(),
+            }
+        _write_state(fresh_state)
+        return fresh_upload, fresh_state
+
+    part_size = default_part_size
+    upload = None
+    if state.get("uploadId") and str(state.get("key") or "") == obj_key:
+        part_size = int(state.get("partSize") or (8 * 1024 * 1024))
+        from deepseek_infra.infra.workspace.backup_target_store import MultipartUpload
+
+        local_parts = [dict(item) for item in list(state.get("parts") or []) if isinstance(item, dict)]
+        upload = MultipartUpload(
+            key=obj_key,
+            upload_id=str(state["uploadId"]),
+            checksum_sha256=digest,
+            expected_size=size,
+        )
+        state["partSize"] = part_size
+        state["workers"] = workers
+        state["maxInFlightBytes"] = workers * part_size
+        state["checksumSha256"] = digest
+        list_parts = getattr(store, "list_multipart_parts", None)
+        if not callable(list_parts):
+            raise AppError("multipart provider cannot reconcile parts", code=ErrorCode.INVALID_REQUEST, status=409)
+        try:
+            remote_parts = sorted(
+                [dict(item) for item in list_parts(upload) if isinstance(item, dict)],
+                key=_multipart_part_number,
+            )
+        except Exception as exc:
+            if not _multipart_upload_missing(exc):
+                raise
+            upload, state = _new_upload(previous_upload_id=upload.upload_id, reason="provider-upload-not-found")
+        else:
+            conflict_reason = _validate_resumable_remote_parts(
+                package,
+                size=size,
+                part_size=part_size,
+                local_parts=local_parts,
+                remote_parts=remote_parts,
+            )
+            if conflict_reason is not None:
+                store.abort_multipart(upload)
+                state = {
+                    "key": obj_key,
+                    "checksumSha256": digest,
+                    "partSize": part_size,
+                    "workers": workers,
+                    "maxInFlightBytes": workers * part_size,
+                    "phase": "quarantined",
+                    **({"targetId": dest_target_id} if dest_target_id else {}),
+                    "multipartQuarantine": {
+                        "uploadId": upload.upload_id,
+                        "reason": conflict_reason,
+                        "localParts": local_parts,
+                        "remoteParts": remote_parts,
+                        "quarantinedAt": _utc_iso(),
+                    },
+                }
+                _write_state(state)
+                raise AppError(
+                    f"multipart-reconciliation-conflict:{conflict_reason}",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
+            if len(remote_parts) < len(local_parts):
+                store.abort_multipart(upload)
+                upload, state = _new_upload(
+                    previous_upload_id=upload.upload_id,
+                    reason=f"provider-parts-behind:{len(remote_parts)}<{len(local_parts)}",
+                )
+            else:
+                upload.parts = remote_parts
+                state["parts"] = remote_parts
+                state["completedParts"] = len(remote_parts)
+                state["multipartReconciliation"] = {
+                    "status": "remote-ahead-adopted" if len(remote_parts) > len(local_parts) else "remote-matches-local",
+                    "uploadId": upload.upload_id,
+                    "localPartCount": len(local_parts),
+                    "remotePartCount": len(remote_parts),
+                    "reconciledAt": _utc_iso(),
+                }
+                _write_state(state)
+    else:
+        upload, state = _new_upload()
 
     completed_parts = {int(item["partNumber"]): item for item in upload.parts}
-    list_parts = getattr(store, "list_multipart_parts", None)
-    if callable(list_parts):
-        try:
-            completed_parts.update({int(item["partNumber"]): item for item in list_parts(upload)})
-        except AppError:
-            if completed_parts:
-                raise
     upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
     state["parts"] = upload.parts
     _write_state(state)

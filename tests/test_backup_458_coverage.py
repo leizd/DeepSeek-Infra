@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -11,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from deepseek_infra.core.errors import AppError
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_capacity,
     backup_control,
@@ -20,6 +21,7 @@ from deepseek_infra.infra.workspace import (
     backup_publish,
     backup_replication,
     backup_retirement,
+    backup_spool,
     backup_targets,
 )
 from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore, MultipartUpload
@@ -457,7 +459,7 @@ def test_retirement_formal_bindings_marker_conflicts_and_payload_inventory(tmp_s
     with pytest.raises(AppError, match="receipt-missing"):
         backup_retirement._read_formal_metadata(empty_target, "policy", "backup")
 
-    cases = [
+    cases: list[tuple[dict[str, Any], dict[str, Any], str]] = [
         ({}, {"receiptDigest": "bad"}, "receipt-commit-binding"),
         ({"backupId": "other"}, {}, "backup-binding"),
         ({"policyId": "other"}, {}, "policy-binding"),
@@ -775,6 +777,108 @@ def _multipart_source(tmp_settings: Path, name: str, data: bytes) -> SimpleNames
 def _remote_part(number: int, chunk: bytes) -> dict[str, Any]:
     digest = hashlib.sha256(chunk).hexdigest()
     return {"number": number, "etag": digest, "size": len(chunk), "checksumSha256": digest}
+
+
+def test_publish_multipart_reconciliation_conflict_matrix_and_missing_upload(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_spool, "SPOOL_DIR", tmp_settings / ".backup-spool")
+    data = b"abcd"
+    source = tmp_settings / "publish-multipart-source.age"
+    source.write_bytes(data)
+    package = SimpleNamespace(path=source, size=len(data), ciphertext_sha256=hashlib.sha256(data).hexdigest())
+    etag = hashlib.sha256(data).hexdigest()
+    checksum = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
+    valid_remote = {"partNumber": 1, "etag": etag, "size": len(data), "checksumSHA256": checksum}
+    valid_local = dict(valid_remote)
+
+    cases: list[tuple[list[dict[str, Any]], list[dict[str, Any]], str]] = [
+        ([{"partNumber": 2}], [], "non-contiguous-local-part"),
+        ([], [{"partNumber": 2}], "non-contiguous-remote-part"),
+        ([], [valid_remote, {**valid_remote, "partNumber": 2}], "remote-parts-exceed-source"),
+        ([], [{**valid_remote, "size": 3}], "size-mismatch"),
+        ([], [{**valid_remote, "checksumSHA256": "bad"}], "checksum-mismatch"),
+        ([{**valid_local, "size": 3}], [valid_remote], "local-remote-size-conflict"),
+        ([{**valid_local, "etag": "bad"}], [valid_remote], "local-remote-etag-conflict"),
+        ([{**valid_local, "checksumSHA256": "bad"}], [valid_remote], "local-remote-checksum-conflict"),
+    ]
+    for local_parts, remote_parts, expected in cases:
+        reason = backup_publish._validate_resumable_remote_parts(
+            package,
+            size=len(data),
+            part_size=len(data),
+            local_parts=local_parts,
+            remote_parts=remote_parts,
+        )
+        assert reason is not None and expected in reason
+    assert (
+        backup_publish._validate_resumable_remote_parts(
+            package,
+            size=len(data),
+            part_size=len(data),
+            local_parts=[valid_local],
+            remote_parts=[valid_remote],
+        )
+        is None
+    )
+    truncated = tmp_settings / "publish-multipart-truncated.age"
+    truncated.write_bytes(data[:-1])
+    assert backup_publish._validate_resumable_remote_parts(
+        SimpleNamespace(path=truncated),
+        size=len(data),
+        part_size=len(data),
+        local_parts=[],
+        remote_parts=[valid_remote],
+    ) == "source-part-1-truncated"
+
+    class MissingUploadStore(MemoryTargetStore):
+        def list_multipart_parts(self, upload: MultipartUpload) -> list[dict[str, Any]]:
+            del upload
+            raise AppError("multipart-upload-not-found", code=ErrorCode.NOT_FOUND, status=404)
+
+    missing_store = MissingUploadStore()
+    backup_spool.write_multipart_state(
+        "publish-missing-policy",
+        "publish-missing-slot",
+        {
+            "key": "objects/publish-missing.age",
+            "uploadId": "provider-aborted-upload",
+            "parts": [],
+            "partSize": len(data),
+        },
+        target_id="target-missing",
+    )
+    backup_publish._upload_object_resumable(
+        missing_store,
+        package,
+        obj_key="objects/publish-missing.age",
+        policy_id="publish-missing-policy",
+        slot_digest="publish-missing-slot",
+        dest_target_id="target-missing",
+    )
+    missing_state = backup_spool.read_multipart_state(
+        "publish-missing-policy",
+        "publish-missing-slot",
+        target_id="target-missing",
+    )
+    assert missing_state is not None
+    assert missing_state["multipartRestart"]["reason"] == "provider-upload-not-found"
+
+    backup_spool.write_multipart_state(
+        "publish-no-list-policy",
+        "publish-no-list-slot",
+        {"key": "objects/publish-no-list.age", "uploadId": "upload-no-list", "parts": []},
+    )
+    no_list_store: Any = SimpleNamespace(list_multipart_parts=None)
+    with pytest.raises(AppError, match="cannot reconcile"):
+        backup_publish._upload_object_resumable(
+            no_list_store,
+            package,
+            obj_key="objects/publish-no-list.age",
+            policy_id="publish-no-list-policy",
+            slot_digest="publish-no-list-slot",
+        )
 
 
 def test_multipart_reconciliation_conflict_matrix_and_unexpected_provider_error(tmp_settings: Path) -> None:

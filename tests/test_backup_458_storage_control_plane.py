@@ -94,6 +94,14 @@ def test_storage_control_connection_retries_locked_wal_initialization(
     assert connection.wal_attempts == 2
     assert connection.closed is True
 
+    def fail_with(message: str) -> None:
+        raise sqlite3.OperationalError(message)
+
+    with pytest.raises(sqlite3.OperationalError, match="syntax error"):
+        backup_control._retry_locked(lambda: fail_with("syntax error"), timeout_seconds=0)
+    with pytest.raises(sqlite3.OperationalError, match="database is busy"):
+        backup_control._retry_locked(lambda: fail_with("database is busy"), timeout_seconds=0)
+
 
 def test_maintenance_lease_and_cursor_are_durable_cas(tmp_settings: Path) -> None:
     lease = backup_control.acquire_maintenance_lease(

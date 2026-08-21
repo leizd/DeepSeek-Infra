@@ -538,6 +538,130 @@ def test_multipart_reconciles_legacy_journal_and_handles_list_errors(
         )
 
 
+def test_publish_multipart_reconciliation_is_provider_bound_and_target_scoped(
+    tmp_settings: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_spool, "SPOOL_DIR", tmp_settings / ".backup-spool")
+    part_size = 16 * 1024 * 1024
+    path = tmp_path / "provider-bound.age"
+    path.write_bytes(b"a" * part_size + b"tail")
+    package = SimpleNamespace(
+        path=path,
+        size=path.stat().st_size,
+        ciphertext_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+    store = MemoryTargetStore()
+    upload = store.begin_multipart("objects/provider-bound.age", checksum_sha256=package.ciphertext_sha256)
+    first = path.read_bytes()[:part_size]
+    store.upload_part(upload, 1, first, checksum_sha256=hashlib.sha256(first).hexdigest())
+    backup_spool.write_multipart_state(
+        "provider-bound-policy",
+        "provider-bound-slot",
+        {
+            "key": upload.key,
+            "uploadId": upload.upload_id,
+            "parts": [],
+            "partSize": part_size,
+            "checksumSha256": package.ciphertext_sha256,
+        },
+        target_id="target-a",
+    )
+
+    backup_publish._upload_object_resumable(
+        store,
+        package,
+        obj_key=upload.key,
+        policy_id="provider-bound-policy",
+        slot_digest="provider-bound-slot",
+        dest_target_id="target-a",
+    )
+
+    state_a = backup_spool.read_multipart_state("provider-bound-policy", "provider-bound-slot", target_id="target-a")
+    assert state_a is not None
+    assert state_a["multipartReconciliation"]["status"] == "remote-ahead-adopted"
+    assert store.get_bytes(upload.key) == path.read_bytes()
+    assert backup_spool.read_multipart_state("provider-bound-policy", "provider-bound-slot", target_id="target-b") is None
+
+
+def test_publish_multipart_restarts_provider_behind_and_quarantines_conflict(
+    tmp_settings: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_spool, "SPOOL_DIR", tmp_settings / ".backup-spool")
+    data = b"provider-restart"
+    path = tmp_path / "provider-restart.age"
+    path.write_bytes(data)
+    package = SimpleNamespace(path=path, size=len(data), ciphertext_sha256=hashlib.sha256(data).hexdigest())
+    stale_part = {"partNumber": 1, "etag": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    backup_spool.write_multipart_state(
+        "provider-restart-policy",
+        "provider-restart-slot",
+        {
+            "key": "objects/provider-restart.age",
+            "uploadId": "upload-from-another-provider",
+            "parts": [stale_part],
+            "partSize": 16 * 1024 * 1024,
+            "checksumSha256": package.ciphertext_sha256,
+        },
+        target_id="target-restart",
+    )
+    restart_store = MemoryTargetStore()
+
+    backup_publish._upload_object_resumable(
+        restart_store,
+        package,
+        obj_key="objects/provider-restart.age",
+        policy_id="provider-restart-policy",
+        slot_digest="provider-restart-slot",
+        dest_target_id="target-restart",
+    )
+
+    restarted = backup_spool.read_multipart_state(
+        "provider-restart-policy",
+        "provider-restart-slot",
+        target_id="target-restart",
+    )
+    assert restarted is not None
+    assert restarted["multipartRestart"]["previousUploadId"] == "upload-from-another-provider"
+    assert restart_store.get_bytes("objects/provider-restart.age") == data
+
+    conflict_store = MemoryTargetStore()
+    conflict_upload = conflict_store.begin_multipart("objects/provider-conflict.age", checksum_sha256=package.ciphertext_sha256)
+    conflict_store.upload_part(conflict_upload, 1, b"x" * len(data))
+    backup_spool.write_multipart_state(
+        "provider-conflict-policy",
+        "provider-conflict-slot",
+        {
+            "key": conflict_upload.key,
+            "uploadId": conflict_upload.upload_id,
+            "parts": [],
+            "partSize": 16 * 1024 * 1024,
+            "checksumSha256": package.ciphertext_sha256,
+        },
+        target_id="target-conflict",
+    )
+    with pytest.raises(AppError, match="multipart-reconciliation-conflict"):
+        backup_publish._upload_object_resumable(
+            conflict_store,
+            package,
+            obj_key=conflict_upload.key,
+            policy_id="provider-conflict-policy",
+            slot_digest="provider-conflict-slot",
+            dest_target_id="target-conflict",
+        )
+    quarantined = backup_spool.read_multipart_state(
+        "provider-conflict-policy",
+        "provider-conflict-slot",
+        target_id="target-conflict",
+    )
+    assert quarantined is not None and quarantined["phase"] == "quarantined"
+    assert "etag-unverifiable-or-mismatch" in quarantined["multipartQuarantine"]["reason"]
+    assert conflict_store.list_multipart_parts(conflict_upload) == []
+
+
 def test_s3_list_parts_paginates_and_normalizes() -> None:
     class ListPartsClient:
         def __init__(self) -> None:

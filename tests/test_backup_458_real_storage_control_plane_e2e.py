@@ -275,7 +275,28 @@ def test_real_three_minio_storage_control_plane_e2e(tmp_settings: Path) -> None:
     assert first["phase"] == "complete", first.get("error")
     first_backup_id = str(first["backupId"])
     assert backup_replication.authenticate_committed_copy(backup_publish.resolve_target(target_a), policy_id, first_backup_id)[0] == "authenticated"
-    assert backup_replication.authenticate_committed_copy(backup_publish.resolve_target(target_b), policy_id, first_backup_id)[0] == "authenticated"
+    replica_status = backup_replication.authenticate_committed_copy(
+        backup_publish.resolve_target(target_b), policy_id, first_backup_id
+    )[0]
+    if replica_status != "authenticated":
+        job_states = [
+            backup_replication.read_job(str(job_id))
+            for job_id in list(first.get("replicationJobs") or [])
+        ]
+        pytest.fail(
+            "required initial replica did not commit: "
+            + json.dumps(
+                {
+                    "replicaStatus": replica_status,
+                    "replicationCompliance": first.get("replicationCompliance"),
+                    "replicationDetails": first.get("replicationDetails"),
+                    "jobs": job_states,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+        )
 
     a_stopped = False
     supervisor: backup_maintenance.StorageMaintenanceSupervisor | None = None
