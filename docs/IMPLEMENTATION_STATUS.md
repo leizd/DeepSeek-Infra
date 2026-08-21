@@ -5,9 +5,11 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.5.8。
+适用版本：v4.5.9。
 
-> 4.5.8 已把 Repair、Replication、Rebalance、Drain、Retirement、Capacity 与 Transfer QoS 收敛到持久化 Storage Control Plane：SQLite 提供跨进程 Policy/Topology CAS、Maintenance Supervisor 以 durable cursor 推进后台工作、Copy Retirement 保留 Receipt v4/Commit v4 并用 authenticated retirement marker 管理 Payload GC、Placement 以单个 Logical Recovery Point 计算 Failure Domain/Region 目标、Multipart 恢复与 provider `ListParts` 对账、生产数据流受 global/source/destination 三层 P0-P6 QoS 约束。三个真实 MinIO 与 real Age 的 exact-merge Evidence 只能由独立 CI producer 产出，本地合同测试不能替代它。
+> 4.5.9 在 4.5.8 Storage Control Plane 之上落地 Lifecycle Transaction Journal、可重建 Ciphertext Reference Index、物理对象占用计量、基于 elapsed time 的容量预测、诚实 Cost provenance、Recovery Chain Closure 的 Hot/Warm/Archive Tiering，以及按 Worker/Target 分片的 Maintenance lease。Retirement 依赖扫描在分页上限 fail-closed；未知费率不再填入隐式默认价。Wire 面（object-set-v1 / Receipt v4 / Commit v4 / FastCDC v3 / randomized Age）继续冻结。三个真实 MinIO 与 real Age 的 exact-merge Evidence 仍只能由独立 CI producer 产出。
+
+> 4.5.8 已把 Repair、Replication、Rebalance、Drain、Retirement、Capacity 与 Transfer QoS 收敛到持久化 Storage Control Plane：SQLite 提供跨进程 Policy/Topology CAS、Maintenance Supervisor 以 durable cursor 推进后台工作、Copy Retirement 保留 Receipt v4/Commit v4 并用 authenticated retirement marker 管理 Payload GC、Placement 以单个 Logical Recovery Point 计算 Failure Domain/Region 目标、Multipart 恢复与 provider `ListParts` 对账、生产数据流受 global/source/destination 三层 P0-P6 QoS 约束。
 
 > 4.5.0 的产品实现已完成 Gate A-F，Gate G 的真实 MinIO/Rust Age 与故障矩阵 exact-merge CI producer 已接线。当前仍不是 GA：只有这些独立 producer、冻结兼容合同和全量 Python/frontend/eval/security/release 门禁在精确合并提交上全部通过后，才会标记 release-ready。
 

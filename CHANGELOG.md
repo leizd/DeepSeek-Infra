@@ -4,6 +4,21 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.5.9] - Indexed Lifecycle Economics & SLO-Aware Storage Tiering (2026-08-21)
+
+### Indexed Lifecycle Economics & SLO-Aware Storage Tiering
+
+- **Lifecycle Transaction Journal**: Drain/tier topology mutations commit durable intents in `control.sqlite3` under `BEGIN IMMEDIATE`; DrainJob rows are rebuildable projections with crash reconciliation.
+- **Ciphertext Reference Index**: Rebuildable `target_objects` / `recovery_object_refs` accelerate retirement GC from O(history) receipt scans to O(objects in retiring point); shared ciphertext stays protected.
+- **Fail-Closed Retirement Dependencies**: Active job scans that hit the page limit no longer fail open into premature GC.
+- **Physical Storage Accounting**: S3/quota admission uses physical object bytes (plus retired-pending-GC), not Σ logical recovery-point sizes.
+- **Elapsed-Time Capacity Forecast**: Growth horizons use timestamped physical observations with confidence; missing evidence reports `unavailable` instead of invented day counts.
+- **Honest Cost Model**: Unknown operator rates return `costStatus=unavailable` with provenance; no implicit AWS-like default prices.
+- **Recovery-Chain Tiering**: Hot/Warm/Archive placement units cover full restore ancestry; ciphertext migrates without re-encryption; cost never outranks recoverability/RTO.
+- **Sharded Maintenance Leases**: Planner + per-(worker, scope) fencing so one slow archive target cannot stall primary repair.
+- **Control DB Hardening**: `PRAGMA user_version`, migration ledger, quick_check fail-closed, online checkpoints.
+- **Frozen Compatibility Surface**: `object-set-v1`, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age unchanged.
+
 ## [4.5.8] - Durable Storage Control Plane & Geo-Aware Lifecycle (2026-08-20)
 
 ### Durable Storage Control Plane & Geo-Aware Lifecycle
