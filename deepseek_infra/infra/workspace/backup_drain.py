@@ -1,9 +1,13 @@
-"""Autonomous Target Drain and Copy Evacuation (4.5.7).
+"""Autonomous Target Drain and Copy Evacuation (4.5.7+).
 
 Manages the lifecycle of target decommissioning:
 draining -> evacuating -> waiting-for-gc -> drained.
 Coordinates with placement and rebalance to safely evacuate all required
 and retained copies before declaring a target fully drained.
+
+4.5.9: drain topology mutations are journaled as lifecycle intents in
+control.sqlite3 so a crash between topology update and DrainJob insert can be
+reconciled without leaving an unexplainable half-state.
 """
 
 from __future__ import annotations
@@ -79,29 +83,15 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-def start_target_drain(
-    target_id: str,
-    *,
-    reason: str = "administrative-drain",
-    force: bool = False,
-) -> dict[str, Any]:
-    """Initiate a durable drain job and set target registry state to draining."""
-    target_info = backup_targets.get_target(target_id)
-    if not target_info:
-        raise AppError(f"Target {target_id} not found in registry", code=ErrorCode.NOT_FOUND, status=404)
-
-    # Update target registry drainState
-    backup_targets.drain_target(target_id, reason=reason)
-
-    drain_id = f"drain_{secrets.token_hex(8)}"
+def _insert_drain_job(drain_id: str, target_id: str, reason: str) -> None:
     now = _utc_iso()
-
     with _connect() as conn:
         conn.execute(
             """
             INSERT INTO target_drain_jobs(drain_id, target_id, phase, reason, started_at, updated_at, protected_recovery_points, remaining_required_copies, active_rebalances, bytes_remaining, error)
             VALUES (?, ?, 'draining', ?, ?, ?, 0, 0, 0, 0, NULL)
             ON CONFLICT(target_id) DO UPDATE SET
+                drain_id = excluded.drain_id,
                 phase = 'draining',
                 reason = excluded.reason,
                 updated_at = excluded.updated_at,
@@ -110,15 +100,138 @@ def start_target_drain(
             (drain_id, target_id, reason, now, now),
         )
 
+
+def start_target_drain(
+    target_id: str,
+    *,
+    reason: str = "administrative-drain",
+    force: bool = False,
+) -> dict[str, Any]:
+    """Initiate a durable drain job and set target registry state to draining.
+
+    Topology mutation and lifecycle intent are committed atomically in the
+    control authority first; the DrainJob row is a rebuildable projection.
+    """
+    del force  # reserved for operator override paths
+    target_info = backup_targets.get_target(target_id)
+    if not target_info:
+        raise AppError(f"Target {target_id} not found in registry", code=ErrorCode.NOT_FOUND, status=404)
+    # Adopt JSON / mocked registry rows into control authority before journaling.
+    if backup_control.get_target(target_id) is None:
+        backup_control.adopt_target_projection(target_info)
+
+    drain_id = f"drain_{secrets.token_hex(8)}"
+    expected_generation = target_info.get("topologyGeneration")
+    expected = int(expected_generation) if isinstance(expected_generation, int) and not isinstance(expected_generation, bool) else None
+    started = backup_control.begin_target_drain_intent(
+        target_id,
+        reason=reason,
+        drain_id=drain_id,
+        expected_generation=expected,
+    )
+    target_record = started.get("target")
+    if isinstance(target_record, dict):
+        try:
+            backup_targets._project_target(target_record)
+        except Exception:
+            # Control authority already committed; JSON projection lag is healed on read.
+            pass
+
+    intent_id = str(started.get("intentId") or "")
+    job_payload = {"drainId": drain_id, "reason": reason, "targetId": target_id}
+    try:
+        _insert_drain_job(drain_id, target_id, reason)
+        if intent_id:
+            backup_control.update_lifecycle_intent_phase(intent_id, "job-projected", payload=job_payload)
+    except Exception:
+        # Leave intent in topology-committed; reconcile_drain_projections repairs.
+        if intent_id:
+            backup_control.update_lifecycle_intent_phase(intent_id, "awaiting-job-projection", payload=job_payload)
+        raise
+
     return get_target_drain_job(target_id) or {}
 
 
 initiate_target_drain = start_target_drain
 
 
+def reconcile_drain_projections(*, limit: int = 50) -> dict[str, int]:
+    """Recreate missing DrainJob rows from durable lifecycle intents / topology."""
+    recreated = 0
+    fenced = 0
+    intents = backup_control.list_lifecycle_intents(kind="drain", limit=max(1, min(int(limit), 200)))
+    for intent in intents:
+        phase = str(intent.get("phase") or "")
+        if phase in {"completed", "cancelled", "fenced"}:
+            continue
+        target_id = str(intent.get("targetId") or "")
+        if not target_id:
+            continue
+        target = backup_control.get_target(target_id) or {}
+        if str(target.get("drainState") or "") not in {"draining", "evacuating", "waiting-for-gc"}:
+            if phase not in {"completed", "cancelled"}:
+                backup_control.update_lifecycle_intent_phase(str(intent["intentId"]), "fenced")
+                fenced += 1
+            continue
+        expected_gen = intent.get("expectedGeneration")
+        actual_gen = target.get("topologyGeneration")
+        if expected_gen is not None and actual_gen is not None and int(actual_gen) < int(expected_gen):
+            backup_control.update_lifecycle_intent_phase(str(intent["intentId"]), "fenced")
+            fenced += 1
+            continue
+        existing = get_target_drain_job(target_id=target_id)
+        if existing and str(existing.get("phase") or "") not in DRAIN_TERMINAL_PHASES:
+            if phase != "job-projected":
+                backup_control.update_lifecycle_intent_phase(str(intent["intentId"]), "job-projected")
+            continue
+        raw_payload = intent.get("payload")
+        payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+        drain_id = str(payload.get("drainId") or target.get("activeDrainId") or f"drain_{secrets.token_hex(8)}")
+        reason = str(payload.get("reason") or target.get("drainReason") or "reconciled-drain")
+        _insert_drain_job(drain_id, target_id, reason)
+        backup_control.update_lifecycle_intent_phase(
+            str(intent["intentId"]),
+            "job-projected",
+            payload={"drainId": drain_id, "reason": reason, "targetId": target_id, "reconciled": True},
+        )
+        recreated += 1
+
+    # Topology-only half state: draining without any open drain intent/job.
+    for target in backup_control.list_targets():
+        if str(target.get("drainState") or "") != "draining":
+            continue
+        tid = str(target.get("targetId") or "")
+        if not tid:
+            continue
+        if get_target_drain_job(target_id=tid):
+            continue
+        open_intents = [
+            item
+            for item in backup_control.list_lifecycle_intents(kind="drain", target_id=tid, limit=20)
+            if str(item.get("phase") or "") not in {"completed", "cancelled", "fenced"}
+        ]
+        if open_intents:
+            continue
+        drain_id = str(target.get("activeDrainId") or f"drain_{secrets.token_hex(8)}")
+        reason = str(target.get("drainReason") or "topology-orphan-reconcile")
+        backup_control.commit_lifecycle_intent(
+            kind="drain",
+            target_id=tid,
+            phase="job-projected",
+            expected_generation=int(target["topologyGeneration"]) if target.get("topologyGeneration") is not None else None,
+            payload={"drainId": drain_id, "reason": reason, "targetId": tid, "reconciled": True},
+        )
+        _insert_drain_job(drain_id, tid, reason)
+        recreated += 1
+    return {"recreated": recreated, "fenced": fenced}
+
+
 def cancel_target_drain(target_id: str, *, reason: str = "operator-cancelled") -> dict[str, Any]:
     """Cancel a target drain job and return the target to active status."""
     backup_targets.activate_target(target_id)
+    for intent in backup_control.list_lifecycle_intents(kind="drain", target_id=target_id, limit=20):
+        if str(intent.get("phase") or "") not in {"completed", "cancelled", "fenced"}:
+            backup_control.update_lifecycle_intent_phase(str(intent["intentId"]), "cancelled")
     return _update_drain_state(target_id, "cancelled", error=reason)
 
 
