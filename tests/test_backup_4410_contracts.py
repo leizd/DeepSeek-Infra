@@ -28,6 +28,7 @@ from deepseek_infra.infra.workspace import (
     backup_run_plan,
     backup_spool,
     backup_target_s3,
+    backup_transfer_budget,
     backups,
 )
 from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore, MultipartUpload
@@ -417,24 +418,52 @@ def test_multipart_upload_is_parallel_resumable_and_fenced(tmp_settings: Path, t
             self.active = 0
             self.maximum = 0
             self.lock = threading.Lock()
+            self.started = threading.Event()
+            self.release = threading.Event()
 
         def upload_part(self, upload: Any, part_number: int, data: bytes, *, checksum_sha256: str | None = None) -> dict[str, Any]:
             with self.lock:
                 self.active += 1
                 self.maximum = max(self.maximum, self.active)
-            time.sleep(0.01)
+                if self.active == 1:
+                    self.started.set()
+            # Hold the first part until a second part is observed concurrent, or timeout.
+            if not self.release.wait(timeout=2.0):
+                pass
             try:
                 return super().upload_part(upload, part_number, data, checksum_sha256=checksum_sha256)
             finally:
                 with self.lock:
                     self.active -= 1
+                    if self.active >= 1:
+                        self.release.set()
 
     monkeypatch.setattr(backup_spool, "SPOOL_DIR", tmp_settings / ".backup-spool")
+    # Do not let QoS admission serialize part dispatch before the thread pool runs.
+    monkeypatch.setattr(
+        backup_transfer_budget.TransferBudgetManager,
+        "wait_for_bandwidth",
+        lambda self, transfer_id, chunk_size: None,
+    )
     path = tmp_path / "package.age"
     path.write_bytes(b"x" * (33 * 1024 * 1024))
     package = SimpleNamespace(path=path, size=path.stat().st_size, ciphertext_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
     store = ConcurrentStore()
     checkpoints: list[bool] = []
+
+    def _watch_concurrency() -> None:
+        store.started.wait(timeout=2.0)
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            with store.lock:
+                if store.maximum > 1 or store.active > 1:
+                    store.release.set()
+                    return
+            time.sleep(0.001)
+        store.release.set()
+
+    watcher = threading.Thread(target=_watch_concurrency, name="multipart-concurrency-watch", daemon=True)
+    watcher.start()
     backup_publish._upload_object_resumable(
         store,
         package,
@@ -443,6 +472,7 @@ def test_multipart_upload_is_parallel_resumable_and_fenced(tmp_settings: Path, t
         slot_digest="s",
         checkpoint=lambda: checkpoints.append(True),
     )
+    watcher.join(timeout=2.0)
     assert store.maximum > 1
     state = backup_spool.read_multipart_state("p", "s")
     assert state is not None and state["partSize"] == 16 * 1024 * 1024 and state["completedParts"] == 3
