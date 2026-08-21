@@ -2,13 +2,15 @@
 
 Human-readable JSON files remain projections, while this SQLite database owns
 CAS revisions, topology generations, maintenance leases/cursors, capacity
-evidence, and shared transfer-budget state.
+evidence, shared transfer-budget state, lifecycle intents, and rebuildable
+object-reference indexes (4.5.9).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import secrets
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
@@ -22,6 +24,31 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 
 CONTROL_DIR = config.ROOT / ".backup-control"
 CONTROL_DB = CONTROL_DIR / "control.sqlite3"
+
+# Non-rebuildable authority lives at schema version >= 2 (4.5.9 journal + index).
+CONTROL_SCHEMA_VERSION = 2
+
+REBUILDABLE_TABLES = frozenset(
+    {
+        "target_objects",
+        "recovery_object_refs",
+        "capacity_evidence",
+        "target_capacity_observations",
+        "capacity_growth_observations",
+        "qos_buckets",
+        "qos_transfers",
+        "maintenance_cursors",
+    }
+)
+NON_REBUILDABLE_TABLES = frozenset(
+    {
+        "control_policies",
+        "control_targets",
+        "lifecycle_intents",
+        "maintenance_leases",
+        "schema_migrations",
+    }
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS control_policies (
@@ -97,8 +124,77 @@ CREATE TABLE IF NOT EXISTS target_capacity_observations (
     observed_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL,
+    description TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS lifecycle_intents (
+    intent_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    target_id TEXT,
+    policy_id TEXT,
+    backup_id TEXT,
+    expected_generation INTEGER,
+    phase TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS target_objects (
+    target_id TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    ciphertext_digest TEXT,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    live_ref_count INTEGER NOT NULL DEFAULT 0,
+    retired_ref_count INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'unknown',
+    etag TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (target_id, object_key)
+);
+
+CREATE TABLE IF NOT EXISTS recovery_object_refs (
+    target_id TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    backup_id TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    ref_state TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    ciphertext_digest TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (target_id, policy_id, backup_id, object_key)
+);
+
+CREATE TABLE IF NOT EXISTS capacity_growth_observations (
+    observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id TEXT NOT NULL,
+    physical_stored_bytes INTEGER NOT NULL,
+    live_referenced_bytes INTEGER NOT NULL DEFAULT 0,
+    retired_pending_gc_bytes INTEGER NOT NULL DEFAULT 0,
+    new_committed_bytes INTEGER NOT NULL DEFAULT 0,
+    observed_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_capacity_policy_kind_time
 ON capacity_evidence(policy_id, snapshot_kind, observed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_lifecycle_intents_kind_phase
+ON lifecycle_intents(kind, phase);
+
+CREATE INDEX IF NOT EXISTS idx_lifecycle_intents_target
+ON lifecycle_intents(target_id, phase);
+
+CREATE INDEX IF NOT EXISTS idx_target_objects_live
+ON target_objects(target_id, live_ref_count);
+
+CREATE INDEX IF NOT EXISTS idx_recovery_refs_backup
+ON recovery_object_refs(target_id, policy_id, backup_id);
+
+CREATE INDEX IF NOT EXISTS idx_growth_target_time
+ON capacity_growth_observations(target_id, observed_at DESC);
 """
 
 
@@ -123,6 +219,46 @@ def _retry_locked(operation: Callable[[], Any], *, timeout_seconds: float = 30.0
             delay = min(0.25, delay * 2)
 
 
+def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
+    """Create tables and advance PRAGMA user_version with an explicit ledger."""
+    conn.executescript(_SCHEMA)
+    row = conn.execute("PRAGMA user_version").fetchone()
+    current = int(row[0] if row is not None else 0)
+    if current > CONTROL_SCHEMA_VERSION:
+        raise AppError(
+            f"storage control schema version {current} is newer than supported {CONTROL_SCHEMA_VERSION}",
+            code=ErrorCode.INTERNAL,
+            status=500,
+        )
+    if current < CONTROL_SCHEMA_VERSION:
+        now = _utc_iso()
+        for version in range(max(1, current + 1), CONTROL_SCHEMA_VERSION + 1):
+            description = {
+                1: "4.5.8-baseline-control-authority",
+                2: "4.5.9-lifecycle-intents-and-object-index",
+            }.get(version, f"schema-v{version}")
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO schema_migrations(version, applied_at, description)
+                VALUES (?, ?, ?)
+                """,
+                (version, now, description),
+            )
+        conn.execute(f"PRAGMA user_version = {CONTROL_SCHEMA_VERSION}")
+
+
+def _quick_check_or_fail(conn: sqlite3.Connection) -> None:
+    """Fail closed when SQLite reports corruption on non-rebuildable authority."""
+    row = conn.execute("PRAGMA quick_check").fetchone()
+    result = str(row[0] if row is not None else "unknown")
+    if result.casefold() != "ok":
+        raise AppError(
+            f"storage control authority failed integrity check: {result}",
+            code=ErrorCode.INTERNAL,
+            status=500,
+        )
+
+
 @contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
     CONTROL_DIR.mkdir(parents=True, exist_ok=True)
@@ -132,7 +268,8 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.execute("PRAGMA busy_timeout=30000")
         _retry_locked(lambda: conn.execute("PRAGMA journal_mode=WAL"))
         conn.execute("PRAGMA synchronous=FULL")
-        _retry_locked(lambda: conn.executescript(_SCHEMA))
+        _retry_locked(lambda: _apply_schema_migrations(conn))
+        _quick_check_or_fail(conn)
         yield conn
         conn.commit()
     except BaseException:
@@ -827,3 +964,571 @@ def consume_qos_tokens(
 
 def database_path() -> Path:
     return CONTROL_DB
+
+
+def schema_version() -> int:
+    with _connect() as conn:
+        row = conn.execute("PRAGMA user_version").fetchone()
+    return int(row[0] if row is not None else 0)
+
+
+def list_schema_migrations() -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT version, applied_at, description FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    return [
+        {
+            "version": int(row["version"]),
+            "appliedAt": str(row["applied_at"]),
+            "description": str(row["description"]),
+        }
+        for row in rows
+    ]
+
+
+def create_control_checkpoint(destination: Path | None = None) -> Path:
+    """Online SQLite backup of the control authority (non-rebuildable + rebuildable)."""
+    CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    dest = destination or (CONTROL_DIR / f"control-checkpoint-{_utc_iso().replace(':', '')}.sqlite3")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with _connect() as src:
+        dest_conn = sqlite3.connect(dest, timeout=30.0)
+        try:
+            src.backup(dest_conn)
+        finally:
+            dest_conn.close()
+    return dest
+
+
+def commit_lifecycle_intent(
+    *,
+    kind: str,
+    target_id: str | None = None,
+    policy_id: str | None = None,
+    backup_id: str | None = None,
+    expected_generation: int | None = None,
+    phase: str = "committed",
+    payload: dict[str, Any] | None = None,
+    intent_id: str | None = None,
+) -> dict[str, Any]:
+    """Durably record a lifecycle intent under BEGIN IMMEDIATE."""
+    now = _utc_iso()
+    record_id = intent_id or f"intent_{secrets.token_hex(8)}"
+    body = payload or {}
+    with _connect() as conn:
+        _begin_immediate(conn)
+        conn.execute(
+            """
+            INSERT INTO lifecycle_intents(
+                intent_id, kind, target_id, policy_id, backup_id,
+                expected_generation, phase, payload_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record_id,
+                str(kind),
+                str(target_id) if target_id else None,
+                str(policy_id) if policy_id else None,
+                str(backup_id) if backup_id else None,
+                int(expected_generation) if expected_generation is not None else None,
+                str(phase),
+                json.dumps(body, ensure_ascii=False, sort_keys=True),
+                now,
+                now,
+            ),
+        )
+        conn.execute("COMMIT")
+    return get_lifecycle_intent(record_id) or {}
+
+
+def update_lifecycle_intent_phase(intent_id: str, phase: str, *, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute("SELECT * FROM lifecycle_intents WHERE intent_id = ?", (intent_id,)).fetchone()
+        if row is None:
+            conn.execute("ROLLBACK")
+            raise AppError("lifecycle intent not found", code=ErrorCode.NOT_FOUND, status=404)
+        next_payload = payload
+        if next_payload is None:
+            decoded = json.loads(str(row["payload_json"]))
+            next_payload = decoded if isinstance(decoded, dict) else {}
+        conn.execute(
+            """
+            UPDATE lifecycle_intents
+            SET phase = ?, payload_json = ?, updated_at = ?
+            WHERE intent_id = ?
+            """,
+            (str(phase), json.dumps(next_payload, ensure_ascii=False, sort_keys=True), now, intent_id),
+        )
+        conn.execute("COMMIT")
+    return get_lifecycle_intent(intent_id) or {}
+
+
+def get_lifecycle_intent(intent_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM lifecycle_intents WHERE intent_id = ?", (intent_id,)).fetchone()
+    return _decode_lifecycle_intent(row) if row is not None else None
+
+
+def list_lifecycle_intents(
+    *,
+    kind: str | None = None,
+    target_id: str | None = None,
+    phase: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM lifecycle_intents WHERE 1=1"
+    params: list[Any] = []
+    if kind:
+        query += " AND kind = ?"
+        params.append(str(kind))
+    if target_id:
+        query += " AND target_id = ?"
+        params.append(str(target_id))
+    if phase:
+        query += " AND phase = ?"
+        params.append(str(phase))
+    query += " ORDER BY created_at ASC LIMIT ?"
+    params.append(max(1, min(int(limit), 1000)))
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [_decode_lifecycle_intent(row) for row in rows]
+
+
+def _decode_lifecycle_intent(row: sqlite3.Row) -> dict[str, Any]:
+    payload = json.loads(str(row["payload_json"]))
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "intentId": str(row["intent_id"]),
+        "kind": str(row["kind"]),
+        "targetId": str(row["target_id"]) if row["target_id"] else None,
+        "policyId": str(row["policy_id"]) if row["policy_id"] else None,
+        "backupId": str(row["backup_id"]) if row["backup_id"] else None,
+        "expectedGeneration": int(row["expected_generation"]) if row["expected_generation"] is not None else None,
+        "phase": str(row["phase"]),
+        "payload": payload,
+        "createdAt": str(row["created_at"]),
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def begin_target_drain_intent(
+    target_id: str,
+    *,
+    reason: str,
+    drain_id: str,
+    expected_generation: int | None = None,
+) -> dict[str, Any]:
+    """Atomically journal a drain intent and mark the target draining.
+
+    Job DBs remain projections; crash after this commit still leaves a durable
+    intent that startup reconciliation can use to recreate the DrainJob.
+    """
+    now = _utc_iso()
+    intent_id = f"intent_drain_{secrets.token_hex(8)}"
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute("SELECT * FROM control_targets WHERE target_id = ?", (target_id,)).fetchone()
+        if row is None:
+            conn.execute("ROLLBACK")
+            raise AppError("Backup target not found", code=ErrorCode.NOT_FOUND, status=404)
+        generation = int(row["generation"])
+        if expected_generation is not None and generation != int(expected_generation):
+            conn.execute("ROLLBACK")
+            raise AppError(
+                f"CAS mismatch on topologyGeneration: expected {expected_generation}, actual {generation}",
+                code=ErrorCode.INVALID_REQUEST,
+                status=412,
+            )
+        current = _decode_payload(row)
+        next_generation = generation + 1
+        updated = {
+            **current,
+            "targetId": target_id,
+            "topologyGeneration": next_generation,
+            "drainState": "draining",
+            "drainReason": reason,
+            "drainingAt": now,
+            "activeDrainIntentId": intent_id,
+            "activeDrainId": drain_id,
+        }
+        conn.execute(
+            "UPDATE control_targets SET generation = ?, payload_json = ?, updated_at = ? WHERE target_id = ? AND generation = ?",
+            (next_generation, json.dumps(updated, ensure_ascii=False, sort_keys=True), now, target_id, generation),
+        )
+        conn.execute(
+            """
+            INSERT INTO lifecycle_intents(
+                intent_id, kind, target_id, policy_id, backup_id,
+                expected_generation, phase, payload_json, created_at, updated_at
+            ) VALUES (?, 'drain', ?, NULL, NULL, ?, 'topology-committed', ?, ?, ?)
+            """,
+            (
+                intent_id,
+                target_id,
+                next_generation,
+                json.dumps(
+                    {"drainId": drain_id, "reason": reason, "targetId": target_id},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                now,
+                now,
+            ),
+        )
+        conn.execute("COMMIT")
+    return {"intentId": intent_id, "target": updated, "drainId": drain_id}
+
+
+def complete_lifecycle_intent(intent_id: str, *, phase: str = "completed") -> dict[str, Any]:
+    return update_lifecycle_intent_phase(intent_id, phase)
+
+
+def upsert_target_object(
+    *,
+    target_id: str,
+    object_key: str,
+    size_bytes: int = 0,
+    ciphertext_digest: str | None = None,
+    etag: str | None = None,
+    live_delta: int = 0,
+    retired_delta: int = 0,
+    state: str | None = None,
+) -> dict[str, Any]:
+    """Insert or adjust a rebuildable object inventory row."""
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute(
+            "SELECT * FROM target_objects WHERE target_id = ? AND object_key = ?",
+            (target_id, object_key),
+        ).fetchone()
+        if row is None:
+            live = max(0, int(live_delta))
+            retired = max(0, int(retired_delta))
+            next_state = state or ("live" if live > 0 else "retired" if retired > 0 else "unknown")
+            conn.execute(
+                """
+                INSERT INTO target_objects(
+                    target_id, object_key, ciphertext_digest, size_bytes,
+                    live_ref_count, retired_ref_count, state, etag, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_id,
+                    object_key,
+                    ciphertext_digest,
+                    max(0, int(size_bytes)),
+                    live,
+                    retired,
+                    next_state,
+                    etag,
+                    now,
+                ),
+            )
+        else:
+            live = max(0, int(row["live_ref_count"]) + int(live_delta))
+            retired = max(0, int(row["retired_ref_count"]) + int(retired_delta))
+            next_size = max(0, int(size_bytes)) if size_bytes else int(row["size_bytes"])
+            next_digest = ciphertext_digest if ciphertext_digest is not None else row["ciphertext_digest"]
+            next_etag = etag if etag is not None else row["etag"]
+            if state is not None:
+                next_state = state
+            elif live > 0:
+                next_state = "live"
+            elif retired > 0:
+                next_state = "retired-pending-gc"
+            else:
+                next_state = "gc-candidate"
+            conn.execute(
+                """
+                UPDATE target_objects
+                SET ciphertext_digest = ?, size_bytes = ?, live_ref_count = ?,
+                    retired_ref_count = ?, state = ?, etag = ?, updated_at = ?
+                WHERE target_id = ? AND object_key = ?
+                """,
+                (next_digest, next_size, live, retired, next_state, next_etag, now, target_id, object_key),
+            )
+        conn.execute("COMMIT")
+    return get_target_object(target_id, object_key) or {}
+
+
+def get_target_object(target_id: str, object_key: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM target_objects WHERE target_id = ? AND object_key = ?",
+            (target_id, object_key),
+        ).fetchone()
+    return _decode_target_object(row) if row is not None else None
+
+
+def list_target_objects(
+    target_id: str,
+    *,
+    gc_candidates_only: bool = False,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM target_objects WHERE target_id = ?"
+    params: list[Any] = [target_id]
+    if gc_candidates_only:
+        query += " AND live_ref_count = 0 AND state IN ('gc-candidate', 'retired-pending-gc')"
+    query += " ORDER BY object_key LIMIT ?"
+    params.append(max(1, min(int(limit), 5000)))
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [_decode_target_object(row) for row in rows]
+
+
+def _decode_target_object(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "targetId": str(row["target_id"]),
+        "objectKey": str(row["object_key"]),
+        "ciphertextDigest": str(row["ciphertext_digest"]) if row["ciphertext_digest"] else None,
+        "sizeBytes": int(row["size_bytes"]),
+        "liveRefCount": int(row["live_ref_count"]),
+        "retiredRefCount": int(row["retired_ref_count"]),
+        "state": str(row["state"]),
+        "etag": str(row["etag"]) if row["etag"] else None,
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def put_recovery_object_ref(
+    *,
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    object_key: str,
+    ref_state: str,
+    size_bytes: int = 0,
+    ciphertext_digest: str | None = None,
+) -> None:
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        existing = conn.execute(
+            """
+            SELECT ref_state FROM recovery_object_refs
+            WHERE target_id = ? AND policy_id = ? AND backup_id = ? AND object_key = ?
+            """,
+            (target_id, policy_id, backup_id, object_key),
+        ).fetchone()
+        previous = str(existing["ref_state"]) if existing is not None else None
+        conn.execute(
+            """
+            INSERT INTO recovery_object_refs(
+                target_id, policy_id, backup_id, object_key, ref_state,
+                size_bytes, ciphertext_digest, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(target_id, policy_id, backup_id, object_key) DO UPDATE SET
+                ref_state = excluded.ref_state,
+                size_bytes = excluded.size_bytes,
+                ciphertext_digest = excluded.ciphertext_digest,
+                updated_at = excluded.updated_at
+            """,
+            (
+                target_id,
+                policy_id,
+                backup_id,
+                object_key,
+                str(ref_state),
+                max(0, int(size_bytes)),
+                ciphertext_digest,
+                now,
+            ),
+        )
+        live_delta = 0
+        retired_delta = 0
+        if previous != "live" and ref_state == "live":
+            live_delta = 1
+        elif previous == "live" and ref_state != "live":
+            live_delta = -1
+        if previous != "retired" and ref_state == "retired":
+            retired_delta = 1
+            if previous == "live":
+                pass  # live_delta already -1
+        elif previous == "retired" and ref_state != "retired":
+            retired_delta = -1
+        obj = conn.execute(
+            "SELECT * FROM target_objects WHERE target_id = ? AND object_key = ?",
+            (target_id, object_key),
+        ).fetchone()
+        if obj is None:
+            live = 1 if ref_state == "live" else 0
+            retired = 1 if ref_state == "retired" else 0
+            state = "live" if live else ("retired-pending-gc" if retired else "unknown")
+            conn.execute(
+                """
+                INSERT INTO target_objects(
+                    target_id, object_key, ciphertext_digest, size_bytes,
+                    live_ref_count, retired_ref_count, state, etag, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                """,
+                (
+                    target_id,
+                    object_key,
+                    ciphertext_digest,
+                    max(0, int(size_bytes)),
+                    live,
+                    retired,
+                    state,
+                    now,
+                ),
+            )
+        else:
+            live = max(0, int(obj["live_ref_count"]) + live_delta)
+            retired = max(0, int(obj["retired_ref_count"]) + retired_delta)
+            next_size = max(int(obj["size_bytes"]), max(0, int(size_bytes)))
+            if live > 0:
+                state = "live"
+            elif retired > 0:
+                state = "retired-pending-gc"
+            else:
+                state = "gc-candidate"
+            conn.execute(
+                """
+                UPDATE target_objects
+                SET live_ref_count = ?, retired_ref_count = ?, size_bytes = ?,
+                    ciphertext_digest = COALESCE(?, ciphertext_digest),
+                    state = ?, updated_at = ?
+                WHERE target_id = ? AND object_key = ?
+                """,
+                (live, retired, next_size, ciphertext_digest, state, now, target_id, object_key),
+            )
+        conn.execute("COMMIT")
+
+
+def list_recovery_object_refs(
+    *,
+    target_id: str,
+    policy_id: str | None = None,
+    backup_id: str | None = None,
+    ref_state: str | None = None,
+    limit: int = 5000,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM recovery_object_refs WHERE target_id = ?"
+    params: list[Any] = [target_id]
+    if policy_id:
+        query += " AND policy_id = ?"
+        params.append(policy_id)
+    if backup_id:
+        query += " AND backup_id = ?"
+        params.append(backup_id)
+    if ref_state:
+        query += " AND ref_state = ?"
+        params.append(ref_state)
+    query += " ORDER BY policy_id, backup_id, object_key LIMIT ?"
+    params.append(max(1, min(int(limit), 20000)))
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        {
+            "targetId": str(row["target_id"]),
+            "policyId": str(row["policy_id"]),
+            "backupId": str(row["backup_id"]),
+            "objectKey": str(row["object_key"]),
+            "refState": str(row["ref_state"]),
+            "sizeBytes": int(row["size_bytes"]),
+            "ciphertextDigest": str(row["ciphertext_digest"]) if row["ciphertext_digest"] else None,
+            "updatedAt": str(row["updated_at"]),
+        }
+        for row in rows
+    ]
+
+
+def physical_usage_summary(target_id: str) -> dict[str, Any]:
+    """Aggregate rebuildable physical accounting for one target."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT state, live_ref_count, retired_ref_count, size_bytes
+            FROM target_objects WHERE target_id = ?
+            """,
+            (target_id,),
+        ).fetchall()
+    physical = 0
+    live_bytes = 0
+    retired_pending = 0
+    for row in rows:
+        size = max(0, int(row["size_bytes"]))
+        physical += size
+        if int(row["live_ref_count"]) > 0:
+            live_bytes += size
+        elif int(row["retired_ref_count"]) > 0 or str(row["state"]) in {"retired-pending-gc", "gc-candidate"}:
+            retired_pending += size
+    confidence = "high" if rows else "unavailable"
+    return {
+        "targetId": target_id,
+        "physicalStoredBytes": physical,
+        "liveReferencedBytes": live_bytes,
+        "retiredPendingGcBytes": retired_pending,
+        "controlPlaneBytes": 0,
+        "unknownExternalBytes": None,
+        "objectCount": len(rows),
+        "confidence": confidence,
+    }
+
+
+def clear_target_object_index(target_id: str) -> None:
+    """Drop rebuildable index rows for one target (explicit rebuild path)."""
+    with _connect() as conn:
+        _begin_immediate(conn)
+        conn.execute("DELETE FROM recovery_object_refs WHERE target_id = ?", (target_id,))
+        conn.execute("DELETE FROM target_objects WHERE target_id = ?", (target_id,))
+        conn.execute("COMMIT")
+
+
+def record_capacity_growth_observation(
+    *,
+    target_id: str,
+    physical_stored_bytes: int,
+    live_referenced_bytes: int = 0,
+    retired_pending_gc_bytes: int = 0,
+    new_committed_bytes: int = 0,
+    observed_at: str | None = None,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO capacity_growth_observations(
+                target_id, physical_stored_bytes, live_referenced_bytes,
+                retired_pending_gc_bytes, new_committed_bytes, observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                target_id,
+                max(0, int(physical_stored_bytes)),
+                max(0, int(live_referenced_bytes)),
+                max(0, int(retired_pending_gc_bytes)),
+                max(0, int(new_committed_bytes)),
+                str(observed_at or _utc_iso()),
+            ),
+        )
+
+
+def list_capacity_growth_observations(target_id: str, *, limit: int = 60) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM capacity_growth_observations
+            WHERE target_id = ?
+            ORDER BY observed_at DESC, observation_id DESC
+            LIMIT ?
+            """,
+            (target_id, max(1, min(int(limit), 1000))),
+        ).fetchall()
+    return [
+        {
+            "observationId": int(row["observation_id"]),
+            "targetId": str(row["target_id"]),
+            "physicalStoredBytes": int(row["physical_stored_bytes"]),
+            "liveReferencedBytes": int(row["live_referenced_bytes"]),
+            "retiredPendingGcBytes": int(row["retired_pending_gc_bytes"]),
+            "newCommittedBytes": int(row["new_committed_bytes"]),
+            "observedAt": str(row["observed_at"]),
+        }
+        for row in rows
+    ]

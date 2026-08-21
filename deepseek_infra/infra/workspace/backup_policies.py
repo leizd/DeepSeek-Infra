@@ -321,17 +321,31 @@ def _normalize_cost_objectives(raw: Any) -> dict[str, Any]:
     section = _require_mapping(raw, "costObjectives") if raw is not None else {}
     normalized: dict[str, Any] = {}
     monthly_storage = _require_nonnegative_number(
-        section.get("maxEstimatedMonthlyStorageUsd"),
+        section.get("maxEstimatedMonthlyStorageUsd") or section.get("maxMonthlyStorageCostUsd"),
         "costObjectives.maxEstimatedMonthlyStorageUsd",
     )
     monthly_egress = _require_nonnegative_number(
-        section.get("maxEstimatedMonthlyEgressUsd"),
+        section.get("maxEstimatedMonthlyEgressUsd") or section.get("maxMonthlyEgressCostUsd"),
         "costObjectives.maxEstimatedMonthlyEgressUsd",
+    )
+    rebalance_daily = _require_nonnegative_number(
+        section.get("maxRebalanceCostUsdPerDay"),
+        "costObjectives.maxRebalanceCostUsdPerDay",
     )
     if monthly_storage is not None:
         normalized["maxEstimatedMonthlyStorageUsd"] = monthly_storage
+        normalized["maxMonthlyStorageCostUsd"] = monthly_storage
     if monthly_egress is not None:
         normalized["maxEstimatedMonthlyEgressUsd"] = monthly_egress
+        normalized["maxMonthlyEgressCostUsd"] = monthly_egress
+    if rebalance_daily is not None:
+        normalized["maxRebalanceCostUsdPerDay"] = rebalance_daily
+    if "requireKnownRates" in section:
+        normalized["requireKnownRates"] = _require_bool(
+            section.get("requireKnownRates"),
+            "costObjectives.requireKnownRates",
+            False,
+        )
     return normalized
 
 

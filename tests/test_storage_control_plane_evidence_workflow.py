@@ -16,10 +16,14 @@ def _load(path: Path, name: str) -> ModuleType:
     return module
 
 
-def test_storage_control_plane_runner_owns_only_real_three_minio_scenario() -> None:
+def test_storage_control_plane_runner_owns_458_and_459_real_minio_scenarios() -> None:
     runner = _load(ROOT / "scripts" / "run_storage_control_plane_minio_e2e.py", "storage_control_runner")
-    node_id = "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e"
-    assert runner.SCENARIOS == {"real-three-minio-storage-control-plane": (node_id,)}
+    node_458 = "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e"
+    node_459 = "tests/test_backup_459_real_tiering_control_e2e.py::test_real_three_minio_tiering_and_control_recovery_e2e"
+    assert runner.SCENARIOS == {
+        "real-three-minio-storage-control-plane": (node_458,),
+        "real-three-minio-tiering-control-recovery": (node_459,),
+    }
     assert set(runner.REQUIRED_ENDPOINTS) == {
         "DEEPSEEK_TEST_S3_ENDPOINT_A",
         "DEEPSEEK_TEST_S3_ENDPOINT_B",
@@ -28,14 +32,23 @@ def test_storage_control_plane_runner_owns_only_real_three_minio_scenario() -> N
     assert runner.CHECK_SCENARIOS["realThreeMinioEndpoints"] == "real-three-minio-storage-control-plane"
     assert runner.CHECK_SCENARIOS["realAgeRandomizedEncryption"] == "real-three-minio-storage-control-plane"
     assert runner.CHECK_SCENARIOS["autonomousDrainRetirementGcRestore"] == "real-three-minio-storage-control-plane"
+    assert runner.CHECK_SCENARIOS["realThreeMinioTierMigrationE2E"] == "real-three-minio-tiering-control-recovery"
+    assert runner.CHECK_SCENARIOS["realControlDbCrashRecoveryE2E"] == "real-three-minio-tiering-control-recovery"
+    assert runner.CHECK_SCENARIOS["tierMigrationPreservesBackupIdAndObjectSetDigest"] == (
+        "real-three-minio-tiering-control-recovery"
+    )
 
 
-def test_real_evidence_source_forbids_fake_s3_stub_crypto_and_resolver_monkeypatch() -> None:
-    source = (ROOT / "tests" / "test_backup_458_real_storage_control_plane_e2e.py").read_text(encoding="utf-8")
-    assert "ProductionFakeS3Client" not in source
-    assert "stub_crypto" not in source
-    assert "monkeypatch.setattr(backup_publish" not in source
-    assert "monkeypatch.setattr(backup_executor" not in source
+def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypatch() -> None:
+    for rel in (
+        "tests/test_backup_458_real_storage_control_plane_e2e.py",
+        "tests/test_backup_459_real_tiering_control_e2e.py",
+    ):
+        source = (ROOT / rel).read_text(encoding="utf-8")
+        assert "ProductionFakeS3Client" not in source
+        assert "stub_crypto" not in source
+        assert "monkeypatch.setattr(backup_publish" not in source
+        assert "monkeypatch.setattr(backup_executor" not in source
 
 
 def test_legacy_runner_no_longer_claims_real_minio_evidence() -> None:

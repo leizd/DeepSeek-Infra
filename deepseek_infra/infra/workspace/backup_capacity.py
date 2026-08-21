@@ -1,8 +1,8 @@
-"""Target capacity governance, size admission, and cost estimation (4.5.7).
+"""Target capacity governance, size admission, and cost estimation (4.5.9).
 
 Enforces soft/hard watermarks for backup write placement, predicts backup size
 requirements, validates Force Full size admission, and calculates target
-exhaustion horizons.
+exhaustion horizons from elapsed-time physical growth observations.
 """
 
 from __future__ import annotations
@@ -21,6 +21,21 @@ WORKSPACE_ESTIMATOR_SAFETY_FACTOR = 1.20
 
 def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def get_target_capacity(target_id: str) -> dict[str, Any]:
@@ -186,6 +201,12 @@ def check_target_capacity_admission(
     used_val = cap.get("usedBytes")
     used_bytes = int(used_val) if used_val is not None else max(0, total_bytes - free_bytes)
 
+    # Prefer physical object accounting when the probe surfaces it.
+    physical = cap.get("physicalStoredBytes")
+    if isinstance(physical, int) and not isinstance(physical, bool) and physical >= 0 and total_bytes > 0:
+        used_bytes = physical
+        free_bytes = max(0, total_bytes - used_bytes)
+
     # 1. Hard watermark check
     if total_bytes > 0:
         used_pct = (used_bytes / total_bytes) * 100.0
@@ -208,11 +229,62 @@ def check_target_capacity_admission(
     return True, "admitted"
 
 
+def _growth_rates_from_observations(observations: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute elapsed-time growth rates from timestamped physical observations."""
+    points: list[tuple[datetime, int]] = []
+    for item in observations:
+        ts = _parse_iso(str(item.get("observedAt") or ""))
+        stored = item.get("physicalStoredBytes")
+        if ts is None or not isinstance(stored, int) or isinstance(stored, bool):
+            continue
+        points.append((ts, int(stored)))
+    points.sort(key=lambda pair: pair[0])
+    if len(points) < 2:
+        return {"status": "unavailable", "confidence": "unavailable", "reason": "insufficient-time-series"}
+
+    oldest_ts, oldest_bytes = points[0]
+    newest_ts, newest_bytes = points[-1]
+    elapsed_seconds = max(1.0, (newest_ts - oldest_ts).total_seconds())
+    elapsed_days = elapsed_seconds / 86400.0
+    delta = newest_bytes - oldest_bytes
+    # Non-positive growth is reported honestly; admission still uses free space.
+    bytes_per_day = delta / elapsed_days if elapsed_days > 0 else 0.0
+
+    # Windowed rates for P50/P90-ish robust stats over consecutive samples.
+    daily_samples: list[float] = []
+    for idx in range(1, len(points)):
+        prev_ts, prev_bytes = points[idx - 1]
+        cur_ts, cur_bytes = points[idx]
+        seconds = max(1.0, (cur_ts - prev_ts).total_seconds())
+        daily_samples.append((cur_bytes - prev_bytes) * 86400.0 / seconds)
+    daily_samples.sort()
+    if daily_samples:
+        mid = daily_samples[len(daily_samples) // 2]
+        p90_idx = min(len(daily_samples) - 1, int(len(daily_samples) * 0.9))
+        p90 = daily_samples[p90_idx]
+    else:
+        mid = bytes_per_day
+        p90 = bytes_per_day
+
+    confidence = "high" if len(points) >= 10 and elapsed_days >= 7 else "medium" if len(points) >= 3 and elapsed_days >= 1 else "low"
+    return {
+        "status": "ok",
+        "confidence": confidence,
+        "bytesPerDayP50": max(0.0, float(mid)),
+        "bytesPerDayP90": max(0.0, float(p90)),
+        "bytesPerDay": max(0.0, float(bytes_per_day)),
+        "sampleCount": len(points),
+        "elapsedDays": elapsed_days,
+        "netGrowthBytes": delta,
+    }
+
+
 def estimate_target_exhaustion_horizon(
     target_id: str,
     policy_id: str,
 ) -> dict[str, Any]:
-    """Estimate days until target runs out of space based on daily ingestion rate."""
+    """Estimate days until target runs out of space from elapsed-time growth."""
+    del policy_id  # retained for API compatibility; growth is target-scoped
     cap = get_target_capacity(target_id)
     free_bytes = cap.get("freeBytes")
     total_bytes = cap.get("totalBytes")
@@ -223,27 +295,95 @@ def estimate_target_exhaustion_horizon(
             "targetId": target_id,
             "status": "unconstrained",
             "freePercent": None,
+            # Compatibility sentinel for unconstrained targets; timed forecasts use None.
             "estimatedDaysToFull": 9999,
+            "confidence": "unavailable",
+            "forecastStatus": "unconstrained",
         }
 
-    # Estimate daily growth from recent 7 days
-    copies = backup_dr_ledger.list_logical_recovery_copies(target_id=target_id, policy_id=policy_id, limit=30)
-    total_ingested = 0
-    for c in copies:
-        meta_val = c.get("metadata") if isinstance(c, dict) else None
-        meta = meta_val if isinstance(meta_val, dict) else {}
-        sz = c.get("physicalBytes") or c.get("ciphertextBytes") or meta.get("physicalBytes") or meta.get("ciphertextBytes")
-        if isinstance(sz, int) and not isinstance(sz, bool) and sz > 0:
-            total_ingested += sz
+    # Zero free space is immediately exhausted regardless of growth samples.
+    if int(free_bytes) <= 0:
+        return {
+            "targetId": target_id,
+            "status": "critical",
+            "freeBytes": free_bytes,
+            "totalBytes": total_bytes,
+            "freePercent": free_pct if free_pct is not None else 0.0,
+            "dailyIngressEstimateBytes": None,
+            "bytesPerDayP50": None,
+            "bytesPerDayP90": None,
+            "estimatedDaysToFull": 0,
+            "daysToSoftWatermark": 0,
+            "daysToHardWatermark": 0,
+            "confidence": "high",
+            "forecastStatus": "exhausted",
+        }
 
-    daily_rate = max(10 * 1024 * 1024, total_ingested // max(1, len(copies)))
-    days_to_full = max(0, int(free_bytes // daily_rate))
+    # Record a growth observation whenever capacity is probed with physical facts.
+    physical = cap.get("physicalStoredBytes")
+    if isinstance(physical, int) and not isinstance(physical, bool):
+        backup_control.record_capacity_growth_observation(
+            target_id=target_id,
+            physical_stored_bytes=int(physical),
+            live_referenced_bytes=int(cap.get("liveReferencedBytes") or 0),
+            retired_pending_gc_bytes=int(cap.get("retiredPendingGcBytes") or 0),
+            observed_at=str(cap.get("observedAt") or _utc_iso()),
+        )
+    else:
+        used = cap.get("usedBytes")
+        if isinstance(used, int) and not isinstance(used, bool):
+            backup_control.record_capacity_growth_observation(
+                target_id=target_id,
+                physical_stored_bytes=int(used),
+                observed_at=str(cap.get("observedAt") or _utc_iso()),
+            )
+
+    observations = backup_control.list_capacity_growth_observations(target_id, limit=60)
+    rates = _growth_rates_from_observations(observations)
 
     status = "healthy"
     if free_pct is not None:
-        if free_pct < 10.0 or days_to_full < 7:
+        if free_pct < 10.0:
             status = "critical"
-        elif free_pct < 20.0 or days_to_full < 30:
+        elif free_pct < 20.0:
+            status = "degraded"
+
+    if rates.get("status") != "ok":
+        return {
+            "targetId": target_id,
+            "status": status,
+            "freeBytes": free_bytes,
+            "totalBytes": total_bytes,
+            "freePercent": free_pct,
+            "dailyIngressEstimateBytes": None,
+            "bytesPerDayP50": None,
+            "bytesPerDayP90": None,
+            "estimatedDaysToFull": None,
+            "daysToSoftWatermark": None,
+            "daysToHardWatermark": None,
+            "confidence": "unavailable",
+            "forecastStatus": "unavailable",
+        }
+
+    p50 = float(rates["bytesPerDayP50"])
+    p90 = float(rates["bytesPerDayP90"])
+    daily_rate = max(p50, 0.0)
+    if daily_rate <= 0:
+        days_to_full: int | None = None
+        days_soft: int | None = None
+        days_hard: int | None = None
+        forecast_status = "stable-or-shrinking"
+    else:
+        days_to_full = max(0, int(float(free_bytes) // daily_rate))
+        soft_free = max(0.0, float(total_bytes) * (1.0 - DEFAULT_SOFT_WATERMARK_PERCENT / 100.0))
+        hard_free = max(0.0, float(total_bytes) * (1.0 - DEFAULT_HARD_WATERMARK_PERCENT / 100.0))
+        # Days until free space falls to the watermark residual.
+        days_soft = max(0, int(max(0.0, float(free_bytes) - soft_free) // daily_rate))
+        days_hard = max(0, int(max(0.0, float(free_bytes) - hard_free) // daily_rate))
+        forecast_status = "ok"
+        if days_to_full < 7:
+            status = "critical"
+        elif days_to_full < 30 and status == "healthy":
             status = "degraded"
 
     return {
@@ -252,8 +392,16 @@ def estimate_target_exhaustion_horizon(
         "freeBytes": free_bytes,
         "totalBytes": total_bytes,
         "freePercent": free_pct,
-        "dailyIngressEstimateBytes": daily_rate,
+        "dailyIngressEstimateBytes": int(daily_rate) if daily_rate > 0 else 0,
+        "bytesPerDayP50": int(p50),
+        "bytesPerDayP90": int(p90),
         "estimatedDaysToFull": days_to_full,
+        "daysToSoftWatermark": days_soft,
+        "daysToHardWatermark": days_hard,
+        "confidence": rates.get("confidence"),
+        "forecastStatus": forecast_status,
+        "sampleCount": rates.get("sampleCount"),
+        "elapsedDays": rates.get("elapsedDays"),
     }
 
 
@@ -263,22 +411,52 @@ def estimate_transfer_cost(
     source_target_id: str | None = None,
     dest_target_id: str | None = None,
 ) -> dict[str, Any]:
-    """Calculate operator-supplied cost estimates for transfer and storage delta."""
+    """Calculate operator-supplied cost estimates; never invent default prices."""
     src_record = backup_targets.get_target(source_target_id) if source_target_id and source_target_id != "managed-local" else {}
     dst_record = backup_targets.get_target(dest_target_id) if dest_target_id and dest_target_id != "managed-local" else {}
+    src = src_record or {}
+    dst = dst_record or {}
 
     gib = bytes_to_transfer / (1024.0 * 1024.0 * 1024.0)
 
-    # Operator configured rates
-    egress_rate = float((src_record or {}).get("egressCostPerGiB") or 0.09)
-    storage_rate = float((dst_record or {}).get("storageCostPerGiBMonth") or 0.023)
+    egress_raw = src.get("egressCostPerGiB")
+    storage_raw = dst.get("storageCostPerGiBMonth")
+    egress_rate: float | None = None
+    storage_rate: float | None = None
+    if isinstance(egress_raw, (int, float)) and not isinstance(egress_raw, bool):
+        egress_rate = float(egress_raw)
+    if isinstance(storage_raw, (int, float)) and not isinstance(storage_raw, bool):
+        storage_rate = float(storage_raw)
+    egress_known = egress_rate is not None
+    storage_known = storage_rate is not None
 
-    source_region = str((src_record or {}).get("region") or "")
-    dest_region = str((dst_record or {}).get("region") or "")
+    source_region = str(src.get("region") or "")
+    dest_region = str(dst.get("region") or "")
     crosses_region = bool(source_region and dest_region and source_region != dest_region)
-    explicitly_metered = str((src_record or {}).get("costClass") or "") == "cross-region"
-    one_time_egress_cost = gib * egress_rate if crosses_region or explicitly_metered else 0.0
+    explicitly_metered = str(src.get("costClass") or "") == "cross-region"
+    needs_egress = crosses_region or explicitly_metered
+
+    if (needs_egress and not egress_known) or not storage_known:
+        return {
+            "bytesToTransfer": bytes_to_transfer,
+            "gibToTransfer": round(gib, 4),
+            "estimatedOneTimeTransferCost": None,
+            "estimatedMonthlyStorageCostDelta": None,
+            "currency": "USD",
+            "isEstimate": True,
+            "costStatus": "unavailable",
+            "rateSource": "missing-operator-rates",
+            "egressCostPerGiB": egress_rate,
+            "storageCostPerGiBMonth": storage_rate,
+            "egressRateSource": "operator-configured" if egress_known else "unavailable",
+            "storageRateSource": "operator-configured" if storage_known else "unavailable",
+        }
+
+    assert storage_rate is not None
+    effective_egress = float(egress_rate or 0.0)
+    one_time_egress_cost = gib * effective_egress if needs_egress else 0.0
     monthly_storage_cost = gib * storage_rate
+    effective_at = str(dst.get("costRatesEffectiveAt") or src.get("costRatesEffectiveAt") or "")
 
     return {
         "bytesToTransfer": bytes_to_transfer,
@@ -287,6 +465,13 @@ def estimate_transfer_cost(
         "estimatedMonthlyStorageCostDelta": round(monthly_storage_cost, 4),
         "currency": "USD",
         "isEstimate": True,
+        "costStatus": "ok",
+        "rateSource": "operator-configured",
+        "egressCostPerGiB": effective_egress if needs_egress else 0.0,
+        "storageCostPerGiBMonth": storage_rate,
+        "egressRateSource": "operator-configured" if needs_egress else "not-applicable",
+        "storageRateSource": "operator-configured",
+        "effectiveAt": effective_at or None,
     }
 
 

@@ -19,9 +19,13 @@ from deepseek_infra.infra.workspace import backup_crypto  # noqa: E402
 from scripts.release_evidence import stamp_release_report  # noqa: E402
 
 REAL_SCENARIO = "real-three-minio-storage-control-plane"
+TIER_SCENARIO = "real-three-minio-tiering-control-recovery"
 SCENARIOS: dict[str, tuple[str, ...]] = {
     REAL_SCENARIO: (
         "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e",
+    ),
+    TIER_SCENARIO: (
+        "tests/test_backup_459_real_tiering_control_e2e.py::test_real_three_minio_tiering_and_control_recovery_e2e",
     ),
 }
 CHECK_SCENARIOS = {
@@ -33,6 +37,14 @@ CHECK_SCENARIOS = {
     "autonomousDrainRetirementGcRestore": REAL_SCENARIO,
     "formalReceiptCommitHistoryPreserved": REAL_SCENARIO,
     "fakeS3AndStubCryptoForbidden": REAL_SCENARIO,
+    # 4.5.9 gates
+    "realThreeMinioTierMigrationE2E": TIER_SCENARIO,
+    "realControlDbCrashRecoveryE2E": TIER_SCENARIO,
+    "tierMigrationPreservesBackupIdAndObjectSetDigest": TIER_SCENARIO,
+    "tierMigrationDoesNotInvokeAgeEncryption": TIER_SCENARIO,
+    "referenceIndexRebuildsFromFormalTargetTruth": TIER_SCENARIO,
+    "maintenanceScopesProgressIndependently": TIER_SCENARIO,
+    "objectSetV1WireFormatUnchanged": TIER_SCENARIO,
 }
 REQUIRED_ENDPOINTS = (
     "DEEPSEEK_TEST_S3_ENDPOINT_A",
@@ -71,17 +83,19 @@ def main(argv: list[str] | None = None) -> int:
     prerequisite_errors = _prerequisite_errors()
     results: dict[str, dict[str, object]] = {}
     if prerequisite_errors:
-        results[REAL_SCENARIO] = {
-            "nodeIds": list(SCENARIOS[REAL_SCENARIO]),
-            "exitCode": 2,
-            "error": "; ".join(prerequisite_errors),
-        }
+        for scenario, node_ids in SCENARIOS.items():
+            results[scenario] = {
+                "nodeIds": list(node_ids),
+                "exitCode": 2,
+                "error": "; ".join(prerequisite_errors),
+            }
     else:
         environment = os.environ.copy()
         environment["DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E"] = "1"
-        command = [sys.executable, "-m", "pytest", "--no-cov", "-q", *SCENARIOS[REAL_SCENARIO]]
-        completed = subprocess.run(command, cwd=ROOT, env=environment, check=False)
-        results[REAL_SCENARIO] = {"nodeIds": list(SCENARIOS[REAL_SCENARIO]), "exitCode": completed.returncode}
+        for scenario, node_ids in SCENARIOS.items():
+            command = [sys.executable, "-m", "pytest", "--no-cov", "-q", *node_ids]
+            completed = subprocess.run(command, cwd=ROOT, env=environment, check=False)
+            results[scenario] = {"nodeIds": list(node_ids), "exitCode": completed.returncode}
 
     checks = {
         check: "PASS" if results[scenario]["exitCode"] == 0 else "FAIL"
@@ -91,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         {
             "ok": all(value == "PASS" for value in checks.values()),
             "status": "PASS" if all(value == "PASS" for value in checks.values()) else "FAIL",
-            "title": "Real Three-MinIO Storage Control Plane and Geo-Aware Lifecycle E2E",
+            "title": "Real Three-MinIO Storage Control Plane, Tiering, and Control Recovery E2E",
             "checks": checks,
             "checkProvenance": dict(CHECK_SCENARIOS),
             "scenarios": results,

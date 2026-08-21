@@ -430,12 +430,22 @@ def _receipt_payload_keys(receipt: dict[str, Any]) -> set[str]:
 
 
 def _retained_payload_keys(target: Any, *, retiring_backup_id: str) -> set[str]:
-    """Conservatively treat every other formal Receipt as live.
+    """Return payload keys still referenced by non-retiring recovery points.
 
-    A later retirement can reclaim shared payload once every referencing Receipt
-    has its own authenticated marker. Keeping unknown receipts live is the
-    fail-closed behavior when the local Ledger is stale.
+    Prefer the rebuildable ciphertext reference index (O(objects in scope)).
+    When the index is empty/unbuilt, fall back to a conservative full Receipt
+    scan so GC remains fail-closed.
     """
+    from deepseek_infra.infra.workspace import backup_object_index
+
+    target_id = str(getattr(target, "target_id", "") or "")
+    if target_id:
+        indexed = backup_object_index.retained_payload_keys_from_index(
+            target_id, retiring_backup_id=retiring_backup_id
+        )
+        if indexed is not None:
+            return indexed
+
     retained: set[str] = set()
     if target.root is not None:
         receipts_dir = target.root / "receipts"
@@ -492,30 +502,54 @@ def _receipt_has_valid_retirement_marker(target: Any, receipt_bytes: bytes, rece
     )
 
 
+_DEPENDENCY_SCAN_LIMIT = 500
+
+
 def has_active_copy_dependency(target_id: str, policy_id: str, backup_id: str, *, excluding_job_id: str | None = None) -> bool:
-    """Return true while any durable production job can still reference the copy."""
+    """Return true while any durable production job can still reference the copy.
+
+    Page-limited scans fail closed: when a listing hits the scan ceiling without
+    proving the absence of an active dependency, treat the copy as still
+    referenced (same posture as drain completion blockers).
+    """
     from deepseek_infra.infra.workspace import backup_replication
 
-    for job in backup_replication.list_jobs(policy_id=policy_id, backup_id=backup_id, limit=500):
+    limit = _DEPENDENCY_SCAN_LIMIT
+    jobs = list(backup_replication.list_jobs(policy_id=policy_id, backup_id=backup_id, limit=limit))
+    for job in jobs:
         if str(job.get("phase") or "") in backup_replication.TERMINAL_PHASES:
             continue
         if target_id in {str(job.get("primaryTargetId") or ""), str(job.get("replicaTargetId") or "")}:
             return True
-    for job in backup_replication.list_repair_jobs(policy_id=policy_id, limit=500):
+    if len(jobs) >= limit:
+        return True
+
+    repairs = list(backup_replication.list_repair_jobs(policy_id=policy_id, limit=limit))
+    for job in repairs:
         if str(job.get("backupId") or "") != backup_id or str(job.get("phase") or "") in backup_replication.REPAIR_TERMINAL_PHASES:
             continue
         if target_id in {str(job.get("sourceTargetId") or ""), str(job.get("destTargetId") or "")}:
             return True
-    for job in backup_replication.list_rebalance_jobs(policy_id=policy_id, limit=500):
+    if len(repairs) >= limit:
+        return True
+
+    rebalances = list(backup_replication.list_rebalance_jobs(policy_id=policy_id, limit=limit))
+    for job in rebalances:
         if str(job.get("backupId") or "") != backup_id or str(job.get("phase") or "") in {"complete", "failed"}:
             continue
         if target_id in {str(job.get("sourceTargetId") or ""), str(job.get("destTargetId") or "")}:
             return True
-    for job in list_copy_retirement_jobs(policy_id=policy_id, target_id=target_id, limit=500):
+    if len(rebalances) >= limit:
+        return True
+
+    retirements = list(list_copy_retirement_jobs(policy_id=policy_id, target_id=target_id, limit=limit))
+    for job in retirements:
         if str(job.get("jobId") or "") == str(excluding_job_id or "") or str(job.get("backupId") or "") != backup_id:
             continue
         if str(job.get("phase") or "") not in RETIREMENT_TERMINAL_PHASES:
             return True
+    if len(retirements) >= limit:
+        return True
 
     from deepseek_infra.infra.workspace import backup_recovery_job, backups
 
@@ -606,6 +640,21 @@ def execute_copy_retirement_job(
             recoverable=False,
             last_verified_at=_utc_iso(),
             metadata={"retirementMarkerHash": marker["markerHash"], "retiredAt": marker["retiredAt"]},
+        )
+        from deepseek_infra.infra.workspace import backup_object_index
+
+        backup_object_index.index_receipt_objects(
+            target_id=target_id,
+            policy_id=policy_id,
+            backup_id=backup_id,
+            receipt=receipt,
+            ref_state="live",
+        )
+        backup_object_index.apply_retirement_to_index(
+            target_id=target_id,
+            policy_id=policy_id,
+            backup_id=backup_id,
+            receipt=receipt,
         )
 
         # 5. Physical GC is payload-only and fail-closed. Unknown formal

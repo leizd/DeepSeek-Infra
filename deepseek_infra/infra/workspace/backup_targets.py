@@ -467,6 +467,10 @@ def _register(
         "maxReadBytesPerSecond": _positive_qos(max_read_bytes_per_second, "maxReadBytesPerSecond", 100 * 1024 * 1024),
         "maxWriteBytesPerSecond": _positive_qos(max_write_bytes_per_second, "maxWriteBytesPerSecond", 100 * 1024 * 1024),
         "maxConcurrentTransfers": _positive_qos(max_concurrent_transfers, "maxConcurrentTransfers", 4),
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": None,
         "drainState": "active",
         "createdAt": str(created_at or "") or _utc_iso(),
         "registeredAt": _utc_iso(),
@@ -599,6 +603,10 @@ def init_s3_target(
         "maxWriteBytesPerSecond": _positive_qos(max_write_bytes_per_second, "maxWriteBytesPerSecond", 100 * 1024 * 1024),
         "maxConcurrentTransfers": _positive_qos(max_concurrent_transfers, "maxConcurrentTransfers", 4),
         "quotaBytes": _optional_positive_int(quota_bytes, "quotaBytes"),
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": None,
         "drainState": "active",
         "credentialProvider": credential_config,
         "createdAt": str(identity.get("createdAt") or _utc_iso()),
@@ -1013,6 +1021,37 @@ def reinitialize_target(path: Path | str, *, label: str = "") -> dict[str, Any]:
     return record
 
 
+def set_target_storage_tier(
+    target_id: str,
+    *,
+    storage_tier: str,
+    restore_latency_class: str | None = None,
+    min_residence_seconds: int | None = None,
+    retrieval_cost_per_gib: float | int | None = None,
+    expected_generation: int | None = None,
+) -> dict[str, Any]:
+    """Update operator-declared storage tier metadata for SLO-aware placement."""
+    from deepseek_infra.infra.workspace.backup_tiering import normalize_storage_tier
+
+    tier = normalize_storage_tier(storage_tier) or "hot"
+    latency = str(restore_latency_class or {"hot": "seconds", "warm": "minutes", "archive": "hours"}[tier])
+    residence = int(min_residence_seconds) if min_residence_seconds is not None else {"hot": 0, "warm": 7 * 86400, "archive": 30 * 86400}[tier]
+    retrieval = _operator_cost(retrieval_cost_per_gib, "retrievalCostPerGiB") if retrieval_cost_per_gib is not None else None
+
+    def _apply(target: dict[str, Any]) -> dict[str, Any]:
+        updated = {
+            **target,
+            "storageTier": tier,
+            "restoreLatencyClass": latency,
+            "minResidenceSeconds": max(0, residence),
+        }
+        if retrieval is not None:
+            updated["retrievalCostPerGiB"] = retrieval
+        return updated
+
+    return _mutate_target(target_id, _apply, expected_generation=expected_generation)
+
+
 def drain_target(target_id: str, *, reason: str = "", expected_generation: int | None = None) -> dict[str, Any]:
     """Set target drain state to draining."""
     now = _utc_iso()
@@ -1096,20 +1135,62 @@ def probe_target_capacity(target_id: str) -> dict[str, Any]:
 
     if quota_bytes is not None and int(quota_bytes) > 0:
         quota = int(quota_bytes)
-        # Approximate used bytes from known copy sizes or zero
-        from deepseek_infra.infra.workspace import backup_dr_ledger
-        copies = backup_dr_ledger.list_logical_recovery_copies(target_id=target_id)
-        used = sum(int(c.get("logicalBytes") or c.get("physicalBytes") or 0) for c in copies if c.get("recoverable"))
-        free = max(0, quota - used)
+        physical_usage = backup_control.physical_usage_summary(target_id)
+        physical = int(physical_usage.get("physicalStoredBytes") or 0)
+        live_bytes = int(physical_usage.get("liveReferencedBytes") or 0)
+        retired_pending = int(physical_usage.get("retiredPendingGcBytes") or 0)
+        confidence = str(physical_usage.get("confidence") or "unavailable")
+        if confidence == "unavailable" or int(physical_usage.get("objectCount") or 0) == 0:
+            # Index not built yet: fall back to unique physical/ciphertext copy bytes
+            # (never prefer logicalBytes — shared ciphertext must not be double-counted
+            # via logical recovery-point sizes).
+            from deepseek_infra.infra.workspace import backup_dr_ledger
+
+            copies = backup_dr_ledger.list_logical_recovery_copies(target_id=target_id, limit=5000)
+            seen_digests: set[str] = set()
+            used = 0
+            for copy in copies:
+                if not copy.get("recoverable") and str(copy.get("state") or "") != "retired":
+                    # still count retired-but-present until GC via metadata if present
+                    pass
+                meta_val = copy.get("metadata") if isinstance(copy, dict) else None
+                meta = meta_val if isinstance(meta_val, dict) else {}
+                digest = str(copy.get("objectSetDigest") or meta.get("objectSetDigest") or copy.get("backupId") or "")
+                if digest and digest in seen_digests:
+                    continue
+                if digest:
+                    seen_digests.add(digest)
+                sz = (
+                    copy.get("physicalBytes")
+                    or copy.get("ciphertextBytes")
+                    or meta.get("physicalBytes")
+                    or meta.get("ciphertextBytes")
+                    or 0
+                )
+                if isinstance(sz, int) and not isinstance(sz, bool) and sz > 0:
+                    used += sz
+                    if not copy.get("recoverable"):
+                        retired_pending += sz
+                    else:
+                        live_bytes += sz
+            physical = used
+            confidence = "low"
+        free = max(0, quota - physical)
         free_pct = round((free / quota) * 100.0, 2) if quota > 0 else 0.0
         return {
             "targetId": target_id,
             "totalBytes": quota,
-            "usedBytes": used,
+            "usedBytes": physical,
             "freeBytes": free,
             "freePercent": free_pct,
+            "physicalStoredBytes": physical,
+            "liveReferencedBytes": live_bytes,
+            "retiredPendingGcBytes": retired_pending,
+            "controlPlaneBytes": int(physical_usage.get("controlPlaneBytes") or 0),
+            "unknownExternalBytes": physical_usage.get("unknownExternalBytes"),
+            "capacityConfidence": confidence,
             "observedAt": _utc_iso(),
-            "source": "configured-quota",
+            "source": "physical-object-index" if confidence == "high" else "configured-quota-physical-estimate",
         }
 
     return {
@@ -1118,6 +1199,9 @@ def probe_target_capacity(target_id: str) -> dict[str, Any]:
         "usedBytes": None,
         "freeBytes": None,
         "freePercent": None,
+        "physicalStoredBytes": None,
+        "liveReferencedBytes": None,
+        "retiredPendingGcBytes": None,
         "observedAt": _utc_iso(),
         "source": "unknown",
     }

@@ -58,6 +58,13 @@ def test_storage_control_connection_retries_locked_wal_initialization(
     tmp_settings: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    class _Cursor:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def fetchone(self) -> tuple[object, ...]:
+            return (self._value,)
+
     class LockedOnceConnection:
         row_factory: object | None = None
 
@@ -70,7 +77,11 @@ def test_storage_control_connection_retries_locked_wal_initialization(
                 self.wal_attempts += 1
                 if self.wal_attempts == 1:
                     raise sqlite3.OperationalError("database is locked")
-            return object()
+            if statement == "PRAGMA quick_check":
+                return _Cursor("ok")
+            if statement.startswith("PRAGMA user_version"):
+                return _Cursor(2)
+            return _Cursor(None)
 
         def executescript(self, _script: str) -> None:
             return None
