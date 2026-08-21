@@ -450,6 +450,13 @@ def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any
     return normalized_res
 
 
+def _normalize_recovery_placement(raw: Any) -> dict[str, Any]:
+    """Lazy import avoids circular dependency with backup_placement."""
+    from deepseek_infra.infra.workspace.backup_placement import normalize_recovery_placement
+
+    return normalize_recovery_placement(raw)
+
+
 def _normalize_placement(raw: Any) -> dict[str, Any]:
     """Normalize placement and capacity objectives."""
     if raw is None:
@@ -515,6 +522,7 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
         "policyRevision": max(1, int(payload.get("policyRevision") or 1)),
         "replication": _normalize_replication(payload.get("replication"), primary_target_id=target_id),
         "placement": _normalize_placement(payload.get("placement")),
+        "recoveryPlacement": _normalize_recovery_placement(payload.get("recoveryPlacement")),
         "retentionPolicyId": _require_safe_id(payload.get("retentionPolicyId") or DEFAULT_RETENTION_POLICY_ID, "retentionPolicyId"),
         "retry": _normalize_retry(payload.get("retry")),
         "incremental": _normalize_incremental(payload.get("incremental")),
