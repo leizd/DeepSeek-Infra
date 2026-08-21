@@ -1,5 +1,9 @@
 # 4.5.9 Todo
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 ## Phase 1 — Journal + P0 fixes
 - [x] Control DB: user_version, schema_migrations, lifecycle_intents
 - [x] start_target_drain journals intent before/with topology mutation

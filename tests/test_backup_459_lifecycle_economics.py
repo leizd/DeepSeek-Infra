@@ -1,4 +1,4 @@
-"""4.5.9 Indexed Lifecycle Economics & SLO-Aware Storage Tiering contracts."""
+"""Indexed Lifecycle Economics & SLO-Aware Storage Tiering contracts."""
 
 from __future__ import annotations
 

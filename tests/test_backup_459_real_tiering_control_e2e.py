@@ -1,4 +1,4 @@
-"""CI-only real three-MinIO tiering + control-recovery Evidence (4.5.9)."""
+"""CI-only real three-MinIO tiering + control-recovery Evidence."""
 
 from __future__ import annotations
 
