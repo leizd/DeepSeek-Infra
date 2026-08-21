@@ -56,6 +56,9 @@
 - [x] run_storage_control_plane_minio_e2e.py PLACE_SCENARIO + CHECK_SCENARIOS
 - [x] evidence workflow contract updated for 460 node ids
 
+## Version surface 4.6.0
+- [x] VERSION + check_release_version --require-release-note
+- [x] docs/releases/4.6.0.md, CHANGELOG, README, Evidence index, frontend/android/docker
+
 ## Remaining
-- [ ] Version surface 4.6.0
 - [ ] Full suite green + coverage gate

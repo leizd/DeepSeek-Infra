@@ -5,26 +5,25 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.5.9-blue)
+![Version](https://img.shields.io/badge/version-4.6.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.5.9 — Indexed Lifecycle Economics & SLO-Aware Storage Tiering.** Builds on the 4.5.8 Storage Control Plane with a Lifecycle Transaction Journal, rebuildable Ciphertext Reference Index, physical object-byte accounting, elapsed-time capacity forecasts, honest cost provenance, Recovery Chain Closure Hot/Warm/Archive tiering, and sharded maintenance leases.
+> **4.6.0 — Autonomous Recovery Placement & Scale-Safe Storage Control.** Builds on 4.5.9 with scale-safe physical identity/GC, index coverage, lineage graph, RecoveryChainMigrationJob, recoveryPlacement SLO controller (recoverability before cost), and true per-target maintenance sharding.
 
-## 4.5.9 at a glance
+## 4.6.0 at a glance
 
-- Lifecycle Transaction Journal: Drain/tier topology mutations commit durable intents in `control.sqlite3` under `BEGIN IMMEDIATE`; DrainJob rows are rebuildable projections with crash reconciliation.
-- Ciphertext Reference Index: Rebuildable `target_objects` / `recovery_object_refs` accelerate retirement GC; shared ciphertext stays protected; active-job dependency scans fail closed at page limits.
-- Physical Accounting & Forecast: Quota admission uses physical object bytes; growth horizons use elapsed-time observations with confidence instead of invented day counts.
-- Honest Economics: Unknown operator rates report `costStatus=unavailable` with provenance; recoverability and RTO still dominate cost in placement.
-- Recovery-Chain Tiering: Hot/Warm/Archive placement units cover full restore ancestry; ciphertext migrates without re-encryption; `backupId` and `objectSetDigest` remain stable.
-- Sharded Maintenance: Planner + per-(worker, scope) fencing so one slow archive target cannot stall primary repair.
-- Exact-Merge Evidence: Three independent MinIO servers, boto3, `S3TargetStore`, production workers, real randomized Age; tiering and control-recovery scenarios extend the 4.5.8 producer.
+- Scale-safe correctness: canonical ciphertext identity, SQL-native live-ref GC, readiness capacity with zero remote I/O, exact parent chain fail-closed.
+- Index coverage + projections: incomplete index blocks GC; forecasts persist on probe and are read-only for readiness.
+- Lineage + chain migration: rebuildable recovery_lineage; durable RecoveryChainMigrationJob with per-member sources; never marks executed on failure.
+- Autonomous placement: `recoveryPlacement` maps age to Hot/Warm/Archive with explainable reasonCodes; cost is last.
+- Target-sharded maintenance: repair/rebalance/retirement/chain-migration leases scoped by target so one slow dest cannot stall others.
+- Exact-Merge Evidence: three independent MinIO servers plus placement scenario on the storage-control-plane producer.
 
-See the [4.5.9 release notes](docs/releases/4.5.9.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.6.0 release notes](docs/releases/4.6.0.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 
