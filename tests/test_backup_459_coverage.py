@@ -383,11 +383,9 @@ def test_drain_cancel_and_reconcile_fenced(tmp_settings: Path) -> None:
     )
     bumped = backup_drain.reconcile_drain_projections()
     assert bumped["recreated"] >= 0
-    assert backup_control.get_lifecycle_intent(str(intent["intentId"]))["phase"] in {
-        "job-projected",
-        "fenced",
-        "topology-committed",
-    }
+    intent_after = backup_control.get_lifecycle_intent(str(intent["intentId"]))
+    assert intent_after is not None
+    assert intent_after["phase"] in {"job-projected", "fenced", "topology-committed"}
 
     # Empty targetId intent is skipped
     backup_control.commit_lifecycle_intent(kind="drain", target_id=None, phase="open", payload={})
