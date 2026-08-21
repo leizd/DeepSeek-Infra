@@ -1,4 +1,4 @@
-"""Branch coverage for 4.5.9 object index, tiering, control, and drain paths."""
+"""Branch coverage for object index, tiering, control, and drain paths."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import patch
 
 import pytest
