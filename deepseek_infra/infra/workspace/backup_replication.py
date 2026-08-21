@@ -16,6 +16,7 @@ and In-Place Committed Copy Healing.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -30,11 +31,13 @@ from typing import Any
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
+    backup_control,
     backup_dr_ledger,
     backup_object_set,
     backup_publish,
     backup_scheduler,
     backup_spool,
+    backup_transfer_budget,
     backup_writer_lease,
 )
 
@@ -80,6 +83,54 @@ REPAIR_ACTIVE_PHASES = frozenset(
 )
 
 _LOCK = threading.RLock()
+
+
+def _maintenance_job_page(
+    directory: Path,
+    *,
+    cursor_kind: str,
+    scan_limit: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str] | None]:
+    """Read one durable, bounded filename page from a legacy JSON job queue."""
+    cursor_state = backup_control.get_maintenance_cursor(cursor_kind, "global")
+    cursor_value = cursor_state.get("cursor")
+    after_name = str(cursor_value.get("fileName") or "") if isinstance(cursor_value, dict) else ""
+    if not directory.is_dir():
+        return [], cursor_state, None
+
+    page_size = max(1, min(int(scan_limit), 500))
+    paths = [
+        path
+        for path in sorted(directory.glob("*.json"), key=lambda item: item.name)
+        if not path.name.startswith(".") and (not after_name or path.name > after_name)
+    ][:page_size]
+    jobs: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            jobs.append(value)
+    next_cursor = {"fileName": paths[-1].name} if len(paths) >= page_size else None
+    return jobs, cursor_state, next_cursor
+
+
+def _advance_maintenance_job_cursor(
+    cursor_kind: str,
+    cursor_state: dict[str, Any],
+    next_cursor: dict[str, str] | None,
+) -> None:
+    current = cursor_state.get("cursor")
+    normalized_current = current if isinstance(current, dict) else None
+    if normalized_current == next_cursor:
+        return
+    backup_control.update_maintenance_cursor(
+        cursor_kind,
+        "global",
+        next_cursor,
+        expected_generation=int(cursor_state["generation"]),
+    )
 
 
 def _utc_iso(dt: datetime | None = None) -> str:
@@ -354,6 +405,54 @@ def is_source_held(
     return False
 
 
+def has_source_holds_for_target(target_id: str, *, target: Any | None = None, now: datetime | None = None) -> bool:
+    """Fail closed when any durable, unexpired source hold remains on a Target."""
+    current = now or datetime.now(tz=timezone.utc)
+
+    def _active(payload: dict[str, Any]) -> bool:
+        expiry = _parse_iso(payload.get("expiresAt"))
+        return expiry is None or current <= expiry
+
+    if HOLDS_DIR.is_dir():
+        for path in HOLDS_DIR.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return True
+            if isinstance(payload, dict) and str(payload.get("targetId") or "") == target_id and _active(payload):
+                return True
+    if target is None:
+        return False
+    if getattr(target, "root", None) is not None:
+        hold_dir = target.root / "holds" / "repair"
+        if not hold_dir.is_dir():
+            return False
+        for path in hold_dir.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return True
+            if isinstance(payload, dict) and _active(payload):
+                return True
+        return False
+    if getattr(target, "store", None) is not None:
+        cursor: str | None = None
+        try:
+            while True:
+                page = target.store.list_objects("holds/repair/", cursor=cursor, limit=200)
+                for obj in page.objects:
+                    raw = target.store.get_bytes(obj.key)
+                    payload = json.loads(raw.decode("utf-8")) if raw else None
+                    if not isinstance(payload, dict) or _active(payload):
+                        return True
+                cursor = page.cursor
+                if not cursor:
+                    return False
+        except Exception:
+            return True
+    return False
+
+
 # ── Target-Local Catalog Append ─────────────────────────────────────────────
 
 
@@ -449,6 +548,14 @@ def enqueue_replica_jobs(
     if not replication or not replication.get("enabled"):
         return []
     targets = list(replication.get("targets") or [])
+    configured_primary_id = str(policy.get("primaryTargetId") or policy.get("targetId") or "").strip()
+    configured_ids = {
+        str(entry.get("targetId") or "")
+        for entry in targets
+        if isinstance(entry, dict)
+    }
+    if configured_primary_id and configured_primary_id != primary_target_id and configured_primary_id not in configured_ids:
+        targets.append({"targetId": configured_primary_id, "mode": "required", "role": "failback-catchup"})
     if not targets:
         return []
     policy_id = str(policy.get("policyId") or "")
@@ -595,6 +702,12 @@ def execute_replication_job(job_id: str, *, instance_id: str = "repl-worker") ->
                 policy_id=policy_id,
                 schedule_slot=schedule_slot,
                 fencing_token=fencing,
+                traffic_class=(
+                    backup_transfer_budget.TrafficClass.P3_REQUIRED_REPLICATION
+                    if mode == "required"
+                    else backup_transfer_budget.TrafficClass.P6_BEST_EFFORT
+                ),
+                retain_spool=True,
             )
             job = _set_phase(job, "committing")
             if isinstance(package, backup_object_set.ObjectSetPackage):
@@ -629,6 +742,18 @@ def execute_replication_job(job_id: str, *, instance_id: str = "repl-worker") ->
                 )
             except Exception:  # pragma: no cover
                 pass
+            try:
+                job_slot_digest = str(job.get("slotDigest") or "")
+                if job_slot_digest and not has_open_required_jobs(
+                    policy_id=policy_id,
+                    slot_digest=job_slot_digest,
+                    backup_id=backup_id,
+                ):
+                    backup_spool.clear_slot(policy_id, job_slot_digest)
+            except Exception:
+                # Cleanup is retryable and TTL-bounded; it must not downgrade
+                # an authenticated committed replica.
+                pass
             return job
         finally:
             try:
@@ -657,9 +782,14 @@ def _fail_job(job: dict[str, Any], exc: BaseException, *, mode: str) -> dict[str
 
 def process_pending_jobs(*, instance_id: str = "repl-worker", limit: int = 10) -> dict[str, int]:
     """Drain a bounded batch of queued/active replication jobs."""
+    page, cursor_state, next_cursor = _maintenance_job_page(
+        REPLICATION_DIR,
+        cursor_kind="replication-jobs",
+        scan_limit=max(10, min(int(limit) * 10, 500)),
+    )
     pending = [
         j
-        for j in list_jobs(limit=500)
+        for j in page
         if str(j.get("phase") or "") in ACTIVE_PHASES or str(j.get("phase") or "") == "queued"
     ]
     processed = failed = committed = 0
@@ -676,6 +806,7 @@ def process_pending_jobs(*, instance_id: str = "repl-worker", limit: int = 10) -
             committed += 1
         elif res_phase in {"failed", "failed-terminal"}:
             failed += 1
+    _advance_maintenance_job_cursor("replication-jobs", cursor_state, next_cursor)
     return {"processed": processed, "committed": committed, "failed": failed}
 
 
@@ -702,6 +833,23 @@ def _iter_source_stream(target: Any, rel_key: str, *, chunk_size: int = DEFAULT_
                 # If stream yields large chunk, slice into bounded buffer chunks
                 for offset in range(0, len(chunk), chunk_size):
                     yield chunk[offset : offset + chunk_size]
+
+
+def _managed_source_stream(
+    source_target: Any,
+    dest_target: Any,
+    rel_key: str,
+    *,
+    chunk_size: int,
+    traffic_class: backup_transfer_budget.TrafficClass,
+) -> Iterator[bytes]:
+    manager = backup_transfer_budget.get_global_transfer_budget_manager()
+    return manager.throttled_generator(
+        _iter_source_stream(source_target, rel_key, chunk_size=chunk_size),
+        traffic_class=traffic_class,
+        source_target_id=str(getattr(source_target, "target_id", "") or "") or None,
+        dest_target_id=str(getattr(dest_target, "target_id", "") or "") or None,
+    )
 
 
 def authenticate_recovery_copy(
@@ -943,6 +1091,91 @@ def _verify_destination_component(dest_target: Any, target_rel: str, expected_di
     return False, False
 
 
+def _part_number(part: dict[str, Any]) -> int:
+    return int(part.get("partNumber") or part.get("number") or 0)
+
+
+def _normalized_etag(value: Any) -> str:
+    return str(value or "").strip().strip('"').lower()
+
+
+def _part_matches_source(part: dict[str, Any], chunk: bytes) -> tuple[bool, str]:
+    size = int(part.get("size") or 0)
+    if size != len(chunk):
+        return False, f"size-mismatch:{size}!={len(chunk)}"
+    checksum_b64 = str(part.get("checksumSHA256") or "")
+    expected_sha256 = hashlib.sha256(chunk).hexdigest()
+    if checksum_b64:
+        expected_b64 = base64.b64encode(hashlib.sha256(chunk).digest()).decode("ascii")
+        if checksum_b64 != expected_b64:
+            return False, "checksum-mismatch"
+        return True, "provider-checksum"
+    etag = _normalized_etag(part.get("etag"))
+    expected_md5 = hashlib.md5(chunk, usedforsecurity=False).hexdigest()
+    if etag not in {expected_sha256, expected_md5}:
+        return False, "etag-unverifiable-or-mismatch"
+    return True, "etag-content-binding"
+
+
+def _canonical_progress_part(part: dict[str, Any], chunk: bytes) -> dict[str, Any]:
+    return {
+        "number": _part_number(part),
+        "etag": str(part.get("etag") or ""),
+        "size": len(chunk),
+        "checksumSha256": hashlib.sha256(chunk).hexdigest(),
+    }
+
+
+def _provider_upload_part(part: dict[str, Any], chunk: bytes) -> dict[str, Any]:
+    result = {
+        "partNumber": _part_number(part),
+        "etag": str(part.get("etag") or ""),
+        "size": len(chunk),
+    }
+    if part.get("checksumSHA256"):
+        result["checksumSHA256"] = str(part["checksumSHA256"])
+    return result
+
+
+def _upload_result_part(result: Any, part_number: int, chunk: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
+    if isinstance(result, dict):
+        provider = dict(result)
+    else:
+        provider = {
+            "partNumber": int(getattr(result, "part_number", part_number) or part_number),
+            "etag": str(getattr(result, "etag", "") or ""),
+            "size": int(getattr(result, "size", len(chunk)) or len(chunk)),
+        }
+    provider["partNumber"] = int(provider.get("partNumber") or part_number)
+    provider["etag"] = str(provider.get("etag") or "")
+    provider["size"] = int(provider.get("size") or len(chunk))
+    return provider, _canonical_progress_part(provider, chunk)
+
+
+def _multipart_upload_missing(exc: BaseException) -> bool:
+    return int(getattr(exc, "status", 0) or 0) == 404 or "multipart-upload-not-found" in str(exc).lower()
+
+
+def _quarantine_multipart_progress(
+    progress_state: dict[str, Any],
+    *,
+    upload_id: str,
+    reason: str,
+    local_parts: list[dict[str, Any]],
+    remote_parts: list[dict[str, Any]],
+) -> None:
+    progress_state["multipartQuarantine"] = {
+        "uploadId": upload_id,
+        "reason": reason,
+        "localParts": local_parts,
+        "remoteParts": remote_parts,
+        "quarantinedAt": _utc_iso(),
+    }
+    progress_state.pop("multipartUploadId", None)
+    progress_state["parts"] = []
+    progress_state["nextOffset"] = 0
+
+
 def stream_ciphertext_transfer(
     source_target: Any,
     dest_target: Any,
@@ -953,6 +1186,7 @@ def stream_ciphertext_transfer(
     chunk_size: int = DEFAULT_BUFFER_CHUNK_SIZE,
     progress_state: dict[str, Any] | None = None,
     on_part: Callable[[int, str, int], None] | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR,
 ) -> int:
     """Stream ciphertext from source to destination using bounded buffer RAM.
 
@@ -970,7 +1204,13 @@ def stream_ciphertext_transfer(
         tmp = dp.with_name(f".{dp.name}.{os.getpid()}.{time.time_ns()}.tmp")
         try:
             with tmp.open("wb") as out_h:
-                for chunk in _iter_source_stream(source_target, source_rel, chunk_size=chunk_size):
+                for chunk in _managed_source_stream(
+                    source_target,
+                    dest_target,
+                    source_rel,
+                    chunk_size=chunk_size,
+                    traffic_class=traffic_class,
+                ):
                     hasher.update(chunk)
                     out_h.write(chunk)
                     bytes_transferred += len(chunk)
@@ -991,57 +1231,165 @@ def stream_ciphertext_transfer(
             raise
     elif dest_target.store is not None:
         store = dest_target.store
-        stream = _iter_source_stream(source_target, source_rel, chunk_size=chunk_size)
+        stream = _managed_source_stream(
+            source_target,
+            dest_target,
+            source_rel,
+            chunk_size=chunk_size,
+            traffic_class=traffic_class,
+        )
 
-        # Check if resuming existing multipart upload
-        if (
-            progress_state is not None
-            and progress_state.get("multipartUploadId")
-            and int(progress_state.get("nextOffset") or 0) > 0
-        ):
+        # Reconcile the durable local checkpoint with provider ListParts before
+        # sending any resumed bytes. Provider parts are accepted only after
+        # they are content-bound to the immutable source ciphertext.
+        if progress_state is not None and progress_state.get("multipartUploadId"):
             from deepseek_infra.infra.workspace.backup_target_store import MultipartUpload
 
             upload_id = str(progress_state["multipartUploadId"])
-            next_offset = int(progress_state["nextOffset"])
-            existing_parts = list(progress_state.get("parts") or [])
+            local_parts = [dict(item) for item in list(progress_state.get("parts") or []) if isinstance(item, dict)]
             upload = MultipartUpload(key=dest_rel, upload_id=upload_id, checksum_sha256=expected_digest)
-
-            offset_skipped = 0
-            while offset_skipped < next_offset:
-                try:
-                    c = next(stream)
-                except StopIteration:
-                    break
-                hasher.update(c)
-                bytes_transferred += len(c)
-                offset_skipped += len(c)
-
-            part_num = len(existing_parts)
             try:
+                remote_parts = sorted(
+                    [dict(item) for item in store.list_multipart_parts(upload) if isinstance(item, dict)],
+                    key=_part_number,
+                )
+            except Exception as exc:
+                if not _multipart_upload_missing(exc):
+                    raise
+                progress_state["multipartRestart"] = {
+                    "previousUploadId": upload_id,
+                    "reason": "provider-upload-not-found",
+                    "restartedAt": _utc_iso(),
+                }
+                progress_state.pop("multipartUploadId", None)
+                progress_state["parts"] = []
+                progress_state["nextOffset"] = 0
+            else:
+                conflict_reason: str | None = None
+                if len(remote_parts) < len(local_parts):
+                    conflict_reason = f"remote-part-count-behind:{len(remote_parts)}<{len(local_parts)}"
+                canonical_remote: list[dict[str, Any]] = []
+                provider_remote: list[dict[str, Any]] = []
+                expected_local_offset = 0
+                for index, remote_part in enumerate(remote_parts, start=1):
+                    if _part_number(remote_part) != index:
+                        conflict_reason = conflict_reason or f"non-contiguous-remote-part:{_part_number(remote_part)}"
+                        break
+                    try:
+                        source_chunk = next(stream)
+                    except StopIteration:
+                        conflict_reason = conflict_reason or "remote-parts-exceed-source"
+                        break
+                    matches, match_reason = _part_matches_source(remote_part, source_chunk)
+                    if not matches:
+                        conflict_reason = conflict_reason or f"remote-part-{index}-{match_reason}"
+                        break
+                    if index <= len(local_parts):
+                        local_part = local_parts[index - 1]
+                        if _part_number(local_part) != index:
+                            conflict_reason = conflict_reason or f"non-contiguous-local-part:{_part_number(local_part)}"
+                            break
+                        local_size = int(local_part.get("size") or len(source_chunk))
+                        if local_size != int(remote_part.get("size") or 0):
+                            conflict_reason = conflict_reason or f"part-{index}-local-remote-size-conflict"
+                            break
+                        local_etag = _normalized_etag(local_part.get("etag"))
+                        remote_etag = _normalized_etag(remote_part.get("etag"))
+                        if len(local_etag) in {32, 64} and local_etag != remote_etag:
+                            conflict_reason = conflict_reason or f"part-{index}-local-remote-etag-conflict"
+                            break
+                        local_checksum = str(local_part.get("checksumSha256") or "")
+                        if local_checksum and local_checksum != hashlib.sha256(source_chunk).hexdigest():
+                            conflict_reason = conflict_reason or f"part-{index}-local-checksum-conflict"
+                            break
+                        expected_local_offset += len(source_chunk)
+                    hasher.update(source_chunk)
+                    bytes_transferred += len(source_chunk)
+                    canonical_remote.append(_canonical_progress_part(remote_part, source_chunk))
+                    provider_remote.append(_provider_upload_part(remote_part, source_chunk))
+
+                local_next_offset = int(progress_state.get("nextOffset") or 0)
+                if conflict_reason is None and local_next_offset != expected_local_offset:
+                    conflict_reason = f"local-offset-conflict:{local_next_offset}!={expected_local_offset}"
+                if conflict_reason is not None:
+                    store.abort_multipart(upload)
+                    _quarantine_multipart_progress(
+                        progress_state,
+                        upload_id=upload_id,
+                        reason=conflict_reason,
+                        local_parts=local_parts,
+                        remote_parts=remote_parts,
+                    )
+                    raise AppError(
+                        f"multipart-reconciliation-conflict:{conflict_reason}",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=409,
+                    )
+
+                upload.parts = provider_remote
+                progress_state["parts"] = canonical_remote
+                progress_state["nextOffset"] = sum(int(item["size"]) for item in canonical_remote)
+                reconcile_status = "remote-ahead-adopted" if len(remote_parts) > len(local_parts) else "remote-matches-local"
+                progress_state["multipartReconciliation"] = {
+                    "status": reconcile_status,
+                    "uploadId": upload_id,
+                    "localPartCount": len(local_parts),
+                    "remotePartCount": len(remote_parts),
+                    "reconciledAt": _utc_iso(),
+                }
+                if on_part is not None:
+                    for adopted in canonical_remote[len(local_parts) :]:
+                        on_part(int(adopted["number"]), str(adopted["etag"]), int(adopted["size"]))
+
+                part_num = len(remote_parts)
                 for chunk in stream:
                     part_num += 1
                     hasher.update(chunk)
                     bytes_transferred += len(chunk)
-                    res_n = store.upload_part(upload, part_num, chunk)
-                    etag_n = getattr(res_n, "etag", str(res_n))
-                    progress_state["parts"].append({"number": part_num, "etag": etag_n})
+                    result = store.upload_part(
+                        upload,
+                        part_num,
+                        chunk,
+                        checksum_sha256=hashlib.sha256(chunk).hexdigest(),
+                    )
+                    provider_part, progress_part = _upload_result_part(result, part_num, chunk)
+                    upload.parts = [item for item in upload.parts if _part_number(item) != part_num]
+                    upload.parts.append(provider_part)
+                    upload.parts.sort(key=_part_number)
+                    progress_state["parts"].append(progress_part)
                     progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(chunk)
                     if on_part is not None:
-                        on_part(part_num, etag_n, len(chunk))
+                        on_part(part_num, str(progress_part["etag"]), len(chunk))
 
                 calc_digest = hasher.hexdigest()
                 if calc_digest != expected_digest:
                     store.abort_multipart(upload)
+                    _quarantine_multipart_progress(
+                        progress_state,
+                        upload_id=upload_id,
+                        reason="source-ciphertext-digest-mismatch",
+                        local_parts=local_parts,
+                        remote_parts=remote_parts,
+                    )
                     raise AppError(
                         f"source component corrupt: ciphertext transfer digest mismatch: calculated={calc_digest}, expected={expected_digest}",
                         code=ErrorCode.INTERNAL,
                         status=500,
                     )
+                upload.expected_size = bytes_transferred
                 store.complete_multipart_if_absent(upload)
                 return bytes_transferred
-            except Exception:
-                store.abort_multipart(upload)
-                raise
+
+        # A missing provider upload is restarted from byte zero.
+        stream = _managed_source_stream(
+            source_target,
+            dest_target,
+            source_rel,
+            chunk_size=chunk_size,
+            traffic_class=traffic_class,
+        )
+        hasher = hashlib.sha256()
+        bytes_transferred = 0
 
         try:
             first_chunk = next(stream)
@@ -1073,36 +1421,50 @@ def stream_ciphertext_transfer(
                 progress_state["multipartUploadId"] = upload.upload_id
                 progress_state["parts"] = []
                 progress_state["nextOffset"] = 0
+                progress_state["multipartReconciliation"] = {
+                    "status": "new-upload",
+                    "uploadId": upload.upload_id,
+                    "localPartCount": 0,
+                    "remotePartCount": 0,
+                    "reconciledAt": _utc_iso(),
+                }
             part_num = 1
             try:
-                res1 = store.upload_part(upload, part_num, first_chunk)
-                etag1 = getattr(res1, "etag", str(res1))
+                res1 = store.upload_part(upload, part_num, first_chunk, checksum_sha256=hashlib.sha256(first_chunk).hexdigest())
+                provider1, progress1 = _upload_result_part(res1, part_num, first_chunk)
+                upload.parts = [provider1]
                 if progress_state is not None:
-                    progress_state["parts"].append({"number": part_num, "etag": etag1})
+                    progress_state["parts"].append(progress1)
                     progress_state["nextOffset"] = len(first_chunk)
                 if on_part is not None:
-                    on_part(part_num, etag1, len(first_chunk))
+                    on_part(part_num, str(progress1["etag"]), len(first_chunk))
 
                 part_num += 1
-                res2 = store.upload_part(upload, part_num, second_chunk)
-                etag2 = getattr(res2, "etag", str(res2))
+                res2 = store.upload_part(upload, part_num, second_chunk, checksum_sha256=hashlib.sha256(second_chunk).hexdigest())
+                provider2, progress2 = _upload_result_part(res2, part_num, second_chunk)
+                upload.parts = [item for item in upload.parts if _part_number(item) != part_num]
+                upload.parts.append(provider2)
+                upload.parts.sort(key=_part_number)
                 if progress_state is not None:
-                    progress_state["parts"].append({"number": part_num, "etag": etag2})
+                    progress_state["parts"].append(progress2)
                     progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(second_chunk)
                 if on_part is not None:
-                    on_part(part_num, etag2, len(second_chunk))
+                    on_part(part_num, str(progress2["etag"]), len(second_chunk))
 
                 for chunk in stream:
                     part_num += 1
                     hasher.update(chunk)
                     bytes_transferred += len(chunk)
-                    res_n = store.upload_part(upload, part_num, chunk)
-                    etag_n = getattr(res_n, "etag", str(res_n))
+                    result = store.upload_part(upload, part_num, chunk, checksum_sha256=hashlib.sha256(chunk).hexdigest())
+                    provider_part, progress_part = _upload_result_part(result, part_num, chunk)
+                    upload.parts = [item for item in upload.parts if _part_number(item) != part_num]
+                    upload.parts.append(provider_part)
+                    upload.parts.sort(key=_part_number)
                     if progress_state is not None:
-                        progress_state["parts"].append({"number": part_num, "etag": etag_n})
+                        progress_state["parts"].append(progress_part)
                         progress_state["nextOffset"] = int(progress_state["nextOffset"]) + len(chunk)
                     if on_part is not None:
-                        on_part(part_num, etag_n, len(chunk))
+                        on_part(part_num, str(progress_part["etag"]), len(chunk))
 
                 calc_digest = hasher.hexdigest()
                 if calc_digest != expected_digest:
@@ -1112,9 +1474,13 @@ def stream_ciphertext_transfer(
                         code=ErrorCode.INTERNAL,
                         status=500,
                     )
+                upload.expected_size = bytes_transferred
                 store.complete_multipart_if_absent(upload)
             except Exception:
-                store.abort_multipart(upload)
+                # A durable checkpoint is intentionally left resumable on
+                # transient transport failures. Untracked uploads are aborted.
+                if progress_state is None:
+                    store.abort_multipart(upload)
                 raise
 
     return bytes_transferred
@@ -1126,6 +1492,8 @@ def quarantine_and_replace_corrupt_remote_object(
     expected_digest: str,
     source_target: Any,
     source_rel: str,
+    *,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR,
 ) -> int:
     """Safely replace a corrupted object on destination using conditional delete + transfer."""
     if dest_target.root is not None:
@@ -1134,7 +1502,14 @@ def quarantine_and_replace_corrupt_remote_object(
         dp = dest_target.root / dest_rel
         if dp.is_file():
             dp.rename(q_dir / f"{expected_digest}.corrupt.{time.time_ns()}")
-        return stream_ciphertext_transfer(source_target, dest_target, source_rel, dest_rel, expected_digest)
+        return stream_ciphertext_transfer(
+            source_target,
+            dest_target,
+            source_rel,
+            dest_rel,
+            expected_digest,
+            traffic_class=traffic_class,
+        )
 
     if dest_target.store is not None:
         stat = dest_target.store.stat(dest_rel)
@@ -1183,7 +1558,14 @@ def quarantine_and_replace_corrupt_remote_object(
             except Exception as exc:
                 raise AppError(f"conditional-delete-corrupt-object-failed: {exc}", code=ErrorCode.INVALID_REQUEST, status=412) from exc
 
-        return stream_ciphertext_transfer(source_target, dest_target, source_rel, dest_rel, expected_digest)
+        return stream_ciphertext_transfer(
+            source_target,
+            dest_target,
+            source_rel,
+            dest_rel,
+            expected_digest,
+            traffic_class=traffic_class,
+        )
     return 0
 
 
@@ -1247,6 +1629,7 @@ def create_repair_job(
     source_target_id: str | None = None,
     object_set_digest: str | None = None,
     repair_id: str | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR,
 ) -> dict[str, Any]:
     with _LOCK:
         REPAIRS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1260,6 +1643,7 @@ def create_repair_job(
             "destTargetId": dest_target_id,
             "objectSetDigest": object_set_digest,
             "repairMode": "auto",
+            "trafficClass": int(traffic_class),
             "phase": "queued",
             "components": {},
             "bytesRepaired": 0,
@@ -1296,6 +1680,7 @@ def execute_replica_repair(
     source_target_id: str | None = None,
     run_id: str | None = None,
     instance_id: str = "healer-worker",
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR,
 ) -> dict[str, Any]:
     """Repair missing/corrupted replica copy purely on the ciphertext plane.
 
@@ -1327,6 +1712,7 @@ def execute_replica_repair(
                 dest_target_id=dest_target_id,
                 source_target_id=source_target_id,
                 repair_id=r_id,
+                traffic_class=traffic_class,
             )
     else:
         job = existing_job
@@ -1358,6 +1744,10 @@ def execute_repair_job_instance(
     backup_id = str(job["backupId"])
     dest_target_id = str(job["destTargetId"])
     source_target_id = job.get("sourceTargetId") or requested_source_target_id
+    try:
+        transfer_class = backup_transfer_budget.TrafficClass(int(job.get("trafficClass", 2)))
+    except ValueError:
+        transfer_class = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR
     attempt = int(job.get("attempt") or 0) + 1
     max_attempts = int(job.get("maxAttempts") or 5)
 
@@ -1562,8 +1952,23 @@ def execute_repair_job_instance(
                         digest,
                         source_target,
                         source_rel,
+                        traffic_class=transfer_class,
                     )
                 else:
+                    def _checkpoint_multipart_part(part_number: int, etag: str, part_bytes: int) -> None:
+                        nonlocal job
+                        assert job is not None
+                        components_state[digest]["lastCheckpointPart"] = part_number
+                        components_state[digest]["lastCheckpointEtag"] = etag
+                        components_state[digest]["lastCheckpointPartBytes"] = part_bytes
+                        job = _set_repair_phase(
+                            job,
+                            "transferring-components",
+                            components=components_state,
+                            bytesRepaired=bytes_transferred,
+                        )
+                        hold.renew()
+
                     trans_bytes = stream_ciphertext_transfer(
                         source_target,
                         dest_target,
@@ -1571,6 +1976,8 @@ def execute_repair_job_instance(
                         target_rel,
                         digest,
                         progress_state=components_state[digest],
+                        on_part=_checkpoint_multipart_part,
+                        traffic_class=transfer_class,
                     )
 
                 bytes_transferred += trans_bytes
@@ -1739,8 +2146,13 @@ def execute_repair_job_instance(
 def process_pending_repairs(*, instance_id: str = "healer-worker", limit: int = 5, now: datetime | None = None) -> dict[str, int]:
     """Drain and resume active/queued ReplicaRepairJobs respecting backoff and attempt limits."""
     current = now or datetime.now(tz=timezone.utc)
+    page, cursor_state, next_cursor = _maintenance_job_page(
+        REPAIRS_DIR,
+        cursor_kind="repair-jobs",
+        scan_limit=max(10, min(int(limit) * 10, 500)),
+    )
     pending = []
-    for j in list_repair_jobs(limit=200):
+    for j in page:
         phase = str(j.get("phase") or "")
         if phase not in REPAIR_ACTIVE_PHASES and phase != "queued":
             continue
@@ -1767,6 +2179,7 @@ def process_pending_repairs(*, instance_id: str = "healer-worker", limit: int = 
         except Exception:
             processed += 1
             failed += 1
+    _advance_maintenance_job_cursor("repair-jobs", cursor_state, next_cursor)
     return {"processed": processed, "succeeded": succeeded, "failed": failed}
 
 
@@ -2042,6 +2455,7 @@ def simulate_copy_removal(
     placement = (policy or {}).get("placement") or {}
     min_copies = int(repl.get("minCommittedCopies") or 1)
     min_fd = int(repl.get("minFailureDomains") or 1)
+    min_regions = int(repl.get("minRegions") or 1)
     max_copies_per_fd = placement.get("maxCopiesPerFailureDomain") or repl.get("maxCopiesPerFailureDomain")
 
     all_target_records = {t["targetId"]: t for t in backup_targets.list_targets()}
@@ -2057,13 +2471,21 @@ def simulate_copy_removal(
         str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
         for c in healthy_after
     }
+    regions_before = {
+        str((all_target_records.get(str(c.get("targetId"))) or {}).get("region") or "default-region")
+        for c in healthy_before
+    }
+    regions_after = {
+        str((all_target_records.get(str(c.get("targetId"))) or {}).get("region") or "default-region")
+        for c in healthy_after
+    }
 
     counts_by_fd_after: dict[str, int] = {}
     for c in healthy_after:
         fd_name = str((all_target_records.get(str(c.get("targetId"))) or {}).get("failureDomain") or "default")
         counts_by_fd_after[fd_name] = counts_by_fd_after.get(fd_name, 0) + 1
 
-    policy_safe = len(healthy_after) >= min_copies and len(fd_after) >= min_fd
+    policy_safe = len(healthy_after) >= min_copies and len(fd_after) >= min_fd and len(regions_after) >= min_regions
     if max_copies_per_fd is not None and int(max_copies_per_fd) > 0:
         if any(cnt > int(max_copies_per_fd) for cnt in counts_by_fd_after.values()):
             policy_safe = False
@@ -2075,6 +2497,8 @@ def simulate_copy_removal(
         "healthyCopiesAfter": len(healthy_after),
         "failureDomainsBefore": len(fd_before),
         "failureDomainsAfter": len(fd_after),
+        "regionsBefore": len(regions_before),
+        "regionsAfter": len(regions_after),
         "copiesInEachDomainAfter": counts_by_fd_after,
         "policySafe": policy_safe and not protected_by_hold,
         "protectedByHold": protected_by_hold,
@@ -2149,6 +2573,7 @@ def execute_rebalance_job(
             dest_target_id=dest_target_id,
             source_target_id=source_target_id,
             instance_id=instance_id,
+            traffic_class=backup_transfer_budget.TrafficClass.P5_REBALANCE_DRAIN,
         )
         if repair_res.get("status") != "success":
             raise AppError(f"Rebalance transfer failed: {repair_res.get('error')}", code=ErrorCode.INTERNAL, status=500)
@@ -2171,17 +2596,15 @@ def execute_rebalance_job(
             sim = simulate_copy_removal(policy_id, backup_id, source_target_id)
             if sim.get("policySafe") and not sim.get("protectedByHold"):
                 job = _set_rebalance_phase(job, "pruning_source")
-                # Mark retired in ledger
-                copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
-                backup_dr_ledger.record_logical_recovery_copy(
-                    target_id=source_target_id,
-                    policy_id=policy_id,
-                    backup_id=backup_id,
-                    committed_at=str(copies[0].get("committedAt") if copies else _utc_iso()),
-                    state="retired",
-                    recoverable=False,
-                    last_verified_at=_utc_iso(),
+                from deepseek_infra.infra.workspace import backup_retirement
+
+                retirement = backup_retirement.create_copy_retirement_job(
+                    policy_id,
+                    backup_id,
+                    source_target_id,
+                    reason="rebalance-prune-source",
                 )
+                job = _set_rebalance_phase(job, "retirement_pending", retirementJobId=retirement["jobId"])
 
         job = _set_rebalance_phase(job, "complete")
         return {"status": "success", "jobId": job_id, "job": job}
@@ -2195,7 +2618,12 @@ def process_pending_rebalances(
     instance_id: str = "rebalance-worker",
     limit: int = 5,
 ) -> dict[str, int]:
-    pending = list_rebalance_jobs(phase="pending", limit=limit)
+    page, cursor_state, next_cursor = _maintenance_job_page(
+        REBALANCE_DIR,
+        cursor_kind="rebalance-jobs",
+        scan_limit=max(10, min(int(limit) * 10, 500)),
+    )
+    pending = [job for job in page if str(job.get("phase") or "") == "pending"][: max(1, int(limit))]
     succeeded = 0
     failed = 0
     for job in pending:
@@ -2204,6 +2632,7 @@ def process_pending_rebalances(
             succeeded += 1
         else:
             failed += 1
+    _advance_maintenance_job_cursor("rebalance-jobs", cursor_state, next_cursor)
     return {"processed": len(pending), "succeeded": succeeded, "failed": failed}
 
 

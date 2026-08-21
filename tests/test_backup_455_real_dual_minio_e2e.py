@@ -1,6 +1,6 @@
-"""Dual MinIO S3 E2E Integration: Verified Write Continuity, Governed Failback & Primary Promotion.
+"""Legacy dual-target S3 contract simulation for continuity and failback.
 
-Tests production S3TargetStore against dual S3 targets (live MinIO or high-fidelity S3TargetStore adapters):
+This ProductionFakeS3Client suite does not satisfy real MinIO or real Age Evidence:
 1. Target A (Primary) and Target B (Replica) initialization and policy registration.
 2. Multi-point backup creation with real Age encryption and replicated copy on Target B.
 3. In-place ciphertext repair of corrupted and missing objects on Target B using CAS source holds and bounded streaming.
@@ -27,6 +27,7 @@ from typing import Any
 import pytest
 
 from deepseek_infra.infra.workspace import (
+    backup_capacity,
     backup_dr_audit,
     backup_dr_ledger,
     backup_policies,
@@ -38,6 +39,7 @@ from deepseek_infra.infra.workspace import (
     backup_targets,
     backup_write_continuity,
 )
+from deepseek_infra.infra.workspace.backup_target_store import object_key
 
 
 @pytest.fixture(autouse=True)
@@ -225,8 +227,8 @@ class MockResolvedS3Target:
         return self.store
 
 
-def test_dual_minio_s3_write_continuity_governed_failback_and_promotion_e2e(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Full Production E2E: Dual S3 Targets, Bounded Transfer, Failover, Keyset Reconciler, Failback, CAS Promotion."""
+def test_legacy_dual_s3_write_continuity_governed_failback_and_promotion(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise bounded transfer, failover, reconciliation, failback, and CAS promotion."""
     # 1. Setup Dual S3 Targets using production S3TargetStore
     client_a = ProductionFakeS3Client("bucket-primary-a")
     client_b = ProductionFakeS3Client("bucket-replica-b")
@@ -260,8 +262,27 @@ def test_dual_minio_s3_write_continuity_governed_failback_and_promotion_e2e(tmp_
         },
         "scope": {"kind": "workspace", "paths": ["workspace.json"]},
     }
-    # Register mock target IDs in backup_targets registry lookup
-    monkeypatch.setattr(backup_targets, "get_target", lambda tid: {"targetId": tid, "kind": "s3", "bucket": f"bucket-{tid}"})
+    # Register complete operator-supplied target metadata for placement.
+    target_records = {
+        target_a_id: {
+            "targetId": target_a_id,
+            "kind": "s3",
+            "bucket": "bucket-primary-a",
+            "region": "region-a",
+            "failureDomain": "region-a-1",
+            "quotaBytes": 20 * 1024**3,
+        },
+        target_b_id: {
+            "targetId": target_b_id,
+            "kind": "s3",
+            "bucket": "bucket-replica-b",
+            "region": "region-b",
+            "failureDomain": "region-b-1",
+            "quotaBytes": 20 * 1024**3,
+        },
+    }
+    monkeypatch.setattr(backup_targets, "get_target", lambda tid: target_records[tid])
+    monkeypatch.setattr(backup_targets, "list_targets", lambda: list(target_records.values()))
 
     pol = backup_policies.create_policy(policy_payload)
     assert pol["primaryTargetId"] == target_a_id
@@ -272,7 +293,7 @@ def test_dual_minio_s3_write_continuity_governed_failback_and_promotion_e2e(tmp_
     backup_id_1 = "bk_minio_001"
     c1_bytes = b"age-encryption.org/v1\nproduction-ciphertext-payload-point-1"
     c1_digest = _sha256(c1_bytes)
-    c1_rel = f"objects/{c1_digest[:2]}/{c1_digest[2:4]}/{c1_digest}.age"
+    c1_rel = object_key(c1_digest)
 
     store_a.put_if_absent(c1_rel, c1_bytes, checksum_sha256=c1_digest)
 
@@ -322,6 +343,12 @@ def test_dual_minio_s3_write_continuity_governed_failback_and_promotion_e2e(tmp_
         recoverable=True,
         state="healthy",
     )
+    backup_capacity.record_physical_size_evidence(
+        policy_id=policy_id,
+        backup_id=backup_id_1,
+        snapshot_kind="full",
+        physical_bytes=len(c1_bytes),
+    )
 
     # 4. Reconcile Policy Replicas: Transfers ciphertext to Target B without whole-file RAM buffering
     reconcile_res = backup_replication.reconcile_policy_replicas(policy_id, max_points=10)
@@ -362,7 +389,7 @@ def test_dual_minio_s3_write_continuity_governed_failback_and_promotion_e2e(tmp_
     # Write Point 2 to Target B
     c2_bytes = b"age-encryption.org/v1\nproduction-ciphertext-payload-point-2"
     c2_digest = _sha256(c2_bytes)
-    c2_rel = f"objects/{c2_digest[:2]}/{c2_digest[2:4]}/{c2_digest}.age"
+    c2_rel = object_key(c2_digest)
     store_b.put_if_absent(c2_rel, c2_bytes, checksum_sha256=c2_digest)
 
     receipt_2 = {

@@ -9,6 +9,7 @@ Recovery Identities.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -393,8 +394,21 @@ def package_path(policy_id: str, slot_digest: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def read_multipart_state(policy_id: str, slot_digest: str) -> dict[str, Any] | None:
-    path = _slot_dir(policy_id, slot_digest) / "multipart.json"
+def _multipart_scope(target_id: str | None) -> str | None:
+    if not target_id:
+        return None
+    return hashlib.sha256(target_id.encode("utf-8")).hexdigest()[:24]
+
+
+def _multipart_state_path(policy_id: str, slot_digest: str, target_id: str | None) -> Path:
+    scope = _multipart_scope(target_id)
+    if scope is None:
+        return _slot_dir(policy_id, slot_digest) / "multipart.json"
+    return _slot_dir(policy_id, slot_digest) / "multipart-targets" / f"{scope}.json"
+
+
+def read_multipart_state(policy_id: str, slot_digest: str, *, target_id: str | None = None) -> dict[str, Any] | None:
+    path = _multipart_state_path(policy_id, slot_digest, target_id)
     if not path.is_file():
         return None
     try:
@@ -404,12 +418,36 @@ def read_multipart_state(policy_id: str, slot_digest: str) -> dict[str, Any] | N
     return data if isinstance(data, dict) else None
 
 
-def write_multipart_state(policy_id: str, slot_digest: str, state: dict[str, Any]) -> None:
-    _atomic_write_json(_slot_dir(policy_id, slot_digest) / "multipart.json", state)
+def write_multipart_state(
+    policy_id: str,
+    slot_digest: str,
+    state: dict[str, Any],
+    *,
+    target_id: str | None = None,
+) -> None:
+    _atomic_write_json(_multipart_state_path(policy_id, slot_digest, target_id), state)
 
 
-def read_component_multipart_state(policy_id: str, slot_digest: str, ciphertext_digest: str) -> dict[str, Any] | None:
-    path = _slot_dir(policy_id, slot_digest) / "multipart" / f"{ciphertext_digest}.json"
+def _component_multipart_state_path(
+    policy_id: str,
+    slot_digest: str,
+    ciphertext_digest: str,
+    target_id: str | None,
+) -> Path:
+    scope = _multipart_scope(target_id)
+    if scope is None:
+        return _slot_dir(policy_id, slot_digest) / "multipart" / f"{ciphertext_digest}.json"
+    return _slot_dir(policy_id, slot_digest) / "multipart-targets" / scope / f"{ciphertext_digest}.json"
+
+
+def read_component_multipart_state(
+    policy_id: str,
+    slot_digest: str,
+    ciphertext_digest: str,
+    *,
+    target_id: str | None = None,
+) -> dict[str, Any] | None:
+    path = _component_multipart_state_path(policy_id, slot_digest, ciphertext_digest, target_id)
     if not path.is_file():
         return None
     try:
@@ -424,8 +462,10 @@ def write_component_multipart_state(
     slot_digest: str,
     ciphertext_digest: str,
     state: dict[str, Any],
+    *,
+    target_id: str | None = None,
 ) -> None:
-    _atomic_write_json(_slot_dir(policy_id, slot_digest) / "multipart" / f"{ciphertext_digest}.json", state)
+    _atomic_write_json(_component_multipart_state_path(policy_id, slot_digest, ciphertext_digest, target_id), state)
 
 
 def clear_slot(policy_id: str, slot_digest: str) -> None:

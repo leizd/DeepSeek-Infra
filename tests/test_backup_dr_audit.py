@@ -50,6 +50,9 @@ def test_audit_managed_local(tmp_settings: Path) -> None:
         "createdAt": "2026-08-15T00:00:00Z",
     }
     receipt_file.write_text(json.dumps(receipt_data), encoding="utf-8")
+    payload = root / "objects" / "sha256" / "bb" / f"{'b' * 64}.age"
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    payload.write_bytes(b"present-for-audit")
 
     # Add a malformed commit to test anomaly handling
     bad_commit = commits_dir / "bad.json"

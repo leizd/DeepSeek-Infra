@@ -10,16 +10,27 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
+    backup_control,
     backup_dr_ledger,
+    backup_policies,
+    backup_publish,
+    backup_recovery_keeper,
     backup_replication,
+    backup_retirement,
+    backup_run_plan,
+    backup_scheduler,
     backup_targets,
+    backup_writer_lease,
 )
+from deepseek_infra.infra.workspace.backup_target_store import commit_slot_digest
 
 DRAIN_DIR = config.ROOT / ".backup-drains"
 DRAIN_DB = DRAIN_DIR / "drains.sqlite3"
@@ -33,7 +44,8 @@ def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     DRAIN_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DRAIN_DB)
     conn.row_factory = sqlite3.Row
@@ -57,7 +69,14 @@ def _connect() -> sqlite3.Connection:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_drain_phase ON target_drain_jobs(phase)")
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def start_target_drain(
@@ -183,11 +202,83 @@ def _update_drain_state(
     return get_target_drain_job(target_id=target_id) or {}
 
 
+def _active_run_targets(target_id: str) -> bool:
+    for run in backup_scheduler.list_active_runs():
+        policy_id = str(run.get("policyId") or "")
+        slot = str(run.get("scheduleSlot") or "")
+        plan = backup_run_plan.read_run_plan(policy_id, commit_slot_digest(slot)) if policy_id and slot else None
+        if isinstance(plan, dict):
+            selected = str(plan.get("selectedWriteTargetId") or plan.get("targetId") or "")
+        else:
+            try:
+                policy = backup_policies.get_policy(policy_id)
+            except AppError:
+                policy = {}
+            selected = str(policy.get("primaryTargetId") or policy.get("targetId") or "")
+        if selected == target_id:
+            return True
+    return False
+
+
+def _active_recovery_targets(target_id: str) -> bool:
+    for session in backup_recovery_keeper.scan_durable_recovery_sessions().values():
+        phase = str(session.get("phase") or "")
+        if phase in backup_recovery_keeper.TERMINAL_PHASES:
+            continue
+        referenced_targets = {
+            str(session.get("activeSourceTargetId") or ""),
+            str(session.get("targetId") or ""),
+        }
+        referenced_targets.update(
+            str(hold.get("targetId") or "")
+            for hold in list(session.get("holds") or [])
+            if isinstance(hold, dict)
+        )
+        if target_id in referenced_targets:
+            return True
+    return False
+
+
+def _drain_completion_blockers(target_id: str) -> list[str]:
+    """Return fail-closed blockers that prevent the draining -> drained transition."""
+    blockers: list[str] = []
+    try:
+        target = backup_publish.resolve_target(target_id)
+    except Exception:
+        return ["target-unavailable"]
+    if backup_writer_lease.active_writer_lease(target):
+        blockers.append("active-writer-lease")
+    if _active_run_targets(target_id):
+        blockers.append("active-backup-run")
+    if _active_recovery_targets(target_id):
+        blockers.append("active-recovery")
+    if backup_replication.has_source_holds_for_target(target_id, target=target):
+        blockers.append("active-source-hold")
+
+    repairs = backup_replication.list_repair_jobs(source_target_id=target_id, limit=500)
+    if any(str(item.get("phase") or "") not in backup_replication.REPAIR_TERMINAL_PHASES for item in repairs):
+        blockers.append("active-repair-source")
+    elif len(repairs) >= 500:
+        blockers.append("repair-scan-incomplete")
+    rebalances = backup_replication.list_rebalance_jobs(source_target_id=target_id, limit=500)
+    if any(str(item.get("phase") or "") not in {"complete", "failed"} for item in rebalances):
+        blockers.append("active-rebalance-source")
+    elif len(rebalances) >= 500:
+        blockers.append("rebalance-scan-incomplete")
+    retirements = backup_retirement.list_copy_retirement_jobs(target_id=target_id, limit=500)
+    if any(str(item.get("phase") or "") not in backup_retirement.RETIREMENT_TERMINAL_PHASES for item in retirements):
+        blockers.append("pending-retirement")
+    elif len(retirements) >= 500:
+        blockers.append("retirement-scan-incomplete")
+    return blockers
+
+
 def process_target_drain(
     target_id: str,
     *,
     instance_id: str = "drain-supervisor",
     max_rebalances_per_step: int = 5,
+    scan_page_size: int = 100,
 ) -> dict[str, Any]:
     """Execute autonomous evacuation step for a draining target."""
     job = get_target_drain_job(target_id=target_id)
@@ -197,72 +288,112 @@ def process_target_drain(
     if job["phase"] in DRAIN_TERMINAL_PHASES:
         return {"status": "completed", "job": job}
 
-    _update_drain_state(target_id, "evacuating")
-
-    # List all copies held on target
-    target_copies = backup_dr_ledger.list_logical_recovery_copies(target_id=target_id, limit=500)
-    live_copies = [c for c in target_copies if c.get("recoverable") and c.get("state") == "healthy"]
-
-    if not live_copies:
-        # Check active writers or holds on target
-        has_active_holds = any(
-            backup_replication.is_source_held(target_id, str(c.get("policyId")), str(c.get("backupId")))
-            for c in target_copies
-        )
-        if not has_active_holds:
-            # All copies evacuated and no active holds -> marked drained
-            backup_targets.mark_target_drained(target_id)
-            updated = _update_drain_state(
-                target_id,
-                "drained",
-                protected_points=0,
-                remaining_copies=0,
-                active_rebalances=0,
-                bytes_remaining=0,
-            )
-            return {"status": "drained", "job": updated}
-
-    all_targets = {t["targetId"]: t for t in backup_targets.list_targets()}
-    active_cand_ids = [
-        tid for tid, t in all_targets.items()
-        if tid != target_id and t.get("drainState") not in {"draining", "drained"}
-    ]
-
-    rebalances_triggered = 0
-    remaining_bytes = sum(int(c.get("logicalBytes") or c.get("physicalBytes") or 50 * 1024 * 1024) for c in live_copies)
-
-    for copy in live_copies:
-        if rebalances_triggered >= max_rebalances_per_step:
-            break
-
-        policy_id = str(copy.get("policyId"))
-        backup_id = str(copy.get("backupId"))
-
-        # Find destination target not in draining state
-        existing_copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
-        existing_target_ids = {str(c.get("targetId")) for c in existing_copies if c.get("recoverable")}
-
-        for cand_id in active_cand_ids:
-            if cand_id not in existing_target_ids:
-                # Enqueue rebalance job with prune_source_after=True
-                r_job = backup_replication.create_rebalance_job(
-                    policy_id=policy_id,
-                    backup_id=backup_id,
-                    dest_target_id=cand_id,
-                    source_target_id=target_id,
-                    reason="autonomous-drain-evacuation",
-                    prune_source_after=True,
-                )
-                backup_replication.execute_rebalance_job(str(r_job["jobId"]), instance_id=instance_id)
-                rebalances_triggered += 1
-                break
-
-    updated = _update_drain_state(
-        target_id,
-        "evacuating" if len(live_copies) > 0 else "waiting-for-gc",
-        protected_points=len(live_copies),
-        remaining_copies=len(live_copies),
-        active_rebalances=rebalances_triggered,
-        bytes_remaining=remaining_bytes,
+    lease = backup_control.acquire_maintenance_lease(
+        "target-drain", target_id, owner_instance_id=instance_id, lease_seconds=60
     )
-    return {"status": "in_progress", "job": updated, "rebalancesTriggered": rebalances_triggered}
+    if lease is None:
+        return {"status": "skipped", "reason": "drain-owned-by-another-worker", "job": job}
+    try:
+        _update_drain_state(target_id, "evacuating")
+        live_total = backup_dr_ledger.count_live_logical_recovery_copies(target_id=target_id)
+        if live_total == 0:
+            blockers = _drain_completion_blockers(target_id)
+            if not blockers:
+                backup_targets.mark_target_drained(target_id)
+                updated = _update_drain_state(target_id, "drained")
+                return {"status": "drained", "job": updated}
+            updated = _update_drain_state(target_id, "waiting-for-gc", error=",".join(blockers))
+            return {"status": "in_progress", "job": updated, "blockers": blockers, "rebalancesTriggered": 0}
+
+        cursor_state = backup_control.get_maintenance_cursor("target-drain", target_id)
+        cursor = cursor_state["cursor"] if isinstance(cursor_state.get("cursor"), dict) else {}
+        page_size = max(1, min(int(scan_page_size), 500))
+        page = backup_dr_ledger.list_logical_recovery_copies(
+            target_id=target_id,
+            after_committed_at=str(cursor.get("committedAt")) if cursor.get("committedAt") else None,
+            after_logical_id=str(cursor.get("logicalId")) if cursor.get("logicalId") else None,
+            limit=page_size,
+        )
+        all_targets = {str(item["targetId"]): item for item in backup_targets.list_targets()}
+        candidate_ids = [
+            candidate_id
+            for candidate_id, target in all_targets.items()
+            if candidate_id != target_id and target.get("drainState") not in {"draining", "drained"}
+        ]
+        triggered = 0
+        examined = 0
+        last_copy: dict[str, Any] | None = None
+        remaining_bytes = 0
+        for copy in page:
+            is_live = bool(copy.get("recoverable") and copy.get("state") == "healthy")
+            if is_live and triggered >= max(0, max_rebalances_per_step):
+                break
+            examined += 1
+            last_copy = copy
+            if not is_live:
+                continue
+            metadata_value = copy.get("metadata")
+            metadata: dict[str, Any] = metadata_value if isinstance(metadata_value, dict) else {}
+            physical_value = metadata.get("physicalBytes") or metadata.get("ciphertextBytes")
+            required_bytes = int(physical_value) if isinstance(physical_value, int) and not isinstance(physical_value, bool) else None
+            if required_bytes is not None:
+                remaining_bytes += required_bytes
+            policy_id = str(copy.get("policyId") or "")
+            backup_id = str(copy.get("backupId") or "")
+            try:
+                policy = backup_policies.get_policy(policy_id)
+            except AppError:
+                policy = {
+                    "policyId": policy_id,
+                    "targetId": target_id,
+                    "replication": {"enabled": True, "targets": [{"targetId": item} for item in candidate_ids]},
+                }
+            ranked = backup_scheduler.plan_target_placement(
+                policy,
+                candidate_target_ids=candidate_ids,
+                primary_target_id=target_id,
+                logical_recovery_point_id=str(copy.get("logicalId") or ""),
+                required_bytes=required_bytes,
+                snapshot_kind="full",
+                force_full=False,
+            )
+            if not ranked:
+                continue
+            backup_replication.create_rebalance_job(
+                policy_id=policy_id,
+                backup_id=backup_id,
+                dest_target_id=str(ranked[0][1]),
+                source_target_id=target_id,
+                reason="autonomous-drain-evacuation",
+                prune_source_after=True,
+            )
+            triggered += 1
+
+        next_cursor = None
+        if last_copy is not None and (examined < len(page) or len(page) >= page_size):
+            next_cursor = {
+                "committedAt": str(last_copy.get("committedAt") or ""),
+                "logicalId": str(last_copy.get("logicalId") or ""),
+            }
+        backup_control.update_maintenance_cursor(
+            "target-drain",
+            target_id,
+            next_cursor,
+            expected_generation=int(cursor_state["generation"]),
+        )
+        updated = _update_drain_state(
+            target_id,
+            "evacuating",
+            protected_points=live_total,
+            remaining_copies=live_total,
+            active_rebalances=triggered,
+            bytes_remaining=remaining_bytes,
+        )
+        return {"status": "in_progress", "job": updated, "rebalancesTriggered": triggered}
+    finally:
+        backup_control.release_maintenance_lease(
+            "target-drain",
+            target_id,
+            owner_instance_id=instance_id,
+            fencing_token=int(lease["fencingToken"]),
+        )

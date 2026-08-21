@@ -237,6 +237,10 @@ def test_stream_ciphertext_transfer_and_authentication(tmp_settings: Path) -> No
 
     # Resuming multi-part streaming
     mock_store.reset_mock()
+    mock_store.list_multipart_parts.return_value = [
+        {"partNumber": 1, "etag": hashlib.sha256(payload[:4]).hexdigest(), "size": 4},
+        {"partNumber": 2, "etag": hashlib.sha256(payload[4:8]).hexdigest(), "size": 4},
+    ]
     prog_resume = {
         "multipartUploadId": "mp-1",
         "nextOffset": 8,
@@ -357,9 +361,10 @@ def test_execute_replication_job_full_flow(tmp_settings: Path) -> None:
     mock_pub.converged = True
 
     with patch.object(backup_replication, "_load_package_from_spool", return_value={"package": "mock"}):
-        with patch.object(backup_publish, "publish_backup", return_value=mock_pub):
+        with patch.object(backup_publish, "publish_backup", return_value=mock_pub) as publish:
             res_succ = backup_replication.execute_replication_job("repl_succ_1")
             assert res_succ["phase"] == "committed"
+            assert publish.call_args.kwargs["retain_spool"] is True
 
     # 5. Repair job with missing source receipt
     r_job = backup_replication.create_repair_job(
@@ -488,7 +493,11 @@ def test_replication_fail_job_and_process_pending_branches(tmp_settings: Path) -
         {"jobId": "j_fut", "phase": "retry-wait", "nextRetryAt": future_iso},
         {"jobId": "j_past", "phase": "retry-wait", "nextRetryAt": past_iso},
     ]
-    with patch.object(backup_replication, "list_jobs", return_value=jobs_mock):
+    with patch.object(
+        backup_replication,
+        "_maintenance_job_page",
+        return_value=(jobs_mock, {"cursor": None, "generation": 0}, None),
+    ):
         with patch.object(backup_replication, "execute_replication_job", return_value={"phase": "committed"}):
             summary = backup_replication.process_pending_jobs(limit=10)
             assert summary["processed"] == 1
@@ -510,7 +519,11 @@ def test_replication_fail_job_and_process_pending_branches(tmp_settings: Path) -
 
 def test_replication_repair_exception_branches_and_pending_repairs(tmp_settings: Path) -> None:
     # 1. process_pending_repairs with empty list
-    with patch.object(backup_replication, "list_repair_jobs", return_value=[]):
+    with patch.object(
+        backup_replication,
+        "_maintenance_job_page",
+        return_value=([], {"cursor": None, "generation": 0}, None),
+    ):
         res = backup_replication.process_pending_repairs()
         assert res["processed"] == 0
 
@@ -521,7 +534,11 @@ def test_replication_repair_exception_branches_and_pending_repairs(tmp_settings:
         {"repairId": "rep_fut", "phase": "retry-wait", "nextAttemptAt": future_at},
         {"repairId": "rep_past", "phase": "retry-wait", "nextAttemptAt": past_at, "attempt": 1, "maxAttempts": 5},
     ]
-    with patch.object(backup_replication, "list_repair_jobs", return_value=jobs):
+    with patch.object(
+        backup_replication,
+        "_maintenance_job_page",
+        return_value=(jobs, {"cursor": None, "generation": 0}, None),
+    ):
         with patch.object(backup_replication, "execute_repair_job_instance", return_value={"status": "success"}):
             res_proc = backup_replication.process_pending_repairs()
             assert res_proc["processed"] == 1
@@ -730,7 +747,11 @@ def test_replication_maintenance_window_and_rebalance_execution(tmp_settings: Pa
     assert exc_404.value.status == 404
 
     # 3. process_pending_rebalances empty
-    with patch.object(backup_replication, "list_rebalance_jobs", return_value=[]):
+    with patch.object(
+        backup_replication,
+        "_maintenance_job_page",
+        return_value=([], {"cursor": None, "generation": 0}, None),
+    ):
         res_reb = backup_replication.process_pending_rebalances()
         assert res_reb["processed"] == 0
 
@@ -947,7 +968,14 @@ def test_backup_replication_committed_auth_and_resumed_stream(tmp_settings: Path
     d_total_hex = hashlib.sha256(data_total).hexdigest()
 
     fake_store = SimpleNamespace(
-        upload_part=lambda upload, num, chunk: SimpleNamespace(etag=f"etag_{num}"),
+        list_multipart_parts=lambda upload: [
+            {
+                "partNumber": 1,
+                "etag": hashlib.sha256(b"part1_content").hexdigest(),
+                "size": len(b"part1_content"),
+            }
+        ],
+        upload_part=lambda upload, num, chunk, **kwargs: SimpleNamespace(etag=f"etag_{num}"),
         abort_multipart=lambda upload: None,
         complete_multipart_if_absent=lambda upload: None,
     )

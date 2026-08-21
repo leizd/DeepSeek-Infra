@@ -1083,6 +1083,8 @@ def list_logical_recovery_copies(
     backup_id: str | None = None,
     object_set_digest: str | None = None,
     logical_id: str | None = None,
+    after_committed_at: str | None = None,
+    after_logical_id: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     query = "SELECT * FROM recovery_point_copies"
@@ -1103,9 +1105,12 @@ def list_logical_recovery_copies(
     if object_set_digest is not None:
         clauses.append("object_set_digest = ?")
         params.append(object_set_digest)
+    if after_committed_at is not None:
+        clauses.append("(committed_at < ? OR (committed_at = ? AND logical_id < ?))")
+        params.extend((after_committed_at, after_committed_at, str(after_logical_id or "")))
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY committed_at DESC LIMIT ?"
+    query += " ORDER BY committed_at DESC, logical_id DESC LIMIT ?"
     params.append(limit)
     with _DB_LOCK, _get_connection() as conn:
         try:
@@ -1134,6 +1139,23 @@ def list_logical_recovery_copies(
             }
             for row in rows
         ]
+
+
+def count_live_logical_recovery_copies(*, target_id: str) -> int:
+    """Count current healthy/recoverable copies without scanning Target history."""
+    with _DB_LOCK, _get_connection() as conn:
+        try:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS copy_count
+                FROM recovery_point_copies
+                WHERE target_id = ? AND recoverable = 1 AND state = 'healthy'
+                """,
+                (target_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return 0
+    return int(row["copy_count"] if row is not None else 0)
 
 
 def update_recovery_copy_state(

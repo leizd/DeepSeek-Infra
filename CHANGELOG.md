@@ -4,6 +4,21 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.5.8] - Durable Storage Control Plane & Geo-Aware Lifecycle (2026-08-20)
+
+### Durable Storage Control Plane & Geo-Aware Lifecycle
+
+- **Chain-Preserving Retirement**: Keeps Receipt v4 and Commit v4 immutable, adds authenticated Target-local retirement markers, and distinguishes governed payload removal from corruption during audit.
+- **Live-Reference Payload GC**: Deletes ciphertext only after marker commit and Ledger retirement, while preserving objects referenced by non-retired recovery points, holds, and active maintenance jobs.
+- **Cross-Process Control Authority**: Adds `.backup-control/control.sqlite3` as the SQLite CAS authority for Policy revisions, Target topology generations, promotion epochs, maintenance leases/cursors, capacity evidence, and transfer budgets; JSON remains a projection.
+- **Logical-Recovery-Point Placement**: Scopes `minCommittedCopies`, `minFailureDomains`, `maxCopiesPerFailureDomain`, and `minRegions` to one replica set, then applies matching RecoveryClass RTO evidence and operator-supplied cost estimates after correctness.
+- **Confidence-Aware Capacity Admission**: Removes the fixed 500 MiB Force Full fallback, prioritizes physical/ciphertext observations, and fails closed when bounded targets lack reliable capacity evidence.
+- **Provider-Reconciled Multipart Resume**: Compares local repair checkpoints with provider `ListParts`, accepts verified remote-ahead progress, restarts missing uploads, and aborts/quarantines conflicting parts.
+- **Managed Production Transfers**: Enforces cross-process P0-P6 global, source-read, and destination-write token buckets across publish, restore, repair, replication, scrub/drill, and rebalance flows, reserving Disaster Recovery bandwidth.
+- **Durable Maintenance Supervisor & Autonomous Drain**: Coordinates bounded worker queues under leases, advances drains with durable keyset cursors, uses the production placement planner, and blocks completion on writers, runs, recovery holds, source dependencies, and pending retirement.
+- **Real Three-MinIO Evidence Contract**: Adds a dedicated exact-merge producer using three independent MinIO endpoints, boto3, `S3TargetStore`, production Scheduler/BackupExecutor/Supervisor, and real randomized Age. The legacy contract runner no longer claims real MinIO integration.
+- **Frozen Compatibility Surface**: `object-set-v1`, Receipt v4, Commit v4, FastCDC v3, Projection semantics, and randomized Age remain unchanged.
+
 ## [4.5.7] - Topology Safety, Capacity Governance & Bandwidth QoS (2026-08-18)
 
 ### Topology Safety, Capacity Governance & Bandwidth QoS

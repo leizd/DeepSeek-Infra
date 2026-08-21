@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -30,6 +31,10 @@ def _isolate_target_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     fake_temp = tmp_path / "fake_temp"
     fake_temp.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_temp))
+    from deepseek_infra.infra.workspace import backup_control
+
+    monkeypatch.setattr(backup_control, "CONTROL_DIR", tmp_path / ".backup-control")
+    monkeypatch.setattr(backup_control, "CONTROL_DB", tmp_path / ".backup-control" / "control.sqlite3")
 
 
 # ── Gate F: Bandwidth QoS & TransferBudgetManager ───────────────────────────
@@ -116,9 +121,9 @@ def test_capacity_admission_watermarks(tmp_settings: Path) -> None:
 
 
 def test_predict_next_backup_bytes_p90(tmp_settings: Path) -> None:
-    # Empty historical copies returns fallback default
+    # Empty history remains unavailable instead of pretending a small P90.
     val_default = backup_capacity.predict_next_backup_bytes("empty-pol", snapshot_kind="full")
-    assert val_default > 0
+    assert val_default is None
 
     # With historical ledger data
     policy_id = "p90-pol"
@@ -130,10 +135,11 @@ def test_predict_next_backup_bytes_p90(tmp_settings: Path) -> None:
             committed_at=f"2026-08-18T10:0{i}:00Z",
             state="healthy",
             recoverable=True,
-            metadata={"totalBytes": 1000 + i * 100, "snapshotKind": "full"},
+            metadata={"physicalBytes": 1000 + i * 100, "snapshotKind": "full"},
         )
 
     p90_val = backup_capacity.predict_next_backup_bytes(policy_id, snapshot_kind="full")
+    assert p90_val is not None
     assert p90_val >= 1800  # P90 of 1000..1900
 
 
@@ -170,19 +176,32 @@ def test_copy_retirement_lifecycle_and_gc(tmp_settings: Path) -> None:
     # Record receipt with obj1 and obj2
     rec_dir = t_dir / "receipts" / policy_id
     rec_dir.mkdir(parents=True, exist_ok=True)
-    (rec_dir / f"{backup_id}.receipt.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": "receipt-v4",
-                "policyId": policy_id,
-                "backupId": backup_id,
-                "components": [
-                    {"digest": obj1.name, "byteSize": 11},
-                    {"digest": obj2.name, "byteSize": 11},
-                ],
-            }
-        )
-    )
+    receipt = {
+        "schemaVersion": 4,
+        "targetId": target_id,
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "components": [
+            {"digest": obj1.name, "byteSize": 11},
+            {"digest": obj2.name, "byteSize": 11},
+        ],
+    }
+    receipt_bytes = (json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (rec_dir / f"{backup_id}.receipt.json").write_bytes(receipt_bytes)
+    commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "targetId": target_id,
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "receiptDigest": hashlib.sha256(receipt_bytes).hexdigest(),
+        "committedAt": "2026-08-18T10:00:00Z",
+    }
+    commit["commitHash"] = backup_publish._commit_hash(commit)
+    commit_path = t_dir / "commits" / policy_id / f"{backup_id}.json"
+    commit_path.parent.mkdir(parents=True, exist_ok=True)
+    commit_path.write_text(json.dumps(commit), encoding="utf-8")
 
     # Another retained backup references obj1
     (rec_dir / "bk-other.receipt.json").write_text(
@@ -354,7 +373,7 @@ def test_plan_target_placement_ranking(tmp_settings: Path) -> None:
     }
 
     # Record existing copy in zone-a
-    backup_dr_ledger.record_logical_recovery_copy(
+    logical_id = backup_dr_ledger.record_logical_recovery_copy(
         target_id=t1,
         policy_id="pol-placement",
         backup_id="bk-existing",
@@ -370,10 +389,10 @@ def test_plan_target_placement_ranking(tmp_settings: Path) -> None:
             policy,
             candidate_target_ids=[t1, t2],
             primary_target_id="managed-local",
+            logical_recovery_point_id=logical_id,
+            required_bytes=1024,
         )
-        assert len(scored) == 2
-        # t2 should rank first due to failure-domain gain
-        assert scored[0][1] == t2
+    assert [target_id for _, target_id in scored] == [t2]
 
 
 # ── Gate D: Primary Promotion with Global Latest Point ──────────────────────

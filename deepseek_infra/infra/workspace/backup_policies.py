@@ -10,17 +10,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_targets
+from deepseek_infra.infra.workspace import backup_control, backup_targets
 from deepseek_infra.infra.workspace.backup_cron import load_timezone, parse_cron
 
 POLICY_SCHEMA_VERSION = 2
@@ -125,6 +125,17 @@ def _require_int(value: Any, name: str, default: int, minimum: int, maximum: int
     if value < minimum or value > maximum:
         raise AppError(f"Backup policy field {name} must be between {minimum} and {maximum}", code=ErrorCode.INVALID_PAYLOAD)
     return value
+
+
+def _require_nonnegative_number(value: Any, name: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise AppError(f"Backup policy field {name} must be a number", code=ErrorCode.INVALID_PAYLOAD)
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        raise AppError(f"Backup policy field {name} must be a finite non-negative number", code=ErrorCode.INVALID_PAYLOAD)
+    return parsed
 
 
 def _require_choice(value: Any, name: str, choices: tuple[str, ...], default: str | None = None) -> str:
@@ -292,6 +303,7 @@ def _normalize_recovery_objectives(raw: Any) -> dict[str, Any]:
     max_scrub = section.get("maxScrubAgeSeconds")
     max_drill = section.get("maxDrillAgeSeconds")
     max_replica_lag = section.get("maxReplicaLagSeconds")
+    max_rto = section.get("maxRtoSeconds")
     if max_rpo is not None:
         normalized["maxRpoSeconds"] = _require_int(max_rpo, "recoveryObjectives.maxRpoSeconds", 3600, 60, 86400 * 365)
     if max_scrub is not None:
@@ -300,6 +312,26 @@ def _normalize_recovery_objectives(raw: Any) -> dict[str, Any]:
         normalized["maxDrillAgeSeconds"] = _require_int(max_drill, "recoveryObjectives.maxDrillAgeSeconds", 604800, 60, 86400 * 365)
     if max_replica_lag is not None:
         normalized["maxReplicaLagSeconds"] = _require_int(max_replica_lag, "recoveryObjectives.maxReplicaLagSeconds", 3600, 1, 86400 * 365)
+    if max_rto is not None:
+        normalized["maxRtoSeconds"] = _require_int(max_rto, "recoveryObjectives.maxRtoSeconds", 3600, 1, 86400 * 365)
+    return normalized
+
+
+def _normalize_cost_objectives(raw: Any) -> dict[str, Any]:
+    section = _require_mapping(raw, "costObjectives") if raw is not None else {}
+    normalized: dict[str, Any] = {}
+    monthly_storage = _require_nonnegative_number(
+        section.get("maxEstimatedMonthlyStorageUsd"),
+        "costObjectives.maxEstimatedMonthlyStorageUsd",
+    )
+    monthly_egress = _require_nonnegative_number(
+        section.get("maxEstimatedMonthlyEgressUsd"),
+        "costObjectives.maxEstimatedMonthlyEgressUsd",
+    )
+    if monthly_storage is not None:
+        normalized["maxEstimatedMonthlyStorageUsd"] = monthly_storage
+    if monthly_egress is not None:
+        normalized["maxEstimatedMonthlyEgressUsd"] = monthly_egress
     return normalized
 
 
@@ -322,7 +354,13 @@ def _normalize_recovery_drill(raw: Any) -> dict[str, Any]:
 def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any]:
     """Backward-compatible replication block. Default disabled preserves legacy behavior."""
     if raw is None:
-        return {"enabled": False, "targets": [], "minCommittedCopies": 1}
+        return {
+            "enabled": False,
+            "targets": [],
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+        }
     section = _require_mapping(raw, "replication")
     enabled = _require_bool(section.get("enabled"), "replication.enabled", False)
     raw_targets = section.get("targets")
@@ -360,6 +398,7 @@ def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any
             targets.append({"targetId": tid, "mode": mode})
     min_copies = _require_int(section.get("minCommittedCopies"), "replication.minCommittedCopies", 1, 1, 16)
     min_failure_domains = _require_int(section.get("minFailureDomains"), "replication.minFailureDomains", 1, 1, 16)
+    min_regions = _require_int(section.get("minRegions"), "replication.minRegions", 1, 1, 16)
     max_copies_per_fd = section.get("maxCopiesPerFailureDomain")
     if max_copies_per_fd is not None:
         max_copies_per_fd = _require_int(max_copies_per_fd, "replication.maxCopiesPerFailureDomain", 1, 1, 16)
@@ -377,11 +416,17 @@ def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any
                 "Backup policy replication.minFailureDomains exceeds configured targets",
                 code=ErrorCode.INVALID_PAYLOAD,
             )
+        if min_regions > max_possible:
+            raise AppError(
+                "Backup policy replication.minRegions exceeds configured targets",
+                code=ErrorCode.INVALID_PAYLOAD,
+            )
     normalized_res: dict[str, Any] = {
         "enabled": bool(enabled),
         "targets": targets,
         "minCommittedCopies": min_copies,
         "minFailureDomains": min_failure_domains,
+        "minRegions": min_regions,
     }
     if max_copies_per_fd is not None:
         normalized_res["maxCopiesPerFailureDomain"] = max_copies_per_fd
@@ -460,6 +505,7 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
         "retry": _normalize_retry(payload.get("retry")),
         "incremental": _normalize_incremental(payload.get("incremental")),
         "recoveryObjectives": _normalize_recovery_objectives(payload.get("recoveryObjectives")),
+        "costObjectives": _normalize_cost_objectives(payload.get("costObjectives")),
         "recoveryDrill": _normalize_recovery_drill(payload.get("recoveryDrill")),
         "createdAt": created_at or now,
         "updatedAt": now,
@@ -495,37 +541,60 @@ def create_policy(payload: dict[str, Any]) -> dict[str, Any]:
     validate_target_bindings(policy)
     _ensure_dir()
     if _policy_path(policy["policyId"]).exists():
+        try:
+            existing = json.loads(_policy_path(policy["policyId"]).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        if isinstance(existing, dict) and existing.get("policyId"):
+            backup_control.adopt_policy_projection(existing)
         raise AppError("Backup policy id collision; retry", code=ErrorCode.INVALID_REQUEST, status=409)
-    _atomic_write_json(_policy_path(policy["policyId"]), policy)
-    return policy
+    authoritative = backup_control.create_policy(policy)
+    _atomic_write_json(_policy_path(policy["policyId"]), authoritative)
+    return authoritative
 
 
 def get_policy(policy_id: str) -> dict[str, Any]:
-    path = _policy_path(_require_safe_id(policy_id, "policyId"))
-    if not path.is_file():
-        raise AppError("Backup policy not found", code=ErrorCode.NOT_FOUND, status=404)
+    safe_id = _require_safe_id(policy_id, "policyId")
+    path = _policy_path(safe_id)
+    authoritative = backup_control.get_policy(safe_id)
+    if authoritative is None:
+        if not path.is_file():
+            raise AppError("Backup policy not found", code=ErrorCode.NOT_FOUND, status=404)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AppError("Backup policy store is unreadable", code=ErrorCode.INTERNAL, status=500) from exc
+        if not isinstance(data, dict) or not data.get("policyId"):
+            raise AppError("Backup policy store is unreadable", code=ErrorCode.INTERNAL, status=500)
+        authoritative = backup_control.adopt_policy_projection(data)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise AppError("Backup policy store is unreadable", code=ErrorCode.INTERNAL, status=500) from exc
-    return data
+        projected = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    except (OSError, json.JSONDecodeError):
+        projected = None
+    if projected != authoritative:
+        _atomic_write_json(path, authoritative)
+    return authoritative
 
 
 def list_policies() -> list[dict[str, Any]]:
-    if not BACKUP_POLICY_DIR.is_dir():
-        return []
-    policies: list[dict[str, Any]] = []
-    for path in sorted(BACKUP_POLICY_DIR.glob("*.json")):
+    if BACKUP_POLICY_DIR.is_dir():
+        for path in sorted(BACKUP_POLICY_DIR.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict) and data.get("policyId"):
+                backup_control.adopt_policy_projection(data)
+    policies = backup_control.list_policies()
+    for policy in policies:
+        path = _policy_path(str(policy["policyId"]))
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            projected = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
         except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(data, dict) and data.get("policyId"):
-            policies.append(data)
+            projected = None
+        if projected != policy:
+            _atomic_write_json(path, policy)
     return policies
-
-
-_POLICY_LOCK = threading.RLock()
 
 
 def update_policy(
@@ -534,19 +603,13 @@ def update_policy(
     *,
     expected_revision: int | None = None,
 ) -> dict[str, Any]:
-    with _POLICY_LOCK:
-        existing = get_policy(policy_id)
-        if not isinstance(patch, dict):
-            raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
+    if not isinstance(patch, dict):
+        raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
+    # Ensure a legacy JSON projection is adopted before entering the authority
+    # transaction. All merge/normalize work below then runs under BEGIN IMMEDIATE.
+    get_policy(policy_id)
 
-        curr_rev = int(existing.get("policyRevision") or 1)
-        if expected_revision is not None and curr_rev != expected_revision:
-            raise AppError(
-                f"CAS mismatch on policyRevision: expected {expected_revision}, actual {curr_rev}",
-                code=ErrorCode.INVALID_REQUEST,
-                status=412,
-            )
-
+    def _mutate(existing: dict[str, Any]) -> dict[str, Any]:
         merged = dict(existing)
         for key in (
             "name",
@@ -562,6 +625,7 @@ def update_policy(
             "retry",
             "incremental",
             "recoveryObjectives",
+            "costObjectives",
             "recoveryDrill",
             "replication",
             "placement",
@@ -570,13 +634,22 @@ def update_policy(
                 merged[key] = patch[key]
         normalized = normalize_policy(merged, policy_id=existing["policyId"], created_at=str(existing.get("createdAt") or ""))
         validate_target_bindings(normalized)
-        _atomic_write_json(_policy_path(policy_id), normalized)
         return normalized
 
+    updated = backup_control.mutate_policy(
+        policy_id,
+        expected_revision=expected_revision,
+        mutate=_mutate,
+        generation_kind="placement",
+    )
+    _atomic_write_json(_policy_path(policy_id), updated)
+    return updated
 
 
-def delete_policy(policy_id: str) -> dict[str, Any]:
-    policy = get_policy(policy_id)
+
+def delete_policy(policy_id: str, *, expected_revision: int | None = None) -> dict[str, Any]:
+    get_policy(policy_id)
+    policy = backup_control.delete_policy(policy_id, expected_revision=expected_revision)
     _policy_path(policy_id).unlink(missing_ok=True)
     return {"deleted": True, "policyId": policy["policyId"]}
 

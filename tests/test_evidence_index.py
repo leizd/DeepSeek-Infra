@@ -126,6 +126,13 @@ def test_evidence_index_lists_frontend_bundle_decomposition() -> None:
     assert "Vite manifest" in index
 
 
+def test_evidence_index_lists_real_storage_control_plane() -> None:
+    index = Path("docs/EVIDENCE_INDEX.md").read_text(encoding="utf-8")
+    assert f"docs/evidence/storage-control-plane-minio-v{VERSION}.json" in index
+    assert "scripts/run_storage_control_plane_minio_e2e.py" in index
+    assert "three independent MinIO" in index
+
+
 def test_evidence_index_lists_automation_runtime() -> None:
     index = Path("docs/EVIDENCE_INDEX.md").read_text(encoding="utf-8")
     assert f"docs/evidence/automation-v{VERSION}.json" in index

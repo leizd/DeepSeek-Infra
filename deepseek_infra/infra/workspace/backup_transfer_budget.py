@@ -8,6 +8,7 @@ scrub, drill, and rebalance operations.
 from __future__ import annotations
 
 import enum
+import os
 import secrets
 import threading
 import time
@@ -17,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.workspace import backup_control
 
 
 class TrafficClass(enum.IntEnum):
@@ -120,6 +122,7 @@ class TransferBudgetManager:
                         max_concurrent_transfers=cfg.get("max_concurrent_transfers") or cfg.get("maxConcurrentTransfers"),
                     )
         self._active_transfers: dict[str, ActiveTransfer] = {}
+        self._owner_instance_id = f"qos-{os.getpid()}-{secrets.token_hex(4)}"
 
         if per_target_read_bytes_per_sec:
             for tid, r_lim in per_target_read_bytes_per_sec.items():
@@ -130,10 +133,6 @@ class TransferBudgetManager:
         if max_concurrent_transfers_per_target:
             for tid, c_lim in max_concurrent_transfers_per_target.items():
                 self.set_target_budget(tid, max_concurrent_transfers=c_lim)
-
-        # Token buckets: key -> (tokens, last_refill_time)
-        self._global_tokens: float = float(self.global_bytes_per_second)
-        self._global_last_refill: float = time.monotonic()
 
     def set_target_budget(
         self,
@@ -153,7 +152,20 @@ class TransferBudgetManager:
 
     def get_target_budget(self, target_id: str) -> TargetBudgetConfig:
         with self._lock:
-            return self._target_configs.get(target_id, TargetBudgetConfig())
+            configured = self._target_configs.get(target_id)
+            if configured is not None:
+                return configured
+        try:
+            from deepseek_infra.infra.workspace import backup_targets
+
+            target = backup_targets.get_target(target_id)
+        except AppError:
+            return TargetBudgetConfig()
+        return TargetBudgetConfig(
+            max_read_bytes_per_second=int(target.get("maxReadBytesPerSecond") or TargetBudgetConfig.max_read_bytes_per_second),
+            max_write_bytes_per_second=int(target.get("maxWriteBytesPerSecond") or TargetBudgetConfig.max_write_bytes_per_second),
+            max_concurrent_transfers=int(target.get("maxConcurrentTransfers") or DEFAULT_TARGET_MAX_CONCURRENCY),
+        )
 
     def acquire_bandwidth(
         self,
@@ -163,8 +175,15 @@ class TransferBudgetManager:
         dest_target_id: str | None = None,
         source_target_id: str | None = None,
     ) -> int:
-        with self._lock:
-            return max(1, requested_bytes)
+        requested = max(1, int(requested_bytes))
+        with self.track_transfer(
+            traffic_class=traffic_class,
+            source_target_id=source_target_id,
+            dest_target_id=dest_target_id,
+            estimated_bytes=requested,
+        ) as transfer_id:
+            self.wait_for_bandwidth(transfer_id, requested)
+        return requested
 
     @contextmanager
     def track_transfer(
@@ -198,8 +217,9 @@ class TransferBudgetManager:
         estimated_bytes: int = 0,
     ) -> ActiveTransfer:
         with self._lock:
-            # Enforce per-target concurrency
-            for tid, role in [(source_target_id, "read"), (dest_target_id, "write")]:
+            # Preserve same-process visibility for callers that explicitly
+            # inspect/inject local transfer state in addition to durable CAS.
+            for tid in (source_target_id, dest_target_id):
                 if tid:
                     cfg = self.get_target_budget(tid)
                     active_count = sum(
@@ -215,6 +235,19 @@ class TransferBudgetManager:
                                 status=429,
                             )
 
+            source_limit = self.get_target_budget(source_target_id).max_concurrent_transfers if source_target_id else DEFAULT_TARGET_MAX_CONCURRENCY
+            dest_limit = self.get_target_budget(dest_target_id).max_concurrent_transfers if dest_target_id else DEFAULT_TARGET_MAX_CONCURRENCY
+            backup_control.acquire_qos_transfer(
+                transfer_id=transfer_id,
+                traffic_class=int(traffic_class),
+                source_target_id=source_target_id,
+                dest_target_id=dest_target_id,
+                estimated_bytes=estimated_bytes,
+                source_concurrency_limit=source_limit,
+                dest_concurrency_limit=dest_limit,
+                owner_instance_id=self._owner_instance_id,
+            )
+
             transfer = ActiveTransfer(
                 transfer_id=transfer_id,
                 traffic_class=traffic_class,
@@ -229,6 +262,7 @@ class TransferBudgetManager:
     def release_transfer_token(self, transfer_id: str) -> None:
         with self._lock:
             self._active_transfers.pop(transfer_id, None)
+        backup_control.release_qos_transfer(transfer_id)
 
     def get_effective_rate_limit(self, transfer_id: str) -> int:
         """Compute effective bytes/sec for this transfer taking into account priority and targets."""
@@ -237,9 +271,26 @@ class TransferBudgetManager:
             if not transfer:
                 return self.global_bytes_per_second
 
-            has_active_recovery = any(
-                t.traffic_class == TrafficClass.P0_DISASTER_RECOVERY
-                for t in self._active_transfers.values()
+            base_rate = self._base_class_rate(transfer)
+
+            # Target read/write limits
+            if transfer.source_target_id:
+                src_cfg = self.get_target_budget(transfer.source_target_id)
+                base_rate = min(base_rate, src_cfg.max_read_bytes_per_second)
+
+            if transfer.dest_target_id:
+                dst_cfg = self.get_target_budget(transfer.dest_target_id)
+                base_rate = min(base_rate, dst_cfg.max_write_bytes_per_second)
+
+            return max(64 * 1024, base_rate)
+
+    def _base_class_rate(self, transfer: ActiveTransfer) -> int:
+        """Return priority-class rate without folding in target buckets."""
+        with self._lock:
+
+            durable_transfers = backup_control.list_qos_transfers()
+            has_active_recovery = any(int(t.get("trafficClass", -1)) == 0 for t in durable_transfers) or any(
+                t.traffic_class == TrafficClass.P0_DISASTER_RECOVERY for t in self._active_transfers.values()
             )
 
             # Base class limit
@@ -253,16 +304,6 @@ class TransferBudgetManager:
                     base_rate = self.global_bytes_per_second
                 else:
                     base_rate = min(self.background_max_bytes_per_sec, self.global_bytes_per_second)
-
-            # Target read/write limits
-            if transfer.source_target_id:
-                src_cfg = self.get_target_budget(transfer.source_target_id)
-                base_rate = min(base_rate, src_cfg.max_read_bytes_per_second)
-
-            if transfer.dest_target_id:
-                dst_cfg = self.get_target_budget(transfer.dest_target_id)
-                base_rate = min(base_rate, dst_cfg.max_write_bytes_per_second)
-
             return max(64 * 1024, base_rate)
 
     def consume_bandwidth(
@@ -272,31 +313,63 @@ class TransferBudgetManager:
         *,
         now: float | None = None,
     ) -> float:
-        """Record chunk transfer and return required sleep time in seconds (if any) to throttle."""
+        """Try to reserve one chunk from global/source/destination buckets."""
         with self._lock:
             transfer = self._active_transfers.get(transfer_id)
             if not transfer:
                 return 0.0
+            amount = max(1, int(chunk_size))
+            bucket_specs: list[dict[str, Any]] = [
+                {
+                    "bucketKey": "global",
+                    "rateBytesPerSecond": self.global_bytes_per_second,
+                    "capacityBytes": max(self.max_burst_bytes, amount),
+                },
+                {
+                    "bucketKey": f"class:{int(transfer.traffic_class)}",
+                    "rateBytesPerSecond": self._base_class_rate(transfer),
+                    "capacityBytes": max(self._base_class_rate(transfer), amount),
+                },
+            ]
+            if transfer.source_target_id:
+                source_rate = self.get_target_budget(transfer.source_target_id).max_read_bytes_per_second
+                bucket_specs.append(
+                    {
+                        "bucketKey": f"target:{transfer.source_target_id}:read",
+                        "rateBytesPerSecond": source_rate,
+                        "capacityBytes": max(source_rate, amount),
+                    }
+                )
+            if transfer.dest_target_id:
+                dest_rate = self.get_target_budget(transfer.dest_target_id).max_write_bytes_per_second
+                bucket_specs.append(
+                    {
+                        "bucketKey": f"target:{transfer.dest_target_id}:write",
+                        "rateBytesPerSecond": dest_rate,
+                        "capacityBytes": max(dest_rate, amount),
+                    }
+                )
+            result = backup_control.consume_qos_tokens(
+                transfer_id=transfer_id,
+                requested_bytes=amount,
+                bucket_specs=bucket_specs,
+                traffic_class=int(transfer.traffic_class),
+                reserved_global_tokens=self.reserved_recovery_bytes_per_sec,
+                now=now,
+            )
+            if result["granted"]:
+                transfer.bytes_transferred += amount
+                transfer.last_chunk_at = time.monotonic()
+                return 0.0
+            return float(result["waitSeconds"])
 
-            current_time = now if now is not None else time.monotonic()
-            transfer.bytes_transferred += chunk_size
-            transfer.last_chunk_at = current_time
-
-            rate_limit = min(float(self.global_bytes_per_second), float(self.get_effective_rate_limit(transfer_id)))
-
-            # Refill global tokens
-            elapsed = current_time - self._global_last_refill
-            if elapsed > 0:
-                self._global_tokens = min(float(self.global_bytes_per_second), self._global_tokens + elapsed * self.global_bytes_per_second)
-                self._global_last_refill = current_time
-
-            self._global_tokens -= chunk_size
-            sleep_needed = 0.0
-            if self._global_tokens < 0:
-                deficit = -self._global_tokens
-                sleep_needed = min(1.0, deficit / max(1.0, rate_limit))
-
-            return max(0.0, sleep_needed)
+    def wait_for_bandwidth(self, transfer_id: str, chunk_size: int) -> None:
+        """Block cooperatively until all hierarchical buckets grant the chunk."""
+        while True:
+            wait_seconds = self.consume_bandwidth(transfer_id, chunk_size)
+            if wait_seconds <= 0:
+                return
+            time.sleep(min(1.0, max(0.001, wait_seconds)))
 
     def throttled_generator(
         self,
@@ -323,9 +396,7 @@ class TransferBudgetManager:
             for chunk in stream:
                 if not chunk:
                     continue
-                sleep_sec = self.consume_bandwidth(tid, len(chunk))
-                if sleep_sec > 0.001:
-                    time.sleep(sleep_sec)
+                self.wait_for_bandwidth(tid, len(chunk))
                 yield chunk
         finally:
             if cleanup:
@@ -334,16 +405,27 @@ class TransferBudgetManager:
     def transfer_control_summary(self) -> dict[str, Any]:
         """Return real-time projection of transfer control without remote I/O."""
         with self._lock:
-            p0_count = sum(1 for t in self._active_transfers.values() if t.traffic_class == TrafficClass.P0_DISASTER_RECOVERY)
-            p2_count = sum(1 for t in self._active_transfers.values() if t.traffic_class in {TrafficClass.P2_REQUIRED_REPAIR, TrafficClass.P3_REQUIRED_REPLICATION})
+            durable = {str(t["transferId"]): t for t in backup_control.list_qos_transfers()}
+            for transfer_id, transfer in self._active_transfers.items():
+                durable.setdefault(
+                    transfer_id,
+                    {
+                        "trafficClass": int(transfer.traffic_class),
+                        "estimatedBytes": transfer.estimated_bytes,
+                        "bytesTransferred": transfer.bytes_transferred,
+                    },
+                )
+            p0_count = sum(1 for t in durable.values() if int(t.get("trafficClass", -1)) == 0)
+            p2_count = sum(1 for t in durable.values() if int(t.get("trafficClass", -1)) in {2, 3})
             rebalance_backlog = sum(
-                t.estimated_bytes for t in self._active_transfers.values()
-                if t.traffic_class in {TrafficClass.P5_REBALANCE_DRAIN, TrafficClass.P6_BEST_EFFORT}
+                max(0, int(t.get("estimatedBytes") or 0) - int(t.get("bytesTransferred") or 0))
+                for t in durable.values()
+                if int(t.get("trafficClass", -1)) in {5, 6}
             )
             has_throttle = p0_count > 0
 
             return {
-                "activeTransfersTotal": len(self._active_transfers),
+                "activeTransfersTotal": len(durable),
                 "activeRecoveryTransfers": p0_count,
                 "activeRepairTransfers": p2_count,
                 "rebalanceBacklogBytes": rebalance_backlog,
@@ -356,11 +438,15 @@ class TransferBudgetManager:
 
     def active_transfers_count(self) -> int:
         with self._lock:
-            return len(self._active_transfers)
+            durable_ids = {str(item["transferId"]) for item in backup_control.list_qos_transfers()}
+            return len(durable_ids | set(self._active_transfers))
 
     def active_transfers_bytes(self) -> int:
         with self._lock:
-            return sum(t.bytes_transferred for t in self._active_transfers.values())
+            durable = {str(item["transferId"]): int(item.get("bytesTransferred") or 0) for item in backup_control.list_qos_transfers()}
+            for transfer_id, transfer in self._active_transfers.items():
+                durable[transfer_id] = max(durable.get(transfer_id, 0), transfer.bytes_transferred)
+            return sum(durable.values())
 
 
 # Singleton manager instance

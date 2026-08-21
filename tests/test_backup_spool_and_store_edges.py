@@ -139,12 +139,14 @@ def test_init_s3_target_with_fake_client(tmp_settings: Path, monkeypatch: pytest
         prefix="pref",
         region="us-east-1",
         label="offsite",
+        quota_bytes=20 * 1024 * 1024,
         credential_provider={"type": "aws-default-chain", "profile": "demo"},
         client=client,
         probe=True,
     )
     assert record["kind"] == "s3"
     assert record["bucket"] == "bk"
+    assert record["quotaBytes"] == 20 * 1024 * 1024
     assert "secretAccessKey" not in str(record)
     store = backup_targets.open_target_store(record["targetId"], write_intent=False, client=client)
     assert store.capabilities().kind == "s3"
@@ -153,6 +155,19 @@ def test_init_s3_target_with_fake_client(tmp_settings: Path, monkeypatch: pytest
     persisted = json.loads(registry_path.read_text(encoding="utf-8"))
     persisted["lastProbe"]["results"]["multipart-provider-sha256"] = "FAIL"
     registry_path.write_text(json.dumps(persisted), encoding="utf-8")
+    reopened = backup_targets.open_target_store(record["targetId"], write_intent=False, client=client)
+    assert reopened.capabilities().integrity_mode == "strong-provider-checksum"
+    backup_targets._mutate_target(
+        str(record["targetId"]),
+        lambda current: {
+            **current,
+            "lastProbe": {
+                **dict(current["lastProbe"]),
+                "results": {**dict(current["lastProbe"]["results"]), "multipart-provider-sha256": "FAIL"},
+            },
+        },
+        bump_generation=False,
+    )
     reopened = backup_targets.open_target_store(record["targetId"], write_intent=False, client=client)
     assert reopened.capabilities().integrity_mode == "full-readback"
     from deepseek_infra.infra.workspace.backup_target_s3 import open_s3_store

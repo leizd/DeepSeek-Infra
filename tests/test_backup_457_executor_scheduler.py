@@ -63,6 +63,8 @@ def test_scheduler_target_ranking_diversity(tmp_settings: Path) -> None:
         policy,
         candidate_target_ids=candidates,
         primary_target_id=t1,
+        logical_recovery_point_id=None,
+        required_bytes=1024,
     )
     assert len(ranked) == 2
     # Returns list of ((diversity, lag, prio, ...), target_id)

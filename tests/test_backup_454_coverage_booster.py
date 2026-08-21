@@ -12,12 +12,14 @@ import pytest
 
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
+    backup_capacity,
     backup_dr_ledger,
     backup_dr_readiness,
     backup_publish,
     backup_replication,
     backup_scheduler,
     backup_target_store,
+    backup_targets,
 )
 
 
@@ -493,36 +495,54 @@ def test_write_failover_and_dr_readiness(tmp_settings, monkeypatch) -> None:
     """Test write placement failover and DR readiness writeContinuity block."""
     policy = {
         "policyId": "pol-stability",
-        "targetId": "primary-target-unavailable",
+        "targetId": "target_primary_unavailable",
         "replication": {
             "enabled": True,
             "minCommittedCopies": 2,
             "targets": [
-                {"targetId": "replica-target-healthy", "mode": "required"},
+                {"targetId": "target_replica_healthy", "mode": "required"},
             ],
         },
     }
 
     replica_dir = tmp_settings / "replica_store"
     replica_dir.mkdir(parents=True)
+    backup_targets.register_filesystem_target(
+        "target_primary_unavailable",
+        path=tmp_settings / "primary_store",
+        region="region-primary",
+        failure_domain="region-primary-a",
+    )
+    backup_targets.register_filesystem_target(
+        "target_replica_healthy",
+        path=replica_dir,
+        region="region-replica",
+        failure_domain="region-replica-a",
+    )
 
     def mock_resolve(tid: str) -> Any:
-        if tid == "primary-target-unavailable":
+        if tid == "target_primary_unavailable":
             raise AppError("connection failed", status=503)
-        if tid == "replica-target-healthy":
+        if tid == "target_replica_healthy":
             return MockTarget(tid, root=replica_dir)
         raise AppError("unknown", status=404)
 
     monkeypatch.setattr(backup_publish, "resolve_target", mock_resolve)
+    backup_capacity.record_physical_size_evidence(
+        policy_id="pol-stability",
+        backup_id="bk-capacity-evidence",
+        snapshot_kind="full",
+        physical_bytes=1024 * 1024,
+    )
 
     # Evaluate write placement
     placement = backup_scheduler.evaluate_write_placement(policy)
     assert placement["isFailover"] is True
-    assert placement["selectedWriteTargetId"] == "replica-target-healthy"
+    assert placement["selectedWriteTargetId"] == "target_replica_healthy"
     assert placement["forceFull"] is True
 
     # Test DR readiness writeContinuity block
-    readiness = backup_dr_readiness.evaluate_scope_readiness("replica-target-healthy")
+    readiness = backup_dr_readiness.evaluate_scope_readiness("target_replica_healthy")
     assert "writeContinuity" in readiness
     assert "status" in readiness["writeContinuity"]
 

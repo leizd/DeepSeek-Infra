@@ -17,6 +17,7 @@ readable through :func:`backup_file_candidates` and truncated commit keys.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -28,7 +29,16 @@ from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_component_transport, backup_object_set, backup_scheduler, backup_spool, backup_targets, backup_unattended, backups
+from deepseek_infra.infra.workspace import (
+    backup_component_transport,
+    backup_object_set,
+    backup_scheduler,
+    backup_spool,
+    backup_targets,
+    backup_transfer_budget,
+    backup_unattended,
+    backups,
+)
 from deepseek_infra.infra.workspace.backup_target_store import (
     BackupTargetStore,
     STRONG_PROVIDER_CHECKSUM,
@@ -361,7 +371,7 @@ def _record_publish_to_dr_ledger(
     package: Any,
 ) -> None:
     try:
-        from deepseek_infra.infra.workspace import backup_dr_ledger
+        from deepseek_infra.infra.workspace import backup_capacity, backup_dr_ledger
         receipt = result.receipt or {}
         commit = result.commit or {}
         backup_id = str(receipt.get("backupId") or getattr(package, "backup_id", ""))
@@ -400,7 +410,23 @@ def _record_publish_to_dr_ledger(
                 mode="required",
                 snapshot_kind=str(receipt.get("snapshotKind") or "full"),
                 verified_at=committed_at,
-                metadata={"objectSetDigest": object_set_digest} if object_set_digest else None,
+                metadata={
+                    "objectSetDigest": object_set_digest or None,
+                    "logicalBytes": logical_bytes,
+                    "physicalBytes": ciphertext_bytes,
+                    "ciphertextBytes": ciphertext_bytes,
+                    "snapshotKind": str(receipt.get("snapshotKind") or "full"),
+                },
+            )
+        except Exception:
+            pass
+        try:
+            backup_capacity.record_physical_size_evidence(
+                policy_id=policy_id,
+                backup_id=backup_id,
+                snapshot_kind=str(receipt.get("snapshotKind") or "full"),
+                physical_bytes=ciphertext_bytes,
+                observed_at=committed_at,
             )
         except Exception:
             pass
@@ -418,8 +444,14 @@ def publish_backup(
     fencing_token: int,
     receipt: dict[str, Any] | None = None,
     checkpoint: Callable[[], None] | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
+    retain_spool: bool = False,
 ) -> PublishResult:
-    """Publish a verified package as an immutable object plus slot commit."""
+    """Publish a verified package as an immutable object plus slot commit.
+
+    ``retain_spool`` transfers cleanup ownership to the replication lifecycle so
+    required replicas can reuse the exact ciphertext after the primary commit.
+    """
     result: PublishResult
     if isinstance(package, backup_object_set.ObjectSetPackage):
         if target.kind != "filesystem" or target.root is None:
@@ -432,6 +464,8 @@ def publish_backup(
                 fencing_token=fencing_token,
                 receipt=receipt,
                 checkpoint=checkpoint,
+                traffic_class=traffic_class,
+                retain_spool=retain_spool,
             )
         else:
             result = _publish_object_set_filesystem(
@@ -443,6 +477,7 @@ def publish_backup(
                 fencing_token=fencing_token,
                 receipt=receipt,
                 checkpoint=checkpoint,
+                traffic_class=traffic_class,
             )
     elif target.kind != "filesystem" or target.root is None:
         result = _publish_via_store(
@@ -454,6 +489,8 @@ def publish_backup(
             fencing_token=fencing_token,
             receipt=receipt,
             checkpoint=checkpoint,
+            traffic_class=traffic_class,
+            retain_spool=retain_spool,
         )
     else:
         result = _publish_filesystem(
@@ -465,6 +502,7 @@ def publish_backup(
             fencing_token=fencing_token,
             receipt=receipt,
             checkpoint=checkpoint,
+            traffic_class=traffic_class,
         )
     _record_publish_to_dr_ledger(target.target_id, policy_id, result, package)
     return result
@@ -480,6 +518,7 @@ def _publish_filesystem(
     fencing_token: int,
     receipt: dict[str, Any] | None = None,
     checkpoint: Callable[[], None] | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
 ) -> PublishResult:
     root = target.require_root()
     _ensure_layout(root)
@@ -507,12 +546,19 @@ def _publish_filesystem(
     try:
         _write_journal(root, journal)
         if not obj.is_file():
-            with package.path.open("rb") as source, partial.open("wb") as output:
+            manager = backup_transfer_budget.get_global_transfer_budget_manager()
+            with manager.track_transfer(
+                traffic_class=traffic_class,
+                source_target_id="managed-local",
+                dest_target_id=target.target_id,
+                estimated_bytes=int(package.size),
+            ) as transfer_id, package.path.open("rb") as source, partial.open("wb") as output:
                 while True:
                     _checkpoint()
                     chunk = source.read(1024 * 1024)
                     if not chunk:
                         break
+                    manager.wait_for_bandwidth(transfer_id, len(chunk))
                     output.write(chunk)
                 output.flush()
                 os.fsync(output.fileno())
@@ -620,6 +666,7 @@ def _publish_object_set_filesystem(
     fencing_token: int,
     receipt: dict[str, Any] | None,
     checkpoint: Callable[[], None] | None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
 ) -> PublishResult:
     root = target.require_root()
     _ensure_layout(root)
@@ -659,9 +706,16 @@ def _publish_object_set_filesystem(
             partial = root / ".partial" / f"{run_id}-{component.ciphertext_digest}.part"
             partials.append(partial)
             if not destination.is_file():
-                with component.path.open("rb") as source, partial.open("wb") as output:
+                manager = backup_transfer_budget.get_global_transfer_budget_manager()
+                with manager.track_transfer(
+                    traffic_class=traffic_class,
+                    source_target_id="managed-local",
+                    dest_target_id=target.target_id,
+                    estimated_bytes=component.ciphertext_size,
+                ) as transfer_id, component.path.open("rb") as source, partial.open("wb") as output:
                     while chunk := source.read(1024 * 1024):
                         _checkpoint()
+                        manager.wait_for_bandwidth(transfer_id, len(chunk))
                         output.write(chunk)
                     output.flush()
                     os.fsync(output.fileno())
@@ -811,6 +865,8 @@ def _publish_object_set_via_store(
     fencing_token: int,
     receipt: dict[str, Any] | None,
     checkpoint: Callable[[], None] | None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
+    retain_spool: bool = False,
 ) -> PublishResult:
     store = target.require_store()
     slot_digest = commit_slot_digest(schedule_slot)
@@ -865,7 +921,8 @@ def _publish_object_set_via_store(
                     journal.update(phase="converged", convergedToRunId=str(existing.get("runId") or ""), updatedAt=_utc_iso())
                     _replace_journal(store, journal)
                     backup_scheduler.record_target_health(target.target_id, "ok", None)
-                    backup_spool.clear_slot(policy_id, slot_digest)
+                    if not retain_spool:
+                        backup_spool.clear_slot(policy_id, slot_digest)
                     return PublishResult(
                         receipt=existing_receipt,
                         path=None,
@@ -909,6 +966,9 @@ def _publish_object_set_via_store(
                     checkpoint=_component_checkpoint,
                     multipart_digest=component.ciphertext_digest,
                     workers=1,
+                    traffic_class=traffic_class,
+                    source_target_id="managed-local",
+                    dest_target_id=target.target_id,
                 )
                 metadata = store.stat(key)
             if metadata is None or metadata.size != component.ciphertext_size:
@@ -922,7 +982,13 @@ def _publish_object_set_via_store(
                 return
             digest = hashlib.sha256()
             observed_size = 0
-            for chunk in store.get_stream(key):
+            manager = backup_transfer_budget.get_global_transfer_budget_manager()
+            verified_stream = manager.throttled_generator(
+                store.get_stream(key),
+                traffic_class=traffic_class,
+                source_target_id=target.target_id,
+            )
+            for chunk in verified_stream:
                 _component_checkpoint()
                 digest.update(chunk)
                 observed_size += len(chunk)
@@ -1016,7 +1082,8 @@ def _publish_object_set_via_store(
             commit_hash=str(marker["commitHash"]),
         )
         backup_scheduler.record_target_health(target.target_id, "ok", None)
-        backup_spool.clear_slot(policy_id, slot_digest)
+        if not retain_spool:
+            backup_spool.clear_slot(policy_id, slot_digest)
         return PublishResult(
             receipt=receipt_data,
             path=None,
@@ -1041,6 +1108,8 @@ def _publish_via_store(
     fencing_token: int,
     receipt: dict[str, Any] | None = None,
     checkpoint: Callable[[], None] | None = None,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
+    retain_spool: bool = False,
 ) -> PublishResult:
     store = target.require_store()
     digest = str(package.ciphertext_sha256)
@@ -1091,7 +1160,8 @@ def _publish_via_store(
                 journal.update(phase="converged", convergedToRunId=str(existing.get("runId") or ""), updatedAt=_utc_iso())
                 _replace_journal(store, journal)
                 backup_scheduler.record_target_health(target.target_id, "ok", None)
-                backup_spool.clear_slot(policy_id, slot_digest)
+                if not retain_spool:
+                    backup_spool.clear_slot(policy_id, slot_digest)
                 return PublishResult(
                     receipt=existing_receipt,
                     path=None,
@@ -1114,7 +1184,17 @@ def _publish_via_store(
 
         _checkpoint()
         if store.stat(obj_key) is None:
-            _upload_object_resumable(store, package_view, obj_key=obj_key, policy_id=policy_id, slot_digest=slot_digest, checkpoint=checkpoint)
+            _upload_object_resumable(
+                store,
+                package_view,
+                obj_key=obj_key,
+                policy_id=policy_id,
+                slot_digest=slot_digest,
+                checkpoint=checkpoint,
+                traffic_class=traffic_class,
+                source_target_id="managed-local",
+                dest_target_id=target.target_id,
+            )
         else:
             # Verify remote object when present.
             remote = store.get_bytes(obj_key)
@@ -1176,7 +1256,8 @@ def _publish_via_store(
             commit_hash=str(marker["commitHash"]),
         )
         backup_scheduler.record_target_health(target.target_id, "ok", None)
-        backup_spool.clear_slot(policy_id, slot_digest)
+        if not retain_spool:
+            backup_spool.clear_slot(policy_id, slot_digest)
         return PublishResult(
             receipt=receipt_data,
             path=None,
@@ -1208,6 +1289,73 @@ def _replace_journal(store: BackupTargetStore, journal: dict[str, Any]) -> None:
         pass
 
 
+def _multipart_part_number(part: dict[str, Any]) -> int:
+    return int(part.get("partNumber") or part.get("number") or 0)
+
+
+def _normalized_multipart_etag(value: Any) -> str:
+    return str(value or "").strip().strip('"').lower()
+
+
+def _multipart_upload_missing(exc: BaseException) -> bool:
+    return int(getattr(exc, "status", 0) or 0) == 404 or "multipart-upload-not-found" in str(exc).lower()
+
+
+def _validate_resumable_remote_parts(
+    package: Any,
+    *,
+    size: int,
+    part_size: int,
+    local_parts: list[dict[str, Any]],
+    remote_parts: list[dict[str, Any]],
+) -> str | None:
+    path = Path(package.path)
+    ordered_local = sorted(local_parts, key=_multipart_part_number)
+    ordered_remote = sorted(remote_parts, key=_multipart_part_number)
+    for index, local in enumerate(ordered_local, start=1):
+        if _multipart_part_number(local) != index:
+            return f"non-contiguous-local-part:{_multipart_part_number(local)}"
+    with path.open("rb") as handle:
+        for index, remote in enumerate(ordered_remote, start=1):
+            if _multipart_part_number(remote) != index:
+                return f"non-contiguous-remote-part:{_multipart_part_number(remote)}"
+            offset = (index - 1) * part_size
+            if offset >= size:
+                return "remote-parts-exceed-source"
+            expected_size = min(part_size, size - offset)
+            remote_size = int(remote.get("size") or 0)
+            if remote_size != expected_size:
+                return f"remote-part-{index}-size-mismatch:{remote_size}!={expected_size}"
+            handle.seek(offset)
+            chunk = handle.read(expected_size)
+            if len(chunk) != expected_size:
+                return f"source-part-{index}-truncated"
+            expected_sha = hashlib.sha256(chunk).hexdigest()
+            provider_checksum = str(remote.get("checksumSHA256") or "")
+            if provider_checksum:
+                expected_b64 = base64.b64encode(hashlib.sha256(chunk).digest()).decode("ascii")
+                if provider_checksum != expected_b64:
+                    return f"remote-part-{index}-checksum-mismatch"
+            else:
+                remote_etag = _normalized_multipart_etag(remote.get("etag"))
+                expected_md5 = hashlib.md5(chunk, usedforsecurity=False).hexdigest()
+                if remote_etag not in {expected_sha, expected_md5}:
+                    return f"remote-part-{index}-etag-unverifiable-or-mismatch"
+            if index <= len(ordered_local):
+                local = ordered_local[index - 1]
+                local_size = int(local.get("size") or 0)
+                if local_size != remote_size:
+                    return f"part-{index}-local-remote-size-conflict"
+                local_etag = _normalized_multipart_etag(local.get("etag"))
+                remote_etag = _normalized_multipart_etag(remote.get("etag"))
+                if local_etag and remote_etag and local_etag != remote_etag:
+                    return f"part-{index}-local-remote-etag-conflict"
+                local_checksum = str(local.get("checksumSHA256") or "")
+                if local_checksum and provider_checksum and local_checksum != provider_checksum:
+                    return f"part-{index}-local-remote-checksum-conflict"
+    return None
+
+
 def _upload_object_resumable(
     store: BackupTargetStore,
     package: Any,
@@ -1218,6 +1366,9 @@ def _upload_object_resumable(
     checkpoint: Callable[[], None] | None = None,
     multipart_digest: str | None = None,
     workers: int = 4,
+    traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
+    source_target_id: str | None = "managed-local",
+    dest_target_id: str | None = None,
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1229,56 +1380,134 @@ def _upload_object_resumable(
         raw_size = getattr(package, "ciphertext_size", 0)
     size = int(str(raw_size if raw_size is not None else 0))
     state = (
-        backup_spool.read_component_multipart_state(policy_id, slot_digest, multipart_digest)
+        backup_spool.read_component_multipart_state(
+            policy_id,
+            slot_digest,
+            multipart_digest,
+            target_id=dest_target_id,
+        )
         if multipart_digest is not None
-        else backup_spool.read_multipart_state(policy_id, slot_digest)
+        else backup_spool.read_multipart_state(policy_id, slot_digest, target_id=dest_target_id)
     ) or {}
 
     def _write_state(value: dict[str, Any]) -> None:
         if multipart_digest is not None:
-            backup_spool.write_component_multipart_state(policy_id, slot_digest, multipart_digest, value)
+            backup_spool.write_component_multipart_state(
+                policy_id,
+                slot_digest,
+                multipart_digest,
+                value,
+                target_id=dest_target_id,
+            )
         else:
-            backup_spool.write_multipart_state(policy_id, slot_digest, value)
-    upload = None
-    if state.get("uploadId") and str(state.get("key") or "") == obj_key:
-        part_size = int(state.get("partSize") or (8 * 1024 * 1024))
-        from deepseek_infra.infra.workspace.backup_target_store import MultipartUpload
+            backup_spool.write_multipart_state(policy_id, slot_digest, value, target_id=dest_target_id)
 
-        upload = MultipartUpload(
-            key=obj_key,
-            upload_id=str(state["uploadId"]),
-            checksum_sha256=digest,
-            parts=list(state.get("parts") or []),
-            expected_size=size,
-        )
-        state["partSize"] = part_size
-        state["workers"] = workers
-        state["maxInFlightBytes"] = workers * part_size
-        state["checksumSha256"] = digest
-    else:
-        part_size = default_part_size
-        upload = store.begin_multipart(obj_key, checksum_sha256=digest)
-        upload.expected_size = size
-        state = {
+    def _new_upload(*, previous_upload_id: str | None = None, reason: str | None = None) -> tuple[Any, dict[str, Any]]:
+        fresh_upload = store.begin_multipart(obj_key, checksum_sha256=digest)
+        fresh_upload.expected_size = size
+        fresh_state: dict[str, Any] = {
             "key": obj_key,
-            "uploadId": upload.upload_id,
+            "uploadId": fresh_upload.upload_id,
             "parts": [],
             "checksumSha256": digest,
             "partSize": part_size,
             "workers": workers,
             "maxInFlightBytes": workers * part_size,
             "phase": "uploading",
+            **({"targetId": dest_target_id} if dest_target_id else {}),
         }
-        _write_state(state)
+        if previous_upload_id and reason:
+            fresh_state["multipartRestart"] = {
+                "previousUploadId": previous_upload_id,
+                "reason": reason,
+                "restartedAt": _utc_iso(),
+            }
+        _write_state(fresh_state)
+        return fresh_upload, fresh_state
+
+    part_size = default_part_size
+    upload = None
+    if state.get("uploadId") and str(state.get("key") or "") == obj_key:
+        part_size = int(state.get("partSize") or (8 * 1024 * 1024))
+        from deepseek_infra.infra.workspace.backup_target_store import MultipartUpload
+
+        local_parts = [dict(item) for item in list(state.get("parts") or []) if isinstance(item, dict)]
+        upload = MultipartUpload(
+            key=obj_key,
+            upload_id=str(state["uploadId"]),
+            checksum_sha256=digest,
+            expected_size=size,
+        )
+        state["partSize"] = part_size
+        state["workers"] = workers
+        state["maxInFlightBytes"] = workers * part_size
+        state["checksumSha256"] = digest
+        list_parts = getattr(store, "list_multipart_parts", None)
+        if not callable(list_parts):
+            raise AppError("multipart provider cannot reconcile parts", code=ErrorCode.INVALID_REQUEST, status=409)
+        try:
+            remote_parts = sorted(
+                [dict(item) for item in list_parts(upload) if isinstance(item, dict)],
+                key=_multipart_part_number,
+            )
+        except Exception as exc:
+            if not _multipart_upload_missing(exc):
+                raise
+            upload, state = _new_upload(previous_upload_id=upload.upload_id, reason="provider-upload-not-found")
+        else:
+            conflict_reason = _validate_resumable_remote_parts(
+                package,
+                size=size,
+                part_size=part_size,
+                local_parts=local_parts,
+                remote_parts=remote_parts,
+            )
+            if conflict_reason is not None:
+                store.abort_multipart(upload)
+                state = {
+                    "key": obj_key,
+                    "checksumSha256": digest,
+                    "partSize": part_size,
+                    "workers": workers,
+                    "maxInFlightBytes": workers * part_size,
+                    "phase": "quarantined",
+                    **({"targetId": dest_target_id} if dest_target_id else {}),
+                    "multipartQuarantine": {
+                        "uploadId": upload.upload_id,
+                        "reason": conflict_reason,
+                        "localParts": local_parts,
+                        "remoteParts": remote_parts,
+                        "quarantinedAt": _utc_iso(),
+                    },
+                }
+                _write_state(state)
+                raise AppError(
+                    f"multipart-reconciliation-conflict:{conflict_reason}",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
+            if len(remote_parts) < len(local_parts):
+                store.abort_multipart(upload)
+                upload, state = _new_upload(
+                    previous_upload_id=upload.upload_id,
+                    reason=f"provider-parts-behind:{len(remote_parts)}<{len(local_parts)}",
+                )
+            else:
+                upload.parts = remote_parts
+                state["parts"] = remote_parts
+                state["completedParts"] = len(remote_parts)
+                state["multipartReconciliation"] = {
+                    "status": "remote-ahead-adopted" if len(remote_parts) > len(local_parts) else "remote-matches-local",
+                    "uploadId": upload.upload_id,
+                    "localPartCount": len(local_parts),
+                    "remotePartCount": len(remote_parts),
+                    "reconciledAt": _utc_iso(),
+                }
+                _write_state(state)
+    else:
+        upload, state = _new_upload()
 
     completed_parts = {int(item["partNumber"]): item for item in upload.parts}
-    list_parts = getattr(store, "list_multipart_parts", None)
-    if callable(list_parts):
-        try:
-            completed_parts.update({int(item["partNumber"]): item for item in list_parts(upload)})
-        except AppError:
-            if completed_parts:
-                raise
     upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
     state["parts"] = upload.parts
     _write_state(state)
@@ -1296,21 +1525,32 @@ def _upload_object_resumable(
         for part_number, offset in enumerate(range(0, size, part_size), start=1)
         if part_number not in completed_parts
     ]
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="backup-multipart") as executor:
-        futures = {}
-        for part_number, offset, length in pending:
-            if checkpoint is not None:
-                checkpoint()
-            futures[executor.submit(upload_one, part_number, offset, length)] = part_number
-        for future in as_completed(futures):
-            if checkpoint is not None:
-                checkpoint()
-            part_number = futures[future]
-            completed_parts[part_number] = future.result()
-            upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
-            state["parts"] = upload.parts
-            state["completedParts"] = len(upload.parts)
-            _write_state(state)
+    manager = backup_transfer_budget.get_global_transfer_budget_manager()
+    with manager.track_transfer(
+        traffic_class=traffic_class,
+        source_target_id=source_target_id,
+        dest_target_id=dest_target_id,
+        estimated_bytes=sum(length for _, _, length in pending),
+    ) as transfer_id:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="backup-multipart") as executor:
+            futures = {}
+            for part_number, offset, length in pending:
+                if checkpoint is not None:
+                    checkpoint()
+                # Reserve every part against the hierarchical buckets before
+                # dispatch. Once admitted, provider uploads retain their
+                # bounded parallelism instead of serializing on SQLite setup.
+                manager.wait_for_bandwidth(transfer_id, length)
+                futures[executor.submit(upload_one, part_number, offset, length)] = part_number
+            for future in as_completed(futures):
+                if checkpoint is not None:
+                    checkpoint()
+                part_number = futures[future]
+                completed_parts[part_number] = future.result()
+                upload.parts = sorted(completed_parts.values(), key=lambda item: int(item["partNumber"]))
+                state["parts"] = upload.parts
+                state["completedParts"] = len(upload.parts)
+                _write_state(state)
     if checkpoint is not None:
         checkpoint()
     state["phase"] = "completing"

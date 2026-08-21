@@ -68,6 +68,11 @@ EVIDENCE_SPECS = (
     EvidenceSpec("docs/evidence/object-set-s3-v{version}.json", "object-set-s3-e2e", "exact-merge"),
     EvidenceSpec("docs/evidence/recovery-faults-v{version}.json", "recovery-fault-evidence", "exact-merge"),
     EvidenceSpec("docs/evidence/replica-healing-s3-v{version}.json", "replica-healing-s3-e2e", "exact-merge"),
+    EvidenceSpec(
+        "docs/evidence/storage-control-plane-minio-v{version}.json",
+        "storage-control-plane-minio-e2e",
+        "exact-merge",
+    ),
     EvidenceSpec("docs/evidence/python-coverage-stability-v{version}.json", "test", "optional", required_for_ga=False),
 )
 

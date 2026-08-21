@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,13 +90,32 @@ def test_retirement_shared_components_gc(tmp_settings: Path) -> None:
     r1_dir = t_root / "receipts"
     r1_dir.mkdir(parents=True, exist_ok=True)
     r1 = {
+        "schemaVersion": 4,
+        "targetId": t1,
+        "policyId": policy_id,
+        "backupId": b1,
         "filename": "objects/sha256/aa/aabbcc.age",
         "components": [
             {"path": "objects/sha256/aa/ddeeff.age", "digest": "ddeeff"},
             {"digest": "uniquedigest123"},
         ],
     }
-    (r1_dir / f"{b1}.json").write_text(json.dumps(r1), encoding="utf-8")
+    r1_bytes = (json.dumps(r1, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (r1_dir / f"{b1}.json").write_bytes(r1_bytes)
+    commit = {
+        "schemaVersion": 4,
+        "targetGeneration": 1,
+        "previousCommitHash": "0" * 64,
+        "targetId": t1,
+        "policyId": policy_id,
+        "backupId": b1,
+        "receiptDigest": hashlib.sha256(r1_bytes).hexdigest(),
+        "committedAt": "2026-08-18T09:00:00Z",
+    }
+    commit["commitHash"] = backup_publish._commit_hash(commit)
+    commit_path = t_root / "commits" / policy_id / f"{b1}.json"
+    commit_path.parent.mkdir(parents=True, exist_ok=True)
+    commit_path.write_text(json.dumps(commit), encoding="utf-8")
 
     # Write receipt for b2 referencing comp1 (shared)
     r2 = {
@@ -150,6 +170,7 @@ def test_retirement_shared_components_gc(tmp_settings: Path) -> None:
     mock_remote_store.get_bytes.side_effect = _mock_get_bytes
     mock_remote_store.stat.return_value = MagicMock(size=500, etag="etag_rem")
     mock_remote_store.delete_if_match.return_value = True
+    mock_remote_store.list_objects.return_value = SimpleNamespace(objects=(), cursor=None)
 
     mock_rem_target = MagicMock()
     mock_rem_target.root = None
@@ -165,12 +186,16 @@ def test_retirement_shared_components_gc(tmp_settings: Path) -> None:
         recoverable=True,
     )
 
+    remote_receipt_bytes = (json.dumps(r_remote_data, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    remote_commit = {"commitHash": "c" * 64, "receiptDigest": hashlib.sha256(remote_receipt_bytes).hexdigest()}
     with patch.object(backup_publish, "resolve_target", return_value=mock_rem_target):
         with patch.object(backup_replication, "simulate_copy_removal", return_value={"policySafe": True, "protectedByHold": False}):
-            job_rem = backup_retirement.create_copy_retirement_job(policy_id, "bk-remote-1", t1)
-            res_rem = backup_retirement.execute_copy_retirement_job(job_rem["jobId"])
-            assert res_rem["phase"] == "reclaimed"
-            assert res_rem["bytesReclaimed"] > 0
+            with patch.object(backup_retirement, "_read_formal_metadata", return_value=(remote_receipt_bytes, r_remote_data, remote_commit)):
+                with patch.object(backup_retirement, "_write_retirement_marker"):
+                    job_rem = backup_retirement.create_copy_retirement_job(policy_id, "bk-remote-1", t1)
+                    res_rem = backup_retirement.execute_copy_retirement_job(job_rem["jobId"])
+                    assert res_rem["phase"] == "reclaimed"
+                    assert res_rem["bytesReclaimed"] > 0
 
     # 7. List retirement jobs with multiple filters
     filtered_jobs = backup_retirement.list_copy_retirement_jobs(policy_id=policy_id, target_id=t1, phase="reclaimed")
@@ -264,11 +289,12 @@ def test_drain_and_transfer_full_coverage(tmp_settings: Path) -> None:
         state="healthy",
         recoverable=True,
     )
-    with patch.object(backup_replication, "create_rebalance_job", return_value={"jobId": "reb-test-1"}):
-        with patch.object(backup_replication, "execute_rebalance_job", return_value={"phase": "completed"}):
-            res_live = backup_drain.process_target_drain(t_src)
-            assert res_live["status"] == "in_progress"
-            assert res_live["rebalancesTriggered"] >= 1
+    with patch.object(backup_scheduler, "plan_target_placement", return_value=[((0,), t_dst)]):
+        with patch.object(backup_replication, "create_rebalance_job", return_value={"jobId": "reb-test-1"}):
+            with patch.object(backup_replication, "execute_rebalance_job", return_value={"phase": "completed"}):
+                res_live = backup_drain.process_target_drain(t_src)
+                assert res_live["status"] == "in_progress"
+                assert res_live["rebalancesTriggered"] >= 1
 
     # 4. TransferBudgetManager concurrency limit & P0 bypass
     mgr = backup_transfer_budget.TransferBudgetManager()
@@ -389,7 +415,7 @@ def test_backup_drain_job_queries_and_waiting_for_gc(tmp_settings: Path) -> None
         state="degraded",
         recoverable=False,
     )
-    with patch.object(backup_replication, "is_source_held", return_value=True):
+    with patch.object(backup_replication, "has_source_holds_for_target", return_value=True):
         res_held = backup_drain.process_target_drain(t_id)
         assert res_held["status"] == "in_progress"
         assert res_held["job"]["phase"] == "waiting-for-gc"

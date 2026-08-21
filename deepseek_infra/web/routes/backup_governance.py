@@ -184,8 +184,16 @@ def create_backup_governance_router() -> APIRouter:
         payload = await read_json_body(request, max_bytes=64_000)
         kind = str(payload.get("kind") or "filesystem").strip().lower()
         failure_domain = str(payload.get("failureDomain") or "").strip() or None
+        provider_name = str(payload.get("provider") or "").strip() or None
+        jurisdiction = str(payload.get("jurisdiction") or "").strip() or None
         priority = int(payload.get("priority") or 0)
         cost_class = str(payload.get("costClass") or "").strip() or None
+        storage_cost = payload.get("storageCostPerGiBMonth")
+        egress_cost = payload.get("egressCostPerGiB")
+        max_read = payload.get("maxReadBytesPerSecond")
+        max_write = payload.get("maxWriteBytesPerSecond")
+        max_concurrent = payload.get("maxConcurrentTransfers")
+        quota_bytes = payload.get("quotaBytes")
 
         if kind in {"s3", "s3-compatible"}:
             provider = payload.get("credentialProvider") if isinstance(payload.get("credentialProvider"), dict) else None
@@ -198,8 +206,16 @@ def create_backup_governance_router() -> APIRouter:
                     expected_bucket_owner=str(payload.get("expectedBucketOwner") or "") or None,
                     label=str(payload.get("label") or ""),
                     failure_domain=failure_domain,
+                    provider=provider_name,
+                    jurisdiction=jurisdiction,
                     priority=priority,
                     cost_class=cost_class,
+                    storage_cost_per_gib_month=storage_cost,
+                    egress_cost_per_gib=egress_cost,
+                    max_read_bytes_per_second=max_read,
+                    max_write_bytes_per_second=max_write,
+                    max_concurrent_transfers=max_concurrent,
+                    quota_bytes=quota_bytes,
                     credential_provider=provider,
                     probe=bool(payload.get("probe", True)),
                 )
@@ -207,7 +223,23 @@ def create_backup_governance_router() -> APIRouter:
         if kind == "webdav":
             raise AppError("WebDAV targets are reserved but not GA in 4.4.6", code=ErrorCode.INVALID_REQUEST, status=501)
         path = Path(str(payload.get("path") or ""))
-        return json_response(backup_targets.init_target(path, label=str(payload.get("label") or "")))
+        return json_response(
+            backup_targets.init_target(
+                path,
+                label=str(payload.get("label") or ""),
+                region=str(payload.get("region") or "") or None,
+                failure_domain=failure_domain,
+                provider=provider_name,
+                jurisdiction=jurisdiction,
+                priority=priority,
+                cost_class=cost_class,
+                storage_cost_per_gib_month=storage_cost,
+                egress_cost_per_gib=egress_cost,
+                max_read_bytes_per_second=max_read,
+                max_write_bytes_per_second=max_write,
+                max_concurrent_transfers=max_concurrent,
+            )
+        )
 
     @router.post("/api/workspace/backup-targets/register-new")
     async def api_backup_targets_register_new(request: Request) -> JSONResponse:

@@ -9,6 +9,7 @@ inspect pipeline (including the sealed frontend mirror), record
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from datetime import datetime, timedelta, timezone
@@ -16,7 +17,16 @@ from pathlib import Path
 from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
-from deepseek_infra.infra.workspace import backup_catalog, backup_crypto, backup_object_set, backup_publish, backup_targets, backup_unattended, backups
+from deepseek_infra.infra.workspace import (
+    backup_catalog,
+    backup_crypto,
+    backup_object_set,
+    backup_publish,
+    backup_targets,
+    backup_transfer_budget,
+    backup_unattended,
+    backups,
+)
 
 UNLOCK_VERIFICATION_WARNING_DAYS = 30
 
@@ -56,6 +66,20 @@ def _ciphertext_members(root: Path, record: dict[str, Any]) -> list[tuple[Path, 
     return [(_ciphertext_path(root, record), str(item["digest"]), int(item["size"]))]
 
 
+def _managed_ciphertext_sha256(path: Path, *, target_id: str) -> str:
+    manager = backup_transfer_budget.get_global_transfer_budget_manager()
+    with manager.track_transfer(
+        traffic_class=backup_transfer_budget.TrafficClass.P4_SCRUB_DRILL,
+        source_target_id=target_id,
+        estimated_bytes=path.stat().st_size,
+    ) as transfer_id, path.open("rb") as handle:
+        digest = hashlib.sha256()
+        while chunk := handle.read(1024 * 1024):
+            manager.wait_for_bandwidth(transfer_id, len(chunk))
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def scrub_backup(root: Path, backup_id: str, *, target_id: str | None = None) -> dict[str, Any]:
     """Re-verify every committed ciphertext object without unlocking it."""
     record = _catalog_record(root, backup_id)
@@ -80,7 +104,12 @@ def scrub_backup(root: Path, backup_id: str, *, target_id: str | None = None) ->
         _check("not-symlink", not reparsed, f"reparse point {', '.join(reparsed[:3])}")
         wrong_sizes = [path.name for path, _, size in members if path.stat().st_size != size]
         _check("size", not wrong_sizes, f"size mismatch {', '.join(wrong_sizes[:3])}")
-        wrong_digests = [path.name for path, digest, _ in members if backup_unattended.sha256_file(path) != digest]
+        effective_target_id = str(target_id or "managed-local")
+        wrong_digests = [
+            path.name
+            for path, digest, _ in members
+            if _managed_ciphertext_sha256(path, target_id=effective_target_id) != digest
+        ]
         _check("sha256", not wrong_digests, f"digest mismatch {', '.join(wrong_digests[:3])}")
         try:
             invalid_headers = [path.name for path, _, _ in members if not bool(backup_crypto.inspect_header(path).get("age"))]

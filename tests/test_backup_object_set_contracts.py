@@ -27,6 +27,7 @@ from deepseek_infra.infra.workspace import (
     backup_pack,
     backup_publish,
     backup_reconcile,
+    backup_replication,
     backup_recovery_drill,
     backup_remote_restore,
     backup_retention,
@@ -1228,6 +1229,122 @@ def test_publish_v4_store_commits_and_converges_exact_ciphertext_set(tmp_setting
             schedule_slot="slot-object-set-store",
             fencing_token=3,
         )
+
+
+def test_publish_v4_store_can_retain_spool_for_required_replication(tmp_settings: Path) -> None:
+    store = backup_target_store.MemoryTargetStore()
+    target = backup_publish.ResolvedTarget(
+        target_id="target-object-set-retained-spool",
+        root=None,
+        managed=False,
+        kind="s3",
+        store=store,
+    )
+    control = _component(tmp_settings, "control-retained-spool", b"control-retained", control=True)
+    payload = _component(tmp_settings, "payload-retained-spool", b"payload-retained")
+    package = backup_object_set.ObjectSetPackage(
+        backup_id="backup-object-set-retained-spool",
+        components=(control, payload),
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+        manifest={"snapshotKind": "full"},
+    )
+    policy_id = "policy-object-set-retained-spool"
+    schedule_slot = "slot-object-set-retained-spool"
+
+    backup_publish.publish_backup(
+        target,
+        package,
+        run_id="run-object-set-retained-spool",
+        policy_id=policy_id,
+        schedule_slot=schedule_slot,
+        fencing_token=1,
+        retain_spool=True,
+    )
+
+    assert backup_spool.lookup_verified_package(
+        policy_id=policy_id,
+        slot_digest=backup_target_store.commit_slot_digest(schedule_slot),
+    ) is not None
+
+
+def test_required_replication_reuses_retained_object_set_spool(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary_store = backup_target_store.MemoryTargetStore()
+    replica_store = backup_target_store.MemoryTargetStore()
+    for store, incarnation in ((primary_store, "primary"), (replica_store, "replica")):
+        backup_target_store.put_json_if_absent(
+            store,
+            "control/head.json",
+            {
+                "schemaVersion": 1,
+                "targetGeneration": 0,
+                "latestCommitHash": "0" * 64,
+                "incarnationId": incarnation,
+            },
+        )
+    primary = backup_publish.ResolvedTarget(
+        target_id="target-object-set-primary",
+        root=None,
+        managed=False,
+        kind="s3",
+        store=primary_store,
+    )
+    replica = backup_publish.ResolvedTarget(
+        target_id="target-object-set-replica",
+        root=None,
+        managed=False,
+        kind="s3",
+        store=replica_store,
+    )
+    control = _component(tmp_settings, "control-required-replica", b"control-required", control=True)
+    payload = _component(tmp_settings, "payload-required-replica", b"payload-required")
+    package = backup_object_set.ObjectSetPackage(
+        backup_id="backup-object-set-required-replica",
+        components=(control, payload),
+        manifest_digest="a" * 64,
+        coverage_digest="b" * 64,
+        manifest={"snapshotKind": "full"},
+    )
+    policy_id = "policy-object-set-required-replica"
+    schedule_slot = "slot-object-set-required-replica"
+    slot_digest = backup_target_store.commit_slot_digest(schedule_slot)
+    published = backup_publish.publish_backup(
+        primary,
+        package,
+        run_id="run-object-set-required-replica",
+        policy_id=policy_id,
+        schedule_slot=schedule_slot,
+        fencing_token=1,
+        retain_spool=True,
+    )
+    jobs = backup_replication.enqueue_replica_jobs(
+        policy={
+            "policyId": policy_id,
+            "targetId": primary.target_id,
+            "primaryTargetId": primary.target_id,
+            "replication": {
+                "enabled": True,
+                "targets": [{"targetId": replica.target_id, "mode": "required"}],
+            },
+        },
+        primary_target_id=primary.target_id,
+        backup_id=package.backup_id,
+        package=package,
+        run_id="run-object-set-required-replica",
+        schedule_slot=schedule_slot,
+        slot_digest=slot_digest,
+        primary_receipt=published.receipt,
+    )
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda _target_id: replica)
+
+    result = backup_replication.execute_replication_job(str(jobs[0]["jobId"]), instance_id="replica-test")
+
+    assert result["phase"] == "committed", result.get("error")
+    assert backup_replication.authenticate_committed_copy(replica, policy_id, package.backup_id)[0] == "authenticated"
+    assert backup_spool.lookup_verified_package(policy_id=policy_id, slot_digest=slot_digest) is None
 
 
 def test_publish_v4_store_component_readbacks_overlap(tmp_settings: Path) -> None:

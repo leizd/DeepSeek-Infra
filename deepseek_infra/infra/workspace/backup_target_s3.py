@@ -57,6 +57,8 @@ def _raise_from_client_error(exc: Exception, *, action: str) -> NoReturn:
     error = response.get("Error") if isinstance(response, dict) else {}
     code = str((error or {}).get("Code") or "")
     status = int((response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0) if isinstance(response, dict) else 0
+    if code in {"NoSuchUpload", "NoSuchMultipartUpload"} or (status == 404 and action == "list-parts"):
+        raise AppError("multipart-upload-not-found", code=ErrorCode.NOT_FOUND, status=404) from exc
     if code in {"PreconditionFailed", "412"} or status == 412:
         raise AppError(f"conditional-{action}-failed: precondition", code=ErrorCode.INVALID_REQUEST, status=412) from exc
     if code in {"ConditionalRequestConflict", "409"} or status == 409:
