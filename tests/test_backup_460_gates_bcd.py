@@ -17,8 +17,6 @@ from deepseek_infra.infra.workspace import (
 
 def test_incomplete_index_does_not_self_deadlock_retirement_gc(tmp_settings: Path) -> None:
     """Retirement may write partial index rows; GC must still proceed via receipt path."""
-    from unittest.mock import MagicMock
-
     from deepseek_infra.infra.workspace import backup_retirement
 
     tid = "target_ret_gc"
@@ -48,7 +46,6 @@ def test_incomplete_index_does_not_self_deadlock_retirement_gc(tmp_settings: Pat
     assert backup_retirement._payload_key_is_retained(target, "objects/sha256/bb/y.age", retiring_backup_id="drop")
     # Unknown key with no receipts on disk is not retained (safe to GC candidate).
     assert not backup_retirement._payload_key_is_retained(target, "objects/sha256/cc/z.age", retiring_backup_id="drop")
-    del MagicMock
 
 
 def test_index_coverage_blocks_gc_until_complete(tmp_settings: Path) -> None:
