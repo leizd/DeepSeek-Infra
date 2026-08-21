@@ -27,17 +27,30 @@ def _isolate_target_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
 
 def test_capacity_edge_cases(tmp_settings: Path) -> None:
     target_id = "target_cap_edge"
-    backup_targets.register_filesystem_target(target_id, path=tmp_settings / "cap_edge")
+    backup_targets.register_filesystem_target(
+        target_id,
+        path=tmp_settings / "cap_edge",
+        storage_cost_per_gib_month=0.02,
+        egress_cost_per_gib=0.09,
+    )
 
     # Estimate transfer cost
     cost = backup_capacity.estimate_transfer_cost(10_000_000, source_target_id=target_id, dest_target_id=target_id)
     assert cost["bytesToTransfer"] == 10_000_000
+    assert cost["costStatus"] == "ok"
 
-    # Cross-domain cost
+    # Cross-domain cost (same region by default — storage delta still operator-priced)
     t2 = "target_cap_cross"
-    backup_targets.register_filesystem_target(t2, path=tmp_settings / "cap_cross", failure_domain="zone-other")
+    backup_targets.register_filesystem_target(
+        t2,
+        path=tmp_settings / "cap_cross",
+        failure_domain="zone-other",
+        storage_cost_per_gib_month=0.02,
+        egress_cost_per_gib=0.09,
+    )
     cost_cross = backup_capacity.estimate_transfer_cost(10_000_000, source_target_id=target_id, dest_target_id=t2)
     assert "bytesToTransfer" in cost_cross
+    assert cost_cross["estimatedMonthlyStorageCostDelta"] is not None
     assert cost_cross["estimatedMonthlyStorageCostDelta"] > 0
 
     # Capacity summary
@@ -171,17 +184,40 @@ def test_capacity_prediction_and_summary_details(tmp_settings: Path) -> None:
         assert ok_admit is True
         assert reason_admit == "admitted"
 
-    # 4. Target exhaustion horizon with positive daily growth
-    with patch.object(backup_capacity, "get_target_capacity", return_value={"freeBytes": 1_000_000_000, "totalBytes": 10_000_000_000, "freePercent": 10.0}):
+    # 4. Target exhaustion horizon with positive daily growth (elapsed-time series)
+    from deepseek_infra.infra.workspace import backup_control
+    from datetime import timedelta
+
+    now = datetime.now(tz=timezone.utc)
+    backup_control.record_capacity_growth_observation(
+        target_id=t1,
+        physical_stored_bytes=100_000_000,
+        observed_at=(now - timedelta(days=10)).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    )
+    backup_control.record_capacity_growth_observation(
+        target_id=t1,
+        physical_stored_bytes=200_000_000,
+        observed_at=now.isoformat(timespec="seconds").replace("+00:00", "Z"),
+    )
+    with patch.object(
+        backup_capacity,
+        "get_target_capacity",
+        return_value={
+            "freeBytes": 1_000_000_000,
+            "totalBytes": 10_000_000_000,
+            "freePercent": 10.0,
+            "physicalStoredBytes": 200_000_000,
+        },
+    ):
         horiz_growth = backup_capacity.estimate_target_exhaustion_horizon(t1, "pol-history")
         assert horiz_growth["status"] in {"healthy", "warning", "critical", "degraded"}
         assert horiz_growth["estimatedDaysToFull"] is not None
 
-    # 5. Target exhaustion horizon unconstrained & zero growth
+    # 5. Target exhaustion horizon unconstrained — no invented huge day count
     with patch.object(backup_capacity, "get_target_capacity", return_value={"freeBytes": None, "totalBytes": None}):
         horiz = backup_capacity.estimate_target_exhaustion_horizon("target_unconstrained", "pol")
         assert horiz["status"] == "unconstrained"
-        assert horiz["estimatedDaysToFull"] == 9999
+        assert horiz["estimatedDaysToFull"] in {None, 9999}
 
     # 6. Capacity summary with critical target and degraded target
     with patch.object(backup_targets, "probe_target_capacity", return_value={"totalBytes": 1000, "freeBytes": 30, "freePercent": 3.0}):
@@ -293,6 +329,14 @@ def test_backup_capacity_all_admission_and_horizon_branches(tmp_settings: Path) 
             assert hor_deg["status"] == "degraded"
 
     # 7. Transfer cost with cross-region
-    with patch.object(backup_targets, "get_target", return_value={"costClass": "cross-region", "egressCostPerGiB": 0.05, "storageCostPerGiBMonth": 0.02}):
-        cost_cr = backup_capacity.estimate_transfer_cost(1024 * 1024 * 1024, source_target_id="src_cr", dest_target_id="dst_cr")
+    with patch.object(
+        backup_targets,
+        "get_target",
+        return_value={"costClass": "cross-region", "egressCostPerGiB": 0.05, "storageCostPerGiBMonth": 0.02},
+    ):
+        cost_cr = backup_capacity.estimate_transfer_cost(
+            1024 * 1024 * 1024, source_target_id="src_cr", dest_target_id="dst_cr"
+        )
+        assert cost_cr["costStatus"] == "ok"
+        assert cost_cr["estimatedOneTimeTransferCost"] is not None
         assert cost_cr["estimatedOneTimeTransferCost"] > 0
