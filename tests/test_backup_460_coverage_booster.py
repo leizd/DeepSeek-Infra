@@ -604,6 +604,87 @@ def test_execute_chain_migration_paths(tmp_settings: Path) -> None:
     assert summary["processed"] >= 1
 
 
+def test_capacity_blocks_and_disabled_placement_direct() -> None:
+    with patch.object(
+        backup_placement.backup_capacity,
+        "estimate_target_exhaustion_horizon",
+        return_value={"status": "degraded"},
+    ):
+        hard, reason = backup_placement._capacity_blocks_dest("t", soft=True)
+        assert hard is False and reason == "capacity-soft-watermark"
+        hard2, reason2 = backup_placement._capacity_blocks_dest("t", soft=False)
+        assert hard2 is False and reason2 == "ok"
+    with patch.object(
+        backup_placement.backup_capacity,
+        "estimate_target_exhaustion_horizon",
+        return_value={"status": "critical"},
+    ):
+        assert backup_placement._capacity_blocks_dest("t")[0] is True
+    disabled = backup_placement.evaluate_point_placement(
+        {"recoveryPlacement": {"enabled": False}},
+        "b",
+        committed_at=None,
+        copies=[],
+        targets_by_id={},
+    )
+    assert disabled["action"] == "none"
+    # Empty placement section treated as disabled
+    empty = backup_placement.evaluate_point_placement(
+        {"recoveryPlacement": None},
+        "b",
+        committed_at="bad",
+        copies=[],
+        targets_by_id={},
+    )
+    assert empty["reasonCodes"] == ["placement-controller-disabled"]
+
+
+def test_maintenance_tick_full_mocked_paths(tmp_settings: Path) -> None:
+    with patch.object(
+        backup_control,
+        "acquire_maintenance_lease",
+        side_effect=[
+            None,  # planner
+            {"workerKind": "storage-maintenance", "fencingToken": 9},  # legacy
+        ],
+    ), patch.object(backup_control, "release_maintenance_lease", return_value=True), patch.object(
+        backup_control, "renew_maintenance_lease", return_value=True
+    ), patch.object(
+        backup_maintenance.backup_recovery_keeper, "reconcile_durable_recovery_leases", return_value={}
+    ), patch.object(
+        backup_maintenance, "_run_with_scope_lease", return_value=(False, None)  # replication skip
+    ), patch.object(
+        backup_maintenance, "_process_repair_scopes", return_value={"processed": 0}
+    ), patch.object(
+        backup_maintenance, "_process_rebalance_scopes", return_value={"processed": 0}
+    ), patch.object(
+        backup_maintenance, "_process_retirement_scopes", return_value={"processed": 0}
+    ), patch.object(
+        backup_maintenance, "_process_chain_migration_scopes", return_value={"processed": 0}
+    ), patch.object(
+        backup_maintenance, "_probe_capacity_page", return_value=0
+    ), patch.object(
+        backup_maintenance,
+        "_process_drain_scopes",
+        return_value={"drainsProcessed": 0, "drainFailures": 0, "drainLeaseSkips": 0},
+    ), patch.object(
+        backup_maintenance.backup_placement, "reconcile_all_policies", return_value={"policies": 0}
+    ), patch.object(
+        backup_maintenance.backup_transfer_budget,
+        "get_global_transfer_budget_manager",
+        return_value=type("M", (), {"transfer_control_summary": staticmethod(lambda: {})})(),
+    ):
+        summary = backup_maintenance.maintenance_tick(instance_id="legacy-tick", limit_per_worker=2)
+    assert summary["leaseAcquired"] is True
+    assert summary["replication"] == {"leaseSkipped": True}
+    assert summary["plannerKind"] == "storage-maintenance"
+
+    # Full deny
+    with patch.object(backup_control, "acquire_maintenance_lease", return_value=None):
+        denied = backup_maintenance.maintenance_tick(instance_id="busy")
+    assert denied == {"leaseAcquired": False, "drainsProcessed": 0}
+
+
 def test_rebuild_index_filesystem_and_gc_candidates(tmp_settings: Path) -> None:
     from types import SimpleNamespace
 
