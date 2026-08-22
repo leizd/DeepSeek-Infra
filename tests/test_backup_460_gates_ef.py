@@ -1,4 +1,4 @@
-"""4.6.0 Gates E/F — autonomous placement SLO controller + target-sharded maintenance."""
+"""Gates E/F — autonomous placement SLO controller + target-sharded maintenance."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""4.6.0 Gate A — scale-safe correctness closures."""
+"""Gate A — scale-safe correctness closures."""
 
 from __future__ import annotations
 

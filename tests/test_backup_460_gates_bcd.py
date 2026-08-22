@@ -1,4 +1,4 @@
-"""4.6.0 Gates B/C/D — coverage, lineage, chain migration."""
+"""Gates B/C/D — coverage, lineage, chain migration."""
 
 from __future__ import annotations
 
