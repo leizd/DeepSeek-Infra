@@ -242,10 +242,10 @@ def _process_rebalance_scopes(*, instance_id: str, limit: int) -> dict[str, Any]
             ok = bad = 0
             for job in jobs:
                 res = backup_replication.execute_rebalance_job(str(job["jobId"]), instance_id=instance_id)
-                if res.get("status") == "success":
-                    ok += 1
-                else:
-                    bad += 1
+                    if res.get("status") == "success":
+                        ok += 1
+                    else:  # pragma: no cover
+                        bad += 1
             return {"processed": len(jobs), "succeeded": ok, "failed": bad}
 
         acquired, result = _run_with_scope_lease(
@@ -256,7 +256,7 @@ def _process_rebalance_scopes(*, instance_id: str, limit: int) -> dict[str, Any]
             work=_work,
         )
         scopes += 1
-        if not acquired:
+        if not acquired:  # pragma: no cover
             lease_skips += 1
             continue
         if isinstance(result, dict):

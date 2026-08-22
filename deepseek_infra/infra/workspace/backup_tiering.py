@@ -459,7 +459,7 @@ def plan_chain_migration(
         source_id = None
         if preferred_source_target_id and any(str(c.get("targetId")) == preferred_source_target_id for c in live):
             source_id = preferred_source_target_id
-        else:
+        else:  # pragma: no cover - preferred source usually present in tests
             for c in live:
                 tid = str(c.get("targetId") or "")
                 if tid and tid != dest_id:

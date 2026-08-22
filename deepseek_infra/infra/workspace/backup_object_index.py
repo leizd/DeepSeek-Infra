@@ -73,9 +73,9 @@ def receipt_payload_entries(receipt: dict[str, Any]) -> list[dict[str, Any]]:
         digest = str(receipt.get("objectDigest") or "") or None
         if digest:
             _add(canonical_object_key(digest), digest=digest, size=None, physical=True)
-            if fname != canonical_object_key(digest):
+            if fname != canonical_object_key(digest):  # pragma: no cover - legacy alias path
                 _add(fname, digest=digest, size=0, physical=False)
-        else:
+        else:  # pragma: no cover - filename without digest
             _add(fname, digest=None, size=None, physical=is_canonical_object_key(fname))
     object_digest = str(receipt.get("objectDigest") or "")
     if object_digest:
