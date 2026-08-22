@@ -247,6 +247,25 @@ def test_schema_version_is_at_least_5(tmp_settings: Path) -> None:
     assert backup_control.schema_version() >= 5
 
 
+def test_rebuild_from_store_with_bad_and_good_receipts(tmp_settings: Path) -> None:
+    from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore
+
+    tid = "target_store_rebuild"
+    store = MemoryTargetStore()
+    good = json.dumps({"policyId": "p", "backupId": "g1", "objects": [{"digest": "dd" * 32, "size": 1}]}).encode()
+    store.put_if_absent("receipts/g1.json", good)
+    store.put_if_absent("receipts/bad.json", b"{nope")
+    target = SimpleNamespace(target_id=tid, root=None, store=store)
+    with patch(
+        "deepseek_infra.infra.workspace.backup_retirement._receipt_has_valid_retirement_marker",
+        return_value=False,
+    ):
+        result = backup_object_index.rebuild_index_from_target(target)
+    assert result["coverageState"] == "incomplete"
+    assert int(result.get("parseFailures") or 0) >= 1
+    assert backup_object_index.gc_allowed(tid)[0] is False
+
+
 def test_coverage_reject_reasons_are_explicit(tmp_settings: Path) -> None:
     tid = "target_reasons"
     assert backup_control.index_coverage_allows_gc(tid) == (False, "object-reference-index-missing")
@@ -288,6 +307,37 @@ def test_coverage_reject_reasons_are_explicit(tmp_settings: Path) -> None:
         source_receipt_mutation_generation=0,
     )
     assert "read-failures" in backup_control.index_coverage_allows_gc(tid)[1]
+
+
+def test_mutation_and_coverage_helpers_cover_edges(tmp_settings: Path) -> None:
+    assert backup_control.note_formal_receipt_mutation(None) is None
+    assert backup_control.note_formal_receipt_mutation("  ") is None
+    tid = "target_edges"
+    # First bump creates incomplete coverage row
+    g1 = backup_control.bump_target_receipt_mutation(tid)
+    assert g1 == 1
+    cov = backup_control.get_target_index_coverage(tid)
+    assert cov is not None and cov["state"] == "incomplete"
+    g2 = backup_control.bump_target_receipt_mutation(tid)
+    assert g2 == 2
+    # Incomplete reason path
+    backup_control.set_target_index_coverage(tid, state="incomplete", reason="manual-dirty")
+    allowed, reason = backup_control.index_coverage_allows_gc(tid)
+    assert allowed is False
+    assert "manual-dirty" in reason or "incomplete" in reason
+    # process_pending classifies reconciliation as waiting
+    jobs = [
+        {"jobId": "j1", "phase": "requested"},
+        {"jobId": "j2", "phase": "requested"},
+    ]
+    with patch.object(backup_retirement, "list_copy_retirement_jobs", return_value=jobs), patch.object(
+        backup_retirement,
+        "execute_copy_retirement_job",
+        side_effect=[{"phase": "gc-reconciliation-required"}, {"phase": "reclaimed"}],
+    ):
+        summary = backup_retirement.process_pending_retirements(limit=5)
+    assert summary["waiting"] >= 1
+    assert summary["reclaimed"] >= 1
 
 
 def test_rebuild_read_failure_leaves_incomplete(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
