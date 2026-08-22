@@ -607,6 +607,14 @@ def _publish_filesystem(
         if marker_path.is_file():
             return _converge_or_conflict(json.loads(marker_path.read_text(encoding="utf-8")))
 
+        # Dirty index coverage before formal Receipt becomes authoritative truth.
+        try:
+            from deepseek_infra.infra.workspace import backup_control as _ctrl
+
+            tid = str(receipt_data.get("targetId") or "") or None
+            _ctrl.note_formal_receipt_mutation(tid)
+        except Exception:
+            pass
         _write_immutable(receipt_path, receipt_bytes)
         journal.update(phase="receipt-published", receiptDigest=receipt_digest, receipt=receipt_data, updatedAt=_utc_iso())
         _write_journal(root, journal)

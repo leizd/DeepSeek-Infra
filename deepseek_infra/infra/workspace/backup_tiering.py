@@ -459,7 +459,7 @@ def plan_chain_migration(
         source_id = None
         if preferred_source_target_id and any(str(c.get("targetId")) == preferred_source_target_id for c in live):
             source_id = preferred_source_target_id
-        else:  # pragma: no cover - preferred source usually present in tests
+        else:
             for c in live:
                 tid = str(c.get("targetId") or "")
                 if tid and tid != dest_id:
@@ -467,7 +467,7 @@ def plan_chain_migration(
                     break
         if source_id is None:
             # Already on dest only — still record as verified-noop.
-            if any(str(c.get("targetId")) == dest_id for c in live):  # pragma: no cover - noop member
+            if any(str(c.get("targetId")) == dest_id for c in live):
                 members_plan.append(
                     {
                         "backupId": member,
@@ -478,7 +478,7 @@ def plan_chain_migration(
                     }
                 )
                 continue
-            return {  # pragma: no cover - no live source anywhere
+            return {
                 "status": "rejected",
                 "reason": f"no-authenticated-source:{member}",
                 "unit": unit,
@@ -581,21 +581,21 @@ def execute_chain_migration(
                 if auth[0] == "authenticated":
                     m["state"] = "verified"
                     m["objectSetDigest"] = result.get("objectSetDigest")
-                else:  # pragma: no cover - dest auth failure
+                else:
                     m["state"] = "failed"
                     m["error"] = f"dest-auth:{auth[0]}"
                     any_failed = True
-            else:  # pragma: no cover - transfer non-success
+            else:
                 m["state"] = "failed"
                 m["error"] = str(result.get("error") or status)
                 any_failed = True
-        except Exception as exc:  # pragma: no cover - per-member isolation
+        except Exception as exc:
             m["state"] = "failed"
             m["error"] = str(exc)
             any_failed = True
         updated_members.append(m)
 
-    if any_failed:  # pragma: no cover - aggregate member failure
+    if any_failed:
         return backup_control.update_chain_migration_job(
             migration_id,
             phase="failed-terminal",
@@ -624,7 +624,7 @@ def execute_chain_migration(
         copies_by_backup=by_backup,
         targets_by_id=all_targets,
     )
-    if desired in {"hot", "warm"} and not ok:  # pragma: no cover - closure reject
+    if desired in {"hot", "warm"} and not ok:
         return backup_control.update_chain_migration_job(
             migration_id,
             phase="failed-terminal",
@@ -655,14 +655,14 @@ def process_pending_chain_migrations(
     failed = 0
     for phase in ("planned", "transferring", "members-authenticated", "closure-authenticated"):
         for job in backup_control.list_chain_migration_jobs(phase=phase, limit=limit):
-            if processed >= limit:  # pragma: no cover - page bound
+            if processed >= limit:
                 break
             result = execute_chain_migration(str(job["migrationId"]), instance_id=instance_id)
             processed += 1
             p = str(result.get("phase") or "")
             if p == "converged":
                 converged += 1
-            elif p == "failed-terminal":  # pragma: no cover - failed drain
+            elif p == "failed-terminal":
                 failed += 1
     return {"processed": processed, "converged": converged, "failed": failed}
 

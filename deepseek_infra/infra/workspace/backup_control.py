@@ -28,7 +28,8 @@ CONTROL_DB = CONTROL_DIR / "control.sqlite3"
 # Non-rebuildable authority lives at schema version >= 2 (4.5.9 journal + index).
 # v3 adds canonical physical object identity for scale-safe capacity/GC (4.6.0).
 # v4 adds index coverage, recovery lineage graph, chain migration jobs (4.6.0 B/C/D).
-CONTROL_SCHEMA_VERSION = 4
+# v5 adds fail-closed index coverage evidence + formal receipt mutation generation (4.6.1).
+CONTROL_SCHEMA_VERSION = 5
 
 REBUILDABLE_TABLES = frozenset(
     {
@@ -53,6 +54,7 @@ NON_REBUILDABLE_TABLES = frozenset(
         "maintenance_leases",
         "schema_migrations",
         "chain_migration_jobs",
+        "target_receipt_mutations",
     }
 )
 
@@ -214,6 +216,19 @@ CREATE TABLE IF NOT EXISTS target_index_coverage (
     last_receipt_cursor TEXT,
     source_head_generation INTEGER,
     completed_at TEXT,
+    updated_at TEXT NOT NULL,
+    enumerated_receipts INTEGER NOT NULL DEFAULT 0,
+    parsed_receipts INTEGER NOT NULL DEFAULT 0,
+    indexed_receipts INTEGER NOT NULL DEFAULT 0,
+    parse_failures INTEGER NOT NULL DEFAULT 0,
+    read_failures INTEGER NOT NULL DEFAULT 0,
+    source_receipt_mutation_generation INTEGER,
+    reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS target_receipt_mutations (
+    target_id TEXT PRIMARY KEY,
+    generation INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
 );
 
@@ -302,12 +317,27 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
                     conn.execute(stmt)
                 except sqlite3.OperationalError:
                     pass  # column already present
+        if current < 5:
+            for stmt in (
+                "ALTER TABLE target_index_coverage ADD COLUMN enumerated_receipts INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE target_index_coverage ADD COLUMN parsed_receipts INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE target_index_coverage ADD COLUMN indexed_receipts INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE target_index_coverage ADD COLUMN parse_failures INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE target_index_coverage ADD COLUMN read_failures INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE target_index_coverage ADD COLUMN source_receipt_mutation_generation INTEGER",
+                "ALTER TABLE target_index_coverage ADD COLUMN reason TEXT",
+            ):
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError:
+                    pass
         for version in range(max(1, current + 1), CONTROL_SCHEMA_VERSION + 1):
             description = {
                 1: "4.5.8-baseline-control-authority",
                 2: "4.5.9-lifecycle-intents-and-object-index",
                 3: "4.6.0-canonical-physical-object-identity",
                 4: "4.6.0-lineage-index-coverage-chain-migration",
+                5: "4.6.1-fail-closed-index-coverage-and-receipt-mutation",
             }.get(version, f"schema-v{version}")
             conn.execute(
                 """
@@ -1770,8 +1800,27 @@ def set_target_index_coverage(
     formal_receipt_count: int = 0,
     last_receipt_cursor: str | None = None,
     source_head_generation: int | None = None,
+    enumerated_receipts: int = 0,
+    parsed_receipts: int = 0,
+    indexed_receipts: int = 0,
+    parse_failures: int = 0,
+    read_failures: int = 0,
+    source_receipt_mutation_generation: int | None = None,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     now = _utc_iso()
+    # Backward-compatible complete claims: fill evidence defaults and pin mutation gen.
+    enum_n = max(0, int(enumerated_receipts))
+    parsed_n = max(0, int(parsed_receipts))
+    indexed_n = max(0, int(indexed_receipts))
+    parse_n = max(0, int(parse_failures))
+    read_n = max(0, int(read_failures))
+    formal_n = max(0, int(formal_receipt_count))
+    if str(state) == "complete":
+        if enum_n == 0 and formal_n > 0:
+            enum_n = parsed_n = indexed_n = formal_n
+        if source_receipt_mutation_generation is None:
+            source_receipt_mutation_generation = get_target_receipt_mutation_generation(target_id)
     with _connect() as conn:
         _begin_immediate(conn)
         row = conn.execute(
@@ -1786,8 +1835,10 @@ def set_target_index_coverage(
             """
             INSERT INTO target_index_coverage(
                 target_id, index_generation, state, formal_receipt_count,
-                last_receipt_cursor, source_head_generation, completed_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                last_receipt_cursor, source_head_generation, completed_at, updated_at,
+                enumerated_receipts, parsed_receipts, indexed_receipts,
+                parse_failures, read_failures, source_receipt_mutation_generation, reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(target_id) DO UPDATE SET
                 index_generation = excluded.index_generation,
                 state = excluded.state,
@@ -1795,17 +1846,31 @@ def set_target_index_coverage(
                 last_receipt_cursor = excluded.last_receipt_cursor,
                 source_head_generation = excluded.source_head_generation,
                 completed_at = excluded.completed_at,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                enumerated_receipts = excluded.enumerated_receipts,
+                parsed_receipts = excluded.parsed_receipts,
+                indexed_receipts = excluded.indexed_receipts,
+                parse_failures = excluded.parse_failures,
+                read_failures = excluded.read_failures,
+                source_receipt_mutation_generation = excluded.source_receipt_mutation_generation,
+                reason = excluded.reason
             """,
             (
                 target_id,
                 gen,
                 str(state),
-                max(0, int(formal_receipt_count)),
+                formal_n,
                 last_receipt_cursor,
                 int(source_head_generation) if source_head_generation is not None else None,
                 completed_at,
                 now,
+                enum_n,
+                parsed_n,
+                indexed_n,
+                parse_n,
+                read_n,
+                int(source_receipt_mutation_generation) if source_receipt_mutation_generation is not None else None,
+                str(reason) if reason else None,
             ),
         )
         conn.execute("COMMIT")
@@ -1820,6 +1885,7 @@ def get_target_index_coverage(target_id: str) -> dict[str, Any] | None:
         ).fetchone()
     if row is None:
         return None
+    keys = set(row.keys())
     return {
         "targetId": str(row["target_id"]),
         "indexGeneration": int(row["index_generation"]),
@@ -1829,16 +1895,112 @@ def get_target_index_coverage(target_id: str) -> dict[str, Any] | None:
         "sourceHeadGeneration": int(row["source_head_generation"]) if row["source_head_generation"] is not None else None,
         "completedAt": str(row["completed_at"]) if row["completed_at"] else None,
         "updatedAt": str(row["updated_at"]),
+        "enumeratedReceipts": int(row["enumerated_receipts"]) if "enumerated_receipts" in keys else 0,
+        "parsedReceipts": int(row["parsed_receipts"]) if "parsed_receipts" in keys else 0,
+        "indexedReceipts": int(row["indexed_receipts"]) if "indexed_receipts" in keys else 0,
+        "parseFailures": int(row["parse_failures"]) if "parse_failures" in keys else 0,
+        "readFailures": int(row["read_failures"]) if "read_failures" in keys else 0,
+        "sourceReceiptMutationGeneration": (
+            int(row["source_receipt_mutation_generation"])
+            if "source_receipt_mutation_generation" in keys and row["source_receipt_mutation_generation"] is not None
+            else None
+        ),
+        "reason": str(row["reason"]) if "reason" in keys and row["reason"] else None,
     }
 
 
+def get_target_receipt_mutation_generation(target_id: str) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT generation FROM target_receipt_mutations WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+    return int(row["generation"]) if row is not None else 0
+
+
+def bump_target_receipt_mutation(target_id: str) -> int:
+    """Advance formal-receipt mutation generation and dirty index coverage.
+
+    Must be called *before* remote/local formal Receipt writes so a crash after
+    a successful write never leaves a stale complete coverage claim.
+    """
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute(
+            "SELECT generation FROM target_receipt_mutations WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+        gen = int(row["generation"]) + 1 if row is not None else 1
+        conn.execute(
+            """
+            INSERT INTO target_receipt_mutations(target_id, generation, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(target_id) DO UPDATE SET
+                generation = excluded.generation,
+                updated_at = excluded.updated_at
+            """,
+            (target_id, gen, now),
+        )
+        # Dirties coverage without advancing index_generation unless a row exists.
+        cov = conn.execute(
+            "SELECT index_generation FROM target_index_coverage WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+        if cov is not None:
+            conn.execute(
+                """
+                UPDATE target_index_coverage
+                SET state = 'incomplete',
+                    reason = 'formal-receipt-mutation',
+                    completed_at = NULL,
+                    updated_at = ?
+                WHERE target_id = ?
+                """,
+                (now, target_id),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO target_index_coverage(
+                    target_id, index_generation, state, formal_receipt_count,
+                    completed_at, updated_at, reason
+                ) VALUES (?, 0, 'incomplete', 0, NULL, ?, 'formal-receipt-mutation')
+                """,
+                (target_id, now),
+            )
+        conn.execute("COMMIT")
+    return gen
+
+
+def note_formal_receipt_mutation(target_id: str | None) -> int | None:
+    """Public hook for publish/replication/migration before formal Receipt writes."""
+    tid = str(target_id or "").strip()
+    if not tid:
+        return None
+    return bump_target_receipt_mutation(tid)
+
+
 def index_coverage_allows_gc(target_id: str) -> tuple[bool, str]:
+    """Index is GC-authoritative only when complete, clean, and fresh."""
     cov = get_target_index_coverage(target_id)
     if cov is None:
-        # Empty index → GC must use conservative receipt scan, not index GC path.
         return False, "object-reference-index-missing"
     if str(cov.get("state") or "") != "complete":
-        return False, "object-reference-index-incomplete"
+        return False, str(cov.get("reason") or "object-reference-index-incomplete")
+    if int(cov.get("parseFailures") or 0) > 0:
+        return False, "object-reference-index-parse-failures"
+    if int(cov.get("readFailures") or 0) > 0:
+        return False, "object-reference-index-read-failures"
+    enumerated = int(cov.get("enumeratedReceipts") or 0)
+    indexed = int(cov.get("indexedReceipts") or 0)
+    parsed = int(cov.get("parsedReceipts") or 0)
+    if enumerated != indexed or enumerated != parsed:
+        return False, "object-reference-index-count-mismatch"
+    current_mut = get_target_receipt_mutation_generation(target_id)
+    source_mut = cov.get("sourceReceiptMutationGeneration")
+    if source_mut is None or int(source_mut) != int(current_mut):
+        return False, "object-reference-index-stale"
     return True, "ok"
 
 

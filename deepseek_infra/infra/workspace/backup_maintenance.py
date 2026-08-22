@@ -304,6 +304,7 @@ def _process_retirement_scopes(*, instance_id: str, limit: int) -> dict[str, Any
                     "retiring-ledger-copy",
                     "gc-pending",
                     "gc-running",
+                    "gc-reconciliation-required",
                 }:
                     wait += 1
                 else:

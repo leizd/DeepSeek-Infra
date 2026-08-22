@@ -2007,6 +2007,12 @@ def execute_repair_job_instance(
                 dest_receipt_bytes = (json.dumps(dest_receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
                 dest_receipt_digest = hashlib.sha256(dest_receipt_bytes).hexdigest()
 
+                try:
+                    from deepseek_infra.infra.workspace import backup_control as _ctrl
+
+                    _ctrl.note_formal_receipt_mutation(dest_target_id)
+                except Exception:
+                    pass
                 if dest_target.root is not None:
                     rp = dest_target.root / "receipts" / f"{backup_id}.json"
                     rp.parent.mkdir(parents=True, exist_ok=True)

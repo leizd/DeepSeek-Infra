@@ -34,6 +34,14 @@ RETIREMENT_TERMINAL_PHASES = frozenset({"reclaimed", "rejected", "failed", "supe
 RETIREMENT_MARKER_SCHEMA_VERSION = 1
 
 
+class GcReferenceScanIndeterminate(Exception):
+    """Raised when retained-ref scan cannot determine safety for destructive GC."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -432,10 +440,10 @@ def _receipt_payload_keys(receipt: dict[str, Any]) -> set[str]:
 def _payload_key_is_retained(target: Any, object_key: str, *, retiring_backup_id: str) -> bool:
     """Return True if object_key must not be GC'd.
 
-    Prefer SQL-native live-ref checks only when index coverage is complete.
-    When the index is empty or incomplete, fall back to a conservative full
-    Receipt scan. Incomplete indexes may still *retain* keys they know about
-    (over-retain is safe) but must not alone authorize a delete.
+    Prefer SQL-native live-ref checks only when index coverage is complete and
+    fresh. When the index is empty/incomplete/stale, fall back to a fail-closed
+    full Receipt scan: any unreadable or malformed Receipt makes the scan
+    indeterminate and blocks destructive GC for the whole job.
     """
     from deepseek_infra.infra.workspace import backup_object_index
 
@@ -445,25 +453,30 @@ def _payload_key_is_retained(target: Any, object_key: str, *, retiring_backup_id
             target_id, retiring_backup_id=retiring_backup_id
         )
         if index_mode is not None:
-            # Complete coverage: index is authoritative for live-ref.
+            # Complete + fresh coverage: index is authoritative for live-ref.
             return backup_object_index.object_is_live_referenced(
                 target_id, object_key, excluding_backup_id=retiring_backup_id
             )
-        # Incomplete / empty: over-retain if any indexed live ref exists, then
-        # always consult receipts so unindexed live points stay protected.
+        # Incomplete / empty / stale: over-retain if any indexed live ref exists,
+        # then always consult receipts so unindexed live points stay protected.
         if backup_object_index.object_is_live_referenced(
             target_id, object_key, excluding_backup_id=retiring_backup_id
         ):
             return True
 
-    # Conservative receipt scan (index empty or incomplete).
+    # Fail-closed receipt scan (index empty, incomplete, or stale).
     if target.root is not None:
         receipts_dir = target.root / "receipts"
         candidates = sorted(receipts_dir.rglob("*.json")) if receipts_dir.is_dir() else []
         for path in candidates:
-            receipt_bytes = path.read_bytes()
+            try:
+                receipt_bytes = path.read_bytes()
+            except OSError as exc:
+                raise GcReferenceScanIndeterminate(f"receipt-read-failure:{path.name}") from exc
             receipt = _read_json_bytes(receipt_bytes)
-            if receipt is None or str(receipt.get("backupId") or path.stem) == retiring_backup_id:
+            if receipt is None:
+                raise GcReferenceScanIndeterminate(f"receipt-parse-failure:{path.name}")
+            if str(receipt.get("backupId") or path.stem) == retiring_backup_id:
                 continue
             if _receipt_has_valid_retirement_marker(target, receipt_bytes, receipt):
                 continue
@@ -474,11 +487,18 @@ def _payload_key_is_retained(target: Any, object_key: str, *, retiring_backup_id
         while True:
             page = target.store.list_objects("receipts/", cursor=cursor, limit=200)
             for meta in page.objects:
-                receipt_bytes = target.store.get_bytes(meta.key)
+                try:
+                    receipt_bytes = target.store.get_bytes(meta.key)
+                except Exception as exc:
+                    raise GcReferenceScanIndeterminate(f"receipt-read-failure:{meta.key}") from exc
+                if receipt_bytes is None:
+                    raise GcReferenceScanIndeterminate(f"receipt-read-failure:{meta.key}")
                 receipt = _read_json_bytes(receipt_bytes)
-                if receipt is None or str(receipt.get("backupId") or Path(meta.key).stem) == retiring_backup_id:
+                if receipt is None:
+                    raise GcReferenceScanIndeterminate(f"receipt-parse-failure:{meta.key}")
+                if str(receipt.get("backupId") or Path(meta.key).stem) == retiring_backup_id:
                     continue
-                if receipt_bytes is not None and _receipt_has_valid_retirement_marker(target, receipt_bytes, receipt):
+                if _receipt_has_valid_retirement_marker(target, receipt_bytes, receipt):
                     continue
                 if object_key in _receipt_payload_keys(receipt):
                     return True
@@ -508,9 +528,14 @@ def _retained_payload_keys(target: Any, *, retiring_backup_id: str) -> set[str]:
         receipts_dir = target.root / "receipts"
         candidates = sorted(receipts_dir.rglob("*.json")) if receipts_dir.is_dir() else []
         for path in candidates:
-            receipt_bytes = path.read_bytes()
+            try:
+                receipt_bytes = path.read_bytes()
+            except OSError as exc:
+                raise GcReferenceScanIndeterminate(f"receipt-read-failure:{path.name}") from exc
             receipt = _read_json_bytes(receipt_bytes)
-            if receipt is None or str(receipt.get("backupId") or path.stem) == retiring_backup_id:
+            if receipt is None:
+                raise GcReferenceScanIndeterminate(f"receipt-parse-failure:{path.name}")
+            if str(receipt.get("backupId") or path.stem) == retiring_backup_id:
                 continue
             if _receipt_has_valid_retirement_marker(target, receipt_bytes, receipt):
                 continue
@@ -520,11 +545,18 @@ def _retained_payload_keys(target: Any, *, retiring_backup_id: str) -> set[str]:
         while True:
             page = target.store.list_objects("receipts/", cursor=cursor, limit=200)
             for meta in page.objects:
-                receipt_bytes = target.store.get_bytes(meta.key)
+                try:
+                    receipt_bytes = target.store.get_bytes(meta.key)
+                except Exception as exc:
+                    raise GcReferenceScanIndeterminate(f"receipt-read-failure:{meta.key}") from exc
+                if receipt_bytes is None:
+                    raise GcReferenceScanIndeterminate(f"receipt-read-failure:{meta.key}")
                 receipt = _read_json_bytes(receipt_bytes)
-                if receipt is None or str(receipt.get("backupId") or Path(meta.key).stem) == retiring_backup_id:
+                if receipt is None:
+                    raise GcReferenceScanIndeterminate(f"receipt-parse-failure:{meta.key}")
+                if str(receipt.get("backupId") or Path(meta.key).stem) == retiring_backup_id:
                     continue
-                if receipt_bytes is not None and _receipt_has_valid_retirement_marker(target, receipt_bytes, receipt):
+                if _receipt_has_valid_retirement_marker(target, receipt_bytes, receipt):
                     continue
                 retained.update(_receipt_payload_keys(receipt))
             if page.cursor is None:
@@ -720,25 +752,35 @@ def execute_copy_retirement_job(
         # written partial index rows for the retiring point).
         _update_job_phase(job_id, "gc-pending")
         _update_job_phase(job_id, "gc-running")
-        for component in sorted(_receipt_payload_keys(receipt)):
-            if _payload_key_is_retained(target, component, retiring_backup_id=backup_id):
-                continue
-            if target.root is not None:
-                path = target.root.joinpath(*component.split("/"))
-                if path.is_file():
-                    size = path.stat().st_size
-                    path.unlink()
-                    bytes_reclaimed += size
-            elif target.store is not None:
-                meta = target.store.stat(component)
-                if meta is not None:
-                    if not target.store.delete_if_match(component, expected_etag=meta.etag):
-                        raise AppError(
-                            f"retirement-payload-delete-cas-mismatch:{component}",
-                            code=ErrorCode.INVALID_REQUEST,
-                            status=409,
-                        )
-                    bytes_reclaimed += int(meta.size or 0)
+        try:
+            for component in sorted(_receipt_payload_keys(receipt)):
+                if _payload_key_is_retained(target, component, retiring_backup_id=backup_id):
+                    continue
+                if target.root is not None:
+                    path = target.root.joinpath(*component.split("/"))
+                    if path.is_file():
+                        size = path.stat().st_size
+                        path.unlink()
+                        bytes_reclaimed += size
+                elif target.store is not None:
+                    meta = target.store.stat(component)
+                    if meta is not None:
+                        if not target.store.delete_if_match(component, expected_etag=meta.etag):
+                            raise AppError(
+                                f"retirement-payload-delete-cas-mismatch:{component}",
+                                code=ErrorCode.INVALID_REQUEST,
+                                status=409,
+                            )
+                        bytes_reclaimed += int(meta.size or 0)
+        except GcReferenceScanIndeterminate as exc:
+            # Marker stays; payload is retained until receipt truth is repaired.
+            return _update_job_phase(
+                job_id,
+                "gc-reconciliation-required",
+                error=f"gc-scan-indeterminate:{exc.reason}",
+                bytes_reclaimed=bytes_reclaimed,
+                sim_metadata={**sim, "retirementMarker": marker},
+            )
 
         return _update_job_phase(job_id, "reclaimed", bytes_reclaimed=bytes_reclaimed, sim_metadata={**sim, "retirementMarker": marker})
     except Exception as exc:
@@ -777,6 +819,7 @@ def process_pending_retirements(
             "retiring-ledger-copy",
             "gc-pending",
             "gc-running",
+            "gc-reconciliation-required",
         }:
             waiting += 1
         else:
