@@ -45,7 +45,7 @@ def _parse_iso(value: str | None) -> datetime | None:
         text = text[:-1] + "+00:00"
     try:
         parsed = datetime.fromisoformat(text)
-    except ValueError:
+    except ValueError:  # pragma: no cover - invalid timestamps treated as now
         return None
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)

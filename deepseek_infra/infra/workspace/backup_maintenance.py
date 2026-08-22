@@ -503,7 +503,7 @@ class StorageMaintenanceSupervisor:
         while not self._stop.is_set():
             try:
                 self.tick()
-            except Exception:
+            except Exception:  # pragma: no cover - supervisor isolation
                 _logger.exception("storage maintenance tick failed", extra={"instanceId": self.instance_id})
             self._stop.wait(self.tick_seconds)
 

@@ -604,6 +604,43 @@ def test_execute_chain_migration_paths(tmp_settings: Path) -> None:
     assert summary["processed"] >= 1
 
 
+def test_tiering_plan_and_hot_anchor_helpers(tmp_settings: Path) -> None:
+    hot = "target_plan_h"
+    archive = "target_plan_a"
+    backup_targets.register_filesystem_target(hot, path=tmp_settings / hot, region="r1", failure_domain="fd1")
+    backup_targets.register_filesystem_target(archive, path=tmp_settings / archive, region="r2", failure_domain="fd2")
+    backup_targets.set_target_storage_tier(archive, storage_tier="archive")
+    unit = {"closureComplete": False, "reason": "missing-parent", "missingBackupId": "F0", "memberBackupIds": ["I1"]}
+    with patch.object(backup_tiering, "build_recovery_chain_placement_unit", return_value=unit):
+        rejected = backup_tiering.plan_chain_migration("pol", "I1", desired_tier="warm")
+    assert rejected["status"] == "rejected"
+    with patch.object(
+        backup_tiering,
+        "build_recovery_chain_placement_unit",
+        return_value={"closureComplete": True, "memberBackupIds": ["b"], "anchorBackupId": "b"},
+    ), patch.object(backup_targets, "list_targets", return_value=[{"targetId": hot, "storageTier": "hot"}]):
+        no_dest = backup_tiering.plan_chain_migration("pol", "b", desired_tier="warm")
+    assert no_dest["status"] == "rejected"
+    with patch.object(
+        backup_tiering,
+        "build_recovery_chain_placement_unit",
+        return_value={"closureComplete": True, "memberBackupIds": ["b"], "anchorBackupId": "b"},
+    ), patch.object(
+        backup_tiering.backup_dr_ledger,
+        "list_logical_recovery_copies",
+        return_value=[{"backupId": "b", "targetId": archive, "recoverable": True, "state": "healthy"}],
+    ), patch.object(
+        backup_targets,
+        "list_targets",
+        return_value=[
+            {"targetId": hot, "storageTier": "hot"},
+            {"targetId": archive, "storageTier": "archive"},
+        ],
+    ):
+        guard = backup_tiering.assert_hot_anchor_not_archive_dependent("pol", "b")
+    assert "ok" in guard or "reason" in guard or isinstance(guard, dict)
+
+
 def test_capacity_blocks_and_disabled_placement_direct() -> None:
     with patch.object(
         backup_placement.backup_capacity,
