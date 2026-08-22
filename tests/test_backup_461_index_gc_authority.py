@@ -1,4 +1,4 @@
-"""4.6.1 fail-closed index coverage and GC authority contracts."""
+"""Fail-closed index coverage and GC authority contracts."""
 
 from __future__ import annotations
 
@@ -245,3 +245,77 @@ def test_migration_transfer_failure_never_converges(tmp_settings: Path) -> None:
 
 def test_schema_version_is_at_least_5(tmp_settings: Path) -> None:
     assert backup_control.schema_version() >= 5
+
+
+def test_coverage_reject_reasons_are_explicit(tmp_settings: Path) -> None:
+    tid = "target_reasons"
+    assert backup_control.index_coverage_allows_gc(tid) == (False, "object-reference-index-missing")
+    backup_control.set_target_index_coverage(
+        tid,
+        state="complete",
+        formal_receipt_count=2,
+        enumerated_receipts=2,
+        parsed_receipts=2,
+        indexed_receipts=1,
+        parse_failures=0,
+        read_failures=0,
+        source_receipt_mutation_generation=0,
+    )
+    allowed, reason = backup_control.index_coverage_allows_gc(tid)
+    assert allowed is False
+    assert "count-mismatch" in reason
+    backup_control.set_target_index_coverage(
+        tid,
+        state="complete",
+        formal_receipt_count=1,
+        enumerated_receipts=1,
+        parsed_receipts=1,
+        indexed_receipts=1,
+        parse_failures=1,
+        read_failures=0,
+        source_receipt_mutation_generation=0,
+    )
+    assert "parse-failures" in backup_control.index_coverage_allows_gc(tid)[1]
+    backup_control.set_target_index_coverage(
+        tid,
+        state="complete",
+        formal_receipt_count=1,
+        enumerated_receipts=1,
+        parsed_receipts=1,
+        indexed_receipts=1,
+        parse_failures=0,
+        read_failures=1,
+        source_receipt_mutation_generation=0,
+    )
+    assert "read-failures" in backup_control.index_coverage_allows_gc(tid)[1]
+
+
+def test_rebuild_read_failure_leaves_incomplete(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tid = "target_read_fail"
+    root = tmp_settings / tid
+    receipts = root / "receipts"
+    receipts.mkdir(parents=True)
+    good_path = receipts / "ok.json"
+    good_path.write_text(
+        json.dumps({"policyId": "p", "backupId": "ok", "objects": [{"digest": "cc" * 32, "size": 1}]}),
+        encoding="utf-8",
+    )
+    bad_path = receipts / "badread.json"
+    bad_path.write_text("{}", encoding="utf-8")
+    backup_targets.register_filesystem_target(tid, path=root)
+    target = SimpleNamespace(target_id=tid, root=root, store=None)
+    real_read = Path.read_bytes
+
+    def flaky_read(self: Path) -> bytes:
+        if self.name == "badread.json":
+            raise OSError("boom")
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", flaky_read)
+    with patch(
+        "deepseek_infra.infra.workspace.backup_retirement._receipt_has_valid_retirement_marker",
+        return_value=False,
+    ):
+        result = backup_object_index.rebuild_index_from_target(target)
+    assert result["coverageState"] == "incomplete"
+    assert int(result.get("readFailures") or 0) >= 1
