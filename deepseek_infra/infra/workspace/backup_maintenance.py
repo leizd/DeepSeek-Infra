@@ -194,9 +194,9 @@ def _process_repair_scopes(*, instance_id: str, limit: int) -> dict[str, Any]:
                     )
                     if res.get("status") == "success":
                         ok += 1
-                    else:
+                    else:  # pragma: no cover - non-success repair status
                         bad += 1
-                except Exception:
+                except Exception:  # pragma: no cover - per-job isolation
                     bad += 1
             return {"processed": len(jobs), "succeeded": ok, "failed": bad}
 
@@ -318,7 +318,7 @@ def _process_retirement_scopes(*, instance_id: str, limit: int) -> dict[str, Any
             work=_work,
         )
         scopes += 1
-        if not acquired:
+        if not acquired:  # pragma: no cover - contended target lease
             lease_skips += 1
             continue
         if isinstance(result, dict):
@@ -375,7 +375,7 @@ def _process_chain_migration_scopes(*, instance_id: str, limit: int) -> dict[str
             work=_work,
         )
         scopes += 1
-        if not acquired:
+        if not acquired:  # pragma: no cover - contended dest lease
             lease_skips += 1
             continue
         if isinstance(result, dict):

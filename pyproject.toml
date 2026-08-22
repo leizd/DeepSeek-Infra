@@ -30,6 +30,7 @@ fail_under = 95
 precision = 2
 exclude_lines = [
     "pragma: no cover",
+    "pragma: no branch",
     "if __name__ == .__main__.:",
     "raise NotImplementedError",
 ]

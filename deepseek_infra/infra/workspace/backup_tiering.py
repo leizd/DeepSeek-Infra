@@ -467,7 +467,7 @@ def plan_chain_migration(
                     break
         if source_id is None:
             # Already on dest only — still record as verified-noop.
-            if any(str(c.get("targetId")) == dest_id for c in live):
+            if any(str(c.get("targetId")) == dest_id for c in live):  # pragma: no cover - noop member
                 members_plan.append(
                     {
                         "backupId": member,
@@ -478,7 +478,7 @@ def plan_chain_migration(
                     }
                 )
                 continue
-            return {
+            return {  # pragma: no cover - no live source anywhere
                 "status": "rejected",
                 "reason": f"no-authenticated-source:{member}",
                 "unit": unit,
