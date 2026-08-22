@@ -24,21 +24,25 @@ def test_evaluate_scope_readiness_no_recovery_points(tmp_settings: Path) -> None
 
 
 def test_evaluate_scope_readiness_available_and_objectives(tmp_settings: Path) -> None:
-    # Record target evidence
+    from datetime import datetime, timedelta, timezone
+
+    # Relative timestamps stay inside generous RPO/scrub/drill windows.
+    now = datetime.now(tz=timezone.utc)
+    observed = (now - timedelta(hours=1)).isoformat(timespec="seconds").replace("+00:00", "Z")
+
     backup_dr_ledger.record_target_evidence(
         target_id="target_1",
-        observed_at="2026-08-15T00:00:00Z",
+        observed_at=observed,
         scheduled_ready=True,
         integrity_mode="full-readback",
         status="ok",
     )
 
-    # Record recovery point
     backup_dr_ledger.record_recovery_point(
         target_id="target_1",
         policy_id="policy_1",
         backup_id="bk_001",
-        committed_at="2026-08-15T00:00:00Z",
+        committed_at=observed,
         snapshot_kind="full",
         parent_backup_id=None,
         chain_digest="hash001",
@@ -46,32 +50,29 @@ def test_evaluate_scope_readiness_available_and_objectives(tmp_settings: Path) -
         ciphertext_bytes=1000,
         logical_bytes=2000,
         recoverable=True,
-        verified_at="2026-08-15T00:00:00Z",
+        verified_at=observed,
         storage_protocol="object-set-v1",
     )
 
-    # Record scrub evidence (policy-scoped)
     backup_dr_ledger.record_scrub_evidence(
         target_id="target_1",
         backup_id="bk_001",
         policy_id="policy_1",
-        observed_at="2026-08-15T00:00:00Z",
+        observed_at=observed,
         result="success",
     )
 
-    # Record drill evidence
     backup_dr_ledger.record_drill_evidence(
         target_id="target_1",
         policy_id="policy_1",
         backup_id="bk_001",
         drill_kind="manual",
-        observed_at="2026-08-15T00:00:00Z",
+        observed_at=observed,
         result="success",
         work_class="recovery-drill",
         stage_durations={"totalMs": 200},
     )
 
-    # Evaluate with generous objectives
     scope_eval = backup_dr_readiness.evaluate_scope_readiness(
         target_id="target_1",
         policy_id="policy_1",

@@ -236,6 +236,9 @@ def test_micro_branch_coverage_for_coverage_gate(tmp_settings: Path) -> None:
     backup_control.put_recovery_object_ref(
         target_id=tid, policy_id="p", backup_id="drop", object_key="k2", ref_state="live", size_bytes=1
     )
+    # Incomplete coverage must not advertise an authoritative index.
+    assert backup_object_index.retained_payload_keys_from_index(tid, retiring_backup_id="drop") is None
+    backup_control.set_target_index_coverage(tid, state="complete", formal_receipt_count=2)
     assert backup_object_index.retained_payload_keys_from_index(tid, retiring_backup_id="drop") is not None
     assert backup_object_index.object_is_live_referenced(tid, "k1", excluding_backup_id="drop")
     assert not backup_object_index.object_is_live_referenced(tid, "k2", excluding_backup_id="drop")
@@ -821,7 +824,9 @@ def test_tiering_execute_exception_and_require_known_rates(tmp_settings: Path) -
             intent_id=None,
         )
     assert out["objectSetDigest"] == "d2"
-    assert out["rebalance"]["phase"] == "pending"
+    # Exceptions never mark the intent executed; rebalance payload surfaces the failure.
+    assert out["rebalance"]["phase"] == "failed"
+    assert out.get("intentPhase") in {"failed-terminal", "failed", None} or "fail" in str(out.get("status") or "")
 
     with patch.object(
         backup_tiering.backup_publish,

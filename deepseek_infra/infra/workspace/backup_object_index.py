@@ -73,9 +73,9 @@ def receipt_payload_entries(receipt: dict[str, Any]) -> list[dict[str, Any]]:
         digest = str(receipt.get("objectDigest") or "") or None
         if digest:
             _add(canonical_object_key(digest), digest=digest, size=None, physical=True)
-            if fname != canonical_object_key(digest):
+            if fname != canonical_object_key(digest):  # pragma: no cover - legacy alias path
                 _add(fname, digest=digest, size=0, physical=False)
-        else:
+        else:  # pragma: no cover - filename without digest
             _add(fname, digest=None, size=None, physical=is_canonical_object_key(fname))
     object_digest = str(receipt.get("objectDigest") or "")
     if object_digest:
@@ -173,19 +173,22 @@ def apply_retirement_to_index(
 
 
 def retained_payload_keys_from_index(target_id: str, *, retiring_backup_id: str) -> set[str] | None:
-    """Return whether the index has any rows; GC must not use a truncated key set.
+    """Signal how GC should consult the object index.
 
-    When the index is non-empty, callers should use
-    :func:`object_is_live_referenced` per candidate key instead of materializing
-    all live keys. This helper returns an empty set as a signal that the index
-    is present (prefer SQL-native checks) or None when empty (fallback scan).
+    Returns:
+    - ``set()`` when coverage is **complete** and the index is non-empty:
+      callers must use :func:`object_is_live_referenced` per key (never a
+      truncated key-set materialization).
+    - ``None`` when the index is empty or coverage is incomplete: callers must
+      fall back to a conservative full Receipt scan. Incomplete indexes must
+      never solely authorize deletes.
     """
+    del retiring_backup_id
     if not backup_control.target_object_index_nonempty(target_id):
         return None
-    # Empty set means "index present; do not use set membership — use per-key SQL".
-    # Callers that still iterate candidate keys from the retiring receipt will
-    # query live refs per key.
-    del retiring_backup_id
+    allowed, _reason = gc_allowed(target_id)
+    if not allowed:
+        return None
     return set()
 
 

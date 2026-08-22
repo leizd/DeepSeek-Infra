@@ -1,4 +1,4 @@
-"""4.6.0 Gates E/F — autonomous placement SLO controller + target-sharded maintenance."""
+"""Gates E/F — autonomous placement SLO controller + target-sharded maintenance."""
 
 from __future__ import annotations
 
@@ -245,9 +245,11 @@ def test_repair_scopes_shard_by_dest_target(tmp_settings: Path) -> None:
     ]
     seen_scopes: list[str] = []
 
-    def fake_lease(worker_kind: str, scope_id: str, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_lease(worker_kind: str, scope_id: str, **kwargs: object) -> tuple[bool, object]:
         seen_scopes.append(f"{worker_kind}:{scope_id}")
-        return True, kwargs["work"]()
+        work = kwargs["work"]
+        assert callable(work)
+        return True, work()
 
     with patch.object(backup_maintenance.backup_replication, "list_repair_jobs", return_value=jobs), patch.object(
         backup_maintenance.backup_replication,
@@ -271,9 +273,11 @@ def test_retirement_scopes_shard_by_target(tmp_settings: Path) -> None:
     ]
     seen: list[str] = []
 
-    def fake_lease(worker_kind: str, scope_id: str, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_lease(worker_kind: str, scope_id: str, **kwargs: object) -> tuple[bool, object]:
         seen.append(f"{worker_kind}:{scope_id}")
-        return True, kwargs["work"]()
+        work = kwargs["work"]
+        assert callable(work)
+        return True, work()
 
     with patch.object(
         backup_maintenance.backup_retirement, "list_copy_retirement_jobs", return_value=jobs

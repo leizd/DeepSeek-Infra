@@ -1,4 +1,4 @@
-"""4.6.0 Gates B/C/D — coverage, lineage, chain migration."""
+"""Gates B/C/D — coverage, lineage, chain migration."""
 
 from __future__ import annotations
 
@@ -13,6 +13,39 @@ from deepseek_infra.infra.workspace import (
     backup_targets,
     backup_tiering,
 )
+
+
+def test_incomplete_index_does_not_self_deadlock_retirement_gc(tmp_settings: Path) -> None:
+    """Retirement may write partial index rows; GC must still proceed via receipt path."""
+    from deepseek_infra.infra.workspace import backup_retirement
+
+    tid = "target_ret_gc"
+    root = tmp_settings / tid
+    root.mkdir(parents=True)
+    backup_targets.register_filesystem_target(tid, path=root)
+    # Partial index without coverage complete (what retirement writes).
+    backup_object_index.index_receipt_objects(
+        target_id=tid,
+        policy_id="p",
+        backup_id="drop",
+        receipt={"policyId": "p", "backupId": "drop", "objects": [{"path": "objects/sha256/aa/x.age", "size": 1}]},
+        ref_state="retired",
+    )
+    allowed, reason = backup_object_index.gc_allowed(tid)
+    assert allowed is False
+    assert "incomplete" in reason or "missing" in reason
+    # Incomplete index still over-retains known live keys.
+    target = type("T", (), {"target_id": tid, "root": root, "store": None})()
+    backup_object_index.index_receipt_objects(
+        target_id=tid,
+        policy_id="p",
+        backup_id="keep",
+        receipt={"policyId": "p", "backupId": "keep", "objects": [{"path": "objects/sha256/bb/y.age", "size": 1}]},
+        ref_state="live",
+    )
+    assert backup_retirement._payload_key_is_retained(target, "objects/sha256/bb/y.age", retiring_backup_id="drop")
+    # Unknown key with no receipts on disk is not retained (safe to GC candidate).
+    assert not backup_retirement._payload_key_is_retained(target, "objects/sha256/cc/z.age", retiring_backup_id="drop")
 
 
 def test_index_coverage_blocks_gc_until_complete(tmp_settings: Path) -> None:

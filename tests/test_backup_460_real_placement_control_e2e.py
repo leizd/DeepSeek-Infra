@@ -1,4 +1,4 @@
-"""CI-only real three-MinIO autonomous placement + scale-safe control Evidence (4.6.0)."""
+"""CI-only real three-MinIO autonomous placement + scale-safe control Evidence."""
 
 from __future__ import annotations
 
@@ -156,7 +156,7 @@ def _formal_bytes(target: Any, prefix: str, backup_id: str) -> tuple[str, bytes]
 
 @pytest.mark.integration
 def test_real_three_minio_autonomous_placement_control_e2e(tmp_settings: Path) -> None:
-    """4.6.0 Gate G: placement SLO, chain migration, coverage GC, target-sharded maintenance."""
+    """Gate G: placement SLO, chain migration, coverage GC, target-sharded maintenance."""
     endpoints, _containers = _real_prerequisites()
     clients = [_client(endpoint) for endpoint in endpoints]
     suffix = uuid.uuid4().hex[:8]
@@ -374,5 +374,5 @@ def test_real_three_minio_autonomous_placement_control_e2e(tmp_settings: Path) -
         probe.assert_not_called()
     assert horizon.get("targetId") == target_hot
 
-    # Schema still at control v4+ for 4.6.0.
+    # Schema still at control v4+ for this release line.
     assert backup_control.schema_version() >= 4
