@@ -247,6 +247,40 @@ def test_schema_version_is_at_least_5(tmp_settings: Path) -> None:
     assert backup_control.schema_version() >= 5
 
 
+def test_reconcile_inventory_and_store_retained_scan(tmp_settings: Path) -> None:
+    from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore
+
+    tid = "target_inv"
+    store = MemoryTargetStore()
+    store.put_if_absent("objects/sha256/ff/a.age", b"abc")
+    store.put_if_absent("receipts/r.json", b"{}")
+    target = SimpleNamespace(target_id=tid, root=None, store=store)
+    page = backup_object_index.reconcile_inventory_page(target, prefix="objects/", limit=50)
+    assert page["examined"] >= 1
+    assert isinstance(page["orphans"], list)
+    # no store
+    empty = backup_object_index.reconcile_inventory_page(
+        SimpleNamespace(target_id=tid, root=None, store=None)
+    )
+    assert empty["examined"] == 0
+
+    # Store retained scan success + fail-closed
+    good = {
+        "backupId": "keep",
+        "policyId": "p",
+        "objects": [{"digest": "aa" * 32}],
+    }
+    store2 = MemoryTargetStore()
+    store2.put_if_absent("receipts/keep.json", json.dumps(good).encode())
+    store2.put_if_absent("receipts/drop.json", json.dumps({"backupId": "drop", "policyId": "p"}).encode())
+    rt = SimpleNamespace(root=None, store=store2, target_id="t-ret-store")
+    keys = backup_retirement._retained_payload_keys(rt, retiring_backup_id="drop")
+    assert any("aa" * 32 in k or "sha256" in k for k in keys)
+    store2.put_if_absent("receipts/broken.json", b"{")
+    with pytest.raises(backup_retirement.GcReferenceScanIndeterminate):
+        backup_retirement._retained_payload_keys(rt, retiring_backup_id="drop")
+
+
 def test_control_schema_v5_helpers_are_exercised(tmp_settings: Path) -> None:
     """Dense hits for schema v5 coverage evidence and mutation APIs."""
     tid = "target_v5_dense"
