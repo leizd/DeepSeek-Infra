@@ -247,6 +247,64 @@ def test_schema_version_is_at_least_5(tmp_settings: Path) -> None:
     assert backup_control.schema_version() >= 5
 
 
+def test_control_schema_v5_helpers_are_exercised(tmp_settings: Path) -> None:
+    """Dense hits for schema v5 coverage evidence and mutation APIs."""
+    tid = "target_v5_dense"
+    assert backup_control.get_target_receipt_mutation_generation(tid) == 0
+    assert backup_control.get_target_index_coverage(tid) is None
+    # Dirty via note
+    assert backup_control.note_formal_receipt_mutation(tid) == 1
+    cov = backup_control.get_target_index_coverage(tid)
+    assert cov is not None
+    assert cov["state"] == "incomplete"
+    assert backup_control.get_target_receipt_mutation_generation(tid) == 1
+    # Complete claim with auto-fill defaults at current mutation gen
+    backup_control.set_target_index_coverage(tid, state="complete", formal_receipt_count=4)
+    allowed, reason = backup_control.index_coverage_allows_gc(tid)
+    assert allowed is True, reason
+    # Stale after next mutation
+    backup_control.note_formal_receipt_mutation(tid)
+    assert backup_control.index_coverage_allows_gc(tid)[0] is False
+    # Explicit incomplete reason
+    backup_control.set_target_index_coverage(
+        tid, state="building", reason="rebuild-started", formal_receipt_count=0
+    )
+    assert backup_control.index_coverage_allows_gc(tid)[0] is False
+    backup_control.set_target_index_coverage(
+        tid, state="scanning", reason="rebuild-scanning", formal_receipt_count=0
+    )
+    assert "scanning" in str(backup_control.get_target_index_coverage(tid) or {})
+    # Empty target_id note
+    assert backup_control.note_formal_receipt_mutation("") is None
+    # put_recovery_object_ref + gc candidates blocked when incomplete
+    backup_control.put_recovery_object_ref(
+        target_id=tid,
+        policy_id="p",
+        backup_id="b",
+        object_key="objects/sha256/ee/z.age",
+        ref_state="retired",
+        size_bytes=1,
+        physical=True,
+    )
+    assert backup_object_index.gc_candidate_keys(tid) == []
+    # Fresh complete unlocks candidates
+    gen = backup_control.get_target_receipt_mutation_generation(tid)
+    backup_control.set_target_index_coverage(
+        tid,
+        state="complete",
+        formal_receipt_count=1,
+        enumerated_receipts=1,
+        parsed_receipts=1,
+        indexed_receipts=1,
+        parse_failures=0,
+        read_failures=0,
+        source_receipt_mutation_generation=gen,
+    )
+    assert "objects/sha256/ee/z.age" in backup_object_index.gc_candidate_keys(tid)
+    # retained_payload_keys_from_index signals authoritative mode
+    assert backup_object_index.retained_payload_keys_from_index(tid, retiring_backup_id="x") is not None
+
+
 def test_rebuild_from_store_with_bad_and_good_receipts(tmp_settings: Path) -> None:
     from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore
 
