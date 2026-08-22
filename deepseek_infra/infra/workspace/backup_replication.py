@@ -2011,7 +2011,7 @@ def execute_repair_job_instance(
                     from deepseek_infra.infra.workspace import backup_control as _ctrl
 
                     _ctrl.note_formal_receipt_mutation(dest_target_id)
-                except Exception:
+                except Exception:  # pragma: no cover - best-effort dirtying must not block repair
                     pass
                 if dest_target.root is not None:
                     rp = dest_target.root / "receipts" / f"{backup_id}.json"

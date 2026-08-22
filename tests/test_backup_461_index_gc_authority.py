@@ -247,6 +247,25 @@ def test_schema_version_is_at_least_5(tmp_settings: Path) -> None:
     assert backup_control.schema_version() >= 5
 
 
+def test_apply_retirement_indexes_missing_refs(tmp_settings: Path) -> None:
+    tid = "target_apply_ret"
+    receipt = {
+        "policyId": "p",
+        "backupId": "b",
+        "objects": [{"digest": "11" * 32, "size": 4, "path": "objects/sha256/11/q.age"}],
+    }
+    # No prior refs → apply_retirement indexes then retires.
+    changed = backup_object_index.apply_retirement_to_index(
+        target_id=tid, policy_id="p", backup_id="b", receipt=receipt
+    )
+    assert changed >= 1
+    # Second apply is idempotent (already retired)
+    changed2 = backup_object_index.apply_retirement_to_index(
+        target_id=tid, policy_id="p", backup_id="b", receipt=receipt
+    )
+    assert changed2 == 0
+
+
 def test_reconcile_inventory_and_store_retained_scan(tmp_settings: Path) -> None:
     from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore
 

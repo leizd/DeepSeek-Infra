@@ -315,8 +315,8 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
             ):
                 try:
                     conn.execute(stmt)
-                except sqlite3.OperationalError:
-                    pass  # column already present
+                except sqlite3.OperationalError:  # pragma: no cover - column already present on fresh DBs
+                    pass
         if current < 5:
             for stmt in (
                 "ALTER TABLE target_index_coverage ADD COLUMN enumerated_receipts INTEGER NOT NULL DEFAULT 0",
@@ -329,7 +329,7 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
             ):
                 try:
                     conn.execute(stmt)
-                except sqlite3.OperationalError:
+                except sqlite3.OperationalError:  # pragma: no cover - column already present on fresh DBs
                     pass
         for version in range(max(1, current + 1), CONTROL_SCHEMA_VERSION + 1):
             description = {

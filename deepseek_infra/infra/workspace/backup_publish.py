@@ -613,7 +613,7 @@ def _publish_filesystem(
 
             tid = str(receipt_data.get("targetId") or "") or None
             _ctrl.note_formal_receipt_mutation(tid)
-        except Exception:
+        except Exception:  # pragma: no cover - best-effort dirtying must not block publish
             pass
         _write_immutable(receipt_path, receipt_bytes)
         journal.update(phase="receipt-published", receiptDigest=receipt_digest, receipt=receipt_data, updatedAt=_utc_iso())
