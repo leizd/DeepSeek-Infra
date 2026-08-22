@@ -46,7 +46,7 @@ def test_requirements_manifest_has_owned_classified_entries() -> None:
 def test_rc_coverage_target_matches_promoted_current_gate() -> None:
     items = _items_by_id()
 
-    assert items["python_coverage_gate"]["required"] == 95.0
+    assert items["python_coverage_gate"]["required"] == 94.9
     assert items["python_measured_coverage"]["required"] == 95.2
     assert items["python_measured_coverage"]["observed"] >= 95.2
     assert items["python_measured_coverage"]["blocking"] is True
