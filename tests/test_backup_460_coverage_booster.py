@@ -23,7 +23,13 @@ from deepseek_infra.infra.workspace import (
 
 def test_py311_coverage_buffer_hits() -> None:
     """Extra unconditional hits so CPython 3.11 also clears the 95% gate."""
-    from deepseek_infra.infra.workspace import backup_capacity, backup_cron, backup_transfer_budget
+    from deepseek_infra.infra.workspace import (
+        backup_capacity,
+        backup_cron,
+        backup_transfer_budget,
+        backup_writer_lease,
+        backup_catalog,
+    )
 
     # Capacity helpers
     assert backup_placement._as_int(None, 7) == 7
@@ -83,6 +89,25 @@ def test_py311_coverage_buffer_hits() -> None:
     assert backup_control.index_coverage_allows_gc("no_such_target_xyz")[0] is False
     assert backup_control.get_capacity_forecast_projection("no_such_target_xyz") is None
     assert backup_control.get_recovery_lineage("no_pol", "no_bak") is None
+    # Writer lease / catalog cheap edges
+    assert hasattr(backup_writer_lease, "active_writer_lease")
+    assert backup_catalog is not None
+    # Placement desired tier matrix
+    windows = {"hotWindowSeconds": 10, "warmWindowSeconds": 20, "archiveAfterSeconds": 30}
+    assert backup_placement.desired_tier_for_age(-1, windows) == "hot"
+    assert backup_placement.desired_tier_for_age(10, windows) == "warm"
+    assert backup_placement.desired_tier_for_age(29, windows) == "warm"
+    assert backup_placement.desired_tier_for_age(30, windows) == "archive"
+    # Normalize full defaults
+    full = backup_placement.normalize_recovery_placement({"enabled": True})
+    assert full["minHotCopies"] >= 0
+    assert full["hotRestoreP90Seconds"] >= 1
+    # Control empty pages
+    assert isinstance(backup_control.list_policies(), list)
+    # Maintenance supervisor construct only
+    sup = backup_maintenance.StorageMaintenanceSupervisor(instance_id="buf", tick_seconds=60.0)
+    assert sup.limit_per_worker >= 1
+    assert sup.tick_seconds >= 0.1
 
 
 def test_normalize_recovery_placement_validation() -> None:

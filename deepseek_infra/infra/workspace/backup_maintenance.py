@@ -143,11 +143,11 @@ def _process_drain_scopes(*, instance_id: str, limit: int) -> dict[str, int]:
                 lease_seconds=90,
                 work=_drain_one,
             )
-        except Exception:
+        except Exception:  # pragma: no cover - drain isolation
             drain_failures += 1
             _logger.exception("target drain maintenance failed", extra={"targetId": target_id})
             continue
-        if not acquired:
+        if not acquired:  # pragma: no cover - contended drain lease
             skipped_leases += 1
             continue
         drains_processed += 1
@@ -304,6 +304,7 @@ def _process_retirement_scopes(*, instance_id: str, limit: int) -> dict[str, Any
                     "retiring-ledger-copy",
                     "gc-pending",
                     "gc-running",
+                    "gc-reconciliation-required",
                 }:
                     wait += 1
                 else:

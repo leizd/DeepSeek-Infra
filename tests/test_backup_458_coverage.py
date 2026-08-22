@@ -647,6 +647,13 @@ def test_retirement_retained_reference_scans_and_active_job_sources(tmp_settings
     (receipts / "retained.json").write_bytes(_stable_bytes(retained))
     (receipts / "invalid.json").write_bytes(b"not-json")
     filesystem_target = SimpleNamespace(root=root, store=None, target_id="target-retained-filesystem")
+    # Malformed formal receipt must fail closed — never treat as "unreferenced".
+    with pytest.raises(backup_retirement.GcReferenceScanIndeterminate):
+        backup_retirement._retained_payload_keys(
+            filesystem_target,
+            retiring_backup_id="backup-retiring",
+        )
+    (receipts / "invalid.json").unlink()
     filesystem_keys = backup_retirement._retained_payload_keys(
         filesystem_target,
         retiring_backup_id="backup-retiring",
@@ -656,7 +663,13 @@ def test_retirement_retained_reference_scans_and_active_job_sources(tmp_settings
     store = MemoryTargetStore()
     store.put_if_absent("receipts/retiring.json", _stable_bytes(retiring))
     store.put_if_absent("receipts/retained.json", _stable_bytes(retained))
-    store.put_if_absent("receipts/invalid.json", b"[]")
+    store.put_if_absent("receipts/invalid.json", b"[]")  # JSON array is not a receipt object
+    remote_target = SimpleNamespace(root=None, store=store, target_id="target-retained-remote")
+    with pytest.raises(backup_retirement.GcReferenceScanIndeterminate):
+        backup_retirement._retained_payload_keys(remote_target, retiring_backup_id="backup-retiring")
+    store = MemoryTargetStore()
+    store.put_if_absent("receipts/retiring.json", _stable_bytes(retiring))
+    store.put_if_absent("receipts/retained.json", _stable_bytes(retained))
     remote_target = SimpleNamespace(root=None, store=store, target_id="target-retained-remote")
     remote_keys = backup_retirement._retained_payload_keys(remote_target, retiring_backup_id="backup-retiring")
     assert any(digest in key for key in remote_keys)

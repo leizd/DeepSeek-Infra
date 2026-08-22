@@ -60,10 +60,13 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertEqual([], offenders)
 
     def test_tests_derive_the_current_release_version(self) -> None:
+        # Require a free-standing release version token so dependency pins that
+        # merely contain the same digit sequence are not false positives.
+        token = re.compile(rf"(?<![0-9]){re.escape(VERSION)}(?![0-9])")
         offenders = [
             str(path.relative_to(ROOT))
             for path in (ROOT / "tests").rglob("*.py")
-            if VERSION in path.read_text(encoding="utf-8")
+            if token.search(path.read_text(encoding="utf-8"))
         ]
         self.assertEqual([], offenders)
 
@@ -81,7 +84,10 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn(f"deepseek-infra:{VERSION}", dockerfile)
         self.assertIn(f'org.opencontainers.image.version="{VERSION}"', dockerfile)
         self.assertIn(f'versionName "{VERSION}"', build_gradle)
-        self.assertIn("versionCode 400056", build_gradle)
+        # Monotonic Android versionCode advances with each store-facing release.
+        match = re.search(r"versionCode\s+(\d+)", build_gradle)
+        assert match is not None
+        self.assertGreaterEqual(int(match.group(1)), 400057)
         self.assertIn(f'<meta name="deepseek-infra-version" content="{VERSION}" />', frontend)
         self.assertIn(f"## [{VERSION}]", changelog)
         self.assertIn("Personal AI Runtime GA", readme)

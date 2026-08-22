@@ -125,14 +125,21 @@ def test_retirement_shared_components_gc(tmp_settings: Path) -> None:
     (r2_dir := t_root / "receipts" / policy_id).mkdir(parents=True, exist_ok=True)
     (r2_dir / f"{b2}.json").write_text(json.dumps(r2), encoding="utf-8")
 
-    # Add invalid JSON in receipts dir to test exception handling in scanner
+    # Malformed sibling receipt must fail closed (no payload delete).
     (r1_dir / "invalid.json").write_text("invalid json content {{{", encoding="utf-8")
+    with patch.object(backup_replication, "simulate_copy_removal", return_value={"policySafe": True, "protectedByHold": False}):
+        job_bad = backup_retirement.create_copy_retirement_job(policy_id, b1, t1)
+        res_bad = backup_retirement.execute_copy_retirement_job(job_bad["jobId"])
+        assert res_bad["phase"] == "gc-reconciliation-required"
+        assert comp1.is_file() and comp2.is_file()
+        backup_retirement.cancel_copy_retirement_job(str(job_bad["jobId"]), reason="fixture-cleanup")
 
-    # Create & execute retirement job for b1
+    # With only well-formed receipts, shared-component GC reclaim proceeds.
+    (r1_dir / "invalid.json").unlink()
     with patch.object(backup_replication, "simulate_copy_removal", return_value={"policySafe": True, "protectedByHold": False}):
         job = backup_retirement.create_copy_retirement_job(policy_id, b1, t1)
         res = backup_retirement.execute_copy_retirement_job(job["jobId"])
-        assert res["phase"] == "reclaimed"
+        assert res["phase"] == "reclaimed", res
 
         # Unique component was unlinked, shared component was retained!
         assert comp1.is_file()
