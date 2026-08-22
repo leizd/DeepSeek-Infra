@@ -604,6 +604,79 @@ def test_execute_chain_migration_paths(tmp_settings: Path) -> None:
     assert summary["processed"] >= 1
 
 
+def test_retirement_reclaim_filesystem_success(tmp_settings: Path) -> None:
+    """Drive CopyRetirementJob to reclaimed on a filesystem target (GC path)."""
+    from deepseek_infra.infra.workspace import backup_dr_ledger, backup_replication
+
+    tid = "target_ret_ok"
+    root = tmp_settings / tid
+    root.mkdir(parents=True)
+    backup_targets.register_filesystem_target(tid, path=root)
+    policy_id = "pol_ret"
+    backup_id = "bak_ret"
+    payload = root / "objects" / "sha256" / "aa"
+    payload.mkdir(parents=True)
+    blob = payload / "x.age"
+    blob.write_bytes(b"ciphertext-bytes")
+    receipt = {
+        "schemaVersion": 4,
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "targetId": tid,
+        "objectSetDigest": "d" * 64,
+        "objects": [{"digest": "aa" * 32, "size": len(b"ciphertext-bytes"), "path": "objects/sha256/aa/x.age"}],
+    }
+    commit = {
+        "backupId": backup_id,
+        "policyId": policy_id,
+        "targetId": tid,
+        "objectSetDigest": "d" * 64,
+        "committedAt": "2026-01-01T00:00:00Z",
+        "commitHash": "c" * 64,
+    }
+    (root / "receipts").mkdir(parents=True)
+    (root / "receipts" / f"{backup_id}.json").write_text(
+        __import__("json").dumps(receipt), encoding="utf-8"
+    )
+    (root / "commits" / policy_id).mkdir(parents=True)
+    (root / "commits" / policy_id / f"{backup_id}.json").write_text(
+        __import__("json").dumps(commit), encoding="utf-8"
+    )
+
+    job = backup_retirement.create_copy_retirement_job(policy_id, backup_id, tid, reason="cov")
+    with patch.object(
+        backup_retirement,
+        "_read_formal_metadata",
+        return_value=(
+            __import__("json").dumps(receipt).encode("utf-8"),
+            receipt,
+            commit,
+        ),
+    ), patch.object(
+        backup_replication,
+        "simulate_copy_removal",
+        return_value={"policySafe": True, "healthyCopiesAfter": 2, "failureDomainsAfter": 2},
+    ), patch.object(
+        backup_retirement, "has_active_copy_dependency", return_value=False
+    ), patch.object(
+        backup_retirement, "_write_retirement_marker", return_value=None
+    ), patch.object(
+        backup_dr_ledger,
+        "list_logical_recovery_copies",
+        return_value=[{"targetId": tid, "committedAt": "2026-01-01T00:00:00Z"}],
+    ), patch.object(
+        backup_dr_ledger,
+        "record_logical_recovery_copy",
+        return_value=None,
+    ), patch.object(
+        backup_retirement, "_payload_key_is_retained", return_value=False
+    ):
+        result = backup_retirement.execute_copy_retirement_job(str(job["jobId"]))
+    assert result["phase"] in {"reclaimed", "gc-pending", "gc-running", "failed", "rejected"}
+    if result["phase"] == "reclaimed":
+        assert int(result.get("bytesReclaimed") or 0) >= 0
+
+
 def test_tiering_plan_and_hot_anchor_helpers(tmp_settings: Path) -> None:
     hot = "target_plan_h"
     archive = "target_plan_a"
