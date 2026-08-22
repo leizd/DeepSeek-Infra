@@ -247,6 +247,64 @@ def test_schema_version_is_at_least_5(tmp_settings: Path) -> None:
     assert backup_control.schema_version() >= 5
 
 
+def test_retirement_reclaim_with_clean_receipts(tmp_settings: Path) -> None:
+    """Full reclaim path when receipt truth is determinate."""
+    tid = "target_reclaim_ok"
+    root = tmp_settings / tid
+    receipts = root / "receipts"
+    receipts.mkdir(parents=True)
+    payload = root / "objects" / "sha256" / "aa"
+    payload.mkdir(parents=True)
+    blob = payload / "x.age"
+    blob.write_bytes(b"xx")
+    policy_id = "p"
+    backup_id = "drop"
+    receipt = {
+        "policyId": policy_id,
+        "backupId": backup_id,
+        "targetId": tid,
+        "objectSetDigest": "d" * 64,
+        "objects": [{"digest": "aa" * 32, "size": 2, "path": "objects/sha256/aa/x.age"}],
+    }
+    commit = {
+        "backupId": backup_id,
+        "policyId": policy_id,
+        "targetId": tid,
+        "objectSetDigest": "d" * 64,
+        "committedAt": "2026-01-01T00:00:00Z",
+        "commitHash": "c" * 64,
+    }
+    (receipts / f"{backup_id}.json").write_text(json.dumps(receipt), encoding="utf-8")
+    backup_targets.register_filesystem_target(tid, path=root)
+    fake = SimpleNamespace(target_id=tid, root=root, store=None)
+    job = backup_retirement.create_copy_retirement_job(policy_id, backup_id, tid)
+    with patch(
+        "deepseek_infra.infra.workspace.backup_publish.resolve_target", return_value=fake
+    ), patch.object(
+        backup_retirement,
+        "_read_formal_metadata",
+        return_value=(json.dumps(receipt).encode(), receipt, commit),
+    ), patch(
+        "deepseek_infra.infra.workspace.backup_replication.simulate_copy_removal",
+        return_value={"policySafe": True, "protectedByHold": False},
+    ), patch.object(
+        backup_retirement, "has_active_copy_dependency", return_value=False
+    ), patch.object(
+        backup_retirement, "_write_retirement_marker", return_value=None
+    ), patch(
+        "deepseek_infra.infra.workspace.backup_dr_ledger.list_logical_recovery_copies",
+        return_value=[{"targetId": tid, "committedAt": "t"}],
+    ), patch(
+        "deepseek_infra.infra.workspace.backup_dr_ledger.record_logical_recovery_copy",
+        return_value=None,
+    ), patch.object(
+        backup_retirement, "_payload_key_is_retained", return_value=False
+    ):
+        result = backup_retirement.execute_copy_retirement_job(str(job["jobId"]))
+    assert result["phase"] == "reclaimed", result
+    assert not blob.is_file()
+
+
 def test_apply_retirement_indexes_missing_refs(tmp_settings: Path) -> None:
     tid = "target_apply_ret"
     receipt = {
