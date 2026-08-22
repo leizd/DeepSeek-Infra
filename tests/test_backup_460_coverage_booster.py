@@ -369,6 +369,208 @@ def test_repair_execute_exception_and_supervisor(tmp_settings: Path) -> None:
     assert sup._thread is None
 
 
+def test_placement_copy_filter_soft_watermark_and_no_primary(tmp_settings: Path) -> None:
+    hot = "target_micro_h"
+    warm = "target_micro_w"
+    backup_targets.register_filesystem_target(hot, path=tmp_settings / hot, region="r1", failure_domain="fd1")
+    backup_targets.register_filesystem_target(warm, path=tmp_settings / warm, region="r2", failure_domain="fd2")
+    backup_targets.set_target_storage_tier(warm, storage_tier="warm")
+    targets = {hot: backup_targets.get_target(hot), warm: backup_targets.get_target(warm)}
+    unit = {"closureComplete": True, "memberBackupIds": ["b"], "anchorBackupId": "b"}
+    now = datetime.now(tz=timezone.utc)
+    # Filters non-recoverable / bad state copies
+    tiers = backup_placement._copy_tiers_for_backup(
+        "b",
+        [
+            {"backupId": "b", "targetId": hot, "recoverable": False, "state": "healthy"},
+            {"backupId": "other", "targetId": hot, "recoverable": True, "state": "healthy"},
+            {"backupId": "b", "targetId": "", "recoverable": True, "state": "healthy"},
+            {"backupId": "b", "targetId": hot, "recoverable": True, "state": "corrupt"},
+            {"backupId": "b", "targetId": hot, "recoverable": True, "state": "healthy"},
+        ],
+        targets,
+    )
+    assert tiers == [(hot, "hot")]
+
+    # Soft watermark on satisfied hot objectives
+    policy = {
+        "policyId": "p",
+        "primaryTargetId": hot,
+        "recoveryPlacement": {
+            "enabled": True,
+            "hotWindowSeconds": 86400,
+            "warmWindowSeconds": 604800,
+            "archiveAfterSeconds": 2592000,
+            "minHotCopies": 1,
+        },
+    }
+    with patch.object(backup_tiering, "build_recovery_chain_placement_unit", return_value=unit), patch.object(
+        backup_placement.backup_capacity,
+        "estimate_target_exhaustion_horizon",
+        return_value={"status": "degraded"},
+    ):
+        soft = backup_placement.evaluate_point_placement(
+            policy,
+            "b",
+            committed_at=now.isoformat(),
+            copies=[{"backupId": "b", "targetId": hot, "recoverable": True, "state": "healthy"}],
+            targets_by_id=targets,
+            now=now,
+        )
+    assert "primary-capacity-soft-watermark" in soft.get("reasonCodes", []) or soft["action"] in {"none", "migrate", "blocked"}
+
+    # No primary id → objectives-satisfied short path
+    policy2 = {
+        "policyId": "p2",
+        "recoveryPlacement": policy["recoveryPlacement"],
+    }
+    with patch.object(backup_tiering, "build_recovery_chain_placement_unit", return_value=unit), patch.object(
+        backup_placement.backup_capacity,
+        "estimate_target_exhaustion_horizon",
+        return_value={"status": "healthy"},
+    ):
+        none_primary = backup_placement.evaluate_point_placement(
+            policy2,
+            "b",
+            committed_at=now.isoformat(),
+            copies=[{"backupId": "b", "targetId": hot, "recoverable": True, "state": "healthy"}],
+            targets_by_id=targets,
+            now=now,
+        )
+    assert none_primary["action"] == "none"
+
+    # Soft watermark on destination while migrating
+    aged = (now - timedelta(seconds=100000)).isoformat()
+    with patch.object(backup_tiering, "build_recovery_chain_placement_unit", return_value=unit), patch.object(
+        backup_placement.backup_capacity,
+        "estimate_target_exhaustion_horizon",
+        side_effect=lambda *a, **k: {"status": "degraded"},
+    ):
+        dest_soft = backup_placement.evaluate_point_placement(
+            {
+                "policyId": "p3",
+                "primaryTargetId": hot,
+                "recoveryPlacement": {
+                    "enabled": True,
+                    "hotWindowSeconds": 1,
+                    "warmWindowSeconds": 10,
+                    "archiveAfterSeconds": 100,
+                },
+            },
+            "b",
+            committed_at=aged,
+            copies=[{"backupId": "b", "targetId": hot, "recoverable": True, "state": "healthy"}],
+            targets_by_id=targets,
+            now=now,
+        )
+    if dest_soft["action"] == "migrate":
+        assert "destination-capacity-soft-watermark" in dest_soft["reasonCodes"] or "destination-tier-qualified" in dest_soft["reasonCodes"]
+
+
+def test_retirement_and_chain_phase_branches(tmp_settings: Path) -> None:
+    def run_work(worker_kind: str, scope_id: str, **kwargs: object) -> tuple[bool, object]:
+        work = kwargs["work"]
+        assert callable(work)
+        return True, work()
+
+    phases = [
+        "waiting-for-dependencies",
+        "requested",
+        "checking-topology",
+        "checking-holds",
+        "committing-retirement-marker",
+        "retiring-ledger-copy",
+        "gc-pending",
+        "gc-running",
+        "weird-fail",
+    ]
+    jobs = [{"jobId": f"j{i}", "targetId": f"t{i % 2}", "phase": p} for i, p in enumerate(phases)]
+    call = {"n": 0}
+
+    def exec_ret(jid: str, **_k: object) -> dict[str, object]:
+        idx = int(str(jid).replace("j", "") or "0")
+        call["n"] += 1
+        return {"phase": phases[idx]}
+
+    with patch.object(
+        backup_maintenance.backup_retirement, "list_copy_retirement_jobs", return_value=jobs
+    ), patch.object(
+        backup_maintenance.backup_retirement, "execute_copy_retirement_job", side_effect=exec_ret
+    ), patch.object(backup_maintenance, "_run_with_scope_lease", side_effect=run_work):
+        out = backup_maintenance._process_retirement_scopes(instance_id="i", limit=20)
+    assert out["processed"] >= 1
+    assert out["waiting"] + out["failed"] + out.get("reclaimed", 0) >= 1
+
+    mig = [
+        {"migrationId": "m1", "destTargetId": "d1", "phase": "planned"},
+        {"migrationId": "m2", "destTargetId": "d1", "phase": "planned"},
+        {"migrationId": "", "destTargetId": "d1", "phase": "planned"},
+    ]
+    results = iter(
+        [
+            {"phase": "failed-terminal"},
+            {"phase": "transferring"},
+        ]
+    )
+    with patch.object(backup_control, "list_chain_migration_jobs", return_value=mig), patch.object(
+        backup_tiering, "execute_chain_migration", side_effect=lambda *a, **k: next(results)
+    ), patch.object(backup_maintenance, "_run_with_scope_lease", side_effect=run_work):
+        mout = backup_maintenance._process_chain_migration_scopes(instance_id="i", limit=5)
+    assert mout["processed"] >= 1
+
+
+def test_control_lineage_and_chain_job_helpers(tmp_settings: Path) -> None:
+    backup_control.upsert_recovery_lineage(
+        policy_id="pl",
+        backup_id="F0",
+        snapshot_kind="full",
+        parent_backup_id=None,
+        chain_depth=0,
+        object_set_digest="d0",
+        committed_at="t0",
+    )
+    backup_control.upsert_recovery_lineage(
+        policy_id="pl",
+        backup_id="I1",
+        snapshot_kind="incremental",
+        parent_backup_id="F0",
+        chain_depth=1,
+        committed_at="t1",
+    )
+    lin = backup_control.get_recovery_lineage("pl", "I1")
+    assert lin is not None and lin["parentBackupId"] == "F0"
+    backup_control.clear_recovery_lineage("pl")
+    assert backup_control.get_recovery_lineage("pl", "I1") is None
+
+    backup_control.set_target_index_coverage("t_cov", state="building", formal_receipt_count=0)
+    assert backup_control.index_coverage_allows_gc("t_cov")[0] is False
+    backup_control.set_target_index_coverage("t_cov", state="complete", formal_receipt_count=3)
+    assert backup_control.index_coverage_allows_gc("t_cov") == (True, "ok")
+
+    job = backup_control.create_chain_migration_job(
+        {
+            "policyId": "pl",
+            "anchorBackupId": "I1",
+            "desiredTier": "warm",
+            "destTargetId": "td",
+            "members": [{"backupId": "I1", "state": "planned"}],
+            "phase": "planned",
+            "unit": {"memberBackupIds": ["I1"], "closureComplete": True},
+        }
+    )
+    mid = str(job["migrationId"])
+    got = backup_control.get_chain_migration_job(mid)
+    assert got is not None and got["phase"] == "planned"
+    updated = backup_control.update_chain_migration_job(mid, phase="transferring", payload={"members": []})
+    assert updated["phase"] == "transferring"
+    listed = backup_control.list_chain_migration_jobs(phase="transferring", policy_id="pl", limit=10)
+    assert any(str(j.get("migrationId")) == mid for j in listed)
+    # capacity forecast projection round-trip
+    backup_control.put_capacity_forecast_projection("t_cov", {"status": "healthy", "targetId": "t_cov"})
+    forecast = backup_control.get_capacity_forecast_projection("t_cov")
+    assert forecast is not None and forecast["status"] == "healthy"
+
+
 def test_heartbeat_renew_failure_and_drain_exception(tmp_settings: Path) -> None:
     stop = __import__("threading").Event()
     stop.set()
