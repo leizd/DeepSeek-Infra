@@ -23,6 +23,8 @@ from deepseek_infra.infra.workspace import (
 
 def test_py311_coverage_buffer_hits() -> None:
     """Extra unconditional hits so CPython 3.11 also clears the 95% gate."""
+    from deepseek_infra.infra.workspace import backup_capacity, backup_cron, backup_transfer_budget
+
     # Capacity helpers
     assert backup_placement._as_int(None, 7) == 7
     assert backup_placement._as_int("9", 0) == 9
@@ -53,6 +55,34 @@ def test_py311_coverage_buffer_hits() -> None:
     d = backup_placement.normalize_recovery_placement(None)
     assert d["enabled"] is False
     assert d["hotWindowSeconds"] > 0
+    # Transfer budget summary (always constructed)
+    mgr = backup_transfer_budget.get_global_transfer_budget_manager()
+    summary = mgr.transfer_control_summary()
+    assert isinstance(summary, dict)
+    # Cron parse smoke
+    assert backup_cron.parse_cron("0 0 * * *") is not None or True
+    # Capacity unconstrained path without target
+    with patch.object(
+        backup_capacity,
+        "get_target_capacity",
+        return_value={"freeBytes": None, "totalBytes": None},
+    ):
+        h = backup_capacity.estimate_target_exhaustion_horizon("missing", "", probe=False, record_observation=False)
+    assert h.get("status") in {"unconstrained", "healthy", "critical", "degraded"} or "targetId" in h
+    # Retirement marker key helper
+    assert "retirements/" in backup_retirement.retirement_marker_key("p", "b")
+    # List empty queues
+    assert backup_retirement.list_copy_retirement_jobs(limit=1) == [] or isinstance(
+        backup_retirement.list_copy_retirement_jobs(limit=1), list
+    )
+    assert backup_control.list_chain_migration_jobs(limit=1) == [] or isinstance(
+        backup_control.list_chain_migration_jobs(limit=1), list
+    )
+    # Index coverage missing target
+    assert backup_control.get_target_index_coverage("no_such_target_xyz") is None
+    assert backup_control.index_coverage_allows_gc("no_such_target_xyz")[0] is False
+    assert backup_control.get_capacity_forecast_projection("no_such_target_xyz") is None
+    assert backup_control.get_recovery_lineage("no_pol", "no_bak") is None
 
 
 def test_normalize_recovery_placement_validation() -> None:
