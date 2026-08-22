@@ -247,6 +247,54 @@ def test_schema_version_is_at_least_5(tmp_settings: Path) -> None:
     assert backup_control.schema_version() >= 5
 
 
+def test_has_active_dependency_and_cancel_paths(tmp_settings: Path) -> None:
+    from deepseek_infra.infra.workspace import backup_replication
+
+    policy_id = "pol_dep"
+    backup_id = "bak_dep"
+    target_id = "tgt_dep"
+    with patch.object(
+        backup_replication,
+        "list_jobs",
+        return_value=[{"phase": "pending", "primaryTargetId": target_id}],
+    ):
+        assert backup_retirement.has_active_copy_dependency(target_id, policy_id, backup_id) is True
+    with patch.object(backup_replication, "list_jobs", return_value=[]), patch.object(
+        backup_replication,
+        "list_repair_jobs",
+        return_value=[{"backupId": backup_id, "phase": "queued", "destTargetId": target_id}],
+    ):
+        assert backup_retirement.has_active_copy_dependency(target_id, policy_id, backup_id) is True
+    with patch.object(backup_replication, "list_jobs", return_value=[]), patch.object(
+        backup_replication, "list_repair_jobs", return_value=[]
+    ), patch.object(
+        backup_replication,
+        "list_rebalance_jobs",
+        return_value=[{"backupId": backup_id, "phase": "pending", "sourceTargetId": target_id}],
+    ):
+        assert backup_retirement.has_active_copy_dependency(target_id, policy_id, backup_id) is True
+    with patch.object(backup_replication, "list_jobs", return_value=[]), patch.object(
+        backup_replication, "list_repair_jobs", return_value=[]
+    ), patch.object(backup_replication, "list_rebalance_jobs", return_value=[]), patch.object(
+        backup_retirement,
+        "list_copy_retirement_jobs",
+        return_value=[{"jobId": "other", "backupId": backup_id, "phase": "requested"}],
+    ):
+        assert backup_retirement.has_active_copy_dependency(
+            target_id, policy_id, backup_id, excluding_job_id="self"
+        ) is True
+    with patch.object(backup_replication, "list_jobs", return_value=[]), patch.object(
+        backup_replication, "list_repair_jobs", return_value=[]
+    ), patch.object(backup_replication, "list_rebalance_jobs", return_value=[]), patch.object(
+        backup_retirement, "list_copy_retirement_jobs", return_value=[]
+    ):
+        assert backup_retirement.has_active_copy_dependency(target_id, policy_id, backup_id) is False
+    job = backup_retirement.create_copy_retirement_job(policy_id, backup_id, target_id)
+    assert backup_retirement.cancel_copy_retirement_job(str(job["jobId"]))["phase"] == "cancelled"
+    # cancel terminal is no-op return
+    assert backup_retirement.cancel_copy_retirement_job(str(job["jobId"]))["phase"] == "cancelled"
+
+
 def test_retirement_reclaim_with_clean_receipts(tmp_settings: Path) -> None:
     """Full reclaim path when receipt truth is determinate."""
     tid = "target_reclaim_ok"
