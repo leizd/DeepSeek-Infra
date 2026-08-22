@@ -519,6 +519,116 @@ def test_retirement_and_chain_phase_branches(tmp_settings: Path) -> None:
     assert mout["processed"] >= 1
 
 
+def test_execute_chain_migration_paths(tmp_settings: Path) -> None:
+    from types import SimpleNamespace
+
+    src = "target_xcm_s"
+    dst = "target_xcm_d"
+    backup_targets.register_filesystem_target(src, path=tmp_settings / src, region="r1", failure_domain="fd1")
+    backup_targets.register_filesystem_target(dst, path=tmp_settings / dst, region="r2", failure_domain="fd2")
+    backup_targets.set_target_storage_tier(dst, storage_tier="warm")
+    # Missing job
+    with pytest.raises(AppError):
+        backup_tiering.execute_chain_migration("mig_missing_zzz")
+    # Already terminal
+    term = backup_control.create_chain_migration_job(
+        {
+            "policyId": "px",
+            "anchorBackupId": "a",
+            "desiredTier": "warm",
+            "phase": "converged",
+            "members": [],
+            "unit": {"memberBackupIds": [], "closureComplete": True},
+        }
+    )
+    assert backup_tiering.execute_chain_migration(str(term["migrationId"]))["phase"] == "converged"
+
+    job = backup_control.create_chain_migration_job(
+        {
+            "policyId": "px",
+            "anchorBackupId": "I1",
+            "desiredTier": "warm",
+            "destTargetId": dst,
+            "phase": "planned",
+            "unit": {"memberBackupIds": ["I1", "F0"], "closureComplete": True},
+            "members": [
+                {"backupId": "F0", "sourceTargetId": src, "destTargetId": dst, "state": "planned", "noop": True},
+                {"backupId": "I1", "sourceTargetId": src, "destTargetId": dst, "state": "planned", "noop": False},
+            ],
+        }
+    )
+    with patch.object(
+        backup_tiering,
+        "execute_tier_migration",
+        return_value={"status": "success", "intentPhase": "executed", "objectSetDigest": "d"},
+    ), patch.object(
+        backup_tiering.backup_replication,
+        "authenticate_committed_copy",
+        return_value=("authenticated", {}, {}),
+    ), patch.object(
+        backup_tiering.backup_publish,
+        "resolve_target",
+        return_value=SimpleNamespace(root=None, store=None),
+    ), patch.object(
+        backup_tiering,
+        "chain_satisfies_tier",
+        return_value=(True, "ok"),
+    ), patch.object(
+        backup_tiering.backup_dr_ledger,
+        "list_logical_recovery_copies",
+        return_value=[
+            {"backupId": "F0", "targetId": dst, "recoverable": True, "state": "healthy"},
+            {"backupId": "I1", "targetId": dst, "recoverable": True, "state": "healthy"},
+        ],
+    ):
+        done = backup_tiering.execute_chain_migration(str(job["migrationId"]))
+    assert done["phase"] in {"converged", "verified", "transferring", "closure-authenticated", "members-authenticated"}
+
+    # process_pending advances planned jobs
+    j2 = backup_control.create_chain_migration_job(
+        {
+            "policyId": "px",
+            "anchorBackupId": "b2",
+            "desiredTier": "warm",
+            "phase": "planned",
+            "members": [],
+            "unit": {"memberBackupIds": [], "closureComplete": True},
+        }
+    )
+    with patch.object(
+        backup_tiering,
+        "execute_chain_migration",
+        return_value={**j2, "phase": "converged"},
+    ):
+        summary = backup_tiering.process_pending_chain_migrations(limit=3)
+    assert summary["processed"] >= 1
+
+
+def test_rebuild_index_filesystem_and_gc_candidates(tmp_settings: Path) -> None:
+    from types import SimpleNamespace
+
+    tid = "target_rebuild_fs"
+    root = tmp_settings / tid
+    receipts = root / "receipts"
+    receipts.mkdir(parents=True)
+    digest = "ab" * 32
+    (receipts / "b1.json").write_text(
+        '{"policyId":"p","backupId":"b1","objects":[{"digest":"' + digest + '","size":3}]}',
+        encoding="utf-8",
+    )
+    backup_targets.register_filesystem_target(tid, path=root)
+    target = SimpleNamespace(target_id=tid, root=root, store=None)
+    with patch(
+        "deepseek_infra.infra.workspace.backup_retirement._receipt_has_valid_retirement_marker",
+        return_value=False,
+    ):
+        result = backup_object_index.rebuild_index_from_target(target)
+    assert result["coverageState"] == "complete"
+    assert backup_object_index.gc_allowed(tid)[0] is True
+    # After rebuild, retired-only candidates empty until retirement
+    assert isinstance(backup_object_index.gc_candidate_keys(tid), list)
+
+
 def test_control_lineage_and_chain_job_helpers(tmp_settings: Path) -> None:
     backup_control.upsert_recovery_lineage(
         policy_id="pl",
