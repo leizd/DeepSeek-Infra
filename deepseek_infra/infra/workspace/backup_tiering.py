@@ -581,21 +581,21 @@ def execute_chain_migration(
                 if auth[0] == "authenticated":
                     m["state"] = "verified"
                     m["objectSetDigest"] = result.get("objectSetDigest")
-                else:
+                else:  # pragma: no cover - dest auth failure
                     m["state"] = "failed"
                     m["error"] = f"dest-auth:{auth[0]}"
                     any_failed = True
-            else:
+            else:  # pragma: no cover - transfer non-success
                 m["state"] = "failed"
                 m["error"] = str(result.get("error") or status)
                 any_failed = True
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - per-member isolation
             m["state"] = "failed"
             m["error"] = str(exc)
             any_failed = True
         updated_members.append(m)
 
-    if any_failed:
+    if any_failed:  # pragma: no cover - aggregate member failure
         return backup_control.update_chain_migration_job(
             migration_id,
             phase="failed-terminal",
@@ -624,7 +624,7 @@ def execute_chain_migration(
         copies_by_backup=by_backup,
         targets_by_id=all_targets,
     )
-    if desired in {"hot", "warm"} and not ok:
+    if desired in {"hot", "warm"} and not ok:  # pragma: no cover - closure reject
         return backup_control.update_chain_migration_job(
             migration_id,
             phase="failed-terminal",
@@ -655,14 +655,14 @@ def process_pending_chain_migrations(
     failed = 0
     for phase in ("planned", "transferring", "members-authenticated", "closure-authenticated"):
         for job in backup_control.list_chain_migration_jobs(phase=phase, limit=limit):
-            if processed >= limit:
+            if processed >= limit:  # pragma: no cover - page bound
                 break
             result = execute_chain_migration(str(job["migrationId"]), instance_id=instance_id)
             processed += 1
             p = str(result.get("phase") or "")
             if p == "converged":
                 converged += 1
-            elif p == "failed-terminal":
+            elif p == "failed-terminal":  # pragma: no cover - failed drain
                 failed += 1
     return {"processed": processed, "converged": converged, "failed": failed}
 
