@@ -4,6 +4,16 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.6.1] - Recovery Control Plane Stabilization & Release Hardening (2026-08-22)
+
+### Recovery Control Plane Stabilization & Release Hardening
+
+- **Incomplete-Index GC Fail-Safe**: Partial object-index coverage never solely authorizes payload deletes; over-retain known live hits and fall back to full Receipt scan so retirement/drain can converge.
+- **4.6.0 Follow-Through**: Packages post-merge mypy, DR readiness clock, Dockerfile/SVG/version-surface, and placement/control test hygiene fixes as an explicit patch release.
+- **Coverage Contract Restored**: Python 3.10/3.11/3.12 matrix returns to `fail_under=95` / `--cov-fail-under=95` (no permanent 94.9 floor).
+- **Release Hygiene**: Checklist and gates derive versioned paths from root `VERSION`; Android `versionCode` advances with `versionName`.
+- **Frozen Compatibility Surface**: `object-set-v1`, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age unchanged.
+
 ## [4.6.0] - Autonomous Recovery Placement & Scale-Safe Storage Control (2026-08-21)
 
 ### Autonomous Recovery Placement & Scale-Safe Storage Control

@@ -5,25 +5,23 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.6.0-blue)
+![Version](https://img.shields.io/badge/version-4.6.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.6.0 — Autonomous Recovery Placement & Scale-Safe Storage Control.** Builds on 4.5.9 with scale-safe physical identity/GC, index coverage, lineage graph, RecoveryChainMigrationJob, recoveryPlacement SLO controller (recoverability before cost), and true per-target maintenance sharding.
+> **4.6.1 — Recovery Control Plane Stabilization & Release Hardening.** Formalizes post-4.6.0 correctness and CI fixes: incomplete-index GC fail-safe fallback, placement/control test hygiene, Python matrix coverage restored to 95%, and release-surface consistency. No wire-format changes.
 
-## 4.6.0 at a glance
+## 4.6.1 at a glance
 
-- Scale-safe correctness: canonical ciphertext identity, SQL-native live-ref GC, readiness capacity with zero remote I/O, exact parent chain fail-closed.
-- Index coverage + projections: incomplete index blocks GC; forecasts persist on probe and are read-only for readiness.
-- Lineage + chain migration: rebuildable recovery_lineage; durable RecoveryChainMigrationJob with per-member sources; never marks executed on failure.
-- Autonomous placement: `recoveryPlacement` maps age to Hot/Warm/Archive with explainable reasonCodes; cost is last.
-- Target-sharded maintenance: repair/rebalance/retirement/chain-migration leases scoped by target so one slow dest cannot stall others.
-- Exact-Merge Evidence: three independent MinIO servers plus placement scenario on the storage-control-plane producer.
+- Retirement GC: incomplete index coverage never solely authorizes deletes; over-retain known hits and fall back to full Receipt scan.
+- Coverage contract restored to 95% across the 3.10 / 3.11 / 3.12 matrix.
+- Release hygiene: checklist and gates derive versions from `VERSION`; Docker/architecture surfaces stay consistent.
+- Frozen compatibility surface unchanged: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age.
 
-See the [4.6.0 release notes](docs/releases/4.6.0.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.6.1 release notes](docs/releases/4.6.1.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

@@ -31,7 +31,9 @@
         "docs",
         "rust"
       ],
-      "evidence": [".github/workflows/ci.yml"],
+      "evidence": [
+        ".github/workflows/ci.yml"
+      ],
       "description": "The release commit must have successful results for every required CI job."
     },
     {
@@ -40,11 +42,13 @@
       "category": "quality_blocker",
       "owner": "Python Runtime",
       "blocking": true,
-      "required": 94.9,
-      "observed": 94.9,
+      "required": 95.0,
+      "observed": 95.0,
       "check": "pyproject_coverage_gate",
-      "evidence": ["pyproject.toml"],
-      "description": "The 4.6.0 Python CI floor is 94.9% across the 3.10/3.11/3.12 matrix; restore 95.0 when py3.11 parity returns. Branch coverage remains measured without a separate threshold."
+      "evidence": [
+        "pyproject.toml"
+      ],
+      "description": "The Python CI floor is 95%; branch coverage remains measured without a separate threshold."
     },
     {
       "id": "python_measured_coverage",
@@ -55,7 +59,9 @@
       "required": 95.2,
       "observed": 95.23174094831421,
       "check": "observed_number_gte",
-      "evidence": ["docs/PRE_4_0_QUALITY_BASELINE.md"],
+      "evidence": [
+        "docs/PRE_4_0_QUALITY_BASELINE.md"
+      ],
       "description": "Each full rc.2 Python suite must clear the 95.20% release-freeze floor."
     },
     {
@@ -87,7 +93,10 @@
       "observed": true,
       "check": "workflow_job",
       "job": "rust",
-      "evidence": [".github/workflows/ci.yml", "rust/Cargo.toml"],
+      "evidence": [
+        ".github/workflows/ci.yml",
+        "rust/Cargo.toml"
+      ],
       "description": "Rust formatting, linting with warnings denied, and workspace tests are release gates."
     },
     {
@@ -98,8 +107,14 @@
       "blocking": true,
       "required": 80.0,
       "check": "evidence_number_gte",
-      "path": ["coverage", "lines", "percent"],
-      "evidence": ["docs/evidence/rust-coverage-v4.0.0-rc.2.json"],
+      "path": [
+        "coverage",
+        "lines",
+        "percent"
+      ],
+      "evidence": [
+        "docs/evidence/rust-coverage-v4.0.0-rc.2.json"
+      ],
       "description": "cargo llvm-cov must measure the complete five-crate workspace at 80% line coverage or higher."
     },
     {
@@ -112,7 +127,10 @@
       "observed": true,
       "check": "workflow_job",
       "job": "rust-coverage",
-      "evidence": [".github/workflows/ci.yml", "scripts/run_rust_coverage.py"],
+      "evidence": [
+        ".github/workflows/ci.yml",
+        "scripts/run_rust_coverage.py"
+      ],
       "description": "The independent rust-coverage job blocks rc readiness at the measured 80% line threshold."
     },
     {
@@ -125,7 +143,11 @@
       "observed": true,
       "check": "workflow_job",
       "job": "rust-docker",
-      "evidence": ["rust/Dockerfile", "scripts/smoke_rust_sidecar.py", ".github/workflows/ci.yml"],
+      "evidence": [
+        "rust/Dockerfile",
+        "scripts/smoke_rust_sidecar.py",
+        ".github/workflows/ci.yml"
+      ],
       "description": "The non-root Rust sidecar image must build and pass its offline endpoint smoke."
     },
     {
@@ -138,7 +160,11 @@
       "observed": true,
       "check": "workflow_job",
       "job": "hybrid-runtime-e2e",
-      "evidence": ["docker-compose.hybrid-test.yml", "scripts/smoke_hybrid_runtime.py", ".github/workflows/ci.yml"],
+      "evidence": [
+        "docker-compose.hybrid-test.yml",
+        "scripts/smoke_hybrid_runtime.py",
+        ".github/workflows/ci.yml"
+      ],
       "description": "Python-to-Rust delegation and Python fallback must pass over the real container network."
     },
     {
@@ -150,7 +176,11 @@
       "required": 38,
       "observed": 38,
       "check": "rag_parity_cases",
-      "evidence": ["fixtures/rag/parity_cases.json", "scripts/check_rag_parity.py", "docs/RAG_PARITY_BASELINE.md"],
+      "evidence": [
+        "fixtures/rag/parity_cases.json",
+        "scripts/check_rag_parity.py",
+        "docs/RAG_PARITY_BASELINE.md"
+      ],
       "description": "All deterministic normalization, ranking, citation, and validation cases must remain present."
     },
     {
@@ -161,8 +191,12 @@
       "blocking": true,
       "required": 68,
       "check": "json_collection_count_gte",
-      "path": ["cases"],
-      "evidence": ["fixtures/gateway/request_preparation_cases.json"],
+      "path": [
+        "cases"
+      ],
+      "evidence": [
+        "fixtures/gateway/request_preparation_cases.json"
+      ],
       "description": "All 68 deterministic Gateway request preparation cases are required."
     },
     {
@@ -173,8 +207,12 @@
       "blocking": true,
       "required": 105,
       "check": "json_collection_count_gte",
-      "path": ["cases"],
-      "evidence": ["fixtures/mcp/protocol_preparation_cases.json"],
+      "path": [
+        "cases"
+      ],
+      "evidence": [
+        "fixtures/mcp/protocol_preparation_cases.json"
+      ],
       "description": "All 105 deterministic MCP protocol preparation cases are required."
     },
     {
@@ -185,8 +223,12 @@
       "blocking": true,
       "required": 125,
       "check": "json_collection_count_gte",
-      "path": ["cases"],
-      "evidence": ["fixtures/rag/document_preparation_cases.json"],
+      "path": [
+        "cases"
+      ],
+      "evidence": [
+        "fixtures/rag/document_preparation_cases.json"
+      ],
       "description": "All 125 deterministic RAG document preparation cases are required."
     },
     {
@@ -197,8 +239,12 @@
       "blocking": true,
       "required": 110,
       "check": "evidence_number_gte",
-      "path": ["validCaseCount"],
-      "evidence": ["docs/evidence/rag-vector-binary-parity-v4.0.0-rc.2.json"],
+      "path": [
+        "validCaseCount"
+      ],
+      "evidence": [
+        "docs/evidence/rag-vector-binary-parity-v4.0.0-rc.2.json"
+      ],
       "description": "The compact binary transport must pass all 110 valid cases."
     },
     {
@@ -209,8 +255,12 @@
       "blocking": true,
       "required": 16,
       "check": "evidence_number_gte",
-      "path": ["malformedCaseCount"],
-      "evidence": ["docs/evidence/rag-vector-binary-parity-v4.0.0-rc.2.json"],
+      "path": [
+        "malformedCaseCount"
+      ],
+      "evidence": [
+        "docs/evidence/rag-vector-binary-parity-v4.0.0-rc.2.json"
+      ],
       "description": "The compact binary transport must reject all 16 malformed cases with stable errors."
     },
     {
@@ -222,7 +272,10 @@
       "required": true,
       "observed": true,
       "check": "files_exist",
-      "evidence": ["tests/test_rust_policy_audit.py", "tests/test_rust_policy_fail_modes.py"],
+      "evidence": [
+        "tests/test_rust_policy_audit.py",
+        "tests/test_rust_policy_fail_modes.py"
+      ],
       "description": "Stable deny codes, redacted audit events, and fail-mode execution blocking must stay covered."
     },
     {
@@ -235,7 +288,10 @@
       "observed": true,
       "check": "workflow_job",
       "job": "release-readiness",
-      "evidence": ["scripts/preflight_release.py", ".github/workflows/ci.yml"],
+      "evidence": [
+        "scripts/preflight_release.py",
+        ".github/workflows/ci.yml"
+      ],
       "description": "Versioned release evidence, doctor checks, and the dry-run package path must stay green."
     },
     {
@@ -247,7 +303,10 @@
       "required": true,
       "observed": true,
       "check": "default_rust_disabled",
-      "evidence": [".env.example", "docker-compose.yml"],
+      "evidence": [
+        ".env.example",
+        "docker-compose.yml"
+      ],
       "description": "All Rust delegates remain off and the default Compose file remains Python-only during readiness review."
     },
     {
@@ -259,8 +318,15 @@
       "required": true,
       "observed": true,
       "check": "files_contain",
-      "needles": ["Rollback", "DEEPSEEK_RUST_GATEWAY=0", "DEEPSEEK_RUST_RAG=0"],
-      "evidence": ["docs/RUST_HYBRID_RUNTIME_RUNBOOK.md", "docs/RELEASE_READINESS_3_1_X.md"],
+      "needles": [
+        "Rollback",
+        "DEEPSEEK_RUST_GATEWAY=0",
+        "DEEPSEEK_RUST_RAG=0"
+      ],
+      "evidence": [
+        "docs/RUST_HYBRID_RUNTIME_RUNBOOK.md",
+        "docs/RELEASE_READINESS_3_1_X.md"
+      ],
       "description": "The stateless rollback to all-Python execution must remain explicit and exercised by hybrid fallback tests."
     },
     {
@@ -345,7 +411,10 @@
       "field_type": "list",
       "allow_empty": true,
       "expected": [],
-      "evidence": ["release/4_0_runtime_decision.json", "docs/adr/ADR-0040-hybrid-runtime-architecture.md"],
+      "evidence": [
+        "release/4_0_runtime_decision.json",
+        "docs/adr/ADR-0040-hybrid-runtime-architecture.md"
+      ],
       "description": "ADR-0040 explicitly approves an empty Rust default-on set for 4.0."
     },
     {
@@ -360,7 +429,10 @@
       "field": "default_sidecar_deployment",
       "field_type": "boolean",
       "expected": false,
-      "evidence": ["release/4_0_runtime_decision.json", "docs/adr/ADR-0040-hybrid-runtime-architecture.md"],
+      "evidence": [
+        "release/4_0_runtime_decision.json",
+        "docs/adr/ADR-0040-hybrid-runtime-architecture.md"
+      ],
       "description": "ADR-0040 approves Python-only default deployment with an optional Rust sidecar."
     },
     {
@@ -374,12 +446,18 @@
       "decision_file": "release/4_0_runtime_decision.json",
       "field": "python_fallback",
       "field_type": "object",
-      "required_fields": ["supported_through", "removal_not_before"],
+      "required_fields": [
+        "supported_through",
+        "removal_not_before"
+      ],
       "expected": {
         "supported_through": "4.x",
         "removal_not_before": "5.0.0"
       },
-      "evidence": ["release/4_0_runtime_decision.json", "docs/adr/ADR-0040-hybrid-runtime-architecture.md"],
+      "evidence": [
+        "release/4_0_runtime_decision.json",
+        "docs/adr/ADR-0040-hybrid-runtime-architecture.md"
+      ],
       "description": "ADR-0040 guarantees Python fallback through 4.x and forbids removal before 5.0.0."
     },
     {
@@ -393,9 +471,15 @@
       "decision_file": "release/4_0_runtime_decision.json",
       "field": "gateway_streaming_owner",
       "field_type": "string",
-      "allowed_values": ["python", "rust"],
+      "allowed_values": [
+        "python",
+        "rust"
+      ],
       "expected": "python",
-      "evidence": ["release/4_0_runtime_decision.json", "docs/adr/ADR-0040-hybrid-runtime-architecture.md"],
+      "evidence": [
+        "release/4_0_runtime_decision.json",
+        "docs/adr/ADR-0040-hybrid-runtime-architecture.md"
+      ],
       "description": "ADR-0040 assigns 4.0 streaming chat to Python without claiming a Rust streaming implementation."
     },
     {
@@ -409,12 +493,21 @@
       "decision_file": "release/4_0_runtime_decision.json",
       "field": "mcp_tool_execution_owner",
       "field_type": "string",
-      "allowed_values": ["python", "rust"],
+      "allowed_values": [
+        "python",
+        "rust"
+      ],
       "expected": "python",
       "additional_expected": {
-        "rust_mcp_responsibility": ["json_rpc_validation", "protocol_routing"]
+        "rust_mcp_responsibility": [
+          "json_rpc_validation",
+          "protocol_routing"
+        ]
       },
-      "evidence": ["release/4_0_runtime_decision.json", "docs/adr/ADR-0040-hybrid-runtime-architecture.md"],
+      "evidence": [
+        "release/4_0_runtime_decision.json",
+        "docs/adr/ADR-0040-hybrid-runtime-architecture.md"
+      ],
       "description": "ADR-0040 keeps real tool execution in Python and limits Rust MCP ownership to validation and routing."
     },
     {
@@ -426,7 +519,9 @@
       "required": true,
       "observed": true,
       "check": "advisory",
-      "evidence": ["docs/RAG_PARITY_BASELINE.md"],
+      "evidence": [
+        "docs/RAG_PARITY_BASELINE.md"
+      ],
       "description": "Add broader Policy and RAG corpora beyond the current deterministic baseline."
     },
     {
@@ -438,7 +533,9 @@
       "required": true,
       "observed": true,
       "check": "advisory",
-      "evidence": ["docs/RUST_MIGRATION_ROADMAP.md"],
+      "evidence": [
+        "docs/RUST_MIGRATION_ROADMAP.md"
+      ],
       "description": "Record latency and throughput baselines for Python, Rust, and fallback paths."
     },
     {
@@ -450,7 +547,9 @@
       "required": true,
       "observed": false,
       "check": "advisory",
-      "evidence": ["rust/Dockerfile"],
+      "evidence": [
+        "rust/Dockerfile"
+      ],
       "description": "Measure and reduce the sidecar image without weakening health checks or non-root execution."
     },
     {
@@ -462,7 +561,9 @@
       "required": true,
       "observed": false,
       "check": "advisory",
-      "evidence": ["docs/RUST_HYBRID_RUNTIME_RUNBOOK.md"],
+      "evidence": [
+        "docs/RUST_HYBRID_RUNTIME_RUNBOOK.md"
+      ],
       "description": "Evaluate durable audit storage after the structured logging contract is stable."
     }
   ]

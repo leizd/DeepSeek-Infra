@@ -59,7 +59,7 @@ def main() -> int:
         **evidence_revision(ROOT),
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "status": "PASS" if passed else "FAIL",
-        "ciGatePercent": 94.9,
+        "ciGatePercent": 95.0,
         "releaseMinimumPercent": args.minimum,
         "completeRunCount": len(runs),
         "runs": runs,

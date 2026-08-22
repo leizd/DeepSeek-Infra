@@ -277,11 +277,11 @@ def check_quality_gate_evidence(root: Path, version: str) -> CheckResult:
     details: dict[str, Any] = {"version": version}
     coverage_gate = _coverage_fail_under(root)
     details["coverageFailUnder"] = coverage_gate
-    if coverage_gate < 94.9:
-        failures.append(f"coverage fail_under is {coverage_gate:g}, expected >= 94.9")
+    if coverage_gate < 95:
+        failures.append(f"coverage fail_under is {coverage_gate:g}, expected >= 95")
     ci_text = _read(root / ".github" / "workflows" / "ci.yml")
-    if "--cov-fail-under=94.9" not in ci_text:
-        failures.append("CI pytest coverage gate is not --cov-fail-under=94.9")
+    if "--cov-fail-under=95" not in ci_text:
+        failures.append("CI pytest coverage gate is not --cov-fail-under=95")
     report_specs = [
         ("evals/reports/latest.json", "offlineEval"),
         ("evals/reports/agent-latest.json", "agentEval"),

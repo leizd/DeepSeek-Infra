@@ -60,10 +60,13 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertEqual([], offenders)
 
     def test_tests_derive_the_current_release_version(self) -> None:
+        # Require a free-standing release version token so dependency pins that
+        # merely contain the same digit sequence are not false positives.
+        token = re.compile(rf"(?<![0-9]){re.escape(VERSION)}(?![0-9])")
         offenders = [
             str(path.relative_to(ROOT))
             for path in (ROOT / "tests").rglob("*.py")
-            if VERSION in path.read_text(encoding="utf-8")
+            if token.search(path.read_text(encoding="utf-8"))
         ]
         self.assertEqual([], offenders)
 

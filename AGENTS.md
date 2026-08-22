@@ -20,7 +20,7 @@ npm ci --prefix frontend
 npm run check --prefix frontend
 ruff check .
 mypy .
-pytest --cov --cov-fail-under=94.9
+pytest --cov --cov-fail-under=95
 # Retained vendor JavaScript syntax:
 node --check static/vendor/katex/katex.min.js
 ```
@@ -35,7 +35,7 @@ node --check static/vendor/katex/katex.min.js
 
 - **`ruff` config is intentionally minimal**: `line-length=140`, rules `E4,E7,E9,F` only (in `pyproject.toml`). Don't assume broader lint rules are enforced; don't add style rules without checking.
 - **`mypy .`** runs on the whole repo; `ignore_missing_imports=true` is set, so third-party stub misses are not errors. `warn_unused_ignores=true` — don't leave stale `# type: ignore`.
-- **Coverage gate is 94.9% (4.6.0 matrix floor; restore 95.0 when py3.11 parity returns)** (raised from 90% in v3.3.2), `source = ["deepseek_infra"]`, with branch measurement enabled. `--cov-fail-under=94.9` fails the run; branch coverage is reported but has no separate threshold yet. Lower locally with `pytest --no-cov` when iterating.
+- **Coverage gate is 95.0%** (raised from 90% in v3.3.2), `source = ["deepseek_infra"]`, with branch measurement enabled. `--cov-fail-under=95` fails the run; branch coverage is reported but has no separate threshold yet. Lower locally with `pytest --no-cov` when iterating.
 - **`pytest` uses `--strict-markers`** (from `pyproject.toml`). Registered markers: `integration` (spins up a real HTTP server on an ephemeral `127.0.0.1` port) and `slow` (>1s). Both run in CI's default `pytest` invocation.
 
 ### Offline eval gates (no API key)

@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.6.0。
+适用版本：v4.6.1。
 
-> 4.6.0 在 4.5.9 之上落地 Autonomous Recovery Placement：scale-safe 物理身份与 GC、index coverage、lineage graph、RecoveryChainMigrationJob、recoveryPlacement SLO 控制器（recoverability→cost 次序）、按 target 分片的 repair/rebalance/retirement/chain-migration lease。Wire 面继续冻结；三个真实 MinIO placement Evidence 仍只能由 storage-control-plane-minio-e2e producer 产出。
+> 4.6.1 正式收口 4.6.0 merge 后的 Recovery Control Plane 稳定化：incomplete-index GC fail-safe、placement/control 测试与 mypy 卫生、Python 矩阵 coverage 恢复 95%、release checklist/version surface 一致性。Wire 面继续冻结。
 
 > 4.5.8 已把 Repair、Replication、Rebalance、Drain、Retirement、Capacity 与 Transfer QoS 收敛到持久化 Storage Control Plane：SQLite 提供跨进程 Policy/Topology CAS、Maintenance Supervisor 以 durable cursor 推进后台工作、Copy Retirement 保留 Receipt v4/Commit v4 并用 authenticated retirement marker 管理 Payload GC、Placement 以单个 Logical Recovery Point 计算 Failure Domain/Region 目标、Multipart 恢复与 provider `ListParts` 对账、生产数据流受 global/source/destination 三层 P0-P6 QoS 约束。
 
