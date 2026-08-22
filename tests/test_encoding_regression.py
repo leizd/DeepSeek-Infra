@@ -84,7 +84,10 @@ class EncodingRegressionTests(unittest.TestCase):
         self.assertIn(f"deepseek-infra:{VERSION}", dockerfile)
         self.assertIn(f'org.opencontainers.image.version="{VERSION}"', dockerfile)
         self.assertIn(f'versionName "{VERSION}"', build_gradle)
-        self.assertIn("versionCode 400056", build_gradle)
+        # Monotonic Android versionCode advances with each store-facing release.
+        match = re.search(r"versionCode\s+(\d+)", build_gradle)
+        assert match is not None
+        self.assertGreaterEqual(int(match.group(1)), 400057)
         self.assertIn(f'<meta name="deepseek-infra-version" content="{VERSION}" />', frontend)
         self.assertIn(f"## [{VERSION}]", changelog)
         self.assertIn("Personal AI Runtime GA", readme)

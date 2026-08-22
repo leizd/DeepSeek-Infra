@@ -1,5 +1,9 @@
 # 4.6.1 Todo — Recovery Control Plane Stabilization & Release Hardening
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 ## Scope
 - [x] Branch `release/4.6.1-stability` from main (includes #141 post-4.6.0 fixes)
 - [x] Restore coverage gate to 95% (pyproject / CI / preflight / readiness / AGENTS)
