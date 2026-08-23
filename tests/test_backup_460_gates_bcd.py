@@ -66,9 +66,20 @@ def test_index_coverage_blocks_gc_until_complete(tmp_settings: Path) -> None:
     assert "incomplete" in reason or "missing" in reason
     assert backup_object_index.gc_candidate_keys(tid) == []
 
-    backup_control.set_target_index_coverage(tid, state="complete", formal_receipt_count=1)
+    gen = backup_control.get_target_receipt_mutation_generation(tid)
+    backup_control.set_target_index_coverage(
+        tid,
+        state="complete",
+        formal_receipt_count=1,
+        enumerated_receipts=1,
+        parsed_receipts=1,
+        indexed_receipts=1,
+        parse_failures=0,
+        read_failures=0,
+        source_receipt_mutation_generation=gen,
+    )
     allowed2, reason2 = backup_object_index.gc_allowed(tid)
-    assert allowed2 is True
+    assert allowed2 is True, reason2
     assert reason2 == "ok"
     assert "objects/sha256/aa/x.age" in backup_object_index.gc_candidate_keys(tid)
 

@@ -217,6 +217,9 @@ def rebuild_index_from_target(target: Any) -> dict[str, Any]:
 
     When a valid retirement marker is present the ref is stored as retired;
     otherwise it is live. Missing markers keep payload protected.
+
+    Coverage is ``complete`` only when every enumerated formal Receipt was
+    successfully read, parsed, and indexed — never after skipping failures.
     """
     from deepseek_infra.infra.workspace import backup_retirement
 
@@ -224,51 +227,86 @@ def rebuild_index_from_target(target: Any) -> dict[str, Any]:
     if not target_id:
         raise AppError("target_id required for index rebuild", code=ErrorCode.INVALID_REQUEST, status=400)
     backup_control.clear_target_object_index(target_id)
-    backup_control.set_target_index_coverage(target_id, state="building", formal_receipt_count=0)
+    mutation_gen = backup_control.get_target_receipt_mutation_generation(target_id)
+    backup_control.set_target_index_coverage(
+        target_id,
+        state="building",
+        formal_receipt_count=0,
+        source_receipt_mutation_generation=mutation_gen,
+        reason="rebuild-started",
+    )
     live = 0
     retired = 0
-    scanned = 0
+    enumerated = 0
+    parsed = 0
+    indexed = 0
+    parse_failures = 0
+    read_failures = 0
 
     def _handle_receipt(receipt_bytes: bytes, receipt: dict[str, Any], stem: str) -> None:
-        nonlocal live, retired, scanned
-        scanned += 1
+        nonlocal live, retired, indexed
         policy_id = str(receipt.get("policyId") or "")
         backup_id = str(receipt.get("backupId") or stem)
         if not policy_id or not backup_id:
             return
         is_retired = backup_retirement._receipt_has_valid_retirement_marker(target, receipt_bytes, receipt)
         state = "retired" if is_retired else "live"
-        index_receipt_objects(
+        count = index_receipt_objects(
             target_id=target_id,
             policy_id=policy_id,
             backup_id=backup_id,
             receipt=receipt,
             ref_state=state,
         )
+        if count > 0:
+            indexed += 1
         if is_retired:
             retired += 1
         else:
             live += 1
 
-    backup_control.set_target_index_coverage(target_id, state="scanning", formal_receipt_count=0)
+    backup_control.set_target_index_coverage(
+        target_id,
+        state="scanning",
+        formal_receipt_count=0,
+        source_receipt_mutation_generation=mutation_gen,
+        reason="rebuild-scanning",
+    )
     if getattr(target, "root", None) is not None:
         receipts_dir = Path(target.root) / "receipts"
         candidates = sorted(receipts_dir.rglob("*.json")) if receipts_dir.is_dir() else []
         for path in candidates:
-            receipt_bytes = path.read_bytes()
+            enumerated += 1
+            try:
+                receipt_bytes = path.read_bytes()
+            except OSError:
+                read_failures += 1
+                continue
             receipt = _read_json_bytes(receipt_bytes)
             if receipt is None:
+                parse_failures += 1
                 continue
+            parsed += 1
             _handle_receipt(receipt_bytes, receipt, path.stem)
     elif getattr(target, "store", None) is not None:
         cursor: str | None = None
         while True:
             page = target.store.list_objects("receipts/", cursor=cursor, limit=200)
             for meta in page.objects:
-                receipt_bytes = target.store.get_bytes(meta.key)
-                receipt = _read_json_bytes(receipt_bytes)
-                if receipt is None or receipt_bytes is None:
+                enumerated += 1
+                try:
+                    receipt_bytes = target.store.get_bytes(meta.key)
+                except Exception:
+                    read_failures += 1
                     continue
+                if receipt_bytes is None:
+                    read_failures += 1
+                    continue
+                receipt = _read_json_bytes(receipt_bytes)
+                if receipt is None:
+                    parse_failures += 1
+                    continue
+                parsed += 1
                 _handle_receipt(receipt_bytes, receipt, Path(meta.key).stem)
             if page.cursor is None:
                 break
@@ -282,18 +320,49 @@ def rebuild_index_from_target(target: Any) -> dict[str, Any]:
             head_gen = int(rec["topologyGeneration"])
     except Exception:
         head_gen = None
+
+    # Freshness: capture mutation generation again; any mutation during rebuild dirties us.
+    end_mutation = backup_control.get_target_receipt_mutation_generation(target_id)
+    clean = (
+        parse_failures == 0
+        and read_failures == 0
+        and enumerated == parsed == indexed
+        and end_mutation == mutation_gen
+    )
+    state = "complete" if clean else "incomplete"
+    reason = None if clean else (
+        "receipt-parse-failure"
+        if parse_failures
+        else "receipt-read-failure"
+        if read_failures
+        else "receipt-count-mismatch"
+        if enumerated != indexed or enumerated != parsed
+        else "receipt-mutation-during-rebuild"
+    )
     coverage = backup_control.set_target_index_coverage(
         target_id,
-        state="complete",
-        formal_receipt_count=scanned,
+        state=state,
+        formal_receipt_count=indexed,
         source_head_generation=head_gen,
+        enumerated_receipts=enumerated,
+        parsed_receipts=parsed,
+        indexed_receipts=indexed,
+        parse_failures=parse_failures,
+        read_failures=read_failures,
+        source_receipt_mutation_generation=mutation_gen if clean else end_mutation,
+        reason=reason,
     )
     return {
-        "scannedReceipts": scanned,
+        "scannedReceipts": enumerated,
+        "parsedReceipts": parsed,
+        "indexedReceipts": indexed,
         "liveRecoveryPoints": live,
         "retiredRecoveryPoints": retired,
+        "parseFailures": parse_failures,
+        "readFailures": read_failures,
         "indexGeneration": int(coverage.get("indexGeneration") or 0),
-        "coverageState": "complete",
+        "coverageState": state,
+        "reason": reason,
     }
 
 def reconcile_inventory_page(
