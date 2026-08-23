@@ -226,15 +226,8 @@ def rebuild_index_from_target(target: Any) -> dict[str, Any]:
     target_id = str(getattr(target, "target_id", "") or "")
     if not target_id:
         raise AppError("target_id required for index rebuild", code=ErrorCode.INVALID_REQUEST, status=400)
-    backup_control.clear_target_object_index(target_id)
-    mutation_gen = backup_control.get_target_receipt_mutation_generation(target_id)
-    backup_control.set_target_index_coverage(
-        target_id,
-        state="building",
-        formal_receipt_count=0,
-        source_receipt_mutation_generation=mutation_gen,
-        reason="rebuild-started",
-    )
+    # Atomic invalidate-then-clear: never expose complete coverage over empty rows.
+    mutation_gen = backup_control.begin_index_rebuild_clear(target_id)
     live = 0
     retired = 0
     enumerated = 0

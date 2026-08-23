@@ -4,6 +4,17 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.6.2] - Transactional Metadata Fencing & Two-Phase Ciphertext GC (2026-08-23)
+
+### Transactional Metadata Fencing & Two-Phase Ciphertext GC
+
+- **Fail-Closed Formal Metadata Authority**: Receipt/Commit writers must acquire a durable Target metadata fence and bump receipt mutation generation before any formal Receipt PUT; control authority failure blocks publication (`blocked-control-authority`), never best-effort continue.
+- **Mutually Exclusive Metadata Gates**: Formal mutation and destructive GC serialize per target via `target_metadata_gates` (control schema v6).
+- **Atomic Index Rebuild Start**: Coverage is invalidated to `building` in the same SQLite transaction that clears index rows — no complete+empty TOCTOU window.
+- **Two-Phase Ciphertext GC**: Durable `ciphertext_gc_intents` bind receipt mutation generation + object ETag; final DELETE runs under the destructive fence with revalidation; CAS mismatch / generation change cancels without marking reclaimed.
+- **Coverage Contract**: Combined-branch floor restored to **95.0%**.
+- **Frozen Compatibility Surface**: `object-set-v1`, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age unchanged.
+
 ## [4.6.1] - Recovery Control Plane Stabilization & Release Hardening (2026-08-22)
 
 ### Recovery Control Plane Stabilization & Release Hardening
