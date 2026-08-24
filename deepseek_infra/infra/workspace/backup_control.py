@@ -29,7 +29,8 @@ CONTROL_DB = CONTROL_DIR / "control.sqlite3"
 # v3 adds canonical physical object identity for scale-safe capacity/GC (4.6.0).
 # v4 adds index coverage, recovery lineage graph, chain migration jobs (4.6.0 B/C/D).
 # v5 adds fail-closed index coverage evidence + formal receipt mutation generation (4.6.1).
-CONTROL_SCHEMA_VERSION = 5
+# v6 adds target metadata fences + durable two-phase ciphertext GC intents (4.6.2).
+CONTROL_SCHEMA_VERSION = 6
 
 REBUILDABLE_TABLES = frozenset(
     {
@@ -44,6 +45,7 @@ REBUILDABLE_TABLES = frozenset(
         "target_index_coverage",
         "recovery_lineage",
         "capacity_forecast_projections",
+        "ciphertext_gc_intents",
     }
 )
 NON_REBUILDABLE_TABLES = frozenset(
@@ -55,8 +57,18 @@ NON_REBUILDABLE_TABLES = frozenset(
         "schema_migrations",
         "chain_migration_jobs",
         "target_receipt_mutations",
+        "target_metadata_gates",
     }
 )
+
+METADATA_GATE_FORMAL = "formal-mutation"
+METADATA_GATE_DESTRUCTIVE = "destructive-gc"
+METADATA_GATE_LEASE_SECONDS = 120
+GC_INTENT_CANDIDATE = "candidate"
+GC_INTENT_VALIDATED = "validated"
+GC_INTENT_DELETING = "deleting"
+GC_INTENT_RECLAIMED = "reclaimed"
+GC_INTENT_CANCELLED = "cancelled"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS control_policies (
@@ -268,6 +280,35 @@ CREATE TABLE IF NOT EXISTS chain_migration_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_chain_migration_phase
 ON chain_migration_jobs(phase, updated_at);
+
+CREATE TABLE IF NOT EXISTS target_metadata_gates (
+    target_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    fencing_token INTEGER NOT NULL,
+    lease_until TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ciphertext_gc_intents (
+    intent_id TEXT PRIMARY KEY,
+    target_id TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    expected_receipt_mutation_generation INTEGER NOT NULL,
+    expected_etag TEXT,
+    state TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    owner_id TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gc_intents_target_state
+ON ciphertext_gc_intents(target_id, state, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_gc_intents_object
+ON ciphertext_gc_intents(target_id, object_key, state);
 """
 
 
@@ -338,6 +379,7 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
                 3: "4.6.0-canonical-physical-object-identity",
                 4: "4.6.0-lineage-index-coverage-chain-migration",
                 5: "4.6.1-fail-closed-index-coverage-and-receipt-mutation",
+                6: "metadata-fences-and-two-phase-ciphertext-gc",
             }.get(version, f"schema-v{version}")
             conn.execute(
                 """
@@ -1736,6 +1778,54 @@ def clear_target_object_index(target_id: str) -> None:
         conn.execute("COMMIT")
 
 
+def begin_index_rebuild_clear(target_id: str, *, mutation_gen: int | None = None) -> int:
+    """Atomically invalidate coverage then clear index rows (no complete+empty window).
+
+    Returns the receipt mutation generation pinned at rebuild start.
+    """
+    tid = str(target_id or "").strip()
+    if not tid:
+        raise AppError("target_id required for index rebuild", code=ErrorCode.INVALID_REQUEST, status=400)
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = conn.execute(
+            "SELECT generation FROM target_receipt_mutations WHERE target_id = ?",
+            (tid,),
+        ).fetchone()
+        pinned = int(mutation_gen) if mutation_gen is not None else (int(row["generation"]) if row is not None else 0)
+        cov = conn.execute(
+            "SELECT index_generation FROM target_index_coverage WHERE target_id = ?",
+            (tid,),
+        ).fetchone()
+        gen = int(cov["index_generation"]) if cov is not None else 0
+        conn.execute(
+            """
+            INSERT INTO target_index_coverage(
+                target_id, index_generation, state, formal_receipt_count,
+                completed_at, updated_at, source_receipt_mutation_generation, reason
+            ) VALUES (?, ?, 'building', 0, NULL, ?, ?, 'rebuild-started')
+            ON CONFLICT(target_id) DO UPDATE SET
+                state = 'building',
+                formal_receipt_count = 0,
+                completed_at = NULL,
+                updated_at = excluded.updated_at,
+                enumerated_receipts = 0,
+                parsed_receipts = 0,
+                indexed_receipts = 0,
+                parse_failures = 0,
+                read_failures = 0,
+                source_receipt_mutation_generation = excluded.source_receipt_mutation_generation,
+                reason = 'rebuild-started'
+            """,
+            (tid, gen, now, pinned),
+        )
+        conn.execute("DELETE FROM recovery_object_refs WHERE target_id = ?", (tid,))
+        conn.execute("DELETE FROM target_objects WHERE target_id = ?", (tid,))
+        conn.execute("COMMIT")
+    return pinned
+
+
 def record_capacity_growth_observation(
     *,
     target_id: str,
@@ -1974,11 +2064,348 @@ def bump_target_receipt_mutation(target_id: str) -> int:
 
 
 def note_formal_receipt_mutation(target_id: str | None) -> int | None:
-    """Public hook for publish/replication/migration before formal Receipt writes."""
+    """Public hook for publish/replication/migration before formal Receipt writes.
+
+    Fail-closed: control authority errors propagate. Callers must not swallow them
+    and continue writing formal Receipts.
+    """
     tid = str(target_id or "").strip()
     if not tid:
-        return None
+        raise AppError(
+            "blocked-control-authority:target-id-required-for-formal-receipt",
+            code=ErrorCode.INVALID_REQUEST,
+            status=400,
+        )
     return bump_target_receipt_mutation(tid)
+
+
+def _parse_lease_until(value: str) -> datetime:
+    raw = str(value or "").strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    return datetime.fromisoformat(raw)
+
+
+def _gate_row(conn: sqlite3.Connection, target_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM target_metadata_gates WHERE target_id = ?",
+        (target_id,),
+    ).fetchone()
+
+
+def _acquire_metadata_gate(
+    conn: sqlite3.Connection,
+    *,
+    target_id: str,
+    owner_id: str,
+    mode: str,
+    lease_seconds: int = METADATA_GATE_LEASE_SECONDS,
+) -> int:
+    now = datetime.now(tz=timezone.utc)
+    now_iso = now.isoformat(timespec="seconds").replace("+00:00", "Z")
+    lease_until = (now + timedelta(seconds=max(5, int(lease_seconds)))).isoformat(timespec="seconds").replace("+00:00", "Z")
+    row = _gate_row(conn, target_id)
+    if row is not None:
+        existing_until = _parse_lease_until(str(row["lease_until"]))
+        same_owner = str(row["owner_id"]) == owner_id and str(row["mode"]) == mode
+        expired = existing_until <= now
+        if not expired and not same_owner:
+            raise AppError(
+                f"blocked-metadata-gate:{target_id}:{row['mode']}:{row['owner_id']}",
+                code=ErrorCode.INVALID_REQUEST,
+                status=409,
+            )
+        token = int(row["fencing_token"]) + (0 if same_owner and not expired else 1)
+    else:
+        token = 1
+    conn.execute(
+        """
+        INSERT INTO target_metadata_gates(target_id, owner_id, mode, fencing_token, lease_until, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(target_id) DO UPDATE SET
+            owner_id = excluded.owner_id,
+            mode = excluded.mode,
+            fencing_token = excluded.fencing_token,
+            lease_until = excluded.lease_until,
+            updated_at = excluded.updated_at
+        """,
+        (target_id, owner_id, mode, token, lease_until, now_iso),
+    )
+    return token
+
+
+def _release_metadata_gate(conn: sqlite3.Connection, *, target_id: str, owner_id: str, fencing_token: int) -> None:
+    conn.execute(
+        """
+        DELETE FROM target_metadata_gates
+        WHERE target_id = ? AND owner_id = ? AND fencing_token = ?
+        """,
+        (target_id, owner_id, int(fencing_token)),
+    )
+
+
+@contextmanager
+def begin_formal_metadata_mutation(
+    target_id: str,
+    *,
+    operation_id: str,
+    kind: str = "backup-publish",
+    lease_seconds: int = METADATA_GATE_LEASE_SECONDS,
+) -> Iterator[dict[str, Any]]:
+    """Exclusive fence + durable receipt-mutation dirtying for formal Receipt/Commit writes.
+
+    Control authority failure raises; callers must not write formal metadata outside this guard.
+    """
+    del kind  # retained for audit/call-site clarity
+    tid = str(target_id or "").strip()
+    owner = str(operation_id or "").strip() or secrets.token_hex(8)
+    if not tid:
+        raise AppError(
+            "blocked-control-authority:target-id-required-for-formal-receipt",
+            code=ErrorCode.INVALID_REQUEST,
+            status=400,
+        )
+    with _connect() as conn:
+        _begin_immediate(conn)
+        token = _acquire_metadata_gate(
+            conn,
+            target_id=tid,
+            owner_id=owner,
+            mode=METADATA_GATE_FORMAL,
+            lease_seconds=lease_seconds,
+        )
+        # Inline bump so dirtying and fence share one durability boundary.
+        now = _utc_iso()
+        row = conn.execute(
+            "SELECT generation FROM target_receipt_mutations WHERE target_id = ?",
+            (tid,),
+        ).fetchone()
+        gen = int(row["generation"]) + 1 if row is not None else 1
+        conn.execute(
+            """
+            INSERT INTO target_receipt_mutations(target_id, generation, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(target_id) DO UPDATE SET
+                generation = excluded.generation,
+                updated_at = excluded.updated_at
+            """,
+            (tid, gen, now),
+        )
+        cov = conn.execute(
+            "SELECT index_generation FROM target_index_coverage WHERE target_id = ?",
+            (tid,),
+        ).fetchone()
+        if cov is not None:
+            conn.execute(
+                """
+                UPDATE target_index_coverage
+                SET state = 'incomplete',
+                    reason = 'formal-receipt-mutation',
+                    completed_at = NULL,
+                    updated_at = ?
+                WHERE target_id = ?
+                """,
+                (now, tid),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO target_index_coverage(
+                    target_id, index_generation, state, formal_receipt_count,
+                    completed_at, updated_at, reason
+                ) VALUES (?, 0, 'incomplete', 0, NULL, ?, 'formal-receipt-mutation')
+                """,
+                (tid, now),
+            )
+        conn.execute("COMMIT")
+    guard = {
+        "targetId": tid,
+        "ownerId": owner,
+        "mode": METADATA_GATE_FORMAL,
+        "fencingToken": token,
+        "receiptMutationGeneration": gen,
+    }
+    try:
+        yield guard
+    finally:
+        with _connect() as conn:
+            _begin_immediate(conn)
+            _release_metadata_gate(conn, target_id=tid, owner_id=owner, fencing_token=token)
+            conn.execute("COMMIT")
+
+
+@contextmanager
+def begin_destructive_metadata_fence(
+    target_id: str,
+    *,
+    operation_id: str,
+    lease_seconds: int = METADATA_GATE_LEASE_SECONDS,
+) -> Iterator[dict[str, Any]]:
+    """Exclusive fence for final GC revalidation + DELETE (serialized vs formal mutation)."""
+    tid = str(target_id or "").strip()
+    owner = str(operation_id or "").strip() or secrets.token_hex(8)
+    if not tid:
+        raise AppError("target_id required for destructive fence", code=ErrorCode.INVALID_REQUEST, status=400)
+    with _connect() as conn:
+        _begin_immediate(conn)
+        token = _acquire_metadata_gate(
+            conn,
+            target_id=tid,
+            owner_id=owner,
+            mode=METADATA_GATE_DESTRUCTIVE,
+            lease_seconds=lease_seconds,
+        )
+        conn.execute("COMMIT")
+    guard = {
+        "targetId": tid,
+        "ownerId": owner,
+        "mode": METADATA_GATE_DESTRUCTIVE,
+        "fencingToken": token,
+        "receiptMutationGeneration": get_target_receipt_mutation_generation(tid),
+    }
+    try:
+        yield guard
+    finally:
+        with _connect() as conn:
+            _begin_immediate(conn)
+            _release_metadata_gate(conn, target_id=tid, owner_id=owner, fencing_token=token)
+            conn.execute("COMMIT")
+
+
+def create_ciphertext_gc_intent(
+    *,
+    target_id: str,
+    object_key: str,
+    expected_receipt_mutation_generation: int,
+    expected_etag: str | None = None,
+    size_bytes: int = 0,
+    owner_id: str | None = None,
+    intent_id: str | None = None,
+) -> dict[str, Any]:
+    tid = str(target_id or "").strip()
+    key = str(object_key or "").strip()
+    if not tid or not key:
+        raise AppError("target_id and object_key required for gc intent", code=ErrorCode.INVALID_REQUEST, status=400)
+    iid = str(intent_id or "").strip() or f"gc_{secrets.token_hex(12)}"
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        conn.execute(
+            """
+            INSERT INTO ciphertext_gc_intents(
+                intent_id, target_id, object_key, expected_receipt_mutation_generation,
+                expected_etag, state, size_bytes, owner_id, error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                iid,
+                tid,
+                key,
+                int(expected_receipt_mutation_generation),
+                str(expected_etag) if expected_etag else None,
+                GC_INTENT_VALIDATED,
+                max(0, int(size_bytes)),
+                str(owner_id) if owner_id else None,
+                now,
+                now,
+            ),
+        )
+        conn.execute("COMMIT")
+    return get_ciphertext_gc_intent(iid) or {
+        "intentId": iid,
+        "targetId": tid,
+        "objectKey": key,
+        "state": GC_INTENT_VALIDATED,
+    }
+
+
+def get_ciphertext_gc_intent(intent_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM ciphertext_gc_intents WHERE intent_id = ?",
+            (str(intent_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "intentId": str(row["intent_id"]),
+        "targetId": str(row["target_id"]),
+        "objectKey": str(row["object_key"]),
+        "expectedReceiptMutationGeneration": int(row["expected_receipt_mutation_generation"]),
+        "expectedEtag": str(row["expected_etag"]) if row["expected_etag"] else None,
+        "state": str(row["state"]),
+        "sizeBytes": int(row["size_bytes"] or 0),
+        "ownerId": str(row["owner_id"]) if row["owner_id"] else None,
+        "error": str(row["error"]) if row["error"] else None,
+        "createdAt": str(row["created_at"]),
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def update_ciphertext_gc_intent(
+    intent_id: str,
+    *,
+    state: str,
+    error: str | None = None,
+) -> dict[str, Any] | None:
+    now = _utc_iso()
+    with _connect() as conn:
+        _begin_immediate(conn)
+        conn.execute(
+            """
+            UPDATE ciphertext_gc_intents
+            SET state = ?, error = ?, updated_at = ?
+            WHERE intent_id = ?
+            """,
+            (str(state), str(error) if error else None, now, str(intent_id)),
+        )
+        conn.execute("COMMIT")
+    return get_ciphertext_gc_intent(intent_id)
+
+
+def list_ciphertext_gc_intents(
+    target_id: str | None = None,
+    *,
+    states: list[str] | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if target_id:
+        clauses.append("target_id = ?")
+        params.append(str(target_id))
+    if states:
+        placeholders = ",".join("?" for _ in states)
+        clauses.append(f"state IN ({placeholders})")
+        params.extend(str(s) for s in states)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(max(1, min(int(limit), 1000)))
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM ciphertext_gc_intents
+            {where}
+            ORDER BY updated_at ASC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+    return [
+        {
+            "intentId": str(row["intent_id"]),
+            "targetId": str(row["target_id"]),
+            "objectKey": str(row["object_key"]),
+            "expectedReceiptMutationGeneration": int(row["expected_receipt_mutation_generation"]),
+            "expectedEtag": str(row["expected_etag"]) if row["expected_etag"] else None,
+            "state": str(row["state"]),
+            "sizeBytes": int(row["size_bytes"] or 0),
+            "ownerId": str(row["owner_id"]) if row["owner_id"] else None,
+            "error": str(row["error"]) if row["error"] else None,
+            "createdAt": str(row["created_at"]),
+            "updatedAt": str(row["updated_at"]),
+        }
+        for row in rows
+    ]
 
 
 def index_coverage_allows_gc(target_id: str) -> tuple[bool, str]:

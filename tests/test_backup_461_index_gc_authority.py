@@ -433,8 +433,9 @@ def test_control_schema_v5_helpers_are_exercised(tmp_settings: Path) -> None:
         tid, state="scanning", reason="rebuild-scanning", formal_receipt_count=0
     )
     assert "scanning" in str(backup_control.get_target_index_coverage(tid) or {})
-    # Empty target_id note
-    assert backup_control.note_formal_receipt_mutation("") is None
+    # Empty target_id note is fail-closed
+    with pytest.raises(Exception):
+        backup_control.note_formal_receipt_mutation("")
     # put_recovery_object_ref + gc candidates blocked when incomplete
     backup_control.put_recovery_object_ref(
         target_id=tid,
@@ -527,8 +528,10 @@ def test_coverage_reject_reasons_are_explicit(tmp_settings: Path) -> None:
 
 
 def test_mutation_and_coverage_helpers_cover_edges(tmp_settings: Path) -> None:
-    assert backup_control.note_formal_receipt_mutation(None) is None
-    assert backup_control.note_formal_receipt_mutation("  ") is None
+    with pytest.raises(Exception):
+        backup_control.note_formal_receipt_mutation(None)
+    with pytest.raises(Exception):
+        backup_control.note_formal_receipt_mutation("  ")
     tid = "target_edges"
     # First bump creates incomplete coverage row
     g1 = backup_control.bump_target_receipt_mutation(tid)

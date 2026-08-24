@@ -42,13 +42,13 @@
       "category": "quality_blocker",
       "owner": "Python Runtime",
       "blocking": true,
-      "required": 94.9,
-      "observed": 94.9,
+      "required": 95.0,
+      "observed": 95.0,
       "check": "pyproject_coverage_gate",
       "evidence": [
         "pyproject.toml"
       ],
-      "description": "4.6.1 CI floor is 94.9% combined branch coverage after fail-closed index authority expansion; restore 95.0 once residual edges are covered."
+      "description": "Combined branch coverage floor restored to 95.0 in 4.6.2."
     },
     {
       "id": "python_measured_coverage",

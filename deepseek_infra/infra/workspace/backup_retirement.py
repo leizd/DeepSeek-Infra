@@ -508,6 +508,193 @@ def _payload_key_is_retained(target: Any, object_key: str, *, retiring_backup_id
     return False
 
 
+def _object_etag_and_size(target: Any, object_key: str) -> tuple[str | None, int]:
+    if target.root is not None:
+        path = target.root.joinpath(*object_key.split("/"))
+        if not path.is_file():
+            return None, 0
+        st = path.stat()
+        return f"fs:{int(st.st_mtime_ns)}:{int(st.st_size)}", int(st.st_size)
+    if target.store is not None:
+        meta = target.store.stat(object_key)
+        if meta is None:
+            return None, 0
+        return str(getattr(meta, "etag", None) or "") or None, int(getattr(meta, "size", 0) or 0)
+    return None, 0
+
+
+def _delete_payload_if_match(target: Any, object_key: str, *, expected_etag: str | None) -> int:
+    """Delete one payload object; return reclaimed bytes. 0 if already gone."""
+    if target.root is not None:
+        path = target.root.joinpath(*object_key.split("/"))
+        if not path.is_file():
+            return 0
+        current_etag, size = _object_etag_and_size(target, object_key)
+        if expected_etag and current_etag and current_etag != expected_etag:
+            raise AppError(
+                f"retirement-payload-delete-cas-mismatch:{object_key}",
+                code=ErrorCode.INVALID_REQUEST,
+                status=409,
+            )
+        path.unlink()
+        return size
+    if target.store is not None:
+        meta = target.store.stat(object_key)
+        if meta is None:
+            return 0
+        etag = expected_etag or str(getattr(meta, "etag", None) or "")
+        if not target.store.delete_if_match(object_key, expected_etag=etag):
+            raise AppError(
+                f"retirement-payload-delete-cas-mismatch:{object_key}",
+                code=ErrorCode.INVALID_REQUEST,
+                status=409,
+            )
+        return int(getattr(meta, "size", 0) or 0)
+    return 0
+
+
+def _reclaim_unreferenced_payloads(
+    target: Any,
+    *,
+    receipt: dict[str, Any],
+    retiring_backup_id: str,
+    owner_id: str,
+) -> int:
+    """Two-phase GC: durable intents + exclusive metadata fence + CAS delete."""
+    from deepseek_infra.infra.workspace import backup_control
+
+    target_id = str(getattr(target, "target_id", "") or "")
+    if not target_id:
+        raise AppError("target_id required for payload GC", code=ErrorCode.INVALID_REQUEST, status=400)
+
+    # Phase 1 — candidate/validate outside the exclusive fence (throughput).
+    intents: list[dict[str, Any]] = []
+    mutation_gen = backup_control.get_target_receipt_mutation_generation(target_id)
+    for component in sorted(_receipt_payload_keys(receipt)):
+        if _payload_key_is_retained(target, component, retiring_backup_id=retiring_backup_id):
+            continue
+        etag, size = _object_etag_and_size(target, component)
+        if etag is None and size == 0:
+            # Already absent — nothing to reclaim.
+            continue
+        intent = backup_control.create_ciphertext_gc_intent(
+            target_id=target_id,
+            object_key=component,
+            expected_receipt_mutation_generation=mutation_gen,
+            expected_etag=etag,
+            size_bytes=size,
+            owner_id=owner_id,
+        )
+        intents.append(intent)
+
+    reclaimed = 0
+    cas_failures: list[str] = []
+    # Phase 2 — exclusive fence: revalidate then delete.
+    with backup_control.begin_destructive_metadata_fence(target_id, operation_id=owner_id):
+        live_gen = backup_control.get_target_receipt_mutation_generation(target_id)
+        for intent in intents:
+            iid = str(intent["intentId"])
+            key = str(intent["objectKey"])
+            expected_gen = int(intent["expectedReceiptMutationGeneration"])
+            expected_etag = intent.get("expectedEtag")
+            if live_gen != expected_gen:
+                backup_control.update_ciphertext_gc_intent(
+                    iid, state=backup_control.GC_INTENT_CANCELLED, error="receipt-mutation-generation-changed"
+                )
+                continue
+            if _payload_key_is_retained(target, key, retiring_backup_id=retiring_backup_id):
+                backup_control.update_ciphertext_gc_intent(
+                    iid, state=backup_control.GC_INTENT_CANCELLED, error="live-ref-appeared"
+                )
+                continue
+            current_etag, _size = _object_etag_and_size(target, key)
+            if current_etag is None:
+                backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
+                continue
+            if expected_etag and current_etag != expected_etag:
+                backup_control.update_ciphertext_gc_intent(
+                    iid, state=backup_control.GC_INTENT_CANCELLED, error="etag-mismatch"
+                )
+                # Object identity changed under us — retryable GC, never reclaimed.
+                cas_failures.append(key)
+                continue
+            backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_DELETING)
+            try:
+                reclaimed += _delete_payload_if_match(target, key, expected_etag=expected_etag or current_etag)
+            except AppError as exc:
+                if "cas-mismatch" in str(exc):
+                    # Leave intent non-terminal so restart/reconcile can retry delete.
+                    backup_control.update_ciphertext_gc_intent(
+                        iid, state=backup_control.GC_INTENT_VALIDATED, error="cas-mismatch"
+                    )
+                    cas_failures.append(key)
+                    continue
+                raise
+            backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
+    if cas_failures:
+        raise AppError(
+            f"retirement-payload-delete-cas-mismatch:{cas_failures[0]}",
+            code=ErrorCode.INVALID_REQUEST,
+            status=409,
+        )
+    return reclaimed
+
+
+def reconcile_interrupted_gc_intents(target: Any, *, limit: int = 50) -> dict[str, int]:
+    """Resume durable GC intents after process restart (deleting → reclaimed/cancel)."""
+    from deepseek_infra.infra.workspace import backup_control
+
+    target_id = str(getattr(target, "target_id", "") or "")
+    if not target_id:
+        return {"examined": 0, "reclaimed": 0, "cancelled": 0}
+    pending = backup_control.list_ciphertext_gc_intents(
+        target_id,
+        states=[backup_control.GC_INTENT_DELETING, backup_control.GC_INTENT_VALIDATED],
+        limit=limit,
+    )
+    reclaimed = 0
+    cancelled = 0
+    with backup_control.begin_destructive_metadata_fence(target_id, operation_id=f"gc-reconcile-{secrets.token_hex(4)}"):
+        live_gen = backup_control.get_target_receipt_mutation_generation(target_id)
+        for intent in pending:
+            iid = str(intent["intentId"])
+            key = str(intent["objectKey"])
+            if live_gen != int(intent["expectedReceiptMutationGeneration"]):
+                backup_control.update_ciphertext_gc_intent(
+                    iid, state=backup_control.GC_INTENT_CANCELLED, error="receipt-mutation-generation-changed"
+                )
+                cancelled += 1
+                continue
+            current_etag, _size = _object_etag_and_size(target, key)
+            if current_etag is None:
+                backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
+                reclaimed += 1
+                continue
+            if intent.get("expectedEtag") and current_etag != intent.get("expectedEtag"):
+                backup_control.update_ciphertext_gc_intent(
+                    iid, state=backup_control.GC_INTENT_CANCELLED, error="etag-mismatch"
+                )
+                cancelled += 1
+                continue
+            if _payload_key_is_retained(target, key, retiring_backup_id=""):
+                backup_control.update_ciphertext_gc_intent(
+                    iid, state=backup_control.GC_INTENT_CANCELLED, error="live-ref-appeared"
+                )
+                cancelled += 1
+                continue
+            try:
+                _delete_payload_if_match(target, key, expected_etag=intent.get("expectedEtag") or current_etag)
+            except AppError:
+                backup_control.update_ciphertext_gc_intent(
+                    iid, state=backup_control.GC_INTENT_CANCELLED, error="cas-mismatch"
+                )
+                cancelled += 1
+                continue
+            backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
+            reclaimed += 1
+    return {"examined": len(pending), "reclaimed": reclaimed, "cancelled": cancelled}
+
+
 def _retained_payload_keys(target: Any, *, retiring_backup_id: str) -> set[str]:
     """Compatibility helper: full retained set via conservative scan only.
 
@@ -745,33 +932,18 @@ def execute_copy_retirement_job(
             receipt=receipt,
         )
 
-        # 5. Physical GC is payload-only and fail-closed. Candidate keys come from
-        # the retiring receipt only. Live-ref checks use a complete index when
-        # available, otherwise a conservative full Receipt scan. Incomplete
-        # coverage must not hard-block this path (retirement itself may have
-        # written partial index rows for the retiring point).
+        # 5. Two-phase payload GC under Target Metadata Fence (4.6.2).
+        # Candidate → durable intent (binds receipt mutation gen + etag) →
+        # exclusive fence → revalidate generation/refs/etag → CAS delete.
         _update_job_phase(job_id, "gc-pending")
         _update_job_phase(job_id, "gc-running")
         try:
-            for component in sorted(_receipt_payload_keys(receipt)):
-                if _payload_key_is_retained(target, component, retiring_backup_id=backup_id):
-                    continue
-                if target.root is not None:
-                    path = target.root.joinpath(*component.split("/"))
-                    if path.is_file():
-                        size = path.stat().st_size
-                        path.unlink()
-                        bytes_reclaimed += size
-                elif target.store is not None:
-                    meta = target.store.stat(component)
-                    if meta is not None:
-                        if not target.store.delete_if_match(component, expected_etag=meta.etag):
-                            raise AppError(
-                                f"retirement-payload-delete-cas-mismatch:{component}",
-                                code=ErrorCode.INVALID_REQUEST,
-                                status=409,
-                            )
-                        bytes_reclaimed += int(meta.size or 0)
+            bytes_reclaimed += _reclaim_unreferenced_payloads(
+                target,
+                receipt=receipt,
+                retiring_backup_id=backup_id,
+                owner_id=str(job_id),
+            )
         except GcReferenceScanIndeterminate as exc:
             # Marker stays; payload is retained until receipt truth is repaired.
             return _update_job_phase(

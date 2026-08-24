@@ -607,15 +607,12 @@ def _publish_filesystem(
         if marker_path.is_file():
             return _converge_or_conflict(json.loads(marker_path.read_text(encoding="utf-8")))
 
-        # Dirty index coverage before formal Receipt becomes authoritative truth.
-        try:
-            from deepseek_infra.infra.workspace import backup_control as _ctrl
+        # Fail-closed Formal Metadata Mutation Authority before Receipt becomes truth.
+        from deepseek_infra.infra.workspace import backup_control as _ctrl
 
-            tid = str(receipt_data.get("targetId") or "") or None
-            _ctrl.note_formal_receipt_mutation(tid)
-        except Exception:  # pragma: no cover - best-effort dirtying must not block publish
-            pass
-        _write_immutable(receipt_path, receipt_bytes)
+        tid = str(receipt_data.get("targetId") or target.target_id or "")
+        with _ctrl.begin_formal_metadata_mutation(tid, operation_id=str(run_id), kind="legacy-filesystem-publish"):
+            _write_immutable(receipt_path, receipt_bytes)
         journal.update(phase="receipt-published", receiptDigest=receipt_digest, receipt=receipt_data, updatedAt=_utc_iso())
         _write_journal(root, journal)
 
@@ -805,7 +802,14 @@ def _publish_object_set_filesystem(
         _checkpoint()
         if marker_path.is_file():
             return _converge_or_conflict(json.loads(marker_path.read_text(encoding="utf-8")))
-        _write_immutable(receipt_path, receipt_bytes)
+        from deepseek_infra.infra.workspace import backup_control as _ctrl
+
+        with _ctrl.begin_formal_metadata_mutation(
+            str(target.target_id),
+            operation_id=str(run_id),
+            kind="object-set-filesystem-publish",
+        ):
+            _write_immutable(receipt_path, receipt_bytes)
         journal.update(phase="receipt-published", receiptDigest=receipt_digest, receipt=receipt_data, updatedAt=_utc_iso())
         _write_journal(root, journal)
 
@@ -1042,14 +1046,21 @@ def _publish_object_set_via_store(
         receipt_digest = hashlib.sha256(receipt_bytes).hexdigest()
         r_key = receipt_key(spooled.backup_id)
         _checkpoint()
-        try:
-            store.put_if_absent(r_key, receipt_bytes, checksum_sha256=receipt_digest, content_type="application/json")
-        except AppError as exc:
-            if exc.status not in {409, 412}:
-                raise
-            existing_receipt_bytes = store.get_bytes(r_key)
-            if existing_receipt_bytes is None or hashlib.sha256(existing_receipt_bytes).hexdigest() != receipt_digest:
-                raise
+        from deepseek_infra.infra.workspace import backup_control as _ctrl
+
+        with _ctrl.begin_formal_metadata_mutation(
+            str(target.target_id),
+            operation_id=str(run_id),
+            kind="object-set-remote-publish",
+        ):
+            try:
+                store.put_if_absent(r_key, receipt_bytes, checksum_sha256=receipt_digest, content_type="application/json")
+            except AppError as exc:
+                if exc.status not in {409, 412}:
+                    raise
+                existing_receipt_bytes = store.get_bytes(r_key)
+                if existing_receipt_bytes is None or hashlib.sha256(existing_receipt_bytes).hexdigest() != receipt_digest:
+                    raise
         journal.update(phase="receipt-published", receiptDigest=receipt_digest, receipt=receipt_data, updatedAt=_utc_iso())
         _replace_journal(store, journal)
 
@@ -1216,16 +1227,23 @@ def _publish_via_store(
         receipt_bytes = (json.dumps(receipt_data, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
         receipt_digest = hashlib.sha256(receipt_bytes).hexdigest()
         _checkpoint()
-        try:
-            store.put_if_absent(r_key, receipt_bytes, checksum_sha256=receipt_digest, content_type="application/json")
-        except AppError as exc:  # pragma: no cover - receipt race
-            if exc.status not in {409, 412}:
-                raise
-            existing_receipt = read_json(store, r_key) or {}
-            if existing_receipt and hashlib.sha256(
-                (json.dumps(existing_receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-            ).hexdigest() != receipt_digest and str(existing_receipt.get("objectDigest") or "") != digest:
-                raise
+        from deepseek_infra.infra.workspace import backup_control as _ctrl
+
+        with _ctrl.begin_formal_metadata_mutation(
+            str(target.target_id),
+            operation_id=str(run_id),
+            kind="legacy-remote-publish",
+        ):
+            try:
+                store.put_if_absent(r_key, receipt_bytes, checksum_sha256=receipt_digest, content_type="application/json")
+            except AppError as exc:  # pragma: no cover - receipt race
+                if exc.status not in {409, 412}:
+                    raise
+                existing_receipt = read_json(store, r_key) or {}
+                if existing_receipt and hashlib.sha256(
+                    (json.dumps(existing_receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                ).hexdigest() != receipt_digest and str(existing_receipt.get("objectDigest") or "") != digest:
+                    raise
         journal.update(phase="receipt-published", receiptDigest=receipt_digest, receipt=receipt_data, updatedAt=_utc_iso())
         _replace_journal(store, journal)
 

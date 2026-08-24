@@ -2007,18 +2007,19 @@ def execute_repair_job_instance(
                 dest_receipt_bytes = (json.dumps(dest_receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
                 dest_receipt_digest = hashlib.sha256(dest_receipt_bytes).hexdigest()
 
-                try:
-                    from deepseek_infra.infra.workspace import backup_control as _ctrl
+                from deepseek_infra.infra.workspace import backup_control as _ctrl
 
-                    _ctrl.note_formal_receipt_mutation(dest_target_id)
-                except Exception:  # pragma: no cover - best-effort dirtying must not block repair
-                    pass
-                if dest_target.root is not None:
-                    rp = dest_target.root / "receipts" / f"{backup_id}.json"
-                    rp.parent.mkdir(parents=True, exist_ok=True)
-                    rp.write_bytes(dest_receipt_bytes)
-                elif dest_target.store is not None:
-                    dest_target.store.put_if_absent(f"receipts/{backup_id}.json", dest_receipt_bytes)
+                with _ctrl.begin_formal_metadata_mutation(
+                    dest_target_id,
+                    operation_id=str(job.get("runId") or job.get("jobId") or backup_id),
+                    kind="replica-provision-receipt",
+                ):
+                    if dest_target.root is not None:
+                        rp = dest_target.root / "receipts" / f"{backup_id}.json"
+                        rp.parent.mkdir(parents=True, exist_ok=True)
+                        rp.write_bytes(dest_receipt_bytes)
+                    elif dest_target.store is not None:
+                        dest_target.store.put_if_absent(f"receipts/{backup_id}.json", dest_receipt_bytes)
 
                 def _next_generation_and_previous(target: Any) -> tuple[int, str]:
                     latest = None
