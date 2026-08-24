@@ -86,6 +86,20 @@ def prepare_and_start(
             logger.info("scheduler_recovered_orphans count=%d", recovered)
     except Exception:
         logger.exception("scheduler_orphan_recovery_failed")
+    # Drain pending control-authority RPO=0 outbox before accepting mutations.
+    try:
+        from deepseek_infra.infra.workspace import backup_control
+
+        authority_ready = backup_control.ensure_control_authority_ready()
+        if authority_ready.get("drained") or authority_ready.get("pending"):
+            logger.info(
+                "control_authority_startup status=%s pending=%s drained=%s",
+                authority_ready.get("status"),
+                authority_ready.get("pending"),
+                authority_ready.get("drained"),
+            )
+    except Exception:
+        logger.exception("control_authority_startup_failed")
     stop_event = start_periodic_cache_cleanup()
 
     bind_host = host or settings.default_host or DEFAULT_HOST

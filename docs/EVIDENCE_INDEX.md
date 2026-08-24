@@ -5,14 +5,26 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.6.2.
+Applicable version: v4.6.3.
+
+## 4.6.3 development evidence contract
+
+4.6.3 skeleton: secretless `control-authority-v1`, hash-chained authority
+generations, control schema v7 boot/recovery state, and
+`reconstruct_control_authority` after local control DB loss.
+Unit contracts: `tests/test_backup_463_control_authority.py`.
+Real three-MinIO disaster E2E:
+`tests/test_backup_463_real_control_authority_disaster_e2e.py`
+(scenario `real-three-minio-control-authority-disaster-recovery` on the
+storage-control-plane MinIO Evidence runner).
 
 ## 4.6.2 development evidence contract
 
 4.6.2 is a stabilization patch on 4.6.0: incomplete-index GC fail-safe fallback,
 placement/control test hygiene, Python matrix coverage restored to 95%, and
-release-surface consistency. Unit contracts remain under `tests/test_backup_460_*.py`.
-Real three-MinIO Evidence still requires the exact-merge CI producer path.
+release-surface consistency. Unit contracts remain under `tests/test_backup_460_*.py`
+and `tests/test_backup_462_*.py`. Real three-MinIO Evidence still requires the
+exact-merge CI producer path (includes `real-three-minio-transactional-gc-fencing`).
 
 
 ## 4.6.0 development evidence contract

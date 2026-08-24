@@ -30,7 +30,8 @@ CONTROL_DB = CONTROL_DIR / "control.sqlite3"
 # v4 adds index coverage, recovery lineage graph, chain migration jobs (4.6.0 B/C/D).
 # v5 adds fail-closed index coverage evidence + formal receipt mutation generation (4.6.1).
 # v6 adds target metadata fences + durable two-phase ciphertext GC intents (4.6.2).
-CONTROL_SCHEMA_VERSION = 6
+# v7 adds control boot epoch + recovery state for disaster-recoverable authority (4.6.3).
+CONTROL_SCHEMA_VERSION = 7
 
 REBUILDABLE_TABLES = frozenset(
     {
@@ -58,6 +59,19 @@ NON_REBUILDABLE_TABLES = frozenset(
         "chain_migration_jobs",
         "target_receipt_mutations",
         "target_metadata_gates",
+        "control_boot_state",
+        "control_authority_head",
+        "control_authority_outbox",
+    }
+)
+# Ephemeral ownership must never resurrect across control-node recovery.
+EPHEMERAL_RECOVERY_TABLES = frozenset(
+    {
+        "maintenance_leases",
+        "target_metadata_gates",
+        "qos_buckets",
+        "qos_transfers",
+        "ciphertext_gc_intents",
     }
 )
 
@@ -309,11 +323,54 @@ ON ciphertext_gc_intents(target_id, state, updated_at);
 
 CREATE INDEX IF NOT EXISTS idx_gc_intents_object
 ON ciphertext_gc_intents(target_id, object_key, state);
+
+CREATE TABLE IF NOT EXISTS control_boot_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    boot_epoch INTEGER NOT NULL,
+    recovery_state TEXT NOT NULL,
+    reason TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS control_authority_head (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    authority_generation INTEGER NOT NULL,
+    authority_digest TEXT NOT NULL,
+    previous_digest TEXT,
+    payload_digest TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS control_authority_outbox (
+    outbox_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    checkpoint_json TEXT NOT NULL,
+    state TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_authority_outbox_state
+ON control_authority_outbox(state, created_at);
 """
 
 
 def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _ensure_boot_state_row(conn: sqlite3.Connection, *, now: str | None = None) -> None:
+    current = now or _utc_iso()
+    row = conn.execute("SELECT boot_epoch FROM control_boot_state WHERE id = 1").fetchone()
+    if row is None:
+        conn.execute(
+            """
+            INSERT INTO control_boot_state(id, boot_epoch, recovery_state, reason, updated_at)
+            VALUES (1, 1, 'active', NULL, ?)
+            """,
+            (current,),
+        )
 
 
 def _retry_locked(operation: Callable[[], Any], *, timeout_seconds: float = 30.0) -> Any:
@@ -380,6 +437,7 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
                 4: "4.6.0-lineage-index-coverage-chain-migration",
                 5: "4.6.1-fail-closed-index-coverage-and-receipt-mutation",
                 6: "metadata-fences-and-two-phase-ciphertext-gc",
+                7: "4.6.3-control-authority-boot-and-recovery-state",
             }.get(version, f"schema-v{version}")
             conn.execute(
                 """
@@ -389,6 +447,7 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
                 (version, now, description),
             )
         conn.execute(f"PRAGMA user_version = {CONTROL_SCHEMA_VERSION}")
+        _ensure_boot_state_row(conn, now=now)
 
 
 def _quick_check_or_fail(conn: sqlite3.Connection) -> None:
@@ -454,6 +513,7 @@ def create_policy(policy: dict[str, Any]) -> dict[str, Any]:
             conn.execute("ROLLBACK")
             raise AppError("Backup policy id collision; retry", code=ErrorCode.INVALID_REQUEST, status=409) from exc
         conn.execute("COMMIT")
+    _anchor_after_non_rebuildable_mutation(kind="policy-mutation")
     return stored
 
 
@@ -479,6 +539,47 @@ def adopt_policy_projection(policy: dict[str, Any]) -> dict[str, Any]:
             stored = _decode_payload(row)
         conn.execute("COMMIT")
     return stored
+
+
+def _anchor_after_non_rebuildable_mutation(*, kind: str) -> None:
+    """RPO=0 when authority anchor roots/stores are configured; no-op otherwise."""
+    from deepseek_infra.infra.workspace import backup_control_authority
+
+    if not backup_control_authority.authority_anchors_configured():
+        return
+    backup_control_authority.anchor_non_rebuildable_mutation(kind=kind, rpo_zero=True)
+
+
+def ensure_control_authority_ready() -> dict[str, Any]:
+    """Startup hook: drain pending RPO=0 authority outbox when anchors are configured."""
+    from deepseek_infra.infra.workspace import backup_control_authority
+
+    pending = backup_control_authority.pending_authority_outbox_count()
+    if pending <= 0:
+        return {"status": "ready", "pending": 0, "drained": 0, "failed": 0}
+    if not backup_control_authority.authority_anchors_configured():
+        return {
+            "status": "pending-without-anchors",
+            "pending": pending,
+            "drained": 0,
+            "failed": 0,
+        }
+    try:
+        result = backup_control_authority.drain_pending_authority_outbox(rpo_zero=True)
+    except AppError as exc:
+        return {
+            "status": "anchor-failed",
+            "pending": backup_control_authority.pending_authority_outbox_count(),
+            "drained": 0,
+            "failed": pending,
+            "error": str(exc),
+        }
+    return {
+        "status": "ready" if int(result.get("pending") or 0) == 0 else "partial",
+        "pending": int(result.get("pending") or 0),
+        "drained": int(result.get("drained") or 0),
+        "failed": int(result.get("failed") or 0),
+    }
 
 
 def get_policy(policy_id: str) -> dict[str, Any] | None:
@@ -681,6 +782,13 @@ def mutate_policy(
             (next_revision, json.dumps(updated, ensure_ascii=False, sort_keys=True), _utc_iso(), policy_id, revision),
         )
         conn.execute("COMMIT")
+    anchor_kind = {
+        "promotion": "primary-promotion",
+        "drain": "drain-policy-mutation",
+        "topology": "policy-topology-mutation",
+        "placement": "placement-mutation",
+    }.get(generation_kind, "policy-mutation")
+    _anchor_after_non_rebuildable_mutation(kind=anchor_kind)
     return updated
 
 
@@ -702,6 +810,7 @@ def delete_policy(policy_id: str, *, expected_revision: int | None = None) -> di
         payload = _decode_payload(row)
         conn.execute("DELETE FROM control_policies WHERE policy_id = ?", (policy_id,))
         conn.execute("COMMIT")
+    _anchor_after_non_rebuildable_mutation(kind="policy-mutation")
     return payload
 
 
@@ -736,6 +845,7 @@ def upsert_target(target: dict[str, Any], *, expected_generation: int | None = N
                 (generation, json.dumps(stored, ensure_ascii=False, sort_keys=True), _utc_iso(), target_id),
             )
         conn.execute("COMMIT")
+    _anchor_after_non_rebuildable_mutation(kind="target-topology-mutation")
     return stored
 
 
@@ -833,7 +943,8 @@ def mutate_target(
                 code=ErrorCode.INVALID_REQUEST,
                 status=412,
             )
-        updated = mutate(_decode_payload(row))
+        current = _decode_payload(row)
+        updated = mutate(dict(current))
         next_generation = generation + 1 if bump_generation else generation
         updated["targetId"] = target_id
         updated["topologyGeneration"] = next_generation
@@ -842,6 +953,18 @@ def mutate_target(
             (next_generation, json.dumps(updated, ensure_ascii=False, sort_keys=True), _utc_iso(), target_id, generation),
         )
         conn.execute("COMMIT")
+    if bump_generation:
+        prev_drain = str(current.get("drainState") or "active")
+        new_drain = str(updated.get("drainState") or "active")
+        if new_drain == "draining" and prev_drain != "draining":
+            kind = "drain-start"
+        elif new_drain == "drained":
+            kind = "drain-complete"
+        elif new_drain == "active" and prev_drain in {"draining", "drained", "evacuating", "waiting-for-gc"}:
+            kind = "drain-cancel"
+        else:
+            kind = "target-topology-mutation"
+        _anchor_after_non_rebuildable_mutation(kind=kind)
     return updated
 
 
@@ -863,6 +986,7 @@ def delete_target(target_id: str, *, expected_generation: int | None = None) -> 
         payload = _decode_payload(row)
         conn.execute("DELETE FROM control_targets WHERE target_id = ?", (target_id,))
         conn.execute("COMMIT")
+    _anchor_after_non_rebuildable_mutation(kind="target-topology-mutation")
     return payload
 
 
@@ -1324,6 +1448,7 @@ def begin_target_drain_intent(
             ),
         )
         conn.execute("COMMIT")
+    _anchor_after_non_rebuildable_mutation(kind="drain-start")
     return {"intentId": intent_id, "target": updated, "drainId": drain_id}
 
 
@@ -2142,6 +2267,152 @@ def _release_metadata_gate(conn: sqlite3.Connection, *, target_id: str, owner_id
         """,
         (target_id, owner_id, int(fencing_token)),
     )
+
+
+def _metadata_gate_stale_reason(
+    row: sqlite3.Row | None,
+    *,
+    target_id: str,
+    owner_id: str,
+    fencing_token: int,
+    mode: str | None,
+    now: datetime,
+) -> str | None:
+    if row is None:
+        return f"blocked-metadata-gate:missing:{target_id}"
+    if str(row["owner_id"]) != owner_id:
+        return f"blocked-metadata-gate:owner-mismatch:{target_id}"
+    if int(row["fencing_token"]) != int(fencing_token):
+        return f"blocked-metadata-gate:stale-token:{target_id}"
+    if mode is not None and str(row["mode"]) != mode:
+        return f"blocked-metadata-gate:mode-mismatch:{target_id}"
+    if _parse_lease_until(str(row["lease_until"])) <= now:
+        return f"blocked-metadata-gate:lease-expired:{target_id}"
+    return None
+
+
+def metadata_gate_is_current(
+    target_id: str,
+    *,
+    owner_id: str,
+    fencing_token: int,
+    mode: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """True only while owner+token still holds a non-expired metadata gate."""
+    tid = str(target_id or "").strip()
+    owner = str(owner_id or "").strip()
+    if not tid or not owner:
+        return False
+    current = now or datetime.now(tz=timezone.utc)
+    with _connect() as conn:
+        row = _gate_row(conn, tid)
+    return (
+        _metadata_gate_stale_reason(
+            row,
+            target_id=tid,
+            owner_id=owner,
+            fencing_token=int(fencing_token),
+            mode=mode,
+            now=current,
+        )
+        is None
+    )
+
+
+def assert_metadata_gate_current(
+    target_id: str,
+    *,
+    owner_id: str,
+    fencing_token: int,
+    mode: str | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Fail closed if the caller no longer owns the live metadata fence."""
+    tid = str(target_id or "").strip()
+    owner = str(owner_id or "").strip()
+    if not tid or not owner:
+        raise AppError(
+            "blocked-metadata-gate:owner-required",
+            code=ErrorCode.INVALID_REQUEST,
+            status=400,
+        )
+    current = now or datetime.now(tz=timezone.utc)
+    with _connect() as conn:
+        row = _gate_row(conn, tid)
+    reason = _metadata_gate_stale_reason(
+        row,
+        target_id=tid,
+        owner_id=owner,
+        fencing_token=int(fencing_token),
+        mode=mode,
+        now=current,
+    )
+    if reason is not None:
+        raise AppError(reason, code=ErrorCode.INVALID_REQUEST, status=409)
+
+
+def renew_target_metadata_gate(
+    target_id: str,
+    *,
+    owner_id: str,
+    fencing_token: int,
+    mode: str | None = None,
+    lease_seconds: int = METADATA_GATE_LEASE_SECONDS,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Extend lease only while owner+token remain current; never after takeover."""
+    tid = str(target_id or "").strip()
+    owner = str(owner_id or "").strip()
+    if not tid or not owner:
+        raise AppError(
+            "blocked-metadata-gate:owner-required",
+            code=ErrorCode.INVALID_REQUEST,
+            status=400,
+        )
+    current = now or datetime.now(tz=timezone.utc)
+    now_iso = current.isoformat(timespec="seconds").replace("+00:00", "Z")
+    lease_until = (current + timedelta(seconds=max(5, int(lease_seconds)))).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+    with _connect() as conn:
+        _begin_immediate(conn)
+        row = _gate_row(conn, tid)
+        reason = _metadata_gate_stale_reason(
+            row,
+            target_id=tid,
+            owner_id=owner,
+            fencing_token=int(fencing_token),
+            mode=mode,
+            now=current,
+        )
+        if reason is not None:
+            conn.execute("ROLLBACK")
+            raise AppError(reason, code=ErrorCode.INVALID_REQUEST, status=409)
+        assert row is not None
+        conn.execute(
+            """
+            UPDATE target_metadata_gates
+            SET lease_until = ?, updated_at = ?
+            WHERE target_id = ? AND owner_id = ? AND fencing_token = ?
+            """,
+            (lease_until, now_iso, tid, owner, int(fencing_token)),
+        )
+        if conn.total_changes < 1:
+            conn.execute("ROLLBACK")
+            raise AppError(
+                f"blocked-metadata-gate:stale-token:{tid}",
+                code=ErrorCode.INVALID_REQUEST,
+                status=409,
+            )
+        conn.execute("COMMIT")
+    return {
+        "targetId": tid,
+        "ownerId": owner,
+        "mode": str(row["mode"]),
+        "fencingToken": int(fencing_token),
+        "leaseUntil": lease_until,
+    }
 
 
 @contextmanager

@@ -589,48 +589,73 @@ def _reclaim_unreferenced_payloads(
 
     reclaimed = 0
     cas_failures: list[str] = []
-    # Phase 2 — exclusive fence: revalidate then delete.
-    with backup_control.begin_destructive_metadata_fence(target_id, operation_id=owner_id):
-        live_gen = backup_control.get_target_receipt_mutation_generation(target_id)
-        for intent in intents:
-            iid = str(intent["intentId"])
-            key = str(intent["objectKey"])
-            expected_gen = int(intent["expectedReceiptMutationGeneration"])
-            expected_etag = intent.get("expectedEtag")
-            if live_gen != expected_gen:
-                backup_control.update_ciphertext_gc_intent(
-                    iid, state=backup_control.GC_INTENT_CANCELLED, error="receipt-mutation-generation-changed"
+    # Phase 2 — short per-object destructive fence: revalidate, assert ownership, then CAS delete.
+    # A single long-held fence is not fencing: lease expiry + takeover must abort DELETE.
+    for intent in intents:
+        iid = str(intent["intentId"])
+        key = str(intent["objectKey"])
+        expected_gen = int(intent["expectedReceiptMutationGeneration"])
+        expected_etag = intent.get("expectedEtag")
+        try:
+            with backup_control.begin_destructive_metadata_fence(
+                target_id,
+                operation_id=f"{owner_id}:{iid}",
+            ) as fence:
+                backup_control.renew_target_metadata_gate(
+                    target_id,
+                    owner_id=str(fence["ownerId"]),
+                    fencing_token=int(fence["fencingToken"]),
+                    mode=backup_control.METADATA_GATE_DESTRUCTIVE,
                 )
-                continue
-            if _payload_key_is_retained(target, key, retiring_backup_id=retiring_backup_id):
-                backup_control.update_ciphertext_gc_intent(
-                    iid, state=backup_control.GC_INTENT_CANCELLED, error="live-ref-appeared"
-                )
-                continue
-            current_etag, _size = _object_etag_and_size(target, key)
-            if current_etag is None:
-                backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
-                continue
-            if expected_etag and current_etag != expected_etag:
-                backup_control.update_ciphertext_gc_intent(
-                    iid, state=backup_control.GC_INTENT_CANCELLED, error="etag-mismatch"
-                )
-                # Object identity changed under us — retryable GC, never reclaimed.
-                cas_failures.append(key)
-                continue
-            backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_DELETING)
-            try:
-                reclaimed += _delete_payload_if_match(target, key, expected_etag=expected_etag or current_etag)
-            except AppError as exc:
-                if "cas-mismatch" in str(exc):
-                    # Leave intent non-terminal so restart/reconcile can retry delete.
+                live_gen = backup_control.get_target_receipt_mutation_generation(target_id)
+                if live_gen != expected_gen:
                     backup_control.update_ciphertext_gc_intent(
-                        iid, state=backup_control.GC_INTENT_VALIDATED, error="cas-mismatch"
+                        iid, state=backup_control.GC_INTENT_CANCELLED, error="receipt-mutation-generation-changed"
                     )
+                    continue
+                if _payload_key_is_retained(target, key, retiring_backup_id=retiring_backup_id):
+                    backup_control.update_ciphertext_gc_intent(
+                        iid, state=backup_control.GC_INTENT_CANCELLED, error="live-ref-appeared"
+                    )
+                    continue
+                current_etag, _size = _object_etag_and_size(target, key)
+                if current_etag is None:
+                    backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
+                    continue
+                if expected_etag and current_etag != expected_etag:
+                    backup_control.update_ciphertext_gc_intent(
+                        iid, state=backup_control.GC_INTENT_CANCELLED, error="etag-mismatch"
+                    )
+                    # Object identity changed under us — retryable GC, never reclaimed.
                     cas_failures.append(key)
                     continue
-                raise
-            backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
+                backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_DELETING)
+                backup_control.assert_metadata_gate_current(
+                    target_id,
+                    owner_id=str(fence["ownerId"]),
+                    fencing_token=int(fence["fencingToken"]),
+                    mode=backup_control.METADATA_GATE_DESTRUCTIVE,
+                )
+                try:
+                    reclaimed += _delete_payload_if_match(target, key, expected_etag=expected_etag or current_etag)
+                except AppError as exc:
+                    if "cas-mismatch" in str(exc):
+                        # Leave intent non-terminal so restart/reconcile can retry delete.
+                        backup_control.update_ciphertext_gc_intent(
+                            iid, state=backup_control.GC_INTENT_VALIDATED, error="cas-mismatch"
+                        )
+                        cas_failures.append(key)
+                        continue
+                    raise
+                backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
+        except AppError as exc:
+            if "blocked-metadata-gate" in str(exc):
+                # Stale/expired fence after takeover: leave garbage, never DELETE.
+                backup_control.update_ciphertext_gc_intent(
+                    iid, state=backup_control.GC_INTENT_VALIDATED, error="metadata-fence-lost"
+                )
+                break
+            raise
     if cas_failures:
         raise AppError(
             f"retirement-payload-delete-cas-mismatch:{cas_failures[0]}",
@@ -654,44 +679,68 @@ def reconcile_interrupted_gc_intents(target: Any, *, limit: int = 50) -> dict[st
     )
     reclaimed = 0
     cancelled = 0
-    with backup_control.begin_destructive_metadata_fence(target_id, operation_id=f"gc-reconcile-{secrets.token_hex(4)}"):
-        live_gen = backup_control.get_target_receipt_mutation_generation(target_id)
-        for intent in pending:
-            iid = str(intent["intentId"])
-            key = str(intent["objectKey"])
-            if live_gen != int(intent["expectedReceiptMutationGeneration"]):
-                backup_control.update_ciphertext_gc_intent(
-                    iid, state=backup_control.GC_INTENT_CANCELLED, error="receipt-mutation-generation-changed"
+    owner_prefix = f"gc-reconcile-{secrets.token_hex(4)}"
+    for intent in pending:
+        iid = str(intent["intentId"])
+        key = str(intent["objectKey"])
+        try:
+            with backup_control.begin_destructive_metadata_fence(
+                target_id,
+                operation_id=f"{owner_prefix}:{iid}",
+            ) as fence:
+                backup_control.renew_target_metadata_gate(
+                    target_id,
+                    owner_id=str(fence["ownerId"]),
+                    fencing_token=int(fence["fencingToken"]),
+                    mode=backup_control.METADATA_GATE_DESTRUCTIVE,
                 )
-                cancelled += 1
-                continue
-            current_etag, _size = _object_etag_and_size(target, key)
-            if current_etag is None:
+                live_gen = backup_control.get_target_receipt_mutation_generation(target_id)
+                if live_gen != int(intent["expectedReceiptMutationGeneration"]):
+                    backup_control.update_ciphertext_gc_intent(
+                        iid, state=backup_control.GC_INTENT_CANCELLED, error="receipt-mutation-generation-changed"
+                    )
+                    cancelled += 1
+                    continue
+                current_etag, _size = _object_etag_and_size(target, key)
+                if current_etag is None:
+                    backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
+                    reclaimed += 1
+                    continue
+                if intent.get("expectedEtag") and current_etag != intent.get("expectedEtag"):
+                    backup_control.update_ciphertext_gc_intent(
+                        iid, state=backup_control.GC_INTENT_CANCELLED, error="etag-mismatch"
+                    )
+                    cancelled += 1
+                    continue
+                if _payload_key_is_retained(target, key, retiring_backup_id=""):
+                    backup_control.update_ciphertext_gc_intent(
+                        iid, state=backup_control.GC_INTENT_CANCELLED, error="live-ref-appeared"
+                    )
+                    cancelled += 1
+                    continue
+                backup_control.assert_metadata_gate_current(
+                    target_id,
+                    owner_id=str(fence["ownerId"]),
+                    fencing_token=int(fence["fencingToken"]),
+                    mode=backup_control.METADATA_GATE_DESTRUCTIVE,
+                )
+                try:
+                    _delete_payload_if_match(target, key, expected_etag=intent.get("expectedEtag") or current_etag)
+                except AppError:
+                    backup_control.update_ciphertext_gc_intent(
+                        iid, state=backup_control.GC_INTENT_CANCELLED, error="cas-mismatch"
+                    )
+                    cancelled += 1
+                    continue
                 backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
                 reclaimed += 1
-                continue
-            if intent.get("expectedEtag") and current_etag != intent.get("expectedEtag"):
+        except AppError as exc:
+            if "blocked-metadata-gate" in str(exc):
                 backup_control.update_ciphertext_gc_intent(
-                    iid, state=backup_control.GC_INTENT_CANCELLED, error="etag-mismatch"
+                    iid, state=backup_control.GC_INTENT_VALIDATED, error="metadata-fence-lost"
                 )
-                cancelled += 1
-                continue
-            if _payload_key_is_retained(target, key, retiring_backup_id=""):
-                backup_control.update_ciphertext_gc_intent(
-                    iid, state=backup_control.GC_INTENT_CANCELLED, error="live-ref-appeared"
-                )
-                cancelled += 1
-                continue
-            try:
-                _delete_payload_if_match(target, key, expected_etag=intent.get("expectedEtag") or current_etag)
-            except AppError:
-                backup_control.update_ciphertext_gc_intent(
-                    iid, state=backup_control.GC_INTENT_CANCELLED, error="cas-mismatch"
-                )
-                cancelled += 1
-                continue
-            backup_control.update_ciphertext_gc_intent(iid, state=backup_control.GC_INTENT_RECLAIMED)
-            reclaimed += 1
+                break
+            raise
     return {"examined": len(pending), "reclaimed": reclaimed, "cancelled": cancelled}
 
 

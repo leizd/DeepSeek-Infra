@@ -4,6 +4,21 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.6.3] - Disaster-Recoverable Control Authority (skeleton) (2026-08-24)
+
+### Disaster-Recoverable Control Authority (skeleton)
+
+- **control-authority-v1**: Secretless hash-chained control checkpoints (policies/targets/epochs only; never S3/Age/API secrets).
+- **Control schema v7**: `control_boot_state` (boot epoch + recovery state) and `control_authority_head`.
+- **Recovery engine skeleton**: `control-recovery-required` fail-closed mode; `reconstruct_control_authority` rebuilds a fresh DB from authority replicas; ephemeral leases/fences cleared; boot epoch advances.
+- **Divergent heads fail closed**: same generation / different digest → `control-authority-divergent`.
+- **Frozen Compatibility Surface**: `object-set-v1`, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age unchanged.
+- **RPO=0 authority anchor**: When authority replica roots are configured, policy/topology mutations snapshot + durably write `control-authority-v1` before ack; outbox tracks pending anchors; pending outbox blocks further mutations.
+- **Formal truth rebuild**: `rebuild_formal_truth_from_authenticated_commits` indexes only Commit-hash + `receiptDigest` (+ object-set) bound Receipts; orphan receipts are `orphan-control-metadata` only.
+- **Real three-MinIO disaster E2E**: wipe local `control.sqlite3`, reconstruct from secretless authority heads on three MinIO stores, rebuild Commit-authenticated formal truth, advance boot epoch, never resurrect leases; scenario `real-three-minio-control-authority-disaster-recovery`.
+- **Promote/drain RPO=0 wiring**: `mutate_policy(generation_kind=promotion|drain|…)`, `begin_target_drain_intent`, `mutate_target` drain-start/complete/cancel, and `delete_policy`/`delete_target` anchor when replicas configured; promote uses `generation_kind="promotion"`.
+- **Startup outbox drain**: `ensure_control_authority_ready` on app + backup worker start.
+
 ## [4.6.2] - Transactional Metadata Fencing & Two-Phase Ciphertext GC (2026-08-23)
 
 ### Transactional Metadata Fencing & Two-Phase Ciphertext GC
@@ -11,7 +26,8 @@
 - **Fail-Closed Formal Metadata Authority**: Receipt/Commit writers must acquire a durable Target metadata fence and bump receipt mutation generation before any formal Receipt PUT; control authority failure blocks publication (`blocked-control-authority`), never best-effort continue.
 - **Mutually Exclusive Metadata Gates**: Formal mutation and destructive GC serialize per target via `target_metadata_gates` (control schema v6).
 - **Atomic Index Rebuild Start**: Coverage is invalidated to `building` in the same SQLite transaction that clears index rows — no complete+empty TOCTOU window.
-- **Two-Phase Ciphertext GC**: Durable `ciphertext_gc_intents` bind receipt mutation generation + object ETag; final DELETE runs under the destructive fence with revalidation; CAS mismatch / generation change cancels without marking reclaimed.
+- **Two-Phase Ciphertext GC**: Durable `ciphertext_gc_intents` bind receipt mutation generation + object ETag; final DELETE runs under a **per-object** destructive fence with revalidation; CAS mismatch / generation change cancels without marking reclaimed.
+- **Fencing Effect**: `renew_target_metadata_gate` / `assert_metadata_gate_current` / `metadata_gate_is_current` make tokens real; lease expiry + takeover aborts DELETE (leave garbage, never wrong delete). Real three-MinIO scenario `real-three-minio-transactional-gc-fencing`.
 - **Coverage Contract**: Combined-branch floor restored to **95.0%**.
 - **Frozen Compatibility Surface**: `object-set-v1`, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age unchanged.
 

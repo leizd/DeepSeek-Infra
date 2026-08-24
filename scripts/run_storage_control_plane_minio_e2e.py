@@ -21,6 +21,8 @@ from scripts.release_evidence import stamp_release_report  # noqa: E402
 REAL_SCENARIO = "real-three-minio-storage-control-plane"
 TIER_SCENARIO = "real-three-minio-tiering-control-recovery"
 PLACE_SCENARIO = "real-three-minio-autonomous-placement-control"
+TXGC_SCENARIO = "real-three-minio-transactional-gc-fencing"
+AUTH_DR_SCENARIO = "real-three-minio-control-authority-disaster-recovery"
 SCENARIOS: dict[str, tuple[str, ...]] = {
     REAL_SCENARIO: (
         "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e",
@@ -30,6 +32,12 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
     ),
     PLACE_SCENARIO: (
         "tests/test_backup_460_real_placement_control_e2e.py::test_real_three_minio_autonomous_placement_control_e2e",
+    ),
+    TXGC_SCENARIO: (
+        "tests/test_backup_462_real_transactional_gc_e2e.py::test_real_three_minio_transactional_gc_fencing_e2e",
+    ),
+    AUTH_DR_SCENARIO: (
+        "tests/test_backup_463_real_control_authority_disaster_e2e.py::test_real_three_minio_control_authority_disaster_recovery_e2e",
     ),
 }
 CHECK_SCENARIOS = {
@@ -57,6 +65,20 @@ CHECK_SCENARIOS = {
     "targetShardedRepairScopesProgressIndependently": PLACE_SCENARIO,
     "capacityReadinessZeroRemoteIo": PLACE_SCENARIO,
     "randomizedAgeAndObjectSetWireFreeze": PLACE_SCENARIO,
+    # 4.6.2 gates (transactional GC fencing effect on real MinIO)
+    "realThreeMinioTransactionalGcFencingE2E": TXGC_SCENARIO,
+    "expiredMetadataFenceNeverDeletesAfterTakeover": TXGC_SCENARIO,
+    "realMinioPublishGcLeaseExpiryRaceNeverLosesCiphertext": TXGC_SCENARIO,
+    # 4.6.3 gates (control authority disaster recovery on real MinIO)
+    "realThreeMinioControlAuthorityDisasterRecoveryE2E": AUTH_DR_SCENARIO,
+    "policyRevisionSurvivesTotalControlDbLoss": AUTH_DR_SCENARIO,
+    "targetTopologySurvivesTotalControlDbLoss": AUTH_DR_SCENARIO,
+    "freshNodeReconstructsControlAuthority": AUTH_DR_SCENARIO,
+    "authenticatedCommittedReceiptsAreRecoveryTruth": AUTH_DR_SCENARIO,
+    "expiredLeasesAreNeverResurrected": AUTH_DR_SCENARIO,
+    "recoveryAdvancesControlBootEpoch": AUTH_DR_SCENARIO,
+    "controlAuthorityCheckpointContainsNoSecrets": AUTH_DR_SCENARIO,
+    "controlRecoveryPerformsZeroAgeEncryption": AUTH_DR_SCENARIO,
 }
 REQUIRED_ENDPOINTS = (
     "DEEPSEEK_TEST_S3_ENDPOINT_A",

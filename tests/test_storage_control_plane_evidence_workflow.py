@@ -23,10 +23,19 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
     node_460 = (
         "tests/test_backup_460_real_placement_control_e2e.py::test_real_three_minio_autonomous_placement_control_e2e"
     )
+    node_462 = (
+        "tests/test_backup_462_real_transactional_gc_e2e.py::test_real_three_minio_transactional_gc_fencing_e2e"
+    )
+    node_463 = (
+        "tests/test_backup_463_real_control_authority_disaster_e2e.py::"
+        "test_real_three_minio_control_authority_disaster_recovery_e2e"
+    )
     assert runner.SCENARIOS == {
         "real-three-minio-storage-control-plane": (node_458,),
         "real-three-minio-tiering-control-recovery": (node_459,),
         "real-three-minio-autonomous-placement-control": (node_460,),
+        "real-three-minio-transactional-gc-fencing": (node_462,),
+        "real-three-minio-control-authority-disaster-recovery": (node_463,),
     }
     assert set(runner.REQUIRED_ENDPOINTS) == {
         "DEEPSEEK_TEST_S3_ENDPOINT_A",
@@ -50,6 +59,24 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
     assert runner.CHECK_SCENARIOS["targetShardedRepairScopesProgressIndependently"] == (
         "real-three-minio-autonomous-placement-control"
     )
+    assert runner.CHECK_SCENARIOS["realThreeMinioTransactionalGcFencingE2E"] == (
+        "real-three-minio-transactional-gc-fencing"
+    )
+    assert runner.CHECK_SCENARIOS["expiredMetadataFenceNeverDeletesAfterTakeover"] == (
+        "real-three-minio-transactional-gc-fencing"
+    )
+    assert runner.CHECK_SCENARIOS["realMinioPublishGcLeaseExpiryRaceNeverLosesCiphertext"] == (
+        "real-three-minio-transactional-gc-fencing"
+    )
+    assert runner.CHECK_SCENARIOS["realThreeMinioControlAuthorityDisasterRecoveryE2E"] == (
+        "real-three-minio-control-authority-disaster-recovery"
+    )
+    assert runner.CHECK_SCENARIOS["policyRevisionSurvivesTotalControlDbLoss"] == (
+        "real-three-minio-control-authority-disaster-recovery"
+    )
+    assert runner.CHECK_SCENARIOS["freshNodeReconstructsControlAuthority"] == (
+        "real-three-minio-control-authority-disaster-recovery"
+    )
 
 
 def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypatch() -> None:
@@ -57,6 +84,8 @@ def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypat
         "tests/test_backup_458_real_storage_control_plane_e2e.py",
         "tests/test_backup_459_real_tiering_control_e2e.py",
         "tests/test_backup_460_real_placement_control_e2e.py",
+        "tests/test_backup_462_real_transactional_gc_e2e.py",
+        "tests/test_backup_463_real_control_authority_disaster_e2e.py",
     ):
         source = (ROOT / rel).read_text(encoding="utf-8")
         assert "ProductionFakeS3Client" not in source

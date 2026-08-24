@@ -624,6 +624,7 @@ def update_policy(
     patch: dict[str, Any],
     *,
     expected_revision: int | None = None,
+    generation_kind: str = "placement",
 ) -> dict[str, Any]:
     if not isinstance(patch, dict):
         raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
@@ -662,7 +663,7 @@ def update_policy(
         policy_id,
         expected_revision=expected_revision,
         mutate=_mutate,
-        generation_kind="placement",
+        generation_kind=generation_kind,
     )
     _atomic_write_json(_policy_path(policy_id), updated)
     return updated

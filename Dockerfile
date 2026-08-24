@@ -15,7 +15,7 @@ FROM python:3.12-slim
 
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="DeepSeek Infra" \
-      org.opencontainers.image.version="4.6.2" \
+      org.opencontainers.image.version="4.6.3" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.description="Python-first hybrid Personal AI Runtime"
 
