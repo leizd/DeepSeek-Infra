@@ -33,21 +33,31 @@ def control_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return db
 
 
-def _ckpt(**kwargs: Any) -> dict[str, Any]:
-    base = {
-        "generation": 1,
-        "previous_digest": None,
-        "policies": [],
-        "targets": [],
-        "receipt_mutation_generations": {},
-        "promotion_epochs": {},
-        "drain_generations": {},
-        "placement_generations": {},
-        "control_schema_version": 7,
-        "created_at": "2026-08-24T00:00:00Z",
-    }
-    base.update(kwargs)
-    return backup_control_authority.build_authority_checkpoint(**base)
+def _ckpt(
+    *,
+    generation: int = 1,
+    previous_digest: str | None = None,
+    policies: list[dict[str, Any]] | None = None,
+    targets: list[dict[str, Any]] | None = None,
+    receipt_mutation_generations: dict[str, int] | None = None,
+    promotion_epochs: dict[str, int] | None = None,
+    drain_generations: dict[str, int] | None = None,
+    placement_generations: dict[str, int] | None = None,
+    control_schema_version: int = 7,
+    created_at: str = "2026-08-24T00:00:00Z",
+) -> dict[str, Any]:
+    return backup_control_authority.build_authority_checkpoint(
+        generation=generation,
+        previous_digest=previous_digest,
+        policies=list(policies or []),
+        targets=list(targets or []),
+        receipt_mutation_generations=dict(receipt_mutation_generations or {}),
+        promotion_epochs=dict(promotion_epochs or {}),
+        drain_generations=dict(drain_generations or {}),
+        placement_generations=dict(placement_generations or {}),
+        control_schema_version=control_schema_version,
+        created_at=created_at,
+    )
 
 
 def test_verify_chain_payload_and_broken_link_and_gap(control_db: Path) -> None:
