@@ -1,4 +1,4 @@
-"""Disaster recovery for local Storage Control Authority (4.6.3 skeleton).
+"""Disaster recovery for local Storage Control Authority (4.6.4 production activation).
 
 When control.sqlite3 is missing/corrupt, enter fail-closed read-only recovery,
 rebuild a fresh DB from secretless control-authority-v1 checkpoints, advance
@@ -6,6 +6,9 @@ boot epoch, and never resurrect ephemeral leases/fences.
 
 Formal truth rebuild only accepts Commit v4 → receiptDigest → Receipt bindings;
 orphan receipts never become recovery authority.
+
+Startup must obtain an Authority Verdict before workers run. All mutation
+primitives call assert_control_mutations_allowed.
 """
 
 from __future__ import annotations
@@ -23,8 +26,14 @@ from deepseek_infra.infra.workspace import backup_control, backup_control_author
 RECOVERY_ACTIVE = "active"
 RECOVERY_REQUIRED = "control-recovery-required"
 RECOVERY_IN_PROGRESS = "recovering"
+STATE_GENESIS_REQUIRED = "genesis-required"
+STATE_AUTHORITY_DIVERGENT = "authority-divergent"
+STATE_AUTHORITY_UNAVAILABLE = "authority-unavailable"
+STATE_RECOVERING_FORMAL_TRUTH = "recovering-formal-truth"
 
-# Mutations blocked until authority reconstruction completes.
+MUTATION_ALLOWED_STATES = frozenset({RECOVERY_ACTIVE})
+
+# Mutations blocked unless authority verdict is ACTIVE.
 BLOCKED_MUTATION_OPERATIONS = frozenset(
     {
         "backup-publish",
@@ -36,9 +45,14 @@ BLOCKED_MUTATION_OPERATIONS = frozenset(
         "primary-promotion",
         "drain-start",
         "drain-cancel",
+        "drain-complete",
         "placement-mutation",
         "policy-mutation",
+        "policy-topology-mutation",
+        "drain-policy-mutation",
         "target-topology-mutation",
+        "chain-migration",
+        "scheduler-backup-execution",
     }
 )
 
@@ -48,6 +62,7 @@ ALLOWED_DURING_RECOVERY = frozenset(
         "target-probe",
         "restore-discovery",
         "control-recovery",
+        "authority-verdict",
     }
 )
 
@@ -91,23 +106,174 @@ def enter_control_recovery_required(*, reason: str) -> dict[str, Any]:
 
 
 def assert_control_mutations_allowed(*, operation: str) -> None:
+    """Central mutation barrier — production paths must call before side effects."""
     op = str(operation or "").strip() or "unknown"
     if op in ALLOWED_DURING_RECOVERY:
         return
     state = get_control_recovery_state()
-    if state["recoveryState"] != RECOVERY_ACTIVE:
+    recovery_state = str(state["recoveryState"])
+    if recovery_state not in MUTATION_ALLOWED_STATES:
         raise AppError(
-            f"control-recovery-required:blocked:{op}",
+            f"control-authority-barrier:blocked:{op}:state={recovery_state}",
             code=ErrorCode.INVALID_REQUEST,
             status=503,
         )
-    # Pending RPO=0 outbox must drain before further non-rebuildable mutations.
-    if op in BLOCKED_MUTATION_OPERATIONS and backup_control_authority.pending_authority_outbox_count() > 0:
+    # Pending RPO=0 outbox / prepared intents freeze further non-rebuildable mutations.
+    if backup_control_authority.pending_authority_outbox_count() > 0:
         raise AppError(
             f"authority-anchor-pending:blocked:{op}",
             code=ErrorCode.INVALID_REQUEST,
             status=503,
         )
+
+
+def set_control_recovery_state(*, recovery_state: str, reason: str | None = None) -> dict[str, Any]:
+    now = _utc_iso()
+    with backup_control._connect() as conn:  # noqa: SLF001
+        backup_control._begin_immediate(conn)  # noqa: SLF001
+        backup_control._ensure_boot_state_row(conn, now=now)  # noqa: SLF001
+        conn.execute(
+            """
+            UPDATE control_boot_state
+            SET recovery_state = ?, reason = ?, updated_at = ?
+            WHERE id = 1
+            """,
+            (str(recovery_state), str(reason) if reason else None, now),
+        )
+        conn.execute("COMMIT")
+    return get_control_recovery_state()
+
+
+def local_control_db_present() -> bool:
+    return Path(backup_control.CONTROL_DB).is_file()
+
+
+def local_control_db_healthy() -> bool:
+    """True only when control DB opens and passes integrity without raising."""
+    if not local_control_db_present():
+        return False
+    try:
+        with backup_control._connect() as conn:  # noqa: SLF001
+            row = conn.execute("PRAGMA quick_check").fetchone()
+            result = str(row[0] if row is not None else "unknown")
+            return result.casefold() == "ok"
+    except Exception:
+        return False
+
+
+def resolve_startup_authority_verdict() -> dict[str, Any]:
+    """Classify Control Authority before any worker may start (4.6.4 Gate A).
+
+    Never silently creates an ACTIVE authority when remote Authority history exists
+    but the local DB is missing — that path is RECOVERY_REQUIRED.
+    """
+    from deepseek_infra.infra.workspace import backup_control as ctrl
+
+    present = local_control_db_present()
+    healthy = local_control_db_healthy() if present else False
+    anchors = backup_control_authority.authority_anchors_configured()
+    remote: dict[str, dict[str, Any]] = {}
+    remote_error: str | None = None
+    if anchors:
+        try:
+            remote = {
+                **discover_authority_replicas(
+                    [str(p) for p in backup_control_authority.get_authority_anchor_roots()]
+                ),
+                **discover_authority_replicas_from_stores(backup_control_authority.get_authority_anchor_stores()),
+            }
+        except AppError as exc:
+            remote_error = str(exc)
+        except Exception as exc:  # pragma: no cover - defensive
+            remote_error = str(exc)
+
+    # Missing/corrupt local + remote history → recovery, never auto-genesis ACTIVE.
+    if (not present or not healthy) and remote:
+        if present and not healthy:
+            _quarantine_corrupt_db(Path(ctrl.CONTROL_DB))
+        enter_control_recovery_required(reason="local-missing-or-corrupt-remote-authority-present")
+        return {
+            "verdict": RECOVERY_REQUIRED,
+            "allowWorkers": False,
+            "allowMutations": False,
+            "localPresent": present,
+            "localHealthy": healthy,
+            "remoteReplicaCount": len(remote),
+            "reason": "local-missing-or-corrupt-remote-authority-present",
+        }
+
+    if (not present or not healthy) and anchors and not remote:
+        if present and not healthy:
+            _quarantine_corrupt_db(Path(ctrl.CONTROL_DB))
+        set_control_recovery_state(
+            recovery_state=STATE_AUTHORITY_UNAVAILABLE,
+            reason=remote_error or "authority-replicas-configured-but-unreachable",
+        )
+        return {
+            "verdict": STATE_AUTHORITY_UNAVAILABLE,
+            "allowWorkers": False,
+            "allowMutations": False,
+            "localPresent": present,
+            "localHealthy": healthy,
+            "remoteReplicaCount": 0,
+            "reason": remote_error or "authority-replicas-configured-but-unreachable",
+        }
+
+    if not present:
+        # First install: opening control DB creates empty ACTIVE shell.
+        with ctrl._connect():  # noqa: SLF001
+            pass
+        set_control_recovery_state(recovery_state=RECOVERY_ACTIVE, reason="genesis-empty-control-db")
+        return {
+            "verdict": RECOVERY_ACTIVE,
+            "allowWorkers": True,
+            "allowMutations": True,
+            "localPresent": True,
+            "localHealthy": True,
+            "remoteReplicaCount": 0,
+            "reason": "genesis-empty-control-db",
+        }
+
+    # Local healthy: drain pending anchors; refuse ACTIVE if pending remains with anchors.
+    ready = ctrl.ensure_control_authority_ready()
+    state = get_control_recovery_state()
+    if state["recoveryState"] != RECOVERY_ACTIVE:
+        return {
+            "verdict": state["recoveryState"],
+            "allowWorkers": False,
+            "allowMutations": False,
+            "localPresent": True,
+            "localHealthy": True,
+            "remoteReplicaCount": len(remote),
+            "outbox": ready,
+            "reason": state.get("reason"),
+        }
+    if int(ready.get("pending") or 0) > 0:
+        return {
+            "verdict": RECOVERY_REQUIRED,
+            "allowWorkers": False,
+            "allowMutations": False,
+            "localPresent": True,
+            "localHealthy": True,
+            "remoteReplicaCount": len(remote),
+            "outbox": ready,
+            "reason": "pending-authority-outbox",
+        }
+    return {
+        "verdict": RECOVERY_ACTIVE,
+        "allowWorkers": True,
+        "allowMutations": True,
+        "localPresent": True,
+        "localHealthy": True,
+        "remoteReplicaCount": len(remote),
+        "outbox": ready,
+        "reason": "local-authority-active",
+    }
+
+
+def workers_allowed_by_verdict(verdict: dict[str, Any] | None = None) -> bool:
+    current = verdict if verdict is not None else resolve_startup_authority_verdict()
+    return bool(current.get("allowWorkers"))
 
 
 def _clear_ephemeral_tables(conn: Any) -> None:
@@ -224,7 +390,7 @@ def reconstruct_control_authority(
             code=ErrorCode.INVALID_REQUEST,
             status=409,
         )
-    backup_control_authority.verify_authority_chain([checkpoint])
+    backup_control_authority.verify_authority_checkpoint_integrity(checkpoint)
 
     control_dir = Path(backup_control.CONTROL_DIR)
     control_db = Path(backup_control.CONTROL_DB)

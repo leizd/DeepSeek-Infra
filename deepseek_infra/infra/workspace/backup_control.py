@@ -494,6 +494,7 @@ def _begin_immediate(conn: sqlite3.Connection) -> None:
 
 
 def create_policy(policy: dict[str, Any]) -> dict[str, Any]:
+    _require_control_mutation(operation="policy-mutation")
     policy_id = str(policy["policyId"])
     revision = max(1, int(policy.get("policyRevision") or 1))
     stored = {**policy, "policyRevision": revision}
@@ -539,6 +540,13 @@ def adopt_policy_projection(policy: dict[str, Any]) -> dict[str, Any]:
             stored = _decode_payload(row)
         conn.execute("COMMIT")
     return stored
+
+
+def _require_control_mutation(*, operation: str) -> None:
+    """Fail closed unless startup Authority Verdict is ACTIVE (4.6.4 Gate B)."""
+    from deepseek_infra.infra.workspace import backup_control_recovery
+
+    backup_control_recovery.assert_control_mutations_allowed(operation=operation)
 
 
 def _anchor_after_non_rebuildable_mutation(*, kind: str) -> None:
@@ -748,6 +756,7 @@ def mutate_policy(
     mutate: Callable[[dict[str, Any]], dict[str, Any]],
     generation_kind: str = "placement",
 ) -> dict[str, Any]:
+    _require_control_mutation(operation="policy-mutation")
     with _connect() as conn:
         _begin_immediate(conn)
         row = conn.execute("SELECT * FROM control_policies WHERE policy_id = ?", (policy_id,)).fetchone()
@@ -793,6 +802,7 @@ def mutate_policy(
 
 
 def delete_policy(policy_id: str, *, expected_revision: int | None = None) -> dict[str, Any]:
+    _require_control_mutation(operation="policy-mutation")
     with _connect() as conn:
         _begin_immediate(conn)
         row = conn.execute("SELECT * FROM control_policies WHERE policy_id = ?", (policy_id,)).fetchone()
@@ -815,6 +825,7 @@ def delete_policy(policy_id: str, *, expected_revision: int | None = None) -> di
 
 
 def upsert_target(target: dict[str, Any], *, expected_generation: int | None = None) -> dict[str, Any]:
+    _require_control_mutation(operation="target-topology-mutation")
     target_id = str(target["targetId"])
     with _connect() as conn:
         _begin_immediate(conn)
@@ -929,6 +940,8 @@ def mutate_target(
     mutate: Callable[[dict[str, Any]], dict[str, Any]],
     bump_generation: bool = True,
 ) -> dict[str, Any]:
+    if bump_generation:
+        _require_control_mutation(operation="target-topology-mutation")
     with _connect() as conn:
         _begin_immediate(conn)
         row = conn.execute("SELECT * FROM control_targets WHERE target_id = ?", (target_id,)).fetchone()
@@ -969,6 +982,7 @@ def mutate_target(
 
 
 def delete_target(target_id: str, *, expected_generation: int | None = None) -> dict[str, Any]:
+    _require_control_mutation(operation="target-topology-mutation")
     with _connect() as conn:
         _begin_immediate(conn)
         row = conn.execute("SELECT * FROM control_targets WHERE target_id = ?", (target_id,)).fetchone()
@@ -1395,6 +1409,7 @@ def begin_target_drain_intent(
     Job DBs remain projections; crash after this commit still leaves a durable
     intent that startup reconciliation can use to recreate the DrainJob.
     """
+    _require_control_mutation(operation="drain-start")
     now = _utc_iso()
     intent_id = f"intent_drain_{secrets.token_hex(8)}"
     with _connect() as conn:
@@ -2427,6 +2442,7 @@ def begin_formal_metadata_mutation(
 
     Control authority failure raises; callers must not write formal metadata outside this guard.
     """
+    _require_control_mutation(operation="formal-mutation")
     del kind  # retained for audit/call-site clarity
     tid = str(target_id or "").strip()
     owner = str(operation_id or "").strip() or secrets.token_hex(8)
@@ -2513,6 +2529,7 @@ def begin_destructive_metadata_fence(
     lease_seconds: int = METADATA_GATE_LEASE_SECONDS,
 ) -> Iterator[dict[str, Any]]:
     """Exclusive fence for final GC revalidation + DELETE (serialized vs formal mutation)."""
+    _require_control_mutation(operation="destructive-gc")
     tid = str(target_id or "").strip()
     owner = str(operation_id or "").strip() or secrets.token_hex(8)
     if not tid:

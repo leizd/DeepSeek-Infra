@@ -69,7 +69,29 @@ def prepare_and_start(
         raise SystemExit("Missing static directory")
     if not (STATIC_DIR / "ui" / "index.html").is_file():
         raise RuntimeError("React frontend build is missing. Run scripts/build_frontend.py.")
-    ensure_startup_dependencies()
+    # Gate A: Authority Verdict before any mutation worker (4.6.4).
+    try:
+        from deepseek_infra.infra.workspace import backup_control_recovery
+
+        authority_verdict = backup_control_recovery.resolve_startup_authority_verdict()
+        logger.info(
+            "control_authority_verdict verdict=%s workers=%s mutations=%s",
+            authority_verdict.get("verdict"),
+            authority_verdict.get("allowWorkers"),
+            authority_verdict.get("allowMutations"),
+        )
+    except Exception:
+        logger.exception("control_authority_verdict_failed")
+        # Fail closed: mark recovery-required so mutation barrier blocks work.
+        try:
+            from deepseek_infra.infra.workspace import backup_control_recovery
+
+            backup_control_recovery.enter_control_recovery_required(reason="authority-verdict-failed")
+            authority_verdict = {"verdict": "control-recovery-required", "allowWorkers": False}
+        except Exception:
+            authority_verdict = {"verdict": "authority-unavailable", "allowWorkers": False}
+
+    ensure_startup_dependencies(authority_verdict=authority_verdict)
     register_mimetypes()
     cleanup_runtime_caches()
     # One-time at startup (not in the periodic loop): opt-in resume of orphaned
@@ -86,20 +108,6 @@ def prepare_and_start(
             logger.info("scheduler_recovered_orphans count=%d", recovered)
     except Exception:
         logger.exception("scheduler_orphan_recovery_failed")
-    # Drain pending control-authority RPO=0 outbox before accepting mutations.
-    try:
-        from deepseek_infra.infra.workspace import backup_control
-
-        authority_ready = backup_control.ensure_control_authority_ready()
-        if authority_ready.get("drained") or authority_ready.get("pending"):
-            logger.info(
-                "control_authority_startup status=%s pending=%s drained=%s",
-                authority_ready.get("status"),
-                authority_ready.get("pending"),
-                authority_ready.get("drained"),
-            )
-    except Exception:
-        logger.exception("control_authority_startup_failed")
     stop_event = start_periodic_cache_cleanup()
 
     bind_host = host or settings.default_host or DEFAULT_HOST
@@ -149,21 +157,38 @@ def shutdown_handle(handle: ServerHandle) -> None:
             pass
 
 
-def ensure_startup_dependencies() -> None:
+def ensure_startup_dependencies(*, authority_verdict: dict | None = None) -> None:
     if multipart_module is None or not supported_multipart_module(multipart_module):
         raise SystemExit(MULTIPART_IMPORT_ERROR)
     recovery = recover_interrupted_restores()
     if recovery["recoveryRequired"]:
         logger.error("workspace_restore_recovery_required", extra={"restores": recovery["recoveryRequired"]})
+    allow_workers = True
+    if authority_verdict is not None:
+        allow_workers = bool(authority_verdict.get("allowWorkers"))
+    else:
+        try:
+            from deepseek_infra.infra.workspace import backup_control_recovery
+
+            allow_workers = backup_control_recovery.workers_allowed_by_verdict()
+        except Exception:
+            logger.exception("control_authority_worker_gate_failed")
+            allow_workers = False
     try:
         from deepseek_infra.infra.workspace import backup_recovery_keeper
 
-        backup_recovery_keeper.start_global_recovery_keeper(reconcile_first=True)
+        if allow_workers:
+            backup_recovery_keeper.start_global_recovery_keeper(reconcile_first=True)
+        else:
+            logger.warning("recovery_lease_keeper_skipped_authority_not_active")
     except Exception:
         logger.exception("recovery_lease_keeper_start_failed")
     from deepseek_infra.backup_worker import start_embedded_worker
 
-    start_embedded_worker()
+    if allow_workers:
+        start_embedded_worker()
+    else:
+        logger.warning("embedded_backup_worker_skipped_authority_not_active")
 
 
 def register_mimetypes() -> None:
