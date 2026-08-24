@@ -230,7 +230,31 @@ def _assert_checkpoint_secretless(checkpoint: dict[str, Any]) -> None:
         )
 
 
+def verify_authority_checkpoint_integrity(checkpoint: dict[str, Any]) -> None:
+    """Validate one checkpoint's schema and digests (not full-history contiguity)."""
+    if str(checkpoint.get("schema") or "") != AUTHORITY_SCHEMA:
+        raise AppError("control-authority-schema-mismatch", code=ErrorCode.INVALID_REQUEST, status=400)
+    gen = int(checkpoint.get("authorityGeneration") or 0)
+    if gen < 1:
+        raise AppError("control-authority-invalid-generation", code=ErrorCode.INVALID_REQUEST, status=400)
+    expected_payload = compute_payload_digest(checkpoint)
+    if str(checkpoint.get("payloadDigest") or "") != expected_payload:
+        raise AppError(
+            f"control-authority-payload-digest-mismatch:{gen}",
+            code=ErrorCode.INVALID_REQUEST,
+            status=409,
+        )
+    expected_digest = compute_checkpoint_digest(checkpoint)
+    if str(checkpoint.get("digest") or "") != expected_digest:
+        raise AppError(
+            f"control-authority-digest-mismatch:{gen}",
+            code=ErrorCode.INVALID_REQUEST,
+            status=409,
+        )
+
+
 def verify_authority_chain(checkpoints: list[dict[str, Any]]) -> None:
+    """Require contiguous genesis→head hash chain (4.6.4 Gate D)."""
     if not checkpoints:
         raise AppError("control-authority-empty-history", code=ErrorCode.INVALID_REQUEST, status=400)
     ordered = sorted(checkpoints, key=lambda item: int(item.get("authorityGeneration") or 0))
@@ -238,11 +262,8 @@ def verify_authority_chain(checkpoints: list[dict[str, Any]]) -> None:
     prev_digest: str | None = None
     prev_gen = 0
     for item in ordered:
-        if str(item.get("schema") or "") != AUTHORITY_SCHEMA:
-            raise AppError("control-authority-schema-mismatch", code=ErrorCode.INVALID_REQUEST, status=400)
+        verify_authority_checkpoint_integrity(item)
         gen = int(item.get("authorityGeneration") or 0)
-        if gen < 1:
-            raise AppError("control-authority-invalid-generation", code=ErrorCode.INVALID_REQUEST, status=400)
         if gen in seen_gen and seen_gen[gen] != str(item.get("digest") or ""):
             raise AppError(
                 f"control-authority-divergent:fork-at-generation-{gen}",
@@ -255,33 +276,39 @@ def verify_authority_chain(checkpoints: list[dict[str, Any]]) -> None:
                 code=ErrorCode.INVALID_REQUEST,
                 status=409,
             )
-        expected_payload = compute_payload_digest(item)
-        if str(item.get("payloadDigest") or "") != expected_payload:
-            raise AppError(
-                f"control-authority-payload-digest-mismatch:{gen}",
-                code=ErrorCode.INVALID_REQUEST,
-                status=409,
-            )
-        expected_digest = compute_checkpoint_digest(item)
-        if str(item.get("digest") or "") != expected_digest:
-            raise AppError(
-                f"control-authority-digest-mismatch:{gen}",
-                code=ErrorCode.INVALID_REQUEST,
-                status=409,
-            )
-        if prev_digest is not None and gen == prev_gen + 1 and item.get("previousDigest") != prev_digest:
-            raise AppError(
-                f"control-authority-divergent:broken-chain-at-{gen}",
-                code=ErrorCode.INVALID_REQUEST,
-                status=409,
-            )
+        if prev_gen == 0:
+            if item.get("previousDigest") not in (None, ""):
+                raise AppError(
+                    "control-authority-genesis-previous-must-be-null",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
+            if gen != 1:
+                raise AppError(
+                    f"control-authority-gap:expected-genesis-1-got-{gen}",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
+        else:
+            if gen != prev_gen + 1:
+                raise AppError(
+                    f"control-authority-gap:expected-{prev_gen + 1}-got-{gen}",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
+            if item.get("previousDigest") != prev_digest:
+                raise AppError(
+                    f"control-authority-divergent:broken-chain-at-{gen}",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
         seen_gen[gen] = str(item["digest"])
         prev_digest = str(item["digest"])
         prev_gen = gen
 
 
 def select_authority_heads(replicas: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Pick the unique highest generation head; fail closed on same-gen digest fork."""
+    """Pick unique highest generation only when it is a verified tip of contiguous history."""
     if not replicas:
         raise AppError("control-authority-no-replicas", code=ErrorCode.INVALID_REQUEST, status=400)
     best_gen = -1
@@ -528,7 +555,8 @@ def load_authority_bundle(root: Path) -> dict[str, Any]:
 
 def apply_authority_checkpoint_to_fresh_db(checkpoint: dict[str, Any]) -> None:
     """Replay non-rebuildable authority into the current control DB (recovery use)."""
-    verify_authority_chain([checkpoint])
+    # Tip integrity only — full genesis→head was validated when loading replica history.
+    verify_authority_checkpoint_integrity(checkpoint)
     _assert_checkpoint_secretless(checkpoint)
     now = _utc_iso()
     policies = list(checkpoint.get("policies") or [])

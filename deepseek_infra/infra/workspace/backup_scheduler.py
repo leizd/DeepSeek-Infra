@@ -1402,14 +1402,22 @@ class BackupWorker:
         if self._thread is not None:
             return
         try:
-            from deepseek_infra.infra.workspace import backup_control
+            from deepseek_infra.infra.workspace import backup_control_recovery
 
-            backup_control.ensure_control_authority_ready()
+            verdict = backup_control_recovery.resolve_startup_authority_verdict()
+            if not verdict.get("allowWorkers"):
+                _logger.warning(
+                    "backup worker refused to start: authority verdict=%s",
+                    verdict.get("verdict"),
+                    extra={"instanceId": self.instance_id},
+                )
+                return
         except Exception:
             _logger.exception(
                 "backup worker control authority startup failed",
                 extra={"instanceId": self.instance_id},
             )
+            return
         if self.reconcile_on_start:
             try:
                 from deepseek_infra.infra.workspace import backup_reconcile

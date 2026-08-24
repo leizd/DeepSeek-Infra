@@ -5,24 +5,24 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.6.3-blue)
+![Version](https://img.shields.io/badge/version-4.6.4-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.6.3 — Disaster-Recoverable Control Authority (skeleton).** Secretless `control-authority-v1` hash-chained checkpoints, control schema v7 boot epoch / recovery state, and fail-closed reconstruction after local control DB loss. No wire-format changes.
+> **4.6.4 — Production Control Authority Activation.** Startup Authority Verdict before workers, central mutation barrier on control primitives, contiguous genesis→head authority chains. No wire-format changes.
 
-## 4.6.3 at a glance
+## 4.6.4 at a glance
 
-- `control-authority-v1` checkpoints never carry S3/Age/API secrets.
-- Authority generations are hash-chained; divergent heads fail closed.
-- Missing/corrupt control authority enters `control-recovery-required` (mutations blocked).
-- Fresh control DB reconstruction replays non-rebuildable authority and advances `bootEpoch`; ephemeral leases/fences do not resurrect.
+- Startup Authority Verdict classifies ACTIVE / RECOVERY_REQUIRED / AUTHORITY_UNAVAILABLE before workers start.
+- Missing local DB + remote Authority never auto-creates ACTIVE authority.
+- Mutation barrier on policy/target/drain and formal/destructive fences.
+- Contiguous genesis→head hash chains (generation gaps rejected).
 - Frozen compatibility surface unchanged: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age.
 
-See the [4.6.3 release notes](docs/releases/4.6.3.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.6.4 release notes](docs/releases/4.6.4.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

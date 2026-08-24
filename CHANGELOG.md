@@ -4,6 +4,16 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.6.4] - Production Control Authority Activation (2026-08-24)
+
+### Production Control Authority Activation & Monotonic Replica Recovery
+
+- **Startup Authority Verdict (Gate A)**: `resolve_startup_authority_verdict` classifies ACTIVE / RECOVERY_REQUIRED / AUTHORITY_UNAVAILABLE / genesis before any backup worker or recovery keeper starts; missing local DB + remote Authority never auto-creates ACTIVE.
+- **Central Mutation Barrier (Gate B)**: `assert_control_mutations_allowed` enforced on policy/target/drain primitives and formal/destructive metadata fences (`control-authority-barrier`).
+- **Strict genesis→head chain (Gate D)**: `verify_authority_chain` rejects generation gaps and non-null genesis previousDigest.
+- **Startup order**: Authority Verdict runs before embedded workers; workers refuse start when verdict disallows.
+- **Frozen Compatibility Surface**: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age unchanged.
+
 ## [4.6.3] - Disaster-Recoverable Control Authority (skeleton) (2026-08-24)
 
 ### Disaster-Recoverable Control Authority (skeleton)
