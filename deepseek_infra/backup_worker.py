@@ -18,17 +18,29 @@ def create_worker(instance_id: str | None = None) -> backup_scheduler.BackupWork
     )
 
 
+def _startup_control_authority() -> None:
+    """Best-effort drain of pending authority outbox before worker ticks."""
+    try:
+        from deepseek_infra.infra.workspace import backup_control
+
+        backup_control.ensure_control_authority_ready()
+    except Exception:
+        pass
+
+
 def start_embedded_worker() -> backup_scheduler.BackupWorker | None:
     """Start the embedded worker when DEEPSEEK_BACKUP_WORKER=embedded."""
     mode = os.environ.get("DEEPSEEK_BACKUP_WORKER", "disabled").strip().lower()
     if mode != "embedded":
         return None
+    _startup_control_authority()
     worker = create_worker()
     worker.start()
     return worker
 
 
 def main() -> int:
+    _startup_control_authority()
     worker = create_worker()
     worker.start()
     try:

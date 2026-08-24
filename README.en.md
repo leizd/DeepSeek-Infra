@@ -5,23 +5,24 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.6.2-blue)
+![Version](https://img.shields.io/badge/version-4.6.3-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.6.2 — Recovery Control Plane Stabilization & Release Hardening.** Formalizes post-4.6.0 correctness and CI fixes: incomplete-index GC fail-safe fallback, placement/control test hygiene, Python matrix coverage restored to 95%, and release-surface consistency. No wire-format changes.
+> **4.6.3 — Disaster-Recoverable Control Authority (skeleton).** Secretless `control-authority-v1` hash-chained checkpoints, control schema v7 boot epoch / recovery state, and fail-closed reconstruction after local control DB loss. No wire-format changes.
 
-## 4.6.2 at a glance
+## 4.6.3 at a glance
 
-- Retirement GC: incomplete index coverage never solely authorizes deletes; over-retain known hits and fall back to full Receipt scan.
-- Coverage contract restored to 95% across the 3.10 / 3.11 / 3.12 matrix.
-- Release hygiene: checklist and gates derive versions from `VERSION`; Docker/architecture surfaces stay consistent.
+- `control-authority-v1` checkpoints never carry S3/Age/API secrets.
+- Authority generations are hash-chained; divergent heads fail closed.
+- Missing/corrupt control authority enters `control-recovery-required` (mutations blocked).
+- Fresh control DB reconstruction replays non-rebuildable authority and advances `bootEpoch`; ephemeral leases/fences do not resurrect.
 - Frozen compatibility surface unchanged: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age.
 
-See the [4.6.2 release notes](docs/releases/4.6.2.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.6.3 release notes](docs/releases/4.6.3.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

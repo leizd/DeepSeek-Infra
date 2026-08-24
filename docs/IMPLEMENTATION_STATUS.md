@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.6.2。
+适用版本：v4.6.3。
 
-> 4.6.2 正式收口 4.6.0 merge 后的 Recovery Control Plane 稳定化：incomplete-index GC fail-safe、placement/control 测试与 mypy 卫生、Python 矩阵 coverage 恢复 95%、release checklist/version surface 一致性。Wire 面继续冻结。
+> 4.6.3 骨架：secretless `control-authority-v1`、hash-chained authority generations、control schema v7 boot epoch / recovery state、本地 control DB 灾难后 fail-closed 重建入口。完整三 MinIO disaster E2E 与 mutation RPO=0 anchor 为 follow-through。Wire 面继续冻结。
 
 > 4.5.8 已把 Repair、Replication、Rebalance、Drain、Retirement、Capacity 与 Transfer QoS 收敛到持久化 Storage Control Plane：SQLite 提供跨进程 Policy/Topology CAS、Maintenance Supervisor 以 durable cursor 推进后台工作、Copy Retirement 保留 Receipt v4/Commit v4 并用 authenticated retirement marker 管理 Payload GC、Placement 以单个 Logical Recovery Point 计算 Failure Domain/Region 目标、Multipart 恢复与 provider `ListParts` 对账、生产数据流受 global/source/destination 三层 P0-P6 QoS 约束。
 

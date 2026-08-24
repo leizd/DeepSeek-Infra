@@ -5,14 +5,26 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.6.2.
+Applicable version: v4.6.3.
+
+## 4.6.3 development evidence contract
+
+4.6.3 skeleton: secretless `control-authority-v1`, hash-chained authority
+generations, control schema v7 boot/recovery state, and
+`reconstruct_control_authority` after local control DB loss.
+Unit contracts: `tests/test_backup_463_control_authority.py`.
+Real three-MinIO disaster E2E:
+`tests/test_backup_463_real_control_authority_disaster_e2e.py`
+(scenario `real-three-minio-control-authority-disaster-recovery` on the
+storage-control-plane MinIO Evidence runner).
 
 ## 4.6.2 development evidence contract
 
 4.6.2 is a stabilization patch on 4.6.0: incomplete-index GC fail-safe fallback,
 placement/control test hygiene, Python matrix coverage restored to 95%, and
-release-surface consistency. Unit contracts remain under `tests/test_backup_460_*.py`.
-Real three-MinIO Evidence still requires the exact-merge CI producer path.
+release-surface consistency. Unit contracts remain under `tests/test_backup_460_*.py`
+and `tests/test_backup_462_*.py`. Real three-MinIO Evidence still requires the
+exact-merge CI producer path (includes `real-three-minio-transactional-gc-fencing`).
 
 
 ## 4.6.0 development evidence contract
@@ -65,49 +77,49 @@ succeeds. For development setup and quality gates, see [AGENTS.md](../AGENTS.md)
 
 - `docs/evidence/headless-mcp-bridge.json`
 - `docs/evidence/a2a-external-peer.json`
-- `docs/evidence/ga-v4.6.2.json`
-- `docs/evidence/workspace-v4.6.2.json`
-- `docs/evidence/edge-router-v4.6.2.json`
-- `docs/evidence/media-v4.6.2.json`
-- `docs/evidence/browser-v4.6.2.json`
-- `docs/evidence/automation-v4.6.2.json`
-- `docs/evidence/skills-v4.6.2.json`
-- `docs/evidence/skills-ui-v4.6.2.json`
-- `docs/evidence/skill-builder-v4.6.2.json`
-- `docs/evidence/skill-packs-v4.6.2.json`
-- `docs/evidence/skill-eval-dashboard-v4.6.2.json`
-- `docs/evidence/skill-versioning-v4.6.2.json`
-- `docs/evidence/skill-analytics-v4.6.2.json`
-- `docs/evidence/skill-security-v4.6.2.json`
-- `docs/evidence/skill-catalog-v4.6.2.json`
-- `docs/evidence/context-taint-v4.6.2.json`
-- `docs/evidence/semantic-cache-onnx-v4.6.2.json`
-- `docs/evidence/upgrade-rollback-v4.6.2.json`
-- `docs/evidence/protocol-contract-v4.6.2.json`
-- `docs/evidence/frontend-bundle-v4.6.2.json`
-- `docs/evidence/frontend-browser-v4.6.2.json`
+- `docs/evidence/ga-v4.6.3.json`
+- `docs/evidence/workspace-v4.6.3.json`
+- `docs/evidence/edge-router-v4.6.3.json`
+- `docs/evidence/media-v4.6.3.json`
+- `docs/evidence/browser-v4.6.3.json`
+- `docs/evidence/automation-v4.6.3.json`
+- `docs/evidence/skills-v4.6.3.json`
+- `docs/evidence/skills-ui-v4.6.3.json`
+- `docs/evidence/skill-builder-v4.6.3.json`
+- `docs/evidence/skill-packs-v4.6.3.json`
+- `docs/evidence/skill-eval-dashboard-v4.6.3.json`
+- `docs/evidence/skill-versioning-v4.6.3.json`
+- `docs/evidence/skill-analytics-v4.6.3.json`
+- `docs/evidence/skill-security-v4.6.3.json`
+- `docs/evidence/skill-catalog-v4.6.3.json`
+- `docs/evidence/context-taint-v4.6.3.json`
+- `docs/evidence/semantic-cache-onnx-v4.6.3.json`
+- `docs/evidence/upgrade-rollback-v4.6.3.json`
+- `docs/evidence/protocol-contract-v4.6.3.json`
+- `docs/evidence/frontend-bundle-v4.6.3.json`
+- `docs/evidence/frontend-browser-v4.6.3.json`
 - `evals/reports/latest.json`
 - `evals/reports/agent-latest.json`
 - `evals/reports/baseline-compare-latest.json`
 - `evals/reports/security-latest.json`
-- `evals/reports/skills-v4.6.2.json`
-- `evals/reports/media-v4.6.2.json`
-- `evals/reports/browser-v4.6.2.json`
-- `evals/reports/automation-v4.6.2.json`
-- `docs/evidence/rust-sidecar-image-v4.6.2.json`
-- `docs/evidence/hybrid-runtime-e2e-v4.6.2.json`
-- `docs/evidence/gateway-request-parity-v4.6.2.json`
-- `docs/evidence/mcp-protocol-parity-v4.6.2.json`
-- `docs/evidence/rag-parity-v4.6.2.json`
-- `docs/evidence/rag-document-preparation-parity-v4.6.2.json`
-- `docs/evidence/rag-vector-binary-parity-v4.6.2.json`
-- `docs/evidence/rust-coverage-v4.6.2.json`
-- `docs/evidence/rust-sidecar-performance-v4.6.2.json`
-- `docs/evidence/packed-delta-s3-v4.6.2.json`
-- `docs/evidence/object-set-s3-v4.6.2.json`
-- `docs/evidence/recovery-faults-v4.6.2.json`
-- `docs/evidence/replica-healing-s3-v4.6.2.json`
-- `docs/evidence/storage-control-plane-minio-v4.6.2.json`
+- `evals/reports/skills-v4.6.3.json`
+- `evals/reports/media-v4.6.3.json`
+- `evals/reports/browser-v4.6.3.json`
+- `evals/reports/automation-v4.6.3.json`
+- `docs/evidence/rust-sidecar-image-v4.6.3.json`
+- `docs/evidence/hybrid-runtime-e2e-v4.6.3.json`
+- `docs/evidence/gateway-request-parity-v4.6.3.json`
+- `docs/evidence/mcp-protocol-parity-v4.6.3.json`
+- `docs/evidence/rag-parity-v4.6.3.json`
+- `docs/evidence/rag-document-preparation-parity-v4.6.3.json`
+- `docs/evidence/rag-vector-binary-parity-v4.6.3.json`
+- `docs/evidence/rust-coverage-v4.6.3.json`
+- `docs/evidence/rust-sidecar-performance-v4.6.3.json`
+- `docs/evidence/packed-delta-s3-v4.6.3.json`
+- `docs/evidence/object-set-s3-v4.6.3.json`
+- `docs/evidence/recovery-faults-v4.6.3.json`
+- `docs/evidence/replica-healing-s3-v4.6.3.json`
+- `docs/evidence/storage-control-plane-minio-v4.6.3.json`
 
 ## Historical 4.4.15 evidence contract
 

@@ -30,11 +30,10 @@ def control_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_schema_v6_and_migrations(control_db: Path) -> None:
-    assert backup_control.CONTROL_SCHEMA_VERSION == 6
-    assert backup_control.schema_version() == 6
+    assert backup_control.CONTROL_SCHEMA_VERSION >= 6
+    assert backup_control.schema_version() == backup_control.CONTROL_SCHEMA_VERSION
     migrations = backup_control.list_schema_migrations()
-    assert migrations[-1]["version"] == 6
-    assert "metadata-fences" in migrations[-1]["description"]
+    assert any(item["version"] == 6 and "metadata-fences" in item["description"] for item in migrations)
 
 
 def test_formal_receipt_mutation_fail_closed_requires_target(control_db: Path) -> None:
@@ -386,6 +385,20 @@ def test_gc_intent_validation_filters_and_expired_gate_takeover(control_db: Path
     with backup_control.begin_destructive_metadata_fence("t-expired", operation_id="new-owner") as guard:
         assert guard["fencingToken"] == 8
         assert guard["ownerId"] == "new-owner"
+        assert backup_control.metadata_gate_is_current(
+            "t-expired",
+            owner_id="new-owner",
+            fencing_token=8,
+            mode=backup_control.METADATA_GATE_DESTRUCTIVE,
+        )
+        renewed = backup_control.renew_target_metadata_gate(
+            "t-expired",
+            owner_id="new-owner",
+            fencing_token=8,
+            mode=backup_control.METADATA_GATE_DESTRUCTIVE,
+        )
+        assert renewed["fencingToken"] == 8
+        assert renewed["leaseUntil"]
 
     with backup_control._connect() as conn:
         backup_control._begin_immediate(conn)
@@ -409,6 +422,171 @@ def test_gc_intent_validation_filters_and_expired_gate_takeover(control_db: Path
         )
         conn.execute("COMMIT")
     assert renewed_token == first_token
+
+
+def test_expired_metadata_fence_never_deletes_after_takeover(
+    control_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stale GC holder must not DELETE after lease expiry + token takeover."""
+    from contextlib import contextmanager
+
+    target_root = tmp_path / "tgt-fence-takeover"
+    dig = "a1" + ("b" * 62)
+    key = object_key(dig)
+    path = target_root.joinpath(*key.split("/"))
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"must-survive-stale-gc")
+    (target_root / "receipts").mkdir(parents=True)
+    receipt = {"backupId": "gone", "policyId": "p1", "objects": [{"digest": dig, "size": 20}]}
+    (target_root / "receipts" / "gone.json").write_text(json.dumps(receipt), encoding="utf-8")
+
+    class _T:
+        target_id = "t-fence-takeover"
+        root = target_root
+        store = None
+
+    monkeypatch.setattr(backup_retirement, "_payload_key_is_retained", lambda *a, **k: False)
+
+    real_begin = backup_control.begin_destructive_metadata_fence
+    delete_calls: list[str] = []
+
+    @contextmanager
+    def _stale_after_takeover(target_id: str, **kwargs: Any):
+        with real_begin(target_id, **kwargs) as guard:
+            with backup_control._connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE target_metadata_gates
+                    SET lease_until = ?, updated_at = ?
+                    WHERE target_id = ?
+                    """,
+                    ("2000-01-01T00:00:00+00:00", "2000-01-01T00:00:00Z", target_id),
+                )
+            with real_begin(target_id, operation_id="publisher-takeover") as newer:
+                assert int(newer["fencingToken"]) > int(guard["fencingToken"])
+            yield guard
+
+    real_delete = backup_retirement._delete_payload_if_match
+
+    def _track_delete(target: Any, object_key_arg: str, *, expected_etag: str | None) -> int:
+        delete_calls.append(object_key_arg)
+        return real_delete(target, object_key_arg, expected_etag=expected_etag)
+
+    monkeypatch.setattr(backup_control, "begin_destructive_metadata_fence", _stale_after_takeover)
+    monkeypatch.setattr(backup_retirement, "_delete_payload_if_match", _track_delete)
+
+    reclaimed = backup_retirement._reclaim_unreferenced_payloads(
+        _T(),
+        receipt=receipt,
+        retiring_backup_id="gone",
+        owner_id="gc-stale",
+    )
+    assert reclaimed == 0
+    assert delete_calls == []
+    assert path.is_file()
+    intents = backup_control.list_ciphertext_gc_intents("t-fence-takeover")
+    assert intents
+    assert all(i["state"] != "reclaimed" for i in intents)
+    assert any(i.get("error") == "metadata-fence-lost" for i in intents)
+
+
+def test_metadata_fence_renewal_failure_aborts_destructive_gc(
+    control_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Renewal failure mid critical section must abort DELETE (leave garbage)."""
+    target_root = tmp_path / "tgt-fence-renew"
+    dig = "c2" + ("d" * 62)
+    key = object_key(dig)
+    path = target_root.joinpath(*key.split("/"))
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"must-survive-renew-fail")
+    (target_root / "receipts").mkdir(parents=True)
+    receipt = {"backupId": "old", "policyId": "p1", "objects": [{"digest": dig, "size": 22}]}
+    (target_root / "receipts" / "old.json").write_text(json.dumps(receipt), encoding="utf-8")
+
+    class _T:
+        target_id = "t-fence-renew"
+        root = target_root
+        store = None
+
+    monkeypatch.setattr(backup_retirement, "_payload_key_is_retained", lambda *a, **k: False)
+
+    def _renew_fails(*_a: Any, **_k: Any) -> dict[str, Any]:
+        raise AppError(
+            "blocked-metadata-gate:lease-expired:t-fence-renew",
+            code=ErrorCode.INVALID_REQUEST,
+            status=409,
+        )
+
+    delete_calls: list[str] = []
+    real_delete = backup_retirement._delete_payload_if_match
+
+    def _track_delete(target: Any, object_key_arg: str, *, expected_etag: str | None) -> int:
+        delete_calls.append(object_key_arg)
+        return real_delete(target, object_key_arg, expected_etag=expected_etag)
+
+    monkeypatch.setattr(backup_control, "renew_target_metadata_gate", _renew_fails)
+    monkeypatch.setattr(backup_retirement, "_delete_payload_if_match", _track_delete)
+
+    reclaimed = backup_retirement._reclaim_unreferenced_payloads(
+        _T(),
+        receipt=receipt,
+        retiring_backup_id="old",
+        owner_id="gc-renew",
+    )
+    assert reclaimed == 0
+    assert delete_calls == []
+    assert path.is_file()
+    intents = backup_control.list_ciphertext_gc_intents("t-fence-renew")
+    assert any(i.get("error") == "metadata-fence-lost" for i in intents)
+
+
+def test_assert_metadata_gate_rejects_stale_token_after_takeover(control_db: Path) -> None:
+    with backup_control.begin_destructive_metadata_fence("t-assert", operation_id="gc-a") as stale:
+        token_a = int(stale["fencingToken"])
+    with backup_control._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO target_metadata_gates(target_id, owner_id, mode, fencing_token, lease_until, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "t-assert",
+                "gc-a",
+                backup_control.METADATA_GATE_DESTRUCTIVE,
+                token_a,
+                "2000-01-01T00:00:00+00:00",
+                "2000-01-01T00:00:00Z",
+            ),
+        )
+    with backup_control.begin_destructive_metadata_fence("t-assert", operation_id="gc-b") as fresh:
+        assert int(fresh["fencingToken"]) == token_a + 1
+        assert backup_control.metadata_gate_is_current(
+            "t-assert",
+            owner_id="gc-b",
+            fencing_token=int(fresh["fencingToken"]),
+            mode=backup_control.METADATA_GATE_DESTRUCTIVE,
+        )
+        assert not backup_control.metadata_gate_is_current(
+            "t-assert",
+            owner_id="gc-a",
+            fencing_token=token_a,
+            mode=backup_control.METADATA_GATE_DESTRUCTIVE,
+        )
+        with pytest.raises(AppError, match="stale-token|owner-mismatch"):
+            backup_control.assert_metadata_gate_current(
+                "t-assert",
+                owner_id="gc-a",
+                fencing_token=token_a,
+                mode=backup_control.METADATA_GATE_DESTRUCTIVE,
+            )
+        with pytest.raises(AppError, match="stale-token|owner-mismatch|lease-expired"):
+            backup_control.renew_target_metadata_gate(
+                "t-assert",
+                owner_id="gc-a",
+                fencing_token=token_a,
+                mode=backup_control.METADATA_GATE_DESTRUCTIVE,
+            )
 
 
 def test_reconcile_interrupted_gc_intents_handles_every_terminal_outcome(
@@ -497,7 +675,12 @@ def test_two_phase_gc_cancels_all_intents_when_receipt_generation_changes(
     class _MutatingFence:
         def __enter__(self) -> dict[str, Any]:
             backup_control.note_formal_receipt_mutation(target_id)
-            return {}
+            return {
+                "targetId": target_id,
+                "ownerId": "gc-owner",
+                "mode": backup_control.METADATA_GATE_DESTRUCTIVE,
+                "fencingToken": 1,
+            }
 
         def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             return None
@@ -505,6 +688,12 @@ def test_two_phase_gc_cancels_all_intents_when_receipt_generation_changes(
     monkeypatch.setattr(backup_retirement, "_payload_key_is_retained", lambda *args, **kwargs: False)
     monkeypatch.setattr(backup_retirement, "_object_etag_and_size", lambda *args, **kwargs: ("etag", 9))
     monkeypatch.setattr(backup_control, "begin_destructive_metadata_fence", lambda *args, **kwargs: _MutatingFence())
+    monkeypatch.setattr(
+        backup_control,
+        "renew_target_metadata_gate",
+        lambda *args, **kwargs: {"fencingToken": 1, "leaseUntil": "2099-01-01T00:00:00Z"},
+    )
+    monkeypatch.setattr(backup_control, "assert_metadata_gate_current", lambda *args, **kwargs: None)
 
     assert backup_retirement._reclaim_unreferenced_payloads(
         target,

@@ -487,7 +487,12 @@ def promote_primary_target(
                 targets.append({"targetId": prev_primary, "mode": "required"})
             repl["targets"] = targets
             updated_policy["replication"] = repl
-        backup_policies.update_policy(policy_id, updated_policy, expected_revision=curr_rev)
+        backup_policies.update_policy(
+            policy_id,
+            updated_policy,
+            expected_revision=curr_rev,
+            generation_kind="promotion",
+        )
 
         # Update continuity state
         now_str = _utc_iso()

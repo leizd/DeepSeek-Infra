@@ -1401,6 +1401,15 @@ class BackupWorker:
     def start(self) -> None:
         if self._thread is not None:
             return
+        try:
+            from deepseek_infra.infra.workspace import backup_control
+
+            backup_control.ensure_control_authority_ready()
+        except Exception:
+            _logger.exception(
+                "backup worker control authority startup failed",
+                extra={"instanceId": self.instance_id},
+            )
         if self.reconcile_on_start:
             try:
                 from deepseek_infra.infra.workspace import backup_reconcile
