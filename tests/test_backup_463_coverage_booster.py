@@ -18,7 +18,7 @@ from deepseek_infra.infra.workspace import (
     backup_object_set,
     backup_publish,
 )
-from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore, object_key, receipt_key
+from deepseek_infra.infra.workspace.backup_target_store import MemoryTargetStore, receipt_key
 
 
 @pytest.fixture
