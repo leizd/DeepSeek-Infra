@@ -269,40 +269,15 @@ def verify_authority_chain(checkpoints: list[dict[str, Any]]) -> None:
                 code=ErrorCode.INVALID_REQUEST,
                 status=409,
             )
-        if prev_digest is not None and gen == prev_gen + 1:
-            if item.get("previousDigest") != prev_digest:
-                raise AppError(
-                    f"control-authority-divergent:broken-chain-at-{gen}",
-                    code=ErrorCode.INVALID_REQUEST,
-                    status=409,
-                )
-        if gen == prev_gen and str(item.get("digest")) != seen_gen.get(gen):
+        if prev_digest is not None and gen == prev_gen + 1 and item.get("previousDigest") != prev_digest:
             raise AppError(
-                f"control-authority-divergent:fork-at-generation-{gen}",
+                f"control-authority-divergent:broken-chain-at-{gen}",
                 code=ErrorCode.INVALID_REQUEST,
                 status=409,
             )
-        if gen > prev_gen + 1 and prev_gen != 0:
-            # Gaps allowed only when verifying a sparse tip set; full history callers pass contiguous.
-            pass
         seen_gen[gen] = str(item["digest"])
         prev_digest = str(item["digest"])
         prev_gen = gen
-    # Explicit fork detection for duplicate generations with different digests already handled.
-    # Contiguous chain from min..max when length matches span.
-    gens = [int(item["authorityGeneration"]) for item in ordered]
-    if len(gens) >= 2 and max(gens) - min(gens) + 1 == len(gens):
-        for index in range(1, len(ordered)):
-            cur = ordered[index]
-            prev = ordered[index - 1]
-            if int(cur["authorityGeneration"]) != int(prev["authorityGeneration"]) + 1:
-                raise AppError("control-authority-gap", code=ErrorCode.INVALID_REQUEST, status=409)
-            if cur.get("previousDigest") != prev.get("digest"):
-                raise AppError(
-                    f"control-authority-divergent:broken-chain-at-{cur['authorityGeneration']}",
-                    code=ErrorCode.INVALID_REQUEST,
-                    status=409,
-                )
 
 
 def select_authority_heads(replicas: dict[str, dict[str, Any]]) -> dict[str, Any]:

@@ -388,6 +388,306 @@ def test_reconstruct_incomplete_checkpoint(control_db: Path, tmp_path: Path) -> 
         monkey.undo()
 
 
+def test_allowed_secret_adjacent_and_invalid_generation_in_chain(control_db: Path) -> None:
+    assert backup_control_authority._key_is_forbidden("credential_reference") is False
+    assert backup_control_authority._key_is_forbidden("secretAccessKey") is True
+    # gen < 1 inside verify (bypass build)
+    bad = {
+        "schema": backup_control_authority.AUTHORITY_SCHEMA,
+        "authorityGeneration": 0,
+        "previousDigest": None,
+        "policies": [],
+        "targets": [],
+        "receiptMutationGenerations": {},
+        "promotionEpochs": {},
+        "drainGenerations": {},
+        "placementGenerations": {},
+        "controlSchemaVersion": 7,
+        "createdAt": "2026-08-24T00:00:00Z",
+    }
+    bad["payloadDigest"] = backup_control_authority.compute_payload_digest(bad)
+    bad["digest"] = backup_control_authority.compute_checkpoint_digest(bad)
+    with pytest.raises(AppError, match="invalid-generation"):
+        backup_control_authority.verify_authority_chain([bad])
+
+
+def test_select_heads_without_checkpoint_blob(control_db: Path) -> None:
+    chosen = backup_control_authority.select_authority_heads(
+        {"r1": {"generation": 3, "digest": "a" * 64}}
+    )
+    assert chosen["generation"] == 3
+    assert chosen["checkpoint"]["digest"] == "a" * 64
+
+
+def test_put_absent_conflict_and_store_list_pagination(control_db: Path) -> None:
+    class _ConflictStore:
+        def stat(self, key: str) -> Any:
+            return None
+
+        def put_if_absent(self, *a: Any, **k: Any) -> Any:
+            return SimpleNamespace(created=False)
+
+        def get_bytes(self, key: str) -> bytes | None:
+            return b"other"
+
+    with pytest.raises(OSError, match="absent-conflict"):
+        backup_control_authority._put_json_replace(_ConflictStore(), "k", {"a": 1})
+
+    class _Page:
+        def __init__(self, objects: list[Any], cursor: str | None) -> None:
+            self.objects = objects
+            self.cursor = cursor
+
+    ckpt = _ckpt(generation=1)
+    ckpt_raw = (backup_control_authority._canonical_json(ckpt) + "\n").encode()
+    head = {
+        "schema": backup_control_authority.AUTHORITY_SCHEMA,
+        "authorityGeneration": 1,
+        "digest": ckpt["digest"],
+        "checkpointKey": backup_control_authority.authority_checkpoint_key(1),
+    }
+    head_raw = (backup_control_authority._canonical_json(head) + "\n").encode()
+
+    class _PagedStore:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_bytes(self, key: str) -> bytes | None:
+            if key == backup_control_authority.authority_head_key():
+                return head_raw
+            if key == backup_control_authority.authority_checkpoint_key(1):
+                return ckpt_raw
+            if key.endswith("bad.json"):
+                return b"not-json"
+            if key.endswith("gone.json"):
+                return None
+            return None
+
+        def list_objects(self, prefix: str, *, cursor: str | None = None, limit: int = 200) -> Any:
+            self.calls += 1
+            if cursor is None:
+                return _Page(
+                    [
+                        SimpleNamespace(key=f"{prefix}gone.json"),
+                        SimpleNamespace(key=f"{prefix}bad.json"),
+                        SimpleNamespace(key=backup_control_authority.authority_checkpoint_key(1)),
+                    ],
+                    cursor="next",
+                )
+            return _Page([], cursor=None)
+
+    store = _PagedStore()
+    bundle = backup_control_authority.load_authority_bundle_from_store(store)
+    assert bundle["checkpoint"] is not None
+    assert store.calls >= 2
+
+
+def test_apply_skips_non_dict_entries(control_db: Path) -> None:
+    ckpt = _ckpt(generation=1)
+    ckpt["policies"] = ["bad", {"policyId": "p-nd", "policyRevision": 1}]
+    ckpt["targets"] = ["bad", {"targetId": "t-nd", "kind": "s3"}]
+    # recompute digests after mutation
+    ckpt.pop("digest", None)
+    ckpt.pop("payloadDigest", None)
+    ckpt["payloadDigest"] = backup_control_authority.compute_payload_digest(ckpt)
+    ckpt["digest"] = backup_control_authority.compute_checkpoint_digest(ckpt)
+    backup_control_authority.apply_authority_checkpoint_to_fresh_db(ckpt)
+    assert backup_control.get_policy("p-nd") is not None
+
+
+def test_write_empty_roots_stores_return_empty(control_db: Path) -> None:
+    ckpt = _ckpt(generation=1)
+    assert backup_control_authority._write_checkpoint_to_roots(ckpt, []) == []
+    assert backup_control_authority._write_checkpoint_to_stores(ckpt, []) == []
+
+
+def test_drain_with_stores_and_no_durable(control_db: Path, tmp_path: Path) -> None:
+    root = tmp_path / "ok"
+    root.mkdir()
+    ckpt = _ckpt(generation=1)
+    backup_control_authority._enqueue_authority_outbox(kind="d", checkpoint=ckpt)
+    store = MemoryTargetStore()
+    backup_control_authority.configure_authority_anchor_roots([root])
+    backup_control_authority.configure_authority_anchor_stores([store])
+    out = backup_control_authority.drain_pending_authority_outbox(rpo_zero=True)
+    assert out["drained"] == 1
+    # second pending with empty write path: roots=[] stores=[] after clear mid-drain
+    backup_control_authority._enqueue_authority_outbox(kind="d2", checkpoint=ckpt)
+    backup_control_authority.configure_authority_anchor_roots(None)
+    backup_control_authority.configure_authority_anchor_stores(None)
+    with pytest.raises(AppError, match="no-roots"):
+        backup_control_authority.drain_pending_authority_outbox(rpo_zero=True)
+
+
+def test_drain_rpo_false_no_roots_continues(control_db: Path) -> None:
+    ckpt = _ckpt(generation=1)
+    backup_control_authority._enqueue_authority_outbox(kind="d3", checkpoint=ckpt)
+    result = backup_control_authority.drain_pending_authority_outbox(rpo_zero=False)
+    assert result["failed"] >= 1
+
+
+def test_discover_store_tip_none(control_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = MemoryTargetStore()
+
+    def _bundle(*a: Any, **k: Any) -> dict[str, Any]:
+        return {"head": {"authorityGeneration": 1, "digest": "a" * 64}, "checkpoint": None, "history": []}
+
+    monkeypatch.setattr(backup_control_authority, "load_authority_bundle_from_store", _bundle)
+    assert backup_control_recovery.discover_authority_replicas_from_stores([store]) == {}
+
+
+def test_iter_commits_store_errors_and_pagination(control_db: Path) -> None:
+    class _Meta:
+        def __init__(self, key: str) -> None:
+            self.key = key
+
+    class _Page:
+        def __init__(self, objects: list[Any], cursor: str | None) -> None:
+            self.objects = objects
+            self.cursor = cursor
+
+    class _Store:
+        def __init__(self) -> None:
+            self.n = 0
+
+        def list_objects(self, prefix: str, *, cursor: str | None = None, limit: int = 200) -> Any:
+            self.n += 1
+            if cursor is None:
+                return _Page([_Meta("commits/p/a.json"), _Meta("commits/p/b.json")], "c2")
+            return _Page([_Meta("commits/p/c.json")], None)
+
+        def get_bytes(self, key: str) -> bytes | None:
+            if key.endswith("a.json"):
+                raise RuntimeError("boom")
+            if key.endswith("b.json"):
+                return b"not-json"
+            marker = {
+                "schemaVersion": 4,
+                "backupId": "bx",
+                "policyId": "p",
+                "receiptDigest": "0" * 64,
+                "targetGeneration": 1,
+                "commitHash": "x",
+            }
+            return (json.dumps(marker) + "\n").encode()
+
+    target = SimpleNamespace(target_id="t", root=None, store=_Store())
+    markers = backup_control_recovery._iter_commit_markers(target)
+    assert len(markers) == 1
+
+
+def test_load_receipt_oserror_and_store_exception(control_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "r"
+    (root / "receipts").mkdir(parents=True)
+    path = root / "receipts" / "b.json"
+    path.write_text("{}", encoding="utf-8")
+    target = SimpleNamespace(target_id="t", root=root, store=None)
+
+    def _boom(*a: Any, **k: Any) -> bytes:
+        raise OSError("nope")
+
+    monkeypatch.setattr(Path, "read_bytes", _boom)
+    assert backup_control_recovery._load_receipt_bytes(target, "b") is None
+
+    class _Store:
+        def get_bytes(self, key: str) -> bytes | None:
+            raise RuntimeError("down")
+
+    assert backup_control_recovery._load_receipt_bytes(SimpleNamespace(root=None, store=_Store()), "b") is None
+    assert backup_control_recovery._list_receipt_backup_ids(SimpleNamespace(root=tmp_path / "nor", store=None)) == set()
+
+
+def test_authenticate_object_set_inventory_ok_and_fail(control_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_object_set as bos
+
+    target_root = tmp_path / "os"
+    (target_root / "receipts").mkdir(parents=True)
+    target = SimpleNamespace(target_id="t", root=target_root, store=None)
+    receipt = {
+        "schemaVersion": 4,
+        "storageProtocol": bos.OBJECT_SET_V1,
+        "backupId": "bos1",
+        "policyId": "p",
+        "objectSetDigest": "d" * 64,
+        "controlObjectDigest": "c" * 64,
+        "objects": [],
+    }
+    raw = (json.dumps(receipt, sort_keys=True) + "\n").encode()
+    (target_root / "receipts" / "bos1.json").write_bytes(raw)
+    marker = {
+        "schemaVersion": backup_publish.COMMIT_SCHEMA_VERSION,
+        "backupId": "bos1",
+        "policyId": "p",
+        "receiptDigest": hashlib.sha256(raw).hexdigest(),
+        "objectSetDigest": "d" * 64,
+        "controlObjectDigest": "c" * 64,
+        "targetGeneration": 1,
+        "storageProtocol": bos.OBJECT_SET_V1,
+    }
+    marker["commitHash"] = backup_publish._commit_hash(marker)
+
+    monkeypatch.setattr(bos, "committed_object_inventory", lambda r: [])
+    assert backup_control_recovery.authenticate_committed_receipt(target, marker) is not None
+
+    def _fail(r: Any) -> Any:
+        raise AppError("bad inventory", code=__import__("deepseek_infra.core.errors", fromlist=["ErrorCode"]).ErrorCode.INVALID_REQUEST)
+
+    monkeypatch.setattr(bos, "committed_object_inventory", _fail)
+    assert backup_control_recovery.authenticate_committed_receipt(target, marker) is None
+
+
+def test_formal_truth_missing_policy_and_retired(control_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import backup_retirement
+
+    target_root = tmp_path / "ret"
+    (target_root / "commits" / "p").mkdir(parents=True)
+    (target_root / "receipts").mkdir(parents=True)
+    receipt = {"schemaVersion": 4, "backupId": "br", "policyId": "", "objects": [{"digest": "cc" * 32, "size": 1}]}
+    raw = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
+    (target_root / "receipts" / "br.json").write_bytes(raw)
+    marker = {
+        "schemaVersion": 4,
+        "backupId": "br",
+        "policyId": "",
+        "receiptDigest": hashlib.sha256(raw).hexdigest(),
+        "targetGeneration": 1,
+    }
+    marker["commitHash"] = backup_publish._commit_hash(marker)
+    (target_root / "commits" / "p" / "s.json").write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
+
+    # missing policy on both receipt and marker
+    monkeypatch.setattr(backup_retirement, "_receipt_has_valid_retirement_marker", lambda *a, **k: False)
+    target = SimpleNamespace(target_id="t-ret", root=target_root, store=None)
+    result = backup_control_recovery.rebuild_formal_truth_from_authenticated_commits(target)
+    assert result["invalidCommits"] >= 1
+
+    # retired path
+    receipt2 = {"schemaVersion": 4, "backupId": "br2", "policyId": "p2", "objects": [{"digest": "dd" * 32, "size": 1}]}
+    raw2 = (json.dumps(receipt2, indent=2, sort_keys=True) + "\n").encode()
+    (target_root / "receipts" / "br2.json").write_bytes(raw2)
+    marker2 = {
+        "schemaVersion": 4,
+        "backupId": "br2",
+        "policyId": "p2",
+        "receiptDigest": hashlib.sha256(raw2).hexdigest(),
+        "targetGeneration": 2,
+        "parentBackupId": "br",
+    }
+    marker2["commitHash"] = backup_publish._commit_hash(marker2)
+    (target_root / "commits" / "p" / "s2.json").write_text(json.dumps(marker2, indent=2) + "\n", encoding="utf-8")
+    monkeypatch.setattr(backup_retirement, "_receipt_has_valid_retirement_marker", lambda *a, **k: True)
+    result2 = backup_control_recovery.rebuild_formal_truth_from_authenticated_commits(target)
+    assert result2["retired"] >= 1
+
+
+def test_read_json_bytes_edges(control_db: Path) -> None:
+    assert backup_control_recovery._read_json_bytes(None) is None
+    assert backup_control_recovery._read_json_bytes(b"") is None
+    assert backup_control_recovery._read_json_bytes(b"[1]") is None
+    assert backup_control_recovery._read_json_bytes(b"{") is None
+    assert backup_control_recovery._read_json_bytes(b'{"a":1}') == {"a": 1}
+
+
 def test_formal_truth_invalid_bound_types(control_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from deepseek_infra.infra.workspace import backup_retirement
 
