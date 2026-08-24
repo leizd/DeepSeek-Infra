@@ -97,7 +97,8 @@ def test_real_three_minio_transactional_gc_fencing_e2e(tmp_settings: Path, monke
     digest = "4620" + ("ab" * 30)
     key = object_key(digest)
     body = b"real-minio-tx-gc-fencing-ciphertext-v462"
-    assert store.put_if_absent(key, body) is True
+    put = store.put_if_absent(key, body)
+    assert getattr(put, "created", True) is True
     meta = store.stat(key)
     assert meta is not None
     etag = str(getattr(meta, "etag", None) or "")

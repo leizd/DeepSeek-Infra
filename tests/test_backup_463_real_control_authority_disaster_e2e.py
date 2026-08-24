@@ -1,4 +1,4 @@
-"""Real three-MinIO Evidence: control authority disaster recovery (4.6.3)."""
+"""Real three-MinIO Evidence: control authority disaster recovery."""
 
 from __future__ import annotations
 

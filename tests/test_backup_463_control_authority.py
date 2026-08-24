@@ -1,4 +1,4 @@
-"""4.6.3 skeleton: secretless control-authority-v1 + hash-chained generations."""
+"""Control-authority skeleton: secretless control-authority-v1 + hash-chained generations."""
 
 from __future__ import annotations
 
