@@ -1,4 +1,4 @@
-"""4.6.4: production authority verdict, mutation barrier, contiguous chains."""
+"""Production authority verdict, mutation barrier, and contiguous chains."""
 
 from __future__ import annotations
 
