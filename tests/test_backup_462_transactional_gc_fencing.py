@@ -715,7 +715,7 @@ def test_payload_retention_store_scan_fails_closed_on_missing_or_invalid_receipt
         backup_retirement._payload_key_is_retained(target, "objects/free", retiring_backup_id="old")
 
     class _BrokenStore(_MissingStore):
-        def get_bytes(self, key: str) -> bytes:
+        def get_bytes(self, key: str) -> bytes | None:
             return b"not-json"
 
     target.store = _BrokenStore()
@@ -729,3 +729,172 @@ def test_payload_retention_store_scan_fails_closed_on_missing_or_invalid_receipt
     target.store = _FailingStore()
     with pytest.raises(backup_retirement.GcReferenceScanIndeterminate, match="receipt-read-failure"):
         backup_retirement._payload_key_is_retained(target, "objects/free", retiring_backup_id="old")
+
+
+def test_retained_payload_set_uses_index_or_store_fallback(
+    control_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_object_index, "retained_payload_keys_from_index", lambda *args, **kwargs: set())
+    assert backup_retirement._retained_payload_keys(
+        SimpleNamespace(target_id="t-index", root=None, store=None),
+        retiring_backup_id="old",
+    ) == set()
+
+    monkeypatch.setattr(backup_object_index, "retained_payload_keys_from_index", lambda *args, **kwargs: None)
+    store = MemoryTargetStore()
+    store.put_if_absent(
+        "receipts/a-old.json",
+        json.dumps({"backupId": "old", "objects": [{"path": "objects/retiring"}]}).encode(),
+    )
+    store.put_if_absent(
+        "receipts/b-retired.json",
+        json.dumps({"backupId": "retired", "objects": [{"path": "objects/retired"}]}).encode(),
+    )
+    store.put_if_absent(
+        "receipts/c-live.json",
+        json.dumps({"backupId": "live", "objects": [{"path": "objects/live"}]}).encode(),
+    )
+    monkeypatch.setattr(
+        backup_retirement,
+        "_receipt_has_valid_retirement_marker",
+        lambda _target, _raw, receipt: receipt.get("backupId") == "retired",
+    )
+    assert backup_retirement._retained_payload_keys(
+        SimpleNamespace(target_id="", root=None, store=store),
+        retiring_backup_id="old",
+    ) == {"objects/live"}
+
+    meta = ObjectMeta(key="receipts/broken.json", size=1, etag="etag")
+
+    class _BrokenStore:
+        def list_objects(self, prefix: str, *, cursor: str | None = None, limit: int = 1000) -> ListPage:
+            return ListPage(objects=(meta,))
+
+        def get_bytes(self, key: str) -> bytes | None:
+            return b"not-json"
+
+    with pytest.raises(backup_retirement.GcReferenceScanIndeterminate, match="receipt-parse-failure"):
+        backup_retirement._retained_payload_keys(
+            SimpleNamespace(target_id="", root=None, store=_BrokenStore()),
+            retiring_backup_id="old",
+        )
+
+    class _MissingStore(_BrokenStore):
+        def get_bytes(self, key: str) -> None:
+            return None
+
+    with pytest.raises(backup_retirement.GcReferenceScanIndeterminate, match="receipt-read-failure"):
+        backup_retirement._retained_payload_keys(
+            SimpleNamespace(target_id="", root=None, store=_MissingStore()),
+            retiring_backup_id="old",
+        )
+
+    class _FailingStore(_BrokenStore):
+        def get_bytes(self, key: str) -> bytes:
+            raise OSError("read failed")
+
+    with pytest.raises(backup_retirement.GcReferenceScanIndeterminate, match="receipt-read-failure"):
+        backup_retirement._retained_payload_keys(
+            SimpleNamespace(target_id="", root=None, store=_FailingStore()),
+            retiring_backup_id="old",
+        )
+
+
+def test_retained_payload_set_paginates_and_fails_closed_on_filesystem_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_meta = ObjectMeta(key="receipts/old.json", size=1, etag="etag-old")
+    second_meta = ObjectMeta(key="receipts/live.json", size=1, etag="etag-live")
+
+    class _PagedStore:
+        def list_objects(self, prefix: str, *, cursor: str | None = None, limit: int = 1000) -> ListPage:
+            if cursor is None:
+                return ListPage(objects=(first_meta,), cursor="next")
+            return ListPage(objects=(second_meta,))
+
+        def get_bytes(self, key: str) -> bytes:
+            backup_id = "old" if key.endswith("old.json") else "live"
+            return json.dumps({"backupId": backup_id, "objects": [{"path": f"objects/{backup_id}"}]}).encode()
+
+    monkeypatch.setattr(backup_retirement, "_receipt_has_valid_retirement_marker", lambda *args, **kwargs: False)
+    assert backup_retirement._retained_payload_keys(
+        SimpleNamespace(target_id="", root=None, store=_PagedStore()),
+        retiring_backup_id="old",
+    ) == {"objects/live"}
+
+    receipts = tmp_path / "receipts"
+    receipts.mkdir()
+    broken = receipts / "broken.json"
+    broken.write_text("{}", encoding="utf-8")
+    original_read_bytes = Path.read_bytes
+
+    def _read_bytes(path: Path) -> bytes:
+        if path == broken:
+            raise OSError("read failed")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", _read_bytes)
+    with pytest.raises(backup_retirement.GcReferenceScanIndeterminate, match="receipt-read-failure"):
+        backup_retirement._retained_payload_keys(
+            SimpleNamespace(target_id="", root=tmp_path, store=None),
+            retiring_backup_id="old",
+        )
+
+
+def test_retirement_marker_reads_filesystem_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = {"policyId": "policy", "backupId": "backup"}
+    marker_path = tmp_path.joinpath(*backup_retirement.retirement_marker_key("policy", "backup").split("/"))
+    marker_path.parent.mkdir(parents=True)
+    marker_path.write_text(json.dumps({"targetId": "target"}), encoding="utf-8")
+    monkeypatch.setattr(backup_retirement, "_read_formal_metadata", lambda *args, **kwargs: ({}, {}, {}))
+    monkeypatch.setattr(backup_retirement, "retirement_marker_valid", lambda *args, **kwargs: True)
+    assert backup_retirement._receipt_has_valid_retirement_marker(
+        SimpleNamespace(target_id="target", root=tmp_path, store=None),
+        b"receipt",
+        receipt,
+    )
+
+
+def test_store_index_rebuild_counts_read_and_parse_failures(
+    control_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metas = tuple(
+        ObjectMeta(key=f"receipts/{name}.json", size=1, etag=f"etag-{name}")
+        for name in ("raised", "missing", "invalid", "valid")
+    )
+
+    class _Store:
+        def list_objects(self, prefix: str, *, cursor: str | None = None, limit: int = 1000) -> ListPage:
+            return ListPage(objects=metas)
+
+        def get_bytes(self, key: str) -> bytes | None:
+            if key.endswith("raised.json"):
+                raise OSError("read failed")
+            if key.endswith("missing.json"):
+                return None
+            if key.endswith("invalid.json"):
+                return b"not-json"
+            return json.dumps(
+                {
+                    "backupId": "valid",
+                    "policyId": "policy",
+                    "objects": [{"path": "objects/live", "digest": "6" * 64, "size": 7}],
+                }
+            ).encode()
+
+    monkeypatch.setattr(backup_retirement, "_receipt_has_valid_retirement_marker", lambda *args, **kwargs: False)
+    result = backup_object_index.rebuild_index_from_target(
+        SimpleNamespace(target_id="t-store-rebuild", root=None, store=_Store())
+    )
+    assert result["coverageState"] == "incomplete"
+    assert result["scannedReceipts"] == 4
+    assert result["parsedReceipts"] == 1
+    assert result["indexedReceipts"] == 1
+    assert result["readFailures"] == 2
+    assert result["parseFailures"] == 1
