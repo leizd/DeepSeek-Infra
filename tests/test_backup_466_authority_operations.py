@@ -197,3 +197,136 @@ def test_provider_status_shape(control_db: Path) -> None:
     status = backup_authority_provider.provider_status()
     assert "mode" in status
     assert "minDurableReplicas" in status
+
+
+def test_credential_profile_empty_and_shorthand(control_db: Path) -> None:
+    with pytest.raises(AppError, match="invalid-profile"):
+        backup_authority_provider.credential_provider_from_reference("profile:")
+    assert backup_authority_provider.credential_provider_from_reference("myprof") == {
+        "type": "aws-profile",
+        "profile": "myprof",
+    }
+    assert backup_authority_provider.credential_provider_from_reference("aws-profile:x")["profile"] == "x"
+
+
+def test_record_from_locator_rejects_fs(control_db: Path) -> None:
+    loc = backup_authority_provider.AuthorityReplicaLocator(
+        replica_id="f", kind="filesystem", root="/tmp"
+    )
+    with pytest.raises(AppError, match="not-s3"):
+        backup_authority_provider.record_from_authority_locator(loc)
+
+
+def test_production_factory_none_for_fs(control_db: Path) -> None:
+    loc = backup_authority_provider.AuthorityReplicaLocator(
+        replica_id="f", kind="filesystem", root="/tmp"
+    )
+    assert backup_authority_provider.production_authority_store_factory(loc) is None
+
+
+def test_authority_mode_and_min_durable(control_db: Path) -> None:
+    assert (
+        backup_authority_provider.authority_mode(env={backup_authority_provider.ENV_AUTHORITY_MODE: "local-only"})
+        == backup_authority_provider.MODE_LOCAL_ONLY
+    )
+    assert (
+        backup_authority_provider.authority_mode(env={backup_authority_provider.ENV_AUTHORITY_MODE: "local"})
+        == backup_authority_provider.MODE_LOCAL_ONLY
+    )
+    assert backup_authority_provider.min_durable_replicas(env={}) == 1
+    assert backup_authority_provider.min_durable_replicas(
+        env={backup_authority_provider.ENV_AUTHORITY_MIN_DURABLE: "2"}
+    ) == 2
+    with pytest.raises(AppError, match="min-durable-invalid"):
+        backup_authority_provider.min_durable_replicas(
+            env={backup_authority_provider.ENV_AUTHORITY_MIN_DURABLE: "nope"}
+        )
+
+
+def test_discover_records_s3_resolve_errors(control_db: Path) -> None:
+    loc = backup_authority_provider.AuthorityReplicaLocator(
+        replica_id="bad",
+        kind="s3",
+        endpoint="http://127.0.0.1:1",
+        bucket="b",
+        credential_reference="aws-default",
+    )
+
+    def boom(_l: Any) -> Any:
+        raise RuntimeError("open-failed")
+
+    provider = backup_authority_provider.StaticAuthorityReplicaProvider(
+        _locators=[loc], _store_factory=boom
+    )
+    assert provider.discover() == []
+    assert provider.resolve_errors()
+    assert provider.configured_count() == 1
+    assert provider.resolved_count() == 0
+
+
+def test_verdict_unresolved_includes_error_detail(control_db: Path) -> None:
+    def boom(_l: Any) -> Any:
+        raise RuntimeError("detail-err")
+
+    env = {
+        backup_authority_provider.ENV_AUTHORITY_REPLICAS: json.dumps(
+            [
+                {
+                    "replicaId": "s1",
+                    "kind": "s3",
+                    "endpoint": "http://127.0.0.1:9000",
+                    "bucket": "b",
+                    "credentialReference": "aws-default",
+                }
+            ]
+        )
+    }
+    backup_authority_provider.install_provider_from_bootstrap(env=env, store_factory=boom)
+    control_db.unlink(missing_ok=True)
+    verdict = backup_control_recovery.resolve_startup_authority_verdict()
+    assert verdict["verdict"] == backup_control_recovery.STATE_AUTHORITY_UNAVAILABLE
+    assert "detail-err" in str(verdict.get("reason") or "")
+
+
+def test_health_with_targets_and_verify_degraded(control_db: Path) -> None:
+    backup_control.schema_version()
+    backup_control.create_policy({"policyId": "hp", "policyRevision": 1, "enabled": True})
+    backup_control.upsert_target({"targetId": "ht", "kind": "filesystem", "root": "/tmp"})
+    health = backup_control_recovery.authority_health_snapshot()
+    assert int(health["formalTruth"]["targetCount"]) >= 1
+    assert int(health["formalTruth"]["incompleteTargets"]) >= 1
+    # Force configured>resolved via provider
+    env = {
+        backup_authority_provider.ENV_AUTHORITY_REPLICAS: json.dumps(
+            [
+                {
+                    "replicaId": "s1",
+                    "kind": "s3",
+                    "endpoint": "http://127.0.0.1:9000",
+                    "bucket": "b",
+                    "credentialReference": "aws-default",
+                }
+            ]
+        )
+    }
+    backup_authority_provider.install_provider_from_bootstrap(
+        env=env, store_factory=lambda _l: (_ for _ in ()).throw(RuntimeError("x"))
+    )
+    verify = backup_control_recovery.authority_verify()
+    assert verify["status"] == "degraded"
+    assert "configured-exceeds-resolved" in verify["issues"] or "formal-truth-incomplete" in verify["issues"]
+
+
+def test_activate_blocked_when_pending_outbox(control_db: Path, tmp_path: Path) -> None:
+    root = tmp_path / "auth"
+    root.mkdir()
+    backup_control_authority.configure_authority_anchor_roots([root])
+    backup_control.create_policy({"policyId": "p", "policyRevision": 1, "enabled": True})
+    ckpt = backup_control_authority.snapshot_authority_from_control_db()
+    backup_control_authority._enqueue_authority_outbox(kind="pend", checkpoint=ckpt)
+    backup_control_recovery.set_control_recovery_state(
+        recovery_state=backup_control_recovery.STATE_RECOVERING_FORMAL_TRUTH,
+        reason="unit",
+    )
+    with pytest.raises(AppError, match="unresolved-authority-mutation"):
+        backup_control_recovery.activate_control_after_formal_truth()
