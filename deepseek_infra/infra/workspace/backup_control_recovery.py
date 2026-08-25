@@ -190,7 +190,7 @@ def local_control_db_healthy() -> bool:
 
 
 def _ensure_provider_before_verdict() -> None:
-    """Resolve AuthorityReplicaProvider before any verdict classification (4.6.5 Gate A)."""
+    """Resolve AuthorityReplicaProvider before any verdict classification (4.6.6)."""
     from deepseek_infra.infra.workspace import backup_authority_provider
 
     if backup_authority_provider.get_authority_replica_provider() is not None:
@@ -199,9 +199,11 @@ def _ensure_provider_before_verdict() -> None:
     if backup_control_authority.authority_anchors_configured():
         backup_authority_provider.sync_provider_from_legacy_globals()
         return
-    # Production fresh process: bootstrap from env / bootstrap file (no secrets).
+    # Production fresh process: bootstrap + production S3 store factory (no secrets).
     try:
-        backup_authority_provider.install_provider_from_bootstrap()
+        backup_authority_provider.install_provider_from_bootstrap(
+            store_factory=backup_authority_provider.production_authority_store_factory
+        )
     except AppError:
         raise
     except Exception:
@@ -209,21 +211,49 @@ def _ensure_provider_before_verdict() -> None:
 
 
 def resolve_startup_authority_verdict() -> dict[str, Any]:
-    """Classify Control Authority before any worker may start (4.6.5).
+    """Classify Control Authority before any worker may start (4.6.6).
 
-    Never silently creates an ACTIVE authority when remote Authority history exists
-    but the local DB is missing — that path is RECOVERY_REQUIRED.
-    Provider bootstrap runs first so fresh processes see configured replicas.
+    Configured replicas that fail to resolve → AUTHORITY_UNAVAILABLE (never local-only
+    ACTIVE). Missing local DB + remote history → RECOVERY_REQUIRED.
     """
+    from deepseek_infra.infra.workspace import backup_authority_provider
     from deepseek_infra.infra.workspace import backup_control as ctrl
 
     _ensure_provider_before_verdict()
+    status = backup_authority_provider.provider_status()
+    configured_n = int(status.get("configuredReplicaCount") or 0)
+    resolved_n = int(status.get("resolvedReplicaCount") or 0)
+    mode = str(status.get("mode") or backup_authority_provider.MODE_REPLICATED)
 
     present = local_control_db_present()
     healthy = local_control_db_healthy() if present else False
     anchors = backup_control_authority.authority_anchors_configured()
     remote: dict[str, dict[str, Any]] = {}
     remote_error: str | None = None
+
+    # Configured but unresolved (e.g. S3 factory failed) — fail closed, never local-only.
+    if configured_n > 0 and resolved_n == 0 and mode != backup_authority_provider.MODE_LOCAL_ONLY:
+        if not local_control_db_present():
+            with ctrl._connect():  # noqa: SLF001
+                pass
+        reason = "authority-replicas-configured-but-unresolved"
+        errs = status.get("resolveErrors") or []
+        if errs:
+            reason = f"{reason}:{errs[0]}"
+        set_control_recovery_state(recovery_state=STATE_AUTHORITY_UNAVAILABLE, reason=reason)
+        return {
+            "verdict": STATE_AUTHORITY_UNAVAILABLE,
+            "allowWorkers": False,
+            "allowMutations": False,
+            "localPresent": present,
+            "localHealthy": healthy,
+            "remoteReplicaCount": 0,
+            "configuredReplicaCount": configured_n,
+            "resolvedReplicaCount": 0,
+            "reason": reason,
+            "provider": status,
+        }
+
     if anchors:
         try:
             remote = {
@@ -253,10 +283,13 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
             "localPresent": present,
             "localHealthy": healthy,
             "remoteReplicaCount": len(remote),
+            "configuredReplicaCount": configured_n,
+            "resolvedReplicaCount": resolved_n,
             "reason": "local-missing-or-corrupt-remote-authority-present",
+            "provider": status,
         }
 
-    if (not present or not healthy) and anchors and not remote:
+    if (not present or not healthy) and (anchors or configured_n > 0) and not remote:
         if present and not healthy:
             _quarantine_corrupt_db(Path(ctrl.CONTROL_DB))
         if not local_control_db_present():
@@ -275,7 +308,10 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
                 "localPresent": local_control_db_present(),
                 "localHealthy": False,
                 "remoteReplicaCount": 0,
+                "configuredReplicaCount": configured_n,
+                "resolvedReplicaCount": resolved_n,
                 "reason": remote_error,
+                "provider": status,
             }
         set_control_recovery_state(
             recovery_state=STATE_GENESIS_REQUIRED,
@@ -288,11 +324,34 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
             "localPresent": True,
             "localHealthy": True,
             "remoteReplicaCount": 0,
+            "configuredReplicaCount": configured_n,
+            "resolvedReplicaCount": resolved_n,
             "reason": "authority-replicas-configured-empty-history",
+            "provider": status,
         }
 
     if not present:
-        # Local-only first install (no authority replicas configured).
+        # Local-only first install only when mode=local-only or zero configured replicas.
+        if configured_n > 0 and mode != backup_authority_provider.MODE_LOCAL_ONLY:
+            if not local_control_db_present():
+                with ctrl._connect():  # noqa: SLF001
+                    pass
+            set_control_recovery_state(
+                recovery_state=STATE_AUTHORITY_UNAVAILABLE,
+                reason="authority-replicas-configured-forbid-implicit-local-genesis",
+            )
+            return {
+                "verdict": STATE_AUTHORITY_UNAVAILABLE,
+                "allowWorkers": False,
+                "allowMutations": False,
+                "localPresent": False,
+                "localHealthy": False,
+                "remoteReplicaCount": 0,
+                "configuredReplicaCount": configured_n,
+                "resolvedReplicaCount": resolved_n,
+                "reason": "authority-replicas-configured-forbid-implicit-local-genesis",
+                "provider": status,
+            }
         with ctrl._connect():  # noqa: SLF001
             pass
         set_control_recovery_state(recovery_state=RECOVERY_ACTIVE, reason="genesis-local-only")
@@ -303,7 +362,10 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
             "localPresent": True,
             "localHealthy": True,
             "remoteReplicaCount": 0,
+            "configuredReplicaCount": configured_n,
+            "resolvedReplicaCount": resolved_n,
             "reason": "genesis-local-only",
+            "provider": status,
         }
 
     # Local healthy: drain pending anchors; refuse ACTIVE if pending remains with anchors.
@@ -501,18 +563,31 @@ def reconstruct_control_authority(
     *,
     recovery_stores: list[Any] | None = None,
     bootstrap_profile: dict[str, Any] | None = None,
-    activate: bool = True,
+    activate: bool = False,
 ) -> dict[str, Any]:
     """Rebuild a fresh control.sqlite3 from secretless authority checkpoints.
 
-    4.6.5: after authority replay the plane stays in recovering-formal-truth until
-    ``activate_control_after_formal_truth`` (or ``activate=True`` with no targets
-    requiring rebuild) anchors a new durable boot epoch and enters ACTIVE.
+    4.6.6: defaults to ``activate=False`` — plane stays RECOVERING_FORMAL_TRUTH until
+    ``activate_control_after_formal_truth`` after Commit-authenticated rebuild.
+    Auto-activate only when ``activate=True`` and zero registered targets remain.
     """
     del bootstrap_profile  # reserved for credential/bootstrap wiring (never stored in checkpoints)
     _ensure_provider_before_verdict()
     replicas = discover_authority_replicas(list(recovery_targets or []))
-    replicas.update(discover_authority_replicas_from_stores(list(recovery_stores or [])))
+    # Prefer explicit stores; else provider-discovered stores (production S3 bootstrap).
+    store_list = list(recovery_stores or [])
+    if not store_list:
+        from deepseek_infra.infra.workspace import backup_authority_provider
+
+        provider = backup_authority_provider.get_authority_replica_provider()
+        if provider is not None:
+            for item in provider.discover():
+                if item.store is not None:
+                    store_list.append(item.store)
+        if not store_list:
+            store_list = list(backup_control_authority.get_authority_anchor_stores())
+    store_by_index = {f"store-{i}": s for i, s in enumerate(store_list)}
+    replicas.update(discover_authority_replicas_from_stores(store_list))
     if not replicas:
         raise AppError(
             "control-authority-no-usable-replicas",
@@ -530,11 +605,12 @@ def reconstruct_control_authority(
         )
     backup_control_authority.verify_authority_checkpoint_integrity(checkpoint)
 
-    # Anti-entropy: repair lagging ancestor replicas from canonical history when handles present.
+    # Anti-entropy: repair lagging ancestor replicas (filesystem + S3 stores).
     history_views = selected.get("historyViews") or {}
     canonical_id = str(selected.get("canonicalReplicaId") or "")
     canonical_view = history_views.get(canonical_id) if isinstance(history_views, dict) else None
     canonical_history = list((canonical_view or {}).get("history") or [])
+    repair_report: dict[str, Any] = {"repaired": [], "errors": []}
     if canonical_history and selected.get("laggingReplicas"):
         lagging_handles: list[dict[str, Any]] = []
         for rid in selected.get("laggingReplicas") or []:
@@ -545,17 +621,21 @@ def reconstruct_control_authority(
             }
             if src.get("root"):
                 handle["root"] = src["root"]
-            # store handle only when discover attached storeIndex — optional.
+            store_index = src.get("storeIndex")
+            if store_index is not None and f"store-{int(store_index)}" in store_by_index:
+                handle["store"] = store_by_index[f"store-{int(store_index)}"]
+            elif str(rid) in store_by_index:
+                handle["store"] = store_by_index[str(rid)]
             lagging_handles.append(handle)
-        fs_lagging = [h for h in lagging_handles if h.get("root")]
-        if fs_lagging:
+        repairable = [h for h in lagging_handles if h.get("root") or h.get("store")]
+        if repairable:
             try:
-                backup_control_authority.repair_lagging_authority_replicas(
+                repair_report = backup_control_authority.repair_lagging_authority_replicas(
                     canonical_history=canonical_history,
-                    lagging=fs_lagging,
+                    lagging=repairable,
                 )
-            except AppError:
-                pass
+            except AppError as exc:
+                repair_report = {"repaired": [], "errors": [str(exc)], "status": "failed"}
 
     control_dir = Path(backup_control.CONTROL_DIR)
     control_db = Path(backup_control.CONTROL_DB)
@@ -637,14 +717,14 @@ def reconstruct_control_authority(
         "rebuildableProjections": "pending-formal-truth-rebuild",
         "recoveryState": STATE_RECOVERING_FORMAL_TRUTH,
         "controlBootEpochFromAuthority": remote_boot_epoch,
+        "antiEntropy": repair_report,
     }
-    if activate:
-        # Compatibility: when caller does not drive formal-truth rebuild separately,
-        # advance boot epoch and enter ACTIVE (unit tests / empty-target recovery).
-        activated = activate_control_after_formal_truth(
-            reason="authority-reconstructed",
-            require_complete_coverage=False,
-        )
+    # Count targets after authority apply.
+    with backup_control._connect() as conn:  # noqa: SLF001
+        target_n = int(conn.execute("SELECT COUNT(*) AS c FROM control_targets").fetchone()["c"])
+    if activate and target_n == 0:
+        # Zero-target authority may activate (no Formal Truth surface).
+        activated = activate_control_after_formal_truth(reason="authority-reconstructed-zero-targets")
         result.update(
             {
                 "status": "recovered",
@@ -653,24 +733,33 @@ def reconstruct_control_authority(
                 "activation": activated,
             }
         )
+    elif activate and target_n > 0:
+        # Refuse silent bypass — caller must rebuild Formal Truth first.
+        result["activation"] = {
+            "status": "blocked",
+            "reason": "formal-truth-required-before-activate",
+            "targetCount": target_n,
+        }
     return result
 
 
 def activate_control_after_formal_truth(
     *,
     reason: str = "formal-truth-validated",
-    require_complete_coverage: bool = False,
+    require_complete_coverage: bool | None = None,
 ) -> dict[str, Any]:
     """Anchor a new durable boot epoch and enter ACTIVE after formal truth rebuild.
 
-    When ``require_complete_coverage`` is True, every registered target must report
-    index coverage state ``complete`` or activation fails closed.
+    4.6.6: when any control target is registered, complete index coverage is mandatory.
+    ``require_complete_coverage=False`` is ignored when targets exist (no production bypass).
     """
-    if require_complete_coverage:
+    with backup_control._connect() as conn:  # noqa: SLF001
+        targets = conn.execute("SELECT target_id FROM control_targets").fetchall()
+        target_ids = [str(row["target_id"]) for row in targets]
+    must_check = bool(target_ids) or (require_complete_coverage is True)
+    if must_check and target_ids:
         with backup_control._connect() as conn:  # noqa: SLF001
-            targets = conn.execute("SELECT target_id FROM control_targets").fetchall()
-            for row in targets:
-                tid = str(row["target_id"])
+            for tid in target_ids:
                 cov = conn.execute(
                     "SELECT state FROM target_index_coverage WHERE target_id = ?",
                     (tid,),
@@ -682,6 +771,12 @@ def activate_control_after_formal_truth(
                         code=ErrorCode.INVALID_REQUEST,
                         status=503,
                     )
+    if backup_control_authority.pending_authority_outbox_count() > 0:
+        raise AppError(
+            "formal-truth-blocked:unresolved-authority-mutation",
+            code=ErrorCode.INVALID_REQUEST,
+            status=503,
+        )
 
     set_control_recovery_state(recovery_state=STATE_ANCHORING_NEW_EPOCH, reason=reason)
     remote_floor: int | None = None
@@ -999,4 +1094,95 @@ def rebuild_formal_truth_from_authenticated_commits(target: Any) -> dict[str, An
         "live": live,
         "retired": retired,
         "source": "commit-authenticated-receipts",
+    }
+
+
+def authority_health_snapshot() -> dict[str, Any]:
+    """Read-only Authority health for operators (available during recovery)."""
+    from deepseek_infra.infra.workspace import backup_authority_provider
+
+    provider = backup_authority_provider.provider_status()
+    boot: dict[str, Any] = {
+        "bootEpoch": None,
+        "recoveryState": None,
+        "reason": None,
+    }
+    if local_control_db_present() and local_control_db_healthy():
+        try:
+            boot = get_control_recovery_state()
+        except Exception:
+            pass
+    head_gen = None
+    head_digest = None
+    if local_control_db_present() and local_control_db_healthy():
+        try:
+            with backup_control._connect() as conn:  # noqa: SLF001
+                row = conn.execute(
+                    "SELECT authority_generation, authority_digest FROM control_authority_head WHERE id = 1"
+                ).fetchone()
+                if row is not None:
+                    head_gen = int(row["authority_generation"])
+                    head_digest = str(row["authority_digest"])
+        except Exception:
+            pass
+    pending = 0
+    try:
+        if local_control_db_present() and local_control_db_healthy():
+            pending = backup_control_authority.pending_authority_outbox_count()
+    except Exception:
+        pending = 0
+    formal = {"targetCount": 0, "completeTargets": 0, "incompleteTargets": 0}
+    if local_control_db_present() and local_control_db_healthy():
+        try:
+            with backup_control._connect() as conn:  # noqa: SLF001
+                targets = conn.execute("SELECT target_id FROM control_targets").fetchall()
+                formal["targetCount"] = len(targets)
+                complete = 0
+                for row in targets:
+                    cov = conn.execute(
+                        "SELECT state FROM target_index_coverage WHERE target_id = ?",
+                        (str(row["target_id"]),),
+                    ).fetchone()
+                    if cov is not None and str(cov["state"]) == "complete":
+                        complete += 1
+                formal["completeTargets"] = complete
+                formal["incompleteTargets"] = int(formal["targetCount"]) - complete
+        except Exception:
+            pass
+    recovery_state = boot.get("recoveryState")
+    workers = recovery_state == RECOVERY_ACTIVE and pending == 0
+    return {
+        "verdict": recovery_state,
+        "recoveryState": recovery_state,
+        "controlBootEpoch": boot.get("bootEpoch"),
+        "canonicalGeneration": head_gen,
+        "canonicalDigest": head_digest,
+        "configuredReplicaCount": provider.get("configuredReplicaCount"),
+        "resolvedReplicaCount": provider.get("resolvedReplicaCount"),
+        "resolveErrors": provider.get("resolveErrors") or [],
+        "minDurableReplicas": provider.get("minDurableReplicas"),
+        "unresolvedMutationCount": pending,
+        "formalTruth": formal,
+        "workersAllowed": workers,
+        "mutationsAllowed": workers,
+        "providerMode": provider.get("mode"),
+        "reason": boot.get("reason"),
+    }
+
+
+def authority_verify() -> dict[str, Any]:
+    """Read-only verify: provider + optional local chain tip integrity."""
+    health = authority_health_snapshot()
+    issues: list[str] = []
+    if int(health.get("configuredReplicaCount") or 0) > int(health.get("resolvedReplicaCount") or 0):
+        issues.append("configured-exceeds-resolved")
+    if int(health.get("formalTruth", {}).get("incompleteTargets") or 0) > 0:
+        issues.append("formal-truth-incomplete")
+    if int(health.get("unresolvedMutationCount") or 0) > 0:
+        issues.append("unresolved-authority-mutations")
+    return {
+        "status": "ok" if not issues else "degraded",
+        "issues": issues,
+        "health": health,
+        "readOnly": True,
     }

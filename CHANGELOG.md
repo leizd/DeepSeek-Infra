@@ -4,6 +4,19 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.6.6] - Production Authority Operations & Evidence Integrity (2026-08-25)
+
+### Production Authority Operations & Evidence Integrity
+
+- **Production S3 store factory**: `production_authority_store_factory` resolves bootstrap S3 locators via `credentialReference` → `open_s3_store` (no secrets in bootstrap).
+- **Configured ≠ resolved**: configured replicas that fail to resolve → `authority-unavailable`; never implicit local-only ACTIVE genesis.
+- **Mandatory Formal Truth**: `reconstruct_control_authority(activate=False)` default; activation requires complete target index coverage when any target is registered.
+- **S3 anti-entropy**: lagging store replicas repair from canonical immutable bytes; repair outcomes reported.
+- **Durability policy**: `DEEPSEEK_CONTROL_AUTHORITY_MIN_DURABLE_REPLICAS` (default 1); ack fails when durable copies are insufficient.
+- **Evidence integrity**: filesystem fresh-process scenario renamed; genuine `real-three-minio-fresh-process-authority-recovery` bound to MinIO e2e.
+- **Operator surfaces**: `authority_health_snapshot` / `authority_verify` (read-only during recovery).
+- **Frozen Compatibility Surface**: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age unchanged.
+
 ## [4.6.5] - Crash-Atomic Control Authority & Fresh-Process Recovery (2026-08-25)
 
 ### Crash-Atomic Control Authority & Fresh-Process Recovery

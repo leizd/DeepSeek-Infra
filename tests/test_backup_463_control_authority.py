@@ -314,9 +314,17 @@ def test_reconstruct_from_checkpoints_advances_boot_epoch_and_clears_ephemeral(
     result = backup_control_recovery.reconstruct_control_authority(
         [staging],
         bootstrap_profile={"reason": "unit-test"},
+        activate=False,
     )
-    assert result["status"] == "recovered"
-    assert int(result["bootEpoch"]) > int(before["bootEpoch"])
+    assert result["status"] == "authority-restored"
+    assert result["recoveryState"] == backup_control_recovery.STATE_RECOVERING_FORMAL_TRUTH
+    # Formal-truth gate: mark target coverage complete then activate.
+    backup_control.set_target_index_coverage(
+        "t-r", state="complete", formal_receipt_count=0, source_receipt_mutation_generation=0, reason="unit"
+    )
+    activated = backup_control_recovery.activate_control_after_formal_truth(reason="unit-reconstruct")
+    assert activated["status"] == "active"
+    assert int(activated["bootEpoch"]) > int(before["bootEpoch"])
     assert backup_control_recovery.get_control_recovery_state()["recoveryState"] == (
         backup_control_recovery.RECOVERY_ACTIVE
     )
@@ -392,7 +400,9 @@ def test_reconstruct_quarantines_existing_db_and_skips_bad_replicas(
     (bad / "control" / "authority" / "head.json").write_text("{}", encoding="utf-8")
 
     assert control_db.is_file()
-    result = backup_control_recovery.reconstruct_control_authority([bad, good])
+    result = backup_control_recovery.reconstruct_control_authority(
+        [bad, good], activate=True
+    )
     assert result["status"] == "recovered"
     assert result["quarantinedPath"] is not None
     assert Path(str(result["quarantinedPath"])).is_file()
@@ -857,11 +867,18 @@ def test_reconstruct_from_store_replicas(control_db: Path) -> None:
             {"targetId": "t-rs", "kind": "s3", "bucket": "b", "endpointUrl": "https://x", "credentialReference": "r"}
         )
         control_db.unlink(missing_ok=True)
-        recovered = backup_control_recovery.reconstruct_control_authority(recovery_stores=[store_a, store_b])
-        assert recovered["status"] == "recovered"
+        recovered = backup_control_recovery.reconstruct_control_authority(
+            recovery_stores=[store_a, store_b], activate=False
+        )
+        assert recovered["status"] == "authority-restored"
         pol = backup_control.get_policy("pol-rs")
         assert pol is not None
         assert int(pol["policyRevision"]) == 3
         assert backup_control.get_target("t-rs") is not None
+        backup_control.set_target_index_coverage(
+            "t-rs", state="complete", formal_receipt_count=0, source_receipt_mutation_generation=0, reason="unit"
+        )
+        activated = backup_control_recovery.activate_control_after_formal_truth()
+        assert activated["status"] == "active"
     finally:
         backup_control_authority.configure_authority_anchor_stores(None)

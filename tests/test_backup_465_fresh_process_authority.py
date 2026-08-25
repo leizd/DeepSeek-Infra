@@ -113,7 +113,7 @@ def test_subprocess_fresh_process_detects_remote_authority(
         # Reconstruct then activate.
         recovered = backup_control_recovery.reconstruct_control_authority(
             recovery_targets=[{str(auth_root)!r}],
-            activate=True,
+            activate=True,  # zero targets after authority replay → allowed
         )
         out["recovered"] = {{
             "status": recovered.get("status"),

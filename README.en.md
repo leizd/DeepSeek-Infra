@@ -5,25 +5,25 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.6.5-blue)
+![Version](https://img.shields.io/badge/version-4.6.6-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.6.5 — Crash-Atomic Control Authority & Fresh-Process Recovery.** Production replica provider bootstrap, monotonic head CAS, cross-replica ancestry, crash-atomic mutation journal, fresh-process disaster reboot. No wire-format changes.
+> **4.6.6 — Production Authority Operations & Evidence Integrity.** Production S3 Authority bootstrap, configured≠resolved fail-closed, mandatory Formal Truth activation, verifiable MinIO DR Evidence. No wire-format changes.
 
-## 4.6.5 at a glance
+## 4.6.6 at a glance
 
-- AuthorityReplicaProvider rebuilds replicas from bootstrap before Startup Verdict.
-- Fresh process with remote authority never auto-creates ACTIVE genesis.
-- Logical monotonic head CAS + physical ETag CAS; stale writers fail closed.
-- Cross-replica canonical ancestry; lagging ancestors repair from immutable bytes.
-- Crash-atomic PREPARED mutation journal (control schema v8); durable controlBootEpoch.
+- Production S3 AuthorityStoreFactory resolves credentialReference before Startup Verdict.
+- Configured-but-unresolved replicas → AUTHORITY_UNAVAILABLE (never local-only ACTIVE).
+- reconstruct defaults to RECOVERING_FORMAL_TRUTH; activation requires complete target coverage.
+- S3 lagging ancestor anti-entropy + durability policy (minDurableReplicas).
+- Filesystem fresh-process Evidence separated from genuine three-MinIO DR Evidence.
 - Frozen compatibility surface unchanged: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age.
 
-See the [4.6.5 release notes](docs/releases/4.6.5.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.6.6 release notes](docs/releases/4.6.6.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

@@ -278,7 +278,9 @@ def test_recovery_boot_epoch_strictly_increases(control_db: Path, tmp_path: Path
     root.mkdir()
     g1 = _ckpt(1, None, policies=[{"policyId": "p", "policyRevision": 1}], boot_epoch=4)
     backup_control_authority.write_authority_checkpoint_bundle(root, g1)
-    recovered = backup_control_recovery.reconstruct_control_authority(recovery_targets=[root])
+    recovered = backup_control_recovery.reconstruct_control_authority(
+        recovery_targets=[root], activate=True
+    )
     assert int(recovered["bootEpoch"]) > 4
     assert recovered["status"] == "recovered"
     state = backup_control_recovery.get_control_recovery_state()

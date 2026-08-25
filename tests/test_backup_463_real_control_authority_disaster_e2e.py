@@ -256,11 +256,10 @@ def test_real_three_minio_control_authority_disaster_recovery_e2e(tmp_settings: 
         recovered = backup_control_recovery.reconstruct_control_authority(
             recovery_stores=stores,
             bootstrap_profile={"reason": "real-three-minio-disaster-e2e"},
+            activate=False,
         )
-        assert recovered["status"] == "recovered"
-        assert int(recovered["bootEpoch"]) > int(boot_before["bootEpoch"])
-        state = backup_control_recovery.get_control_recovery_state()
-        assert state["recoveryState"] == backup_control_recovery.RECOVERY_ACTIVE
+        assert recovered["status"] == "authority-restored"
+        assert recovered["recoveryState"] == backup_control_recovery.STATE_RECOVERING_FORMAL_TRUTH
 
         restored_policy = backup_control.get_policy(policy_id)
         assert restored_policy is not None
@@ -274,11 +273,27 @@ def test_real_three_minio_control_authority_disaster_recovery_e2e(tmp_settings: 
         assert gates == 0
         assert leases == 0
 
-        formal = backup_control_recovery.rebuild_formal_truth_from_authenticated_commits(primary)
-        assert formal["source"] == "commit-authenticated-receipts"
-        assert formal["authenticatedRecoveryPoints"] >= 1
+        # Formal truth rebuild for every required target before activation.
+        from types import SimpleNamespace
+
+        formal_last: dict[str, Any] = {}
+        for tid, client in zip((target_a, target_b, target_c), clients, strict=True):
+            opened = backup_targets.open_target_store(tid, write_intent=False, client=client)
+            tgt = SimpleNamespace(target_id=tid, store=opened, root=None)
+            formal_last = backup_control_recovery.rebuild_formal_truth_from_authenticated_commits(tgt)
+            assert formal_last["source"] == "commit-authenticated-receipts"
+        assert int(formal_last.get("authenticatedRecoveryPoints") or 0) >= 1
+        activated = backup_control_recovery.activate_control_after_formal_truth(
+            reason="real-three-minio-disaster-e2e"
+        )
+        assert activated["status"] == "active"
+        assert int(activated["bootEpoch"]) > int(boot_before["bootEpoch"])
+        state = backup_control_recovery.get_control_recovery_state()
+        assert state["recoveryState"] == backup_control_recovery.RECOVERY_ACTIVE
         usage = backup_control.physical_usage_summary(target_a)
         assert int(usage.get("physicalStoredBytes") or 0) >= 0
+        primary = backup_publish.resolve_target(target_a)
+        assert primary.store is not None
 
         markers: list[dict[str, Any]] = []
         cursor: str | None = None
