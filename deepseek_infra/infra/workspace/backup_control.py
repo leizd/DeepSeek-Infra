@@ -31,7 +31,8 @@ CONTROL_DB = CONTROL_DIR / "control.sqlite3"
 # v5 adds fail-closed index coverage evidence + formal receipt mutation generation (4.6.1).
 # v6 adds target metadata fences + durable two-phase ciphertext GC intents (4.6.2).
 # v7 adds control boot epoch + recovery state for disaster-recoverable authority (4.6.3).
-CONTROL_SCHEMA_VERSION = 7
+# v8 adds crash-atomic authority mutation journal (4.6.5).
+CONTROL_SCHEMA_VERSION = 8
 
 REBUILDABLE_TABLES = frozenset(
     {
@@ -62,6 +63,7 @@ NON_REBUILDABLE_TABLES = frozenset(
         "control_boot_state",
         "control_authority_head",
         "control_authority_outbox",
+        "control_authority_mutations",
     }
 )
 # Ephemeral ownership must never resurrect across control-node recovery.
@@ -353,6 +355,21 @@ CREATE TABLE IF NOT EXISTS control_authority_outbox (
 
 CREATE INDEX IF NOT EXISTS idx_authority_outbox_state
 ON control_authority_outbox(state, created_at);
+
+CREATE TABLE IF NOT EXISTS control_authority_mutations (
+    mutation_id TEXT PRIMARY KEY,
+    authority_generation INTEGER NOT NULL,
+    authority_digest TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    checkpoint_json TEXT NOT NULL,
+    state TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_authority_mutations_state
+ON control_authority_mutations(state, created_at);
 """
 
 
@@ -438,6 +455,7 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
                 5: "4.6.1-fail-closed-index-coverage-and-receipt-mutation",
                 6: "metadata-fences-and-two-phase-ciphertext-gc",
                 7: "4.6.3-control-authority-boot-and-recovery-state",
+                8: "4.6.5-crash-atomic-control-authority-mutation-journal",
             }.get(version, f"schema-v{version}")
             conn.execute(
                 """
@@ -498,6 +516,7 @@ def create_policy(policy: dict[str, Any]) -> dict[str, Any]:
     policy_id = str(policy["policyId"])
     revision = max(1, int(policy.get("policyRevision") or 1))
     stored = {**policy, "policyRevision": revision}
+    prepared: dict[str, Any] | None = None
     with _connect() as conn:
         _begin_immediate(conn)
         try:
@@ -510,11 +529,12 @@ def create_policy(policy: dict[str, Any]) -> dict[str, Any]:
                 """,
                 (policy_id, revision, json.dumps(stored, ensure_ascii=False, sort_keys=True), _utc_iso()),
             )
+            prepared = _prepare_authority_intent_if_configured(conn, kind="policy-mutation")
         except sqlite3.IntegrityError as exc:
             conn.execute("ROLLBACK")
             raise AppError("Backup policy id collision; retry", code=ErrorCode.INVALID_REQUEST, status=409) from exc
         conn.execute("COMMIT")
-    _anchor_after_non_rebuildable_mutation(kind="policy-mutation")
+    _anchor_after_non_rebuildable_mutation(kind="policy-mutation", prepared=prepared)
     return stored
 
 
@@ -549,13 +569,28 @@ def _require_control_mutation(*, operation: str) -> None:
     backup_control_recovery.assert_control_mutations_allowed(operation=operation)
 
 
-def _anchor_after_non_rebuildable_mutation(*, kind: str) -> None:
+def _prepare_authority_intent_if_configured(conn: sqlite3.Connection, *, kind: str) -> dict[str, Any] | None:
+    """Same-TX PREPARED authority intent when RPO=0 replicas are configured (4.6.5 Gate F)."""
+    from deepseek_infra.infra.workspace import backup_control_authority
+
+    if not backup_control_authority.authority_anchors_configured():
+        return None
+    return backup_control_authority.prepare_authority_mutation_in_tx(conn, kind=kind)
+
+
+def _anchor_after_non_rebuildable_mutation(
+    *,
+    kind: str,
+    prepared: dict[str, Any] | None = None,
+) -> None:
     """RPO=0 when authority anchor roots/stores are configured; no-op otherwise."""
     from deepseek_infra.infra.workspace import backup_control_authority
 
     if not backup_control_authority.authority_anchors_configured():
         return
-    backup_control_authority.anchor_non_rebuildable_mutation(kind=kind, rpo_zero=True)
+    backup_control_authority.anchor_non_rebuildable_mutation(
+        kind=kind, rpo_zero=True, prepared=prepared
+    )
 
 
 def ensure_control_authority_ready() -> dict[str, Any]:
@@ -790,19 +825,21 @@ def mutate_policy(
             """,
             (next_revision, json.dumps(updated, ensure_ascii=False, sort_keys=True), _utc_iso(), policy_id, revision),
         )
+        anchor_kind = {
+            "promotion": "primary-promotion",
+            "drain": "drain-policy-mutation",
+            "topology": "policy-topology-mutation",
+            "placement": "placement-mutation",
+        }.get(generation_kind, "policy-mutation")
+        prepared = _prepare_authority_intent_if_configured(conn, kind=anchor_kind)
         conn.execute("COMMIT")
-    anchor_kind = {
-        "promotion": "primary-promotion",
-        "drain": "drain-policy-mutation",
-        "topology": "policy-topology-mutation",
-        "placement": "placement-mutation",
-    }.get(generation_kind, "policy-mutation")
-    _anchor_after_non_rebuildable_mutation(kind=anchor_kind)
+    _anchor_after_non_rebuildable_mutation(kind=anchor_kind, prepared=prepared)
     return updated
 
 
 def delete_policy(policy_id: str, *, expected_revision: int | None = None) -> dict[str, Any]:
     _require_control_mutation(operation="policy-mutation")
+    prepared: dict[str, Any] | None = None
     with _connect() as conn:
         _begin_immediate(conn)
         row = conn.execute("SELECT * FROM control_policies WHERE policy_id = ?", (policy_id,)).fetchone()
@@ -819,14 +856,16 @@ def delete_policy(policy_id: str, *, expected_revision: int | None = None) -> di
             )
         payload = _decode_payload(row)
         conn.execute("DELETE FROM control_policies WHERE policy_id = ?", (policy_id,))
+        prepared = _prepare_authority_intent_if_configured(conn, kind="policy-mutation")
         conn.execute("COMMIT")
-    _anchor_after_non_rebuildable_mutation(kind="policy-mutation")
+    _anchor_after_non_rebuildable_mutation(kind="policy-mutation", prepared=prepared)
     return payload
 
 
 def upsert_target(target: dict[str, Any], *, expected_generation: int | None = None) -> dict[str, Any]:
     _require_control_mutation(operation="target-topology-mutation")
     target_id = str(target["targetId"])
+    prepared: dict[str, Any] | None = None
     with _connect() as conn:
         _begin_immediate(conn)
         row = conn.execute("SELECT * FROM control_targets WHERE target_id = ?", (target_id,)).fetchone()
@@ -855,8 +894,9 @@ def upsert_target(target: dict[str, Any], *, expected_generation: int | None = N
                 "UPDATE control_targets SET generation = ?, payload_json = ?, updated_at = ? WHERE target_id = ?",
                 (generation, json.dumps(stored, ensure_ascii=False, sort_keys=True), _utc_iso(), target_id),
             )
+        prepared = _prepare_authority_intent_if_configured(conn, kind="target-topology-mutation")
         conn.execute("COMMIT")
-    _anchor_after_non_rebuildable_mutation(kind="target-topology-mutation")
+    _anchor_after_non_rebuildable_mutation(kind="target-topology-mutation", prepared=prepared)
     return stored
 
 
@@ -965,24 +1005,27 @@ def mutate_target(
             "UPDATE control_targets SET generation = ?, payload_json = ?, updated_at = ? WHERE target_id = ? AND generation = ?",
             (next_generation, json.dumps(updated, ensure_ascii=False, sort_keys=True), _utc_iso(), target_id, generation),
         )
+        prepared: dict[str, Any] | None = None
+        kind = "target-topology-mutation"
+        if bump_generation:
+            prev_drain = str(current.get("drainState") or "active")
+            new_drain = str(updated.get("drainState") or "active")
+            if new_drain == "draining" and prev_drain != "draining":
+                kind = "drain-start"
+            elif new_drain == "drained":
+                kind = "drain-complete"
+            elif new_drain == "active" and prev_drain in {"draining", "drained", "evacuating", "waiting-for-gc"}:
+                kind = "drain-cancel"
+            prepared = _prepare_authority_intent_if_configured(conn, kind=kind)
         conn.execute("COMMIT")
     if bump_generation:
-        prev_drain = str(current.get("drainState") or "active")
-        new_drain = str(updated.get("drainState") or "active")
-        if new_drain == "draining" and prev_drain != "draining":
-            kind = "drain-start"
-        elif new_drain == "drained":
-            kind = "drain-complete"
-        elif new_drain == "active" and prev_drain in {"draining", "drained", "evacuating", "waiting-for-gc"}:
-            kind = "drain-cancel"
-        else:
-            kind = "target-topology-mutation"
-        _anchor_after_non_rebuildable_mutation(kind=kind)
+        _anchor_after_non_rebuildable_mutation(kind=kind, prepared=prepared)
     return updated
 
 
 def delete_target(target_id: str, *, expected_generation: int | None = None) -> dict[str, Any]:
     _require_control_mutation(operation="target-topology-mutation")
+    prepared: dict[str, Any] | None = None
     with _connect() as conn:
         _begin_immediate(conn)
         row = conn.execute("SELECT * FROM control_targets WHERE target_id = ?", (target_id,)).fetchone()
@@ -999,8 +1042,9 @@ def delete_target(target_id: str, *, expected_generation: int | None = None) -> 
             )
         payload = _decode_payload(row)
         conn.execute("DELETE FROM control_targets WHERE target_id = ?", (target_id,))
+        prepared = _prepare_authority_intent_if_configured(conn, kind="target-topology-mutation")
         conn.execute("COMMIT")
-    _anchor_after_non_rebuildable_mutation(kind="target-topology-mutation")
+    _anchor_after_non_rebuildable_mutation(kind="target-topology-mutation", prepared=prepared)
     return payload
 
 
@@ -1462,8 +1506,9 @@ def begin_target_drain_intent(
                 now,
             ),
         )
+        prepared = _prepare_authority_intent_if_configured(conn, kind="drain-start")
         conn.execute("COMMIT")
-    _anchor_after_non_rebuildable_mutation(kind="drain-start")
+    _anchor_after_non_rebuildable_mutation(kind="drain-start", prepared=prepared)
     return {"intentId": intent_id, "target": updated, "drainId": drain_id}
 
 
