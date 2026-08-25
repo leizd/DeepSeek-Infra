@@ -30,10 +30,10 @@ def control_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_schema_v7_boot_and_recovery_state(control_db: Path) -> None:
-    assert backup_control.CONTROL_SCHEMA_VERSION == 7
-    assert backup_control.schema_version() == 7
+    assert backup_control.CONTROL_SCHEMA_VERSION == 8
+    assert backup_control.schema_version() == 8
     migrations = backup_control.list_schema_migrations()
-    assert migrations[-1]["version"] == 7
+    assert migrations[-1]["version"] == 8
     assert "control-authority" in migrations[-1]["description"]
     state = backup_control_recovery.get_control_recovery_state()
     assert state["recoveryState"] == backup_control_recovery.RECOVERY_ACTIVE

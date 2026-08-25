@@ -31,9 +31,11 @@ def control_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_verdict_genesis_when_no_local_no_remote(control_db: Path) -> None:
     control_db.unlink(missing_ok=True)
     verdict = backup_control_recovery.resolve_startup_authority_verdict()
+    # Local-only install (no authority replicas) remains ACTIVE for single-node.
     assert verdict["verdict"] == backup_control_recovery.RECOVERY_ACTIVE
     assert verdict["allowWorkers"] is True
     assert verdict["allowMutations"] is True
+    assert verdict["reason"] in {"genesis-local-only", "genesis-empty-control-db"}
 
 
 def test_verdict_recovery_when_local_missing_remote_present(control_db: Path) -> None:
@@ -117,7 +119,7 @@ def test_local_db_healthy_false_on_connect_error(control_db: Path, monkeypatch: 
 def test_verdict_authority_unavailable_when_anchors_unreachable(
     control_db: Path, tmp_path: Path
 ) -> None:
-    # Configure roots that exist but have no authority head.
+    # Configure roots that exist but have no authority head → explicit genesis.
     empty = tmp_path / "empty-auth"
     empty.mkdir()
     backup_control_authority.configure_authority_anchor_roots([empty])
@@ -125,7 +127,7 @@ def test_verdict_authority_unavailable_when_anchors_unreachable(
     for suffix in ("-wal", "-shm"):
         Path(str(control_db) + suffix).unlink(missing_ok=True)
     verdict = backup_control_recovery.resolve_startup_authority_verdict()
-    assert verdict["verdict"] == backup_control_recovery.STATE_AUTHORITY_UNAVAILABLE
+    assert verdict["verdict"] == backup_control_recovery.STATE_GENESIS_REQUIRED
     assert verdict["allowWorkers"] is False
 
 
