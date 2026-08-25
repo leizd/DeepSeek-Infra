@@ -1383,7 +1383,7 @@ def test_authority_retention_edge_cases_all(clean_authority_env: dict[str, Any],
 
 
 def test_backup_governance_retention_and_dr_endpoints(clean_authority_env: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test all 4.6.9 web endpoints in backup_governance.py."""
+    """Test all authority retention and DR readiness web endpoints in backup_governance.py."""
     from fastapi.testclient import TestClient
     from deepseek_infra.web import server
 
@@ -1553,7 +1553,7 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path, monkeypatch: pytes
         proof_path,
         scenario="retention-safety",
         checks=checks_valid,
-        meta={"version": "4.6.9"},
+        meta={"version": "1.0.0"},
         schema=evidence_proof.EVIDENCE_PROOF_SCHEMA_V3,
     )
     assert written.is_file()
