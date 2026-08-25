@@ -154,6 +154,14 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_backup_control, "CONTROL_DIR", tmp_path / ".backup-control")
     monkeypatch.setattr(workspace_backup_control, "CONTROL_DB", tmp_path / ".backup-control" / "control.sqlite3")
 
+    from deepseek_infra.infra.workspace import backup_authority_provider as workspace_backup_authority_provider
+    from deepseek_infra.infra.workspace import backup_control_authority as workspace_backup_control_authority
+
+    # Process-local authority replica handles must not leak across tests.
+    workspace_backup_control_authority.configure_authority_anchor_roots(None)
+    workspace_backup_control_authority.configure_authority_anchor_stores(None)
+    workspace_backup_authority_provider.reset_authority_replica_provider()
+
     from deepseek_infra.infra.workspace import backup_replication as workspace_backup_replication
     from deepseek_infra.infra.workspace import backup_write_continuity as workspace_backup_write_continuity
     from deepseek_infra.infra.workspace import backup_retirement as workspace_backup_retirement
@@ -187,6 +195,9 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()
     yield tmp_path
+    workspace_backup_control_authority.configure_authority_anchor_roots(None)
+    workspace_backup_control_authority.configure_authority_anchor_stores(None)
+    workspace_backup_authority_provider.reset_authority_replica_provider()
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()
 

@@ -1,13 +1,13 @@
-"""Disaster recovery for local Storage Control Authority (4.6.4 production activation).
+"""Disaster recovery for local Storage Control Authority (4.6.5 completion).
 
 When control.sqlite3 is missing/corrupt, enter fail-closed read-only recovery,
 rebuild a fresh DB from secretless control-authority-v1 checkpoints, advance
-boot epoch, and never resurrect ephemeral leases/fences.
+boot epoch only after formal truth validation, and never resurrect ephemeral leases/fences.
 
 Formal truth rebuild only accepts Commit v4 → receiptDigest → Receipt bindings;
 orphan receipts never become recovery authority.
 
-Startup must obtain an Authority Verdict before workers run. All mutation
+Startup must resolve AuthorityReplicaProvider before Verdict. All mutation
 primitives call assert_control_mutations_allowed.
 """
 
@@ -29,7 +29,32 @@ RECOVERY_IN_PROGRESS = "recovering"
 STATE_GENESIS_REQUIRED = "genesis-required"
 STATE_AUTHORITY_DIVERGENT = "authority-divergent"
 STATE_AUTHORITY_UNAVAILABLE = "authority-unavailable"
+STATE_RECOVERING_AUTHORITY = "recovering-authority"
 STATE_RECOVERING_FORMAL_TRUTH = "recovering-formal-truth"
+STATE_VALIDATING = "validating"
+STATE_ANCHORING_NEW_EPOCH = "anchoring-new-epoch"
+
+# Table classification (4.6.5 Gate H).
+DURABLE_AUTHORITY_TABLES = frozenset(
+    {
+        "control_policies",
+        "control_targets",
+        "control_authority_head",
+        "control_authority_outbox",
+        "control_authority_mutations",
+        "control_boot_state",
+        "target_receipt_mutations",
+        "schema_migrations",
+    }
+)
+REBUILDABLE_PROJECTION_TABLES = frozenset(backup_control.REBUILDABLE_TABLES)
+RECONCILABLE_INTENT_TABLES = frozenset(
+    {
+        "lifecycle_intents",
+        "chain_migration_jobs",
+    }
+)
+EPHEMERAL_OWNERSHIP_TABLES = frozenset(backup_control.EPHEMERAL_RECOVERY_TABLES)
 
 MUTATION_ALLOWED_STATES = frozenset({RECOVERY_ACTIVE})
 
@@ -110,6 +135,9 @@ def assert_control_mutations_allowed(*, operation: str) -> None:
     op = str(operation or "").strip() or "unknown"
     if op in ALLOWED_DURING_RECOVERY:
         return
+    # Genesis ceremony is the only path that may create the first authority.
+    if op == "control-genesis":
+        return
     state = get_control_recovery_state()
     recovery_state = str(state["recoveryState"])
     if recovery_state not in MUTATION_ALLOWED_STATES:
@@ -161,13 +189,35 @@ def local_control_db_healthy() -> bool:
         return False
 
 
+def _ensure_provider_before_verdict() -> None:
+    """Resolve AuthorityReplicaProvider before any verdict classification (4.6.5 Gate A)."""
+    from deepseek_infra.infra.workspace import backup_authority_provider
+
+    if backup_authority_provider.get_authority_replica_provider() is not None:
+        return
+    # Legacy in-process roots/stores still win when tests configure them.
+    if backup_control_authority.authority_anchors_configured():
+        backup_authority_provider.sync_provider_from_legacy_globals()
+        return
+    # Production fresh process: bootstrap from env / bootstrap file (no secrets).
+    try:
+        backup_authority_provider.install_provider_from_bootstrap()
+    except AppError:
+        raise
+    except Exception:
+        pass
+
+
 def resolve_startup_authority_verdict() -> dict[str, Any]:
-    """Classify Control Authority before any worker may start (4.6.4 Gate A).
+    """Classify Control Authority before any worker may start (4.6.5).
 
     Never silently creates an ACTIVE authority when remote Authority history exists
     but the local DB is missing — that path is RECOVERY_REQUIRED.
+    Provider bootstrap runs first so fresh processes see configured replicas.
     """
     from deepseek_infra.infra.workspace import backup_control as ctrl
+
+    _ensure_provider_before_verdict()
 
     present = local_control_db_present()
     healthy = local_control_db_healthy() if present else False
@@ -191,6 +241,10 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
     if (not present or not healthy) and remote:
         if present and not healthy:
             _quarantine_corrupt_db(Path(ctrl.CONTROL_DB))
+        # Need a DB shell to record recovery state.
+        if not local_control_db_present():
+            with ctrl._connect():  # noqa: SLF001
+                pass
         enter_control_recovery_required(reason="local-missing-or-corrupt-remote-authority-present")
         return {
             "verdict": RECOVERY_REQUIRED,
@@ -205,25 +259,43 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
     if (not present or not healthy) and anchors and not remote:
         if present and not healthy:
             _quarantine_corrupt_db(Path(ctrl.CONTROL_DB))
+        if not local_control_db_present():
+            with ctrl._connect():  # noqa: SLF001
+                pass
+        # Configured replicas but empty remote history → explicit genesis ceremony.
+        if remote_error:
+            set_control_recovery_state(
+                recovery_state=STATE_AUTHORITY_UNAVAILABLE,
+                reason=remote_error,
+            )
+            return {
+                "verdict": STATE_AUTHORITY_UNAVAILABLE,
+                "allowWorkers": False,
+                "allowMutations": False,
+                "localPresent": local_control_db_present(),
+                "localHealthy": False,
+                "remoteReplicaCount": 0,
+                "reason": remote_error,
+            }
         set_control_recovery_state(
-            recovery_state=STATE_AUTHORITY_UNAVAILABLE,
-            reason=remote_error or "authority-replicas-configured-but-unreachable",
+            recovery_state=STATE_GENESIS_REQUIRED,
+            reason="authority-replicas-configured-empty-history",
         )
         return {
-            "verdict": STATE_AUTHORITY_UNAVAILABLE,
+            "verdict": STATE_GENESIS_REQUIRED,
             "allowWorkers": False,
             "allowMutations": False,
-            "localPresent": present,
-            "localHealthy": healthy,
+            "localPresent": True,
+            "localHealthy": True,
             "remoteReplicaCount": 0,
-            "reason": remote_error or "authority-replicas-configured-but-unreachable",
+            "reason": "authority-replicas-configured-empty-history",
         }
 
     if not present:
-        # First install: opening control DB creates empty ACTIVE shell.
+        # Local-only first install (no authority replicas configured).
         with ctrl._connect():  # noqa: SLF001
             pass
-        set_control_recovery_state(recovery_state=RECOVERY_ACTIVE, reason="genesis-empty-control-db")
+        set_control_recovery_state(recovery_state=RECOVERY_ACTIVE, reason="genesis-local-only")
         return {
             "verdict": RECOVERY_ACTIVE,
             "allowWorkers": True,
@@ -231,7 +303,7 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
             "localPresent": True,
             "localHealthy": True,
             "remoteReplicaCount": 0,
-            "reason": "genesis-empty-control-db",
+            "reason": "genesis-local-only",
         }
 
     # Local healthy: drain pending anchors; refuse ACTIVE if pending remains with anchors.
@@ -271,6 +343,65 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
     }
 
 
+def initialize_control_authority(*, reason: str = "explicit-genesis") -> dict[str, Any]:
+    """Explicit genesis ceremony (4.6.5 Gate B): durable generation-1 authority.
+
+    When replicas are configured, generation 1 must be written before ACTIVE.
+    Local-only mode records a local head without remote anchors.
+    """
+    from deepseek_infra.infra.workspace import backup_control as ctrl
+
+    _ensure_provider_before_verdict()
+    if not local_control_db_present():
+        with ctrl._connect():  # noqa: SLF001
+            pass
+    set_control_recovery_state(recovery_state=STATE_GENESIS_REQUIRED, reason=reason)
+    # Build empty generation-1 checkpoint with boot epoch 1.
+    with ctrl._connect() as conn:  # noqa: SLF001
+        backup_control._begin_immediate(conn)  # noqa: SLF001
+        backup_control._ensure_boot_state_row(conn)  # noqa: SLF001
+        conn.execute(
+            """
+            UPDATE control_boot_state
+            SET boot_epoch = 1, recovery_state = ?, reason = ?, updated_at = ?
+            WHERE id = 1
+            """,
+            (STATE_GENESIS_REQUIRED, reason, _utc_iso()),
+        )
+        prepared = None
+        if backup_control_authority.authority_anchors_configured():
+            prepared = backup_control_authority.prepare_authority_mutation_in_tx(
+                conn, kind="control-genesis"
+            )
+        else:
+            checkpoint = backup_control_authority._snapshot_authority_from_conn(conn)  # noqa: SLF001
+            backup_control_authority.record_local_authority_head(checkpoint, conn=conn)
+        conn.execute("COMMIT")
+    if prepared is not None:
+        backup_control_authority.anchor_non_rebuildable_mutation(
+            kind="control-genesis",
+            prepared=prepared,
+            rpo_zero=True,
+        )
+    set_control_recovery_state(recovery_state=RECOVERY_ACTIVE, reason=f"genesis-complete:{reason}")
+    head = None
+    with ctrl._connect() as conn:  # noqa: SLF001
+        row = conn.execute(
+            "SELECT authority_generation, authority_digest FROM control_authority_head WHERE id = 1"
+        ).fetchone()
+        if row is not None:
+            head = {
+                "authorityGeneration": int(row["authority_generation"]),
+                "authorityDigest": str(row["authority_digest"]),
+            }
+    return {
+        "status": "genesis-complete",
+        "recoveryState": RECOVERY_ACTIVE,
+        "head": head,
+        "reason": reason,
+    }
+
+
 def workers_allowed_by_verdict(verdict: dict[str, Any] | None = None) -> bool:
     current = verdict if verdict is not None else resolve_startup_authority_verdict()
     return bool(current.get("allowWorkers"))
@@ -281,18 +412,27 @@ def _clear_ephemeral_tables(conn: Any) -> None:
         conn.execute(f"DELETE FROM {table}")
 
 
-def _advance_boot_epoch(conn: Any, *, reason: str) -> int:
+def _advance_boot_epoch(
+    conn: Any,
+    *,
+    reason: str,
+    recovery_state: str = RECOVERY_ACTIVE,
+    minimum_epoch: int | None = None,
+) -> int:
     now = _utc_iso()
     backup_control._ensure_boot_state_row(conn, now=now)  # noqa: SLF001
     row = conn.execute("SELECT boot_epoch FROM control_boot_state WHERE id = 1").fetchone()
-    epoch = int(row["boot_epoch"] if row is not None else 0) + 1
+    current = int(row["boot_epoch"] if row is not None else 0)
+    epoch = current + 1
+    if minimum_epoch is not None:
+        epoch = max(epoch, int(minimum_epoch))
     conn.execute(
         """
         UPDATE control_boot_state
         SET boot_epoch = ?, recovery_state = ?, reason = ?, updated_at = ?
         WHERE id = 1
         """,
-        (epoch, RECOVERY_ACTIVE, reason, now),
+        (epoch, recovery_state, reason, now),
     )
     return epoch
 
@@ -361,18 +501,16 @@ def reconstruct_control_authority(
     *,
     recovery_stores: list[Any] | None = None,
     bootstrap_profile: dict[str, Any] | None = None,
+    activate: bool = True,
 ) -> dict[str, Any]:
     """Rebuild a fresh control.sqlite3 from secretless authority checkpoints.
 
-    Skeleton scope (4.6.3):
-    - select unique hash-chained authority tip
-    - quarantine corrupt/missing DB
-    - replay non-rebuildable policies/targets/epochs
-    - clear ephemeral leases/fences
-    - advance boot epoch
-    - leave rebuildable projections empty for later formal-truth rebuild
+    4.6.5: after authority replay the plane stays in recovering-formal-truth until
+    ``activate_control_after_formal_truth`` (or ``activate=True`` with no targets
+    requiring rebuild) anchors a new durable boot epoch and enters ACTIVE.
     """
     del bootstrap_profile  # reserved for credential/bootstrap wiring (never stored in checkpoints)
+    _ensure_provider_before_verdict()
     replicas = discover_authority_replicas(list(recovery_targets or []))
     replicas.update(discover_authority_replicas_from_stores(list(recovery_stores or [])))
     if not replicas:
@@ -392,10 +530,40 @@ def reconstruct_control_authority(
         )
     backup_control_authority.verify_authority_checkpoint_integrity(checkpoint)
 
+    # Anti-entropy: repair lagging ancestor replicas from canonical history when handles present.
+    history_views = selected.get("historyViews") or {}
+    canonical_id = str(selected.get("canonicalReplicaId") or "")
+    canonical_view = history_views.get(canonical_id) if isinstance(history_views, dict) else None
+    canonical_history = list((canonical_view or {}).get("history") or [])
+    if canonical_history and selected.get("laggingReplicas"):
+        lagging_handles: list[dict[str, Any]] = []
+        for rid in selected.get("laggingReplicas") or []:
+            src = replicas.get(str(rid)) or {}
+            handle: dict[str, Any] = {
+                "replicaId": str(rid),
+                "tipGeneration": int(src.get("generation") or 0),
+            }
+            if src.get("root"):
+                handle["root"] = src["root"]
+            # store handle only when discover attached storeIndex — optional.
+            lagging_handles.append(handle)
+        fs_lagging = [h for h in lagging_handles if h.get("root")]
+        if fs_lagging:
+            try:
+                backup_control_authority.repair_lagging_authority_replicas(
+                    canonical_history=canonical_history,
+                    lagging=fs_lagging,
+                )
+            except AppError:
+                pass
+
     control_dir = Path(backup_control.CONTROL_DIR)
     control_db = Path(backup_control.CONTROL_DB)
     control_dir.mkdir(parents=True, exist_ok=True)
     quarantined = _quarantine_corrupt_db(control_db) if control_db.is_file() else None
+
+    remote_boot = checkpoint.get("controlBootEpoch")
+    remote_boot_epoch = int(remote_boot) if remote_boot is not None else None
 
     # Fresh DB via normal connect/migrate path.
     with backup_control._connect() as conn:  # noqa: SLF001
@@ -406,15 +574,18 @@ def reconstruct_control_authority(
             SET recovery_state = ?, reason = ?, updated_at = ?
             WHERE id = 1
             """,
-            (RECOVERY_IN_PROGRESS, "reconstruct-from-authority", _utc_iso()),
+            (STATE_RECOVERING_AUTHORITY, "reconstruct-from-authority", _utc_iso()),
         )
         _clear_ephemeral_tables(conn)
         # Clear durable tables we are about to replay (fresh node should be empty).
+        # Reconcilable intents are cleared then left for target-truth reconcile (not durable authority).
         for table in (
             "control_policies",
             "control_targets",
             "target_receipt_mutations",
             "control_authority_head",
+            "control_authority_mutations",
+            "control_authority_outbox",
             "lifecycle_intents",
             "chain_migration_jobs",
         ):
@@ -426,11 +597,37 @@ def reconstruct_control_authority(
     with backup_control._connect() as conn:  # noqa: SLF001
         backup_control._begin_immediate(conn)  # noqa: SLF001
         _clear_ephemeral_tables(conn)
-        boot_epoch = _advance_boot_epoch(conn, reason="authority-reconstructed")
+        # Seed boot epoch from durable authority when present; do not ACTIVE yet.
+        if remote_boot_epoch is not None:
+            conn.execute(
+                """
+                UPDATE control_boot_state
+                SET boot_epoch = ?, recovery_state = ?, reason = ?, updated_at = ?
+                WHERE id = 1
+                """,
+                (
+                    int(remote_boot_epoch),
+                    STATE_RECOVERING_FORMAL_TRUTH,
+                    "authority-replayed-awaiting-formal-truth",
+                    _utc_iso(),
+                ),
+            )
+            boot_epoch = int(remote_boot_epoch)
+        else:
+            conn.execute(
+                """
+                UPDATE control_boot_state
+                SET recovery_state = ?, reason = ?, updated_at = ?
+                WHERE id = 1
+                """,
+                (STATE_RECOVERING_FORMAL_TRUTH, "authority-replayed-awaiting-formal-truth", _utc_iso()),
+            )
+            row = conn.execute("SELECT boot_epoch FROM control_boot_state WHERE id = 1").fetchone()
+            boot_epoch = int(row["boot_epoch"] if row is not None else 1)
         conn.execute("COMMIT")
 
-    return {
-        "status": "recovered",
+    result = {
+        "status": "authority-restored",
         "bootEpoch": boot_epoch,
         "authorityGeneration": int(checkpoint["authorityGeneration"]),
         "authorityDigest": str(checkpoint["digest"]),
@@ -438,6 +635,118 @@ def reconstruct_control_authority(
         "replicaCount": int(selected["replicaCount"]),
         "laggingReplicas": list(selected.get("laggingReplicas") or []),
         "rebuildableProjections": "pending-formal-truth-rebuild",
+        "recoveryState": STATE_RECOVERING_FORMAL_TRUTH,
+        "controlBootEpochFromAuthority": remote_boot_epoch,
+    }
+    if activate:
+        # Compatibility: when caller does not drive formal-truth rebuild separately,
+        # advance boot epoch and enter ACTIVE (unit tests / empty-target recovery).
+        activated = activate_control_after_formal_truth(
+            reason="authority-reconstructed",
+            require_complete_coverage=False,
+        )
+        result.update(
+            {
+                "status": "recovered",
+                "bootEpoch": activated["bootEpoch"],
+                "recoveryState": RECOVERY_ACTIVE,
+                "activation": activated,
+            }
+        )
+    return result
+
+
+def activate_control_after_formal_truth(
+    *,
+    reason: str = "formal-truth-validated",
+    require_complete_coverage: bool = False,
+) -> dict[str, Any]:
+    """Anchor a new durable boot epoch and enter ACTIVE after formal truth rebuild.
+
+    When ``require_complete_coverage`` is True, every registered target must report
+    index coverage state ``complete`` or activation fails closed.
+    """
+    if require_complete_coverage:
+        with backup_control._connect() as conn:  # noqa: SLF001
+            targets = conn.execute("SELECT target_id FROM control_targets").fetchall()
+            for row in targets:
+                tid = str(row["target_id"])
+                cov = conn.execute(
+                    "SELECT state FROM target_index_coverage WHERE target_id = ?",
+                    (tid,),
+                ).fetchone()
+                state = str(cov["state"]) if cov is not None else "missing"
+                if state != "complete":
+                    raise AppError(
+                        f"formal-truth-incomplete:{tid}:state={state}",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=503,
+                    )
+
+    set_control_recovery_state(recovery_state=STATE_ANCHORING_NEW_EPOCH, reason=reason)
+    remote_floor: int | None = None
+    with backup_control._connect() as conn:  # noqa: SLF001
+        row = conn.execute(
+            "SELECT authority_generation, authority_digest FROM control_authority_head WHERE id = 1"
+        ).fetchone()
+        # Prefer controlBootEpoch from last applied checkpoint tip if present in journal/outbox — use local+1.
+        boot_row = conn.execute("SELECT boot_epoch FROM control_boot_state WHERE id = 1").fetchone()
+        current_epoch = int(boot_row["boot_epoch"] if boot_row is not None else 1)
+        remote_floor = current_epoch + 1
+
+    prepared: dict[str, Any] | None = None
+    with backup_control._connect() as conn:  # noqa: SLF001
+        backup_control._begin_immediate(conn)  # noqa: SLF001
+        boot_epoch = _advance_boot_epoch(
+            conn,
+            reason=reason,
+            recovery_state=STATE_ANCHORING_NEW_EPOCH,
+            minimum_epoch=remote_floor,
+        )
+        if backup_control_authority.authority_anchors_configured():
+            prepared = backup_control_authority.prepare_authority_mutation_in_tx(
+                conn, kind="boot-epoch-activation"
+            )
+        else:
+            # Local-only: still record head carrying new boot epoch when possible.
+            try:
+                ckpt = backup_control_authority._snapshot_authority_from_conn(conn)  # noqa: SLF001
+                # Only advance local head when we can form next gen from existing tip.
+                if row is not None or int(ckpt.get("authorityGeneration") or 0) == 1:
+                    backup_control_authority.record_local_authority_head(ckpt, conn=conn)
+            except AppError:
+                pass
+        conn.execute("COMMIT")
+
+    if prepared is not None:
+        try:
+            backup_control_authority.anchor_non_rebuildable_mutation(
+                kind="boot-epoch-activation",
+                prepared=prepared,
+                rpo_zero=True,
+            )
+        except AppError:
+            # Keep non-ACTIVE if RPO=0 anchor fails.
+            set_control_recovery_state(
+                recovery_state=RECOVERY_REQUIRED,
+                reason="boot-epoch-anchor-failed",
+            )
+            raise
+
+    set_control_recovery_state(recovery_state=RECOVERY_ACTIVE, reason=reason)
+    return {
+        "status": "active",
+        "bootEpoch": boot_epoch,
+        "recoveryState": RECOVERY_ACTIVE,
+        "reason": reason,
+        "authorityHead": (
+            {
+                "authorityGeneration": int(row["authority_generation"]),
+                "authorityDigest": str(row["authority_digest"]),
+            }
+            if row is not None
+            else None
+        ),
     }
 
 

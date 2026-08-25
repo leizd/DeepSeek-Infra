@@ -4,6 +4,19 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.6.5] - Crash-Atomic Control Authority & Fresh-Process Recovery (2026-08-25)
+
+### Crash-Atomic Control Authority & Fresh-Process Recovery
+
+- **AuthorityReplicaProvider (Gate A)**: Bootstrap replica locators from env/bootstrap file before Startup Verdict; fresh processes no longer depend on inherited process-global TargetStore handles.
+- **Explicit genesis (Gate B)**: Configured empty replicas → `genesis-required` until `initialize_control_authority` durably writes generation 1.
+- **Monotonic head CAS (Gate C)**: Logical `(generation=N+1, previousDigest=current)` plus physical ETag CAS; stale writers fail closed.
+- **Cross-replica ancestry (Gate D/E)**: Canonical history selection requires ancestor/prefix relation; lagging ancestors repair from immutable checkpoint bytes.
+- **Crash-atomic mutation journal (Gate F, schema v8)**: Local non-rebuildable mutation and PREPARED authority intent commit in one SQLite transaction; `remote-outcome-unknown` reconciles by digest.
+- **Durable controlBootEpoch (Gate G)**: Additive `control-authority-v1` field; recovery activation strictly increases boot epoch before ACTIVE.
+- **Fresh-process Evidence (Gate J)**: Subprocess tests prove no auto-genesis, mutation barrier pre-recovery, restore of pre-disaster policy, post-recovery mutation, prepared-crash exactly-once anchor.
+- **Frozen Compatibility Surface**: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age unchanged.
+
 ## [4.6.4] - Production Control Authority Activation (2026-08-24)
 
 ### Production Control Authority Activation & Monotonic Replica Recovery

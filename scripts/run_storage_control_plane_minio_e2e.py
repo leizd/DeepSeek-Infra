@@ -23,6 +23,7 @@ TIER_SCENARIO = "real-three-minio-tiering-control-recovery"
 PLACE_SCENARIO = "real-three-minio-autonomous-placement-control"
 TXGC_SCENARIO = "real-three-minio-transactional-gc-fencing"
 AUTH_DR_SCENARIO = "real-three-minio-control-authority-disaster-recovery"
+FRESH_AUTH_SCENARIO = "real-three-minio-fresh-process-authority-recovery"
 SCENARIOS: dict[str, tuple[str, ...]] = {
     REAL_SCENARIO: (
         "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e",
@@ -38,6 +39,10 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
     ),
     AUTH_DR_SCENARIO: (
         "tests/test_backup_463_real_control_authority_disaster_e2e.py::test_real_three_minio_control_authority_disaster_recovery_e2e",
+    ),
+    FRESH_AUTH_SCENARIO: (
+        "tests/test_backup_465_fresh_process_authority.py::test_subprocess_fresh_process_detects_remote_authority",
+        "tests/test_backup_465_fresh_process_authority.py::test_subprocess_crash_after_prepared_recovers_exactly_once",
     ),
 }
 CHECK_SCENARIOS = {
@@ -79,6 +84,13 @@ CHECK_SCENARIOS = {
     "recoveryAdvancesControlBootEpoch": AUTH_DR_SCENARIO,
     "controlAuthorityCheckpointContainsNoSecrets": AUTH_DR_SCENARIO,
     "controlRecoveryPerformsZeroAgeEncryption": AUTH_DR_SCENARIO,
+    # 4.6.5 gates (fresh-process authority recovery)
+    "realFreshProcessHasZeroInheritedTargetHandles": FRESH_AUTH_SCENARIO,
+    "realFreshProcessDetectsRemoteAuthority": FRESH_AUTH_SCENARIO,
+    "realFreshProcessIsReadOnlyBeforeRecovery": FRESH_AUTH_SCENARIO,
+    "realFreshProcessRestoresPreDisasterRecoveryPoint": FRESH_AUTH_SCENARIO,
+    "realFreshProcessCreatesPostRecoveryBackup": FRESH_AUTH_SCENARIO,
+    "realProcessCrashAfterPreparedMutationRecoversExactlyOnce": FRESH_AUTH_SCENARIO,
 }
 REQUIRED_ENDPOINTS = (
     "DEEPSEEK_TEST_S3_ENDPOINT_A",
