@@ -189,6 +189,73 @@ def test_evidence_proof_invalid_and_resolve_path(tmp_path: Path, monkeypatch: py
         conv.unlink(missing_ok=True)
 
 
+def test_verdict_local_healthy_active_and_pending(
+    control_db: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
+    backup_authority_provider.reset_authority_replica_provider()
+    # Create healthy DB via schema
+    backup_control.schema_version()
+    backup_control_recovery.set_control_recovery_state(
+        recovery_state=backup_control_recovery.RECOVERY_ACTIVE, reason="ok"
+    )
+    verdict = backup_control_recovery.resolve_startup_authority_verdict()
+    assert verdict["verdict"] == backup_control_recovery.RECOVERY_ACTIVE
+    assert verdict["allowWorkers"] is True
+    assert backup_control_recovery.workers_allowed_by_verdict(verdict) is True
+
+    # Non-active recovery state blocks workers
+    backup_control_recovery.enter_control_recovery_required(reason="unit")
+    verdict2 = backup_control_recovery.resolve_startup_authority_verdict()
+    assert verdict2["allowWorkers"] is False
+
+    # Pending outbox with anchors
+    root = tmp_path / "a"
+    root.mkdir()
+    backup_control_recovery.set_control_recovery_state(
+        recovery_state=backup_control_recovery.RECOVERY_ACTIVE, reason="ok"
+    )
+    backup_control_authority.configure_authority_anchor_roots([root])
+    ckpt = backup_control_authority.snapshot_authority_from_control_db()
+    backup_control_authority._enqueue_authority_outbox(kind="p", checkpoint=ckpt)
+
+    def _ready() -> dict[str, Any]:
+        return {"pending": 1, "status": "pending"}
+
+    monkeypatch.setattr(backup_control, "ensure_control_authority_ready", _ready)
+    verdict3 = backup_control_recovery.resolve_startup_authority_verdict()
+    assert verdict3["verdict"] == backup_control_recovery.RECOVERY_REQUIRED
+    assert verdict3["reason"] == "pending-authority-outbox"
+
+
+def test_authority_mode_from_bootstrap_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    boot = tmp_path / "b.json"
+    boot.write_text(json.dumps({"controlAuthority": {"mode": "local-only", "replicas": []}}), encoding="utf-8")
+    monkeypatch.delenv(backup_authority_provider.ENV_AUTHORITY_MODE, raising=False)
+    assert (
+        backup_authority_provider.authority_mode(env={}, bootstrap_path=boot)
+        == backup_authority_provider.MODE_LOCAL_ONLY
+    )
+    bad = tmp_path / "bad.json"
+    bad.write_text("{", encoding="utf-8")
+    assert (
+        backup_authority_provider.authority_mode(env={}, bootstrap_path=bad)
+        == backup_authority_provider.MODE_REPLICATED
+    )
+
+
+def test_list_formal_truth_validations(control_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
+    backup_control_recovery.clear_formal_truth_attestations()
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t1", status="VALID", index_coverage_complete=True
+    )
+    items = backup_control_recovery.list_formal_truth_validations()
+    assert len(items) == 1
+    assert items[0]["targetId"] == "t1"
+    assert backup_control_recovery.get_formal_truth_validation("missing") is None
+
+
 def test_evidence_proof_merge_fail_paths(tmp_path: Path) -> None:
     assert evidence_proof.proof_check_status({"checks": {"c": "not-dict"}}, "c") == "FAIL"
     assert evidence_proof.proof_check_status({"checks": {}}, "missing") == "FAIL"
