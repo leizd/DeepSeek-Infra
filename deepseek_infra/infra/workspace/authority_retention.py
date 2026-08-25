@@ -296,6 +296,8 @@ def _fetch_all_authority_history() -> list[dict[str, Any]]:
                 try:
                     data = json.loads(str(row["checkpoint_json"]))
                     if isinstance(data, dict):
+                        if "kind" not in data and row["kind"]:
+                            data["kind"] = str(row["kind"])
                         history.append(data)
                 except Exception:
                     continue
@@ -407,6 +409,12 @@ def explain_retention(
     # Calculate target checkpoint generation
     if target_generation is not None:
         target_gen = int(target_generation)
+        if target_gen < 1 or target_gen > max(1, current_gen - min_gens):
+            reasons.append({
+                "code": REASON_INSUFFICIENT_HISTORY,
+                "targetGeneration": target_gen,
+                "message": f"Target generation {target_gen} is invalid or violates minimum retained generations",
+            })
     else:
         target_gen = max(1, current_gen - min_gens)
 
@@ -810,12 +818,13 @@ def authority_history_snapshot() -> dict[str, Any]:
 
     if _checkpoints_dir().is_dir():
         ckpt_files = sorted(_checkpoints_dir().glob("*.json"))
-        if ckpt_files:
+        for cp in reversed(ckpt_files):
             try:
-                data = json.loads(ckpt_files[-1].read_text(encoding="utf-8"))
+                data = json.loads(cp.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     latest_ckpt_gen = int(data.get("checkpointGeneration") or 0)
                     latest_ckpt_digest = str(data.get("headDigest") or "")
+                    break
             except Exception:
                 pass
 
@@ -828,11 +837,12 @@ def authority_history_snapshot() -> dict[str, Any]:
     last_compaction: str | None = None
     if _jobs_dir().is_dir():
         job_files = sorted(_jobs_dir().glob("*.json"), key=lambda p: p.stat().st_mtime)
-        if job_files:
+        for jp in reversed(job_files):
             try:
-                jdata = json.loads(job_files[-1].read_text(encoding="utf-8"))
+                jdata = json.loads(jp.read_text(encoding="utf-8"))
                 if jdata.get("state") == STATE_COMMITTED:
                     last_compaction = str(jdata.get("updatedAt") or jdata.get("createdAt"))
+                    break
             except Exception:
                 pass
 

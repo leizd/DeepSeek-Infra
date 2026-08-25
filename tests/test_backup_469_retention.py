@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 import pytest
 
-from deepseek_infra.core.errors import AppError
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     authority_retention,
     backup_authority_provider,
@@ -787,6 +789,14 @@ def test_compaction_execution_and_dependency_graph(clean_authority_env: dict[str
     assert isinstance(dep, dict)
     assert 50 in dep or 80 in dep
 
+    # Dependency graph with explicit conn
+    with backup_control._connect() as conn:  # noqa: SLF001
+        dep_conn = authority_retention.get_retention_dependency_graph(up_to_generation=120, conn=conn)
+        assert isinstance(dep_conn, dict)
+
+    # Dependency graph with 0 generation
+    assert authority_retention.get_retention_dependency_graph(up_to_generation=0) == {}
+
     # Execute compaction with dry-run
     res_dry = authority_retention.execute_compaction(
         policy={"minimumGenerations": 20},
@@ -800,6 +810,575 @@ def test_compaction_execution_and_dependency_graph(clean_authority_env: dict[str
         target_generation=120,
     )
     assert res["state"] in {"COMMITTED", "BLOCKED"}
+
+
+def test_authority_retention_edge_cases_and_verification(clean_authority_env: dict[str, Any]) -> None:
+    """Test all edge cases and verification error paths in authority_retention."""
+    # 1. build_authority_retention_checkpoint validation
+    with pytest.raises(AppError) as exc_info:
+        authority_retention.build_authority_retention_checkpoint(
+            checkpoint_generation=0,
+            ancestor_digest="a" * 64,
+            head_digest="h" * 64,
+        )
+    assert exc_info.value.status == 400
+
+    ckpt = authority_retention.build_authority_retention_checkpoint(
+        checkpoint_generation=50,
+        ancestor_digest="a" * 64,
+        head_digest="h" * 64,
+        history_start_generation=1,
+        included_mutations=["non-dict", {"generation": 1, "digest": "d" * 64, "kind": "policy"}],  # type: ignore[list-item]
+        replica_coverage={"r1": "non-dict", "r2": {"generation": 50, "digest": "d" * 64}},
+    )
+    assert ckpt["checkpointGeneration"] == 50
+    assert "r2" in ckpt["replicaCoverage"]
+
+    # 2. _fetch_all_authority_history fallback to head
+    with backup_control._connect() as conn:  # noqa: SLF001
+        conn.execute("DELETE FROM control_authority_mutations")
+        conn.execute("INSERT OR REPLACE INTO control_authority_head (id, authority_generation, authority_digest, previous_digest, payload_digest, updated_at) VALUES (1, 10, 'hd1', 'hd0', 'pd1', datetime('now'))")
+        conn.commit()
+    head_hist = authority_retention._fetch_all_authority_history()  # noqa: SLF001
+    assert len(head_hist) == 1
+    assert head_hist[0]["authorityGeneration"] == 10
+
+    # 3. verify_compaction error branches
+    hist = [
+        {"authorityGeneration": 1, "digest": "d1", "previousDigest": None},
+        {"authorityGeneration": 2, "digest": "d2", "previousDigest": "d1"},
+        {"authorityGeneration": 3, "digest": "d3", "previousDigest": "d2"},
+    ]
+
+    # ckpt gen < 1
+    with pytest.raises(AppError):
+        authority_retention.verify_compaction(
+            checkpoint={"checkpointGeneration": 0, "ancestorDigest": "d1"},
+            full_history=hist,
+            tail_history=[],
+        )
+
+    # ckpt gen not in history
+    with pytest.raises(AppError):
+        authority_retention.verify_compaction(
+            checkpoint={"checkpointGeneration": 99, "ancestorDigest": "d1"},
+            full_history=hist,
+            tail_history=[],
+        )
+
+    # ancestor digest mismatch
+    with pytest.raises(AppError):
+        authority_retention.verify_compaction(
+            checkpoint={"checkpointGeneration": 2, "ancestorDigest": "wrong_digest"},
+            full_history=hist,
+            tail_history=[],
+        )
+
+    # historyStartGeneration mismatch
+    with pytest.raises(AppError):
+        authority_retention.verify_compaction(
+            checkpoint={"checkpointGeneration": 2, "ancestorDigest": "d2", "historyStartGeneration": 99},
+            full_history=hist,
+            tail_history=[],
+        )
+
+    # includedMutationDigest wrong
+    with pytest.raises(AppError):
+        authority_retention.verify_compaction(
+            checkpoint={"checkpointGeneration": 2, "ancestorDigest": "d2", "historyStartGeneration": 1, "includedMutationDigest": "wrong"},
+            full_history=hist,
+            tail_history=[],
+        )
+
+    # tail start gap
+    with pytest.raises(AppError):
+        authority_retention.verify_compaction(
+            checkpoint={"checkpointGeneration": 1, "ancestorDigest": "d1", "historyStartGeneration": 1},
+            full_history=hist,
+            tail_history=[{"authorityGeneration": 3, "digest": "d3"}],
+        )
+
+    # empty tail when ckpt != head
+    with pytest.raises(AppError):
+        authority_retention.verify_compaction(
+            checkpoint={"checkpointGeneration": 1, "ancestorDigest": "d1", "historyStartGeneration": 1},
+            full_history=hist,
+            tail_history=[],
+        )
+
+    # replayed head digest mismatch
+    with pytest.raises(AppError):
+        authority_retention.verify_compaction(
+            checkpoint={"checkpointGeneration": 2, "ancestorDigest": "d2", "historyStartGeneration": 1},
+            full_history=hist,
+            tail_history=[{"authorityGeneration": 3, "digest": "wrong_head"}],
+        )
+
+    # forbidden secrets in checkpoint
+    with pytest.raises(AppError):
+        authority_retention.verify_compaction(
+            checkpoint={"checkpointGeneration": 3, "ancestorDigest": "d3", "historyStartGeneration": 1, "secretkey": "leaked"},
+            full_history=hist,
+            tail_history=[],
+        )
+
+
+def test_evidence_proof_v3_comprehensive() -> None:
+    """Test Evidence Proof v3 semantic validators for all error conditions and success cases."""
+    # 1. validate_dr_readiness_proof
+    assert len(evidence_proof.validate_dr_readiness_proof({}, "test")) > 0
+    assert len(evidence_proof.validate_dr_readiness_proof({
+        "drillId": "d1",
+        "testedBackupId": "b1",
+        "restoreDurationMs": 100,
+        "workspaceDigestBefore": "d" * 64,
+        "workspaceDigestAfter": "d" * 64,
+        "objectCount": 5,
+        "commitVerified": False,
+        "receiptVerified": True,
+        "ageVerified": True,
+        "cleanupCompleted": True,
+    }, "test")) > 0
+    assert len(evidence_proof.validate_dr_readiness_proof({
+        "drillId": "d1",
+        "testedBackupId": "b1",
+        "restoreDurationMs": -5,
+        "workspaceDigestBefore": "d" * 64,
+        "workspaceDigestAfter": "d" * 64,
+        "objectCount": 5,
+        "commitVerified": True,
+        "receiptVerified": True,
+        "ageVerified": True,
+        "cleanupCompleted": True,
+    }, "test")) > 0
+
+    valid_dr_proof = {
+        "drillId": "d1",
+        "testedBackupId": "b1",
+        "restoreDurationMs": 120,
+        "workspaceDigestBefore": "d" * 64,
+        "workspaceDigestAfter": "d" * 64,
+        "objectCount": 5,
+        "commitVerified": True,
+        "receiptVerified": True,
+        "ageVerified": True,
+        "cleanupCompleted": True,
+    }
+    assert evidence_proof.validate_dr_readiness_proof(valid_dr_proof, "test") == []
+
+    # 2. validate_retention_safety_proof
+    assert len(evidence_proof.validate_retention_safety_proof({}, "test")) > 0
+    assert len(evidence_proof.validate_retention_safety_proof({
+        "checkpointVerified": False,
+        "ancestorCoverage": True,
+        "replicaAgreement": True,
+        "dependencyClosure": True,
+    }, "test")) > 0
+
+    valid_retention_proof = {
+        "checkpointVerified": True,
+        "ancestorCoverage": True,
+        "replicaAgreement": True,
+        "dependencyClosure": True,
+    }
+    assert evidence_proof.validate_retention_safety_proof(valid_retention_proof, "test") == []
+
+    # 3. validate_distinct_pid_proof
+    assert len(evidence_proof.validate_distinct_pid_proof({}, "test")) > 0
+    assert len(evidence_proof.validate_distinct_pid_proof({"pidA": 10, "pidB": 10}, "test")) > 0
+    assert evidence_proof.validate_distinct_pid_proof({"pidA": 10, "pidB": 20}, "test") == []
+
+    # 4. validate_sigkill_proof
+    assert len(evidence_proof.validate_sigkill_proof({}, "test")) > 0
+    assert len(evidence_proof.validate_sigkill_proof({"returncode": 0}, "test")) > 0
+    assert evidence_proof.validate_sigkill_proof({"returncode": -9}, "test") == []
+
+    # 5. validate_epoch_increase_proof
+    assert len(evidence_proof.validate_epoch_increase_proof({}, "test")) > 0
+    assert len(evidence_proof.validate_epoch_increase_proof({"epochA": 10, "epochB": 10}, "test")) > 0
+    assert evidence_proof.validate_epoch_increase_proof({"epochA": 10, "epochB": 11}, "test") == []
+
+    # 6. validate_minio_endpoints_proof
+    assert len(evidence_proof.validate_minio_endpoints_proof({}, "test")) > 0
+    assert len(evidence_proof.validate_minio_endpoints_proof({"endpoints": ["http://127.0.0.1:9000"]}, "test")) > 0
+    assert evidence_proof.validate_minio_endpoints_proof({
+        "endpoints": ["http://127.0.0.1:9000", "http://127.0.0.1:9001", "http://127.0.0.1:9002"]
+    }, "test") == []
+
+
+def test_authority_retention_deep_branch_coverage(clean_authority_env: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cover remaining branches in authority_retention."""
+    # 1. Dependency graph query exceptions and target_index_coverage
+    class FailingConn:
+        def execute(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("query failed")
+
+    assert authority_retention.get_retention_dependency_graph(up_to_generation=50, conn=FailingConn()) == {}
+
+    with backup_control._connect() as conn:  # noqa: SLF001
+        conn.execute(
+            "INSERT INTO target_index_coverage (target_id, source_receipt_mutation_generation, updated_at) VALUES ('t1', 30, datetime('now'))"
+        )
+        conn.commit()
+    dep = authority_retention.get_retention_dependency_graph(up_to_generation=50)
+    assert any(any(d.get("type") == "target_index_coverage" for d in deps) for deps in dep.values())
+
+    # 2. Formal truth failure in explain_retention
+    monkeypatch.setattr(
+        backup_control_recovery,
+        "resolve_startup_authority_verdict",
+        lambda: {"verdict": "formal-truth-failure", "errors": ["formal truth invalid"]},
+    )
+    exp_ft = authority_retention.explain_retention()
+    assert exp_ft["allowed"] is False
+    assert any(r.get("code") == authority_retention.REASON_FORMAL_TRUTH_STALE for r in exp_ft["reasons"])
+
+    # 3. Store replicas in explain_retention (error and lag)
+    monkeypatch.setattr(
+        backup_control_recovery,
+        "resolve_startup_authority_verdict",
+        lambda: {"verdict": "local-healthy", "errors": []},
+    )
+
+    class DummyStore:
+        def get_bytes(self, *args: Any, **kwargs: Any) -> Any:
+            raise AppError("store read error", code=ErrorCode.INTERNAL, status=500)
+
+    monkeypatch.setattr(backup_control_authority, "get_authority_anchor_stores", lambda: [DummyStore()])
+    exp_store = authority_retention.explain_retention()
+    assert exp_store["allowed"] is False
+    assert any(r.get("code") == authority_retention.REASON_REPLICA_LAG for r in exp_store["reasons"])
+
+    monkeypatch.setattr(
+        backup_control_authority,
+        "load_authority_bundle_from_store",
+        lambda s, replica_id: {"checkpoint": {"authorityGeneration": 10, "digest": "d10"}},
+    )
+    monkeypatch.setattr(backup_control_authority, "get_authority_anchor_stores", lambda: ["store-0"])
+    exp_store_lag = authority_retention.explain_retention()
+    assert exp_store_lag["allowed"] is False
+    assert any(r.get("code") == authority_retention.REASON_REPLICA_LAG for r in exp_store_lag["reasons"])
+
+    # 4. Root replica fork in explain_retention
+    fork_root = tmp_path / "fork_anchor_root"
+    fork_root.mkdir(parents=True, exist_ok=True)
+    bundle_fork = {
+        "checkpoint": {"authorityGeneration": 200, "digest": "dfork"},
+        "checkpoints": [
+            {"authorityGeneration": 1, "digest": "d1", "previousDigest": None},
+            {"authorityGeneration": 2, "digest": "bad", "previousDigest": "wrong"},
+        ],
+    }
+    monkeypatch.setattr(backup_control_authority, "get_authority_anchor_roots", lambda: [fork_root])
+    monkeypatch.setattr(backup_control_authority, "load_authority_bundle", lambda r: bundle_fork)
+    monkeypatch.setattr(
+        backup_control_authority,
+        "verify_authority_chain",
+        lambda ckpts: (_ for _ in ()).throw(AppError("Chain fork detected", code=ErrorCode.INVALID_REQUEST, status=409)),
+    )
+    exp_fork = authority_retention.explain_retention()
+    assert any(r.get("code") == authority_retention.REASON_CROSS_REPLICA_FORK for r in exp_fork["reasons"])
+
+    # 5. execute_compaction target generation missing from history
+    monkeypatch.setattr(backup_control_authority, "get_authority_anchor_roots", lambda: [])
+    monkeypatch.setattr(backup_control_authority, "get_authority_anchor_stores", lambda: [])
+    with pytest.raises(AppError):
+        authority_retention.execute_compaction(
+            policy={"minimumGenerations": 1},
+            target_generation=99999,
+        )
+
+    # Missing target history item in state machine
+    real_fetch = authority_retention._fetch_all_authority_history  # noqa: SLF001
+    monkeypatch.setattr(authority_retention, "_fetch_all_authority_history", lambda: [])
+    monkeypatch.setattr(
+        authority_retention,
+        "plan_retention",
+        lambda **kwargs: {
+            "allowed": True,
+            "targetCheckpointGeneration": 50,
+            "headDigest": "h50",
+            "eligiblePruneGenerations": [1, 2],
+        },
+    )
+    with pytest.raises(AppError) as exc_missing:
+        authority_retention.execute_compaction(policy={"minimumGenerations": 1})
+    assert exc_missing.value.status == 500
+    monkeypatch.setattr(authority_retention, "_fetch_all_authority_history", real_fetch)
+    monkeypatch.setattr(authority_retention, "plan_retention", authority_retention.plan_retention)
+
+    # 6. execute_compaction verification failure during state machine
+    monkeypatch.setattr(
+        authority_retention,
+        "verify_compaction",
+        lambda **kwargs: (_ for _ in ()).throw(AppError("Verification check failed", code=ErrorCode.INVALID_REQUEST, status=409)),
+    )
+    with pytest.raises(AppError) as exc_ver:
+        authority_retention.execute_compaction(
+            policy={"minimumGenerations": 20},
+            target_generation=50,
+        )
+    assert exc_ver.value.status == 409
+    monkeypatch.setattr(authority_retention, "verify_compaction", authority_retention.verify_compaction)
+
+    # 7. Snapshot with invalid/corrupt JSON files and valid JSON files in directories
+    retention_dir = tmp_path / "retention_corrupt"
+    ckpts_dir = retention_dir / "checkpoints"
+    jobs_dir = retention_dir / "jobs"
+    ckpts_dir.mkdir(parents=True, exist_ok=True)
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(authority_retention, "AUTHORITY_RETENTION_DIR", retention_dir)
+
+    (ckpts_dir / "0000000000000001.json").write_text("{ not json", encoding="utf-8")
+    (jobs_dir / "job_corrupt.json").write_text("{ not json", encoding="utf-8")
+
+    snap = authority_retention.authority_history_snapshot()
+    assert snap["checkpointGeneration"] is None
+    assert snap["lastCompaction"] is None
+
+def test_authority_retention_edge_cases_all(clean_authority_env: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test remaining edge cases for explain_retention, execute_compaction, and helpers."""
+    # 1. explain_retention target_gen < 1 and target_gen > current_gen
+    exp_neg = authority_retention.explain_retention(target_generation=-5)
+    assert exp_neg["allowed"] is False
+    assert any(r.get("code") == authority_retention.REASON_INSUFFICIENT_HISTORY for r in exp_neg["reasons"])
+
+    exp_high = authority_retention.explain_retention(target_generation=999999)
+    assert exp_high["allowed"] is False
+    assert any(r.get("code") == authority_retention.REASON_INSUFFICIENT_HISTORY for r in exp_high["reasons"])
+
+    # 2. current_gen < min_gens
+    exp_insuf = authority_retention.explain_retention(policy={"minimumGenerations": 1000})
+    assert exp_insuf["allowed"] is False
+    assert any(r.get("code") == authority_retention.REASON_INSUFFICIENT_HISTORY for r in exp_insuf["reasons"])
+
+    # 3. Active restore sessions & malformed json in restore staging
+    restore_dir = clean_authority_env["staging_dir"] / "sess1"
+    restore_dir.mkdir(parents=True, exist_ok=True)
+    (restore_dir / "remote-fetch.json").write_text(
+        json.dumps({"phase": "downloading"}), encoding="utf-8"
+    )
+    exp_restore = authority_retention.explain_retention(policy={"minimumGenerations": 10})
+    assert exp_restore["allowed"] is False
+    assert any(r.get("code") == authority_retention.REASON_ACTIVE_RESTORE_SESSION for r in exp_restore["reasons"])
+    # Malformed json in remote-fetch.json
+    (restore_dir / "remote-fetch.json").write_text("invalid json", encoding="utf-8")
+    authority_retention.explain_retention(policy={"minimumGenerations": 10})
+    (restore_dir / "remote-fetch.json").write_text(
+        json.dumps({"phase": "complete"}), encoding="utf-8"
+    )
+
+    # 4. Active GC unfinished & GC query exception
+    with backup_control._connect() as conn:  # noqa: SLF001
+        conn.execute(
+            "INSERT INTO ciphertext_gc_intents (intent_id, target_id, object_key, expected_receipt_mutation_generation, state, created_at, updated_at) VALUES ('gc1', 't1', 'obj1', 10, 'running', datetime('now'), datetime('now'))"
+        )
+        conn.commit()
+    exp_gc = authority_retention.explain_retention(policy={"minimumGenerations": 10})
+    assert exp_gc["allowed"] is False
+    assert any(r.get("code") == authority_retention.REASON_GC_UNFINISHED for r in exp_gc["reasons"])
+
+    # 5. DR Drill Running
+    with backup_control._connect() as conn:  # noqa: SLF001
+        conn.execute("DELETE FROM ciphertext_gc_intents")
+        conn.commit()
+    backup_dr_readiness.set_dr_drill_running(True)
+    exp_drill = authority_retention.explain_retention(policy={"minimumGenerations": 10})
+    assert exp_drill["allowed"] is False
+    assert any(r.get("code") == authority_retention.REASON_DR_DRILL_RUNNING for r in exp_drill["reasons"])
+    backup_dr_readiness.set_dr_drill_running(False)
+
+    # 6. execute_compaction with anchor root replica coverage and prune empty
+    root1 = tmp_path / "root1"
+    bundle1 = {
+        "checkpoint": {"schema": "control-authority-v1", "authorityGeneration": 150, "digest": "d150"},
+        "checkpoints": [],
+    }
+    monkeypatch.setattr(backup_control_authority, "get_authority_anchor_roots", lambda: [root1])
+    monkeypatch.setattr(backup_control_authority, "load_authority_bundle", lambda r: bundle1)
+
+    # Compaction with empty eligible prune (all kept)
+    comp_all_kept = authority_retention.execute_compaction(
+        policy={"minimumGenerations": 50, "keepMutationClasses": ["policy-update", "target-change", "formal-truth-failure"]},
+        target_generation=50,
+    )
+    assert comp_all_kept["state"] == authority_retention.STATE_COMMITTED
+    assert comp_all_kept["prunedGenerationsCount"] == 0
+
+    # 7. execute_compaction verification error handling (lines 748-752)
+    real_verify = authority_retention.verify_compaction
+    monkeypatch.setattr(
+        authority_retention,
+        "verify_compaction",
+        lambda **kwargs: (_ for _ in ()).throw(AppError("Verification simulation failure", code=ErrorCode.INVALID_REQUEST, status=409)),
+    )
+    with pytest.raises(AppError) as exc_verify_err:
+        authority_retention.execute_compaction(
+            policy={"minimumGenerations": 50},
+            target_generation=50,
+        )
+    assert exc_verify_err.value.status == 409
+    monkeypatch.setattr(authority_retention, "verify_compaction", real_verify)
+
+    # 8. execute_compaction dry_run (lines 727-728)
+    comp_dry = authority_retention.execute_compaction(
+        policy={"minimumGenerations": 20},
+        target_generation=50,
+        dry_run=True,
+    )
+    assert comp_dry["state"] == authority_retention.STATE_READY
+
+    # 9. execute_compaction prune exception (lines 776-780)
+    real_connect = backup_control._connect  # noqa: SLF001
+
+    class ExecWrapperConn:
+        def __init__(self, real_c: Any) -> None:
+            self._real = real_c
+
+        def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+            if "DELETE FROM control_authority_mutations" in str(sql):
+                raise RuntimeError("disk IO error on delete")
+            return self._real.execute(sql, *args, **kwargs)
+
+        def commit(self) -> None:
+            self._real.commit()
+
+        def rollback(self) -> None:
+            self._real.rollback()
+
+        def cursor(self) -> Any:
+            return self._real.cursor()
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._real, name)
+
+    @contextlib.contextmanager
+    def _failing_delete_connect() -> Any:
+        with real_connect() as conn:
+            yield ExecWrapperConn(conn)
+
+    monkeypatch.setattr(backup_control, "_connect", _failing_delete_connect)
+    with pytest.raises(AppError) as exc_prune_err:
+        authority_retention.execute_compaction(
+            policy={"minimumGenerations": 20},
+            target_generation=50,
+        )
+    assert exc_prune_err.value.status == 500
+    monkeypatch.setattr(backup_control, "_connect", real_connect)
+
+    # 10. Test _fetch_all_authority_history table error fallback to head
+    class TableErrorConn:
+        def __init__(self, real_c: Any) -> None:
+            self._real = real_c
+
+        def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+            if "FROM control_authority_mutations" in str(sql):
+                raise sqlite3.OperationalError("no such table")
+            return self._real.execute(sql, *args, **kwargs)
+
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+    @contextlib.contextmanager
+    def _table_error_connect() -> Any:
+        with real_connect() as conn:
+            yield TableErrorConn(conn)
+
+    monkeypatch.setattr(backup_control, "_connect", _table_error_connect)
+    hist_fallback = authority_retention._fetch_all_authority_history()  # noqa: SLF001
+    assert len(hist_fallback) >= 1
+    assert hist_fallback[0]["schema"] == "control-authority-v1"
+    monkeypatch.setattr(backup_control, "_connect", real_connect)
+
+    # 11. Test _fetch_all_authority_history total failure (lines 322-323)
+    class TotalErrorConn:
+        def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+            raise sqlite3.OperationalError("database locked")
+
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+    @contextlib.contextmanager
+    def _total_error_connect() -> Any:
+        yield TotalErrorConn()
+
+    monkeypatch.setattr(backup_control, "_connect", _total_error_connect)
+    hist_empty = authority_retention._fetch_all_authority_history()  # noqa: SLF001
+    assert hist_empty == []
+    monkeypatch.setattr(backup_control, "_connect", real_connect)
+
+    # 12. Test snapshot with checkpoints and jobs files
+    ckpt_dir = authority_retention._checkpoints_dir()  # noqa: SLF001
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    (ckpt_dir / "bad.json").write_text("corrupted", encoding="utf-8")
+    (ckpt_dir / "00000050.json").write_text(
+        json.dumps({"checkpointGeneration": 50, "headDigest": "d50"}), encoding="utf-8"
+    )
+
+    jobs_dir = authority_retention._jobs_dir()  # noqa: SLF001
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    (jobs_dir / "bad.json").write_text("corrupted", encoding="utf-8")
+    (jobs_dir / "job1.json").write_text(
+        json.dumps({"jobId": "job1", "state": authority_retention.STATE_COMMITTED, "updatedAt": "2026-08-25T12:00:00Z"}), encoding="utf-8"
+    )
+
+    snap_with_files = authority_retention.authority_history_snapshot()
+    assert snap_with_files["currentGeneration"] > 0
+    assert snap_with_files["checkpointGeneration"] == 50
+    assert snap_with_files["lastCompaction"] == "2026-08-25T12:00:00Z"
+
+    # 13. Test _add_dep with gen <= 0 (line 217)
+    with backup_control._connect() as conn:  # noqa: SLF001
+        conn.execute(
+            "INSERT INTO target_receipt_mutations (target_id, generation, updated_at) VALUES ('t0', 0, datetime('now'))"
+        )
+        conn.commit()
+    dep_0 = authority_retention.get_retention_dependency_graph(up_to_generation=50)
+    assert 0 not in dep_0
+
+    # 14. Test GC error in explain_retention (lines 377-378)
+    class GCOpErrorConn:
+        def __init__(self, real_c: Any) -> None:
+            self._real = real_c
+
+        def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+            if "ciphertext_gc_intents" in str(sql):
+                raise sqlite3.OperationalError("gc table error")
+            return self._real.execute(sql, *args, **kwargs)
+
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+    @contextlib.contextmanager
+    def _gc_error_connect() -> Any:
+        with real_connect() as conn:
+            yield GCOpErrorConn(conn)
+
+    monkeypatch.setattr(backup_control, "_connect", _gc_error_connect)
+    exp_gc_err = authority_retention.explain_retention(policy={"minimumGenerations": 10})
+    assert isinstance(exp_gc_err, dict)
+    monkeypatch.setattr(backup_control, "_connect", real_connect)
+
+    # 15. Test verify_compaction generation mismatch (lines 584-590)
+    with pytest.raises(AppError) as exc_gen_mismatch:
+        authority_retention.verify_compaction(
+            checkpoint={"checkpointGeneration": 50, "headDigest": "d50", "tailCount": 0},
+            tail_history=[],
+            full_history=[
+                {"schema": "control-authority-v1", "authorityGeneration": 1, "digest": "d1", "previousDigest": None, "payloadDigest": "p1"},
+                {"schema": "control-authority-v1", "authorityGeneration": 2, "digest": "d2", "previousDigest": "d1", "payloadDigest": "p2"},
+            ],
+        )
+    assert exc_gen_mismatch.value.status == 409
 
 
 
