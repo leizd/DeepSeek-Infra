@@ -280,14 +280,12 @@ def test_authority_verify_divergent_and_durability(
     backup_control_authority.configure_authority_anchor_roots([r1, r2])
     backup_control.schema_version()
     verify = backup_control_recovery.authority_verify()
-    assert verify.get("overall") in {
-        "DIVERGENT",
-        "DEGRADED",
-        "DURABILITY_UNSATISFIED",
-        "HEALTHY",
-        "UNAVAILABLE",
-    }
-    assert isinstance(verify.get("replicas"), list)
+    # Valid local chains that fork at the same generation → overall DIVERGENT (Gate L).
+    assert verify.get("overall") == "DIVERGENT"
+    assert "cross-replica-divergent" in list(verify.get("issues") or [])
+    replicas = list(verify.get("replicas") or [])
+    assert len(replicas) >= 2
+    assert all(bool(item.get("divergent")) for item in replicas)
 
 
 def test_activate_rejects_invalid_attestation_counts(
@@ -316,6 +314,47 @@ def test_activate_rejects_invalid_attestation_counts(
         reason="unit",
     )
     with pytest.raises(AppError, match="invalid-commits"):
+        backup_control_recovery.activate_control_after_formal_truth()
+
+
+def test_activate_rejects_lineage_invalid_and_stale_authority(
+    control_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
+    backup_control.create_policy({"policyId": "p", "policyRevision": 1, "enabled": True})
+    backup_control.upsert_target({"targetId": "t1", "kind": "filesystem", "root": "/tmp"})
+    backup_control.set_target_index_coverage(
+        "t1",
+        state="complete",
+        formal_receipt_count=1,
+        source_receipt_mutation_generation=0,
+        reason="unit",
+    )
+    backup_control_recovery.set_control_recovery_state(
+        recovery_state=backup_control_recovery.STATE_RECOVERING_FORMAL_TRUTH,
+        reason="unit",
+    )
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t1",
+        status="VALID",
+        index_coverage_complete=True,
+        invalid_commit_count=0,
+        lineage_valid=False,
+        retirement_reconciled=True,
+    )
+    with pytest.raises(AppError, match="lineage-invalid"):
+        backup_control_recovery.activate_control_after_formal_truth()
+
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t1",
+        status="VALID",
+        index_coverage_complete=True,
+        invalid_commit_count=0,
+        lineage_valid=True,
+        retirement_reconciled=True,
+        authority_generation=999999,
+    )
+    with pytest.raises(AppError, match="stale-authority"):
         backup_control_recovery.activate_control_after_formal_truth()
 
 
@@ -357,13 +396,24 @@ def test_evidence_proof_merge_fail_paths(tmp_path: Path) -> None:
 
 def test_evidence_proof_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "proof.json"
+    digest = "a" * 64
+    other = "b" * 64
+    restore_ev = {
+        "backupId": "b1",
+        "targetId": "t1",
+        "restoreId": "r1",
+        "preBackupWorkspaceDigest": digest,
+        "corruptedWorkspaceDigest": other,
+        "postRestoreWorkspaceDigest": digest,
+        "restorePhase": "complete",
+    }
     evidence_proof.write_evidence_proof(
         path,
         scenario="demo",
         checks={
             "realPreDisasterBackupIsActuallyRestored": {
                 "status": "PASS",
-                "evidence": {"beforeSha256": "a", "afterSha256": "a"},
+                "evidence": restore_ev,
             }
         },
     )
@@ -373,6 +423,37 @@ def test_evidence_proof_roundtrip(tmp_path: Path) -> None:
         evidence_proof.proof_check_status(loaded, "realPreDisasterBackupIsActuallyRestored")
         == "PASS"
     )
+    # Bare status=PASS without required fields must FAIL semantic validation.
+    bare = {
+        "schema": evidence_proof.EVIDENCE_PROOF_SCHEMA,
+        "scenario": "demo",
+        "checks": {
+            "realPreDisasterBackupIsActuallyRestored": {
+                "status": "PASS",
+                "evidence": {"note": "not-enough"},
+            }
+        },
+    }
+    assert evidence_proof.proof_check_status(bare, "realPreDisasterBackupIsActuallyRestored") == "FAIL"
+    assert evidence_proof.proof_check_status(
+        {
+            "checks": {
+                "freshProcessAAndBHaveDifferentPids": {
+                    "status": "PASS",
+                    "evidence": {"pidA": 1, "pidB": 1},
+                }
+            }
+        },
+        "freshProcessAAndBHaveDifferentPids",
+    ) == "FAIL"
+    assert evidence_proof.proof_check_status(
+        {
+            "checks": {
+                "processAExitedBySigkill": {"status": "PASS", "evidence": {"returncode": 0}},
+            }
+        },
+        "processAExitedBySigkill",
+    ) == "FAIL"
     merged = evidence_proof.merge_checks_from_proof(
         checks={"realPreDisasterBackupIsActuallyRestored": "PASS", "other": "PASS"},
         check_to_scenario={},
@@ -390,3 +471,262 @@ def test_evidence_proof_roundtrip(tmp_path: Path) -> None:
         required_proof_checks={"demo": ("realPreDisasterBackupIsActuallyRestored",)},
     )
     assert merged2["realPreDisasterBackupIsActuallyRestored"] == "FAIL"
+
+
+def _sha(n: int = 0xAA) -> str:
+    return f"{n:02x}" * 32
+
+
+def test_evidence_proof_v2_validators_cover_all_branches(tmp_path: Path) -> None:
+    digest = _sha(0x11)
+    other = _sha(0x22)
+    third = _sha(0x33)
+    # load scenario mismatch + invalid sha256 + restore relations
+    path = tmp_path / "p.json"
+    evidence_proof.write_evidence_proof(path, scenario="s1", checks={})
+    with pytest.raises(ValueError, match="scenario-mismatch"):
+        evidence_proof.load_evidence_proof(path, expected_scenario="other")
+    assert evidence_proof.validate_restore_proof(
+        {
+            "backupId": "b",
+            "targetId": "t",
+            "restoreId": "r",
+            "preBackupWorkspaceDigest": "not-a-digest",
+            "corruptedWorkspaceDigest": other,
+            "postRestoreWorkspaceDigest": digest,
+        },
+        "x",
+    )
+    assert "restore-digest-mismatch" in evidence_proof.validate_restore_proof(
+        {
+            "backupId": "b",
+            "targetId": "t",
+            "restoreId": "r",
+            "preBackupWorkspaceDigest": digest,
+            "corruptedWorkspaceDigest": other,
+            "postRestoreWorkspaceDigest": third,
+            "restorePhase": "complete",
+        },
+        "x",
+    )
+    assert "workspace-was-not-corrupted" in evidence_proof.validate_restore_proof(
+        {
+            "backupId": "b",
+            "targetId": "t",
+            "restoreId": "r",
+            "preBackupWorkspaceDigest": digest,
+            "corruptedWorkspaceDigest": digest,
+            "postRestoreWorkspaceDigest": digest,
+        },
+        "x",
+    )
+    assert any(
+        e.startswith("restore-phase-incomplete")
+        for e in evidence_proof.validate_restore_proof(
+            {
+                "backupId": "b",
+                "targetId": "t",
+                "restoreId": "r",
+                "preBackupWorkspaceDigest": digest,
+                "corruptedWorkspaceDigest": other,
+                "postRestoreWorkspaceDigest": digest,
+                "restorePhase": "fetching",
+            },
+            "x",
+        )
+    )
+    # backup commit binding
+    assert evidence_proof.validate_backup_commit_proof(
+        {
+            "backupId": "b3",
+            "commitKey": "commits/c.json",
+            "receiptKey": "receipts/b3.json",
+            "receiptDigest": digest,
+            "objectSetDigest": other,
+            "computedReceiptSha256": third,
+        },
+        "x",
+    )
+    assert not evidence_proof.validate_backup_commit_proof(
+        {
+            "backupId": "b3",
+            "commitKey": "commits/c.json",
+            "receiptKey": "receipts/b3.json",
+            "receiptDigest": digest,
+            "objectSetDigest": other,
+            "computedReceiptSha256": digest,
+        },
+        "x",
+    )
+    # pids
+    assert "invalid-pid-types" in evidence_proof.validate_distinct_pid_proof(
+        {"pidA": "x", "pidB": "1"}, "x"
+    )
+    assert "non-positive-pid" in evidence_proof.validate_distinct_pid_proof(
+        {"pidA": 0, "pidB": 2}, "x"
+    )
+    assert not evidence_proof.validate_distinct_pid_proof({"pidA": 1, "pidB": 2}, "x")
+    # sigkill / epoch / endpoints
+    assert "invalid-returncode" in evidence_proof.validate_sigkill_proof(
+        {"returncode": "nope"}, "x"
+    )
+    assert not evidence_proof.validate_sigkill_proof({"returncode": -9}, "x")
+    assert "boot-epoch-not-increased" in evidence_proof.validate_epoch_increase_proof(
+        {"epochA": 3, "epochB": 3}, "x"
+    )
+    assert "invalid-epoch-types" in evidence_proof.validate_epoch_increase_proof(
+        {"epochA": "a", "epochB": "b"}, "x"
+    )
+    assert not evidence_proof.validate_epoch_increase_proof({"epochA": 1, "epochB": 2}, "x")
+    assert "need-three-endpoints" in evidence_proof.validate_minio_endpoints_proof(
+        {"endpoints": ["a", "b"]}, "x"
+    )
+    assert "endpoints-not-distinct" in evidence_proof.validate_minio_endpoints_proof(
+        {"endpoints": ["http://a", "http://a/", "http://a"]}, "x"
+    )
+    assert not evidence_proof.validate_minio_endpoints_proof(
+        {"endpoints": ["http://a", "http://b", "http://c"]}, "x"
+    )
+    assert evidence_proof.validate_pass_with_schema_only({}, "x") == ["empty-evidence"]
+    assert not evidence_proof.validate_pass_with_schema_only(
+        {"schema": evidence_proof.EVIDENCE_PROOF_SCHEMA}, "x"
+    )
+    # validate_check edges
+    assert evidence_proof.validate_check("any", {"status": "FAIL", "evidence": {}}) 
+    assert evidence_proof.validate_check("any", {"status": "PASS", "evidence": "nope"})
+    assert evidence_proof.validate_check("unknownCheck", {"status": "PASS", "evidence": {}})
+    assert not evidence_proof.validate_check(
+        "unknownCheck", {"status": "PASS", "evidence": {"ok": True}}
+    )
+    # non-semantic mode
+    assert (
+        evidence_proof.proof_check_status(
+            {"checks": {"c": {"status": "PASS", "evidence": {}}}},
+            "c",
+            semantic=False,
+        )
+        == "PASS"
+    )
+    assert (
+        evidence_proof.proof_check_status(
+            {"checks": {"c": {"status": "FAIL"}}},
+            "c",
+            semantic=False,
+        )
+        == "FAIL"
+    )
+    # missing proof path with exit 0 → FAIL
+    missing = evidence_proof.merge_checks_from_proof(
+        checks={"a": "PASS"},
+        check_to_scenario={},
+        scenario_results={"s": {"exitCode": 0, "proofPath": None}},
+        required_proof_checks={"s": ("a",)},
+    )
+    assert missing["a"] == "FAIL"
+    # resolve via explicit env path
+    env_path = tmp_path / "env-proof.json"
+    evidence_proof.write_evidence_proof(env_path, scenario="env-scen", checks={})
+    assert (
+        evidence_proof.resolve_proof_path(
+            env={evidence_proof.ENV_EVIDENCE_PROOF_PATH: str(env_path)}
+        )
+        == env_path
+    )
+
+
+def test_activate_rejects_coverage_retirement_and_stale_mutation(
+    control_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
+    backup_control.create_policy({"policyId": "p", "policyRevision": 1, "enabled": True})
+    backup_control.upsert_target({"targetId": "t1", "kind": "filesystem", "root": "/tmp"})
+    backup_control.set_target_index_coverage(
+        "t1",
+        state="complete",
+        formal_receipt_count=1,
+        source_receipt_mutation_generation=0,
+        reason="unit",
+    )
+    backup_control_recovery.set_control_recovery_state(
+        recovery_state=backup_control_recovery.STATE_RECOVERING_FORMAL_TRUTH,
+        reason="unit",
+    )
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t1",
+        status="VALID",
+        index_coverage_complete=False,
+        lineage_valid=True,
+        retirement_reconciled=True,
+    )
+    with pytest.raises(AppError, match="coverage-incomplete"):
+        backup_control_recovery.activate_control_after_formal_truth()
+
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t1",
+        status="VALID",
+        index_coverage_complete=True,
+        lineage_valid=True,
+        retirement_reconciled=False,
+    )
+    with pytest.raises(AppError, match="retirement-unreconciled"):
+        backup_control_recovery.activate_control_after_formal_truth()
+
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t1",
+        status="VALID",
+        index_coverage_complete=True,
+        lineage_valid=True,
+        retirement_reconciled=True,
+        source_receipt_mutation_generation=999,
+    )
+    with pytest.raises(AppError, match="stale-mutation"):
+        backup_control_recovery.activate_control_after_formal_truth()
+
+    # Missing mutation row is generation 0 (same as get_target_receipt_mutation_generation).
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t1",
+        status="VALID",
+        index_coverage_complete=True,
+        lineage_valid=True,
+        retirement_reconciled=True,
+        source_receipt_mutation_generation=0,
+    )
+    out = backup_control_recovery.activate_control_after_formal_truth()
+    assert out["status"] == "active"
+
+
+def test_authority_verify_durability_unsatisfied(
+    control_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
+    r1 = tmp_path / "only"
+    r1.mkdir()
+    a = backup_control_authority.build_authority_checkpoint(
+        generation=1,
+        previous_digest=None,
+        policies=[{"policyId": "p", "policyRevision": 1}],
+        targets=[],
+        receipt_mutation_generations={},
+        promotion_epochs={},
+        drain_generations={},
+        placement_generations={},
+        control_schema_version=8,
+    )
+    backup_control_authority.write_authority_checkpoint_bundle(r1, a)
+    backup_control_authority.configure_authority_anchor_roots([r1])
+    backup_control.schema_version()
+    monkeypatch.setattr(
+        backup_control_recovery,
+        "authority_health_snapshot",
+        lambda: {
+            "configuredReplicaCount": 3,
+            "resolvedReplicaCount": 1,
+            "minDurableReplicas": 3,
+            "formalTruth": {"incompleteTargets": 0},
+            "unresolvedMutationCount": 0,
+            "mode": "local-only",
+        },
+    )
+    verify = backup_control_recovery.authority_verify()
+    assert verify.get("overall") == "DURABILITY_UNSATISFIED"
+    assert "durability-unsatisfied" in list(verify.get("issues") or [])

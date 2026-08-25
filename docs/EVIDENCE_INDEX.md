@@ -5,7 +5,45 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.6.7.
+Applicable version: v4.6.8.
+
+## 4.6.8 development evidence contract
+
+4.6.8 closes end-to-end Backup DR Evidence: SIGKILL Process A holding real
+Full+Incremental object-set backups on three MinIO replicas, wipe local control
+DB, Process B production Authority store factory only, Formal Truth rebuild with
+generation-bound attestation, production remote restore of pre-disaster Backup B2
+(workspace digest match), and real post-recovery Backup B3 with Commit/Receipt
+binding. Claims use `evidence-proof-v2` semantic validators — bare `status=PASS`
+without required fields fails. Cross-replica valid forks report overall
+`DIVERGENT`.
+
+- Unit: `tests/test_backup_467_authority_fail_closed.py` (proof validators +
+  Formal Truth gates + Gate L fork classify)
+- Real three-MinIO SIGKILL DR:
+  `tests/test_backup_468_real_backup_dr_sigkill_e2e.py`
+  (scenario `real-three-minio-process-replacement-authority-recovery` on the
+  storage-control-plane MinIO Evidence runner)
+
+### Local Evidence environment (dev only)
+
+Formal PASS remains CI job `storage-control-plane-minio-e2e` on the exact merge
+commit. For local development:
+
+```text
+python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+python scripts/build_backup_crypto.py
+# requires Docker Desktop / engine on PATH
+python scripts/setup_storage_control_plane_minio_e2e.py doctor
+python scripts/setup_storage_control_plane_minio_e2e.py start
+python scripts/setup_storage_control_plane_minio_e2e.py run --scenario process-replace
+# full runner (includes docker stop/start in 458):
+python scripts/setup_storage_control_plane_minio_e2e.py run --scenario all
+python scripts/setup_storage_control_plane_minio_e2e.py stop
+```
+
+Compose topology: `docker-compose.storage-control-minio.yml` (ports 9000/9001/9002).
+Shell env export: `python scripts/setup_storage_control_plane_minio_e2e.py env --shell pwsh`.
 
 ## 4.6.3 development evidence contract
 

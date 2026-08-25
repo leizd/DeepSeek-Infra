@@ -51,7 +51,7 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
         "tests/test_backup_466_real_fresh_process_minio_e2e.py::test_real_three_minio_fresh_process_authority_recovery_e2e",
     ),
     PROCESS_REPLACE_SCENARIO: (
-        "tests/test_backup_467_real_process_replacement_minio_e2e.py::test_real_three_minio_process_replacement_authority_dr_e2e",
+        "tests/test_backup_468_real_backup_dr_sigkill_e2e.py::test_real_three_minio_sigkill_backup_disaster_recovery_e2e",
     ),
 }
 CHECK_SCENARIOS = {
@@ -104,7 +104,7 @@ CHECK_SCENARIOS = {
     "realFreshProcessRestoresPreDisasterBackup": PROCESS_REPLACE_SCENARIO,
     "realFreshProcessCreatesPostRecoveryBackup": PROCESS_REPLACE_SCENARIO,
     "realFreshProcessBootEpochStrictlyIncreases": PROCESS_REPLACE_SCENARIO,
-    # 4.6.7 process-replacement + proof-backed claims
+    # 4.6.8 process-replacement + evidence-proof-v2 claims
     "realThreeMinioProcessReplacementE2E": PROCESS_REPLACE_SCENARIO,
     "freshProcessAAndBHaveDifferentPids": PROCESS_REPLACE_SCENARIO,
     "processAIsDeadBeforeProcessBStarts": PROCESS_REPLACE_SCENARIO,
@@ -112,18 +112,26 @@ CHECK_SCENARIOS = {
     "realPreDisasterBackupIsActuallyRestored": PROCESS_REPLACE_SCENARIO,
     "restoredWorkspaceDigestMatchesPreDisasterDigest": PROCESS_REPLACE_SCENARIO,
     "realPostRecoveryBackupHasValidCommit": PROCESS_REPLACE_SCENARIO,
+    "realPostRecoveryBackupHasValidReceiptBinding": PROCESS_REPLACE_SCENARIO,
+    "processAExitedBySigkill": PROCESS_REPLACE_SCENARIO,
     "evidenceCheckCannotPassWithoutStructuredProof": PROCESS_REPLACE_SCENARIO,
 }
 
-# Claims that MUST be backed by evidence-proof-v1 (not pytest exit alone).
+# Claims that MUST be backed by evidence-proof-v2 (semantic validators; not pytest exit alone).
 REQUIRED_PROOF_CHECKS: dict[str, tuple[str, ...]] = {
     PROCESS_REPLACE_SCENARIO: (
         "realPreDisasterBackupIsActuallyRestored",
+        "realFreshProcessRestoresPreDisasterBackup",
         "restoredWorkspaceDigestMatchesPreDisasterDigest",
         "realPostRecoveryBackupHasValidCommit",
+        "realFreshProcessCreatesPostRecoveryBackup",
+        "realPostRecoveryBackupHasValidReceiptBinding",
         "freshProcessAAndBHaveDifferentPids",
         "processAIsDeadBeforeProcessBStarts",
+        "processAExitedBySigkill",
+        "realFreshProcessBootEpochStrictlyIncreases",
         "realThreeMinioProcessReplacementE2E",
+        "freshProcessBUsesProductionAuthorityStoreFactory",
         "evidenceCheckCannotPassWithoutStructuredProof",
     ),
 }
@@ -193,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         check: "PASS" if results[scenario]["exitCode"] == 0 else "FAIL"
         for check, scenario in CHECK_SCENARIOS.items()
     }
-    # 4.6.7: proof-backed claims cannot PASS from pytest exit alone.
+    # 4.6.8: proof-backed claims cannot PASS from pytest exit alone.
     checks = evidence_proof.merge_checks_from_proof(
         checks=checks,
         check_to_scenario=dict(CHECK_SCENARIOS),

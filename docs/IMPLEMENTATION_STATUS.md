@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.6.7。
+适用版本：v4.6.8。
 
-> 4.6.7：Startup Authority Verdict + 中央 mutation barrier + 严格 genesis→head chain；缺失本地 DB 且远端 Authority 存在时不得静默 ACTIVE。4.6.3 骨架能力保留。Wire 面继续冻结。
+> 4.6.8：SIGKILL Process A/B + 真实 object-set restore/B3 + evidence-proof-v2 语义校验；Formal Truth attestation 绑定 authority/mutation generation；跨副本合法 fork → DIVERGENT。Wire 面继续冻结。
 
 > 4.5.8 已把 Repair、Replication、Rebalance、Drain、Retirement、Capacity 与 Transfer QoS 收敛到持久化 Storage Control Plane：SQLite 提供跨进程 Policy/Topology CAS、Maintenance Supervisor 以 durable cursor 推进后台工作、Copy Retirement 保留 Receipt v4/Commit v4 并用 authenticated retirement marker 管理 Payload GC、Placement 以单个 Logical Recovery Point 计算 Failure Domain/Region 目标、Multipart 恢复与 provider `ListParts` 对账、生产数据流受 global/source/destination 三层 P0-P6 QoS 约束。
 

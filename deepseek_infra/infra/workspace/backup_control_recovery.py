@@ -816,6 +816,10 @@ def activate_control_after_formal_truth(
     must_check = bool(target_ids) or (require_complete_coverage is True)
     if must_check and target_ids:
         with backup_control._connect() as conn:  # noqa: SLF001
+            head = conn.execute(
+                "SELECT authority_generation FROM control_authority_head WHERE id = 1"
+            ).fetchone()
+            current_gen = int(head["authority_generation"]) if head is not None else None
             for tid in target_ids:
                 cov = conn.execute(
                     "SELECT state FROM target_index_coverage WHERE target_id = ?",
@@ -844,6 +848,40 @@ def activate_control_after_formal_truth(
                 if int(att.get("invalidCommitCount") or 0) > 0:
                     raise AppError(
                         f"formal-truth-attestation-invalid-commits:{tid}",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=503,
+                    )
+                if not att.get("lineageValid"):
+                    raise AppError(
+                        f"formal-truth-attestation-lineage-invalid:{tid}",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=503,
+                    )
+                if not att.get("retirementReconciled"):
+                    raise AppError(
+                        f"formal-truth-attestation-retirement-unreconciled:{tid}",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=503,
+                    )
+                mut = conn.execute(
+                    "SELECT generation FROM target_receipt_mutations WHERE target_id = ?",
+                    (tid,),
+                ).fetchone()
+                # Match get_target_receipt_mutation_generation(): missing row == 0.
+                current_mut = int(mut["generation"]) if mut is not None else 0
+                att_gen = att.get("authorityGeneration")
+                if att_gen is not None and (
+                    current_gen is None or int(att_gen) != int(current_gen)
+                ):
+                    raise AppError(
+                        f"formal-truth-attestation-stale-authority:{tid}",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=503,
+                    )
+                att_mut = att.get("sourceReceiptMutationGeneration")
+                if att_mut is not None and int(att_mut) != int(current_mut):
+                    raise AppError(
+                        f"formal-truth-attestation-stale-mutation:{tid}",
                         code=ErrorCode.INVALID_REQUEST,
                         status=503,
                     )
@@ -1171,7 +1209,17 @@ def rebuild_formal_truth_from_authenticated_commits(target: Any) -> dict[str, An
         "retired": retired,
         "source": "commit-authenticated-receipts",
     }
-    # 4.6.7: durable-in-process Formal Truth attestation (not coverage alone).
+    # Bind attestation to current authority tip + target mutation generation.
+    authority_gen = None
+    try:
+        with backup_control._connect() as conn:  # noqa: SLF001
+            head = conn.execute(
+                "SELECT authority_generation FROM control_authority_head WHERE id = 1"
+            ).fetchone()
+            if head is not None:
+                authority_gen = int(head["authority_generation"])
+    except Exception:
+        authority_gen = None
     record_formal_truth_validation(
         target_id=target_id,
         status="VALID" if state == "complete" and invalid_commits == 0 else "INVALID",
@@ -1179,10 +1227,11 @@ def rebuild_formal_truth_from_authenticated_commits(target: Any) -> dict[str, An
         invalid_commit_count=invalid_commits,
         orphan_receipt_count=orphan_receipts,
         indexed_receipt_count=indexed,
-        lineage_valid=True,  # lineage upserts only for authenticated commits
-        retirement_reconciled=True,
+        lineage_valid=(invalid_commits == 0 and authenticated == indexed),
+        retirement_reconciled=(invalid_commits == 0),
         index_coverage_complete=(state == "complete"),
         source_receipt_mutation_generation=end_mutation,
+        authority_generation=authority_gen,
     )
     result["formalTruthAttestation"] = get_formal_truth_validation(target_id)
     return result
@@ -1205,6 +1254,7 @@ def record_formal_truth_validation(
     retirement_reconciled: bool = False,
     index_coverage_complete: bool = False,
     source_receipt_mutation_generation: int | None = None,
+    authority_generation: int | None = None,
 ) -> dict[str, Any]:
     """Record Formal Truth validation attestation for activation gate."""
     entry = {
@@ -1218,6 +1268,7 @@ def record_formal_truth_validation(
         "retirementReconciled": bool(retirement_reconciled),
         "indexCoverageComplete": bool(index_coverage_complete),
         "sourceReceiptMutationGeneration": source_receipt_mutation_generation,
+        "authorityGeneration": int(authority_generation) if authority_generation is not None else None,
         "validatedAt": _utc_iso(),
     }
     _FORMAL_TRUTH_ATTESTATIONS[str(target_id)] = entry
@@ -1317,11 +1368,16 @@ def authority_verify() -> dict[str, Any]:
     discovered.update(discover_authority_replicas([str(p) for p in roots]))
     discovered.update(discover_authority_replicas_from_stores(list(stores)))
     selected: dict[str, Any] | None = None
+    cross_replica_divergent = False
     if discovered:
         try:
             selected = backup_control_authority.select_authority_heads(discovered)
         except AppError as exc:
-            issues.append(f"divergent-or-invalid:{exc}")
+            msg = str(exc)
+            issues.append(f"divergent-or-invalid:{msg}")
+            if "divergent" in msg.casefold() or "non-ancestor" in msg.casefold() or "fork" in msg.casefold():
+                cross_replica_divergent = True
+                issues.append("cross-replica-divergent")
             selected = None
     for rid, meta in discovered.items():
         gen = int(meta.get("generation") or 0)
@@ -1348,7 +1404,8 @@ def authority_verify() -> dict[str, Any]:
                 "repairable": lag > 0 and history_valid and selected is not None and rid in list(
                     selected.get("laggingReplicas") or []
                 ),
-                "divergent": not history_valid,
+                # Cross-replica fork marks every involved tip divergent even if local chain is valid.
+                "divergent": (not history_valid) or cross_replica_divergent,
             }
         )
     configured = int(health.get("configuredReplicaCount") or 0)
@@ -1363,7 +1420,7 @@ def authority_verify() -> dict[str, Any]:
     reachable = sum(1 for r in replica_reports if r.get("reachable") and r.get("historyValid"))
     if configured > 0 and reachable < min_durable:
         issues.append("durability-unsatisfied")
-    if any(r.get("divergent") for r in replica_reports):
+    if cross_replica_divergent or any(r.get("divergent") for r in replica_reports):
         overall = "DIVERGENT"
     elif "durability-unsatisfied" in issues:
         overall = "DURABILITY_UNSATISFIED"

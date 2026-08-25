@@ -4,6 +4,18 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.6.8] - End-to-End Backup Disaster Recovery & Typed Evidence (2026-08-25)
+
+### End-to-End Backup Disaster Recovery & Typed Evidence
+
+- **SIGKILL Process A**: controller hard-kills live Process A (not clean exit) before Process B starts.
+- **Real Backup DR**: Process A creates Full+Incremental on three MinIO; Process B restores B2 via production remote restore APIs with workspace digest match.
+- **Post-recovery Backup B3**: production executor path after Formal Truth ACTIVE; Commit marker + receiptDigest binding required in evidence.
+- **evidence-proof-v2**: typed validators for restore digests, backup commit binding, distinct PIDs, SIGKILL returncode, epoch increase, MinIO endpoints; bare `status=PASS` fails.
+- **Formal Truth session bind**: attestation records authorityGeneration + mutation generation; stale/lineage-invalid blocks ACTIVE.
+- **Gate L fork classify**: valid local chains that fork cross-replica → overall `DIVERGENT` with `cross-replica-divergent`.
+- **Frozen Compatibility Surface**: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age, control-authority-v1 unchanged.
+
 ## [4.6.7] - Verifiable Disaster Recovery & Fail-Closed Authority Bootstrap (2026-08-25)
 
 ### Verifiable Disaster Recovery & Fail-Closed Authority Bootstrap

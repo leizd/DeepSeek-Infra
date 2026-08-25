@@ -1,17 +1,23 @@
-"""Machine-readable Evidence proof contract (evidence-proof-v1).
+"""Machine-readable Evidence proof contract (evidence-proof-v2).
 
-Runners must derive claim PASS/FAIL from proof documents, not pytest exit alone.
+Runners must derive claim PASS/FAIL from typed, semantically validated proofs —
+not pytest exit alone, and not bare status=PASS without required evidence fields.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-EVIDENCE_PROOF_SCHEMA = "evidence-proof-v1"
+EVIDENCE_PROOF_SCHEMA = "evidence-proof-v2"
+EVIDENCE_PROOF_SCHEMA_V1 = "evidence-proof-v1"  # accepted for non-semantic legacy reads
 ENV_EVIDENCE_PROOF_PATH = "DEEPSEEK_EVIDENCE_PROOF_PATH"
+
+CheckValidator = Callable[[dict[str, Any], str], list[str]]
 
 
 def write_evidence_proof(
@@ -20,12 +26,13 @@ def write_evidence_proof(
     scenario: str,
     checks: dict[str, dict[str, Any]],
     meta: dict[str, Any] | None = None,
+    schema: str = EVIDENCE_PROOF_SCHEMA,
 ) -> Path:
-    """Write evidence-proof-v1 JSON. Each check: {status: PASS|FAIL, evidence: {...}}."""
+    """Write evidence proof JSON. Each check: {status: PASS|FAIL, evidence: {...}}."""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema": EVIDENCE_PROOF_SCHEMA,
+        "schema": str(schema),
         "scenario": str(scenario),
         "checks": checks,
         "meta": dict(meta or {}),
@@ -34,26 +41,187 @@ def write_evidence_proof(
     return out
 
 
-def load_evidence_proof(path: Path | str) -> dict[str, Any]:
+def load_evidence_proof(path: Path | str, *, expected_scenario: str | None = None) -> dict[str, Any]:
     raw = Path(path).read_text(encoding="utf-8")
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("evidence-proof-must-be-object")
-    if str(data.get("schema") or "") != EVIDENCE_PROOF_SCHEMA:
-        raise ValueError(f"evidence-proof-schema-mismatch:{data.get('schema')}")
+    schema = str(data.get("schema") or "")
+    if schema not in {EVIDENCE_PROOF_SCHEMA, EVIDENCE_PROOF_SCHEMA_V1}:
+        raise ValueError(f"evidence-proof-schema-mismatch:{schema}")
     if not isinstance(data.get("checks"), dict):
         raise ValueError("evidence-proof-checks-required")
+    if expected_scenario is not None and str(data.get("scenario") or "") != expected_scenario:
+        raise ValueError(
+            f"evidence-proof-scenario-mismatch:expected={expected_scenario}:got={data.get('scenario')}"
+        )
     return data
 
 
-def proof_check_status(proof: dict[str, Any], check_name: str) -> str:
+def _require_fields(evidence: dict[str, Any], fields: tuple[str, ...]) -> list[str]:
+    missing = [name for name in fields if evidence.get(name) in (None, "")]
+    return [f"missing-field:{name}" for name in missing]
+
+
+def _require_sha256(value: Any, *, field: str) -> list[str]:
+    text = str(value or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", text):
+        return [f"invalid-sha256:{field}"]
+    return []
+
+
+def validate_restore_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    errors = _require_fields(
+        evidence,
+        (
+            "backupId",
+            "targetId",
+            "restoreId",
+            "preBackupWorkspaceDigest",
+            "corruptedWorkspaceDigest",
+            "postRestoreWorkspaceDigest",
+        ),
+    )
+    for field in (
+        "preBackupWorkspaceDigest",
+        "corruptedWorkspaceDigest",
+        "postRestoreWorkspaceDigest",
+    ):
+        if evidence.get(field) not in (None, ""):
+            errors.extend(_require_sha256(evidence.get(field), field=field))
+    pre = str(evidence.get("preBackupWorkspaceDigest") or "")
+    corrupted = str(evidence.get("corruptedWorkspaceDigest") or "")
+    post = str(evidence.get("postRestoreWorkspaceDigest") or "")
+    if pre and post and pre != post:
+        errors.append("restore-digest-mismatch")
+    if pre and corrupted and pre == corrupted:
+        errors.append("workspace-was-not-corrupted")
+    phase = str(evidence.get("restorePhase") or evidence.get("phase") or "").casefold()
+    if phase and phase not in {"complete", "backend-committed", "committed"}:
+        errors.append(f"restore-phase-incomplete:{phase}")
+    return errors
+
+
+def validate_backup_commit_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    errors = _require_fields(
+        evidence,
+        (
+            "backupId",
+            "commitKey",
+            "receiptKey",
+            "receiptDigest",
+            "objectSetDigest",
+        ),
+    )
+    for field in ("receiptDigest", "objectSetDigest"):
+        if evidence.get(field) not in (None, ""):
+            errors.extend(_require_sha256(evidence.get(field), field=field))
+    # Optional binding verification if raw digests provided by producer.
+    computed = evidence.get("computedReceiptSha256")
+    declared = evidence.get("receiptDigest")
+    if computed and declared and str(computed) != str(declared):
+        errors.append("receipt-digest-binding-mismatch")
+    return errors
+
+
+def validate_distinct_pid_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    errors = _require_fields(evidence, ("pidA", "pidB"))
+    try:
+        pid_a = int(str(evidence.get("pidA")))
+        pid_b = int(str(evidence.get("pidB")))
+    except (TypeError, ValueError):
+        return errors + ["invalid-pid-types"]
+    if pid_a <= 0 or pid_b <= 0:
+        errors.append("non-positive-pid")
+    if pid_a == pid_b:
+        errors.append("pids-not-distinct")
+    return errors
+
+
+def validate_sigkill_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    errors = _require_fields(evidence, ("returncode",))
+    try:
+        code = int(str(evidence.get("returncode")))
+    except (TypeError, ValueError):
+        return errors + ["invalid-returncode"]
+    # POSIX signal kill → negative; Windows terminate often != 0
+    if code == 0:
+        errors.append("process-a-exited-cleanly-not-killed")
+    return errors
+
+
+def validate_epoch_increase_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    errors = _require_fields(evidence, ("epochA", "epochB"))
+    try:
+        if int(str(evidence.get("epochB"))) <= int(str(evidence.get("epochA"))):
+            errors.append("boot-epoch-not-increased")
+    except (TypeError, ValueError):
+        errors.append("invalid-epoch-types")
+    return errors
+
+
+def validate_minio_endpoints_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    endpoints = evidence.get("endpoints")
+    if not isinstance(endpoints, list) or len(endpoints) < 3:
+        return ["need-three-endpoints"]
+    unique = {str(item).rstrip("/") for item in endpoints}
+    if len(unique) < 3:
+        return ["endpoints-not-distinct"]
+    return []
+
+
+def validate_pass_with_schema_only(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if str(evidence.get("schema") or "") not in {EVIDENCE_PROOF_SCHEMA, EVIDENCE_PROOF_SCHEMA_V1, "ok"}:
+        if not evidence:
+            return ["empty-evidence"]
+    return []
+
+
+VALIDATORS: dict[str, CheckValidator] = {
+    "realPreDisasterBackupIsActuallyRestored": validate_restore_proof,
+    "realFreshProcessRestoresPreDisasterBackup": validate_restore_proof,
+    "restoredWorkspaceDigestMatchesPreDisasterDigest": validate_restore_proof,
+    "realPostRecoveryBackupHasValidCommit": validate_backup_commit_proof,
+    "realFreshProcessCreatesPostRecoveryBackup": validate_backup_commit_proof,
+    "realPostRecoveryBackupHasValidReceiptBinding": validate_backup_commit_proof,
+    "freshProcessAAndBHaveDifferentPids": validate_distinct_pid_proof,
+    "processAIsDeadBeforeProcessBStarts": validate_sigkill_proof,
+    "processAExitedBySigkill": validate_sigkill_proof,
+    "realFreshProcessBootEpochStrictlyIncreases": validate_epoch_increase_proof,
+    "realThreeMinioProcessReplacementE2E": validate_minio_endpoints_proof,
+    "realThreeMinioFreshProcessAuthorityRecoveryE2E": validate_minio_endpoints_proof,
+    "evidenceCheckCannotPassWithoutStructuredProof": validate_pass_with_schema_only,
+}
+
+
+def validate_check(check_name: str, item: dict[str, Any]) -> list[str]:
+    """Return semantic errors for one check item; empty list means PASS-eligible."""
+    status = str(item.get("status") or "").upper()
+    if status != "PASS":
+        return [f"status-not-pass:{status or 'missing'}"]
+    evidence = item.get("evidence")
+    if not isinstance(evidence, dict):
+        return ["evidence-must-be-object"]
+    validator = VALIDATORS.get(check_name)
+    if validator is None:
+        # Unknown checks: require non-empty evidence object (no self-assert without payload).
+        if not evidence:
+            return ["empty-evidence-for-unknown-check"]
+        return []
+    return validator(evidence, check_name)
+
+
+def proof_check_status(proof: dict[str, Any], check_name: str, *, semantic: bool = True) -> str:
     raw_checks = proof.get("checks")
     checks: dict[str, Any] = raw_checks if isinstance(raw_checks, dict) else {}
     item = checks.get(check_name)
     if not isinstance(item, dict):
         return "FAIL"
-    status = str(item.get("status") or "").upper()
-    return "PASS" if status == "PASS" else "FAIL"
+    if not semantic:
+        status = str(item.get("status") or "").upper()
+        return "PASS" if status == "PASS" else "FAIL"
+    errors = validate_check(check_name, item)
+    return "PASS" if not errors else "FAIL"
 
 
 def resolve_proof_path(*, env: dict[str, str] | None = None, scenario: str | None = None) -> Path | None:
@@ -62,7 +230,6 @@ def resolve_proof_path(*, env: dict[str, str] | None = None, scenario: str | Non
     if raw:
         return Path(raw)
     if scenario:
-        # Convention under cwd artifacts/
         candidate = Path("artifacts") / f"evidence-proof-{scenario}.json"
         if candidate.is_file():
             return candidate
@@ -76,10 +243,7 @@ def merge_checks_from_proof(
     scenario_results: dict[str, dict[str, Any]],
     required_proof_checks: dict[str, tuple[str, ...]],
 ) -> dict[str, str]:
-    """Upgrade/downgrade checks using proof files when scenarios declare required proofs.
-
-    ``required_proof_checks`` maps scenario_id → check names that MUST have PASS in proof.
-    """
+    """Upgrade/downgrade checks using typed proof validators."""
     out = dict(checks)
     for scenario, required in required_proof_checks.items():
         result = scenario_results.get(scenario) or {}
@@ -98,11 +262,11 @@ def merge_checks_from_proof(
                 out[check] = "FAIL"
             continue
         try:
-            proof = load_evidence_proof(path)
+            proof = load_evidence_proof(path, expected_scenario=scenario)
         except (OSError, ValueError, json.JSONDecodeError, TypeError):
             for check in required:
                 out[check] = "FAIL"
             continue
         for check in required:
-            out[check] = proof_check_status(proof, check)
+            out[check] = proof_check_status(proof, check, semantic=True)
     return out
