@@ -244,6 +244,81 @@ def test_authority_mode_from_bootstrap_file(tmp_path: Path, monkeypatch: pytest.
     )
 
 
+def test_authority_verify_divergent_and_durability(
+    control_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
+    monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MIN_DURABLE, "3")
+    r1 = tmp_path / "r1"
+    r2 = tmp_path / "r2"
+    r1.mkdir()
+    r2.mkdir()
+    a = backup_control_authority.build_authority_checkpoint(
+        generation=1,
+        previous_digest=None,
+        policies=[{"policyId": "p", "policyRevision": 1}],
+        targets=[],
+        receipt_mutation_generations={},
+        promotion_epochs={},
+        drain_generations={},
+        placement_generations={},
+        control_schema_version=8,
+    )
+    b = backup_control_authority.build_authority_checkpoint(
+        generation=1,
+        previous_digest=None,
+        policies=[{"policyId": "q", "policyRevision": 1}],
+        targets=[],
+        receipt_mutation_generations={},
+        promotion_epochs={},
+        drain_generations={},
+        placement_generations={},
+        control_schema_version=8,
+    )
+    backup_control_authority.write_authority_checkpoint_bundle(r1, a)
+    backup_control_authority.write_authority_checkpoint_bundle(r2, b)
+    backup_control_authority.configure_authority_anchor_roots([r1, r2])
+    backup_control.schema_version()
+    verify = backup_control_recovery.authority_verify()
+    assert verify.get("overall") in {
+        "DIVERGENT",
+        "DEGRADED",
+        "DURABILITY_UNSATISFIED",
+        "HEALTHY",
+        "UNAVAILABLE",
+    }
+    assert isinstance(verify.get("replicas"), list)
+
+
+def test_activate_rejects_invalid_attestation_counts(
+    control_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
+    backup_control.create_policy({"policyId": "p", "policyRevision": 1, "enabled": True})
+    backup_control.upsert_target({"targetId": "t1", "kind": "filesystem", "root": "/tmp"})
+    backup_control.set_target_index_coverage(
+        "t1",
+        state="complete",
+        formal_receipt_count=1,
+        source_receipt_mutation_generation=0,
+        reason="unit",
+    )
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t1",
+        status="VALID",
+        index_coverage_complete=True,
+        invalid_commit_count=2,
+        lineage_valid=True,
+        retirement_reconciled=True,
+    )
+    backup_control_recovery.set_control_recovery_state(
+        recovery_state=backup_control_recovery.STATE_RECOVERING_FORMAL_TRUTH,
+        reason="unit",
+    )
+    with pytest.raises(AppError, match="invalid-commits"):
+        backup_control_recovery.activate_control_after_formal_truth()
+
+
 def test_list_formal_truth_validations(control_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
     backup_control_recovery.clear_formal_truth_attestations()
