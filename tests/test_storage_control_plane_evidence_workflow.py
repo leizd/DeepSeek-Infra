@@ -42,9 +42,9 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "tests/test_backup_466_real_fresh_process_minio_e2e.py::"
         "test_real_three_minio_fresh_process_authority_recovery_e2e"
     )
-    node_467 = (
-        "tests/test_backup_467_real_process_replacement_minio_e2e.py::"
-        "test_real_three_minio_process_replacement_authority_dr_e2e"
+    node_468 = (
+        "tests/test_backup_468_real_backup_dr_sigkill_e2e.py::"
+        "test_real_three_minio_sigkill_backup_disaster_recovery_e2e"
     )
     assert runner.SCENARIOS == {
         "real-three-minio-storage-control-plane": (node_458,),
@@ -54,7 +54,7 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "real-three-minio-control-authority-disaster-recovery": (node_463,),
         "fresh-process-filesystem-authority-recovery": (node_465_a, node_465_b),
         "real-three-minio-fresh-process-authority-recovery": (node_466,),
-        "real-three-minio-process-replacement-authority-recovery": (node_467,),
+        "real-three-minio-process-replacement-authority-recovery": (node_468,),
     }
     assert set(runner.REQUIRED_ENDPOINTS) == {
         "DEEPSEEK_TEST_S3_ENDPOINT_A",
@@ -111,7 +111,16 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
     assert runner.CHECK_SCENARIOS["realPreDisasterBackupIsActuallyRestored"] == (
         "real-three-minio-process-replacement-authority-recovery"
     )
-    assert "real-three-minio-process-replacement-authority-recovery" in runner.REQUIRED_PROOF_CHECKS
+    assert runner.CHECK_SCENARIOS["processAExitedBySigkill"] == (
+        "real-three-minio-process-replacement-authority-recovery"
+    )
+    assert runner.CHECK_SCENARIOS["realPostRecoveryBackupHasValidReceiptBinding"] == (
+        "real-three-minio-process-replacement-authority-recovery"
+    )
+    required = runner.REQUIRED_PROOF_CHECKS["real-three-minio-process-replacement-authority-recovery"]
+    assert "realPreDisasterBackupIsActuallyRestored" in required
+    assert "processAExitedBySigkill" in required
+    assert "realPostRecoveryBackupHasValidReceiptBinding" in required
 
 
 def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypatch() -> None:

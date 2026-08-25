@@ -5,25 +5,25 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.6.7-blue)
+![Version](https://img.shields.io/badge/version-4.6.8-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.6.7 — Verifiable Disaster Recovery & Fail-Closed Authority Bootstrap.** Explicit replicated mode, bootstrap fail-closed, Formal Truth attestation, process A/B Evidence with proof-v1. No wire-format changes.
+> **4.6.8 — End-to-End Backup Disaster Recovery & Typed Evidence.** SIGKILL Process A, real object-set restore of pre-disaster Backup B2, post-recovery Backup B3 with Commit/Receipt binding, evidence-proof-v2 semantic validators. No wire-format changes.
 
-## 4.6.7 at a glance
+## 4.6.8 at a glance
 
-- Production S3 AuthorityStoreFactory resolves credentialReference before Startup Verdict.
-- Configured-but-unresolved replicas → AUTHORITY_UNAVAILABLE (never local-only ACTIVE).
-- reconstruct defaults to RECOVERING_FORMAL_TRUTH; activation requires complete target coverage.
-- S3 lagging ancestor anti-entropy + durability policy (minDurableReplicas).
-- Filesystem fresh-process Evidence separated from genuine three-MinIO DR Evidence.
-- Frozen compatibility surface unchanged: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age.
+- True SIGKILL Process A → wipe control DB → Process B production factory only.
+- Real Full+Incremental on three MinIO before disaster; production remote restore of B2 with digest match.
+- Post-recovery Backup B3 with valid Commit marker and receiptDigest binding.
+- evidence-proof-v2: bare `status=PASS` without typed fields fails; runner requires scenario-bound proofs.
+- Formal Truth attestation binds authority/mutation generation; cross-replica valid fork → overall DIVERGENT.
+- Frozen compatibility surface unchanged: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age, control-authority-v1.
 
-See the [4.6.7 release notes](docs/releases/4.6.7.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.6.8 release notes](docs/releases/4.6.8.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

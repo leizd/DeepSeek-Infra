@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.6.7-blue)
+![版本](https://img.shields.io/badge/version-4.6.8-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.6.7 — Verifiable Disaster Recovery & Fail-Closed Authority Bootstrap**。显式 replicated 模式、bootstrap fail-closed、Formal Truth attestation、真正 Process A/B Evidence + proof-v1；无 wire-format 变更。详见 [4.6.7 发布说明](docs/releases/4.6.7.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
+> **4.6.8 — End-to-End Backup Disaster Recovery & Typed Evidence**。SIGKILL Process A、真实 object-set restore B2、post-recovery Backup B3、evidence-proof-v2 语义校验；无 wire-format 变更。详见 [4.6.8 发布说明](docs/releases/4.6.8.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)、[4.5.4](docs/releases/4.5.4.md)、[4.5.5](docs/releases/4.5.5.md)、[4.5.6](docs/releases/4.5.6.md)、[4.5.7](docs/releases/4.5.7.md)、[4.5.8](docs/releases/4.5.8.md)、[4.5.9](docs/releases/4.5.9.md)、[4.6.0](docs/releases/4.6.0.md)、[4.6.2](docs/releases/4.6.2.md)、[4.6.3](docs/releases/4.6.3.md)、[4.6.4](docs/releases/4.6.4.md)、[4.6.5](docs/releases/4.6.5.md)、[4.6.6](docs/releases/4.6.6.md)、[4.6.7](docs/releases/4.6.7.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)、[4.5.4](docs/releases/4.5.4.md)、[4.5.5](docs/releases/4.5.5.md)、[4.5.6](docs/releases/4.5.6.md)、[4.5.7](docs/releases/4.5.7.md)、[4.5.8](docs/releases/4.5.8.md)、[4.5.9](docs/releases/4.5.9.md)、[4.6.0](docs/releases/4.6.0.md)、[4.6.2](docs/releases/4.6.2.md)、[4.6.3](docs/releases/4.6.3.md)、[4.6.4](docs/releases/4.6.4.md)、[4.6.5](docs/releases/4.6.5.md)、[4.6.6](docs/releases/4.6.6.md)、[4.6.7](docs/releases/4.6.7.md)、[4.6.8](docs/releases/4.6.8.md)。
 
 **4.4.15 validation target:** Full/Incremental Projection 同义、最终快照中新建 Project 可选、未选且已分叉 Contributor 零改动、Adaptive Delta O(buffer) 且超阈值前终止加密、Object Set 精确提交、Control-first Preview、未选 Component 零 GET、真实进程退出后恢复续传、Object Set Holds/GC 和旧 Whole-Age 永久兼容。
 

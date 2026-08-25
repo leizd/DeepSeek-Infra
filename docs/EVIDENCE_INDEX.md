@@ -5,7 +5,45 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.6.7.
+Applicable version: v4.6.8.
+
+## 4.6.8 development evidence contract
+
+4.6.8 closes end-to-end Backup DR Evidence: SIGKILL Process A holding real
+Full+Incremental object-set backups on three MinIO replicas, wipe local control
+DB, Process B production Authority store factory only, Formal Truth rebuild with
+generation-bound attestation, production remote restore of pre-disaster Backup B2
+(workspace digest match), and real post-recovery Backup B3 with Commit/Receipt
+binding. Claims use `evidence-proof-v2` semantic validators — bare `status=PASS`
+without required fields fails. Cross-replica valid forks report overall
+`DIVERGENT`.
+
+- Unit: `tests/test_backup_467_authority_fail_closed.py` (proof validators +
+  Formal Truth gates + Gate L fork classify)
+- Real three-MinIO SIGKILL DR:
+  `tests/test_backup_468_real_backup_dr_sigkill_e2e.py`
+  (scenario `real-three-minio-process-replacement-authority-recovery` on the
+  storage-control-plane MinIO Evidence runner)
+
+### Local Evidence environment (dev only)
+
+Formal PASS remains CI job `storage-control-plane-minio-e2e` on the exact merge
+commit. For local development:
+
+```text
+python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+python scripts/build_backup_crypto.py
+# requires Docker Desktop / engine on PATH
+python scripts/setup_storage_control_plane_minio_e2e.py doctor
+python scripts/setup_storage_control_plane_minio_e2e.py start
+python scripts/setup_storage_control_plane_minio_e2e.py run --scenario process-replace
+# full runner (includes docker stop/start in 458):
+python scripts/setup_storage_control_plane_minio_e2e.py run --scenario all
+python scripts/setup_storage_control_plane_minio_e2e.py stop
+```
+
+Compose topology: `docker-compose.storage-control-minio.yml` (ports 9000/9001/9002).
+Shell env export: `python scripts/setup_storage_control_plane_minio_e2e.py env --shell pwsh`.
 
 ## 4.6.3 development evidence contract
 
@@ -77,49 +115,49 @@ succeeds. For development setup and quality gates, see [AGENTS.md](../AGENTS.md)
 
 - `docs/evidence/headless-mcp-bridge.json`
 - `docs/evidence/a2a-external-peer.json`
-- `docs/evidence/ga-v4.6.7.json`
-- `docs/evidence/workspace-v4.6.7.json`
-- `docs/evidence/edge-router-v4.6.7.json`
-- `docs/evidence/media-v4.6.7.json`
-- `docs/evidence/browser-v4.6.7.json`
-- `docs/evidence/automation-v4.6.7.json`
-- `docs/evidence/skills-v4.6.7.json`
-- `docs/evidence/skills-ui-v4.6.7.json`
-- `docs/evidence/skill-builder-v4.6.7.json`
-- `docs/evidence/skill-packs-v4.6.7.json`
-- `docs/evidence/skill-eval-dashboard-v4.6.7.json`
-- `docs/evidence/skill-versioning-v4.6.7.json`
-- `docs/evidence/skill-analytics-v4.6.7.json`
-- `docs/evidence/skill-security-v4.6.7.json`
-- `docs/evidence/skill-catalog-v4.6.7.json`
-- `docs/evidence/context-taint-v4.6.7.json`
-- `docs/evidence/semantic-cache-onnx-v4.6.7.json`
-- `docs/evidence/upgrade-rollback-v4.6.7.json`
-- `docs/evidence/protocol-contract-v4.6.7.json`
-- `docs/evidence/frontend-bundle-v4.6.7.json`
-- `docs/evidence/frontend-browser-v4.6.7.json`
+- `docs/evidence/ga-v4.6.8.json`
+- `docs/evidence/workspace-v4.6.8.json`
+- `docs/evidence/edge-router-v4.6.8.json`
+- `docs/evidence/media-v4.6.8.json`
+- `docs/evidence/browser-v4.6.8.json`
+- `docs/evidence/automation-v4.6.8.json`
+- `docs/evidence/skills-v4.6.8.json`
+- `docs/evidence/skills-ui-v4.6.8.json`
+- `docs/evidence/skill-builder-v4.6.8.json`
+- `docs/evidence/skill-packs-v4.6.8.json`
+- `docs/evidence/skill-eval-dashboard-v4.6.8.json`
+- `docs/evidence/skill-versioning-v4.6.8.json`
+- `docs/evidence/skill-analytics-v4.6.8.json`
+- `docs/evidence/skill-security-v4.6.8.json`
+- `docs/evidence/skill-catalog-v4.6.8.json`
+- `docs/evidence/context-taint-v4.6.8.json`
+- `docs/evidence/semantic-cache-onnx-v4.6.8.json`
+- `docs/evidence/upgrade-rollback-v4.6.8.json`
+- `docs/evidence/protocol-contract-v4.6.8.json`
+- `docs/evidence/frontend-bundle-v4.6.8.json`
+- `docs/evidence/frontend-browser-v4.6.8.json`
 - `evals/reports/latest.json`
 - `evals/reports/agent-latest.json`
 - `evals/reports/baseline-compare-latest.json`
 - `evals/reports/security-latest.json`
-- `evals/reports/skills-v4.6.7.json`
-- `evals/reports/media-v4.6.7.json`
-- `evals/reports/browser-v4.6.7.json`
-- `evals/reports/automation-v4.6.7.json`
-- `docs/evidence/rust-sidecar-image-v4.6.7.json`
-- `docs/evidence/hybrid-runtime-e2e-v4.6.7.json`
-- `docs/evidence/gateway-request-parity-v4.6.7.json`
-- `docs/evidence/mcp-protocol-parity-v4.6.7.json`
-- `docs/evidence/rag-parity-v4.6.7.json`
-- `docs/evidence/rag-document-preparation-parity-v4.6.7.json`
-- `docs/evidence/rag-vector-binary-parity-v4.6.7.json`
-- `docs/evidence/rust-coverage-v4.6.7.json`
-- `docs/evidence/rust-sidecar-performance-v4.6.7.json`
-- `docs/evidence/packed-delta-s3-v4.6.7.json`
-- `docs/evidence/object-set-s3-v4.6.7.json`
-- `docs/evidence/recovery-faults-v4.6.7.json`
-- `docs/evidence/replica-healing-s3-v4.6.7.json`
-- `docs/evidence/storage-control-plane-minio-v4.6.7.json`
+- `evals/reports/skills-v4.6.8.json`
+- `evals/reports/media-v4.6.8.json`
+- `evals/reports/browser-v4.6.8.json`
+- `evals/reports/automation-v4.6.8.json`
+- `docs/evidence/rust-sidecar-image-v4.6.8.json`
+- `docs/evidence/hybrid-runtime-e2e-v4.6.8.json`
+- `docs/evidence/gateway-request-parity-v4.6.8.json`
+- `docs/evidence/mcp-protocol-parity-v4.6.8.json`
+- `docs/evidence/rag-parity-v4.6.8.json`
+- `docs/evidence/rag-document-preparation-parity-v4.6.8.json`
+- `docs/evidence/rag-vector-binary-parity-v4.6.8.json`
+- `docs/evidence/rust-coverage-v4.6.8.json`
+- `docs/evidence/rust-sidecar-performance-v4.6.8.json`
+- `docs/evidence/packed-delta-s3-v4.6.8.json`
+- `docs/evidence/object-set-s3-v4.6.8.json`
+- `docs/evidence/recovery-faults-v4.6.8.json`
+- `docs/evidence/replica-healing-s3-v4.6.8.json`
+- `docs/evidence/storage-control-plane-minio-v4.6.8.json`
 
 ## Historical 4.4.15 evidence contract
 

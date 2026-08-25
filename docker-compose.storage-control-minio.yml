@@ -1,0 +1,41 @@
+# Local three-MinIO topology for Storage Control Plane Evidence (matches CI ports).
+# Usage:
+#   docker compose -f docker-compose.storage-control-minio.yml up -d
+#   python scripts/setup_storage_control_plane_minio_e2e.py env
+#   python scripts/setup_storage_control_plane_minio_e2e.py run --scenario process-replace
+#   docker compose -f docker-compose.storage-control-minio.yml down
+#
+# Formal release Evidence is still owned by CI job storage-control-plane-minio-e2e.
+
+name: deepseek-storage-control-minio
+
+services:
+  minio-a:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    container_name: deepseek-minio-control-a
+    command: ["server", "/data", "--address", ":9000"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-deepseekci}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-local-storage-control-e2e}
+    ports:
+      - "127.0.0.1:9000:9000"
+
+  minio-b:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    container_name: deepseek-minio-control-b
+    command: ["server", "/data", "--address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-deepseekci}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-local-storage-control-e2e}
+    ports:
+      - "127.0.0.1:9001:9001"
+
+  minio-c:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    container_name: deepseek-minio-control-c
+    command: ["server", "/data", "--address", ":9002"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-deepseekci}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-local-storage-control-e2e}
+    ports:
+      - "127.0.0.1:9002:9002"
