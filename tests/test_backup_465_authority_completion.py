@@ -1,4 +1,4 @@
-"""4.6.5: crash-atomic authority, provider bootstrap, ancestry, monotonic CAS."""
+"""Crash-atomic authority completion: provider bootstrap, ancestry, monotonic CAS."""
 
 from __future__ import annotations
 
