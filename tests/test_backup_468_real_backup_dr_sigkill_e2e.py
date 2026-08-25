@@ -1,4 +1,4 @@
-"""4.6.8: SIGKILL Process A → Process B real object-set restore + post-recovery Backup."""
+"""SIGKILL Process A → Process B real object-set restore + post-recovery Backup DR Evidence."""
 
 from __future__ import annotations
 
