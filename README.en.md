@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.6.8-blue)
+![Version](https://img.shields.io/badge/version-4.6.9-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.6.8 — End-to-End Backup Disaster Recovery & Typed Evidence.** SIGKILL Process A, real object-set restore of pre-disaster Backup B2, post-recovery Backup B3 with Commit/Receipt binding, evidence-proof-v2 semantic validators. No wire-format changes.
+> **4.6.9 — Authority History Retention & Continuous DR Readiness.** Authority history safe compaction and checkpoints (AuthorityCheckpoint v1), fail-closed safety gate, continuous DR rehearsal with dr-readiness-proof-v1, DR SLO metrics, evidence-proof-v3 semantic validators. Wire-format frozen.
 
-## 4.6.8 at a glance
+## 4.6.9 at a glance
 
 - True SIGKILL Process A → wipe control DB → Process B production factory only.
 - Real Full+Incremental on three MinIO before disaster; production remote restore of B2 with digest match.

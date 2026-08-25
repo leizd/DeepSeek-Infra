@@ -673,4 +673,73 @@ def create_backup_governance_router() -> APIRouter:
         summary = backup_transfer_budget.get_global_transfer_budget_manager().transfer_control_summary()
         return json_response(summary)
 
+    # ── 4.6.9 Authority Retention & Continuous DR Readiness Routes ───────────
+
+    @router.get("/api/workspace/authority/history-snapshot")
+    async def api_authority_history_snapshot(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import authority_retention
+
+        return json_response(authority_retention.authority_history_snapshot())
+
+    @router.get("/api/workspace/authority/retention/policy")
+    async def api_authority_retention_policy_get(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import authority_retention
+
+        return json_response(authority_retention.get_authority_retention_policy())
+
+    @router.post("/api/workspace/authority/retention/policy")
+    async def api_authority_retention_policy_post(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import authority_retention
+
+        return json_response(authority_retention.put_authority_retention_policy(body))
+
+    @router.post("/api/workspace/authority/retention/explain")
+    async def api_authority_retention_explain(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import authority_retention
+
+        target_gen = body.get("targetGeneration") if isinstance(body, dict) else None
+        return json_response(authority_retention.explain_retention(target_generation=target_gen))
+
+    @router.post("/api/workspace/authority/retention/plan")
+    async def api_authority_retention_plan(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import authority_retention
+
+        target_gen = body.get("targetGeneration") if isinstance(body, dict) else None
+        return json_response(authority_retention.plan_retention(target_generation=target_gen))
+
+    @router.post("/api/workspace/authority/retention/compact")
+    async def api_authority_retention_compact(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import authority_retention
+
+        target_gen = body.get("targetGeneration") if isinstance(body, dict) else None
+        dry_run = bool(body.get("dryRun")) if isinstance(body, dict) else False
+        return json_response(authority_retention.execute_compaction(target_generation=target_gen, dry_run=dry_run))
+
+    @router.post("/api/workspace/disaster-recovery/drills/run")
+    async def api_dr_drill_run(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import backup_dr_readiness
+
+        backup_id = body.get("backupId") if isinstance(body, dict) else None
+        target_id = body.get("targetId") if isinstance(body, dict) else None
+        return json_response(backup_dr_readiness.run_dr_drill(backup_id=backup_id, target_id=target_id))
+
+    @router.get("/api/workspace/disaster-recovery/slo")
+    async def api_dr_slo_get(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import backup_dr_readiness
+
+        return json_response(backup_dr_readiness.get_dr_slo_status())
+
     return router
