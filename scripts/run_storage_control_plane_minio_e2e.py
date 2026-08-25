@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from deepseek_infra.infra.workspace import backup_crypto  # noqa: E402
+from deepseek_infra.infra.workspace import evidence_proof  # noqa: E402
 from scripts.release_evidence import stamp_release_report  # noqa: E402
 
 REAL_SCENARIO = "real-three-minio-storage-control-plane"
@@ -25,6 +26,7 @@ TXGC_SCENARIO = "real-three-minio-transactional-gc-fencing"
 AUTH_DR_SCENARIO = "real-three-minio-control-authority-disaster-recovery"
 FS_FRESH_AUTH_SCENARIO = "fresh-process-filesystem-authority-recovery"
 FRESH_AUTH_SCENARIO = "real-three-minio-fresh-process-authority-recovery"
+PROCESS_REPLACE_SCENARIO = "real-three-minio-process-replacement-authority-recovery"
 SCENARIOS: dict[str, tuple[str, ...]] = {
     REAL_SCENARIO: (
         "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e",
@@ -47,6 +49,9 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
     ),
     FRESH_AUTH_SCENARIO: (
         "tests/test_backup_466_real_fresh_process_minio_e2e.py::test_real_three_minio_fresh_process_authority_recovery_e2e",
+    ),
+    PROCESS_REPLACE_SCENARIO: (
+        "tests/test_backup_467_real_process_replacement_minio_e2e.py::test_real_three_minio_process_replacement_authority_dr_e2e",
     ),
 }
 CHECK_SCENARIOS = {
@@ -96,9 +101,31 @@ CHECK_SCENARIOS = {
     "realFreshProcessUsesProductionS3Bootstrap": FRESH_AUTH_SCENARIO,
     "realFreshProcessHasZeroInheritedS3Handles": FRESH_AUTH_SCENARIO,
     "realFreshProcessIsReadOnlyBeforeFormalTruth": FRESH_AUTH_SCENARIO,
-    "realFreshProcessRestoresPreDisasterBackup": FRESH_AUTH_SCENARIO,
-    "realFreshProcessCreatesPostRecoveryBackup": FRESH_AUTH_SCENARIO,
-    "realFreshProcessBootEpochStrictlyIncreases": FRESH_AUTH_SCENARIO,
+    "realFreshProcessRestoresPreDisasterBackup": PROCESS_REPLACE_SCENARIO,
+    "realFreshProcessCreatesPostRecoveryBackup": PROCESS_REPLACE_SCENARIO,
+    "realFreshProcessBootEpochStrictlyIncreases": PROCESS_REPLACE_SCENARIO,
+    # 4.6.7 process-replacement + proof-backed claims
+    "realThreeMinioProcessReplacementE2E": PROCESS_REPLACE_SCENARIO,
+    "freshProcessAAndBHaveDifferentPids": PROCESS_REPLACE_SCENARIO,
+    "processAIsDeadBeforeProcessBStarts": PROCESS_REPLACE_SCENARIO,
+    "freshProcessBUsesProductionAuthorityStoreFactory": PROCESS_REPLACE_SCENARIO,
+    "realPreDisasterBackupIsActuallyRestored": PROCESS_REPLACE_SCENARIO,
+    "restoredWorkspaceDigestMatchesPreDisasterDigest": PROCESS_REPLACE_SCENARIO,
+    "realPostRecoveryBackupHasValidCommit": PROCESS_REPLACE_SCENARIO,
+    "evidenceCheckCannotPassWithoutStructuredProof": PROCESS_REPLACE_SCENARIO,
+}
+
+# Claims that MUST be backed by evidence-proof-v1 (not pytest exit alone).
+REQUIRED_PROOF_CHECKS: dict[str, tuple[str, ...]] = {
+    PROCESS_REPLACE_SCENARIO: (
+        "realPreDisasterBackupIsActuallyRestored",
+        "restoredWorkspaceDigestMatchesPreDisasterDigest",
+        "realPostRecoveryBackupHasValidCommit",
+        "freshProcessAAndBHaveDifferentPids",
+        "processAIsDeadBeforeProcessBStarts",
+        "realThreeMinioProcessReplacementE2E",
+        "evidenceCheckCannotPassWithoutStructuredProof",
+    ),
 }
 REQUIRED_ENDPOINTS = (
     "DEEPSEEK_TEST_S3_ENDPOINT_A",
@@ -146,15 +173,33 @@ def main(argv: list[str] | None = None) -> int:
     else:
         environment = os.environ.copy()
         environment["DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E"] = "1"
+        proof_dir = ROOT / "artifacts" / "evidence-proofs"
+        proof_dir.mkdir(parents=True, exist_ok=True)
         for scenario, node_ids in SCENARIOS.items():
+            proof_path = proof_dir / f"evidence-proof-{scenario}.json"
+            if proof_path.is_file():
+                proof_path.unlink()
+            env = environment.copy()
+            env[evidence_proof.ENV_EVIDENCE_PROOF_PATH] = str(proof_path)
             command = [sys.executable, "-m", "pytest", "--no-cov", "-q", *node_ids]
-            completed = subprocess.run(command, cwd=ROOT, env=environment, check=False)
-            results[scenario] = {"nodeIds": list(node_ids), "exitCode": completed.returncode}
+            completed = subprocess.run(command, cwd=ROOT, env=env, check=False)
+            results[scenario] = {
+                "nodeIds": list(node_ids),
+                "exitCode": completed.returncode,
+                "proofPath": str(proof_path) if proof_path.is_file() else None,
+            }
 
     checks = {
         check: "PASS" if results[scenario]["exitCode"] == 0 else "FAIL"
         for check, scenario in CHECK_SCENARIOS.items()
     }
+    # 4.6.7: proof-backed claims cannot PASS from pytest exit alone.
+    checks = evidence_proof.merge_checks_from_proof(
+        checks=checks,
+        check_to_scenario=dict(CHECK_SCENARIOS),
+        scenario_results=results,
+        required_proof_checks=REQUIRED_PROOF_CHECKS,
+    )
     report = stamp_release_report(
         {
             "ok": all(value == "PASS" for value in checks.values()),
@@ -162,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             "title": "Real Three-MinIO Storage Control Plane, Tiering, Placement, and Control Recovery E2E",
             "checks": checks,
             "checkProvenance": dict(CHECK_SCENARIOS),
+            "requiredProofChecks": {k: list(v) for k, v in REQUIRED_PROOF_CHECKS.items()},
             "scenarios": results,
             "endpoints": {name: os.environ.get(name) for name in REQUIRED_ENDPOINTS},
         },

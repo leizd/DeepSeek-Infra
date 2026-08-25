@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.6.6-blue)
+![Version](https://img.shields.io/badge/version-4.6.7-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.6.6 — Production Authority Operations & Evidence Integrity.** Production S3 Authority bootstrap, configured≠resolved fail-closed, mandatory Formal Truth activation, verifiable MinIO DR Evidence. No wire-format changes.
+> **4.6.7 — Verifiable Disaster Recovery & Fail-Closed Authority Bootstrap.** Explicit replicated mode, bootstrap fail-closed, Formal Truth attestation, process A/B Evidence with proof-v1. No wire-format changes.
 
-## 4.6.6 at a glance
+## 4.6.7 at a glance
 
 - Production S3 AuthorityStoreFactory resolves credentialReference before Startup Verdict.
 - Configured-but-unresolved replicas → AUTHORITY_UNAVAILABLE (never local-only ACTIVE).
@@ -23,7 +23,7 @@ DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines
 - Filesystem fresh-process Evidence separated from genuine three-MinIO DR Evidence.
 - Frozen compatibility surface unchanged: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age.
 
-See the [4.6.6 release notes](docs/releases/4.6.6.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.6.7 release notes](docs/releases/4.6.7.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

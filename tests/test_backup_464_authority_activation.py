@@ -25,6 +25,10 @@ def control_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(backup_control, "CONTROL_DB", db)
     backup_control_authority.configure_authority_anchor_roots(None)
     backup_control_authority.configure_authority_anchor_stores(None)
+    from deepseek_infra.infra.workspace import backup_authority_provider
+
+    backup_authority_provider.reset_authority_replica_provider()
+    monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
     return db
 
 

@@ -29,10 +29,15 @@ RECOVERY_IN_PROGRESS = "recovering"
 STATE_GENESIS_REQUIRED = "genesis-required"
 STATE_AUTHORITY_DIVERGENT = "authority-divergent"
 STATE_AUTHORITY_UNAVAILABLE = "authority-unavailable"
+STATE_AUTHORITY_CONFIGURATION_REQUIRED = "authority-configuration-required"
+STATE_AUTHORITY_BOOTSTRAP_FAILED = "authority-bootstrap-failed"
 STATE_RECOVERING_AUTHORITY = "recovering-authority"
 STATE_RECOVERING_FORMAL_TRUTH = "recovering-formal-truth"
 STATE_VALIDATING = "validating"
 STATE_ANCHORING_NEW_EPOCH = "anchoring-new-epoch"
+
+# In-process Formal Truth validation attestations (4.6.7) — not forgeable via coverage alone.
+_FORMAL_TRUTH_ATTESTATIONS: dict[str, dict[str, Any]] = {}
 
 # Table classification (4.6.5 Gate H).
 DURABLE_AUTHORITY_TABLES = frozenset(
@@ -189,37 +194,76 @@ def local_control_db_healthy() -> bool:
         return False
 
 
-def _ensure_provider_before_verdict() -> None:
-    """Resolve AuthorityReplicaProvider before any verdict classification (4.6.6)."""
+def _ensure_provider_before_verdict() -> dict[str, Any] | None:
+    """Resolve AuthorityReplicaProvider before verdict (4.6.7 fail-closed bootstrap).
+
+    Returns optional bootstrap-failure verdict payload; None means continue.
+    """
     from deepseek_infra.infra.workspace import backup_authority_provider
+    from deepseek_infra.infra.workspace import backup_control as ctrl
 
     if backup_authority_provider.get_authority_replica_provider() is not None:
-        return
+        return None
     # Legacy in-process roots/stores still win when tests configure them.
     if backup_control_authority.authority_anchors_configured():
         backup_authority_provider.sync_provider_from_legacy_globals()
-        return
+        return None
     # Production fresh process: bootstrap + production S3 store factory (no secrets).
     try:
         backup_authority_provider.install_provider_from_bootstrap(
             store_factory=backup_authority_provider.production_authority_store_factory
         )
-    except AppError:
-        raise
-    except Exception:
-        pass
+    except AppError as exc:
+        if not local_control_db_present():
+            with ctrl._connect():  # noqa: SLF001
+                pass
+        reason = f"authority-bootstrap-failed:{exc}"
+        set_control_recovery_state(recovery_state=STATE_AUTHORITY_BOOTSTRAP_FAILED, reason=reason)
+        return {
+            "verdict": STATE_AUTHORITY_BOOTSTRAP_FAILED,
+            "allowWorkers": False,
+            "allowMutations": False,
+            "localPresent": local_control_db_present(),
+            "localHealthy": local_control_db_healthy() if local_control_db_present() else False,
+            "remoteReplicaCount": 0,
+            "configuredReplicaCount": 0,
+            "resolvedReplicaCount": 0,
+            "reason": reason,
+        }
+    except Exception as exc:  # noqa: BLE001 — must fail closed, never pretend no config
+        if not local_control_db_present():
+            with ctrl._connect():  # noqa: SLF001
+                pass
+        reason = f"unexpected-authority-bootstrap-failure:{type(exc).__name__}:{exc}"
+        set_control_recovery_state(recovery_state=STATE_AUTHORITY_BOOTSTRAP_FAILED, reason=reason)
+        return {
+            "verdict": STATE_AUTHORITY_BOOTSTRAP_FAILED,
+            "allowWorkers": False,
+            "allowMutations": False,
+            "localPresent": local_control_db_present(),
+            "localHealthy": local_control_db_healthy() if local_control_db_present() else False,
+            "remoteReplicaCount": 0,
+            "configuredReplicaCount": 0,
+            "resolvedReplicaCount": 0,
+            "reason": reason,
+        }
+    return None
 
 
 def resolve_startup_authority_verdict() -> dict[str, Any]:
-    """Classify Control Authority before any worker may start (4.6.6).
+    """Classify Control Authority before any worker may start (4.6.7).
 
-    Configured replicas that fail to resolve → AUTHORITY_UNAVAILABLE (never local-only
-    ACTIVE). Missing local DB + remote history → RECOVERY_REQUIRED.
+    - replicated + configured=0 + no local DB → AUTHORITY_CONFIGURATION_REQUIRED
+    - configured but unresolved → AUTHORITY_UNAVAILABLE
+    - bootstrap exception → AUTHORITY_BOOTSTRAP_FAILED
+    - local-only ACTIVE only when mode=local-only (explicit opt-in)
     """
     from deepseek_infra.infra.workspace import backup_authority_provider
     from deepseek_infra.infra.workspace import backup_control as ctrl
 
-    _ensure_provider_before_verdict()
+    bootstrap_fail = _ensure_provider_before_verdict()
+    if bootstrap_fail is not None:
+        return bootstrap_fail
     status = backup_authority_provider.provider_status()
     configured_n = int(status.get("configuredReplicaCount") or 0)
     resolved_n = int(status.get("resolvedReplicaCount") or 0)
@@ -331,17 +375,20 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
         }
 
     if not present:
-        # Local-only first install only when mode=local-only or zero configured replicas.
-        if configured_n > 0 and mode != backup_authority_provider.MODE_LOCAL_ONLY:
+        # 4.6.7: replicated mode never auto local-only; must opt-in mode=local-only.
+        if mode != backup_authority_provider.MODE_LOCAL_ONLY:
             if not local_control_db_present():
                 with ctrl._connect():  # noqa: SLF001
                     pass
-            set_control_recovery_state(
-                recovery_state=STATE_AUTHORITY_UNAVAILABLE,
-                reason="authority-replicas-configured-forbid-implicit-local-genesis",
-            )
+            if configured_n > 0:
+                reason = "authority-replicas-configured-forbid-implicit-local-genesis"
+                state = STATE_AUTHORITY_UNAVAILABLE
+            else:
+                reason = "authority-configuration-required"
+                state = STATE_AUTHORITY_CONFIGURATION_REQUIRED
+            set_control_recovery_state(recovery_state=state, reason=reason)
             return {
-                "verdict": STATE_AUTHORITY_UNAVAILABLE,
+                "verdict": state,
                 "allowWorkers": False,
                 "allowMutations": False,
                 "localPresent": False,
@@ -349,8 +396,9 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
                 "remoteReplicaCount": 0,
                 "configuredReplicaCount": configured_n,
                 "resolvedReplicaCount": resolved_n,
-                "reason": "authority-replicas-configured-forbid-implicit-local-genesis",
+                "reason": reason,
                 "provider": status,
+                "mode": mode,
             }
         with ctrl._connect():  # noqa: SLF001
             pass
@@ -366,21 +414,22 @@ def resolve_startup_authority_verdict() -> dict[str, Any]:
             "resolvedReplicaCount": resolved_n,
             "reason": "genesis-local-only",
             "provider": status,
+            "mode": mode,
         }
 
     # Local healthy: drain pending anchors; refuse ACTIVE if pending remains with anchors.
     ready = ctrl.ensure_control_authority_ready()
-    state = get_control_recovery_state()
-    if state["recoveryState"] != RECOVERY_ACTIVE:
+    boot_state = get_control_recovery_state()
+    if boot_state["recoveryState"] != RECOVERY_ACTIVE:
         return {
-            "verdict": state["recoveryState"],
+            "verdict": boot_state["recoveryState"],
             "allowWorkers": False,
             "allowMutations": False,
             "localPresent": True,
             "localHealthy": True,
             "remoteReplicaCount": len(remote),
             "outbox": ready,
-            "reason": state.get("reason"),
+            "reason": boot_state.get("reason"),
         }
     if int(ready.get("pending") or 0) > 0:
         return {
@@ -572,7 +621,14 @@ def reconstruct_control_authority(
     Auto-activate only when ``activate=True`` and zero registered targets remain.
     """
     del bootstrap_profile  # reserved for credential/bootstrap wiring (never stored in checkpoints)
-    _ensure_provider_before_verdict()
+    bootstrap_fail = _ensure_provider_before_verdict()
+    if bootstrap_fail is not None:
+        raise AppError(
+            str(bootstrap_fail.get("reason") or "authority-bootstrap-failed"),
+            code=ErrorCode.INVALID_REQUEST,
+            status=503,
+        )
+    clear_formal_truth_attestations()
     replicas = discover_authority_replicas(list(recovery_targets or []))
     # Prefer explicit stores; else provider-discovered stores (production S3 bootstrap).
     store_list = list(recovery_stores or [])
@@ -750,9 +806,10 @@ def activate_control_after_formal_truth(
 ) -> dict[str, Any]:
     """Anchor a new durable boot epoch and enter ACTIVE after formal truth rebuild.
 
-    4.6.6: when any control target is registered, complete index coverage is mandatory.
-    ``require_complete_coverage=False`` is ignored when targets exist (no production bypass).
+    4.6.7: when targets exist, requires Formal Truth VALID attestation per target
+    (coverage complete is necessary but not sufficient — attestation must exist).
     """
+    set_control_recovery_state(recovery_state=STATE_VALIDATING, reason=reason)
     with backup_control._connect() as conn:  # noqa: SLF001
         targets = conn.execute("SELECT target_id FROM control_targets").fetchall()
         target_ids = [str(row["target_id"]) for row in targets]
@@ -768,6 +825,25 @@ def activate_control_after_formal_truth(
                 if state != "complete":
                     raise AppError(
                         f"formal-truth-incomplete:{tid}:state={state}",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=503,
+                    )
+                att = get_formal_truth_validation(tid)
+                if att is None or str(att.get("status") or "") != "VALID":
+                    raise AppError(
+                        f"formal-truth-attestation-missing-or-invalid:{tid}",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=503,
+                    )
+                if not att.get("indexCoverageComplete"):
+                    raise AppError(
+                        f"formal-truth-attestation-coverage-incomplete:{tid}",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=503,
+                    )
+                if int(att.get("invalidCommitCount") or 0) > 0:
+                    raise AppError(
+                        f"formal-truth-attestation-invalid-commits:{tid}",
                         code=ErrorCode.INVALID_REQUEST,
                         status=503,
                     )
@@ -1083,7 +1159,7 @@ def rebuild_formal_truth_from_authenticated_commits(target: Any) -> dict[str, An
         source_receipt_mutation_generation=end_mutation,
         reason=reason or "formal-truth-authenticated",
     )
-    return {
+    result = {
         "targetId": target_id,
         "coverageState": state,
         "commitsSeen": commits_seen,
@@ -1095,6 +1171,66 @@ def rebuild_formal_truth_from_authenticated_commits(target: Any) -> dict[str, An
         "retired": retired,
         "source": "commit-authenticated-receipts",
     }
+    # 4.6.7: durable-in-process Formal Truth attestation (not coverage alone).
+    record_formal_truth_validation(
+        target_id=target_id,
+        status="VALID" if state == "complete" and invalid_commits == 0 else "INVALID",
+        authenticated_commit_count=authenticated,
+        invalid_commit_count=invalid_commits,
+        orphan_receipt_count=orphan_receipts,
+        indexed_receipt_count=indexed,
+        lineage_valid=True,  # lineage upserts only for authenticated commits
+        retirement_reconciled=True,
+        index_coverage_complete=(state == "complete"),
+        source_receipt_mutation_generation=end_mutation,
+    )
+    result["formalTruthAttestation"] = get_formal_truth_validation(target_id)
+    return result
+
+
+def clear_formal_truth_attestations() -> None:
+    """Test helper / recovery start: drop in-process attestations."""
+    _FORMAL_TRUTH_ATTESTATIONS.clear()
+
+
+def record_formal_truth_validation(
+    *,
+    target_id: str,
+    status: str,
+    authenticated_commit_count: int = 0,
+    invalid_commit_count: int = 0,
+    orphan_receipt_count: int = 0,
+    indexed_receipt_count: int = 0,
+    lineage_valid: bool = False,
+    retirement_reconciled: bool = False,
+    index_coverage_complete: bool = False,
+    source_receipt_mutation_generation: int | None = None,
+) -> dict[str, Any]:
+    """Record Formal Truth validation attestation for activation gate."""
+    entry = {
+        "targetId": str(target_id),
+        "status": str(status),
+        "authenticatedCommitCount": int(authenticated_commit_count),
+        "invalidCommitCount": int(invalid_commit_count),
+        "orphanReceiptCount": int(orphan_receipt_count),
+        "indexedReceiptCount": int(indexed_receipt_count),
+        "lineageValid": bool(lineage_valid),
+        "retirementReconciled": bool(retirement_reconciled),
+        "indexCoverageComplete": bool(index_coverage_complete),
+        "sourceReceiptMutationGeneration": source_receipt_mutation_generation,
+        "validatedAt": _utc_iso(),
+    }
+    _FORMAL_TRUTH_ATTESTATIONS[str(target_id)] = entry
+    return dict(entry)
+
+
+def get_formal_truth_validation(target_id: str) -> dict[str, Any] | None:
+    item = _FORMAL_TRUTH_ATTESTATIONS.get(str(target_id))
+    return dict(item) if item is not None else None
+
+
+def list_formal_truth_validations() -> list[dict[str, Any]]:
+    return [dict(v) for v in _FORMAL_TRUTH_ATTESTATIONS.values()]
 
 
 def authority_health_snapshot() -> dict[str, Any]:
@@ -1171,18 +1307,96 @@ def authority_health_snapshot() -> dict[str, Any]:
 
 
 def authority_verify() -> dict[str, Any]:
-    """Read-only verify: provider + optional local chain tip integrity."""
+    """Read-only verify: open every configured replica and check history/ancestry/durability."""
     health = authority_health_snapshot()
     issues: list[str] = []
-    if int(health.get("configuredReplicaCount") or 0) > int(health.get("resolvedReplicaCount") or 0):
+    replica_reports: list[dict[str, Any]] = []
+    roots = backup_control_authority.get_authority_anchor_roots()
+    stores = backup_control_authority.get_authority_anchor_stores()
+    discovered: dict[str, dict[str, Any]] = {}
+    discovered.update(discover_authority_replicas([str(p) for p in roots]))
+    discovered.update(discover_authority_replicas_from_stores(list(stores)))
+    selected: dict[str, Any] | None = None
+    if discovered:
+        try:
+            selected = backup_control_authority.select_authority_heads(discovered)
+        except AppError as exc:
+            issues.append(f"divergent-or-invalid:{exc}")
+            selected = None
+    for rid, meta in discovered.items():
+        gen = int(meta.get("generation") or 0)
+        digest = str(meta.get("digest") or "")
+        history = list(meta.get("history") or [])
+        history_valid = True
+        try:
+            if history:
+                backup_control_authority.verify_authority_chain(history)
+        except AppError:
+            history_valid = False
+            issues.append(f"history-invalid:{rid}")
+        lag = 0
+        if selected is not None:
+            lag = max(0, int(selected.get("generation") or 0) - gen)
+        replica_reports.append(
+            {
+                "replicaId": rid,
+                "reachable": True,
+                "tipGeneration": gen,
+                "tipDigest": digest,
+                "historyValid": history_valid,
+                "lagGenerations": lag,
+                "repairable": lag > 0 and history_valid and selected is not None and rid in list(
+                    selected.get("laggingReplicas") or []
+                ),
+                "divergent": not history_valid,
+            }
+        )
+    configured = int(health.get("configuredReplicaCount") or 0)
+    resolved = int(health.get("resolvedReplicaCount") or 0)
+    if configured > resolved:
         issues.append("configured-exceeds-resolved")
     if int(health.get("formalTruth", {}).get("incompleteTargets") or 0) > 0:
         issues.append("formal-truth-incomplete")
     if int(health.get("unresolvedMutationCount") or 0) > 0:
         issues.append("unresolved-authority-mutations")
+    min_durable = int(health.get("minDurableReplicas") or 1)
+    reachable = sum(1 for r in replica_reports if r.get("reachable") and r.get("historyValid"))
+    if configured > 0 and reachable < min_durable:
+        issues.append("durability-unsatisfied")
+    if any(r.get("divergent") for r in replica_reports):
+        overall = "DIVERGENT"
+    elif "durability-unsatisfied" in issues:
+        overall = "DURABILITY_UNSATISFIED"
+    elif configured > 0 and resolved == 0:
+        overall = "UNAVAILABLE"
+    elif issues:
+        overall = "DEGRADED"
+    else:
+        overall = "HEALTHY"
     return {
-        "status": "ok" if not issues else "degraded",
+        "status": "ok" if overall == "HEALTHY" else "degraded",
+        "overall": overall,
         "issues": issues,
         "health": health,
+        "replicas": replica_reports,
+        "canonicalGeneration": (selected or {}).get("generation"),
+        "canonicalDigest": (selected or {}).get("digest"),
         "readOnly": True,
+    }
+
+
+def authority_audit_once() -> dict[str, Any]:
+    """Read-only continuous DR audit skeleton (no destructive repair)."""
+    verify = authority_verify()
+    health = verify.get("health") or {}
+    return {
+        "status": verify.get("overall") or verify.get("status"),
+        "verifiedAt": _utc_iso(),
+        "configuredReplicaCount": health.get("configuredReplicaCount"),
+        "resolvedReplicaCount": health.get("resolvedReplicaCount"),
+        "unresolvedMutations": health.get("unresolvedMutationCount"),
+        "formalTruth": health.get("formalTruth"),
+        "replicas": verify.get("replicas") or [],
+        "issues": verify.get("issues") or [],
+        "destructiveRepair": False,
     }

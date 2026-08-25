@@ -307,10 +307,12 @@ def test_verdict_provider_bootstrap_error_path(control_db: Path, monkeypatch: py
         raise AppError("bootstrap-boom", code=ErrorCode.INVALID_REQUEST, status=400)
 
     monkeypatch.setattr(backup_authority_provider, "install_provider_from_bootstrap", boom)
-    # When provider install raises AppError, _ensure_provider_before_verdict re-raises
+    # current-release: AppError during bootstrap becomes fail-closed verdict (not raise).
     control_db.unlink(missing_ok=True)
-    with pytest.raises(AppError, match="bootstrap-boom"):
-        backup_control_recovery.resolve_startup_authority_verdict()
+    verdict = backup_control_recovery.resolve_startup_authority_verdict()
+    assert verdict["verdict"] == backup_control_recovery.STATE_AUTHORITY_BOOTSTRAP_FAILED
+    assert verdict["allowWorkers"] is False
+    assert "bootstrap-boom" in str(verdict.get("reason") or "")
 
 
 def test_verdict_remote_generic_exception(control_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -684,6 +686,13 @@ def test_activate_with_complete_coverage_target(control_db: Path) -> None:
         formal_receipt_count=1,
         source_receipt_mutation_generation=0,
         reason="unit",
+    )
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t1",
+        status="VALID",
+        index_coverage_complete=True,
+        lineage_valid=True,
+        retirement_reconciled=True,
     )
     backup_control_recovery.set_control_recovery_state(
         recovery_state=backup_control_recovery.STATE_RECOVERING_FORMAL_TRUTH,

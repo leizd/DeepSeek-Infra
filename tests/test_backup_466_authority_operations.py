@@ -160,6 +160,16 @@ def test_activate_after_complete_coverage(control_db: Path, tmp_path: Path) -> N
         source_receipt_mutation_generation=0,
         reason="unit",
     )
+    # Coverage alone is insufficient — attestation required.
+    with pytest.raises(AppError, match="attestation-missing"):
+        backup_control_recovery.activate_control_after_formal_truth()
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t1",
+        status="VALID",
+        index_coverage_complete=True,
+        lineage_valid=True,
+        retirement_reconciled=True,
+    )
     activated = backup_control_recovery.activate_control_after_formal_truth()
     assert activated["status"] == "active"
 
@@ -332,19 +342,23 @@ def test_activate_blocked_when_pending_outbox(control_db: Path, tmp_path: Path) 
         backup_control_recovery.activate_control_after_formal_truth()
 
 
-def test_ensure_provider_swallows_generic_exception(
+def test_ensure_provider_fails_closed_on_generic_exception(
     control_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     backup_authority_provider.reset_authority_replica_provider()
     backup_control_authority.configure_authority_anchor_roots(None)
     backup_control_authority.configure_authority_anchor_stores(None)
+    control_db.unlink(missing_ok=True)
 
     def boom(**_k: Any) -> Any:
         raise RuntimeError("bootstrap-generic")
 
     monkeypatch.setattr(backup_authority_provider, "install_provider_from_bootstrap", boom)
-    # Should not raise — generic Exception is swallowed.
-    backup_control_recovery._ensure_provider_before_verdict()  # noqa: SLF001
+    # current-release: fail closed — returns bootstrap-failed verdict payload.
+    fail = backup_control_recovery._ensure_provider_before_verdict()  # noqa: SLF001
+    assert fail is not None
+    assert fail["verdict"] == backup_control_recovery.STATE_AUTHORITY_BOOTSTRAP_FAILED
+    assert fail["allowWorkers"] is False
 
 
 def test_reconstruct_anti_entropy_with_store_handle(control_db: Path) -> None:

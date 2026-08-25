@@ -322,6 +322,13 @@ def test_reconstruct_from_checkpoints_advances_boot_epoch_and_clears_ephemeral(
     backup_control.set_target_index_coverage(
         "t-r", state="complete", formal_receipt_count=0, source_receipt_mutation_generation=0, reason="unit"
     )
+    backup_control_recovery.record_formal_truth_validation(
+        target_id="t-r",
+        status="VALID",
+        index_coverage_complete=True,
+        lineage_valid=True,
+        retirement_reconciled=True,
+    )
     activated = backup_control_recovery.activate_control_after_formal_truth(reason="unit-reconstruct")
     assert activated["status"] == "active"
     assert int(activated["bootEpoch"]) > int(before["bootEpoch"])
@@ -877,6 +884,13 @@ def test_reconstruct_from_store_replicas(control_db: Path) -> None:
         assert backup_control.get_target("t-rs") is not None
         backup_control.set_target_index_coverage(
             "t-rs", state="complete", formal_receipt_count=0, source_receipt_mutation_generation=0, reason="unit"
+        )
+        backup_control_recovery.record_formal_truth_validation(
+            target_id="t-rs",
+            status="VALID",
+            index_coverage_complete=True,
+            lineage_valid=True,
+            retirement_reconciled=True,
         )
         activated = backup_control_recovery.activate_control_after_formal_truth()
         assert activated["status"] == "active"
