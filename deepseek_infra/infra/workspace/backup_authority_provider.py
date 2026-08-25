@@ -1,7 +1,7 @@
 """Production AuthorityReplicaProvider — bootstrap replicas before Startup Verdict.
 
-4.6.5 Gate A: fresh processes must rebuild replica handles from operator bootstrap
-configuration and credential references. Never rely on inherited process globals alone.
+4.6.6: production S3 store factory from credentialReference; configured≠resolved
+fail-closed; never degrade configured S3 replicas to local-only ACTIVE genesis.
 """
 
 from __future__ import annotations
@@ -17,6 +17,10 @@ from deepseek_infra.core.errors import AppError, ErrorCode
 # Bootstrap env: JSON list of replica descriptors (locator + credentialReference only).
 ENV_AUTHORITY_REPLICAS = "DEEPSEEK_CONTROL_AUTHORITY_REPLICAS"
 ENV_AUTHORITY_BOOTSTRAP_PATH = "DEEPSEEK_CONTROL_AUTHORITY_BOOTSTRAP"
+ENV_AUTHORITY_MODE = "DEEPSEEK_CONTROL_AUTHORITY_MODE"
+ENV_AUTHORITY_MIN_DURABLE = "DEEPSEEK_CONTROL_AUTHORITY_MIN_DURABLE_REPLICAS"
+MODE_LOCAL_ONLY = "local-only"
+MODE_REPLICATED = "replicated"
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,91 @@ class AuthorityReplicaProvider(Protocol):
     def configured(self) -> bool:
         ...
 
+    def configured_count(self) -> int:
+        ...
+
+    def resolved_count(self) -> int:
+        ...
+
+
+def credential_provider_from_reference(reference: str | None) -> dict[str, Any]:
+    """Map secretless credentialReference → S3 credentialProvider descriptor (no secrets)."""
+    ref = str(reference or "").strip()
+    if not ref or ref in {"aws-default", "aws-default-chain", "default"}:
+        return {"type": "aws-default-chain"}
+    if ref.startswith("profile:") or ref.startswith("aws-profile:"):
+        profile = ref.split(":", 1)[1].strip()
+        if not profile:
+            raise AppError(
+                "control-authority-credential-reference-invalid-profile",
+                code=ErrorCode.INVALID_REQUEST,
+                status=400,
+            )
+        return {"type": "aws-profile", "profile": profile}
+    if ref in {"environment", "instance-role", "workload-identity"}:
+        return {"type": ref}
+    # Named profile shorthand.
+    return {"type": "aws-profile", "profile": ref}
+
+
+def record_from_authority_locator(locator: AuthorityReplicaLocator) -> dict[str, Any]:
+    """Build secret-free S3 target record for open_s3_store."""
+    if locator.kind != "s3":
+        raise AppError(
+            f"control-authority-locator-not-s3:{locator.replica_id}",
+            code=ErrorCode.INVALID_REQUEST,
+            status=400,
+        )
+    if not locator.bucket:
+        raise AppError(
+            f"control-authority-s3-bucket-required:{locator.replica_id}",
+            code=ErrorCode.INVALID_REQUEST,
+            status=400,
+        )
+    return {
+        "targetId": f"authority-replica:{locator.replica_id}",
+        "kind": "s3",
+        "bucket": locator.bucket,
+        "prefix": locator.prefix or "",
+        "region": locator.region,
+        "endpointUrl": locator.endpoint,
+        "credentialProvider": credential_provider_from_reference(locator.credential_reference),
+        "credentialReference": locator.credential_reference,
+    }
+
+
+def production_authority_store_factory(locator: AuthorityReplicaLocator, *, client: Any | None = None) -> Any | None:
+    """Production AuthorityStoreFactory: locator → real S3TargetStore via credentialReference."""
+    if locator.kind != "s3":
+        return None
+    from deepseek_infra.infra.workspace import backup_target_s3
+
+    record = record_from_authority_locator(locator)
+    return backup_target_s3.open_s3_store(record, client=client)
+
+
+def authority_mode(*, env: dict[str, str] | None = None) -> str:
+    environ = env if env is not None else dict(os.environ)
+    mode = str(environ.get(ENV_AUTHORITY_MODE) or MODE_REPLICATED).strip().casefold()
+    if mode in {MODE_LOCAL_ONLY, "local", "localonly"}:
+        return MODE_LOCAL_ONLY
+    return MODE_REPLICATED
+
+
+def min_durable_replicas(*, env: dict[str, str] | None = None, default: int = 1) -> int:
+    environ = env if env is not None else dict(os.environ)
+    raw = environ.get(ENV_AUTHORITY_MIN_DURABLE)
+    if raw is None or str(raw).strip() == "":
+        return max(1, int(default))
+    try:
+        return max(1, int(raw))
+    except ValueError as exc:
+        raise AppError(
+            "control-authority-min-durable-invalid",
+            code=ErrorCode.INVALID_REQUEST,
+            status=400,
+        ) from exc
+
 
 @dataclass
 class StaticAuthorityReplicaProvider:
@@ -83,33 +172,53 @@ class StaticAuthorityReplicaProvider:
     _locators: list[AuthorityReplicaLocator] = field(default_factory=list)
     _replicas: list[AuthorityReplica] = field(default_factory=list)
     _store_factory: Any | None = None
+    _resolve_errors: list[str] = field(default_factory=list)
 
     def locators(self) -> list[AuthorityReplicaLocator]:
         return list(self._locators)
 
     def configured(self) -> bool:
-        return bool(self._locators or self._replicas)
+        return self.configured_count() > 0
+
+    def configured_count(self) -> int:
+        if self._locators:
+            return len(self._locators)
+        return len(self._replicas)
+
+    def resolved_count(self) -> int:
+        return len(self.discover())
+
+    def resolve_errors(self) -> list[str]:
+        return list(self._resolve_errors)
 
     def discover(self) -> list[AuthorityReplica]:
         if self._replicas:
             return list(self._replicas)
         resolved: list[AuthorityReplica] = []
+        errors: list[str] = []
         for locator in self._locators:
             if locator.kind == "filesystem":
                 if not locator.root:
+                    errors.append(f"{locator.replica_id}:filesystem-root-missing")
                     continue
                 resolved.append(AuthorityReplica(locator=locator, root=Path(locator.root)))
             elif locator.kind == "s3":
-                store = self._resolve_s3_store(locator)
+                try:
+                    store = self._resolve_s3_store(locator)
+                except Exception as exc:  # noqa: BLE001 — surface per-replica resolve failure
+                    errors.append(f"{locator.replica_id}:{exc}")
+                    continue
                 if store is not None:
                     resolved.append(AuthorityReplica(locator=locator, store=store))
+                else:
+                    errors.append(f"{locator.replica_id}:s3-store-unresolved")
+        self._resolve_errors = errors
         self._replicas = resolved
         return list(self._replicas)
 
     def _resolve_s3_store(self, locator: AuthorityReplicaLocator) -> Any | None:
-        if self._store_factory is not None:
-            return self._store_factory(locator)
-        return None
+        factory = self._store_factory if self._store_factory is not None else production_authority_store_factory
+        return factory(locator)
 
 
 # Process-wide provider installed before Startup Verdict (tests + production bootstrap).
@@ -266,22 +375,37 @@ def install_provider_from_bootstrap(
     extra_roots: list[Path | str] | None = None,
     extra_stores: list[Any] | None = None,
 ) -> StaticAuthorityReplicaProvider:
-    """Parse bootstrap, merge with any already-open handles, install as process provider."""
+    """Parse bootstrap, merge with any already-open handles, install as process provider.
+
+    Production default ``store_factory`` is ``production_authority_store_factory`` so S3
+    locators resolve via credentialReference without inherited process handles.
+    """
+    factory = store_factory if store_factory is not None else production_authority_store_factory
     locators = load_bootstrap_locators(env=env, bootstrap_path=bootstrap_path)
-    provider = StaticAuthorityReplicaProvider(_locators=list(locators), _store_factory=store_factory)
     # Merge explicit handles (tests / in-process configuration).
     merged = provider_from_roots_and_stores(extra_roots, extra_stores)
-    all_locators = list(provider.locators()) + list(merged.locators())
+    all_locators = list(locators) + list(merged.locators())
     all_replicas = list(merged.discover())
-    # Resolve filesystem locators without factory.
+    resolve_errors: list[str] = []
     for locator in locators:
         if locator.kind == "filesystem" and locator.root:
             all_replicas.append(AuthorityReplica(locator=locator, root=Path(locator.root)))
-        elif locator.kind == "s3" and store_factory is not None:
-            store = store_factory(locator)
+        elif locator.kind == "s3":
+            try:
+                store = factory(locator)
+            except Exception as exc:  # noqa: BLE001
+                resolve_errors.append(f"{locator.replica_id}:{exc}")
+                continue
             if store is not None:
                 all_replicas.append(AuthorityReplica(locator=locator, store=store))
-    final = StaticAuthorityReplicaProvider(_locators=all_locators, _replicas=all_replicas, _store_factory=store_factory)
+            else:
+                resolve_errors.append(f"{locator.replica_id}:s3-store-unresolved")
+    final = StaticAuthorityReplicaProvider(
+        _locators=all_locators,
+        _replicas=all_replicas,
+        _store_factory=factory,
+        _resolve_errors=resolve_errors,
+    )
     configure_authority_replica_provider(final)
     # Mirror into legacy globals so existing anchor paths keep working.
     from deepseek_infra.infra.workspace import backup_control_authority
@@ -291,6 +415,39 @@ def install_provider_from_bootstrap(
     backup_control_authority.configure_authority_anchor_roots(roots_out or None)
     backup_control_authority.configure_authority_anchor_stores(stores_out or None)
     return final
+
+
+def provider_status() -> dict[str, Any]:
+    """Operator-facing configured vs resolved snapshot."""
+    provider = get_authority_replica_provider()
+    mode = authority_mode()
+    if provider is None:
+        return {
+            "mode": mode,
+            "configuredReplicaCount": 0,
+            "resolvedReplicaCount": 0,
+            "resolveErrors": [],
+            "replicaIds": [],
+            "locatorIds": [],
+            "minDurableReplicas": min_durable_replicas(),
+        }
+    locators = list(provider.locators())
+    replicas = list(provider.discover())
+    errors: list[str] = []
+    if isinstance(provider, StaticAuthorityReplicaProvider):
+        errors = list(provider.resolve_errors())
+        configured = int(provider.configured_count())
+    else:
+        configured = len(locators)
+    return {
+        "mode": mode,
+        "configuredReplicaCount": int(configured),
+        "resolvedReplicaCount": len(replicas),
+        "resolveErrors": list(errors),
+        "replicaIds": [r.replica_id for r in replicas],
+        "locatorIds": [loc.replica_id for loc in locators],
+        "minDurableReplicas": min_durable_replicas(),
+    }
 
 
 def sync_provider_from_legacy_globals() -> StaticAuthorityReplicaProvider | None:

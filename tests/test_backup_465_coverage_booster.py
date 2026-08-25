@@ -354,10 +354,7 @@ def test_reconstruct_activate_false_and_anti_entropy(control_db: Path, tmp_path:
     )
     assert result["status"] == "authority-restored"
     assert result["recoveryState"] == backup_control_recovery.STATE_RECOVERING_FORMAL_TRUTH
-    activated = backup_control_recovery.activate_control_after_formal_truth(
-        require_complete_coverage=False,
-        reason="unit-activate",
-    )
+    activated = backup_control_recovery.activate_control_after_formal_truth(reason="unit-activate")
     assert activated["status"] == "active"
     assert int(activated["bootEpoch"]) > 2
 
@@ -634,7 +631,7 @@ def test_reconstruct_without_boot_epoch_field(control_db: Path, tmp_path: Path) 
     assert "controlBootEpoch" not in a or a.get("controlBootEpoch") is None
     backup_control_authority.write_authority_checkpoint_bundle(root, a)
     result = backup_control_recovery.reconstruct_control_authority(
-        recovery_targets=[root], activate=True
+        recovery_targets=[root], activate=True  # no targets in checkpoint
     )
     assert result["status"] == "recovered"
 
@@ -887,8 +884,11 @@ def test_provider_locator_to_public_minimal(control_db: Path) -> None:
     loc = backup_authority_provider.AuthorityReplicaLocator(replica_id="x", kind="s3")
     d = loc.to_public_dict()
     assert d == {"replicaId": "x", "kind": "s3"}
-    # Protocol methods via AttributeError-free call
-    assert backup_authority_provider.StaticAuthorityReplicaProvider(_locators=[loc])._resolve_s3_store(loc) is None  # noqa: SLF001
+    # Missing bucket → production factory fails closed.
+    with pytest.raises(AppError, match="bucket-required"):
+        backup_authority_provider.StaticAuthorityReplicaProvider(
+            _locators=[loc]
+        )._resolve_s3_store(loc)  # noqa: SLF001
 
 
 def test_fs_identical_whitespace_checkpoint_rewrite(control_db: Path, tmp_path: Path) -> None:
@@ -963,7 +963,7 @@ def test_anti_entropy_repair_error_swallowed(control_db: Path, tmp_path: Path, m
 
     monkeypatch.setattr(backup_control_authority, "repair_lagging_authority_replicas", boom)
     result = backup_control_recovery.reconstruct_control_authority(
-        recovery_targets=[tip, lag], activate=True
+        recovery_targets=[tip, lag], activate=True  # policies only
     )
     assert result["status"] == "recovered"
 

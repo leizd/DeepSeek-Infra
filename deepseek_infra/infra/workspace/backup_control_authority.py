@@ -1203,10 +1203,14 @@ def anchor_prepared_mutation(
     roots: list[Path | str] | None = None,
     stores: list[Any] | None = None,
     rpo_zero: bool = True,
+    min_durable: int | None = None,
 ) -> dict[str, Any]:
     """Anchor a PREPARED checkpoint to replicas (idempotent; handles remote-outcome-unknown)."""
+    from deepseek_infra.infra.workspace import backup_authority_provider
+
     fs_roots = [Path(item) for item in roots] if roots is not None else get_authority_anchor_roots()
     store_list = list(stores) if stores is not None else get_authority_anchor_stores()
+    required = int(min_durable) if min_durable is not None else backup_authority_provider.min_durable_replicas()
     if mutation_id:
         _mark_mutation(mutation_id, state=MUTATION_ANCHORING)
     if not fs_roots and not store_list:
@@ -1236,9 +1240,16 @@ def anchor_prepared_mutation(
             durable_roots = _write_checkpoint_to_roots(checkpoint, fs_roots)
         if store_list:
             durable_stores = _write_checkpoint_to_stores(checkpoint, store_list)
-        if not durable_roots and not durable_stores:
+        durable_count = len(durable_roots) + len(durable_stores)
+        if durable_count <= 0:
             raise AppError(
                 "authority-rpo-zero-anchor-failed:no-durable-replica",
+                code=ErrorCode.INTERNAL,
+                status=503,
+            )
+        if durable_count < required:
+            raise AppError(
+                f"authority-durability-unsatisfied:need-{required}-got-{durable_count}",
                 code=ErrorCode.INTERNAL,
                 status=503,
             )
@@ -1273,7 +1284,7 @@ def anchor_prepared_mutation(
             "mutationId": mutation_id,
             "authorityGeneration": int(checkpoint["authorityGeneration"]),
         }
-    return _complete_anchor_after_remote(
+    completed = _complete_anchor_after_remote(
         checkpoint=checkpoint,
         outbox_id=outbox_id,
         mutation_id=mutation_id,
@@ -1281,6 +1292,9 @@ def anchor_prepared_mutation(
         durable_roots=durable_roots,
         durable_stores=durable_stores,
     )
+    completed["minDurableReplicas"] = required
+    completed["durableCount"] = len(durable_roots) + len(durable_stores)
+    return completed
 
 
 def anchor_non_rebuildable_mutation(

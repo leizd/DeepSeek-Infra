@@ -38,13 +38,18 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "tests/test_backup_465_fresh_process_authority.py::"
         "test_subprocess_crash_after_prepared_recovers_exactly_once"
     )
+    node_466 = (
+        "tests/test_backup_466_real_fresh_process_minio_e2e.py::"
+        "test_real_three_minio_fresh_process_authority_recovery_e2e"
+    )
     assert runner.SCENARIOS == {
         "real-three-minio-storage-control-plane": (node_458,),
         "real-three-minio-tiering-control-recovery": (node_459,),
         "real-three-minio-autonomous-placement-control": (node_460,),
         "real-three-minio-transactional-gc-fencing": (node_462,),
         "real-three-minio-control-authority-disaster-recovery": (node_463,),
-        "real-three-minio-fresh-process-authority-recovery": (node_465_a, node_465_b),
+        "fresh-process-filesystem-authority-recovery": (node_465_a, node_465_b),
+        "real-three-minio-fresh-process-authority-recovery": (node_466,),
     }
     assert set(runner.REQUIRED_ENDPOINTS) == {
         "DEEPSEEK_TEST_S3_ENDPOINT_A",
@@ -86,10 +91,16 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
     assert runner.CHECK_SCENARIOS["freshNodeReconstructsControlAuthority"] == (
         "real-three-minio-control-authority-disaster-recovery"
     )
-    assert runner.CHECK_SCENARIOS["realFreshProcessDetectsRemoteAuthority"] == (
-        "real-three-minio-fresh-process-authority-recovery"
+    assert runner.CHECK_SCENARIOS["freshProcessFilesystemAuthorityRecovery"] == (
+        "fresh-process-filesystem-authority-recovery"
     )
     assert runner.CHECK_SCENARIOS["realProcessCrashAfterPreparedMutationRecoversExactlyOnce"] == (
+        "fresh-process-filesystem-authority-recovery"
+    )
+    assert runner.CHECK_SCENARIOS["realThreeMinioFreshProcessAuthorityRecoveryE2E"] == (
+        "real-three-minio-fresh-process-authority-recovery"
+    )
+    assert runner.CHECK_SCENARIOS["realFreshProcessCreatesPostRecoveryBackup"] == (
         "real-three-minio-fresh-process-authority-recovery"
     )
 
