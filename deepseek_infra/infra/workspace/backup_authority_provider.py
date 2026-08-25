@@ -142,9 +142,25 @@ def production_authority_store_factory(locator: AuthorityReplicaLocator, *, clie
     return backup_target_s3.open_s3_store(record, client=client)
 
 
-def authority_mode(*, env: dict[str, str] | None = None) -> str:
+def authority_mode(
+    *,
+    env: dict[str, str] | None = None,
+    bootstrap_path: Path | str | None = None,
+) -> str:
     environ = env if env is not None else dict(os.environ)
-    mode = str(environ.get(ENV_AUTHORITY_MODE) or MODE_REPLICATED).strip().casefold()
+    mode = str(environ.get(ENV_AUTHORITY_MODE) or "").strip().casefold()
+    if not mode:
+        path_raw = bootstrap_path or environ.get(ENV_AUTHORITY_BOOTSTRAP_PATH)
+        if path_raw and Path(str(path_raw)).is_file():
+            try:
+                payload = json.loads(Path(str(path_raw)).read_text(encoding="utf-8"))
+                block = payload.get("controlAuthority") if isinstance(payload, dict) else None
+                if isinstance(block, dict) and block.get("mode") is not None:
+                    mode = str(block.get("mode") or "").strip().casefold()
+            except (OSError, json.JSONDecodeError):
+                mode = ""
+    if not mode:
+        mode = MODE_REPLICATED
     if mode in {MODE_LOCAL_ONLY, "local", "localonly"}:
         return MODE_LOCAL_ONLY
     return MODE_REPLICATED

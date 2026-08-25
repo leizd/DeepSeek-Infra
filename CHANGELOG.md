@@ -4,6 +4,18 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.6.7] - Verifiable Disaster Recovery & Fail-Closed Authority Bootstrap (2026-08-25)
+
+### Verifiable Disaster Recovery & Fail-Closed Authority Bootstrap
+
+- **Explicit mode**: `replicated` (default) with zero replicas → `authority-configuration-required`; `local-only` requires opt-in env/bootstrap.
+- **Bootstrap fail-closed**: unexpected install exceptions → `authority-bootstrap-failed` (no silent local-only).
+- **Formal Truth attestation**: `record_formal_truth_validation` required before ACTIVE; coverage alone cannot activate.
+- **Remote authority_verify**: opens all replicas, checks chain/lag/divergence/durability; `authority_audit_once` read-only.
+- **evidence-proof-v1**: MinIO runner merges claim PASS only from structured proof for process-replacement scenario.
+- **Process A/B Evidence**: controller kills A, starts distinct-PID B with production factory only.
+- **Frozen Compatibility Surface**: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age, control-authority-v1 unchanged.
+
 ## [4.6.6] - Production Authority Operations & Evidence Integrity (2026-08-25)
 
 ### Production Authority Operations & Evidence Integrity

@@ -161,6 +161,14 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     workspace_backup_control_authority.configure_authority_anchor_roots(None)
     workspace_backup_control_authority.configure_authority_anchor_stores(None)
     workspace_backup_authority_provider.reset_authority_replica_provider()
+    # Unit tests default to explicit local-only; production default remains replicated.
+    monkeypatch.setenv(workspace_backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
+    try:
+        from deepseek_infra.infra.workspace import backup_control_recovery as _bcr
+
+        _bcr.clear_formal_truth_attestations()
+    except Exception:
+        pass
 
     from deepseek_infra.infra.workspace import backup_replication as workspace_backup_replication
     from deepseek_infra.infra.workspace import backup_write_continuity as workspace_backup_write_continuity
