@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -1379,6 +1380,286 @@ def test_authority_retention_edge_cases_all(clean_authority_env: dict[str, Any],
             ],
         )
     assert exc_gen_mismatch.value.status == 409
+
+
+def test_backup_governance_retention_and_dr_endpoints(clean_authority_env: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test all 4.6.9 web endpoints in backup_governance.py."""
+    from fastapi.testclient import TestClient
+    from deepseek_infra.web import server
+
+    monkeypatch.setattr("deepseek_infra.web.routes.backup_governance.require_api_auth", lambda _req: None)
+    app = server.create_app()
+    client = TestClient(app)
+
+    # 1. GET /api/workspace/authority/history-snapshot
+    resp_snap = client.get("/api/workspace/authority/history-snapshot")
+    assert resp_snap.status_code == 200
+    data_snap = resp_snap.json()
+    assert "currentGeneration" in data_snap
+
+    # 2. GET /api/workspace/authority/retention/policy
+    resp_pol_get = client.get("/api/workspace/authority/retention/policy")
+    assert resp_pol_get.status_code == 200
+    data_pol = resp_pol_get.json()
+    assert "minimumGenerations" in data_pol
+
+    # 3. POST /api/workspace/authority/retention/policy
+    resp_pol_post = client.post(
+        "/api/workspace/authority/retention/policy",
+        json={"minimumGenerations": 25, "keepRetentionDays": 30},
+    )
+    assert resp_pol_post.status_code == 200
+    assert resp_pol_post.json()["minimumGenerations"] == 25
+
+    # 4. POST /api/workspace/authority/retention/explain
+    resp_exp = client.post(
+        "/api/workspace/authority/retention/explain",
+        json={"targetGeneration": 50},
+    )
+    assert resp_exp.status_code == 200
+    assert "allowed" in resp_exp.json()
+
+    # 5. POST /api/workspace/authority/retention/plan
+    resp_plan = client.post(
+        "/api/workspace/authority/retention/plan",
+        json={"targetGeneration": 50},
+    )
+    assert resp_plan.status_code == 200
+    assert "allowed" in resp_plan.json()
+
+    # 6. POST /api/workspace/authority/retention/compact (dry run)
+    resp_compact = client.post(
+        "/api/workspace/authority/retention/compact",
+        json={"targetGeneration": 50, "dryRun": True},
+    )
+    assert resp_compact.status_code == 200
+    assert "state" in resp_compact.json()
+
+    # 7. POST /api/workspace/disaster-recovery/drills/run
+    resp_drill = client.post(
+        "/api/workspace/disaster-recovery/drills/run",
+        json={"backupId": "backup_test", "targetId": "managed-local"},
+    )
+    assert resp_drill.status_code == 200
+    assert resp_drill.json()["status"] == "success"
+
+    # 8. GET /api/workspace/disaster-recovery/slo
+    resp_slo = client.get("/api/workspace/disaster-recovery/slo")
+    assert resp_slo.status_code == 200
+    assert "restoreSuccessRate" in resp_slo.json()
+
+
+def test_dr_readiness_and_slo_engine_exhaustive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exhaustively test backup_dr_readiness.py functions and edge cases."""
+    # 1. _compute_dir_digest
+    empty_d = tmp_path / "empty_dir"
+    empty_d.mkdir()
+    d_empty = backup_dr_readiness._compute_dir_digest(empty_d)
+    assert len(d_empty) == 64
+    d_nonexist = backup_dr_readiness._compute_dir_digest(tmp_path / "non_existent")
+    assert len(d_nonexist) == 64
+
+    dir_with_files = tmp_path / "with_files"
+    dir_with_files.mkdir()
+    (dir_with_files / "a.txt").write_bytes(b"hello")
+    (dir_with_files / "sub").mkdir()
+    (dir_with_files / "sub" / "b.txt").write_bytes(b"world")
+    d_files = backup_dr_readiness._compute_dir_digest(dir_with_files)
+    assert len(d_files) == 64
+
+    # 2. _percentile
+    assert backup_dr_readiness._percentile([], 0.5) == 0.0
+    assert backup_dr_readiness._percentile([10.0], 0.5) == 10.0
+    assert backup_dr_readiness._percentile([1.0, 2.0, 3.0, 4.0, 5.0], 0.5) == 3.0
+    assert backup_dr_readiness._percentile([1.0, 2.0, 3.0, 4.0, 5.0], 0.95) > 4.0
+
+    # 3. _resolve_target_kind
+    assert backup_dr_readiness._resolve_target_kind("managed-local") == "managed-local"
+    assert backup_dr_readiness._resolve_target_kind("nonexistent_target") == "filesystem"
+
+    # 4. _parse_time
+    assert backup_dr_readiness._parse_time(None) is None
+    assert backup_dr_readiness._parse_time("not-a-time") is None
+    assert backup_dr_readiness._parse_time("2026-08-25T12:00:00Z") is not None
+    assert backup_dr_readiness._parse_time("2026-08-25T12:00:00+00:00") is not None
+    assert backup_dr_readiness._parse_time("2026-08-25T12:00:00") is None  # no offset
+
+    # 5. _nonnegative
+    assert backup_dr_readiness._nonnegative(5) == 5
+    assert backup_dr_readiness._nonnegative(-1) == 0
+    assert backup_dr_readiness._nonnegative("abc") == 0
+
+    # 6. run_dr_drill with explicit scratch_root
+    custom_scratch = tmp_path / "custom_scratch"
+    res1 = backup_dr_readiness.run_dr_drill(scratch_root=custom_scratch)
+    assert res1["status"] == "success"
+    assert "proof" in res1
+
+    # 7. run_dr_drill already running raises AppError
+    backup_dr_readiness.set_dr_drill_running(True)
+    with pytest.raises(AppError) as exc_drill:
+        backup_dr_readiness.run_dr_drill()
+    assert exc_drill.value.status == 409
+    backup_dr_readiness.set_dr_drill_running(False)
+
+    # 8. calculate_dr_slo_metrics with various drills
+    now_ref = datetime(2026, 8, 25, 12, 0, 0, tzinfo=timezone.utc)
+    drills_sample: list[dict[str, Any]] = [
+        {
+            "drillId": "d1",
+            "result": "success",
+            "proof": {"restoreDurationMs": 1500},
+            "observedAt": "2026-08-25T10:00:00Z",
+        },
+        {
+            "drillId": "d2",
+            "result": "failure",
+            "rtoSeconds": 3.5,
+            "observedAt": "2026-08-20T10:00:00Z",
+        },
+        {
+            "drillId": "d3",
+            "status": "success",
+            "proof": {"restoreDurationMs": 2000},
+            "completedAt": "2026-08-24T12:00:00Z",
+        },
+    ]
+    slo_res = backup_dr_readiness.calculate_dr_slo_metrics(now=now_ref, drills=drills_sample)
+    assert slo_res["totalDrillsTested"] == 3
+    assert slo_res["restoreSuccessRate"] == 0.6667
+    assert slo_res["rtoSeconds"]["p50"] > 0
+    assert slo_res["evidenceFreshnessDays"] < 1.0
+
+    # Empty drills
+    empty_drills: list[dict[str, Any]] = []
+    slo_empty = backup_dr_readiness.calculate_dr_slo_metrics(now=now_ref, drills=empty_drills)
+    assert slo_empty["totalDrillsTested"] == 0
+    assert slo_empty["restoreSuccessRate"] == 1.0
+
+    # get_dr_slo_status
+    slo_status = backup_dr_readiness.get_dr_slo_status()
+    assert "evaluatedAt" in slo_status
+
+
+def test_evidence_proof_validators_exhaustive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test all evidence-proof validator helpers and schemas."""
+    # 1. write_evidence_proof and load_evidence_proof
+    proof_path = tmp_path / "evidence_proof.json"
+    checks_valid = {
+        "checkA": {"status": "PASS", "evidence": {"k": "v"}},
+        "checkB": {"status": "FAIL", "evidence": {}},
+    }
+    written = evidence_proof.write_evidence_proof(
+        proof_path,
+        scenario="retention-safety",
+        checks=checks_valid,
+        meta={"version": "4.6.9"},
+        schema=evidence_proof.EVIDENCE_PROOF_SCHEMA_V3,
+    )
+    assert written.is_file()
+
+    loaded = evidence_proof.load_evidence_proof(proof_path, expected_scenario="retention-safety")
+    assert loaded["schema"] == evidence_proof.EVIDENCE_PROOF_SCHEMA_V3
+    assert loaded["scenario"] == "retention-safety"
+
+    # load_evidence_proof errors
+    with pytest.raises(ValueError, match="evidence-proof-scenario-mismatch"):
+        evidence_proof.load_evidence_proof(proof_path, expected_scenario="wrong-scenario")
+
+    bad_schema_path = tmp_path / "bad_schema.json"
+    bad_schema_path.write_text(json.dumps({"schema": "invalid-schema", "checks": {}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="evidence-proof-schema-mismatch"):
+        evidence_proof.load_evidence_proof(bad_schema_path)
+
+    non_obj_path = tmp_path / "non_obj.json"
+    non_obj_path.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="evidence-proof-must-be-object"):
+        evidence_proof.load_evidence_proof(non_obj_path)
+
+    no_checks_path = tmp_path / "no_checks.json"
+    no_checks_path.write_text(json.dumps({"schema": evidence_proof.EVIDENCE_PROOF_SCHEMA}), encoding="utf-8")
+    with pytest.raises(ValueError, match="evidence-proof-checks-required"):
+        evidence_proof.load_evidence_proof(no_checks_path)
+
+    # 2. validate_dr_readiness_proof
+    valid_dr_evidence = {
+        "drillId": "d1",
+        "testedBackupId": "b1",
+        "restoreDurationMs": 1200,
+        "workspaceDigestBefore": "a" * 64,
+        "workspaceDigestAfter": "a" * 64,
+        "objectCount": 10,
+        "commitVerified": True,
+        "receiptVerified": True,
+        "ageVerified": True,
+        "cleanupCompleted": True,
+    }
+    assert evidence_proof.validate_dr_readiness_proof(valid_dr_evidence, "test") == []
+    assert evidence_proof.validate_dr_readiness_proof("not-a-dict", "test") == ["not-a-dict"]  # type: ignore
+
+    # Mismatched digests and false booleans
+    bad_dr_evidence = dict(valid_dr_evidence)
+    bad_dr_evidence["workspaceDigestAfter"] = "b" * 64
+    bad_dr_evidence["commitVerified"] = False
+    bad_dr_evidence["restoreDurationMs"] = -10
+    bad_dr_evidence["objectCount"] = -5
+    errs_dr = evidence_proof.validate_dr_readiness_proof(bad_dr_evidence, "test")
+    assert "drill-workspace-digest-mismatch" in errs_dr
+    assert "commitVerified-not-true" in errs_dr
+    assert "invalid-restore-duration" in errs_dr
+    assert "invalid-object-count" in errs_dr
+
+    # 3. validate_retention_safety_proof
+    valid_safety_evidence = {
+        "retentionSafety": {
+            "checkpointVerified": True,
+            "ancestorCoverage": True,
+            "replicaAgreement": True,
+            "dependencyClosure": True,
+        }
+    }
+    assert evidence_proof.validate_retention_safety_proof(valid_safety_evidence, "test") == []
+    assert evidence_proof.validate_retention_safety_proof("not-a-dict", "test") == ["not-a-dict"]  # type: ignore
+
+    bad_safety_evidence = {
+        "checkpointVerified": False,
+        "ancestorCoverage": True,
+        "replicaAgreement": False,
+        "dependencyClosure": True,
+    }
+    errs_safety = evidence_proof.validate_retention_safety_proof(bad_safety_evidence, "test")
+    assert "retention-safety-checkpointVerified-not-true" in errs_safety
+    assert "retention-safety-replicaAgreement-not-true" in errs_safety
+
+    # 4. validate_check & proof_check_status
+    assert evidence_proof.validate_check("unknown_check", {"status": "FAIL", "evidence": {}}) == ["status-not-pass:FAIL"]
+    assert evidence_proof.validate_check("unknown_check", {"status": "PASS", "evidence": "bad"}) == ["evidence-must-be-object"]
+    assert evidence_proof.validate_check("unknown_check", {"status": "PASS", "evidence": {}}) == ["empty-evidence-for-unknown-check"]
+    assert evidence_proof.validate_check("unknown_check", {"status": "PASS", "evidence": {"ok": True}}) == []
+
+    # 5. resolve_proof_path & merge_checks_from_proof
+    monkeypatch.setenv(evidence_proof.ENV_EVIDENCE_PROOF_PATH, str(proof_path))
+    assert evidence_proof.resolve_proof_path() == proof_path
+    monkeypatch.delenv(evidence_proof.ENV_EVIDENCE_PROOF_PATH)
+
+    merged = evidence_proof.merge_checks_from_proof(
+        checks={"checkA": "UNKNOWN", "checkB": "UNKNOWN"},
+        check_to_scenario={"checkA": "retention-safety", "checkB": "retention-safety"},
+        scenario_results={"retention-safety": {"exitCode": 0, "proofPath": str(proof_path)}},
+        required_proof_checks={"retention-safety": ("checkA", "checkB")},
+    )
+    assert merged["checkA"] == "PASS"
+    assert merged["checkB"] == "FAIL"
+
+    # merge with failed exitCode
+    merged_fail = evidence_proof.merge_checks_from_proof(
+        checks={"checkA": "UNKNOWN"},
+        check_to_scenario={"checkA": "retention-safety"},
+        scenario_results={"retention-safety": {"exitCode": 1}},
+        required_proof_checks={"retention-safety": ("checkA",)},
+    )
+    assert merged_fail["checkA"] == "FAIL"
+
 
 
 
