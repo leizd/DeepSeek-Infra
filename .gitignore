@@ -44,6 +44,7 @@
 .backup-drains/
 .backup-retirements/
 .backup-control/
+.backup-authority-retention/
 .workspace-mutation.lock
 .workspace-generation
 

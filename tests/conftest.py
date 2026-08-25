@@ -156,6 +156,9 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
 
     from deepseek_infra.infra.workspace import backup_authority_provider as workspace_backup_authority_provider
     from deepseek_infra.infra.workspace import backup_control_authority as workspace_backup_control_authority
+    from deepseek_infra.infra.workspace import authority_retention as workspace_authority_retention
+
+    monkeypatch.setattr(workspace_authority_retention, "AUTHORITY_RETENTION_DIR", tmp_path / ".backup-authority-retention")
 
     # Process-local authority replica handles must not leak across tests.
     workspace_backup_control_authority.configure_authority_anchor_roots(None)

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 EVIDENCE_PROOF_SCHEMA = "evidence-proof-v2"
+EVIDENCE_PROOF_SCHEMA_V3 = "evidence-proof-v3"
 EVIDENCE_PROOF_SCHEMA_V1 = "evidence-proof-v1"  # accepted for non-semantic legacy reads
 ENV_EVIDENCE_PROOF_PATH = "DEEPSEEK_EVIDENCE_PROOF_PATH"
 
@@ -47,7 +48,7 @@ def load_evidence_proof(path: Path | str, *, expected_scenario: str | None = Non
     if not isinstance(data, dict):
         raise ValueError("evidence-proof-must-be-object")
     schema = str(data.get("schema") or "")
-    if schema not in {EVIDENCE_PROOF_SCHEMA, EVIDENCE_PROOF_SCHEMA_V1}:
+    if schema not in {EVIDENCE_PROOF_SCHEMA, EVIDENCE_PROOF_SCHEMA_V3, EVIDENCE_PROOF_SCHEMA_V1}:
         raise ValueError(f"evidence-proof-schema-mismatch:{schema}")
     if not isinstance(data.get("checks"), dict):
         raise ValueError("evidence-proof-checks-required")
@@ -171,10 +172,69 @@ def validate_minio_endpoints_proof(evidence: dict[str, Any], check_name: str) ->
 
 
 def validate_pass_with_schema_only(evidence: dict[str, Any], check_name: str) -> list[str]:
-    if str(evidence.get("schema") or "") not in {EVIDENCE_PROOF_SCHEMA, EVIDENCE_PROOF_SCHEMA_V1, "ok"}:
+    if str(evidence.get("schema") or "") not in {EVIDENCE_PROOF_SCHEMA, EVIDENCE_PROOF_SCHEMA_V3, EVIDENCE_PROOF_SCHEMA_V1, "ok"}:
         if not evidence:
             return ["empty-evidence"]
     return []
+
+
+def validate_dr_readiness_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    errors = _require_fields(
+        evidence,
+        (
+            "drillId",
+            "testedBackupId",
+            "restoreDurationMs",
+            "workspaceDigestBefore",
+            "workspaceDigestAfter",
+            "objectCount",
+            "commitVerified",
+            "receiptVerified",
+            "ageVerified",
+            "cleanupCompleted",
+        ),
+    )
+    for field in ("workspaceDigestBefore", "workspaceDigestAfter"):
+        val = evidence.get(field)
+        if val not in (None, ""):
+            errors.extend(_require_sha256(val, field=field))
+    pre = str(evidence.get("workspaceDigestBefore") or "")
+    post = str(evidence.get("workspaceDigestAfter") or "")
+    if pre and post and pre != post:
+        errors.append("drill-workspace-digest-mismatch")
+    for bool_field in ("commitVerified", "receiptVerified", "ageVerified", "cleanupCompleted"):
+        if evidence.get(bool_field) is not True:
+            errors.append(f"{bool_field}-not-true")
+    dur = evidence.get("restoreDurationMs")
+    if dur is not None and (not isinstance(dur, (int, float)) or dur < 0):
+        errors.append("invalid-restore-duration")
+    count = evidence.get("objectCount")
+    if count is not None and (not isinstance(count, int) or isinstance(count, bool) or count < 0):
+        errors.append("invalid-object-count")
+    return errors
+
+
+def validate_retention_safety_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    safety = evidence.get("retentionSafety")
+    if not isinstance(safety, dict):
+        safety = evidence
+    errors = _require_fields(
+        safety,
+        (
+            "checkpointVerified",
+            "ancestorCoverage",
+            "replicaAgreement",
+            "dependencyClosure",
+        ),
+    )
+    for bool_field in ("checkpointVerified", "ancestorCoverage", "replicaAgreement", "dependencyClosure"):
+        if safety.get(bool_field) is not True:
+            errors.append(f"retention-safety-{bool_field}-not-true")
+    return errors
 
 
 VALIDATORS: dict[str, CheckValidator] = {
@@ -191,6 +251,11 @@ VALIDATORS: dict[str, CheckValidator] = {
     "realThreeMinioProcessReplacementE2E": validate_minio_endpoints_proof,
     "realThreeMinioFreshProcessAuthorityRecoveryE2E": validate_minio_endpoints_proof,
     "evidenceCheckCannotPassWithoutStructuredProof": validate_pass_with_schema_only,
+    "continuousDrillProducesReadinessProof": validate_dr_readiness_proof,
+    "drReadinessProofValid": validate_dr_readiness_proof,
+    "realDrReadinessProof": validate_dr_readiness_proof,
+    "retentionSafetyProof": validate_retention_safety_proof,
+    "authorityRetentionSafety": validate_retention_safety_proof,
 }
 
 

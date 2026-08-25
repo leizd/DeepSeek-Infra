@@ -4,6 +4,20 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.6.9] - Authority History Retention & Continuous DR Readiness (2026-08-25)
+
+### Authority History Retention & Continuous DR Readiness
+
+- **Authority History Retention Framework**: Compaction builds `AuthorityCheckpoint v1` retention artifact containing `checkpointGeneration`, `ancestorDigest`, `headDigest`, `includedMutationDigest`, `replicaCoverage`, `formalTruthDigest`. Compaction satisfies invariant `verify(C + tail) == verify(full history)`.
+- **Retention Policy v1**: Configurable `minimumGenerations` (default 100), `minimumAgeDays` (default 30), `keepMutationClasses` (default `["authority-bootstrap", "target-change", "security-event", "formal-truth-failure"]`), `checkpointInterval` (default 10000).
+- **Compaction Safety Gate & State Machine**: `RetentionJob` lifecycle (`PENDING` → `VALIDATING` → `READY` → `EXECUTING` → `VERIFYING` → `COMMITTED`), fail-closed blocking on replica lag, cross-replica fork, active restore sessions, running DR drills, stale formal truth, and unfinished GC.
+- **Continuous Disaster Recovery Drill**: In-process background runner `run_dr_drill()` creating isolated scratch workspace, verifying pre/post digests and commit/receipt/age validity, producing `dr-readiness-proof-v1`.
+- **Backup DR SLO Metrics**: Computes `restoreSuccessRate` (>= 99.9%), `rtoSeconds` (p50/p95/p99), `rpoSeconds`, and `evidenceFreshnessDays` (<= 7.0 days).
+- **Authority History Explorer & Explain API**: `authority_history_snapshot()` and `explain_retention()` operator views with detailed blocking diagnostics.
+- **Recovery Dependency Graph**: `get_retention_dependency_graph()` identifying active receipt mutations and index coverage references.
+- **evidence-proof-v3**: Typed semantic evidence validators `validate_dr_readiness_proof` and `validate_retention_safety_proof`.
+- **Frozen Wire Compatibility**: `object-set-v1`, `Receipt v4`, `Commit v4`, `FastCDC v3`, `Projection semantics`, `randomized Age`, `control-authority-v1`, `evidence-proof-v2` unchanged.
+
 ## [4.6.8] - End-to-End Backup Disaster Recovery & Typed Evidence (2026-08-25)
 
 ### End-to-End Backup Disaster Recovery & Typed Evidence
