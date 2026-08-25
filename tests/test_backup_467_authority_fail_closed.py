@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from deepseek_infra.core.errors import AppError
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     backup_authority_provider,
     backup_control,
@@ -116,6 +117,18 @@ def test_attestation_then_activate(control_db: Path, monkeypatch: pytest.MonkeyP
     assert out["status"] == "active"
 
 
+def test_bootstrap_apperror_fails_closed(control_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    backup_authority_provider.reset_authority_replica_provider()
+    control_db.unlink(missing_ok=True)
+
+    def boom(**_k: Any) -> Any:
+        raise AppError("parse-failed", code=ErrorCode.INVALID_REQUEST, status=400)
+
+    monkeypatch.setattr(backup_authority_provider, "install_provider_from_bootstrap", boom)
+    verdict = backup_control_recovery.resolve_startup_authority_verdict()
+    assert verdict["verdict"] == backup_control_recovery.STATE_AUTHORITY_BOOTSTRAP_FAILED
+
+
 def test_authority_verify_reads_replicas(control_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
     root = tmp_path / "auth"
@@ -145,6 +158,59 @@ def test_authority_verify_reads_replicas(control_db: Path, tmp_path: Path, monke
     }
     audit = backup_control_recovery.authority_audit_once()
     assert audit.get("destructiveRepair") is False
+
+
+def test_evidence_proof_invalid_and_resolve_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"schema":"nope","checks":{}}', encoding="utf-8")
+    with pytest.raises(ValueError, match="schema-mismatch"):
+        evidence_proof.load_evidence_proof(bad)
+    bad.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="must-be-object"):
+        evidence_proof.load_evidence_proof(bad)
+    bad.write_text('{"schema":"evidence-proof-v1"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="checks-required"):
+        evidence_proof.load_evidence_proof(bad)
+    monkeypatch.setenv(evidence_proof.ENV_EVIDENCE_PROOF_PATH, str(tmp_path / "p.json"))
+    assert evidence_proof.resolve_proof_path() == tmp_path / "p.json"
+    monkeypatch.delenv(evidence_proof.ENV_EVIDENCE_PROOF_PATH, raising=False)
+    assert evidence_proof.resolve_proof_path() is None
+    # Convention path under artifacts/
+    art = Path("artifacts")
+    art.mkdir(exist_ok=True)
+    conv = art / "evidence-proof-scen.json"
+    conv.write_text(
+        json.dumps({"schema": evidence_proof.EVIDENCE_PROOF_SCHEMA, "scenario": "scen", "checks": {}}),
+        encoding="utf-8",
+    )
+    try:
+        assert evidence_proof.resolve_proof_path(scenario="scen") == conv
+    finally:
+        conv.unlink(missing_ok=True)
+
+
+def test_evidence_proof_merge_fail_paths(tmp_path: Path) -> None:
+    assert evidence_proof.proof_check_status({"checks": {"c": "not-dict"}}, "c") == "FAIL"
+    assert evidence_proof.proof_check_status({"checks": {}}, "missing") == "FAIL"
+    # Non-zero exit fails all required
+    merged = evidence_proof.merge_checks_from_proof(
+        checks={"a": "PASS"},
+        check_to_scenario={},
+        scenario_results={"s": {"exitCode": 1}},
+        required_proof_checks={"s": ("a",)},
+    )
+    assert merged["a"] == "FAIL"
+    # Corrupt proof file after path is set
+    bad = tmp_path / "c.json"
+    bad.write_text("{", encoding="utf-8")
+    merged2 = evidence_proof.merge_checks_from_proof(
+        checks={"a": "PASS"},
+        check_to_scenario={},
+        scenario_results={"s": {"exitCode": 0, "proofPath": str(bad)}},
+        required_proof_checks={"s": ("a",)},
+    )
+    assert merged2["a"] == "FAIL"
+    assert evidence_proof.resolve_proof_path(env={}, scenario="nope") is None
 
 
 def test_evidence_proof_roundtrip(tmp_path: Path) -> None:

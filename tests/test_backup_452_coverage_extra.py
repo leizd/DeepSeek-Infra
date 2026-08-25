@@ -316,7 +316,11 @@ def test_audit_resume_completed(tmp_settings: Path) -> None:
 
 def test_app_startup_keeper_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
     from deepseek_infra import app as app_mod
+    from deepseek_infra.infra.workspace import backup_authority_provider
 
+    # Explicit local-only so authority verdict allows workers without replicas.
+    monkeypatch.setenv(backup_authority_provider.ENV_AUTHORITY_MODE, "local-only")
+    backup_authority_provider.reset_authority_replica_provider()
     monkeypatch.setattr(app_mod, "multipart_module", object())
     monkeypatch.setattr(app_mod, "supported_multipart_module", lambda m: True)
     monkeypatch.setattr("deepseek_infra.infra.workspace.backups.recover_interrupted_restores", lambda: {"recoveryRequired": []})
@@ -326,7 +330,8 @@ def test_app_startup_keeper_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda **k: started.append("start"),
     )
     monkeypatch.setattr("deepseek_infra.backup_worker.start_embedded_worker", lambda: None)
-    app_mod.ensure_startup_dependencies()
+    # Pass allowWorkers explicitly so this unit test is not coupled to control DB paths.
+    app_mod.ensure_startup_dependencies(authority_verdict={"allowWorkers": True, "verdict": "active"})
     assert "start" in started
 
     class H:

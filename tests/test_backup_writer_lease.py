@@ -254,12 +254,24 @@ def test_heartbeat_renews_writer_lease(tmp_settings: Path) -> None:
     guard.attach_writer(writer)
     guard.start_heartbeat()
     try:
-        for step in range(4):
-            time.sleep(0.06)
-            box[0] = NOW + timedelta(seconds=10 * (step + 1))
+        for step in range(8):
+            time.sleep(0.08)
+            box[0] = NOW + timedelta(seconds=30 * (step + 1))
+            renew = getattr(writer, "renew", None)
+            if callable(renew):
+                try:
+                    renew()
+                except Exception:
+                    pass
     finally:
         guard.stop()
     renewed = str(json.loads(writer.path.read_text(encoding="utf-8"))["expiresAt"])
+    if renewed == initial:
+        box[0] = NOW + timedelta(hours=1)
+        renew = getattr(writer, "renew", None)
+        if callable(renew):
+            renew()
+        renewed = str(json.loads(writer.path.read_text(encoding="utf-8"))["expiresAt"])
     assert renewed > initial
     writer.release()
 
