@@ -112,10 +112,17 @@ def _envelope() -> dict[str, object]:
     return body
 
 
-def _claim_and_run(policy: dict[str, Any], *, now: datetime) -> dict[str, Any]:
-    claimed = backup_scheduler.claim_due_slots([policy], instance_id="ctrl-auth-fresh-e2e", now=now)
-    assert len(claimed) == 1
-    return backup_executor.execute_run(claimed[0], instance_id="ctrl-auth-fresh-e2e", now=now)
+def _claim_and_run(policy: dict[str, Any], *, now: datetime, manual: bool = False) -> dict[str, Any]:
+    if manual:
+        claimed = backup_scheduler.claim_manual_run(
+            policy, instance_id="ctrl-auth-fresh-e2e", now=now
+        )
+        return backup_executor.execute_run(claimed, instance_id="ctrl-auth-fresh-e2e", now=now)
+    claimed_list = backup_scheduler.claim_due_slots(
+        [policy], instance_id="ctrl-auth-fresh-e2e", now=now
+    )
+    assert len(claimed_list) == 1
+    return backup_executor.execute_run(claimed_list[0], instance_id="ctrl-auth-fresh-e2e", now=now)
 
 
 def _wipe_local_control_db() -> None:
@@ -166,8 +173,8 @@ def test_real_three_minio_fresh_process_authority_recovery_e2e(tmp_settings: Pat
     try:
         identity = backup_crypto.generate_identity()
         recipient = str(identity["recipient"])
-        identity_text = str(identity["identity"])
         assert recipient.startswith("age1")
+        assert str(identity["identity"]).startswith("AGE-SECRET-KEY-")
 
         def _write_plaintext(handle: Any) -> None:
             handle.write(b"same-plaintext-fresh-minio")
@@ -290,11 +297,14 @@ def test_real_three_minio_fresh_process_authority_recovery_e2e(tmp_settings: Pat
         restored_policy = backup_control.get_policy(policy_id)
         assert restored_policy is not None
 
-        # Post-recovery Backup B3 via production executor path.
-        policy2 = backup_control.get_policy(policy_id)
+        # Post-recovery Backup B3 via production executor path (manual claim —
+        # schedule slots may already be recorded from pre-disaster run).
+        policy2 = backup_control.get_policy(policy_id) or backup_policies.get_policy(policy_id)
         assert policy2 is not None
+        # Prefer full policy JSON (with schedule/protection) from policies store.
+        full_policy = backup_policies.get_policy(policy_id) or policy2
         now2 = datetime.now(tz=UTC).replace(hour=5, minute=0, second=0, microsecond=0)
-        second = _claim_and_run(policy2, now=now2)
+        second = _claim_and_run(full_policy, now=now2, manual=True)
         assert second["phase"] == "complete", second.get("error")
         backup_id_b3 = str(second["backupId"])
         assert backup_id_b3 != backup_id
