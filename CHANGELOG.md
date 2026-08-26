@@ -4,6 +4,24 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.7.0] - Global Recovery Intelligence & Autonomous Resilience (2026-08-26)
+
+### Global Recovery Intelligence & Autonomous Resilience
+
+- **Global Recovery Intelligence Layer**: Closed-loop resilience cycle `Observation` → `Risk Prediction` → `Action Planning` → `Safe Autonomous Execution` → `Evidence Verification`.
+- **Risk Assessment Engine (`resilience_risk_engine.py`)**: Multi-metric evaluation scanning capacity horizons, replica sync lag, DR freshness, restore latency SLA compliance, failure domain dispersion, repair backlog, and authority consensus. Emits typed `RiskSnapshot` with canonical `riskDigest`.
+- **Typed Risk Level Model**: Unified states `healthy`, `warning`, `degraded`, `critical`, `blocked` across all recovery dimensions.
+- **Deterministic Resilience Planner (`resilience_planner.py`)**: Transforms risk snapshots into deterministic, policy-bounded `ResiliencePlan` with `planDigest`.
+- **Autonomous Action Policy Gate (`autonomous_action_policy.py`)**: `automationPolicyVersion: 1`. Autonomously executes safe, reversible actions (`CREATE_REPAIR_JOB`, `CREATE_REBALANCE_JOB`, `START_DR_DRILL`), while strictly gating high-impact actions (`PRIMARY_PROMOTION`, `POLICY_CHANGE`, `COPY_DELETION`, `TOPOLOGY_MUTATION`) behind manual approval.
+- **Durable Action Journal (`resilience_action_journal.py`)**: Traceable action lifecycle tracking intent, execution, and proof binding, with automatic state rollback on failure.
+- **Predictive Capacity Planning (`capacity_forecaster.py`)**: Multi-horizon forecasting (`7d`, `30d`, `90d`) for used percent and days-to-full with confidence scoring.
+- **RPO/RTO Placement Optimizer (`rpo_rto_optimizer.py`)**: Latency-aware target placement and replica priority recommendations.
+- **What-if DR Simulator (`recovery_simulator.py`)**: Evaluates recovery survivability, copy count survival, and estimated RTO under AZ failure, target outage, and primary corruption scenarios.
+- **Continuous Resilience Score (`resilience_score.py`)**: 0-100 weighted DR credit score with grades (A / B / C / D / F) spanning drills (25%), replicas (25%), capacity (20%), restore performance (15%), and authority integrity (15%).
+- **Evidence Proof v3 (`evidence_proof.py`)**: Typed semantic decision proof validation (`validate_decision_proof`, `validate_resilience_proof`).
+- **Operator Console APIs**: Endpoints for resilience snapshots, risk assessments, deterministic planning, execution, simulations, and explanatory reasoning (`resilience_explain`).
+- **Frozen Storage Protocol**: All storage wire protocols (`object-set-v1`, `Receipt v4`, `Commit v4`, `FastCDC v3`, `Projection semantics`, `randomized Age`), authority checkpoints (`control-authority-v1`, `AuthorityCheckpoint v1`), and encryption semantics remain strictly frozen and compatible.
+
 ## [4.6.9] - Authority History Retention & Continuous DR Readiness (2026-08-25)
 
 ### Authority History Retention & Continuous DR Readiness

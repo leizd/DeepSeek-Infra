@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.6.9.
+Applicable version: v4.7.0.
 
 ## 4.6.8 development evidence contract
 

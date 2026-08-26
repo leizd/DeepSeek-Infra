@@ -451,7 +451,7 @@ class SkillsSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     root: Path = ROOT
-    app_version: str = "4.6.9"
+    app_version: str = "4.7.0"
     deepseek_url: str = DEFAULT_DEEPSEEK_API_URL
     tavily_url: str = DEFAULT_TAVILY_API_URL
     deepseek_timeout_seconds: int = 180
