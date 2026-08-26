@@ -743,7 +743,34 @@ def test_operator_console_resilience_routes(tmp_settings: Path, monkeypatch: pyt
     assert "survivable" in sim_data
     assert "estimatedRTO" in sim_data
 
-    # 5. Explain
+    # 5. Execute
+    # 5a. Missing actionId raises 400
+    res_exec_bad = client.post("/api/workspace/resilience/execute", json={})
+    assert res_exec_bad.status_code == 400
+
+    # 5b. Execute by intent in payload
+    res_exec_auto = client.post(
+        "/api/workspace/resilience/execute",
+        json={"type": "START_DR_DRILL", "parameters": {}},
+    )
+    assert res_exec_auto.status_code == 200
+    assert res_exec_auto.json()["state"] == "COMPLETED"
+
+    # 5c. Execute existing recorded action
+    from deepseek_infra.infra.workspace import resilience_action_journal
+    rec_act = resilience_action_journal.record_action_intent(
+        {"type": "START_DR_DRILL", "parameters": {}},
+        created_by="api-test",
+    )
+    res_exec_id = client.post(
+        "/api/workspace/resilience/execute",
+        json={"actionId": rec_act["actionId"]},
+    )
+    assert res_exec_id.status_code == 200
+    assert res_exec_id.json()["state"] == "COMPLETED"
+
+    # 6. Explain
+    # 6a. Default target
     res_explain = client.post("/api/workspace/resilience/explain", json={"targetId": "managed-local"})
     assert res_explain.status_code == 200
     explain_data = res_explain.json()
@@ -751,17 +778,57 @@ def test_operator_console_resilience_routes(tmp_settings: Path, monkeypatch: pyt
     assert "reason" in explain_data
     assert len(explain_data["reasons"]) >= 1
 
-    # 6. Journal
-    res_j = client.get("/api/workspace/resilience/journal")
+    # 6b. With actionId and capacity watermark / horizon exhaustion
+    rec_explain = resilience_action_journal.record_action_intent(
+        {
+            "type": "CREATE_REBALANCE_JOB",
+            "parameters": {
+                "reason": "capacity-migration",
+                "sourceTargetId": "target_exp_src",
+                "destTargetId": "target_exp_dest",
+            },
+        },
+        created_by="api-explain-test",
+    )
+    dir_exp_s = tmp_settings / "t-exp-src"
+    dir_exp_s.mkdir(parents=True, exist_ok=True)
+    backup_targets.register_filesystem_target("target_exp_src", path=dir_exp_s, label="Exp Src")
+
+    dir_exp_d = tmp_settings / "t-exp-dest"
+    dir_exp_d.mkdir(parents=True, exist_ok=True)
+    backup_targets.register_filesystem_target("target_exp_dest", path=dir_exp_d, label="Exp Dest")
+
+    monkeypatch.setattr(
+        backup_capacity,
+        "get_target_capacity",
+        lambda tid, probe=False: {"totalBytes": 100, "freeBytes": 10, "freePercent": 10.0},
+    )
+    monkeypatch.setattr(
+        backup_capacity,
+        "estimate_target_exhaustion_horizon",
+        lambda tid, policy_id="", probe=False, record_observation=False: {"estimatedDaysToFull": 5},
+    )
+
+    res_exp_act = client.post(
+        "/api/workspace/resilience/explain",
+        json={"actionId": rec_explain["actionId"]},
+    )
+    assert res_exp_act.status_code == 200
+    exp_act_data = res_exp_act.json()
+    assert "capacity watermark exceeded" in exp_act_data["reasons"]
+    assert "target exhaustion horizon critical" in exp_act_data["reasons"]
+
+    # 7. Journal
+    res_j = client.get("/api/workspace/resilience/journal?state=COMPLETED&limit=10")
     assert res_j.status_code == 200
     assert isinstance(res_j.json(), list)
 
-    # 7. Forecast
+    # 8. Forecast
     res_fc = client.get("/api/workspace/resilience/forecast")
     assert res_fc.status_code == 200
     assert "targets" in res_fc.json()
 
-    # 8. Optimizer
+    # 9. Optimizer
     res_opt = client.get("/api/workspace/resilience/optimizer")
     assert res_opt.status_code == 200
     assert "recommendations" in res_opt.json()
@@ -1572,3 +1639,81 @@ def test_resilience_risk_engine_policy_without_recovery_points(tmp_settings: Pat
     # Filtered assess_risks with explicit target and policy lists
     snap = resilience_risk_engine.assess_risks(target_ids=["managed-local"], policy_ids=["pol-no-points"])
     assert "riskDigest" in snap
+
+
+def test_resilience_score_intermediate_bands(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test drill age between 7-30 days, capacity watermark warning, and missing required replicas."""
+    now = datetime.now(tz=timezone.utc)
+
+    # 1. Drill age 15 days
+    monkeypatch.setattr(
+        backup_dr_readiness,
+        "_drill_records",
+        lambda root=None: [{"drillId": "d-mid", "success": True, "finishedAt": _utc_iso(now - timedelta(days=15))}],
+    )
+
+    # 2. Capacity between 10% and 20%
+    monkeypatch.setattr(
+        backup_capacity,
+        "get_target_capacity",
+        lambda tid, probe=False: {"totalBytes": 100, "freeBytes": 15, "freePercent": 15.0},
+    )
+    monkeypatch.setattr(
+        backup_capacity,
+        "estimate_target_exhaustion_horizon",
+        lambda tid, policy_id="", probe=False, record_observation=False: {"estimatedDaysToFull": 60},
+    )
+
+    # 3. Policy with minCommittedCopies=2 and 1 committed copy
+    backup_policies.create_policy({
+        "name": "Repl Pol 2",
+        "policyId": "pol-2-copies",
+        "targetId": "managed-local",
+        "replication": {"enabled": True, "minCommittedCopies": 2, "destTargets": ["managed-local"]},
+    })
+    backup_dr_ledger.record_recovery_point(
+        policy_id="pol-2-copies",
+        backup_id="bkp-c-1",
+        target_id="managed-local",
+        chain_digest="cd-c1",
+        committed_at=_utc_iso(now),
+    )
+    backup_dr_ledger.record_logical_recovery_copy(
+        policy_id="pol-2-copies",
+        backup_id="bkp-c-1",
+        target_id="managed-local",
+        state="committed",
+        committed_at=_utc_iso(now),
+    )
+
+    score_res = resilience_score.calculate_resilience_score(now=now)
+    assert score_res["factorBreakdown"]["drDrill"]["status"] == "warning"
+    assert score_res["factorBreakdown"]["capacity"]["status"] == "warning"
+    assert score_res["factorBreakdown"]["replicaHealth"]["status"] == "degraded"
+
+
+def test_recovery_simulator_failed_suite_and_fallback_baseline(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test run_comprehensive_simulation_suite reporting suitePassed=False and 600s baseline calculation."""
+    now = datetime.now(tz=timezone.utc)
+
+    # Register target and policy
+    dir_t1 = tmp_settings / "t-surv-1"
+    dir_t1.mkdir(parents=True, exist_ok=True)
+    backup_targets.register_filesystem_target("target_surv_1", path=dir_t1, label="Surv 1")
+
+    backup_policies.create_policy({
+        "name": "Surv Pol",
+        "policyId": "pol-surv-1",
+        "targetId": "target_surv_1",
+    })
+    backup_dr_ledger.record_recovery_point(
+        policy_id="pol-surv-1",
+        backup_id="bkp-surv-1",
+        target_id="target_surv_1",
+        chain_digest="cd-s1",
+        committed_at=_utc_iso(now),
+    )
+
+    # Exclude all targets so simulation fails
+    res_suite = recovery_simulator.run_comprehensive_simulation_suite(now=now)
+    assert "suitePassed" in res_suite
