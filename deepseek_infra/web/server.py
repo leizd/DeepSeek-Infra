@@ -385,7 +385,12 @@ def create_app() -> FastAPI:
         path = request.url.path
         mutation = request.method in {"POST", "PUT", "PATCH", "DELETE"}
         restore_protocol = path.startswith("/api/workspace/restores/")
-        backup_protocol = path.startswith("/api/workspace/backups")
+        backup_protocol = (
+            path.startswith("/api/workspace/backups")
+            or path.startswith("/api/workspace/resilience")
+            or path.startswith("/api/workspace/authority")
+            or path.startswith("/api/workspace/disaster-recovery")
+        )
         exempt = restore_protocol or backup_protocol or path == "/api/auth/logout"
         if mutation and path.startswith("/api/") and not exempt:
             owner = request.headers.get("X-Workspace-Restore-Id")
