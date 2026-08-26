@@ -795,11 +795,18 @@ def create_backup_governance_router() -> APIRouter:
     async def api_resilience_plan(request: Request) -> JSONResponse:
         require_api_auth(request)
         body = await read_json_body(request)
-        from deepseek_infra.infra.workspace import resilience_planner, resilience_risk_engine
+        from deepseek_infra.infra.workspace import (
+            resilience_action_journal,
+            resilience_planner,
+            resilience_risk_engine,
+        )
 
         probe = bool(body.get("probe")) if isinstance(body, dict) else False
         risks_res = resilience_risk_engine.assess_risks(probe=probe)
         plan_res = resilience_planner.plan_resilience_actions(risks_res)
+        if isinstance(body, dict) and body.get("materialize", True):
+            mat_res = resilience_action_journal.materialize_resilience_plan(plan_res, created_by="resilience-api")
+            return json_response(mat_res)
         return json_response(plan_res)
 
     @router.post("/api/workspace/resilience/execute")
@@ -809,11 +816,14 @@ def create_backup_governance_router() -> APIRouter:
         from deepseek_infra.infra.workspace import resilience_action_journal
 
         action_id = body.get("actionId") if isinstance(body, dict) else None
-        if not action_id and isinstance(body, dict) and body.get("type"):
-            recorded = resilience_action_journal.record_action_intent(body, created_by="operator-api")
-            action_id = recorded["actionId"]
-
         if not action_id:
+            # Prohibit anonymous raw action execution for autonomous safety (P0-4 / Gate B)
+            if isinstance(body, dict) and body.get("type"):
+                raise AppError(
+                    "Raw action execution not permitted; actions must be materialized from a valid ResiliencePlan bound to a fresh RiskSnapshot",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=400,
+                )
             raise AppError("actionId is required", code=ErrorCode.INVALID_REQUEST, status=400)
 
         result = resilience_action_journal.execute_autonomous_action(str(action_id))

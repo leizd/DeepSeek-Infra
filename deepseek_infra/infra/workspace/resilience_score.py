@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from deepseek_infra.infra.workspace import (
-    backup_authority_provider,
     backup_capacity,
     backup_dr_ledger,
     backup_dr_readiness,
@@ -161,28 +160,26 @@ def calculate_resilience_score(
     auth_score = 15
     auth_status = "healthy"
 
-    provider = backup_authority_provider.get_authority_replica_provider()
-    if provider is not None:
-        try:
-            verify_fn = getattr(provider, "verify_authority_consensus", None)
-            if callable(verify_fn):
-                p_res = verify_fn()
-                if isinstance(p_res, dict):
-                    if p_res.get("status") == "divergent":
-                        auth_score = 0
-                        auth_status = "blocked"
-                        weaknesses.append("authority-replica-fork-detected")
-                    elif p_res.get("status") == "lagging":
-                        auth_score = 10
-                        auth_status = "warning"
-                        weaknesses.append("authority-replica-lag")
-            elif provider.configured() and provider.resolved_count() < provider.configured_count():
-                auth_score = 5
-                auth_status = "degraded"
-                weaknesses.append("authority-replicas-unresolved")
-        except Exception:
+    from deepseek_infra.infra.workspace import backup_control_recovery
+
+    try:
+        v_res = backup_control_recovery.authority_verify()
+        overall = str(v_res.get("overall") or "HEALTHY").upper()
+        if overall == "DIVERGENT":
+            auth_score = 0
+            auth_status = "blocked"
+            weaknesses.append("authority-replica-fork-detected")
+        elif overall in {"UNAVAILABLE", "DURABILITY_UNSATISFIED"}:
+            auth_score = 5
+            auth_status = "degraded"
+            weaknesses.append(f"authority-{overall.lower()}")
+        elif overall == "DEGRADED":
             auth_score = 10
             auth_status = "warning"
+            weaknesses.append("authority-degraded")
+    except Exception:
+        auth_score = 10
+        auth_status = "warning"
 
     total_score = max(0, min(100, drill_score + replica_score + capacity_score + restore_score + auth_score))
     grade = _calculate_grade(total_score)
