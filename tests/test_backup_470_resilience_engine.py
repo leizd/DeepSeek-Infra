@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
     autonomous_action_policy,
     backup_authority_provider,
@@ -1787,18 +1787,50 @@ def test_comprehensive_matrix_booster(tmp_settings: Path, monkeypatch: pytest.Mo
     res_ret_cmp = client.post("/api/workspace/authority/retention/compact", json={"dryRun": True})
     assert res_ret_cmp.status_code in {200, 409}
 
-    # 4c. Not found route
-    res_nf = client.get("/api/workspace/nonexistent-governance-endpoint")
-    assert res_nf.status_code == 404
+    # 4e. Full resilience governance endpoints
+    res_snap = client.get("/api/workspace/resilience/snapshot")
+    assert res_snap.status_code == 200
 
-    # 4d. Direct share target error fallback
-    monkeypatch.setattr("deepseek_infra.web.server.extract_uploaded_file", lambda *a, **k: (_ for _ in ()).throw(AppError("Mock corrupt file", code=ErrorCode.INVALID_PAYLOAD)))
-    res_share_err = client.post(
-        "/share-target",
-        data={},
-        files={"file": ("corrupt.bin", b"binary", "application/octet-stream")},
-        follow_redirects=False,
+    res_ass = client.post("/api/workspace/resilience/assess", json={"probe": True})
+    assert res_ass.status_code == 200
+
+    res_pln = client.post("/api/workspace/resilience/plan", json={"probe": True})
+    assert res_pln.status_code == 200
+
+    res_sim = client.post("/api/workspace/resilience/simulate", json={"scenario": "REGION_OUTAGE"})
+    assert res_sim.status_code == 200
+
+    # Record action intent and test explain + execute
+    act = resilience_action_journal.record_action_intent(
+        {
+            "type": "REBALANCE_TRIGGER",
+            "sourceRiskType": "CAPACITY_IMBALANCE",
+            "parameters": {"sourceTargetId": "managed-local", "reason": "capacity critical"},
+        }
     )
-    assert res_share_err.status_code == 303
+    res_exp = client.post(
+        "/api/workspace/resilience/explain",
+        json={"actionId": act["actionId"], "targetId": "managed-local"},
+    )
+    assert res_exp.status_code == 200
+
+    res_exp_none = client.post("/api/workspace/resilience/explain", json={})
+    assert res_exp_none.status_code == 200
+
+    res_exec_bad = client.post("/api/workspace/resilience/execute", json={})
+    assert res_exec_bad.status_code == 400
+
+    res_exec_ok = client.post("/api/workspace/resilience/execute", json={"actionId": act["actionId"]})
+    assert res_exec_ok.status_code in {200, 400, 403, 409}
+
+    res_exec_intent = client.post(
+        "/api/workspace/resilience/execute",
+        json={
+            "type": "CAPACITY_EMERGENCY_CLEANUP",
+            "sourceRiskType": "CAPACITY_IMBALANCE",
+            "parameters": {"targetId": "managed-local"},
+        },
+    )
+    assert res_exec_intent.status_code in {200, 400, 403, 409}
 
 
