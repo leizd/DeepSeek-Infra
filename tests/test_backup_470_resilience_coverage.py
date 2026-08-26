@@ -171,30 +171,28 @@ def test_resilience_score_and_risk_engine(tmp_settings: Path) -> None:
     assert "actions" in plan
 
 
-def test_complete_backup_governance_router_endpoints(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_complete_backup_governance_router_endpoints(tmp_settings: Path) -> None:
     """Directly test every route in backup_governance router."""
-    monkeypatch.setattr("deepseek_infra.web.http_utils.require_api_auth", lambda _req: None)
-    monkeypatch.setattr("deepseek_infra.web.routes.backup_governance.require_api_auth", lambda _req: None)
-    monkeypatch.setattr("deepseek_infra.web.server.require_api_auth", lambda _req: None)
-    monkeypatch.setattr("deepseek_infra.web.server.require_allowed_host", lambda _req: None)
+    from deepseek_infra.core import config
 
+    token = config.settings.auth.token
     app = server.create_app()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1:8000", headers={"Authorization": f"Bearer {token}"})
 
     r_pol_get = client.get("/api/workspace/authority/retention/policy")
-    assert r_pol_get.status_code in {200, 400, 409}
+    assert r_pol_get.status_code == 200
 
     r_pol_post = client.post(
         "/api/workspace/authority/retention/policy",
         json={"minimumGenerations": 50, "minimumAgeDays": 7},
     )
-    assert r_pol_post.status_code in {200, 400, 409}
+    assert r_pol_post.status_code == 200
 
     r_exp = client.post("/api/workspace/authority/retention/explain", json={"targetGeneration": 100})
-    assert r_exp.status_code in {200, 409}
+    assert r_exp.status_code == 200
 
     r_plan = client.post("/api/workspace/authority/retention/plan", json={"targetGeneration": 100})
-    assert r_plan.status_code in {200, 409}
+    assert r_plan.status_code == 200
 
     r_cmp = client.post("/api/workspace/authority/retention/compact", json={"targetGeneration": 100, "dryRun": True})
     assert r_cmp.status_code in {200, 409}
@@ -225,8 +223,24 @@ def test_complete_backup_governance_router_endpoints(tmp_settings: Path, monkeyp
     r_expl = client.post("/api/workspace/resilience/explain", json={"actionId": act["actionId"]})
     assert r_expl.status_code == 200
 
+    r_expl_none = client.post("/api/workspace/resilience/explain", json={})
+    assert r_expl_none.status_code == 200
+
     r_exec = client.post("/api/workspace/resilience/execute", json={"actionId": act["actionId"]})
     assert r_exec.status_code in {200, 400, 403, 409}
+
+    r_exec_intent = client.post(
+        "/api/workspace/resilience/execute",
+        json={
+            "type": "CAPACITY_EMERGENCY_CLEANUP",
+            "sourceRiskType": "CAPACITY_IMBALANCE",
+            "parameters": {"targetId": "managed-local"},
+        },
+    )
+    assert r_exec_intent.status_code in {200, 400, 403, 409}
+
+    r_exec_bad = client.post("/api/workspace/resilience/execute", json={})
+    assert r_exec_bad.status_code == 400
 
     r_jnl = client.get("/api/workspace/resilience/journal?limit=20")
     assert r_jnl.status_code == 200
