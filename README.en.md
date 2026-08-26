@@ -12,18 +12,19 @@
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.6.9 — Authority History Retention & Continuous DR Readiness.** Authority history safe compaction and checkpoints (AuthorityCheckpoint v1), fail-closed safety gate, continuous DR rehearsal with dr-readiness-proof-v1, DR SLO metrics, evidence-proof-v3 semantic validators. Wire-format frozen.
+> **4.7.0 — Global Recovery Intelligence & Autonomous Resilience.** Continuous risk assessment, autonomous self-healing decision planner, policy admission gate, transactional action journal with rollback, multi-horizon predictive capacity forecasting, RPO/RTO placement optimizer, and what-if disaster simulation. Wire-format frozen.
 
-## 4.6.9 at a glance
+## 4.7.0 at a glance
 
-- True SIGKILL Process A → wipe control DB → Process B production factory only.
-- Real Full+Incremental on three MinIO before disaster; production remote restore of B2 with digest match.
-- Post-recovery Backup B3 with valid Commit marker and receiptDigest binding.
-- evidence-proof-v2: bare `status=PASS` without typed fields fails; runner requires scenario-bound proofs.
-- Formal Truth attestation binds authority/mutation generation; cross-replica valid fork → overall DIVERGENT.
-- Frozen compatibility surface unchanged: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age, control-authority-v1.
+- Proactive risk detection across capacity exhaustion, replica lag, failure domains, DR freshness, restore SLA, and authority consensus.
+- Deterministic resilience planner generating safe self-healing actions (`CREATE_REPAIR_JOB`, `CREATE_REBALANCE_JOB`, `START_DR_DRILL`).
+- Strict policy gate bounding autonomous actions while requiring explicit operator approval for high-impact mutations.
+- Durable SQLite action journal recording complete intent-to-execution lifecycle with automatic rollback and decision proof binding.
+- Multi-horizon (7d, 30d, 90d) capacity forecasting and days-to-full prediction without destructive actions.
+- Recovery what-if simulator and continuous 0-100 DR resilience credit score.
+- Frozen compatibility surface unchanged: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age, control-authority-v1, AuthorityCheckpoint v1.
 
-See the [4.6.8 release notes](docs/releases/4.6.8.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.7.0 release notes](docs/releases/4.7.0.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

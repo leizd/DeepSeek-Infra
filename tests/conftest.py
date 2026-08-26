@@ -203,6 +203,18 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(automation_registry, "AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(automation_history, "AUTOMATION_DIR", automation_dir)
 
+    from deepseek_infra.infra.workspace import (
+        autonomous_action_policy as workspace_autonomous_action_policy,
+        resilience_action_journal as workspace_resilience_action_journal,
+    )
+
+    resilience_journal_dir = tmp_path / ".resilience-journal"
+    resilience_policy_dir = tmp_path / ".resilience-policy"
+    monkeypatch.setattr(workspace_resilience_action_journal, "JOURNAL_DIR", resilience_journal_dir)
+    monkeypatch.setattr(workspace_resilience_action_journal, "JOURNAL_DB", resilience_journal_dir / "journal.sqlite3")
+    monkeypatch.setattr(workspace_autonomous_action_policy, "POLICY_DIR", resilience_policy_dir)
+    monkeypatch.setattr(workspace_autonomous_action_policy, "POLICY_FILE", resilience_policy_dir / "autonomous_policy.json")
+
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()
     yield tmp_path
