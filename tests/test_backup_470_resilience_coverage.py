@@ -1,4 +1,4 @@
-"""Comprehensive test suite guaranteeing 100% branch and statement coverage for 4.7.0 resilience modules."""
+"""Comprehensive test suite guaranteeing 100% branch and statement coverage for resilience modules."""
 
 from __future__ import annotations
 
