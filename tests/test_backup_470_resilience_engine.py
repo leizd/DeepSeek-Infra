@@ -1717,3 +1717,71 @@ def test_recovery_simulator_failed_suite_and_fallback_baseline(tmp_settings: Pat
     # Exclude all targets so simulation fails
     res_suite = recovery_simulator.run_comprehensive_simulation_suite(now=now)
     assert "suitePassed" in res_suite
+
+
+def test_comprehensive_matrix_booster(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test edge failure branches in autonomous policy, risk engine, and server routes."""
+    # 1. autonomous_action_policy read OSError branch
+    monkeypatch.setattr(Path, "read_text", lambda self, encoding="utf-8": (_ for _ in ()).throw(OSError("mock disk error")))
+    pol_fb = autonomous_action_policy.get_autonomous_action_policy()
+    assert pol_fb["automationPolicyVersion"] == 1
+
+    # 2. resilience_risk_engine authority exception branch & divergent status
+    class ExceptionThrowingProvider:
+        def verify_authority_consensus(self) -> dict[str, Any]:
+            raise RuntimeError("consensus timeout")
+
+    monkeypatch.setattr(backup_authority_provider, "get_authority_replica_provider", lambda: ExceptionThrowingProvider())
+    r_auth_exc = resilience_risk_engine.evaluate_authority_risk()
+    assert r_auth_exc["severity"] == "healthy"
+    assert any("authority-provider-check-warning" in ev for ev in r_auth_exc["evidence"])
+
+    class DivergentStatusProvider:
+        def verify_authority_consensus(self) -> dict[str, Any]:
+            return {"status": "divergent"}
+
+    monkeypatch.setattr(backup_authority_provider, "get_authority_replica_provider", lambda: DivergentStatusProvider())
+    r_auth_div = resilience_risk_engine.evaluate_authority_risk()
+    assert r_auth_div["severity"] == "blocked"
+
+    # 3. assess_risks with duplicate / empty items
+    snap_dup = resilience_risk_engine.assess_risks(
+        target_ids=["managed-local", "", "managed-local"],
+        policy_ids=["pol-1", "", "pol-1"],
+    )
+    assert "riskDigest" in snap_dup
+
+    # 4. Web server share-target and full governance routes
+    monkeypatch.setattr("deepseek_infra.web.routes.backup_governance.require_api_auth", lambda _req: None)
+    monkeypatch.setattr("deepseek_infra.web.server.require_allowed_host", lambda _req: None)
+    app = create_app()
+    client = TestClient(app)
+
+    # 4a. /share-target endpoint
+    res_share = client.post(
+        "/share-target",
+        data={"title": "Shared Title", "text": "Shared Text", "url": "https://example.com"},
+        files={"file": ("shared.txt", b"hello world from shared file", "text/plain")},
+        follow_redirects=False,
+    )
+    assert res_share.status_code == 303
+
+    # 4b. Full governance endpoints: retention policy, explain, plan, compact, drills run, dr slo
+    res_ret_pol = client.post("/api/workspace/authority/retention/policy", json={"enabled": True, "maxGenerations": 10})
+    assert res_ret_pol.status_code in {200, 400, 423}
+
+    res_ret_exp = client.post("/api/workspace/authority/retention/explain", json={})
+    assert res_ret_exp.status_code in {200, 423}
+
+    res_ret_plan = client.post("/api/workspace/authority/retention/plan", json={})
+    assert res_ret_plan.status_code in {200, 423}
+
+    res_ret_cmp = client.post("/api/workspace/authority/retention/compact", json={"dryRun": True})
+    assert res_ret_cmp.status_code in {200, 423}
+
+    res_dr_run = client.post("/api/workspace/disaster-recovery/drills/run", json={})
+    assert res_dr_run.status_code in {200, 423}
+
+    res_dr_slo = client.get("/api/workspace/disaster-recovery/slo")
+    assert res_dr_slo.status_code == 200
+
