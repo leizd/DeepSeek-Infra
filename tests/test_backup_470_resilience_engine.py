@@ -1833,4 +1833,13 @@ def test_comprehensive_matrix_booster(tmp_settings: Path, monkeypatch: pytest.Mo
     )
     assert res_exec_intent.status_code in {200, 400, 403, 409}
 
+    res_jnl = client.get("/api/workspace/resilience/journal?state=COMPLETED&limit=10")
+    assert res_jnl.status_code == 200
+
+    res_fc = client.get("/api/workspace/resilience/forecast")
+    assert res_fc.status_code == 200
+
+    res_opt = client.get("/api/workspace/resilience/optimizer")
+    assert res_opt.status_code == 200
+
 
