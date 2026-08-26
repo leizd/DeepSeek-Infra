@@ -1,6 +1,6 @@
 # Copyright (c) 2026 DeepSeek Infra Contributors
 # SPDX-License-Identifier: MIT
-"""Comprehensive coverage booster for verified autonomous resilience action journal, planner, and governance endpoints."""
+"""Comprehensive coverage booster for verified autonomous resilience, planner, and governance endpoints."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,6 +17,8 @@ from deepseek_infra.infra.workspace import (
     backup_dr_ledger,
     backup_policies,
     backup_targets,
+    backup_tiering,
+    backup_writer_lease,
     resilience_action_journal,
     resilience_planner,
 )
@@ -197,6 +199,78 @@ def test_booster_compensation_and_effects() -> None:
     assert res_can["compensationState"] == "JOB_CANCELLED"
 
 
+def test_booster_action_freshness_and_simulation_branches(tmp_path: Path) -> None:
+    t1_dir = tmp_path / "tgt_sim1"
+    t1_dir.mkdir(parents=True, exist_ok=True)
+    t2_dir = tmp_path / "tgt_sim2"
+    t2_dir.mkdir(parents=True, exist_ok=True)
+
+    backup_targets.register_filesystem_target("target_sim1", path=t1_dir)
+    backup_targets.register_filesystem_target("target_sim2", path=t2_dir)
+
+    # 1. check_action_freshness with cleared replica lag
+    f_ok, f_reason = resilience_action_journal.check_action_freshness(
+        {"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "pol_missing"}},
+        {"risks": []},
+    )
+    assert f_ok is False
+    assert "cleared" in f_reason
+
+    # 2. check_action_freshness with cleared capacity
+    f_ok2, f_reason2 = resilience_action_journal.check_action_freshness(
+        {"type": "CREATE_REBALANCE_JOB", "parameters": {"sourceTargetId": "target_sim1", "destTargetId": "target_sim2"}},
+        {"risks": []},
+    )
+    assert f_ok2 is False
+    assert "cleared" in f_reason2
+
+    # 3. check_action_freshness with cleared DR drill
+    f_ok3, f_reason3 = resilience_action_journal.check_action_freshness(
+        {"type": "START_DR_DRILL", "parameters": {}},
+        {"risks": []},
+    )
+    assert f_ok3 is False
+    assert "cleared" in f_reason3
+
+    # 4. simulate_action for CREATE_REBALANCE_JOB errors
+    s_ok1, s_res1 = resilience_action_journal.simulate_action(
+        {"type": "CREATE_REBALANCE_JOB", "parameters": {"sourceTargetId": "t1", "destTargetId": "t1"}}
+    )
+    assert s_ok1 is False
+    assert "identical" in s_res1.get("error", "")
+
+    s_ok2, s_res2 = resilience_action_journal.simulate_action(
+        {"type": "CREATE_REBALANCE_JOB", "parameters": {"sourceTargetId": "target_sim1", "destTargetId": "target_nonexistent"}}
+    )
+    assert s_ok2 is False
+
+    # 5. simulate_action for CREATE_REPAIR_JOB errors
+    s_ok3, s_res3 = resilience_action_journal.simulate_action(
+        {"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "", "backupId": ""}}
+    )
+    assert s_ok3 is False
+    assert "missing" in s_res3.get("error", "")
+
+    s_ok4, s_res4 = resilience_action_journal.simulate_action(
+        {"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "pol_not_found", "backupId": "b1"}}
+    )
+    assert s_ok4 is False
+
+    # 6. verify_action_outcome error branches
+    v_ok1, v_res1 = resilience_action_journal.verify_action_outcome(
+        {"type": "CREATE_REBALANCE_JOB", "parameters": {}},
+        {"job": {"status": "failed", "error": "simulated-failure"}},
+    )
+    assert v_ok1 is False
+    assert "rebalance-job-id-missing" in v_res1.get("error", "") or "failed" in v_res1.get("error", "")
+
+    v_ok2, v_res2 = resilience_action_journal.verify_action_outcome(
+        {"type": "UNSUPPORTED_TYPE", "parameters": {}},
+        {},
+    )
+    assert v_ok2 is False
+
+
 def test_booster_autonomous_policy_and_proof() -> None:
     policy = autonomous_action_policy.get_autonomous_action_policy()
     assert "allowedActions" in policy or "autonomousEnabled" in policy
@@ -244,6 +318,11 @@ def test_booster_planner_comprehensive_scenarios(tmp_path: Path) -> None:
         backup_id="bid_rep",
         committed_at="2026-08-26T00:00:00Z",
     )
+
+    # find_rebalance_candidate_copy
+    pid, bid = resilience_planner.find_rebalance_candidate_copy("target_src")
+    assert pid == "pol_rep"
+    assert bid == "bid_rep"
 
     snapshot = {
         "overallRisk": "HIGH",
@@ -344,7 +423,7 @@ def test_booster_governance_routes_via_client(tmp_path: Path) -> None:
     assert resp_exp1.status_code == 200
     assert "reasons" in resp_exp1.json()
 
-    # Explain with actionId
+    # Explain with actionId and reasons
     resilience_action_journal.record_action_intent(
         {
             "actionId": "act_exp_route",
@@ -365,3 +444,44 @@ def test_booster_governance_routes_via_client(tmp_path: Path) -> None:
     # Explain with empty body
     resp_exp3 = client.post("/api/workspace/resilience/explain", json={}, headers=headers)
     assert resp_exp3.status_code == 200
+
+    # Explain with critical horizon and watermark mock
+    with patch("deepseek_infra.infra.workspace.backup_capacity.get_target_capacity", return_value={"freePercent": 10.0, "freeBytes": 1000}):
+        with patch("deepseek_infra.infra.workspace.backup_capacity.estimate_target_exhaustion_horizon", return_value={"estimatedDaysToFull": 12}):
+            with patch("deepseek_infra.infra.workspace.resilience_planner.select_rebalance_destination", return_value="target_dest"):
+                resp_crit = client.post("/api/workspace/resilience/explain", json={"targetId": "target_exp1"}, headers=headers)
+                assert resp_crit.status_code == 200
+                crit_reasons = resp_crit.json()["reasons"]
+                assert "capacity watermark exceeded" in crit_reasons
+                assert "target exhaustion horizon critical" in crit_reasons
+                assert "destination satisfies topology" in crit_reasons
+
+
+def test_booster_writer_lease_and_tiering_lifecycle(tmp_path: Path) -> None:
+    # 1. TargetWriterLease context and renewal
+    t_lease_dir = tmp_path / "lease_root"
+    t_lease_dir.mkdir(parents=True, exist_ok=True)
+    lease = backup_writer_lease.TargetWriterLease(
+        t_lease_dir,
+        target_id="target_l1",
+        owner_run_id="run_1",
+        owner_instance_id="inst_1",
+        fencing_token=1,
+        lease_seconds=10,
+    )
+    with lease:
+        lease.renew()
+        lease.assert_owned()
+        active = backup_writer_lease.active_writer_lease(lease)
+        assert isinstance(active, bool)
+
+    # 2. Tiering helper operations
+    assert backup_tiering.normalize_storage_tier("HOT") == "hot"
+    assert backup_tiering.normalize_storage_tier("ARCHIVE") == "archive"
+    assert backup_tiering.normalize_storage_tier(None) is None
+    with pytest.raises(AppError):
+        backup_tiering.normalize_storage_tier("UNKNOWN_TIER")
+
+    assert backup_tiering.target_storage_tier({"storageTier": "archive"}) == "archive"
+    assert backup_tiering.target_storage_tier({"storageTier": "hot"}) == "hot"
+    assert backup_tiering.target_storage_tier(None) == "hot"
