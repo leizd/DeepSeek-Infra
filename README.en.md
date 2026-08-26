@@ -5,26 +5,25 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.7.0-blue)
+![Version](https://img.shields.io/badge/version-4.7.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.7.0 — Global Recovery Intelligence & Autonomous Resilience.** Continuous risk assessment, autonomous self-healing decision planner, policy admission gate, transactional action journal with rollback, multi-horizon predictive capacity forecasting, RPO/RTO placement optimizer, and what-if disaster simulation. Wire-format frozen.
+> **4.7.1 — Verified Autonomous Remediation & Exactly-Once Resilience.** Closes the autonomous resilience loop with verified outcome post-conditions, typed multi-state compensation, CAS concurrency fencing with durable leases, and unbypassable safety floor.
 
-## 4.7.0 at a glance
+## 4.7.1 at a glance
 
-- Proactive risk detection across capacity exhaustion, replica lag, failure domains, DR freshness, restore SLA, and authority consensus.
-- Deterministic resilience planner generating safe self-healing actions (`CREATE_REPAIR_JOB`, `CREATE_REBALANCE_JOB`, `START_DR_DRILL`).
-- Strict policy gate bounding autonomous actions while requiring explicit operator approval for high-impact mutations.
-- Durable SQLite action journal recording complete intent-to-execution lifecycle with automatic rollback and decision proof binding.
-- Multi-horizon (7d, 30d, 90d) capacity forecasting and days-to-full prediction without destructive actions.
-- Recovery what-if simulator and continuous 0-100 DR resilience credit score.
-- Frozen compatibility surface unchanged: object-set-v1, Receipt v4, Commit v4, FastCDC v3, Projection, randomized Age, control-authority-v1, AuthorityCheckpoint v1.
+- Strictly verified autonomous execution: states SUCCEEDED/COMPLETED reachable only after real post-condition outcome verification.
+- Typed effect classification and safe compensation lifecycle (NO_EFFECT, CANCELABLE, COMPENSATABLE, IRREVERSIBLE).
+- Complete and executable action intents emitted by the resilience planner with fully resolved targets.
+- Subsystem idempotency with resilienceActionId propagation and SQLite CAS single-owner action claims.
+- Immutable safety floor NEVER_AUTONOMOUS unbypassable by operator policy.
+- Real-time rate limiting, TOCTOU freshness validation, and precondition simulation.
 
-See the [4.7.0 release notes](docs/releases/4.7.0.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.7.1 release notes](docs/releases/4.7.1.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

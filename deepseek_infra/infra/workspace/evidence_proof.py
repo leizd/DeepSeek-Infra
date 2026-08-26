@@ -255,9 +255,14 @@ def validate_decision_proof(evidence: dict[str, Any], check_name: str) -> list[s
     )
     if decision.get("riskDigest") not in (None, ""):
         errors.extend(_require_sha256(decision.get("riskDigest"), field="riskDigest"))
+    for d_field in ("riskBeforeDigest", "riskAfterDigest"):
+        if decision.get(d_field) not in (None, ""):
+            errors.extend(_require_sha256(decision.get(d_field), field=d_field))
     for bool_field in ("actionAllowed", "simulationPassed", "executionVerified"):
         if decision.get(bool_field) is not True:
             errors.append(f"decision-{bool_field}-not-true")
+    if "effectObserved" in decision and decision.get("effectObserved") is not True:
+        errors.append("decision-effectObserved-not-true")
     return errors
 
 

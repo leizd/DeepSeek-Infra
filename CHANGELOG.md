@@ -4,6 +4,24 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.7.1] - Verified Autonomous Remediation & Exactly-Once Resilience (2026-08-26)
+
+### Verified Autonomous Remediation & Exactly-Once Resilience
+
+- **Executable Action Contracts (`ResilienceActionIntent v1`)**: Planner emits complete, fully resolved action intents with valid `policyId`, `backupId`, `sourceTargetId`, and `destTargetId`; unexecutable partial actions are never emitted.
+- **Atomic Plan Materialization (`materialize_resilience_plan`)**: Plans and action intents materialize atomically into the durable journal with validated `planDigest` and `inputRiskDigest`; bare unauthenticated actions are rejected from autonomous execution.
+- **Fresh Risk Admission & TOCTOU Fencing**: Pre-execution risk re-evaluation detects cleared risks (`SKIPPED_NO_LONGER_NEEDED`) and environment shifts (`REPLAN_REQUIRED`) to prevent executing obsolete plans.
+- **Exactly-Once Action Claim State Machine**: Transactional SQLite CAS (`UPDATE ... WHERE state='PENDING'`) with lease ownership guarantees each action is executed by at most one worker.
+- **Subsystem Action Idempotency**: Subsystems (`create_repair_job`, `create_rebalance_job`, `run_dr_drill`) bind `resilienceActionId` to prevent duplicate job creation across retries.
+- **Immutable Safety Floor (`NEVER_AUTONOMOUS`)**: Code-level hard floor strictly forbids autonomous execution of `PRIMARY_PROMOTION`, `POLICY_CHANGE`, `COPY_DELETION`, and `TOPOLOGY_MUTATION` regardless of operator configuration.
+- **Canonical Authority Risk Source**: Risk Engine directly queries `backup_control_recovery.authority_verify()`, eliminating mock provider divergence and accurately mapping `HEALTHY`, `DEGRADED`, `UNAVAILABLE`, `DURABILITY_UNSATISFIED`, and `DIVERGENT`.
+- **Precondition Simulators & Post-Condition Verifiers**: Distinct pre-execution simulation (`simulationPassed`) and post-execution outcome verification (`executionVerified`) assert real replica increases, destination durability, and DR drill validity before entering `SUCCEEDED`.
+- **Safe Compensation Semantics**: Replaces superficial journal rollback with classified effect lifecycles (`NO_EFFECT`, `CANCELABLE`, `COMPENSATABLE`, `IRREVERSIBLE`) and compensation states (`FAILED_BEFORE_EFFECT`, `COMPENSATING`, `COMPENSATED`, `NEEDS_OPERATOR`).
+- **Runtime Rate Limits Enforcement**: Enforces `maxConcurrentActions`, `maxActionsPerHour`, and per-target action admission gates.
+- **Closed-Loop Risk Reduction**: Captures `riskBefore` and `riskAfter` digests, proving that target risk severity improved or did not worsen.
+- **Three-MinIO Autonomous Remediation Evidence**: Dedicated end-to-end evidence proving real autonomous replica repair, capacity rebalancing, and DR drill freshness restoration.
+- **Wire & Protocol Stability**: `object-set-v1`, `Receipt v4`, `Commit v4`, `FastCDC v3`, `control-authority-v1`, and `AuthorityCheckpoint v1` remain 100% stable and wire-compatible.
+
 ## [4.7.0] - Global Recovery Intelligence & Autonomous Resilience (2026-08-26)
 
 ### Global Recovery Intelligence & Autonomous Resilience

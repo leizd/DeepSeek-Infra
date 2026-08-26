@@ -1629,14 +1629,22 @@ def create_repair_job(
     source_target_id: str | None = None,
     object_set_digest: str | None = None,
     repair_id: str | None = None,
+    resilience_action_id: str | None = None,
     traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR,
 ) -> dict[str, Any]:
     with _LOCK:
         REPAIRS_DIR.mkdir(parents=True, exist_ok=True)
+        if resilience_action_id:
+            existing = list_repair_jobs(policy_id=policy_id, backup_id=backup_id)
+            for j in existing:
+                if j.get("resilienceActionId") == resilience_action_id:
+                    return j
+
         r_id = repair_id or f"repair_{uuid.uuid4().hex[:16]}"
         job = {
             "schemaVersion": REPAIR_JOB_SCHEMA_VERSION,
             "repairId": r_id,
+            "resilienceActionId": resilience_action_id,
             "policyId": policy_id,
             "backupId": backup_id,
             "sourceTargetId": source_target_id,
@@ -2408,6 +2416,7 @@ def create_rebalance_job(
     source_target_id: str,
     reason: str = "failure-domain-rebalance",
     prune_source_after: bool = False,
+    resilience_action_id: str | None = None,
 ) -> dict[str, Any]:
     with _LOCK:
         REBALANCE_DIR.mkdir(parents=True, exist_ok=True)
@@ -2419,6 +2428,8 @@ def create_rebalance_job(
             limit=10,
         )
         for job in existing:
+            if resilience_action_id and job.get("resilienceActionId") == resilience_action_id:
+                return job
             if job.get("phase") not in {"complete", "failed"}:
                 return job
 
@@ -2427,6 +2438,7 @@ def create_rebalance_job(
         body: dict[str, Any] = {
             "schemaVersion": REBALANCE_JOB_SCHEMA_VERSION,
             "jobId": job_id,
+            "resilienceActionId": resilience_action_id,
             "policyId": policy_id,
             "backupId": backup_id,
             "sourceTargetId": source_target_id,

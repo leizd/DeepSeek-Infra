@@ -16,7 +16,6 @@ from typing import Any
 
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
-    backup_authority_provider,
     backup_capacity,
     backup_control,
     backup_dr_ledger,
@@ -395,7 +394,7 @@ def evaluate_repair_backlog_risk() -> dict[str, Any]:
 
 
 def evaluate_authority_risk() -> dict[str, Any]:
-    """Evaluate authority consensus, anchor drift, and fail-closed state."""
+    """Evaluate authority consensus, anchor drift, and fail-closed state via canonical authority_verify()."""
     evidence: list[str] = []
     details: dict[str, Any] = {}
 
@@ -415,39 +414,63 @@ def evaluate_authority_risk() -> dict[str, Any]:
             "details": {"error": str(exc)},
         }
 
-    provider = backup_authority_provider.get_authority_replica_provider()
-    if provider is not None:
-        try:
-            verify_fn = getattr(provider, "verify_authority_consensus", None)
-            if callable(verify_fn):
-                p_res = verify_fn()
-                if isinstance(p_res, dict):
-                    if p_res.get("status") == "divergent":
-                        return {
-                            "type": RiskType.AUTHORITY_DEGRADATION.value,
-                            "severity": RiskSeverity.BLOCKED.value,
-                            "confidence": RiskConfidence.VERIFIED.value,
-                            "evidence": ["authority-cross-replica-fork-detected"],
-                            "details": details,
-                        }
-                    if p_res.get("status") == "lagging":
-                        return {
-                            "type": RiskType.AUTHORITY_DEGRADATION.value,
-                            "severity": RiskSeverity.WARNING.value,
-                            "confidence": RiskConfidence.VERIFIED.value,
-                            "evidence": ["authority-replica-lag-detected"],
-                            "details": details,
-                        }
-            elif provider.configured() and provider.resolved_count() < provider.configured_count():
-                return {
-                    "type": RiskType.AUTHORITY_DEGRADATION.value,
-                    "severity": RiskSeverity.CRITICAL.value,
-                    "confidence": RiskConfidence.VERIFIED.value,
-                    "evidence": [f"authority-replicas-unresolved:{provider.resolved_count()}/{provider.configured_count()}"],
-                    "details": details,
-                }
-        except Exception as exc:
-            evidence.append(f"authority-provider-check-warning:{exc}")
+    from deepseek_infra.infra.workspace import backup_control_recovery
+
+    try:
+        v_res = backup_control_recovery.authority_verify()
+        overall = str(v_res.get("overall") or "HEALTHY").upper()
+        issues = list(v_res.get("issues") or [])
+        details["authorityVerify"] = {
+            "overall": overall,
+            "issues": issues,
+            "configuredReplicaCount": v_res.get("configuredReplicaCount"),
+            "resolvedReplicaCount": v_res.get("resolvedReplicaCount"),
+            "replicaCount": len(v_res.get("replicas") or []),
+        }
+        for iss in issues:
+            evidence.append(f"authority-issue:{iss}")
+
+        if overall == "DIVERGENT":
+            evidence.append("authority-cross-replica-fork-detected")
+            return {
+                "type": RiskType.AUTHORITY_DEGRADATION.value,
+                "severity": RiskSeverity.BLOCKED.value,
+                "confidence": RiskConfidence.VERIFIED.value,
+                "evidence": evidence,
+                "details": details,
+            }
+        elif overall in {"UNAVAILABLE", "DURABILITY_UNSATISFIED"}:
+            evidence.append(f"authority-{overall.lower()}-critical")
+            return {
+                "type": RiskType.AUTHORITY_DEGRADATION.value,
+                "severity": RiskSeverity.CRITICAL.value,
+                "confidence": RiskConfidence.VERIFIED.value,
+                "evidence": evidence,
+                "details": details,
+            }
+        elif overall == "DEGRADED":
+            severity = (
+                RiskSeverity.WARNING.value
+                if len(issues) == 1 and ("authority-replica-lag-detected" in issues or any("lag" in str(i) for i in issues))
+                else RiskSeverity.DEGRADED.value
+            )
+            evidence.append("authority-degraded-detected")
+            return {
+                "type": RiskType.AUTHORITY_DEGRADATION.value,
+                "severity": severity,
+                "confidence": RiskConfidence.VERIFIED.value,
+                "evidence": evidence,
+                "details": details,
+            }
+    except Exception as exc:
+        evidence.append(f"authority-verify-exception:{exc}")
+        return {
+            "type": RiskType.AUTHORITY_DEGRADATION.value,
+            "severity": RiskSeverity.BLOCKED.value,
+            "confidence": RiskConfidence.HIGH.value,
+            "evidence": evidence,
+            "details": {"error": str(exc)},
+        }
 
     evidence.append("authority-consensus-verified")
     return {
