@@ -182,8 +182,10 @@ def test_complete_backup_governance_router_endpoints(tmp_settings: Path, monkeyp
 
     app = FastAPI()
 
-    async def handle_app_error(_req: Request, exc: AppError) -> JSONResponse:
-        return json_response(exc.to_response(), status=exc.status)
+    async def handle_app_error(_req: Request, exc: Exception) -> JSONResponse:
+        if isinstance(exc, AppError):
+            return json_response(exc.to_response(), status=exc.status)
+        return json_response({"error": str(exc)}, status=500)
 
     app.add_exception_handler(AppError, handle_app_error)
     app.include_router(create_backup_governance_router())
