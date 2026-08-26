@@ -530,6 +530,7 @@ def _create_object_set_restore(
         "selectionDigest": selection_digest_value,
         "phase": "fetching-controls",
         "createdAt": _utc_iso(),
+        "lastHoldRenewedAt": _utc_iso(),
         "updatedAt": _utc_iso(),
     }
     _atomic_write_json(_session_path(restore_id), session)
@@ -670,6 +671,7 @@ def create_restore_from_target(
             "selectionDigest": selection_digest_value,
             "phase": "fetching-chain",
             "createdAt": _utc_iso(),
+            "lastHoldRenewedAt": _utc_iso(),
             "updatedAt": _utc_iso(),
         }
         _atomic_write_json(_session_path(restore_id), session)
@@ -722,6 +724,7 @@ def create_restore_from_target(
         "ciphertextPath": str(staging_root / filename),
         "phase": "fetching",
         "createdAt": _utc_iso(),
+        "lastHoldRenewedAt": _utc_iso(),
         "updatedAt": _utc_iso(),
     }
     _atomic_write_json(_session_path(restore_id), session)

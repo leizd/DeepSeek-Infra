@@ -73,7 +73,7 @@ def renew_session(
     if str(session.get("phase") or "") in TERMINAL_PHASES:
         return False
     current_time = (now or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
-    last_renewed = _parse_time(session.get("lastHoldRenewedAt"))
+    last_renewed = _parse_time(session.get("lastHoldRenewedAt")) or _parse_time(session.get("createdAt"))
     if last_renewed is not None and (current_time - last_renewed).total_seconds() < min_interval_seconds:
         return False
     keys = list(session.get("holdKeys") or [])
