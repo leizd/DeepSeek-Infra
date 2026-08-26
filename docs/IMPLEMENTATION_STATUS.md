@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.6.9。
+适用版本：v4.7.0。
 
-> 4.6.9：Authority 历史安全压缩与检查点（AuthorityCheckpoint v1）、Fail-Closed 防御门禁、连续 DR 演练与 Readiness Proof、DR SLO 指标、Evidence Proof v3 语义校验；保持现有 Backup wire 格式完全冻结。
+> 4.7.0：全局恢复智能与自治韧性（Global Recovery Intelligence & Autonomous Resilience）：风险评估引擎（Risk Assessment Engine）、确定性韧性决策规划（Deterministic Resilience Planner）、自治动作策略门禁（Autonomous Action Policy）、持久化动作日志与证明绑定（Resilience Action Journal）、多周期容量预测（Predictive Capacity Forecaster）、RPO/RTO 放置优化器、What-if DR 模拟器（Recovery Simulation）、持续韧性评分（Continuous Resilience Score 0-100）、Decision Proof v3 校验；保持现有 Backup wire 格式与 Authority Checkpoint 完全冻结。
 
 > 4.5.8 已把 Repair、Replication、Rebalance、Drain、Retirement、Capacity 与 Transfer QoS 收敛到持久化 Storage Control Plane：SQLite 提供跨进程 Policy/Topology CAS、Maintenance Supervisor 以 durable cursor 推进后台工作、Copy Retirement 保留 Receipt v4/Commit v4 并用 authenticated retirement marker 管理 Payload GC、Placement 以单个 Logical Recovery Point 计算 Failure Domain/Region 目标、Multipart 恢复与 provider `ListParts` 对账、生产数据流受 global/source/destination 三层 P0-P6 QoS 约束。
 

@@ -593,6 +593,16 @@ def list_recovery_points(
         ]
 
 
+def latest_recovery_point(
+    *,
+    target_id: str | None = None,
+    policy_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the most recent recovery point for a target/policy."""
+    points = list_recovery_points(target_id=target_id, policy_id=policy_id, limit=1)
+    return points[0] if points else None
+
+
 def resolve_recoverable_chain(
     target_id: str,
     policy_id: str,

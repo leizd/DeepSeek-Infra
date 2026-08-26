@@ -742,4 +742,176 @@ def create_backup_governance_router() -> APIRouter:
 
         return json_response(backup_dr_readiness.get_dr_slo_status())
 
+    @router.get("/api/workspace/resilience/snapshot")
+    async def api_resilience_snapshot(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import (
+            resilience_action_journal,
+            resilience_risk_engine,
+            resilience_score,
+        )
+
+        score_res = resilience_score.calculate_resilience_score()
+        risks_res = resilience_risk_engine.assess_risks(probe=False)
+        actions = resilience_action_journal.list_actions(limit=50)
+
+        critical_risks = sum(1 for r in risks_res.get("risks", []) if str(r.get("severity")).lower() in {"critical", "blocked"})
+        planned_actions = sum(1 for a in actions if a.get("state") in {"PENDING", "APPROVAL_REQUIRED"})
+        running_actions = sum(1 for a in actions if a.get("state") == "EXECUTING")
+
+        return json_response(
+            {
+                "score": score_res["score"],
+                "grade": score_res["grade"],
+                "overallRisk": risks_res.get("overallRisk", "healthy"),
+                "criticalRisks": critical_risks,
+                "plannedActions": planned_actions,
+                "runningActions": running_actions,
+                "factorBreakdown": score_res.get("factorBreakdown"),
+                "weaknesses": score_res.get("weaknesses", []),
+                "riskDigest": risks_res.get("riskDigest"),
+                "generatedAt": score_res.get("generatedAt"),
+            }
+        )
+
+    @router.post("/api/workspace/resilience/assess")
+    async def api_resilience_assess(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import resilience_risk_engine, resilience_score
+
+        probe = bool(body.get("probe")) if isinstance(body, dict) else False
+        risks_res = resilience_risk_engine.assess_risks(probe=probe)
+        score_res = resilience_score.calculate_resilience_score()
+
+        return json_response(
+            {
+                "riskSnapshot": risks_res,
+                "resilienceScore": score_res,
+            }
+        )
+
+    @router.post("/api/workspace/resilience/plan")
+    async def api_resilience_plan(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import resilience_planner, resilience_risk_engine
+
+        probe = bool(body.get("probe")) if isinstance(body, dict) else False
+        risks_res = resilience_risk_engine.assess_risks(probe=probe)
+        plan_res = resilience_planner.plan_resilience_actions(risks_res)
+        return json_response(plan_res)
+
+    @router.post("/api/workspace/resilience/execute")
+    async def api_resilience_execute(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import resilience_action_journal
+
+        action_id = body.get("actionId") if isinstance(body, dict) else None
+        if not action_id and isinstance(body, dict) and body.get("type"):
+            recorded = resilience_action_journal.record_action_intent(body, created_by="operator-api")
+            action_id = recorded["actionId"]
+
+        if not action_id:
+            raise AppError("actionId is required", code=ErrorCode.INVALID_REQUEST, status=400)
+
+        result = resilience_action_journal.execute_autonomous_action(str(action_id))
+        return json_response(result)
+
+    @router.post("/api/workspace/resilience/simulate")
+    async def api_resilience_simulate(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import recovery_simulator
+
+        scenario = str(body.get("scenario") or "AZ_FAILURE") if isinstance(body, dict) else "AZ_FAILURE"
+        excluded = body.get("excludedTargets") if isinstance(body, dict) else None
+        policy_id = body.get("policyId") if isinstance(body, dict) else None
+        res = recovery_simulator.simulate_recovery(scenario, excluded_targets=excluded, policy_id=policy_id)
+        return json_response(res)
+
+    @router.post("/api/workspace/resilience/explain")
+    async def api_resilience_explain(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import (
+            backup_capacity,
+            resilience_action_journal,
+            resilience_planner,
+        )
+
+        action_id = body.get("actionId") if isinstance(body, dict) else None
+        target_id = body.get("targetId") if isinstance(body, dict) else None
+        policy_id = body.get("policyId") if isinstance(body, dict) else None
+
+        reasons: list[str] = []
+        evidence: list[str] = []
+        details: dict[str, Any] = {}
+
+        if action_id:
+            act = resilience_action_journal.get_action(str(action_id))
+            if act:
+                reasons.append(str(act.get("type", "")))
+                params = act.get("parameters", {})
+                if params.get("reason"):
+                    reasons.append(str(params["reason"]))
+                details["action"] = act
+                details["state"] = act.get("state")
+                target_id = target_id or params.get("sourceTargetId") or params.get("target")
+
+        if target_id:
+            cap = backup_capacity.get_target_capacity(str(target_id), probe=False)
+            horizon = backup_capacity.estimate_target_exhaustion_horizon(str(target_id), policy_id="", probe=False, record_observation=False)
+            free_pct = cap.get("freePercent")
+            if free_pct is not None and free_pct <= 20.0:
+                reasons.append("capacity watermark exceeded")
+            if horizon.get("estimatedDaysToFull") is not None and int(horizon["estimatedDaysToFull"]) < 30:
+                reasons.append("target exhaustion horizon critical")
+            dest = resilience_planner.select_rebalance_destination(str(target_id))
+            if dest:
+                reasons.append("destination satisfies topology")
+            details["targetCapacity"] = cap
+            details["targetHorizon"] = horizon
+
+        if not reasons:
+            reasons.append("system topology and resilience criteria satisfied")
+
+        return json_response(
+            {
+                "actionId": action_id,
+                "targetId": target_id,
+                "policyId": policy_id,
+                "reasons": reasons,
+                "reason": reasons,
+                "evidence": evidence,
+                "details": details,
+            }
+        )
+
+    @router.get("/api/workspace/resilience/journal")
+    async def api_resilience_journal(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import resilience_action_journal
+
+        state = request.query_params.get("state")
+        action_type = request.query_params.get("type")
+        limit_str = request.query_params.get("limit")
+        limit = int(limit_str) if limit_str and limit_str.isdigit() else 50
+        return JSONResponse(content=resilience_action_journal.list_actions(state=state, action_type=action_type, limit=limit))
+
+    @router.get("/api/workspace/resilience/forecast")
+    async def api_resilience_forecast(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import capacity_forecaster
+
+        return json_response(capacity_forecaster.forecast_all_targets(probe=False))
+
+    @router.get("/api/workspace/resilience/optimizer")
+    async def api_resilience_optimizer(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import rpo_rto_optimizer
+
+        return json_response(rpo_rto_optimizer.generate_placement_recommendations())
+
     return router

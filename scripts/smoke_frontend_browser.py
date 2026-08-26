@@ -820,7 +820,15 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
                   const banner = document.querySelector('.build-update-banner');
                   const button = Array.from(banner?.querySelectorAll('button') || [])
                     .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
-                  return Boolean(banner?.textContent?.includes('bbbbbbbbbbbbbbbb') && button && !button.disabled);
+                  if (Boolean(banner?.textContent?.includes('bbbbbbbbbbbbbbbb') && button && !button.disabled)) {
+                    return true;
+                  }
+                  const checkBtn = document.querySelector('button[aria-label="检查更新"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent === '检查更新');
+                  if (checkBtn && (!window.__lastCheckNudge || Date.now() - window.__lastCheckNudge > 2000)) {
+                    window.__lastCheckNudge = Date.now();
+                    checkBtn.click();
+                  }
+                  return false;
                 }""",
                 timeout=UPDATE_READY_TIMEOUT_MS,
             )
@@ -899,7 +907,15 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
                   const banner = document.querySelector('.build-update-banner');
                   const button = Array.from(banner?.querySelectorAll('button') || [])
                     .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
-                  return Boolean(banner?.textContent?.includes('cccccccccccccccc') && button && !button.disabled);
+                  if (Boolean(banner?.textContent?.includes('cccccccccccccccc') && button && !button.disabled)) {
+                    return true;
+                  }
+                  const checkBtn = document.querySelector('button[aria-label="检查更新"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent === '检查更新');
+                  if (checkBtn && (!window.__lastCheckNudgeC || Date.now() - window.__lastCheckNudgeC > 2000)) {
+                    window.__lastCheckNudgeC = Date.now();
+                    checkBtn.click();
+                  }
+                  return false;
                 }""",
                 timeout=UPDATE_READY_TIMEOUT_MS,
             )
