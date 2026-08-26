@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -38,38 +37,29 @@ def renew(
 ) -> dict[str, Any]:
     if ttl_seconds <= 0:
         raise ValueError("ttl_seconds must be positive")
-    last_exc: Exception | None = None
-    for attempt in range(3):
-        current = read_json(store, key)
-        meta = store.stat(key)
-        if current is None or meta is None or not meta.etag:
-            raise AppError("Recovery hold lease is missing", code=ErrorCode.NOT_FOUND, status=404)
-        observed_generation = current.get("generation")
-        generation = observed_generation if isinstance(observed_generation, int) and observed_generation >= 0 else 0
-        current_time = (now or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
-        current_expiry = _parse_time(current.get("expiresAt"))
-        next_expiry = current_time + timedelta(seconds=ttl_seconds)
-        if current_expiry is not None and next_expiry <= current_expiry:
-            next_expiry = current_expiry + timedelta(seconds=1)
-        renewed = dict(current)
-        renewed.update(
-            schemaVersion=max(3, int(current.get("schemaVersion") or 0)),
-            generation=generation + 1,
-            renewedAt=_utc_iso(current_time),
-            expiresAt=_utc_iso(next_expiry),
-        )
-        try:
-            put_json_if_match(store, key, renewed, expected_etag=meta.etag)
-            return renewed
-        except AppError as exc:
-            last_exc = exc
-            fresh = read_json(store, key)
-            if isinstance(fresh, dict):
-                fresh_expiry = _parse_time(fresh.get("expiresAt"))
-                if fresh_expiry is not None and (fresh_expiry - current_time).total_seconds() >= (ttl_seconds / 2):
-                    return fresh
-            time.sleep(0.05 * (attempt + 1))
-    raise AppError("Recovery hold lease renewal conflict", code=ErrorCode.INVALID_REQUEST, status=409) from last_exc
+    current = read_json(store, key)
+    meta = store.stat(key)
+    if current is None or meta is None or not meta.etag:
+        raise AppError("Recovery hold lease is missing", code=ErrorCode.NOT_FOUND, status=404)
+    observed_generation = current.get("generation")
+    generation = observed_generation if isinstance(observed_generation, int) and observed_generation >= 0 else 0
+    current_time = (now or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
+    current_expiry = _parse_time(current.get("expiresAt"))
+    next_expiry = current_time + timedelta(seconds=ttl_seconds)
+    if current_expiry is not None and next_expiry <= current_expiry:
+        next_expiry = current_expiry + timedelta(seconds=1)
+    renewed = dict(current)
+    renewed.update(
+        schemaVersion=max(3, int(current.get("schemaVersion") or 0)),
+        generation=generation + 1,
+        renewedAt=_utc_iso(current_time),
+        expiresAt=_utc_iso(next_expiry),
+    )
+    try:
+        put_json_if_match(store, key, renewed, expected_etag=meta.etag)
+    except AppError as exc:
+        raise AppError("Recovery hold lease renewal conflict", code=ErrorCode.INVALID_REQUEST, status=409) from exc
+    return renewed
 
 
 def renew_session(
