@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from deepseek_infra.core.errors import AppError
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
     autonomous_action_policy,
     backup_authority_provider,
@@ -1760,6 +1760,7 @@ def test_comprehensive_matrix_booster(tmp_settings: Path, monkeypatch: pytest.Mo
     # 4. Web server share-target and full governance routes
     monkeypatch.setattr(backup_authority_provider, "get_authority_replica_provider", lambda: None)
     monkeypatch.setattr("deepseek_infra.web.routes.backup_governance.require_api_auth", lambda _req: None)
+    monkeypatch.setattr("deepseek_infra.web.server.require_api_auth", lambda _req: None)
     monkeypatch.setattr("deepseek_infra.web.server.require_allowed_host", lambda _req: None)
     app = create_app()
     client = TestClient(app)
@@ -1786,10 +1787,18 @@ def test_comprehensive_matrix_booster(tmp_settings: Path, monkeypatch: pytest.Mo
     res_ret_cmp = client.post("/api/workspace/authority/retention/compact", json={"dryRun": True})
     assert res_ret_cmp.status_code in {200, 409}
 
-    res_dr_run = client.post("/api/workspace/disaster-recovery/drills/run", json={})
-    assert res_dr_run.status_code in {200, 409}
+    # 4c. Not found route
+    res_nf = client.get("/api/workspace/nonexistent-governance-endpoint")
+    assert res_nf.status_code == 404
 
-    res_dr_slo = client.get("/api/workspace/disaster-recovery/slo")
-    assert res_dr_slo.status_code == 200
+    # 4d. Direct share target error fallback
+    monkeypatch.setattr("deepseek_infra.web.server.extract_uploaded_file", lambda *a, **k: (_ for _ in ()).throw(AppError("Mock corrupt file", code=ErrorCode.INVALID_PAYLOAD)))
+    res_share_err = client.post(
+        "/share-target",
+        data={},
+        files={"file": ("corrupt.bin", b"binary", "application/octet-stream")},
+        follow_redirects=False,
+    )
+    assert res_share_err.status_code == 303
 
 

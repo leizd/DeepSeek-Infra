@@ -814,26 +814,25 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
 
         await page.get_by_role("button", name="检查更新").click()
         await page.get_by_text("bbbbbbbbbbbbbbbb", exact=False).wait_for(timeout=15_000)
-        deadline_b = time.monotonic() + (UPDATE_READY_TIMEOUT_MS / 1000.0)
-        while time.monotonic() < deadline_b:
-            ready_b = await page.evaluate(
+        try:
+            await page.wait_for_function(
                 """() => {
                   const banner = document.querySelector('.build-update-banner');
                   const button = Array.from(banner?.querySelectorAll('button') || [])
                     .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
-                  return Boolean(banner?.textContent?.includes('bbbbbbbbbbbbbbbb') && button && !button.disabled);
-                }"""
+                  if (Boolean(banner?.textContent?.includes('bbbbbbbbbbbbbbbb') && button && !button.disabled)) {
+                    return true;
+                  }
+                  const checkBtn = document.querySelector('button[aria-label="检查更新"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent === '检查更新');
+                  if (checkBtn && (!window.__lastCheckNudge || Date.now() - window.__lastCheckNudge > 2000)) {
+                    window.__lastCheckNudge = Date.now();
+                    checkBtn.click();
+                  }
+                  return false;
+                }""",
+                timeout=UPDATE_READY_TIMEOUT_MS,
             )
-            if ready_b:
-                break
-            try:
-                check_btn = page.get_by_role("button", name="检查更新")
-                if await check_btn.is_visible():
-                    await check_btn.click()
-            except Exception:
-                pass
-            await asyncio.sleep(1.0)
-        else:
+        except Exception as error:
             staged_b_state = await page.evaluate(
                 """async () => ({
                   text: document.querySelector('.build-update-banner')?.textContent || '',
@@ -846,7 +845,7 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
                   })),
                 })"""
             )
-            raise AssertionError(f"staged build B was not ready: {staged_b_state}")
+            raise AssertionError(f"staged build B was not ready: {staged_b_state}") from error
         try:
             await update_peer.get_by_text("bbbbbbbbbbbbbbbb", exact=False).wait_for(timeout=15_000)
         except Exception as error:
@@ -902,26 +901,25 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
         deployed_target["buildId"] = "cccccccccccccccc"
         await page.get_by_role("button", name="检查更新").click()
         await page.get_by_text("cccccccccccccccc", exact=False).wait_for(timeout=15_000)
-        deadline_c = time.monotonic() + (UPDATE_READY_TIMEOUT_MS / 1000.0)
-        while time.monotonic() < deadline_c:
-            ready_c = await page.evaluate(
+        try:
+            await page.wait_for_function(
                 """() => {
                   const banner = document.querySelector('.build-update-banner');
                   const button = Array.from(banner?.querySelectorAll('button') || [])
                     .find((candidate) => candidate.textContent?.includes('更新并重新加载'));
-                  return Boolean(banner?.textContent?.includes('cccccccccccccccc') && button && !button.disabled);
-                }"""
+                  if (Boolean(banner?.textContent?.includes('cccccccccccccccc') && button && !button.disabled)) {
+                    return true;
+                  }
+                  const checkBtn = document.querySelector('button[aria-label="检查更新"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent === '检查更新');
+                  if (checkBtn && (!window.__lastCheckNudgeC || Date.now() - window.__lastCheckNudgeC > 2000)) {
+                    window.__lastCheckNudgeC = Date.now();
+                    checkBtn.click();
+                  }
+                  return false;
+                }""",
+                timeout=UPDATE_READY_TIMEOUT_MS,
             )
-            if ready_c:
-                break
-            try:
-                check_btn = page.get_by_role("button", name="检查更新")
-                if await check_btn.is_visible():
-                    await check_btn.click()
-            except Exception:
-                pass
-            await asyncio.sleep(1.0)
-        else:
+        except Exception as error:
             staged_state = await page.evaluate(
                 """async () => ({
                   text: document.querySelector('.build-update-banner')?.textContent || '',
@@ -943,7 +941,7 @@ async def run_browser(base_url: str, trace_id: str) -> dict[str, str]:
                   })),
                 })"""
             )
-            raise AssertionError(f"newer target C was not ready: {staged_state}")
+            raise AssertionError(f"newer target C was not ready: {staged_state}") from error
         await update_peer.get_by_text("cccccccccccccccc", exact=False).wait_for(timeout=15_000)
         superseded_state = await page.evaluate(
             """async () => {
