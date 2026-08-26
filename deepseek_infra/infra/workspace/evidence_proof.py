@@ -237,6 +237,49 @@ def validate_retention_safety_proof(evidence: dict[str, Any], check_name: str) -
     return errors
 
 
+def validate_decision_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    decision = evidence.get("decisionProof")
+    if not isinstance(decision, dict):
+        decision = evidence
+    errors = _require_fields(
+        decision,
+        (
+            "riskDigest",
+            "policyVersion",
+            "actionAllowed",
+            "simulationPassed",
+            "executionVerified",
+        ),
+    )
+    if decision.get("riskDigest") not in (None, ""):
+        errors.extend(_require_sha256(decision.get("riskDigest"), field="riskDigest"))
+    for bool_field in ("actionAllowed", "simulationPassed", "executionVerified"):
+        if decision.get(bool_field) is not True:
+            errors.append(f"decision-{bool_field}-not-true")
+    return errors
+
+
+def validate_resilience_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    errors = _require_fields(
+        evidence,
+        (
+            "riskDigest",
+            "score",
+            "overallRisk",
+        ),
+    )
+    if evidence.get("riskDigest") not in (None, ""):
+        errors.extend(_require_sha256(evidence.get("riskDigest"), field="riskDigest"))
+    score = evidence.get("score")
+    if score is not None and (not isinstance(score, (int, float)) or isinstance(score, bool) or score < 0 or score > 100):
+        errors.append("invalid-resilience-score")
+    return errors
+
+
 VALIDATORS: dict[str, CheckValidator] = {
     "realPreDisasterBackupIsActuallyRestored": validate_restore_proof,
     "realFreshProcessRestoresPreDisasterBackup": validate_restore_proof,
@@ -256,6 +299,10 @@ VALIDATORS: dict[str, CheckValidator] = {
     "realDrReadinessProof": validate_dr_readiness_proof,
     "retentionSafetyProof": validate_retention_safety_proof,
     "authorityRetentionSafety": validate_retention_safety_proof,
+    "decisionProof": validate_decision_proof,
+    "resilienceDecisionProof": validate_decision_proof,
+    "resilienceScoreProof": validate_resilience_proof,
+    "resilienceSnapshotProof": validate_resilience_proof,
 }
 
 
