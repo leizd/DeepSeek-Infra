@@ -315,10 +315,11 @@ export class BuildUpdateStore {
             });
           }
           void this.stage(build, this.targetGeneration);
-        } else if (previous.phase !== "checking") {
-          this.publish({ phase: previous.phase, error: previous.error });
-        } else {
-          this.publish({ phase: "available", error: undefined });
+        } else if (this.snapshot.phase === "checking") {
+          this.publish({
+            phase: previous.phase === "checking" ? "available" : previous.phase,
+            error: previous.error,
+          });
         }
         return build;
       } catch (reason) {
@@ -328,7 +329,10 @@ export class BuildUpdateStore {
         const timedOut = controller.signal.aborted;
         if (this.target) {
           // 已确认的 target 不因检查失败或超时而降级。
-          this.publish({ phase: previous.phase === "checking" ? "available" : previous.phase, error: undefined });
+          const restored = this.snapshot.phase === "checking"
+            ? (previous.phase === "checking" ? "available" : previous.phase)
+            : this.snapshot.phase;
+          this.publish({ phase: restored, error: undefined });
         } else if (previous.phase === "current") {
           this.publish({ phase: "current", error: undefined });
         } else {
