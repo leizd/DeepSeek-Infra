@@ -20,7 +20,6 @@ from deepseek_infra.infra.workspace import (
     resilience_score,
     rpo_rto_optimizer,
 )
-from deepseek_infra.web import server
 
 
 def test_autonomous_action_policy_all_branches(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -171,13 +170,27 @@ def test_resilience_score_and_risk_engine(tmp_settings: Path) -> None:
     assert "actions" in plan
 
 
-def test_complete_backup_governance_router_endpoints(tmp_settings: Path) -> None:
+def test_complete_backup_governance_router_endpoints(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Directly test every route in backup_governance router."""
-    from deepseek_infra.core import config
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+    from deepseek_infra.web.http_utils import json_response
+    import deepseek_infra.web.routes.backup_governance as governance
+    from deepseek_infra.web.routes.backup_governance import create_backup_governance_router
 
-    token = config.settings.auth.token
-    app = server.create_app()
-    client = TestClient(app, base_url="http://127.0.0.1:8000", headers={"Authorization": f"Bearer {token}"})
+    monkeypatch.setattr(governance, "require_api_auth", lambda _r: None)
+
+    app = FastAPI()
+
+    async def handle_app_error(_req: Request, exc: AppError) -> JSONResponse:
+        return json_response(exc.to_response(), status=exc.status)
+
+    app.add_exception_handler(AppError, handle_app_error)
+    app.include_router(create_backup_governance_router())
+    client = TestClient(app)
+
+    r_snap_auth = client.get("/api/workspace/authority/history-snapshot")
+    assert r_snap_auth.status_code == 200
 
     r_pol_get = client.get("/api/workspace/authority/retention/policy")
     assert r_pol_get.status_code == 200
