@@ -949,12 +949,19 @@ def test_backup_governance_resilience_api_endpoints_exhaustive(tmp_settings: Pat
     r_plan = client.post("/api/workspace/resilience/plan", json={"materialize": False}, headers=headers)
     assert r_plan.status_code == 200
 
-    # 3. POST /api/workspace/resilience/execute error cases
+    # 3. POST /api/workspace/resilience/execute
     r_no_id = client.post("/api/workspace/resilience/execute", json={}, headers=headers)
     assert r_no_id.status_code == 400
 
     r_raw_type = client.post("/api/workspace/resilience/execute", json={"type": "CREATE_REPAIR_JOB"}, headers=headers)
     assert r_raw_type.status_code == 400
+
+    from deepseek_infra.infra.workspace import resilience_action_journal
+
+    monkeypatch.setattr(resilience_action_journal, "execute_autonomous_action", lambda aid: {"actionId": aid, "state": "SUCCEEDED"})
+    r_exec = client.post("/api/workspace/resilience/execute", json={"actionId": "act_exec_mock"}, headers=headers)
+    assert r_exec.status_code == 200
+    assert r_exec.json().get("state") == "SUCCEEDED"
 
     # 4. POST /api/workspace/resilience/explain with action, target, capacity <= 20%, and horizon < 30
     from deepseek_infra.infra.workspace import backup_capacity, backup_targets, resilience_action_journal, resilience_planner

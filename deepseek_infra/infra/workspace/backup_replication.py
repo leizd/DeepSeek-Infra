@@ -881,13 +881,13 @@ def authenticate_recovery_copy(
         tid = target if isinstance(target, str) else str(target.get("targetId") or "")
         if tid:
             try:
-                from deepseek_infra.infra.workspace import backup_targets
-                t_store = backup_targets.open_target_store(tid, write_intent=False)
+                from deepseek_infra.infra.workspace import backup_publish
+                t_store = backup_publish.resolve_target(tid, write_intent=False)
             except Exception:
                 t_store = target
 
     t_root = getattr(t_store, "root", None)
-    t_remote = getattr(t_store, "store", None)
+    t_remote = getattr(t_store, "store", t_store if hasattr(t_store, "get_bytes") else None)
 
     if t_root is not None:
         rp = t_root / "receipts" / f"{backup_id}.json"
