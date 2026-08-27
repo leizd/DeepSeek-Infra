@@ -1002,6 +1002,29 @@ def test_backup_governance_resilience_api_endpoints_exhaustive(tmp_settings: Pat
     assert r_exp_empty.status_code == 200
     assert "system topology and resilience criteria satisfied" in r_exp_empty.json().get("reasons", [])
 
+    # 5. POST /api/workspace/resilience/simulate
+    r_sim = client.post("/api/workspace/resilience/simulate", json={"scenario": "TARGET_FAILURE"}, headers=headers)
+    assert r_sim.status_code == 200
+
+    # 6. Multipart share target in server.py (lines 715-740)
+    files = [("file", ("test.txt", b"hello deepseek", "text/plain"))]
+    r_share = client.post(
+        "/share-target",
+        files=files,
+        data={"title": "Test Title", "text": "Sample text"},
+        headers={"Host": "127.0.0.1"},
+        follow_redirects=False,
+    )
+    assert r_share.status_code == 303
+
+    # 7. POST /api/file-text in server.py (lines 531-532)
+    r_ext = client.post(
+        "/api/file-text",
+        files=[("file", ("extract.txt", b"payload data", "text/plain"))],
+        headers=headers,
+    )
+    assert r_ext.status_code == 200
+
 
 def test_workspace_legacy_projects_api_exhaustive(tmp_settings: object) -> None:
     from deepseek_infra.web.server import create_server
