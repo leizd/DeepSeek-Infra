@@ -216,21 +216,24 @@ def find_matching_risk(
     risk_subject: dict[str, Any],
     risk_snapshot: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Find risk record matching the given riskSubject in a risk snapshot."""
-    s_type = str(risk_subject.get("type") or "").upper()
-    s_pid = str(risk_subject.get("policyId") or "")
-    s_tid = str(risk_subject.get("targetId") or risk_subject.get("target") or "")
+    """Find a risk whose declared scope exactly matches RiskSubject v1."""
+    subject_scope = {
+        "type": str(risk_subject.get("type") or "").upper(),
+        "policyId": str(risk_subject.get("policyId") or ""),
+        "backupId": str(risk_subject.get("backupId") or ""),
+        "targetId": str(risk_subject.get("targetId") or risk_subject.get("target") or ""),
+        "failureDomain": str(risk_subject.get("failureDomain") or ""),
+    }
 
     for r in risk_snapshot.get("risks", []):
-        r_type = str(r.get("type") or "").upper()
-        r_pid = str(r.get("policyId") or "")
-        r_tid = str(r.get("target") or "")
-
-        if s_type and r_type != s_type:
-            continue
-        if s_pid and r_pid and r_pid != s_pid:
-            continue
-        if s_tid and r_tid and r_tid != s_tid:
+        risk_scope = {
+            "type": str(r.get("type") or "").upper(),
+            "policyId": str(r.get("policyId") or ""),
+            "backupId": str(r.get("backupId") or ""),
+            "targetId": str(r.get("targetId") or r.get("target") or ""),
+            "failureDomain": str(r.get("failureDomain") or ""),
+        }
+        if any(expected and risk_scope[field] != expected for field, expected in subject_scope.items()):
             continue
         return r
     return None
@@ -274,6 +277,13 @@ def verify_scoped_risk_reduction(
 
     risk_before = find_matching_risk(risk_subject, risk_before_snapshot)
     risk_after = find_matching_risk(risk_subject, risk_after_snapshot)
+
+    if risk_before is None:
+        return False, {
+            "riskSubject": risk_subject,
+            "effectObserved": False,
+            "reason": "target-risk-subject-not-observed-before",
+        }
 
     sev_before = str(risk_before.get("severity") if risk_before else action.get("severityBefore") or action.get("severity") or "warning").lower()
     sev_after = str(risk_after.get("severity") if risk_after else RiskSeverity.HEALTHY.value).lower()

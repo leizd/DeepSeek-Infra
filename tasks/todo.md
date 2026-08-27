@@ -2,7 +2,7 @@
 
 ## Phase 1: Correctness contracts
 
-- [ ] Strict RiskSubject v1 exact matching
+- [x] Strict RiskSubject v1 exact matching
 - [ ] Strong `dr-readiness-proof-v1` producer and verifier
 - [ ] Durable repair/rebalance cancellation before `COMPENSATED`
 - [ ] Checkpoint: focused tests, Ruff, and Mypy

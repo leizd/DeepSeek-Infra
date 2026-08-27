@@ -154,8 +154,16 @@ def test_outcome_verifier_branches(tmp_settings: Path, monkeypatch: pytest.Monke
 
     # 9. verify_scoped_risk_reduction legacy action synthesize riskSubject & worsening risk
     act_legacy_repair = {"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "pol_x", "backupId": "bkp_x", "destTargetId": "tgt_x"}}
-    snap_b = {"risks": [{"type": "REPLICA_LAG", "policyId": "pol_x", "severity": "warning"}]}
-    snap_worse = {"risks": [{"type": "REPLICA_LAG", "policyId": "pol_x", "severity": "critical"}]}
+    snap_b = {
+        "risks": [
+            {"type": "REPLICA_LAG", "policyId": "pol_x", "backupId": "bkp_x", "target": "tgt_x", "severity": "warning"}
+        ]
+    }
+    snap_worse = {
+        "risks": [
+            {"type": "REPLICA_LAG", "policyId": "pol_x", "backupId": "bkp_x", "target": "tgt_x", "severity": "critical"}
+        ]
+    }
     ok_worse, res_worse = resilience_outcome_verifier.verify_scoped_risk_reduction(act_legacy_repair, snap_b, snap_worse)
     assert ok_worse is False
     assert "target-risk-not-improved" in res_worse["reason"]

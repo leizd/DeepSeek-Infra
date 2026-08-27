@@ -50,6 +50,21 @@ def _utc_iso(dt: datetime | None = None) -> str:
     return current.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _risk_subject_from_record(risk: dict[str, Any]) -> dict[str, str | None]:
+    """Bind an action only to scope that the observed risk actually declared."""
+    policy_id = str(risk.get("policyId") or "")
+    backup_id = str(risk.get("backupId") or "")
+    target_id = str(risk.get("targetId") or risk.get("target") or "")
+    failure_domain = str(risk.get("failureDomain") or "")
+    return {
+        "type": str(risk.get("type") or "").upper(),
+        "policyId": policy_id or None,
+        "backupId": backup_id or None,
+        "targetId": target_id or None,
+        "failureDomain": failure_domain or None,
+    }
+
+
 def compute_plan_digest(plan: dict[str, Any]) -> str:
     """Compute deterministic SHA-256 digest of a resilience plan."""
     payload = {
@@ -271,12 +286,7 @@ def plan_resilience_actions(
                     "severity": r_sev,
                     "confidence": str(r.get("confidence", "verified")),
                     "requiresApproval": req_appr,
-                    "riskSubject": {
-                        "type": RiskType.CAPACITY_EXHAUSTION.value,
-                        "targetId": target_id,
-                        "policyId": cand_pid,
-                        "backupId": cand_bid,
-                    },
+                    "riskSubject": _risk_subject_from_record(r),
                     "severityBefore": r_sev,
                     "expectedEffect": "severity-decrease",
                     "parameters": {
@@ -320,12 +330,7 @@ def plan_resilience_actions(
                 "severity": r_sev,
                 "confidence": str(r.get("confidence", "verified")),
                 "requiresApproval": req_appr,
-                "riskSubject": {
-                    "type": r_type,
-                    "policyId": policy_id,
-                    "backupId": backup_id,
-                    "targetId": dest_target or source_target,
-                },
+                "riskSubject": _risk_subject_from_record(r),
                 "severityBefore": r_sev,
                 "expectedEffect": "severity-decrease",
                 "parameters": {
@@ -357,12 +362,7 @@ def plan_resilience_actions(
                 "severity": r_sev,
                 "confidence": str(r.get("confidence", "verified")),
                 "requiresApproval": req_appr,
-                "riskSubject": {
-                    "type": RiskType.DR_STALENESS.value,
-                    "policyId": str(policy_id or ""),
-                    "backupId": str(drill_backup_id or ""),
-                    "targetId": str(drill_target_id or ""),
-                },
+                "riskSubject": _risk_subject_from_record(r),
                 "severityBefore": r_sev,
                 "expectedEffect": "severity-decrease",
                 "parameters": {

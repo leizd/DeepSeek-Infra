@@ -432,6 +432,11 @@ def test_autonomous_action_has_journal_and_executes(tmp_settings: Path, monkeypa
     monkeypatch.setattr(resilience_action_journal, "check_action_freshness", lambda action, snap: (True, "fresh"))
     monkeypatch.setattr(resilience_action_journal, "simulate_action", lambda action: (True, {"simulationPassed": True}))
     monkeypatch.setattr(resilience_action_journal, "verify_action_outcome", lambda action, res: (True, {"executionVerified": True}))
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "verify_scoped_risk_reduction",
+        lambda action, before, after: (True, {"effectObserved": True, "riskSubject": action.get("riskSubject")}),
+    )
 
     action = {
         "actionId": "act-repair-1",
@@ -790,6 +795,11 @@ def test_operator_console_resilience_routes(tmp_settings: Path, monkeypatch: pyt
     monkeypatch.setattr(resilience_action_journal, "check_action_freshness", lambda action, snap: (True, "fresh"))
     monkeypatch.setattr(resilience_action_journal, "simulate_action", lambda action: (True, {"simulationPassed": True}))
     monkeypatch.setattr(resilience_action_journal, "verify_action_outcome", lambda action, res: (True, {"executionVerified": True}))
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "verify_scoped_risk_reduction",
+        lambda action, before, after: (True, {"effectObserved": True, "riskSubject": action.get("riskSubject")}),
+    )
 
     res_exec_id = client.post(
         "/api/workspace/resilience/execute",
@@ -1613,6 +1623,11 @@ def test_resilience_action_journal_execution_dispatch_types(tmp_settings: Path, 
     monkeypatch.setattr(resilience_action_journal, "check_action_freshness", lambda action, snap: (True, "fresh"))
     monkeypatch.setattr(resilience_action_journal, "simulate_action", lambda action: (True, {"simulationPassed": True}))
     monkeypatch.setattr(resilience_action_journal, "verify_action_outcome", lambda action, res: (True, {"executionVerified": True}))
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "verify_scoped_risk_reduction",
+        lambda action, before, after: (True, {"effectObserved": True, "riskSubject": action.get("riskSubject")}),
+    )
 
     # 1. CREATE_REBALANCE_JOB
     act_reb = {
