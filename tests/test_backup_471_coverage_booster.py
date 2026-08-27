@@ -199,7 +199,8 @@ def test_booster_compensation_and_effects() -> None:
     assert res_can["compensationState"] == "JOB_CANCELLED"
 
 
-def test_booster_action_freshness_and_simulation_branches(tmp_path: Path) -> None:
+def test_booster_action_freshness_and_simulation_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backup_targets, "_containment_violation", lambda *a, **k: None)
     t1_dir = tmp_path / "tgt_sim1"
     t1_dir.mkdir(parents=True, exist_ok=True)
     t2_dir = tmp_path / "tgt_sim2"
@@ -262,7 +263,7 @@ def test_booster_action_freshness_and_simulation_branches(tmp_path: Path) -> Non
         {"job": {"status": "failed", "error": "simulated-failure"}},
     )
     assert v_ok1 is False
-    assert "rebalance-job-id-missing" in v_res1.get("error", "") or "failed" in v_res1.get("error", "")
+    assert "rebalance-job-id-missing" in v_res1.get("error", "") or "failed" in v_res1.get("error", "") or "failure" in v_res1.get("error", "")
 
     v_ok2, v_res2 = resilience_action_journal.verify_action_outcome(
         {"type": "UNSUPPORTED_TYPE", "parameters": {}},

@@ -27,6 +27,7 @@ AUTH_DR_SCENARIO = "real-three-minio-control-authority-disaster-recovery"
 FS_FRESH_AUTH_SCENARIO = "fresh-process-filesystem-authority-recovery"
 FRESH_AUTH_SCENARIO = "real-three-minio-fresh-process-authority-recovery"
 PROCESS_REPLACE_SCENARIO = "real-three-minio-process-replacement-authority-recovery"
+AUTONOMOUS_REMEDIATION_SCENARIO = "real-three-minio-autonomous-remediation"
 SCENARIOS: dict[str, tuple[str, ...]] = {
     REAL_SCENARIO: (
         "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e",
@@ -52,6 +53,9 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
     ),
     PROCESS_REPLACE_SCENARIO: (
         "tests/test_backup_468_real_backup_dr_sigkill_e2e.py::test_real_three_minio_sigkill_backup_disaster_recovery_e2e",
+    ),
+    AUTONOMOUS_REMEDIATION_SCENARIO: (
+        "tests/test_backup_472_real_three_minio_remediation_e2e.py::test_real_three_minio_autonomous_remediation_e2e",
     ),
 }
 CHECK_SCENARIOS = {
@@ -115,6 +119,11 @@ CHECK_SCENARIOS = {
     "realPostRecoveryBackupHasValidReceiptBinding": PROCESS_REPLACE_SCENARIO,
     "processAExitedBySigkill": PROCESS_REPLACE_SCENARIO,
     "evidenceCheckCannotPassWithoutStructuredProof": PROCESS_REPLACE_SCENARIO,
+    # 4.7.2 gates
+    "realThreeMinioAutonomousRemediationE2E": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "coordinatedAutonomousRemediationGraph": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "verifiedScopedRiskReduction": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "crashRecoverableExactlyOnceExecution": AUTONOMOUS_REMEDIATION_SCENARIO,
 }
 
 # Claims that MUST be backed by evidence-proof-v2 (semantic validators; not pytest exit alone).

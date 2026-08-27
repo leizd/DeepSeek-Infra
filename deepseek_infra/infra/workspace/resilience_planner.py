@@ -146,13 +146,6 @@ def find_rebalance_candidate_copy(source_target_id: str) -> tuple[str | None, st
                 "healthy",
             }:
                 return pid, bid
-    # Fallback to any latest point if policies exist
-    if policies:
-        p0 = policies[0]
-        pid0 = str(p0.get("policyId") or "")
-        pt0 = backup_dr_ledger.latest_recovery_point(policy_id=pid0)
-        if pt0:
-            return pid0, str(pt0.get("backupId") or "")
     return None, None
 
 
@@ -263,7 +256,7 @@ def plan_resilience_actions(
             target_id = str(r.get("target") or "")
             dest_target = select_rebalance_destination(target_id)
             cand_pid, cand_bid = find_rebalance_candidate_copy(target_id)
-            if target_id and dest_target:
+            if target_id and dest_target and cand_pid and cand_bid:
                 action_type = ResilienceActionType.CREATE_REBALANCE_JOB.value
                 req_appr = not autonomous_action_policy.is_action_autonomous(action_type, policy)
                 action_intent = {
@@ -272,15 +265,23 @@ def plan_resilience_actions(
                     "source": target_id,
                     "destination": dest_target,
                     "target": target_id,
-                    "policyId": cand_pid or "",
-                    "backupId": cand_bid or "",
+                    "policyId": cand_pid,
+                    "backupId": cand_bid,
                     "reason": "capacity-risk",
                     "severity": r_sev,
                     "confidence": str(r.get("confidence", "verified")),
                     "requiresApproval": req_appr,
+                    "riskSubject": {
+                        "type": RiskType.CAPACITY_EXHAUSTION.value,
+                        "targetId": target_id,
+                        "policyId": cand_pid,
+                        "backupId": cand_bid,
+                    },
+                    "severityBefore": r_sev,
+                    "expectedEffect": "severity-decrease",
                     "parameters": {
-                        "policyId": cand_pid or "",
-                        "backupId": cand_bid or "",
+                        "policyId": cand_pid,
+                        "backupId": cand_bid,
                         "sourceTargetId": target_id,
                         "destTargetId": dest_target,
                         "reason": "proactive-capacity-rebalance",
@@ -319,6 +320,14 @@ def plan_resilience_actions(
                 "severity": r_sev,
                 "confidence": str(r.get("confidence", "verified")),
                 "requiresApproval": req_appr,
+                "riskSubject": {
+                    "type": r_type,
+                    "policyId": policy_id,
+                    "backupId": backup_id,
+                    "targetId": dest_target or source_target,
+                },
+                "severityBefore": r_sev,
+                "expectedEffect": "severity-decrease",
                 "parameters": {
                     "policyId": policy_id,
                     "backupId": backup_id,
@@ -348,6 +357,14 @@ def plan_resilience_actions(
                 "severity": r_sev,
                 "confidence": str(r.get("confidence", "verified")),
                 "requiresApproval": req_appr,
+                "riskSubject": {
+                    "type": RiskType.DR_STALENESS.value,
+                    "policyId": str(policy_id or ""),
+                    "backupId": str(drill_backup_id or ""),
+                    "targetId": str(drill_target_id or ""),
+                },
+                "severityBefore": r_sev,
+                "expectedEffect": "severity-decrease",
                 "parameters": {
                     "policyId": policy_id,
                     "backupId": drill_backup_id,
@@ -368,6 +385,11 @@ def plan_resilience_actions(
                     "severity": r_sev,
                     "confidence": str(r.get("confidence", "verified")),
                     "requiresApproval": True,
+                    "riskSubject": {
+                        "type": RiskType.AUTHORITY_DEGRADATION.value,
+                    },
+                    "severityBefore": r_sev,
+                    "expectedEffect": "severity-decrease",
                     "parameters": {},
                     "evidence": r.get("evidence", []),
                 }

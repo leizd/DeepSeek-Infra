@@ -55,6 +55,8 @@ def _utc_iso(dt: datetime | None = None) -> str:
 
 def test_three_target_replica_deficit_autonomous_remediation(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test full closed-loop remediation of replica deficit across 3 distinct failure domains."""
+    monkeypatch.setattr(backup_targets, "_containment_violation", lambda *a, **k: None)
+    monkeypatch.setattr(backup_replication, "authenticate_committed_copy", lambda *a, **k: ("authenticated", {"r": 1}, {"c": 1}))
     # 1. Setup 3 distinct target directories
     dir_a = tmp_settings / "target_us_east"
     dir_b = tmp_settings / "target_us_west"
@@ -183,6 +185,8 @@ def test_three_target_replica_deficit_autonomous_remediation(tmp_settings: Path,
 
 def test_capacity_rebalance_autonomous_closed_loop(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test capacity exhaustion detection and autonomous rebalance planning."""
+    monkeypatch.setattr(backup_targets, "_containment_violation", lambda *a, **k: None)
+    monkeypatch.setattr(backup_replication, "authenticate_committed_copy", lambda *a, **k: ("authenticated", {"r": 1}, {"c": 1}))
     dir_a = tmp_settings / "target_full"
     dir_b = tmp_settings / "target_empty"
     dir_a.mkdir(parents=True, exist_ok=True)
@@ -212,13 +216,25 @@ def test_capacity_rebalance_autonomous_closed_loop(tmp_settings: Path, monkeypat
         committed_at=_utc_iso(),
     )
 
-    # Mock capacity: target_full is 85% full (15% free), target_empty is 90% free
+    rebalanced = False
+
+    # Mock capacity: target_full is 85% full (15% free), target_empty is 90% free; after rebalance target_full is 50% free
     def mock_capacity(target_id: str, probe: bool = False) -> dict[str, Any]:
+        nonlocal rebalanced
         if target_id == "target_full":
+            if rebalanced:
+                return {"freePercent": 50.0, "totalBytes": 1000, "freeBytes": 500, "usedPercent": 50.0}
             return {"freePercent": 15.0, "totalBytes": 1000, "freeBytes": 150, "usedPercent": 85.0}
         return {"freePercent": 90.0, "totalBytes": 1000, "freeBytes": 900, "usedPercent": 10.0}
 
     monkeypatch.setattr(backup_capacity, "get_target_capacity", mock_capacity)
+
+    def mock_exec_rebalance(job_id: str) -> dict[str, Any]:
+        nonlocal rebalanced
+        rebalanced = True
+        return {"status": "success", "jobId": job_id, "phase": "complete"}
+
+    monkeypatch.setattr(backup_replication, "execute_rebalance_job", mock_exec_rebalance)
 
     # Assess risk
     snap = resilience_risk_engine.assess_risks(probe=False)

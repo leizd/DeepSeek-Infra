@@ -1,0 +1,223 @@
+{
+  "ok": false,
+  "status": "FAIL",
+  "title": "Real Three-MinIO Storage Control Plane, Tiering, Placement, and Control Recovery E2E",
+  "checks": {
+    "realThreeMinioEndpoints": "FAIL",
+    "productionSchedulerBackupExecutorAndMaintenanceSupervisor": "FAIL",
+    "realAgeRandomizedEncryption": "FAIL",
+    "realServerStopFailoverAndRestartCatchup": "FAIL",
+    "providerBackedRepairReconciliation": "FAIL",
+    "autonomousDrainRetirementGcRestore": "FAIL",
+    "formalReceiptCommitHistoryPreserved": "FAIL",
+    "fakeS3AndStubCryptoForbidden": "FAIL",
+    "realThreeMinioTierMigrationE2E": "FAIL",
+    "realControlDbCrashRecoveryE2E": "FAIL",
+    "tierMigrationPreservesBackupIdAndObjectSetDigest": "FAIL",
+    "tierMigrationDoesNotInvokeAgeEncryption": "FAIL",
+    "referenceIndexRebuildsFromFormalTargetTruth": "FAIL",
+    "maintenanceScopesProgressIndependently": "FAIL",
+    "objectSetV1WireFormatUnchanged": "FAIL",
+    "realThreeMinioAutonomousPlacementE2E": "FAIL",
+    "incompleteLineageBlocksChainMigration": "FAIL",
+    "indexCoverageBlocksGcUntilComplete": "FAIL",
+    "placementControllerCorrectnessOrder": "FAIL",
+    "targetShardedRepairScopesProgressIndependently": "FAIL",
+    "capacityReadinessZeroRemoteIo": "FAIL",
+    "randomizedAgeAndObjectSetWireFreeze": "FAIL",
+    "realThreeMinioTransactionalGcFencingE2E": "FAIL",
+    "expiredMetadataFenceNeverDeletesAfterTakeover": "FAIL",
+    "realMinioPublishGcLeaseExpiryRaceNeverLosesCiphertext": "FAIL",
+    "realThreeMinioControlAuthorityDisasterRecoveryE2E": "FAIL",
+    "policyRevisionSurvivesTotalControlDbLoss": "FAIL",
+    "targetTopologySurvivesTotalControlDbLoss": "FAIL",
+    "freshNodeReconstructsControlAuthority": "FAIL",
+    "authenticatedCommittedReceiptsAreRecoveryTruth": "FAIL",
+    "expiredLeasesAreNeverResurrected": "FAIL",
+    "recoveryAdvancesControlBootEpoch": "FAIL",
+    "controlAuthorityCheckpointContainsNoSecrets": "FAIL",
+    "controlRecoveryPerformsZeroAgeEncryption": "FAIL",
+    "freshProcessFilesystemAuthorityRecovery": "FAIL",
+    "realProcessCrashAfterPreparedMutationRecoversExactlyOnce": "FAIL",
+    "realThreeMinioFreshProcessAuthorityRecoveryE2E": "FAIL",
+    "realFreshProcessUsesProductionS3Bootstrap": "FAIL",
+    "realFreshProcessHasZeroInheritedS3Handles": "FAIL",
+    "realFreshProcessIsReadOnlyBeforeFormalTruth": "FAIL",
+    "realFreshProcessRestoresPreDisasterBackup": "FAIL",
+    "realFreshProcessCreatesPostRecoveryBackup": "FAIL",
+    "realFreshProcessBootEpochStrictlyIncreases": "FAIL",
+    "realThreeMinioProcessReplacementE2E": "FAIL",
+    "freshProcessAAndBHaveDifferentPids": "FAIL",
+    "processAIsDeadBeforeProcessBStarts": "FAIL",
+    "freshProcessBUsesProductionAuthorityStoreFactory": "FAIL",
+    "realPreDisasterBackupIsActuallyRestored": "FAIL",
+    "restoredWorkspaceDigestMatchesPreDisasterDigest": "FAIL",
+    "realPostRecoveryBackupHasValidCommit": "FAIL",
+    "realPostRecoveryBackupHasValidReceiptBinding": "FAIL",
+    "processAExitedBySigkill": "FAIL",
+    "evidenceCheckCannotPassWithoutStructuredProof": "FAIL",
+    "realThreeMinioAutonomousRemediationE2E": "FAIL",
+    "coordinatedAutonomousRemediationGraph": "FAIL",
+    "verifiedScopedRiskReduction": "FAIL",
+    "crashRecoverableExactlyOnceExecution": "FAIL"
+  },
+  "checkProvenance": {
+    "realThreeMinioEndpoints": "real-three-minio-storage-control-plane",
+    "productionSchedulerBackupExecutorAndMaintenanceSupervisor": "real-three-minio-storage-control-plane",
+    "realAgeRandomizedEncryption": "real-three-minio-storage-control-plane",
+    "realServerStopFailoverAndRestartCatchup": "real-three-minio-storage-control-plane",
+    "providerBackedRepairReconciliation": "real-three-minio-storage-control-plane",
+    "autonomousDrainRetirementGcRestore": "real-three-minio-storage-control-plane",
+    "formalReceiptCommitHistoryPreserved": "real-three-minio-storage-control-plane",
+    "fakeS3AndStubCryptoForbidden": "real-three-minio-storage-control-plane",
+    "realThreeMinioTierMigrationE2E": "real-three-minio-tiering-control-recovery",
+    "realControlDbCrashRecoveryE2E": "real-three-minio-tiering-control-recovery",
+    "tierMigrationPreservesBackupIdAndObjectSetDigest": "real-three-minio-tiering-control-recovery",
+    "tierMigrationDoesNotInvokeAgeEncryption": "real-three-minio-tiering-control-recovery",
+    "referenceIndexRebuildsFromFormalTargetTruth": "real-three-minio-tiering-control-recovery",
+    "maintenanceScopesProgressIndependently": "real-three-minio-tiering-control-recovery",
+    "objectSetV1WireFormatUnchanged": "real-three-minio-tiering-control-recovery",
+    "realThreeMinioAutonomousPlacementE2E": "real-three-minio-autonomous-placement-control",
+    "incompleteLineageBlocksChainMigration": "real-three-minio-autonomous-placement-control",
+    "indexCoverageBlocksGcUntilComplete": "real-three-minio-autonomous-placement-control",
+    "placementControllerCorrectnessOrder": "real-three-minio-autonomous-placement-control",
+    "targetShardedRepairScopesProgressIndependently": "real-three-minio-autonomous-placement-control",
+    "capacityReadinessZeroRemoteIo": "real-three-minio-autonomous-placement-control",
+    "randomizedAgeAndObjectSetWireFreeze": "real-three-minio-autonomous-placement-control",
+    "realThreeMinioTransactionalGcFencingE2E": "real-three-minio-transactional-gc-fencing",
+    "expiredMetadataFenceNeverDeletesAfterTakeover": "real-three-minio-transactional-gc-fencing",
+    "realMinioPublishGcLeaseExpiryRaceNeverLosesCiphertext": "real-three-minio-transactional-gc-fencing",
+    "realThreeMinioControlAuthorityDisasterRecoveryE2E": "real-three-minio-control-authority-disaster-recovery",
+    "policyRevisionSurvivesTotalControlDbLoss": "real-three-minio-control-authority-disaster-recovery",
+    "targetTopologySurvivesTotalControlDbLoss": "real-three-minio-control-authority-disaster-recovery",
+    "freshNodeReconstructsControlAuthority": "real-three-minio-control-authority-disaster-recovery",
+    "authenticatedCommittedReceiptsAreRecoveryTruth": "real-three-minio-control-authority-disaster-recovery",
+    "expiredLeasesAreNeverResurrected": "real-three-minio-control-authority-disaster-recovery",
+    "recoveryAdvancesControlBootEpoch": "real-three-minio-control-authority-disaster-recovery",
+    "controlAuthorityCheckpointContainsNoSecrets": "real-three-minio-control-authority-disaster-recovery",
+    "controlRecoveryPerformsZeroAgeEncryption": "real-three-minio-control-authority-disaster-recovery",
+    "freshProcessFilesystemAuthorityRecovery": "fresh-process-filesystem-authority-recovery",
+    "realProcessCrashAfterPreparedMutationRecoversExactlyOnce": "fresh-process-filesystem-authority-recovery",
+    "realThreeMinioFreshProcessAuthorityRecoveryE2E": "real-three-minio-fresh-process-authority-recovery",
+    "realFreshProcessUsesProductionS3Bootstrap": "real-three-minio-fresh-process-authority-recovery",
+    "realFreshProcessHasZeroInheritedS3Handles": "real-three-minio-fresh-process-authority-recovery",
+    "realFreshProcessIsReadOnlyBeforeFormalTruth": "real-three-minio-fresh-process-authority-recovery",
+    "realFreshProcessRestoresPreDisasterBackup": "real-three-minio-process-replacement-authority-recovery",
+    "realFreshProcessCreatesPostRecoveryBackup": "real-three-minio-process-replacement-authority-recovery",
+    "realFreshProcessBootEpochStrictlyIncreases": "real-three-minio-process-replacement-authority-recovery",
+    "realThreeMinioProcessReplacementE2E": "real-three-minio-process-replacement-authority-recovery",
+    "freshProcessAAndBHaveDifferentPids": "real-three-minio-process-replacement-authority-recovery",
+    "processAIsDeadBeforeProcessBStarts": "real-three-minio-process-replacement-authority-recovery",
+    "freshProcessBUsesProductionAuthorityStoreFactory": "real-three-minio-process-replacement-authority-recovery",
+    "realPreDisasterBackupIsActuallyRestored": "real-three-minio-process-replacement-authority-recovery",
+    "restoredWorkspaceDigestMatchesPreDisasterDigest": "real-three-minio-process-replacement-authority-recovery",
+    "realPostRecoveryBackupHasValidCommit": "real-three-minio-process-replacement-authority-recovery",
+    "realPostRecoveryBackupHasValidReceiptBinding": "real-three-minio-process-replacement-authority-recovery",
+    "processAExitedBySigkill": "real-three-minio-process-replacement-authority-recovery",
+    "evidenceCheckCannotPassWithoutStructuredProof": "real-three-minio-process-replacement-authority-recovery",
+    "realThreeMinioAutonomousRemediationE2E": "real-three-minio-autonomous-remediation",
+    "coordinatedAutonomousRemediationGraph": "real-three-minio-autonomous-remediation",
+    "verifiedScopedRiskReduction": "real-three-minio-autonomous-remediation",
+    "crashRecoverableExactlyOnceExecution": "real-three-minio-autonomous-remediation"
+  },
+  "requiredProofChecks": {
+    "real-three-minio-process-replacement-authority-recovery": [
+      "realPreDisasterBackupIsActuallyRestored",
+      "realFreshProcessRestoresPreDisasterBackup",
+      "restoredWorkspaceDigestMatchesPreDisasterDigest",
+      "realPostRecoveryBackupHasValidCommit",
+      "realFreshProcessCreatesPostRecoveryBackup",
+      "realPostRecoveryBackupHasValidReceiptBinding",
+      "freshProcessAAndBHaveDifferentPids",
+      "processAIsDeadBeforeProcessBStarts",
+      "processAExitedBySigkill",
+      "realFreshProcessBootEpochStrictlyIncreases",
+      "realThreeMinioProcessReplacementE2E",
+      "freshProcessBUsesProductionAuthorityStoreFactory",
+      "evidenceCheckCannotPassWithoutStructuredProof"
+    ]
+  },
+  "scenarios": {
+    "real-three-minio-storage-control-plane": {
+      "nodeIds": [
+        "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e"
+      ],
+      "exitCode": 2,
+      "error": "missing endpoints: DEEPSEEK_TEST_S3_ENDPOINT_A, DEEPSEEK_TEST_S3_ENDPOINT_B, DEEPSEEK_TEST_S3_ENDPOINT_C; missing container identities: DEEPSEEK_TEST_MINIO_CONTAINER_A, DEEPSEEK_TEST_MINIO_CONTAINER_B, DEEPSEEK_TEST_MINIO_CONTAINER_C"
+    },
+    "real-three-minio-tiering-control-recovery": {
+      "nodeIds": [
+        "tests/test_backup_459_real_tiering_control_e2e.py::test_real_three_minio_tiering_and_control_recovery_e2e"
+      ],
+      "exitCode": 2,
+      "error": "missing endpoints: DEEPSEEK_TEST_S3_ENDPOINT_A, DEEPSEEK_TEST_S3_ENDPOINT_B, DEEPSEEK_TEST_S3_ENDPOINT_C; missing container identities: DEEPSEEK_TEST_MINIO_CONTAINER_A, DEEPSEEK_TEST_MINIO_CONTAINER_B, DEEPSEEK_TEST_MINIO_CONTAINER_C"
+    },
+    "real-three-minio-autonomous-placement-control": {
+      "nodeIds": [
+        "tests/test_backup_460_real_placement_control_e2e.py::test_real_three_minio_autonomous_placement_control_e2e"
+      ],
+      "exitCode": 2,
+      "error": "missing endpoints: DEEPSEEK_TEST_S3_ENDPOINT_A, DEEPSEEK_TEST_S3_ENDPOINT_B, DEEPSEEK_TEST_S3_ENDPOINT_C; missing container identities: DEEPSEEK_TEST_MINIO_CONTAINER_A, DEEPSEEK_TEST_MINIO_CONTAINER_B, DEEPSEEK_TEST_MINIO_CONTAINER_C"
+    },
+    "real-three-minio-transactional-gc-fencing": {
+      "nodeIds": [
+        "tests/test_backup_462_real_transactional_gc_e2e.py::test_real_three_minio_transactional_gc_fencing_e2e"
+      ],
+      "exitCode": 2,
+      "error": "missing endpoints: DEEPSEEK_TEST_S3_ENDPOINT_A, DEEPSEEK_TEST_S3_ENDPOINT_B, DEEPSEEK_TEST_S3_ENDPOINT_C; missing container identities: DEEPSEEK_TEST_MINIO_CONTAINER_A, DEEPSEEK_TEST_MINIO_CONTAINER_B, DEEPSEEK_TEST_MINIO_CONTAINER_C"
+    },
+    "real-three-minio-control-authority-disaster-recovery": {
+      "nodeIds": [
+        "tests/test_backup_463_real_control_authority_disaster_e2e.py::test_real_three_minio_control_authority_disaster_recovery_e2e"
+      ],
+      "exitCode": 2,
+      "error": "missing endpoints: DEEPSEEK_TEST_S3_ENDPOINT_A, DEEPSEEK_TEST_S3_ENDPOINT_B, DEEPSEEK_TEST_S3_ENDPOINT_C; missing container identities: DEEPSEEK_TEST_MINIO_CONTAINER_A, DEEPSEEK_TEST_MINIO_CONTAINER_B, DEEPSEEK_TEST_MINIO_CONTAINER_C"
+    },
+    "fresh-process-filesystem-authority-recovery": {
+      "nodeIds": [
+        "tests/test_backup_465_fresh_process_authority.py::test_subprocess_fresh_process_detects_remote_authority",
+        "tests/test_backup_465_fresh_process_authority.py::test_subprocess_crash_after_prepared_recovers_exactly_once"
+      ],
+      "exitCode": 2,
+      "error": "missing endpoints: DEEPSEEK_TEST_S3_ENDPOINT_A, DEEPSEEK_TEST_S3_ENDPOINT_B, DEEPSEEK_TEST_S3_ENDPOINT_C; missing container identities: DEEPSEEK_TEST_MINIO_CONTAINER_A, DEEPSEEK_TEST_MINIO_CONTAINER_B, DEEPSEEK_TEST_MINIO_CONTAINER_C"
+    },
+    "real-three-minio-fresh-process-authority-recovery": {
+      "nodeIds": [
+        "tests/test_backup_466_real_fresh_process_minio_e2e.py::test_real_three_minio_fresh_process_authority_recovery_e2e"
+      ],
+      "exitCode": 2,
+      "error": "missing endpoints: DEEPSEEK_TEST_S3_ENDPOINT_A, DEEPSEEK_TEST_S3_ENDPOINT_B, DEEPSEEK_TEST_S3_ENDPOINT_C; missing container identities: DEEPSEEK_TEST_MINIO_CONTAINER_A, DEEPSEEK_TEST_MINIO_CONTAINER_B, DEEPSEEK_TEST_MINIO_CONTAINER_C"
+    },
+    "real-three-minio-process-replacement-authority-recovery": {
+      "nodeIds": [
+        "tests/test_backup_468_real_backup_dr_sigkill_e2e.py::test_real_three_minio_sigkill_backup_disaster_recovery_e2e"
+      ],
+      "exitCode": 2,
+      "error": "missing endpoints: DEEPSEEK_TEST_S3_ENDPOINT_A, DEEPSEEK_TEST_S3_ENDPOINT_B, DEEPSEEK_TEST_S3_ENDPOINT_C; missing container identities: DEEPSEEK_TEST_MINIO_CONTAINER_A, DEEPSEEK_TEST_MINIO_CONTAINER_B, DEEPSEEK_TEST_MINIO_CONTAINER_C"
+    },
+    "real-three-minio-autonomous-remediation": {
+      "nodeIds": [
+        "tests/test_backup_472_real_three_minio_remediation_e2e.py::test_real_three_minio_autonomous_remediation_e2e"
+      ],
+      "exitCode": 2,
+      "error": "missing endpoints: DEEPSEEK_TEST_S3_ENDPOINT_A, DEEPSEEK_TEST_S3_ENDPOINT_B, DEEPSEEK_TEST_S3_ENDPOINT_C; missing container identities: DEEPSEEK_TEST_MINIO_CONTAINER_A, DEEPSEEK_TEST_MINIO_CONTAINER_B, DEEPSEEK_TEST_MINIO_CONTAINER_C"
+    }
+  },
+  "endpoints": {
+    "DEEPSEEK_TEST_S3_ENDPOINT_A": null,
+    "DEEPSEEK_TEST_S3_ENDPOINT_B": null,
+    "DEEPSEEK_TEST_S3_ENDPOINT_C": null
+  },
+  "version": "4.7.2",
+  "testedRevision": "fa952867f45673e8b9bd31c6e33637b4278369bd",
+  "sourceRevision": "fa952867f45673e8b9bd31c6e33637b4278369bd",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-08-27T03:15:22Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  }
+}

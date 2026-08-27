@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.7.1。
+适用版本：v4.7.2。
 
-> 4.7.1：可验证自治修复与严格一次执行韧性闭环（Verified Autonomous Remediation & Exactly-Once Resilience）：可执行动作契约（ResilienceActionIntent v1）、原子规划物化（Atomic Plan Materialization）、TOCTOU 风险再校验（Fresh Risk Admission）、CAS 租约严格一次认领（Exactly-Once Action Claim）、底层任务动作幂等（Subsystem Action Idempotency）、代码级硬安全底线（NEVER_AUTONOMOUS Safety Floor）、权威风险源直连（Canonical Authority Verify）、前置仿真与真实后置验证（Precondition Simulation & Post-Condition Verification）、安全补偿语义（Safe Compensation）、准入速率限制（Rate Limits Enforcement）、闭环风险改善证明（Closed-Loop Risk Reduction）与真实三 MinIO 自治修复 Evidence。
+> 4.7.2：协调式自治修复与崩溃可恢复执行（Coordinated Autonomous Remediation & Crash-Recoverable Execution）：不可变规划与动作身份（Immutable Plan & Action Identity）、崩溃可恢复租约与 CAS 隔离（Crash-Recoverable Action Leases & CAS Fencing）、副作用对账引擎与 EFFECT_UNKNOWN（Effect Reconciliation Engine）、全子系统动作幂等（All-Subsystem Idempotency）、真实目标耐久性与完成契约（Real Outcome Contracts）、作用域风险削减验证（Scoped Risk Effect Verification）、多风险协调图（Multi-Risk Coordination DAG）、资源冲突与依赖锁（Resource Conflict & Dependency Locks）、原子全局与单目标安全预算（Atomic Safety Budgets）、爆炸半径不变量防护（Blast-Radius Invariants）与真实三 MinIO 自治修复 Evidence。
 
 > 4.7.0：全局恢复智能与自治韧性（Global Recovery Intelligence & Autonomous Resilience）：风险评估引擎（Risk Assessment Engine）、确定性韧性决策规划（Deterministic Resilience Planner）、自治动作策略门禁（Autonomous Action Policy）、持久化动作日志与证明绑定（Resilience Action Journal）、多周期容量预测（Predictive Capacity Forecaster）、RPO/RTO 放置优化器、What-if DR 模拟器（Recovery Simulation）、持续韧性评分（Continuous Resilience Score 0-100）、Decision Proof v3 校验；保持现有 Backup wire 格式与 Authority Checkpoint 完全冻结。
 

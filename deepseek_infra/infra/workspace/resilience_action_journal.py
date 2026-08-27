@@ -1,15 +1,18 @@
-"""Global Recovery Intelligence - Action Journal & Evidence Binding (4.7.1 Gates B, C, D, E, H, I, J, K, L).
+"""Global Recovery Intelligence - Action Journal & Evidence Binding (4.7.2 Gates A, B, C, D, E, F, I, J, K, L).
 
 Durable, transactional lifecycle journal for all autonomous and operator-guided
 resilience actions. Guarantees:
-1. Atomic plan materialization (materialize_resilience_plan)
-2. Exactly-once durable lease claims via SQLite CAS (claim_action)
-3. TOCTOU fresh risk checking before execution (check_action_freshness)
-4. Subsystem action idempotency propagation (resilienceActionId)
+1. Immutable create-once Plan and Action Identity (Gate A)
+2. Crash-recoverable CAS claims with executionEpoch and renewable leases (Gate B)
+3. Effect handle persistence & crash reconciliation (Gate C)
+4. Subsystem action idempotency propagation (Gate D)
 5. Precondition simulation before mutation (simulate_action)
-6. Real post-condition outcome verification (verify_action_outcome)
-7. Safe compensation lifecycle (NO_EFFECT, CANCELABLE, COMPENSATABLE, IRREVERSIBLE)
-8. Closed-loop risk reduction validation (riskBefore -> riskAfter)
+6. Real post-condition outcome verification (Gate E)
+7. Scoped closed-loop risk reduction verification (Gate F)
+8. Transactional resource locks (Gate I)
+9. Atomic global and per-target safety budgets (Gate J)
+10. Blast-radius invariant enforcement (Gate K)
+11. Effect-aware compensation and EFFECT_UNKNOWN handling (Gate L)
 """
 
 from __future__ import annotations
@@ -17,12 +20,17 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.workspace import (
+    resilience_outcome_verifier,
+    resilience_resource_locks,
+)
 
 JOURNAL_DIR = config.ROOT / ".resilience-journal"
 JOURNAL_DB = JOURNAL_DIR / "journal.sqlite3"
@@ -53,8 +61,14 @@ CREATE TABLE IF NOT EXISTS resilience_actions (
     owner_instance_id TEXT,
     lease_until TEXT,
     claim_token TEXT,
+    execution_epoch INTEGER NOT NULL DEFAULT 0,
     effect_class TEXT,
     compensation_state TEXT,
+    effect_handle_json TEXT,
+    risk_subject_json TEXT,
+    expected_effect TEXT,
+    severity_before TEXT,
+    coordination_plan_id TEXT,
     execution_result_json TEXT,
     verification_result_json TEXT,
     decision_proof_json TEXT,
@@ -82,8 +96,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("owner_instance_id", "TEXT"),
         ("lease_until", "TEXT"),
         ("claim_token", "TEXT"),
+        ("execution_epoch", "INTEGER NOT NULL DEFAULT 0"),
         ("effect_class", "TEXT"),
         ("compensation_state", "TEXT"),
+        ("effect_handle_json", "TEXT"),
+        ("risk_subject_json", "TEXT"),
+        ("expected_effect", "TEXT"),
+        ("severity_before", "TEXT"),
+        ("coordination_plan_id", "TEXT"),
         ("risk_before_digest", "TEXT"),
         ("risk_after_digest", "TEXT"),
     ]
@@ -93,6 +113,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE resilience_actions ADD COLUMN {col_name} {col_type};")
             except sqlite3.OperationalError:
                 pass
+    resilience_resource_locks.ensure_locks_schema(conn)
 
 
 @contextlib.contextmanager
@@ -114,7 +135,7 @@ def materialize_resilience_plan(
     *,
     created_by: str = "resilience-planner",
 ) -> dict[str, Any]:
-    """Atomically validate and persist a ResiliencePlan and its Action Intents (Gate B)."""
+    """Atomically validate and persist a ResiliencePlan and its Action Intents (Gate A & B)."""
     from deepseek_infra.infra.workspace import (
         autonomous_action_policy,
         resilience_planner,
@@ -167,8 +188,14 @@ def materialize_resilience_plan(
                 "ownerInstanceId": None,
                 "leaseUntil": None,
                 "claimToken": None,
+                "executionEpoch": 0,
                 "effectClass": "NO_EFFECT",
                 "compensationState": None,
+                "effectHandle": None,
+                "riskSubject": act.get("riskSubject"),
+                "expectedEffect": act.get("expectedEffect", "severity-decrease"),
+                "severityBefore": act.get("severityBefore"),
+                "coordinationPlanId": act.get("coordinationPlanId"),
                 "executionResult": None,
                 "verificationResult": None,
                 "decisionProof": None,
@@ -181,61 +208,107 @@ def materialize_resilience_plan(
         )
 
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO resilience_plans (
-                plan_id, plan_version, input_risk_digest, plan_digest,
-                overall_risk, status, plan_json, created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                plan_id,
-                plan_version,
-                input_risk_digest,
-                effective_plan_digest,
-                overall_risk,
-                str(plan.get("status") or "PROPOSED"),
-                json.dumps(plan),
-                created_by,
-                now_iso,
-                now_iso,
-            ),
-        )
-        for va in validated_actions:
+        # Gate A: Create-once immutable plan
+        existing_plan_row = conn.execute(
+            "SELECT plan_digest, plan_json, status FROM resilience_plans WHERE plan_id = ?",
+            (plan_id,),
+        ).fetchone()
+
+        if existing_plan_row:
+            existing_digest = existing_plan_row[0]
+            if existing_digest != effective_plan_digest:
+                raise AppError(
+                    f"Plan identity conflict: plan '{plan_id}' exists with different digest ({existing_digest} != {effective_plan_digest})",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
+        else:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO resilience_actions (
-                    action_id, plan_id, action_type, created_by, input_risk_digest, plan_digest,
-                    state, parameters_json, owner_instance_id, lease_until, claim_token,
-                    effect_class, compensation_state, execution_result_json, verification_result_json,
-                    decision_proof_json, risk_before_digest, risk_after_digest, error_message,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO resilience_plans (
+                    plan_id, plan_version, input_risk_digest, plan_digest,
+                    overall_risk, status, plan_json, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    va["actionId"],
-                    va["planId"],
-                    va["type"],
-                    va["createdBy"],
-                    va["inputRiskDigest"],
-                    va["planDigest"],
-                    va["state"],
-                    json.dumps(va["parameters"]),
-                    None,
-                    None,
-                    None,
-                    "NO_EFFECT",
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
+                    plan_id,
+                    plan_version,
+                    input_risk_digest,
+                    effective_plan_digest,
+                    overall_risk,
+                    str(plan.get("status") or "PROPOSED"),
+                    json.dumps(plan),
+                    created_by,
                     now_iso,
                     now_iso,
                 ),
             )
+
+        # Gate A: Create-once immutable actions
+        persisted_actions: list[dict[str, Any]] = []
+        for va in validated_actions:
+            act_id = va["actionId"]
+            existing_act_row = conn.execute(
+                "SELECT plan_digest, state, parameters_json, execution_result_json, verification_result_json, decision_proof_json FROM resilience_actions WHERE action_id = ?",
+                (act_id,),
+            ).fetchone()
+
+            if existing_act_row:
+                existing_params = json.loads(existing_act_row[2]) if existing_act_row[2] else {}
+                # Check for conflict
+                if existing_params != va["parameters"]:
+                    raise AppError(
+                        f"Action identity conflict: action '{act_id}' exists with different parameters",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=409,
+                    )
+                # Idempotent replay: return existing action without resetting state
+                existing_act = get_action(act_id)
+                if existing_act:
+                    persisted_actions.append(existing_act)
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO resilience_actions (
+                        action_id, plan_id, action_type, created_by, input_risk_digest, plan_digest,
+                        state, parameters_json, owner_instance_id, lease_until, claim_token, execution_epoch,
+                        effect_class, compensation_state, effect_handle_json, risk_subject_json, expected_effect,
+                        severity_before, coordination_plan_id, execution_result_json, verification_result_json,
+                        decision_proof_json, risk_before_digest, risk_after_digest, error_message,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        act_id,
+                        va["planId"],
+                        va["type"],
+                        va["createdBy"],
+                        va["inputRiskDigest"],
+                        va["planDigest"],
+                        va["state"],
+                        json.dumps(va["parameters"]),
+                        None,
+                        None,
+                        None,
+                        0,
+                        "NO_EFFECT",
+                        None,
+                        None,
+                        json.dumps(va["riskSubject"]) if va["riskSubject"] else None,
+                        va["expectedEffect"],
+                        va["severityBefore"],
+                        va["coordinationPlanId"],
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        now_iso,
+                        now_iso,
+                    ),
+                )
+                persisted_actions.append(va)
         conn.commit()
 
     return {
@@ -245,7 +318,7 @@ def materialize_resilience_plan(
         "planDigest": effective_plan_digest,
         "overallRisk": overall_risk,
         "status": "MATERIALIZED",
-        "actions": validated_actions,
+        "actions": persisted_actions,
         "createdAt": now_iso,
     }
 
@@ -258,7 +331,7 @@ def record_action_intent(
     input_risk_digest: str = "",
     plan_digest: str = "",
 ) -> dict[str, Any]:
-    """Record an individual action intent into the durable journal."""
+    """Record an individual action intent into the durable journal with create-once semantics (Gate A)."""
     action_id = str(action.get("actionId") or f"act_{uuid.uuid4().hex[:12]}")
     action_type = str(action.get("type", "")).upper()
     req_approval = bool(action.get("requiresApproval"))
@@ -282,8 +355,14 @@ def record_action_intent(
         "ownerInstanceId": None,
         "leaseUntil": None,
         "claimToken": None,
+        "executionEpoch": 0,
         "effectClass": "NO_EFFECT",
         "compensationState": None,
+        "effectHandle": None,
+        "riskSubject": action.get("riskSubject"),
+        "expectedEffect": action.get("expectedEffect", "severity-decrease"),
+        "severityBefore": action.get("severityBefore"),
+        "coordinationPlanId": action.get("coordinationPlanId"),
         "executionResult": None,
         "verificationResult": None,
         "decisionProof": None,
@@ -295,15 +374,31 @@ def record_action_intent(
     }
 
     with _connect() as conn:
+        existing = conn.execute(
+            "SELECT action_id, parameters_json FROM resilience_actions WHERE action_id = ?",
+            (action_id,),
+        ).fetchone()
+
+        if existing:
+            existing_params = json.loads(existing[1]) if existing[1] else {}
+            if existing_params != params:
+                raise AppError(
+                    f"Action identity conflict: action '{action_id}' exists with different parameters",
+                    code=ErrorCode.INVALID_REQUEST,
+                    status=409,
+                )
+            return get_action(action_id) or record
+
         conn.execute(
             """
-            INSERT OR REPLACE INTO resilience_actions (
+            INSERT INTO resilience_actions (
                 action_id, plan_id, action_type, created_by, input_risk_digest, plan_digest,
-                state, parameters_json, owner_instance_id, lease_until, claim_token,
-                effect_class, compensation_state, execution_result_json, verification_result_json,
+                state, parameters_json, owner_instance_id, lease_until, claim_token, execution_epoch,
+                effect_class, compensation_state, effect_handle_json, risk_subject_json, expected_effect,
+                severity_before, coordination_plan_id, execution_result_json, verification_result_json,
                 decision_proof_json, risk_before_digest, risk_after_digest, error_message,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 action_id,
@@ -317,8 +412,14 @@ def record_action_intent(
                 None,
                 None,
                 None,
+                0,
                 "NO_EFFECT",
                 None,
+                None,
+                json.dumps(record["riskSubject"]) if record["riskSubject"] else None,
+                record["expectedEffect"],
+                record["severityBefore"],
+                record["coordinationPlanId"],
                 None,
                 None,
                 None,
@@ -338,11 +439,13 @@ def update_action_state(
     action_id: str,
     state: str,
     *,
+    execution_epoch: int | None = None,
+    claim_token: str | None = None,
     owner_instance_id: str | None = None,
     lease_until: str | None = None,
-    claim_token: str | None = None,
     effect_class: str | None = None,
     compensation_state: str | None = None,
+    effect_handle: dict[str, Any] | None = None,
     result: dict[str, Any] | None = None,
     verification: dict[str, Any] | None = None,
     proof: dict[str, Any] | None = None,
@@ -350,64 +453,127 @@ def update_action_state(
     risk_after_digest: str | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
-    """Update execution state, results, proofs, and error messages for an action."""
+    """Update execution state with CAS fencing on execution_epoch and claim_token (Gate B)."""
     now_iso = _utc_iso()
+    terminal_states = {"SUCCEEDED", "COMPENSATED", "FAILED_BEFORE_EFFECT", "NEEDS_OPERATOR", "EFFECT_UNKNOWN", "BLOCKED", "SKIPPED_NO_LONGER_NEEDED", "PREEMPTED"}
+
     with _connect() as conn:
         row = conn.execute(
-            "SELECT action_id, plan_id, action_type, created_by, input_risk_digest, plan_digest, "
-            "state, parameters_json, owner_instance_id, lease_until, claim_token, effect_class, "
-            "compensation_state, execution_result_json, verification_result_json, "
-            "decision_proof_json, risk_before_digest, risk_after_digest, error_message, "
-            "created_at, updated_at FROM resilience_actions WHERE action_id = ?",
+            """
+            SELECT action_id, plan_id, action_type, created_by, input_risk_digest, plan_digest,
+                   state, parameters_json, owner_instance_id, lease_until, claim_token, execution_epoch,
+                   effect_class, compensation_state, effect_handle_json, risk_subject_json, expected_effect,
+                   severity_before, coordination_plan_id, execution_result_json, verification_result_json,
+                   decision_proof_json, risk_before_digest, risk_after_digest, error_message,
+                   created_at, updated_at
+            FROM resilience_actions WHERE action_id = ?
+            """,
             (action_id,),
         ).fetchone()
 
         if not row:
             raise AppError(f"Action '{action_id}' not found in journal", code=ErrorCode.NOT_FOUND, status=404)
 
-        cur_result = json.loads(row[13]) if row[13] else None
-        cur_verif = json.loads(row[14]) if row[14] else None
-        cur_proof = json.loads(row[15]) if row[15] else None
+        cur_result = json.loads(row[19]) if row[19] else None
+        cur_verif = json.loads(row[20]) if row[20] else None
+        cur_proof = json.loads(row[21]) if row[21] else None
+        cur_handle = json.loads(row[14]) if row[14] else None
 
         new_result = result if result is not None else cur_result
         new_verif = verification if verification is not None else cur_verif
         new_proof = proof if proof is not None else cur_proof
+        new_handle = effect_handle if effect_handle is not None else cur_handle
 
-        conn.execute(
-            """
-            UPDATE resilience_actions SET
-                state = ?,
-                owner_instance_id = COALESCE(?, owner_instance_id),
-                lease_until = COALESCE(?, lease_until),
-                claim_token = COALESCE(?, claim_token),
-                effect_class = COALESCE(?, effect_class),
-                compensation_state = COALESCE(?, compensation_state),
-                execution_result_json = ?,
-                verification_result_json = ?,
-                decision_proof_json = ?,
-                risk_before_digest = COALESCE(?, risk_before_digest),
-                risk_after_digest = COALESCE(?, risk_after_digest),
-                error_message = ?,
-                updated_at = ?
-            WHERE action_id = ?
-            """,
-            (
-                state,
-                owner_instance_id,
-                lease_until,
-                claim_token,
-                effect_class,
-                compensation_state,
-                json.dumps(new_result) if new_result is not None else None,
-                json.dumps(new_verif) if new_verif is not None else None,
-                json.dumps(new_proof) if new_proof is not None else None,
-                risk_before_digest,
-                risk_after_digest,
-                error,
-                now_iso,
-                action_id,
-            ),
-        )
+        # If execution_epoch and claim_token are provided, perform strict CAS update
+        if execution_epoch is not None and claim_token is not None:
+            cursor = conn.execute(
+                """
+                UPDATE resilience_actions SET
+                    state = ?,
+                    owner_instance_id = COALESCE(?, owner_instance_id),
+                    lease_until = COALESCE(?, lease_until),
+                    effect_class = COALESCE(?, effect_class),
+                    compensation_state = COALESCE(?, compensation_state),
+                    effect_handle_json = ?,
+                    execution_result_json = ?,
+                    verification_result_json = ?,
+                    decision_proof_json = ?,
+                    risk_before_digest = COALESCE(?, risk_before_digest),
+                    risk_after_digest = COALESCE(?, risk_after_digest),
+                    error_message = ?,
+                    updated_at = ?
+                WHERE action_id = ?
+                  AND execution_epoch = ?
+                  AND claim_token = ?
+                """,
+                (
+                    state,
+                    owner_instance_id,
+                    lease_until,
+                    effect_class,
+                    compensation_state,
+                    json.dumps(new_handle) if new_handle is not None else None,
+                    json.dumps(new_result) if new_result is not None else None,
+                    json.dumps(new_verif) if new_verif is not None else None,
+                    json.dumps(new_proof) if new_proof is not None else None,
+                    risk_before_digest,
+                    risk_after_digest,
+                    error,
+                    now_iso,
+                    action_id,
+                    execution_epoch,
+                    claim_token,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise AppError(
+                    f"Action '{action_id}' lease lost (CAS epoch {execution_epoch} token mismatch): stale worker cannot commit",
+                    code=ErrorCode.FORBIDDEN,
+                    status=409,
+                )
+        else:
+            conn.execute(
+                """
+                UPDATE resilience_actions SET
+                    state = ?,
+                    owner_instance_id = COALESCE(?, owner_instance_id),
+                    lease_until = COALESCE(?, lease_until),
+                    claim_token = COALESCE(?, claim_token),
+                    effect_class = COALESCE(?, effect_class),
+                    compensation_state = COALESCE(?, compensation_state),
+                    effect_handle_json = ?,
+                    execution_result_json = ?,
+                    verification_result_json = ?,
+                    decision_proof_json = ?,
+                    risk_before_digest = COALESCE(?, risk_before_digest),
+                    risk_after_digest = COALESCE(?, risk_after_digest),
+                    error_message = ?,
+                    updated_at = ?
+                WHERE action_id = ?
+                """,
+                (
+                    state,
+                    owner_instance_id,
+                    lease_until,
+                    claim_token,
+                    effect_class,
+                    compensation_state,
+                    json.dumps(new_handle) if new_handle is not None else None,
+                    json.dumps(new_result) if new_result is not None else None,
+                    json.dumps(new_verif) if new_verif is not None else None,
+                    json.dumps(new_proof) if new_proof is not None else None,
+                    risk_before_digest,
+                    risk_after_digest,
+                    error,
+                    now_iso,
+                    action_id,
+                ),
+            )
+
+        # Release resource locks upon terminal state
+        if state in terminal_states:
+            resilience_resource_locks.release_action_locks(conn, action_id)
+
         conn.commit()
 
     return get_action(action_id) or {}
@@ -418,14 +584,36 @@ def claim_action(
     *,
     owner_instance_id: str = "resilience-worker",
     lease_seconds: int = 60,
+    now: datetime | None = None,
 ) -> tuple[bool, dict[str, Any] | None, str]:
-    """CAS claim an action for exactly-once execution (Gate D)."""
-    now = datetime.now(tz=timezone.utc)
-    now_iso = _utc_iso(now)
-    lease_until_iso = _utc_iso(now + timedelta(seconds=lease_seconds))
+    """CAS claim an action for crash-recoverable execution (Gate B & D)."""
+    current = now or datetime.now(tz=timezone.utc)
+    now_iso = _utc_iso(current)
+    lease_until_iso = _utc_iso(current + timedelta(seconds=lease_seconds))
     claim_token = uuid.uuid4().hex
 
+    action = get_action(action_id)
+    if not action:
+        return False, None, "action-not-found"
+
+    # Derive resource locks
+    lock_keys = resilience_resource_locks.derive_resource_locks_for_action(action)
+
     with _connect() as conn:
+        # 1. Acquire resource locks
+        if lock_keys:
+            acquired, lock_reason = resilience_resource_locks.acquire_action_locks(
+                conn,
+                action_id,
+                lock_keys,
+                owner_instance_id=owner_instance_id,
+                lease_until=lease_until_iso,
+                now=current,
+            )
+            if not acquired:
+                return False, get_action(action_id), lock_reason
+
+        # 2. CAS claim with epoch increment covering PENDING and expired active states
         cursor = conn.execute(
             """
             UPDATE resilience_actions
@@ -433,9 +621,13 @@ def claim_action(
                 owner_instance_id = ?,
                 lease_until = ?,
                 claim_token = ?,
+                execution_epoch = execution_epoch + 1,
                 updated_at = ?
             WHERE action_id = ?
-              AND (state = 'PENDING' OR (state = 'CLAIMED' AND lease_until < ?))
+              AND (
+                  state = 'PENDING'
+                  OR (state IN ('CLAIMED', 'EXECUTING', 'VERIFYING', 'RECONCILING') AND lease_until < ?)
+              )
             """,
             (
                 owner_instance_id,
@@ -450,27 +642,84 @@ def claim_action(
         if cursor.rowcount == 1:
             return True, get_action(action_id), "claimed"
 
+        # If claim failed, release any newly taken locks if not the winner
+        cur_act = get_action(action_id)
+        if cur_act and cur_act.get("claimToken") != claim_token:
+            resilience_resource_locks.release_action_locks(conn, action_id)
+
     return False, get_action(action_id), "claim-rejected-not-pending-or-active-lease"
 
 
-def check_rate_limits(conn: sqlite3.Connection, target_id: str | None = None) -> tuple[bool, str]:
-    """Check active concurrent and hourly rate limits (Gate K)."""
+def check_rate_limits(
+    conn: sqlite3.Connection,
+    action: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    """Check active concurrent and hourly rate limits with atomic budget enforcement (Gate J)."""
     from deepseek_infra.infra.workspace import autonomous_action_policy
 
     limits = autonomous_action_policy.get_action_rate_limits()
 
-    # 1. Concurrent running actions
+    # 1. Global concurrent running actions
     row = conn.execute(
-        "SELECT COUNT(*) FROM resilience_actions WHERE state IN ('CLAIMED', 'EXECUTING', 'VERIFYING')"
+        "SELECT COUNT(*) FROM resilience_actions WHERE state IN ('CLAIMED', 'EXECUTING', 'VERIFYING', 'RECONCILING')"
     ).fetchone()
     active_count = int(row[0]) if row else 0
+
     if active_count >= limits["maxConcurrentActions"]:
+        # Check if action is CRITICAL repair that can preempt a WARNING rebalance
+        if action and str(action.get("type")) == "CREATE_REPAIR_JOB" and str(action.get("severity")).lower() == "critical":
+            # Attempt to preempt an active warning rebalance
+            warning_reb = conn.execute(
+                """
+                SELECT action_id FROM resilience_actions
+                WHERE action_type = 'CREATE_REBALANCE_JOB'
+                  AND state IN ('CLAIMED', 'PENDING')
+                ORDER BY created_at ASC LIMIT 1
+                """
+            ).fetchone()
+            if warning_reb:
+                preempt_id = warning_reb[0]
+                conn.execute(
+                    """
+                    UPDATE resilience_actions
+                    SET state = 'PREEMPTED', error_message = 'preempted-by-critical-repair', updated_at = ?
+                    WHERE action_id = ?
+                    """,
+                    (_utc_iso(), preempt_id),
+                )
+                conn.commit()
+                return True, "admitted-with-preemption"
         return False, f"max-concurrent-actions-exceeded:{active_count}>={limits['maxConcurrentActions']}"
 
-    # 2. Hourly action throughput
+    # 2. Per-target concurrent limit
+    if action:
+        raw_params = action.get("parameters")
+        params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+        targets = [
+            str(params.get("sourceTargetId") or action.get("source") or ""),
+            str(params.get("destTargetId") or action.get("destination") or action.get("target") or ""),
+        ]
+        for tid in targets:
+            if not tid:
+                continue
+            rows = conn.execute(
+                """
+                SELECT parameters_json FROM resilience_actions
+                WHERE state IN ('CLAIMED', 'EXECUTING', 'VERIFYING', 'RECONCILING')
+                """
+            ).fetchall()
+            target_active = 0
+            for r in rows:
+                p = json.loads(r[0]) if r[0] else {}
+                if p.get("sourceTargetId") == tid or p.get("destTargetId") == tid or p.get("targetId") == tid:
+                    target_active += 1
+            if target_active >= 2:
+                return False, f"max-per-target-concurrent-actions-exceeded:{tid}:{target_active}>=2"
+
+    # 3. Hourly action throughput
     one_hour_ago = _utc_iso(datetime.now(tz=timezone.utc) - timedelta(hours=1))
     row_hr = conn.execute(
-        "SELECT COUNT(*) FROM resilience_actions WHERE created_at >= ? AND state NOT IN ('BLOCKED', 'STALE', 'SKIPPED_NO_LONGER_NEEDED')",
+        "SELECT COUNT(*) FROM resilience_actions WHERE created_at >= ? AND state NOT IN ('BLOCKED', 'STALE', 'SKIPPED_NO_LONGER_NEEDED', 'PREEMPTED')",
         (one_hour_ago,),
     ).fetchone()
     hourly_count = int(row_hr[0]) if row_hr else 0
@@ -526,7 +775,7 @@ def check_action_freshness(action: dict[str, Any], fresh_risk_snapshot: dict[str
 
 
 def simulate_action(action: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    """Simulate action preconditions before execution (Gate H)."""
+    """Simulate action preconditions before execution (Gate H & K)."""
     from deepseek_infra.infra.workspace import (
         backup_capacity,
         backup_dr_ledger,
@@ -592,105 +841,15 @@ def simulate_action(action: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     return False, {"simulationPassed": False, "error": f"unsupported-simulation-type:{act_type}"}
 
 
-def verify_action_outcome(
-    action: dict[str, Any],
-    execution_result: dict[str, Any],
-) -> tuple[bool, dict[str, Any]]:
-    """Verify real outcome post-conditions (Gate I)."""
-    from deepseek_infra.infra.workspace import (
-        backup_dr_ledger,
-        backup_policies,
-        backup_replication,
-    )
-
-    act_type = str(action.get("type", "")).upper()
-    params = action.get("parameters", {})
-
-    if act_type == "CREATE_REPAIR_JOB":
-        pid = str(params.get("policyId") or action.get("policyId") or "")
-        bid = str(params.get("backupId") or action.get("backupId") or "")
-        dst = str(params.get("destTargetId") or action.get("destination") or action.get("target") or "")
-
-        # Execute repair synchronously if queued
-        repair_job = execution_result.get("job")
-        repair_id = (repair_job.get("repairId") if isinstance(repair_job, dict) else None) or execution_result.get("repairId")
-        if repair_id and isinstance(repair_job, dict) and repair_job.get("phase") != "complete":
-            try:
-                rep_res = backup_replication.execute_replica_repair(
-                    policy_id=pid,
-                    backup_id=bid,
-                    dest_target_id=dst,
-                )
-                if rep_res.get("phase") != "complete":
-                    return False, {"executionVerified": False, "error": f"repair-phase-not-complete:{rep_res.get('phase')}"}
-            except Exception as exc:
-                return False, {"executionVerified": False, "error": f"repair-execution-failed:{exc}"}
-
-        # Check ledger for committed copies
-        copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=pid, backup_id=bid)
-        committed = [c for c in copies if str(c.get("status") or c.get("state") or "").lower() in {"committed", "active", "healthy"}]
-        try:
-            policy = backup_policies.get_policy(pid) or {}
-        except Exception:
-            policy = {}
-        min_copies = int(policy.get("replication", {}).get("minCommittedCopies") or 1)
-
-        if len(committed) < min_copies:
-            return False, {
-                "executionVerified": False,
-                "error": f"committed-copies-insufficient:{len(committed)}<{min_copies}",
-                "committedCopies": len(committed),
-            }
-
-        return True, {
-            "executionVerified": True,
-            "committedCopies": len(committed),
-            "destinationTarget": dst,
-            "verifiedAt": _utc_iso(),
-        }
-
-    elif act_type == "CREATE_REBALANCE_JOB":
-        src = str(params.get("sourceTargetId") or action.get("source") or action.get("target") or "")
-        dst = str(params.get("destTargetId") or action.get("destination") or "")
-        raw_reb_job = execution_result.get("job")
-        reb_job = raw_reb_job if isinstance(raw_reb_job, dict) else {}
-        job_id = reb_job.get("jobId") or execution_result.get("jobId")
-        if not job_id:
-            return False, {"executionVerified": False, "error": "rebalance-job-id-missing"}
-        if str(reb_job.get("status") or "").lower() == "failed" or reb_job.get("error"):
-            return False, {"executionVerified": False, "error": str(reb_job.get("error") or "rebalance-job-failed")}
-
-        return True, {
-            "executionVerified": True,
-            "rebalanceJobId": job_id,
-            "sourceTargetId": src,
-            "destTargetId": dst,
-            "verifiedAt": _utc_iso(),
-        }
-
-    elif act_type == "START_DR_DRILL":
-        success = execution_result.get("success") is True or str(execution_result.get("status") or "").lower() in {"pass", "success"}
-        if not success:
-            return False, {
-                "executionVerified": False,
-                "error": execution_result.get("error") or "dr-drill-failed",
-            }
-        return True, {
-            "executionVerified": True,
-            "drillId": execution_result.get("drillId"),
-            "verifiedAt": _utc_iso(),
-        }
-
-    return False, {"executionVerified": False, "error": f"unsupported-verification-type:{act_type}"}
-
-
 def compensate_action(
     action_id: str,
     error_msg: str,
     *,
     effect_class: str = "NO_EFFECT",
+    execution_epoch: int | None = None,
+    claim_token: str | None = None,
 ) -> dict[str, Any]:
-    """Execute typed compensation and transition to exact compensation states (Gate J)."""
+    """Execute typed compensation and transition to exact compensation states (Gate L)."""
     action = get_action(action_id)
     if not action:
         raise AppError(f"Action '{action_id}' not found", code=ErrorCode.NOT_FOUND, status=404)
@@ -704,6 +863,9 @@ def compensate_action(
     elif effect_class == "COMPENSATABLE":
         target_state = "COMPENSATED"
         comp_state = "EFFECT_COMPENSATED"
+    elif effect_class == "EFFECT_UNKNOWN":
+        target_state = "EFFECT_UNKNOWN"
+        comp_state = "REMOTE_EFFECT_UNCERTAIN"
     else:
         target_state = "NEEDS_OPERATOR"
         comp_state = "MANUAL_INTERVENTION_REQUIRED"
@@ -711,6 +873,8 @@ def compensate_action(
     return update_action_state(
         action_id,
         target_state,
+        execution_epoch=execution_epoch,
+        claim_token=claim_token,
         effect_class=effect_class,
         compensation_state=comp_state,
         error=error_msg,
@@ -726,11 +890,15 @@ def get_action(action_id: str) -> dict[str, Any] | None:
     """Retrieve a single action journal record."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT action_id, plan_id, action_type, created_by, input_risk_digest, plan_digest, "
-            "state, parameters_json, owner_instance_id, lease_until, claim_token, effect_class, "
-            "compensation_state, execution_result_json, verification_result_json, "
-            "decision_proof_json, risk_before_digest, risk_after_digest, error_message, "
-            "created_at, updated_at FROM resilience_actions WHERE action_id = ?",
+            """
+            SELECT action_id, plan_id, action_type, created_by, input_risk_digest, plan_digest,
+                   state, parameters_json, owner_instance_id, lease_until, claim_token, execution_epoch,
+                   effect_class, compensation_state, effect_handle_json, risk_subject_json, expected_effect,
+                   severity_before, coordination_plan_id, execution_result_json, verification_result_json,
+                   decision_proof_json, risk_before_digest, risk_after_digest, error_message,
+                   created_at, updated_at
+            FROM resilience_actions WHERE action_id = ?
+            """,
             (action_id,),
         ).fetchone()
 
@@ -749,16 +917,22 @@ def get_action(action_id: str) -> dict[str, Any] | None:
             "ownerInstanceId": row[8],
             "leaseUntil": row[9],
             "claimToken": row[10],
-            "effectClass": row[11],
-            "compensationState": row[12],
-            "executionResult": json.loads(row[13]) if row[13] else None,
-            "verificationResult": json.loads(row[14]) if row[14] else None,
-            "decisionProof": json.loads(row[15]) if row[15] else None,
-            "riskBeforeDigest": row[16],
-            "riskAfterDigest": row[17],
-            "error": row[18],
-            "createdAt": row[19],
-            "updatedAt": row[20],
+            "executionEpoch": int(row[11] or 0),
+            "effectClass": row[12],
+            "compensationState": row[13],
+            "effectHandle": json.loads(row[14]) if row[14] else None,
+            "riskSubject": json.loads(row[15]) if row[15] else None,
+            "expectedEffect": row[16],
+            "severityBefore": row[17],
+            "coordinationPlanId": row[18],
+            "executionResult": json.loads(row[19]) if row[19] else None,
+            "verificationResult": json.loads(row[20]) if row[20] else None,
+            "decisionProof": json.loads(row[21]) if row[21] else None,
+            "riskBeforeDigest": row[22],
+            "riskAfterDigest": row[23],
+            "error": row[24],
+            "createdAt": row[25],
+            "updatedAt": row[26],
         }
 
 
@@ -770,11 +944,15 @@ def list_actions(
 ) -> list[dict[str, Any]]:
     """List historical action journal entries with optional filters."""
     query = (
-        "SELECT action_id, plan_id, action_type, created_by, input_risk_digest, plan_digest, "
-        "state, parameters_json, owner_instance_id, lease_until, claim_token, effect_class, "
-        "compensation_state, execution_result_json, verification_result_json, "
-        "decision_proof_json, risk_before_digest, risk_after_digest, error_message, "
-        "created_at, updated_at FROM resilience_actions"
+        """
+        SELECT action_id, plan_id, action_type, created_by, input_risk_digest, plan_digest,
+               state, parameters_json, owner_instance_id, lease_until, claim_token, execution_epoch,
+               effect_class, compensation_state, effect_handle_json, risk_subject_json, expected_effect,
+               severity_before, coordination_plan_id, execution_result_json, verification_result_json,
+               decision_proof_json, risk_before_digest, risk_after_digest, error_message,
+               created_at, updated_at
+        FROM resilience_actions
+        """
     )
     clauses: list[str] = []
     params: list[Any] = []
@@ -807,19 +985,42 @@ def list_actions(
                     "ownerInstanceId": row[8],
                     "leaseUntil": row[9],
                     "claimToken": row[10],
-                    "effectClass": row[11],
-                    "compensationState": row[12],
-                    "executionResult": json.loads(row[13]) if row[13] else None,
-                    "verificationResult": json.loads(row[14]) if row[14] else None,
-                    "decisionProof": json.loads(row[15]) if row[15] else None,
-                    "riskBeforeDigest": row[16],
-                    "riskAfterDigest": row[17],
-                    "error": row[18],
-                    "createdAt": row[19],
-                    "updatedAt": row[20],
+                    "executionEpoch": int(row[11] or 0),
+                    "effectClass": row[12],
+                    "compensationState": row[13],
+                    "effectHandle": json.loads(row[14]) if row[14] else None,
+                    "riskSubject": json.loads(row[15]) if row[15] else None,
+                    "expectedEffect": row[16],
+                    "severityBefore": row[17],
+                    "coordinationPlanId": row[18],
+                    "executionResult": json.loads(row[19]) if row[19] else None,
+                    "verificationResult": json.loads(row[20]) if row[20] else None,
+                    "decisionProof": json.loads(row[21]) if row[21] else None,
+                    "riskBeforeDigest": row[22],
+                    "riskAfterDigest": row[23],
+                    "error": row[24],
+                    "createdAt": row[25],
+                    "updatedAt": row[26],
                 }
             )
     return results
+
+
+def verify_action_outcome(
+    action: dict[str, Any],
+    execution_result: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    """Verify outcome post-conditions (Gate E)."""
+    return resilience_outcome_verifier.verify_action_outcome(action, execution_result)
+
+
+def verify_scoped_risk_reduction(
+    action: dict[str, Any],
+    risk_before_snapshot: dict[str, Any],
+    risk_after_snapshot: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    """Verify scoped risk reduction on exact subject (Gate F)."""
+    return resilience_outcome_verifier.verify_scoped_risk_reduction(action, risk_before_snapshot, risk_after_snapshot)
 
 
 def execute_autonomous_action(
@@ -828,7 +1029,7 @@ def execute_autonomous_action(
     instance_id: str = "resilience-worker",
     lease_seconds: int = 120,
 ) -> dict[str, Any]:
-    """Execute an admitted action with full 4.7.1 closed-loop verified lifecycle."""
+    """Execute an admitted action with full crash-recoverable closed-loop verified lifecycle."""
     action = get_action(action_id)
     if not action:
         raise AppError(f"Action '{action_id}' not found in journal", code=ErrorCode.NOT_FOUND, status=404)
@@ -841,7 +1042,8 @@ def execute_autonomous_action(
     )
 
     act_type = str(action.get("type", "")).upper()
-    params = action.get("parameters", {})
+    params_raw = action.get("parameters")
+    params = params_raw if isinstance(params_raw, dict) else {}
 
     # 1. Policy Admission Check
     admitted, adm_reason = autonomous_action_policy.validate_action_admission(action)
@@ -849,14 +1051,14 @@ def execute_autonomous_action(
         update_action_state(action_id, "BLOCKED", error=adm_reason)
         raise AppError(f"Autonomous action execution blocked: {adm_reason}", code=ErrorCode.FORBIDDEN, status=403)
 
-    # 2. Rate Limits Check (Gate K)
+    # 2. Atomic Rate Limits & Safety Budget Check (Gate J)
     with _connect() as conn:
-        rate_ok, rate_reason = check_rate_limits(conn)
+        rate_ok, rate_reason = check_rate_limits(conn, action)
         if not rate_ok:
             update_action_state(action_id, "BLOCKED", error=rate_reason)
             raise AppError(f"Autonomous action rate limit exceeded: {rate_reason}", code=ErrorCode.FORBIDDEN, status=429)
 
-    # 3. CAS Exactly-Once Claim (Gate D)
+    # 3. CAS Exactly-Once Claim with Execution Epoch & Resource Locks (Gate B & I)
     claimed, claimed_action, claim_reason = claim_action(action_id, owner_instance_id=instance_id, lease_seconds=lease_seconds)
     if not claimed or not claimed_action:
         cur_state = action.get("state") if action else "unknown"
@@ -866,33 +1068,37 @@ def execute_autonomous_action(
             status=409,
         )
     action = claimed_action
-    params_raw = action.get("parameters")
-    params = params_raw if isinstance(params_raw, dict) else {}
+    epoch = action["executionEpoch"]
+    token = action["claimToken"]
 
     # 4. Fresh Risk Check & TOCTOU Fencing (Gate C)
+    journal_mod = sys.modules[__name__]
     risk_before_snapshot = resilience_risk_engine.assess_risks(probe=False)
     risk_before_digest = str(risk_before_snapshot.get("riskDigest") or "")
-    fresh, fresh_reason = check_action_freshness(action, risk_before_snapshot)
+    fresh, fresh_reason = journal_mod.check_action_freshness(action, risk_before_snapshot)
     if not fresh:
         updated = update_action_state(
             action_id,
             "SKIPPED_NO_LONGER_NEEDED" if "cleared" in fresh_reason else "REPLAN_REQUIRED",
+            execution_epoch=epoch,
+            claim_token=token,
             risk_before_digest=risk_before_digest,
             error=fresh_reason,
         )
         return updated
 
-    # 5. Precondition Simulation (Gate H)
-    sim_ok, sim_details = simulate_action(action)
+    # 5. Precondition Simulation (Gate H & K)
+    sim_ok, sim_details = journal_mod.simulate_action(action)
     if not sim_ok:
         err = sim_details.get("error", "simulation-preconditions-unmet")
-        update_action_state(action_id, "BLOCKED", error=err)
+        update_action_state(action_id, "BLOCKED", execution_epoch=epoch, claim_token=token, error=err)
         raise AppError(f"Action precondition simulation failed: {err}", code=ErrorCode.INVALID_REQUEST, status=400)
 
-    # 6. Execute Underlying Subsystem with Idempotency Key (Gates E & J)
-    update_action_state(action_id, "EXECUTING", effect_class="NO_EFFECT")
+    # 6. Execute Underlying Subsystem with Idempotency Key & Persist effectHandle (Gate C & D)
+    update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class="NO_EFFECT")
     result_payload: dict[str, Any] = {}
     current_effect = "NO_EFFECT"
+    effect_handle: dict[str, Any] = {}
 
     try:
         if act_type == "CREATE_REBALANCE_JOB":
@@ -901,6 +1107,7 @@ def execute_autonomous_action(
             source_id = str(params.get("sourceTargetId") or params.get("source") or action.get("source") or "")
             dest_id = str(params.get("destTargetId") or params.get("destination") or action.get("destination") or "")
             reason = str(params.get("reason") or "resilience-planner-rebalance")
+
             job = backup_replication.create_rebalance_job(
                 policy_id=policy_id,
                 backup_id=backup_id,
@@ -910,7 +1117,17 @@ def execute_autonomous_action(
                 resilience_action_id=action_id,
             )
             current_effect = "CANCELABLE"
+            effect_handle = {"kind": "rebalance", "jobId": job.get("jobId")}
             result_payload = {"job": job, "jobId": job.get("jobId")}
+            update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class=current_effect, effect_handle=effect_handle)
+
+            # Execute rebalance to destination durability completion (Gate E)
+            try:
+                reb_res = backup_replication.execute_rebalance_job(str(job["jobId"]))
+                result_payload["executionStatus"] = reb_res.get("status")
+                result_payload["rebalanceResult"] = reb_res
+            except Exception as exc:
+                result_payload["error"] = str(exc)
 
         elif act_type == "CREATE_REPAIR_JOB":
             policy_id = str(params.get("policyId") or action.get("policyId") or "")
@@ -931,32 +1148,62 @@ def execute_autonomous_action(
                 resilience_action_id=action_id,
             )
             current_effect = "CANCELABLE"
+            effect_handle = {"kind": "repair", "repairId": job.get("repairId")}
             result_payload = {"job": job, "repairId": job.get("repairId")}
+            update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class=current_effect, effect_handle=effect_handle)
+
+            # Execute replica repair to completion (Gate E)
+            try:
+                rep_res = backup_replication.execute_replica_repair(
+                    policy_id=policy_id,
+                    backup_id=backup_id,
+                    dest_target_id=dest_id,
+                    source_target_id=source_id,
+                    run_id=str(job["repairId"]),
+                )
+                result_payload["executionStatus"] = rep_res.get("status") or rep_res.get("phase")
+                result_payload["repairResult"] = rep_res
+            except Exception as exc:
+                result_payload["error"] = str(exc)
 
         elif act_type == "START_DR_DRILL":
+            effect_handle = {"kind": "drill", "resilienceActionId": action_id}
             drill_res = backup_dr_readiness.run_dr_drill(
                 backup_id=params.get("backupId"),
                 target_id=params.get("targetId"),
+                resilience_action_id=action_id,
             )
             current_effect = "COMPENSATABLE"
             result_payload = drill_res
+            update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class=current_effect, effect_handle=effect_handle)
 
         else:
             raise AppError(f"Unsupported action execution type: {act_type}", code=ErrorCode.INVALID_REQUEST, status=400)
 
-        # 7. Post-Condition Outcome Verification (Gate I)
-        update_action_state(action_id, "VERIFYING", effect_class=current_effect)
-        verified_ok, verif_details = verify_action_outcome(action, result_payload)
+        # 7. Post-Condition Outcome Verification (Gate E)
+        update_action_state(action_id, "VERIFYING", execution_epoch=epoch, claim_token=token, effect_class=current_effect)
+        verified_ok, verif_details = journal_mod.verify_action_outcome(action, result_payload)
         if not verified_ok:
             verif_err = str(verif_details.get("error") or "post-condition-outcome-verification-failed")
-            compensate_action(action_id, verif_err, effect_class=current_effect)
+            compensate_action(action_id, verif_err, effect_class=current_effect, execution_epoch=epoch, claim_token=token)
             raise AppError(f"Outcome verification failed: {verif_err}", code=ErrorCode.INTERNAL, status=500)
 
-        # 8. Closed-Loop Risk Re-assessment (Gate L)
+        # 8. Scoped Closed-Loop Risk Reduction Verification (Gate F)
+        update_action_state(action_id, "ASSESSING_EFFECT", execution_epoch=epoch, claim_token=token, effect_class=current_effect)
         risk_after_snapshot = resilience_risk_engine.assess_risks(probe=False)
         risk_after_digest = str(risk_after_snapshot.get("riskDigest") or "")
 
-        # 9. Build Concrete Decision Proof v3
+        effect_reduced, reduction_details = journal_mod.verify_scoped_risk_reduction(
+            action,
+            risk_before_snapshot,
+            risk_after_snapshot,
+        )
+        if not effect_reduced:
+            red_err = str(reduction_details.get("reason") or "target-risk-not-improved")
+            compensate_action(action_id, red_err, effect_class=current_effect, execution_epoch=epoch, claim_token=token)
+            raise AppError(f"Scoped risk reduction failed: {red_err}", code=ErrorCode.INTERNAL, status=500)
+
+        # 9. Build Decision Proof v3
         decision_proof = {
             "riskDigest": action.get("inputRiskDigest") or risk_before_digest,
             "riskBeforeDigest": risk_before_digest,
@@ -967,7 +1214,10 @@ def execute_autonomous_action(
             "actionAllowed": True,
             "simulationPassed": True,
             "executionVerified": True,
-            "effectObserved": True,
+            "effectObserved": reduction_details.get("effectObserved") is True,
+            "scopedRiskSubject": reduction_details.get("riskSubject"),
+            "severityBefore": reduction_details.get("severityBefore"),
+            "severityAfter": reduction_details.get("severityAfter"),
             "executedActionType": act_type,
             "actionId": action_id,
             "planId": action.get("planId"),
@@ -976,6 +1226,8 @@ def execute_autonomous_action(
         updated = update_action_state(
             action_id,
             "SUCCEEDED",
+            execution_epoch=epoch,
+            claim_token=token,
             effect_class=current_effect,
             result=result_payload,
             verification=verif_details,
@@ -987,7 +1239,7 @@ def execute_autonomous_action(
 
     except Exception as exc:
         if not isinstance(exc, AppError) or exc.status >= 500:
-            compensate_action(action_id, str(exc), effect_class=current_effect)
+            compensate_action(action_id, str(exc), effect_class=current_effect, execution_epoch=epoch, claim_token=token)
         if not isinstance(exc, AppError):
             raise AppError(f"Action execution failed: {exc}", code=ErrorCode.INTERNAL, status=500) from exc
         raise
