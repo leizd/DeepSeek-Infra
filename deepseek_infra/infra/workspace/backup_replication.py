@@ -935,10 +935,12 @@ def authenticate_recovery_copy(
             raw_commit = None
         if raw_commit is None and raw_receipt is not None:
             try:
+                from deepseek_infra.infra.workspace import backup_target_store
+
                 rc_json = json.loads(raw_receipt.decode("utf-8"))
                 slot = str(rc_json.get("scheduleSlot") or "")
                 if slot:
-                    for k in backup_publish.commit_marker_keys(policy_id, slot):
+                    for k in backup_target_store.commit_marker_keys(policy_id, slot):
                         try:
                             raw_commit = t_remote.get_bytes(k)
                             if raw_commit:
@@ -1807,6 +1809,12 @@ def execute_repair_job_instance(
             c for c in copies
             if str(c.get("targetId")) != dest_target_id and c.get("recoverable") and c.get("state") == "healthy"
         ]
+        if not healthy:
+            points = backup_dr_ledger.list_recovery_points(policy_id=policy_id)
+            healthy = [
+                p for p in points
+                if str(p.get("backupId")) == backup_id and str(p.get("targetId")) != dest_target_id and p.get("recoverable")
+            ]
         if not healthy:
             job = _set_repair_phase(job, "failed-terminal", error="no-healthy-source-copy")
             raise AppError(
