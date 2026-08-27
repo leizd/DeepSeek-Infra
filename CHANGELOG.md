@@ -4,6 +4,14 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.7.3] - Proof-Carrying Fleet Resilience & Production Coordination (2026-08-27)
+
+### Development baseline
+
+- Version surfaces are prepared for the 4.7.3 implementation series.
+- Gate A-N behavior and provider-backed evidence remain in progress; this entry
+  does not claim release readiness or passing production evidence.
+
 ## [4.7.2] - Coordinated Autonomous Remediation & Crash-Recoverable Execution (2026-08-27)
 
 ### Coordinated Autonomous Remediation & Crash-Recoverable Execution
