@@ -1291,6 +1291,38 @@ def test_rpo_rto_optimizer_and_coordinator_exhaustive(tmp_settings: object, monk
     assert "evaluations" in sim_res
 
 
+def test_server_reminders_search_and_static_resolution(tmp_settings: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web import server as srv_mod
+
+    # 1. Test reminder_action
+    monkeypatch.setattr(srv_mod, "load_reminders", lambda: [{"id": "r1", "title": "Reminder 1"}])
+    monkeypatch.setattr(srv_mod, "create_reminder", lambda p: {"id": "r2", "title": p.get("title")})
+    monkeypatch.setattr(srv_mod, "delete_reminder", lambda rid: True)
+
+    list_res = srv_mod.reminder_action({"action": "list"})
+    assert len(list_res.get("reminders", [])) == 1
+
+    create_res = srv_mod.reminder_action({"action": "create", "title": "New Reminder"})
+    assert create_res.get("ok") is True
+
+    del_res = srv_mod.reminder_action({"action": "delete", "id": "r1"})
+    assert del_res.get("ok") is True
+
+    # 2. Test conversation_search
+    empty_res = srv_mod.conversation_search({"query": ""})
+    assert empty_res == {"results": []}
+
+    convs = [{"id": "c1", "title": "Alpha Conversation", "messages": [{"content": "hello world"}]}]
+    search_res = srv_mod.conversation_search({"query": "alpha", "conversations": convs})
+    assert len(search_res.get("results", [])) == 1
+
+    # 3. Test resolve_static_file
+    assert srv_mod.resolve_static_file("legacy/foo") is None
+    assert srv_mod.resolve_static_file("..") is None
+    assert srv_mod.resolve_static_file("nonexistent.unknown_ext") is None
+
+
+
 
 
 
