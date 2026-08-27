@@ -169,7 +169,8 @@ def test_booster_execute_autonomous_action_failure_paths() -> None:
                     assert exc_info.value.status == 500
     failed_act = resilience_action_journal.get_action("act_verif_fail")
     assert failed_act is not None
-    assert failed_act["compensationState"] in {"JOB_CANCELLED", "COMPENSATED", "CANCELLED", "MANUAL_INTERVENTION_REQUIRED"}
+    assert failed_act["state"] == "EFFECT_UNKNOWN"
+    assert failed_act["compensationState"] == "REMOTE_EFFECT_UNCERTAIN"
 
 
 def test_booster_compensation_and_effects() -> None:
@@ -193,10 +194,10 @@ def test_booster_compensation_and_effects() -> None:
     assert res_irr["state"] == "NEEDS_OPERATOR"
     assert res_irr["compensationState"] == "MANUAL_INTERVENTION_REQUIRED"
 
-    # 3. CANCELABLE compensation
+    # 3. CANCELABLE without a durable effect handle fails closed
     res_can = resilience_action_journal.compensate_action("act_can", "Job cancelled", effect_class="CANCELABLE")
-    assert res_can["state"] == "COMPENSATED"
-    assert res_can["compensationState"] == "JOB_CANCELLED"
+    assert res_can["state"] == "EFFECT_UNKNOWN"
+    assert res_can["compensationState"] == "REMOTE_EFFECT_UNCERTAIN"
 
 
 def test_booster_action_freshness_and_simulation_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

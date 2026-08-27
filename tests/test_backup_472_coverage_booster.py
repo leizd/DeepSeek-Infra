@@ -405,15 +405,15 @@ def test_compensation_typed_states(tmp_settings: Path) -> None:
         "parameters": {},
     })
 
-    # CANCELABLE
+    # CANCELABLE without a durable job handle is uncertain, never compensated.
     c_canc = resilience_action_journal.compensate_action(act["actionId"], "canceled", effect_class="CANCELABLE")
-    assert c_canc["state"] == "COMPENSATED"
-    assert c_canc["compensationState"] == "JOB_CANCELLED"
+    assert c_canc["state"] == "EFFECT_UNKNOWN"
+    assert c_canc["compensationState"] == "REMOTE_EFFECT_UNCERTAIN"
 
-    # COMPENSATABLE
+    # COMPENSATABLE without an implementation remains outstanding.
     c_comp = resilience_action_journal.compensate_action(act["actionId"], "compensated", effect_class="COMPENSATABLE")
-    assert c_comp["state"] == "COMPENSATED"
-    assert c_comp["compensationState"] == "EFFECT_COMPENSATED"
+    assert c_comp["state"] == "COMPENSATION_REQUIRED"
+    assert c_comp["compensationState"] == "COMPENSATOR_NOT_IMPLEMENTED"
 
     # IRREVERSIBLE
     c_irr = resilience_action_journal.compensate_action(act["actionId"], "irreversible", effect_class="IRREVERSIBLE")

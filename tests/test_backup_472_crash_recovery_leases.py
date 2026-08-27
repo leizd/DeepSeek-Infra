@@ -314,10 +314,10 @@ def test_typed_compensation_transitions(tmp_settings: Path) -> None:
     assert res["state"] == "FAILED_BEFORE_EFFECT"
     assert res["compensationState"] == "NONE"
 
-    # CANCELABLE -> COMPENSATED / JOB_CANCELLED
+    # CANCELABLE without a durable job handle -> EFFECT_UNKNOWN
     res2 = resilience_action_journal.compensate_action(act_id, "Rebalance cancelled", effect_class="CANCELABLE")
-    assert res2["state"] == "COMPENSATED"
-    assert res2["compensationState"] == "JOB_CANCELLED"
+    assert res2["state"] == "EFFECT_UNKNOWN"
+    assert res2["compensationState"] == "REMOTE_EFFECT_UNCERTAIN"
 
     # EFFECT_UNKNOWN -> EFFECT_UNKNOWN
     res3 = resilience_action_journal.compensate_action(act_id, "Connection timed out", effect_class="EFFECT_UNKNOWN")

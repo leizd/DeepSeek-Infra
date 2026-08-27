@@ -67,7 +67,7 @@ ACTIVE_PHASES = frozenset(
 )
 MODES = frozenset({"required", "best-effort"})
 
-REPAIR_TERMINAL_PHASES = frozenset({"healthy", "failed-terminal", "failed", "quarantined", "superseded", "skipped"})
+REPAIR_TERMINAL_PHASES = frozenset({"healthy", "failed-terminal", "failed", "quarantined", "superseded", "skipped", "cancelled"})
 REPAIR_ACTIVE_PHASES = frozenset(
     {
         "queued",
@@ -1677,6 +1677,24 @@ def _set_repair_phase(job: dict[str, Any], phase: str, **extra: Any) -> dict[str
     return job
 
 
+def cancel_repair_job(repair_id: str, *, reason: str = "resilience-action-compensation") -> dict[str, Any]:
+    """Cancel a repair only before any remote effect can have started."""
+    with _LOCK:
+        job = read_repair_job(repair_id)
+        if job is None:
+            return {"status": "unknown", "repairId": repair_id, "reason": "repair-job-not-found"}
+        phase = str(job.get("phase") or "")
+        if phase == "cancelled":
+            return {"status": "cancelled", "repairId": repair_id, "phase": phase, "job": job}
+        if phase != "queued":
+            return {"status": "not-cancelable", "repairId": repair_id, "phase": phase, "job": job}
+        cancelled = _set_repair_phase(job, "cancelled", cancellationReason=reason, cancelledAt=_utc_iso())
+        observed = read_repair_job(repair_id)
+        if not observed or str(observed.get("phase") or "") != "cancelled":
+            return {"status": "unknown", "repairId": repair_id, "reason": "repair-cancellation-not-observed"}
+        return {"status": "cancelled", "repairId": repair_id, "phase": "cancelled", "job": cancelled}
+
+
 # ── Ciphertext-Plane Replica Self-Healing Engine (4.5.4) ────────────────────
 
 
@@ -1742,11 +1760,21 @@ def execute_repair_job_instance(
 ) -> dict[str, Any]:
     """Execute or resume an individual durable ReplicaRepairJob."""
     start_time = time.monotonic()
-    job = read_repair_job(repair_id)
-    if job is None:
-        raise AppError("ReplicaRepairJob not found", code=ErrorCode.NOT_FOUND, status=404)
-    if str(job.get("phase") or "") in REPAIR_TERMINAL_PHASES:
-        return {"status": "success" if job.get("phase") == "healthy" else str(job.get("phase")), "repairId": repair_id, "job": job}
+    with _LOCK:
+        job = read_repair_job(repair_id)
+        if job is None:
+            raise AppError("ReplicaRepairJob not found", code=ErrorCode.NOT_FOUND, status=404)
+        if str(job.get("phase") or "") in REPAIR_TERMINAL_PHASES:
+            return {"status": "success" if job.get("phase") == "healthy" else str(job.get("phase")), "repairId": repair_id, "job": job}
+
+        attempt = int(job.get("attempt") or 0) + 1
+        max_attempts = int(job.get("maxAttempts") or 5)
+        if attempt > max_attempts:
+            job = _set_repair_phase(job, "failed-terminal", error="max-attempts-exceeded", attempt=attempt)
+            raise AppError("ReplicaRepairJob max attempts exceeded", code=ErrorCode.INVALID_REQUEST, status=409)
+
+        # Claim the first effect boundary while cancellation uses the same lock.
+        job = _set_repair_phase(job, "selecting-source", attempt=attempt)
 
     policy_id = str(job["policyId"])
     backup_id = str(job["backupId"])
@@ -1756,15 +1784,8 @@ def execute_repair_job_instance(
         transfer_class = backup_transfer_budget.TrafficClass(int(job.get("trafficClass", 2)))
     except ValueError:
         transfer_class = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR
-    attempt = int(job.get("attempt") or 0) + 1
-    max_attempts = int(job.get("maxAttempts") or 5)
-
-    if attempt > max_attempts:
-        job = _set_repair_phase(job, "failed-terminal", error="max-attempts-exceeded", attempt=attempt)
-        raise AppError("ReplicaRepairJob max attempts exceeded", code=ErrorCode.INVALID_REQUEST, status=409)
 
     # 1. Resolve source
-    job = _set_repair_phase(job, "selecting-source", attempt=attempt)
     if not source_target_id:
         copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
         healthy = [
@@ -2360,6 +2381,24 @@ def _set_rebalance_phase(job: dict[str, Any], phase: str, **extra: Any) -> dict[
         return job
 
 
+def cancel_rebalance_job(job_id: str, *, reason: str = "resilience-action-compensation") -> dict[str, Any]:
+    """Cancel a rebalance only while its durable job is still pending."""
+    with _LOCK:
+        job = read_rebalance_job(job_id)
+        if job is None:
+            return {"status": "unknown", "jobId": job_id, "reason": "rebalance-job-not-found"}
+        phase = str(job.get("phase") or "")
+        if phase == "cancelled":
+            return {"status": "cancelled", "jobId": job_id, "phase": phase, "job": job}
+        if phase != "pending":
+            return {"status": "not-cancelable", "jobId": job_id, "phase": phase, "job": job}
+        cancelled = _set_rebalance_phase(job, "cancelled", cancellationReason=reason, cancelledAt=_utc_iso())
+        observed = read_rebalance_job(job_id)
+        if not observed or str(observed.get("phase") or "") != "cancelled":
+            return {"status": "unknown", "jobId": job_id, "reason": "rebalance-cancellation-not-observed"}
+        return {"status": "cancelled", "jobId": job_id, "phase": "cancelled", "job": cancelled}
+
+
 def read_rebalance_job(job_id: str) -> dict[str, Any] | None:
     path = _rebalance_job_path(job_id)
     if not path.is_file():
@@ -2430,7 +2469,7 @@ def create_rebalance_job(
         for job in existing:
             if resilience_action_id and job.get("resilienceActionId") == resilience_action_id:
                 return job
-            if job.get("phase") not in {"complete", "failed"}:
+            if job.get("phase") not in {"complete", "failed", "cancelled"}:
                 return job
 
         job_id = f"rebalance_{uuid.uuid4().hex[:16]}"
@@ -2573,16 +2612,21 @@ def execute_rebalance_job(
     instance_id: str = "rebalance-worker",
 ) -> dict[str, Any]:
     """Execute a replica rebalance job: copy ciphertext, authenticate, record ledger, optionally prune."""
-    job = read_rebalance_job(job_id)
-    if job is None:
-        raise AppError("rebalance job not found", code=ErrorCode.NOT_FOUND, status=404)
+    with _LOCK:
+        job = read_rebalance_job(job_id)
+        if job is None:
+            raise AppError("rebalance job not found", code=ErrorCode.NOT_FOUND, status=404)
+        phase = str(job.get("phase") or "")
+        if phase == "cancelled":
+            return {"status": "cancelled", "jobId": job_id, "job": job}
+        if phase == "complete":
+            return {"status": "success", "jobId": job_id, "job": job}
+        job = _set_rebalance_phase(job, "transferring")
 
     policy_id = str(job["policyId"])
     backup_id = str(job["backupId"])
     source_target_id = str(job["sourceTargetId"])
     dest_target_id = str(job["destTargetId"])
-
-    job = _set_rebalance_phase(job, "transferring")
 
     try:
         # Use execute_replica_repair to safely transfer and provision on dest

@@ -455,7 +455,17 @@ def update_action_state(
 ) -> dict[str, Any]:
     """Update execution state with CAS fencing on execution_epoch and claim_token (Gate B)."""
     now_iso = _utc_iso()
-    terminal_states = {"SUCCEEDED", "COMPENSATED", "FAILED_BEFORE_EFFECT", "NEEDS_OPERATOR", "EFFECT_UNKNOWN", "BLOCKED", "SKIPPED_NO_LONGER_NEEDED", "PREEMPTED"}
+    terminal_states = {
+        "SUCCEEDED",
+        "COMPENSATED",
+        "COMPENSATION_REQUIRED",
+        "FAILED_BEFORE_EFFECT",
+        "NEEDS_OPERATOR",
+        "EFFECT_UNKNOWN",
+        "BLOCKED",
+        "SKIPPED_NO_LONGER_NEEDED",
+        "PREEMPTED",
+    }
 
     with _connect() as conn:
         row = conn.execute(
@@ -855,21 +865,65 @@ def compensate_action(
     if not action:
         raise AppError(f"Action '{action_id}' not found", code=ErrorCode.NOT_FOUND, status=404)
 
+    if (execution_epoch is None) != (claim_token is None):
+        raise AppError(
+            "Compensation fencing requires both execution_epoch and claim_token",
+            code=ErrorCode.INVALID_REQUEST,
+            status=400,
+        )
+    if execution_epoch is not None and claim_token is not None:
+        if int(action.get("executionEpoch") or 0) != execution_epoch or str(action.get("claimToken") or "") != claim_token:
+            raise AppError(
+                f"Action '{action_id}' lease lost before compensation",
+                code=ErrorCode.FORBIDDEN,
+                status=409,
+            )
+
     if effect_class == "NO_EFFECT":
         target_state = "FAILED_BEFORE_EFFECT"
         comp_state = "NONE"
+        compensated_handle = None
     elif effect_class == "CANCELABLE":
-        target_state = "COMPENSATED"
-        comp_state = "JOB_CANCELLED"
+        from deepseek_infra.infra.workspace import backup_replication
+
+        raw_handle = action.get("effectHandle")
+        handle = raw_handle if isinstance(raw_handle, dict) else {}
+        kind = str(handle.get("kind") or "")
+        if kind == "repair" and handle.get("repairId"):
+            cancellation = backup_replication.cancel_repair_job(str(handle["repairId"]), reason=error_msg)
+        elif kind == "rebalance" and handle.get("jobId"):
+            cancellation = backup_replication.cancel_rebalance_job(str(handle["jobId"]), reason=error_msg)
+        else:
+            cancellation = {"status": "unknown", "reason": "cancelable-effect-handle-missing-or-unsupported"}
+
+        cancellation_status = str(cancellation.get("status") or "unknown")
+        if cancellation_status == "cancelled":
+            target_state = "COMPENSATED"
+            comp_state = "JOB_CANCELLED"
+        elif cancellation_status == "not-cancelable":
+            target_state = "COMPENSATION_REQUIRED"
+            comp_state = "JOB_NOT_CANCELABLE"
+        else:
+            target_state = "EFFECT_UNKNOWN"
+            comp_state = "REMOTE_EFFECT_UNCERTAIN"
+        compensated_handle = dict(handle)
+        compensated_handle["cancellationResult"] = {
+            key: cancellation[key]
+            for key in ("status", "phase", "reason", "repairId", "jobId")
+            if key in cancellation
+        }
     elif effect_class == "COMPENSATABLE":
-        target_state = "COMPENSATED"
-        comp_state = "EFFECT_COMPENSATED"
+        target_state = "COMPENSATION_REQUIRED"
+        comp_state = "COMPENSATOR_NOT_IMPLEMENTED"
+        compensated_handle = None
     elif effect_class == "EFFECT_UNKNOWN":
         target_state = "EFFECT_UNKNOWN"
         comp_state = "REMOTE_EFFECT_UNCERTAIN"
+        compensated_handle = None
     else:
         target_state = "NEEDS_OPERATOR"
         comp_state = "MANUAL_INTERVENTION_REQUIRED"
+        compensated_handle = None
 
     return update_action_state(
         action_id,
@@ -878,6 +932,7 @@ def compensate_action(
         claim_token=claim_token,
         effect_class=effect_class,
         compensation_state=comp_state,
+        effect_handle=compensated_handle,
         error=error_msg,
     )
 

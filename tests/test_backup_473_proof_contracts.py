@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from deepseek_infra.infra.workspace import evidence_proof, resilience_outcome_verifier, resilience_planner, resilience_risk_engine
+from deepseek_infra.core.errors import AppError
+from deepseek_infra.infra.workspace import (
+    backup_replication,
+    evidence_proof,
+    resilience_action_journal,
+    resilience_outcome_verifier,
+    resilience_planner,
+    resilience_risk_engine,
+)
 
 
 def _valid_dr_proof() -> dict[str, object]:
@@ -266,3 +274,165 @@ def test_dr_readiness_validator_rejects_legacy_untyped_proof() -> None:
 
     assert "missing-field:schema" in errors
     assert "missing-field:backupId" in errors
+
+
+def _record_cancelable_action(action_id: str, action_type: str, effect_handle: dict[str, object]) -> None:
+    resilience_action_journal.record_action_intent(
+        {
+            "actionId": action_id,
+            "type": action_type,
+            "parameters": {},
+        }
+    )
+    resilience_action_journal.update_action_state(
+        action_id,
+        "EXECUTING",
+        effect_class="CANCELABLE",
+        effect_handle=effect_handle,
+    )
+
+
+def test_cancelable_rebalance_must_actually_cancel_before_compensated(tmp_settings: object) -> None:
+    job = backup_replication.create_rebalance_job(
+        policy_id="policy-a",
+        backup_id="backup-a",
+        source_target_id="target-a",
+        dest_target_id="target-b",
+        resilience_action_id="action-rebalance-cancel",
+    )
+    _record_cancelable_action(
+        "action-rebalance-cancel",
+        "CREATE_REBALANCE_JOB",
+        {"kind": "rebalance", "jobId": job["jobId"]},
+    )
+
+    result = resilience_action_journal.compensate_action(
+        "action-rebalance-cancel",
+        "verification-failed",
+        effect_class="CANCELABLE",
+    )
+
+    assert result["state"] == "COMPENSATED"
+    assert result["compensationState"] == "JOB_CANCELLED"
+    assert result["effectHandle"]["cancellationResult"]["status"] == "cancelled"
+    assert backup_replication.read_rebalance_job(str(job["jobId"]))["phase"] == "cancelled"  # type: ignore[index]
+
+
+def test_cancelled_repair_cannot_be_resumed(tmp_settings: object) -> None:
+    job = backup_replication.create_repair_job(
+        policy_id="policy-repair",
+        backup_id="backup-repair",
+        source_target_id="target-a",
+        dest_target_id="target-b",
+        resilience_action_id="action-repair-cancel",
+    )
+    _record_cancelable_action(
+        "action-repair-cancel",
+        "CREATE_REPAIR_JOB",
+        {"kind": "repair", "repairId": job["repairId"]},
+    )
+
+    result = resilience_action_journal.compensate_action(
+        "action-repair-cancel",
+        "verification-failed",
+        effect_class="CANCELABLE",
+    )
+    resumed = backup_replication.execute_repair_job_instance(str(job["repairId"]))
+
+    assert result["state"] == "COMPENSATED"
+    assert backup_replication.read_repair_job(str(job["repairId"]))["phase"] == "cancelled"  # type: ignore[index]
+    assert resumed["status"] == "cancelled"
+
+
+def test_started_remote_effect_requires_compensation_protocol(tmp_settings: object) -> None:
+    job = backup_replication.create_rebalance_job(
+        policy_id="policy-b",
+        backup_id="backup-b",
+        source_target_id="target-a",
+        dest_target_id="target-b",
+        resilience_action_id="action-rebalance-started",
+    )
+    backup_replication._set_rebalance_phase(job, "transferring")
+    _record_cancelable_action(
+        "action-rebalance-started",
+        "CREATE_REBALANCE_JOB",
+        {"kind": "rebalance", "jobId": job["jobId"]},
+    )
+
+    result = resilience_action_journal.compensate_action(
+        "action-rebalance-started",
+        "worker-failed",
+        effect_class="CANCELABLE",
+    )
+
+    assert result["state"] == "COMPENSATION_REQUIRED"
+    assert result["compensationState"] == "JOB_NOT_CANCELABLE"
+    assert backup_replication.read_rebalance_job(str(job["jobId"]))["phase"] == "transferring"  # type: ignore[index]
+
+
+def test_missing_remote_effect_handle_is_effect_unknown(tmp_settings: object) -> None:
+    _record_cancelable_action(
+        "action-missing-effect",
+        "CREATE_REPAIR_JOB",
+        {"kind": "repair", "repairId": "repair-missing"},
+    )
+
+    result = resilience_action_journal.compensate_action(
+        "action-missing-effect",
+        "connection-lost",
+        effect_class="CANCELABLE",
+    )
+
+    assert result["state"] == "EFFECT_UNKNOWN"
+    assert result["compensationState"] == "REMOTE_EFFECT_UNCERTAIN"
+
+
+def test_compensatable_effect_without_handler_is_not_marked_compensated(tmp_settings: object) -> None:
+    resilience_action_journal.record_action_intent(
+        {"actionId": "action-drill-no-handler", "type": "START_DR_DRILL", "parameters": {}}
+    )
+
+    result = resilience_action_journal.compensate_action(
+        "action-drill-no-handler",
+        "proof-invalid",
+        effect_class="COMPENSATABLE",
+    )
+
+    assert result["state"] == "COMPENSATION_REQUIRED"
+    assert result["compensationState"] == "COMPENSATOR_NOT_IMPLEMENTED"
+
+
+def test_stale_worker_cannot_cancel_underlying_job(tmp_settings: object) -> None:
+    job = backup_replication.create_rebalance_job(
+        policy_id="policy-fenced",
+        backup_id="backup-fenced",
+        source_target_id="target-a",
+        dest_target_id="target-b",
+        resilience_action_id="action-fenced-cancel",
+    )
+    resilience_action_journal.record_action_intent(
+        {"actionId": "action-fenced-cancel", "type": "CREATE_REBALANCE_JOB", "parameters": {}}
+    )
+    claimed, action, _reason = resilience_action_journal.claim_action("action-fenced-cancel")
+    assert claimed is True
+    assert action is not None
+    token = str(action["claimToken"])
+    resilience_action_journal.update_action_state(
+        "action-fenced-cancel",
+        "EXECUTING",
+        execution_epoch=int(action["executionEpoch"]),
+        claim_token=token,
+        effect_class="CANCELABLE",
+        effect_handle={"kind": "rebalance", "jobId": job["jobId"]},
+    )
+
+    with pytest.raises(AppError, match="lease lost before compensation"):
+        resilience_action_journal.compensate_action(
+            "action-fenced-cancel",
+            "stale-worker",
+            effect_class="CANCELABLE",
+            execution_epoch=int(action["executionEpoch"]),
+            claim_token="stale-token",
+        )
+
+    assert backup_replication.read_rebalance_job(str(job["jobId"]))["phase"] == "pending"  # type: ignore[index]

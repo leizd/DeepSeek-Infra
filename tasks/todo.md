@@ -4,7 +4,7 @@
 
 - [x] Strict RiskSubject v1 exact matching
 - [x] Strong `dr-readiness-proof-v1` producer and verifier
-- [ ] Durable repair/rebalance cancellation before `COMPENSATED`
+- [x] Durable repair/rebalance cancellation before `COMPENSATED`
 - [ ] Checkpoint: focused tests, Ruff, and Mypy
 
 ## Phase 2: Fenced execution control plane
