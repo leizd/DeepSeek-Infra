@@ -926,3 +926,83 @@ def test_coordinator_and_scheduler_exhaustive_branches(tmp_settings: Path) -> No
     assert res_mix["transferBudget"].get("rebalanceBlockedByRepairReserve") is True
 
 
+def test_backup_governance_resilience_api_endpoints_exhaustive(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test resilience HTTP endpoints in backup_governance.py and server.py."""
+    from starlette.testclient import TestClient
+    from deepseek_infra.web.server import create_server
+    from deepseek_infra.core.config import settings
+
+    srv, _ = create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    headers = {"Authorization": f"Bearer {settings.auth.token}", "X-DeepSeek-Client": "test"}
+
+    # 1. GET & POST /api/workspace/resilience/coordination-plan
+    r_get = client.get("/api/workspace/resilience/coordination-plan", headers=headers)
+    assert r_get.status_code == 200
+    assert "coordinationPlanId" in r_get.json()
+
+    r_post = client.post("/api/workspace/resilience/coordination-plan", json={"probe": False}, headers=headers)
+    assert r_post.status_code == 200
+    assert "coordinationPlanId" in r_post.json()
+
+    # 2. POST /api/workspace/resilience/plan with materialize: False
+    r_plan = client.post("/api/workspace/resilience/plan", json={"materialize": False}, headers=headers)
+    assert r_plan.status_code == 200
+
+    # 3. POST /api/workspace/resilience/execute error cases
+    r_no_id = client.post("/api/workspace/resilience/execute", json={}, headers=headers)
+    assert r_no_id.status_code == 400
+
+    r_raw_type = client.post("/api/workspace/resilience/execute", json={"type": "CREATE_REPAIR_JOB"}, headers=headers)
+    assert r_raw_type.status_code == 400
+
+    # 4. POST /api/workspace/resilience/explain with action, target, capacity <= 20%, and horizon < 30
+    from deepseek_infra.infra.workspace import backup_capacity, backup_targets, resilience_action_journal, resilience_planner
+
+    backup_targets.register_filesystem_target("target_exp1", path=tmp_settings / "t_exp1", failure_domain="fd1")
+    backup_targets.register_filesystem_target("target_exp2", path=tmp_settings / "t_exp2", failure_domain="fd2")
+    resilience_action_journal.record_action_intent({
+        "actionId": "act_explain_1",
+        "type": "CREATE_REBALANCE_JOB",
+        "parameters": {"reason": "capacity-pressure", "sourceTargetId": "target_exp1", "destination": "target_exp2"},
+    })
+
+    monkeypatch.setattr(
+        backup_capacity,
+        "get_target_capacity",
+        lambda t, **kw: {"freePercent": 15.0, "totalBytes": 1000, "freeBytes": 150},
+    )
+    monkeypatch.setattr(
+        backup_capacity,
+        "estimate_target_exhaustion_horizon",
+        lambda t, **kw: {"estimatedDaysToFull": 10, "growthRateBytesPerDay": 15},
+    )
+    monkeypatch.setattr(
+        resilience_planner,
+        "select_rebalance_destination",
+        lambda t: "target_exp2",
+    )
+
+    r_exp = client.post("/api/workspace/resilience/explain", json={"actionId": "act_explain_1"}, headers=headers)
+    assert r_exp.status_code == 200
+    exp_body = r_exp.json()
+    assert "capacity watermark exceeded" in exp_body.get("reasons", [])
+    assert "target exhaustion horizon critical" in exp_body.get("reasons", [])
+    assert "destination satisfies topology" in exp_body.get("reasons", [])
+
+    # Explain with empty body -> fallback reason
+    r_exp_empty = client.post("/api/workspace/resilience/explain", json={}, headers=headers)
+    assert r_exp_empty.status_code == 200
+    assert "system topology and resilience criteria satisfied" in r_exp_empty.json().get("reasons", [])
+
+    # 5. POST /api/workspace/resilience/simulate
+    r_sim = client.post("/api/workspace/resilience/simulate", json={"scenario": "TARGET_FAILURE"}, headers=headers)
+    assert r_sim.status_code == 200
+
+    # 6. Multipart share target in server.py
+    files = [("file", ("test.txt", b"hello deepseek", "text/plain"))]
+    r_share = client.post("/share-target", files=files, data={"title": "Test Title", "text": "Sample text"}, follow_redirects=False)
+    assert r_share.status_code == 303
+
+
+

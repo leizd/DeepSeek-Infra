@@ -136,14 +136,7 @@ def test_real_three_minio_autonomous_remediation_e2e(tmp_settings: Path) -> None
         "targetId": t_a_id,
         "primaryTargetId": t_a_id,
         "replication": {
-            "enabled": True,
-            "minCommittedCopies": 2,
-            "minFailureDomains": 2,
-            "targets": [
-                {"targetId": t_b_id, "mode": "required"},
-                {"targetId": t_c_id, "mode": "best-effort"},
-            ],
-            "destTargets": [t_b_id, t_c_id],
+            "enabled": False,
         },
     })
 
@@ -164,7 +157,19 @@ def test_real_three_minio_autonomous_remediation_e2e(tmp_settings: Path) -> None
     assert run_res["phase"] == "complete", run_res.get("error")
     backup_id = str(run_res["backupId"])
 
-    # 5. Risk Assessment: Only 1 copy on MinIO A -> REPLICA_LAG detected
+    # 5. Enable Replication Requirement and Assess Risks (1 copy vs 2 required -> REPLICA_LAG)
+    policy = backup_policies.update_policy(policy_id, {
+        "replication": {
+            "enabled": True,
+            "minCommittedCopies": 2,
+            "minFailureDomains": 2,
+            "targets": [
+                {"targetId": t_b_id, "mode": "required"},
+                {"targetId": t_c_id, "mode": "best-effort"},
+            ],
+            "destTargets": [t_b_id, t_c_id],
+        },
+    })
     snap_before = resilience_risk_engine.assess_risks(probe=False)
     lag_risk = next(
         (r for r in snap_before.get("risks", []) if str(r.get("type")) == "REPLICA_LAG" and str(r.get("policyId")) == policy_id),
