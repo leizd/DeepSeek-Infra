@@ -216,20 +216,23 @@ def test_real_three_minio_autonomous_remediation_e2e(
     assert lag_risk_after.get("severity") == "healthy"
 
     # 11. Rebalance Action: Rebalance / Copy to MinIO C
-    monkeypatch.setattr(
-        resilience_risk_engine,
-        "assess_risks",
-        lambda *args, **kwargs: {
+    call_count = 0
+
+    def _mock_assess(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        return {
             "risks": [
                 {
                     "type": "CAPACITY_EXHAUSTION",
                     "target": t_a_id,
-                    "severity": "warning",
+                    "severity": "warning" if call_count == 1 else "healthy",
                     "policyId": policy_id,
                 }
             ]
-        },
-    )
+        }
+
+    monkeypatch.setattr(resilience_risk_engine, "assess_risks", _mock_assess)
     rebalance_act = {
         "actionId": f"act_reb_{uuid.uuid4().hex[:8]}",
         "type": "CREATE_REBALANCE_JOB",
