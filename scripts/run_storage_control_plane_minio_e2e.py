@@ -119,11 +119,22 @@ CHECK_SCENARIOS = {
     "realPostRecoveryBackupHasValidReceiptBinding": PROCESS_REPLACE_SCENARIO,
     "processAExitedBySigkill": PROCESS_REPLACE_SCENARIO,
     "evidenceCheckCannotPassWithoutStructuredProof": PROCESS_REPLACE_SCENARIO,
-    # 4.7.2 gates
+    # 4.7.2 / 4.7.3 gates
     "realThreeMinioAutonomousRemediationE2E": AUTONOMOUS_REMEDIATION_SCENARIO,
     "coordinatedAutonomousRemediationGraph": AUTONOMOUS_REMEDIATION_SCENARIO,
     "verifiedScopedRiskReduction": AUTONOMOUS_REMEDIATION_SCENARIO,
     "crashRecoverableExactlyOnceExecution": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "realThreeMinioAutonomousRepairE2E": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "realThreeMinioAutonomousRebalanceE2E": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "realThreeMinioAutonomousDrillE2E": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "realReplicaTransferUsesEndpointAAndB": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "realRebalanceUsesEndpointAAndC": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "destinationReceiptAuthenticated": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "destinationCommitAuthenticated": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "crashRecoveryObservedExistingEffect": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "leaseTakeoverUsedNewExecutionEpoch": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "blastRadiusInvariantVerified": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "atomicBudgetAdmissionVerified": AUTONOMOUS_REMEDIATION_SCENARIO,
 }
 
 # Claims that MUST be backed by evidence-proof-v2 (semantic validators; not pytest exit alone).
@@ -142,6 +153,19 @@ REQUIRED_PROOF_CHECKS: dict[str, tuple[str, ...]] = {
         "realThreeMinioProcessReplacementE2E",
         "freshProcessBUsesProductionAuthorityStoreFactory",
         "evidenceCheckCannotPassWithoutStructuredProof",
+    ),
+    AUTONOMOUS_REMEDIATION_SCENARIO: (
+        "realThreeMinioAutonomousRepairE2E",
+        "realThreeMinioAutonomousRebalanceE2E",
+        "realThreeMinioAutonomousDrillE2E",
+        "realReplicaTransferUsesEndpointAAndB",
+        "realRebalanceUsesEndpointAAndC",
+        "destinationReceiptAuthenticated",
+        "destinationCommitAuthenticated",
+        "crashRecoveryObservedExistingEffect",
+        "leaseTakeoverUsedNewExecutionEpoch",
+        "blastRadiusInvariantVerified",
+        "atomicBudgetAdmissionVerified",
     ),
 }
 REQUIRED_ENDPOINTS = (

@@ -1,4 +1,4 @@
-"""4.7.3 proof-carrying resilience correctness contracts."""
+"""Proof-carrying resilience correctness contracts."""
 
 from __future__ import annotations
 

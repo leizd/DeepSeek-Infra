@@ -21,7 +21,9 @@ import contextlib
 import json
 import sqlite3
 import sys
+import threading
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
@@ -642,6 +644,7 @@ def admit_and_claim_action(
         if not claimable:
             conn.rollback()
             return False, get_action(action_id), "claim-rejected-not-pending-or-active-lease"
+        claimed_state = "CLAIMED" if current_state == "PENDING" else "RECONCILING"
 
         if enforce_budgets:
             rate_ok, rate_reason = check_rate_limits(
@@ -671,7 +674,7 @@ def admit_and_claim_action(
         cursor = conn.execute(
             """
             UPDATE resilience_actions
-            SET state = 'CLAIMED',
+            SET state = ?,
                 owner_instance_id = ?,
                 lease_until = ?,
                 claim_token = ?,
@@ -684,6 +687,7 @@ def admit_and_claim_action(
               )
             """,
             (
+                claimed_state,
                 owner_instance_id,
                 lease_until_iso,
                 claim_token,
@@ -698,6 +702,112 @@ def admit_and_claim_action(
         conn.commit()
 
     return True, get_action(action_id), "admitted-and-claimed" if enforce_budgets else "claimed"
+
+
+def renew_action_lease(
+    action_id: str,
+    execution_epoch: int,
+    claim_token: str,
+    *,
+    owner_instance_id: str | None = None,
+    lease_seconds: int = 120,
+    now: datetime | None = None,
+) -> bool:
+    """CAS-renew an active action lease and all of its resource locks."""
+    current = now or datetime.now(tz=timezone.utc)
+    lease_until_iso = _utc_iso(current + timedelta(seconds=max(1, lease_seconds)))
+    now_iso = _utc_iso(current)
+    action = get_action(action_id)
+    if not action:
+        return False
+    expected_lock_count = len(resilience_resource_locks.derive_resource_locks_for_action(action))
+    effective_owner = str(owner_instance_id or action.get("ownerInstanceId") or "resilience-worker")
+
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            """
+            UPDATE resilience_actions
+            SET lease_until = ?, owner_instance_id = ?, updated_at = ?
+            WHERE action_id = ?
+              AND execution_epoch = ?
+              AND claim_token = ?
+              AND state IN ('CLAIMED', 'EXECUTING', 'RECONCILING', 'VERIFYING', 'ASSESSING_EFFECT')
+            """,
+            (
+                lease_until_iso,
+                effective_owner,
+                now_iso,
+                action_id,
+                execution_epoch,
+                claim_token,
+            ),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            return False
+        renewed_locks = resilience_resource_locks.renew_action_locks(
+            conn,
+            action_id,
+            owner_instance_id=effective_owner,
+            lease_until=lease_until_iso,
+        )
+        if renewed_locks != expected_lock_count:
+            conn.rollback()
+            return False
+        conn.commit()
+    return True
+
+
+def _run_with_action_lease_heartbeat(
+    *,
+    action_id: str,
+    execution_epoch: int,
+    claim_token: str,
+    lease_seconds: int,
+    operation_name: str,
+    operation: Callable[[], Any],
+    heartbeat_interval_seconds: float | None = None,
+) -> Any:
+    """Run a blocking operation while periodically renewing its fenced lease."""
+    interval = heartbeat_interval_seconds
+    if interval is None:
+        interval = min(30.0, max(0.1, float(lease_seconds) / 3.0))
+    if not renew_action_lease(action_id, execution_epoch, claim_token, lease_seconds=lease_seconds):
+        raise AppError(
+            f"Action '{action_id}' lease lost before {operation_name}",
+            code=ErrorCode.FORBIDDEN,
+            status=409,
+        )
+
+    stop = threading.Event()
+    lease_lost = threading.Event()
+
+    def heartbeat() -> None:
+        while not stop.wait(interval):
+            if not renew_action_lease(action_id, execution_epoch, claim_token, lease_seconds=lease_seconds):
+                lease_lost.set()
+                return
+
+    heartbeat_thread = threading.Thread(
+        target=heartbeat,
+        name=f"resilience-lease-{action_id[:24]}",
+        daemon=True,
+    )
+    heartbeat_thread.start()
+    try:
+        result = operation()
+    finally:
+        stop.set()
+        heartbeat_thread.join(timeout=max(1.0, interval * 2.0))
+
+    if lease_lost.is_set():
+        raise AppError(
+            f"Action '{action_id}' lease lost during {operation_name}; stale worker result fenced",
+            code=ErrorCode.FORBIDDEN,
+            status=409,
+        )
+    return result
 
 
 def check_rate_limits(
@@ -1229,118 +1339,203 @@ def execute_autonomous_action(
     epoch = action["executionEpoch"]
     token = action["claimToken"]
 
-    # 4. Fresh Risk Check & TOCTOU Fencing (Gate C)
+    # 3. Effect Reconciliation for Recovered / Taken-Over Actions (Gate C)
+    skip_execution_mutation = False
+    resume_existing_job = False
+    reconciled_job_info: dict[str, Any] = {}
+    result_payload: dict[str, Any] = {}
+    current_effect: str = str(action.get("effectClass") or "NO_EFFECT")
+
+    if action.get("state") == "RECONCILING":
+        from deepseek_infra.infra.workspace import resilience_effect_reconciler
+
+        reconcile_directive, reconcile_details = resilience_effect_reconciler.reconcile_action_effect(
+            action, instance_id=instance_id
+        )
+        if reconcile_directive == "EFFECT_UNKNOWN":
+            err_msg = str(reconcile_details.get("error") or "effect reconciliation failed closed")
+            update_action_state(
+                action_id,
+                "EFFECT_UNKNOWN",
+                execution_epoch=epoch,
+                claim_token=token,
+                compensation_state="REMOTE_EFFECT_UNCERTAIN",
+                error=err_msg,
+            )
+            raise AppError(f"Action effect reconciliation failed closed: {err_msg}", code=ErrorCode.INTERNAL, status=500)
+        elif reconcile_directive == "TRIGGER_COMPENSATION":
+            err_msg = str(reconcile_details.get("error") or "reconciliation-triggered-compensation")
+            compensate_action(
+                action_id,
+                err_msg,
+                effect_class=str(action.get("effectClass") or "CANCELABLE"),
+                execution_epoch=epoch,
+                claim_token=token,
+            )
+            raise AppError(f"Action compensation triggered during reconciliation: {err_msg}", code=ErrorCode.INTERNAL, status=500)
+        elif reconcile_directive == "ADVANCE_TO_VERIFYING":
+            result_payload = dict(reconcile_details)
+            current_effect = str(action.get("effectClass") or "CANCELABLE")
+            skip_execution_mutation = True
+        elif reconcile_directive == "RESUME_EXECUTION":
+            resume_existing_job = True
+            reconciled_job_info = reconcile_details
+            
     journal_mod = sys.modules[__name__]
     risk_before_snapshot = resilience_risk_engine.assess_risks(probe=False)
     risk_before_digest = str(risk_before_snapshot.get("riskDigest") or "")
-    fresh, fresh_reason = journal_mod.check_action_freshness(action, risk_before_snapshot)
-    if not fresh:
-        updated = update_action_state(
-            action_id,
-            "SKIPPED_NO_LONGER_NEEDED" if "cleared" in fresh_reason else "REPLAN_REQUIRED",
-            execution_epoch=epoch,
-            claim_token=token,
-            risk_before_digest=risk_before_digest,
-            error=fresh_reason,
-        )
-        return updated
-
-    # 5. Precondition Simulation (Gate H & K)
-    sim_ok, sim_details = journal_mod.simulate_action(action)
-    if not sim_ok:
-        err = sim_details.get("error", "simulation-preconditions-unmet")
-        update_action_state(action_id, "BLOCKED", execution_epoch=epoch, claim_token=token, error=err)
-        raise AppError(f"Action precondition simulation failed: {err}", code=ErrorCode.INVALID_REQUEST, status=400)
-
-    # 6. Execute Underlying Subsystem with Idempotency Key & Persist effectHandle (Gate C & D)
-    update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class="NO_EFFECT")
-    result_payload: dict[str, Any] = {}
-    current_effect = "NO_EFFECT"
-    effect_handle: dict[str, Any] = {}
 
     try:
-        if act_type == "CREATE_REBALANCE_JOB":
-            policy_id = str(params.get("policyId") or action.get("policyId") or "")
-            backup_id = str(params.get("backupId") or action.get("backupId") or "")
-            source_id = str(params.get("sourceTargetId") or params.get("source") or action.get("source") or "")
-            dest_id = str(params.get("destTargetId") or params.get("destination") or action.get("destination") or "")
-            reason = str(params.get("reason") or "resilience-planner-rebalance")
-
-            job = backup_replication.create_rebalance_job(
-                policy_id=policy_id,
-                backup_id=backup_id,
-                source_target_id=source_id,
-                dest_target_id=dest_id,
-                reason=reason,
-                resilience_action_id=action_id,
-            )
-            current_effect = "CANCELABLE"
-            effect_handle = {"kind": "rebalance", "jobId": job.get("jobId")}
-            result_payload = {"job": job, "jobId": job.get("jobId")}
-            update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class=current_effect, effect_handle=effect_handle)
-
-            # Execute rebalance to destination durability completion (Gate E)
-            try:
-                reb_res = backup_replication.execute_rebalance_job(str(job["jobId"]))
-                result_payload["executionStatus"] = reb_res.get("status")
-                result_payload["rebalanceResult"] = reb_res
-            except Exception as exc:
-                result_payload["error"] = str(exc)
-
-        elif act_type == "CREATE_REPAIR_JOB":
-            policy_id = str(params.get("policyId") or action.get("policyId") or "")
-            backup_id = str(params.get("backupId") or action.get("backupId") or "")
-            source_id = str(params.get("sourceTargetId") or params.get("source") or action.get("source") or "")
-            dest_id = str(
-                params.get("destTargetId")
-                or params.get("destination")
-                or params.get("targetId")
-                or action.get("destination")
-                or ""
-            )
-            job = backup_replication.create_repair_job(
-                policy_id=policy_id,
-                backup_id=backup_id,
-                source_target_id=source_id,
-                dest_target_id=dest_id,
-                resilience_action_id=action_id,
-            )
-            current_effect = "CANCELABLE"
-            effect_handle = {"kind": "repair", "repairId": job.get("repairId")}
-            result_payload = {"job": job, "repairId": job.get("repairId")}
-            update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class=current_effect, effect_handle=effect_handle)
-
-            # Execute replica repair to completion (Gate E)
-            try:
-                rep_res = backup_replication.execute_replica_repair(
-                    policy_id=policy_id,
-                    backup_id=backup_id,
-                    dest_target_id=dest_id,
-                    source_target_id=source_id,
-                    run_id=str(job["repairId"]),
+        if not skip_execution_mutation:
+            # 4. Fresh Risk Check & TOCTOU Fencing (Gate C)
+            fresh, fresh_reason = journal_mod.check_action_freshness(action, risk_before_snapshot)
+            if not fresh:
+                updated = update_action_state(
+                    action_id,
+                    "SKIPPED_NO_LONGER_NEEDED" if "cleared" in fresh_reason else "REPLAN_REQUIRED",
+                    execution_epoch=epoch,
+                    claim_token=token,
+                    risk_before_digest=risk_before_digest,
+                    error=fresh_reason,
                 )
-                result_payload["executionStatus"] = rep_res.get("status") or rep_res.get("phase")
-                result_payload["repairResult"] = rep_res
-            except Exception as exc:
-                result_payload["error"] = str(exc)
+                return updated
 
-        elif act_type == "START_DR_DRILL":
-            effect_handle = {"kind": "drill", "resilienceActionId": action_id}
-            drill_res = backup_dr_readiness.run_dr_drill(
-                backup_id=params.get("backupId"),
-                target_id=params.get("targetId"),
-                resilience_action_id=action_id,
-            )
-            current_effect = "COMPENSATABLE"
-            result_payload = drill_res
-            update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class=current_effect, effect_handle=effect_handle)
+            # 5. Precondition Simulation (Gate H & K)
+            sim_ok, sim_details = journal_mod.simulate_action(action)
+            if not sim_ok:
+                err = sim_details.get("error", "simulation-preconditions-unmet")
+                update_action_state(action_id, "BLOCKED", execution_epoch=epoch, claim_token=token, error=err)
+                raise AppError(f"Action precondition simulation failed: {err}", code=ErrorCode.INVALID_REQUEST, status=400)
 
-        else:
-            raise AppError(f"Unsupported action execution type: {act_type}", code=ErrorCode.INVALID_REQUEST, status=400)
+            # 6. Execute Underlying Subsystem with Idempotency Key & Persist effectHandle (Gate C & D)
+            update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class="NO_EFFECT")
+            current_effect = "NO_EFFECT"
+            effect_handle: dict[str, Any] = {}
+
+            if act_type == "CREATE_REBALANCE_JOB":
+                policy_id = str(params.get("policyId") or action.get("policyId") or "")
+                backup_id = str(params.get("backupId") or action.get("backupId") or "")
+                source_id = str(params.get("sourceTargetId") or params.get("source") or action.get("source") or "")
+                dest_id = str(params.get("destTargetId") or params.get("destination") or action.get("destination") or "")
+                reason = str(params.get("reason") or "resilience-planner-rebalance")
+
+                if resume_existing_job and reconciled_job_info.get("jobId"):
+                    job = reconciled_job_info.get("job") or backup_replication.read_rebalance_job(str(reconciled_job_info["jobId"])) or {}
+                else:
+                    job = backup_replication.create_rebalance_job(
+                        policy_id=policy_id,
+                        backup_id=backup_id,
+                        source_target_id=source_id,
+                        dest_target_id=dest_id,
+                        reason=reason,
+                        resilience_action_id=action_id,
+                    )
+                current_effect = "CANCELABLE"
+                effect_handle = {"kind": "rebalance", "jobId": job.get("jobId")}
+                result_payload = {"job": job, "jobId": job.get("jobId")}
+                update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class=current_effect, effect_handle=effect_handle)
+
+                # Execute rebalance to destination durability completion (Gate E)
+                try:
+                    reb_res = _run_with_action_lease_heartbeat(
+                        action_id=action_id,
+                        execution_epoch=epoch,
+                        claim_token=token,
+                        lease_seconds=lease_seconds,
+                        operation_name="rebalance",
+                        operation=lambda: backup_replication.execute_rebalance_job(str(job["jobId"])),
+                    )
+                    result_payload["executionStatus"] = reb_res.get("status")
+                    result_payload["rebalanceResult"] = reb_res
+                except AppError as exc:
+                    if exc.status == 409:
+                        raise
+                    result_payload["error"] = str(exc)
+                except Exception as exc:
+                    result_payload["error"] = str(exc)
+
+            elif act_type == "CREATE_REPAIR_JOB":
+                policy_id = str(params.get("policyId") or action.get("policyId") or "")
+                backup_id = str(params.get("backupId") or action.get("backupId") or "")
+                source_id = str(params.get("sourceTargetId") or params.get("source") or action.get("source") or "")
+                dest_id = str(
+                    params.get("destTargetId")
+                    or params.get("destination")
+                    or params.get("targetId")
+                    or action.get("destination")
+                    or ""
+                )
+                if resume_existing_job and reconciled_job_info.get("repairId"):
+                    job = reconciled_job_info.get("job") or backup_replication.read_repair_job(str(reconciled_job_info["repairId"])) or {}
+                else:
+                    job = backup_replication.create_repair_job(
+                        policy_id=policy_id,
+                        backup_id=backup_id,
+                        source_target_id=source_id,
+                        dest_target_id=dest_id,
+                        resilience_action_id=action_id,
+                    )
+                current_effect = "CANCELABLE"
+                effect_handle = {"kind": "repair", "repairId": job.get("repairId")}
+                result_payload = {"job": job, "repairId": job.get("repairId")}
+                update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class=current_effect, effect_handle=effect_handle)
+
+                # Execute replica repair to completion (Gate E)
+                try:
+                    rep_res = _run_with_action_lease_heartbeat(
+                        action_id=action_id,
+                        execution_epoch=epoch,
+                        claim_token=token,
+                        lease_seconds=lease_seconds,
+                        operation_name="repair",
+                        operation=lambda: backup_replication.execute_replica_repair(
+                            policy_id=policy_id,
+                            backup_id=backup_id,
+                            dest_target_id=dest_id,
+                            source_target_id=source_id,
+                            run_id=str(job["repairId"]),
+                        ),
+                    )
+                    result_payload["executionStatus"] = rep_res.get("status") or rep_res.get("phase")
+                    result_payload["repairResult"] = rep_res
+                except AppError as exc:
+                    if exc.status == 409:
+                        raise
+                    result_payload["error"] = str(exc)
+                except Exception as exc:
+                    result_payload["error"] = str(exc)
+
+            elif act_type == "START_DR_DRILL":
+                effect_handle = {"kind": "drill", "resilienceActionId": action_id}
+                drill_res = _run_with_action_lease_heartbeat(
+                    action_id=action_id,
+                    execution_epoch=epoch,
+                    claim_token=token,
+                    lease_seconds=lease_seconds,
+                    operation_name="dr-drill",
+                    operation=lambda: backup_dr_readiness.run_dr_drill(
+                        backup_id=params.get("backupId"),
+                        target_id=params.get("targetId"),
+                        resilience_action_id=action_id,
+                    ),
+                )
+                current_effect = "COMPENSATABLE"
+                result_payload = drill_res
+                update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class=current_effect, effect_handle=effect_handle)
+
+            else:
+                raise AppError(f"Unsupported action execution type: {act_type}", code=ErrorCode.INVALID_REQUEST, status=400)
 
         # 7. Post-Condition Outcome Verification (Gate E)
         update_action_state(action_id, "VERIFYING", execution_epoch=epoch, claim_token=token, effect_class=current_effect)
-        verified_ok, verif_details = journal_mod.verify_action_outcome(action, result_payload)
+        verified_ok, verif_details = _run_with_action_lease_heartbeat(
+            action_id=action_id,
+            execution_epoch=epoch,
+            claim_token=token,
+            lease_seconds=lease_seconds,
+            operation_name="outcome-verification",
+            operation=lambda: journal_mod.verify_action_outcome(action, result_payload),
+        )
         if not verified_ok:
             verif_err = str(verif_details.get("error") or "post-condition-outcome-verification-failed")
             compensate_action(action_id, verif_err, effect_class=current_effect, execution_epoch=epoch, claim_token=token)

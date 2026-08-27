@@ -1,5 +1,10 @@
 # Implementation Plan: 4.7.3 Proof-Carrying Fleet Resilience
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 ## Objective
 
 Upgrade 4.7.2 coordinated autonomous remediation from structural claims to

@@ -61,6 +61,8 @@ def load_evidence_proof(path: Path | str, *, expected_scenario: str | None = Non
 
 
 def _require_fields(evidence: dict[str, Any], fields: tuple[str, ...]) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
     missing = [name for name in fields if evidence.get(name) in (None, "")]
     return [f"missing-field:{name}" for name in missing]
 
@@ -73,6 +75,8 @@ def _require_sha256(value: Any, *, field: str) -> list[str]:
 
 
 def validate_restore_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
     errors = _require_fields(
         evidence,
         (
@@ -105,6 +109,8 @@ def validate_restore_proof(evidence: dict[str, Any], check_name: str) -> list[st
 
 
 def validate_backup_commit_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
     errors = _require_fields(
         evidence,
         (
@@ -127,6 +133,8 @@ def validate_backup_commit_proof(evidence: dict[str, Any], check_name: str) -> l
 
 
 def validate_distinct_pid_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
     errors = _require_fields(evidence, ("pidA", "pidB"))
     try:
         pid_a = int(str(evidence.get("pidA")))
@@ -141,6 +149,8 @@ def validate_distinct_pid_proof(evidence: dict[str, Any], check_name: str) -> li
 
 
 def validate_sigkill_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
     errors = _require_fields(evidence, ("returncode",))
     try:
         code = int(str(evidence.get("returncode")))
@@ -153,6 +163,8 @@ def validate_sigkill_proof(evidence: dict[str, Any], check_name: str) -> list[st
 
 
 def validate_epoch_increase_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
     errors = _require_fields(evidence, ("epochA", "epochB"))
     try:
         if int(str(evidence.get("epochB"))) <= int(str(evidence.get("epochA"))):
@@ -163,6 +175,8 @@ def validate_epoch_increase_proof(evidence: dict[str, Any], check_name: str) -> 
 
 
 def validate_minio_endpoints_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
     endpoints = evidence.get("endpoints")
     if not isinstance(endpoints, list) or len(endpoints) < 3:
         return ["need-three-endpoints"]
@@ -295,6 +309,97 @@ def validate_resilience_proof(evidence: dict[str, Any], check_name: str) -> list
     return errors
 
 
+def validate_autonomous_repair_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    errors = _require_fields(
+        evidence,
+        (
+            "backupId",
+            "actionId",
+            "endpointA",
+            "endpointB",
+            "receiptDigest",
+            "commitDigest",
+        ),
+    )
+    for field in ("receiptDigest", "commitDigest"):
+        if evidence.get(field) not in (None, ""):
+            errors.extend(_require_sha256(evidence.get(field), field=field))
+    return errors
+
+
+def validate_autonomous_rebalance_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    errors = _require_fields(
+        evidence,
+        (
+            "backupId",
+            "actionId",
+            "endpointA",
+            "endpointC",
+            "receiptDigest",
+            "commitDigest",
+        ),
+    )
+    for field in ("receiptDigest", "commitDigest"):
+        if evidence.get(field) not in (None, ""):
+            errors.extend(_require_sha256(evidence.get(field), field=field))
+    return errors
+
+
+def validate_crash_recovery_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    return _require_fields(
+        evidence,
+        (
+            "actionId",
+            "oldEpoch",
+            "newEpoch",
+            "reconciliationDirective",
+        ),
+    )
+
+
+def validate_blast_radius_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    errors = _require_fields(
+        evidence,
+        (
+            "minCommittedCopies",
+            "copiesDuring",
+        ),
+    )
+    if evidence.get("blastRadiusVerified") is not True:
+        errors.append("blast-radius-not-verified")
+    try:
+        min_c = int(str(evidence.get("minCommittedCopies") or 0))
+        during_c = int(str(evidence.get("copiesDuring") or 0))
+        if during_c < min_c:
+            errors.append("copies-during-less-than-minimum")
+    except (ValueError, TypeError):
+        errors.append("invalid-copies-counts")
+    return errors
+
+
+def validate_atomic_budget_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    errors = _require_fields(
+        evidence,
+        (
+            "actionId",
+            "executionEpoch",
+        ),
+    )
+    if evidence.get("atomicAdmissionVerified") is not True:
+        errors.append("atomic-admission-not-verified")
+    return errors
+
+
 VALIDATORS: dict[str, CheckValidator] = {
     "realPreDisasterBackupIsActuallyRestored": validate_restore_proof,
     "realFreshProcessRestoresPreDisasterBackup": validate_restore_proof,
@@ -318,6 +423,17 @@ VALIDATORS: dict[str, CheckValidator] = {
     "resilienceDecisionProof": validate_decision_proof,
     "resilienceScoreProof": validate_resilience_proof,
     "resilienceSnapshotProof": validate_resilience_proof,
+    "realThreeMinioAutonomousRepairE2E": validate_minio_endpoints_proof,
+    "realThreeMinioAutonomousRebalanceE2E": validate_minio_endpoints_proof,
+    "realThreeMinioAutonomousDrillE2E": validate_dr_readiness_proof,
+    "realReplicaTransferUsesEndpointAAndB": validate_autonomous_repair_proof,
+    "realRebalanceUsesEndpointAAndC": validate_autonomous_rebalance_proof,
+    "destinationReceiptAuthenticated": validate_backup_commit_proof,
+    "destinationCommitAuthenticated": validate_backup_commit_proof,
+    "crashRecoveryObservedExistingEffect": validate_crash_recovery_proof,
+    "leaseTakeoverUsedNewExecutionEpoch": validate_epoch_increase_proof,
+    "blastRadiusInvariantVerified": validate_blast_radius_proof,
+    "atomicBudgetAdmissionVerified": validate_atomic_budget_proof,
 }
 
 

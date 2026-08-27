@@ -99,6 +99,26 @@ def release_action_locks(conn: sqlite3.Connection, action_id: str) -> None:
     conn.execute("DELETE FROM resilience_resource_locks WHERE action_id = ?", (action_id,))
 
 
+def renew_action_locks(
+    conn: sqlite3.Connection,
+    action_id: str,
+    *,
+    owner_instance_id: str,
+    lease_until: str,
+) -> int:
+    """Renew every lock owned by an action in the caller's transaction."""
+    ensure_locks_schema(conn)
+    cursor = conn.execute(
+        """
+        UPDATE resilience_resource_locks
+        SET owner_instance_id = ?, lease_until = ?
+        WHERE action_id = ?
+        """,
+        (owner_instance_id, lease_until, action_id),
+    )
+    return int(cursor.rowcount)
+
+
 def list_active_locks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """List all active resource locks."""
     ensure_locks_schema(conn)
