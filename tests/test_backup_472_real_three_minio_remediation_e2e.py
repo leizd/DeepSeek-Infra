@@ -141,7 +141,7 @@ def test_real_three_minio_autonomous_remediation_e2e(tmp_settings: Path) -> None
             "minFailureDomains": 2,
             "targets": [
                 {"targetId": t_b_id, "mode": "required"},
-                {"targetId": t_c_id, "mode": "optional"},
+                {"targetId": t_c_id, "mode": "best-effort"},
             ],
             "destTargets": [t_b_id, t_c_id],
         },

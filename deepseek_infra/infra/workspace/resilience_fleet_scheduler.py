@@ -195,7 +195,10 @@ def schedule_fleet_resilience(
 ) -> dict[str, Any]:
     """Orchestrate multi-policy fleet resilience into admitted Execution Waves (Gates J, K, L, M, N)."""
     current = now or datetime.now(tz=timezone.utc)
-    limits = autonomous_action_policy.get_action_rate_limits()
+    raw_limits = autonomous_action_policy.get_action_rate_limits()
+    if action_policy and isinstance(action_policy.get("rateLimits"), dict):
+        raw_limits = {**raw_limits, **action_policy["rateLimits"]}
+    limits = raw_limits
 
     # 1. Resolve candidate actions
     if candidate_actions is not None:

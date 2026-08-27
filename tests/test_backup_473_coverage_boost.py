@@ -7,8 +7,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import hashlib
 import json
+import pytest
 
 from deepseek_infra.infra.workspace import (
+    backup_dr_readiness,
     backup_policies,
     backup_targets,
     evidence_proof,
@@ -608,3 +610,319 @@ def test_effect_reconciler_all_branches(tmp_settings: Path) -> None:
     claimed_act = {"actionId": "act_claimed", "type": "CREATE_REPAIR_JOB", "state": "CLAIMED"}
     directive, details = resilience_effect_reconciler.reconcile_action_effect(claimed_act)
     assert directive == "RESUME_SIMULATING"
+
+
+def test_action_journal_reconciliation_compensation_and_advance(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test execute_autonomous_action branches for TRIGGER_COMPENSATION and ADVANCE_TO_VERIFYING."""
+    from deepseek_infra.infra.workspace import resilience_action_journal
+    from deepseek_infra.core.errors import AppError
+
+    # 1. TRIGGER_COMPENSATION
+    resilience_action_journal.record_action_intent({
+        "actionId": "act_comp_trig",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {"policyId": "pol_c", "backupId": "bk_c"},
+    })
+    claimed, act, _ = resilience_action_journal.claim_action("act_comp_trig")
+    assert claimed is True
+    assert act is not None
+    resilience_action_journal.update_action_state(
+        "act_comp_trig",
+        "EXECUTING",
+        execution_epoch=int(act["executionEpoch"]),
+        claim_token=str(act["claimToken"]),
+        lease_until="2000-01-01T00:00:00Z",
+    )
+    # Monkeypatch reconcile to return TRIGGER_COMPENSATION
+    monkeypatch.setattr(
+        resilience_effect_reconciler,
+        "reconcile_action_effect",
+        lambda a, **kw: ("TRIGGER_COMPENSATION", {"error": "forced-compensation-in-test"}),
+    )
+    with pytest.raises(AppError, match="Action compensation triggered"):
+        resilience_action_journal.execute_autonomous_action("act_comp_trig")
+
+    # 2. Freshness check fails (cleared risk -> SKIPPED_NO_LONGER_NEEDED)
+    resilience_action_journal.record_action_intent({
+        "actionId": "act_fresh_skip",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {"policyId": "pol_f", "backupId": "bk_f"},
+    })
+    monkeypatch.setattr(
+        resilience_effect_reconciler,
+        "reconcile_action_effect",
+        lambda a: ("RESUME_SIMULATING", {}),
+    )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "check_action_freshness",
+        lambda a, s: (False, "cleared-by-external-operation"),
+    )
+    res = resilience_action_journal.execute_autonomous_action("act_fresh_skip")
+    assert res.get("state") == "SKIPPED_NO_LONGER_NEEDED"
+
+    # 3. Freshness check fails (replan required)
+    resilience_action_journal.record_action_intent({
+        "actionId": "act_fresh_replan",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {"policyId": "pol_f", "backupId": "bk_f"},
+    })
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "check_action_freshness",
+        lambda a, s: (False, "divergent-topology-detected"),
+    )
+    res_replan = resilience_action_journal.execute_autonomous_action("act_fresh_replan")
+    assert res_replan.get("state") == "REPLAN_REQUIRED"
+
+    # 4. Scoped risk reduction fails -> triggers compensation
+    resilience_action_journal.record_action_intent({
+        "actionId": "act_red_fail",
+        "type": "START_DR_DRILL",
+        "parameters": {"policyId": "pol_dr", "backupId": "bk_dr"},
+    })
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "check_action_freshness",
+        lambda a, s: (True, "fresh"),
+    )
+    monkeypatch.setattr(
+        backup_dr_readiness,
+        "run_dr_drill",
+        lambda **kwargs: {"status": "SUCCESS", "schema": "dr-readiness-proof-v1"},
+    )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "verify_action_outcome",
+        lambda a, r: (True, {"verified": True}),
+    )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "verify_scoped_risk_reduction",
+        lambda a, b, af: (False, {"reason": "risk-score-did-not-decrease"}),
+    )
+    with pytest.raises(AppError, match="Scoped risk reduction failed"):
+        resilience_action_journal.execute_autonomous_action("act_red_fail")
+
+
+def test_action_journal_advance_to_verifying_and_resume_execution(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test execute_autonomous_action branches for ADVANCE_TO_VERIFYING, RESUME_EXECUTION, and EFFECT_UNKNOWN."""
+    from deepseek_infra.infra.workspace import resilience_action_journal, backup_replication
+    from deepseek_infra.core.errors import AppError
+
+    # 1. EFFECT_UNKNOWN on takeover
+    resilience_action_journal.record_action_intent({
+        "actionId": "act_eff_unk",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {"policyId": "pol_u", "backupId": "bk_u"},
+    })
+    claimed, act, _ = resilience_action_journal.claim_action("act_eff_unk")
+    assert claimed is True
+    assert act is not None
+    resilience_action_journal.update_action_state(
+        "act_eff_unk",
+        "EXECUTING",
+        execution_epoch=int(act["executionEpoch"]),
+        claim_token=str(act["claimToken"]),
+        lease_until="2000-01-01T00:00:00Z",
+    )
+    monkeypatch.setattr(
+        resilience_effect_reconciler,
+        "reconcile_action_effect",
+        lambda a, **kw: ("EFFECT_UNKNOWN", {"error": "remote-target-unreachable"}),
+    )
+    with pytest.raises(AppError, match="Action effect reconciliation failed closed"):
+        resilience_action_journal.execute_autonomous_action("act_eff_unk")
+
+    # 2. ADVANCE_TO_VERIFYING on takeover
+    resilience_action_journal.record_action_intent({
+        "actionId": "act_adv_ver",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {"policyId": "pol_v", "backupId": "bk_v"},
+    })
+    claimed, act, _ = resilience_action_journal.claim_action("act_adv_ver")
+    assert claimed is True
+    assert act is not None
+    resilience_action_journal.update_action_state(
+        "act_adv_ver",
+        "EXECUTING",
+        execution_epoch=int(act["executionEpoch"]),
+        claim_token=str(act["claimToken"]),
+        lease_until="2000-01-01T00:00:00Z",
+    )
+    monkeypatch.setattr(
+        resilience_effect_reconciler,
+        "reconcile_action_effect",
+        lambda a, **kw: ("ADVANCE_TO_VERIFYING", {"executionStatus": "COMPLETED"}),
+    )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "verify_action_outcome",
+        lambda a, r: (True, {"verified": True}),
+    )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "verify_scoped_risk_reduction",
+        lambda a, b, af: (True, {"effectObserved": True, "reduction": 10.0}),
+    )
+    res_adv = resilience_action_journal.execute_autonomous_action("act_adv_ver")
+    assert res_adv.get("state") == "SUCCEEDED"
+
+    # 3. RESUME_EXECUTION for repair job
+    resilience_action_journal.record_action_intent({
+        "actionId": "act_res_rep",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {"policyId": "pol_r", "backupId": "bk_r", "source": "src", "destination": "dst"},
+    })
+    claimed, act, _ = resilience_action_journal.claim_action("act_res_rep")
+    assert claimed is True
+    assert act is not None
+    resilience_action_journal.update_action_state(
+        "act_res_rep",
+        "EXECUTING",
+        execution_epoch=int(act["executionEpoch"]),
+        claim_token=str(act["claimToken"]),
+        lease_until="2000-01-01T00:00:00Z",
+    )
+    monkeypatch.setattr(
+        resilience_effect_reconciler,
+        "reconcile_action_effect",
+        lambda a, **kw: ("RESUME_EXECUTION", {"repairId": "rep_existing_1"}),
+    )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "check_action_freshness",
+        lambda a, s: (True, "fresh"),
+    )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "simulate_action",
+        lambda a: (True, {"simulated": True}),
+    )
+    monkeypatch.setattr(
+        backup_replication,
+        "read_repair_job",
+        lambda r_id: {"repairId": r_id, "policyId": "pol_r", "backupId": "bk_r"},
+    )
+    monkeypatch.setattr(
+        backup_replication,
+        "execute_replica_repair",
+        lambda **kw: {"status": "SUCCESS"},
+    )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "verify_action_outcome",
+        lambda a, r: (True, {"verified": True}),
+    )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "verify_scoped_risk_reduction",
+        lambda a, b, af: (True, {"effectObserved": True, "reduction": 5.0}),
+    )
+    res_resume = resilience_action_journal.execute_autonomous_action("act_res_rep")
+    assert res_resume.get("state") == "SUCCEEDED"
+
+
+def test_coordinator_and_scheduler_exhaustive_branches(tmp_settings: Path) -> None:
+    """Test all edge branches in resilience_coordinator and resilience_fleet_scheduler."""
+    blocked_risk = {
+        "overallRisk": "blocked",
+        "riskDigest": "digest_blocked",
+        "risks": [{"type": "authority_degradation", "severity": "critical"}],
+    }
+    plan = resilience_coordinator.plan_coordinated_resilience(blocked_risk)
+    assert "authority-circuit-breaker-engaged" in plan["objectives"]
+    assert all(a["requiresApproval"] for a in plan["actions"])
+
+    # 2. Coordinator wave simulation with domain loss below minFailureDomains
+    # Target 1 in fd1, Target 2 in fd2
+    backup_targets.register_filesystem_target(
+        "target_fd1",
+        path=tmp_settings / "t_fd1",
+        failure_domain="fd1",
+    )
+    backup_targets.register_filesystem_target(
+        "target_fd2",
+        path=tmp_settings / "t_fd2",
+        failure_domain="fd2",
+    )
+
+    backup_policies.create_policy({
+        "schemaVersion": 1,
+        "policyId": "pol_fd_test",
+        "name": "FD Test",
+        "targetId": "target_fd1",
+        "replication": {
+            "enabled": True,
+            "minCommittedCopies": 2,
+            "minFailureDomains": 2,
+            "targets": [{"targetId": "target_fd2", "mode": "required"}],
+            "destTargets": ["target_fd2"],
+        },
+    })
+    backup_targets.drain_target("target_fd1")
+
+    passed, sim_res = resilience_coordinator.simulate_coordination_wave(
+        [{"type": "CREATE_REBALANCE_JOB", "policyId": "pol_fd_test", "backupId": "bk_fd", "source": "target_fd1", "destination": "target_fd2"}],
+        current_copies={("pol_fd_test", "bk_fd"): [
+            {"targetId": "target_fd1", "status": "committed", "failureDomain": "fd1"},
+            {"targetId": "target_fd2", "status": "committed", "failureDomain": "fd2"},
+        ]},
+    )
+    assert passed is False
+    assert "insufficient" in str(sim_res["reason"])
+
+    # 3. Scheduler preemption checks on various states
+    assert resilience_fleet_scheduler.can_preempt_action({"state": "PENDING"}) is True
+    assert resilience_fleet_scheduler.can_preempt_action({"state": "CLAIMED", "effectClass": "NO_EFFECT"}) is True
+    assert resilience_fleet_scheduler.can_preempt_action({"state": "CLAIMED", "effectClass": "CANCELABLE"}) is False
+    assert resilience_fleet_scheduler.can_preempt_action({"state": "EXECUTING"}) is False
+    assert resilience_fleet_scheduler.can_preempt_action({"state": "COMPLETED"}) is False
+
+    # 4. Scheduler arbitration with limit saturation
+    sat_actions = [
+        {"actionId": f"act_sat_{i}", "policyId": "pol_sat", "type": "CREATE_REBALANCE_JOB", "source": "target_fd1", "destination": "target_fd2"}
+        for i in range(10)
+    ]
+    scheduled = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"overallRisk": "warning", "riskDigest": "d1"},
+        candidate_actions=sat_actions,
+    )
+    assert len(scheduled["executionWaves"]) > 0
+    assert len(scheduled["deferredActions"]) > 0
+
+    # 5. Resource lock conflict and concurrency deferrals
+    t_actions = [
+        {"actionId": "act_t1", "policyId": "pol_1", "backupId": "bk_1", "type": "CREATE_REPAIR_JOB", "destination": "target_fd1"},
+        {"actionId": "act_t2", "policyId": "pol_2", "backupId": "bk_2", "type": "CREATE_REPAIR_JOB", "destination": "target_fd1"},
+    ]
+    res_t = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"overallRisk": "warning", "riskDigest": "d1"},
+        candidate_actions=t_actions,
+    )
+    assert any(a.get("deferReason") == "resource-lock-conflict" for a in res_t["deferredActions"])
+
+    # 6. Global concurrency limit deferral
+    gc_actions = [
+        {"actionId": "act_gc1", "policyId": "pol_1", "backupId": "bk_1", "type": "CREATE_REPAIR_JOB", "destination": "target_fd1"},
+        {"actionId": "act_gc2", "policyId": "pol_2", "backupId": "bk_2", "type": "CREATE_REPAIR_JOB", "destination": "target_fd2"},
+    ]
+    res_gc = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"overallRisk": "warning", "riskDigest": "d1"},
+        candidate_actions=gc_actions,
+        action_policy={"rateLimits": {"maxConcurrentActions": 1}},
+    )
+    assert any(a.get("deferReason") == "global-concurrency-exceeded" for a in res_gc["deferredActions"])
+
+    # 7. Rebalance with repair reserve active
+    mix_actions = [
+        {"actionId": "act_rep_m", "policyId": "pol_1", "type": "CREATE_REPAIR_JOB", "destination": "target_fd1"},
+        {"actionId": "act_reb_m", "policyId": "pol_2", "type": "CREATE_REBALANCE_JOB", "source": "target_fd1", "destination": "target_fd2"},
+    ]
+    res_mix = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"overallRisk": "warning", "riskDigest": "d1"},
+        candidate_actions=mix_actions,
+    )
+    assert res_mix["transferBudget"].get("rebalanceBlockedByRepairReserve") is True
+
+
