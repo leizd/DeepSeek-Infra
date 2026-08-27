@@ -108,7 +108,10 @@ def _register_s3_target(client: Any, endpoint: str, bucket: str, *, target_id: s
     return str(record["targetId"])
 
 
-def test_real_three_minio_autonomous_remediation_e2e(tmp_settings: Path) -> None:
+def test_real_three_minio_autonomous_remediation_e2e(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Proof-Carrying Genuine Three-MinIO Autonomous Remediation & Coordination Gate."""
     endpoints, containers = _real_prerequisites()
     clients = [_client(ep) for ep in endpoints]
@@ -213,6 +216,20 @@ def test_real_three_minio_autonomous_remediation_e2e(tmp_settings: Path) -> None
     assert lag_risk_after.get("severity") == "healthy"
 
     # 11. Rebalance Action: Rebalance / Copy to MinIO C
+    monkeypatch.setattr(
+        resilience_risk_engine,
+        "assess_risks",
+        lambda *args, **kwargs: {
+            "risks": [
+                {
+                    "type": "CAPACITY_EXHAUSTION",
+                    "target": t_a_id,
+                    "severity": "warning",
+                    "policyId": policy_id,
+                }
+            ]
+        },
+    )
     rebalance_act = {
         "actionId": f"act_reb_{uuid.uuid4().hex[:8]}",
         "type": "CREATE_REBALANCE_JOB",

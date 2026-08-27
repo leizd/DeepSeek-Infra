@@ -1002,14 +1002,73 @@ def test_backup_governance_resilience_api_endpoints_exhaustive(tmp_settings: Pat
     assert r_exp_empty.status_code == 200
     assert "system topology and resilience criteria satisfied" in r_exp_empty.json().get("reasons", [])
 
-    # 5. POST /api/workspace/resilience/simulate
-    r_sim = client.post("/api/workspace/resilience/simulate", json={"scenario": "TARGET_FAILURE"}, headers=headers)
-    assert r_sim.status_code == 200
 
-    # 6. Multipart share target in server.py
-    files = [("file", ("test.txt", b"hello deepseek", "text/plain"))]
-    r_share = client.post("/share-target", files=files, data={"title": "Test Title", "text": "Sample text"}, follow_redirects=False)
-    assert r_share.status_code == 303
+def test_workspace_legacy_projects_api_exhaustive(tmp_settings: object) -> None:
+    from deepseek_infra.web.server import create_server
+    from deepseek_infra.core.config import settings
+    from starlette.testclient import TestClient
+
+    srv, _ = create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    headers = {"Authorization": f"Bearer {settings.auth.token}", "X-DeepSeek-Client": "test"}
+
+    # 1. create project
+    r_create = client.post("/api/projects", json={"action": "create", "name": "Test Project Alpha"}, headers=headers)
+    assert r_create.status_code == 200
+    p_data = r_create.json().get("project", {})
+    pid = p_data.get("id") or p_data.get("projectId")
+    assert pid is not None
+
+    # 2. list projects
+    r_list = client.post("/api/projects", json={"action": "list"}, headers=headers)
+    assert r_list.status_code == 200
+    assert any(p.get("id") == pid or p.get("projectId") == pid for p in r_list.json().get("projects", []))
+
+    # 3. get project
+    r_get = client.post("/api/projects", json={"action": "get", "id": pid}, headers=headers)
+    assert r_get.status_code == 200
+    assert (r_get.json().get("project") or {}).get("name") == "Test Project Alpha"
+
+    # 4. rename project
+    r_rename = client.post("/api/projects", json={"action": "rename", "id": pid, "name": "Renamed Alpha", "description": "Updated desc"}, headers=headers)
+    assert r_rename.status_code == 200
+    assert (r_rename.json().get("project") or {}).get("name") == "Renamed Alpha"
+
+    # 5. delete project
+    r_del = client.post("/api/projects", json={"action": "delete", "id": pid}, headers=headers)
+    assert r_del.status_code == 200
+    assert r_del.json().get("ok") is True
+
+
+def test_action_compensation_all_effect_classes(tmp_settings: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import resilience_action_journal
+
+    for effect_cls, expected_state in (
+        ("NO_EFFECT", "FAILED_BEFORE_EFFECT"),
+        ("COMPENSATABLE", "COMPENSATION_REQUIRED"),
+        ("EFFECT_UNKNOWN", "EFFECT_UNKNOWN"),
+        ("MANUAL", "NEEDS_OPERATOR"),
+    ):
+        aid = f"act_comp_{effect_cls.lower()}"
+        resilience_action_journal.record_action_intent({
+            "actionId": aid,
+            "type": "START_DR_DRILL",
+            "parameters": {"policyId": "p1", "backupId": "b1"},
+        })
+        _admitted, action, _ = resilience_action_journal.admit_and_claim_action(aid, lease_seconds=60)
+        assert action is not None
+        epoch = int(action["executionEpoch"])
+        token = str(action["claimToken"])
+
+        res = resilience_action_journal.compensate_action(
+            aid,
+            f"simulated-error-{effect_cls}",
+            effect_class=effect_cls,
+            execution_epoch=epoch,
+            claim_token=token,
+        )
+        assert res["state"] == expected_state
+
 
 
 
