@@ -178,8 +178,14 @@ def select_repair_destination(
     repl_cfg = policy.get("replication") if isinstance(policy, dict) else {}
     target_candidates: list[str] = []
     if isinstance(repl_cfg, dict):
-        for tid in repl_cfg.get("targetIds") or []:
-            if str(tid) not in existing_targets:
+        raw_list = (
+            repl_cfg.get("targetIds")
+            or repl_cfg.get("destTargets")
+            or [t.get("targetId") for t in repl_cfg.get("targets", []) if isinstance(t, dict)]
+            or []
+        )
+        for tid in raw_list:
+            if tid and str(tid) not in existing_targets:
                 target_candidates.append(str(tid))
 
     all_targets = {str(t.get("targetId") or ""): t for t in backup_targets.list_targets()}

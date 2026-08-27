@@ -121,7 +121,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
 @contextlib.contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
     JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(JOURNAL_DB, timeout=30.0)
+    conn = sqlite3.connect(JOURNAL_DB, timeout=30.0, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.executescript(SCHEMA_INIT)
