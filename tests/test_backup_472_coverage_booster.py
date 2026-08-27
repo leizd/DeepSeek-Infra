@@ -12,6 +12,7 @@ from deepseek_infra.core.config import settings
 from deepseek_infra.infra.workspace import (
     backup_dr_ledger,
     backup_policies,
+    backup_publish,
     backup_replication,
     backup_targets,
     resilience_action_journal,
@@ -320,4 +321,142 @@ def test_coordinator_and_planner_exhaustive_branches(tmp_settings: Path, monkeyp
     monkeypatch.setattr(backup_dr_ledger, "list_logical_recovery_copies", lambda **kw: [{"targetId": "target_src", "status": "committed"}])
     cand = resilience_planner.find_rebalance_candidate_copy("target_src")
     assert cand == ("pol_x", "b_comm")
+
+
+def test_journal_rate_limits_preemption_and_hourly(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test rate limit checks with preemption and hourly ceiling."""
+    with resilience_action_journal._connect() as conn:
+        # Preemption: Insert a warning rebalance job in CLAIMED state
+        act_reb = resilience_action_journal.record_action_intent({
+            "actionId": "act_reb_preempt_target",
+            "type": "CREATE_REBALANCE_JOB",
+            "severityBefore": "warning",
+            "parameters": {"sourceTargetId": "target_a", "destTargetId": "target_b"},
+        })
+        conn.execute(
+            "UPDATE resilience_actions SET state = 'CLAIMED', lease_until = '2099-01-01T00:00:00Z' WHERE action_id = ?",
+            (act_reb["actionId"],),
+        )
+        conn.commit()
+
+        # Check rate limits for critical repair when maxConcurrentActions is simulated as 1
+        monkeypatch.setattr(
+            "deepseek_infra.infra.workspace.autonomous_action_policy.get_action_rate_limits",
+            lambda: {"maxConcurrentActions": 1, "maxActionsPerHour": 50},
+        )
+        act_crit = {"type": "CREATE_REPAIR_JOB", "severityBefore": "critical", "parameters": {}}
+        admitted, reason = resilience_action_journal.check_rate_limits(conn, act_crit)
+        assert admitted is True
+        assert reason == "admitted-with-preemption"
+
+        # Exceeded hourly limit
+        monkeypatch.setattr(
+            "deepseek_infra.infra.workspace.autonomous_action_policy.get_action_rate_limits",
+            lambda: {"maxConcurrentActions": 10, "maxActionsPerHour": 0},
+        )
+        adm_hr, r_hr = resilience_action_journal.check_rate_limits(conn, act_crit)
+        assert adm_hr is False
+        assert "max-actions-per-hour-exceeded" in r_hr
+
+
+def test_journal_freshness_and_simulation_branches(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test freshness evaluation and simulation error branches."""
+    # 1. Freshness: destination target draining
+    monkeypatch.setattr(backup_targets, "get_target", lambda tid: {"targetId": tid, "status": "draining"})
+    act_reb = {"type": "CREATE_REBALANCE_JOB", "parameters": {"sourceTargetId": "target_src", "destTargetId": "target_dst"}}
+    snap_fresh = {"risks": [{"type": "CAPACITY_EXHAUSTION", "target": "target_src", "severity": "warning"}]}
+    fresh_ok, fresh_reason = resilience_action_journal.check_action_freshness(act_reb, snap_fresh)
+    assert fresh_ok is False
+    assert fresh_reason == "destination-target-draining-or-unavailable"
+
+    # 2. Simulation: recovery point not found for repair
+    monkeypatch.setattr(backup_policies, "get_policy", lambda pid: {"policyId": pid})
+    monkeypatch.setattr(backup_dr_ledger, "get_recovery_point", lambda pid, bid: None)
+    sim_ok, sim_res = resilience_action_journal.simulate_action({
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {"policyId": "pol_1", "backupId": "bkp_1", "destTargetId": "target_b"},
+    })
+    assert sim_ok is False
+    assert "recovery-point-not-found" in sim_res["error"]
+
+    # 3. Simulation: draining destination target for repair
+    monkeypatch.setattr(backup_dr_ledger, "get_recovery_point", lambda pid, bid: {"backupId": bid})
+    sim_drain_ok, sim_drain_res = resilience_action_journal.simulate_action({
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {"policyId": "pol_1", "backupId": "bkp_1", "destTargetId": "target_dst"},
+    })
+    assert sim_drain_ok is False
+    assert "repair-destination-target-invalid" in sim_drain_res["error"]
+
+
+def test_compensation_typed_states(tmp_settings: Path) -> None:
+    """Test compensate_action transitions across all typed effect classes."""
+    act = resilience_action_journal.record_action_intent({
+        "actionId": "act_comp_states",
+        "type": "CREATE_REBALANCE_JOB",
+        "parameters": {},
+    })
+
+    # CANCELABLE
+    c_canc = resilience_action_journal.compensate_action(act["actionId"], "canceled", effect_class="CANCELABLE")
+    assert c_canc["state"] == "COMPENSATED"
+    assert c_canc["compensationState"] == "JOB_CANCELLED"
+
+    # COMPENSATABLE
+    c_comp = resilience_action_journal.compensate_action(act["actionId"], "compensated", effect_class="COMPENSATABLE")
+    assert c_comp["state"] == "COMPENSATED"
+    assert c_comp["compensationState"] == "EFFECT_COMPENSATED"
+
+    # IRREVERSIBLE
+    c_irr = resilience_action_journal.compensate_action(act["actionId"], "irreversible", effect_class="IRREVERSIBLE")
+    assert c_irr["state"] == "NEEDS_OPERATOR"
+    assert c_irr["compensationState"] == "MANUAL_INTERVENTION_REQUIRED"
+
+    # EFFECT_UNKNOWN
+    c_unk = resilience_action_journal.compensate_action(act["actionId"], "unknown", effect_class="EFFECT_UNKNOWN")
+    assert c_unk["state"] == "EFFECT_UNKNOWN"
+    assert c_unk["compensationState"] == "REMOTE_EFFECT_UNCERTAIN"
+
+
+def test_reconciler_and_outcome_verifier_deep_branches(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test reconciler and outcome verifier branches for 100% booster coverage."""
+    from deepseek_infra.infra.workspace import resilience_effect_reconciler
+
+    # 1. Reconciler: CREATE_REPAIR_JOB in running phase
+    act_rep = {"actionId": "act_rep_run", "type": "CREATE_REPAIR_JOB", "state": "EXECUTING", "effectHandle": {"repairId": "rep_1"}}
+    monkeypatch.setattr(backup_replication, "read_repair_job", lambda rid: {"phase": "running", "repairId": rid})
+    dec, ctx = resilience_effect_reconciler.reconcile_action_effect(act_rep)
+    assert dec == "RESUME_EXECUTION"
+
+    # 2. Reconciler: CREATE_REBALANCE_JOB in running phase
+    act_reb = {"actionId": "act_reb_run", "type": "CREATE_REBALANCE_JOB", "state": "EXECUTING", "effectHandle": {"jobId": "reb_1"}}
+    monkeypatch.setattr(backup_replication, "read_rebalance_job", lambda jid: {"phase": "running", "jobId": jid})
+    dec_rb, ctx_rb = resilience_effect_reconciler.reconcile_action_effect(act_reb)
+    assert dec_rb == "RESUME_EXECUTION"
+
+    # 3. Verifier: _resolve_target_safely fallback to target_dict with path
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
+    monkeypatch.setattr(backup_targets, "get_target", lambda tid: {"targetId": tid, "path": "/tmp/custom_target", "kind": "filesystem"})
+    res_t = resilience_outcome_verifier._resolve_target_safely("target_custom")
+    assert res_t.target_id == "target_custom"
+    assert res_t.root == Path("/tmp/custom_target")
+
+    # 4. Verifier: Rebalance missing jobId and destination auth exception
+    v_no_job, v_no_job_res = resilience_outcome_verifier.verify_action_outcome(
+        {"actionId": "act_rb_noj", "type": "CREATE_REBALANCE_JOB", "parameters": {}},
+        {},
+    )
+    assert v_no_job is False
+    assert v_no_job_res["error"] == "rebalance-job-id-missing"
+
+    monkeypatch.setattr(backup_replication, "read_rebalance_job", lambda jid: {"phase": "complete"})
+    monkeypatch.setattr(backup_replication, "authenticate_committed_copy", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("auth-fail")))
+    v_exc, v_exc_res = resilience_outcome_verifier.verify_action_outcome(
+        {"actionId": "act_rb_exc", "type": "CREATE_REBALANCE_JOB", "parameters": {"policyId": "p", "backupId": "b", "destTargetId": "target_custom"}},
+        {"jobId": "reb_1"},
+    )
+    assert v_exc is False
+    assert "rebalance-destination-auth-error" in v_exc_res["error"]
+
+
 

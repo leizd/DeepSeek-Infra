@@ -667,7 +667,8 @@ def check_rate_limits(
 
     if active_count >= limits["maxConcurrentActions"]:
         # Check if action is CRITICAL repair that can preempt a WARNING rebalance
-        if action and str(action.get("type")) == "CREATE_REPAIR_JOB" and str(action.get("severity")).lower() == "critical":
+        act_sev = str(action.get("severity") or action.get("severityBefore") or "").lower() if action else ""
+        if action and str(action.get("type")) == "CREATE_REPAIR_JOB" and act_sev == "critical":
             # Attempt to preempt an active warning rebalance
             warning_reb = conn.execute(
                 """
