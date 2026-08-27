@@ -1093,5 +1093,62 @@ def test_action_compensation_all_effect_classes(tmp_settings: object, monkeypatc
         assert res["state"] == expected_state
 
 
+def test_workspace_backups_routes_and_restores_exhaustive(tmp_settings: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.web.server import create_server
+    from deepseek_infra.core.config import settings
+    from deepseek_infra.infra.workspace import backups as workspace_backups
+    from starlette.testclient import TestClient
+
+    srv, _ = create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    headers = {"Authorization": f"Bearer {settings.auth.token}", "X-DeepSeek-Client": "test"}
+
+    # Mock backup session
+    monkeypatch.setattr(workspace_backups, "get_session", lambda bid: {"backupId": bid, "status": "COMPLETED"})
+    monkeypatch.setattr(workspace_backups, "delete_backup", lambda bid: True)
+    monkeypatch.setattr(workspace_backups, "finalize_session", lambda bid, cancel_event=None: {"backupId": bid, "status": "FINALIZED"})
+
+    # 1. GET /api/workspace/backups/{backup_id}
+    r_get = client.get("/api/workspace/backups/b123", headers=headers)
+    assert r_get.status_code == 200
+    assert r_get.json().get("status") == "COMPLETED"
+
+    # 2. DELETE /api/workspace/backups/{backup_id}
+    r_del = client.delete("/api/workspace/backups/b123", headers=headers)
+    assert r_del.status_code == 200
+    assert r_del.json().get("deleted") is True
+
+    # 3. POST /api/workspace/backups/{backup_id}/finalize
+    r_fin = client.post("/api/workspace/backups/b123/finalize", headers=headers)
+    assert r_fin.status_code == 200
+    assert r_fin.json().get("status") == "FINALIZED"
+
+    # 4. POST /api/workspace/restores/inspect with multipart
+    monkeypatch.setattr(workspace_backups, "inspect_archive", lambda raw, filename="": {"valid": True, "archiveSha256": "mock"})
+    r_insp = client.post(
+        "/api/workspace/restores/inspect",
+        files=[("file", ("workspace.dsibackup", b"PKdummycontent", "application/zip"))],
+        headers=headers,
+    )
+    assert r_insp.status_code == 200
+    assert r_insp.json().get("valid") is True
+
+
+def test_server_streaming_and_cascade_branches() -> None:
+    from deepseek_infra.web.server import emit_cascade_as_stream
+
+    events = []
+    def write_event(ev: dict[str, Any]) -> None:
+        events.append(ev)
+
+    # emit with reasoning
+    with pytest.MonkeyPatch.context() as mp:
+        import deepseek_infra.web.server as srv_mod
+        mp.setattr(srv_mod, "call_deepseek_cascade", lambda p: {"content": "hello", "reasoning": "thought process"})
+        emit_cascade_as_stream({"prompt": "hi"}, write_event)
+        assert any(e.get("type") == "reasoning" for e in events)
+
+
+
 
 
