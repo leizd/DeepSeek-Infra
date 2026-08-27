@@ -1149,6 +1149,61 @@ def test_server_streaming_and_cascade_branches() -> None:
         assert any(e.get("type") == "reasoning" for e in events)
 
 
+def test_server_additional_common_routes_boost(tmp_settings: object) -> None:
+    from deepseek_infra.web.server import create_server
+    from deepseek_infra.core.config import settings
+    from starlette.testclient import TestClient
+
+    srv, _ = create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    headers = {"Authorization": f"Bearer {settings.auth.token}", "Host": "127.0.0.1", "X-DeepSeek-Client": "test"}
+
+    # 1. GET /api/config
+    r_cfg = client.get("/api/config", headers=headers)
+    assert r_cfg.status_code == 200
+
+    # 2. Status routes: rag, budget, tool-policy, scheduler, mcp, taint, semantic-cache, gateway, edge
+    assert client.get("/api/rag/status", headers=headers).status_code == 200
+    assert client.get("/api/budget", headers=headers).status_code == 200
+    assert client.get("/api/tool-policy", headers=headers).status_code == 200
+    assert client.get("/api/scheduler", headers=headers).status_code == 200
+    assert client.get("/api/mcp", headers=headers).status_code == 200
+    assert client.get("/api/taint", headers=headers).status_code == 200
+    assert client.get("/api/semantic-cache/status", headers=headers).status_code == 200
+    assert client.get("/api/gateway/status", headers=headers).status_code == 200
+    assert client.get("/api/edge/status", headers=headers).status_code == 200
+
+    # 3. POST /api/edge/reload & POST /api/workspace/resilience/assess
+    assert client.post("/api/edge/reload", headers=headers).status_code in (200, 400, 500)
+    assert client.post("/api/workspace/resilience/assess", json={"probe": False}, headers=headers).status_code == 200
+
+
+def test_resilience_risk_engine_and_policy_exhaustive(tmp_settings: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import autonomous_action_policy, resilience_risk_engine
+
+    # Test autonomous action policy
+    limits = autonomous_action_policy.get_action_rate_limits()
+    assert "maxConcurrentActions" in limits
+    autonomous_action_policy.set_action_rate_limits({"maxConcurrentActions": 5})
+    assert autonomous_action_policy.get_action_rate_limits()["maxConcurrentActions"] == 5
+
+    # Test is_action_autonomous & validate_action_admission
+    assert autonomous_action_policy.is_action_autonomous("CREATE_REPAIR_JOB") is True
+    assert autonomous_action_policy.is_action_autonomous("PRIMARY_PROMOTION") is False
+
+    admitted, reason = autonomous_action_policy.validate_action_admission({"type": "CREATE_REPAIR_JOB"})
+    assert admitted is True
+
+    admitted_promo, reason_promo = autonomous_action_policy.validate_action_admission({"type": "PRIMARY_PROMOTION"})
+    assert admitted_promo is False
+
+    # Test risk engine assess_risks
+    res = resilience_risk_engine.assess_risks(probe=False)
+    assert "risks" in res
+    assert "riskDigest" in res
+
+
+
 
 
 
