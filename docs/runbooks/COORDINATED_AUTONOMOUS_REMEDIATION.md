@@ -1,5 +1,10 @@
 # Runbook: Coordinated Autonomous Remediation & Crash-Recoverable Execution (DeepSeek Infra 4.7.2)
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 ## 1. Overview & Architecture
 
 DeepSeek Infra 4.7.2 elevates the storage resilience substrate from single-action execution to **Coordinated Autonomous Remediation & Crash-Recoverable Execution**. It resolves complex multi-risk situations through deterministic DAG coordination, strict transactional resource locking, CAS epoch-fenced execution leases, in-flight crash effect reconciliation, real post-condition outcome verification, and closed-loop scoped risk reduction.
