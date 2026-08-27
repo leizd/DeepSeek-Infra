@@ -1026,7 +1026,7 @@ def test_backup_governance_resilience_api_endpoints_exhaustive(tmp_settings: Pat
     assert r_ext.status_code == 200
 
 
-def test_workspace_legacy_projects_api_exhaustive(tmp_settings: object) -> None:
+def test_workspace_legacy_projects_api_exhaustive(tmp_settings: object, monkeypatch: pytest.MonkeyPatch) -> None:
     from deepseek_infra.web.server import create_server
     from deepseek_infra.core.config import settings
     from starlette.testclient import TestClient
@@ -1042,10 +1042,13 @@ def test_workspace_legacy_projects_api_exhaustive(tmp_settings: object) -> None:
     pid = p_data.get("id") or p_data.get("projectId")
     assert pid is not None
 
-    # 2. list projects
+    # 2. list projects (explicit and default action -> covers line 59)
     r_list = client.post("/api/projects", json={"action": "list"}, headers=headers)
     assert r_list.status_code == 200
     assert any(p.get("id") == pid or p.get("projectId") == pid for p in r_list.json().get("projects", []))
+
+    r_def = client.post("/api/projects", json={}, headers=headers)
+    assert r_def.status_code == 200
 
     # 3. get project
     r_get = client.post("/api/projects", json={"action": "get", "id": pid}, headers=headers)
@@ -1061,6 +1064,12 @@ def test_workspace_legacy_projects_api_exhaustive(tmp_settings: object) -> None:
     r_del = client.post("/api/projects", json={"action": "delete", "id": pid}, headers=headers)
     assert r_del.status_code == 200
     assert r_del.json().get("ok") is True
+
+    # 6. Upload too large in workspace_backups (covers line 443)
+    from deepseek_infra.infra.workspace import backups as workspace_backups
+    monkeypatch.setattr(workspace_backups, "MAX_ARCHIVE_BYTES", 5)
+    r_upl = client.post("/api/workspace/restores/inspect", content=b"1234567890", headers=headers)
+    assert r_upl.status_code == 413
 
 
 def test_action_compensation_all_effect_classes(tmp_settings: object, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1237,6 +1246,44 @@ def test_rpo_rto_optimizer_and_coordinator_exhaustive(tmp_settings: object, monk
     assert rec["type"] == "PREFERRED_RESTORE_TARGET_ADVISORY"
     assert rec["recommendedTarget"] == "target_fast"
     assert rec["currentPrimaryTarget"] == "target_slow"
+
+    # 1b. Test RPO/RTO when performance difference is < 1.5x (branch 73->91)
+    monkeypatch.setattr(
+        backup_dr_readiness,
+        "_drill_records",
+        lambda: [
+            {"targetId": "target_a", "durationMs": 1000},
+            {"targetId": "target_a", "durationMs": 1000},
+            {"targetId": "target_b", "durationMs": 1100},
+            {"targetId": "target_b", "durationMs": 1100},
+        ],
+    )
+    monkeypatch.setattr(
+        backup_policies,
+        "list_policies",
+        lambda: [{"policyId": "pol_a", "targetId": "target_a"}],
+    )
+    recs_close = rpo_rto_optimizer.generate_placement_recommendations()
+    assert recs_close["recommendations"] == []
+
+    # 1c. Test RPO/RTO when policy is NOT using the slowest target (branch 77->74)
+    monkeypatch.setattr(
+        backup_dr_readiness,
+        "_drill_records",
+        lambda: [
+            {"targetId": "target_fast", "durationMs": 1000},
+            {"targetId": "target_fast", "durationMs": 1100},
+            {"targetId": "target_slow", "durationMs": 5000},
+            {"targetId": "target_slow", "durationMs": 5200},
+        ],
+    )
+    monkeypatch.setattr(
+        backup_policies,
+        "list_policies",
+        lambda: [{"policyId": "pol_fast", "targetId": "target_fast"}],
+    )
+    recs_fast_pol = rpo_rto_optimizer.generate_placement_recommendations()
+    assert recs_fast_pol["recommendations"] == []
 
     # 2. Test Resilience Coordinator with Authority degradation circuit breaker
     auth_risk_snapshot = {

@@ -454,3 +454,29 @@ def test_launcher_window_invalid_port(
     assert window._current_credentials() is None
     assert len(messagebox.errors) == 2
 
+
+def test_launcher_window_handlers_edge_branches(
+    launcher_window: tuple[gui.LauncherWindow, FakeRoot, FakeMessageBox, list[LauncherCredentials]],
+) -> None:
+    window, root, _messagebox, _saved = launcher_window
+
+    # 1. _on_close when runtime is not running
+    cast(FakeRuntime, window.runtime).running = False
+    window._on_close()
+    assert root.destroyed is True
+
+    # 2. _on_start and _on_save with invalid credentials
+    window.port_var.set("bad_port")
+    window._on_start()
+    window._on_save()
+
+    # 3. _drain_events with log and status events
+    window._event_queue.put(("log", "regular log output"))
+    window._event_queue.put(("status", "running"))
+    window._drain_events()
+    assert "regular log output" in window.log_widget.content
+
+    # 4. _append_log without server_started (line 615->exit)
+    window._append_log("plain log line without markers")
+
+
