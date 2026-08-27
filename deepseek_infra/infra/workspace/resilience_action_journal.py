@@ -118,18 +118,36 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     resilience_resource_locks.ensure_locks_schema(conn)
 
 
+_JOURNAL_LOCK = threading.RLock()
+
+
 @contextlib.contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
     JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(JOURNAL_DB, timeout=30.0, isolation_level=None)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.executescript(SCHEMA_INIT)
-    _migrate_schema(conn)
+    with _JOURNAL_LOCK:
+        conn = sqlite3.connect(JOURNAL_DB, timeout=30.0, isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.executescript(SCHEMA_INIT)
+        _migrate_schema(conn)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
+def _commit(conn: sqlite3.Connection) -> None:
     try:
-        yield conn
-    finally:
-        conn.close()
+        conn.execute("COMMIT")
+    except sqlite3.OperationalError:
+        pass
+
+
+def _rollback(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("ROLLBACK")
+    except sqlite3.OperationalError:
+        pass
 
 
 def materialize_resilience_plan(
@@ -311,7 +329,7 @@ def materialize_resilience_plan(
                     ),
                 )
                 persisted_actions.append(va)
-        conn.commit()
+        _commit(conn)
 
     return {
         "planId": plan_id,
@@ -432,7 +450,7 @@ def record_action_intent(
                 now_iso,
             ),
         )
-        conn.commit()
+        _commit(conn)
 
     return record
 
@@ -586,7 +604,7 @@ def update_action_state(
         if state in terminal_states:
             resilience_resource_locks.release_action_locks(conn, action_id)
 
-        conn.commit()
+        _commit(conn)
 
     return get_action(action_id) or {}
 
@@ -635,14 +653,14 @@ def admit_and_claim_action(
             (action_id,),
         ).fetchone()
         if not current_row:
-            conn.rollback()
+            _rollback(conn)
             return False, None, "action-not-found"
         current_state = str(current_row[0] or "")
         current_lease = str(current_row[1] or "")
         active_states = {"CLAIMED", "EXECUTING", "RECONCILING", "VERIFYING", "ASSESSING_EFFECT"}
         claimable = current_state == "PENDING" or (current_state in active_states and current_lease < now_iso)
         if not claimable:
-            conn.rollback()
+            _rollback(conn)
             return False, get_action(action_id), "claim-rejected-not-pending-or-active-lease"
         claimed_state = "CLAIMED" if current_state == "PENDING" else "RECONCILING"
 
@@ -655,7 +673,7 @@ def admit_and_claim_action(
                 commit_mutations=False,
             )
             if not rate_ok:
-                conn.rollback()
+                _rollback(conn)
                 return False, get_action(action_id), rate_reason
 
         if lock_keys:
@@ -668,7 +686,7 @@ def admit_and_claim_action(
                 now=current,
             )
             if not acquired:
-                conn.rollback()
+                _rollback(conn)
                 return False, get_action(action_id), lock_reason
 
         cursor = conn.execute(
@@ -697,9 +715,9 @@ def admit_and_claim_action(
             ),
         )
         if cursor.rowcount != 1:
-            conn.rollback()
+            _rollback(conn)
             return False, get_action(action_id), "claim-rejected-not-pending-or-active-lease"
-        conn.commit()
+        _commit(conn)
 
     return True, get_action(action_id), "admitted-and-claimed" if enforce_budgets else "claimed"
 
@@ -744,7 +762,7 @@ def renew_action_lease(
             ),
         )
         if cursor.rowcount != 1:
-            conn.rollback()
+            _rollback(conn)
             return False
         renewed_locks = resilience_resource_locks.renew_action_locks(
             conn,
@@ -753,9 +771,9 @@ def renew_action_lease(
             lease_until=lease_until_iso,
         )
         if renewed_locks != expected_lock_count:
-            conn.rollback()
+            _rollback(conn)
             return False
-        conn.commit()
+        _commit(conn)
     return True
 
 
@@ -860,7 +878,7 @@ def check_rate_limits(
                 )
                 resilience_resource_locks.release_action_locks(conn, str(preempt_id))
                 if commit_mutations:
-                    conn.commit()
+                    _commit(conn)
                 return True, "admitted-with-preemption"
         return False, f"max-concurrent-actions-exceeded:{active_count}>={limits['maxConcurrentActions']}"
 
