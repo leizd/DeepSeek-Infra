@@ -325,6 +325,9 @@ def test_risk_generates_safe_action(tmp_settings: Path, monkeypatch: pytest.Monk
     backup_targets.register_filesystem_target("target_a", path=dir_a, label="A")
     backup_targets.register_filesystem_target("target_b", path=dir_b, label="B")
 
+    backup_policies.create_policy({"name": "Policy 1", "policyId": "pol_1", "targetId": "target_a"})
+    backup_dr_ledger.record_recovery_point(policy_id="pol_1", backup_id="bkp_1", target_id="target_a", chain_digest="cd_1", committed_at=_utc_iso())
+    backup_dr_ledger.record_logical_recovery_copy(policy_id="pol_1", backup_id="bkp_1", target_id="target_a", state="committed", committed_at=_utc_iso())
     # Monkeypatch capacity: target_a has 5% free, target_b has 80% free
     def fake_cap(tid: str, probe: bool = False) -> dict[str, Any]:
         if tid == "target_a":
@@ -967,12 +970,13 @@ def test_resilience_action_journal_drill_and_queries(tmp_settings: Path, monkeyp
     monkeypatch.setattr(
         backup_dr_readiness,
         "run_dr_drill",
-        lambda backup_id=None, target_id=None: {"drillId": "drill-777", "success": True},
+        lambda *args, **kwargs: {"drillId": "drill-777", "success": True},
     )
 
     monkeypatch.setattr(resilience_action_journal, "check_action_freshness", lambda action, snap: (True, "fresh"))
     monkeypatch.setattr(resilience_action_journal, "simulate_action", lambda action: (True, {"simulationPassed": True}))
     monkeypatch.setattr(resilience_action_journal, "verify_action_outcome", lambda action, res: (True, {"executionVerified": True}))
+    monkeypatch.setattr(resilience_action_journal, "verify_scoped_risk_reduction", lambda action, b, a: (True, {"effectObserved": True}))
 
     action = {
         "actionId": "act-drill-99",

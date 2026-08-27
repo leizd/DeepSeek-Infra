@@ -947,11 +947,27 @@ def run_dr_drill(
     target_id: str | None = None,
     scratch_root: Path | None = None,
     policy_id: str | None = None,
+    resilience_action_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute a continuous DR rehearsal drill, restoring into isolated scratch workspace (P0-6).
 
-    Emits dr-readiness-proof-v1.
+    Emits dr-readiness-proof-v1 and supports exact resilienceActionId idempotency.
     """
+    if resilience_action_id:
+        for rec in _drill_records():
+            if rec.get("resilienceActionId") == resilience_action_id or (
+                isinstance(rec.get("proof"), dict) and rec["proof"].get("resilienceActionId") == resilience_action_id
+            ):
+                return {
+                    "status": "success" if rec.get("result") == "success" or rec.get("status") == "success" else str(rec.get("result") or rec.get("status")),
+                    "drillId": rec.get("drillId"),
+                    "testedBackupId": rec.get("backupId") or rec.get("testedBackupId"),
+                    "targetId": rec.get("targetId"),
+                    "proof": rec.get("proof") or {},
+                    "durationMs": int((float(rec.get("rtoSeconds") or 1)) * 1000),
+                    "resilienceActionId": resilience_action_id,
+                }
+
     if is_dr_drill_running():
         raise AppError("Disaster recovery rehearsal is already running", code=ErrorCode.INVALID_REQUEST, status=409)
 
@@ -1016,6 +1032,7 @@ def run_dr_drill(
 
         proof: dict[str, Any] = {
             "drillId": drill_id,
+            "resilienceActionId": resilience_action_id,
             "testedBackupId": chosen_backup_id,
             "restoreDurationMs": elapsed_ms,
             "workspaceDigestBefore": pre_digest,
@@ -1036,6 +1053,7 @@ def run_dr_drill(
             json.dumps(
                 {
                     "drillId": drill_id,
+                    "resilienceActionId": resilience_action_id,
                     "targetId": tested_target_id,
                     "backupId": chosen_backup_id,
                     "result": "success",
@@ -1052,6 +1070,7 @@ def run_dr_drill(
         return {
             "status": "success",
             "drillId": drill_id,
+            "resilienceActionId": resilience_action_id,
             "testedBackupId": chosen_backup_id,
             "targetId": tested_target_id,
             "proof": proof,

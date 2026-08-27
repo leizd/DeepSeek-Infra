@@ -271,7 +271,7 @@ def evaluate_dr_freshness_risk(
     successful_drills: list[dict[str, Any]] = []
 
     for d in drills:
-        if d.get("success") is True or str(d.get("status") or "").lower() == "pass":
+        if d.get("success") is True or str(d.get("status") or "").lower() in {"pass", "success"} or str(d.get("result") or "").lower() == "success":
             successful_drills.append(d)
 
     evidence: list[str] = []
@@ -286,7 +286,7 @@ def evaluate_dr_freshness_risk(
         }
 
     latest_drill = successful_drills[0]
-    finished_at = _parse_iso(latest_drill.get("finishedAt") or latest_drill.get("startedAt"))
+    finished_at = _parse_iso(latest_drill.get("finishedAt") or latest_drill.get("startedAt") or latest_drill.get("observedAt"))
     if finished_at is None:
         age_days = 999.0
     else:
@@ -295,7 +295,7 @@ def evaluate_dr_freshness_risk(
     details = {
         "lastDrillId": latest_drill.get("drillId"),
         "lastSuccessfulDrillAgeDays": round(age_days, 2),
-        "finishedAt": str(latest_drill.get("finishedAt") or ""),
+        "finishedAt": str(latest_drill.get("finishedAt") or latest_drill.get("observedAt") or ""),
     }
 
     if age_days > 30.0:

@@ -5,25 +5,24 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.7.1-blue)
+![Version](https://img.shields.io/badge/version-4.7.2-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.7.1 — Verified Autonomous Remediation & Exactly-Once Resilience.** Closes the autonomous resilience loop with verified outcome post-conditions, typed multi-state compensation, CAS concurrency fencing with durable leases, and unbypassable safety floor.
+> **4.7.2 — Coordinated Autonomous Remediation & Crash-Recoverable Execution.** Closes multi-risk storage resilience with verified DAG coordination, CAS-fenced renewable execution leases, crash effect reconciliation, and blast-radius safety.
 
-## 4.7.1 at a glance
+## 4.7.2 at a glance
 
-- Strictly verified autonomous execution: states SUCCEEDED/COMPLETED reachable only after real post-condition outcome verification.
-- Typed effect classification and safe compensation lifecycle (NO_EFFECT, CANCELABLE, COMPENSATABLE, IRREVERSIBLE).
-- Complete and executable action intents emitted by the resilience planner with fully resolved targets.
-- Subsystem idempotency with resilienceActionId propagation and SQLite CAS single-owner action claims.
-- Immutable safety floor NEVER_AUTONOMOUS unbypassable by operator policy.
-- Real-time rate limiting, TOCTOU freshness validation, and precondition simulation.
+- Coordinated multi-risk DAG planning resolving complex concurrent storage risks deterministically.
+- Transactional resource locking and atomic safety budgets preventing split-brain or resource overload.
+- Crash-recoverable CAS execution leases and in-flight effect handle reconciliation.
+- Real post-condition outcome contracts and scoped closed-loop risk reduction verification.
+- Genuine three-target MinIO multi-failure-domain autonomous remediation with Decision Proof v3.
 
-See the [4.7.1 release notes](docs/releases/4.7.1.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.7.2 release notes](docs/releases/4.7.2.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 ## 4.4.15 at a glance
 

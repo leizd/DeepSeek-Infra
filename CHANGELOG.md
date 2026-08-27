@@ -4,6 +4,22 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.7.2] - Coordinated Autonomous Remediation & Crash-Recoverable Execution (2026-08-27)
+
+### Coordinated Autonomous Remediation & Crash-Recoverable Execution
+
+- **Immutable Plan & Action Identity (Gate A)**: Plans and actions are create-once immutable identities; identical payloads replay idempotently without state mutation, conflicting payloads fail closed (`409 Conflict`), and `INSERT OR REPLACE` is purged so `SUCCEEDED` actions can never be reset to `PENDING`.
+- **Crash-Recoverable Action Leases & CAS Fencing (Gate B)**: `executionEpoch`, `claimToken`, and renewable `leaseUntil` protect `CLAIMED`, `EXECUTING`, `VERIFYING`, and `RECONCILING` states. Stale workers lose CAS fencing upon lease expiration.
+- **Effect Reconciliation Engine (Gate C)**: Persistent `effectHandle` tracking; recovers crashed workers by inspecting existing subsystem jobs rather than blindly re-executing side effects; introduces first-class `EFFECT_UNKNOWN` state for uncertain remote mutations.
+- **All-Subsystem Idempotency (Gate D)**: Native propagation and deduplication on `resilienceActionId` across DR Drills (`run_dr_drill`), Repair, and Rebalance.
+- **Real Outcome Contracts & Rebalance Completion (Gate E)**: Rebalance requires completed transfer and authenticated destination copy (`Receipt`/`Commit` binding); Repair requires durable committed replica and failure domain verification.
+- **Scoped Risk Effect Verification (Gate F)**: Compares `severityBefore` vs `severityAfter` for the targeted `riskSubject`. `effectObserved` is derived dynamically and blocks `SUCCEEDED` on unchanged or worsened risk.
+- **Planner Candidate Correctness (Gate G)**: Removes improper rebalance fallback to unrelated backups, preventing incorrect rebalance actions when source targets have no copy.
+- **Multi-Risk Coordination DAG & Resource Locking (Gate H & I)**: `ResilienceCoordinationPlan v1`, durable SQLite resource locks (`(policyId, backupId, targetId)`), serialized mutual exclusion, and dependency graphs (repair before drain).
+- **Atomic Global/Target Safety Budgets & Blast-Radius Invariants (Gate J & K)**: Atomic concurrency and bandwidth budgeting; invariant verification ensures active plans never breach minimum committed copies or failure domain diversity.
+- **Effect-Aware Compensation & Operator Intervention (Gate L)**: Typed compensation lifecycles with real job cancellation and operator handoff (`NEEDS_OPERATOR`).
+- **Wire & Protocol Freeze Preserved**: `object-set-v1`, `Receipt v4`, `Commit v4`, `FastCDC v3`, `randomized Age`, `control-authority-v1`, and `AuthorityCheckpoint v1` wire semantics remain 100% frozen.
+
 ## [4.7.1] - Verified Autonomous Remediation & Exactly-Once Resilience (2026-08-26)
 
 ### Verified Autonomous Remediation & Exactly-Once Resilience

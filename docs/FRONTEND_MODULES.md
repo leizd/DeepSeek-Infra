@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.7.1。
+适用版本：v4.7.2。
 
 > 4.5.0 的 Gate A-D 先完成后端 Transport、Cache、Pipeline 与 Safety；在这些 Gate 通过前不新增漂亮但不可依赖的 Recovery UI。
 

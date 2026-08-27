@@ -371,6 +371,8 @@ def test_rate_limits_block_excessive_concurrent_actions(tmp_settings: Path) -> N
 
 def test_end_to_end_autonomous_remediation_and_proof_validation(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Gate I, L: Execute repair, verify outcome, validate risk reduction and Decision Proof v3."""
+    monkeypatch.setattr(backup_targets, "_containment_violation", lambda *a, **k: None)
+    monkeypatch.setattr(backup_replication, "authenticate_committed_copy", lambda *a, **k: ("authenticated", {"r": 1}, {"c": 1}))
     dir_t1 = tmp_settings / "target_src"
     dir_t2 = tmp_settings / "target_dst"
     dir_t1.mkdir(parents=True, exist_ok=True)

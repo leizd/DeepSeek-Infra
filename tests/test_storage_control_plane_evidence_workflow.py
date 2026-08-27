@@ -46,6 +46,10 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "tests/test_backup_468_real_backup_dr_sigkill_e2e.py::"
         "test_real_three_minio_sigkill_backup_disaster_recovery_e2e"
     )
+    node_472 = (
+        "tests/test_backup_472_real_three_minio_remediation_e2e.py::"
+        "test_real_three_minio_autonomous_remediation_e2e"
+    )
     assert runner.SCENARIOS == {
         "real-three-minio-storage-control-plane": (node_458,),
         "real-three-minio-tiering-control-recovery": (node_459,),
@@ -55,6 +59,7 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "fresh-process-filesystem-authority-recovery": (node_465_a, node_465_b),
         "real-three-minio-fresh-process-authority-recovery": (node_466,),
         "real-three-minio-process-replacement-authority-recovery": (node_468,),
+        "real-three-minio-autonomous-remediation": (node_472,),
     }
     assert set(runner.REQUIRED_ENDPOINTS) == {
         "DEEPSEEK_TEST_S3_ENDPOINT_A",
