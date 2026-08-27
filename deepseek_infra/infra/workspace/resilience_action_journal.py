@@ -596,7 +596,25 @@ def claim_action(
     lease_seconds: int = 60,
     now: datetime | None = None,
 ) -> tuple[bool, dict[str, Any] | None, str]:
-    """CAS claim an action for crash-recoverable execution (Gate B & D)."""
+    """Compatibility claim API; production execution uses atomic admission."""
+    return admit_and_claim_action(
+        action_id,
+        owner_instance_id=owner_instance_id,
+        lease_seconds=lease_seconds,
+        now=now,
+        enforce_budgets=False,
+    )
+
+
+def admit_and_claim_action(
+    action_id: str,
+    *,
+    owner_instance_id: str = "resilience-worker",
+    lease_seconds: int = 60,
+    now: datetime | None = None,
+    enforce_budgets: bool = True,
+) -> tuple[bool, dict[str, Any] | None, str]:
+    """Atomically verify budgets, acquire locks, and claim a new execution epoch."""
     current = now or datetime.now(tz=timezone.utc)
     now_iso = _utc_iso(current)
     lease_until_iso = _utc_iso(current + timedelta(seconds=lease_seconds))
@@ -606,11 +624,37 @@ def claim_action(
     if not action:
         return False, None, "action-not-found"
 
-    # Derive resource locks
     lock_keys = resilience_resource_locks.derive_resource_locks_for_action(action)
 
     with _connect() as conn:
-        # 1. Acquire resource locks
+        conn.execute("BEGIN IMMEDIATE")
+        current_row = conn.execute(
+            "SELECT state, lease_until FROM resilience_actions WHERE action_id = ?",
+            (action_id,),
+        ).fetchone()
+        if not current_row:
+            conn.rollback()
+            return False, None, "action-not-found"
+        current_state = str(current_row[0] or "")
+        current_lease = str(current_row[1] or "")
+        active_states = {"CLAIMED", "EXECUTING", "RECONCILING", "VERIFYING", "ASSESSING_EFFECT"}
+        claimable = current_state == "PENDING" or (current_state in active_states and current_lease < now_iso)
+        if not claimable:
+            conn.rollback()
+            return False, get_action(action_id), "claim-rejected-not-pending-or-active-lease"
+
+        if enforce_budgets:
+            rate_ok, rate_reason = check_rate_limits(
+                conn,
+                action,
+                exclude_action_id=action_id,
+                now=current,
+                commit_mutations=False,
+            )
+            if not rate_ok:
+                conn.rollback()
+                return False, get_action(action_id), rate_reason
+
         if lock_keys:
             acquired, lock_reason = resilience_resource_locks.acquire_action_locks(
                 conn,
@@ -621,9 +665,9 @@ def claim_action(
                 now=current,
             )
             if not acquired:
+                conn.rollback()
                 return False, get_action(action_id), lock_reason
 
-        # 2. CAS claim with epoch increment covering PENDING and expired active states
         cursor = conn.execute(
             """
             UPDATE resilience_actions
@@ -636,7 +680,7 @@ def claim_action(
             WHERE action_id = ?
               AND (
                   state = 'PENDING'
-                  OR (state IN ('CLAIMED', 'EXECUTING', 'VERIFYING', 'RECONCILING') AND lease_until < ?)
+                  OR (state IN ('CLAIMED', 'EXECUTING', 'RECONCILING', 'VERIFYING', 'ASSESSING_EFFECT') AND lease_until < ?)
               )
             """,
             (
@@ -648,21 +692,21 @@ def claim_action(
                 now_iso,
             ),
         )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            return False, get_action(action_id), "claim-rejected-not-pending-or-active-lease"
         conn.commit()
-        if cursor.rowcount == 1:
-            return True, get_action(action_id), "claimed"
 
-        # If claim failed, release any newly taken locks if not the winner
-        cur_act = get_action(action_id)
-        if cur_act and cur_act.get("claimToken") != claim_token:
-            resilience_resource_locks.release_action_locks(conn, action_id)
-
-    return False, get_action(action_id), "claim-rejected-not-pending-or-active-lease"
+    return True, get_action(action_id), "admitted-and-claimed" if enforce_budgets else "claimed"
 
 
 def check_rate_limits(
     conn: sqlite3.Connection,
     action: dict[str, Any] | None = None,
+    *,
+    exclude_action_id: str | None = None,
+    now: datetime | None = None,
+    commit_mutations: bool = True,
 ) -> tuple[bool, str]:
     """Check active concurrent and hourly rate limits with atomic budget enforcement (Gate J)."""
     from deepseek_infra.infra.workspace import autonomous_action_policy
@@ -670,8 +714,14 @@ def check_rate_limits(
     limits = autonomous_action_policy.get_action_rate_limits()
 
     # 1. Global concurrent running actions
+    excluded = str(exclude_action_id or "")
     row = conn.execute(
-        "SELECT COUNT(*) FROM resilience_actions WHERE state IN ('CLAIMED', 'EXECUTING', 'VERIFYING', 'RECONCILING')"
+        """
+        SELECT COUNT(*) FROM resilience_actions
+        WHERE state IN ('CLAIMED', 'EXECUTING', 'RECONCILING', 'VERIFYING', 'ASSESSING_EFFECT')
+          AND action_id != ?
+        """,
+        (excluded,),
     ).fetchone()
     active_count = int(row[0]) if row else 0
 
@@ -698,7 +748,9 @@ def check_rate_limits(
                     """,
                     (_utc_iso(), preempt_id),
                 )
-                conn.commit()
+                resilience_resource_locks.release_action_locks(conn, str(preempt_id))
+                if commit_mutations:
+                    conn.commit()
                 return True, "admitted-with-preemption"
         return False, f"max-concurrent-actions-exceeded:{active_count}>={limits['maxConcurrentActions']}"
 
@@ -716,22 +768,72 @@ def check_rate_limits(
             rows = conn.execute(
                 """
                 SELECT parameters_json FROM resilience_actions
-                WHERE state IN ('CLAIMED', 'EXECUTING', 'VERIFYING', 'RECONCILING')
-                """
+                WHERE state IN ('CLAIMED', 'EXECUTING', 'RECONCILING', 'VERIFYING', 'ASSESSING_EFFECT')
+                  AND action_id != ?
+                """,
+                (excluded,),
             ).fetchall()
             target_active = 0
             for r in rows:
                 p = json.loads(r[0]) if r[0] else {}
                 if p.get("sourceTargetId") == tid or p.get("destTargetId") == tid or p.get("targetId") == tid:
                     target_active += 1
-            if target_active >= 2:
-                return False, f"max-per-target-concurrent-actions-exceeded:{tid}:{target_active}>=2"
+            target_limit = int(limits.get("maxConcurrentPerTarget", 2))
+            if target_active >= target_limit:
+                return False, f"max-per-target-concurrent-actions-exceeded:{tid}:{target_active}>={target_limit}"
+
+        policy_id = str(params.get("policyId") or action.get("policyId") or "")
+        if policy_id:
+            rows = conn.execute(
+                """
+                SELECT parameters_json FROM resilience_actions
+                WHERE state IN ('CLAIMED', 'EXECUTING', 'RECONCILING', 'VERIFYING', 'ASSESSING_EFFECT')
+                  AND action_id != ?
+                """,
+                (excluded,),
+            ).fetchall()
+            policy_active = sum(
+                1
+                for row_item in rows
+                if str((json.loads(row_item[0]) if row_item[0] else {}).get("policyId") or "") == policy_id
+            )
+            policy_limit = int(limits.get("maxConcurrentPerPolicy", 2))
+            if policy_active >= policy_limit:
+                return False, f"max-per-policy-concurrent-actions-exceeded:{policy_id}:{policy_active}>={policy_limit}"
+
+        raw_subject = action.get("riskSubject")
+        subject = raw_subject if isinstance(raw_subject, dict) else {}
+        failure_domain = str(params.get("failureDomain") or subject.get("failureDomain") or "")
+        if failure_domain:
+            rows = conn.execute(
+                """
+                SELECT parameters_json, risk_subject_json FROM resilience_actions
+                WHERE state IN ('CLAIMED', 'EXECUTING', 'RECONCILING', 'VERIFYING', 'ASSESSING_EFFECT')
+                  AND action_id != ?
+                """,
+                (excluded,),
+            ).fetchall()
+            active_domains: set[str] = set()
+            for params_json, subject_json in rows:
+                active_params = json.loads(params_json) if params_json else {}
+                active_subject = json.loads(subject_json) if subject_json else {}
+                active_domain = str(active_params.get("failureDomain") or active_subject.get("failureDomain") or "")
+                if active_domain:
+                    active_domains.add(active_domain)
+            domain_limit = int(limits.get("maxSimultaneousFailureDomainsTouched", 1))
+            if failure_domain not in active_domains and len(active_domains) >= domain_limit:
+                return False, f"max-failure-domains-touched-exceeded:{failure_domain}:{len(active_domains)}>={domain_limit}"
 
     # 3. Hourly action throughput
-    one_hour_ago = _utc_iso(datetime.now(tz=timezone.utc) - timedelta(hours=1))
+    one_hour_ago = _utc_iso((now or datetime.now(tz=timezone.utc)) - timedelta(hours=1))
     row_hr = conn.execute(
-        "SELECT COUNT(*) FROM resilience_actions WHERE created_at >= ? AND state NOT IN ('BLOCKED', 'STALE', 'SKIPPED_NO_LONGER_NEEDED', 'PREEMPTED')",
-        (one_hour_ago,),
+        """
+        SELECT COUNT(*) FROM resilience_actions
+        WHERE created_at >= ?
+          AND action_id != ?
+          AND state NOT IN ('BLOCKED', 'STALE', 'SKIPPED_NO_LONGER_NEEDED', 'PREEMPTED')
+        """,
+        (one_hour_ago, excluded),
     ).fetchone()
     hourly_count = int(row_hr[0]) if row_hr else 0
     if hourly_count >= limits["maxActionsPerHour"]:
@@ -1107,21 +1209,21 @@ def execute_autonomous_action(
         update_action_state(action_id, "BLOCKED", error=adm_reason)
         raise AppError(f"Autonomous action execution blocked: {adm_reason}", code=ErrorCode.FORBIDDEN, status=403)
 
-    # 2. Atomic Rate Limits & Safety Budget Check (Gate J)
-    with _connect() as conn:
-        rate_ok, rate_reason = check_rate_limits(conn, action)
-        if not rate_ok:
-            update_action_state(action_id, "BLOCKED", error=rate_reason)
-            raise AppError(f"Autonomous action rate limit exceeded: {rate_reason}", code=ErrorCode.FORBIDDEN, status=429)
-
-    # 3. CAS Exactly-Once Claim with Execution Epoch & Resource Locks (Gate B & I)
-    claimed, claimed_action, claim_reason = claim_action(action_id, owner_instance_id=instance_id, lease_seconds=lease_seconds)
+    # 2. Atomic budget admission, resource locks, and execution-epoch claim.
+    claimed, claimed_action, claim_reason = admit_and_claim_action(
+        action_id,
+        owner_instance_id=instance_id,
+        lease_seconds=lease_seconds,
+    )
     if not claimed or not claimed_action:
         cur_state = action.get("state") if action else "unknown"
+        is_budget_rejection = claim_reason.startswith(("max-", "hourly-"))
+        if is_budget_rejection:
+            update_action_state(action_id, "PENDING", error=claim_reason)
         raise AppError(
             f"Action '{action_id}' could not be claimed (state: {cur_state}, reason: {claim_reason})",
-            code=ErrorCode.INVALID_REQUEST,
-            status=409,
+            code=ErrorCode.FORBIDDEN if is_budget_rejection else ErrorCode.INVALID_REQUEST,
+            status=429 if is_budget_rejection else 409,
         )
     action = claimed_action
     epoch = action["executionEpoch"]

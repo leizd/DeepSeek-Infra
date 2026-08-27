@@ -362,7 +362,7 @@ def test_rate_limits_block_excessive_concurrent_actions(tmp_settings: Path) -> N
 
     db_act = resilience_action_journal.get_action("act-rate-blocked")
     assert db_act is not None
-    assert db_act["state"] == "BLOCKED"
+    assert db_act["state"] == "PENDING"
     assert "max-concurrent-actions-exceeded" in str(db_act["error"])
 
 

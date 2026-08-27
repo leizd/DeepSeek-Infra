@@ -5,11 +5,11 @@
 - [x] Strict RiskSubject v1 exact matching
 - [x] Strong `dr-readiness-proof-v1` producer and verifier
 - [x] Durable repair/rebalance cancellation before `COMPENSATED`
-- [ ] Checkpoint: focused tests, Ruff, and Mypy
+- [x] Checkpoint: focused tests, Ruff, and Mypy
 
 ## Phase 2: Fenced execution control plane
 
-- [ ] Atomic `admit_and_claim_action()` transaction
+- [x] Atomic `admit_and_claim_action()` transaction
 - [ ] CAS action lease renewal with resource-lock renewal
 - [ ] Lease takeover enters `RECONCILING`
 - [ ] Reconciler drives resume/verify/recreate/compensate/unknown branches
