@@ -4,7 +4,41 @@ from __future__ import annotations
 
 import pytest
 
-from deepseek_infra.infra.workspace import resilience_outcome_verifier, resilience_planner, resilience_risk_engine
+from deepseek_infra.infra.workspace import evidence_proof, resilience_outcome_verifier, resilience_planner, resilience_risk_engine
+
+
+def _valid_dr_proof() -> dict[str, object]:
+    return {
+        "schema": "dr-readiness-proof-v1",
+        "drillId": "drill-1",
+        "backupId": "backup-1",
+        "testedBackupId": "backup-1",
+        "resilienceActionId": "action-1",
+        "restoreDurationMs": 10,
+        "workspaceDigestBefore": "a" * 64,
+        "workspaceDigestAfter": "a" * 64,
+        "objectCount": 1,
+        "commitVerified": True,
+        "receiptVerified": True,
+        "ageVerified": True,
+        "cleanupCompleted": True,
+    }
+
+
+def _verify_dr_proof(proof: object) -> tuple[bool, dict[str, object]]:
+    return resilience_outcome_verifier.verify_action_outcome(
+        {
+            "actionId": "action-1",
+            "type": "START_DR_DRILL",
+            "parameters": {"backupId": "backup-1"},
+        },
+        {
+            "status": "success",
+            "drillId": "drill-1",
+            "testedBackupId": "backup-1",
+            "proof": proof,
+        },
+    )
 
 
 def test_risk_subject_matches_backup_id_exactly() -> None:
@@ -164,3 +198,71 @@ def test_planner_does_not_invent_risk_subject_scope(monkeypatch: pytest.MonkeyPa
         "targetId": "target-a",
         "failureDomain": None,
     }
+
+
+def test_dr_drill_requires_typed_identity_bound_proof() -> None:
+    verified, details = _verify_dr_proof(_valid_dr_proof())
+
+    assert verified is True
+    assert details["executionVerified"] is True
+    assert details["proofSchema"] == "dr-readiness-proof-v1"
+
+
+@pytest.mark.parametrize("proof", [None, {}, "not-an-object"])
+def test_dr_drill_without_proof_cannot_succeed(proof: object) -> None:
+    verified, details = _verify_dr_proof(proof)
+
+    assert verified is False
+    assert details["error"] == "dr-drill-proof-required"
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [
+        ("schema", "dr-readiness-proof-v0"),
+        ("drillId", "drill-other"),
+        ("backupId", "backup-other"),
+        ("resilienceActionId", "action-other"),
+    ],
+)
+def test_dr_drill_proof_identity_must_match(field: str, wrong_value: str) -> None:
+    proof = _valid_dr_proof()
+    proof[field] = wrong_value
+
+    verified, details = _verify_dr_proof(proof)
+
+    assert verified is False
+    assert field in str(details["error"])
+
+
+@pytest.mark.parametrize("field", ["commitVerified", "receiptVerified", "ageVerified", "cleanupCompleted"])
+@pytest.mark.parametrize("invalid_value", [False, None])
+def test_dr_drill_proof_requires_all_verification_flags(field: str, invalid_value: object) -> None:
+    proof = _valid_dr_proof()
+    proof[field] = invalid_value
+
+    verified, details = _verify_dr_proof(proof)
+
+    assert verified is False
+    assert field in str(details["error"])
+
+
+def test_dr_drill_proof_requires_equal_workspace_digests() -> None:
+    proof = _valid_dr_proof()
+    proof["workspaceDigestAfter"] = "b" * 64
+
+    verified, details = _verify_dr_proof(proof)
+
+    assert verified is False
+    assert "drill-workspace-digest-mismatch" in str(details["error"])
+
+
+def test_dr_readiness_validator_rejects_legacy_untyped_proof() -> None:
+    proof = _valid_dr_proof()
+    del proof["schema"]
+    del proof["backupId"]
+
+    errors = evidence_proof.validate_dr_readiness_proof(proof, "drReadinessProofValid")
+
+    assert "missing-field:schema" in errors
+    assert "missing-field:backupId" in errors

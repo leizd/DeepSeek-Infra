@@ -23,6 +23,7 @@ from deepseek_infra.infra.workspace import (
     backup_publish,
     backup_replication,
     backup_targets,
+    evidence_proof,
 )
 from deepseek_infra.infra.workspace.resilience_risk_engine import SEVERITY_ORDER, RiskSeverity
 
@@ -199,13 +200,45 @@ def verify_action_outcome(
                 "error": execution_result.get("error") or "dr-drill-failed",
             }
         raw_proof = execution_result.get("proof")
-        proof = raw_proof if isinstance(raw_proof, dict) else {}
-        if proof and proof.get("commitVerified") is False:
-            return False, {"executionVerified": False, "error": "dr-drill-proof-commit-unverified"}
+        if not isinstance(raw_proof, dict) or not raw_proof:
+            return False, {"executionVerified": False, "error": "dr-drill-proof-required"}
+        proof = raw_proof
+        proof_errors = evidence_proof.validate_dr_readiness_proof(proof, "drReadinessProofValid")
+        if proof_errors:
+            return False, {
+                "executionVerified": False,
+                "error": "dr-drill-proof-invalid:" + ",".join(proof_errors),
+                "proofErrors": proof_errors,
+            }
+
+        action_id = str(action.get("actionId") or "")
+        result_drill_id = str(execution_result.get("drillId") or "")
+        action_backup_id = str(params.get("backupId") or action.get("backupId") or "")
+        result_backup_id = str(execution_result.get("backupId") or execution_result.get("testedBackupId") or "")
+        proof_bindings = (
+            ("resilienceActionId", action_id),
+            ("drillId", result_drill_id),
+            ("backupId", action_backup_id or result_backup_id),
+        )
+        for field, expected in proof_bindings:
+            observed = str(proof.get(field) or "")
+            if not expected or observed != expected:
+                return False, {
+                    "executionVerified": False,
+                    "error": f"dr-drill-proof-{field}-mismatch:expected={expected or '<missing>'},observed={observed or '<missing>'}",
+                }
+        if action_backup_id and result_backup_id and action_backup_id != result_backup_id:
+            return False, {
+                "executionVerified": False,
+                "error": f"dr-drill-result-backupId-mismatch:action={action_backup_id},result={result_backup_id}",
+            }
 
         return True, {
             "executionVerified": True,
-            "drillId": execution_result.get("drillId"),
+            "drillId": result_drill_id,
+            "backupId": str(proof["backupId"]),
+            "resilienceActionId": action_id,
+            "proofSchema": str(proof["schema"]),
             "verifiedAt": _utc_iso(),
         }
 

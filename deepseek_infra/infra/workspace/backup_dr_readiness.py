@@ -33,6 +33,7 @@ from deepseek_infra.infra.workspace import (
     backups,
 )
 from deepseek_infra.infra.workspace.backup_target_store import read_json
+from deepseek_infra.infra.workspace.evidence_proof import DR_READINESS_PROOF_SCHEMA
 
 SCHEMA_VERSION = 2
 RTO_EVIDENCE_WINDOW_DAYS = 30
@@ -962,6 +963,7 @@ def run_dr_drill(
                     "status": "success" if rec.get("result") == "success" or rec.get("status") == "success" else str(rec.get("result") or rec.get("status")),
                     "drillId": rec.get("drillId"),
                     "testedBackupId": rec.get("backupId") or rec.get("testedBackupId"),
+                    "backupId": rec.get("backupId") or rec.get("testedBackupId"),
                     "targetId": rec.get("targetId"),
                     "proof": rec.get("proof") or {},
                     "durationMs": int((float(rec.get("rtoSeconds") or 1)) * 1000),
@@ -1031,8 +1033,10 @@ def run_dr_drill(
             cleanup_ok = True
 
         proof: dict[str, Any] = {
+            "schema": DR_READINESS_PROOF_SCHEMA,
             "drillId": drill_id,
             "resilienceActionId": resilience_action_id,
+            "backupId": chosen_backup_id,
             "testedBackupId": chosen_backup_id,
             "restoreDurationMs": elapsed_ms,
             "workspaceDigestBefore": pre_digest,
@@ -1071,6 +1075,7 @@ def run_dr_drill(
             "status": "success",
             "drillId": drill_id,
             "resilienceActionId": resilience_action_id,
+            "backupId": chosen_backup_id,
             "testedBackupId": chosen_backup_id,
             "targetId": tested_target_id,
             "proof": proof,

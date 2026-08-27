@@ -16,6 +16,7 @@ from typing import Any
 EVIDENCE_PROOF_SCHEMA = "evidence-proof-v2"
 EVIDENCE_PROOF_SCHEMA_V3 = "evidence-proof-v3"
 EVIDENCE_PROOF_SCHEMA_V1 = "evidence-proof-v1"  # accepted for non-semantic legacy reads
+DR_READINESS_PROOF_SCHEMA = "dr-readiness-proof-v1"
 ENV_EVIDENCE_PROOF_PATH = "DEEPSEEK_EVIDENCE_PROOF_PATH"
 
 CheckValidator = Callable[[dict[str, Any], str], list[str]]
@@ -184,7 +185,9 @@ def validate_dr_readiness_proof(evidence: dict[str, Any], check_name: str) -> li
     errors = _require_fields(
         evidence,
         (
+            "schema",
             "drillId",
+            "backupId",
             "testedBackupId",
             "restoreDurationMs",
             "workspaceDigestBefore",
@@ -196,6 +199,13 @@ def validate_dr_readiness_proof(evidence: dict[str, Any], check_name: str) -> li
             "cleanupCompleted",
         ),
     )
+    schema = str(evidence.get("schema") or "")
+    if schema and schema != DR_READINESS_PROOF_SCHEMA:
+        errors.append(f"invalid-dr-readiness-proof-schema:{schema}")
+    backup_id = str(evidence.get("backupId") or "")
+    tested_backup_id = str(evidence.get("testedBackupId") or "")
+    if backup_id and tested_backup_id and backup_id != tested_backup_id:
+        errors.append("drill-backupId-mismatch")
     for field in ("workspaceDigestBefore", "workspaceDigestAfter"):
         val = evidence.get(field)
         if val not in (None, ""):

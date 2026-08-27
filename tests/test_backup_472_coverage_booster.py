@@ -150,7 +150,7 @@ def test_outcome_verifier_branches(tmp_settings: Path, monkeypatch: pytest.Monke
         {"success": True, "proof": {"commitVerified": False}},
     )
     assert ok_drill_bad is False
-    assert "dr-drill-proof-commit-unverified" in res_drill_bad["error"]
+    assert "commitVerified-not-true" in res_drill_bad["error"]
 
     # 9. verify_scoped_risk_reduction legacy action synthesize riskSubject & worsening risk
     act_legacy_repair = {"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "pol_x", "backupId": "bkp_x", "destTargetId": "tgt_x"}}
