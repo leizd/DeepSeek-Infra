@@ -229,12 +229,16 @@ def test_backup_governance_resilience_api_endpoints(tmp_settings: Path, monkeypa
     p2 = client.post("/api/workspace/resilience/plan", json={"materialize": True}, headers=headers)
     assert p2.status_code == 200
 
-    # 3. POST /api/workspace/resilience/coordination-plan
+    # 3. GET & POST /api/workspace/resilience/coordination-plan
+    cp_get = client.get("/api/workspace/resilience/coordination-plan", headers=headers)
+    assert cp_get.status_code == 200
+    assert "coordinationPlanVersion" in cp_get.json()
+
     cp = client.post("/api/workspace/resilience/coordination-plan", json={"probe": False}, headers=headers)
     assert cp.status_code == 200
     assert "coordinationPlanVersion" in cp.json()
 
-    # 4. POST /api/workspace/resilience/execute (error branches & validation)
+    # 4. POST /api/workspace/resilience/execute (error branches & success execution)
     e_no_id = client.post("/api/workspace/resilience/execute", json={}, headers=headers)
     assert e_no_id.status_code == 400
 
@@ -244,12 +248,38 @@ def test_backup_governance_resilience_api_endpoints(tmp_settings: Path, monkeypa
     e_not_found = client.post("/api/workspace/resilience/execute", json={"actionId": "act_nonexistent_999"}, headers=headers)
     assert e_not_found.status_code == 404
 
+    # Execute a real materialized action intent
+    act_real = resilience_action_journal.record_action_intent({
+        "actionId": "act_http_exec",
+        "type": "START_DR_DRILL",
+        "parameters": {"policyId": "pol_http"},
+    })
+    monkeypatch.setattr(resilience_action_journal, "execute_autonomous_action", lambda aid: {"success": True, "actionId": aid})
+    e_ok = client.post("/api/workspace/resilience/execute", json={"actionId": act_real["actionId"]}, headers=headers)
+    assert e_ok.status_code == 200
+
     # 5. POST /api/workspace/resilience/simulate and /api/workspace/resilience/explain
     sim = client.post("/api/workspace/resilience/simulate", json={"scenario": "AZ_FAILURE"}, headers=headers)
     assert sim.status_code == 200
 
-    exp = client.post("/api/workspace/resilience/explain", json={"targetId": "target_a"}, headers=headers)
+    from deepseek_infra.infra.workspace import backup_capacity
+    monkeypatch.setattr(backup_capacity, "get_target_capacity", lambda tid, **kw: {"freePercent": 15.0, "freeBytes": 1000})
+    monkeypatch.setattr(backup_capacity, "estimate_target_exhaustion_horizon", lambda tid, **kw: {"estimatedDaysToFull": 10})
+    monkeypatch.setattr(resilience_planner, "select_rebalance_destination", lambda tid: "target_b")
+
+    exp = client.post("/api/workspace/resilience/explain", json={"targetId": "target_a", "actionId": act_real["actionId"]}, headers=headers)
     assert exp.status_code == 200
+    assert len(exp.json()["reasons"]) >= 2
+
+    # 6. GET /api/workspace/resilience/journal, forecast, optimizer
+    jnl = client.get("/api/workspace/resilience/journal?state=PENDING&limit=10", headers=headers)
+    assert jnl.status_code == 200
+
+    fc = client.get("/api/workspace/resilience/forecast", headers=headers)
+    assert fc.status_code == 200
+
+    opt = client.get("/api/workspace/resilience/optimizer", headers=headers)
+    assert opt.status_code == 200
 
 
 def test_coordinator_and_planner_exhaustive_branches(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -809,10 +809,11 @@ def create_backup_governance_router() -> APIRouter:
             return json_response(mat_res)
         return json_response(plan_res)
 
+    @router.get("/api/workspace/resilience/coordination-plan")
     @router.post("/api/workspace/resilience/coordination-plan")
     async def api_resilience_coordination_plan(request: Request) -> JSONResponse:
         require_api_auth(request)
-        body = await read_json_body(request)
+        body = await read_json_body(request) if request.method == "POST" else {}
         from deepseek_infra.infra.workspace import (
             resilience_coordinator,
             resilience_risk_engine,
