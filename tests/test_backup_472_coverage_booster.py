@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from starlette.testclient import TestClient
 
+from deepseek_infra.core.config import settings
 from deepseek_infra.infra.workspace import (
     backup_dr_ledger,
     backup_policies,
@@ -18,6 +20,7 @@ from deepseek_infra.infra.workspace import (
     resilience_planner,
     resilience_resource_locks,
 )
+from deepseek_infra.web.server import create_server
 
 
 def _utc_iso(dt: datetime | None = None) -> str:
@@ -202,3 +205,89 @@ def test_resource_locks_and_journal_limits(tmp_settings: Path) -> None:
         "parameters": {"policyId": "pol_nonexistent_123", "backupId": "b1", "destTargetId": "t1"},
     })
     assert sim_bad_rep is False
+
+
+def test_backup_governance_resilience_api_endpoints(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test HTTP endpoints in backup_governance for resilience coordination and execution."""
+    srv, _ = create_server(0, host="127.0.0.1")
+    client = TestClient(srv.app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    headers = {"Authorization": f"Bearer {settings.auth.token}", "X-DeepSeek-Client": "test"}
+
+    # 1. GET /api/workspace/resilience/snapshot and POST /api/workspace/resilience/assess
+    r1 = client.get("/api/workspace/resilience/snapshot", headers=headers)
+    assert r1.status_code == 200
+    assert "grade" in r1.json()
+
+    r2 = client.post("/api/workspace/resilience/assess", json={"probe": False}, headers=headers)
+    assert r2.status_code == 200
+    assert "riskSnapshot" in r2.json()
+
+    # 2. POST /api/workspace/resilience/plan (materialize=True and materialize=False)
+    p1 = client.post("/api/workspace/resilience/plan", json={"materialize": False}, headers=headers)
+    assert p1.status_code == 200
+
+    p2 = client.post("/api/workspace/resilience/plan", json={"materialize": True}, headers=headers)
+    assert p2.status_code == 200
+
+    # 3. POST /api/workspace/resilience/coordination-plan
+    cp = client.post("/api/workspace/resilience/coordination-plan", json={"probe": False}, headers=headers)
+    assert cp.status_code == 200
+    assert "coordinationPlanVersion" in cp.json()
+
+    # 4. POST /api/workspace/resilience/execute (error branches & validation)
+    e_no_id = client.post("/api/workspace/resilience/execute", json={}, headers=headers)
+    assert e_no_id.status_code == 400
+
+    e_anon = client.post("/api/workspace/resilience/execute", json={"type": "START_DR_DRILL"}, headers=headers)
+    assert e_anon.status_code == 400
+
+    e_not_found = client.post("/api/workspace/resilience/execute", json={"actionId": "act_nonexistent_999"}, headers=headers)
+    assert e_not_found.status_code == 404
+
+    # 5. POST /api/workspace/resilience/simulate and /api/workspace/resilience/explain
+    sim = client.post("/api/workspace/resilience/simulate", json={"scenario": "AZ_FAILURE"}, headers=headers)
+    assert sim.status_code == 200
+
+    exp = client.post("/api/workspace/resilience/explain", json={"targetId": "target_a"}, headers=headers)
+    assert exp.status_code == 200
+
+
+def test_coordinator_and_planner_exhaustive_branches(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test exhaustive branches in coordinator and planner."""
+    # 1. Coordinate plan with DR drill and rebalance on the same backup
+    snap = {
+        "riskSnapshotVersion": 1,
+        "overallRisk": "degraded",
+        "riskDigest": "e" * 64,
+        "risks": [
+            {"type": "DR_STALENESS", "policyId": "pol_shared", "severity": "warning"},
+            {"type": "CAPACITY_EXHAUSTION", "target": "target_src", "severity": "warning"},
+        ],
+    }
+
+    # Mock planner actions to simulate drill & rebalance on same backup
+    mock_plan = {
+        "planId": "p_mock",
+        "actions": [
+            {"actionId": "act_rep", "type": "CREATE_REPAIR_JOB", "policyId": "pol_shared", "backupId": "bkp_1", "source": "target_src", "destination": "target_dst"},
+            {"actionId": "act_reb", "type": "CREATE_REBALANCE_JOB", "policyId": "pol_shared", "backupId": "bkp_1", "source": "target_src", "destination": "target_dst2"},
+            {"actionId": "act_dr", "type": "START_DR_DRILL", "policyId": "pol_shared", "backupId": "bkp_1"},
+        ],
+    }
+    monkeypatch.setattr(resilience_planner, "plan_resilience_actions", lambda *a, **k: mock_plan)
+
+    coord = resilience_coordinator.plan_coordinated_resilience(snap)
+    assert len(coord["dependencies"]) >= 2
+    assert len(coord["conflicts"]) >= 2
+    assert coord["planDigest"] is not None
+
+    # 2. Planner find_rebalance_candidate_copy non-committed vs committed
+    monkeypatch.setattr(backup_policies, "list_policies", lambda: [{"policyId": "pol_x"}])
+    monkeypatch.setattr(backup_dr_ledger, "latest_recovery_point", lambda policy_id: {"backupId": "b_comm"})
+    monkeypatch.setattr(backup_dr_ledger, "list_logical_recovery_copies", lambda **kw: [{"targetId": "target_src", "status": "staged"}])
+    assert resilience_planner.find_rebalance_candidate_copy("target_src") == (None, None)
+
+    monkeypatch.setattr(backup_dr_ledger, "list_logical_recovery_copies", lambda **kw: [{"targetId": "target_src", "status": "committed"}])
+    cand = resilience_planner.find_rebalance_candidate_copy("target_src")
+    assert cand == ("pol_x", "b_comm")
+
