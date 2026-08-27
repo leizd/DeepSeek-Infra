@@ -411,3 +411,46 @@ def test_windows_dpi_awareness_non_windows_and_total_failure(monkeypatch: pytest
 
     monkeypatch.setattr(ctypes, "windll", SimpleNamespace(), raising=False)
     assert gui._enable_windows_dpi_awareness() == 0.0
+
+
+def test_launcher_window_card_without_title(
+    launcher_window: tuple[gui.LauncherWindow, FakeRoot, FakeMessageBox, list[LauncherCredentials]],
+) -> None:
+    window, _root, _messagebox, _saved = launcher_window
+    card, inner = window._create_card(FakeWidget(), title=None)
+    assert card is not None
+    assert inner is not None
+
+
+def test_launcher_window_on_close_when_running(
+    launcher_window: tuple[gui.LauncherWindow, FakeRoot, FakeMessageBox, list[LauncherCredentials]],
+) -> None:
+    window, root, messagebox, _saved = launcher_window
+    cast(FakeRuntime, window.runtime).running = True
+    messagebox.yesno = True
+    window._on_close()
+    assert cast(FakeRuntime, window.runtime).stop_calls == 1
+    assert root.destroyed is True
+
+
+def test_launcher_window_append_log_rotation_and_update(
+    launcher_window: tuple[gui.LauncherWindow, FakeRoot, FakeMessageBox, list[LauncherCredentials]],
+) -> None:
+    window, _root, _messagebox, _saved = launcher_window
+    window.log_widget.content = "\n" * (gui.LOG_BUFFER_LINES + 5)
+    window._append_log("server_started: http://127.0.0.1:8123")
+    assert window.log_widget.seen == "end"
+
+
+def test_launcher_window_invalid_port(
+    launcher_window: tuple[gui.LauncherWindow, FakeRoot, FakeMessageBox, list[LauncherCredentials]],
+) -> None:
+    window, _root, messagebox, _saved = launcher_window
+    window.port_var.set("invalid_port")
+    assert window._current_credentials() is None
+    assert len(messagebox.errors) == 1
+
+    window.port_var.set("99999")
+    assert window._current_credentials() is None
+    assert len(messagebox.errors) == 2
+
