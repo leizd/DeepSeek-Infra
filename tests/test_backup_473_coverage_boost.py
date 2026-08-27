@@ -1322,6 +1322,218 @@ def test_server_reminders_search_and_static_resolution(tmp_settings: object, mon
     assert srv_mod.resolve_static_file("nonexistent.unknown_ext") is None
 
 
+def test_saved_items_and_risk_engine_exhaustive(tmp_settings: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timezone, timedelta
+    from deepseek_infra.infra.workspace import (
+        backup_capacity,
+        backup_control_recovery,
+        backup_dr_ledger,
+        backup_dr_readiness,
+        backup_policies,
+        backup_replication,
+        projects,
+        resilience_coordinator,
+        resilience_risk_engine,
+        saved_items,
+    )
+    from deepseek_infra.infra.workspace.resilience_risk_engine import RiskSeverity
+
+    # 1. saved_items.update_saved_item: test skipping non-matching item and update all fields
+    proj = projects.create_project("test_saved_proj")
+    pid = proj["id"]
+    saved_items.create_saved_item(pid, item_type="chat_snippet", title="Item 1", content="Content 1")
+    item2 = saved_items.create_saved_item(pid, item_type="chat_snippet", title="Item 2", content="Content 2")
+
+    # Update item2 (skipping item1 in loop -> line 82 covered)
+    updated2 = saved_items.update_saved_item(
+        pid,
+        item2["savedId"],
+        {
+            "title": "Item 2 Updated",
+            "content": "Content 2 Updated",
+            "tags": ["tag1", "tag2"],
+            "purpose": "reference",
+            "sourceRef": {"type": "chat", "id": "chat_123"},
+        },
+    )
+    assert updated2["title"] == "Item 2 Updated"
+    assert updated2["content"] == "Content 2 Updated"
+
+    # Update item2 with partial fields (no title -> line 84->86 covered)
+    updated2_part = saved_items.update_saved_item(
+        pid,
+        item2["savedId"],
+        {"content": "Content 2 Updated Again"},
+    )
+    assert updated2_part["content"] == "Content 2 Updated Again"
+
+    # 2. resilience_risk_engine.evaluate_target_capacity_risk branches
+    # 2a. Unconstrained quota
+    monkeypatch.setattr(backup_capacity, "get_target_capacity", lambda t, **kw: {"freePercent": None, "totalBytes": None})
+    monkeypatch.setattr(backup_capacity, "estimate_target_exhaustion_horizon", lambda t, **kw: {})
+    res_uncon = resilience_risk_engine.evaluate_target_capacity_risk("t_uncon")
+    assert res_uncon["severity"] == RiskSeverity.HEALTHY.value
+    assert "unconstrained-quota" in res_uncon["evidence"]
+
+    # 2b. Critical (free < 5% or days < 7)
+    monkeypatch.setattr(backup_capacity, "get_target_capacity", lambda t, **kw: {"freePercent": 3.0, "totalBytes": 1000, "freeBytes": 30})
+    monkeypatch.setattr(backup_capacity, "estimate_target_exhaustion_horizon", lambda t, **kw: {"estimatedDaysToFull": 5})
+    res_crit = resilience_risk_engine.evaluate_target_capacity_risk("t_crit")
+    assert res_crit["severity"] == RiskSeverity.CRITICAL.value
+
+    # 2c. Degraded (free < 10% or days < 30)
+    monkeypatch.setattr(backup_capacity, "get_target_capacity", lambda t, **kw: {"freePercent": 8.0, "totalBytes": 1000, "freeBytes": 80})
+    monkeypatch.setattr(backup_capacity, "estimate_target_exhaustion_horizon", lambda t, **kw: {"estimatedDaysToFull": 20})
+    res_deg = resilience_risk_engine.evaluate_target_capacity_risk("t_deg")
+    assert res_deg["severity"] == RiskSeverity.DEGRADED.value
+
+    # 2d. Warning (free <= 20%)
+    monkeypatch.setattr(backup_capacity, "get_target_capacity", lambda t, **kw: {"freePercent": 15.0, "totalBytes": 1000, "freeBytes": 150})
+    monkeypatch.setattr(backup_capacity, "estimate_target_exhaustion_horizon", lambda t, **kw: {"estimatedDaysToFull": 60})
+    res_warn = resilience_risk_engine.evaluate_target_capacity_risk("t_warn")
+    assert res_warn["severity"] == RiskSeverity.WARNING.value
+
+    # 2e. Healthy (free > 20%)
+    monkeypatch.setattr(backup_capacity, "get_target_capacity", lambda t, **kw: {"freePercent": 50.0, "totalBytes": 1000, "freeBytes": 500})
+    monkeypatch.setattr(backup_capacity, "estimate_target_exhaustion_horizon", lambda t, **kw: {"estimatedDaysToFull": 120})
+    res_hlth = resilience_risk_engine.evaluate_target_capacity_risk("t_hlth")
+    assert res_hlth["severity"] == RiskSeverity.HEALTHY.value
+
+    # 3. resilience_risk_engine.evaluate_policy_replica_risk branches
+    # 3a. Policy not found or replication disabled
+    monkeypatch.setattr(backup_policies, "get_policy", lambda pid: {"policyId": pid, "replication": {"enabled": False}})
+    assert resilience_risk_engine.evaluate_policy_replica_risk("p_dis") == []
+
+    # 3b. Replication enabled, 0 committed copies
+    monkeypatch.setattr(
+        backup_policies,
+        "get_policy",
+        lambda pid: {"policyId": pid, "replication": {"enabled": True, "minCommittedCopies": 2, "minFailureDomains": 2}},
+    )
+    monkeypatch.setattr(backup_dr_ledger, "latest_recovery_point", lambda **kw: {"backupId": "b1"})
+    monkeypatch.setattr(backup_dr_ledger, "list_logical_recovery_copies", lambda **kw: [])
+    r_zero = resilience_risk_engine.evaluate_policy_replica_risk("p_zero")
+    assert any(r["severity"] == RiskSeverity.CRITICAL.value for r in r_zero)
+
+    # 3c. Replication enabled, open jobs
+    monkeypatch.setattr(
+        backup_dr_ledger,
+        "list_logical_recovery_copies",
+        lambda **kw: [
+            {"targetId": "t1", "status": "committed", "failureDomain": "fd1"},
+            {"targetId": "t2", "status": "committed", "failureDomain": "fd2"},
+        ],
+    )
+    monkeypatch.setattr(backup_replication, "has_open_required_jobs", lambda **kw: True)
+    r_open = resilience_risk_engine.evaluate_policy_replica_risk("p_open")
+    assert any(r["severity"] == RiskSeverity.WARNING.value for r in r_open)
+
+    # 4. resilience_risk_engine.evaluate_dr_freshness_risk branches
+    # 4a. No successful drills
+    monkeypatch.setattr(backup_dr_readiness, "_drill_records", lambda: [])
+    r_no_drill = resilience_risk_engine.evaluate_dr_freshness_risk("p1")
+    assert r_no_drill["severity"] == RiskSeverity.CRITICAL.value
+
+    # 4b. Drill age > 30d
+    now_dt = datetime.now(tz=timezone.utc)
+    old_iso = (now_dt - timedelta(days=35)).isoformat()
+    monkeypatch.setattr(backup_dr_readiness, "_drill_records", lambda: [{"success": True, "finishedAt": old_iso}])
+    r_old = resilience_risk_engine.evaluate_dr_freshness_risk("p1", now=now_dt)
+    assert r_old["severity"] == RiskSeverity.CRITICAL.value
+
+    # 4c. Drill age > 7d
+    warn_iso = (now_dt - timedelta(days=10)).isoformat()
+    monkeypatch.setattr(backup_dr_readiness, "_drill_records", lambda: [{"success": True, "finishedAt": warn_iso}])
+    r_warn_drill = resilience_risk_engine.evaluate_dr_freshness_risk("p1", now=now_dt)
+    assert r_warn_drill["severity"] == RiskSeverity.WARNING.value
+
+    # 4d. Drill age <= 7d
+    fresh_iso = (now_dt - timedelta(days=2)).isoformat()
+    monkeypatch.setattr(backup_dr_readiness, "_drill_records", lambda: [{"success": True, "finishedAt": fresh_iso}])
+    r_fresh = resilience_risk_engine.evaluate_dr_freshness_risk("p1", now=now_dt)
+    assert r_fresh["severity"] == RiskSeverity.HEALTHY.value
+
+    # 4e. Drill missing finishedAt
+    monkeypatch.setattr(backup_dr_readiness, "_drill_records", lambda: [{"success": True}])
+    r_nofin = resilience_risk_engine.evaluate_dr_freshness_risk("p1", now=now_dt)
+    assert r_nofin["severity"] == RiskSeverity.CRITICAL.value
+
+    # 5. resilience_risk_engine.evaluate_restore_latency_risk branches
+    # 5a. Low restore success rate (<0.99)
+    monkeypatch.setattr(backup_dr_readiness, "calculate_dr_slo_metrics", lambda **kw: {"restoreSuccessRate": 0.95})
+    r_slo_crit = resilience_risk_engine.evaluate_restore_latency_risk("p1")
+    assert r_slo_crit["severity"] == RiskSeverity.CRITICAL.value
+
+    # 5b. RTO P95 > 1800s
+    monkeypatch.setattr(backup_dr_readiness, "calculate_dr_slo_metrics", lambda **kw: {"restoreSuccessRate": 1.0, "rtoSecondsP95": 2000})
+    r_rto_deg = resilience_risk_engine.evaluate_restore_latency_risk("p1")
+    assert r_rto_deg["severity"] == RiskSeverity.DEGRADED.value
+
+    # 5c. RTO P95 > 900s
+    monkeypatch.setattr(backup_dr_readiness, "calculate_dr_slo_metrics", lambda **kw: {"restoreSuccessRate": 1.0, "rtoSecondsP95": 1200})
+    r_rto_warn = resilience_risk_engine.evaluate_restore_latency_risk("p1")
+    assert r_rto_warn["severity"] == RiskSeverity.WARNING.value
+
+    # 6. resilience_risk_engine.evaluate_repair_backlog_risk branches
+    # 6a. Failed repairs >= 3
+    monkeypatch.setattr(backup_replication, "list_repair_jobs", lambda: [{"phase": "failed"}] * 3)
+    r_rep_crit = resilience_risk_engine.evaluate_repair_backlog_risk()
+    assert r_rep_crit["severity"] == RiskSeverity.CRITICAL.value
+
+    # 6b. Open repairs >= 5
+    monkeypatch.setattr(backup_replication, "list_repair_jobs", lambda: [{"phase": "running"}] * 5)
+    r_rep_deg = resilience_risk_engine.evaluate_repair_backlog_risk()
+    assert r_rep_deg["severity"] == RiskSeverity.DEGRADED.value
+
+    # 6c. Open repairs > 0
+    monkeypatch.setattr(backup_replication, "list_repair_jobs", lambda: [{"phase": "running"}])
+    r_rep_warn = resilience_risk_engine.evaluate_repair_backlog_risk()
+    assert r_rep_warn["severity"] == RiskSeverity.WARNING.value
+
+    # 7. resilience_risk_engine.evaluate_authority_risk branches
+    # 7a. Divergent
+    monkeypatch.setattr(backup_control_recovery, "authority_verify", lambda: {"overall": "DIVERGENT", "issues": ["fork"]})
+    r_auth_div = resilience_risk_engine.evaluate_authority_risk()
+    assert r_auth_div["severity"] == RiskSeverity.BLOCKED.value
+
+    # 7b. Unavailable
+    monkeypatch.setattr(backup_control_recovery, "authority_verify", lambda: {"overall": "UNAVAILABLE", "issues": ["quorum-lost"]})
+    r_auth_unavail = resilience_risk_engine.evaluate_authority_risk()
+    assert r_auth_unavail["severity"] == RiskSeverity.CRITICAL.value
+
+    # 7c. Degraded with lag
+    monkeypatch.setattr(backup_control_recovery, "authority_verify", lambda: {"overall": "DEGRADED", "issues": ["authority-replica-lag-detected"]})
+    r_auth_lag = resilience_risk_engine.evaluate_authority_risk()
+    assert r_auth_lag["severity"] == RiskSeverity.WARNING.value
+
+    # 7d. Degraded with other issue
+    monkeypatch.setattr(backup_control_recovery, "authority_verify", lambda: {"overall": "DEGRADED", "issues": ["replica-schema-mismatch", "other"]})
+    r_auth_other = resilience_risk_engine.evaluate_authority_risk()
+    assert r_auth_other["severity"] == RiskSeverity.DEGRADED.value
+
+    # 8. resilience_coordinator: test dependency graph across repair, rebalance, and drill on same policy and backupId
+    risk_snapshot_multi = {
+        "riskDigest": "digest_multi",
+        "overallRisk": "warning",
+        "risks": [],
+    }
+    monkeypatch.setattr(
+        resilience_coordinator.resilience_planner,
+        "plan_resilience_actions",
+        lambda rs, **kw: {
+            "actions": [
+                {"actionId": "act_rep_1", "type": "CREATE_REPAIR_JOB", "policyId": "p_same", "backupId": "b_same"},
+                {"actionId": "act_reb_1", "type": "CREATE_REBALANCE_JOB", "policyId": "p_same", "backupId": "b_same"},
+                {"actionId": "act_dr_1", "type": "START_DR_DRILL", "policyId": "p_same", "backupId": "b_same"},
+            ]
+        },
+    )
+    coord_plan = resilience_coordinator.plan_coordinated_resilience(risk_snapshot_multi)
+    assert len(coord_plan.get("dependencies", [])) >= 2
+    assert len(coord_plan.get("conflicts", [])) >= 2
+
+
+
 
 
 
