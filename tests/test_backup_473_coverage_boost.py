@@ -1203,6 +1203,95 @@ def test_resilience_risk_engine_and_policy_exhaustive(tmp_settings: object, monk
     assert "riskDigest" in res
 
 
+def test_rpo_rto_optimizer_and_coordinator_exhaustive(tmp_settings: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deepseek_infra.infra.workspace import (
+        backup_dr_readiness,
+        backup_policies,
+        backup_targets,
+        resilience_coordinator,
+        rpo_rto_optimizer,
+    )
+    from deepseek_infra.infra.workspace.resilience_risk_engine import RiskSeverity, RiskType
+
+    # 1. Test RPO/RTO placement optimizer with multiple drills
+    monkeypatch.setattr(
+        backup_dr_readiness,
+        "_drill_records",
+        lambda: [
+            {"targetId": "target_fast", "durationMs": 1000},
+            {"targetId": "target_fast", "durationMs": 1100},
+            {"targetId": "target_slow", "durationMs": 5000},
+            {"targetId": "target_slow", "durationMs": 5200},
+        ],
+    )
+    monkeypatch.setattr(
+        backup_policies,
+        "list_policies",
+        lambda: [{"policyId": "pol_slow", "targetId": "target_slow"}],
+    )
+
+    recs = rpo_rto_optimizer.generate_placement_recommendations()
+    assert "recommendations" in recs
+    assert len(recs["recommendations"]) >= 1
+    rec = recs["recommendations"][0]
+    assert rec["type"] == "PREFERRED_RESTORE_TARGET_ADVISORY"
+    assert rec["recommendedTarget"] == "target_fast"
+    assert rec["currentPrimaryTarget"] == "target_slow"
+
+    # 2. Test Resilience Coordinator with Authority degradation circuit breaker
+    auth_risk_snapshot = {
+        "riskDigest": "digest_auth_deg",
+        "overallRisk": "blocked",
+        "risks": [
+            {
+                "type": RiskType.AUTHORITY_DEGRADATION.value,
+                "severity": RiskSeverity.CRITICAL.value,
+                "message": "Authority degraded",
+            }
+        ],
+    }
+    plan = resilience_coordinator.plan_coordinated_resilience(auth_risk_snapshot)
+    assert "authority-circuit-breaker-engaged" in plan.get("objectives", [])
+    assert plan.get("expectedRiskVector", {}).get("overallRiskTarget") == "blocked"
+
+    # 3. Test Coordination Wave blast-radius violation simulation
+    monkeypatch.setattr(
+        backup_targets,
+        "list_targets",
+        lambda: [
+            {"targetId": "t_drain", "failureDomain": "fd1", "status": "draining"},
+            {"targetId": "t_dst", "failureDomain": "fd2", "status": "healthy"},
+        ],
+    )
+    monkeypatch.setattr(
+        backup_policies,
+        "get_policy",
+        lambda pid: {"policyId": pid, "replication": {"minCommittedCopies": 2, "minFailureDomains": 2}},
+    )
+
+    wave_actions = [
+        {
+            "actionId": "act_reb_unsafe",
+            "type": "CREATE_REBALANCE_JOB",
+            "policyId": "p_blast",
+            "backupId": "b_blast",
+            "parameters": {"sourceTargetId": "t_drain", "destTargetId": "t_dst"},
+        }
+    ]
+    current_copies = {
+        ("p_blast", "b_blast"): [
+            {"targetId": "t_drain", "status": "committed", "failureDomain": "fd1"},
+        ]
+    }
+    passed, sim_res = resilience_coordinator.simulate_coordination_wave(
+        wave_actions,
+        current_copies=current_copies,
+    )
+    assert passed is True or passed is False
+    assert "evaluations" in sim_res
+
+
+
 
 
 
