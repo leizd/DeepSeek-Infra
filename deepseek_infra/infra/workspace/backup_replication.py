@@ -462,17 +462,19 @@ def append_target_local_catalog(target: Any, receipt: dict[str, Any]) -> None:
     backup_id = str(receipt.get("backupId") or "")
     if not backup_id:
         return
-    if target.root is not None:
-        cats_dir = target.root / "catalogs"
+    t_root = getattr(target, "root", None)
+    t_remote = getattr(target, "store", None)
+    if t_root is not None:
+        cats_dir = t_root / "catalogs"
         cats_dir.mkdir(parents=True, exist_ok=True)
         line = json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n"
         cat_file = cats_dir / f"{policy_id}.jsonl"
         with cat_file.open("a", encoding="utf-8") as h:
             h.write(line)
             h.flush()
-    elif target.store is not None:
+    elif t_remote is not None:
         cat_key = f"catalogs/{policy_id}/{backup_id}.json"
-        target.store.put_if_absent(cat_key, json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8"))
+        t_remote.put_if_absent(cat_key, json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8"))
 
 
 # ── Replication Job CRUD ────────────────────────────────────────────────────
@@ -874,9 +876,22 @@ def authenticate_recovery_copy(
     raw_receipt: bytes | None = None
     raw_commit: bytes | None = None
 
-    if target.root is not None:
-        rp = target.root / "receipts" / f"{backup_id}.json"
-        cp = target.root / "commits" / policy_id / f"{backup_id}.json"
+    t_store = target
+    if isinstance(target, (str, dict)):
+        tid = target if isinstance(target, str) else str(target.get("targetId") or "")
+        if tid:
+            try:
+                from deepseek_infra.infra.workspace import backup_targets
+                t_store = backup_targets.open_target_store(tid, write_intent=False)
+            except Exception:
+                t_store = target
+
+    t_root = getattr(t_store, "root", None)
+    t_remote = getattr(t_store, "store", None)
+
+    if t_root is not None:
+        rp = t_root / "receipts" / f"{backup_id}.json"
+        cp = t_root / "commits" / policy_id / f"{backup_id}.json"
         if rp.is_file():
             try:
                 raw_receipt = rp.read_bytes()
@@ -892,13 +907,13 @@ def authenticate_recovery_copy(
                 rc_json = json.loads(raw_receipt.decode("utf-8"))
                 slot = str(rc_json.get("scheduleSlot") or "")
                 if slot:
-                    found_cp = backup_publish.find_commit_marker_path(target.root, policy_id, slot)
+                    found_cp = backup_publish.find_commit_marker_path(t_root, policy_id, slot)
                     if found_cp is not None and found_cp.is_file():
                         raw_commit = found_cp.read_bytes()
             except Exception:
                 pass
             if raw_commit is None:
-                commits_dir = target.root / "commits" / policy_id
+                commits_dir = t_root / "commits" / policy_id
                 if commits_dir.is_dir():
                     for cand in commits_dir.glob("*.json"):
                         try:
@@ -909,13 +924,13 @@ def authenticate_recovery_copy(
                                 break
                         except Exception:
                             continue
-    elif target.store is not None:
+    elif t_remote is not None:
         try:
-            raw_receipt = target.store.get_bytes(r_key)
+            raw_receipt = t_remote.get_bytes(r_key)
         except Exception:
             raw_receipt = None
         try:
-            raw_commit = target.store.get_bytes(c_key)
+            raw_commit = t_remote.get_bytes(c_key)
         except Exception:
             raw_commit = None
         if raw_commit is None and raw_receipt is not None:
@@ -925,7 +940,7 @@ def authenticate_recovery_copy(
                 if slot:
                     for k in backup_publish.commit_marker_keys(policy_id, slot):
                         try:
-                            raw_commit = target.store.get_bytes(k)
+                            raw_commit = t_remote.get_bytes(k)
                             if raw_commit:
                                 break
                         except Exception:
