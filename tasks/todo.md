@@ -1,50 +1,60 @@
-# 4.7.3 Todo — Proof-Carrying Fleet Resilience
+# 4.7.4 Todo — Durable Fleet SLO & Evidence-Closed Autonomous Operations
 
 <!-- docs-language-switcher:start -->
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
+## Phase 0: Release contract
 
-## Phase 1: Correctness contracts
+- [x] Prepare 4.7.4 version surfaces
+- [x] Record ADR-0045 architecture and frozen boundaries
 
-- [x] Strict RiskSubject v1 exact matching
-- [x] Strong `dr-readiness-proof-v1` producer and verifier
-- [x] Durable repair/rebalance cancellation before `COMPENSATED`
-- [x] Checkpoint: focused tests, Ruff, and Mypy
+## Phase 1: Evidence closure
 
-## Phase 2: Fenced execution control plane
+- [ ] Read actual Receipt and Commit bytes from the expected S3 target
+- [ ] Remove every synthetic digest and placeholder object key
+- [ ] Strengthen semantic proof validators for raw-byte bindings
+- [ ] Upload report, exact proof, and proof SHA-256 together
+- [ ] Make Evidence Assembly reject missing/tampered autonomous proof
+- [ ] Prove live remote-repair crash takeover with distinct PIDs and one job
+- [ ] Prove global/target/policy/failure-domain admission with OS processes
+- [ ] Checkpoint: focused Evidence/process tests, Ruff, Mypy
 
-- [x] Atomic `admit_and_claim_action()` transaction
-- [x] CAS action lease renewal with resource-lock renewal
-- [x] Lease takeover enters `RECONCILING`
-- [x] Reconciler drives resume/verify/recreate/compensate/unknown branches
-- [x] Long-running repair, rebalance, and DR operations heartbeat leases
-- [x] Checkpoint: concurrency, crash, and stale-worker tests
+## Phase 2: Persistent risk and fairness
 
-## Phase 3: Fleet coordination
+- [ ] Add durable Risk Observation Ledger
+- [ ] Persist open/clear/reopen lifecycle and exact RiskSubject digest
+- [ ] Carry durable first-seen/open-since state through planner actions
+- [ ] Derive risk debt from unresolved risk age
+- [ ] Add durable scheduler virtual service history
+- [ ] Use persistent fairness history in production scheduling
+- [ ] Checkpoint: restart/debt/fairness tests, Ruff, Mypy
 
-- [x] Observed copy/failure-domain blast-radius wave simulation
-- [x] Unsafe wave fail-closed state
-- [x] Risk debt model
-- [x] Weighted fair policy scheduling
-- [x] Safe-point-only preemption
-- [x] Repair/DR bandwidth reserves and rebalance opportunism
-- [x] Checkpoint: fairness, starvation, preemption, and reserve tests
+## Phase 3: Scheduler correctness
 
-## Phase 4: Evidence
+- [ ] Partition all runnable actions into true DAG waves
+- [ ] Emit typed `UNSCHEDULABLE` reasons
+- [ ] Enforce repair reserve through `backup_transfer_budget`
+- [ ] Integrate atomic safe-point preemption and typed decision proof
+- [ ] Make degraded blast-radius safety monotonic
+- [ ] Include running effects in blast-radius simulation
+- [ ] Checkpoint: waves/budget/preemption/blast tests, Ruff, Mypy
 
-- [x] Three distinct production S3 endpoint repair scenario
-- [x] Separate production S3 rebalance scenario
-- [x] Production restore DR drill scenario
-- [x] Scenario-specific typed proof fields
-- [x] Autonomous claims added to `REQUIRED_PROOF_CHECKS`
-- [x] Exit-code-only evidence rejected
+## Phase 4: Fleet SLO and API
+
+- [ ] Persist Fleet SLO samples across restart
+- [ ] Measure queue, clear, remediation, DR, takeover, starvation, proof freshness
+- [ ] Compute configurable 1h/24h error-budget burn rates
+- [ ] Enforce timezone-aware maintenance windows and critical overrides
+- [ ] Add authenticated Fleet Readiness API
+- [ ] Checkpoint: SLO/burn/window/API tests, Ruff, Mypy
 
 ## Phase 5: Release closure
 
-- [x] 4.7.3 version surfaces
-- [x] Fleet coordination runbook and release notes
-- [x] Frozen wire contract assertions
-- [x] Frontend check, Ruff, Mypy, full pytest coverage gate
-- [x] Offline eval gates and release version check
-- [x] Five-axis code review
+- [ ] Lock all requested 4.7.4 Evidence names
+- [ ] Run real three-MinIO proof and crash scenarios
+- [ ] Prove frozen wire semantics unchanged
+- [ ] Update runbook, release notes, README, architecture, and Evidence index
+- [ ] Run frontend, Ruff, Mypy, full 95% coverage, offline eval, release gates
+- [ ] Inspect exact proof artifact from final CI assembly
+- [ ] Perform final multi-axis code review

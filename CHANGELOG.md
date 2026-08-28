@@ -4,6 +4,15 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.7.4] - Durable Fleet SLO & Evidence-Closed Autonomous Operations (2026-08-28)
+
+### Development baseline
+
+- Version surfaces and architecture contracts are prepared for the 4.7.4
+  implementation series.
+- Gate A-N behavior and provider-backed Evidence remain in progress; this entry
+  does not claim release readiness or passing production Evidence.
+
 ## [4.7.3] - Proof-Carrying Fleet Resilience & Production Coordination (2026-08-27)
 
 ### Development baseline
