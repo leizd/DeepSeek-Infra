@@ -45,13 +45,11 @@ def get_fleet_readiness(*, now: datetime | None = None) -> dict[str, Any]:
 
     dr_slo = backup_dr_readiness.calculate_dr_slo_metrics(now=current)
     dr_freshness_hours = max(0.0, float(dr_slo.get("evidenceFreshnessDays") or 0.0) * 24.0)
-    resilience_slo_ledger.record_sample(
-        resilience_slo_ledger.DR_READINESS_AGE_HOURS,
-        dr_freshness_hours,
-        observed_at=current,
-        sample_key=f"dr-readiness:{_utc_iso(current)}",
-    )
     slo = resilience_slo_ledger.get_fleet_slo_snapshot(now=current)
+    # Readiness is a read-only projection. The risk control loop persists the
+    # periodic sample; this field is recalculated so the operator sees current
+    # age without manufacturing telemetry by polling the endpoint.
+    slo["drFreshnessHours"] = round(dr_freshness_hours, 3)
     burn_rate = resilience_slo_ledger.compute_burn_rates(now=current)
 
     schedule = resilience_scheduler_service.get_latest_schedule_snapshot() or {}

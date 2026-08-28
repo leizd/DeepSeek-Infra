@@ -13,6 +13,7 @@ from deepseek_infra.infra.workspace import (
     resilience_action_journal,
     resilience_fleet_readiness,
     resilience_fleet_scheduler,
+    resilience_risk_engine,
     resilience_risk_observations,
     resilience_scheduler_service,
     resilience_slo_ledger,
@@ -200,6 +201,7 @@ def test_fleet_readiness_api_is_authenticated_and_source_backed(tmp_settings: Pa
         scheduled_at=now,
     )
 
+    samples_before_get = resilience_slo_ledger.list_samples(resilience_slo_ledger.DR_READINESS_AGE_HOURS)
     direct = resilience_fleet_readiness.get_fleet_readiness(now=now)
     assert direct["slo"]["repairP95Ms"] == 1250.0
     assert direct["scheduler"]["waves"][0]["waveIndex"] == 0
@@ -214,3 +216,63 @@ def test_fleet_readiness_api_is_authenticated_and_source_backed(tmp_settings: Pa
     )
     assert response.status_code == 200
     assert response.json()["slo"]["repairP95Ms"] == 1250.0
+    assert resilience_slo_ledger.list_samples(resilience_slo_ledger.DR_READINESS_AGE_HOURS) == samples_before_get
+
+
+def test_risk_control_loop_persists_dr_freshness_without_operator_read(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(
+        resilience_risk_engine,
+        "evaluate_dr_freshness_risk",
+        lambda **_kwargs: {
+            "type": "DR_STALENESS",
+            "severity": "healthy",
+            "confidence": "verified",
+            "evidence": ["dr-drill-fresh:2.0d<=7d"],
+            "details": {"lastSuccessfulDrillAgeDays": 2.0},
+        },
+    )
+    monkeypatch.setattr(
+        resilience_risk_engine,
+        "evaluate_restore_latency_risk",
+        lambda **_kwargs: {
+            "type": "RESTORE_LATENCY_BREACH",
+            "severity": "healthy",
+            "confidence": "high",
+            "evidence": ["restore-latency-within-bounds"],
+            "details": {},
+        },
+    )
+    monkeypatch.setattr(
+        resilience_risk_engine,
+        "evaluate_repair_backlog_risk",
+        lambda: {
+            "type": "REPAIR_BACKLOG",
+            "severity": "healthy",
+            "confidence": "high",
+            "evidence": ["repair-backlog-clear"],
+            "details": {},
+        },
+    )
+    monkeypatch.setattr(
+        resilience_risk_engine,
+        "evaluate_authority_risk",
+        lambda: {
+            "type": "AUTHORITY_DEGRADATION",
+            "severity": "healthy",
+            "confidence": "verified",
+            "evidence": ["authority-consensus-verified"],
+            "details": {},
+        },
+    )
+
+    resilience_risk_engine.assess_risks(target_ids=[], policy_ids=[], now=now)
+
+    samples = resilience_slo_ledger.list_samples(resilience_slo_ledger.DR_READINESS_AGE_HOURS)
+    assert len(samples) == 1
+    assert samples[0]["value"] == 48.0
+    assert samples[0]["sampleKey"] == "dr-readiness:2026-08-28T12:00:00Z"

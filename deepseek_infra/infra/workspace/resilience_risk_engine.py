@@ -520,6 +520,17 @@ def assess_risks(
     # 3. DR Staleness risk
     dr_risk = evaluate_dr_freshness_risk(now=current)
     all_risks.append(dr_risk)
+    dr_details = dr_risk.get("details")
+    dr_age_days = dr_details.get("lastSuccessfulDrillAgeDays") if isinstance(dr_details, dict) else None
+    if isinstance(dr_age_days, (int, float)) and not isinstance(dr_age_days, bool):
+        from deepseek_infra.infra.workspace import resilience_slo_ledger
+
+        resilience_slo_ledger.record_sample(
+            resilience_slo_ledger.DR_READINESS_AGE_HOURS,
+            max(0.0, float(dr_age_days) * 24.0),
+            observed_at=current,
+            sample_key=f"dr-readiness:{_utc_iso(current)}",
+        )
 
     # 4. Restore Latency risk
     rto_risk = evaluate_restore_latency_risk(now=current)
