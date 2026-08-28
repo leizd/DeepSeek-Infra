@@ -158,6 +158,7 @@ succeeds. For development setup and quality gates, see [AGENTS.md](../AGENTS.md)
 - `docs/evidence/recovery-faults-v4.7.4.json`
 - `docs/evidence/replica-healing-s3-v4.7.4.json`
 - `docs/evidence/storage-control-plane-minio-v4.7.4.json`
+- `docs/evidence/storage-control-plane-autonomous-proof-v4.7.4.json`
 
 ## Historical 4.4.15 evidence contract
 

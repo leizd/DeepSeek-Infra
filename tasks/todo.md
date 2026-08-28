@@ -11,11 +11,11 @@
 
 ## Phase 1: Evidence closure
 
-- [ ] Read actual Receipt and Commit bytes from the expected S3 target
-- [ ] Remove every synthetic digest and placeholder object key
-- [ ] Strengthen semantic proof validators for raw-byte bindings
-- [ ] Upload report, exact proof, and proof SHA-256 together
-- [ ] Make Evidence Assembly reject missing/tampered autonomous proof
+- [x] Read actual Receipt and Commit bytes from the expected S3 target
+- [x] Remove every synthetic digest and placeholder object key
+- [x] Strengthen semantic proof validators for raw-byte bindings
+- [x] Upload report, exact proof, and proof SHA-256 together
+- [x] Make Evidence Assembly reject missing/tampered autonomous proof
 - [ ] Prove live remote-repair crash takeover with distinct PIDs and one job
 - [ ] Prove global/target/policy/failure-domain admission with OS processes
 - [ ] Checkpoint: focused Evidence/process tests, Ruff, Mypy

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 EvidenceTier = Literal["candidate", "exact-merge", "optional"]
+EvidencePayloadKind = Literal["report", "proof"]
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,8 @@ class EvidenceSpec:
     producer: str
     tier: EvidenceTier
     required_for_ga: bool = True
+    payload_kind: EvidencePayloadKind = "report"
+    scenario: str | None = None
 
     def path(self, version: str) -> str:
         return self.path_template.format(version=version)
@@ -72,6 +75,13 @@ EVIDENCE_SPECS = (
         "docs/evidence/storage-control-plane-minio-v{version}.json",
         "storage-control-plane-minio-e2e",
         "exact-merge",
+    ),
+    EvidenceSpec(
+        "docs/evidence/storage-control-plane-autonomous-proof-v{version}.json",
+        "storage-control-plane-minio-e2e",
+        "exact-merge",
+        payload_kind="proof",
+        scenario="real-three-minio-autonomous-remediation",
     ),
     EvidenceSpec("docs/evidence/python-coverage-stability-v{version}.json", "test", "optional", required_for_ga=False),
 )

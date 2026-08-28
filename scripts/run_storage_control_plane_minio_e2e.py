@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 from deepseek_infra.infra.workspace import backup_crypto  # noqa: E402
 from deepseek_infra.infra.workspace import evidence_proof  # noqa: E402
+from deepseek_infra.infra.diagnostics.evidence_manifest import sha256_of  # noqa: E402
 from scripts.release_evidence import stamp_release_report  # noqa: E402
 
 REAL_SCENARIO = "real-three-minio-storage-control-plane"
@@ -28,6 +30,7 @@ FS_FRESH_AUTH_SCENARIO = "fresh-process-filesystem-authority-recovery"
 FRESH_AUTH_SCENARIO = "real-three-minio-fresh-process-authority-recovery"
 PROCESS_REPLACE_SCENARIO = "real-three-minio-process-replacement-authority-recovery"
 AUTONOMOUS_REMEDIATION_SCENARIO = "real-three-minio-autonomous-remediation"
+AUTONOMOUS_PROOF_TEMPLATE = "docs/evidence/storage-control-plane-autonomous-proof-v{version}.json"
 SCENARIOS: dict[str, tuple[str, ...]] = {
     REAL_SCENARIO: (
         "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e",
@@ -202,6 +205,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    autonomous_proof_rel = AUTONOMOUS_PROOF_TEMPLATE.format(version=version)
+    autonomous_proof_output = ROOT / autonomous_proof_rel
+    if autonomous_proof_output.is_file():
+        autonomous_proof_output.unlink()
     prerequisite_errors = _prerequisite_errors()
     results: dict[str, dict[str, object]] = {}
     if prerequisite_errors:
@@ -241,6 +249,20 @@ def main(argv: list[str] | None = None) -> int:
         scenario_results=results,
         required_proof_checks=REQUIRED_PROOF_CHECKS,
     )
+    proof_artifact: dict[str, object] | None = None
+    autonomous_result = results.get(AUTONOMOUS_REMEDIATION_SCENARIO) or {}
+    proof_path_raw = autonomous_result.get("proofPath")
+    proof_source = Path(str(proof_path_raw)) if proof_path_raw else None
+    required_autonomous_checks = REQUIRED_PROOF_CHECKS[AUTONOMOUS_REMEDIATION_SCENARIO]
+    if proof_source is not None and proof_source.is_file() and all(checks.get(name) == "PASS" for name in required_autonomous_checks):
+        autonomous_proof_output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(proof_source, autonomous_proof_output)
+        proof_artifact = {
+            "path": autonomous_proof_rel,
+            "sha256": sha256_of(autonomous_proof_output),
+            "bytes": autonomous_proof_output.stat().st_size,
+            "scenario": AUTONOMOUS_REMEDIATION_SCENARIO,
+        }
     report = stamp_release_report(
         {
             "ok": all(value == "PASS" for value in checks.values()),
@@ -249,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
             "checks": checks,
             "checkProvenance": dict(CHECK_SCENARIOS),
             "requiredProofChecks": {k: list(v) for k, v in REQUIRED_PROOF_CHECKS.items()},
+            "proofArtifact": proof_artifact,
             "scenarios": results,
             "endpoints": {name: os.environ.get(name) for name in REQUIRED_ENDPOINTS},
         },

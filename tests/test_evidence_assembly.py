@@ -65,7 +65,30 @@ def _producer_downloads(tmp_path: Path) -> tuple[Path, Path]:
     for spec in evidence_specs():
         path = source / spec.path(VERSION)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(_payload()) + "\n", encoding="utf-8")
+        if spec.payload_kind == "proof":
+            payload: dict[str, object] = {
+                "schema": "evidence-proof-v2",
+                "scenario": spec.scenario,
+                "checks": {"assemblyExactProof": {"status": "PASS", "evidence": {"source": "test"}}},
+                "meta": {"producer": spec.producer},
+            }
+        else:
+            payload = _payload()
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    storage_specs = [spec for spec in evidence_specs() if spec.producer == "storage-control-plane-minio-e2e"]
+    proof_spec = next(spec for spec in storage_specs if spec.payload_kind == "proof")
+    report_spec = next(spec for spec in storage_specs if spec.payload_kind == "report")
+    proof_path = source / proof_spec.path(VERSION)
+    report_path = source / report_spec.path(VERSION)
+    report = _payload()
+    report["proofArtifact"] = {
+        "path": proof_spec.path(VERSION),
+        "sha256": sha256_of(proof_path),
+        "bytes": proof_path.stat().st_size,
+        "scenario": proof_spec.scenario,
+    }
+    report["requiredProofChecks"] = {proof_spec.scenario: ["assemblyExactProof"]}
+    report_path.write_text(json.dumps(report) + "\n", encoding="utf-8")
     for producer in evidence_producers():
         prepare_producer_artifact(
             source,
@@ -151,6 +174,38 @@ def test_assembly_rejects_missing_producer_and_artifact_collision(tmp_path: Path
     target.write_text(json.dumps(_payload()), encoding="utf-8")
     with pytest.raises(ValueError, match="ownership mismatch"):
         assemble_evidence(downloads, tmp_path / "collision-output", version=VERSION, context=_context(), github_sha=REVISION)
+
+
+def test_storage_control_producer_rejects_missing_or_tampered_exact_proof(tmp_path: Path) -> None:
+    _, downloads = _producer_downloads(tmp_path / "missing")
+    producer = "storage-control-plane-minio-e2e"
+    directory = downloads / f"evidence-producer-{producer}"
+    proof_rel = f"docs/evidence/storage-control-plane-autonomous-proof-v{VERSION}.json"
+    (directory / proof_rel).unlink()
+    _, missing_errors = _validate_producer_directory(
+        directory,
+        producer=producer,
+        version=VERSION,
+        context=_context(),
+        github_sha=REVISION,
+    )
+    assert any("producer artifact ownership mismatch" in error for error in missing_errors)
+    assert any("producer exact proof pair missing" in error for error in missing_errors)
+
+    _, tampered_downloads = _producer_downloads(tmp_path / "tampered")
+    tampered_directory = tampered_downloads / f"evidence-producer-{producer}"
+    report_path = tampered_directory / f"docs/evidence/storage-control-plane-minio-v{VERSION}.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["proofArtifact"]["sha256"] = "0" * 64
+    report_path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+    _, tampered_errors = _validate_producer_directory(
+        tampered_directory,
+        producer=producer,
+        version=VERSION,
+        context=_context(),
+        github_sha=REVISION,
+    )
+    assert any("producer report proof checksum mismatch" in error for error in tampered_errors)
 
 
 def test_assembly_rejects_revision_and_ci_mismatch(tmp_path: Path) -> None:
