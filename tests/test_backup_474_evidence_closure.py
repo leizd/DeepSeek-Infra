@@ -5,9 +5,11 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from deepseek_infra.infra.diagnostics.evidence_inventory import evidence_paths_for_producer
 from deepseek_infra.infra.workspace import evidence_proof
-from scripts import run_storage_control_plane_minio_e2e
+from scripts import run_storage_control_plane_minio_e2e, validate_evidence_proof
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -199,3 +201,52 @@ def test_474_required_check_names_are_locked_to_proof_or_explicit_scenarios() ->
         "controlAuthorityV1Unchanged",
         "authorityCheckpointV1Unchanged",
     } <= set(run_storage_control_plane_minio_e2e.CHECK_SCENARIOS)
+
+
+def test_validate_evidence_proof_cli_reports_exact_bytes_and_digest(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "proof.json"
+    evidence_proof.write_evidence_proof(
+        path,
+        scenario="proof-cli-scenario",
+        checks={"operatorClaim": {"status": "PASS", "evidence": {"source": "durable-journal"}}},
+    )
+
+    assert validate_evidence_proof.main(["--proof", str(path), "--scenario", "proof-cli-scenario"]) == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    raw = path.read_bytes()
+    assert result == {
+        "bytes": len(raw),
+        "checkCount": 1,
+        "errors": {},
+        "proofPath": str(path.resolve()),
+        "scenario": "proof-cli-scenario",
+        "schema": evidence_proof.EVIDENCE_PROOF_SCHEMA,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "status": "PASS",
+    }
+
+
+def test_validate_evidence_proof_cli_fails_closed_on_semantic_or_scenario_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "invalid-proof.json"
+    evidence_proof.write_evidence_proof(
+        path,
+        scenario="actual-scenario",
+        checks={"operatorClaim": {"status": "PASS", "evidence": {}}},
+    )
+
+    assert validate_evidence_proof.main(["--proof", str(path)]) == 1
+    semantic_result = json.loads(capsys.readouterr().out)
+    assert semantic_result["status"] == "FAIL"
+    assert semantic_result["errors"] == {"operatorClaim": ["empty-evidence-for-unknown-check"]}
+
+    assert validate_evidence_proof.main(["--proof", str(path), "--scenario", "wrong-scenario"]) == 1
+    scenario_result = json.loads(capsys.readouterr().out)
+    assert scenario_result["status"] == "FAIL"
+    assert "evidence-proof-scenario-mismatch" in scenario_result["error"]
