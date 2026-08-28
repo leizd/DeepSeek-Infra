@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.7.2.
+Applicable version: v4.7.3.
 
 ## 4.6.8 development evidence contract
 
@@ -115,49 +115,49 @@ succeeds. For development setup and quality gates, see [AGENTS.md](../AGENTS.md)
 
 - `docs/evidence/headless-mcp-bridge.json`
 - `docs/evidence/a2a-external-peer.json`
-- `docs/evidence/ga-v4.7.2.json`
-- `docs/evidence/workspace-v4.7.2.json`
-- `docs/evidence/edge-router-v4.7.2.json`
-- `docs/evidence/media-v4.7.2.json`
-- `docs/evidence/browser-v4.7.2.json`
-- `docs/evidence/automation-v4.7.2.json`
-- `docs/evidence/skills-v4.7.2.json`
-- `docs/evidence/skills-ui-v4.7.2.json`
-- `docs/evidence/skill-builder-v4.7.2.json`
-- `docs/evidence/skill-packs-v4.7.2.json`
-- `docs/evidence/skill-eval-dashboard-v4.7.2.json`
-- `docs/evidence/skill-versioning-v4.7.2.json`
-- `docs/evidence/skill-analytics-v4.7.2.json`
-- `docs/evidence/skill-security-v4.7.2.json`
-- `docs/evidence/skill-catalog-v4.7.2.json`
-- `docs/evidence/context-taint-v4.7.2.json`
-- `docs/evidence/semantic-cache-onnx-v4.7.2.json`
-- `docs/evidence/upgrade-rollback-v4.7.2.json`
-- `docs/evidence/protocol-contract-v4.7.2.json`
-- `docs/evidence/frontend-bundle-v4.7.2.json`
-- `docs/evidence/frontend-browser-v4.7.2.json`
+- `docs/evidence/ga-v4.7.3.json`
+- `docs/evidence/workspace-v4.7.3.json`
+- `docs/evidence/edge-router-v4.7.3.json`
+- `docs/evidence/media-v4.7.3.json`
+- `docs/evidence/browser-v4.7.3.json`
+- `docs/evidence/automation-v4.7.3.json`
+- `docs/evidence/skills-v4.7.3.json`
+- `docs/evidence/skills-ui-v4.7.3.json`
+- `docs/evidence/skill-builder-v4.7.3.json`
+- `docs/evidence/skill-packs-v4.7.3.json`
+- `docs/evidence/skill-eval-dashboard-v4.7.3.json`
+- `docs/evidence/skill-versioning-v4.7.3.json`
+- `docs/evidence/skill-analytics-v4.7.3.json`
+- `docs/evidence/skill-security-v4.7.3.json`
+- `docs/evidence/skill-catalog-v4.7.3.json`
+- `docs/evidence/context-taint-v4.7.3.json`
+- `docs/evidence/semantic-cache-onnx-v4.7.3.json`
+- `docs/evidence/upgrade-rollback-v4.7.3.json`
+- `docs/evidence/protocol-contract-v4.7.3.json`
+- `docs/evidence/frontend-bundle-v4.7.3.json`
+- `docs/evidence/frontend-browser-v4.7.3.json`
 - `evals/reports/latest.json`
 - `evals/reports/agent-latest.json`
 - `evals/reports/baseline-compare-latest.json`
 - `evals/reports/security-latest.json`
-- `evals/reports/skills-v4.7.2.json`
-- `evals/reports/media-v4.7.2.json`
-- `evals/reports/browser-v4.7.2.json`
-- `evals/reports/automation-v4.7.2.json`
-- `docs/evidence/rust-sidecar-image-v4.7.2.json`
-- `docs/evidence/hybrid-runtime-e2e-v4.7.2.json`
-- `docs/evidence/gateway-request-parity-v4.7.2.json`
-- `docs/evidence/mcp-protocol-parity-v4.7.2.json`
-- `docs/evidence/rag-parity-v4.7.2.json`
-- `docs/evidence/rag-document-preparation-parity-v4.7.2.json`
-- `docs/evidence/rag-vector-binary-parity-v4.7.2.json`
-- `docs/evidence/rust-coverage-v4.7.2.json`
-- `docs/evidence/rust-sidecar-performance-v4.7.2.json`
-- `docs/evidence/packed-delta-s3-v4.7.2.json`
-- `docs/evidence/object-set-s3-v4.7.2.json`
-- `docs/evidence/recovery-faults-v4.7.2.json`
-- `docs/evidence/replica-healing-s3-v4.7.2.json`
-- `docs/evidence/storage-control-plane-minio-v4.7.2.json`
+- `evals/reports/skills-v4.7.3.json`
+- `evals/reports/media-v4.7.3.json`
+- `evals/reports/browser-v4.7.3.json`
+- `evals/reports/automation-v4.7.3.json`
+- `docs/evidence/rust-sidecar-image-v4.7.3.json`
+- `docs/evidence/hybrid-runtime-e2e-v4.7.3.json`
+- `docs/evidence/gateway-request-parity-v4.7.3.json`
+- `docs/evidence/mcp-protocol-parity-v4.7.3.json`
+- `docs/evidence/rag-parity-v4.7.3.json`
+- `docs/evidence/rag-document-preparation-parity-v4.7.3.json`
+- `docs/evidence/rag-vector-binary-parity-v4.7.3.json`
+- `docs/evidence/rust-coverage-v4.7.3.json`
+- `docs/evidence/rust-sidecar-performance-v4.7.3.json`
+- `docs/evidence/packed-delta-s3-v4.7.3.json`
+- `docs/evidence/object-set-s3-v4.7.3.json`
+- `docs/evidence/recovery-faults-v4.7.3.json`
+- `docs/evidence/replica-healing-s3-v4.7.3.json`
+- `docs/evidence/storage-control-plane-minio-v4.7.3.json`
 
 ## Historical 4.4.15 evidence contract
 

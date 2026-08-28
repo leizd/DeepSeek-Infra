@@ -23,6 +23,7 @@ from deepseek_infra.infra.workspace import (
     backup_publish,
     backup_replication,
     backup_targets,
+    evidence_proof,
 )
 from deepseek_infra.infra.workspace.resilience_risk_engine import SEVERITY_ORDER, RiskSeverity
 
@@ -199,13 +200,45 @@ def verify_action_outcome(
                 "error": execution_result.get("error") or "dr-drill-failed",
             }
         raw_proof = execution_result.get("proof")
-        proof = raw_proof if isinstance(raw_proof, dict) else {}
-        if proof and proof.get("commitVerified") is False:
-            return False, {"executionVerified": False, "error": "dr-drill-proof-commit-unverified"}
+        if not isinstance(raw_proof, dict) or not raw_proof:
+            return False, {"executionVerified": False, "error": "dr-drill-proof-required"}
+        proof = raw_proof
+        proof_errors = evidence_proof.validate_dr_readiness_proof(proof, "drReadinessProofValid")
+        if proof_errors:
+            return False, {
+                "executionVerified": False,
+                "error": "dr-drill-proof-invalid:" + ",".join(proof_errors),
+                "proofErrors": proof_errors,
+            }
+
+        action_id = str(action.get("actionId") or "")
+        result_drill_id = str(execution_result.get("drillId") or "")
+        action_backup_id = str(params.get("backupId") or action.get("backupId") or "")
+        result_backup_id = str(execution_result.get("backupId") or execution_result.get("testedBackupId") or "")
+        proof_bindings = (
+            ("resilienceActionId", action_id),
+            ("drillId", result_drill_id),
+            ("backupId", action_backup_id or result_backup_id),
+        )
+        for field, expected in proof_bindings:
+            observed = str(proof.get(field) or "")
+            if not expected or observed != expected:
+                return False, {
+                    "executionVerified": False,
+                    "error": f"dr-drill-proof-{field}-mismatch:expected={expected or '<missing>'},observed={observed or '<missing>'}",
+                }
+        if action_backup_id and result_backup_id and action_backup_id != result_backup_id:
+            return False, {
+                "executionVerified": False,
+                "error": f"dr-drill-result-backupId-mismatch:action={action_backup_id},result={result_backup_id}",
+            }
 
         return True, {
             "executionVerified": True,
-            "drillId": execution_result.get("drillId"),
+            "drillId": result_drill_id,
+            "backupId": str(proof["backupId"]),
+            "resilienceActionId": action_id,
+            "proofSchema": str(proof["schema"]),
             "verifiedAt": _utc_iso(),
         }
 
@@ -216,21 +249,24 @@ def find_matching_risk(
     risk_subject: dict[str, Any],
     risk_snapshot: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Find risk record matching the given riskSubject in a risk snapshot."""
-    s_type = str(risk_subject.get("type") or "").upper()
-    s_pid = str(risk_subject.get("policyId") or "")
-    s_tid = str(risk_subject.get("targetId") or risk_subject.get("target") or "")
+    """Find a risk whose declared scope exactly matches RiskSubject v1."""
+    subject_scope = {
+        "type": str(risk_subject.get("type") or "").upper(),
+        "policyId": str(risk_subject.get("policyId") or ""),
+        "backupId": str(risk_subject.get("backupId") or ""),
+        "targetId": str(risk_subject.get("targetId") or risk_subject.get("target") or ""),
+        "failureDomain": str(risk_subject.get("failureDomain") or ""),
+    }
 
     for r in risk_snapshot.get("risks", []):
-        r_type = str(r.get("type") or "").upper()
-        r_pid = str(r.get("policyId") or "")
-        r_tid = str(r.get("target") or "")
-
-        if s_type and r_type != s_type:
-            continue
-        if s_pid and r_pid and r_pid != s_pid:
-            continue
-        if s_tid and r_tid and r_tid != s_tid:
+        risk_scope = {
+            "type": str(r.get("type") or "").upper(),
+            "policyId": str(r.get("policyId") or ""),
+            "backupId": str(r.get("backupId") or ""),
+            "targetId": str(r.get("targetId") or r.get("target") or ""),
+            "failureDomain": str(r.get("failureDomain") or ""),
+        }
+        if any(expected and risk_scope[field] != expected for field, expected in subject_scope.items()):
             continue
         return r
     return None
@@ -274,6 +310,13 @@ def verify_scoped_risk_reduction(
 
     risk_before = find_matching_risk(risk_subject, risk_before_snapshot)
     risk_after = find_matching_risk(risk_subject, risk_after_snapshot)
+
+    if risk_before is None:
+        return False, {
+            "riskSubject": risk_subject,
+            "effectObserved": False,
+            "reason": "target-risk-subject-not-observed-before",
+        }
 
     sev_before = str(risk_before.get("severity") if risk_before else action.get("severityBefore") or action.get("severity") or "warning").lower()
     sev_after = str(risk_after.get("severity") if risk_after else RiskSeverity.HEALTHY.value).lower()

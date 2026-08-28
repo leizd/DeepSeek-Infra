@@ -259,7 +259,9 @@ def test_dr_drill_produces_readiness_proof(clean_authority_env: dict[str, Any]) 
     assert res["status"] == "success"
     proof = res["proof"]
 
+    assert proof["schema"] == evidence_proof.DR_READINESS_PROOF_SCHEMA
     assert proof["drillId"].startswith("drill_")
+    assert proof["backupId"] == proof["testedBackupId"]
     assert isinstance(proof["restoreDurationMs"], int) and proof["restoreDurationMs"] >= 0
     assert len(proof["workspaceDigestBefore"]) == 64
     assert len(proof["workspaceDigestAfter"]) == 64
@@ -606,7 +608,9 @@ def test_evidence_proof_v3_validators() -> None:
     }, "test")) > 0
 
     valid_dr_proof = {
+        "schema": evidence_proof.DR_READINESS_PROOF_SCHEMA,
         "drillId": "drill_123",
+        "backupId": "backup_abc",
         "testedBackupId": "backup_abc",
         "restoreDurationMs": 150,
         "workspaceDigestBefore": "a" * 64,
@@ -954,7 +958,9 @@ def test_evidence_proof_v3_comprehensive() -> None:
     }, "test")) > 0
 
     valid_dr_proof = {
+        "schema": evidence_proof.DR_READINESS_PROOF_SCHEMA,
         "drillId": "d1",
+        "backupId": "b1",
         "testedBackupId": "b1",
         "restoreDurationMs": 120,
         "workspaceDigestBefore": "d" * 64,
@@ -1583,7 +1589,9 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path, monkeypatch: pytes
 
     # 2. validate_dr_readiness_proof
     valid_dr_evidence = {
+        "schema": evidence_proof.DR_READINESS_PROOF_SCHEMA,
         "drillId": "d1",
+        "backupId": "b1",
         "testedBackupId": "b1",
         "restoreDurationMs": 1200,
         "workspaceDigestBefore": "a" * 64,

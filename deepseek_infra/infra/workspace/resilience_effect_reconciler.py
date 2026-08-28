@@ -51,6 +51,8 @@ def reconcile_action_effect(
                         break
 
             if not job:
+                if repair_id or str(action.get("effectClass") or "") not in {"", "NO_EFFECT"}:
+                    return "EFFECT_UNKNOWN", {"error": "repair-effect-handle-not-observed", "repairId": repair_id}
                 return "RECREATE_EFFECT", {}
 
             phase = str(job.get("phase", "")).lower()
@@ -75,6 +77,8 @@ def reconcile_action_effect(
                         break
 
             if not reb_job:
+                if job_id or str(action.get("effectClass") or "") not in {"", "NO_EFFECT"}:
+                    return "EFFECT_UNKNOWN", {"error": "rebalance-effect-handle-not-observed", "jobId": job_id}
                 return "RECREATE_EFFECT", {}
 
             phase = str(reb_job.get("phase", "")).lower()
@@ -96,10 +100,24 @@ def reconcile_action_effect(
                     break
 
             if not drill_rec:
+                if effect_handle or str(action.get("effectClass") or "") not in {"", "NO_EFFECT"}:
+                    return "EFFECT_UNKNOWN", {"error": "drill-effect-handle-not-observed"}
+                return "RECREATE_EFFECT", {}
+
+            if not isinstance(drill_rec, dict):
                 return "RECREATE_EFFECT", {}
 
             if drill_rec.get("result") == "success" or drill_rec.get("status") == "success":
-                return "ADVANCE_TO_VERIFYING", drill_rec
+                raw_proof = drill_rec.get("proof")
+                proof: dict[str, Any] = dict(raw_proof) if isinstance(raw_proof, dict) else {}
+                return "ADVANCE_TO_VERIFYING", {
+                    "status": "success",
+                    "drillId": drill_rec.get("drillId"),
+                    "backupId": drill_rec.get("backupId") or drill_rec.get("testedBackupId") or proof.get("backupId"),
+                    "testedBackupId": drill_rec.get("backupId") or drill_rec.get("testedBackupId") or proof.get("backupId"),
+                    "resilienceActionId": act_id,
+                    "proof": proof,
+                }
             else:
                 return "TRIGGER_COMPENSATION", {"error": drill_rec.get("error") or "dr-drill-failed"}
 

@@ -150,12 +150,20 @@ def test_outcome_verifier_branches(tmp_settings: Path, monkeypatch: pytest.Monke
         {"success": True, "proof": {"commitVerified": False}},
     )
     assert ok_drill_bad is False
-    assert "dr-drill-proof-commit-unverified" in res_drill_bad["error"]
+    assert "commitVerified-not-true" in res_drill_bad["error"]
 
     # 9. verify_scoped_risk_reduction legacy action synthesize riskSubject & worsening risk
     act_legacy_repair = {"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "pol_x", "backupId": "bkp_x", "destTargetId": "tgt_x"}}
-    snap_b = {"risks": [{"type": "REPLICA_LAG", "policyId": "pol_x", "severity": "warning"}]}
-    snap_worse = {"risks": [{"type": "REPLICA_LAG", "policyId": "pol_x", "severity": "critical"}]}
+    snap_b = {
+        "risks": [
+            {"type": "REPLICA_LAG", "policyId": "pol_x", "backupId": "bkp_x", "target": "tgt_x", "severity": "warning"}
+        ]
+    }
+    snap_worse = {
+        "risks": [
+            {"type": "REPLICA_LAG", "policyId": "pol_x", "backupId": "bkp_x", "target": "tgt_x", "severity": "critical"}
+        ]
+    }
     ok_worse, res_worse = resilience_outcome_verifier.verify_scoped_risk_reduction(act_legacy_repair, snap_b, snap_worse)
     assert ok_worse is False
     assert "target-risk-not-improved" in res_worse["reason"]
@@ -397,15 +405,15 @@ def test_compensation_typed_states(tmp_settings: Path) -> None:
         "parameters": {},
     })
 
-    # CANCELABLE
+    # CANCELABLE without a durable job handle is uncertain, never compensated.
     c_canc = resilience_action_journal.compensate_action(act["actionId"], "canceled", effect_class="CANCELABLE")
-    assert c_canc["state"] == "COMPENSATED"
-    assert c_canc["compensationState"] == "JOB_CANCELLED"
+    assert c_canc["state"] == "EFFECT_UNKNOWN"
+    assert c_canc["compensationState"] == "REMOTE_EFFECT_UNCERTAIN"
 
-    # COMPENSATABLE
+    # COMPENSATABLE without an implementation remains outstanding.
     c_comp = resilience_action_journal.compensate_action(act["actionId"], "compensated", effect_class="COMPENSATABLE")
-    assert c_comp["state"] == "COMPENSATED"
-    assert c_comp["compensationState"] == "EFFECT_COMPENSATED"
+    assert c_comp["state"] == "COMPENSATION_REQUIRED"
+    assert c_comp["compensationState"] == "COMPENSATOR_NOT_IMPLEMENTED"
 
     # IRREVERSIBLE
     c_irr = resilience_action_journal.compensate_action(act["actionId"], "irreversible", effect_class="IRREVERSIBLE")

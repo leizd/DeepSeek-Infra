@@ -122,10 +122,10 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
     assert runner.CHECK_SCENARIOS["realPostRecoveryBackupHasValidReceiptBinding"] == (
         "real-three-minio-process-replacement-authority-recovery"
     )
-    required = runner.REQUIRED_PROOF_CHECKS["real-three-minio-process-replacement-authority-recovery"]
-    assert "realPreDisasterBackupIsActuallyRestored" in required
-    assert "processAExitedBySigkill" in required
-    assert "realPostRecoveryBackupHasValidReceiptBinding" in required
+    required_remediation = runner.REQUIRED_PROOF_CHECKS["real-three-minio-autonomous-remediation"]
+    assert "realThreeMinioAutonomousRepairE2E" in required_remediation
+    assert "realReplicaTransferUsesEndpointAAndB" in required_remediation
+    assert "destinationReceiptAuthenticated" in required_remediation
 
 
 def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypatch() -> None:
@@ -135,12 +135,15 @@ def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypat
         "tests/test_backup_460_real_placement_control_e2e.py",
         "tests/test_backup_462_real_transactional_gc_e2e.py",
         "tests/test_backup_463_real_control_authority_disaster_e2e.py",
+        "tests/test_backup_472_real_three_minio_remediation_e2e.py",
     ):
         source = (ROOT / rel).read_text(encoding="utf-8")
         assert "ProductionFakeS3Client" not in source
         assert "stub_crypto" not in source
         assert "monkeypatch.setattr(backup_publish" not in source
         assert "monkeypatch.setattr(backup_executor" not in source
+        assert "register_filesystem_target" not in source
+
 
 
 def test_legacy_runner_no_longer_claims_real_minio_evidence() -> None:

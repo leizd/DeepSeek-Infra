@@ -223,6 +223,7 @@ def evaluate_policy_replica_risk(
         {
             "type": RiskType.REPLICA_LAG.value,
             "policyId": policy_id,
+            "backupId": backup_id,
             "severity": rep_sev,
             "confidence": RiskConfidence.VERIFIED.value,
             "evidence": copy_evidence,
@@ -247,6 +248,7 @@ def evaluate_policy_replica_risk(
         {
             "type": RiskType.FAILURE_DOMAIN_VIOLATION.value,
             "policyId": policy_id,
+            "backupId": backup_id,
             "severity": fd_sev,
             "confidence": RiskConfidence.VERIFIED.value,
             "evidence": fd_evidence,

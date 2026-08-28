@@ -323,8 +323,8 @@ def test_safe_compensation_lifecycle_on_failure(tmp_settings: Path, monkeypatch:
 
     db_act = resilience_action_journal.get_action("act-comp-test")
     assert db_act is not None
-    assert db_act["state"] == "COMPENSATED"
-    assert db_act["compensationState"] == "EFFECT_COMPENSATED"
+    assert db_act["state"] == "COMPENSATION_REQUIRED"
+    assert db_act["compensationState"] == "COMPENSATOR_NOT_IMPLEMENTED"
     assert "drill-restoration-timeout" in str(db_act["error"])
 
 
@@ -362,7 +362,7 @@ def test_rate_limits_block_excessive_concurrent_actions(tmp_settings: Path) -> N
 
     db_act = resilience_action_journal.get_action("act-rate-blocked")
     assert db_act is not None
-    assert db_act["state"] == "BLOCKED"
+    assert db_act["state"] == "PENDING"
     assert "max-concurrent-actions-exceeded" in str(db_act["error"])
 
 

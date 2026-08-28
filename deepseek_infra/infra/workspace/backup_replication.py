@@ -67,7 +67,7 @@ ACTIVE_PHASES = frozenset(
 )
 MODES = frozenset({"required", "best-effort"})
 
-REPAIR_TERMINAL_PHASES = frozenset({"healthy", "failed-terminal", "failed", "quarantined", "superseded", "skipped"})
+REPAIR_TERMINAL_PHASES = frozenset({"healthy", "failed-terminal", "failed", "quarantined", "superseded", "skipped", "cancelled"})
 REPAIR_ACTIVE_PHASES = frozenset(
     {
         "queued",
@@ -462,17 +462,19 @@ def append_target_local_catalog(target: Any, receipt: dict[str, Any]) -> None:
     backup_id = str(receipt.get("backupId") or "")
     if not backup_id:
         return
-    if target.root is not None:
-        cats_dir = target.root / "catalogs"
+    t_root = getattr(target, "root", None)
+    t_remote = getattr(target, "store", None)
+    if t_root is not None:
+        cats_dir = t_root / "catalogs"
         cats_dir.mkdir(parents=True, exist_ok=True)
         line = json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n"
         cat_file = cats_dir / f"{policy_id}.jsonl"
         with cat_file.open("a", encoding="utf-8") as h:
             h.write(line)
             h.flush()
-    elif target.store is not None:
+    elif t_remote is not None:
         cat_key = f"catalogs/{policy_id}/{backup_id}.json"
-        target.store.put_if_absent(cat_key, json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8"))
+        t_remote.put_if_absent(cat_key, json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8"))
 
 
 # ── Replication Job CRUD ────────────────────────────────────────────────────
@@ -874,9 +876,22 @@ def authenticate_recovery_copy(
     raw_receipt: bytes | None = None
     raw_commit: bytes | None = None
 
-    if target.root is not None:
-        rp = target.root / "receipts" / f"{backup_id}.json"
-        cp = target.root / "commits" / policy_id / f"{backup_id}.json"
+    t_store = target
+    if isinstance(target, (str, dict)):
+        tid = target if isinstance(target, str) else str(target.get("targetId") or "")
+        if tid:
+            try:
+                from deepseek_infra.infra.workspace import backup_publish
+                t_store = backup_publish.resolve_target(tid, write_intent=False)
+            except Exception:
+                t_store = target
+
+    t_root = getattr(t_store, "root", None)
+    t_remote = getattr(t_store, "store", t_store if hasattr(t_store, "get_bytes") else None)
+
+    if t_root is not None:
+        rp = t_root / "receipts" / f"{backup_id}.json"
+        cp = t_root / "commits" / policy_id / f"{backup_id}.json"
         if rp.is_file():
             try:
                 raw_receipt = rp.read_bytes()
@@ -892,13 +907,13 @@ def authenticate_recovery_copy(
                 rc_json = json.loads(raw_receipt.decode("utf-8"))
                 slot = str(rc_json.get("scheduleSlot") or "")
                 if slot:
-                    found_cp = backup_publish.find_commit_marker_path(target.root, policy_id, slot)
+                    found_cp = backup_publish.find_commit_marker_path(t_root, policy_id, slot)
                     if found_cp is not None and found_cp.is_file():
                         raw_commit = found_cp.read_bytes()
             except Exception:
                 pass
             if raw_commit is None:
-                commits_dir = target.root / "commits" / policy_id
+                commits_dir = t_root / "commits" / policy_id
                 if commits_dir.is_dir():
                     for cand in commits_dir.glob("*.json"):
                         try:
@@ -909,23 +924,25 @@ def authenticate_recovery_copy(
                                 break
                         except Exception:
                             continue
-    elif target.store is not None:
+    elif t_remote is not None:
         try:
-            raw_receipt = target.store.get_bytes(r_key)
+            raw_receipt = t_remote.get_bytes(r_key)
         except Exception:
             raw_receipt = None
         try:
-            raw_commit = target.store.get_bytes(c_key)
+            raw_commit = t_remote.get_bytes(c_key)
         except Exception:
             raw_commit = None
         if raw_commit is None and raw_receipt is not None:
             try:
+                from deepseek_infra.infra.workspace import backup_target_store
+
                 rc_json = json.loads(raw_receipt.decode("utf-8"))
                 slot = str(rc_json.get("scheduleSlot") or "")
                 if slot:
-                    for k in backup_publish.commit_marker_keys(policy_id, slot):
+                    for k in backup_target_store.commit_marker_keys(policy_id, slot):
                         try:
-                            raw_commit = target.store.get_bytes(k)
+                            raw_commit = t_remote.get_bytes(k)
                             if raw_commit:
                                 break
                         except Exception:
@@ -1677,6 +1694,24 @@ def _set_repair_phase(job: dict[str, Any], phase: str, **extra: Any) -> dict[str
     return job
 
 
+def cancel_repair_job(repair_id: str, *, reason: str = "resilience-action-compensation") -> dict[str, Any]:
+    """Cancel a repair only before any remote effect can have started."""
+    with _LOCK:
+        job = read_repair_job(repair_id)
+        if job is None:
+            return {"status": "unknown", "repairId": repair_id, "reason": "repair-job-not-found"}
+        phase = str(job.get("phase") or "")
+        if phase == "cancelled":
+            return {"status": "cancelled", "repairId": repair_id, "phase": phase, "job": job}
+        if phase != "queued":
+            return {"status": "not-cancelable", "repairId": repair_id, "phase": phase, "job": job}
+        cancelled = _set_repair_phase(job, "cancelled", cancellationReason=reason, cancelledAt=_utc_iso())
+        observed = read_repair_job(repair_id)
+        if not observed or str(observed.get("phase") or "") != "cancelled":
+            return {"status": "unknown", "repairId": repair_id, "reason": "repair-cancellation-not-observed"}
+        return {"status": "cancelled", "repairId": repair_id, "phase": "cancelled", "job": cancelled}
+
+
 # ── Ciphertext-Plane Replica Self-Healing Engine (4.5.4) ────────────────────
 
 
@@ -1742,11 +1777,21 @@ def execute_repair_job_instance(
 ) -> dict[str, Any]:
     """Execute or resume an individual durable ReplicaRepairJob."""
     start_time = time.monotonic()
-    job = read_repair_job(repair_id)
-    if job is None:
-        raise AppError("ReplicaRepairJob not found", code=ErrorCode.NOT_FOUND, status=404)
-    if str(job.get("phase") or "") in REPAIR_TERMINAL_PHASES:
-        return {"status": "success" if job.get("phase") == "healthy" else str(job.get("phase")), "repairId": repair_id, "job": job}
+    with _LOCK:
+        job = read_repair_job(repair_id)
+        if job is None:
+            raise AppError("ReplicaRepairJob not found", code=ErrorCode.NOT_FOUND, status=404)
+        if str(job.get("phase") or "") in REPAIR_TERMINAL_PHASES:
+            return {"status": "success" if job.get("phase") == "healthy" else str(job.get("phase")), "repairId": repair_id, "job": job}
+
+        attempt = int(job.get("attempt") or 0) + 1
+        max_attempts = int(job.get("maxAttempts") or 5)
+        if attempt > max_attempts:
+            job = _set_repair_phase(job, "failed-terminal", error="max-attempts-exceeded", attempt=attempt)
+            raise AppError("ReplicaRepairJob max attempts exceeded", code=ErrorCode.INVALID_REQUEST, status=409)
+
+        # Claim the first effect boundary while cancellation uses the same lock.
+        job = _set_repair_phase(job, "selecting-source", attempt=attempt)
 
     policy_id = str(job["policyId"])
     backup_id = str(job["backupId"])
@@ -1756,21 +1801,20 @@ def execute_repair_job_instance(
         transfer_class = backup_transfer_budget.TrafficClass(int(job.get("trafficClass", 2)))
     except ValueError:
         transfer_class = backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR
-    attempt = int(job.get("attempt") or 0) + 1
-    max_attempts = int(job.get("maxAttempts") or 5)
-
-    if attempt > max_attempts:
-        job = _set_repair_phase(job, "failed-terminal", error="max-attempts-exceeded", attempt=attempt)
-        raise AppError("ReplicaRepairJob max attempts exceeded", code=ErrorCode.INVALID_REQUEST, status=409)
 
     # 1. Resolve source
-    job = _set_repair_phase(job, "selecting-source", attempt=attempt)
     if not source_target_id:
         copies = backup_dr_ledger.list_logical_recovery_copies(policy_id=policy_id, backup_id=backup_id)
         healthy = [
             c for c in copies
             if str(c.get("targetId")) != dest_target_id and c.get("recoverable") and c.get("state") == "healthy"
         ]
+        if not healthy:
+            points = backup_dr_ledger.list_recovery_points(policy_id=policy_id)
+            healthy = [
+                p for p in points
+                if str(p.get("backupId")) == backup_id and str(p.get("targetId")) != dest_target_id and p.get("recoverable")
+            ]
         if not healthy:
             job = _set_repair_phase(job, "failed-terminal", error="no-healthy-source-copy")
             raise AppError(
@@ -2360,6 +2404,24 @@ def _set_rebalance_phase(job: dict[str, Any], phase: str, **extra: Any) -> dict[
         return job
 
 
+def cancel_rebalance_job(job_id: str, *, reason: str = "resilience-action-compensation") -> dict[str, Any]:
+    """Cancel a rebalance only while its durable job is still pending."""
+    with _LOCK:
+        job = read_rebalance_job(job_id)
+        if job is None:
+            return {"status": "unknown", "jobId": job_id, "reason": "rebalance-job-not-found"}
+        phase = str(job.get("phase") or "")
+        if phase == "cancelled":
+            return {"status": "cancelled", "jobId": job_id, "phase": phase, "job": job}
+        if phase != "pending":
+            return {"status": "not-cancelable", "jobId": job_id, "phase": phase, "job": job}
+        cancelled = _set_rebalance_phase(job, "cancelled", cancellationReason=reason, cancelledAt=_utc_iso())
+        observed = read_rebalance_job(job_id)
+        if not observed or str(observed.get("phase") or "") != "cancelled":
+            return {"status": "unknown", "jobId": job_id, "reason": "rebalance-cancellation-not-observed"}
+        return {"status": "cancelled", "jobId": job_id, "phase": "cancelled", "job": cancelled}
+
+
 def read_rebalance_job(job_id: str) -> dict[str, Any] | None:
     path = _rebalance_job_path(job_id)
     if not path.is_file():
@@ -2430,7 +2492,7 @@ def create_rebalance_job(
         for job in existing:
             if resilience_action_id and job.get("resilienceActionId") == resilience_action_id:
                 return job
-            if job.get("phase") not in {"complete", "failed"}:
+            if job.get("phase") not in {"complete", "failed", "cancelled"}:
                 return job
 
         job_id = f"rebalance_{uuid.uuid4().hex[:16]}"
@@ -2573,16 +2635,21 @@ def execute_rebalance_job(
     instance_id: str = "rebalance-worker",
 ) -> dict[str, Any]:
     """Execute a replica rebalance job: copy ciphertext, authenticate, record ledger, optionally prune."""
-    job = read_rebalance_job(job_id)
-    if job is None:
-        raise AppError("rebalance job not found", code=ErrorCode.NOT_FOUND, status=404)
+    with _LOCK:
+        job = read_rebalance_job(job_id)
+        if job is None:
+            raise AppError("rebalance job not found", code=ErrorCode.NOT_FOUND, status=404)
+        phase = str(job.get("phase") or "")
+        if phase == "cancelled":
+            return {"status": "cancelled", "jobId": job_id, "job": job}
+        if phase == "complete":
+            return {"status": "success", "jobId": job_id, "job": job}
+        job = _set_rebalance_phase(job, "transferring")
 
     policy_id = str(job["policyId"])
     backup_id = str(job["backupId"])
     source_target_id = str(job["sourceTargetId"])
     dest_target_id = str(job["destTargetId"])
-
-    job = _set_rebalance_phase(job, "transferring")
 
     try:
         # Use execute_replica_repair to safely transfer and provision on dest

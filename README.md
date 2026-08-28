@@ -5,24 +5,15 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.7.2-blue)
+![版本](https://img.shields.io/badge/version-4.7.3-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.7.2 — Coordinated Autonomous Remediation & Crash-Recoverable Execution**。协调式多风险 DAG 编排、CAS 租约竞态控制与崩溃效果对账、事务型资源锁与爆炸半径安全底线；保持现有 Backup wire 格式完全冻结。详见 [4.7.2 发布说明](docs/releases/4.7.2.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
+> **4.7.3 — Proof-Carrying Fleet Resilience & Production Coordination**。可证明的 Multi-MinIO 端到端验证与 Evidence 闭环、Crash-Recoverable 事务与 Effect 仲裁、Fleet 调度与多维风险债务模型 (Risk Debt)、安全点抢占与带宽配额保护、瞬态爆炸半径模拟。详见 [4.7.3 发布说明](docs/releases/4.7.3.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)、[4.5.4](docs/releases/4.5.4.md)、[4.5.5](docs/releases/4.5.5.md)、[4.5.6](docs/releases/4.5.6.md)、[4.5.7](docs/releases/4.5.7.md)、[4.5.8](docs/releases/4.5.8.md)、[4.5.9](docs/releases/4.5.9.md)、[4.6.0](docs/releases/4.6.0.md)、[4.6.2](docs/releases/4.6.2.md)、[4.6.3](docs/releases/4.6.3.md)、[4.6.4](docs/releases/4.6.4.md)、[4.6.5](docs/releases/4.6.5.md)、[4.6.6](docs/releases/4.6.6.md)、[4.6.7](docs/releases/4.6.7.md)、[4.6.8](docs/releases/4.6.8.md)、[4.6.9](docs/releases/4.6.9.md)、[4.7.0](docs/releases/4.7.0.md)、[4.7.1](docs/releases/4.7.1.md)、[4.7.2](docs/releases/4.7.2.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)、[4.5.4](docs/releases/4.5.4.md)、[4.5.5](docs/releases/4.5.5.md)、[4.5.6](docs/releases/4.5.6.md)、[4.5.7](docs/releases/4.5.7.md)、[4.5.8](docs/releases/4.5.8.md)、[4.5.9](docs/releases/4.5.9.md)、[4.6.0](docs/releases/4.6.0.md)、[4.6.2](docs/releases/4.6.2.md)、[4.6.3](docs/releases/4.6.3.md)、[4.6.4](docs/releases/4.6.4.md)、[4.6.5](docs/releases/4.6.5.md)、[4.6.6](docs/releases/4.6.6.md)、[4.6.7](docs/releases/4.6.7.md)、[4.6.8](docs/releases/4.6.8.md)、[4.6.9](docs/releases/4.6.9.md)、[4.7.0](docs/releases/4.7.0.md)、[4.7.1](docs/releases/4.7.1.md)、[4.7.2](docs/releases/4.7.2.md)、[4.7.3](docs/releases/4.7.3.md)。
 
-**4.4.15 validation target:** Full/Incremental Projection 同义、最终快照中新建 Project 可选、未选且已分叉 Contributor 零改动、Adaptive Delta O(buffer) 且超阈值前终止加密、Object Set 精确提交、Control-first Preview、未选 Component 零 GET、真实进程退出后恢复续传、Object Set Holds/GC 和旧 Whole-Age 永久兼容。
-
-## 30 秒概览
-
-DeepSeek Infra 是一个**本地优先的 Agentic AI Infra 平台**，提供：
-
-DeepSeek Infra is a local-first Personal AI Runtime: Projects, Memory, Skills, MCP tools, multimodal Media, Browser snapshots, Automations, Saved Items, Artifacts and Exports in one private workspace.
-
-- **OpenAI 兼容网关** — 把任意 OpenAI SDK 的 `base_url` 指向 `localhost:8000/v1` 即可接入
 - **持久化 Agent DAG 运行时** — Planner → Worker → Critic → Synthesizer，支持断线恢复
 - **MCP 原生工具中心** — 17 个本地工具以标准 MCP Server 暴露，外部 MCP server 桥接带 health / retry / 熔断
 - **无状态 MCP 执行平面** — 官方 TypeScript SDK + Redis 持久任务/幂等 + 双实例轮询/租约恢复 + OpenTelemetry
