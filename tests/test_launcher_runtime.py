@@ -127,3 +127,45 @@ def test_build_env_without_auth_token(monkeypatch: pytest.MonkeyPatch) -> None:
     env = build_env(LauncherCredentials())
     assert "AUTH_TOKEN" not in env
     monkeypatch.setattr(runtime_module, "settings", original)
+
+
+def test_launcher_runtime_read_loop_and_stop_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+    logs: list[str] = []
+    statuses: list[str] = []
+
+    runtime = LauncherRuntime(on_log=lambda line: logs.append(line), on_status=lambda status: statuses.append(status))
+
+    # 1. Test _read_loop with stdout iteration
+    class FakeProcWithStdout:
+        stdout = ["line1\n", "line2\n"]
+
+    fake_proc = FakeProcWithStdout()
+    runtime._process = fake_proc  # type: ignore[assignment]
+    runtime._read_loop()
+    assert logs == ["line1", "line2"]
+    assert "stopped" in statuses
+    assert runtime._process is None
+
+    # 2. Test stop with proc.wait raising TimeoutExpired and proc.kill raising OSError
+    class FakeProcHanging:
+        poll_calls = 0
+
+        def poll(self) -> object:
+            self.poll_calls += 1
+            return None
+
+        def terminate(self) -> None:
+            pass
+
+        def kill(self) -> None:
+            raise OSError("kill error")
+
+        def wait(self, timeout: float | None = None) -> None:
+            raise subprocess.TimeoutExpired(cmd=["server"], timeout=0.1)
+
+    hanging_proc = FakeProcHanging()
+    runtime._process = hanging_proc  # type: ignore[assignment]
+    runtime.stop(timeout=0.1)
+    assert runtime._process is None
+

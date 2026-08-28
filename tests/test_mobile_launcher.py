@@ -55,3 +55,33 @@ def test_mobile_parse_port_rejects_invalid_values() -> None:
             assert exc.__class__.__name__ == "ArgumentTypeError"
         else:
             raise AssertionError(f"expected parse error for {value}")
+
+
+def test_mobile_configure_environment_interactive_getpass(monkeypatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(mobile.sys.stdin, "isatty", lambda: True)
+
+    # Empty key entered
+    monkeypatch.setattr(mobile.getpass, "getpass", lambda prompt: "   ")
+    args_empty = mobile.parse_args(["--port", "8123"])
+    mobile.configure_environment(args_empty)
+    assert "DEEPSEEK_API_KEY" not in mobile.os.environ
+
+    # Key entered
+    monkeypatch.setattr(mobile.getpass, "getpass", lambda prompt: "sk-interactive")
+    args_key = mobile.parse_args(["--port", "8123"])
+    mobile.configure_environment(args_key)
+    assert mobile.os.environ["DEEPSEEK_API_KEY"] == "sk-interactive"
+
+
+def test_open_mobile_browser(monkeypatch) -> None:
+    # 1. termux-open-url found
+    monkeypatch.setattr(mobile.shutil, "which", lambda cmd: "/usr/bin/termux-open-url" if cmd == "termux-open-url" else None)
+    monkeypatch.setattr(mobile.subprocess, "Popen", lambda *a, **kw: None)
+    assert mobile.open_mobile_browser("http://127.0.0.1:8123") is True
+
+    # 2. termux-open-url not found -> webbrowser fallback
+    monkeypatch.setattr(mobile.shutil, "which", lambda cmd: None)
+    monkeypatch.setattr(mobile.webbrowser, "open", lambda url, new=2: True)
+    assert mobile.open_mobile_browser("http://127.0.0.1:8123") is True
+
