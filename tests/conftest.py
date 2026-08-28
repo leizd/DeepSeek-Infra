@@ -174,6 +174,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
         pass
 
     from deepseek_infra.infra.workspace import backup_replication as workspace_backup_replication
+    from deepseek_infra.infra.workspace import backup_transfer_budget as workspace_backup_transfer_budget
     from deepseek_infra.infra.workspace import backup_write_continuity as workspace_backup_write_continuity
     from deepseek_infra.infra.workspace import backup_retirement as workspace_backup_retirement
     from deepseek_infra.infra.workspace import backup_drain as workspace_backup_drain
@@ -195,6 +196,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_backup_drain, "DRAIN_DB", drain_dir / "drains.sqlite3")
     monkeypatch.setattr(workspace_backup_drain, "DRAINS_DIR", drain_dir)
     monkeypatch.setattr(workspace_backup_drain, "DRAINS_DB", drain_dir / "drains.sqlite3")
+    workspace_backup_transfer_budget.reset_global_transfer_budget_manager()
 
     skills_dir = tmp_path / ".skills"
     monkeypatch.setattr(config, "SKILLS_DIR", skills_dir)
@@ -229,6 +231,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     workspace_backup_control_authority.configure_authority_anchor_roots(None)
     workspace_backup_control_authority.configure_authority_anchor_stores(None)
     workspace_backup_authority_provider.reset_authority_replica_provider()
+    workspace_backup_transfer_budget.reset_global_transfer_budget_manager()
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()
 

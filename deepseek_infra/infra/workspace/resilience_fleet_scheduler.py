@@ -18,6 +18,8 @@ from typing import Any
 from deepseek_infra.infra.workspace import (
     autonomous_action_policy,
     backup_policies,
+    backup_transfer_budget,
+    resilience_action_journal,
     resilience_coordinator,
     resilience_resource_locks,
     resilience_scheduler_service,
@@ -205,7 +207,7 @@ def schedule_fleet_resilience(
     action_policy: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Orchestrate multi-policy fleet resilience into admitted Execution Waves (Gates J, K, L, M, N)."""
+    """Partition every candidate into a real execution wave or typed UNSCHEDULABLE result."""
     current = now or datetime.now(tz=timezone.utc)
     raw_limits = autonomous_action_policy.get_action_rate_limits()
     if action_policy and isinstance(action_policy.get("rateLimits"), dict):
@@ -213,124 +215,218 @@ def schedule_fleet_resilience(
     limits = raw_limits
 
     # 1. Resolve candidate actions
+    coordination_dependencies: list[list[str]] = []
     if candidate_actions is not None:
         actions = list(candidate_actions)
     else:
         coord_plan = resilience_coordinator.plan_coordinated_resilience(risk_snapshot, action_policy=action_policy)
         actions = list(coord_plan.get("actions", []))
+        coordination_dependencies = [list(item) for item in coord_plan.get("dependencies", []) if isinstance(item, list)]
 
     # 2. Fair multi-policy queue ordering based on Risk Debt & Criticality
     sorted_actions = order_actions_fairly(actions, now=current)
 
-    # 3. Partition actions into conflict-free, budget-admitted Execution Waves
-    waves: list[dict[str, Any]] = []
-    current_wave_actions: list[dict[str, Any]] = []
-    used_locks: set[str] = set()
-    used_targets: dict[str, int] = {}
-    used_policies: dict[str, int] = {}
-    used_domains: set[str] = set()
+    # 3. Build the full dependency graph. Explicit dependsOn edges are
+    # authoritative; coordinator invariants are re-derived for direct callers.
+    action_id_counts: dict[str, int] = {}
+    for action in sorted_actions:
+        action_id = str(action.get("actionId") or "")
+        if action_id:
+            action_id_counts[action_id] = action_id_counts.get(action_id, 0) + 1
+    unschedulable_actions: list[dict[str, Any]] = []
+    action_by_id: dict[str, dict[str, Any]] = {}
+    for action in sorted_actions:
+        action_id = str(action.get("actionId") or "")
+        if not action_id:
+            invalid = dict(action)
+            invalid["scheduleStatus"] = "UNSCHEDULABLE"
+            invalid["unschedulableReason"] = "MISSING_ACTION_ID"
+            unschedulable_actions.append(invalid)
+        elif action_id_counts[action_id] > 1:
+            invalid = dict(action)
+            invalid["scheduleStatus"] = "UNSCHEDULABLE"
+            invalid["unschedulableReason"] = "DUPLICATE_ACTION_ID"
+            unschedulable_actions.append(invalid)
+        else:
+            action_by_id[action_id] = action
+    dependency_map: dict[str, set[str]] = {action_id: set() for action_id in action_by_id if action_id}
+    for action_id, action in action_by_id.items():
+        raw_dependencies = action.get("dependsOn")
+        if isinstance(raw_dependencies, list):
+            dependency_map[action_id].update(str(item) for item in raw_dependencies if str(item))
+    for raw_edge in coordination_dependencies:
+        if len(raw_edge) == 2 and str(raw_edge[1]) in dependency_map:
+            dependency_map[str(raw_edge[1])].add(str(raw_edge[0]))
+    valid_actions = list(action_by_id.values())
+    for predecessor in valid_actions:
+        pred_type = str(predecessor.get("type") or "").upper()
+        raw_pred_params = predecessor.get("parameters")
+        pred_params: dict[str, Any] = raw_pred_params if isinstance(raw_pred_params, dict) else {}
+        pred_policy = str(pred_params.get("policyId") or predecessor.get("policyId") or "")
+        pred_backup = str(pred_params.get("backupId") or predecessor.get("backupId") or "")
+        for successor in valid_actions:
+            if predecessor is successor or str(successor.get("type") or "").upper() != "CREATE_REBALANCE_JOB":
+                continue
+            raw_succ_params = successor.get("parameters")
+            succ_params: dict[str, Any] = raw_succ_params if isinstance(raw_succ_params, dict) else {}
+            succ_policy = str(succ_params.get("policyId") or successor.get("policyId") or "")
+            succ_backup = str(succ_params.get("backupId") or successor.get("backupId") or "")
+            if pred_type == "CREATE_REPAIR_JOB" and pred_policy and pred_policy == succ_policy:
+                dependency_map[str(successor.get("actionId") or "")].add(str(predecessor.get("actionId") or ""))
+            if pred_type == "START_DR_DRILL" and pred_backup and pred_backup == succ_backup:
+                dependency_map[str(successor.get("actionId") or "")].add(str(predecessor.get("actionId") or ""))
 
+    # 4. Partition actions into conflict-free, budget-admitted Execution Waves.
+    waves: list[dict[str, Any]] = []
     max_concurrent = int(limits.get("maxConcurrentActions", 3))
     max_per_target = int(limits.get("maxConcurrentPerTarget", 2))
     max_per_policy = int(limits.get("maxConcurrentPerPolicy", 2))
     max_domains = int(limits.get("maxSimultaneousFailureDomainsTouched", 1))
+    transfer_manager = backup_transfer_budget.get_global_transfer_budget_manager()
+    transfer_budget = transfer_manager.scheduler_reservation_snapshot(sorted_actions)
+    pending_ids = list(action_by_id)
+    completed_ids: set[str] = set()
+    prior_defer_reasons: dict[str, list[str]] = {}
 
-    # Bandwidth reservation tracking (Gate N)
-    transfer_budget = {
-        "repairReservePercent": 50,
-        "drDrillReservePercent": 25,
-        "rebalanceOpportunisticPercent": 25,
-        "rebalanceBlockedByRepairReserve": False,
+    # Active effects participate in every proposed-wave simulation.
+    running_actions = []
+    for active_state in ("CLAIMED", "EXECUTING", "RECONCILING", "VERIFYING", "ASSESSING_EFFECT"):
+        running_actions.extend(resilience_action_journal.list_actions(state=active_state, limit=500))
+
+    missing_dependency_ids = {
+        action_id
+        for action_id, dependencies in dependency_map.items()
+        if any(dependency not in action_by_id for dependency in dependencies)
     }
+    for action_id in list(pending_ids):
+        if action_id in missing_dependency_ids:
+            action = dict(action_by_id[action_id])
+            action["scheduleStatus"] = "UNSCHEDULABLE"
+            action["unschedulableReason"] = "MISSING_DEPENDENCY"
+            action["missingDependencies"] = sorted(dependency_map[action_id] - set(action_by_id))
+            unschedulable_actions.append(action)
+            pending_ids.remove(action_id)
 
-    admitted_actions: list[dict[str, Any]] = []
-    deferred_actions: list[dict[str, Any]] = []
+    while pending_ids:
+        ready_ids = [action_id for action_id in pending_ids if dependency_map[action_id].issubset(completed_ids)]
+        if not ready_ids:
+            for action_id in pending_ids:
+                action = dict(action_by_id[action_id])
+                action["scheduleStatus"] = "UNSCHEDULABLE"
+                action["unschedulableReason"] = "DEPENDENCY_CYCLE_OR_BLOCKED_PREDECESSOR"
+                action["unmetDependencies"] = sorted(dependency_map[action_id] - completed_ids)
+                unschedulable_actions.append(action)
+            pending_ids.clear()
+            break
 
-    for act in sorted_actions:
-        atype = str(act.get("type") or "").upper()
-        params = act.get("parameters", {}) if isinstance(act.get("parameters"), dict) else {}
-        pid = str(params.get("policyId") or act.get("policyId") or "")
-        src = str(params.get("sourceTargetId") or act.get("source") or "")
-        dst = str(params.get("destTargetId") or act.get("destination") or act.get("target") or "")
-        domain = str(params.get("failureDomain") or act.get("riskSubject", {}).get("failureDomain") or "")
+        wave_actions: list[dict[str, Any]] = []
+        used_locks: set[str] = set()
+        used_targets: dict[str, int] = {}
+        used_policies: dict[str, int] = {}
+        used_domains: set[str] = set()
+        wave_index = len(waves)
 
-        lock_keys = resilience_resource_locks.derive_resource_locks_for_action(act)
-        has_lock_conflict = any(k in used_locks for k in lock_keys)
+        for action_id in ready_ids:
+            original = action_by_id[action_id]
+            action = dict(original)
+            if action.get("requiresApproval") is True:
+                action["scheduleStatus"] = "UNSCHEDULABLE"
+                action["unschedulableReason"] = "APPROVAL_REQUIRED"
+                unschedulable_actions.append(action)
+                pending_ids.remove(action_id)
+                continue
+            raw_params = action.get("parameters")
+            params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+            raw_subject = action.get("riskSubject")
+            subject: dict[str, Any] = raw_subject if isinstance(raw_subject, dict) else {}
+            policy_id = str(params.get("policyId") or action.get("policyId") or "")
+            source_id = str(params.get("sourceTargetId") or action.get("source") or "")
+            dest_id = str(
+                params.get("destTargetId")
+                or params.get("targetId")
+                or action.get("destination")
+                or action.get("target")
+                or ""
+            )
+            domain = str(params.get("failureDomain") or subject.get("failureDomain") or "")
+            lock_keys = resilience_resource_locks.derive_resource_locks_for_action(action)
+            budget_ok, transfer_reason = transfer_manager.can_share_scheduler_wave(wave_actions, action)
+            reasons: list[str] = []
+            if not budget_ok:
+                reasons.append(transfer_reason)
+            if any(key in used_locks for key in lock_keys):
+                reasons.append("RESOURCE_LOCK_CONFLICT")
+            if any(target_id and used_targets.get(target_id, 0) >= max_per_target for target_id in (source_id, dest_id)):
+                reasons.append("TARGET_CONCURRENCY_EXCEEDED")
+            if policy_id and used_policies.get(policy_id, 0) >= max_per_policy:
+                reasons.append("POLICY_CONCURRENCY_EXCEEDED")
+            if domain and domain not in used_domains and len(used_domains) >= max_domains:
+                reasons.append("FAILURE_DOMAIN_LIMIT_EXCEEDED")
+            if len(wave_actions) >= max_concurrent:
+                reasons.append("GLOBAL_CONCURRENCY_EXCEEDED")
+            if reasons:
+                prior_defer_reasons.setdefault(action_id, [])
+                for reason in reasons:
+                    if reason not in prior_defer_reasons[action_id]:
+                        prior_defer_reasons[action_id].append(reason)
+                continue
 
-        target_exceeded = False
-        for tid in (src, dst):
-            if tid and used_targets.get(tid, 0) >= max_per_target:
-                target_exceeded = True
-                break
-
-        policy_exceeded = bool(pid and used_policies.get(pid, 0) >= max_per_policy)
-        domain_exceeded = bool(domain and domain not in used_domains and len(used_domains) >= max_domains)
-        concurrency_exceeded = len(current_wave_actions) >= max_concurrent
-
-        # Bandwidth reservation check: Rebalance cannot consume repair reserve
-        if atype == "CREATE_REBALANCE_JOB":
-            active_repairs = sum(1 for a in current_wave_actions if str(a.get("type")) == "CREATE_REPAIR_JOB")
-            if active_repairs > 0 and len(current_wave_actions) >= 1:
-                # Durability repairs take precedence
-                transfer_budget["rebalanceBlockedByRepairReserve"] = True
-
-        can_admit_to_current_wave = not (
-            has_lock_conflict
-            or target_exceeded
-            or policy_exceeded
-            or domain_exceeded
-            or concurrency_exceeded
-        )
-
-        if can_admit_to_current_wave:
-            act["scheduleStatus"] = "ADMITTED"
-            current_wave_actions.append(act)
-            admitted_actions.append(act)
-            for k in lock_keys:
-                used_locks.add(k)
-            for tid in (src, dst):
-                if tid:
-                    used_targets[tid] = used_targets.get(tid, 0) + 1
-            if pid:
-                used_policies[pid] = used_policies.get(pid, 0) + 1
+            action["scheduleStatus"] = "ASSIGNED"
+            action["waveIndex"] = wave_index
+            action["dependencies"] = sorted(dependency_map[action_id])
+            action["priorDeferReasons"] = list(prior_defer_reasons.get(action_id, []))
+            wave_actions.append(action)
+            used_locks.update(lock_keys)
+            for target_id in (source_id, dest_id):
+                if target_id:
+                    used_targets[target_id] = used_targets.get(target_id, 0) + 1
+            if policy_id:
+                used_policies[policy_id] = used_policies.get(policy_id, 0) + 1
             if domain:
                 used_domains.add(domain)
-        else:
-            reason = "concurrency-or-lock-conflict"
-            if has_lock_conflict:
-                reason = "resource-lock-conflict"
-            elif target_exceeded:
-                reason = "target-concurrency-exceeded"
-            elif policy_exceeded:
-                reason = "policy-concurrency-exceeded"
-            elif domain_exceeded:
-                reason = "failure-domain-limit-exceeded"
-            elif concurrency_exceeded:
-                reason = "global-concurrency-exceeded"
 
-            act["scheduleStatus"] = "DEFERRED"
-            act["deferReason"] = reason
-            deferred_actions.append(act)
+        if not wave_actions:
+            # Positive policy limits guarantee at least one ready action fits an
+            # empty wave; reaching here means the configuration is unusable.
+            for action_id in ready_ids:
+                if action_id not in pending_ids:
+                    continue
+                action = dict(action_by_id[action_id])
+                action["scheduleStatus"] = "UNSCHEDULABLE"
+                action["unschedulableReason"] = "INVALID_ZERO_CAPACITY_BUDGET"
+                unschedulable_actions.append(action)
+                pending_ids.remove(action_id)
+            continue
 
-    # 4. Simulate blast radius across proposed wave
-    wave_passed, wave_sim = resilience_coordinator.simulate_coordination_wave(current_wave_actions)
-    if not wave_passed:
-        for act in current_wave_actions:
-            act["scheduleStatus"] = "BLOCKED_BY_BLAST_RADIUS"
+        wave_passed, wave_sim = resilience_coordinator.simulate_coordination_wave(
+            wave_actions,
+            running_actions=running_actions,
+        )
+        if not wave_passed:
+            for action in wave_actions:
+                action["scheduleStatus"] = "UNSCHEDULABLE"
+                action["unschedulableReason"] = "BLAST_RADIUS_VIOLATION"
+                action["simulationDetails"] = wave_sim
+                unschedulable_actions.append(action)
+                pending_ids.remove(str(action["actionId"]))
+            continue
 
-    if current_wave_actions:
         waves.append(
             {
-                "waveIndex": 0,
-                "actions": current_wave_actions,
-                "waveStatus": "EXECUTABLE" if wave_passed else "BLOCKED_BY_BLAST_RADIUS",
-                "blastRadiusVerified": wave_passed,
+                "waveIndex": wave_index,
+                "actions": wave_actions,
+                "waveStatus": "EXECUTABLE",
+                "blastRadiusVerified": True,
                 "simulationDetails": wave_sim,
             }
         )
+        for action in wave_actions:
+            action_id = str(action["actionId"])
+            completed_ids.add(action_id)
+            pending_ids.remove(action_id)
 
-    if wave_passed:
-        resilience_scheduler_service.record_scheduled_actions(current_wave_actions, scheduled_at=current)
+    assigned_actions = [action for wave in waves for action in wave["actions"]]
+    resilience_scheduler_service.record_scheduled_actions(assigned_actions, scheduled_at=current)
 
     schedule_id = f"fsch_{uuid.uuid4().hex[:16]}"
     return {
@@ -338,10 +434,12 @@ def schedule_fleet_resilience(
         "scheduledAt": _utc_iso(current),
         "riskDigest": str(risk_snapshot.get("riskDigest") or ""),
         "totalCandidateActions": len(sorted_actions),
-        "admittedCount": len(current_wave_actions),
-        "deferredCount": len(deferred_actions),
+        "admittedCount": len(assigned_actions),
+        "deferredCount": 0,
         "executionWaves": waves,
-        "deferredActions": deferred_actions,
+        "deferredActions": [],
+        "unschedulableCount": len(unschedulable_actions),
+        "unschedulableActions": unschedulable_actions,
         "transferBudget": transfer_budget,
-        "status": "SCHEDULED" if wave_passed else "BLOCKED",
+        "status": "SCHEDULED" if not unschedulable_actions else ("PARTIAL" if waves else "UNSCHEDULABLE"),
     }

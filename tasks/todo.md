@@ -32,13 +32,13 @@
 
 ## Phase 3: Scheduler correctness
 
-- [ ] Partition all runnable actions into true DAG waves
-- [ ] Emit typed `UNSCHEDULABLE` reasons
-- [ ] Enforce repair reserve through `backup_transfer_budget`
-- [ ] Integrate atomic safe-point preemption and typed decision proof
-- [ ] Make degraded blast-radius safety monotonic
-- [ ] Include running effects in blast-radius simulation
-- [ ] Checkpoint: waves/budget/preemption/blast tests, Ruff, Mypy
+- [x] Partition all runnable actions into true DAG waves
+- [x] Emit typed `UNSCHEDULABLE` reasons
+- [x] Enforce repair reserve through `backup_transfer_budget`
+- [x] Integrate atomic safe-point preemption and typed decision proof
+- [x] Make degraded blast-radius safety monotonic
+- [x] Include running effects in blast-radius simulation
+- [x] Checkpoint: waves/budget/preemption/blast tests, Ruff, Mypy
 
 ## Phase 4: Fleet SLO and API
 

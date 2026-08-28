@@ -1215,6 +1215,7 @@ def consume_qos_tokens(
     bucket_specs: list[dict[str, Any]],
     traffic_class: int,
     reserved_global_tokens: int = 0,
+    reserved_repair_tokens: int = 0,
     now: float | None = None,
     lease_seconds: float = 60.0,
 ) -> dict[str, Any]:
@@ -1229,6 +1230,10 @@ def consume_qos_tokens(
             "SELECT COUNT(*) AS active_count FROM qos_transfers WHERE traffic_class = 0"
         ).fetchone()
         active_recovery = int(p0_row["active_count"] if p0_row is not None else 0) > 0
+        repair_row = conn.execute(
+            "SELECT COUNT(*) AS active_count FROM qos_transfers WHERE traffic_class IN (2, 3)"
+        ).fetchone()
+        active_repair = int(repair_row["active_count"] if repair_row is not None else 0) > 0
 
         states: list[dict[str, Any]] = []
         max_wait = 0.0
@@ -1246,6 +1251,8 @@ def consume_qos_tokens(
             floor = 0.0
             if key == "global" and int(traffic_class) != 0 and active_recovery:
                 floor = min(capacity, max(0.0, float(reserved_global_tokens)))
+            if key == "global" and int(traffic_class) >= 5 and active_repair:
+                floor = max(floor, min(capacity, max(0.0, float(reserved_repair_tokens))))
             available = max(0.0, tokens - floor)
             if available < amount:
                 max_wait = max(max_wait, (amount - available) / rate)
@@ -1284,6 +1291,7 @@ def consume_qos_tokens(
         "granted": max_wait <= 0,
         "waitSeconds": max(0.0, max_wait),
         "activeRecovery": active_recovery,
+        "activeRepair": active_repair,
         "requestedBytes": amount,
     }
 

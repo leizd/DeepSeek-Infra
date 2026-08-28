@@ -100,6 +100,19 @@ CREATE TABLE IF NOT EXISTS resilience_action_events (
 
 CREATE INDEX IF NOT EXISTS idx_resilience_action_events_action
 ON resilience_action_events(action_id, event_id);
+
+CREATE TABLE IF NOT EXISTS resilience_preemption_decisions (
+    decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    preemptor_action_id TEXT NOT NULL,
+    victim_action_id TEXT NOT NULL,
+    victim_state TEXT NOT NULL,
+    victim_effect_class TEXT NOT NULL,
+    safe INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resilience_preemption_preemptor
+ON resilience_preemption_decisions(preemptor_action_id, decision_id);
 """
 
 
@@ -700,6 +713,7 @@ def admit_and_claim_action(
     now_iso = _utc_iso(current)
     lease_until_iso = _utc_iso(current + timedelta(seconds=lease_seconds))
     claim_token = uuid.uuid4().hex
+    admission_reason = "admitted-and-claimed" if enforce_budgets else "claimed"
 
     action = get_action(action_id)
     if not action:
@@ -736,6 +750,7 @@ def admit_and_claim_action(
             if not rate_ok:
                 _rollback(conn)
                 return False, get_action(action_id), rate_reason
+            admission_reason = rate_reason if rate_reason == "admitted-with-preemption" else admission_reason
 
         if lock_keys:
             acquired, lock_reason = resilience_resource_locks.acquire_action_locks(
@@ -791,7 +806,7 @@ def admit_and_claim_action(
         )
         _commit(conn)
 
-    return True, get_action(action_id), "admitted-and-claimed" if enforce_budgets else "claimed"
+    return True, get_action(action_id), admission_reason
 
 
 def renew_action_lease(
@@ -932,23 +947,68 @@ def check_rate_limits(
             # Attempt to preempt an active warning rebalance
             warning_reb = conn.execute(
                 """
-                SELECT action_id FROM resilience_actions
+                SELECT action_id, state, effect_class, execution_epoch,
+                       owner_instance_id, claim_token, effect_handle_json
+                FROM resilience_actions
                 WHERE action_type = 'CREATE_REBALANCE_JOB'
-                  AND state IN ('CLAIMED', 'PENDING')
+                  AND state = 'CLAIMED'
+                  AND LOWER(COALESCE(severity_before, 'warning')) = 'warning'
                 ORDER BY created_at ASC LIMIT 1
                 """
             ).fetchone()
             if warning_reb:
-                preempt_id = warning_reb[0]
-                conn.execute(
+                from deepseek_infra.infra.workspace import resilience_fleet_scheduler
+
+                preempt_id = str(warning_reb[0])
+                victim_state = str(warning_reb[1] or "")
+                victim_effect_class = str(warning_reb[2] or "")
+                victim_execution_epoch = int(warning_reb[3] or 0)
+                victim_owner_instance_id = str(warning_reb[4] or "") or None
+                victim_claim_token = str(warning_reb[5] or "") or None
+                victim_effect_handle = json.loads(warning_reb[6]) if warning_reb[6] else None
+                victim = {"state": victim_state, "effectClass": victim_effect_class}
+                if not resilience_fleet_scheduler.can_preempt_action(victim):
+                    return False, f"max-concurrent-actions-exceeded:{active_count}>={limits['maxConcurrentActions']}"
+                updated = conn.execute(
                     """
                     UPDATE resilience_actions
                     SET state = 'PREEMPTED', error_message = 'preempted-by-critical-repair', updated_at = ?
-                    WHERE action_id = ?
+                    WHERE action_id = ? AND state = 'CLAIMED'
+                      AND COALESCE(effect_class, 'NO_EFFECT') IN ('', 'NO_EFFECT')
                     """,
                     (_utc_iso(), preempt_id),
                 )
+                if updated.rowcount != 1:
+                    return False, f"max-concurrent-actions-exceeded:{active_count}>={limits['maxConcurrentActions']}"
                 resilience_resource_locks.release_action_locks(conn, str(preempt_id))
+                preemptor_id = str(action.get("actionId") or "")
+                conn.execute(
+                    """
+                    INSERT INTO resilience_preemption_decisions (
+                        preemptor_action_id, victim_action_id, victim_state,
+                        victim_effect_class, safe, reason, created_at
+                    ) VALUES (?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        preemptor_id,
+                        preempt_id,
+                        victim_state,
+                        victim_effect_class or "NO_EFFECT",
+                        "critical-repair-preempts-warning-rebalance",
+                        _utc_iso(),
+                    ),
+                )
+                _append_action_event(
+                    conn,
+                    action_id=preempt_id,
+                    event_type="SAFE_PREEMPTION",
+                    state="PREEMPTED",
+                    owner_instance_id=victim_owner_instance_id,
+                    execution_epoch=victim_execution_epoch,
+                    claim_token=victim_claim_token,
+                    effect_handle=victim_effect_handle,
+                    created_at=_utc_iso(),
+                )
                 if commit_mutations:
                     _commit(conn)
                 return True, "admitted-with-preemption"
@@ -1387,6 +1447,32 @@ def list_action_events(action_id: str) -> list[dict[str, Any]]:
             "claimTokenSha256": row[5],
             "effectHandle": json.loads(row[6]) if row[6] else None,
             "createdAt": str(row[7]),
+        }
+        for row in rows
+    ]
+
+
+def list_preemption_decisions(*, preemptor_action_id: str | None = None) -> list[dict[str, Any]]:
+    """List durable safe-point decisions without exposing claim tokens."""
+    query = (
+        "SELECT preemptor_action_id, victim_action_id, victim_state, "
+        "victim_effect_class, safe, reason FROM resilience_preemption_decisions"
+    )
+    params: tuple[str, ...] = ()
+    if preemptor_action_id is not None:
+        query += " WHERE preemptor_action_id = ?"
+        params = (preemptor_action_id,)
+    query += " ORDER BY decision_id ASC"
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        {
+            "preemptor": str(row[0]),
+            "victim": str(row[1]),
+            "victimState": str(row[2]),
+            "victimEffectClass": str(row[3]),
+            "safe": bool(row[4]),
+            "reason": str(row[5]),
         }
         for row in rows
     ]

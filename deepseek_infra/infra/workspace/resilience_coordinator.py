@@ -269,8 +269,16 @@ def simulate_coordination_wave(
             transient_copy_loss = 0
             transient_domain_loss: set[str] = set()
 
+            combined_actions: list[dict[str, Any]] = []
+            seen_action_ids: set[str] = set()
+            for candidate in (running_actions or []) + actions:
+                action_id = str(candidate.get("actionId") or "")
+                dedupe_key = action_id or f"anonymous-{id(candidate)}"
+                if dedupe_key not in seen_action_ids:
+                    combined_actions.append(candidate)
+                    seen_action_ids.add(dedupe_key)
             policy_wave_actions = [
-                a for a in actions
+                a for a in combined_actions
                 if str(a.get("policyId") or a.get("parameters", {}).get("policyId") or "") == pid
                 and (
                     not str(a.get("backupId") or a.get("parameters", {}).get("backupId") or "")
@@ -293,7 +301,13 @@ def simulate_coordination_wave(
                     src = str(params.get("sourceTargetId") or act.get("source") or "")
                     dst = str(params.get("destTargetId") or act.get("destination") or "")
                     src_target = all_targets.get(src, {})
-                    if str(src_target.get("status") or src_target.get("drainState") or "").lower() in {"draining", "retiring", "failed", "drained"}:
+                    effect_phase = str(act.get("effectPhase") or params.get("effectPhase") or "").lower()
+                    source_unavailable = bool(
+                        params.get("sourceUnavailableDuring")
+                        or params.get("removesSourceBeforeCommit")
+                        or effect_phase in {"pruning_source", "source_removed", "retirement_pending"}
+                    )
+                    if source_unavailable or str(src_target.get("status") or src_target.get("drainState") or "").lower() in {"draining", "retiring", "failed", "drained"}:
                         transient_copy_loss += 1
                         if src in domain_map:
                             transient_domain_loss.add(domain_map[src])
@@ -305,6 +319,8 @@ def simulate_coordination_wave(
             copies_after = copies_during + added_copies
             domains_after = domains_during | added_domains
 
+            copy_floor = min_copies if copies_before >= min_copies else copies_before
+            domain_floor = min_fds if len(domains_before) >= min_fds else len(domains_before)
             eval_entry = {
                 "policyId": pid,
                 "backupId": bid,
@@ -316,19 +332,29 @@ def simulate_coordination_wave(
                 "failureDomainsBefore": sorted(list(domains_before)),
                 "failureDomainsDuring": sorted(list(domains_during)),
                 "failureDomainsAfter": sorted(list(domains_after)),
+                "copySafetyFloor": copy_floor,
+                "failureDomainSafetyFloor": domain_floor,
+                "runningEffectCount": len(
+                    [
+                        action
+                        for action in policy_wave_actions
+                        if action in (running_actions or [])
+                    ]
+                ),
                 "passed": True,
             }
 
-            # Invariant: If there were already sufficient copies, during execution we must not violate minimum
-            if copies_before >= min_copies and copies_during < min_copies:
+            # Healthy baselines must preserve the policy minimum. Already
+            # degraded baselines must be monotonic and cannot lose another copy.
+            if copies_during < copy_floor:
                 eval_entry["passed"] = False
-                eval_entry["reason"] = f"copies-during-insufficient:{copies_during}<{min_copies}"
+                eval_entry["reason"] = f"copies-during-below-safety-floor:{copies_during}<{copy_floor}"
                 all_passed = False
                 failure_reason = str(eval_entry["reason"])
 
-            if len(domains_before) >= min_fds and len(domains_during) < min_fds:
+            if len(domains_during) < domain_floor:
                 eval_entry["passed"] = False
-                eval_entry["reason"] = f"failure-domains-during-insufficient:{len(domains_during)}<{min_fds}"
+                eval_entry["reason"] = f"failure-domains-during-below-safety-floor:{len(domains_during)}<{domain_floor}"
                 all_passed = False
                 failure_reason = str(eval_entry["reason"])
 
