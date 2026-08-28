@@ -18,6 +18,7 @@ resilience actions. Guarantees:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import sqlite3
 import sys
@@ -84,6 +85,21 @@ CREATE TABLE IF NOT EXISTS resilience_actions (
 CREATE INDEX IF NOT EXISTS idx_resilience_actions_state ON resilience_actions(state);
 CREATE INDEX IF NOT EXISTS idx_resilience_actions_type ON resilience_actions(action_type);
 CREATE INDEX IF NOT EXISTS idx_resilience_actions_plan ON resilience_actions(plan_id);
+
+CREATE TABLE IF NOT EXISTS resilience_action_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    state TEXT NOT NULL,
+    owner_instance_id TEXT,
+    execution_epoch INTEGER NOT NULL,
+    claim_token_sha256 TEXT,
+    effect_handle_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resilience_action_events_action
+ON resilience_action_events(action_id, event_id);
 """
 
 
@@ -148,6 +164,39 @@ def _rollback(conn: sqlite3.Connection) -> None:
         conn.execute("ROLLBACK")
     except sqlite3.OperationalError:
         pass
+
+
+def _append_action_event(
+    conn: sqlite3.Connection,
+    *,
+    action_id: str,
+    event_type: str,
+    state: str,
+    owner_instance_id: str | None,
+    execution_epoch: int,
+    claim_token: str | None,
+    effect_handle: dict[str, Any] | None,
+    created_at: str,
+) -> None:
+    token_digest = hashlib.sha256(claim_token.encode("utf-8")).hexdigest() if claim_token else None
+    conn.execute(
+        """
+        INSERT INTO resilience_action_events (
+            action_id, event_type, state, owner_instance_id, execution_epoch,
+            claim_token_sha256, effect_handle_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            action_id,
+            event_type,
+            state,
+            owner_instance_id,
+            int(execution_epoch),
+            token_digest,
+            json.dumps(effect_handle, sort_keys=True) if effect_handle is not None else None,
+            created_at,
+        ),
+    )
 
 
 def materialize_resilience_plan(
@@ -604,6 +653,18 @@ def update_action_state(
         if state in terminal_states:
             resilience_resource_locks.release_action_locks(conn, action_id)
 
+        _append_action_event(
+            conn,
+            action_id=action_id,
+            event_type="STATE_TRANSITION",
+            state=state,
+            owner_instance_id=owner_instance_id or (str(row[8]) if row[8] else None),
+            execution_epoch=int(execution_epoch if execution_epoch is not None else row[11] or 0),
+            claim_token=claim_token or (str(row[10]) if row[10] else None),
+            effect_handle=new_handle,
+            created_at=now_iso,
+        )
+
         _commit(conn)
 
     return get_action(action_id) or {}
@@ -717,6 +778,17 @@ def admit_and_claim_action(
         if cursor.rowcount != 1:
             _rollback(conn)
             return False, get_action(action_id), "claim-rejected-not-pending-or-active-lease"
+        _append_action_event(
+            conn,
+            action_id=action_id,
+            event_type="ACTION_CLAIMED" if claimed_state == "CLAIMED" else "ACTION_TAKEOVER",
+            state=claimed_state,
+            owner_instance_id=owner_instance_id,
+            execution_epoch=int(action.get("executionEpoch") or 0) + 1,
+            claim_token=claim_token,
+            effect_handle=action.get("effectHandle") if isinstance(action.get("effectHandle"), dict) else None,
+            created_at=now_iso,
+        )
         _commit(conn)
 
     return True, get_action(action_id), "admitted-and-claimed" if enforce_budgets else "claimed"
@@ -1290,6 +1362,34 @@ def list_actions(
                 }
             )
     return results
+
+
+def list_action_events(action_id: str) -> list[dict[str, Any]]:
+    """Return the immutable state/claim history used by takeover Evidence."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT event_id, event_type, state, owner_instance_id, execution_epoch,
+                   claim_token_sha256, effect_handle_json, created_at
+            FROM resilience_action_events
+            WHERE action_id = ?
+            ORDER BY event_id ASC
+            """,
+            (action_id,),
+        ).fetchall()
+    return [
+        {
+            "eventId": int(row[0]),
+            "eventType": str(row[1]),
+            "state": str(row[2]),
+            "ownerInstanceId": row[3],
+            "executionEpoch": int(row[4]),
+            "claimTokenSha256": row[5],
+            "effectHandle": json.loads(row[6]) if row[6] else None,
+            "createdAt": str(row[7]),
+        }
+        for row in rows
+    ]
 
 
 def verify_action_outcome(

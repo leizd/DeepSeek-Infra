@@ -114,9 +114,20 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
     # 4. Crash Recovery Proof
     crash_ev: dict[str, Any] = {
         "actionId": "act-1",
-        "oldEpoch": 1,
-        "newEpoch": 2,
+        "workerAPid": 101,
+        "workerBPid": 202,
+        "processAReturnCode": -9,
+        "epochA": 1,
+        "epochB": 2,
+        "repairId": "repair-live",
+        "repairPhaseAtCrash": "transferring-components",
         "reconciliationDirective": "RESUME_EXECUTION",
+        "remoteRepairJobCountBefore": 1,
+        "remoteRepairJobCountAfter": 1,
+        "journalEvents": [
+            {"state": "EXECUTING", "executionEpoch": 1, "ownerInstanceId": "worker-101", "effectHandle": {"kind": "repair", "repairId": "repair-live"}},
+            {"state": "RECONCILING", "executionEpoch": 2, "ownerInstanceId": "worker-202", "effectHandle": {"kind": "repair", "repairId": "repair-live"}},
+        ],
     }
     valid_crash_check: dict[str, Any] = {
         "status": "PASS",
@@ -125,7 +136,7 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
     errs_crash = evidence_proof.validate_crash_recovery_proof(crash_ev, "testCheck")
     assert errs_crash == []
 
-    for k in ("actionId", "oldEpoch", "newEpoch", "reconciliationDirective"):
+    for k in ("actionId", "workerAPid", "workerBPid", "journalEvents", "reconciliationDirective"):
         bad = {k2: v2 for k2, v2 in crash_ev.items() if k2 != k}
         errs_bad = evidence_proof.validate_crash_recovery_proof(bad, "testCheck")
         assert len(errs_bad) > 0
@@ -151,9 +162,13 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
 
     # 6. Atomic Budget Proof
     budg_ev: dict[str, Any] = {
-        "atomicAdmissionVerified": True,
-        "actionId": "act-1",
-        "executionEpoch": 1,
+        "scope": "global",
+        "processResults": [
+            {"pid": 101, "actionId": "act-1", "admitted": True, "reason": "admitted-and-claimed", "executionEpoch": 1},
+            {"pid": 202, "actionId": "act-2", "admitted": False, "reason": "max-concurrent-actions-exceeded:1>=1", "executionEpoch": 0},
+        ],
+        "admittedCount": 1,
+        "rejectedCount": 1,
     }
     valid_budget_check: dict[str, Any] = {
         "status": "PASS",
@@ -162,7 +177,7 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
     errs_budg = evidence_proof.validate_atomic_budget_proof(budg_ev, "testCheck")
     assert errs_budg == []
 
-    for k in ("atomicAdmissionVerified", "actionId", "executionEpoch"):
+    for k in ("scope", "processResults", "admittedCount", "rejectedCount"):
         bad = {k2: v2 for k2, v2 in budg_ev.items() if k2 != k}
         errs_bad = evidence_proof.validate_atomic_budget_proof(bad, "testCheck")
         assert len(errs_bad) > 0

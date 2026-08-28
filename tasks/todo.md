@@ -16,9 +16,9 @@
 - [x] Strengthen semantic proof validators for raw-byte bindings
 - [x] Upload report, exact proof, and proof SHA-256 together
 - [x] Make Evidence Assembly reject missing/tampered autonomous proof
-- [ ] Prove live remote-repair crash takeover with distinct PIDs and one job
-- [ ] Prove global/target/policy/failure-domain admission with OS processes
-- [ ] Checkpoint: focused Evidence/process tests, Ruff, Mypy
+- [x] Prove live remote-repair crash takeover with distinct PIDs and one job
+- [x] Prove global/target/policy/failure-domain admission with OS processes
+- [x] Checkpoint: focused Evidence/process tests, Ruff, Mypy
 
 ## Phase 2: Persistent risk and fairness
 

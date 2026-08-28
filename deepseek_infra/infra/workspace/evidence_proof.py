@@ -430,15 +430,93 @@ def validate_autonomous_rebalance_proof(evidence: dict[str, Any], check_name: st
 def validate_crash_recovery_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
     if not isinstance(evidence, dict):
         return ["not-a-dict"]
-    return _require_fields(
+    errors = _require_fields(
         evidence,
         (
             "actionId",
-            "oldEpoch",
-            "newEpoch",
+            "workerAPid",
+            "workerBPid",
+            "processAReturnCode",
+            "epochA",
+            "epochB",
+            "repairId",
+            "repairPhaseAtCrash",
             "reconciliationDirective",
+            "remoteRepairJobCountBefore",
+            "remoteRepairJobCountAfter",
+            "journalEvents",
         ),
     )
+    try:
+        pid_a = int(str(evidence.get("workerAPid")))
+        pid_b = int(str(evidence.get("workerBPid")))
+        epoch_a = int(str(evidence.get("epochA")))
+        epoch_b = int(str(evidence.get("epochB")))
+        return_code = int(str(evidence.get("processAReturnCode")))
+        before_count = int(str(evidence.get("remoteRepairJobCountBefore")))
+        after_count = int(str(evidence.get("remoteRepairJobCountAfter")))
+    except (TypeError, ValueError):
+        return errors + ["invalid-crash-takeover-numeric-fields"]
+    if pid_a <= 0 or pid_b <= 0 or pid_a == pid_b:
+        errors.append("worker-pids-not-distinct-positive")
+    if return_code == 0:
+        errors.append("worker-a-not-hard-terminated")
+    if epoch_b <= epoch_a:
+        errors.append("takeover-execution-epoch-not-increased")
+    if before_count != 1 or after_count != 1:
+        errors.append("underlying-repair-job-count-not-exactly-one")
+    if str(evidence.get("repairPhaseAtCrash") or "") not in {
+        "selecting-source",
+        "acquiring-source-hold",
+        "validating-source-control",
+        "scanning-destination",
+        "transferring-components",
+        "verifying-components",
+        "finalizing",
+    }:
+        errors.append("worker-a-not-killed-during-active-repair")
+    if str(evidence.get("reconciliationDirective") or "") not in {"RESUME_EXECUTION", "ADVANCE_TO_VERIFYING"}:
+        errors.append("invalid-reconciliation-directive")
+
+    raw_events = evidence.get("journalEvents")
+    if not isinstance(raw_events, list):
+        return errors + ["journal-events-must-be-list"]
+    repair_id = str(evidence.get("repairId") or "")
+    executing_index: int | None = None
+    reconciling_index: int | None = None
+    for index, raw_event in enumerate(raw_events):
+        if not isinstance(raw_event, dict):
+            continue
+        handle = raw_event.get("effectHandle")
+        effect = handle if isinstance(handle, dict) else {}
+        owner = str(raw_event.get("ownerInstanceId") or "")
+        try:
+            event_epoch = int(str(raw_event.get("executionEpoch")))
+        except (TypeError, ValueError):
+            continue
+        if (
+            str(raw_event.get("state") or "") == "EXECUTING"
+            and event_epoch == epoch_a
+            and str(effect.get("kind") or "") == "repair"
+            and str(effect.get("repairId") or "") == repair_id
+            and str(pid_a) in owner
+        ):
+            executing_index = index
+        if (
+            str(raw_event.get("state") or "") == "RECONCILING"
+            and event_epoch == epoch_b
+            and str(effect.get("kind") or "") == "repair"
+            and str(effect.get("repairId") or "") == repair_id
+            and str(pid_b) in owner
+        ):
+            reconciling_index = index
+    if executing_index is None:
+        errors.append("missing-worker-a-executing-effect-event")
+    if reconciling_index is None:
+        errors.append("missing-worker-b-reconciling-event")
+    if executing_index is not None and reconciling_index is not None and reconciling_index <= executing_index:
+        errors.append("reconciling-event-not-after-executing-event")
+    return errors
 
 
 def validate_blast_radius_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
@@ -466,15 +544,57 @@ def validate_blast_radius_proof(evidence: dict[str, Any], check_name: str) -> li
 def validate_atomic_budget_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
     if not isinstance(evidence, dict):
         return ["not-a-dict"]
-    errors = _require_fields(
-        evidence,
-        (
-            "actionId",
-            "executionEpoch",
-        ),
-    )
-    if evidence.get("atomicAdmissionVerified") is not True:
-        errors.append("atomic-admission-not-verified")
+    errors = _require_fields(evidence, ("scope", "processResults", "admittedCount", "rejectedCount"))
+    expected_scope = {
+        "twoProcessesCannotOversubscribeGlobalBudget": "global",
+        "twoProcessesCannotOversubscribeTargetBudget": "target",
+        "twoProcessesCannotOversubscribePolicyBudget": "policy",
+        "twoProcessesCannotOversubscribeFailureDomainBudget": "failure-domain",
+    }.get(check_name)
+    scope = str(evidence.get("scope") or "")
+    if expected_scope is not None and scope != expected_scope:
+        errors.append(f"atomic-budget-scope-mismatch:{scope}!={expected_scope}")
+    elif scope not in {"global", "target", "policy", "failure-domain"}:
+        errors.append("invalid-atomic-budget-scope")
+    raw_results = evidence.get("processResults")
+    if not isinstance(raw_results, list):
+        return errors + ["process-results-must-be-list"]
+    if len(raw_results) != 2:
+        errors.append("atomic-budget-proof-requires-two-process-results")
+    pids: set[int] = set()
+    admitted = 0
+    rejected = 0
+    for raw_result in raw_results:
+        if not isinstance(raw_result, dict):
+            errors.append("process-result-must-be-object")
+            continue
+        try:
+            pid = int(str(raw_result.get("pid")))
+        except (TypeError, ValueError):
+            errors.append("invalid-process-pid")
+            continue
+        if pid <= 0:
+            errors.append("invalid-process-pid")
+        pids.add(pid)
+        if raw_result.get("admitted") is True:
+            admitted += 1
+            try:
+                if int(str(raw_result.get("executionEpoch"))) < 1:
+                    errors.append("admitted-process-missing-execution-epoch")
+            except (TypeError, ValueError):
+                errors.append("admitted-process-missing-execution-epoch")
+        elif raw_result.get("admitted") is False:
+            rejected += 1
+            if not str(raw_result.get("reason") or ""):
+                errors.append("rejected-process-missing-reason")
+        else:
+            errors.append("process-result-admitted-must-be-boolean")
+    if len(pids) != 2:
+        errors.append("atomic-budget-process-pids-not-distinct")
+    if admitted != 1 or rejected != 1:
+        errors.append("atomic-budget-race-not-one-admitted-one-rejected")
+    if evidence.get("admittedCount") != admitted or evidence.get("rejectedCount") != rejected:
+        errors.append("atomic-budget-declared-counts-mismatch")
     return errors
 
 
@@ -509,9 +629,19 @@ VALIDATORS: dict[str, CheckValidator] = {
     "destinationReceiptAuthenticated": validate_autonomous_storage_bytes_proof,
     "destinationCommitAuthenticated": validate_autonomous_storage_bytes_proof,
     "crashRecoveryObservedExistingEffect": validate_crash_recovery_proof,
-    "leaseTakeoverUsedNewExecutionEpoch": validate_epoch_increase_proof,
+    "leaseTakeoverUsedNewExecutionEpoch": validate_crash_recovery_proof,
+    "realWorkerCrashOccursDuringRemoteRepair": validate_crash_recovery_proof,
+    "freshWorkerTakesOverExpiredAction": validate_crash_recovery_proof,
+    "takeoverExecutionEpochStrictlyIncreases": validate_crash_recovery_proof,
+    "takeoverEntersReconcilingBeforeMutation": validate_crash_recovery_proof,
+    "takeoverFindsExistingRemoteEffect": validate_crash_recovery_proof,
+    "takeoverDoesNotCreateSecondRepairJob": validate_crash_recovery_proof,
     "blastRadiusInvariantVerified": validate_blast_radius_proof,
     "atomicBudgetAdmissionVerified": validate_atomic_budget_proof,
+    "twoProcessesCannotOversubscribeGlobalBudget": validate_atomic_budget_proof,
+    "twoProcessesCannotOversubscribeTargetBudget": validate_atomic_budget_proof,
+    "twoProcessesCannotOversubscribePolicyBudget": validate_atomic_budget_proof,
+    "twoProcessesCannotOversubscribeFailureDomainBudget": validate_atomic_budget_proof,
 }
 
 

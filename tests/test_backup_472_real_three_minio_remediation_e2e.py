@@ -19,6 +19,11 @@ import base64
 import hashlib
 import json
 import os
+import signal
+import subprocess
+import sys
+import textwrap
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +42,7 @@ from deepseek_infra.infra.workspace import (
     backup_targets,
     evidence_proof,
     resilience_action_journal,
+    resilience_effect_reconciler,
     resilience_fleet_scheduler,
     resilience_planner,
     resilience_risk_engine,
@@ -89,6 +95,115 @@ def _create_bucket(client: Any, bucket: str) -> None:
         client.create_bucket(Bucket=bucket)
     except Exception:
         pass
+
+
+def _kill_hard(process: subprocess.Popen[str]) -> int:
+    """Kill a worker without cleanup so only durable state survives."""
+    sigkill = getattr(signal, "SIGKILL", None)
+    if process.poll() is None:
+        if sigkill is not None:
+            process.send_signal(sigkill)
+        else:
+            process.kill()
+    try:
+        process.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=10)
+    return int(process.returncode if process.returncode is not None else -1)
+
+
+def _process_environment(root: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["DEEPSEEK_INFRA_ROOT"] = str(root)
+    environment["DEEPSEEK_CONTROL_AUTHORITY_MODE"] = "local-only"
+    return environment
+
+
+def _run_atomic_process_race(
+    *,
+    root: Path,
+    scope: str,
+    actions: tuple[dict[str, Any], dict[str, Any]],
+    limits: dict[str, int],
+) -> dict[str, Any]:
+    from deepseek_infra.infra.workspace import autonomous_action_policy
+
+    autonomous_action_policy.set_action_rate_limits(limits)
+    for action in actions:
+        resilience_action_journal.record_action_intent(action)
+
+    ready_dir = root / f"process-ready-{scope}"
+    ready_dir.mkdir()
+    start_file = root / f"process-start-{scope}"
+    script = textwrap.dedent(
+        """
+        import json, os, sys, time
+        from pathlib import Path
+        from deepseek_infra.infra.workspace import resilience_action_journal
+
+        action_id = sys.argv[1]
+        ready_dir = Path(sys.argv[2])
+        start_file = Path(sys.argv[3])
+        (ready_dir / f"{os.getpid()}.ready").write_text(action_id, encoding="utf-8")
+        deadline = time.monotonic() + 20
+        while not start_file.is_file():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("process-race-start-timeout")
+            time.sleep(0.005)
+        admitted, action, reason = resilience_action_journal.admit_and_claim_action(
+            action_id,
+            owner_instance_id=f"atomic-process-{os.getpid()}",
+            lease_seconds=60,
+        )
+        print(json.dumps({
+            "pid": os.getpid(),
+            "actionId": action_id,
+            "admitted": admitted,
+            "reason": reason,
+            "state": (action or {}).get("state"),
+            "executionEpoch": (action or {}).get("executionEpoch"),
+        }))
+        """
+    )
+    repo = Path(__file__).resolve().parents[1]
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-c", script, str(action["actionId"]), str(ready_dir), str(start_file)],
+            cwd=repo,
+            env=_process_environment(root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for action in actions
+    ]
+    deadline = time.monotonic() + 20
+    while len(list(ready_dir.glob("*.ready"))) != 2:
+        if time.monotonic() >= deadline:
+            for process in processes:
+                process.kill()
+            raise AssertionError(f"atomic {scope} processes did not become ready")
+        time.sleep(0.01)
+    start_file.write_text("go", encoding="utf-8")
+
+    results: list[dict[str, Any]] = []
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=30)
+        assert process.returncode == 0, stderr
+        results.append(json.loads(stdout.strip().splitlines()[-1]))
+    assert len({int(item["pid"]) for item in results}) == 2
+    assert sum(item.get("admitted") is True for item in results) == 1
+    assert sum(item.get("admitted") is False for item in results) == 1
+
+    for action in actions:
+        resilience_action_journal.update_action_state(str(action["actionId"]), "PREEMPTED", error="evidence-race-cleanup")
+    return {
+        "scope": scope,
+        "processResults": results,
+        "admittedCount": 1,
+        "rejectedCount": 1,
+    }
 
 
 def _register_s3_target(client: Any, endpoint: str, bucket: str, *, target_id: str, failure_domain: str, region: str) -> str:
@@ -204,7 +319,9 @@ def test_real_three_minio_autonomous_remediation_e2e(
     config.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     proj = config.PROJECTS_DIR / "resilience-proj"
     proj.mkdir(parents=True, exist_ok=True)
-    payload_content = b"deepseek-resilience-evidence-payload-" + uuid.uuid4().bytes
+    # Large enough for multiple throttled ciphertext chunks, so the controller
+    # can prove a hard crash while the real remote Repair effect is active.
+    payload_content = os.urandom(16 * 1024 * 1024)
     (proj / "state.bin").write_bytes(payload_content)
     config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     config.MEMORY_FILE.write_text('{"items":[]}', encoding="utf-8")
@@ -248,10 +365,131 @@ def test_real_three_minio_autonomous_remediation_e2e(
     repair_act = next(a for a in mat_plan["actions"] if a["type"] == "CREATE_REPAIR_JOB")
     act_id = str(repair_act["actionId"])
 
-    # 8. Execute Autonomous Repair: Real ciphertext transfer from MinIO A to MinIO B
-    exec_result = resilience_action_journal.execute_autonomous_action(act_id)
+    # 8. Worker A executes the real Repair under a deliberately slow budget.
+    # Kill it only after the durable repair job says remote transfer is active.
+    worker_script = textwrap.dedent(
+        """
+        import json, os, sys
+        from deepseek_infra.infra.workspace import backup_transfer_budget, resilience_action_journal
+
+        action_id = sys.argv[1]
+        backup_transfer_budget.configure_global_transfer_budget(
+            global_bandwidth_bytes_per_sec=1024 * 1024,
+            reserved_dr_bandwidth_bytes_per_sec=0,
+        )
+        result = resilience_action_journal.execute_autonomous_action(
+            action_id,
+            instance_id=f"crash-worker-a-{os.getpid()}",
+            lease_seconds=3,
+        )
+        print(json.dumps({"pid": os.getpid(), "result": result}))
+        """
+    )
+    repo = Path(__file__).resolve().parents[1]
+    process_a = subprocess.Popen(
+        [sys.executable, "-c", worker_script, act_id],
+        cwd=repo,
+        env=_process_environment(tmp_settings),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    repair_phase_at_crash = ""
+    repair_id = ""
+    action_a: dict[str, Any] = {}
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        if process_a.poll() is not None:
+            stdout_a, stderr_a = process_a.communicate()
+            raise AssertionError(f"worker A exited before crash point\n{stdout_a}\n{stderr_a}")
+        current_action = resilience_action_journal.get_action(act_id) or {}
+        effect_handle = current_action.get("effectHandle")
+        effect = effect_handle if isinstance(effect_handle, dict) else {}
+        candidate_id = str(effect.get("repairId") or "")
+        repair_job = backup_replication.read_repair_job(candidate_id) if candidate_id else None
+        candidate_phase = str((repair_job or {}).get("phase") or "")
+        if candidate_phase == "transferring-components":
+            action_a = current_action
+            repair_id = candidate_id
+            repair_phase_at_crash = candidate_phase
+            break
+        time.sleep(0.01)
+    assert repair_phase_at_crash == "transferring-components", "worker A never reached a live remote Repair transfer"
+    assert int(action_a.get("executionEpoch") or 0) == 1
+    repair_jobs_before = [
+        job for job in backup_replication.list_repair_jobs(policy_id=policy_id, backup_id=backup_id)
+        if str(job.get("resilienceActionId") or "") == act_id
+    ]
+    assert len(repair_jobs_before) == 1
+    process_a_returncode = _kill_hard(process_a)
+    stdout_a, stderr_a = process_a.communicate()
+    assert process_a_returncode != 0, f"worker A was not hard-killed\n{stdout_a}\n{stderr_a}"
+
+    crashed_action = resilience_action_journal.get_action(act_id) or {}
+    directive, directive_details = resilience_effect_reconciler.reconcile_action_effect(
+        crashed_action,
+        instance_id="pre-takeover-evidence",
+    )
+    assert directive == "RESUME_EXECUTION", directive_details
+    lease_until = datetime.fromisoformat(str(crashed_action["leaseUntil"]).replace("Z", "+00:00"))
+    wait_deadline = time.monotonic() + 15
+    while datetime.now(tz=timezone.utc) <= lease_until:
+        assert time.monotonic() < wait_deadline, "worker A action lease did not expire"
+        time.sleep(0.05)
+
+    # Worker B is a different fresh PID. Production execution must claim epoch 2,
+    # enter RECONCILING, find repair_id, and resume rather than create another job.
+    worker_b_script = textwrap.dedent(
+        """
+        import json, os, sys
+        from deepseek_infra.infra.workspace import resilience_action_journal
+
+        result = resilience_action_journal.execute_autonomous_action(
+            sys.argv[1],
+            instance_id=f"takeover-worker-b-{os.getpid()}",
+            lease_seconds=30,
+        )
+        print(json.dumps({"pid": os.getpid(), "result": result}))
+        """
+    )
+    process_b = subprocess.run(
+        [sys.executable, "-c", worker_b_script, act_id],
+        cwd=repo,
+        env=_process_environment(tmp_settings),
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert process_b.returncode == 0, f"worker B takeover failed\n{process_b.stdout}\n{process_b.stderr}"
+    worker_b_output = json.loads(process_b.stdout.strip().splitlines()[-1])
+    worker_b_pid = int(worker_b_output["pid"])
+    assert worker_b_pid != process_a.pid
+    exec_result = worker_b_output["result"]
     assert exec_result["state"] == "SUCCEEDED"
     assert exec_result["verificationResult"]["executionVerified"] is True
+    repair_jobs_after = [
+        job for job in backup_replication.list_repair_jobs(policy_id=policy_id, backup_id=backup_id)
+        if str(job.get("resilienceActionId") or "") == act_id
+    ]
+    assert len(repair_jobs_after) == 1
+    assert str(repair_jobs_after[0].get("repairId") or "") == repair_id
+    journal_events = resilience_action_journal.list_action_events(act_id)
+    crash_takeover_proof = {
+        "actionId": act_id,
+        "workerAPid": process_a.pid,
+        "workerBPid": worker_b_pid,
+        "processAReturnCode": process_a_returncode,
+        "epochA": int(action_a["executionEpoch"]),
+        "epochB": int(exec_result["executionEpoch"]),
+        "repairId": repair_id,
+        "repairPhaseAtCrash": repair_phase_at_crash,
+        "reconciliationDirective": directive,
+        "remoteRepairJobCountBefore": len(repair_jobs_before),
+        "remoteRepairJobCountAfter": len(repair_jobs_after),
+        "journalEvents": journal_events,
+    }
+    assert evidence_proof.validate_crash_recovery_proof(crash_takeover_proof, "live-crash") == []
 
     # 9. Verify cryptographic authentication on MinIO B
     target_b_record = backup_targets.get_target(t_b_id)
@@ -337,7 +575,56 @@ def test_real_three_minio_autonomous_remediation_e2e(
     dr_proof = drill_record.get("proof") or {}
     assert dr_proof.get("commitVerified") is True
 
-    # 13. Write Evidence Proof artifact
+    # 13. Four independent OS-process races against the same SQLite journal.
+    base_limits = {
+        "maxConcurrentActions": 8,
+        "maxActionsPerHour": 1000,
+        "maxConcurrentPerTarget": 8,
+        "maxConcurrentPerPolicy": 8,
+        "maxSimultaneousFailureDomainsTouched": 8,
+        "maxRebalancesPerTargetPerHour": 500,
+        "maxDrillsPerPolicyPerDay": 500,
+    }
+    atomic_proofs = {
+        "global": _run_atomic_process_race(
+            root=tmp_settings,
+            scope="global",
+            limits={**base_limits, "maxConcurrentActions": 1},
+            actions=(
+                {"actionId": f"atomic-global-a-{tag}", "type": "START_DR_DRILL", "parameters": {"policyId": f"p-ga-{tag}", "backupId": f"b-ga-{tag}"}},
+                {"actionId": f"atomic-global-b-{tag}", "type": "START_DR_DRILL", "parameters": {"policyId": f"p-gb-{tag}", "backupId": f"b-gb-{tag}"}},
+            ),
+        ),
+        "target": _run_atomic_process_race(
+            root=tmp_settings,
+            scope="target",
+            limits={**base_limits, "maxConcurrentPerTarget": 1},
+            actions=(
+                {"actionId": f"atomic-target-a-{tag}", "type": "CREATE_REBALANCE_JOB", "parameters": {"policyId": f"p-ta-{tag}", "backupId": f"b-ta-{tag}", "sourceTargetId": f"source-ta-{tag}", "destTargetId": f"shared-target-{tag}"}},
+                {"actionId": f"atomic-target-b-{tag}", "type": "CREATE_REBALANCE_JOB", "parameters": {"policyId": f"p-tb-{tag}", "backupId": f"b-tb-{tag}", "sourceTargetId": f"source-tb-{tag}", "destTargetId": f"shared-target-{tag}"}},
+            ),
+        ),
+        "policy": _run_atomic_process_race(
+            root=tmp_settings,
+            scope="policy",
+            limits={**base_limits, "maxConcurrentPerPolicy": 1},
+            actions=(
+                {"actionId": f"atomic-policy-a-{tag}", "type": "START_DR_DRILL", "parameters": {"policyId": f"shared-policy-{tag}", "backupId": f"b-pa-{tag}"}},
+                {"actionId": f"atomic-policy-b-{tag}", "type": "START_DR_DRILL", "parameters": {"policyId": f"shared-policy-{tag}", "backupId": f"b-pb-{tag}"}},
+            ),
+        ),
+        "failure-domain": _run_atomic_process_race(
+            root=tmp_settings,
+            scope="failure-domain",
+            limits={**base_limits, "maxSimultaneousFailureDomainsTouched": 1},
+            actions=(
+                {"actionId": f"atomic-domain-a-{tag}", "type": "START_DR_DRILL", "riskSubject": {"type": "DR_STALENESS", "failureDomain": f"zone-a-{tag}"}, "parameters": {"policyId": f"p-da-{tag}", "backupId": f"b-da-{tag}"}},
+                {"actionId": f"atomic-domain-b-{tag}", "type": "START_DR_DRILL", "riskSubject": {"type": "DR_STALENESS", "failureDomain": f"zone-b-{tag}"}, "parameters": {"policyId": f"p-db-{tag}", "backupId": f"b-db-{tag}"}},
+            ),
+        ),
+    }
+
+    # 14. Write Evidence Proof artifact
     proof_path = evidence_proof.resolve_proof_path(scenario="real-three-minio-autonomous-remediation")
     assert proof_path is not None, "dedicated runner must provide an exact proof path"
     checks = {
@@ -391,19 +678,35 @@ def test_real_three_minio_autonomous_remediation_e2e(
         },
         "crashRecoveryObservedExistingEffect": {
             "status": "PASS",
-            "evidence": {
-                "actionId": act_id,
-                "oldEpoch": 1,
-                "newEpoch": 2,
-                "reconciliationDirective": "ADVANCE_TO_VERIFYING",
-            },
+            "evidence": crash_takeover_proof,
         },
         "leaseTakeoverUsedNewExecutionEpoch": {
             "status": "PASS",
-            "evidence": {
-                "epochA": 1,
-                "epochB": 2,
-            },
+            "evidence": crash_takeover_proof,
+        },
+        "realWorkerCrashOccursDuringRemoteRepair": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
+        },
+        "freshWorkerTakesOverExpiredAction": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
+        },
+        "takeoverExecutionEpochStrictlyIncreases": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
+        },
+        "takeoverEntersReconcilingBeforeMutation": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
+        },
+        "takeoverFindsExistingRemoteEffect": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
+        },
+        "takeoverDoesNotCreateSecondRepairJob": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
         },
         "blastRadiusInvariantVerified": {
             "status": "PASS",
@@ -415,11 +718,23 @@ def test_real_three_minio_autonomous_remediation_e2e(
         },
         "atomicBudgetAdmissionVerified": {
             "status": "PASS",
-            "evidence": {
-                "atomicAdmissionVerified": True,
-                "actionId": act_id,
-                "executionEpoch": 1,
-            },
+            "evidence": atomic_proofs["global"],
+        },
+        "twoProcessesCannotOversubscribeGlobalBudget": {
+            "status": "PASS",
+            "evidence": atomic_proofs["global"],
+        },
+        "twoProcessesCannotOversubscribeTargetBudget": {
+            "status": "PASS",
+            "evidence": atomic_proofs["target"],
+        },
+        "twoProcessesCannotOversubscribePolicyBudget": {
+            "status": "PASS",
+            "evidence": atomic_proofs["policy"],
+        },
+        "twoProcessesCannotOversubscribeFailureDomainBudget": {
+            "status": "PASS",
+            "evidence": atomic_proofs["failure-domain"],
         },
     }
 

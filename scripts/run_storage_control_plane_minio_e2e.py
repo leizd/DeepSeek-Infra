@@ -136,8 +136,18 @@ CHECK_SCENARIOS = {
     "destinationCommitAuthenticated": AUTONOMOUS_REMEDIATION_SCENARIO,
     "crashRecoveryObservedExistingEffect": AUTONOMOUS_REMEDIATION_SCENARIO,
     "leaseTakeoverUsedNewExecutionEpoch": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "realWorkerCrashOccursDuringRemoteRepair": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "freshWorkerTakesOverExpiredAction": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "takeoverExecutionEpochStrictlyIncreases": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "takeoverEntersReconcilingBeforeMutation": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "takeoverFindsExistingRemoteEffect": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "takeoverDoesNotCreateSecondRepairJob": AUTONOMOUS_REMEDIATION_SCENARIO,
     "blastRadiusInvariantVerified": AUTONOMOUS_REMEDIATION_SCENARIO,
     "atomicBudgetAdmissionVerified": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "twoProcessesCannotOversubscribeGlobalBudget": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "twoProcessesCannotOversubscribeTargetBudget": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "twoProcessesCannotOversubscribePolicyBudget": AUTONOMOUS_REMEDIATION_SCENARIO,
+    "twoProcessesCannotOversubscribeFailureDomainBudget": AUTONOMOUS_REMEDIATION_SCENARIO,
 }
 
 # Claims that MUST be backed by evidence-proof-v2 (semantic validators; not pytest exit alone).
@@ -167,8 +177,18 @@ REQUIRED_PROOF_CHECKS: dict[str, tuple[str, ...]] = {
         "destinationCommitAuthenticated",
         "crashRecoveryObservedExistingEffect",
         "leaseTakeoverUsedNewExecutionEpoch",
+        "realWorkerCrashOccursDuringRemoteRepair",
+        "freshWorkerTakesOverExpiredAction",
+        "takeoverExecutionEpochStrictlyIncreases",
+        "takeoverEntersReconcilingBeforeMutation",
+        "takeoverFindsExistingRemoteEffect",
+        "takeoverDoesNotCreateSecondRepairJob",
         "blastRadiusInvariantVerified",
         "atomicBudgetAdmissionVerified",
+        "twoProcessesCannotOversubscribeGlobalBudget",
+        "twoProcessesCannotOversubscribeTargetBudget",
+        "twoProcessesCannotOversubscribePolicyBudget",
+        "twoProcessesCannotOversubscribeFailureDomainBudget",
     ),
 }
 REQUIRED_ENDPOINTS = (

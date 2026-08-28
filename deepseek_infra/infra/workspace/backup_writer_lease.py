@@ -220,6 +220,13 @@ class TargetWriterLease:
     def _expired(self, payload: dict[str, Any], now: datetime) -> bool:
         return str(payload.get("expiresAt") or "") < _utc_iso(now)
 
+    def _same_run_takeover_allowed(self, payload: dict[str, Any]) -> bool:
+        """Allow a resumed durable run to fence its crashed process immediately."""
+        return (
+            str(payload.get("ownerRunId") or "") == self.owner_run_id
+            and int(payload.get("fencingToken") or -1) < self.fencing_token
+        )
+
     def acquire(self) -> None:
         if self.store is not None and self.root is None:
             self._acquire_store()
@@ -237,14 +244,17 @@ class TargetWriterLease:
                 fd = _retry_permission(lambda: os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
             except FileExistsError:
                 existing = self._read()
-                if existing is not None and not self._expired(existing, now):
+                same_run_takeover = existing is not None and self._same_run_takeover_allowed(existing)
+                if existing is not None and not self._expired(existing, now) and not same_run_takeover:
                     raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423)
                 if existing is not None and int(existing.get("fencingToken") or 0) >= self.fencing_token:
                     raise AppError("Target writer is held by a newer or equal fencing token", code=ErrorCode.INVALID_REQUEST, status=423)
                 if existing is None:
                     # Holder released between O_EXCL and read — retry exclusive create.
                     continue
-                # Expired + lower token: publish our claim then confirm we still own it.
+                # Expired + lower token, or same durable run + higher token: publish
+                # our claim then confirm we still own it. The former process is
+                # fenced because every visible mutation re-reads this payload.
                 self._write(payload)
                 confirmed = self._read()
                 if (
@@ -289,7 +299,8 @@ class TargetWriterLease:
                     raise
             existing = read_json(self.store, key)
             meta = self.store.stat(key)
-            if existing is not None and not self._expired(existing, now):
+            same_run_takeover = existing is not None and self._same_run_takeover_allowed(existing)
+            if existing is not None and not self._expired(existing, now) and not same_run_takeover:
                 raise AppError("Target writer is busy with another run", code=ErrorCode.INVALID_REQUEST, status=423)
             if existing is not None and int(existing.get("fencingToken") or 0) >= self.fencing_token:
                 raise AppError("Target writer is held by a newer or equal fencing token", code=ErrorCode.INVALID_REQUEST, status=423)
