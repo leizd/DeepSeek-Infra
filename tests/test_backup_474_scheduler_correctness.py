@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -18,7 +19,7 @@ from deepseek_infra.infra.workspace import (
 )
 
 
-def _repair(action_id: str, *, policy: str, backup: str, target: str) -> dict[str, object]:
+def _repair(action_id: str, *, policy: str, backup: str, target: str) -> dict[str, Any]:
     return {
         "actionId": action_id,
         "type": "CREATE_REPAIR_JOB",
@@ -27,7 +28,7 @@ def _repair(action_id: str, *, policy: str, backup: str, target: str) -> dict[st
     }
 
 
-def _rebalance(action_id: str, *, policy: str, backup: str, source: str, target: str) -> dict[str, object]:
+def _rebalance(action_id: str, *, policy: str, backup: str, source: str, target: str) -> dict[str, Any]:
     return {
         "actionId": action_id,
         "type": "CREATE_REBALANCE_JOB",
