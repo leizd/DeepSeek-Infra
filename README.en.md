@@ -16,13 +16,21 @@ DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines
 
 ## 4.7.4 at a glance
 
-- Proof-carrying genuine three-MinIO E2E autonomous remediation and proof contracts.
-- Crash-recoverable transactional execution with renewable leases and effect reconciliation.
-- Multi-dimensional risk debt accounting with weighted fair queueing and starvation prevention.
-- Safe-point preemption and repair reserve bandwidth isolation.
-- Transient blast-radius simulation verifying copy counts and failure domains across execution waves.
+- Actual Receipt v4 and Commit v4 bytes, provider object metadata, and semantic
+  byte-binding checks in genuine three-MinIO autonomous proof.
+- Live Repair crash takeover with distinct worker PIDs, a higher fenced epoch,
+  reconciliation of the existing effect, and no second remote job.
+- Persistent exact-RiskSubject debt and fair-service history used by production
+  scheduling across complete dependency-preserving DAG waves.
+- Enforced Repair transfer reserve and transactional safe-point preemption.
+- Monotonic blast-radius simulation over running and proposed effects, including
+  fleets that are already degraded.
+- Durable Fleet SLO samples, fast/slow burn rates, maintenance constraints, and
+  authenticated source-backed readiness.
 
-See the [4.7.4 release notes](docs/releases/4.7.4.en.md) and [Evidence index](docs/EVIDENCE_INDEX.md).
+See the [4.7.4 release notes](docs/releases/4.7.4.en.md),
+[autonomous operations runbook](docs/runbooks/COORDINATED_AUTONOMOUS_REMEDIATION.md),
+and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.

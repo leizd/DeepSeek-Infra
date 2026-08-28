@@ -6,12 +6,35 @@
 
 ## [4.7.4] - Durable Fleet SLO & Evidence-Closed Autonomous Operations (2026-08-28)
 
-### Development baseline
+### Durable Fleet SLO & Evidence-Closed Autonomous Operations
 
-- Version surfaces and architecture contracts are prepared for the 4.7.4
-  implementation series.
-- Gate A-N behavior and provider-backed Evidence remain in progress; this entry
-  does not claim release readiness or passing production Evidence.
+- **Cryptographically real autonomous proof:** reads exact Receipt v4 and Commit
+  v4 objects from the resolved MinIO target, recomputes raw SHA-256 and
+  Receipt/Commit/object-set binding, and rejects synthetic fallback digests.
+- **Exact proof artifact closure:** Storage Control Plane report, proof bytes,
+  proof SHA-256, byte size, and scenario are uploaded together and revalidated by
+  Evidence Assembly; missing or tampered proof fails closed.
+- **Live crash takeover:** Worker A is hard-killed during a real remote Repair;
+  Worker B uses a higher execution epoch, reconciles the existing effect, and
+  cannot create a second Repair job.
+- **Multi-process atomic admission:** independent OS processes prove global,
+  target, policy, and failure-domain budgets cannot be oversubscribed.
+- **Persistent risk and fairness:** exact RiskSubject lifecycle, unresolved risk
+  age, policy virtual runtime/finish, and actions/bytes served survive restart and
+  drive production scheduling.
+- **True waves and enforced budgets:** complete dependency wave partitioning,
+  typed unschedulable reasons, real Repair transfer reserve, and transactional
+  safe-point preemption.
+- **Monotonic blast safety:** running effects and proposed actions are simulated
+  together; an already-degraded fleet cannot lose another copy or failure domain.
+- **Durable Fleet SLO:** persistent latency/freshness/starvation samples,
+  configurable fast/slow burn rates, maintenance windows with critical overrides,
+  and an authenticated Fleet Readiness API.
+- **Windows repair journal hardening:** transient sharing violations around
+  atomic replace are retried with a bounded fail-closed policy.
+- **Release status:** local real-three-MinIO proof is a developer check only;
+  formal PASS still requires exact-merge CI Evidence Assembly and all release
+  gates.
 
 ## [4.7.3] - Proof-Carrying Fleet Resilience & Production Coordination (2026-08-27)
 
