@@ -362,6 +362,8 @@ def simulate_coordination_wave(
 
     return all_passed, {
         "passed": all_passed,
+        "proposedActionIds": [str(action.get("actionId")) for action in actions if action.get("actionId")],
+        "runningActionIds": [str(action.get("actionId")) for action in (running_actions or []) if action.get("actionId")],
         "evaluations": policy_evaluations,
         "reason": failure_reason if not all_passed else "blast-radius-invariants-satisfied",
     }

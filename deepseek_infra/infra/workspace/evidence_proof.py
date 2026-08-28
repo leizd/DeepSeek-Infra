@@ -156,6 +156,8 @@ def validate_autonomous_storage_bytes_proof(evidence: dict[str, Any], check_name
             "rawCommitSha256",
             "commitReceiptDigest",
             "objectSetDigest",
+            "providerReceiptObject",
+            "providerCommitObject",
         ),
     )
     for field in ("rawReceiptSha256", "rawCommitSha256", "commitReceiptDigest", "objectSetDigest"):
@@ -231,6 +233,23 @@ def validate_autonomous_storage_bytes_proof(evidence: dict[str, Any], check_name
         errors.append("receipt-key-mismatch")
     if backup_id and policy_id and str(evidence.get("commitKey") or "") != f"commits/{policy_id}/{backup_id}.json":
         errors.append("commit-key-mismatch")
+    for field, expected_key, raw, digest in (
+        ("providerReceiptObject", evidence.get("receiptKey"), raw_receipt, receipt_sha256),
+        ("providerCommitObject", evidence.get("commitKey"), raw_commit, commit_sha256),
+    ):
+        raw_object = evidence.get(field)
+        if not isinstance(raw_object, dict):
+            errors.append(f"{field}-must-be-object")
+            continue
+        if raw_object.get("key") != expected_key:
+            errors.append(f"{field}-key-mismatch")
+        if raw_object.get("size") != len(raw):
+            errors.append(f"{field}-size-mismatch")
+        provider_sha256 = raw_object.get("sha256")
+        if provider_sha256 not in (None, "") and provider_sha256 != digest:
+            errors.append(f"{field}-sha256-mismatch")
+        if not str(raw_object.get("etag") or ""):
+            errors.append(f"{field}-etag-missing")
     return errors
 
 
@@ -522,22 +541,84 @@ def validate_crash_recovery_proof(evidence: dict[str, Any], check_name: str) -> 
 def validate_blast_radius_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
     if not isinstance(evidence, dict):
         return ["not-a-dict"]
-    errors = _require_fields(
-        evidence,
-        (
-            "minCommittedCopies",
-            "copiesDuring",
-        ),
-    )
-    if evidence.get("blastRadiusVerified") is not True:
-        errors.append("blast-radius-not-verified")
-    try:
-        min_c = int(str(evidence.get("minCommittedCopies") or 0))
-        during_c = int(str(evidence.get("copiesDuring") or 0))
-        if during_c < min_c:
-            errors.append("copies-during-less-than-minimum")
-    except (ValueError, TypeError):
-        errors.append("invalid-copies-counts")
+    errors = _require_fields(evidence, ("simulator", "simulationPassed", "proposedActionIds", "simulationDetails"))
+    if evidence.get("simulator") != "resilience_coordinator.simulate_coordination_wave":
+        errors.append("blast-radius-simulator-identity-mismatch")
+    if evidence.get("simulationPassed") is not True:
+        errors.append("blast-radius-simulation-not-passed")
+    proposed = evidence.get("proposedActionIds")
+    if not isinstance(proposed, list):
+        errors.append("blast-radius-proposed-actions-must-be-list")
+        proposed = []
+    details = evidence.get("simulationDetails")
+    if not isinstance(details, dict):
+        return errors + ["blast-radius-simulation-details-must-be-object"]
+    if details.get("passed") is not True:
+        errors.append("blast-radius-details-not-passed")
+    if details.get("proposedActionIds") != proposed:
+        errors.append("blast-radius-proposed-action-binding-mismatch")
+    running_ids = details.get("runningActionIds")
+    if not isinstance(running_ids, list):
+        errors.append("blast-radius-running-actions-must-be-list")
+        running_ids = []
+    evaluations = details.get("evaluations")
+    if not isinstance(evaluations, dict) or not evaluations:
+        return errors + ["blast-radius-evaluations-missing"]
+    running_effects = 0
+    for evaluation_key, raw_evaluation in evaluations.items():
+        if not isinstance(raw_evaluation, dict):
+            errors.append(f"blast-radius-evaluation-not-object:{evaluation_key}")
+            continue
+        evaluation = raw_evaluation
+        errors.extend(
+            f"blast-radius-{evaluation_key}-{error}"
+            for error in _require_fields(
+                evaluation,
+                (
+                    "policyId",
+                    "backupId",
+                    "minCommittedCopies",
+                    "minFailureDomains",
+                    "copiesBefore",
+                    "copiesDuring",
+                    "copySafetyFloor",
+                    "failureDomainsBefore",
+                    "failureDomainsDuring",
+                    "failureDomainSafetyFloor",
+                    "runningEffectCount",
+                    "passed",
+                ),
+            )
+        )
+        try:
+            min_copies = int(str(evaluation.get("minCommittedCopies")))
+            min_domains = int(str(evaluation.get("minFailureDomains")))
+            copies_before = int(str(evaluation.get("copiesBefore")))
+            copies_during = int(str(evaluation.get("copiesDuring")))
+            copy_floor = int(str(evaluation.get("copySafetyFloor")))
+            domain_floor = int(str(evaluation.get("failureDomainSafetyFloor")))
+            running_effect_count = int(str(evaluation.get("runningEffectCount")))
+        except (TypeError, ValueError):
+            errors.append(f"blast-radius-invalid-numeric-fields:{evaluation_key}")
+            continue
+        expected_copy_floor = min_copies if copies_before >= min_copies else copies_before
+        if copy_floor != expected_copy_floor or copies_during < copy_floor:
+            errors.append(f"blast-radius-copy-floor-violation:{evaluation_key}")
+        domains_before = evaluation.get("failureDomainsBefore")
+        domains_during = evaluation.get("failureDomainsDuring")
+        if not isinstance(domains_before, list) or not isinstance(domains_during, list):
+            errors.append(f"blast-radius-failure-domains-must-be-lists:{evaluation_key}")
+        else:
+            expected_domain_floor = min_domains if len(domains_before) >= min_domains else len(domains_before)
+            if domain_floor != expected_domain_floor or len(domains_during) < domain_floor:
+                errors.append(f"blast-radius-domain-floor-violation:{evaluation_key}")
+        if running_effect_count < 0:
+            errors.append(f"blast-radius-negative-running-effect-count:{evaluation_key}")
+        running_effects += max(0, running_effect_count)
+        if evaluation.get("passed") is not True:
+            errors.append(f"blast-radius-evaluation-not-passed:{evaluation_key}")
+    if check_name == "runningEffectsParticipateInBlastRadiusSimulation" and (not running_ids or running_effects < 1):
+        errors.append("blast-radius-running-effects-not-proven")
     return errors
 
 
@@ -628,6 +709,13 @@ VALIDATORS: dict[str, CheckValidator] = {
     "realRebalanceUsesEndpointAAndC": validate_autonomous_rebalance_proof,
     "destinationReceiptAuthenticated": validate_autonomous_storage_bytes_proof,
     "destinationCommitAuthenticated": validate_autonomous_storage_bytes_proof,
+    "autonomousProofUsesActualReceiptBytes": validate_autonomous_storage_bytes_proof,
+    "autonomousProofUsesActualCommitBytes": validate_autonomous_storage_bytes_proof,
+    "receiptSha256MatchesCommitReceiptDigest": validate_autonomous_storage_bytes_proof,
+    "proofObjectSetDigestMatchesCommit": validate_autonomous_storage_bytes_proof,
+    "proofObjectKeysExistOnExpectedMinioEndpoint": validate_autonomous_storage_bytes_proof,
+    "receiptV4Unchanged": validate_autonomous_storage_bytes_proof,
+    "commitV4Unchanged": validate_autonomous_storage_bytes_proof,
     "crashRecoveryObservedExistingEffect": validate_crash_recovery_proof,
     "leaseTakeoverUsedNewExecutionEpoch": validate_crash_recovery_proof,
     "realWorkerCrashOccursDuringRemoteRepair": validate_crash_recovery_proof,
@@ -637,6 +725,8 @@ VALIDATORS: dict[str, CheckValidator] = {
     "takeoverFindsExistingRemoteEffect": validate_crash_recovery_proof,
     "takeoverDoesNotCreateSecondRepairJob": validate_crash_recovery_proof,
     "blastRadiusInvariantVerified": validate_blast_radius_proof,
+    "degradedFleetCannotBeFurtherDegraded": validate_blast_radius_proof,
+    "runningEffectsParticipateInBlastRadiusSimulation": validate_blast_radius_proof,
     "atomicBudgetAdmissionVerified": validate_atomic_budget_proof,
     "twoProcessesCannotOversubscribeGlobalBudget": validate_atomic_budget_proof,
     "twoProcessesCannotOversubscribeTargetBudget": validate_atomic_budget_proof,

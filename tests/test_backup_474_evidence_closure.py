@@ -7,6 +7,7 @@ from pathlib import Path
 
 from deepseek_infra.infra.diagnostics.evidence_inventory import evidence_paths_for_producer
 from deepseek_infra.infra.workspace import evidence_proof
+from scripts import run_storage_control_plane_minio_e2e
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,6 +37,7 @@ def _actual_copy_evidence() -> dict[str, object]:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+    commit_sha256 = hashlib.sha256(commit_bytes).hexdigest()
     return {
         "targetId": "target_minio_b",
         "endpoint": "http://127.0.0.1:9001",
@@ -49,9 +51,21 @@ def _actual_copy_evidence() -> dict[str, object]:
         "receiptBytesBase64": base64.b64encode(receipt_bytes).decode("ascii"),
         "commitBytesBase64": base64.b64encode(commit_bytes).decode("ascii"),
         "rawReceiptSha256": receipt_sha256,
-        "rawCommitSha256": hashlib.sha256(commit_bytes).hexdigest(),
+        "rawCommitSha256": commit_sha256,
         "commitReceiptDigest": receipt_sha256,
         "objectSetDigest": object_set_digest,
+        "providerReceiptObject": {
+            "key": f"receipts/{backup_id}.json",
+            "size": len(receipt_bytes),
+            "etag": "receipt-etag",
+            "sha256": receipt_sha256,
+        },
+        "providerCommitObject": {
+            "key": f"commits/{policy_id}/{backup_id}.json",
+            "size": len(commit_bytes),
+            "etag": "commit-etag",
+            "sha256": commit_sha256,
+        },
     }
 
 
@@ -129,3 +143,59 @@ def test_storage_control_plane_inventory_and_ci_require_exact_proof_artifact() -
     assert proof_path in owned_paths
     assert "proofArtifact" in runner
     assert "storage-control-plane-autonomous-proof-v${{ env.RELEASE_VERSION }}.json" in workflow
+
+
+def test_474_required_check_names_are_locked_to_proof_or_explicit_scenarios() -> None:
+    proof_names = {
+        "autonomousProofUsesActualReceiptBytes",
+        "autonomousProofUsesActualCommitBytes",
+        "receiptSha256MatchesCommitReceiptDigest",
+        "proofObjectSetDigestMatchesCommit",
+        "proofObjectKeysExistOnExpectedMinioEndpoint",
+        "degradedFleetCannotBeFurtherDegraded",
+        "runningEffectsParticipateInBlastRadiusSimulation",
+        "receiptV4Unchanged",
+        "commitV4Unchanged",
+    }
+    durable_fleet_names = {
+        "riskFirstSeenPersistsAcrossControlLoops",
+        "riskDebtAgeIncreasesAcrossPlannerRuns",
+        "clearedRiskStopsAccumulatingDebt",
+        "reopenedRiskUsesPersistentLifecycle",
+        "productionSchedulerUsesPersistentFairnessHistory",
+        "weightedFairSchedulingPreventsPolicyStarvation",
+        "allSchedulableActionsReceiveExecutionWave",
+        "dependenciesArePreservedAcrossWaves",
+        "conflictingActionsAreSeparatedAcrossWaves",
+        "unschedulableActionHasTypedReason",
+        "rebalanceCannotConsumeRepairReservedBandwidth",
+        "repairReserveUsesRealTransferBudget",
+        "safePreemptionReleasesBudgetAtomically",
+        "unsafePreemptionCannotModifyVictim",
+        "fleetSloSamplesPersistAcrossRestart",
+        "riskClearLatencyIsMeasured",
+        "remediationQueueDelayIsMeasured",
+        "leaseTakeoverLatencyIsMeasured",
+        "fastAndSlowBurnRatesAreComputed",
+        "criticalRepairOverridesMaintenanceWindow",
+        "rebalanceRespectsMaintenanceWindow",
+        "criticalDrStalenessMayOverrideWindow",
+    }
+    required_proof = set(
+        run_storage_control_plane_minio_e2e.REQUIRED_PROOF_CHECKS[
+            run_storage_control_plane_minio_e2e.AUTONOMOUS_REMEDIATION_SCENARIO
+        ]
+    )
+    assert proof_names <= required_proof
+    assert durable_fleet_names <= set(run_storage_control_plane_minio_e2e.CHECK_SCENARIOS)
+    assert all(
+        run_storage_control_plane_minio_e2e.CHECK_SCENARIOS[name]
+        == run_storage_control_plane_minio_e2e.DURABLE_FLEET_SCENARIO
+        for name in durable_fleet_names
+    )
+    assert {
+        "fastCdcV3Unchanged",
+        "randomizedAgeUnchanged",
+        "controlAuthorityV1Unchanged",
+        "authorityCheckpointV1Unchanged",
+    } <= set(run_storage_control_plane_minio_e2e.CHECK_SCENARIOS)

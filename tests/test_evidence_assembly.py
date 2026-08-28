@@ -300,6 +300,9 @@ def test_producer_descriptor_validation_reports_metadata_and_ownership_errors(tm
 
 def test_assembly_writes_detached_checksum_and_rejects_tampering(tmp_path: Path) -> None:
     output = _assembled(tmp_path)
+    preflight = json.loads((output / f"preflight-v{VERSION}.json").read_text(encoding="utf-8"))
+    assert preflight["checks"]["assembledEvidenceIncludesExactAutonomousProof"] == "PASS"
+    assert preflight["checks"]["missingAutonomousProofFailsAssembly"] == "PASS"
     manifest = output / "docs" / "evidence" / f"evidence-manifest-v{VERSION}.json"
     assert validate_manifest_checksum(manifest) == []
     manifest.write_text(manifest.read_text(encoding="utf-8") + " ", encoding="utf-8")

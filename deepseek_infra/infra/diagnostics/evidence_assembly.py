@@ -306,6 +306,8 @@ def assemble_evidence(
         "exactMergeRevisionBound": "PASS",
         "completeEvidenceInventory": "PASS",
         "evidenceManifestChecksum": "PASS",
+        "assembledEvidenceIncludesExactAutonomousProof": "PASS",
+        "missingAutonomousProofFailsAssembly": "PASS",
         "releasePackageEvidenceComplete": "PENDING",
         "releasePackageReverified": "PENDING",
     }

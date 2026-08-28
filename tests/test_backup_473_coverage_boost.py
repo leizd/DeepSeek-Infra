@@ -47,6 +47,7 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+    commit_digest = hashlib.sha256(commit_bytes).hexdigest()
     repair_ev: dict[str, Any] = {
         "targetId": "target-b",
         "endpoint": "http://127.0.0.1:9001",
@@ -60,9 +61,21 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
         "receiptBytesBase64": base64.b64encode(receipt_bytes).decode("ascii"),
         "commitBytesBase64": base64.b64encode(commit_bytes).decode("ascii"),
         "rawReceiptSha256": receipt_digest,
-        "rawCommitSha256": hashlib.sha256(commit_bytes).hexdigest(),
+        "rawCommitSha256": commit_digest,
         "commitReceiptDigest": receipt_digest,
         "objectSetDigest": object_set_digest,
+        "providerReceiptObject": {
+            "key": "receipts/bk-1.json",
+            "size": len(receipt_bytes),
+            "etag": "receipt-etag",
+            "sha256": receipt_digest,
+        },
+        "providerCommitObject": {
+            "key": "commits/pol-1/bk-1.json",
+            "size": len(commit_bytes),
+            "etag": "commit-etag",
+            "sha256": commit_digest,
+        },
         "endpointA": "http://127.0.0.1:9000",
         "endpointB": "http://127.0.0.1:9001",
     }
@@ -143,9 +156,30 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
 
     # 5. Blast Radius Proof
     blast_ev: dict[str, Any] = {
-        "blastRadiusVerified": True,
-        "minCommittedCopies": 2,
-        "copiesDuring": 2,
+        "simulator": "resilience_coordinator.simulate_coordination_wave",
+        "simulationPassed": True,
+        "proposedActionIds": ["repair-a"],
+        "simulationDetails": {
+            "passed": True,
+            "proposedActionIds": ["repair-a"],
+            "runningActionIds": [],
+            "evaluations": {
+                "pol-1:bk-1": {
+                    "policyId": "pol-1",
+                    "backupId": "bk-1",
+                    "minCommittedCopies": 2,
+                    "minFailureDomains": 2,
+                    "copiesBefore": 2,
+                    "copiesDuring": 2,
+                    "copySafetyFloor": 2,
+                    "failureDomainsBefore": ["zone-a", "zone-b"],
+                    "failureDomainsDuring": ["zone-a", "zone-b"],
+                    "failureDomainSafetyFloor": 2,
+                    "runningEffectCount": 0,
+                    "passed": True,
+                }
+            },
+        },
     }
     valid_blast_check: dict[str, Any] = {
         "status": "PASS",
@@ -155,10 +189,10 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
     assert errs_blast == []
 
     errs_blast_bad = evidence_proof.validate_blast_radius_proof({"blastRadiusVerified": False}, "testCheck")
-    assert "blast-radius-not-verified" in errs_blast_bad
+    assert "blast-radius-simulation-not-passed" in errs_blast_bad
 
     errs_blast_less = evidence_proof.validate_blast_radius_proof({"blastRadiusVerified": True, "minCommittedCopies": 3, "copiesDuring": 1}, "testCheck")
-    assert "copies-during-less-than-minimum" in errs_blast_less
+    assert "blast-radius-simulator-identity-mismatch" in errs_blast_less
 
     # 6. Atomic Budget Proof
     budg_ev: dict[str, Any] = {
@@ -440,8 +474,8 @@ def test_fleet_scheduler_concurrency_and_bandwidth_limits(tmp_settings: Path) ->
     assert sched_none["status"] in {"SCHEDULED", "BLOCKED"}
 
 
-def test_fleet_scheduler_defer_reasons_matrix(tmp_settings: Path) -> None:
-    """Test all deferReason branches in resilience_fleet_scheduler."""
+def test_fleet_scheduler_prior_defer_reasons_across_complete_waves(tmp_settings: Path) -> None:
+    """Temporary conflicts are retained as provenance after later-wave assignment."""
     now = datetime(2026, 8, 27, 12, 0, 0, tzinfo=timezone.utc)
 
     # 1. Lock conflict (same backup)
@@ -462,7 +496,9 @@ def test_fleet_scheduler_defer_reasons_matrix(tmp_settings: Path) -> None:
         candidate_actions=actions_lock_conflict,
         now=now,
     )
-    assert any(a.get("deferReason") == "resource-lock-conflict" for a in sched_lock["deferredActions"])
+    assigned_lock = [action for wave in sched_lock["executionWaves"] for action in wave["actions"]]
+    assert any("RESOURCE_LOCK_CONFLICT" in a.get("priorDeferReasons", []) for a in assigned_lock)
+    assert sched_lock["deferredActions"] == []
 
     # 2. Setup 4 actions on same policy pol_heavy with distinct targets to trigger policy-concurrency-exceeded
     actions_policy_exceeded = [
@@ -482,7 +518,8 @@ def test_fleet_scheduler_defer_reasons_matrix(tmp_settings: Path) -> None:
         candidate_actions=actions_policy_exceeded,
         now=now,
     )
-    assert any(a.get("deferReason") == "policy-concurrency-exceeded" for a in sched_pol["deferredActions"])
+    assigned_policy = [action for wave in sched_pol["executionWaves"] for action in wave["actions"]]
+    assert any("POLICY_CONCURRENCY_EXCEEDED" in a.get("priorDeferReasons", []) for a in assigned_policy)
 
     # 3. Setup 6 actions across different policies and targets to trigger global-concurrency-exceeded / domain limit
     actions_global_exceeded = [
@@ -503,7 +540,11 @@ def test_fleet_scheduler_defer_reasons_matrix(tmp_settings: Path) -> None:
         candidate_actions=actions_global_exceeded,
         now=now,
     )
-    assert any(a.get("deferReason") in {"failure-domain-limit-exceeded", "global-concurrency-exceeded"} for a in sched_glob["deferredActions"])
+    assigned_global = [action for wave in sched_glob["executionWaves"] for action in wave["actions"]]
+    assert any(
+        {"FAILURE_DOMAIN_LIMIT_EXCEEDED", "GLOBAL_CONCURRENCY_EXCEEDED"} & set(a.get("priorDeferReasons", []))
+        for a in assigned_global
+    )
 
 
 def test_coordinator_plan_and_simulation_branches(tmp_settings: Path) -> None:
@@ -578,7 +619,7 @@ def test_coordinator_plan_and_simulation_branches(tmp_settings: Path) -> None:
         current_copies=copies_map,
     )
     assert passed is False
-    assert "insufficient" in sim_res["reason"]
+    assert "below-safety-floor" in sim_res["reason"]
 
     # Empty actions simulation returns True
     passed_empty, sim_empty = resilience_coordinator.simulate_coordination_wave([])
@@ -915,7 +956,7 @@ def test_coordinator_and_scheduler_exhaustive_branches(tmp_settings: Path) -> No
         ]},
     )
     assert passed is False
-    assert "insufficient" in str(sim_res["reason"])
+    assert "below-safety-floor" in str(sim_res["reason"])
 
     # 3. Scheduler preemption checks on various states
     assert resilience_fleet_scheduler.can_preempt_action({"state": "PENDING"}) is True
@@ -934,9 +975,10 @@ def test_coordinator_and_scheduler_exhaustive_branches(tmp_settings: Path) -> No
         candidate_actions=sat_actions,
     )
     assert len(scheduled["executionWaves"]) > 0
-    assert len(scheduled["deferredActions"]) > 0
+    assert scheduled["deferredActions"] == []
+    assert scheduled["admittedCount"] + scheduled["unschedulableCount"] == len(sat_actions)
 
-    # 5. Resource lock conflict and concurrency deferrals
+    # 5. Resource lock conflict is assigned to a later wave with provenance.
     t_actions = [
         {"actionId": "act_t1", "policyId": "pol_1", "backupId": "bk_1", "type": "CREATE_REPAIR_JOB", "destination": "target_fd1"},
         {"actionId": "act_t2", "policyId": "pol_2", "backupId": "bk_2", "type": "CREATE_REPAIR_JOB", "destination": "target_fd1"},
@@ -945,9 +987,10 @@ def test_coordinator_and_scheduler_exhaustive_branches(tmp_settings: Path) -> No
         {"overallRisk": "warning", "riskDigest": "d1"},
         candidate_actions=t_actions,
     )
-    assert any(a.get("deferReason") == "resource-lock-conflict" for a in res_t["deferredActions"])
+    assigned_t = [action for wave in res_t["executionWaves"] for action in wave["actions"]]
+    assert any("RESOURCE_LOCK_CONFLICT" in a.get("priorDeferReasons", []) for a in assigned_t)
 
-    # 6. Global concurrency limit deferral
+    # 6. Global concurrency likewise creates a later wave.
     gc_actions = [
         {"actionId": "act_gc1", "policyId": "pol_1", "backupId": "bk_1", "type": "CREATE_REPAIR_JOB", "destination": "target_fd1"},
         {"actionId": "act_gc2", "policyId": "pol_2", "backupId": "bk_2", "type": "CREATE_REPAIR_JOB", "destination": "target_fd2"},
@@ -957,7 +1000,8 @@ def test_coordinator_and_scheduler_exhaustive_branches(tmp_settings: Path) -> No
         candidate_actions=gc_actions,
         action_policy={"rateLimits": {"maxConcurrentActions": 1}},
     )
-    assert any(a.get("deferReason") == "global-concurrency-exceeded" for a in res_gc["deferredActions"])
+    assigned_gc = [action for wave in res_gc["executionWaves"] for action in wave["actions"]]
+    assert any("GLOBAL_CONCURRENCY_EXCEEDED" in a.get("priorDeferReasons", []) for a in assigned_gc)
 
     # 7. Rebalance with repair reserve active
     mix_actions = [

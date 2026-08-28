@@ -224,6 +224,43 @@ def test_dr_drill_without_proof_cannot_succeed(proof: object) -> None:
     assert details["error"] == "dr-drill-proof-required"
 
 
+def test_blast_radius_proof_requires_exact_simulator_output() -> None:
+    handwritten = {
+        "blastRadiusVerified": True,
+        "minCommittedCopies": 2,
+        "copiesDuring": 2,
+    }
+    assert evidence_proof.validate_blast_radius_proof(handwritten, "blastRadiusInvariantVerified")
+
+    simulator_output = {
+        "simulator": "resilience_coordinator.simulate_coordination_wave",
+        "simulationPassed": True,
+        "proposedActionIds": ["rebalance-a-c"],
+        "simulationDetails": {
+            "passed": True,
+            "proposedActionIds": ["rebalance-a-c"],
+            "runningActionIds": [],
+            "evaluations": {
+                "policy-a:backup-a": {
+                    "policyId": "policy-a",
+                    "backupId": "backup-a",
+                    "minCommittedCopies": 2,
+                    "minFailureDomains": 2,
+                    "copiesBefore": 2,
+                    "copiesDuring": 2,
+                    "copySafetyFloor": 2,
+                    "failureDomainsBefore": ["zone-a", "zone-b"],
+                    "failureDomainsDuring": ["zone-a", "zone-b"],
+                    "failureDomainSafetyFloor": 2,
+                    "runningEffectCount": 0,
+                    "passed": True,
+                }
+            },
+        },
+    }
+    assert evidence_proof.validate_blast_radius_proof(simulator_output, "blastRadiusInvariantVerified") == []
+
+
 @pytest.mark.parametrize(
     ("field", "wrong_value"),
     [

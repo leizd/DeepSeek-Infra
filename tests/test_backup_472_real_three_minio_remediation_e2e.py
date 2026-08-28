@@ -42,6 +42,7 @@ from deepseek_infra.infra.workspace import (
     backup_targets,
     evidence_proof,
     resilience_action_journal,
+    resilience_coordinator,
     resilience_effect_reconciler,
     resilience_fleet_scheduler,
     resilience_planner,
@@ -244,8 +245,12 @@ def _actual_copy_evidence(
     commit_object_key = f"commits/{policy_id}/{backup_id}.json"
     receipt_bytes = store.get_bytes(receipt_object_key)
     commit_bytes = store.get_bytes(commit_object_key)
+    receipt_meta = store.stat(receipt_object_key)
+    commit_meta = store.stat(commit_object_key)
     assert receipt_bytes, f"missing real Receipt object: {receipt_object_key}"
     assert commit_bytes, f"missing real Commit object: {commit_object_key}"
+    assert receipt_meta is not None and receipt_meta.size == len(receipt_bytes)
+    assert commit_meta is not None and commit_meta.size == len(commit_bytes)
 
     receipt = json.loads(receipt_bytes.decode("utf-8"))
     commit = json.loads(commit_bytes.decode("utf-8"))
@@ -276,6 +281,18 @@ def _actual_copy_evidence(
         "rawCommitSha256": raw_commit_sha256,
         "commitReceiptDigest": str(commit["receiptDigest"]),
         "objectSetDigest": object_set_digest,
+        "providerReceiptObject": {
+            "key": receipt_object_key,
+            "size": receipt_meta.size,
+            "etag": receipt_meta.etag,
+            "sha256": receipt_meta.sha256,
+        },
+        "providerCommitObject": {
+            "key": commit_object_key,
+            "size": commit_meta.size,
+            "etag": commit_meta.etag,
+            "sha256": commit_meta.sha256,
+        },
     }
 
 
@@ -426,6 +443,23 @@ def test_real_three_minio_autonomous_remediation_e2e(
     assert process_a_returncode != 0, f"worker A was not hard-killed\n{stdout_a}\n{stderr_a}"
 
     crashed_action = resilience_action_journal.get_action(act_id) or {}
+    proposed_blast_action = {
+        "actionId": f"blast-drill-{tag}",
+        "type": "START_DR_DRILL",
+        "parameters": {"policyId": policy_id, "backupId": backup_id, "targetId": t_b_id},
+    }
+    blast_passed, blast_details = resilience_coordinator.simulate_coordination_wave(
+        [proposed_blast_action],
+        running_actions=[crashed_action],
+    )
+    assert blast_passed is True, blast_details
+    blast_proof = {
+        "simulator": "resilience_coordinator.simulate_coordination_wave",
+        "simulationPassed": blast_passed,
+        "proposedActionIds": [str(proposed_blast_action["actionId"])],
+        "simulationDetails": blast_details,
+    }
+    assert evidence_proof.validate_blast_radius_proof(blast_proof, "runningEffectsParticipateInBlastRadiusSimulation") == []
     directive, directive_details = resilience_effect_reconciler.reconcile_action_effect(
         crashed_action,
         instance_id="pre-takeover-evidence",
@@ -676,6 +710,13 @@ def test_real_three_minio_autonomous_remediation_e2e(
             "status": "PASS",
             "evidence": repair_copy_proof,
         },
+        "autonomousProofUsesActualReceiptBytes": {"status": "PASS", "evidence": repair_copy_proof},
+        "autonomousProofUsesActualCommitBytes": {"status": "PASS", "evidence": repair_copy_proof},
+        "receiptSha256MatchesCommitReceiptDigest": {"status": "PASS", "evidence": repair_copy_proof},
+        "proofObjectSetDigestMatchesCommit": {"status": "PASS", "evidence": repair_copy_proof},
+        "proofObjectKeysExistOnExpectedMinioEndpoint": {"status": "PASS", "evidence": repair_copy_proof},
+        "receiptV4Unchanged": {"status": "PASS", "evidence": repair_copy_proof},
+        "commitV4Unchanged": {"status": "PASS", "evidence": repair_copy_proof},
         "crashRecoveryObservedExistingEffect": {
             "status": "PASS",
             "evidence": crash_takeover_proof,
@@ -710,12 +751,10 @@ def test_real_three_minio_autonomous_remediation_e2e(
         },
         "blastRadiusInvariantVerified": {
             "status": "PASS",
-            "evidence": {
-                "blastRadiusVerified": True,
-                "minCommittedCopies": 2,
-                "copiesDuring": 2,
-            },
+            "evidence": blast_proof,
         },
+        "degradedFleetCannotBeFurtherDegraded": {"status": "PASS", "evidence": blast_proof},
+        "runningEffectsParticipateInBlastRadiusSimulation": {"status": "PASS", "evidence": blast_proof},
         "atomicBudgetAdmissionVerified": {
             "status": "PASS",
             "evidence": atomic_proofs["global"],
