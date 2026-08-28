@@ -20,6 +20,7 @@ from deepseek_infra.infra.workspace import (
     backup_policies,
     resilience_coordinator,
     resilience_resource_locks,
+    resilience_scheduler_service,
 )
 
 SEVERITY_BASE_WEIGHT: dict[str, float] = {
@@ -87,7 +88,8 @@ def compute_risk_debt(
     base_weight = SEVERITY_BASE_WEIGHT.get(sev, 2.0)
 
     # 2. Age factor (accumulates over time so degraded items are not starved)
-    created_at_str = str(action.get("createdAt") or action.get("generatedAt") or "")
+    risk_first_seen = action.get("riskFirstSeenAt")
+    created_at_str = str(risk_first_seen or action.get("createdAt") or action.get("generatedAt") or "")
     created_at = _parse_iso(created_at_str)
     if created_at is not None:
         age_seconds = max(0.0, (current - created_at).total_seconds())
@@ -122,6 +124,7 @@ def compute_risk_debt(
         "sloBreachFactor": slo_factor,
         "policyId": pid,
         "actionId": str(action.get("actionId") or ""),
+        "ageSource": "risk-observation-ledger" if risk_first_seen else "action-created-at-fallback",
     }
 
 
@@ -136,6 +139,7 @@ def order_actions_fairly(
     Balances high-severity urgencies with starvation prevention across policies.
     """
     current = now or datetime.now(tz=timezone.utc)
+    persistent_service = resilience_scheduler_service.list_policy_service()
     history = dict(policy_history or {})
 
     scored_actions: list[tuple[float, dict[str, Any]]] = []
@@ -147,9 +151,17 @@ def order_actions_fairly(
 
         # Apply fair share penalty if policy already executed multiple actions recently
         pid = debt_info["policyId"] or "default"
-        recent_count = history.get(pid, 0)
-        fairness_penalty = 1.0 / (1.0 + 0.2 * recent_count)
+        service_state = persistent_service.get(pid) or {}
+        recent_count = history.get(pid, int(service_state.get("actionsServed") or 0))
+        virtual_runtime = float(service_state.get("virtualRuntime") or recent_count)
+        fairness_penalty = 1.0 / (1.0 + 0.2 * virtual_runtime)
         adjusted_score = score * fairness_penalty
+        act_copy["fairnessState"] = {
+            "persistent": pid in persistent_service and policy_history is None,
+            "actionsServed": recent_count,
+            "virtualRuntime": virtual_runtime,
+            "adjustedScore": round(adjusted_score, 6),
+        }
 
         # Tie-breaker boost for repair vs rebalance
         atype = str(act.get("type") or "").upper()
@@ -316,6 +328,9 @@ def schedule_fleet_resilience(
                 "simulationDetails": wave_sim,
             }
         )
+
+    if wave_passed:
+        resilience_scheduler_service.record_scheduled_actions(current_wave_actions, scheduled_at=current)
 
     schedule_id = f"fsch_{uuid.uuid4().hex[:16]}"
     return {

@@ -550,4 +550,16 @@ def assess_risks(
         "risks": all_risks,
     }
     snapshot["riskDigest"] = compute_risk_digest(snapshot)
+    from deepseek_infra.infra.workspace import resilience_risk_observations
+
+    observations = resilience_risk_observations.observe_risk_snapshot(snapshot, now=current)
+    observations_by_digest = {str(item["riskSubjectDigest"]): item for item in observations}
+    for risk in all_risks:
+        subject = resilience_risk_observations.canonical_risk_subject(risk)
+        subject_digest = resilience_risk_observations.risk_subject_digest(subject)
+        risk["riskSubject"] = subject
+        risk["riskSubjectDigest"] = subject_digest
+        observation = observations_by_digest.get(subject_digest)
+        if observation is not None:
+            risk["riskObservation"] = observation
     return snapshot

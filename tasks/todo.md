@@ -22,13 +22,13 @@
 
 ## Phase 2: Persistent risk and fairness
 
-- [ ] Add durable Risk Observation Ledger
-- [ ] Persist open/clear/reopen lifecycle and exact RiskSubject digest
-- [ ] Carry durable first-seen/open-since state through planner actions
-- [ ] Derive risk debt from unresolved risk age
-- [ ] Add durable scheduler virtual service history
-- [ ] Use persistent fairness history in production scheduling
-- [ ] Checkpoint: restart/debt/fairness tests, Ruff, Mypy
+- [x] Add durable Risk Observation Ledger
+- [x] Persist open/clear/reopen lifecycle and exact RiskSubject digest
+- [x] Carry durable first-seen/open-since state through planner actions
+- [x] Derive risk debt from unresolved risk age
+- [x] Add durable scheduler virtual service history
+- [x] Use persistent fairness history in production scheduling
+- [x] Checkpoint: restart/debt/fairness tests, Ruff, Mypy
 
 ## Phase 3: Scheduler correctness
 

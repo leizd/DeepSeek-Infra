@@ -206,6 +206,8 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     from deepseek_infra.infra.workspace import (
         autonomous_action_policy as workspace_autonomous_action_policy,
         resilience_action_journal as workspace_resilience_action_journal,
+        resilience_risk_observations as workspace_resilience_risk_observations,
+        resilience_scheduler_service as workspace_resilience_scheduler_service,
     )
 
     resilience_journal_dir = tmp_path / ".resilience-journal"
@@ -214,6 +216,12 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_resilience_action_journal, "JOURNAL_DB", resilience_journal_dir / "journal.sqlite3")
     monkeypatch.setattr(workspace_autonomous_action_policy, "POLICY_DIR", resilience_policy_dir)
     monkeypatch.setattr(workspace_autonomous_action_policy, "POLICY_FILE", resilience_policy_dir / "autonomous_policy.json")
+    resilience_risk_dir = tmp_path / ".resilience-risk"
+    monkeypatch.setattr(workspace_resilience_risk_observations, "RISK_LEDGER_DIR", resilience_risk_dir)
+    monkeypatch.setattr(workspace_resilience_risk_observations, "RISK_LEDGER_DB", resilience_risk_dir / "risk.sqlite3")
+    resilience_scheduler_dir = tmp_path / ".resilience-scheduler"
+    monkeypatch.setattr(workspace_resilience_scheduler_service, "SCHEDULER_SERVICE_DIR", resilience_scheduler_dir)
+    monkeypatch.setattr(workspace_resilience_scheduler_service, "SCHEDULER_SERVICE_DB", resilience_scheduler_dir / "service.sqlite3")
 
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()

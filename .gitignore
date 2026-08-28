@@ -114,3 +114,5 @@ rust/target/
 /bin/
 
 .backup-replication
+.resilience-risk/
+.resilience-scheduler/
