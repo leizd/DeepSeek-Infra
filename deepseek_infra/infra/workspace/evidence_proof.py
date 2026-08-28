@@ -6,6 +6,9 @@ not pytest exit alone, and not bare status=PASS without required evidence fields
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
@@ -129,6 +132,105 @@ def validate_backup_commit_proof(evidence: dict[str, Any], check_name: str) -> l
     declared = evidence.get("receiptDigest")
     if computed and declared and str(computed) != str(declared):
         errors.append("receipt-digest-binding-mismatch")
+    return errors
+
+
+def validate_autonomous_storage_bytes_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Recompute Receipt v4 / Commit v4 bindings from the proof's exact bytes."""
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    errors = _require_fields(
+        evidence,
+        (
+            "targetId",
+            "endpoint",
+            "bucket",
+            "backupId",
+            "policyId",
+            "actionId",
+            "receiptKey",
+            "commitKey",
+            "receiptBytesBase64",
+            "commitBytesBase64",
+            "rawReceiptSha256",
+            "rawCommitSha256",
+            "commitReceiptDigest",
+            "objectSetDigest",
+        ),
+    )
+    for field in ("rawReceiptSha256", "rawCommitSha256", "commitReceiptDigest", "objectSetDigest"):
+        if evidence.get(field) not in (None, ""):
+            errors.extend(_require_sha256(evidence.get(field), field=field))
+
+    raw_receipt = b""
+    raw_commit = b""
+    for field, destination in (("receiptBytesBase64", "receipt"), ("commitBytesBase64", "commit")):
+        value = evidence.get(field)
+        if value in (None, ""):
+            continue
+        try:
+            decoded = base64.b64decode(str(value), validate=True)
+        except (binascii.Error, ValueError):
+            errors.append(f"invalid-base64:{field}")
+            continue
+        if not decoded:
+            errors.append(f"empty-bytes:{field}")
+        elif destination == "receipt":
+            raw_receipt = decoded
+        else:
+            raw_commit = decoded
+
+    receipt_sha256 = hashlib.sha256(raw_receipt).hexdigest() if raw_receipt else ""
+    commit_sha256 = hashlib.sha256(raw_commit).hexdigest() if raw_commit else ""
+    if receipt_sha256 and receipt_sha256 != str(evidence.get("rawReceiptSha256") or ""):
+        errors.append("raw-receipt-sha256-mismatch")
+    if commit_sha256 and commit_sha256 != str(evidence.get("rawCommitSha256") or ""):
+        errors.append("raw-commit-sha256-mismatch")
+    if receipt_sha256 and receipt_sha256 != str(evidence.get("commitReceiptDigest") or ""):
+        errors.append("receipt-digest-binding-mismatch")
+
+    receipt: dict[str, Any] = {}
+    commit: dict[str, Any] = {}
+    for raw, destination in ((raw_receipt, "receipt"), (raw_commit, "commit")):
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            errors.append(f"invalid-{destination}-json")
+            continue
+        if not isinstance(parsed, dict):
+            errors.append(f"{destination}-must-be-object")
+        elif destination == "receipt":
+            receipt = parsed
+        else:
+            commit = parsed
+
+    if receipt and int(receipt.get("schemaVersion") or 0) != 4:
+        errors.append("receipt-schema-not-v4")
+    if commit and int(commit.get("schemaVersion") or 0) != 4:
+        errors.append("commit-schema-not-v4")
+
+    backup_id = str(evidence.get("backupId") or "")
+    policy_id = str(evidence.get("policyId") or "")
+    object_set_digest = str(evidence.get("objectSetDigest") or "")
+    if receipt and str(receipt.get("backupId") or "") != backup_id:
+        errors.append("receipt-backup-id-mismatch")
+    if commit and str(commit.get("backupId") or "") != backup_id:
+        errors.append("commit-backup-id-mismatch")
+    if commit and str(commit.get("policyId") or "") != policy_id:
+        errors.append("commit-policy-id-mismatch")
+    if commit and str(commit.get("receiptDigest") or "") != str(evidence.get("commitReceiptDigest") or ""):
+        errors.append("commit-receipt-digest-mismatch")
+    if receipt and str(receipt.get("objectSetDigest") or "") != object_set_digest:
+        errors.append("receipt-object-set-digest-mismatch")
+    if commit and str(commit.get("objectSetDigest") or "") != object_set_digest:
+        errors.append("commit-object-set-digest-mismatch")
+
+    if backup_id and str(evidence.get("receiptKey") or "") != f"receipts/{backup_id}.json":
+        errors.append("receipt-key-mismatch")
+    if backup_id and policy_id and str(evidence.get("commitKey") or "") != f"commits/{policy_id}/{backup_id}.json":
+        errors.append("commit-key-mismatch")
     return errors
 
 
@@ -310,42 +412,18 @@ def validate_resilience_proof(evidence: dict[str, Any], check_name: str) -> list
 
 
 def validate_autonomous_repair_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
-    if not isinstance(evidence, dict):
-        return ["not-a-dict"]
-    errors = _require_fields(
-        evidence,
-        (
-            "backupId",
-            "actionId",
-            "endpointA",
-            "endpointB",
-            "receiptDigest",
-            "commitDigest",
-        ),
-    )
-    for field in ("receiptDigest", "commitDigest"):
-        if evidence.get(field) not in (None, ""):
-            errors.extend(_require_sha256(evidence.get(field), field=field))
+    errors = validate_autonomous_storage_bytes_proof(evidence, check_name)
+    errors.extend(_require_fields(evidence, ("endpointA", "endpointB")))
+    if evidence.get("endpoint") and evidence.get("endpointB") and str(evidence["endpoint"]).rstrip("/") != str(evidence["endpointB"]).rstrip("/"):
+        errors.append("destination-endpoint-b-mismatch")
     return errors
 
 
 def validate_autonomous_rebalance_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
-    if not isinstance(evidence, dict):
-        return ["not-a-dict"]
-    errors = _require_fields(
-        evidence,
-        (
-            "backupId",
-            "actionId",
-            "endpointA",
-            "endpointC",
-            "receiptDigest",
-            "commitDigest",
-        ),
-    )
-    for field in ("receiptDigest", "commitDigest"):
-        if evidence.get(field) not in (None, ""):
-            errors.extend(_require_sha256(evidence.get(field), field=field))
+    errors = validate_autonomous_storage_bytes_proof(evidence, check_name)
+    errors.extend(_require_fields(evidence, ("endpointA", "endpointC")))
+    if evidence.get("endpoint") and evidence.get("endpointC") and str(evidence["endpoint"]).rstrip("/") != str(evidence["endpointC"]).rstrip("/"):
+        errors.append("destination-endpoint-c-mismatch")
     return errors
 
 
@@ -428,8 +506,8 @@ VALIDATORS: dict[str, CheckValidator] = {
     "realThreeMinioAutonomousDrillE2E": validate_dr_readiness_proof,
     "realReplicaTransferUsesEndpointAAndB": validate_autonomous_repair_proof,
     "realRebalanceUsesEndpointAAndC": validate_autonomous_rebalance_proof,
-    "destinationReceiptAuthenticated": validate_backup_commit_proof,
-    "destinationCommitAuthenticated": validate_backup_commit_proof,
+    "destinationReceiptAuthenticated": validate_autonomous_storage_bytes_proof,
+    "destinationCommitAuthenticated": validate_autonomous_storage_bytes_proof,
     "crashRecoveryObservedExistingEffect": validate_crash_recovery_proof,
     "leaseTakeoverUsedNewExecutionEpoch": validate_epoch_increase_proof,
     "blastRadiusInvariantVerified": validate_blast_radius_proof,

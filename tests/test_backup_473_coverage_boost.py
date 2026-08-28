@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Any, cast
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,13 +29,42 @@ def _utc_iso(dt: datetime | None = None) -> str:
 def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
     """Test all evidence proof validators for positive and negative cases."""
     # 1. Base validate_check
+    object_set_digest = hashlib.sha256(b"object-set").hexdigest()
+    receipt_bytes = json.dumps(
+        {"schemaVersion": 4, "backupId": "bk-1", "objectSetDigest": object_set_digest},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    receipt_digest = hashlib.sha256(receipt_bytes).hexdigest()
+    commit_bytes = json.dumps(
+        {
+            "schemaVersion": 4,
+            "backupId": "bk-1",
+            "policyId": "pol-1",
+            "receiptDigest": receipt_digest,
+            "objectSetDigest": object_set_digest,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
     repair_ev: dict[str, Any] = {
+        "targetId": "target-b",
+        "endpoint": "http://127.0.0.1:9001",
+        "bucket": "bucket-b",
+        "prefix": "",
         "backupId": "bk-1",
+        "policyId": "pol-1",
         "actionId": "act-1",
+        "receiptKey": "receipts/bk-1.json",
+        "commitKey": "commits/pol-1/bk-1.json",
+        "receiptBytesBase64": base64.b64encode(receipt_bytes).decode("ascii"),
+        "commitBytesBase64": base64.b64encode(commit_bytes).decode("ascii"),
+        "rawReceiptSha256": receipt_digest,
+        "rawCommitSha256": hashlib.sha256(commit_bytes).hexdigest(),
+        "commitReceiptDigest": receipt_digest,
+        "objectSetDigest": object_set_digest,
         "endpointA": "http://127.0.0.1:9000",
         "endpointB": "http://127.0.0.1:9001",
-        "receiptDigest": hashlib.sha256(b"r").hexdigest(),
-        "commitDigest": hashlib.sha256(b"c").hexdigest(),
     }
     valid_repair_check: dict[str, Any] = {
         "status": "PASS",
@@ -55,20 +85,20 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
     errs_rep = evidence_proof.validate_autonomous_repair_proof(repair_ev, "testCheck")
     assert errs_rep == []
 
-    for k in ("backupId", "actionId", "endpointA", "endpointB", "receiptDigest", "commitDigest"):
+    for k in ("backupId", "actionId", "endpointA", "endpointB", "receiptBytesBase64", "commitBytesBase64"):
         bad = {k2: v2 for k2, v2 in repair_ev.items() if k2 != k}
         errs_bad = evidence_proof.validate_autonomous_repair_proof(bad, "testCheck")
         assert len(errs_bad) > 0
 
     # 3. Autonomous Rebalance Proof
     reb_ev: dict[str, Any] = {
-        "backupId": "bk-1",
-        "actionId": "act-1",
-        "endpointA": "http://127.0.0.1:9000",
+        **repair_ev,
+        "targetId": "target-c",
+        "endpoint": "http://127.0.0.1:9002",
+        "bucket": "bucket-c",
         "endpointC": "http://127.0.0.1:9002",
-        "receiptDigest": hashlib.sha256(b"r").hexdigest(),
-        "commitDigest": hashlib.sha256(b"c").hexdigest(),
     }
+    reb_ev.pop("endpointB")
     valid_reb_check: dict[str, Any] = {
         "status": "PASS",
         "evidence": reb_ev,
@@ -76,7 +106,7 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
     errs_reb = evidence_proof.validate_autonomous_rebalance_proof(reb_ev, "testCheck")
     assert errs_reb == []
 
-    for k in ("backupId", "actionId", "endpointA", "endpointC", "receiptDigest", "commitDigest"):
+    for k in ("backupId", "actionId", "endpointA", "endpointC", "receiptBytesBase64", "commitBytesBase64"):
         bad = {k2: v2 for k2, v2 in reb_ev.items() if k2 != k}
         errs_bad = evidence_proof.validate_autonomous_rebalance_proof(bad, "testCheck")
         assert len(errs_bad) > 0

@@ -15,7 +15,9 @@ Validates under real three-target S3/MinIO:
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -29,6 +31,7 @@ from deepseek_infra.infra.workspace import (
     backup_dr_readiness,
     backup_executor,
     backup_policies,
+    backup_publish,
     backup_replication,
     backup_scheduler,
     backup_targets,
@@ -106,6 +109,59 @@ def _register_s3_target(client: Any, endpoint: str, bucket: str, *, target_id: s
         probe=False,
     )
     return str(record["targetId"])
+
+
+def _actual_copy_evidence(
+    *,
+    target_id: str,
+    endpoint: str,
+    policy_id: str,
+    backup_id: str,
+    action_id: str,
+) -> dict[str, Any]:
+    """Read exact Receipt/Commit bytes back through the resolved production target."""
+    record = backup_targets.get_target(target_id)
+    assert str(record.get("kind") or "") == "s3"
+    assert str(record.get("endpointUrl") or "").rstrip("/") == endpoint.rstrip("/")
+    resolved = backup_publish.resolve_target(target_id, write_intent=False)
+    store = resolved.require_store()
+    receipt_object_key = f"receipts/{backup_id}.json"
+    commit_object_key = f"commits/{policy_id}/{backup_id}.json"
+    receipt_bytes = store.get_bytes(receipt_object_key)
+    commit_bytes = store.get_bytes(commit_object_key)
+    assert receipt_bytes, f"missing real Receipt object: {receipt_object_key}"
+    assert commit_bytes, f"missing real Commit object: {commit_object_key}"
+
+    receipt = json.loads(receipt_bytes.decode("utf-8"))
+    commit = json.loads(commit_bytes.decode("utf-8"))
+    assert isinstance(receipt, dict) and int(receipt.get("schemaVersion") or 0) == 4
+    assert isinstance(commit, dict) and int(commit.get("schemaVersion") or 0) == 4
+    raw_receipt_sha256 = hashlib.sha256(receipt_bytes).hexdigest()
+    raw_commit_sha256 = hashlib.sha256(commit_bytes).hexdigest()
+    assert raw_receipt_sha256 == str(commit.get("receiptDigest") or "")
+    object_set_digest = str(receipt.get("objectSetDigest") or "")
+    assert object_set_digest and object_set_digest == str(commit.get("objectSetDigest") or "")
+    assert str(receipt.get("backupId") or "") == backup_id
+    assert str(commit.get("backupId") or "") == backup_id
+    assert str(commit.get("policyId") or "") == policy_id
+
+    return {
+        "targetId": target_id,
+        "endpoint": endpoint.rstrip("/"),
+        "bucket": str(record.get("bucket") or ""),
+        "prefix": str(record.get("prefix") or ""),
+        "backupId": backup_id,
+        "policyId": policy_id,
+        "actionId": action_id,
+        "receiptKey": receipt_object_key,
+        "commitKey": commit_object_key,
+        "receiptBytesBase64": base64.b64encode(receipt_bytes).decode("ascii"),
+        "commitBytesBase64": base64.b64encode(commit_bytes).decode("ascii"),
+        "rawReceiptSha256": raw_receipt_sha256,
+        "rawCommitSha256": raw_commit_sha256,
+        "commitReceiptDigest": str(commit["receiptDigest"]),
+        "objectSetDigest": object_set_digest,
+    }
 
 
 def test_real_three_minio_autonomous_remediation_e2e(
@@ -203,8 +259,15 @@ def test_real_three_minio_autonomous_remediation_e2e(
     assert auth_status == "authenticated"
     assert receipt_b is not None
     assert commit_b is not None
-    receipt_b_digest = str((receipt_b or {}).get("receiptDigest") or hashlib.sha256(b"receipt-b").hexdigest())
-    commit_b_digest = str((commit_b or {}).get("commitDigest") or hashlib.sha256(b"commit-b").hexdigest())
+    repair_copy_proof = _actual_copy_evidence(
+        target_id=t_b_id,
+        endpoint=endpoints[1],
+        policy_id=policy_id,
+        backup_id=backup_id,
+        action_id=act_id,
+    )
+    assert receipt_b == json.loads(base64.b64decode(repair_copy_proof["receiptBytesBase64"]))
+    assert commit_b == json.loads(base64.b64decode(repair_copy_proof["commitBytesBase64"]))
 
     # 10. Post-Execution Risk Reduction
     snap_after = resilience_risk_engine.assess_risks(probe=False)
@@ -251,8 +314,17 @@ def test_real_three_minio_autonomous_remediation_e2e(
     target_c_record = backup_targets.get_target(t_c_id)
     auth_c_status, receipt_c, commit_c = backup_replication.authenticate_committed_copy(target_c_record, policy_id, backup_id)
     assert auth_c_status == "authenticated"
-    receipt_c_digest = str((receipt_c or {}).get("receiptDigest") or hashlib.sha256(b"receipt-c").hexdigest())
-    commit_c_digest = str((commit_c or {}).get("commitDigest") or hashlib.sha256(b"commit-c").hexdigest())
+    assert receipt_c is not None
+    assert commit_c is not None
+    rebalance_copy_proof = _actual_copy_evidence(
+        target_id=t_c_id,
+        endpoint=endpoints[2],
+        policy_id=policy_id,
+        backup_id=backup_id,
+        action_id=str(rebalance_act["actionId"]),
+    )
+    assert receipt_c == json.loads(base64.b64decode(rebalance_copy_proof["receiptBytesBase64"]))
+    assert commit_c == json.loads(base64.b64decode(rebalance_copy_proof["commitBytesBase64"]))
 
     # 12. DR Readiness Drill on MinIO B
     drill_record = backup_dr_readiness.run_dr_drill(
@@ -266,7 +338,8 @@ def test_real_three_minio_autonomous_remediation_e2e(
     assert dr_proof.get("commitVerified") is True
 
     # 13. Write Evidence Proof artifact
-    proof_path = Path("artifacts") / "evidence-proof-real-three-minio-autonomous-remediation.json"
+    proof_path = evidence_proof.resolve_proof_path(scenario="real-three-minio-autonomous-remediation")
+    assert proof_path is not None, "dedicated runner must provide an exact proof path"
     checks = {
         "realThreeMinioAutonomousRepairE2E": {
             "status": "PASS",
@@ -295,44 +368,26 @@ def test_real_three_minio_autonomous_remediation_e2e(
         "realReplicaTransferUsesEndpointAAndB": {
             "status": "PASS",
             "evidence": {
-                "backupId": backup_id,
-                "actionId": act_id,
+                **repair_copy_proof,
                 "endpointA": endpoints[0],
                 "endpointB": endpoints[1],
-                "receiptDigest": receipt_b_digest,
-                "commitDigest": commit_b_digest,
             },
         },
         "realRebalanceUsesEndpointAAndC": {
             "status": "PASS",
             "evidence": {
-                "backupId": backup_id,
-                "actionId": rebalance_act["actionId"],
+                **rebalance_copy_proof,
                 "endpointA": endpoints[0],
                 "endpointC": endpoints[2],
-                "receiptDigest": receipt_c_digest,
-                "commitDigest": commit_c_digest,
             },
         },
         "destinationReceiptAuthenticated": {
             "status": "PASS",
-            "evidence": {
-                "backupId": backup_id,
-                "commitKey": f"commits/{backup_id}.commit",
-                "receiptKey": f"receipts/{backup_id}.receipt",
-                "receiptDigest": receipt_b_digest,
-                "objectSetDigest": hashlib.sha256(b"obj-set").hexdigest(),
-            },
+            "evidence": repair_copy_proof,
         },
         "destinationCommitAuthenticated": {
             "status": "PASS",
-            "evidence": {
-                "backupId": backup_id,
-                "commitKey": f"commits/{backup_id}.commit",
-                "receiptKey": f"receipts/{backup_id}.receipt",
-                "receiptDigest": receipt_b_digest,
-                "objectSetDigest": hashlib.sha256(b"obj-set").hexdigest(),
-            },
+            "evidence": repair_copy_proof,
         },
         "crashRecoveryObservedExistingEffect": {
             "status": "PASS",
