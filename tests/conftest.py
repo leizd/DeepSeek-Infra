@@ -210,6 +210,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
         resilience_action_journal as workspace_resilience_action_journal,
         resilience_risk_observations as workspace_resilience_risk_observations,
         resilience_scheduler_service as workspace_resilience_scheduler_service,
+        resilience_slo_ledger as workspace_resilience_slo_ledger,
     )
 
     resilience_journal_dir = tmp_path / ".resilience-journal"
@@ -224,6 +225,9 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     resilience_scheduler_dir = tmp_path / ".resilience-scheduler"
     monkeypatch.setattr(workspace_resilience_scheduler_service, "SCHEDULER_SERVICE_DIR", resilience_scheduler_dir)
     monkeypatch.setattr(workspace_resilience_scheduler_service, "SCHEDULER_SERVICE_DB", resilience_scheduler_dir / "service.sqlite3")
+    resilience_slo_dir = tmp_path / ".resilience-slo"
+    monkeypatch.setattr(workspace_resilience_slo_ledger, "SLO_LEDGER_DIR", resilience_slo_dir)
+    monkeypatch.setattr(workspace_resilience_slo_ledger, "SLO_LEDGER_DB", resilience_slo_dir / "slo.sqlite3")
 
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()

@@ -116,3 +116,4 @@ rust/target/
 .backup-replication
 .resilience-risk/
 .resilience-scheduler/
+.resilience-slo/

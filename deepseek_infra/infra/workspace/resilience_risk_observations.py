@@ -49,6 +49,18 @@ def _utc_iso(value: datetime | None = None) -> str:
     return current.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _parse_iso(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
 @contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
     RISK_LEDGER_DIR.mkdir(parents=True, exist_ok=True)
@@ -135,6 +147,8 @@ def observe_risk_snapshot(
     raw_risks = snapshot.get("risks")
     risks = raw_risks if isinstance(raw_risks, list) else []
     records: list[dict[str, Any]] = []
+    slo_samples: list[dict[str, Any]] = []
+    burn_observations: list[dict[str, Any]] = []
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         for raw_risk in risks:
@@ -162,6 +176,22 @@ def observe_risk_snapshot(
                 status = "OPEN"
                 last_cleared = None
                 reopen_count = 0
+                detected_at = _parse_iso(
+                    raw_risk.get("detectedAt")
+                    or raw_risk.get("observedAt")
+                    or raw_risk.get("generatedAt")
+                    or snapshot.get("generatedAt")
+                )
+                current_time = _parse_iso(observed_at)
+                if detected_at is not None and current_time is not None:
+                    slo_samples.append(
+                        {
+                            "metric": "risk_detection_latency_ms",
+                            "value": max(0.0, (current_time - detected_at).total_seconds() * 1000.0),
+                            "key": f"risk-detected:{digest}:{observed_at}",
+                            "digest": digest,
+                        }
+                    )
             else:
                 first_seen = str(existing["first_seen_at"])
                 open_since = existing["open_since_at"]
@@ -175,13 +205,64 @@ def observe_risk_snapshot(
                     status = "REOPENED"
                     open_since = observed_at
                     reopen_count += 1
+                    detected_at = _parse_iso(
+                        raw_risk.get("detectedAt")
+                        or raw_risk.get("observedAt")
+                        or raw_risk.get("generatedAt")
+                        or snapshot.get("generatedAt")
+                    )
+                    current_time = _parse_iso(observed_at)
+                    if detected_at is not None and current_time is not None:
+                        slo_samples.append(
+                            {
+                                "metric": "risk_detection_latency_ms",
+                                "value": max(0.0, (current_time - detected_at).total_seconds() * 1000.0),
+                                "key": f"risk-reopened:{digest}:{observed_at}",
+                                "digest": digest,
+                            }
+                        )
                 elif is_open:
                     status = previous_status if previous_status in {"OPEN", "REOPENED"} else "OPEN"
                     open_since = open_since or observed_at
                 else:
                     status = "CLEARED"
+                    previous_open_since = _parse_iso(str(existing["open_since_at"] or ""))
+                    current_time = _parse_iso(observed_at)
+                    if previous_open_since is not None and current_time is not None:
+                        slo_samples.append(
+                            {
+                                "metric": "risk_clear_latency_ms",
+                                "value": max(0.0, (current_time - previous_open_since).total_seconds() * 1000.0),
+                                "key": f"risk-cleared:{digest}:{observed_at}",
+                                "digest": digest,
+                            }
+                        )
                     open_since = None
                     last_cleared = observed_at
+
+                previous_seen = _parse_iso(str(existing["last_seen_at"] or ""))
+                current_time = _parse_iso(observed_at)
+                if previous_seen is not None and current_time is not None:
+                    elapsed_minutes = max(0.0, (current_time - previous_seen).total_seconds() / 60.0)
+                    previous_severity = str(existing["current_severity"] or "healthy").lower()
+                    if elapsed_minutes > 0:
+                        burn_observations.append(
+                            {
+                                "indicator": "critical_durability_risk_minutes",
+                                "bad": elapsed_minutes if previous_severity in {"critical", "blocked"} else 0.0,
+                                "total": elapsed_minutes,
+                                "key": f"critical-risk:{digest}:{observed_at}",
+                            }
+                        )
+                    if elapsed_minutes > 0 and "DR" in str(subject.get("type") or ""):
+                        burn_observations.append(
+                            {
+                                "indicator": "dr_stale_minutes",
+                                "bad": elapsed_minutes if previous_severity in _OPEN_SEVERITIES else 0.0,
+                                "total": elapsed_minutes,
+                                "key": f"dr-stale:{digest}:{observed_at}",
+                            }
+                        )
 
             conn.execute(
                 """
@@ -234,6 +315,24 @@ def observe_risk_snapshot(
             ).fetchone()
             assert row is not None
             records.append(_row_to_record(row))
+    from deepseek_infra.infra.workspace import resilience_slo_ledger
+
+    for sample in slo_samples:
+        resilience_slo_ledger.record_sample(
+            str(sample["metric"]),
+            float(sample["value"]),
+            observed_at=now,
+            risk_subject_digest=str(sample["digest"]),
+            sample_key=str(sample["key"]),
+        )
+    for observation in burn_observations:
+        resilience_slo_ledger.record_burn_observation(
+            str(observation["indicator"]),
+            bad_units=float(observation["bad"]),
+            total_units=float(observation["total"]),
+            observed_at=now,
+            observation_key=str(observation["key"]),
+        )
     return records
 
 

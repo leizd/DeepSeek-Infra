@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -30,6 +31,13 @@ CREATE TABLE IF NOT EXISTS resilience_scheduler_service_events (
     bytes_served INTEGER NOT NULL,
     scheduled_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS resilience_scheduler_runs (
+    schedule_id TEXT PRIMARY KEY,
+    schedule_json TEXT NOT NULL,
+    scheduled_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resilience_scheduler_runs_time
+ON resilience_scheduler_runs(scheduled_at);
 """
 
 
@@ -157,3 +165,34 @@ def record_scheduled_actions(
                     timestamp,
                 ),
             )
+
+
+def record_schedule_snapshot(schedule: dict[str, Any], *, scheduled_at: datetime | None = None) -> None:
+    """Persist the exact latest wave/unschedulable operator projection."""
+    schedule_id = str(schedule.get("scheduleId") or "")
+    if not schedule_id:
+        raise ValueError("scheduleId is required")
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO resilience_scheduler_runs (
+                schedule_id, schedule_json, scheduled_at
+            ) VALUES (?, ?, ?)
+            """,
+            (
+                schedule_id,
+                json.dumps(schedule, ensure_ascii=False, sort_keys=True),
+                _utc_iso(scheduled_at),
+            ),
+        )
+
+
+def get_latest_schedule_snapshot() -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT schedule_json FROM resilience_scheduler_runs ORDER BY scheduled_at DESC, rowid DESC LIMIT 1"
+        ).fetchone()
+    if row is None:
+        return None
+    parsed = json.loads(str(row[0]))
+    return parsed if isinstance(parsed, dict) else None

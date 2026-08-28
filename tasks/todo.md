@@ -42,12 +42,12 @@
 
 ## Phase 4: Fleet SLO and API
 
-- [ ] Persist Fleet SLO samples across restart
-- [ ] Measure queue, clear, remediation, DR, takeover, starvation, proof freshness
-- [ ] Compute configurable 1h/24h error-budget burn rates
-- [ ] Enforce timezone-aware maintenance windows and critical overrides
-- [ ] Add authenticated Fleet Readiness API
-- [ ] Checkpoint: SLO/burn/window/API tests, Ruff, Mypy
+- [x] Persist Fleet SLO samples across restart
+- [x] Measure queue, clear, remediation, DR, takeover, starvation, proof freshness
+- [x] Compute configurable 1h/24h error-budget burn rates
+- [x] Enforce timezone-aware maintenance windows and critical overrides
+- [x] Add authenticated Fleet Readiness API
+- [x] Checkpoint: SLO/burn/window/API tests, Ruff, Mypy
 
 ## Phase 5: Release closure
 

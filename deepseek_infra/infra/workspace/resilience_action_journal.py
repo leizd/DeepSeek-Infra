@@ -412,6 +412,7 @@ def record_action_intent(
     plan_id: str | None = None,
     input_risk_digest: str = "",
     plan_digest: str = "",
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Record an individual action intent into the durable journal with create-once semantics (Gate A)."""
     action_id = str(action.get("actionId") or f"act_{uuid.uuid4().hex[:12]}")
@@ -422,7 +423,7 @@ def record_action_intent(
 
     is_auto = autonomous_action_policy.is_action_autonomous(action_type)
     initial_state = "APPROVAL_REQUIRED" if (req_approval or not is_auto) else "PENDING"
-    now_iso = _utc_iso()
+    now_iso = _utc_iso(now)
 
     params = action.get("parameters", {})
     record = {
@@ -534,9 +535,11 @@ def update_action_state(
     risk_before_digest: str | None = None,
     risk_after_digest: str | None = None,
     error: str | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Update execution state with CAS fencing on execution_epoch and claim_token (Gate B)."""
-    now_iso = _utc_iso()
+    current = now or datetime.now(tz=timezone.utc)
+    now_iso = _utc_iso(current)
     terminal_states = {
         "SUCCEEDED",
         "COMPENSATED",
@@ -565,6 +568,19 @@ def update_action_state(
 
         if not row:
             raise AppError(f"Action '{action_id}' not found in journal", code=ErrorCode.NOT_FOUND, status=404)
+
+        action_type = str(row[2] or "").upper()
+        previous_state = str(row[6] or "")
+        recorded_epoch = int(execution_epoch if execution_epoch is not None else row[11] or 0)
+        started_row = conn.execute(
+            """
+            SELECT created_at FROM resilience_action_events
+            WHERE action_id = ? AND event_type IN ('ACTION_CLAIMED', 'ACTION_TAKEOVER')
+            ORDER BY event_id DESC LIMIT 1
+            """,
+            (action_id,),
+        ).fetchone()
+        execution_started_at = str(started_row[0]) if started_row is not None else None
 
         cur_result = json.loads(row[19]) if row[19] else None
         cur_verif = json.loads(row[20]) if row[20] else None
@@ -680,6 +696,29 @@ def update_action_state(
 
         _commit(conn)
 
+    if state in terminal_states and previous_state not in terminal_states and action_type in {"CREATE_REPAIR_JOB", "CREATE_REBALANCE_JOB"}:
+        from deepseek_infra.infra.workspace import resilience_slo_ledger
+
+        duration_ms = resilience_slo_ledger.milliseconds_between(execution_started_at, current)
+        if duration_ms is not None:
+            metric = resilience_slo_ledger.REPAIR_TIME_MS if action_type == "CREATE_REPAIR_JOB" else resilience_slo_ledger.REBALANCE_TIME_MS
+            success = state == "SUCCEEDED"
+            resilience_slo_ledger.record_sample(
+                metric,
+                duration_ms,
+                observed_at=current,
+                action_id=action_id,
+                outcome="success" if success else "failed",
+                sample_key=f"remediation:{action_id}:{recorded_epoch}",
+            )
+            resilience_slo_ledger.record_burn_observation(
+                resilience_slo_ledger.FAILED_REMEDIATION_RATIO,
+                bad_units=0 if success else 1,
+                total_units=1,
+                observed_at=current,
+                observation_key=f"remediation-outcome:{action_id}:{recorded_epoch}",
+            )
+
     return get_action(action_id) or {}
 
 
@@ -724,7 +763,7 @@ def admit_and_claim_action(
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         current_row = conn.execute(
-            "SELECT state, lease_until FROM resilience_actions WHERE action_id = ?",
+            "SELECT state, lease_until, created_at FROM resilience_actions WHERE action_id = ?",
             (action_id,),
         ).fetchone()
         if not current_row:
@@ -732,6 +771,7 @@ def admit_and_claim_action(
             return False, None, "action-not-found"
         current_state = str(current_row[0] or "")
         current_lease = str(current_row[1] or "")
+        action_created_at = str(current_row[2] or "")
         active_states = {"CLAIMED", "EXECUTING", "RECONCILING", "VERIFYING", "ASSESSING_EFFECT"}
         claimable = current_state == "PENDING" or (current_state in active_states and current_lease < now_iso)
         if not claimable:
@@ -805,6 +845,38 @@ def admit_and_claim_action(
             created_at=now_iso,
         )
         _commit(conn)
+
+    from deepseek_infra.infra.workspace import resilience_slo_ledger
+
+    claimed_epoch = int(action.get("executionEpoch") or 0) + 1
+    if claimed_state == "CLAIMED":
+        queue_delay_ms = resilience_slo_ledger.milliseconds_between(action_created_at, current)
+        if queue_delay_ms is not None:
+            resilience_slo_ledger.record_sample(
+                resilience_slo_ledger.REMEDIATION_QUEUE_DELAY_MS,
+                queue_delay_ms,
+                observed_at=current,
+                action_id=action_id,
+                sample_key=f"queue-delay:{action_id}:{claimed_epoch}",
+            )
+            threshold_ms = float(action.get("queueDelaySloMs") or 300000.0)
+            resilience_slo_ledger.record_burn_observation(
+                resilience_slo_ledger.QUEUE_DELAY_VIOLATIONS,
+                bad_units=1 if queue_delay_ms > threshold_ms else 0,
+                total_units=1,
+                observed_at=current,
+                observation_key=f"queue-delay-outcome:{action_id}:{claimed_epoch}",
+            )
+    else:
+        takeover_delay_ms = resilience_slo_ledger.milliseconds_between(current_lease, current)
+        if takeover_delay_ms is not None:
+            resilience_slo_ledger.record_sample(
+                resilience_slo_ledger.LEASE_TAKEOVER_TIME_MS,
+                takeover_delay_ms,
+                observed_at=current,
+                action_id=action_id,
+                sample_key=f"lease-takeover:{action_id}:{claimed_epoch}",
+            )
 
     return True, get_action(action_id), admission_reason
 

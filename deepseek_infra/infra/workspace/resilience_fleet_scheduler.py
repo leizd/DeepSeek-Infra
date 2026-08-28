@@ -14,7 +14,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
     autonomous_action_policy,
     backup_policies,
@@ -23,6 +25,7 @@ from deepseek_infra.infra.workspace import (
     resilience_coordinator,
     resilience_resource_locks,
     resilience_scheduler_service,
+    resilience_slo_ledger,
 )
 
 SEVERITY_BASE_WEIGHT: dict[str, float] = {
@@ -200,6 +203,77 @@ def can_preempt_action(victim_action: dict[str, Any]) -> bool:
     return False
 
 
+def evaluate_maintenance_window(
+    action: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Evaluate policy-local maintenance time with narrow critical overrides."""
+    current = now or datetime.now(tz=timezone.utc)
+    raw_params = action.get("parameters")
+    params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+    policy_id = str(params.get("policyId") or action.get("policyId") or "")
+    raw_window = params.get("maintenanceWindow") or action.get("maintenanceWindow")
+    if not isinstance(raw_window, dict) and policy_id:
+        try:
+            policy = backup_policies.get_policy(policy_id)
+        except AppError:
+            policy = None
+        if isinstance(policy, dict):
+            raw_placement = policy.get("placement")
+            placement: dict[str, Any] = raw_placement if isinstance(raw_placement, dict) else {}
+            raw_window = placement.get("maintenanceWindow")
+    if not isinstance(raw_window, dict):
+        return {"allowed": True, "inWindow": True, "override": False, "reason": "NO_MAINTENANCE_WINDOW"}
+
+    action_type = str(action.get("type") or "").upper()
+    severity = str(action.get("severity") or action.get("severityBefore") or "warning").lower()
+    if action_type == "CREATE_REPAIR_JOB" and severity in {"critical", "blocked"}:
+        return {"allowed": True, "inWindow": False, "override": True, "reason": "CRITICAL_DURABILITY_OVERRIDE"}
+    if action_type == "START_DR_DRILL" and (
+        severity in {"critical", "blocked"} or params.get("drStalenessCritical") is True
+    ):
+        return {"allowed": True, "inWindow": False, "override": True, "reason": "CRITICAL_DR_STALENESS_OVERRIDE"}
+
+    timezone_name = str(raw_window.get("timezone") or "UTC")
+    start_text = str(raw_window.get("start") or "")
+    end_text = str(raw_window.get("end") or "")
+    try:
+        zone = ZoneInfo(timezone_name)
+        start_hour, start_minute = (int(part) for part in start_text.split(":", 1))
+        end_hour, end_minute = (int(part) for part in end_text.split(":", 1))
+        if not (0 <= start_hour <= 23 and 0 <= start_minute <= 59 and 0 <= end_hour <= 23 and 0 <= end_minute <= 59):
+            raise ValueError("maintenance time out of range")
+    except (ValueError, ZoneInfoNotFoundError):
+        return {
+            "allowed": False,
+            "inWindow": False,
+            "override": False,
+            "reason": "INVALID_MAINTENANCE_WINDOW",
+            "timezone": timezone_name,
+        }
+    local = current.astimezone(zone)
+    local_minute = local.hour * 60 + local.minute
+    start_value = start_hour * 60 + start_minute
+    end_value = end_hour * 60 + end_minute
+    if start_value == end_value:
+        inside = True
+    elif start_value < end_value:
+        inside = start_value <= local_minute < end_value
+    else:
+        inside = local_minute >= start_value or local_minute < end_value
+    return {
+        "allowed": inside,
+        "inWindow": inside,
+        "override": False,
+        "reason": "WITHIN_MAINTENANCE_WINDOW" if inside else "OUTSIDE_MAINTENANCE_WINDOW",
+        "timezone": timezone_name,
+        "localTime": local.isoformat(timespec="minutes"),
+        "start": start_text,
+        "end": end_text,
+    }
+
+
 def schedule_fleet_resilience(
     risk_snapshot: dict[str, Any],
     *,
@@ -329,6 +403,14 @@ def schedule_fleet_resilience(
         for action_id in ready_ids:
             original = action_by_id[action_id]
             action = dict(original)
+            maintenance_decision = evaluate_maintenance_window(action, now=current)
+            action["maintenanceWindowDecision"] = maintenance_decision
+            if maintenance_decision["allowed"] is not True:
+                action["scheduleStatus"] = "UNSCHEDULABLE"
+                action["unschedulableReason"] = str(maintenance_decision["reason"])
+                unschedulable_actions.append(action)
+                pending_ids.remove(action_id)
+                continue
             if action.get("requiresApproval") is True:
                 action["scheduleStatus"] = "UNSCHEDULABLE"
                 action["unschedulableReason"] = "APPROVAL_REQUIRED"
@@ -429,7 +511,7 @@ def schedule_fleet_resilience(
     resilience_scheduler_service.record_scheduled_actions(assigned_actions, scheduled_at=current)
 
     schedule_id = f"fsch_{uuid.uuid4().hex[:16]}"
-    return {
+    schedule = {
         "scheduleId": schedule_id,
         "scheduledAt": _utc_iso(current),
         "riskDigest": str(risk_snapshot.get("riskDigest") or ""),
@@ -443,3 +525,16 @@ def schedule_fleet_resilience(
         "transferBudget": transfer_budget,
         "status": "SCHEDULED" if not unschedulable_actions else ("PARTIAL" if waves else "UNSCHEDULABLE"),
     }
+    oldest_age_seconds = max(
+        (float(action.get("debtInfo", {}).get("ageSeconds") or 0.0) for action in sorted_actions),
+        default=0.0,
+    )
+    resilience_slo_ledger.record_sample(
+        resilience_slo_ledger.SCHEDULER_STARVATION_AGE_SECONDS,
+        oldest_age_seconds,
+        observed_at=current,
+        sample_key=f"starvation:{schedule_id}",
+        metadata={"candidateActions": len(sorted_actions), "unschedulableActions": len(unschedulable_actions)},
+    )
+    resilience_scheduler_service.record_schedule_snapshot(schedule, scheduled_at=current)
+    return schedule
