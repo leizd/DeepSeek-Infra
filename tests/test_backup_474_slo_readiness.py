@@ -276,3 +276,76 @@ def test_risk_control_loop_persists_dr_freshness_without_operator_read(
     assert len(samples) == 1
     assert samples[0]["value"] == 48.0
     assert samples[0]["sampleKey"] == "dr-readiness:2026-08-28T12:00:00Z"
+
+
+def test_fleet_readiness_classifies_durable_critical_and_degraded_risks(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
+    assert resilience_fleet_readiness._parse_iso(None) is None  # noqa: SLF001
+    assert resilience_fleet_readiness._parse_iso("not-a-time") is None  # noqa: SLF001
+    assert resilience_fleet_readiness._parse_iso("2026-08-28T12:00:00") is None  # noqa: SLF001
+
+    critical = {
+        "type": "REPLICA_LAG",
+        "severity": "critical",
+        "policyId": "policy-readiness",
+        "backupId": "backup-readiness",
+        "targetId": "target-readiness",
+    }
+    resilience_risk_observations.observe_risk_snapshot(
+        {"riskDigest": "critical", "risks": [critical]},
+        now=now - timedelta(hours=2),
+    )
+    critical_readiness = resilience_fleet_readiness.get_fleet_readiness(now=now)
+    assert critical_readiness["fleetReadiness"] == "CRITICAL"
+    assert critical_readiness["riskDebt"]["critical"] == 1
+    assert critical_readiness["riskDebt"]["oldestRiskAgeSeconds"] == 7200.0
+
+    warning = {**critical, "severity": "warning"}
+    resilience_risk_observations.observe_risk_snapshot(
+        {"riskDigest": "warning", "risks": [warning]},
+        now=now,
+    )
+    monkeypatch.setattr(
+        resilience_slo_ledger,
+        "compute_burn_rates",
+        lambda **_kwargs: {"status": "OK", "fast": 0.0, "slow": 0.0},
+    )
+    degraded_readiness = resilience_fleet_readiness.get_fleet_readiness(now=now)
+    assert degraded_readiness["fleetReadiness"] == "DEGRADED"
+    assert degraded_readiness["riskDebt"]["critical"] == 0
+
+
+def test_slo_ledger_fails_closed_on_invalid_samples_and_empty_budget_windows(tmp_settings: Path) -> None:
+    now = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
+    assert resilience_slo_ledger._parse_iso("not-a-time") is None  # noqa: SLF001
+    assert resilience_slo_ledger._parse_iso("2026-08-28T12:00:00") is None  # noqa: SLF001
+    assert resilience_slo_ledger._percentile([], 0.95) == 0.0  # noqa: SLF001
+
+    with pytest.raises(ValueError, match="metric_name is required"):
+        resilience_slo_ledger.record_sample("", 1)
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        resilience_slo_ledger.record_sample("invalid", -1)
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        resilience_slo_ledger.record_sample("invalid", float("inf"))
+
+    resilience_slo_ledger.record_sample("filtered", 1, observed_at=now, sample_key="filtered-one")
+    assert resilience_slo_ledger.list_samples(since=now + timedelta(seconds=1)) == []
+
+    with pytest.raises(ValueError, match="bad_units cannot exceed total_units"):
+        resilience_slo_ledger.record_burn_observation("invalid", bad_units=2, total_units=1)
+    resilience_slo_ledger.record_burn_observation(
+        "zero-total",
+        bad_units=0,
+        total_units=0,
+        observed_at=now,
+        observation_key="zero-total",
+    )
+    burn = resilience_slo_ledger.compute_burn_rates(now=now)
+    assert burn["byIndicator"]["zero-total"] == {"fast": 0.0, "slow": 0.0}
+    with pytest.raises(ValueError, match="errorBudgetFraction"):
+        resilience_slo_ledger.compute_burn_rates(now=now, config_override={"errorBudgetFraction": 0.0})
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
+        resilience_slo_ledger.record_evidence_verification(proof_sha256="INVALID", scenario="invalid")

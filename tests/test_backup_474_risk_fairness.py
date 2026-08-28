@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from deepseek_infra.infra.workspace import (
     resilience_fleet_scheduler,
     resilience_planner,
@@ -125,3 +127,33 @@ def test_production_scheduler_uses_and_updates_persistent_fairness(tmp_settings:
     assert state_a is not None and state_a["actionsServed"] == 6
     assert state_b is not None and state_b["actionsServed"] == 1
     assert state_a["virtualRuntime"] > state_b["virtualRuntime"]
+
+
+def test_risk_observation_and_scheduler_ledgers_fail_closed_on_empty_state(tmp_settings: Path) -> None:
+    assert resilience_risk_observations._parse_iso(None) is None  # noqa: SLF001
+    assert resilience_risk_observations._parse_iso("not-a-time") is None  # noqa: SLF001
+    assert resilience_risk_observations._parse_iso("2026-08-28T12:00:00") is None  # noqa: SLF001
+    assert resilience_risk_observations.observe_risk_snapshot({"riskDigest": "empty", "risks": [None]}) == []
+
+    healthy = _snapshot(severity="healthy", generated_at=datetime(2026, 8, 28, tzinfo=timezone.utc))
+    assert resilience_risk_observations.observe_risk_snapshot(healthy) == []
+
+    opened = _snapshot(severity="warning", generated_at=datetime(2026, 8, 28, tzinfo=timezone.utc))
+    records = resilience_risk_observations.observe_risk_snapshot(opened)
+    risk = opened["risks"][0]  # type: ignore[index]
+    assert resilience_risk_observations.observation_for_risk(risk) == records[0]
+    assert resilience_risk_observations.observe_risk_snapshot(opened) == records
+
+    assert resilience_scheduler_service.get_policy_service("missing-policy") is None
+    assert resilience_scheduler_service.get_latest_schedule_snapshot() is None
+    resilience_scheduler_service.record_scheduled_actions([{}])
+    action = {
+        "actionId": "idempotent-service",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {"policyId": "policy-service", "estimatedBytes": 1024},
+    }
+    resilience_scheduler_service.record_scheduled_actions([action])
+    resilience_scheduler_service.record_scheduled_actions([action])
+    assert resilience_scheduler_service.get_policy_service("policy-service")["actionsServed"] == 1  # type: ignore[index]
+    with pytest.raises(ValueError, match="scheduleId is required"):
+        resilience_scheduler_service.record_schedule_snapshot({})

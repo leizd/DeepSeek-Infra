@@ -279,3 +279,159 @@ def test_degraded_baseline_cannot_be_further_degraded_and_running_effects_count(
     assert evaluation["copySafetyFloor"] == 1
     assert evaluation["failureDomainSafetyFloor"] == 1
     assert evaluation["runningEffectCount"] == 1
+
+
+def test_maintenance_window_parser_fails_closed_and_supports_full_day_and_overnight() -> None:
+    now = datetime(2026, 8, 28, 0, 30, tzinfo=timezone.utc)
+    action = _rebalance("window-edge", policy="policy-window", backup="backup-window", source="a", target="b")
+    action["parameters"]["maintenanceWindow"] = {"timezone": "Not/A_Zone", "start": "00:00", "end": "01:00"}
+    invalid = resilience_fleet_scheduler.evaluate_maintenance_window(action, now=now)
+    assert invalid["allowed"] is False
+    assert invalid["reason"] == "INVALID_MAINTENANCE_WINDOW"
+
+    action["parameters"]["maintenanceWindow"] = {"timezone": "UTC", "start": "25:00", "end": "01:00"}
+    out_of_range = resilience_fleet_scheduler.evaluate_maintenance_window(action, now=now)
+    assert out_of_range["allowed"] is False
+    assert out_of_range["reason"] == "INVALID_MAINTENANCE_WINDOW"
+
+    action["parameters"]["maintenanceWindow"] = {"timezone": "UTC", "start": "00:00", "end": "00:00"}
+    full_day = resilience_fleet_scheduler.evaluate_maintenance_window(action, now=now)
+    assert full_day["allowed"] is True
+    assert full_day["reason"] == "WITHIN_MAINTENANCE_WINDOW"
+
+    action["parameters"]["maintenanceWindow"] = {"timezone": "UTC", "start": "23:00", "end": "02:00"}
+    overnight = resilience_fleet_scheduler.evaluate_maintenance_window(action, now=now)
+    assert overnight["allowed"] is True
+
+
+def test_dependency_cycle_and_approval_are_typed_unschedulable(tmp_settings: Path) -> None:
+    repair = _repair("cycle-repair", policy="policy-cycle", backup="backup-cycle", target="target-b")
+    rebalance = _rebalance(
+        "cycle-rebalance",
+        policy="policy-cycle",
+        backup="backup-cycle",
+        source="target-a",
+        target="target-c",
+    )
+    repair["dependsOn"] = ["cycle-rebalance"]
+    cycle = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"riskDigest": "cycle", "risks": []},
+        candidate_actions=[repair, rebalance],
+    )
+    assert {item["unschedulableReason"] for item in cycle["unschedulableActions"]} == {
+        "DEPENDENCY_CYCLE_OR_BLOCKED_PREDECESSOR"
+    }
+
+    approval = _repair("approval-repair", policy="policy-approval", backup="backup-approval", target="target-b")
+    approval["requiresApproval"] = True
+    blocked = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"riskDigest": "approval", "risks": []},
+        candidate_actions=[approval],
+    )
+    assert blocked["unschedulableActions"][0]["unschedulableReason"] == "APPROVAL_REQUIRED"
+
+
+def test_invalid_zero_capacity_and_blast_failure_are_typed_unschedulable(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    action = _repair("zero-capacity", policy="policy-zero", backup="backup-zero", target="target-zero")
+    zero_capacity = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"riskDigest": "zero", "risks": []},
+        candidate_actions=[action],
+        action_policy={"rateLimits": {"maxConcurrentActions": 0}},
+    )
+    assert zero_capacity["executionWaves"] == []
+    assert zero_capacity["unschedulableActions"][0]["unschedulableReason"] == "INVALID_ZERO_CAPACITY_BUDGET"
+
+    monkeypatch.setattr(
+        resilience_coordinator,
+        "simulate_coordination_wave",
+        lambda *_args, **_kwargs: (False, {"passed": False, "reason": "copy-floor"}),
+    )
+    blast = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"riskDigest": "blast", "risks": []},
+        candidate_actions=[_repair("blast-repair", policy="policy-b", backup="backup-b", target="target-b")],
+    )
+    assert blast["executionWaves"] == []
+    assert blast["unschedulableActions"][0]["unschedulableReason"] == "BLAST_RADIUS_VIOLATION"
+
+
+def test_wave_deferral_records_global_target_policy_and_domain_constraints(tmp_settings: Path) -> None:
+    first = _repair("limit-first", policy="policy-one", backup="backup-one", target="target-one")
+    first["parameters"]["failureDomain"] = "zone-one"
+    same_target = _repair("limit-target", policy="policy-two", backup="backup-two", target="target-one")
+    same_target["parameters"]["failureDomain"] = "zone-one"
+    same_policy_new_domain = _repair(
+        "limit-policy-domain",
+        policy="policy-one",
+        backup="backup-three",
+        target="target-three",
+    )
+    same_policy_new_domain["parameters"]["failureDomain"] = "zone-two"
+    schedule = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"riskDigest": "limits", "risks": []},
+        candidate_actions=[first, same_target, same_policy_new_domain],
+        action_policy={
+            "rateLimits": {
+                "maxConcurrentActions": 1,
+                "maxConcurrentPerTarget": 1,
+                "maxConcurrentPerPolicy": 1,
+                "maxSimultaneousFailureDomainsTouched": 1,
+            }
+        },
+    )
+    deferred_reasons = {
+        item["actionId"]: set(item["priorDeferReasons"])
+        for wave in schedule["executionWaves"]
+        for item in wave["actions"]
+    }
+    assert "TARGET_CONCURRENCY_EXCEEDED" in deferred_reasons["limit-target"]
+    assert "GLOBAL_CONCURRENCY_EXCEEDED" in deferred_reasons["limit-target"]
+    assert "POLICY_CONCURRENCY_EXCEEDED" in deferred_reasons["limit-policy-domain"]
+    assert "FAILURE_DOMAIN_LIMIT_EXCEEDED" in deferred_reasons["limit-policy-domain"]
+
+
+def test_coordinator_edges_and_drill_rebalance_dependency_are_preserved(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator_actions = [
+        {"actionId": "coordinator-a", "type": "NOOP_A", "parameters": {}},
+        {"actionId": "coordinator-b", "type": "NOOP_B", "parameters": {}},
+    ]
+    monkeypatch.setattr(
+        resilience_coordinator,
+        "plan_coordinated_resilience",
+        lambda *_args, **_kwargs: {
+            "actions": coordinator_actions,
+            "dependencies": [["coordinator-a", "coordinator-b"]],
+        },
+    )
+    coordinated = resilience_fleet_scheduler.schedule_fleet_resilience({"riskDigest": "coordinated", "risks": []})
+    assert [[item["actionId"] for item in wave["actions"]] for wave in coordinated["executionWaves"]] == [
+        ["coordinator-a"],
+        ["coordinator-b"],
+    ]
+
+    drill = {
+        "actionId": "drill-before-rebalance",
+        "type": "START_DR_DRILL",
+        "severity": "warning",
+        "parameters": {"policyId": "policy-drill", "backupId": "shared-backup", "targetId": "target-drill"},
+    }
+    rebalance = _rebalance(
+        "rebalance-after-drill",
+        policy="policy-other",
+        backup="shared-backup",
+        source="target-a",
+        target="target-b",
+    )
+    result = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"riskDigest": "drill-dependency", "risks": []},
+        candidate_actions=[drill, rebalance],
+    )
+    assert [[item["actionId"] for item in wave["actions"]] for wave in result["executionWaves"]] == [
+        ["drill-before-rebalance"],
+        ["rebalance-after-drill"],
+    ]

@@ -78,6 +78,7 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
         "tests/test_backup_474_slo_readiness.py::test_maintenance_windows_block_background_work_and_allow_critical_overrides",
         "tests/test_backup_474_slo_readiness.py::test_terminal_repair_records_duration_and_remediation_outcome",
         "tests/test_backup_474_slo_readiness.py::test_fleet_readiness_api_is_authenticated_and_source_backed",
+        "tests/test_backup_474_slo_readiness.py::test_risk_control_loop_persists_dr_freshness_without_operator_read",
     ),
     WIRE_FREEZE_SCENARIO: (
         "tests/test_backup_452_replica_failover.py::test_wire_format_constants_unchanged",

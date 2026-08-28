@@ -1,4 +1,4 @@
-"""4.7.4 real-process admission and crash-fencing contracts."""
+"""Real-process admission and crash-fencing contracts for the current release."""
 
 from __future__ import annotations
 
