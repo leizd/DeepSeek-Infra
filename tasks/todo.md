@@ -52,7 +52,7 @@
 ## Phase 5: Release closure
 
 - [x] Lock all requested 4.7.4 Evidence names
-- [ ] Run real three-MinIO proof and crash scenarios
+- [x] Run real three-MinIO proof and crash scenarios
 - [x] Prove frozen wire semantics unchanged
 - [ ] Update runbook, release notes, README, architecture, and Evidence index
 - [ ] Run frontend, Ruff, Mypy, full 95% coverage, offline eval, release gates

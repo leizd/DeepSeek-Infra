@@ -465,10 +465,14 @@ def test_real_three_minio_autonomous_remediation_e2e(
         instance_id="pre-takeover-evidence",
     )
     assert directive == "RESUME_EXECUTION", directive_details
-    lease_until = datetime.fromisoformat(str(crashed_action["leaseUntil"]).replace("Z", "+00:00"))
     wait_deadline = time.monotonic() + 15
-    while datetime.now(tz=timezone.utc) <= lease_until:
-        assert time.monotonic() < wait_deadline, "worker A action lease did not expire"
+    while True:
+        persisted_after_crash = resilience_action_journal.get_action(act_id) or {}
+        persisted_lease = str(persisted_after_crash.get("leaseUntil") or "")
+        now_iso = datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        if persisted_lease and persisted_lease < now_iso:
+            break
+        assert time.monotonic() < wait_deadline, f"worker A action lease did not expire: {persisted_lease} >= {now_iso}"
         time.sleep(0.05)
 
     # Worker B is a different fresh PID. Production execution must claim epoch 2,
