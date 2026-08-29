@@ -109,7 +109,7 @@ class _LocalMinioInstance:
                 "MINIO_BROWSER": "off",
             }
         )
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
         self.process = subprocess.Popen(
             [str(self.binary), "server", str(self.data_dir), "--address", self.endpoint.removeprefix("http://")],
             env=environment,
