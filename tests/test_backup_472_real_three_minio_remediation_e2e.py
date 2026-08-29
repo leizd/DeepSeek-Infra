@@ -134,9 +134,10 @@ def _run_atomic_process_race(
     for action in actions:
         resilience_action_journal.record_action_intent(action)
 
-    ready_dir = root / f"process-ready-{scope}"
-    ready_dir.mkdir()
-    start_file = root / f"process-start-{scope}"
+    nonce = uuid.uuid4().hex[:8]
+    ready_dir = root / f"process-ready-{scope}-{nonce}"
+    ready_dir.mkdir(parents=True, exist_ok=True)
+    start_file = root / f"process-start-{scope}-{nonce}"
     script = textwrap.dedent(
         """
         import json, os, sys, time
