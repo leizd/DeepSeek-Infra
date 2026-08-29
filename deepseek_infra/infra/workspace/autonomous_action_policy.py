@@ -44,6 +44,8 @@ DEFAULT_RATE_LIMITS = {
     "maxConcurrentActions": 3,
     "maxActionsPerHour": 20,
     "maxConcurrentPerTarget": 2,
+    "maxConcurrentPerPolicy": 2,
+    "maxSimultaneousFailureDomainsTouched": 1,
     "maxRebalancesPerTargetPerHour": 5,
     "maxDrillsPerPolicyPerDay": 2,
 }

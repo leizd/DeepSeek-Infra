@@ -1115,21 +1115,24 @@ def check_rate_limits(
             if target_active >= target_limit:
                 return False, f"max-per-target-concurrent-actions-exceeded:{tid}:{target_active}>={target_limit}"
 
-        policy_id = str(params.get("policyId") or action.get("policyId") or "")
+        raw_subject = action.get("riskSubject")
+        subject = raw_subject if isinstance(raw_subject, dict) else {}
+        policy_id = str(params.get("policyId") or subject.get("policyId") or action.get("policyId") or "")
         if policy_id:
             rows = conn.execute(
                 """
-                SELECT parameters_json FROM resilience_actions
+                SELECT parameters_json, risk_subject_json FROM resilience_actions
                 WHERE state IN ('CLAIMED', 'EXECUTING', 'RECONCILING', 'VERIFYING', 'ASSESSING_EFFECT')
                   AND action_id != ?
                 """,
                 (excluded,),
             ).fetchall()
-            policy_active = sum(
-                1
-                for row_item in rows
-                if str((json.loads(row_item[0]) if row_item[0] else {}).get("policyId") or "") == policy_id
-            )
+            policy_active = 0
+            for params_json, subj_json in rows:
+                p_item = json.loads(params_json) if params_json else {}
+                s_item = json.loads(subj_json) if subj_json else {}
+                if str(p_item.get("policyId") or s_item.get("policyId") or "") == policy_id:
+                    policy_active += 1
             policy_limit = int(limits.get("maxConcurrentPerPolicy", 2))
             if policy_active >= policy_limit:
                 return False, f"max-per-policy-concurrent-actions-exceeded:{policy_id}:{policy_active}>={policy_limit}"

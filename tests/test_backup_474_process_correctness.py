@@ -9,6 +9,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -46,9 +47,10 @@ def _limits(**overrides: int) -> dict[str, int]:
 
 
 def _run_process_race(tmp_settings: Path, action_ids: tuple[str, str]) -> list[dict[str, Any]]:
-    ready_dir = tmp_settings / "process-ready"
-    ready_dir.mkdir()
-    start_file = tmp_settings / "process-start"
+    nonce = uuid.uuid4().hex[:8]
+    ready_dir = tmp_settings / f"process-ready-{nonce}"
+    ready_dir.mkdir(parents=True, exist_ok=True)
+    start_file = tmp_settings / f"process-start-{nonce}"
     script = textwrap.dedent(
         """
         import json, os, sys, time
@@ -81,6 +83,7 @@ def _run_process_race(tmp_settings: Path, action_ids: tuple[str, str]) -> list[d
     )
     environment = os.environ.copy()
     environment["DEEPSEEK_INFRA_ROOT"] = str(tmp_settings)
+    environment["DEEPSEEK_CONTROL_AUTHORITY_MODE"] = "local-only"
     processes = [
         subprocess.Popen(
             [sys.executable, "-c", script, action_id, str(ready_dir), str(start_file)],
