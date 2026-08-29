@@ -56,5 +56,5 @@
 - [x] Prove frozen wire semantics unchanged
 - [x] Update runbook, release notes, README, architecture, and Evidence index
 - [x] Run frontend, Ruff, Mypy, full 95% coverage, offline eval, release gates
-- [ ] Inspect exact proof artifact from final CI assembly
+- [ ] Inspect final exact-merge CI release-readiness, Evidence Assembly, and exact proof artifact
 - [x] Perform final multi-axis code review
