@@ -1,4 +1,4 @@
-"""Coverage-aware risk observation lifecycle (4.7.5 Gate A)."""
+"""Coverage-aware risk observation lifecycle (Gate A)."""
 
 from __future__ import annotations
 

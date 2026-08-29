@@ -1,4 +1,4 @@
-"""Versioned cost model and durability-constrained optimizer (4.7.5 Gates I, J, M)."""
+"""Versioned cost model and durability-constrained optimizer (Gates I, J, M)."""
 
 from __future__ import annotations
 

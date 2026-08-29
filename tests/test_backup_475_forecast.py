@@ -1,4 +1,4 @@
-"""Durable capacity observations, 30/90-day forecast, and backtests (4.7.5 Gates F-H)."""
+"""Durable capacity observations, 30/90-day forecast, and backtests (Gates F-H)."""
 
 from __future__ import annotations
 

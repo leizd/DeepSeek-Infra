@@ -1,4 +1,4 @@
-"""Side-effect-free what-if simulation and optimization proof (4.7.5 Gates K-L)."""
+"""Side-effect-free what-if simulation and optimization proof (Gates K-L)."""
 
 from __future__ import annotations
 

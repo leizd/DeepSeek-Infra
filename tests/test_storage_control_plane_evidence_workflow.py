@@ -74,6 +74,23 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "tests/test_backup_463_control_authority.py::test_control_authority_schema_constant_and_keys",
         "tests/test_backup_463_control_authority.py::test_authority_checkpoint_is_hash_chained_and_secretless",
     )
+    nodes_predictive_fleet = (
+        "tests/test_backup_475_risk_lifecycle.py::test_superseded_backup_risk_cannot_remain_open",
+        "tests/test_backup_475_risk_lifecycle.py::test_unknown_coverage_does_not_implicitly_clear",
+        "tests/test_backup_475_fair_service.py::test_schedule_result_reserves_without_consuming",
+        "tests/test_backup_475_fair_service.py::test_completed_action_charges_observed_bytes_exactly_once",
+        "tests/test_backup_475_fair_service.py::test_preempted_action_releases_reservation",
+        "tests/test_backup_475_wave_executor.py::test_wave_one_cannot_start_before_wave_zero_verified",
+        "tests/test_backup_475_wave_executor.py::test_failed_wave_pauses_downstream_and_stale_requires_replan",
+        "tests/test_backup_475_slo_windows.py::test_fleet_slo_exposes_named_windows_and_insufficient_data",
+        "tests/test_backup_475_forecast.py::test_forecast_uses_durable_observations_and_insufficient_fails_closed",
+        "tests/test_backup_475_forecast.py::test_forecast_backtest_persists_error_and_lowers_confidence",
+        "tests/test_backup_475_optimizer.py::test_cost_model_includes_storage_egress_and_unknown_is_not_zero",
+        "tests/test_backup_475_optimizer.py::test_optimizer_rejects_unsafe_cheaper_plan_and_is_deterministic",
+        "tests/test_backup_475_whatif.py::test_what_if_is_zero_mutation_and_binds_snapshot",
+        "tests/test_backup_475_federation.py::test_federation_snapshot_is_digest_bound_and_credential_free",
+        "tests/test_backup_475_federation.py::test_incompatible_wire_and_credentials_fail_closed",
+    )
     assert runner.SCENARIOS == {
         "real-three-minio-storage-control-plane": (node_458,),
         "real-three-minio-tiering-control-recovery": (node_459,),
@@ -85,6 +102,7 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "real-three-minio-process-replacement-authority-recovery": (node_468,),
         "real-three-minio-autonomous-remediation": (node_472,),
         "durable-fleet-scheduler-slo-correctness": nodes_durable_fleet,
+        "predictive-fleet-planning-verified-optimization": nodes_predictive_fleet,
         "storage-wire-freeze-contracts": nodes_wire_freeze,
     }
     assert set(runner.REQUIRED_ENDPOINTS) == {

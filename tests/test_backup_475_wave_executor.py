@@ -1,4 +1,4 @@
-"""Durable multi-wave execution and per-wave revalidation (4.7.5 Gates C-D)."""
+"""Durable multi-wave execution and per-wave revalidation (Gates C-D)."""
 
 from __future__ import annotations
 

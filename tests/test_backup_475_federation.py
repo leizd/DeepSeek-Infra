@@ -1,4 +1,4 @@
-"""Read-only federation readiness (4.7.5 Gate N)."""
+"""Read-only federation readiness (Gate N)."""
 
 from __future__ import annotations
 

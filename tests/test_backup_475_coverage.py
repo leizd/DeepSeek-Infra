@@ -1,4 +1,4 @@
-"""Extra 4.7.5 branches for durable planning modules."""
+"""Extra branches for durable planning modules."""
 
 from __future__ import annotations
 

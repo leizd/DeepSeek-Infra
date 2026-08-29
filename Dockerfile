@@ -1,6 +1,6 @@
 # DeepSeek Infra - local-first Personal AI Runtime
-# Build: docker build -t deepseek-infra:4.7.4 .
-# Run: docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:4.7.4
+# Build: docker build -t deepseek-infra:4.7.5 .
+# Run: docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:4.7.5
 # See docs/DEPLOYMENT.md for deployment notes.
 FROM node:24-bookworm-slim AS frontend-builder
 

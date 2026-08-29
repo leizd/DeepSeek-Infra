@@ -1,4 +1,4 @@
-"""Reserved versus consumed fair service (4.7.5 Gate B)."""
+"""Reserved versus consumed fair service (Gate B)."""
 
 from __future__ import annotations
 

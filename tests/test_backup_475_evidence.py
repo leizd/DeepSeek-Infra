@@ -1,4 +1,4 @@
-"""4.7.5 predictive planning evidence names and semantic validators."""
+"""Predictive planning evidence names and semantic validators."""
 
 from __future__ import annotations
 

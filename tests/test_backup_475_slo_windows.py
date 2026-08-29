@@ -1,4 +1,4 @@
-"""Time-windowed Fleet SLO and risk-debt score (4.7.5 Gate E)."""
+"""Time-windowed Fleet SLO and risk-debt score (Gate E)."""
 
 from __future__ import annotations
 
