@@ -117,3 +117,7 @@ rust/target/
 .resilience-risk/
 .resilience-scheduler/
 .resilience-slo/
+.resilience-waves/
+.resilience-capacity/
+.resilience-cost/
+.resilience-optimizer/

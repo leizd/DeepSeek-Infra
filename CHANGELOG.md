@@ -4,6 +4,33 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.7.5] - Predictive Fleet Planning & Verified Optimization (2026-08-29)
+
+### Predictive Fleet Planning & Verified Optimization
+
+- **Scope-aware risk lifecycle:** authoritative snapshot coverage reconciles absent
+  RiskSubjects as HEALTHY, SUPERSEDED_BACKUP, POLICY_DISABLED, TARGET_REMOVED, or
+  SCOPE_RETIRED; incomplete coverage never implicitly clears OPEN debt.
+- **Reserved vs consumed fairness:** scheduling only reserves service; persistent
+  fair share is charged from observed bytes/duration after verified terminal
+  success, and PREEMPTED/STALE/REPLAN releases the reservation.
+- **Durable multi-wave execution:** Wave N starts only after Wave N-1 verified
+  success, with fresh Authority, RiskSnapshot, budget, maintenance, and blast-radius
+  revalidation; stale plans pause for replan.
+- **Time-windowed Fleet SLO:** operator snapshots expose 1h/24h/7d/30d/lifetime
+  p50/p95/p99 with explicit INSUFFICIENT_DATA, and readiness `riskDebt.total` is
+  the debt score sum rather than open-risk count.
+- **Predictive planning:** durable capacity observations feed 30/90-day P50/P90
+  forecasts, backtests that can lower confidence, a digest-bound price catalog,
+  and a durability-constrained optimizer that never trades copies or failure
+  domains for cheaper placement.
+- **Side-effect-free What-If and read-only federation:** simulations prove zero
+  storage/authority/journal mutation; federation snapshots are credential-free
+  and digest-bound.
+- **Wire freeze unchanged:** object-set-v1, Receipt v4, Commit v4, FastCDC v3,
+  randomized Age, control-authority-v1, AuthorityCheckpoint v1,
+  dr-readiness-proof-v1, and evidence-proof-v2.
+
 ## [4.7.4] - Durable Fleet SLO & Evidence-Closed Autonomous Operations (2026-08-28)
 
 ### Durable Fleet SLO & Evidence-Closed Autonomous Operations

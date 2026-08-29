@@ -946,4 +946,93 @@ def create_backup_governance_router() -> APIRouter:
 
         return json_response(rpo_rto_optimizer.generate_placement_recommendations())
 
+    @router.get("/api/workspace/resilience/waves")
+    async def api_resilience_waves(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import resilience_wave_executor
+
+        schedule_id = request.query_params.get("scheduleId")
+        if not schedule_id:
+            snapshot = None
+            from deepseek_infra.infra.workspace import resilience_scheduler_service
+
+            latest = resilience_scheduler_service.get_latest_schedule_snapshot()
+            schedule_id = str((latest or {}).get("scheduleId") or "")
+            snapshot = latest
+        else:
+            snapshot = None
+        if not schedule_id:
+            return json_response({"schedule": None, "waves": [], "actions": []})
+        return json_response(
+            {
+                "schedule": resilience_wave_executor.get_schedule(schedule_id) or snapshot,
+                "waves": resilience_wave_executor.list_waves(schedule_id),
+                "actions": resilience_wave_executor.list_wave_actions(schedule_id),
+            }
+        )
+
+    @router.post("/api/workspace/resilience/waves/admit")
+    async def api_resilience_waves_admit(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import resilience_wave_executor
+
+        schedule_id = str((body or {}).get("scheduleId") or "") if isinstance(body, dict) else ""
+        if not schedule_id:
+            raise AppError("scheduleId is required", code=ErrorCode.INVALID_REQUEST, status=400)
+        wave_index = body.get("waveIndex") if isinstance(body, dict) else None
+        return json_response(resilience_wave_executor.admit_wave(schedule_id, None if wave_index is None else int(wave_index)))
+
+    @router.get("/api/workspace/resilience/capacity-forecast")
+    async def api_resilience_capacity_forecast(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import resilience_capacity_forecast
+
+        horizon = request.query_params.get("horizonDays")
+        days = int(horizon) if horizon and horizon.isdigit() else 90
+        return json_response(resilience_capacity_forecast.forecast_all_targets(horizon_days=days))
+
+    @router.post("/api/workspace/resilience/whatif")
+    async def api_resilience_whatif(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import resilience_whatif
+
+        if not isinstance(body, dict):
+            raise AppError("what-if body is required", code=ErrorCode.INVALID_REQUEST, status=400)
+        observed = body.get("observedSnapshot")
+        forecast = body.get("forecast")
+        catalog = body.get("priceCatalog")
+        candidate = body.get("candidate")
+        baseline = body.get("baseline")
+        running = body.get("runningEffects")
+        windows = body.get("maintenanceWindows")
+        return json_response(
+            resilience_whatif.simulate_fleet(
+                observed_snapshot=observed if isinstance(observed, dict) else {},
+                forecast=forecast if isinstance(forecast, dict) else {},
+                price_catalog=catalog if isinstance(catalog, dict) else None,
+                candidate=candidate if isinstance(candidate, dict) else {},
+                baseline=baseline if isinstance(baseline, dict) else {},
+                running_effects=running if isinstance(running, list) else [],
+                maintenance_windows=windows if isinstance(windows, list) else [],
+            )
+        )
+
+    @router.get("/api/workspace/resilience/federation")
+    async def api_resilience_federation(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import resilience_federation_readiness
+
+        return json_response(
+            resilience_federation_readiness.build_federation_snapshot(
+                fleet_id=str(request.query_params.get("fleetId") or "local"),
+                wire_compatibility=["object-set-v1", "receipt-v4", "commit-v4", "fastcdc-v3"],
+                available_failure_domains=[],
+                forecast_headroom=None,
+                cost_class="unknown",
+                readiness="UNKNOWN",
+            )
+        )
+
     return router

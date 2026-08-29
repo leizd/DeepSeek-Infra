@@ -542,4 +542,7 @@ def schedule_fleet_resilience(
         metadata={"candidateActions": len(sorted_actions), "unschedulableActions": len(unschedulable_actions)},
     )
     resilience_scheduler_service.record_schedule_result(schedule, assigned_actions, scheduled_at=current)
+    from deepseek_infra.infra.workspace import resilience_wave_executor
+
+    resilience_wave_executor.persist_planned_schedule(schedule, now=current)
     return schedule

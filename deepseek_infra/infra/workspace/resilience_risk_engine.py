@@ -559,6 +559,24 @@ def assess_risks(
         "generatedAt": _utc_iso(current),
         "overallRisk": worst_severity,
         "risks": all_risks,
+        "coverage": {
+            RiskType.CAPACITY_EXHAUSTION.value: {
+                "targets": sorted(seen_targets),
+                "complete": target_ids is None,
+            },
+            RiskType.REPLICA_LAG.value: {
+                "policies": sorted(seen_policies),
+                "complete": policy_ids is None,
+            },
+            RiskType.FAILURE_DOMAIN_VIOLATION.value: {
+                "policies": sorted(seen_policies),
+                "complete": policy_ids is None,
+            },
+            RiskType.DR_STALENESS.value: {"complete": True},
+            RiskType.RESTORE_LATENCY_BREACH.value: {"complete": True},
+            RiskType.REPAIR_BACKLOG.value: {"complete": True},
+            RiskType.AUTHORITY_DEGRADATION.value: {"complete": True},
+        },
     }
     snapshot["riskDigest"] = compute_risk_digest(snapshot)
     from deepseek_infra.infra.workspace import resilience_risk_observations
