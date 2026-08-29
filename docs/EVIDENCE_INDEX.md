@@ -72,10 +72,16 @@ without required fields fails. Cross-replica valid forks report overall
 ### Local Evidence environment (dev only)
 
 Formal PASS remains CI job `storage-control-plane-minio-e2e` on the exact merge
-commit. For local development:
+commit. The ordinary `pytest` gate no longer skips these scenarios: its session
+fixture builds the two Rust backup helpers and provisions three independent
+MinIO instances. It prefers `DEEPSEEK_TEST_MINIO_BINARY`, then `minio` on
+`PATH`, and otherwise uses the pinned Docker image. The fixture proof remains
+local development evidence only.
+
+To invoke the dedicated Evidence runner manually:
 
 ```text
-python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+python -m pip install -r requirements.txt -r requirements-dev.txt
 python scripts/build_backup_crypto.py
 # requires Docker Desktop / engine on PATH
 python scripts/setup_storage_control_plane_minio_e2e.py doctor

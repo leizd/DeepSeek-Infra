@@ -245,7 +245,7 @@ class RealStorageEnvironment:
             )
 
         access_key = str(os.environ.get("MINIO_ROOT_USER") or "deepseekci")
-        secret_key = str(os.environ.get("MINIO_ROOT_PASSWORD") or "local-storage-control-e2e")
+        secret_key = str(os.environ.get("MINIO_ROOT_PASSWORD") or f"pytest-minio-{uuid.uuid4().hex}")
         ports = _free_ports(3)
         endpoints = tuple(f"http://127.0.0.1:{port}" for port in ports)
         binary = _find_minio_binary(repository_root)

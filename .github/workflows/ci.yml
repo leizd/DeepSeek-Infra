@@ -57,6 +57,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Install native backup helper toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
