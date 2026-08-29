@@ -21,6 +21,7 @@ from deepseek_infra.infra.workspace import (
     backup_writer_lease,
     evidence_proof,
     resilience_action_journal,
+    resilience_resource_locks,
 )
 
 
@@ -30,6 +31,22 @@ class _FailingCommitConnection:
 
     def execute(self, _statement: str) -> None:
         raise sqlite3.OperationalError(self.message)
+
+
+def test_resource_lock_schema_initialization_preserves_caller_transaction() -> None:
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        conn.execute("CREATE TABLE transaction_probe (value TEXT NOT NULL)")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("INSERT INTO transaction_probe (value) VALUES ('pending')")
+
+        resilience_resource_locks.ensure_locks_schema(conn)
+
+        assert conn.in_transaction is True
+        conn.execute("ROLLBACK")
+        assert conn.execute("SELECT COUNT(*) FROM transaction_probe").fetchone() == (0,)
+    finally:
+        conn.close()
 
 
 def _limits(**overrides: int) -> dict[str, int]:
