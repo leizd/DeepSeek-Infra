@@ -50,7 +50,7 @@ proof 时 Assembly 必须失败。详细运维步骤见
 Age、Projection semantics、`control-authority-v1`、AuthorityCheckpoint v1 与
 `dr-readiness-proof-v1` 不变。
 
-## Hybrid Runtime 总览（v4.7.4）
+## Hybrid Runtime 总览（v4.7.5）
 
 > 运维细节、feature flags 与回滚命令见 [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)。
 
