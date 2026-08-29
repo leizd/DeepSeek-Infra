@@ -3280,9 +3280,12 @@ def test_recovery_job_control_survives_real_process_exits(tmp_settings: Path) ->
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_object_set_restore_resumes_across_real_process_exits(tmp_settings: Path) -> None:
-    if not bool(backup_crypto.capabilities().get("encryptedBackupAvailable")):
-        pytest.skip("real backup crypto helper is unavailable")
+def test_object_set_restore_resumes_across_real_process_exits(
+    tmp_settings: Path,
+    native_backup_helpers: None,
+) -> None:
+    del native_backup_helpers
+    assert backup_crypto.capabilities().get("encryptedBackupAvailable") is True
     identity = backup_crypto.generate_identity()
     recovery_identity = str(identity["identity"])
     package = _full_object_set_package(tmp_settings, recipients=(str(identity["recipient"]),))
