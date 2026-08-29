@@ -61,6 +61,33 @@ def test_fleet_slo_samples_persist_and_compute_percentiles(tmp_settings: Path) -
     assert snapshot["sampleCounts"][resilience_slo_ledger.RISK_CLEAR_LATENCY_MS] == 3
 
 
+def test_slo_limit_keeps_latest_samples_and_evidence_freshness_ages(tmp_settings: Path) -> None:
+    now = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
+    for index in range(3):
+        resilience_slo_ledger.record_sample(
+            "bounded-latest",
+            float(index + 1),
+            observed_at=now + timedelta(seconds=index),
+            sample_key=f"bounded-latest-{index}",
+        )
+    resilience_slo_ledger.record_evidence_verification(
+        proof_sha256="a" * 64,
+        scenario="evidence-freshness-test",
+        verified_at=now - timedelta(minutes=5),
+    )
+    resilience_slo_ledger.record_evidence_verification(
+        proof_sha256="a" * 64,
+        scenario="evidence-freshness-test",
+        verified_at=now - timedelta(minutes=1),
+    )
+
+    bounded = resilience_slo_ledger.list_samples("bounded-latest", limit=2)
+    snapshot = resilience_slo_ledger.get_fleet_slo_snapshot(now=now)
+
+    assert [item["value"] for item in bounded] == [2.0, 3.0]
+    assert snapshot["evidenceFreshnessSeconds"] == 60.0
+
+
 def test_fast_and_slow_error_budget_burn_rates_are_computed(tmp_settings: Path) -> None:
     now = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
     resilience_slo_ledger.record_burn_observation(
@@ -84,6 +111,32 @@ def test_fast_and_slow_error_budget_burn_rates_are_computed(tmp_settings: Path) 
     assert result["slow"] == pytest.approx(200.0 / 2400.0 / 0.01)
     assert result["status"] == "CRITICAL"
     assert result["criticalIndicators"] == [resilience_slo_ledger.CRITICAL_DURABILITY_RISK_MINUTES]
+
+
+def test_burn_rate_clips_duration_observations_to_each_window(tmp_settings: Path) -> None:
+    now = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
+    resilience_slo_ledger.record_burn_observation(
+        resilience_slo_ledger.CRITICAL_DURABILITY_RISK_MINUTES,
+        bad_units=90,
+        total_units=90,
+        started_at=now - timedelta(hours=2),
+        observed_at=now - timedelta(minutes=30),
+        observation_key="crosses-fast-window",
+    )
+    resilience_slo_ledger.record_burn_observation(
+        resilience_slo_ledger.CRITICAL_DURABILITY_RISK_MINUTES,
+        bad_units=0,
+        total_units=30,
+        started_at=now - timedelta(minutes=30),
+        observed_at=now,
+        observation_key="recent-healthy-window",
+    )
+
+    result = resilience_slo_ledger.compute_burn_rates(now=now)
+
+    indicator = result["byIndicator"][resilience_slo_ledger.CRITICAL_DURABILITY_RISK_MINUTES]
+    assert indicator["fast"] == pytest.approx(50.0)
+    assert indicator["slow"] == pytest.approx(75.0)
 
 
 def test_risk_clear_and_action_claim_takeover_are_measured(tmp_settings: Path) -> None:
@@ -125,11 +178,19 @@ def test_risk_clear_and_action_claim_takeover_are_measured(tmp_settings: Path) -
         enforce_budgets=False,
     )
     assert takeover and second is not None
+    resilience_action_journal.update_action_state(
+        "takeover-slo",
+        "SUCCEEDED",
+        execution_epoch=int(second["executionEpoch"]),
+        claim_token=str(second["claimToken"]),
+        now=opened_at + timedelta(seconds=30),
+    )
 
     assert resilience_slo_ledger.list_samples(resilience_slo_ledger.RISK_DETECTION_LATENCY_MS)[0]["value"] == 5000.0
     assert resilience_slo_ledger.list_samples(resilience_slo_ledger.RISK_CLEAR_LATENCY_MS)[0]["value"] == 30000.0
     assert resilience_slo_ledger.list_samples(resilience_slo_ledger.REMEDIATION_QUEUE_DELAY_MS)[0]["value"] == 10000.0
     assert resilience_slo_ledger.list_samples(resilience_slo_ledger.LEASE_TAKEOVER_TIME_MS)[0]["value"] == 2000.0
+    assert resilience_slo_ledger.list_samples(resilience_slo_ledger.REPAIR_TIME_MS)[0]["value"] == 20000.0
 
 
 def test_maintenance_windows_block_background_work_and_allow_critical_overrides(tmp_settings: Path) -> None:
@@ -176,6 +237,41 @@ def test_terminal_repair_records_duration_and_remediation_outcome(tmp_settings: 
     assert duration[0]["value"] == 30000.0
     burn = resilience_slo_ledger.compute_burn_rates(now=started + timedelta(seconds=40))
     assert burn["byIndicator"][resilience_slo_ledger.FAILED_REMEDIATION_RATIO]["fast"] == 0.0
+
+
+def test_terminal_action_state_survives_auxiliary_slo_failure(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = datetime(2026, 8, 28, 10, 0, tzinfo=timezone.utc)
+    action = _action("repair-slo-failure", "CREATE_REPAIR_JOB", severity="critical")
+    resilience_action_journal.record_action_intent(action, now=started)
+    claimed, claimed_action, _ = resilience_action_journal.admit_and_claim_action(
+        "repair-slo-failure",
+        owner_instance_id="worker-slo-failure",
+        now=started + timedelta(seconds=10),
+        enforce_budgets=False,
+    )
+    assert claimed and claimed_action is not None
+
+    def fail_slo_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated SLO volume failure")
+
+    monkeypatch.setattr(resilience_slo_ledger, "record_sample", fail_slo_write)
+    monkeypatch.setattr(resilience_slo_ledger, "record_burn_observation", fail_slo_write)
+
+    updated = resilience_action_journal.update_action_state(
+        "repair-slo-failure",
+        "SUCCEEDED",
+        execution_epoch=int(claimed_action["executionEpoch"]),
+        claim_token=str(claimed_action["claimToken"]),
+        now=started + timedelta(seconds=40),
+    )
+
+    assert updated["state"] == "SUCCEEDED"
+    persisted = resilience_action_journal.get_action("repair-slo-failure")
+    assert persisted is not None
+    assert persisted["state"] == "SUCCEEDED"
 
 
 def test_fleet_readiness_api_is_authenticated_and_source_backed(tmp_settings: Path) -> None:
@@ -333,6 +429,8 @@ def test_slo_ledger_fails_closed_on_invalid_samples_and_empty_budget_windows(tmp
 
     resilience_slo_ledger.record_sample("filtered", 1, observed_at=now, sample_key="filtered-one")
     assert resilience_slo_ledger.list_samples(since=now + timedelta(seconds=1)) == []
+    with pytest.raises(ValueError, match="sample_key conflict"):
+        resilience_slo_ledger.record_sample("filtered", 2, observed_at=now, sample_key="filtered-one")
 
     with pytest.raises(ValueError, match="bad_units cannot exceed total_units"):
         resilience_slo_ledger.record_burn_observation("invalid", bad_units=2, total_units=1)
@@ -343,6 +441,22 @@ def test_slo_ledger_fails_closed_on_invalid_samples_and_empty_budget_windows(tmp
         observed_at=now,
         observation_key="zero-total",
     )
+    with pytest.raises(ValueError, match="observation_key conflict"):
+        resilience_slo_ledger.record_burn_observation(
+            "zero-total",
+            bad_units=0,
+            total_units=1,
+            observed_at=now,
+            observation_key="zero-total",
+        )
+    with pytest.raises(ValueError, match="started_at cannot be after observed_at"):
+        resilience_slo_ledger.record_burn_observation(
+            "invalid-window",
+            bad_units=0,
+            total_units=1,
+            started_at=now + timedelta(seconds=1),
+            observed_at=now,
+        )
     burn = resilience_slo_ledger.compute_burn_rates(now=now)
     assert burn["byIndicator"]["zero-total"] == {"fast": 0.0, "slow": 0.0}
     with pytest.raises(ValueError, match="errorBudgetFraction"):

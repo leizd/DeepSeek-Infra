@@ -525,7 +525,7 @@ def assess_risks(
     if isinstance(dr_age_days, (int, float)) and not isinstance(dr_age_days, bool):
         from deepseek_infra.infra.workspace import resilience_slo_ledger
 
-        resilience_slo_ledger.record_sample(
+        resilience_slo_ledger.try_record_sample(
             resilience_slo_ledger.DR_READINESS_AGE_HOURS,
             max(0.0, float(dr_age_days) * 24.0),
             observed_at=current,

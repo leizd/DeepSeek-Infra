@@ -168,8 +168,9 @@ def _connect() -> Iterator[sqlite3.Connection]:
 def _commit(conn: sqlite3.Connection) -> None:
     try:
         conn.execute("COMMIT")
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as exc:
+        if "no transaction is active" not in str(exc).lower():
+            raise
 
 
 def _rollback(conn: sqlite3.Connection) -> None:
@@ -576,7 +577,7 @@ def update_action_state(
             """
             SELECT created_at FROM resilience_action_events
             WHERE action_id = ? AND event_type IN ('ACTION_CLAIMED', 'ACTION_TAKEOVER')
-            ORDER BY event_id DESC LIMIT 1
+            ORDER BY event_id ASC LIMIT 1
             """,
             (action_id,),
         ).fetchone()
@@ -703,7 +704,7 @@ def update_action_state(
         if duration_ms is not None:
             metric = resilience_slo_ledger.REPAIR_TIME_MS if action_type == "CREATE_REPAIR_JOB" else resilience_slo_ledger.REBALANCE_TIME_MS
             success = state == "SUCCEEDED"
-            resilience_slo_ledger.record_sample(
+            resilience_slo_ledger.try_record_sample(
                 metric,
                 duration_ms,
                 observed_at=current,
@@ -711,7 +712,7 @@ def update_action_state(
                 outcome="success" if success else "failed",
                 sample_key=f"remediation:{action_id}:{recorded_epoch}",
             )
-            resilience_slo_ledger.record_burn_observation(
+            resilience_slo_ledger.try_record_burn_observation(
                 resilience_slo_ledger.FAILED_REMEDIATION_RATIO,
                 bad_units=0 if success else 1,
                 total_units=1,
@@ -852,7 +853,7 @@ def admit_and_claim_action(
     if claimed_state == "CLAIMED":
         queue_delay_ms = resilience_slo_ledger.milliseconds_between(action_created_at, current)
         if queue_delay_ms is not None:
-            resilience_slo_ledger.record_sample(
+            resilience_slo_ledger.try_record_sample(
                 resilience_slo_ledger.REMEDIATION_QUEUE_DELAY_MS,
                 queue_delay_ms,
                 observed_at=current,
@@ -860,7 +861,7 @@ def admit_and_claim_action(
                 sample_key=f"queue-delay:{action_id}:{claimed_epoch}",
             )
             threshold_ms = float(action.get("queueDelaySloMs") or 300000.0)
-            resilience_slo_ledger.record_burn_observation(
+            resilience_slo_ledger.try_record_burn_observation(
                 resilience_slo_ledger.QUEUE_DELAY_VIOLATIONS,
                 bad_units=1 if queue_delay_ms > threshold_ms else 0,
                 total_units=1,
@@ -870,7 +871,7 @@ def admit_and_claim_action(
     else:
         takeover_delay_ms = resilience_slo_ledger.milliseconds_between(current_lease, current)
         if takeover_delay_ms is not None:
-            resilience_slo_ledger.record_sample(
+            resilience_slo_ledger.try_record_sample(
                 resilience_slo_ledger.LEASE_TAKEOVER_TIME_MS,
                 takeover_delay_ms,
                 observed_at=current,

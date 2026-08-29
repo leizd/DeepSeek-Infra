@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import (
+    backup_policies,
     resilience_fleet_scheduler,
     resilience_planner,
     resilience_risk_observations,
@@ -18,7 +20,9 @@ from deepseek_infra.infra.workspace import (
 def _snapshot(*, severity: str, generated_at: datetime) -> dict[str, object]:
     return {
         "riskSnapshotVersion": 1,
-        "riskDigest": f"digest-{severity}-{generated_at.timestamp()}",
+        # Production riskDigest is deterministic for unchanged risk state; it
+        # deliberately does not include generatedAt.
+        "riskDigest": f"digest-{severity}",
         "generatedAt": generated_at.isoformat(),
         "overallRisk": severity,
         "risks": [
@@ -52,9 +56,52 @@ def test_risk_first_seen_persists_and_debt_ages_across_planner_runs(tmp_settings
     assert first_action["riskSubjectDigest"] == later_action["riskSubjectDigest"]
     assert first_action["riskFirstSeenAt"] == later_action["riskFirstSeenAt"]
     assert later_action["riskObservationCount"] == 2
+    assert later_action["riskLastSeenAt"].startswith("2026-08-15")
+    replay = resilience_risk_observations.observe_risk_snapshot(later_snapshot, now=later)
+    assert replay[0]["observationCount"] == 2
     debt = resilience_fleet_scheduler.compute_risk_debt(later_action, now=later)
     assert debt["ageDays"] == 14.0
     assert debt["ageSource"] == "risk-observation-ledger"
+
+
+def test_risk_debt_does_not_hide_policy_store_failures(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_policy_read(_policy_id: str) -> dict[str, object]:
+        raise AppError("policy store unavailable", code=ErrorCode.INTERNAL, status=500)
+
+    monkeypatch.setattr(backup_policies, "get_policy", fail_policy_read)
+
+    with pytest.raises(AppError, match="policy store unavailable"):
+        resilience_fleet_scheduler.compute_risk_debt(
+            {
+                "actionId": "policy-store-failure",
+                "severity": "critical",
+                "parameters": {"policyId": "policy-store-failure"},
+            },
+            now=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
+
+
+def test_scheduler_result_persists_fair_service_and_snapshot_atomically(tmp_settings: Path) -> None:
+    action = {
+        "actionId": "atomic-schedule-action",
+        "parameters": {"policyId": "atomic-schedule-policy", "estimatedBytes": 1024},
+    }
+    with pytest.raises(TypeError):
+        resilience_scheduler_service.record_schedule_result(
+            {"scheduleId": "invalid-schedule", "invalid": {"not-json"}},
+            [action],
+        )
+    assert resilience_scheduler_service.get_policy_service("atomic-schedule-policy") is None
+    assert resilience_scheduler_service.get_latest_schedule_snapshot() is None
+
+    schedule = {"scheduleId": "valid-schedule", "executionWaves": []}
+    resilience_scheduler_service.record_schedule_result(schedule, [action])
+
+    assert resilience_scheduler_service.get_policy_service("atomic-schedule-policy")["actionsServed"] == 1  # type: ignore[index]
+    assert resilience_scheduler_service.get_latest_schedule_snapshot() == schedule
 
 
 def test_cleared_risk_stops_debt_and_reopen_uses_new_open_interval(tmp_settings: Path) -> None:

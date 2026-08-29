@@ -10,7 +10,7 @@ import pytest
 
 from deepseek_infra.core.config import APP_VERSION
 from deepseek_infra.infra.diagnostics.evidence_inventory import evidence_paths_for_producer
-from deepseek_infra.infra.workspace import evidence_proof
+from deepseek_infra.infra.workspace import evidence_proof, resilience_slo_ledger
 from scripts import run_storage_control_plane_minio_e2e, validate_evidence_proof
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -206,6 +206,7 @@ def test_474_required_check_names_are_locked_to_proof_or_explicit_scenarios() ->
 
 
 def test_validate_evidence_proof_cli_reports_exact_bytes_and_digest(
+    tmp_settings: Path,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -230,6 +231,12 @@ def test_validate_evidence_proof_cli_reports_exact_bytes_and_digest(
         "sha256": hashlib.sha256(raw).hexdigest(),
         "status": "PASS",
     }
+    verification = resilience_slo_ledger.latest_evidence_verification()
+    assert verification is not None
+    assert verification["metadata"] == {
+        "proofSha256": hashlib.sha256(raw).hexdigest(),
+        "scenario": "proof-cli-scenario",
+    }
 
 
 def test_validate_evidence_proof_cli_fails_closed_on_semantic_or_scenario_error(
@@ -252,6 +259,32 @@ def test_validate_evidence_proof_cli_fails_closed_on_semantic_or_scenario_error(
     scenario_result = json.loads(capsys.readouterr().out)
     assert scenario_result["status"] == "FAIL"
     assert "evidence-proof-scenario-mismatch" in scenario_result["error"]
+
+
+def test_validate_evidence_proof_cli_fails_when_freshness_cannot_persist(
+    tmp_settings: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "proof-slo-failure.json"
+    evidence_proof.write_evidence_proof(
+        path,
+        scenario="proof-slo-failure",
+        checks={"operatorClaim": {"status": "PASS", "evidence": {"source": "durable-journal"}}},
+    )
+
+    def fail_persistence(**_kwargs: object) -> dict[str, Any]:
+        raise OSError("SLO ledger unavailable")
+
+    monkeypatch.setattr(resilience_slo_ledger, "record_evidence_verification", fail_persistence)
+
+    assert validate_evidence_proof.main(["--proof", str(path)]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "FAIL"
+    assert result["errors"] == {
+        "$slo": ["evidence-verification-not-durable:OSError:SLO ledger unavailable"]
+    }
 
 
 def test_autonomous_storage_validator_reports_malformed_bytes_and_provider_bindings() -> None:
@@ -307,6 +340,41 @@ def test_autonomous_storage_validator_reports_malformed_bytes_and_provider_bindi
     invalid_json_errors = evidence_proof.validate_autonomous_storage_bytes_proof(invalid_json, "proof")
     assert "invalid-receipt-json" in invalid_json_errors
     assert "commit-must-be-object" in invalid_json_errors
+
+    invalid_schema_type = _actual_copy_evidence()
+    receipt = json.loads(base64.b64decode(str(invalid_schema_type["receiptBytesBase64"])))
+    commit = json.loads(base64.b64decode(str(invalid_schema_type["commitBytesBase64"])))
+    receipt["schemaVersion"] = []
+    receipt_bytes = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    receipt_sha256 = hashlib.sha256(receipt_bytes).hexdigest()
+    commit["schemaVersion"] = "4"
+    commit["receiptDigest"] = receipt_sha256
+    commit_bytes = json.dumps(commit, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    commit_sha256 = hashlib.sha256(commit_bytes).hexdigest()
+    invalid_schema_type.update(
+        {
+            "receiptBytesBase64": base64.b64encode(receipt_bytes).decode("ascii"),
+            "commitBytesBase64": base64.b64encode(commit_bytes).decode("ascii"),
+            "rawReceiptSha256": receipt_sha256,
+            "rawCommitSha256": commit_sha256,
+            "commitReceiptDigest": receipt_sha256,
+            "providerReceiptObject": {
+                "key": invalid_schema_type["receiptKey"],
+                "size": len(receipt_bytes),
+                "etag": "receipt-etag",
+                "sha256": receipt_sha256,
+            },
+            "providerCommitObject": {
+                "key": invalid_schema_type["commitKey"],
+                "size": len(commit_bytes),
+                "etag": "commit-etag",
+                "sha256": commit_sha256,
+            },
+        }
+    )
+    invalid_schema_errors = evidence_proof.validate_autonomous_storage_bytes_proof(invalid_schema_type, "proof")
+    assert "receipt-schema-not-v4" in invalid_schema_errors
+    assert "commit-schema-not-v4" in invalid_schema_errors
 
     mismatched = _actual_copy_evidence()
     receipt = {
@@ -379,8 +447,11 @@ def test_crash_takeover_validator_rejects_fabricated_process_and_event_order() -
         "repairId": "repair-one",
         "repairPhaseAtCrash": "idle",
         "reconciliationDirective": "CREATE_NEW_EFFECT",
+        "workerALeaseUntil": "not-a-time",
         "remoteRepairJobCountBefore": 0,
         "remoteRepairJobCountAfter": 2,
+        "remoteRepairJobIdsBefore": [],
+        "remoteRepairJobIdsAfter": ["repair-one", "repair-two"],
         "journalEvents": "self-reported",
     }
     fabricated_errors = set(evidence_proof.validate_crash_recovery_proof(fabricated, "crash"))
@@ -389,6 +460,8 @@ def test_crash_takeover_validator_rejects_fabricated_process_and_event_order() -
         "worker-a-not-hard-terminated",
         "takeover-execution-epoch-not-increased",
         "underlying-repair-job-count-not-exactly-one",
+        "underlying-repair-job-identity-not-stable",
+        "invalid-worker-a-lease-expiry",
         "worker-a-not-killed-during-active-repair",
         "invalid-reconciliation-directive",
         "journal-events-must-be-list",
@@ -404,24 +477,35 @@ def test_crash_takeover_validator_rejects_fabricated_process_and_event_order() -
         "reconciliationDirective": "RESUME_EXECUTION",
         "remoteRepairJobCountBefore": 1,
         "remoteRepairJobCountAfter": 1,
+        "workerALeaseUntil": "2026-08-28T12:00:10Z",
+        "remoteRepairJobIdsBefore": ["repair-one"],
+        "remoteRepairJobIdsAfter": ["repair-one"],
         "journalEvents": [
             None,
             {"executionEpoch": "bad"},
             {
+                "eventType": "ACTION_TAKEOVER",
                 "state": "RECONCILING",
                 "executionEpoch": 2,
                 "ownerInstanceId": "worker-b-pid-20",
                 "effectHandle": {"kind": "repair", "repairId": "repair-one"},
+                "createdAt": "2026-08-28T12:00:09Z",
             },
             {
+                "eventType": "STATE_TRANSITION",
                 "state": "EXECUTING",
                 "executionEpoch": 1,
                 "ownerInstanceId": "worker-a-pid-10",
                 "effectHandle": {"kind": "repair", "repairId": "repair-one"},
+                "createdAt": "2026-08-28T12:00:01Z",
             },
         ],
     }
     assert "reconciling-event-not-after-executing-event" in evidence_proof.validate_crash_recovery_proof(
+        reversed_events,
+        "crash",
+    )
+    assert "takeover-occurred-before-worker-a-lease-expiry" in evidence_proof.validate_crash_recovery_proof(
         reversed_events,
         "crash",
     )

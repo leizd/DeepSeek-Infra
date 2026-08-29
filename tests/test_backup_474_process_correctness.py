@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -20,6 +21,14 @@ from deepseek_infra.infra.workspace import (
     evidence_proof,
     resilience_action_journal,
 )
+
+
+class _FailingCommitConnection:
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    def execute(self, _statement: str) -> None:
+        raise sqlite3.OperationalError(self.message)
 
 
 def _limits(**overrides: int) -> dict[str, int]:
@@ -286,20 +295,27 @@ def test_process_and_crash_proof_validators_reject_self_reported_flags() -> None
         "repairId": "repair-live",
         "repairPhaseAtCrash": "transferring-components",
         "reconciliationDirective": "RESUME_EXECUTION",
+        "workerALeaseUntil": "2026-08-28T12:00:10Z",
         "remoteRepairJobCountBefore": 1,
         "remoteRepairJobCountAfter": 1,
+        "remoteRepairJobIdsBefore": ["repair-live"],
+        "remoteRepairJobIdsAfter": ["repair-live"],
         "journalEvents": [
             {
+                "eventType": "STATE_TRANSITION",
                 "state": "EXECUTING",
                 "executionEpoch": 1,
                 "ownerInstanceId": "worker-101",
                 "effectHandle": {"kind": "repair", "repairId": "repair-live"},
+                "createdAt": "2026-08-28T12:00:01Z",
             },
             {
+                "eventType": "ACTION_TAKEOVER",
                 "state": "RECONCILING",
                 "executionEpoch": 2,
                 "ownerInstanceId": "worker-202",
                 "effectHandle": {"kind": "repair", "repairId": "repair-live"},
+                "createdAt": "2026-08-28T12:00:11Z",
             },
         ],
     }
@@ -307,3 +323,9 @@ def test_process_and_crash_proof_validators_reject_self_reported_flags() -> None
         "takeoverDoesNotCreateSecondRepairJob",
         {"status": "PASS", "evidence": actual_crash},
     ) == []
+
+
+def test_action_journal_commit_only_ignores_absent_transaction() -> None:
+    resilience_action_journal._commit(_FailingCommitConnection("cannot commit - no transaction is active"))  # type: ignore[arg-type]  # noqa: SLF001
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        resilience_action_journal._commit(_FailingCommitConnection("disk I/O error"))  # type: ignore[arg-type]  # noqa: SLF001

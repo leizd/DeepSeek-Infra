@@ -357,6 +357,35 @@ def test_invalid_zero_capacity_and_blast_failure_are_typed_unschedulable(
     assert blast["unschedulableActions"][0]["unschedulableReason"] == "BLAST_RADIUS_VIOLATION"
 
 
+def test_blast_conflict_partitions_individually_safe_actions_into_separate_waves(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def simulate(actions: list[dict[str, Any]], **_kwargs: Any) -> tuple[bool, dict[str, Any]]:
+        passed = len(actions) <= 1
+        return passed, {
+            "passed": passed,
+            "reason": "safe" if passed else "combined-wave-conflict",
+            "proposedActionIds": [str(action["actionId"]) for action in actions],
+        }
+
+    monkeypatch.setattr(resilience_coordinator, "simulate_coordination_wave", simulate)
+    schedule = resilience_fleet_scheduler.schedule_fleet_resilience(
+        {"riskDigest": "blast-partition", "risks": []},
+        candidate_actions=[
+            _repair("blast-safe-a", policy="policy-a", backup="backup-a", target="target-a"),
+            _repair("blast-safe-b", policy="policy-b", backup="backup-b", target="target-b"),
+        ],
+    )
+
+    assert [[item["actionId"] for item in wave["actions"]] for wave in schedule["executionWaves"]] == [
+        ["blast-safe-a"],
+        ["blast-safe-b"],
+    ]
+    assert schedule["unschedulableActions"] == []
+    assert "BLAST_RADIUS_WAVE_CONFLICT" in schedule["executionWaves"][1]["actions"][0]["priorDeferReasons"]
+
+
 def test_wave_deferral_records_global_target_policy_and_domain_constraints(tmp_settings: Path) -> None:
     first = _repair("limit-first", policy="policy-one", backup="backup-one", target="target-one")
     first["parameters"]["failureDomain"] = "zone-one"

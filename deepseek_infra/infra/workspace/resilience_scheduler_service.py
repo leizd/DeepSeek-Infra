@@ -116,74 +116,119 @@ def record_scheduled_actions(
     timestamp = _utc_iso(scheduled_at)
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        for action in actions:
-            action_id = str(action.get("actionId") or "")
-            if not action_id:
-                continue
-            policy_id = _policy_id(action)
-            byte_count = _estimated_bytes(action)
-            service_units = 1.0 + (float(byte_count) / float(1024**3))
-            inserted = conn.execute(
-                """
-                INSERT OR IGNORE INTO resilience_scheduler_service_events (
-                    action_id, policy_id, service_units, bytes_served, scheduled_at
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (action_id, policy_id, service_units, byte_count, timestamp),
-            )
-            if inserted.rowcount != 1:
-                continue
-            current = conn.execute(
-                "SELECT virtual_runtime, virtual_finish, actions_served, bytes_served FROM resilience_scheduler_service WHERE policy_id = ?",
-                (policy_id,),
-            ).fetchone()
-            virtual_runtime = float(current[0]) if current is not None else 0.0
-            virtual_finish = float(current[1]) if current is not None else 0.0
-            actions_served = int(current[2]) if current is not None else 0
-            bytes_served = int(current[3]) if current is not None else 0
-            next_runtime = virtual_runtime + service_units
-            next_finish = max(virtual_finish, virtual_runtime) + service_units
-            conn.execute(
-                """
-                INSERT INTO resilience_scheduler_service (
-                    policy_id, virtual_runtime, virtual_finish, actions_served,
-                    bytes_served, last_scheduled_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(policy_id) DO UPDATE SET
-                    virtual_runtime = excluded.virtual_runtime,
-                    virtual_finish = excluded.virtual_finish,
-                    actions_served = excluded.actions_served,
-                    bytes_served = excluded.bytes_served,
-                    last_scheduled_at = excluded.last_scheduled_at
-                """,
-                (
-                    policy_id,
-                    next_runtime,
-                    next_finish,
-                    actions_served + 1,
-                    bytes_served + byte_count,
-                    timestamp,
-                ),
-            )
+        _record_scheduled_actions(conn, actions, timestamp=timestamp)
+
+
+def _record_scheduled_actions(
+    conn: sqlite3.Connection,
+    actions: list[dict[str, Any]],
+    *,
+    timestamp: str,
+) -> None:
+    for action in actions:
+        action_id = str(action.get("actionId") or "")
+        if not action_id:
+            continue
+        policy_id = _policy_id(action)
+        byte_count = _estimated_bytes(action)
+        service_units = 1.0 + (float(byte_count) / float(1024**3))
+        inserted = conn.execute(
+            """
+            INSERT OR IGNORE INTO resilience_scheduler_service_events (
+                action_id, policy_id, service_units, bytes_served, scheduled_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (action_id, policy_id, service_units, byte_count, timestamp),
+        )
+        if inserted.rowcount != 1:
+            continue
+        current = conn.execute(
+            "SELECT virtual_runtime, virtual_finish, actions_served, bytes_served FROM resilience_scheduler_service WHERE policy_id = ?",
+            (policy_id,),
+        ).fetchone()
+        virtual_runtime = float(current[0]) if current is not None else 0.0
+        virtual_finish = float(current[1]) if current is not None else 0.0
+        actions_served = int(current[2]) if current is not None else 0
+        bytes_served = int(current[3]) if current is not None else 0
+        next_runtime = virtual_runtime + service_units
+        next_finish = max(virtual_finish, virtual_runtime) + service_units
+        conn.execute(
+            """
+            INSERT INTO resilience_scheduler_service (
+                policy_id, virtual_runtime, virtual_finish, actions_served,
+                bytes_served, last_scheduled_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(policy_id) DO UPDATE SET
+                virtual_runtime = excluded.virtual_runtime,
+                virtual_finish = excluded.virtual_finish,
+                actions_served = excluded.actions_served,
+                bytes_served = excluded.bytes_served,
+                last_scheduled_at = excluded.last_scheduled_at
+            """,
+            (
+                policy_id,
+                next_runtime,
+                next_finish,
+                actions_served + 1,
+                bytes_served + byte_count,
+                timestamp,
+            ),
+        )
+
+
+def _render_schedule(schedule: dict[str, Any]) -> tuple[str, str]:
+    schedule_id = str(schedule.get("scheduleId") or "")
+    if not schedule_id:
+        raise ValueError("scheduleId is required")
+    return schedule_id, json.dumps(schedule, ensure_ascii=False, sort_keys=True)
+
+
+def _record_schedule_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    schedule_id: str,
+    rendered_schedule: str,
+    timestamp: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO resilience_scheduler_runs (
+            schedule_id, schedule_json, scheduled_at
+        ) VALUES (?, ?, ?)
+        """,
+        (schedule_id, rendered_schedule, timestamp),
+    )
 
 
 def record_schedule_snapshot(schedule: dict[str, Any], *, scheduled_at: datetime | None = None) -> None:
     """Persist the exact latest wave/unschedulable operator projection."""
-    schedule_id = str(schedule.get("scheduleId") or "")
-    if not schedule_id:
-        raise ValueError("scheduleId is required")
+    schedule_id, rendered_schedule = _render_schedule(schedule)
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO resilience_scheduler_runs (
-                schedule_id, schedule_json, scheduled_at
-            ) VALUES (?, ?, ?)
-            """,
-            (
-                schedule_id,
-                json.dumps(schedule, ensure_ascii=False, sort_keys=True),
-                _utc_iso(scheduled_at),
-            ),
+        _record_schedule_snapshot(
+            conn,
+            schedule_id=schedule_id,
+            rendered_schedule=rendered_schedule,
+            timestamp=_utc_iso(scheduled_at),
+        )
+
+
+def record_schedule_result(
+    schedule: dict[str, Any],
+    actions: list[dict[str, Any]],
+    *,
+    scheduled_at: datetime | None = None,
+) -> None:
+    """Atomically persist a schedule projection and its persistent fair-service charge."""
+    schedule_id, rendered_schedule = _render_schedule(schedule)
+    timestamp = _utc_iso(scheduled_at)
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _record_scheduled_actions(conn, actions, timestamp=timestamp)
+        _record_schedule_snapshot(
+            conn,
+            schedule_id=schedule_id,
+            rendered_schedule=rendered_schedule,
+            timestamp=timestamp,
         )
 
 

@@ -13,6 +13,7 @@ import json
 import os
 import re
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -208,10 +209,14 @@ def validate_autonomous_storage_bytes_proof(evidence: dict[str, Any], check_name
         else:
             commit = parsed
 
-    if receipt and int(receipt.get("schemaVersion") or 0) != 4:
-        errors.append("receipt-schema-not-v4")
-    if commit and int(commit.get("schemaVersion") or 0) != 4:
-        errors.append("commit-schema-not-v4")
+    if receipt:
+        receipt_schema = receipt.get("schemaVersion")
+        if not isinstance(receipt_schema, int) or isinstance(receipt_schema, bool) or receipt_schema != 4:
+            errors.append("receipt-schema-not-v4")
+    if commit:
+        commit_schema = commit.get("schemaVersion")
+        if not isinstance(commit_schema, int) or isinstance(commit_schema, bool) or commit_schema != 4:
+            errors.append("commit-schema-not-v4")
 
     backup_id = str(evidence.get("backupId") or "")
     policy_id = str(evidence.get("policyId") or "")
@@ -461,8 +466,11 @@ def validate_crash_recovery_proof(evidence: dict[str, Any], check_name: str) -> 
             "repairId",
             "repairPhaseAtCrash",
             "reconciliationDirective",
+            "workerALeaseUntil",
             "remoteRepairJobCountBefore",
             "remoteRepairJobCountAfter",
+            "remoteRepairJobIdsBefore",
+            "remoteRepairJobIdsAfter",
             "journalEvents",
         ),
     )
@@ -484,6 +492,29 @@ def validate_crash_recovery_proof(evidence: dict[str, Any], check_name: str) -> 
         errors.append("takeover-execution-epoch-not-increased")
     if before_count != 1 or after_count != 1:
         errors.append("underlying-repair-job-count-not-exactly-one")
+    before_ids = evidence.get("remoteRepairJobIdsBefore")
+    after_ids = evidence.get("remoteRepairJobIdsAfter")
+    repair_id = str(evidence.get("repairId") or "")
+    if (
+        not isinstance(before_ids, list)
+        or not isinstance(after_ids, list)
+        or len(before_ids) != 1
+        or len(after_ids) != 1
+        or [str(item) for item in before_ids] != [repair_id]
+        or [str(item) for item in after_ids] != [repair_id]
+        or before_count != len(before_ids)
+        or after_count != len(after_ids)
+    ):
+        errors.append("underlying-repair-job-identity-not-stable")
+
+    lease_expiry: datetime | None = None
+    try:
+        lease_expiry = datetime.fromisoformat(str(evidence.get("workerALeaseUntil") or "").replace("Z", "+00:00"))
+        if lease_expiry.tzinfo is None:
+            raise ValueError("timezone required")
+        lease_expiry = lease_expiry.astimezone(timezone.utc)
+    except ValueError:
+        errors.append("invalid-worker-a-lease-expiry")
     if str(evidence.get("repairPhaseAtCrash") or "") not in {
         "selecting-source",
         "acquiring-source-hold",
@@ -500,9 +531,9 @@ def validate_crash_recovery_proof(evidence: dict[str, Any], check_name: str) -> 
     raw_events = evidence.get("journalEvents")
     if not isinstance(raw_events, list):
         return errors + ["journal-events-must-be-list"]
-    repair_id = str(evidence.get("repairId") or "")
     executing_index: int | None = None
     reconciling_index: int | None = None
+    takeover_at: datetime | None = None
     for index, raw_event in enumerate(raw_events):
         if not isinstance(raw_event, dict):
             continue
@@ -523,18 +554,31 @@ def validate_crash_recovery_proof(evidence: dict[str, Any], check_name: str) -> 
             executing_index = index
         if (
             str(raw_event.get("state") or "") == "RECONCILING"
+            and str(raw_event.get("eventType") or "") == "ACTION_TAKEOVER"
             and event_epoch == epoch_b
             and str(effect.get("kind") or "") == "repair"
             and str(effect.get("repairId") or "") == repair_id
             and str(pid_b) in owner
         ):
             reconciling_index = index
+            try:
+                parsed_takeover_at = datetime.fromisoformat(
+                    str(raw_event.get("createdAt") or "").replace("Z", "+00:00")
+                )
+                if parsed_takeover_at.tzinfo is not None:
+                    takeover_at = parsed_takeover_at.astimezone(timezone.utc)
+            except ValueError:
+                takeover_at = None
     if executing_index is None:
         errors.append("missing-worker-a-executing-effect-event")
     if reconciling_index is None:
         errors.append("missing-worker-b-reconciling-event")
+    elif takeover_at is None:
+        errors.append("missing-worker-b-takeover-timestamp")
     if executing_index is not None and reconciling_index is not None and reconciling_index <= executing_index:
         errors.append("reconciling-event-not-after-executing-event")
+    if lease_expiry is not None and takeover_at is not None and takeover_at <= lease_expiry:
+        errors.append("takeover-occurred-before-worker-a-lease-expiry")
     return errors
 
 

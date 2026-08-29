@@ -135,11 +135,28 @@ def test_evidence_proof_validators_exhaustive(tmp_path: Path) -> None:
         "repairId": "repair-live",
         "repairPhaseAtCrash": "transferring-components",
         "reconciliationDirective": "RESUME_EXECUTION",
+        "workerALeaseUntil": "2026-08-28T12:00:10Z",
         "remoteRepairJobCountBefore": 1,
         "remoteRepairJobCountAfter": 1,
+        "remoteRepairJobIdsBefore": ["repair-live"],
+        "remoteRepairJobIdsAfter": ["repair-live"],
         "journalEvents": [
-            {"state": "EXECUTING", "executionEpoch": 1, "ownerInstanceId": "worker-101", "effectHandle": {"kind": "repair", "repairId": "repair-live"}},
-            {"state": "RECONCILING", "executionEpoch": 2, "ownerInstanceId": "worker-202", "effectHandle": {"kind": "repair", "repairId": "repair-live"}},
+            {
+                "eventType": "STATE_TRANSITION",
+                "state": "EXECUTING",
+                "executionEpoch": 1,
+                "ownerInstanceId": "worker-101",
+                "effectHandle": {"kind": "repair", "repairId": "repair-live"},
+                "createdAt": "2026-08-28T12:00:01Z",
+            },
+            {
+                "eventType": "ACTION_TAKEOVER",
+                "state": "RECONCILING",
+                "executionEpoch": 2,
+                "ownerInstanceId": "worker-202",
+                "effectHandle": {"kind": "repair", "repairId": "repair-live"},
+                "createdAt": "2026-08-28T12:00:11Z",
+            },
         ],
     }
     valid_crash_check: dict[str, Any] = {

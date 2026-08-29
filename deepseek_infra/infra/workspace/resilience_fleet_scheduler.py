@@ -85,7 +85,9 @@ def compute_risk_debt(
     if pol is None and pid:
         try:
             pol = backup_policies.get_policy(pid)
-        except Exception:
+        except AppError as exc:
+            if exc.status != 404:
+                raise
             pol = None
 
     # 1. Severity weight
@@ -399,6 +401,7 @@ def schedule_fleet_resilience(
         used_policies: dict[str, int] = {}
         used_domains: set[str] = set()
         wave_index = len(waves)
+        wave_sim: dict[str, Any] = {}
 
         for action_id in ready_ids:
             original = action_by_id[action_id]
@@ -457,7 +460,24 @@ def schedule_fleet_resilience(
             action["waveIndex"] = wave_index
             action["dependencies"] = sorted(dependency_map[action_id])
             action["priorDeferReasons"] = list(prior_defer_reasons.get(action_id, []))
+            candidate_passed, candidate_sim = resilience_coordinator.simulate_coordination_wave(
+                [*wave_actions, action],
+                running_actions=running_actions,
+            )
+            if not candidate_passed:
+                if wave_actions:
+                    prior_defer_reasons.setdefault(action_id, [])
+                    if "BLAST_RADIUS_WAVE_CONFLICT" not in prior_defer_reasons[action_id]:
+                        prior_defer_reasons[action_id].append("BLAST_RADIUS_WAVE_CONFLICT")
+                    continue
+                action["scheduleStatus"] = "UNSCHEDULABLE"
+                action["unschedulableReason"] = "BLAST_RADIUS_VIOLATION"
+                action["simulationDetails"] = candidate_sim
+                unschedulable_actions.append(action)
+                pending_ids.remove(action_id)
+                continue
             wave_actions.append(action)
+            wave_sim = candidate_sim
             used_locks.update(lock_keys)
             for target_id in (source_id, dest_id):
                 if target_id:
@@ -480,19 +500,6 @@ def schedule_fleet_resilience(
                 pending_ids.remove(action_id)
             continue
 
-        wave_passed, wave_sim = resilience_coordinator.simulate_coordination_wave(
-            wave_actions,
-            running_actions=running_actions,
-        )
-        if not wave_passed:
-            for action in wave_actions:
-                action["scheduleStatus"] = "UNSCHEDULABLE"
-                action["unschedulableReason"] = "BLAST_RADIUS_VIOLATION"
-                action["simulationDetails"] = wave_sim
-                unschedulable_actions.append(action)
-                pending_ids.remove(str(action["actionId"]))
-            continue
-
         waves.append(
             {
                 "waveIndex": wave_index,
@@ -508,8 +515,6 @@ def schedule_fleet_resilience(
             pending_ids.remove(action_id)
 
     assigned_actions = [action for wave in waves for action in wave["actions"]]
-    resilience_scheduler_service.record_scheduled_actions(assigned_actions, scheduled_at=current)
-
     schedule_id = f"fsch_{uuid.uuid4().hex[:16]}"
     schedule = {
         "scheduleId": schedule_id,
@@ -529,12 +534,12 @@ def schedule_fleet_resilience(
         (float(action.get("debtInfo", {}).get("ageSeconds") or 0.0) for action in sorted_actions),
         default=0.0,
     )
-    resilience_slo_ledger.record_sample(
+    resilience_slo_ledger.try_record_sample(
         resilience_slo_ledger.SCHEDULER_STARVATION_AGE_SECONDS,
         oldest_age_seconds,
         observed_at=current,
         sample_key=f"starvation:{schedule_id}",
         metadata={"candidateActions": len(sorted_actions), "unschedulableActions": len(unschedulable_actions)},
     )
-    resilience_scheduler_service.record_schedule_snapshot(schedule, scheduled_at=current)
+    resilience_scheduler_service.record_schedule_result(schedule, assigned_actions, scheduled_at=current)
     return schedule

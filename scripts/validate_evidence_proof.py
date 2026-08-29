@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepseek_infra.infra.workspace import evidence_proof  # noqa: E402
+from deepseek_infra.infra.workspace import evidence_proof, resilience_slo_ledger  # noqa: E402
 
 
 def _base_result(path: Path, raw: bytes = b"") -> dict[str, Any]:
@@ -59,6 +59,16 @@ def main(argv: list[str] | None = None) -> int:
             check_errors = [f"validator-error:{type(exc).__name__}:{exc}"]
         if check_errors:
             errors[str(check_name)] = check_errors
+
+    digest = hashlib.sha256(raw).hexdigest()
+    if not errors:
+        try:
+            resilience_slo_ledger.record_evidence_verification(
+                proof_sha256=digest,
+                scenario=str(proof.get("scenario") or ""),
+            )
+        except Exception as exc:
+            errors["$slo"] = [f"evidence-verification-not-durable:{type(exc).__name__}:{exc}"]
 
     result = {
         **_base_result(path, raw),

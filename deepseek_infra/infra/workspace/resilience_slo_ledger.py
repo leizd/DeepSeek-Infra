@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 import threading
@@ -12,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
 from deepseek_infra.core import config
+
+LOGGER = logging.getLogger(__name__)
 
 SLO_LEDGER_DIR = config.ROOT / ".resilience-slo"
 SLO_LEDGER_DB = SLO_LEDGER_DIR / "slo.sqlite3"
@@ -63,6 +66,7 @@ CREATE TABLE IF NOT EXISTS resilience_slo_burn_observations (
     bad_units REAL NOT NULL,
     total_units REAL NOT NULL,
     metadata_json TEXT NOT NULL,
+    started_at TEXT NOT NULL,
     observed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_resilience_slo_burn_time
@@ -95,6 +99,14 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
+        burn_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(resilience_slo_burn_observations)")
+        }
+        if "started_at" not in burn_columns:
+            conn.execute("ALTER TABLE resilience_slo_burn_observations ADD COLUMN started_at TEXT")
+            conn.execute(
+                "UPDATE resilience_slo_burn_observations SET started_at = observed_at WHERE started_at IS NULL"
+            )
         try:
             yield conn
             conn.commit()
@@ -142,6 +154,7 @@ def record_sample(
     numeric = _require_nonnegative_finite(value, "value")
     key = str(sample_key or f"sample-{uuid.uuid4().hex}")
     timestamp = _utc_iso(observed_at)
+    metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
     with _connect() as conn:
         conn.execute(
             """
@@ -158,7 +171,7 @@ def record_sample(
                 action_id,
                 risk_subject_digest,
                 outcome,
-                json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+                metadata_json,
                 timestamp,
             ),
         )
@@ -167,7 +180,34 @@ def record_sample(
             (key,),
         ).fetchone()
         assert row is not None
-        return _sample_from_row(row)
+        sample = _sample_from_row(row)
+        expected = {
+            "sampleKey": key,
+            "metricName": name,
+            "value": numeric,
+            "policyId": policy_id,
+            "actionId": action_id,
+            "riskSubjectDigest": risk_subject_digest,
+            "outcome": outcome,
+            "metadata": json.loads(metadata_json),
+            "observedAt": timestamp,
+        }
+        if sample != expected:
+            raise ValueError(f"sample_key conflict: {key}")
+        return sample
+
+
+def try_record_sample(
+    metric_name: str,
+    value: float | int,
+    **kwargs: Any,
+) -> dict[str, Any] | None:
+    """Isolate auxiliary SLO persistence from the source-of-truth control transaction."""
+    try:
+        return record_sample(metric_name, value, **kwargs)
+    except Exception:
+        LOGGER.exception("Failed to persist Fleet SLO sample", extra={"sloMetric": metric_name})
+        return None
 
 
 def list_samples(
@@ -187,11 +227,11 @@ def list_samples(
     query = "SELECT * FROM resilience_slo_samples"
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY observed_at ASC, sample_id ASC LIMIT ?"
+    query += " ORDER BY observed_at DESC, sample_id DESC LIMIT ?"
     params.append(max(1, min(int(limit), 100000)))
     with _connect() as conn:
         rows = conn.execute(query, tuple(params)).fetchall()
-    return [_sample_from_row(row) for row in rows]
+    return [_sample_from_row(row) for row in reversed(rows)]
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -205,10 +245,31 @@ def _percentile(values: list[float], percentile: float) -> float:
     return ordered[lower] + fraction * (ordered[upper] - ordered[lower])
 
 
+def _list_recent_samples_per_metric(*, limit_per_metric: int = 10000) -> list[dict[str, Any]]:
+    """Bound reads without allowing one high-volume metric to evict another."""
+    bounded_limit = max(1, min(int(limit_per_metric), 100000))
+    samples: list[dict[str, Any]] = []
+    with _connect() as conn:
+        metric_rows = conn.execute(
+            "SELECT DISTINCT metric_name FROM resilience_slo_samples ORDER BY metric_name"
+        ).fetchall()
+        for metric_row in metric_rows:
+            rows = conn.execute(
+                """
+                SELECT * FROM resilience_slo_samples
+                WHERE metric_name = ?
+                ORDER BY observed_at DESC, sample_id DESC LIMIT ?
+                """,
+                (str(metric_row[0]), bounded_limit),
+            ).fetchall()
+            samples.extend(_sample_from_row(row) for row in reversed(rows))
+    return samples
+
+
 def get_fleet_slo_snapshot(*, now: datetime | None = None) -> dict[str, Any]:
     """Return stable operator fields plus detailed per-metric summaries."""
     current = now or datetime.now(tz=timezone.utc)
-    samples = list_samples()
+    samples = _list_recent_samples_per_metric()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for sample in samples:
         grouped.setdefault(str(sample["metricName"]), []).append(sample)
@@ -230,6 +291,14 @@ def get_fleet_slo_snapshot(*, now: datetime | None = None) -> dict[str, Any]:
     def latest(metric_name: str) -> float:
         return float(summaries.get(metric_name, {}).get("latest") or 0.0)
 
+    evidence_items = grouped.get(EVIDENCE_FRESHNESS_SECONDS, [])
+    latest_evidence_at = _parse_iso(str(evidence_items[-1]["observedAt"])) if evidence_items else None
+    evidence_freshness_seconds: float | None = (
+        max(0.0, (current.astimezone(timezone.utc) - latest_evidence_at).total_seconds())
+        if latest_evidence_at is not None
+        else None
+    )
+
     return {
         "riskDetectionP95Ms": p95(RISK_DETECTION_LATENCY_MS),
         "remediationQueueDelayP95Ms": p95(REMEDIATION_QUEUE_DELAY_MS),
@@ -239,7 +308,9 @@ def get_fleet_slo_snapshot(*, now: datetime | None = None) -> dict[str, Any]:
         "drFreshnessHours": latest(DR_READINESS_AGE_HOURS),
         "leaseTakeoverP95Ms": p95(LEASE_TAKEOVER_TIME_MS),
         "schedulerStarvationAgeSeconds": latest(SCHEDULER_STARVATION_AGE_SECONDS),
-        "evidenceFreshnessSeconds": latest(EVIDENCE_FRESHNESS_SECONDS),
+        "evidenceFreshnessSeconds": (
+            round(evidence_freshness_seconds, 3) if evidence_freshness_seconds is not None else None
+        ),
         "sampleCounts": {name: int(summary["count"]) for name, summary in summaries.items()},
         "metrics": summaries,
         "evaluatedAt": _utc_iso(current),
@@ -251,55 +322,111 @@ def record_burn_observation(
     *,
     bad_units: float | int,
     total_units: float | int,
+    started_at: datetime | None = None,
     observed_at: datetime | None = None,
     observation_key: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    name = str(indicator or "").strip()
+    if not name:
+        raise ValueError("indicator is required")
     bad = _require_nonnegative_finite(bad_units, "bad_units")
     total = _require_nonnegative_finite(total_units, "total_units")
     if bad > total:
         raise ValueError("bad_units cannot exceed total_units")
     key = str(observation_key or f"burn-{uuid.uuid4().hex}")
+    current = observed_at or datetime.now(tz=timezone.utc)
+    started = started_at or current
+    if started > current:
+        raise ValueError("started_at cannot be after observed_at")
+    metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
+    started_iso = _utc_iso(started)
+    observed_iso = _utc_iso(current)
     with _connect() as conn:
         conn.execute(
             """
             INSERT OR IGNORE INTO resilience_slo_burn_observations (
                 observation_key, indicator, bad_units, total_units,
-                metadata_json, observed_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                metadata_json, started_at, observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 key,
-                str(indicator),
+                name,
                 bad,
                 total,
-                json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
-                _utc_iso(observed_at),
+                metadata_json,
+                started_iso,
+                observed_iso,
             ),
         )
+        row = conn.execute(
+            "SELECT * FROM resilience_slo_burn_observations WHERE observation_key = ?",
+            (key,),
+        ).fetchone()
+        assert row is not None
+        actual = (
+            str(row["indicator"]),
+            float(row["bad_units"]),
+            float(row["total_units"]),
+            json.loads(str(row["metadata_json"])),
+            str(row["started_at"] or row["observed_at"]),
+            str(row["observed_at"]),
+        )
+        expected = (name, bad, total, json.loads(metadata_json), started_iso, observed_iso)
+        if actual != expected:
+            raise ValueError(f"observation_key conflict: {key}")
+
+
+def try_record_burn_observation(indicator: str, **kwargs: Any) -> bool:
+    """Best-effort adapter for control paths whose durable state already committed."""
+    try:
+        record_burn_observation(indicator, **kwargs)
+    except Exception:
+        LOGGER.exception(
+            "Failed to persist Fleet SLO burn observation",
+            extra={"sloIndicator": indicator},
+        )
+        return False
+    return True
 
 
 def _window_burn(
     conn: sqlite3.Connection,
     *,
     since: datetime,
+    until: datetime,
     error_budget_fraction: float,
 ) -> dict[str, float]:
     rows = conn.execute(
         """
-        SELECT indicator, SUM(bad_units) AS bad, SUM(total_units) AS total
+        SELECT indicator, bad_units, total_units, started_at, observed_at
         FROM resilience_slo_burn_observations
-        WHERE observed_at >= ?
-        GROUP BY indicator ORDER BY indicator
+        WHERE observed_at >= ? AND started_at <= ?
+        ORDER BY indicator, observed_at, observation_id
         """,
-        (_utc_iso(since),),
+        (_utc_iso(since), _utc_iso(until)),
     ).fetchall()
-    result: dict[str, float] = {}
+    totals: dict[str, list[float]] = {}
     for row in rows:
-        total = float(row["total"] or 0.0)
-        bad = float(row["bad"] or 0.0)
-        result[str(row["indicator"])] = (bad / total / error_budget_fraction) if total > 0 else 0.0
-    return result
+        started = _parse_iso(str(row["started_at"] or row["observed_at"]))
+        observed = _parse_iso(str(row["observed_at"]))
+        if started is None or observed is None:
+            continue
+        if observed > started:
+            overlap_start = max(started, since)
+            overlap_end = min(observed, until)
+            overlap_seconds = max(0.0, (overlap_end - overlap_start).total_seconds())
+            fraction = overlap_seconds / (observed - started).total_seconds()
+        else:
+            fraction = 1.0 if since <= observed <= until else 0.0
+        values = totals.setdefault(str(row["indicator"]), [0.0, 0.0])
+        values[0] += float(row["bad_units"] or 0.0) * fraction
+        values[1] += float(row["total_units"] or 0.0) * fraction
+    return {
+        indicator: (bad / total / error_budget_fraction) if total > 0 else 0.0
+        for indicator, (bad, total) in totals.items()
+    }
 
 
 def compute_burn_rates(
@@ -318,11 +445,13 @@ def compute_burn_rates(
         fast_by_indicator = _window_burn(
             conn,
             since=current - timedelta(seconds=fast_window),
+            until=current,
             error_budget_fraction=budget_fraction,
         )
         slow_by_indicator = _window_burn(
             conn,
             since=current - timedelta(seconds=slow_window),
+            until=current,
             error_budget_fraction=budget_fraction,
         )
     fast_threshold = float(config_values["fastCriticalThreshold"])
@@ -364,12 +493,14 @@ def record_evidence_verification(
     digest = str(proof_sha256 or "").lower()
     if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
         raise ValueError("proof_sha256 must be a lowercase SHA-256 hex digest")
+    current = verified_at or datetime.now(tz=timezone.utc)
+    timestamp = _utc_iso(current)
     return record_sample(
         EVIDENCE_FRESHNESS_SECONDS,
         0.0,
-        observed_at=verified_at,
+        observed_at=current,
         metadata={"proofSha256": digest, "scenario": str(scenario)},
-        sample_key=f"evidence:{scenario}:{digest}",
+        sample_key=f"evidence:{scenario}:{digest}:{timestamp}",
     )
 
 

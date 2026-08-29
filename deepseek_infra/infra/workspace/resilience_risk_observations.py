@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS resilience_risk_observations (
     target_id TEXT,
     failure_domain TEXT,
     last_snapshot_digest TEXT,
+    last_snapshot_observation_key TEXT,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_resilience_risk_observations_status
@@ -69,6 +70,11 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(resilience_risk_observations)")}
+        if "last_snapshot_observation_key" not in columns:
+            conn.execute(
+                "ALTER TABLE resilience_risk_observations ADD COLUMN last_snapshot_observation_key TEXT"
+            )
         try:
             yield conn
             conn.commit()
@@ -119,6 +125,7 @@ def _row_to_record(row: sqlite3.Row) -> dict[str, Any]:
         "targetId": row["target_id"],
         "failureDomain": row["failure_domain"],
         "lastSnapshotDigest": row["last_snapshot_digest"],
+        "lastSnapshotObservationKey": row["last_snapshot_observation_key"],
         "updatedAt": str(row["updated_at"]),
     }
 
@@ -144,6 +151,15 @@ def observe_risk_snapshot(
     """Atomically observe OPEN/CLEARED/REOPENED exact-subject lifecycles."""
     observed_at = _utc_iso(now)
     snapshot_digest = str(snapshot.get("riskDigest") or "")
+    snapshot_generated_at = str(snapshot.get("generatedAt") or observed_at)
+    snapshot_observation_key = hashlib.sha256(
+        json.dumps(
+            {"generatedAt": snapshot_generated_at, "riskDigest": snapshot_digest},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     raw_risks = snapshot.get("risks")
     risks = raw_risks if isinstance(raw_risks, list) else []
     records: list[dict[str, Any]] = []
@@ -164,7 +180,10 @@ def observe_risk_snapshot(
             ).fetchone()
             if existing is None and not is_open:
                 continue
-            if existing is not None and str(existing["last_snapshot_digest"] or "") == snapshot_digest and snapshot_digest:
+            if (
+                existing is not None
+                and str(existing["last_snapshot_observation_key"] or "") == snapshot_observation_key
+            ):
                 records.append(_row_to_record(existing))
                 continue
 
@@ -252,6 +271,7 @@ def observe_risk_snapshot(
                                 "bad": elapsed_minutes if previous_severity in {"critical", "blocked"} else 0.0,
                                 "total": elapsed_minutes,
                                 "key": f"critical-risk:{digest}:{observed_at}",
+                                "startedAt": previous_seen,
                             }
                         )
                     if elapsed_minutes > 0 and "DR" in str(subject.get("type") or ""):
@@ -261,6 +281,7 @@ def observe_risk_snapshot(
                                 "bad": elapsed_minutes if previous_severity in _OPEN_SEVERITIES else 0.0,
                                 "total": elapsed_minutes,
                                 "key": f"dr-stale:{digest}:{observed_at}",
+                                "startedAt": previous_seen,
                             }
                         )
 
@@ -270,8 +291,9 @@ def observe_risk_snapshot(
                     risk_subject_digest, subject_json, first_seen_at, open_since_at,
                     last_seen_at, observation_count, current_severity, peak_severity,
                     status, last_cleared_at, reopen_count, policy_id, backup_id,
-                    target_id, failure_domain, last_snapshot_digest, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    target_id, failure_domain, last_snapshot_digest,
+                    last_snapshot_observation_key, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(risk_subject_digest) DO UPDATE SET
                     subject_json = excluded.subject_json,
                     open_since_at = excluded.open_since_at,
@@ -287,6 +309,7 @@ def observe_risk_snapshot(
                     target_id = excluded.target_id,
                     failure_domain = excluded.failure_domain,
                     last_snapshot_digest = excluded.last_snapshot_digest,
+                    last_snapshot_observation_key = excluded.last_snapshot_observation_key,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -306,6 +329,7 @@ def observe_risk_snapshot(
                     subject.get("targetId"),
                     subject.get("failureDomain"),
                     snapshot_digest,
+                    snapshot_observation_key,
                     observed_at,
                 ),
             )
@@ -318,7 +342,7 @@ def observe_risk_snapshot(
     from deepseek_infra.infra.workspace import resilience_slo_ledger
 
     for sample in slo_samples:
-        resilience_slo_ledger.record_sample(
+        resilience_slo_ledger.try_record_sample(
             str(sample["metric"]),
             float(sample["value"]),
             observed_at=now,
@@ -326,10 +350,11 @@ def observe_risk_snapshot(
             sample_key=str(sample["key"]),
         )
     for observation in burn_observations:
-        resilience_slo_ledger.record_burn_observation(
+        resilience_slo_ledger.try_record_burn_observation(
             str(observation["indicator"]),
             bad_units=float(observation["bad"]),
             total_units=float(observation["total"]),
+            started_at=observation.get("startedAt"),
             observed_at=now,
             observation_key=str(observation["key"]),
         )

@@ -443,6 +443,8 @@ def test_real_three_minio_autonomous_remediation_e2e(
     assert process_a_returncode != 0, f"worker A was not hard-killed\n{stdout_a}\n{stderr_a}"
 
     crashed_action = resilience_action_journal.get_action(act_id) or {}
+    worker_a_lease_until = str(crashed_action.get("leaseUntil") or "")
+    assert worker_a_lease_until
     proposed_blast_action = {
         "actionId": f"blast-drill-{tag}",
         "type": "START_DR_DRILL",
@@ -523,8 +525,11 @@ def test_real_three_minio_autonomous_remediation_e2e(
         "repairId": repair_id,
         "repairPhaseAtCrash": repair_phase_at_crash,
         "reconciliationDirective": directive,
+        "workerALeaseUntil": worker_a_lease_until,
         "remoteRepairJobCountBefore": len(repair_jobs_before),
         "remoteRepairJobCountAfter": len(repair_jobs_after),
+        "remoteRepairJobIdsBefore": [str(job.get("repairId") or "") for job in repair_jobs_before],
+        "remoteRepairJobIdsAfter": [str(job.get("repairId") or "") for job in repair_jobs_after],
         "journalEvents": journal_events,
     }
     assert evidence_proof.validate_crash_recovery_proof(crash_takeover_proof, "live-crash") == []
