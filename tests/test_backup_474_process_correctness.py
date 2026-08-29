@@ -188,6 +188,8 @@ def test_independent_processes_cannot_oversubscribe_atomic_budgets(
             },
         },
     ) == []
+    for action in actions:
+        resilience_action_journal.update_action_state(str(action["actionId"]), "PREEMPTED", error="evidence-race-cleanup")
 
 
 def test_same_run_higher_fence_takes_over_active_writer_lease(tmp_path: Path) -> None:

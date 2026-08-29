@@ -9,6 +9,8 @@ copy deletions, topology mutations) behind an immutable code-level safety floor.
 from __future__ import annotations
 
 import json
+import time
+import uuid
 from typing import Any
 
 from deepseek_infra.core import config
@@ -63,16 +65,17 @@ def get_autonomous_action_policy() -> dict[str, Any]:
     """Retrieve the active autonomous action policy."""
     if not POLICY_FILE.is_file():
         return dict(DEFAULT_POLICY)
-    try:
-        raw = POLICY_FILE.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            # Ensure safety floor invariants are present in memory view
-            res = dict(DEFAULT_POLICY)
-            res.update(data)
-            return res
-    except (OSError, json.JSONDecodeError):
-        pass
+    for _ in range(5):
+        try:
+            raw = POLICY_FILE.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                # Ensure safety floor invariants are present in memory view
+                res = dict(DEFAULT_POLICY)
+                res.update(data)
+                return res
+        except (OSError, json.JSONDecodeError):
+            time.sleep(0.01)
     return dict(DEFAULT_POLICY)
 
 
@@ -93,7 +96,9 @@ def set_autonomous_action_policy(policy_data: dict[str, Any]) -> dict[str, Any]:
                 status=400,
             )
 
-    POLICY_FILE.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp_file = POLICY_DIR / f"autonomous_policy.{uuid.uuid4().hex}.tmp"
+    temp_file.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp_file.replace(POLICY_FILE)
     return merged
 
 
