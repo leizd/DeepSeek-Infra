@@ -44,8 +44,7 @@ CONTAINER_NAMES = (
 def _real_prerequisites() -> tuple[list[str], list[str]]:
     endpoints = [str(os.environ.get(name) or "").rstrip("/") for name in ENDPOINT_NAMES]
     containers = [str(os.environ.get(name) or "") for name in CONTAINER_NAMES]
-    if os.environ.get("DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E") != "1":
-        pytest.skip("dedicated real Storage Control Plane Evidence runner is not active")
+    assert os.environ.get("DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E") == "1"
     assert all(endpoints) and len(set(endpoints)) == 3
     assert all(containers)
     assert backup_crypto.helper_path() is not None
@@ -53,8 +52,9 @@ def _real_prerequisites() -> tuple[list[str], list[str]]:
 
 
 def _client(endpoint: str) -> Any:
-    boto3 = pytest.importorskip("boto3")
-    config_module = pytest.importorskip("botocore.config")
+    import boto3
+    from botocore import config as config_module
+
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
@@ -133,8 +133,12 @@ def _wipe_local_control_db() -> None:
 
 
 @pytest.mark.integration
-def test_real_three_minio_fresh_process_authority_recovery_e2e(tmp_settings: Path) -> None:
+def test_real_three_minio_fresh_process_authority_recovery_e2e(
+    tmp_settings: Path,
+    real_storage_environment: object,
+) -> None:
     """Production S3 bootstrap fresh-process: verdict → formal truth → restore path → new backup."""
+    del real_storage_environment
     endpoints, _containers = _real_prerequisites()
     clients = [_client(endpoint) for endpoint in endpoints]
     suffix = uuid.uuid4().hex[:8]

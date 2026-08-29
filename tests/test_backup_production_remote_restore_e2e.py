@@ -39,10 +39,10 @@ UTC = timezone.utc
 
 def _s3_client() -> Any:
     endpoint = os.environ.get("DEEPSEEK_TEST_S3_ENDPOINT")
-    if not endpoint:
-        pytest.skip("real S3 endpoint is not configured")
-    boto3 = pytest.importorskip("boto3")
-    config_module = pytest.importorskip("botocore.config")
+    assert endpoint, "real S3 endpoint is not configured"
+    import boto3
+    from botocore import config as config_module
+
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
@@ -54,8 +54,7 @@ def _s3_client() -> Any:
 
 
 def _require_real_crypto() -> None:
-    if backup_crypto.helper_path() is None:
-        pytest.skip("real Age backup-crypto helper is not built")
+    assert backup_crypto.helper_path() is not None, "real Age backup-crypto helper is not built"
 
 
 def _envelope(recipient: str) -> dict[str, object]:
@@ -196,9 +195,10 @@ def _run_restart_probe(tmp_settings: Path, command: dict[str, object]) -> dict[s
 
 
 @pytest.mark.integration
-def test_production_remote_restore_full_chain(tmp_settings: Path) -> None:
+def test_production_remote_restore_full_chain(tmp_settings: Path, real_storage_environment: object) -> None:
+    del real_storage_environment
     _require_real_crypto()
-    _s3_client()  # skip when no S3 endpoint is configured
+    _s3_client()  # Assert that the provisioned real endpoint is reachable.
     identity = backup_crypto.generate_identity()
     recipient = str(identity.get("recipient") or "")
     identity_text = str(identity.get("identity") or "")

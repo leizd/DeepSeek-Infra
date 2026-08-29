@@ -28,8 +28,7 @@ CONTAINER_NAMES = (
 def _real_prerequisites() -> tuple[list[str], list[str]]:
     endpoints = [str(os.environ.get(name) or "").rstrip("/") for name in ENDPOINT_NAMES]
     containers = [str(os.environ.get(name) or "") for name in CONTAINER_NAMES]
-    if os.environ.get("DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E") != "1":
-        pytest.skip("dedicated real Storage Control Plane Evidence runner is not active")
+    assert os.environ.get("DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E") == "1"
     assert all(endpoints), "three real S3 endpoints are required"
     assert len(set(endpoints)) == 3, "S3 endpoints must be independent"
     assert all(containers), "three MinIO container identities are required"
@@ -37,8 +36,9 @@ def _real_prerequisites() -> tuple[list[str], list[str]]:
 
 
 def _client(endpoint: str) -> Any:
-    boto3 = pytest.importorskip("boto3")
-    config_module = pytest.importorskip("botocore.config")
+    import boto3
+    from botocore import config as config_module
+
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
@@ -70,8 +70,13 @@ def _register_target(client: Any, endpoint: str, bucket: str, *, region: str, fa
 
 
 @pytest.mark.integration
-def test_real_three_minio_transactional_gc_fencing_e2e(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_real_three_minio_transactional_gc_fencing_e2e(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    real_storage_environment: object,
+) -> None:
     """Publish-vs-GC lease expiry on real MinIO must never lose live ciphertext."""
+    del real_storage_environment
     endpoints, _containers = _real_prerequisites()
     clients = [_client(endpoint) for endpoint in endpoints]
     suffix = uuid.uuid4().hex[:8]

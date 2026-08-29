@@ -27,6 +27,7 @@ MANAGED_ENV_NAMES = (
     *INSTANCE_NAMES,
     "DEEPSEEK_TEST_S3_ENDPOINT",
     "DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E",
+    "DEEPSEEK_EVIDENCE_PROOF_PATH",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "MINIO_ROOT_USER",
@@ -234,6 +235,10 @@ class RealStorageEnvironment:
             return cls(
                 values={
                     "DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E": "1",
+                    "DEEPSEEK_EVIDENCE_PROOF_PATH": str(
+                        os.environ.get("DEEPSEEK_EVIDENCE_PROOF_PATH")
+                        or work_dir / "evidence-proof-real-three-minio-autonomous-remediation.json"
+                    ),
                     "DEEPSEEK_TEST_S3_ENDPOINT": configured_endpoints[0],
                 },
                 external=True,
@@ -291,6 +296,10 @@ class RealStorageEnvironment:
             "MINIO_ROOT_USER": access_key,
             "MINIO_ROOT_PASSWORD": secret_key,
             "DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E": "1",
+            "DEEPSEEK_EVIDENCE_PROOF_PATH": str(
+                os.environ.get("DEEPSEEK_EVIDENCE_PROOF_PATH")
+                or work_dir / "evidence-proof-real-three-minio-autonomous-remediation.json"
+            ),
             "DEEPSEEK_TEST_S3_ENDPOINT": endpoints[0],
         }
         values.update(dict(zip(ENDPOINT_NAMES, endpoints, strict=True)))

@@ -29,8 +29,7 @@ CONTAINER_NAMES = (
 
 
 def _prereq() -> list[str]:
-    if os.environ.get("DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E") != "1":
-        pytest.skip("dedicated real Storage Control Plane Evidence runner is not active")
+    assert os.environ.get("DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E") == "1"
     endpoints = [str(os.environ.get(n) or "").rstrip("/") for n in ENDPOINT_NAMES]
     assert all(endpoints) and len(set(endpoints)) == 3
     assert all(os.environ.get(n) for n in CONTAINER_NAMES)
@@ -39,8 +38,12 @@ def _prereq() -> list[str]:
 
 
 @pytest.mark.integration
-def test_real_three_minio_process_replacement_authority_dr_e2e(tmp_path: Path) -> None:
+def test_real_three_minio_process_replacement_authority_dr_e2e(
+    tmp_path: Path,
+    real_storage_environment: object,
+) -> None:
     """Controller: Process A dies; Process B recovers with production factory only."""
+    del real_storage_environment
     endpoints = _prereq()
     work = tmp_path / "work"
     work.mkdir()
@@ -56,8 +59,9 @@ def test_real_three_minio_process_replacement_authority_dr_e2e(tmp_path: Path) -
     original_sha = hashlib.sha256(original).hexdigest()
 
     # Build three buckets via short setup in controller (creates buckets only).
-    boto3 = pytest.importorskip("boto3")
-    botocore_config = pytest.importorskip("botocore.config")
+    import boto3
+    from botocore import config as botocore_config
+
     clients = []
     buckets = []
     prefixes = []
