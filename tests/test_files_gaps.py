@@ -116,8 +116,8 @@ class TestExtractUploadedFile:
         assert cm.value.code == ErrorCode.UNSUPPORTED_FILE
 
     def test_extract_uploaded_xlsx(self, tmp_files_dir: Path) -> None:
-        pytest.importorskip("openpyxl")
         from openpyxl import Workbook
+
         buffer = BytesIO()
         workbook = Workbook()
         worksheet = workbook.active

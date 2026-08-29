@@ -18,6 +18,7 @@ resilience actions. Guarantees:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import sqlite3
 import sys
@@ -84,6 +85,34 @@ CREATE TABLE IF NOT EXISTS resilience_actions (
 CREATE INDEX IF NOT EXISTS idx_resilience_actions_state ON resilience_actions(state);
 CREATE INDEX IF NOT EXISTS idx_resilience_actions_type ON resilience_actions(action_type);
 CREATE INDEX IF NOT EXISTS idx_resilience_actions_plan ON resilience_actions(plan_id);
+
+CREATE TABLE IF NOT EXISTS resilience_action_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    state TEXT NOT NULL,
+    owner_instance_id TEXT,
+    execution_epoch INTEGER NOT NULL,
+    claim_token_sha256 TEXT,
+    effect_handle_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resilience_action_events_action
+ON resilience_action_events(action_id, event_id);
+
+CREATE TABLE IF NOT EXISTS resilience_preemption_decisions (
+    decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    preemptor_action_id TEXT NOT NULL,
+    victim_action_id TEXT NOT NULL,
+    victim_state TEXT NOT NULL,
+    victim_effect_class TEXT NOT NULL,
+    safe INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resilience_preemption_preemptor
+ON resilience_preemption_decisions(preemptor_action_id, decision_id);
 """
 
 
@@ -139,8 +168,9 @@ def _connect() -> Iterator[sqlite3.Connection]:
 def _commit(conn: sqlite3.Connection) -> None:
     try:
         conn.execute("COMMIT")
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as exc:
+        if "no transaction is active" not in str(exc).lower():
+            raise
 
 
 def _rollback(conn: sqlite3.Connection) -> None:
@@ -148,6 +178,39 @@ def _rollback(conn: sqlite3.Connection) -> None:
         conn.execute("ROLLBACK")
     except sqlite3.OperationalError:
         pass
+
+
+def _append_action_event(
+    conn: sqlite3.Connection,
+    *,
+    action_id: str,
+    event_type: str,
+    state: str,
+    owner_instance_id: str | None,
+    execution_epoch: int,
+    claim_token: str | None,
+    effect_handle: dict[str, Any] | None,
+    created_at: str,
+) -> None:
+    token_digest = hashlib.sha256(claim_token.encode("utf-8")).hexdigest() if claim_token else None
+    conn.execute(
+        """
+        INSERT INTO resilience_action_events (
+            action_id, event_type, state, owner_instance_id, execution_epoch,
+            claim_token_sha256, effect_handle_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            action_id,
+            event_type,
+            state,
+            owner_instance_id,
+            int(execution_epoch),
+            token_digest,
+            json.dumps(effect_handle, sort_keys=True) if effect_handle is not None else None,
+            created_at,
+        ),
+    )
 
 
 def materialize_resilience_plan(
@@ -350,6 +413,7 @@ def record_action_intent(
     plan_id: str | None = None,
     input_risk_digest: str = "",
     plan_digest: str = "",
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Record an individual action intent into the durable journal with create-once semantics (Gate A)."""
     action_id = str(action.get("actionId") or f"act_{uuid.uuid4().hex[:12]}")
@@ -360,7 +424,7 @@ def record_action_intent(
 
     is_auto = autonomous_action_policy.is_action_autonomous(action_type)
     initial_state = "APPROVAL_REQUIRED" if (req_approval or not is_auto) else "PENDING"
-    now_iso = _utc_iso()
+    now_iso = _utc_iso(now)
 
     params = action.get("parameters", {})
     record = {
@@ -472,9 +536,11 @@ def update_action_state(
     risk_before_digest: str | None = None,
     risk_after_digest: str | None = None,
     error: str | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Update execution state with CAS fencing on execution_epoch and claim_token (Gate B)."""
-    now_iso = _utc_iso()
+    current = now or datetime.now(tz=timezone.utc)
+    now_iso = _utc_iso(current)
     terminal_states = {
         "SUCCEEDED",
         "COMPENSATED",
@@ -503,6 +569,19 @@ def update_action_state(
 
         if not row:
             raise AppError(f"Action '{action_id}' not found in journal", code=ErrorCode.NOT_FOUND, status=404)
+
+        action_type = str(row[2] or "").upper()
+        previous_state = str(row[6] or "")
+        recorded_epoch = int(execution_epoch if execution_epoch is not None else row[11] or 0)
+        started_row = conn.execute(
+            """
+            SELECT created_at FROM resilience_action_events
+            WHERE action_id = ? AND event_type IN ('ACTION_CLAIMED', 'ACTION_TAKEOVER')
+            ORDER BY event_id ASC LIMIT 1
+            """,
+            (action_id,),
+        ).fetchone()
+        execution_started_at = str(started_row[0]) if started_row is not None else None
 
         cur_result = json.loads(row[19]) if row[19] else None
         cur_verif = json.loads(row[20]) if row[20] else None
@@ -604,7 +683,42 @@ def update_action_state(
         if state in terminal_states:
             resilience_resource_locks.release_action_locks(conn, action_id)
 
+        _append_action_event(
+            conn,
+            action_id=action_id,
+            event_type="STATE_TRANSITION",
+            state=state,
+            owner_instance_id=owner_instance_id or (str(row[8]) if row[8] else None),
+            execution_epoch=int(execution_epoch if execution_epoch is not None else row[11] or 0),
+            claim_token=claim_token or (str(row[10]) if row[10] else None),
+            effect_handle=new_handle,
+            created_at=now_iso,
+        )
+
         _commit(conn)
+
+    if state in terminal_states and previous_state not in terminal_states and action_type in {"CREATE_REPAIR_JOB", "CREATE_REBALANCE_JOB"}:
+        from deepseek_infra.infra.workspace import resilience_slo_ledger
+
+        duration_ms = resilience_slo_ledger.milliseconds_between(execution_started_at, current)
+        if duration_ms is not None:
+            metric = resilience_slo_ledger.REPAIR_TIME_MS if action_type == "CREATE_REPAIR_JOB" else resilience_slo_ledger.REBALANCE_TIME_MS
+            success = state == "SUCCEEDED"
+            resilience_slo_ledger.try_record_sample(
+                metric,
+                duration_ms,
+                observed_at=current,
+                action_id=action_id,
+                outcome="success" if success else "failed",
+                sample_key=f"remediation:{action_id}:{recorded_epoch}",
+            )
+            resilience_slo_ledger.try_record_burn_observation(
+                resilience_slo_ledger.FAILED_REMEDIATION_RATIO,
+                bad_units=0 if success else 1,
+                total_units=1,
+                observed_at=current,
+                observation_key=f"remediation-outcome:{action_id}:{recorded_epoch}",
+            )
 
     return get_action(action_id) or {}
 
@@ -639,6 +753,7 @@ def admit_and_claim_action(
     now_iso = _utc_iso(current)
     lease_until_iso = _utc_iso(current + timedelta(seconds=lease_seconds))
     claim_token = uuid.uuid4().hex
+    admission_reason = "admitted-and-claimed" if enforce_budgets else "claimed"
 
     action = get_action(action_id)
     if not action:
@@ -649,7 +764,7 @@ def admit_and_claim_action(
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         current_row = conn.execute(
-            "SELECT state, lease_until FROM resilience_actions WHERE action_id = ?",
+            "SELECT state, lease_until, created_at FROM resilience_actions WHERE action_id = ?",
             (action_id,),
         ).fetchone()
         if not current_row:
@@ -657,6 +772,7 @@ def admit_and_claim_action(
             return False, None, "action-not-found"
         current_state = str(current_row[0] or "")
         current_lease = str(current_row[1] or "")
+        action_created_at = str(current_row[2] or "")
         active_states = {"CLAIMED", "EXECUTING", "RECONCILING", "VERIFYING", "ASSESSING_EFFECT"}
         claimable = current_state == "PENDING" or (current_state in active_states and current_lease < now_iso)
         if not claimable:
@@ -675,6 +791,7 @@ def admit_and_claim_action(
             if not rate_ok:
                 _rollback(conn)
                 return False, get_action(action_id), rate_reason
+            admission_reason = rate_reason if rate_reason == "admitted-with-preemption" else admission_reason
 
         if lock_keys:
             acquired, lock_reason = resilience_resource_locks.acquire_action_locks(
@@ -717,9 +834,52 @@ def admit_and_claim_action(
         if cursor.rowcount != 1:
             _rollback(conn)
             return False, get_action(action_id), "claim-rejected-not-pending-or-active-lease"
+        _append_action_event(
+            conn,
+            action_id=action_id,
+            event_type="ACTION_CLAIMED" if claimed_state == "CLAIMED" else "ACTION_TAKEOVER",
+            state=claimed_state,
+            owner_instance_id=owner_instance_id,
+            execution_epoch=int(action.get("executionEpoch") or 0) + 1,
+            claim_token=claim_token,
+            effect_handle=action.get("effectHandle") if isinstance(action.get("effectHandle"), dict) else None,
+            created_at=now_iso,
+        )
         _commit(conn)
 
-    return True, get_action(action_id), "admitted-and-claimed" if enforce_budgets else "claimed"
+    from deepseek_infra.infra.workspace import resilience_slo_ledger
+
+    claimed_epoch = int(action.get("executionEpoch") or 0) + 1
+    if claimed_state == "CLAIMED":
+        queue_delay_ms = resilience_slo_ledger.milliseconds_between(action_created_at, current)
+        if queue_delay_ms is not None:
+            resilience_slo_ledger.try_record_sample(
+                resilience_slo_ledger.REMEDIATION_QUEUE_DELAY_MS,
+                queue_delay_ms,
+                observed_at=current,
+                action_id=action_id,
+                sample_key=f"queue-delay:{action_id}:{claimed_epoch}",
+            )
+            threshold_ms = float(action.get("queueDelaySloMs") or 300000.0)
+            resilience_slo_ledger.try_record_burn_observation(
+                resilience_slo_ledger.QUEUE_DELAY_VIOLATIONS,
+                bad_units=1 if queue_delay_ms > threshold_ms else 0,
+                total_units=1,
+                observed_at=current,
+                observation_key=f"queue-delay-outcome:{action_id}:{claimed_epoch}",
+            )
+    else:
+        takeover_delay_ms = resilience_slo_ledger.milliseconds_between(current_lease, current)
+        if takeover_delay_ms is not None:
+            resilience_slo_ledger.try_record_sample(
+                resilience_slo_ledger.LEASE_TAKEOVER_TIME_MS,
+                takeover_delay_ms,
+                observed_at=current,
+                action_id=action_id,
+                sample_key=f"lease-takeover:{action_id}:{claimed_epoch}",
+            )
+
+    return True, get_action(action_id), admission_reason
 
 
 def renew_action_lease(
@@ -860,23 +1020,68 @@ def check_rate_limits(
             # Attempt to preempt an active warning rebalance
             warning_reb = conn.execute(
                 """
-                SELECT action_id FROM resilience_actions
+                SELECT action_id, state, effect_class, execution_epoch,
+                       owner_instance_id, claim_token, effect_handle_json
+                FROM resilience_actions
                 WHERE action_type = 'CREATE_REBALANCE_JOB'
-                  AND state IN ('CLAIMED', 'PENDING')
+                  AND state = 'CLAIMED'
+                  AND LOWER(COALESCE(severity_before, 'warning')) = 'warning'
                 ORDER BY created_at ASC LIMIT 1
                 """
             ).fetchone()
             if warning_reb:
-                preempt_id = warning_reb[0]
-                conn.execute(
+                from deepseek_infra.infra.workspace import resilience_fleet_scheduler
+
+                preempt_id = str(warning_reb[0])
+                victim_state = str(warning_reb[1] or "")
+                victim_effect_class = str(warning_reb[2] or "")
+                victim_execution_epoch = int(warning_reb[3] or 0)
+                victim_owner_instance_id = str(warning_reb[4] or "") or None
+                victim_claim_token = str(warning_reb[5] or "") or None
+                victim_effect_handle = json.loads(warning_reb[6]) if warning_reb[6] else None
+                victim = {"state": victim_state, "effectClass": victim_effect_class}
+                if not resilience_fleet_scheduler.can_preempt_action(victim):
+                    return False, f"max-concurrent-actions-exceeded:{active_count}>={limits['maxConcurrentActions']}"
+                updated = conn.execute(
                     """
                     UPDATE resilience_actions
                     SET state = 'PREEMPTED', error_message = 'preempted-by-critical-repair', updated_at = ?
-                    WHERE action_id = ?
+                    WHERE action_id = ? AND state = 'CLAIMED'
+                      AND COALESCE(effect_class, 'NO_EFFECT') IN ('', 'NO_EFFECT')
                     """,
                     (_utc_iso(), preempt_id),
                 )
+                if updated.rowcount != 1:
+                    return False, f"max-concurrent-actions-exceeded:{active_count}>={limits['maxConcurrentActions']}"
                 resilience_resource_locks.release_action_locks(conn, str(preempt_id))
+                preemptor_id = str(action.get("actionId") or "")
+                conn.execute(
+                    """
+                    INSERT INTO resilience_preemption_decisions (
+                        preemptor_action_id, victim_action_id, victim_state,
+                        victim_effect_class, safe, reason, created_at
+                    ) VALUES (?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        preemptor_id,
+                        preempt_id,
+                        victim_state,
+                        victim_effect_class or "NO_EFFECT",
+                        "critical-repair-preempts-warning-rebalance",
+                        _utc_iso(),
+                    ),
+                )
+                _append_action_event(
+                    conn,
+                    action_id=preempt_id,
+                    event_type="SAFE_PREEMPTION",
+                    state="PREEMPTED",
+                    owner_instance_id=victim_owner_instance_id,
+                    execution_epoch=victim_execution_epoch,
+                    claim_token=victim_claim_token,
+                    effect_handle=victim_effect_handle,
+                    created_at=_utc_iso(),
+                )
                 if commit_mutations:
                     _commit(conn)
                 return True, "admitted-with-preemption"
@@ -910,21 +1115,24 @@ def check_rate_limits(
             if target_active >= target_limit:
                 return False, f"max-per-target-concurrent-actions-exceeded:{tid}:{target_active}>={target_limit}"
 
-        policy_id = str(params.get("policyId") or action.get("policyId") or "")
+        raw_subject = action.get("riskSubject")
+        subject = raw_subject if isinstance(raw_subject, dict) else {}
+        policy_id = str(params.get("policyId") or subject.get("policyId") or action.get("policyId") or "")
         if policy_id:
             rows = conn.execute(
                 """
-                SELECT parameters_json FROM resilience_actions
+                SELECT parameters_json, risk_subject_json FROM resilience_actions
                 WHERE state IN ('CLAIMED', 'EXECUTING', 'RECONCILING', 'VERIFYING', 'ASSESSING_EFFECT')
                   AND action_id != ?
                 """,
                 (excluded,),
             ).fetchall()
-            policy_active = sum(
-                1
-                for row_item in rows
-                if str((json.loads(row_item[0]) if row_item[0] else {}).get("policyId") or "") == policy_id
-            )
+            policy_active = 0
+            for params_json, subj_json in rows:
+                p_item = json.loads(params_json) if params_json else {}
+                s_item = json.loads(subj_json) if subj_json else {}
+                if str(p_item.get("policyId") or s_item.get("policyId") or "") == policy_id:
+                    policy_active += 1
             policy_limit = int(limits.get("maxConcurrentPerPolicy", 2))
             if policy_active >= policy_limit:
                 return False, f"max-per-policy-concurrent-actions-exceeded:{policy_id}:{policy_active}>={policy_limit}"
@@ -1290,6 +1498,60 @@ def list_actions(
                 }
             )
     return results
+
+
+def list_action_events(action_id: str) -> list[dict[str, Any]]:
+    """Return the immutable state/claim history used by takeover Evidence."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT event_id, event_type, state, owner_instance_id, execution_epoch,
+                   claim_token_sha256, effect_handle_json, created_at
+            FROM resilience_action_events
+            WHERE action_id = ?
+            ORDER BY event_id ASC
+            """,
+            (action_id,),
+        ).fetchall()
+    return [
+        {
+            "eventId": int(row[0]),
+            "eventType": str(row[1]),
+            "state": str(row[2]),
+            "ownerInstanceId": row[3],
+            "executionEpoch": int(row[4]),
+            "claimTokenSha256": row[5],
+            "effectHandle": json.loads(row[6]) if row[6] else None,
+            "createdAt": str(row[7]),
+        }
+        for row in rows
+    ]
+
+
+def list_preemption_decisions(*, preemptor_action_id: str | None = None) -> list[dict[str, Any]]:
+    """List durable safe-point decisions without exposing claim tokens."""
+    query = (
+        "SELECT preemptor_action_id, victim_action_id, victim_state, "
+        "victim_effect_class, safe, reason FROM resilience_preemption_decisions"
+    )
+    params: tuple[str, ...] = ()
+    if preemptor_action_id is not None:
+        query += " WHERE preemptor_action_id = ?"
+        params = (preemptor_action_id,)
+    query += " ORDER BY decision_id ASC"
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        {
+            "preemptor": str(row[0]),
+            "victim": str(row[1]),
+            "victimState": str(row[2]),
+            "victimEffectClass": str(row[3]),
+            "safe": bool(row[4]),
+            "reason": str(row[5]),
+        }
+        for row in rows
+    ]
 
 
 def verify_action_outcome(

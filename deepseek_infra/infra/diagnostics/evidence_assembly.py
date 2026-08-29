@@ -40,6 +40,24 @@ def validate_evidence_payload(
     github_sha: str | None,
 ) -> list[str]:
     rel = spec.path(version)
+    if spec.payload_kind == "proof":
+        from deepseek_infra.infra.workspace import evidence_proof
+
+        try:
+            data = evidence_proof.load_evidence_proof(path, expected_scenario=spec.scenario)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            return [f"invalid Evidence proof {rel}: {exc}"]
+        checks = data.get("checks")
+        if not isinstance(checks, dict) or not checks:
+            return [f"Evidence proof checks missing: {rel}"]
+        proof_errors: list[str] = []
+        for check_name, item in checks.items():
+            if not isinstance(item, dict):
+                proof_errors.append(f"Evidence proof check invalid: {rel}:{check_name}")
+                continue
+            semantic_errors = evidence_proof.validate_check(str(check_name), item)
+            proof_errors.extend(f"Evidence proof check failed: {rel}:{check_name}:{error}" for error in semantic_errors)
+        return proof_errors
     try:
         data = _load_object(path)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
@@ -65,6 +83,55 @@ def validate_evidence_payload(
     return errors
 
 
+def _validate_exact_proof_binding(root: Path, *, producer: str, version: str) -> list[str]:
+    """Bind the storage summary to the exact autonomous proof bytes it validated."""
+    specs = evidence_specs_for_producer(producer)
+    proof_specs = [spec for spec in specs if spec.payload_kind == "proof"]
+    if not proof_specs:
+        return []
+    report_specs = [spec for spec in specs if spec.payload_kind == "report"]
+    if len(proof_specs) != 1 or len(report_specs) != 1:
+        return [f"producer exact proof topology invalid: {producer}"]
+    proof_spec = proof_specs[0]
+    report_spec = report_specs[0]
+    proof_path = root / proof_spec.path(version)
+    report_path = root / report_spec.path(version)
+    if not proof_path.is_file() or not report_path.is_file():
+        return [f"producer exact proof pair missing: {producer}"]
+    try:
+        report = _load_object(report_path)
+        from deepseek_infra.infra.workspace import evidence_proof
+
+        proof = evidence_proof.load_evidence_proof(proof_path, expected_scenario=proof_spec.scenario)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        return [f"producer exact proof pair invalid: {producer}: {exc}"]
+
+    artifact = report.get("proofArtifact")
+    if not isinstance(artifact, dict):
+        return [f"producer report proofArtifact missing: {producer}"]
+    errors: list[str] = []
+    expected_rel = proof_spec.path(version)
+    if artifact.get("path") != expected_rel:
+        errors.append(f"producer report proof path mismatch: {producer}")
+    if artifact.get("scenario") != proof_spec.scenario:
+        errors.append(f"producer report proof scenario mismatch: {producer}")
+    if artifact.get("sha256") != sha256_of(proof_path):
+        errors.append(f"producer report proof checksum mismatch: {producer}")
+    if artifact.get("bytes") != proof_path.stat().st_size:
+        errors.append(f"producer report proof byte size mismatch: {producer}")
+
+    required_by_scenario = report.get("requiredProofChecks")
+    required_map = required_by_scenario if isinstance(required_by_scenario, dict) else {}
+    required = required_map.get(proof_spec.scenario or "")
+    if not isinstance(required, list) or not required or not all(isinstance(item, str) for item in required):
+        errors.append(f"producer report required proof checks missing: {producer}")
+    else:
+        for check_name in required:
+            if evidence_proof.proof_check_status(proof, check_name, semantic=True) != "PASS":
+                errors.append(f"producer exact proof required check failed: {producer}:{check_name}")
+    return errors
+
+
 def prepare_producer_artifact(
     source_root: Path,
     output_root: Path,
@@ -86,6 +153,7 @@ def prepare_producer_artifact(
             errors.append(f"producer {producer} missing owned Evidence: {spec.path(version)}")
             continue
         errors.extend(validate_evidence_payload(path, spec, version=version, context=context, github_sha=github_sha))
+    errors.extend(_validate_exact_proof_binding(source_root, producer=producer, version=version))
     if errors:
         raise ValueError("; ".join(errors))
 
@@ -158,6 +226,7 @@ def _validate_producer_directory(
         if hash_map.get(rel) != sha256_of(path):
             errors.append(f"producer descriptor checksum mismatch: {rel}")
         errors.extend(validate_evidence_payload(path, spec, version=version, context=context, github_sha=github_sha))
+    errors.extend(_validate_exact_proof_binding(directory, producer=producer, version=version))
     return sorted(actual), errors
 
 
@@ -237,6 +306,8 @@ def assemble_evidence(
         "exactMergeRevisionBound": "PASS",
         "completeEvidenceInventory": "PASS",
         "evidenceManifestChecksum": "PASS",
+        "assembledEvidenceIncludesExactAutonomousProof": "PASS",
+        "missingAutonomousProofFailsAssembly": "PASS",
         "releasePackageEvidenceComplete": "PENDING",
         "releasePackageReverified": "PENDING",
     }

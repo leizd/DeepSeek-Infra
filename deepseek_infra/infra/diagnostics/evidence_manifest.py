@@ -51,7 +51,7 @@ def build_evidence_manifest(
             "path": rel,
             "sha256": sha256_of(path),
             "bytes": path.stat().st_size,
-            "status": data.get("status"),
+            "status": "PASS" if specs.get(rel) and specs[rel].payload_kind == "proof" else data.get("status"),
         }
         spec = specs.get(rel)
         if spec is not None:
@@ -165,6 +165,29 @@ def validate_evidence_manifest(
             errors.append(f"evidence checksum mismatch: {rel}")
         if entry.get("bytes") != path.stat().st_size:
             errors.append(f"evidence byte size mismatch: {rel}")
+        spec = specs.get(rel)
+        if spec is not None and spec.payload_kind == "proof":
+            from deepseek_infra.infra.workspace import evidence_proof
+
+            if entry.get("status") != "PASS":
+                errors.append(f"evidence status is not PASS: {rel}")
+            try:
+                proof = evidence_proof.load_evidence_proof(path, expected_scenario=spec.scenario)
+            except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+                errors.append(f"invalid evidence proof {rel}: {exc}")
+            else:
+                raw_checks = proof.get("checks")
+                checks = raw_checks if isinstance(raw_checks, dict) else {}
+                if not checks:
+                    errors.append(f"evidence proof checks missing: {rel}")
+                for check_name, item in checks.items():
+                    if not isinstance(item, dict) or evidence_proof.validate_check(str(check_name), item):
+                        errors.append(f"evidence proof check is not PASS: {rel}:{check_name}")
+            if entry.get("producer") != spec.producer:
+                errors.append(f"evidence producer mismatch: {rel}")
+            if entry.get("tier") != spec.tier:
+                errors.append(f"evidence tier mismatch: {rel}")
+            continue
         if entry.get("status") != "PASS" or data.get("status") != "PASS":
             errors.append(f"evidence status is not PASS: {rel}")
         if data.get("version") != version:
@@ -181,7 +204,6 @@ def validate_evidence_manifest(
             errors.append(f"evidence sourceTreeDirty is not false: {rel}")
         if data.get("sourceContext") != source_context:
             errors.append(f"evidence sourceContext mismatch: {rel}")
-        spec = specs.get(rel)
         if spec is not None:
             if entry.get("producer") != spec.producer:
                 errors.append(f"evidence producer mismatch: {rel}")

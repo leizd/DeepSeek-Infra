@@ -6,10 +6,14 @@ not pytest exit alone, and not bare status=PASS without required evidence fields
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +133,128 @@ def validate_backup_commit_proof(evidence: dict[str, Any], check_name: str) -> l
     declared = evidence.get("receiptDigest")
     if computed and declared and str(computed) != str(declared):
         errors.append("receipt-digest-binding-mismatch")
+    return errors
+
+
+def validate_autonomous_storage_bytes_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Recompute Receipt v4 / Commit v4 bindings from the proof's exact bytes."""
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    errors = _require_fields(
+        evidence,
+        (
+            "targetId",
+            "endpoint",
+            "bucket",
+            "backupId",
+            "policyId",
+            "actionId",
+            "receiptKey",
+            "commitKey",
+            "receiptBytesBase64",
+            "commitBytesBase64",
+            "rawReceiptSha256",
+            "rawCommitSha256",
+            "commitReceiptDigest",
+            "objectSetDigest",
+            "providerReceiptObject",
+            "providerCommitObject",
+        ),
+    )
+    for field in ("rawReceiptSha256", "rawCommitSha256", "commitReceiptDigest", "objectSetDigest"):
+        if evidence.get(field) not in (None, ""):
+            errors.extend(_require_sha256(evidence.get(field), field=field))
+
+    raw_receipt = b""
+    raw_commit = b""
+    for field, destination in (("receiptBytesBase64", "receipt"), ("commitBytesBase64", "commit")):
+        value = evidence.get(field)
+        if value in (None, ""):
+            continue
+        try:
+            decoded = base64.b64decode(str(value), validate=True)
+        except (binascii.Error, ValueError):
+            errors.append(f"invalid-base64:{field}")
+            continue
+        if not decoded:
+            errors.append(f"empty-bytes:{field}")
+        elif destination == "receipt":
+            raw_receipt = decoded
+        else:
+            raw_commit = decoded
+
+    receipt_sha256 = hashlib.sha256(raw_receipt).hexdigest() if raw_receipt else ""
+    commit_sha256 = hashlib.sha256(raw_commit).hexdigest() if raw_commit else ""
+    if receipt_sha256 and receipt_sha256 != str(evidence.get("rawReceiptSha256") or ""):
+        errors.append("raw-receipt-sha256-mismatch")
+    if commit_sha256 and commit_sha256 != str(evidence.get("rawCommitSha256") or ""):
+        errors.append("raw-commit-sha256-mismatch")
+    if receipt_sha256 and receipt_sha256 != str(evidence.get("commitReceiptDigest") or ""):
+        errors.append("receipt-digest-binding-mismatch")
+
+    receipt: dict[str, Any] = {}
+    commit: dict[str, Any] = {}
+    for raw, destination in ((raw_receipt, "receipt"), (raw_commit, "commit")):
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            errors.append(f"invalid-{destination}-json")
+            continue
+        if not isinstance(parsed, dict):
+            errors.append(f"{destination}-must-be-object")
+        elif destination == "receipt":
+            receipt = parsed
+        else:
+            commit = parsed
+
+    if receipt:
+        receipt_schema = receipt.get("schemaVersion")
+        if not isinstance(receipt_schema, int) or isinstance(receipt_schema, bool) or receipt_schema != 4:
+            errors.append("receipt-schema-not-v4")
+    if commit:
+        commit_schema = commit.get("schemaVersion")
+        if not isinstance(commit_schema, int) or isinstance(commit_schema, bool) or commit_schema != 4:
+            errors.append("commit-schema-not-v4")
+
+    backup_id = str(evidence.get("backupId") or "")
+    policy_id = str(evidence.get("policyId") or "")
+    object_set_digest = str(evidence.get("objectSetDigest") or "")
+    if receipt and str(receipt.get("backupId") or "") != backup_id:
+        errors.append("receipt-backup-id-mismatch")
+    if commit and str(commit.get("backupId") or "") != backup_id:
+        errors.append("commit-backup-id-mismatch")
+    if commit and str(commit.get("policyId") or "") != policy_id:
+        errors.append("commit-policy-id-mismatch")
+    if commit and str(commit.get("receiptDigest") or "") != str(evidence.get("commitReceiptDigest") or ""):
+        errors.append("commit-receipt-digest-mismatch")
+    if receipt and str(receipt.get("objectSetDigest") or "") != object_set_digest:
+        errors.append("receipt-object-set-digest-mismatch")
+    if commit and str(commit.get("objectSetDigest") or "") != object_set_digest:
+        errors.append("commit-object-set-digest-mismatch")
+
+    if backup_id and str(evidence.get("receiptKey") or "") != f"receipts/{backup_id}.json":
+        errors.append("receipt-key-mismatch")
+    if backup_id and policy_id and str(evidence.get("commitKey") or "") != f"commits/{policy_id}/{backup_id}.json":
+        errors.append("commit-key-mismatch")
+    for field, expected_key, raw, digest in (
+        ("providerReceiptObject", evidence.get("receiptKey"), raw_receipt, receipt_sha256),
+        ("providerCommitObject", evidence.get("commitKey"), raw_commit, commit_sha256),
+    ):
+        raw_object = evidence.get(field)
+        if not isinstance(raw_object, dict):
+            errors.append(f"{field}-must-be-object")
+            continue
+        if raw_object.get("key") != expected_key:
+            errors.append(f"{field}-key-mismatch")
+        if raw_object.get("size") != len(raw):
+            errors.append(f"{field}-size-mismatch")
+        provider_sha256 = raw_object.get("sha256")
+        if provider_sha256 not in (None, "") and provider_sha256 != digest:
+            errors.append(f"{field}-sha256-mismatch")
+        if not str(raw_object.get("etag") or ""):
+            errors.append(f"{field}-etag-missing")
     return errors
 
 
@@ -310,93 +436,290 @@ def validate_resilience_proof(evidence: dict[str, Any], check_name: str) -> list
 
 
 def validate_autonomous_repair_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
-    if not isinstance(evidence, dict):
-        return ["not-a-dict"]
-    errors = _require_fields(
-        evidence,
-        (
-            "backupId",
-            "actionId",
-            "endpointA",
-            "endpointB",
-            "receiptDigest",
-            "commitDigest",
-        ),
-    )
-    for field in ("receiptDigest", "commitDigest"):
-        if evidence.get(field) not in (None, ""):
-            errors.extend(_require_sha256(evidence.get(field), field=field))
+    errors = validate_autonomous_storage_bytes_proof(evidence, check_name)
+    errors.extend(_require_fields(evidence, ("endpointA", "endpointB")))
+    if evidence.get("endpoint") and evidence.get("endpointB") and str(evidence["endpoint"]).rstrip("/") != str(evidence["endpointB"]).rstrip("/"):
+        errors.append("destination-endpoint-b-mismatch")
     return errors
 
 
 def validate_autonomous_rebalance_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
-    if not isinstance(evidence, dict):
-        return ["not-a-dict"]
-    errors = _require_fields(
-        evidence,
-        (
-            "backupId",
-            "actionId",
-            "endpointA",
-            "endpointC",
-            "receiptDigest",
-            "commitDigest",
-        ),
-    )
-    for field in ("receiptDigest", "commitDigest"):
-        if evidence.get(field) not in (None, ""):
-            errors.extend(_require_sha256(evidence.get(field), field=field))
+    errors = validate_autonomous_storage_bytes_proof(evidence, check_name)
+    errors.extend(_require_fields(evidence, ("endpointA", "endpointC")))
+    if evidence.get("endpoint") and evidence.get("endpointC") and str(evidence["endpoint"]).rstrip("/") != str(evidence["endpointC"]).rstrip("/"):
+        errors.append("destination-endpoint-c-mismatch")
     return errors
 
 
 def validate_crash_recovery_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
     if not isinstance(evidence, dict):
         return ["not-a-dict"]
-    return _require_fields(
+    errors = _require_fields(
         evidence,
         (
             "actionId",
-            "oldEpoch",
-            "newEpoch",
+            "workerAPid",
+            "workerBPid",
+            "processAReturnCode",
+            "epochA",
+            "epochB",
+            "repairId",
+            "repairPhaseAtCrash",
             "reconciliationDirective",
+            "workerALeaseUntil",
+            "remoteRepairJobCountBefore",
+            "remoteRepairJobCountAfter",
+            "remoteRepairJobIdsBefore",
+            "remoteRepairJobIdsAfter",
+            "journalEvents",
         ),
     )
+    try:
+        pid_a = int(str(evidence.get("workerAPid")))
+        pid_b = int(str(evidence.get("workerBPid")))
+        epoch_a = int(str(evidence.get("epochA")))
+        epoch_b = int(str(evidence.get("epochB")))
+        return_code = int(str(evidence.get("processAReturnCode")))
+        before_count = int(str(evidence.get("remoteRepairJobCountBefore")))
+        after_count = int(str(evidence.get("remoteRepairJobCountAfter")))
+    except (TypeError, ValueError):
+        return errors + ["invalid-crash-takeover-numeric-fields"]
+    if pid_a <= 0 or pid_b <= 0 or pid_a == pid_b:
+        errors.append("worker-pids-not-distinct-positive")
+    if return_code == 0:
+        errors.append("worker-a-not-hard-terminated")
+    if epoch_b <= epoch_a:
+        errors.append("takeover-execution-epoch-not-increased")
+    if before_count != 1 or after_count != 1:
+        errors.append("underlying-repair-job-count-not-exactly-one")
+    before_ids = evidence.get("remoteRepairJobIdsBefore")
+    after_ids = evidence.get("remoteRepairJobIdsAfter")
+    repair_id = str(evidence.get("repairId") or "")
+    if (
+        not isinstance(before_ids, list)
+        or not isinstance(after_ids, list)
+        or len(before_ids) != 1
+        or len(after_ids) != 1
+        or [str(item) for item in before_ids] != [repair_id]
+        or [str(item) for item in after_ids] != [repair_id]
+        or before_count != len(before_ids)
+        or after_count != len(after_ids)
+    ):
+        errors.append("underlying-repair-job-identity-not-stable")
+
+    lease_expiry: datetime | None = None
+    try:
+        lease_expiry = datetime.fromisoformat(str(evidence.get("workerALeaseUntil") or "").replace("Z", "+00:00"))
+        if lease_expiry.tzinfo is None:
+            raise ValueError("timezone required")
+        lease_expiry = lease_expiry.astimezone(timezone.utc)
+    except ValueError:
+        errors.append("invalid-worker-a-lease-expiry")
+    if str(evidence.get("repairPhaseAtCrash") or "") not in {
+        "selecting-source",
+        "acquiring-source-hold",
+        "validating-source-control",
+        "scanning-destination",
+        "transferring-components",
+        "verifying-components",
+        "finalizing",
+    }:
+        errors.append("worker-a-not-killed-during-active-repair")
+    if str(evidence.get("reconciliationDirective") or "") not in {"RESUME_EXECUTION", "ADVANCE_TO_VERIFYING"}:
+        errors.append("invalid-reconciliation-directive")
+
+    raw_events = evidence.get("journalEvents")
+    if not isinstance(raw_events, list):
+        return errors + ["journal-events-must-be-list"]
+    executing_index: int | None = None
+    reconciling_index: int | None = None
+    takeover_at: datetime | None = None
+    for index, raw_event in enumerate(raw_events):
+        if not isinstance(raw_event, dict):
+            continue
+        handle = raw_event.get("effectHandle")
+        effect = handle if isinstance(handle, dict) else {}
+        owner = str(raw_event.get("ownerInstanceId") or "")
+        try:
+            event_epoch = int(str(raw_event.get("executionEpoch")))
+        except (TypeError, ValueError):
+            continue
+        if (
+            str(raw_event.get("state") or "") == "EXECUTING"
+            and event_epoch == epoch_a
+            and str(effect.get("kind") or "") == "repair"
+            and str(effect.get("repairId") or "") == repair_id
+            and str(pid_a) in owner
+        ):
+            executing_index = index
+        if (
+            str(raw_event.get("state") or "") == "RECONCILING"
+            and str(raw_event.get("eventType") or "") == "ACTION_TAKEOVER"
+            and event_epoch == epoch_b
+            and str(effect.get("kind") or "") == "repair"
+            and str(effect.get("repairId") or "") == repair_id
+            and str(pid_b) in owner
+        ):
+            reconciling_index = index
+            try:
+                parsed_takeover_at = datetime.fromisoformat(
+                    str(raw_event.get("createdAt") or "").replace("Z", "+00:00")
+                )
+                if parsed_takeover_at.tzinfo is not None:
+                    takeover_at = parsed_takeover_at.astimezone(timezone.utc)
+            except ValueError:
+                takeover_at = None
+    if executing_index is None:
+        errors.append("missing-worker-a-executing-effect-event")
+    if reconciling_index is None:
+        errors.append("missing-worker-b-reconciling-event")
+    elif takeover_at is None:
+        errors.append("missing-worker-b-takeover-timestamp")
+    if executing_index is not None and reconciling_index is not None and reconciling_index <= executing_index:
+        errors.append("reconciling-event-not-after-executing-event")
+    if lease_expiry is not None and takeover_at is not None and takeover_at <= lease_expiry:
+        errors.append("takeover-occurred-before-worker-a-lease-expiry")
+    return errors
 
 
 def validate_blast_radius_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
     if not isinstance(evidence, dict):
         return ["not-a-dict"]
-    errors = _require_fields(
-        evidence,
-        (
-            "minCommittedCopies",
-            "copiesDuring",
-        ),
-    )
-    if evidence.get("blastRadiusVerified") is not True:
-        errors.append("blast-radius-not-verified")
-    try:
-        min_c = int(str(evidence.get("minCommittedCopies") or 0))
-        during_c = int(str(evidence.get("copiesDuring") or 0))
-        if during_c < min_c:
-            errors.append("copies-during-less-than-minimum")
-    except (ValueError, TypeError):
-        errors.append("invalid-copies-counts")
+    errors = _require_fields(evidence, ("simulator", "simulationPassed", "proposedActionIds", "simulationDetails"))
+    if evidence.get("simulator") != "resilience_coordinator.simulate_coordination_wave":
+        errors.append("blast-radius-simulator-identity-mismatch")
+    if evidence.get("simulationPassed") is not True:
+        errors.append("blast-radius-simulation-not-passed")
+    proposed = evidence.get("proposedActionIds")
+    if not isinstance(proposed, list):
+        errors.append("blast-radius-proposed-actions-must-be-list")
+        proposed = []
+    details = evidence.get("simulationDetails")
+    if not isinstance(details, dict):
+        return errors + ["blast-radius-simulation-details-must-be-object"]
+    if details.get("passed") is not True:
+        errors.append("blast-radius-details-not-passed")
+    if details.get("proposedActionIds") != proposed:
+        errors.append("blast-radius-proposed-action-binding-mismatch")
+    running_ids = details.get("runningActionIds")
+    if not isinstance(running_ids, list):
+        errors.append("blast-radius-running-actions-must-be-list")
+        running_ids = []
+    evaluations = details.get("evaluations")
+    if not isinstance(evaluations, dict) or not evaluations:
+        return errors + ["blast-radius-evaluations-missing"]
+    running_effects = 0
+    for evaluation_key, raw_evaluation in evaluations.items():
+        if not isinstance(raw_evaluation, dict):
+            errors.append(f"blast-radius-evaluation-not-object:{evaluation_key}")
+            continue
+        evaluation = raw_evaluation
+        errors.extend(
+            f"blast-radius-{evaluation_key}-{error}"
+            for error in _require_fields(
+                evaluation,
+                (
+                    "policyId",
+                    "backupId",
+                    "minCommittedCopies",
+                    "minFailureDomains",
+                    "copiesBefore",
+                    "copiesDuring",
+                    "copySafetyFloor",
+                    "failureDomainsBefore",
+                    "failureDomainsDuring",
+                    "failureDomainSafetyFloor",
+                    "runningEffectCount",
+                    "passed",
+                ),
+            )
+        )
+        try:
+            min_copies = int(str(evaluation.get("minCommittedCopies")))
+            min_domains = int(str(evaluation.get("minFailureDomains")))
+            copies_before = int(str(evaluation.get("copiesBefore")))
+            copies_during = int(str(evaluation.get("copiesDuring")))
+            copy_floor = int(str(evaluation.get("copySafetyFloor")))
+            domain_floor = int(str(evaluation.get("failureDomainSafetyFloor")))
+            running_effect_count = int(str(evaluation.get("runningEffectCount")))
+        except (TypeError, ValueError):
+            errors.append(f"blast-radius-invalid-numeric-fields:{evaluation_key}")
+            continue
+        expected_copy_floor = min_copies if copies_before >= min_copies else copies_before
+        if copy_floor != expected_copy_floor or copies_during < copy_floor:
+            errors.append(f"blast-radius-copy-floor-violation:{evaluation_key}")
+        domains_before = evaluation.get("failureDomainsBefore")
+        domains_during = evaluation.get("failureDomainsDuring")
+        if not isinstance(domains_before, list) or not isinstance(domains_during, list):
+            errors.append(f"blast-radius-failure-domains-must-be-lists:{evaluation_key}")
+        else:
+            expected_domain_floor = min_domains if len(domains_before) >= min_domains else len(domains_before)
+            if domain_floor != expected_domain_floor or len(domains_during) < domain_floor:
+                errors.append(f"blast-radius-domain-floor-violation:{evaluation_key}")
+        if running_effect_count < 0:
+            errors.append(f"blast-radius-negative-running-effect-count:{evaluation_key}")
+        running_effects += max(0, running_effect_count)
+        if evaluation.get("passed") is not True:
+            errors.append(f"blast-radius-evaluation-not-passed:{evaluation_key}")
+    if check_name == "runningEffectsParticipateInBlastRadiusSimulation" and (not running_ids or running_effects < 1):
+        errors.append("blast-radius-running-effects-not-proven")
     return errors
 
 
 def validate_atomic_budget_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
     if not isinstance(evidence, dict):
         return ["not-a-dict"]
-    errors = _require_fields(
-        evidence,
-        (
-            "actionId",
-            "executionEpoch",
-        ),
-    )
-    if evidence.get("atomicAdmissionVerified") is not True:
-        errors.append("atomic-admission-not-verified")
+    errors = _require_fields(evidence, ("scope", "processResults", "admittedCount", "rejectedCount"))
+    expected_scope = {
+        "twoProcessesCannotOversubscribeGlobalBudget": "global",
+        "twoProcessesCannotOversubscribeTargetBudget": "target",
+        "twoProcessesCannotOversubscribePolicyBudget": "policy",
+        "twoProcessesCannotOversubscribeFailureDomainBudget": "failure-domain",
+    }.get(check_name)
+    scope = str(evidence.get("scope") or "")
+    if expected_scope is not None and scope != expected_scope:
+        errors.append(f"atomic-budget-scope-mismatch:{scope}!={expected_scope}")
+    elif scope not in {"global", "target", "policy", "failure-domain"}:
+        errors.append("invalid-atomic-budget-scope")
+    raw_results = evidence.get("processResults")
+    if not isinstance(raw_results, list):
+        return errors + ["process-results-must-be-list"]
+    if len(raw_results) != 2:
+        errors.append("atomic-budget-proof-requires-two-process-results")
+    pids: set[int] = set()
+    admitted = 0
+    rejected = 0
+    for raw_result in raw_results:
+        if not isinstance(raw_result, dict):
+            errors.append("process-result-must-be-object")
+            continue
+        try:
+            pid = int(str(raw_result.get("pid")))
+        except (TypeError, ValueError):
+            errors.append("invalid-process-pid")
+            continue
+        if pid <= 0:
+            errors.append("invalid-process-pid")
+        pids.add(pid)
+        if raw_result.get("admitted") is True:
+            admitted += 1
+            try:
+                if int(str(raw_result.get("executionEpoch"))) < 1:
+                    errors.append("admitted-process-missing-execution-epoch")
+            except (TypeError, ValueError):
+                errors.append("admitted-process-missing-execution-epoch")
+        elif raw_result.get("admitted") is False:
+            rejected += 1
+            if not str(raw_result.get("reason") or ""):
+                errors.append("rejected-process-missing-reason")
+        else:
+            errors.append("process-result-admitted-must-be-boolean")
+    if len(pids) != 2:
+        errors.append("atomic-budget-process-pids-not-distinct")
+    if admitted != 1 or rejected != 1:
+        errors.append("atomic-budget-race-not-one-admitted-one-rejected")
+    if evidence.get("admittedCount") != admitted or evidence.get("rejectedCount") != rejected:
+        errors.append("atomic-budget-declared-counts-mismatch")
     return errors
 
 
@@ -428,12 +751,31 @@ VALIDATORS: dict[str, CheckValidator] = {
     "realThreeMinioAutonomousDrillE2E": validate_dr_readiness_proof,
     "realReplicaTransferUsesEndpointAAndB": validate_autonomous_repair_proof,
     "realRebalanceUsesEndpointAAndC": validate_autonomous_rebalance_proof,
-    "destinationReceiptAuthenticated": validate_backup_commit_proof,
-    "destinationCommitAuthenticated": validate_backup_commit_proof,
+    "destinationReceiptAuthenticated": validate_autonomous_storage_bytes_proof,
+    "destinationCommitAuthenticated": validate_autonomous_storage_bytes_proof,
+    "autonomousProofUsesActualReceiptBytes": validate_autonomous_storage_bytes_proof,
+    "autonomousProofUsesActualCommitBytes": validate_autonomous_storage_bytes_proof,
+    "receiptSha256MatchesCommitReceiptDigest": validate_autonomous_storage_bytes_proof,
+    "proofObjectSetDigestMatchesCommit": validate_autonomous_storage_bytes_proof,
+    "proofObjectKeysExistOnExpectedMinioEndpoint": validate_autonomous_storage_bytes_proof,
+    "receiptV4Unchanged": validate_autonomous_storage_bytes_proof,
+    "commitV4Unchanged": validate_autonomous_storage_bytes_proof,
     "crashRecoveryObservedExistingEffect": validate_crash_recovery_proof,
-    "leaseTakeoverUsedNewExecutionEpoch": validate_epoch_increase_proof,
+    "leaseTakeoverUsedNewExecutionEpoch": validate_crash_recovery_proof,
+    "realWorkerCrashOccursDuringRemoteRepair": validate_crash_recovery_proof,
+    "freshWorkerTakesOverExpiredAction": validate_crash_recovery_proof,
+    "takeoverExecutionEpochStrictlyIncreases": validate_crash_recovery_proof,
+    "takeoverEntersReconcilingBeforeMutation": validate_crash_recovery_proof,
+    "takeoverFindsExistingRemoteEffect": validate_crash_recovery_proof,
+    "takeoverDoesNotCreateSecondRepairJob": validate_crash_recovery_proof,
     "blastRadiusInvariantVerified": validate_blast_radius_proof,
+    "degradedFleetCannotBeFurtherDegraded": validate_blast_radius_proof,
+    "runningEffectsParticipateInBlastRadiusSimulation": validate_blast_radius_proof,
     "atomicBudgetAdmissionVerified": validate_atomic_budget_proof,
+    "twoProcessesCannotOversubscribeGlobalBudget": validate_atomic_budget_proof,
+    "twoProcessesCannotOversubscribeTargetBudget": validate_atomic_budget_proof,
+    "twoProcessesCannotOversubscribePolicyBudget": validate_atomic_budget_proof,
+    "twoProcessesCannotOversubscribeFailureDomainBudget": validate_atomic_budget_proof,
 }
 
 

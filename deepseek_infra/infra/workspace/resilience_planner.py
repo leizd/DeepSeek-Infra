@@ -20,6 +20,7 @@ from deepseek_infra.infra.workspace import (
     backup_dr_ledger,
     backup_policies,
     backup_targets,
+    resilience_risk_observations,
 )
 from deepseek_infra.infra.workspace.resilience_risk_engine import RiskSeverity, RiskType
 
@@ -52,16 +53,34 @@ def _utc_iso(dt: datetime | None = None) -> str:
 
 def _risk_subject_from_record(risk: dict[str, Any]) -> dict[str, str | None]:
     """Bind an action only to scope that the observed risk actually declared."""
-    policy_id = str(risk.get("policyId") or "")
-    backup_id = str(risk.get("backupId") or "")
-    target_id = str(risk.get("targetId") or risk.get("target") or "")
-    failure_domain = str(risk.get("failureDomain") or "")
+    return resilience_risk_observations.canonical_risk_subject(risk)
+
+
+def _snapshot_time(snapshot: dict[str, Any]) -> datetime | None:
+    raw = snapshot.get("generatedAt")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else None
+
+
+def _risk_lifecycle_fields(risk: dict[str, Any]) -> dict[str, Any]:
+    subject = _risk_subject_from_record(risk)
+    digest = resilience_risk_observations.risk_subject_digest(subject)
+    observation = resilience_risk_observations.get_observation(digest)
+    if observation is None:
+        return {"riskSubjectDigest": digest}
     return {
-        "type": str(risk.get("type") or "").upper(),
-        "policyId": policy_id or None,
-        "backupId": backup_id or None,
-        "targetId": target_id or None,
-        "failureDomain": failure_domain or None,
+        "riskSubjectDigest": digest,
+        "riskFirstSeenAt": observation.get("openSinceAt") or observation.get("firstSeenAt"),
+        "riskLifecycleFirstSeenAt": observation.get("firstSeenAt"),
+        "riskLastSeenAt": observation.get("lastSeenAt"),
+        "riskObservationCount": observation.get("observationCount"),
+        "riskLifecycleStatus": observation.get("status"),
+        "riskReopenCount": observation.get("reopenCount"),
     }
 
 
@@ -265,12 +284,14 @@ def plan_resilience_actions(
     from deepseek_infra.infra.workspace import autonomous_action_policy
 
     policy = action_policy or autonomous_action_policy.get_autonomous_action_policy()
+    resilience_risk_observations.observe_risk_snapshot(risk_snapshot, now=_snapshot_time(risk_snapshot))
 
     for r in risks:
         r_type = str(r.get("type", ""))
         r_sev = str(r.get("severity", RiskSeverity.HEALTHY.value)).lower()
         if r_sev in {RiskSeverity.HEALTHY.value, "low"}:
             continue
+        lifecycle_fields = _risk_lifecycle_fields(r)
 
         # 1. Capacity risk planning -> CREATE_REBALANCE_JOB
         if r_type == RiskType.CAPACITY_EXHAUSTION.value:
@@ -293,6 +314,7 @@ def plan_resilience_actions(
                     "confidence": str(r.get("confidence", "verified")),
                     "requiresApproval": req_appr,
                     "riskSubject": _risk_subject_from_record(r),
+                    **lifecycle_fields,
                     "severityBefore": r_sev,
                     "expectedEffect": "severity-decrease",
                     "parameters": {
@@ -337,6 +359,7 @@ def plan_resilience_actions(
                 "confidence": str(r.get("confidence", "verified")),
                 "requiresApproval": req_appr,
                 "riskSubject": _risk_subject_from_record(r),
+                **lifecycle_fields,
                 "severityBefore": r_sev,
                 "expectedEffect": "severity-decrease",
                 "parameters": {
@@ -369,6 +392,7 @@ def plan_resilience_actions(
                 "confidence": str(r.get("confidence", "verified")),
                 "requiresApproval": req_appr,
                 "riskSubject": _risk_subject_from_record(r),
+                **lifecycle_fields,
                 "severityBefore": r_sev,
                 "expectedEffect": "severity-decrease",
                 "parameters": {
@@ -394,6 +418,7 @@ def plan_resilience_actions(
                     "riskSubject": {
                         "type": RiskType.AUTHORITY_DEGRADATION.value,
                     },
+                    **lifecycle_fields,
                     "severityBefore": r_sev,
                     "expectedEffect": "severity-decrease",
                     "parameters": {},

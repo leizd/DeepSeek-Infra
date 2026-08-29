@@ -169,7 +169,15 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(tmp, path)
+    try:
+        backup_writer_lease._retry_permission(lambda: os.replace(tmp, path))
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            # Preserve the original replace failure; crash leftovers are
+            # ignored by all job readers and can be scrubbed independently.
+            pass
 
 
 class RepairLeaseLostError(AppError):

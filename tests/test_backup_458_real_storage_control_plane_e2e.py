@@ -50,8 +50,7 @@ CONTAINER_NAMES = (
 def _real_prerequisites() -> tuple[list[str], list[str]]:
     endpoints = [str(os.environ.get(name) or "").rstrip("/") for name in ENDPOINT_NAMES]
     containers = [str(os.environ.get(name) or "") for name in CONTAINER_NAMES]
-    if os.environ.get("DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E") != "1":
-        pytest.skip("dedicated real Storage Control Plane Evidence runner is not active")
+    assert os.environ.get("DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E") == "1"
     assert all(endpoints), "three real S3 endpoints are required"
     assert len(set(endpoints)) == 3, "S3 endpoints must be independent"
     assert all(containers), "three MinIO container identities are required"
@@ -60,8 +59,9 @@ def _real_prerequisites() -> tuple[list[str], list[str]]:
 
 
 def _client(endpoint: str) -> Any:
-    boto3 = pytest.importorskip("boto3")
-    config_module = pytest.importorskip("botocore.config")
+    import boto3
+    from botocore import config as config_module
+
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
@@ -87,18 +87,6 @@ def _wait_for_s3(client: Any, *, timeout: float = 45.0) -> None:
             last_error = exc
             time.sleep(1.0)
     raise AssertionError(f"MinIO did not recover: {last_error}")
-
-
-def _docker(action: str, container: str) -> None:
-    assert action in {"start", "stop"}
-    completed = subprocess.run(
-        ["docker", action, container],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=45,
-    )
-    assert completed.returncode == 0, completed.stderr[-2000:]
 
 
 def _seed_workspace() -> bytes:
@@ -220,7 +208,7 @@ def _restore_project(tmp_settings: Path, *, target_id: str, backup_id: str, iden
 
 
 @pytest.mark.integration
-def test_real_three_minio_storage_control_plane_e2e(tmp_settings: Path) -> None:
+def test_real_three_minio_storage_control_plane_e2e(tmp_settings: Path, real_storage_environment: Any) -> None:
     endpoints, containers = _real_prerequisites()
     clients = [_client(endpoint) for endpoint in endpoints]
     suffix = uuid.uuid4().hex[:8]
@@ -301,7 +289,7 @@ def test_real_three_minio_storage_control_plane_e2e(tmp_settings: Path) -> None:
     a_stopped = False
     supervisor: backup_maintenance.StorageMaintenanceSupervisor | None = None
     try:
-        _docker("stop", containers[0])
+        real_storage_environment.control("stop", containers[0])
         a_stopped = True
         (config.PROJECTS_DIR / "control-plane" / "state.bin").write_bytes(b"storage-control-plane-project-v2")
         expected_project = b"storage-control-plane-project-v2"
@@ -311,7 +299,7 @@ def test_real_three_minio_storage_control_plane_e2e(tmp_settings: Path) -> None:
         second_backup_id = str(second["backupId"])
         assert second["snapshotKind"] == "full"
 
-        _docker("start", containers[0])
+        real_storage_environment.control("start", containers[0])
         a_stopped = False
         _wait_for_s3(clients[0])
         supervisor = backup_maintenance.StorageMaintenanceSupervisor(
@@ -356,11 +344,14 @@ def test_real_three_minio_storage_control_plane_e2e(tmp_settings: Path) -> None:
         receipt_key_b, receipt_bytes_before = _formal_bytes(source_b, "receipts/", second_backup_id)
         commit_key_b, commit_bytes_before = _formal_bytes(source_b, f"commits/{policy_id}/", second_backup_id)
         backup_drain.start_target_drain(target_b, reason="real-three-minio-e2e")
-        for _ in range(20):
-            if backup_drain.get_target_drain_job(target_id=target_b)["phase"] == "drained":  # type: ignore[index]
+        drain_deadline = time.monotonic() + 60
+        drain_job = backup_drain.get_target_drain_job(target_id=target_b)
+        while time.monotonic() < drain_deadline:
+            if drain_job["phase"] == "drained":  # type: ignore[index]
                 break
-            time.sleep(0.5)
-        assert backup_drain.get_target_drain_job(target_id=target_b)["phase"] == "drained"  # type: ignore[index]
+            time.sleep(0.25)
+            drain_job = backup_drain.get_target_drain_job(target_id=target_b)
+        assert drain_job["phase"] == "drained", drain_job  # type: ignore[index]
         assert source_b.store.get_bytes(receipt_key_b) == receipt_bytes_before
         assert source_b.store.get_bytes(commit_key_b) == commit_bytes_before
         marker_raw = source_b.store.get_bytes(backup_retirement.retirement_marker_key(policy_id, second_backup_id))
@@ -384,4 +375,4 @@ def test_real_three_minio_storage_control_plane_e2e(tmp_settings: Path) -> None:
         if supervisor is not None:
             supervisor.stop()
         if a_stopped:
-            _docker("start", containers[0])
+            real_storage_environment.control("start", containers[0])

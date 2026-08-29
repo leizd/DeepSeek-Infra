@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -120,10 +122,26 @@ def test_symlink_target_rejected(tmp_settings: Path, tmp_path: Path) -> None:
     link = tmp_path / "link"
     try:
         link.symlink_to(real, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlink creation requires privileges on this platform")
-    with pytest.raises(AppError, match="symlink|reparse"):
-        backup_targets.init_target(link)
+    except OSError as symlink_error:
+        if os.name != "nt":
+            raise
+        completed = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(real)],
+            check=False,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+        assert completed.returncode == 0, f"junction creation failed after symlink denial: {symlink_error}; {completed.stdout}"
+    try:
+        with pytest.raises(AppError, match="symlink|reparse"):
+            backup_targets.init_target(link)
+    finally:
+        if link.is_symlink():
+            link.unlink()
+        elif link.exists():
+            link.rmdir()
+    assert real.is_dir()
 
 
 def test_get_list_delete_target(tmp_settings: Path, tmp_path: Path) -> None:

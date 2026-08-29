@@ -53,6 +53,7 @@ class TrafficClass(enum.IntEnum):
 
 DEFAULT_GLOBAL_BYTES_PER_SECOND = 200 * 1024 * 1024       # 200 MiB/s
 DEFAULT_RESERVED_RECOVERY_BYTES_PER_SEC = 100 * 1024 * 1024 # 100 MiB/s
+DEFAULT_RESERVED_REPAIR_BYTES_PER_SEC = 100 * 1024 * 1024
 DEFAULT_BACKGROUND_MAX_BYTES_PER_SEC = 50 * 1024 * 1024     # 50 MiB/s
 DEFAULT_TARGET_MAX_CONCURRENCY = 4
 
@@ -86,6 +87,7 @@ class TransferBudgetManager:
         global_bandwidth_bytes_per_sec: int | None = None,
         reserved_recovery_bytes_per_sec: int | None = None,
         reserved_dr_bandwidth_bytes_per_sec: int | None = None,
+        reserved_repair_bandwidth_bytes_per_sec: int | None = None,
         background_max_bytes_per_sec: int = DEFAULT_BACKGROUND_MAX_BYTES_PER_SEC,
         max_burst_bytes: int | None = None,
         per_target_read_bytes_per_sec: dict[str, int] | None = None,
@@ -106,6 +108,12 @@ class TransferBudgetManager:
             else (reserved_dr_bandwidth_bytes_per_sec if reserved_dr_bandwidth_bytes_per_sec is not None else DEFAULT_RESERVED_RECOVERY_BYTES_PER_SEC)
         )
         self.reserved_recovery_bytes_per_sec = max(0, dr_res)
+        repair_reserve = (
+            reserved_repair_bandwidth_bytes_per_sec
+            if reserved_repair_bandwidth_bytes_per_sec is not None
+            else min(DEFAULT_RESERVED_REPAIR_BYTES_PER_SEC, self.global_bytes_per_second // 2)
+        )
+        self.reserved_repair_bytes_per_sec = max(0, repair_reserve)
         self.background_max_bytes_per_sec = max(1024 * 1024, background_max_bytes_per_sec)
         self.max_burst_bytes = max_burst_bytes or (self.global_bytes_per_second * 2)
 
@@ -355,6 +363,7 @@ class TransferBudgetManager:
                 bucket_specs=bucket_specs,
                 traffic_class=int(transfer.traffic_class),
                 reserved_global_tokens=self.reserved_recovery_bytes_per_sec,
+                reserved_repair_tokens=self.reserved_repair_bytes_per_sec,
                 now=now,
             )
             if result["granted"]:
@@ -434,7 +443,44 @@ class TransferBudgetManager:
                 "globalBandwidthBytesPerSec": self.global_bytes_per_second,
                 "reservedRecoveryBytesPerSecond": self.reserved_recovery_bytes_per_sec,
                 "reservedDrBandwidthBytesPerSec": self.reserved_recovery_bytes_per_sec,
+                "repairReservedBytesPerSecond": self.reserved_repair_bytes_per_sec,
             }
+
+    def scheduler_reservation_snapshot(self, actions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Expose the real manager configuration used for Fleet wave admission."""
+        action_list = actions or []
+        action_types = [str(action.get("type") or "").upper() for action in action_list]
+        global_rate = max(1, self.global_bytes_per_second)
+        repair_percent = round(100.0 * self.reserved_repair_bytes_per_sec / global_rate, 3)
+        # P0 disaster-recovery reserve predates Fleet scheduling and may be
+        # larger; Fleet DR-drill admission owns a bounded 25% class.
+        drill_reserve = min(self.reserved_recovery_bytes_per_sec, self.global_bytes_per_second // 4)
+        dr_percent = round(100.0 * drill_reserve / global_rate, 3)
+        return {
+            "globalBytesPerSecond": self.global_bytes_per_second,
+            "repairReservedBytesPerSecond": self.reserved_repair_bytes_per_sec,
+            "drDrillReservedBytesPerSecond": drill_reserve,
+            "repairReservePercent": repair_percent,
+            "drDrillReservePercent": dr_percent,
+            "rebalanceOpportunisticPercent": max(0.0, round(100.0 - repair_percent - dr_percent, 3)),
+            "repairActions": action_types.count("CREATE_REPAIR_JOB"),
+            "drillActions": action_types.count("START_DR_DRILL"),
+            "rebalanceActions": action_types.count("CREATE_REBALANCE_JOB"),
+            "rebalanceBlockedByRepairReserve": (
+                "CREATE_REPAIR_JOB" in action_types and "CREATE_REBALANCE_JOB" in action_types
+            ),
+        }
+
+    @staticmethod
+    def can_share_scheduler_wave(existing_actions: list[dict[str, Any]], candidate: dict[str, Any]) -> tuple[bool, str]:
+        """Keep opportunistic Rebalance outside every active Repair wave."""
+        types = {str(action.get("type") or "").upper() for action in existing_actions}
+        candidate_type = str(candidate.get("type") or "").upper()
+        if (candidate_type == "CREATE_REBALANCE_JOB" and "CREATE_REPAIR_JOB" in types) or (
+            candidate_type == "CREATE_REPAIR_JOB" and "CREATE_REBALANCE_JOB" in types
+        ):
+            return False, "DEFERRED_TRANSFER_BUDGET"
+        return True, "TRANSFER_BUDGET_AVAILABLE"
 
     def active_transfers_count(self) -> int:
         with self._lock:
@@ -467,12 +513,14 @@ def configure_global_transfer_budget(
     *,
     global_bandwidth_bytes_per_sec: int | None = None,
     reserved_dr_bandwidth_bytes_per_sec: int | None = None,
+    reserved_repair_bandwidth_bytes_per_sec: int | None = None,
     target_configs: dict[str, TargetBudgetConfig] | None = None,
 ) -> TransferBudgetManager:
     global _GLOBAL_BUDGET_MANAGER
     _GLOBAL_BUDGET_MANAGER = TransferBudgetManager(
         global_bandwidth_bytes_per_sec=global_bandwidth_bytes_per_sec,
         reserved_dr_bandwidth_bytes_per_sec=reserved_dr_bandwidth_bytes_per_sec,
+        reserved_repair_bandwidth_bytes_per_sec=reserved_repair_bandwidth_bytes_per_sec,
         target_configs=target_configs,
     )
     return _GLOBAL_BUDGET_MANAGER

@@ -32,6 +32,50 @@ def _isolate_target_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_temp))
 
 
+def test_replication_atomic_write_retries_transient_windows_replace_lock(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_settings / "repair-journal" / "repair.json"
+    real_replace = backup_replication.os.replace
+    attempts = 0
+
+    def transient_replace(source: Path, destination: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError(5, "transient sharing violation", str(destination))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(backup_replication.os, "replace", transient_replace)
+
+    backup_replication._atomic_write(path, {"repairId": "repair-retry", "phase": "transferring-components"})
+
+    assert attempts == 3
+    assert json.loads(path.read_text(encoding="utf-8"))["phase"] == "transferring-components"
+    assert list(path.parent.glob(".*.tmp")) == []
+
+
+def test_replication_atomic_write_fails_closed_after_persistent_replace_lock(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_settings / "repair-journal" / "repair.json"
+    backup_replication._atomic_write(path, {"repairId": "repair-stable", "phase": "queued"})
+    monkeypatch.setattr(
+        backup_replication.os,
+        "replace",
+        lambda _source, destination: (_ for _ in ()).throw(PermissionError(5, "persistent sharing violation", str(destination))),
+    )
+    monkeypatch.setattr(backup_writer_lease.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(PermissionError, match="persistent sharing violation"):
+        backup_replication._atomic_write(path, {"repairId": "repair-stable", "phase": "healthy"})
+
+    assert json.loads(path.read_text(encoding="utf-8"))["phase"] == "queued"
+    assert list(path.parent.glob(".*.tmp")) == []
+
+
 def test_replication_lag_and_compliance(tmp_settings: Path) -> None:
     p_tid = "target_lag_p"
     r_tid = "target_lag_r"

@@ -774,6 +774,13 @@ def create_backup_governance_router() -> APIRouter:
             }
         )
 
+    @router.get("/api/workspace/resilience/readiness")
+    async def api_resilience_readiness(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        from deepseek_infra.infra.workspace import resilience_fleet_readiness
+
+        return json_response(resilience_fleet_readiness.get_fleet_readiness())
+
     @router.post("/api/workspace/resilience/assess")
     async def api_resilience_assess(request: Request) -> JSONResponse:
         require_api_auth(request)

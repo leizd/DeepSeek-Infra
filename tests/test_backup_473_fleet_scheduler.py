@@ -179,17 +179,18 @@ def test_fleet_scheduler_wave_assembly_and_lock_arbitration(tmp_settings: Path) 
     schedule = resilience_fleet_scheduler.schedule_fleet_resilience(snapshot, candidate_actions=candidate_actions)
 
     assert schedule["status"] == "SCHEDULED"
-    assert len(schedule["executionWaves"]) == 1
+    assert len(schedule["executionWaves"]) == 2
     wave0 = schedule["executionWaves"][0]
     admitted_ids = [a["actionId"] for a in wave0["actions"]]
 
-    # act_w1 and act_w3 are admitted; act_w2 is deferred due to resource lock conflict on backup:pol_wave_1:b1
+    # act_w1 and act_w3 can run together; act_w2 is placed in the next
+    # dependency-preserving wave after the repair completes.
     assert "act_w1" in admitted_ids
     assert "act_w3" in admitted_ids
     assert "act_w2" not in admitted_ids
 
-    deferred = schedule["deferredActions"]
-    assert any(d["actionId"] == "act_w2" and d["deferReason"] == "resource-lock-conflict" for d in deferred)
+    assert [action["actionId"] for action in schedule["executionWaves"][1]["actions"]] == ["act_w2"]
+    assert schedule["deferredActions"] == []
 
 
 def test_transfer_budget_reservation_protects_repair_reserve(tmp_settings: Path) -> None:

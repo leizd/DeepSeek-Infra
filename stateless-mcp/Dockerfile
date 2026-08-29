@@ -9,7 +9,7 @@ RUN apt-get update \
 
 WORKDIR /workspace
 
-COPY requirements.txt requirements-dev.txt ./
+COPY requirements.txt requirements-dev.txt requirements-s3-e2e.txt ./
 RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirements.txt -r requirements-dev.txt
 
 COPY stateless-mcp/package.json stateless-mcp/package-lock.json ./stateless-mcp/

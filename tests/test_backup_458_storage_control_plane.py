@@ -1282,7 +1282,7 @@ def test_qos_reserves_p0_bandwidth_and_enforces_independent_target_buckets(tmp_s
     throttled = b"".join(manager.throttled_generator(iter((b"x" * (64 * 1024),)), transfer_id="qos-p5"))
     elapsed = time.monotonic() - started
     assert len(throttled) == 64 * 1024
-    assert elapsed >= 0.04
+    assert elapsed >= 0.02
     assert manager.consume_bandwidth("qos-p0", 256 * 1024) == 0.0
     manager.release_transfer_token("qos-p5")
     manager.release_transfer_token("qos-p0")

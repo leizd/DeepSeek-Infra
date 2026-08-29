@@ -5,11 +5,45 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.5.0。
+适用版本：v4.7.4。
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 
-## Hybrid Runtime 总览（v4.5.0）
+## 4.7.4 持久化自治运维闭环
+
+4.7.4 不改变备份数据线格式，而是在真实 Storage effect 上增加可恢复的全局
+调度和可复验 Evidence 边界。每次 control loop 先把 exact RiskSubject 写入
+Observation Ledger，再以持久化公平历史构建完整 DAG waves；admission、资源锁、
+execution epoch/token 和安全抢占在 SQLite 事务中围栏，远端 effect 则必须先
+reconcile 后才能继续。Fleet SLO 与 proof verification 独立持久化，Readiness API
+只投影这些 source-backed 状态。
+
+```mermaid
+flowchart LR
+    R["RiskSnapshot<br/>exact RiskSubject"] --> O[("Risk Observation Ledger<br/>first seen · clear · reopen")]
+    O --> F[("Scheduler Service<br/>virtual runtime · bytes served")]
+    F --> W["Complete DAG waves"]
+    W --> A["Atomic admission<br/>transfer reserve · safe preemption"]
+    A --> B["Monotonic blast simulation<br/>running + proposed effects"]
+    B --> J[("Action Journal<br/>epoch · token · lease · effect handle")]
+    J --> X["Repair / Rebalance / Drill"]
+    X --> S[("Fleet SLO Ledger<br/>latency · freshness · burn")]
+    X --> P["Exact Receipt + Commit bytes"]
+    P --> E["Report + proof + SHA-256<br/>Evidence Assembly"]
+```
+
+这一层始终维持以下 fail-closed 边界：未知远端 effect 不得重建第二个 job；已经
+degraded 的 copy/domain baseline 不得继续下降；Rebalance 不得消费 Repair 保留
+token；`EXECUTING/VERIFYING/RECONCILING` action 不得被抢占；缺失或篡改 exact
+proof 时 Assembly 必须失败。详细运维步骤见
+[COORDINATED_AUTONOMOUS_REMEDIATION.md](runbooks/COORDINATED_AUTONOMOUS_REMEDIATION.md)，
+架构决策见 [ADR-0045](adr/ADR-0045-durable-fleet-slo-evidence-closed-operations.md)。
+
+冻结边界保持 `object-set-v1`、Receipt v4、Commit v4、FastCDC v3、randomized
+Age、Projection semantics、`control-authority-v1`、AuthorityCheckpoint v1 与
+`dr-readiness-proof-v1` 不变。
+
+## Hybrid Runtime 总览（v4.7.4）
 
 > 运维细节、feature flags 与回滚命令见 [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)。
 
@@ -119,7 +153,7 @@ Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具�
 
 ### 版本说明
 
-- **Current development version:** `4.5.0`（尚未 release-ready）。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。生产恢复编排在冻结的 `object-set-v1`、Receipt v4、Commit v4 与投影语义之上增加耐久 Job、缓存、流水线、安全控制和 DR Readiness，不迁移或重写线格式。
+- **Current development version:** `4.7.4`（只有 exact-merge CI Evidence 全绿后才 release-ready）。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、持久化 Risk/Scheduler/SLO Ledgers、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。生产恢复编排在冻结的 `object-set-v1`、Receipt v4、Commit v4 与投影语义之上增加耐久 Job、全局多波次调度、安全控制和 Evidence closure，不迁移或重写线格式。
 - **Historical qualification:** `v4.0.0-rc.1` 已被 rc.2 supersede，只保留为历史架构预览；stable `4.0.0` 从已验证的 rc.2 提升。
 - **Patch boundary:** Python-first 所有权、默认关闭的 Rust delegates 和冻结协议均不改变。
 

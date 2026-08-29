@@ -148,10 +148,10 @@ def test_streaming_restore_never_reads_parent_or_payload_whole(tmp_path: Path) -
     assert backup_incremental_restore.COPY_BUFFER_BYTES == 1024 * 1024
 
 
-def test_python_rust_chunk_parity_when_helper_is_available(tmp_path: Path) -> None:
+def test_python_rust_chunk_parity_when_helper_is_available(tmp_path: Path, native_backup_helpers: None) -> None:
+    del native_backup_helpers
     helper = backup_chunk_engine.native_helper_path()
-    if helper is None:
-        pytest.skip("native deepseek-backup helper is built in the Rust CI job")
+    assert helper is not None, "native deepseek-backup helper is required"
     path = tmp_path / "parity.bin"
     path.write_bytes(random.Random(9).randbytes(18 * 1024 * 1024))
     python = backup_chunk_engine.PythonChunkEngine().scan_file(path)

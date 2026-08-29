@@ -5,14 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.7.3-blue)
+![版本](https://img.shields.io/badge/version-4.7.4-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.7.3 — Proof-Carrying Fleet Resilience & Production Coordination**。可证明的 Multi-MinIO 端到端验证与 Evidence 闭环、Crash-Recoverable 事务与 Effect 仲裁、Fleet 调度与多维风险债务模型 (Risk Debt)、安全点抢占与带宽配额保护、瞬态爆炸半径模拟。详见 [4.7.3 发布说明](docs/releases/4.7.3.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
+> **4.7.4 — Durable Fleet SLO & Evidence-Closed Autonomous Operations**。持久化风险生命周期与公平服务历史、完整 DAG 多波次调度、强制传输预算与安全点抢占、Fleet SLO/burn rate，以及可取证复现的真实 MinIO proof。详见 [4.7.4 发布说明](docs/releases/4.7.4.md)、[自治运维 runbook](docs/runbooks/COORDINATED_AUTONOMOUS_REMEDIATION.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)、[4.5.4](docs/releases/4.5.4.md)、[4.5.5](docs/releases/4.5.5.md)、[4.5.6](docs/releases/4.5.6.md)、[4.5.7](docs/releases/4.5.7.md)、[4.5.8](docs/releases/4.5.8.md)、[4.5.9](docs/releases/4.5.9.md)、[4.6.0](docs/releases/4.6.0.md)、[4.6.2](docs/releases/4.6.2.md)、[4.6.3](docs/releases/4.6.3.md)、[4.6.4](docs/releases/4.6.4.md)、[4.6.5](docs/releases/4.6.5.md)、[4.6.6](docs/releases/4.6.6.md)、[4.6.7](docs/releases/4.6.7.md)、[4.6.8](docs/releases/4.6.8.md)、[4.6.9](docs/releases/4.6.9.md)、[4.7.0](docs/releases/4.7.0.md)、[4.7.1](docs/releases/4.7.1.md)、[4.7.2](docs/releases/4.7.2.md)、[4.7.3](docs/releases/4.7.3.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)、[4.5.4](docs/releases/4.5.4.md)、[4.5.5](docs/releases/4.5.5.md)、[4.5.6](docs/releases/4.5.6.md)、[4.5.7](docs/releases/4.5.7.md)、[4.5.8](docs/releases/4.5.8.md)、[4.5.9](docs/releases/4.5.9.md)、[4.6.0](docs/releases/4.6.0.md)、[4.6.2](docs/releases/4.6.2.md)、[4.6.3](docs/releases/4.6.3.md)、[4.6.4](docs/releases/4.6.4.md)、[4.6.5](docs/releases/4.6.5.md)、[4.6.6](docs/releases/4.6.6.md)、[4.6.7](docs/releases/4.6.7.md)、[4.6.8](docs/releases/4.6.8.md)、[4.6.9](docs/releases/4.6.9.md)、[4.7.0](docs/releases/4.7.0.md)、[4.7.1](docs/releases/4.7.1.md)、[4.7.2](docs/releases/4.7.2.md)、[4.7.3](docs/releases/4.7.3.md)、[4.7.4](docs/releases/4.7.4.md)。
 
 - **持久化 Agent DAG 运行时** — Planner → Worker → Critic → Synthesizer，支持断线恢复
 - **MCP 原生工具中心** — 17 个本地工具以标准 MCP Server 暴露，外部 MCP server 桥接带 health / retry / 熔断
@@ -23,6 +23,7 @@
 - **Workspace Core 工作台** — 项目、保存项、产物中心和导出包统一为本地对象模型
 - **Automation Runtime** — 手动、定时、间隔与事件触发的本地自动化，复用 Workspace / Skill / Browser 能力并留下可追溯历史
 - **Trace 可观测性** — 瀑布图、Prometheus 指标、健康探针
+- **Evidence-closed 自治韧性** — persistent Risk Debt、公平多波次调度、真实 transfer reserve、单 effect crash takeover、单调 blast safety，以及 report/proof/SHA-256 一体化取证
 - **Docker 一键部署** — 单卷持久化、非 root 运行、内置 HEALTHCHECK
 
 ```bash

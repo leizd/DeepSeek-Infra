@@ -31,8 +31,7 @@ SCENARIO = "real-three-minio-process-replacement-authority-recovery"
 
 
 def _prereq() -> list[str]:
-    if os.environ.get("DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E") != "1":
-        pytest.skip("dedicated real Storage Control Plane Evidence runner is not active")
+    assert os.environ.get("DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E") == "1"
     endpoints = [str(os.environ.get(n) or "").rstrip("/") for n in ENDPOINT_NAMES]
     assert all(endpoints) and len(set(endpoints)) == 3
     assert all(os.environ.get(n) for n in CONTAINER_NAMES)
@@ -69,11 +68,16 @@ def _kill_hard(proc: subprocess.Popen[str]) -> int:
 
 
 @pytest.mark.integration
-def test_real_three_minio_sigkill_backup_disaster_recovery_e2e(tmp_path: Path) -> None:
+def test_real_three_minio_sigkill_backup_disaster_recovery_e2e(
+    tmp_path: Path,
+    real_storage_environment: object,
+) -> None:
     """A: real Full+Incremental on 3 MinIO, SIGKILL; B: recover, restore B2, Backup B3."""
+    del real_storage_environment
     endpoints = _prereq()
-    boto3 = pytest.importorskip("boto3")
-    botocore_config = pytest.importorskip("botocore.config")
+    import boto3
+    from botocore import config as botocore_config
+
 
     infra = tmp_path / "infra"
     infra.mkdir()

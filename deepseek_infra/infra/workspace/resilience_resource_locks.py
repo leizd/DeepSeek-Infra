@@ -10,16 +10,18 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-LOCKS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS resilience_resource_locks (
-    lock_key TEXT PRIMARY KEY,
-    action_id TEXT NOT NULL,
-    owner_instance_id TEXT,
-    acquired_at TEXT NOT NULL,
-    lease_until TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_resilience_locks_action ON resilience_resource_locks(action_id);
-"""
+LOCKS_SCHEMA = (
+    """
+    CREATE TABLE IF NOT EXISTS resilience_resource_locks (
+        lock_key TEXT PRIMARY KEY,
+        action_id TEXT NOT NULL,
+        owner_instance_id TEXT,
+        acquired_at TEXT NOT NULL,
+        lease_until TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_resilience_locks_action ON resilience_resource_locks(action_id)",
+)
 
 
 def _utc_iso(dt: datetime | None = None) -> str:
@@ -28,7 +30,8 @@ def _utc_iso(dt: datetime | None = None) -> str:
 
 
 def ensure_locks_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(LOCKS_SCHEMA)
+    for statement in LOCKS_SCHEMA:
+        conn.execute(statement)
 
 
 def derive_resource_locks_for_action(action: dict[str, Any]) -> list[str]:

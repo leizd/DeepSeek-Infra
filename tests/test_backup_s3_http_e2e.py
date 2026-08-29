@@ -19,10 +19,10 @@ from deepseek_infra.infra.workspace.backup_target_store import MultipartUpload
 
 def _s3_client() -> Any:
     endpoint = os.environ.get("DEEPSEEK_TEST_S3_ENDPOINT")
-    if not endpoint:
-        pytest.skip("real S3 endpoint is not configured")
-    boto3 = pytest.importorskip("boto3")
-    config_module = pytest.importorskip("botocore.config")
+    assert endpoint, "real S3 endpoint is not configured"
+    import boto3
+    from botocore import config as config_module
+
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
@@ -48,10 +48,13 @@ def _extract_age_stub(raw: bytes, destination: Path) -> None:
 
 
 @pytest.mark.integration
-def test_real_s3_packed_incremental_restore_and_multipart_resume(tmp_path: Path) -> None:
+def test_real_s3_packed_incremental_restore_and_multipart_resume(
+    tmp_path: Path,
+    real_storage_environment: object,
+) -> None:
+    del real_storage_environment
     endpoint = os.environ.get("DEEPSEEK_TEST_S3_ENDPOINT")
-    if not endpoint:
-        pytest.skip("real S3 endpoint is not configured")
+    assert endpoint, "real S3 endpoint is not configured"
     bucket = os.environ.get("DEEPSEEK_TEST_S3_BUCKET", "deepseek-packed-e2e")
     client1 = _s3_client()
     client1.create_bucket(Bucket=bucket)

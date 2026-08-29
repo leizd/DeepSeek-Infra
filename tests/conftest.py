@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import patch
@@ -39,6 +40,35 @@ import deepseek_infra.infra.media.library as media_library
 import deepseek_infra.infra.browser.session as browser_session
 import deepseek_infra.infra.automation.registry as automation_registry
 import deepseek_infra.infra.automation.history as automation_history
+from real_storage_environment import MANAGED_ENV_NAMES, RealStorageEnvironment, ensure_native_backup_helpers
+
+
+@pytest.fixture(scope="session")
+def native_backup_helpers() -> Iterator[None]:
+    repository_root = Path(__file__).resolve().parents[1]
+    ensure_native_backup_helpers(repository_root)
+    yield
+
+
+@pytest.fixture(scope="session")
+def real_storage_environment(
+    tmp_path_factory: pytest.TempPathFactory,
+    native_backup_helpers: None,
+) -> Iterator[RealStorageEnvironment]:
+    del native_backup_helpers
+    repository_root = Path(__file__).resolve().parents[1]
+    environment = RealStorageEnvironment.acquire(repository_root, tmp_path_factory.mktemp("real-minio"))
+    previous = {name: os.environ.get(name) for name in MANAGED_ENV_NAMES}
+    os.environ.update(environment.values)
+    try:
+        yield environment
+    finally:
+        environment.close()
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 @pytest.fixture
@@ -174,6 +204,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
         pass
 
     from deepseek_infra.infra.workspace import backup_replication as workspace_backup_replication
+    from deepseek_infra.infra.workspace import backup_transfer_budget as workspace_backup_transfer_budget
     from deepseek_infra.infra.workspace import backup_write_continuity as workspace_backup_write_continuity
     from deepseek_infra.infra.workspace import backup_retirement as workspace_backup_retirement
     from deepseek_infra.infra.workspace import backup_drain as workspace_backup_drain
@@ -195,6 +226,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_backup_drain, "DRAIN_DB", drain_dir / "drains.sqlite3")
     monkeypatch.setattr(workspace_backup_drain, "DRAINS_DIR", drain_dir)
     monkeypatch.setattr(workspace_backup_drain, "DRAINS_DB", drain_dir / "drains.sqlite3")
+    workspace_backup_transfer_budget.reset_global_transfer_budget_manager()
 
     skills_dir = tmp_path / ".skills"
     monkeypatch.setattr(config, "SKILLS_DIR", skills_dir)
@@ -206,6 +238,9 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     from deepseek_infra.infra.workspace import (
         autonomous_action_policy as workspace_autonomous_action_policy,
         resilience_action_journal as workspace_resilience_action_journal,
+        resilience_risk_observations as workspace_resilience_risk_observations,
+        resilience_scheduler_service as workspace_resilience_scheduler_service,
+        resilience_slo_ledger as workspace_resilience_slo_ledger,
     )
 
     resilience_journal_dir = tmp_path / ".resilience-journal"
@@ -214,6 +249,15 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_resilience_action_journal, "JOURNAL_DB", resilience_journal_dir / "journal.sqlite3")
     monkeypatch.setattr(workspace_autonomous_action_policy, "POLICY_DIR", resilience_policy_dir)
     monkeypatch.setattr(workspace_autonomous_action_policy, "POLICY_FILE", resilience_policy_dir / "autonomous_policy.json")
+    resilience_risk_dir = tmp_path / ".resilience-risk"
+    monkeypatch.setattr(workspace_resilience_risk_observations, "RISK_LEDGER_DIR", resilience_risk_dir)
+    monkeypatch.setattr(workspace_resilience_risk_observations, "RISK_LEDGER_DB", resilience_risk_dir / "risk.sqlite3")
+    resilience_scheduler_dir = tmp_path / ".resilience-scheduler"
+    monkeypatch.setattr(workspace_resilience_scheduler_service, "SCHEDULER_SERVICE_DIR", resilience_scheduler_dir)
+    monkeypatch.setattr(workspace_resilience_scheduler_service, "SCHEDULER_SERVICE_DB", resilience_scheduler_dir / "service.sqlite3")
+    resilience_slo_dir = tmp_path / ".resilience-slo"
+    monkeypatch.setattr(workspace_resilience_slo_ledger, "SLO_LEDGER_DIR", resilience_slo_dir)
+    monkeypatch.setattr(workspace_resilience_slo_ledger, "SLO_LEDGER_DB", resilience_slo_dir / "slo.sqlite3")
 
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()
@@ -221,6 +265,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     workspace_backup_control_authority.configure_authority_anchor_roots(None)
     workspace_backup_control_authority.configure_authority_anchor_stores(None)
     workspace_backup_authority_provider.reset_authority_replica_provider()
+    workspace_backup_transfer_budget.reset_global_transfer_budget_manager()
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()
 

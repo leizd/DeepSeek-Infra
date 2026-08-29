@@ -50,6 +50,30 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "tests/test_backup_472_real_three_minio_remediation_e2e.py::"
         "test_real_three_minio_autonomous_remediation_e2e"
     )
+    nodes_durable_fleet = (
+        "tests/test_backup_474_risk_fairness.py::test_risk_first_seen_persists_and_debt_ages_across_planner_runs",
+        "tests/test_backup_474_risk_fairness.py::test_cleared_risk_stops_debt_and_reopen_uses_new_open_interval",
+        "tests/test_backup_474_risk_fairness.py::test_production_scheduler_uses_and_updates_persistent_fairness",
+        "tests/test_backup_474_scheduler_correctness.py::test_all_schedulable_actions_are_partitioned_into_dependency_waves",
+        "tests/test_backup_474_scheduler_correctness.py::test_missing_dependency_is_typed_unschedulable",
+        "tests/test_backup_474_scheduler_correctness.py::test_rebalance_is_deferred_to_next_wave_by_real_transfer_reserve",
+        "tests/test_backup_474_scheduler_correctness.py::test_runtime_rebalance_cannot_consume_active_repair_reserved_tokens",
+        "tests/test_backup_474_scheduler_correctness.py::test_safe_preemption_releases_victim_and_claims_repair_atomically",
+        "tests/test_backup_474_scheduler_correctness.py::test_unsafe_preemption_cannot_modify_executing_victim",
+        "tests/test_backup_474_slo_readiness.py::test_fleet_slo_samples_persist_and_compute_percentiles",
+        "tests/test_backup_474_slo_readiness.py::test_fast_and_slow_error_budget_burn_rates_are_computed",
+        "tests/test_backup_474_slo_readiness.py::test_risk_clear_and_action_claim_takeover_are_measured",
+        "tests/test_backup_474_slo_readiness.py::test_maintenance_windows_block_background_work_and_allow_critical_overrides",
+        "tests/test_backup_474_slo_readiness.py::test_terminal_repair_records_duration_and_remediation_outcome",
+        "tests/test_backup_474_slo_readiness.py::test_fleet_readiness_api_is_authenticated_and_source_backed",
+        "tests/test_backup_474_slo_readiness.py::test_risk_control_loop_persists_dr_freshness_without_operator_read",
+    )
+    nodes_wire_freeze = (
+        "tests/test_backup_452_replica_failover.py::test_wire_format_constants_unchanged",
+        "tests/test_backup_4410_contracts.py::test_cdc_v3_is_explicit_and_normalized",
+        "tests/test_backup_463_control_authority.py::test_control_authority_schema_constant_and_keys",
+        "tests/test_backup_463_control_authority.py::test_authority_checkpoint_is_hash_chained_and_secretless",
+    )
     assert runner.SCENARIOS == {
         "real-three-minio-storage-control-plane": (node_458,),
         "real-three-minio-tiering-control-recovery": (node_459,),
@@ -60,6 +84,8 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "real-three-minio-fresh-process-authority-recovery": (node_466,),
         "real-three-minio-process-replacement-authority-recovery": (node_468,),
         "real-three-minio-autonomous-remediation": (node_472,),
+        "durable-fleet-scheduler-slo-correctness": nodes_durable_fleet,
+        "storage-wire-freeze-contracts": nodes_wire_freeze,
     }
     assert set(runner.REQUIRED_ENDPOINTS) == {
         "DEEPSEEK_TEST_S3_ENDPOINT_A",
