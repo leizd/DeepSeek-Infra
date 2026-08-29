@@ -1,5 +1,10 @@
 # 4.7.5 Todo — Predictive Fleet Planning & Verified Optimization
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 - [x] Prepare 4.7.5 version surfaces
 - [x] Reconcile absent and superseded risk subjects
 - [x] Separate reserved and consumed fair service

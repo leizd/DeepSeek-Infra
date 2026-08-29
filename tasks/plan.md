@@ -1,5 +1,10 @@
 # Implementation Plan: 4.7.5 Predictive Fleet Planning & Verified Optimization
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 ## Overview
 
 Upgrade 4.7.4 Evidence-Closed Autonomous Operations into verifiable predictive
