@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import patch
@@ -39,6 +40,35 @@ import deepseek_infra.infra.media.library as media_library
 import deepseek_infra.infra.browser.session as browser_session
 import deepseek_infra.infra.automation.registry as automation_registry
 import deepseek_infra.infra.automation.history as automation_history
+from real_storage_environment import MANAGED_ENV_NAMES, RealStorageEnvironment, ensure_native_backup_helpers
+
+
+@pytest.fixture(scope="session")
+def native_backup_helpers() -> Iterator[None]:
+    repository_root = Path(__file__).resolve().parents[1]
+    ensure_native_backup_helpers(repository_root)
+    yield
+
+
+@pytest.fixture(scope="session")
+def real_storage_environment(
+    tmp_path_factory: pytest.TempPathFactory,
+    native_backup_helpers: None,
+) -> Iterator[RealStorageEnvironment]:
+    del native_backup_helpers
+    repository_root = Path(__file__).resolve().parents[1]
+    environment = RealStorageEnvironment.acquire(repository_root, tmp_path_factory.mktemp("real-minio"))
+    previous = {name: os.environ.get(name) for name in MANAGED_ENV_NAMES}
+    os.environ.update(environment.values)
+    try:
+        yield environment
+    finally:
+        environment.close()
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 @pytest.fixture
