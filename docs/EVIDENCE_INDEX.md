@@ -5,7 +5,23 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.7.4.
+Applicable version: v4.7.5.
+
+## 4.7.5 predictive fleet planning contract
+
+4.7.5 keeps the 4.7.4 Storage Control Plane proof pair and adds unit-tested
+semantic checks for risk lifecycle, reserved/consumed fairness, durable waves,
+windowed SLO, capacity forecast/backtest, cost/optimizer, What-If, and
+read-only federation. Wire-format claims remain frozen:
+
+- `objectSetV1WireFormatUnchanged`
+- `receiptV4Unchanged`
+- `commitV4Unchanged`
+- `fastCdcV3Unchanged`
+- `randomizedAgeUnchanged`
+- `controlAuthorityV1Unchanged`
+- `authorityCheckpointV1Unchanged`
+- `drReadinessProofV1Unchanged`
 
 ## 4.7.4 evidence-closed fleet operations contract
 

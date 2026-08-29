@@ -7,6 +7,7 @@ from typing import Any
 
 from deepseek_infra.infra.workspace import (
     backup_dr_readiness,
+    resilience_fleet_scheduler,
     resilience_risk_observations,
     resilience_scheduler_service,
     resilience_slo_ledger,
@@ -75,7 +76,23 @@ def get_fleet_readiness(*, now: datetime | None = None) -> dict[str, Any]:
         "fleetReadiness": readiness,
         "slo": slo,
         "riskDebt": {
-            "total": len(open_risks),
+            "total": round(
+                sum(
+                    float(
+                        resilience_fleet_scheduler.compute_risk_debt(
+                            {
+                                "severity": risk.get("currentSeverity"),
+                                "riskFirstSeenAt": risk.get("openSinceAt"),
+                                "parameters": {"policyId": risk.get("policyId")},
+                            },
+                            now=current,
+                        )["riskDebt"]
+                    )
+                    for risk in open_risks
+                ),
+                3,
+            ),
+            "openCount": len(open_risks),
             "critical": len(critical_risks),
             "oldestRiskAgeSeconds": round(max(open_ages, default=0.0), 3),
         },

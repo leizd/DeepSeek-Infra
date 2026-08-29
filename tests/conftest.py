@@ -238,9 +238,14 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     from deepseek_infra.infra.workspace import (
         autonomous_action_policy as workspace_autonomous_action_policy,
         resilience_action_journal as workspace_resilience_action_journal,
+        resilience_capacity_history as workspace_resilience_capacity_history,
+        resilience_cost_model as workspace_resilience_cost_model,
+        resilience_forecast_backtest as workspace_resilience_forecast_backtest,
+        resilience_placement_optimizer as workspace_resilience_placement_optimizer,
         resilience_risk_observations as workspace_resilience_risk_observations,
         resilience_scheduler_service as workspace_resilience_scheduler_service,
         resilience_slo_ledger as workspace_resilience_slo_ledger,
+        resilience_wave_executor as workspace_resilience_wave_executor,
     )
 
     resilience_journal_dir = tmp_path / ".resilience-journal"
@@ -258,6 +263,20 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     resilience_slo_dir = tmp_path / ".resilience-slo"
     monkeypatch.setattr(workspace_resilience_slo_ledger, "SLO_LEDGER_DIR", resilience_slo_dir)
     monkeypatch.setattr(workspace_resilience_slo_ledger, "SLO_LEDGER_DB", resilience_slo_dir / "slo.sqlite3")
+    resilience_waves_dir = tmp_path / ".resilience-waves"
+    monkeypatch.setattr(workspace_resilience_wave_executor, "WAVE_EXECUTOR_DIR", resilience_waves_dir)
+    monkeypatch.setattr(workspace_resilience_wave_executor, "WAVE_EXECUTOR_DB", resilience_waves_dir / "waves.sqlite3")
+    resilience_capacity_dir = tmp_path / ".resilience-capacity"
+    monkeypatch.setattr(workspace_resilience_capacity_history, "CAPACITY_HISTORY_DIR", resilience_capacity_dir)
+    monkeypatch.setattr(workspace_resilience_capacity_history, "CAPACITY_HISTORY_DB", resilience_capacity_dir / "capacity.sqlite3")
+    monkeypatch.setattr(workspace_resilience_forecast_backtest, "CAPACITY_HISTORY_DIR", resilience_capacity_dir)
+    monkeypatch.setattr(workspace_resilience_forecast_backtest, "CAPACITY_HISTORY_DB", resilience_capacity_dir / "capacity.sqlite3")
+    resilience_cost_dir = tmp_path / ".resilience-cost"
+    monkeypatch.setattr(workspace_resilience_cost_model, "COST_MODEL_DIR", resilience_cost_dir)
+    monkeypatch.setattr(workspace_resilience_cost_model, "COST_MODEL_DB", resilience_cost_dir / "cost.sqlite3")
+    resilience_optimizer_dir = tmp_path / ".resilience-optimizer"
+    monkeypatch.setattr(workspace_resilience_placement_optimizer, "OPTIMIZER_DIR", resilience_optimizer_dir)
+    monkeypatch.setattr(workspace_resilience_placement_optimizer, "OPTIMIZER_DB", resilience_optimizer_dir / "optimizer.sqlite3")
 
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()

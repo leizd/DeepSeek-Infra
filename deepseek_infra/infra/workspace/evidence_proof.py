@@ -723,6 +723,178 @@ def validate_atomic_budget_proof(evidence: dict[str, Any], check_name: str) -> l
     return errors
 
 
+def validate_predictive_planning_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["not-a-dict"]
+    required: dict[str, tuple[str, ...]] = {
+        "absentAuthoritativeRiskIsClosedOrRetired": ("status", "closureReason", "coverageComplete"),
+        "supersededBackupRiskCannotRemainOpenForever": ("status", "closureReason", "previousBackupId"),
+        "policyDisabledRiskIsRetired": ("status", "closureReason"),
+        "unknownCoverageDoesNotImplicitlyClearRisk": ("status", "closureReason"),
+        "schedulerReservationDoesNotCountAsConsumedService": ("reservationStatus", "actionsServed"),
+        "preemptedActionReleasesFairnessReservation": ("reservationStatus", "releaseReason"),
+        "completedActionChargesObservedBytesExactlyOnce": ("actualBytes", "actionsServed"),
+        "serviceConsumptionSurvivesRestart": ("actionsServed", "virtualRuntime"),
+        "waveOneCannotStartBeforeWaveZeroVerified": ("admitted", "reason"),
+        "failedWavePausesDownstreamActions": ("scheduleStatus", "admitted"),
+        "staleWaveRequiresReplan": ("scheduleStatus", "reason"),
+        "waveRevalidatesFreshRiskBeforeExecution": ("revalidatedRisk",),
+        "waveRevalidatesAuthorityBeforeExecution": ("revalidatedAuthority",),
+        "waveRevalidatesBlastRadiusBeforeExecution": ("revalidatedBlastRadius",),
+        "fleetSloExposes1h24h7d30dWindows": ("windows",),
+        "insufficientSloSamplesAreExplicit": ("status",),
+        "capacityForecastUsesDurableObservations": ("sampleCount", "forecastStatus"),
+        "forecastWithInsufficientSamplesFailsClosed": ("forecastStatus",),
+        "thirtyDayCapacityForecastProduced": ("horizonDays", "forecastStatus"),
+        "ninetyDayCapacityForecastProduced": ("horizonDays", "forecastStatus"),
+        "forecastProvidesP50AndP90Headroom": ("p50FreeBytes", "p90FreeBytes"),
+        "forecastBacktestErrorIsPersisted": ("mae", "bias"),
+        "overoptimisticForecastLowersConfidence": ("overoptimistic", "confidence"),
+        "costModelUsesVersionedPriceCatalog": ("priceCatalogVersion", "priceCatalogDigest"),
+        "unknownTargetPriceDoesNotBecomeZero": ("status",),
+        "egressCostIsIncluded": ("egress",),
+        "storageCostIsIncluded": ("storage",),
+        "optimizerNeverReducesMinCommittedCopies": ("accepted", "violations"),
+        "optimizerNeverReducesMinFailureDomains": ("accepted", "violations"),
+        "optimizerRejectsUnsafeCheaperPlan": ("accepted", "violations"),
+        "candidatePlanIsDeterministicForSameInputs": ("candidatePlanDigest", "repeatDigest"),
+        "whatIfProducesNoStorageWrites": ("s3PutCount",),
+        "whatIfProducesNoStorageDeletes": ("s3DeleteCount",),
+        "whatIfDoesNotMutateAuthority": ("authorityMutationCount",),
+        "whatIfDoesNotMutateActionJournal": ("actionJournalMutationCount",),
+        "whatIfBindsObservedFleetSnapshot": ("sourceSnapshotDigest",),
+        "whatIfIncludesRunningEffects": ("runningEffects",),
+        "whatIfIncludesMaintenanceWindows": ("maintenanceWindows",),
+        "optimizationProofBindsForecastDigest": ("forecastDigest",),
+        "optimizationProofBindsPriceCatalogDigest": ("priceCatalogDigest",),
+        "optimizationProofBindsAuthorityHead": ("authorityHeadDigest",),
+        "optimizationProofRecomputesSafetyConstraints": ("durability",),
+        "federationSnapshotContainsNoCredentials": ("forbiddenKeys",),
+        "federationSnapshotIsDigestBound": ("snapshotDigest",),
+        "incompatibleFleetWireVersionFailsClosed": ("status",),
+        "federatedSimulationCannotMutateRemoteFleet": ("remoteMutations",),
+        "objectSetV1WireFormatUnchanged": ("objectSetVersion",),
+        "receiptV4Unchanged": ("receiptVersion",),
+        "commitV4Unchanged": ("commitVersion",),
+        "fastCdcV3Unchanged": ("cdcVersion",),
+        "randomizedAgeUnchanged": ("ageRandomized",),
+        "controlAuthorityV1Unchanged": ("authoritySchema",),
+        "authorityCheckpointV1Unchanged": ("checkpointSchema",),
+        "drReadinessProofV1Unchanged": ("drReadinessProofSchema",),
+    }
+    fields = required.get(check_name)
+    errors = _require_fields(evidence, fields) if fields else []
+    if check_name in {"absentAuthoritativeRiskIsClosedOrRetired", "supersededBackupRiskCannotRemainOpenForever", "policyDisabledRiskIsRetired"}:
+        if str(evidence.get("status") or "") in {"OPEN", "REOPENED", "UNKNOWN_COVERAGE"}:
+            errors.append("risk-subject-still-open")
+        if evidence.get("coverageComplete") is False:
+            errors.append("complete-coverage-required-to-close")
+    if check_name == "unknownCoverageDoesNotImplicitlyClearRisk":
+        if str(evidence.get("status") or "") in {"CLEARED", "SUPERSEDED", "RETIRED"}:
+            errors.append("incomplete-coverage-implicitly-cleared-risk")
+        if str(evidence.get("closureReason") or "") != "UNKNOWN_COVERAGE":
+            errors.append("unknown-coverage-reason-missing")
+    if check_name == "schedulerReservationDoesNotCountAsConsumedService":
+        if str(evidence.get("reservationStatus") or "") != "RESERVED":
+            errors.append("schedule-did-not-reserve")
+        try:
+            if int(str(evidence.get("actionsServed"))) != 0:
+                errors.append("reservation-counted-as-consumed")
+        except (TypeError, ValueError):
+            errors.append("invalid-actions-served")
+    if check_name == "preemptedActionReleasesFairnessReservation":
+        if str(evidence.get("reservationStatus") or "") != "RELEASED":
+            errors.append("preempted-reservation-not-released")
+        if str(evidence.get("releaseReason") or "") != "PREEMPTED":
+            errors.append("preempted-release-reason-mismatch")
+    if check_name == "completedActionChargesObservedBytesExactlyOnce":
+        try:
+            if int(str(evidence.get("actionsServed"))) != 1:
+                errors.append("consumed-service-not-charged-once")
+        except (TypeError, ValueError):
+            errors.append("invalid-actions-served")
+    if check_name == "waveOneCannotStartBeforeWaveZeroVerified":
+        if evidence.get("admitted") is True:
+            errors.append("wave-one-started-before-wave-zero-verified")
+        if str(evidence.get("reason") or "") != "PREDECESSOR_WAVE_NOT_VERIFIED":
+            errors.append("missing-predecessor-gate")
+    if check_name == "staleWaveRequiresReplan":
+        if str(evidence.get("scheduleStatus") or "") != "PAUSED_REPLAN":
+            errors.append("stale-wave-did-not-pause-replan")
+    if check_name == "fleetSloExposes1h24h7d30dWindows":
+        windows = evidence.get("windows")
+        if not isinstance(windows, list) or set(windows) < {"1h", "24h", "7d", "30d", "lifetime"}:
+            errors.append("slo-windows-incomplete")
+    if check_name == "insufficientSloSamplesAreExplicit":
+        if str(evidence.get("status") or "") != "INSUFFICIENT_DATA":
+            errors.append("insufficient-slo-not-explicit")
+    if check_name == "forecastWithInsufficientSamplesFailsClosed":
+        if str(evidence.get("forecastStatus") or "") != "INSUFFICIENT_DATA":
+            errors.append("insufficient-forecast-not-fail-closed")
+    if check_name in {"thirtyDayCapacityForecastProduced", "ninetyDayCapacityForecastProduced"}:
+        expected = 30 if check_name.startswith("thirty") else 90
+        try:
+            if int(str(evidence.get("horizonDays"))) != expected:
+                errors.append("forecast-horizon-mismatch")
+        except (TypeError, ValueError):
+            errors.append("invalid-forecast-horizon")
+    if check_name == "unknownTargetPriceDoesNotBecomeZero":
+        if str(evidence.get("status") or "") != "UNKNOWN_COST":
+            errors.append("unknown-price-was-not-unknown-cost")
+        if evidence.get("monthlyCost") in {0, 0.0}:
+            errors.append("unknown-price-defaulted-to-zero")
+    if check_name in {"optimizerNeverReducesMinCommittedCopies", "optimizerNeverReducesMinFailureDomains", "optimizerRejectsUnsafeCheaperPlan"}:
+        if evidence.get("accepted") is True:
+            errors.append("unsafe-candidate-was-accepted")
+        violations = evidence.get("violations")
+        if not isinstance(violations, list) or not violations:
+            errors.append("durability-violation-not-recorded")
+    if check_name == "candidatePlanIsDeterministicForSameInputs":
+        if str(evidence.get("candidatePlanDigest") or "") != str(evidence.get("repeatDigest") or ""):
+            errors.append("candidate-plan-not-deterministic")
+        errors.extend(_require_sha256(evidence.get("candidatePlanDigest"), field="candidatePlanDigest"))
+    if check_name.startswith("whatIf"):
+        for field in ("s3PutCount", "s3DeleteCount", "authorityMutationCount", "actionJournalMutationCount", "sideEffectsObserved"):
+            if field in evidence:
+                try:
+                    if int(str(evidence.get(field))) != 0:
+                        errors.append(f"what-if-side-effect:{field}")
+                except (TypeError, ValueError):
+                    errors.append(f"invalid-what-if-counter:{field}")
+        if check_name == "whatIfBindsObservedFleetSnapshot":
+            errors.extend(_require_sha256(evidence.get("sourceSnapshotDigest"), field="sourceSnapshotDigest"))
+        if check_name == "whatIfIncludesRunningEffects" and not isinstance(evidence.get("runningEffects"), list):
+            errors.append("running-effects-missing")
+        if check_name == "whatIfIncludesMaintenanceWindows" and not isinstance(evidence.get("maintenanceWindows"), list):
+            errors.append("maintenance-windows-missing")
+    if check_name.startswith("optimizationProof"):
+        for field in ("forecastDigest", "priceCatalogDigest", "authorityHeadDigest"):
+            if field in (fields or ()) or evidence.get(field) not in (None, ""):
+                errors.extend(_require_sha256(evidence.get(field), field=field))
+        if check_name == "optimizationProofRecomputesSafetyConstraints":
+            durability = evidence.get("durability")
+            if not isinstance(durability, dict):
+                errors.append("durability-missing")
+            elif durability.get("copiesPreserved") is not True or durability.get("failureDomainsPreserved") is not True:
+                errors.append("safety-constraints-not-preserved")
+    if check_name == "federationSnapshotContainsNoCredentials":
+        forbidden = evidence.get("forbiddenKeys")
+        if not isinstance(forbidden, list) or forbidden:
+            errors.append("federation-snapshot-contains-credentials")
+    if check_name == "federationSnapshotIsDigestBound":
+        errors.extend(_require_sha256(evidence.get("snapshotDigest"), field="snapshotDigest"))
+    if check_name == "incompatibleFleetWireVersionFailsClosed":
+        if str(evidence.get("status") or "") != "INCOMPATIBLE":
+            errors.append("incompatible-wire-did-not-fail-closed")
+    if check_name == "federatedSimulationCannotMutateRemoteFleet":
+        try:
+            if int(str(evidence.get("remoteMutations"))) != 0:
+                errors.append("federated-simulation-mutated-remote")
+        except (TypeError, ValueError):
+            errors.append("invalid-remote-mutation-count")
+    return errors
+
+
 VALIDATORS: dict[str, CheckValidator] = {
     "realPreDisasterBackupIsActuallyRestored": validate_restore_proof,
     "realFreshProcessRestoresPreDisasterBackup": validate_restore_proof,
@@ -776,6 +948,52 @@ VALIDATORS: dict[str, CheckValidator] = {
     "twoProcessesCannotOversubscribeTargetBudget": validate_atomic_budget_proof,
     "twoProcessesCannotOversubscribePolicyBudget": validate_atomic_budget_proof,
     "twoProcessesCannotOversubscribeFailureDomainBudget": validate_atomic_budget_proof,
+    "absentAuthoritativeRiskIsClosedOrRetired": validate_predictive_planning_proof,
+    "supersededBackupRiskCannotRemainOpenForever": validate_predictive_planning_proof,
+    "policyDisabledRiskIsRetired": validate_predictive_planning_proof,
+    "unknownCoverageDoesNotImplicitlyClearRisk": validate_predictive_planning_proof,
+    "schedulerReservationDoesNotCountAsConsumedService": validate_predictive_planning_proof,
+    "preemptedActionReleasesFairnessReservation": validate_predictive_planning_proof,
+    "completedActionChargesObservedBytesExactlyOnce": validate_predictive_planning_proof,
+    "serviceConsumptionSurvivesRestart": validate_predictive_planning_proof,
+    "waveOneCannotStartBeforeWaveZeroVerified": validate_predictive_planning_proof,
+    "failedWavePausesDownstreamActions": validate_predictive_planning_proof,
+    "staleWaveRequiresReplan": validate_predictive_planning_proof,
+    "waveRevalidatesFreshRiskBeforeExecution": validate_predictive_planning_proof,
+    "waveRevalidatesAuthorityBeforeExecution": validate_predictive_planning_proof,
+    "waveRevalidatesBlastRadiusBeforeExecution": validate_predictive_planning_proof,
+    "fleetSloExposes1h24h7d30dWindows": validate_predictive_planning_proof,
+    "insufficientSloSamplesAreExplicit": validate_predictive_planning_proof,
+    "capacityForecastUsesDurableObservations": validate_predictive_planning_proof,
+    "forecastWithInsufficientSamplesFailsClosed": validate_predictive_planning_proof,
+    "thirtyDayCapacityForecastProduced": validate_predictive_planning_proof,
+    "ninetyDayCapacityForecastProduced": validate_predictive_planning_proof,
+    "forecastProvidesP50AndP90Headroom": validate_predictive_planning_proof,
+    "forecastBacktestErrorIsPersisted": validate_predictive_planning_proof,
+    "overoptimisticForecastLowersConfidence": validate_predictive_planning_proof,
+    "costModelUsesVersionedPriceCatalog": validate_predictive_planning_proof,
+    "unknownTargetPriceDoesNotBecomeZero": validate_predictive_planning_proof,
+    "egressCostIsIncluded": validate_predictive_planning_proof,
+    "storageCostIsIncluded": validate_predictive_planning_proof,
+    "optimizerNeverReducesMinCommittedCopies": validate_predictive_planning_proof,
+    "optimizerNeverReducesMinFailureDomains": validate_predictive_planning_proof,
+    "optimizerRejectsUnsafeCheaperPlan": validate_predictive_planning_proof,
+    "candidatePlanIsDeterministicForSameInputs": validate_predictive_planning_proof,
+    "whatIfProducesNoStorageWrites": validate_predictive_planning_proof,
+    "whatIfProducesNoStorageDeletes": validate_predictive_planning_proof,
+    "whatIfDoesNotMutateAuthority": validate_predictive_planning_proof,
+    "whatIfDoesNotMutateActionJournal": validate_predictive_planning_proof,
+    "whatIfBindsObservedFleetSnapshot": validate_predictive_planning_proof,
+    "whatIfIncludesRunningEffects": validate_predictive_planning_proof,
+    "whatIfIncludesMaintenanceWindows": validate_predictive_planning_proof,
+    "optimizationProofBindsForecastDigest": validate_predictive_planning_proof,
+    "optimizationProofBindsPriceCatalogDigest": validate_predictive_planning_proof,
+    "optimizationProofBindsAuthorityHead": validate_predictive_planning_proof,
+    "optimizationProofRecomputesSafetyConstraints": validate_predictive_planning_proof,
+    "federationSnapshotContainsNoCredentials": validate_predictive_planning_proof,
+    "federationSnapshotIsDigestBound": validate_predictive_planning_proof,
+    "incompatibleFleetWireVersionFailsClosed": validate_predictive_planning_proof,
+    "federatedSimulationCannotMutateRemoteFleet": validate_predictive_planning_proof,
 }
 
 

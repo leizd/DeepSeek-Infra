@@ -1,4 +1,4 @@
-"""Durable exact-subject risk lifecycle for Fleet Risk Debt (4.7.4 Gate E)."""
+"""Durable exact-subject risk lifecycle with coverage-aware reconciliation (4.7.5 Gate A)."""
 
 from __future__ import annotations
 
@@ -18,6 +18,14 @@ RISK_LEDGER_DB = RISK_LEDGER_DIR / "risk.sqlite3"
 _LOCK = threading.RLock()
 _SEVERITY_ORDER = {"healthy": 0, "low": 0, "warning": 1, "degraded": 2, "critical": 3, "blocked": 4}
 _OPEN_SEVERITIES = frozenset({"warning", "degraded", "critical", "blocked"})
+OPEN_STATUSES = frozenset({"OPEN", "REOPENED", "UNKNOWN_COVERAGE"})
+CLOSED_STATUSES = frozenset({"CLEARED", "SUPERSEDED", "RETIRED"})
+CLOSURE_HEALTHY = "HEALTHY"
+CLOSURE_SUPERSEDED_BACKUP = "SUPERSEDED_BACKUP"
+CLOSURE_POLICY_DISABLED = "POLICY_DISABLED"
+CLOSURE_TARGET_REMOVED = "TARGET_REMOVED"
+CLOSURE_SCOPE_RETIRED = "SCOPE_RETIRED"
+CLOSURE_UNKNOWN_COVERAGE = "UNKNOWN_COVERAGE"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS resilience_risk_observations (
@@ -38,6 +46,7 @@ CREATE TABLE IF NOT EXISTS resilience_risk_observations (
     failure_domain TEXT,
     last_snapshot_digest TEXT,
     last_snapshot_observation_key TEXT,
+    closure_reason TEXT,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_resilience_risk_observations_status
@@ -75,6 +84,8 @@ def _connect() -> Iterator[sqlite3.Connection]:
             conn.execute(
                 "ALTER TABLE resilience_risk_observations ADD COLUMN last_snapshot_observation_key TEXT"
             )
+        if "closure_reason" not in columns:
+            conn.execute("ALTER TABLE resilience_risk_observations ADD COLUMN closure_reason TEXT")
         try:
             yield conn
             conn.commit()
@@ -126,6 +137,7 @@ def _row_to_record(row: sqlite3.Row) -> dict[str, Any]:
         "failureDomain": row["failure_domain"],
         "lastSnapshotDigest": row["last_snapshot_digest"],
         "lastSnapshotObservationKey": row["last_snapshot_observation_key"],
+        "closureReason": row["closure_reason"],
         "updatedAt": str(row["updated_at"]),
     }
 
@@ -143,12 +155,127 @@ def observation_for_risk(risk: dict[str, Any]) -> dict[str, Any] | None:
     return get_observation(risk_subject_digest(canonical_risk_subject(risk)))
 
 
+def _coverage_entry(coverage: Any, risk_type: str) -> dict[str, Any] | None:
+    if not isinstance(coverage, dict):
+        return None
+    raw = coverage.get(risk_type)
+    return raw if isinstance(raw, dict) else None
+
+
+def infer_absent_closure_reason(
+    subject: dict[str, Any],
+    *,
+    coverage: Any,
+) -> tuple[str, str]:
+    """Return (status, closureReason) for a previously open subject missing from an authoritative snapshot."""
+    risk_type = str(subject.get("type") or "").upper()
+    entry = _coverage_entry(coverage, risk_type)
+    if entry is None or entry.get("complete") is not True:
+        return "UNKNOWN_COVERAGE", CLOSURE_UNKNOWN_COVERAGE
+
+    targets = {str(item) for item in entry.get("targets") or [] if str(item or "")}
+    policies = {str(item) for item in entry.get("policies") or [] if str(item or "")}
+    backups = {str(item) for item in entry.get("backups") or [] if str(item or "")}
+    target_id = str(subject.get("targetId") or "")
+    policy_id = str(subject.get("policyId") or "")
+    backup_id = str(subject.get("backupId") or "")
+
+    if not targets and not policies and not backups:
+        return "RETIRED", CLOSURE_SCOPE_RETIRED
+    if policy_id and policies and policy_id not in policies:
+        return "RETIRED", CLOSURE_POLICY_DISABLED
+    if target_id and targets and target_id not in targets:
+        return "RETIRED", CLOSURE_TARGET_REMOVED
+    if backup_id and ((backups and backup_id not in backups) or (policy_id and (not policies or policy_id in policies))):
+        return "SUPERSEDED", CLOSURE_SUPERSEDED_BACKUP
+    if policy_id and not policies and not backups and not targets:
+        return "RETIRED", CLOSURE_POLICY_DISABLED
+    return "CLEARED", CLOSURE_HEALTHY
+
+
+def _upsert_observation(
+    conn: sqlite3.Connection,
+    *,
+    digest: str,
+    subject: dict[str, Any],
+    first_seen: str,
+    open_since: str | None,
+    last_seen: str,
+    count: int,
+    severity: str,
+    peak: str,
+    status: str,
+    last_cleared: str | None,
+    reopen_count: int,
+    snapshot_digest: str,
+    snapshot_observation_key: str,
+    closure_reason: str | None,
+    updated_at: str,
+) -> dict[str, Any]:
+    conn.execute(
+        """
+        INSERT INTO resilience_risk_observations (
+            risk_subject_digest, subject_json, first_seen_at, open_since_at,
+            last_seen_at, observation_count, current_severity, peak_severity,
+            status, last_cleared_at, reopen_count, policy_id, backup_id,
+            target_id, failure_domain, last_snapshot_digest,
+            last_snapshot_observation_key, closure_reason, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(risk_subject_digest) DO UPDATE SET
+            subject_json = excluded.subject_json,
+            open_since_at = excluded.open_since_at,
+            last_seen_at = excluded.last_seen_at,
+            observation_count = excluded.observation_count,
+            current_severity = excluded.current_severity,
+            peak_severity = excluded.peak_severity,
+            status = excluded.status,
+            last_cleared_at = excluded.last_cleared_at,
+            reopen_count = excluded.reopen_count,
+            policy_id = excluded.policy_id,
+            backup_id = excluded.backup_id,
+            target_id = excluded.target_id,
+            failure_domain = excluded.failure_domain,
+            last_snapshot_digest = excluded.last_snapshot_digest,
+            last_snapshot_observation_key = excluded.last_snapshot_observation_key,
+            closure_reason = excluded.closure_reason,
+            updated_at = excluded.updated_at
+        """,
+        (
+            digest,
+            json.dumps(subject, ensure_ascii=False, sort_keys=True),
+            first_seen,
+            open_since,
+            last_seen,
+            count,
+            severity,
+            peak,
+            status,
+            last_cleared,
+            reopen_count,
+            subject.get("policyId"),
+            subject.get("backupId"),
+            subject.get("targetId"),
+            subject.get("failureDomain"),
+            snapshot_digest,
+            snapshot_observation_key,
+            closure_reason,
+            updated_at,
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM resilience_risk_observations WHERE risk_subject_digest = ?",
+        (digest,),
+    ).fetchone()
+    assert row is not None
+    return _row_to_record(row)
+
+
 def observe_risk_snapshot(
     snapshot: dict[str, Any],
     *,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Atomically observe OPEN/CLEARED/REOPENED exact-subject lifecycles."""
+    """Atomically observe present subjects and reconcile absent ones against coverage."""
     observed_at = _utc_iso(now)
     snapshot_digest = str(snapshot.get("riskDigest") or "")
     snapshot_generated_at = str(snapshot.get("generatedAt") or observed_at)
@@ -162,9 +289,11 @@ def observe_risk_snapshot(
     ).hexdigest()
     raw_risks = snapshot.get("risks")
     risks = raw_risks if isinstance(raw_risks, list) else []
+    coverage = snapshot.get("coverage")
     records: list[dict[str, Any]] = []
     slo_samples: list[dict[str, Any]] = []
     burn_observations: list[dict[str, Any]] = []
+    present_digests: set[str] = set()
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         for raw_risk in risks:
@@ -172,6 +301,7 @@ def observe_risk_snapshot(
                 continue
             subject = canonical_risk_subject(raw_risk)
             digest = risk_subject_digest(subject)
+            present_digests.add(digest)
             severity = str(raw_risk.get("severity") or "healthy").lower()
             is_open = severity in _OPEN_SEVERITIES
             existing = conn.execute(
@@ -195,6 +325,7 @@ def observe_risk_snapshot(
                 status = "OPEN"
                 last_cleared = None
                 reopen_count = 0
+                closure_reason = None
                 detected_at = _parse_iso(
                     raw_risk.get("detectedAt")
                     or raw_risk.get("observedAt")
@@ -220,10 +351,12 @@ def observe_risk_snapshot(
                 last_cleared = existing["last_cleared_at"]
                 reopen_count = int(existing["reopen_count"])
                 previous_status = str(existing["status"])
-                if is_open and previous_status == "CLEARED":
+                closure_reason = existing["closure_reason"]
+                if is_open and previous_status in CLOSED_STATUSES:
                     status = "REOPENED"
                     open_since = observed_at
                     reopen_count += 1
+                    closure_reason = None
                     detected_at = _parse_iso(
                         raw_risk.get("detectedAt")
                         or raw_risk.get("observedAt")
@@ -243,8 +376,10 @@ def observe_risk_snapshot(
                 elif is_open:
                     status = previous_status if previous_status in {"OPEN", "REOPENED"} else "OPEN"
                     open_since = open_since or observed_at
+                    closure_reason = None
                 else:
                     status = "CLEARED"
+                    closure_reason = CLOSURE_HEALTHY
                     previous_open_since = _parse_iso(str(existing["open_since_at"] or ""))
                     current_time = _parse_iso(observed_at)
                     if previous_open_since is not None and current_time is not None:
@@ -285,60 +420,68 @@ def observe_risk_snapshot(
                             }
                         )
 
-            conn.execute(
-                """
-                INSERT INTO resilience_risk_observations (
-                    risk_subject_digest, subject_json, first_seen_at, open_since_at,
-                    last_seen_at, observation_count, current_severity, peak_severity,
-                    status, last_cleared_at, reopen_count, policy_id, backup_id,
-                    target_id, failure_domain, last_snapshot_digest,
-                    last_snapshot_observation_key, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(risk_subject_digest) DO UPDATE SET
-                    subject_json = excluded.subject_json,
-                    open_since_at = excluded.open_since_at,
-                    last_seen_at = excluded.last_seen_at,
-                    observation_count = excluded.observation_count,
-                    current_severity = excluded.current_severity,
-                    peak_severity = excluded.peak_severity,
-                    status = excluded.status,
-                    last_cleared_at = excluded.last_cleared_at,
-                    reopen_count = excluded.reopen_count,
-                    policy_id = excluded.policy_id,
-                    backup_id = excluded.backup_id,
-                    target_id = excluded.target_id,
-                    failure_domain = excluded.failure_domain,
-                    last_snapshot_digest = excluded.last_snapshot_digest,
-                    last_snapshot_observation_key = excluded.last_snapshot_observation_key,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    digest,
-                    json.dumps(subject, ensure_ascii=False, sort_keys=True),
-                    first_seen,
-                    open_since,
-                    observed_at,
-                    count,
-                    severity,
-                    peak,
-                    status,
-                    last_cleared,
-                    reopen_count,
-                    subject.get("policyId"),
-                    subject.get("backupId"),
-                    subject.get("targetId"),
-                    subject.get("failureDomain"),
-                    snapshot_digest,
-                    snapshot_observation_key,
-                    observed_at,
-                ),
+            records.append(
+                _upsert_observation(
+                    conn,
+                    digest=digest,
+                    subject=subject,
+                    first_seen=first_seen,
+                    open_since=open_since,
+                    last_seen=observed_at,
+                    count=count,
+                    severity=severity,
+                    peak=peak,
+                    status=status,
+                    last_cleared=last_cleared,
+                    reopen_count=reopen_count,
+                    snapshot_digest=snapshot_digest,
+                    snapshot_observation_key=snapshot_observation_key,
+                    closure_reason=closure_reason,
+                    updated_at=observed_at,
+                )
             )
-            row = conn.execute(
-                "SELECT * FROM resilience_risk_observations WHERE risk_subject_digest = ?",
-                (digest,),
-            ).fetchone()
-            assert row is not None
-            records.append(_row_to_record(row))
+
+        absent_rows = conn.execute(
+            """
+            SELECT * FROM resilience_risk_observations
+            WHERE status IN ('OPEN', 'REOPENED', 'UNKNOWN_COVERAGE')
+            """
+        ).fetchall()
+        for existing in absent_rows:
+            digest = str(existing["risk_subject_digest"])
+            if digest in present_digests:
+                continue
+            if str(existing["last_snapshot_observation_key"] or "") == snapshot_observation_key:
+                records.append(_row_to_record(existing))
+                continue
+            subject = json.loads(str(existing["subject_json"]))
+            status, closure_reason = infer_absent_closure_reason(subject, coverage=coverage)
+            open_since = existing["open_since_at"]
+            last_cleared = existing["last_cleared_at"]
+            last_seen = str(existing["last_seen_at"])
+            if status in CLOSED_STATUSES:
+                open_since = None
+                last_cleared = observed_at
+            records.append(
+                _upsert_observation(
+                    conn,
+                    digest=digest,
+                    subject=subject,
+                    first_seen=str(existing["first_seen_at"]),
+                    open_since=open_since,
+                    last_seen=last_seen,
+                    count=int(existing["observation_count"]),
+                    severity=str(existing["current_severity"]),
+                    peak=str(existing["peak_severity"]),
+                    status=status,
+                    last_cleared=last_cleared,
+                    reopen_count=int(existing["reopen_count"]),
+                    snapshot_digest=snapshot_digest,
+                    snapshot_observation_key=snapshot_observation_key,
+                    closure_reason=closure_reason,
+                    updated_at=observed_at,
+                )
+            )
     from deepseek_infra.infra.workspace import resilience_slo_ledger
 
     for sample in slo_samples:
@@ -366,7 +509,7 @@ def list_open_observations() -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT * FROM resilience_risk_observations
-            WHERE status IN ('OPEN', 'REOPENED')
+            WHERE status IN ('OPEN', 'REOPENED', 'UNKNOWN_COVERAGE')
             ORDER BY open_since_at ASC, risk_subject_digest ASC
             """
         ).fetchall()

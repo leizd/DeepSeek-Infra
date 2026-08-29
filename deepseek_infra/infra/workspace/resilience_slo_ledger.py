@@ -266,32 +266,93 @@ def _list_recent_samples_per_metric(*, limit_per_metric: int = 10000) -> list[di
     return samples
 
 
+SLO_WINDOWS: dict[str, float | None] = {
+    "1h": 3600.0,
+    "24h": 86400.0,
+    "7d": 7.0 * 86400.0,
+    "30d": 30.0 * 86400.0,
+    "lifetime": None,
+}
+
+
+def _sample_in_window(sample: dict[str, Any], *, now: datetime, window_seconds: float | None) -> bool:
+    if window_seconds is None:
+        return True
+    observed = _parse_iso(str(sample.get("observedAt") or ""))
+    if observed is None:
+        return False
+    return (now - observed).total_seconds() <= window_seconds
+
+
+def _window_metric_summary(items: list[dict[str, Any]], *, now: datetime, window_seconds: float | None) -> dict[str, Any]:
+    ordered = [item for item in items if _sample_in_window(item, now=now, window_seconds=window_seconds)]
+    values = [float(item["value"]) for item in ordered]
+    if not values:
+        return {
+            "p50": None,
+            "p95": None,
+            "p99": None,
+            "samples": 0,
+            "coverageSeconds": 0.0,
+            "status": "INSUFFICIENT_DATA",
+        }
+    first_at = _parse_iso(str(ordered[0]["observedAt"]))
+    last_at = _parse_iso(str(ordered[-1]["observedAt"]))
+    coverage = 0.0
+    if first_at is not None and last_at is not None:
+        coverage = max(0.0, (last_at - first_at).total_seconds())
+    return {
+        "p50": round(_percentile(values, 0.50), 3),
+        "p95": round(_percentile(values, 0.95), 3),
+        "p99": round(_percentile(values, 0.99), 3),
+        "samples": len(values),
+        "coverageSeconds": round(coverage, 3),
+        "status": "OK",
+    }
+
+
 def get_fleet_slo_snapshot(*, now: datetime | None = None) -> dict[str, Any]:
-    """Return stable operator fields plus detailed per-metric summaries."""
+    """Return stable operator fields plus time-windowed per-metric summaries."""
     current = now or datetime.now(tz=timezone.utc)
     samples = _list_recent_samples_per_metric()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for sample in samples:
         grouped.setdefault(str(sample["metricName"]), []).append(sample)
 
+    windows: dict[str, dict[str, dict[str, Any]]] = {}
+    for window_name, window_seconds in SLO_WINDOWS.items():
+        windows[window_name] = {
+            metric_name: _window_metric_summary(items, now=current, window_seconds=window_seconds)
+            for metric_name, items in grouped.items()
+        }
+
+    window_24h = windows["24h"]
     summaries: dict[str, dict[str, Any]] = {}
     for metric_name, items in grouped.items():
-        values = [float(item["value"]) for item in items]
+        bounded = [item for item in items if _sample_in_window(item, now=current, window_seconds=86400.0)]
+        if not bounded:
+            continue
+        values = [float(item["value"]) for item in bounded]
         summaries[metric_name] = {
             "count": len(values),
             "p50": round(_percentile(values, 0.50), 3),
             "p95": round(_percentile(values, 0.95), 3),
             "latest": round(values[-1], 3),
-            "lastObservedAt": items[-1]["observedAt"],
+            "lastObservedAt": bounded[-1]["observedAt"],
         }
 
     def p95(metric_name: str) -> float:
-        return float(summaries.get(metric_name, {}).get("p95") or 0.0)
+        windowed = window_24h.get(metric_name) or {}
+        if windowed.get("status") == "INSUFFICIENT_DATA":
+            return 0.0
+        return float(windowed.get("p95") or summaries.get(metric_name, {}).get("p95") or 0.0)
 
     def latest(metric_name: str) -> float:
         return float(summaries.get(metric_name, {}).get("latest") or 0.0)
 
-    evidence_items = grouped.get(EVIDENCE_FRESHNESS_SECONDS, [])
+    evidence_items = [
+        item for item in grouped.get(EVIDENCE_FRESHNESS_SECONDS, []) if _sample_in_window(item, now=current, window_seconds=None)
+    ]
     latest_evidence_at = _parse_iso(str(evidence_items[-1]["observedAt"])) if evidence_items else None
     evidence_freshness_seconds: float | None = (
         max(0.0, (current.astimezone(timezone.utc) - latest_evidence_at).total_seconds())
@@ -313,6 +374,7 @@ def get_fleet_slo_snapshot(*, now: datetime | None = None) -> dict[str, Any]:
         ),
         "sampleCounts": {name: int(summary["count"]) for name, summary in summaries.items()},
         "metrics": summaries,
+        "windows": windows,
         "evaluatedAt": _utc_iso(current),
     }
 

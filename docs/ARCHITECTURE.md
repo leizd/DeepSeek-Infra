@@ -5,9 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.7.4。
+适用版本：v4.7.5。
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
+
+## 4.7.5 预测式全局规划与可验证优化
+
+4.7.5 不改变备份数据线格式。它在 4.7.4 的 Evidence-closed 自治运维之上增加
+覆盖感知的风险对账、预留/实耗公平服务、耐久多波次执行器、窗口化 SLO、
+耐久容量观测与 30/90 天预测，以及只产生 What-If 候选的耐久约束优化器。
+优化器不得把 minCommittedCopies / minFailureDomains 当成目标函数权重。
 
 ## 4.7.4 持久化自治运维闭环
 
@@ -153,7 +160,7 @@ Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具�
 
 ### 版本说明
 
-- **Current development version:** `4.7.4`（只有 exact-merge CI Evidence 全绿后才 release-ready）。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、持久化 Risk/Scheduler/SLO Ledgers、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。生产恢复编排在冻结的 `object-set-v1`、Receipt v4、Commit v4 与投影语义之上增加耐久 Job、全局多波次调度、安全控制和 Evidence closure，不迁移或重写线格式。
+- **Current development version:** `4.7.5`（只有 exact-merge CI Evidence 全绿后才 release-ready）。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、持久化 Risk/Scheduler/SLO Ledgers、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。生产恢复编排在冻结的 `object-set-v1`、Receipt v4、Commit v4 与投影语义之上增加耐久 Job、全局多波次调度、安全控制和 Evidence closure，不迁移或重写线格式。
 - **Historical qualification:** `v4.0.0-rc.1` 已被 rc.2 supersede，只保留为历史架构预览；stable `4.0.0` 从已验证的 rc.2 提升。
 - **Patch boundary:** Python-first 所有权、默认关闭的 Rust delegates 和冻结协议均不改变。
 
