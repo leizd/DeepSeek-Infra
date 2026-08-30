@@ -1,4 +1,4 @@
-"""Persistent reserved-versus-consumed Fleet Scheduler service state (4.7.5 Gate B)."""
+"""Effect-bound, exactly-once Fleet Scheduler service settlement (4.7.6 Gate D)."""
 
 from __future__ import annotations
 
@@ -61,17 +61,48 @@ CREATE TABLE IF NOT EXISTS resilience_service_reservations (
     actual_traffic_class TEXT,
     outcome TEXT,
     release_reason TEXT,
+    effect_handle_json TEXT,
+    transfer_id TEXT,
+    telemetry_digest TEXT,
+    settlement_started_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_resilience_service_reservations_schedule
 ON resilience_service_reservations(schedule_id, status);
+CREATE TABLE IF NOT EXISTS resilience_service_settlement_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id TEXT NOT NULL,
+    from_status TEXT NOT NULL,
+    to_status TEXT NOT NULL,
+    execution_epoch INTEGER NOT NULL,
+    effect_handle_json TEXT,
+    transfer_id TEXT,
+    telemetry_digest TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resilience_service_settlement_events_action
+ON resilience_service_settlement_events(action_id, event_id);
 """
+
+_RESERVATION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("effect_handle_json", "TEXT"),
+    ("transfer_id", "TEXT"),
+    ("telemetry_digest", "TEXT"),
+    ("settlement_started_at", "TEXT"),
+)
 
 
 def _utc_iso(value: datetime | None = None) -> str:
     current = value or datetime.now(tz=timezone.utc)
     return current.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _ensure_schema_columns(conn: sqlite3.Connection) -> None:
+    existing = {str(row[1]) for row in conn.execute("PRAGMA table_info(resilience_service_reservations)").fetchall()}
+    for column, definition in _RESERVATION_COLUMNS:
+        if column not in existing:
+            conn.execute(f"ALTER TABLE resilience_service_reservations ADD COLUMN {column} {definition}")
 
 
 @contextmanager
@@ -82,6 +113,7 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
+        _ensure_schema_columns(conn)
         try:
             yield conn
             conn.commit()
@@ -139,6 +171,10 @@ def _reservation_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "actualTrafficClass": row["actual_traffic_class"],
         "outcome": row["outcome"],
         "releaseReason": row["release_reason"],
+        "effectHandle": json.loads(str(row["effect_handle_json"])) if row["effect_handle_json"] else None,
+        "transferId": row["transfer_id"],
+        "telemetryDigest": row["telemetry_digest"],
+        "settlementStartedAt": row["settlement_started_at"],
         "createdAt": str(row["created_at"]),
         "updatedAt": str(row["updated_at"]),
     }
@@ -325,67 +361,116 @@ def record_scheduled_actions(
             _reserve_action(conn, action, schedule_id=schedule_id, timestamp=timestamp)
 
 
-def consume_action_service(
-    action: dict[str, Any] | str,
+def _read_terminal_effect_telemetry(action_id: str) -> dict[str, Any]:
+    from deepseek_infra.infra.workspace import resilience_action_journal, resilience_effect_telemetry
+
+    action = resilience_action_journal.get_action(action_id)
+    if action is None:
+        raise resilience_effect_telemetry.EffectTelemetryUnavailable("Action Journal record is unavailable")
+    return resilience_effect_telemetry.read_terminal_effect_telemetry(action)
+
+
+def _append_settlement_event(
+    conn: sqlite3.Connection,
     *,
-    actual_bytes: int | None = None,
-    actual_duration_ms: float | int | None = None,
-    actual_traffic_class: str | None = None,
-    outcome: str = "SUCCEEDED",
+    action_id: str,
+    from_status: str,
+    to_status: str,
+    telemetry: dict[str, Any],
+    timestamp: str,
+) -> None:
+    effect_handle = telemetry.get("effectHandle")
+    conn.execute(
+        """
+        INSERT INTO resilience_service_settlement_events (
+            action_id, from_status, to_status, execution_epoch,
+            effect_handle_json, transfer_id, telemetry_digest, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            action_id,
+            from_status,
+            to_status,
+            int(telemetry.get("actionExecutionEpoch") or 0),
+            json.dumps(effect_handle, ensure_ascii=False, sort_keys=True) if isinstance(effect_handle, dict) else None,
+            str(telemetry.get("transferId") or ""),
+            str(telemetry.get("telemetryDigest") or ""),
+            timestamp,
+        ),
+    )
+
+
+def _binding_matches(row: sqlite3.Row, telemetry: dict[str, Any]) -> bool:
+    rendered_handle = json.dumps(telemetry.get("effectHandle"), ensure_ascii=False, sort_keys=True)
+    return (
+        int(row["execution_epoch"] or 0) == int(telemetry.get("actionExecutionEpoch") or 0)
+        and str(row["effect_handle_json"] or "") == rendered_handle
+        and str(row["transfer_id"] or "") == str(telemetry.get("transferId") or "")
+        and str(row["telemetry_digest"] or "") == str(telemetry.get("telemetryDigest") or "")
+    )
+
+
+def _begin_effect_settlement(
+    action_id: str,
+    telemetry: dict[str, Any],
+    *,
     consumed_at: datetime | None = None,
 ) -> dict[str, Any] | None:
-    """Charge observed terminal effect exactly once. Reservations are not fair-share."""
-    payload: dict[str, Any] = action if isinstance(action, dict) else {"actionId": action}
-    action_id = str(payload.get("actionId") or "")
-    if not action_id:
-        return None
+    """Durably enter CONSUMING with a fenced terminal-effect binding."""
+    if str(telemetry.get("actionId") or "") != action_id:
+        raise RuntimeError("terminal telemetry Action binding mismatch")
     timestamp = _utc_iso(consumed_at)
+    effect_handle = telemetry.get("effectHandle")
+    if not isinstance(effect_handle, dict):
+        raise RuntimeError("terminal telemetry effect handle is required")
+    rendered_handle = json.dumps(effect_handle, ensure_ascii=False, sort_keys=True)
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute(
             "SELECT * FROM resilience_service_reservations WHERE action_id = ?",
             (action_id,),
         ).fetchone()
-        policy_id = str(existing["policy_id"]) if existing is not None else _policy_id(payload)
-        estimated = int(existing["estimated_bytes"]) if existing is not None else _estimated_bytes(payload)
-        byte_count = estimated if actual_bytes is None else max(0, int(actual_bytes))
         if existing is None:
-            _reserve_action(
-                conn,
-                {**payload, "actionId": action_id, "policyId": policy_id, "estimatedBytes": byte_count},
-                schedule_id=str(payload.get("scheduleId") or "manual"),
-                timestamp=timestamp,
-            )
-        else:
-            status = str(existing["status"])
-            if status == RESERVATION_CONSUMED:
-                return _reservation_from_row(existing)
-            if status in {RESERVATION_RELEASED, RESERVATION_EXPIRED}:
-                return _reservation_from_row(existing)
-        charged = _charge_consumed(
-            conn,
-            action_id=action_id,
-            policy_id=policy_id,
-            byte_count=byte_count,
-            timestamp=timestamp,
-        )
-        duration = None if actual_duration_ms is None else float(actual_duration_ms)
-        conn.execute(
+            raise RuntimeError(f"fair-service reservation is unavailable for Action '{action_id}'")
+        status = str(existing["status"])
+        if status in {RESERVATION_CONSUMED, RESERVATION_RELEASED, RESERVATION_EXPIRED}:
+            return _reservation_from_row(existing)
+        if status in {RESERVATION_CONSUMING, RESERVATION_RECONCILING}:
+            if not _binding_matches(existing, telemetry):
+                raise RuntimeError("terminal telemetry conflicts with in-flight fair-service settlement")
+            return _reservation_from_row(existing)
+        if status != RESERVATION_RESERVED:
+            raise RuntimeError(f"fair-service reservation cannot settle from state '{status}'")
+        cursor = conn.execute(
             """
             UPDATE resilience_service_reservations
-            SET status = ?, actual_bytes = ?, actual_duration_ms = ?,
-                actual_traffic_class = ?, outcome = ?, updated_at = ?
-            WHERE action_id = ?
+            SET status = ?, execution_epoch = ?, effect_handle_json = ?,
+                transfer_id = ?, telemetry_digest = ?, settlement_started_at = ?,
+                outcome = ?, updated_at = ?
+            WHERE action_id = ? AND status = ?
             """,
             (
-                RESERVATION_CONSUMED if charged or (existing is not None and str(existing["status"]) == RESERVATION_CONSUMED) else RESERVATION_CONSUMED,
-                byte_count,
-                duration,
-                actual_traffic_class,
-                str(outcome or "SUCCEEDED"),
+                RESERVATION_CONSUMING,
+                int(telemetry.get("actionExecutionEpoch") or 0),
+                rendered_handle,
+                str(telemetry.get("transferId") or ""),
+                str(telemetry.get("telemetryDigest") or ""),
+                timestamp,
+                str(telemetry.get("outcome") or "SUCCEEDED"),
                 timestamp,
                 action_id,
+                RESERVATION_RESERVED,
             ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("fair-service reservation settlement claim conflicted")
+        _append_settlement_event(
+            conn,
+            action_id=action_id,
+            from_status=RESERVATION_RESERVED,
+            to_status=RESERVATION_CONSUMING,
+            telemetry=telemetry,
+            timestamp=timestamp,
         )
         row = conn.execute(
             "SELECT * FROM resilience_service_reservations WHERE action_id = ?",
@@ -395,14 +480,151 @@ def consume_action_service(
         return _reservation_from_row(row)
 
 
-def record_consumed_service(
-    actions: list[dict[str, Any]],
+def _finish_effect_settlement(
+    action_id: str,
+    telemetry: dict[str, Any],
     *,
     consumed_at: datetime | None = None,
-) -> None:
-    """Seed or record terminal consumption for actions that already produced effects."""
-    for action in actions:
-        consume_action_service(action, actual_bytes=_estimated_bytes(action), consumed_at=consumed_at, outcome="SUCCEEDED")
+) -> dict[str, Any]:
+    timestamp = _utc_iso(consumed_at)
+    byte_count = max(0, int(telemetry.get("actualBytesTransferred") or 0))
+    duration_ms = max(0.0, float(telemetry.get("actualDurationMs") or 0.0))
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT * FROM resilience_service_reservations WHERE action_id = ?",
+            (action_id,),
+        ).fetchone()
+        if existing is None:
+            raise RuntimeError(f"fair-service reservation is unavailable for Action '{action_id}'")
+        if str(existing["status"]) == RESERVATION_CONSUMED:
+            return _reservation_from_row(existing)
+        if str(existing["status"]) != RESERVATION_CONSUMING or not _binding_matches(existing, telemetry):
+            raise RuntimeError("fair-service settlement lost its terminal-effect binding")
+        charged = _charge_consumed(
+            conn,
+            action_id=action_id,
+            policy_id=str(existing["policy_id"]),
+            byte_count=byte_count,
+            timestamp=timestamp,
+        )
+        if not charged:
+            prior_charge = conn.execute(
+                """
+                SELECT policy_id, bytes_served FROM resilience_scheduler_service_events
+                WHERE action_id = ?
+                """,
+                (action_id,),
+            ).fetchone()
+            if (
+                prior_charge is None
+                or str(prior_charge["policy_id"]) != str(existing["policy_id"])
+                or int(prior_charge["bytes_served"]) != byte_count
+            ):
+                raise RuntimeError("existing fair-service charge conflicts with terminal effect telemetry")
+        cursor = conn.execute(
+            """
+            UPDATE resilience_service_reservations
+            SET status = ?, actual_bytes = ?, actual_duration_ms = ?,
+                actual_traffic_class = ?, outcome = ?, updated_at = ?
+            WHERE action_id = ? AND status = ?
+              AND execution_epoch = ? AND telemetry_digest = ?
+            """,
+            (
+                RESERVATION_CONSUMED,
+                byte_count,
+                duration_ms,
+                str(telemetry.get("trafficClass") or ""),
+                str(telemetry.get("outcome") or "SUCCEEDED"),
+                timestamp,
+                action_id,
+                RESERVATION_CONSUMING,
+                int(telemetry.get("actionExecutionEpoch") or 0),
+                str(telemetry.get("telemetryDigest") or ""),
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("fair-service terminal settlement conflicted")
+        _append_settlement_event(
+            conn,
+            action_id=action_id,
+            from_status=RESERVATION_CONSUMING,
+            to_status=RESERVATION_CONSUMED,
+            telemetry=telemetry,
+            timestamp=timestamp,
+        )
+        row = conn.execute(
+            "SELECT * FROM resilience_service_reservations WHERE action_id = ?",
+            (action_id,),
+        ).fetchone()
+        assert row is not None
+        return _reservation_from_row(row)
+
+
+def list_settlement_events(action_id: str) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM resilience_service_settlement_events
+            WHERE action_id = ? ORDER BY event_id
+            """,
+            (action_id,),
+        ).fetchall()
+    return [
+        {
+            "eventId": int(row["event_id"]),
+            "actionId": str(row["action_id"]),
+            "fromStatus": str(row["from_status"]),
+            "toStatus": str(row["to_status"]),
+            "executionEpoch": int(row["execution_epoch"]),
+            "effectHandle": json.loads(str(row["effect_handle_json"])) if row["effect_handle_json"] else None,
+            "transferId": row["transfer_id"],
+            "telemetryDigest": row["telemetry_digest"],
+            "createdAt": str(row["created_at"]),
+        }
+        for row in rows
+    ]
+
+
+def settle_action_from_effect(
+    action_id: str,
+    *,
+    consumed_at: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Settle one terminal Action from durable effect telemetry; callers cannot report actual service."""
+    existing = get_reservation(action_id)
+    if existing is None:
+        raise RuntimeError(f"fair-service reservation is unavailable for Action '{action_id}'")
+    if str(existing["status"]) in {RESERVATION_CONSUMED, RESERVATION_RELEASED, RESERVATION_EXPIRED}:
+        return existing
+
+    from deepseek_infra.infra.workspace import resilience_action_journal
+
+    action = resilience_action_journal.get_action(action_id)
+    if action is None:
+        raise RuntimeError(f"Action Journal record is unavailable for '{action_id}'")
+    terminal_state = str(action.get("state") or "")
+    if terminal_state != "SUCCEEDED":
+        terminal_failures = {
+            "COMPENSATED",
+            "COMPENSATION_REQUIRED",
+            "FAILED_BEFORE_EFFECT",
+            "NEEDS_OPERATOR",
+            "EFFECT_UNKNOWN",
+            "BLOCKED",
+            "SKIPPED_NO_LONGER_NEEDED",
+            "PREEMPTED",
+            "REPLAN_REQUIRED",
+        }
+        if terminal_state in terminal_failures:
+            return release_action_reservation(action_id, reason="FAILED", released_at=consumed_at)
+        raise RuntimeError(f"Action '{action_id}' is not terminal")
+
+    telemetry = _read_terminal_effect_telemetry(action_id)
+    consuming = _begin_effect_settlement(action_id, telemetry, consumed_at=consumed_at)
+    if consuming is None or str(consuming["status"]) in {RESERVATION_RELEASED, RESERVATION_EXPIRED}:
+        return consuming
+    return _finish_effect_settlement(action_id, telemetry, consumed_at=consumed_at)
 
 
 def release_action_reservation(

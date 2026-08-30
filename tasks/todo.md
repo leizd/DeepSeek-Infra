@@ -10,8 +10,8 @@
 - [x] Add fenced schedule/wave/action execution epochs and leases
 - [x] Run admitted actions through the production Action Journal
 - [x] Reconcile crash takeover without duplicate remote effects
-- [ ] Persist terminal effect transfer telemetry
-- [ ] Settle fair service exactly once from observed telemetry
+- [x] Persist terminal effect transfer telemetry
+- [x] Settle fair service exactly once from observed telemetry
 - [ ] Add production capacity sampler to maintenance control loop
 - [ ] Bind observations to target incarnation and capacity revision
 - [ ] Persist 30/90-day Forecast Registry records

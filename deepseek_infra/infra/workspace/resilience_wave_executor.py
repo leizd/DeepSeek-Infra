@@ -1309,6 +1309,25 @@ def run_next_wave(
                 "status": "RUNNER_FENCED_OUT",
                 "actionId": action_id,
             }
+        try:
+            settlement = resilience_scheduler_service.settle_action_from_effect(action_id, consumed_at=now)
+        except Exception as exc:
+            return {
+                "scheduleId": schedule_id,
+                "waveIndex": wave_index,
+                "ran": False,
+                "status": "FAIR_SERVICE_SETTLEMENT_REQUIRED",
+                "actionId": action_id,
+                "reason": type(exc).__name__,
+            }
+        if not isinstance(settlement, dict) or settlement.get("status") != "CONSUMED":
+            return {
+                "scheduleId": schedule_id,
+                "waveIndex": wave_index,
+                "ran": False,
+                "status": "FAIR_SERVICE_SETTLEMENT_REQUIRED",
+                "actionId": action_id,
+            }
         if not _set_action_state_with_fence(
             schedule_id,
             wave_index,
@@ -1336,6 +1355,7 @@ def run_next_wave(
                 "status": ACTION_VERIFIED_SUCCESS,
                 "journalExecutionEpoch": int(terminal_action.get("executionEpoch") or 0),
                 "effectHandle": terminal_action.get("effectHandle"),
+                "fairServiceSettlement": settlement,
             }
         )
 
@@ -1377,117 +1397,6 @@ def run_next_wave(
         "scheduleExecutionEpoch": schedule_epoch,
         "waveExecutionEpoch": wave_epoch,
         "actions": action_results,
-    }
-
-
-def verify_wave_action(
-    schedule_id: str,
-    action_id: str,
-    *,
-    success: bool,
-    outcome: str | None = None,
-    actual_bytes: int | None = None,
-    actual_duration_ms: float | int | None = None,
-    actual_traffic_class: str | None = None,
-    now: datetime | None = None,
-) -> dict[str, Any]:
-    """Record a verified terminal action and settle fair-service reservation."""
-    timestamp = _utc_iso(now)
-    action_status = ACTION_VERIFIED_SUCCESS if success else ACTION_FAILED
-    terminal_outcome = str(outcome or ("SUCCEEDED" if success else "FAILED"))
-    with _connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        existing = conn.execute(
-            "SELECT * FROM resilience_wave_actions WHERE schedule_id = ? AND action_id = ?",
-            (schedule_id, action_id),
-        ).fetchone()
-        if existing is None:
-            raise ValueError(f"unknown wave action: {schedule_id}/{action_id}")
-        conn.execute(
-            """
-            UPDATE resilience_wave_actions
-            SET status = ?, outcome = ?, updated_at = ?
-            WHERE schedule_id = ? AND action_id = ?
-            """,
-            (action_status, terminal_outcome, timestamp, schedule_id, action_id),
-        )
-        wave_index = int(existing["wave_index"])
-        action = json.loads(str(existing["action_json"]))
-        remaining = conn.execute(
-            """
-            SELECT COUNT(*) FROM resilience_wave_actions
-            WHERE schedule_id = ? AND wave_index = ? AND status = ?
-            """,
-            (schedule_id, wave_index, ACTION_PENDING),
-        ).fetchone()
-        failed = conn.execute(
-            """
-            SELECT COUNT(*) FROM resilience_wave_actions
-            WHERE schedule_id = ? AND wave_index = ? AND status = ?
-            """,
-            (schedule_id, wave_index, ACTION_FAILED),
-        ).fetchone()
-        if int(remaining[0]) == 0:
-            wave_status = WAVE_COMPLETED if int(failed[0]) == 0 else WAVE_VERIFYING
-            conn.execute(
-                """
-                UPDATE resilience_wave_states
-                SET status = ?, verified_at = ?, updated_at = ?
-                WHERE schedule_id = ? AND wave_index = ?
-                """,
-                (wave_status if wave_status == WAVE_COMPLETED else WAVE_VERIFYING, timestamp, timestamp, schedule_id, wave_index),
-            )
-            if int(failed[0]) > 0:
-                conn.execute(
-                    """
-                    UPDATE resilience_wave_schedules
-                    SET status = ?, updated_at = ?
-                    WHERE schedule_id = ?
-                    """,
-                    (SCHEDULE_FAILED, timestamp, schedule_id),
-                )
-            else:
-                pending_waves = conn.execute(
-                    """
-                    SELECT COUNT(*) FROM resilience_wave_states
-                    WHERE schedule_id = ? AND status != ?
-                    """,
-                    (schedule_id, WAVE_COMPLETED),
-                ).fetchone()
-                if int(pending_waves[0]) == 0:
-                    conn.execute(
-                        """
-                        UPDATE resilience_wave_schedules
-                        SET status = ?, updated_at = ?
-                        WHERE schedule_id = ?
-                        """,
-                        (SCHEDULE_COMPLETED, timestamp, schedule_id),
-                    )
-        row = conn.execute(
-            "SELECT * FROM resilience_wave_actions WHERE schedule_id = ? AND action_id = ?",
-            (schedule_id, action_id),
-        ).fetchone()
-        assert row is not None
-    from deepseek_infra.infra.workspace import resilience_scheduler_service
-
-    if success:
-        resilience_scheduler_service.consume_action_service(
-            action,
-            actual_bytes=actual_bytes,
-            actual_duration_ms=actual_duration_ms,
-            actual_traffic_class=actual_traffic_class,
-            outcome=terminal_outcome,
-            consumed_at=now,
-        )
-    else:
-        resilience_scheduler_service.release_action_reservation(action_id, reason="FAILED", released_at=now)
-        resilience_scheduler_service.release_schedule_reservations(schedule_id, reason="FAILED", released_at=now)
-    return {
-        "scheduleId": schedule_id,
-        "waveIndex": int(row["wave_index"]),
-        "actionId": action_id,
-        "status": str(row["status"]),
-        "outcome": row["outcome"],
     }
 
 

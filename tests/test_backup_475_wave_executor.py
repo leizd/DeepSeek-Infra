@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from deepseek_infra.infra.workspace import (
+    resilience_action_journal,
     resilience_fresh_state,
     resilience_scheduler_service,
     resilience_wave_executor,
@@ -73,6 +74,25 @@ def _use_fresh_bundle(
     )
 
 
+def _use_runner_outcome(monkeypatch: pytest.MonkeyPatch, *, state: str = "SUCCEEDED") -> None:
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "execute_autonomous_action",
+        lambda action_id, **kwargs: {
+            "actionId": action_id,
+            "state": state,
+            "executionEpoch": 1,
+            "effectHandle": {"kind": "repair", "repairId": f"repair-{action_id}"},
+            "verificationResult": {"verified": True} if state == "SUCCEEDED" else None,
+        },
+    )
+    monkeypatch.setattr(
+        resilience_scheduler_service,
+        "settle_action_from_effect",
+        lambda action_id, *, consumed_at=None: {"actionId": action_id, "status": "CONSUMED"},
+    )
+
+
 def test_wave_one_cannot_start_before_wave_zero_verified(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     resilience_wave_executor.persist_planned_schedule(_schedule(), authority_head_digest="auth-aaa")
     _use_fresh_bundle(monkeypatch)
@@ -83,9 +103,16 @@ def test_wave_one_cannot_start_before_wave_zero_verified(tmp_settings: Path, mon
     assert first["admitted"] is True
     still_blocked = resilience_wave_executor.admit_wave("wave-sched", 1)
     assert still_blocked["admitted"] is False
+    _use_runner_outcome(monkeypatch)
+    completed = resilience_wave_executor.run_next_wave("wave-sched")
+    assert completed["status"] == "COMPLETED"
+    assert resilience_wave_executor.admit_wave("wave-sched", 1)["admitted"] is True
 
 
-def test_verified_wave_zero_releases_wave_one_and_charges_bytes(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verified_wave_zero_releases_wave_one_without_manual_verification(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     plan = _schedule()
     assigned = [
         {"actionId": "repair-a", "parameters": {"policyId": "p1", "estimatedBytes": 100}},
@@ -94,21 +121,12 @@ def test_verified_wave_zero_releases_wave_one_and_charges_bytes(tmp_settings: Pa
     resilience_scheduler_service.record_schedule_result(plan, assigned)
     resilience_wave_executor.persist_planned_schedule(plan, authority_head_digest="auth-aaa")
     _use_fresh_bundle(monkeypatch)
-    resilience_wave_executor.admit_wave("wave-sched", 0)
-    verified = resilience_wave_executor.verify_wave_action(
-        "wave-sched",
-        "repair-a",
-        success=True,
-        actual_bytes=50,
-        actual_duration_ms=9,
-        actual_traffic_class="repair",
-    )
-    assert verified["status"] == "VERIFIED_SUCCESS"
+    _use_runner_outcome(monkeypatch)
+    verified = resilience_wave_executor.run_next_wave("wave-sched")
+    assert verified["status"] == "COMPLETED"
     second = resilience_wave_executor.admit_wave("wave-sched", 1)
     assert second["admitted"] is True
-    state = resilience_scheduler_service.get_policy_service("p1")
-    assert state is not None and state["bytesServed"] == 50
-    assert state["actionsServed"] == 1
+    assert not hasattr(resilience_wave_executor, "verify_wave_action")
 
 
 def test_failed_wave_pauses_downstream_and_stale_requires_replan(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -116,8 +134,8 @@ def test_failed_wave_pauses_downstream_and_stale_requires_replan(tmp_settings: P
     resilience_scheduler_service.record_schedule_result(plan, plan["executionWaves"][0]["actions"])  # type: ignore[index]
     resilience_wave_executor.persist_planned_schedule(plan, authority_head_digest="auth-aaa")
     _use_fresh_bundle(monkeypatch)
-    resilience_wave_executor.admit_wave("wave-sched", 0)
-    failed = resilience_wave_executor.verify_wave_action("wave-sched", "repair-a", success=False)
+    _use_runner_outcome(monkeypatch, state="BLOCKED")
+    failed = resilience_wave_executor.run_next_wave("wave-sched")
     assert failed["status"] == "FAILED"
     downstream = resilience_wave_executor.admit_wave("wave-sched", 1)
     assert downstream["admitted"] is False
@@ -172,5 +190,4 @@ def test_wave_revalidates_authority_budget_and_blast(tmp_settings: Path, monkeyp
         resilience_wave_executor.persist_planned_schedule({})
     with pytest.raises(ValueError, match="unknown schedule"):
         resilience_wave_executor.admit_wave("missing")
-    with pytest.raises(ValueError, match="unknown wave action"):
-        resilience_wave_executor.verify_wave_action("wave-sched", "nope", success=True)
+    assert not hasattr(resilience_wave_executor, "verify_wave_action")

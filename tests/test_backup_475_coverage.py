@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from deepseek_infra.infra.workspace import (
+    resilience_action_journal,
     resilience_capacity_forecast,
     resilience_capacity_history,
     resilience_cost_model,
@@ -38,6 +39,22 @@ def test_wave_executor_skips_malformed_waves_and_lists_state(
         }
 
     monkeypatch.setattr(resilience_fresh_state, "build_fresh_state_bundle", fresh_bundle)
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "execute_autonomous_action",
+        lambda action_id, **kwargs: {
+            "actionId": action_id,
+            "state": "SUCCEEDED",
+            "executionEpoch": 1,
+            "effectHandle": {"kind": "repair", "repairId": f"repair-{action_id}"},
+            "verificationResult": {"verified": True},
+        },
+    )
+    monkeypatch.setattr(
+        resilience_scheduler_service,
+        "settle_action_from_effect",
+        lambda action_id, *, consumed_at=None: {"actionId": action_id, "status": "CONSUMED"},
+    )
     schedule = {
         "scheduleId": "cov-sched",
         "riskDigest": "risk-cov",
@@ -61,8 +78,8 @@ def test_wave_executor_skips_malformed_waves_and_lists_state(
     assert again["admitted"] is False
     with pytest.raises(ValueError, match="unknown wave"):
         resilience_wave_executor.admit_wave("cov-sched", 9)
-    verified = resilience_wave_executor.verify_wave_action("cov-sched", "ok-a", success=True, actual_bytes=1)
-    assert verified["status"] == "VERIFIED_SUCCESS"
+    verified = resilience_wave_executor.run_next_wave("cov-sched")
+    assert verified["status"] == "COMPLETED"
     assert resilience_wave_executor.get_schedule("cov-sched")["status"] == "COMPLETED"  # type: ignore[index]
     empty = resilience_wave_executor.persist_planned_schedule({"scheduleId": "empty-waves", "executionWaves": []})
     none_pending = resilience_wave_executor.admit_wave("empty-waves")
@@ -132,7 +149,7 @@ def test_scheduler_and_risk_helpers(tmp_settings: Path) -> None:
     assert filtered[0]["actionId"] == "cov-res"
     expired = resilience_scheduler_service.release_action_reservation("cov-res", reason="EXPIRED")
     assert expired is not None and expired["status"] == "EXPIRED"
-    assert resilience_scheduler_service.consume_action_service(action, actual_bytes=8)["status"] == "EXPIRED"  # type: ignore[index]
+    assert resilience_scheduler_service.get_reservation("cov-res")["status"] == "EXPIRED"  # type: ignore[index]
     resilience_scheduler_service.record_schedule_snapshot({"scheduleId": "snap-only", "executionWaves": []})
     assert resilience_scheduler_service.get_latest_schedule_snapshot()["scheduleId"] == "snap-only"  # type: ignore[index]
     subject = {"type": "CAPACITY_EXHAUSTION", "targetId": "t-cov"}

@@ -16,6 +16,7 @@ from deepseek_infra.infra.workspace import (
     resilience_effect_reconciler,
     resilience_fresh_state,
     resilience_risk_engine,
+    resilience_scheduler_service,
     resilience_wave_executor,
 )
 
@@ -69,6 +70,11 @@ def _install_fresh_state(monkeypatch: pytest.MonkeyPatch) -> None:
         resilience_fresh_state,
         "build_fresh_state_bundle",
         lambda schedule, wave_actions, *, now=None: _fresh_bundle(),
+    )
+    monkeypatch.setattr(
+        resilience_scheduler_service,
+        "settle_action_from_effect",
+        lambda action_id, *, consumed_at=None: {"actionId": action_id, "status": "CONSUMED"},
     )
 
 

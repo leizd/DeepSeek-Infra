@@ -1801,6 +1801,7 @@ def execute_autonomous_action(
                 )
                 current_effect = "COMPENSATABLE"
                 result_payload = drill_res
+                effect_handle["drillId"] = drill_res.get("drillId")
                 update_action_state(action_id, "EXECUTING", execution_epoch=epoch, claim_token=token, effect_class=current_effect, effect_handle=effect_handle)
 
             else:
