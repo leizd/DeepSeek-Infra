@@ -4,6 +4,24 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.7.6] - Production Predictive Control & Verifiable Simulation (2026-08-30)
+
+### Production Predictive Control & Verifiable Simulation
+
+- **Production truth boundary:** Wave admission and optimizer inputs are built
+  from fresh authoritative sources and fail closed when any source is missing.
+- **Real Wave execution:** a fenced, crash-recoverable runner owns Action Journal
+  execution and settles fair service from observed effect telemetry.
+- **Production forecasting:** maintenance target probes feed incarnation-isolated
+  observations, durable Forecast Records, and automatic due backtests.
+- **Verifiable What-If:** write-deny capabilities, attempted-write audit, and
+  measured pre/post state digests replace self-reported zero mutation.
+- **Exact predictive Evidence:** `predictive-planning-proof-v1` is carried inside
+  the unchanged `evidence-proof-v2` envelope as a separate required artifact.
+- **Wire freeze unchanged:** object-set-v1, Receipt v4, Commit v4, FastCDC v3,
+  randomized Age, control-authority-v1, AuthorityCheckpoint v1, and
+  dr-readiness-proof-v1 remain unchanged; federation remains read-only.
+
 ## [4.7.5] - Predictive Fleet Planning & Verified Optimization (2026-08-29)
 
 ### Predictive Fleet Planning & Verified Optimization

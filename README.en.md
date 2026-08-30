@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![Version](https://img.shields.io/badge/version-4.7.5-blue)
+![Version](https://img.shields.io/badge/version-4.7.6-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-black)
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.7.5 — Predictive Fleet Planning & Verified Optimization.** Scope-aware risk lifecycle, reserved-vs-consumed fairness, durable multi-wave execution with per-wave revalidation, windowed Fleet SLO, 30/90-day capacity forecasts with backtests, and durability-constrained cost-aware placement that never mutates storage.
+> **4.7.6 — Production Predictive Control & Verifiable Simulation.** Production fresh-state admission, real crash-recoverable Wave execution, effect-telemetry fairness settlement, automatic capacity sampling/backtesting, write-deny What-If, and a separately validated typed predictive proof. Cross-fleet writes remain out of scope.
 
-## 4.7.5 at a glance
+## 4.7.6 at a glance
 
 - Scope-aware risk reconciliation so superseded backups and disabled policies
   cannot leave ghost OPEN debt, while incomplete coverage never silently clears.

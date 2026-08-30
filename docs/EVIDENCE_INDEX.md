@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.7.5.
+Applicable version: v4.7.6.
 
-## 4.7.5 predictive fleet planning contract
+## 4.7.6 production predictive control contract
 
 4.7.5 keeps the 4.7.4 Storage Control Plane proof pair and adds unit-tested
 semantic checks for risk lifecycle, reserved/consumed fairness, durable waves,
