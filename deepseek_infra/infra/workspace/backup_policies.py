@@ -74,6 +74,7 @@ def _ensure_dir() -> Path:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    _guard_policy_mutation("projection_write", policy_id=str(payload.get("policyId") or path.stem))
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -82,6 +83,16 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(tmp, path)
+
+
+def _guard_policy_mutation(operation: str, *, policy_id: str = "") -> None:
+    from deepseek_infra.infra.workspace import resilience_simulation_capability
+
+    resilience_simulation_capability.assert_mutation_allowed(
+        "policy",
+        operation,
+        detail={"policyId": policy_id},
+    )
 
 
 def _reject_secret_markers(value: Any, path: str = "$") -> None:
@@ -559,6 +570,7 @@ def validate_target_bindings(policy: dict[str, Any]) -> None:
 
 def create_policy(payload: dict[str, Any]) -> dict[str, Any]:
     raw_id = payload.get("policyId") if isinstance(payload, dict) else None
+    _guard_policy_mutation("create_policy", policy_id=str(raw_id or ""))
     policy = normalize_policy(payload, policy_id=str(raw_id) if raw_id else None)
     validate_target_bindings(policy)
     _ensure_dir()
@@ -626,6 +638,7 @@ def update_policy(
     expected_revision: int | None = None,
     generation_kind: str = "placement",
 ) -> dict[str, Any]:
+    _guard_policy_mutation("update_policy", policy_id=policy_id)
     if not isinstance(patch, dict):
         raise AppError("Backup policy patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
     # Ensure a legacy JSON projection is adopted before entering the authority
@@ -671,6 +684,7 @@ def update_policy(
 
 
 def delete_policy(policy_id: str, *, expected_revision: int | None = None) -> dict[str, Any]:
+    _guard_policy_mutation("delete_policy", policy_id=policy_id)
     get_policy(policy_id)
     policy = backup_control.delete_policy(policy_id, expected_revision=expected_revision)
     _policy_path(policy_id).unlink(missing_ok=True)

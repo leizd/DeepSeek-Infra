@@ -183,8 +183,13 @@ def test_predictive_api_routes_are_authenticated(tmp_settings: Path) -> None:
             "maintenanceWindows": [],
         },
     )
-    assert whatif.status_code == 200
-    assert whatif.json()["s3PutCount"] == 0
+    assert whatif.status_code == 400
+    candidate_only = client.post(
+        "/api/workspace/resilience/whatif",
+        headers=headers,
+        json={"candidate": {"policyId": "policy-missing", "targetId": "target-missing", "operation": "KEEP"}},
+    )
+    assert candidate_only.status_code == 503
     missing = client.post("/api/workspace/resilience/waves/admit", headers=headers, json={})
     assert missing.status_code == 400
     missing_run = client.post("/api/workspace/resilience/waves/run", headers=headers, json={})

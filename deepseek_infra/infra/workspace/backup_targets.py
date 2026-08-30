@@ -121,6 +121,7 @@ def _write_checkpoint(target_id: str, marker_data: dict[str, Any]) -> None:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    _guard_target_mutation("projection_write", target_id=str(payload.get("targetId") or path.stem))
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     with tmp.open("w", encoding="utf-8", newline="\n") as handle:
@@ -130,12 +131,23 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def _guard_target_mutation(operation: str, *, target_id: str = "") -> None:
+    from deepseek_infra.infra.workspace import resilience_simulation_capability
+
+    resilience_simulation_capability.assert_mutation_allowed(
+        "target",
+        operation,
+        detail={"targetId": target_id},
+    )
+
+
 def _project_target(record: dict[str, Any]) -> None:
     _assert_no_secrets(record)
     _atomic_write_json(_registry_path(str(record["targetId"])), record)
 
 
 def _store_target(record: dict[str, Any], *, expected_generation: int | None = None) -> dict[str, Any]:
+    _guard_target_mutation("store_target", target_id=str(record.get("targetId") or ""))
     authoritative = backup_control.upsert_target(record, expected_generation=expected_generation)
     _project_target(authoritative)
     return authoritative
@@ -148,6 +160,7 @@ def _mutate_target(
     expected_generation: int | None = None,
     bump_generation: bool = True,
 ) -> dict[str, Any]:
+    _guard_target_mutation("mutate_target", target_id=target_id)
     # Adopt pre-4.5.8 JSON before entering the cross-process mutation.
     current = get_target(target_id)
     if backup_control.get_target(target_id) is None:
@@ -269,6 +282,7 @@ def init_target(
     max_concurrent_transfers: int | None = None,
 ) -> dict[str, Any]:
     """Initialize a directory as a backup target and register it."""
+    _guard_target_mutation("init_target")
     resolved = _resolve_basic(Path(path))
     marker = resolved / TARGET_MARKER_NAME
     if marker.is_file():
@@ -367,6 +381,7 @@ def register_filesystem_target(
     max_write_bytes_per_second: int | None = None,
     max_concurrent_transfers: int | None = None,
 ) -> dict[str, Any]:
+    _guard_target_mutation("register_filesystem_target", target_id=target_id)
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
     resolved = _resolve_basic(p)
@@ -516,6 +531,7 @@ def init_s3_target(
     probe: bool = True,
 ) -> dict[str, Any]:
     """Register a secret-free S3-compatible target (schema v3)."""
+    _guard_target_mutation("init_s3_target")
     from deepseek_infra.infra.workspace import backup_target_s3
     from deepseek_infra.infra.workspace.backup_target_store import (
         head_key,
@@ -802,6 +818,7 @@ def list_targets() -> list[dict[str, Any]]:
 
 
 def delete_target(target_id: str, *, expected_generation: int | None = None) -> dict[str, Any]:
+    _guard_target_mutation("delete_target", target_id=target_id)
     get_target(target_id)
     record = backup_control.delete_target(target_id, expected_generation=expected_generation)
     _registry_path(target_id).unlink(missing_ok=True)
@@ -1010,6 +1027,7 @@ def record_target_head(root: Path, *, target_id: str, generation: int, commit_ha
 
 def adopt_target_incarnation(target_id: str) -> dict[str, Any]:
     """Accept the currently attached disk as the authoritative branch of a fork."""
+    _guard_target_mutation("adopt_target_incarnation", target_id=target_id)
     record = get_target(target_id)
     resolved = validate_target_location(Path(str(record.get("path") or "")), exclude_target_id=target_id)
     marker = resolved / TARGET_MARKER_NAME
@@ -1036,6 +1054,7 @@ def adopt_target_incarnation(target_id: str) -> dict[str, Any]:
 
 def reinitialize_target(path: Path | str, *, label: str = "") -> dict[str, Any]:
     """Register a directory as a brand-new target with a fresh lineage."""
+    _guard_target_mutation("reinitialize_target")
     resolved = _resolve_basic(Path(path))
     marker = resolved / TARGET_MARKER_NAME
     previous_id: str | None = None

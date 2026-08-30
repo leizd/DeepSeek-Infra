@@ -235,6 +235,16 @@ def _etag_for_bytes(data: bytes) -> str:
     return f'"{_sha256_bytes(data)}"'
 
 
+def _guard_storage_mutation(operation: str, key: str, *, backend: str) -> None:
+    from deepseek_infra.infra.workspace import resilience_simulation_capability
+
+    resilience_simulation_capability.assert_mutation_allowed(
+        "storage",
+        operation,
+        detail={"key": key, "backend": backend},
+    )
+
+
 class FilesystemTargetStore:
     """Local directory store preserving 4.4.5 exclusive-create semantics."""
 
@@ -321,6 +331,7 @@ class FilesystemTargetStore:
         checksum_sha256: str | None = None,
         content_type: str = "application/octet-stream",
     ) -> PutResult:
+        _guard_storage_mutation("put_if_absent", key, backend="filesystem")
         del content_type
         data = _read_source(source)
         if checksum_sha256 is not None and _sha256_bytes(data) != checksum_sha256:
@@ -343,6 +354,7 @@ class FilesystemTargetStore:
         checksum_sha256: str | None = None,
         content_type: str = "application/octet-stream",
     ) -> PutResult:
+        _guard_storage_mutation("put_if_match", key, backend="filesystem")
         del content_type
         data = _read_source(source)
         if checksum_sha256 is not None and _sha256_bytes(data) != checksum_sha256:
@@ -365,6 +377,7 @@ class FilesystemTargetStore:
         return PutResult(key=key, etag=_etag_for_bytes(data), size=len(data), created=False, server_date=_utc_iso())
 
     def delete_if_match(self, key: str, *, expected_etag: str | None = None) -> bool:
+        _guard_storage_mutation("delete_if_match", key, backend="filesystem")
         path = self._path(key)
         if not path.is_file():
             return False
@@ -399,6 +412,7 @@ class FilesystemTargetStore:
         return ListPage(objects=tuple(page), cursor=next_cursor)
 
     def begin_multipart(self, key: str, *, checksum_sha256: str = "") -> MultipartUpload:
+        _guard_storage_mutation("begin_multipart", key, backend="filesystem")
         upload_id = uuid.uuid4().hex
         staging = self.root / ".multipart" / upload_id
         staging.mkdir(parents=True, exist_ok=True)
@@ -408,6 +422,7 @@ class FilesystemTargetStore:
         return MultipartUpload(key=key, upload_id=upload_id, checksum_sha256=checksum_sha256)
 
     def upload_part(self, upload: MultipartUpload, part_number: int, data: bytes, *, checksum_sha256: str | None = None) -> dict[str, Any]:
+        _guard_storage_mutation("upload_part", upload.key, backend="filesystem")
         if checksum_sha256 is not None and _sha256_bytes(data) != checksum_sha256:
             raise AppError("multipart part checksum mismatch", code=ErrorCode.INTERNAL, status=500)
         staging = self.root / ".multipart" / upload.upload_id
@@ -432,6 +447,7 @@ class FilesystemTargetStore:
         return parts
 
     def complete_multipart_if_absent(self, upload: MultipartUpload) -> PutResult:
+        _guard_storage_mutation("complete_multipart_if_absent", upload.key, backend="filesystem")
         staging = self.root / ".multipart" / upload.upload_id
         parts = sorted(upload.parts, key=lambda item: int(item["partNumber"]))
         buffer = io.BytesIO()
@@ -447,6 +463,7 @@ class FilesystemTargetStore:
         return result
 
     def abort_multipart(self, upload: MultipartUpload) -> None:
+        _guard_storage_mutation("abort_multipart", upload.key, backend="filesystem")
         staging = self.root / ".multipart" / upload.upload_id
         shutil.rmtree(staging, ignore_errors=True)
         self._multipart.pop(upload.upload_id, None)
@@ -671,6 +688,7 @@ class MemoryTargetStore:
         checksum_sha256: str | None = None,
         content_type: str = "application/octet-stream",
     ) -> PutResult:
+        _guard_storage_mutation("put_if_absent", key, backend="memory")
         del content_type
         self._maybe_fail("put_if_absent")
         data = _read_source(source)
@@ -694,6 +712,7 @@ class MemoryTargetStore:
         checksum_sha256: str | None = None,
         content_type: str = "application/octet-stream",
     ) -> PutResult:
+        _guard_storage_mutation("put_if_match", key, backend="memory")
         del content_type
         self._maybe_fail("put_if_match")
         data = _read_source(source)
@@ -707,6 +726,7 @@ class MemoryTargetStore:
         return PutResult(key=key, etag=etag, size=len(data), created=False, server_date=_utc_iso())
 
     def delete_if_match(self, key: str, *, expected_etag: str | None = None) -> bool:
+        _guard_storage_mutation("delete_if_match", key, backend="memory")
         self._maybe_fail("delete")
         if key not in self._objects:
             return False
@@ -727,12 +747,14 @@ class MemoryTargetStore:
         return ListPage(objects=objects, cursor=next_cursor)  # type: ignore[arg-type]
 
     def begin_multipart(self, key: str, *, checksum_sha256: str) -> MultipartUpload:
+        _guard_storage_mutation("begin_multipart", key, backend="memory")
         self._maybe_fail("begin_multipart")
         upload_id = uuid.uuid4().hex
         self._multipart[upload_id] = {"key": key, "parts": {}, "checksum": checksum_sha256}
         return MultipartUpload(key=key, upload_id=upload_id, checksum_sha256=checksum_sha256)
 
     def upload_part(self, upload: MultipartUpload, part_number: int, data: bytes, *, checksum_sha256: str | None = None) -> dict[str, Any]:
+        _guard_storage_mutation("upload_part", upload.key, backend="memory")
         self._maybe_fail("upload_part")
         if checksum_sha256 is not None and _sha256_bytes(data) != checksum_sha256:
             raise AppError("multipart part checksum mismatch", code=ErrorCode.INTERNAL, status=500)
@@ -752,6 +774,7 @@ class MemoryTargetStore:
         ]
 
     def complete_multipart_if_absent(self, upload: MultipartUpload) -> PutResult:
+        _guard_storage_mutation("complete_multipart_if_absent", upload.key, backend="memory")
         self._maybe_fail("complete_multipart")
         state = self._multipart.get(upload.upload_id) or {"parts": {}}
         parts = state.get("parts") or {}
@@ -763,6 +786,7 @@ class MemoryTargetStore:
         return result
 
     def abort_multipart(self, upload: MultipartUpload) -> None:
+        _guard_storage_mutation("abort_multipart", upload.key, backend="memory")
         self._multipart.pop(upload.upload_id, None)
 
     def server_time(self) -> datetime | None:

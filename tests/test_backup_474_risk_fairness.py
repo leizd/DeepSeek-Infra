@@ -225,7 +225,7 @@ def test_risk_observation_and_scheduler_ledgers_fail_closed_on_empty_state(tmp_s
     assert resilience_scheduler_service.get_policy_service("missing-policy") is None
     assert resilience_scheduler_service.get_latest_schedule_snapshot() is None
     resilience_scheduler_service.record_scheduled_actions([{}])
-    action = {
+    action: dict[str, object] = {
         "actionId": "idempotent-service",
         "type": "CREATE_REPAIR_JOB",
         "parameters": {"policyId": "policy-service", "estimatedBytes": 1024},

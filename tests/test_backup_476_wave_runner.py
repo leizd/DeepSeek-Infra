@@ -349,11 +349,11 @@ def test_wave_takeover_resumes_existing_action_journal_effect_without_recreate(
         "assess_risks",
         lambda **kwargs: {"riskDigest": "4" * 64, "overallRisk": "warning", "risks": []},
     )
-    monkeypatch.setattr(
-        backup_replication,
-        "create_repair_job",
-        lambda **kwargs: create_calls.append(kwargs) or {"repairId": "duplicate"},
-    )
+    def unexpected_create(**kwargs: Any) -> dict[str, str]:
+        create_calls.append(kwargs)
+        return {"repairId": "duplicate"}
+
+    monkeypatch.setattr(backup_replication, "create_repair_job", unexpected_create)
     monkeypatch.setattr(
         backup_replication,
         "read_repair_job",

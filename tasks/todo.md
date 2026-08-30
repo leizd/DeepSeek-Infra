@@ -16,10 +16,10 @@
 - [x] Bind observations to target incarnation and capacity revision
 - [x] Persist 30/90-day Forecast Registry records
 - [x] Automatically backtest due forecasts from later observations
-- [ ] Build optimizer present truth from authoritative sources
-- [ ] Restrict What-If requests to hypothetical candidates
-- [ ] Add write-deny simulation capability and attempted-write audit
-- [ ] Measure and compare pre/post state digests for every mutation domain
+- [x] Build optimizer present truth from authoritative sources
+- [x] Restrict What-If requests to hypothetical candidates
+- [x] Add write-deny simulation capability and attempted-write audit
+- [x] Measure and compare pre/post state digests for every mutation domain
 - [ ] Add `predictive-planning-proof-v1` typed payload and validator
 - [ ] Emit exact predictive proof artifact from the real runner
 - [ ] Require report + autonomous proof + predictive proof in assembly

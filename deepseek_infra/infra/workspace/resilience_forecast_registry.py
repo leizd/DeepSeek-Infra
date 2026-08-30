@@ -165,6 +165,18 @@ def _active_record(
     return _row_to_record(row) if row is not None else None
 
 
+def get_current_forecast(target_id: str, *, horizon_days: int = 90) -> dict[str, Any] | None:
+    series = resilience_capacity_history.latest_capacity_series(target_id)
+    if series is None:
+        return None
+    return _active_record(
+        target_id=target_id,
+        target_incarnation=series["targetIncarnation"],
+        capacity_revision=series["capacityRevision"],
+        horizon_days=max(1, int(horizon_days)),
+    )
+
+
 def ensure_active_forecasts(
     observation: dict[str, Any],
     *,

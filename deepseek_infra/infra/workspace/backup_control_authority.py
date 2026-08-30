@@ -118,6 +118,12 @@ def _utc_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _guard_authority_mutation(operation: str, *, detail: dict[str, Any] | None = None) -> None:
+    from deepseek_infra.infra.workspace import resilience_simulation_capability
+
+    resilience_simulation_capability.assert_mutation_allowed("authority", operation, detail=detail)
+
+
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -596,6 +602,7 @@ def assert_logical_head_transition(
 
 def record_local_authority_head(checkpoint: dict[str, Any], *, conn: Any | None = None) -> None:
     """Persist the latest anchored authority tip with logical monotonic CAS."""
+    _guard_authority_mutation("record_local_authority_head")
     gen = int(checkpoint["authorityGeneration"])
     digest = str(checkpoint["digest"])
     previous = checkpoint.get("previousDigest")
@@ -658,6 +665,7 @@ def record_local_authority_head(checkpoint: dict[str, Any], *, conn: Any | None 
 
 def write_authority_checkpoint_bundle(root: Path, checkpoint: dict[str, Any]) -> dict[str, Path]:
     """Write checkpoint + head.json under a filesystem authority replica root."""
+    _guard_authority_mutation("write_authority_checkpoint_bundle")
     root = Path(root)
     checkpoints_dir = root / "control" / "authority" / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
@@ -743,6 +751,7 @@ def _read_store_head(store: Any) -> dict[str, Any] | None:
 
 def write_authority_checkpoint_to_store(store: Any, checkpoint: dict[str, Any]) -> dict[str, str]:
     """Write immutable generation checkpoint + logical+physical CAS head (4.6.5 Gate C)."""
+    _guard_authority_mutation("write_authority_checkpoint_to_store")
     gen = int(checkpoint["authorityGeneration"])
     ckpt_key = authority_checkpoint_key(gen)
     head_key = authority_head_key()
@@ -861,6 +870,7 @@ def load_authority_bundle(root: Path) -> dict[str, Any]:
 
 def apply_authority_checkpoint_to_fresh_db(checkpoint: dict[str, Any]) -> None:
     """Replay non-rebuildable authority into the current control DB (recovery use)."""
+    _guard_authority_mutation("apply_authority_checkpoint_to_fresh_db")
     # Tip integrity only — full genesis→head was validated when loading replica history.
     verify_authority_checkpoint_integrity(checkpoint)
     _assert_checkpoint_secretless(checkpoint)
@@ -960,6 +970,7 @@ def apply_authority_checkpoint_to_fresh_db(checkpoint: dict[str, Any]) -> None:
 
 def configure_authority_anchor_roots(roots: list[Path | str] | None) -> list[Path]:
     """Configure filesystem authority replicas used for RPO=0 mutation anchoring."""
+    _guard_authority_mutation("configure_authority_anchor_roots")
     global _AUTHORITY_ANCHOR_ROOTS
     if not roots:
         _AUTHORITY_ANCHOR_ROOTS = []
@@ -974,6 +985,7 @@ def get_authority_anchor_roots() -> list[Path]:
 
 def configure_authority_anchor_stores(stores: list[Any] | None) -> int:
     """Configure Target-store authority replicas (real MinIO/S3) for RPO=0 anchoring."""
+    _guard_authority_mutation("configure_authority_anchor_stores")
     global _AUTHORITY_ANCHOR_STORES
     _AUTHORITY_ANCHOR_STORES = list(stores or [])
     return len(_AUTHORITY_ANCHOR_STORES)
@@ -1053,6 +1065,7 @@ def prepare_authority_mutation_in_tx(conn: Any, *, kind: str) -> dict[str, Any]:
 
     Local non-rebuildable mutation and this intent MUST share one SQLite commit.
     """
+    _guard_authority_mutation("prepare_authority_mutation", detail={"kind": str(kind)})
     mutation_id = f"mut_{secrets.token_hex(12)}"
     checkpoint = _snapshot_authority_from_conn(conn, mutation_id=mutation_id)
     now = _utc_iso()
@@ -1206,6 +1219,7 @@ def anchor_prepared_mutation(
     min_durable: int | None = None,
 ) -> dict[str, Any]:
     """Anchor a PREPARED checkpoint to replicas (idempotent; handles remote-outcome-unknown)."""
+    _guard_authority_mutation("anchor_prepared_mutation")
     from deepseek_infra.infra.workspace import backup_authority_provider
 
     fs_roots = [Path(item) for item in roots] if roots is not None else get_authority_anchor_roots()
@@ -1314,6 +1328,7 @@ def anchor_non_rebuildable_mutation(
     When ``prepared`` is supplied (from prepare_authority_mutation_in_tx), the
     local mutation already committed with the intent; only remote anchor runs.
     """
+    _guard_authority_mutation("anchor_non_rebuildable_mutation")
     if prepared is not None:
         checkpoint = prepared["checkpoint"]
         assert isinstance(checkpoint, dict)
@@ -1371,6 +1386,7 @@ def anchor_non_rebuildable_mutation(
 
 def reconcile_remote_outcome_unknown(*, rpo_zero: bool = True) -> dict[str, Any]:
     """Re-read remote heads and mark PREPARED/UNKNOWN mutations durable when digests match."""
+    _guard_authority_mutation("reconcile_remote_outcome_unknown")
     with backup_control._connect() as conn:  # noqa: SLF001
         try:
             rows = conn.execute(
@@ -1463,6 +1479,7 @@ def repair_lagging_authority_replicas(
     lagging: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Copy immutable canonical checkpoint bytes onto lagging ancestor replicas (Gate E)."""
+    _guard_authority_mutation("repair_lagging_authority_replicas")
     if not canonical_history:
         raise AppError("control-authority-empty-history", code=ErrorCode.INVALID_REQUEST, status=400)
     verify_authority_chain(canonical_history)
@@ -1498,6 +1515,7 @@ def repair_lagging_authority_replicas(
 
 def drain_pending_authority_outbox(*, rpo_zero: bool = True) -> dict[str, Any]:
     """Retry pending outbox + unresolved mutation journal (crash window)."""
+    _guard_authority_mutation("drain_pending_authority_outbox")
     try:
         reconcile_remote_outcome_unknown(rpo_zero=False)
     except AppError:

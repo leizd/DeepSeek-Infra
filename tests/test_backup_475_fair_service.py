@@ -61,7 +61,7 @@ def test_historical_service_seed_charges_exactly_once(tmp_settings: Path) -> Non
         "parameters": {"policyId": "policy-consume", "estimatedBytes": 4096},
     }
     resilience_scheduler_service.reserve_scheduled_actions([action], schedule_id="sched-consume")
-    seeded = {**action, "parameters": {"policyId": "policy-consume", "estimatedBytes": 1024}}
+    seeded: dict[str, object] = {**action, "parameters": {"policyId": "policy-consume", "estimatedBytes": 1024}}
     _seed_historical_service(seeded)
     _seed_historical_service(
         {**seeded, "parameters": {"policyId": "policy-consume", "estimatedBytes": 999999}}

@@ -180,6 +180,16 @@ def _rollback(conn: sqlite3.Connection) -> None:
         pass
 
 
+def _guard_action_journal_mutation(operation: str, *, action_id: str = "") -> None:
+    from deepseek_infra.infra.workspace import resilience_simulation_capability
+
+    resilience_simulation_capability.assert_mutation_allowed(
+        "action-journal",
+        operation,
+        detail={"actionId": action_id},
+    )
+
+
 def _append_action_event(
     conn: sqlite3.Connection,
     *,
@@ -219,6 +229,7 @@ def materialize_resilience_plan(
     created_by: str = "resilience-planner",
 ) -> dict[str, Any]:
     """Atomically validate and persist a ResiliencePlan and its Action Intents (Gate A & B)."""
+    _guard_action_journal_mutation("materialize_resilience_plan")
     from deepseek_infra.infra.workspace import (
         autonomous_action_policy,
         resilience_planner,
@@ -417,6 +428,7 @@ def record_action_intent(
 ) -> dict[str, Any]:
     """Record an individual action intent into the durable journal with create-once semantics (Gate A)."""
     action_id = str(action.get("actionId") or f"act_{uuid.uuid4().hex[:12]}")
+    _guard_action_journal_mutation("record_action_intent", action_id=action_id)
     action_type = str(action.get("type", "")).upper()
     req_approval = bool(action.get("requiresApproval"))
 
@@ -539,6 +551,7 @@ def update_action_state(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Update execution state with CAS fencing on execution_epoch and claim_token (Gate B)."""
+    _guard_action_journal_mutation("update_action_state", action_id=action_id)
     current = now or datetime.now(tz=timezone.utc)
     now_iso = _utc_iso(current)
     terminal_states = {
@@ -731,6 +744,7 @@ def claim_action(
     now: datetime | None = None,
 ) -> tuple[bool, dict[str, Any] | None, str]:
     """Compatibility claim API; production execution uses atomic admission."""
+    _guard_action_journal_mutation("claim_action", action_id=action_id)
     return admit_and_claim_action(
         action_id,
         owner_instance_id=owner_instance_id,
@@ -749,6 +763,7 @@ def admit_and_claim_action(
     enforce_budgets: bool = True,
 ) -> tuple[bool, dict[str, Any] | None, str]:
     """Atomically verify budgets, acquire locks, and claim a new execution epoch."""
+    _guard_action_journal_mutation("admit_and_claim_action", action_id=action_id)
     current = now or datetime.now(tz=timezone.utc)
     now_iso = _utc_iso(current)
     lease_until_iso = _utc_iso(current + timedelta(seconds=lease_seconds))
@@ -1578,6 +1593,7 @@ def execute_autonomous_action(
     lease_seconds: int = 120,
 ) -> dict[str, Any]:
     """Execute an admitted action with full crash-recoverable closed-loop verified lifecycle."""
+    _guard_action_journal_mutation("execute_autonomous_action", action_id=action_id)
     action = get_action(action_id)
     if not action:
         raise AppError(f"Action '{action_id}' not found in journal", code=ErrorCode.NOT_FOUND, status=404)
