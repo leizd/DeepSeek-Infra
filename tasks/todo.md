@@ -12,10 +12,10 @@
 - [x] Reconcile crash takeover without duplicate remote effects
 - [x] Persist terminal effect transfer telemetry
 - [x] Settle fair service exactly once from observed telemetry
-- [ ] Add production capacity sampler to maintenance control loop
-- [ ] Bind observations to target incarnation and capacity revision
-- [ ] Persist 30/90-day Forecast Registry records
-- [ ] Automatically backtest due forecasts from later observations
+- [x] Add production capacity sampler to maintenance control loop
+- [x] Bind observations to target incarnation and capacity revision
+- [x] Persist 30/90-day Forecast Registry records
+- [x] Automatically backtest due forecasts from later observations
 - [ ] Build optimizer present truth from authoritative sources
 - [ ] Restrict What-If requests to hypothetical candidates
 - [ ] Add write-deny simulation capability and attempted-write audit

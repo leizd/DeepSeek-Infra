@@ -997,11 +997,11 @@ def create_backup_governance_router() -> APIRouter:
     @router.get("/api/workspace/resilience/capacity-forecast")
     async def api_resilience_capacity_forecast(request: Request) -> JSONResponse:
         require_api_auth(request)
-        from deepseek_infra.infra.workspace import resilience_capacity_forecast
+        from deepseek_infra.infra.workspace import resilience_forecast_registry
 
         horizon = request.query_params.get("horizonDays")
         days = int(horizon) if horizon and horizon.isdigit() else 90
-        return json_response(resilience_capacity_forecast.forecast_all_targets(horizon_days=days))
+        return json_response(resilience_forecast_registry.forecast_registry_snapshot(horizon_days=days))
 
     @router.post("/api/workspace/resilience/whatif")
     async def api_resilience_whatif(request: Request) -> JSONResponse:

@@ -21,6 +21,7 @@ listing and scrubbing stay allowed.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import re
@@ -730,6 +731,51 @@ def get_target(target_id: str) -> dict[str, Any]:
     if projected != authoritative:
         _project_target(authoritative)
     return authoritative
+
+
+def read_target_capacity_identity(target_id: str) -> dict[str, Any]:
+    """Read the current target incarnation from the target itself without mutating it."""
+    record = get_target(target_id)
+    kind = str(record.get("kind") or "filesystem")
+    identity: dict[str, Any]
+    head: dict[str, Any]
+    if kind == "filesystem":
+        root = verify_target_ready(target_id, write_intent=False)
+        marker = root / TARGET_MARKER_NAME
+        try:
+            raw = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AppError("capacity identity unavailable: target marker is unreadable", code=ErrorCode.INVALID_REQUEST, status=409) from exc
+        if not isinstance(raw, dict):
+            raise AppError("capacity identity unavailable: target marker is invalid", code=ErrorCode.INVALID_REQUEST, status=409)
+        identity = raw
+        head = raw
+    elif kind == "s3":
+        from deepseek_infra.infra.workspace.backup_target_store import head_key, identity_key, read_json
+
+        store = open_target_store(target_id, write_intent=False)
+        identity = read_json(store, identity_key()) or {}
+        head = read_json(store, head_key()) or {}
+    else:
+        raise AppError(f"capacity identity unavailable: unsupported target kind {kind}", code=ErrorCode.INVALID_REQUEST, status=409)
+
+    if str(identity.get("targetId") or "") != target_id:
+        raise AppError("capacity identity unavailable: target identity mismatch", code=ErrorCode.INVALID_REQUEST, status=409)
+    incarnation = str(identity.get("incarnationId") or "").strip()
+    if not incarnation:
+        raise AppError("capacity identity unavailable: target incarnation is missing", code=ErrorCode.INVALID_REQUEST, status=409)
+    payload = {
+        "targetId": target_id,
+        "targetIncarnation": incarnation,
+        "kind": kind,
+        "provider": str(record.get("provider") or kind),
+        "quotaBytes": record.get("quotaBytes"),
+        "targetGeneration": int(head.get("targetGeneration") or identity.get("targetGeneration") or 0),
+        "latestCommitHash": str(head.get("latestCommitHash") or identity.get("latestCommitHash") or TARGET_GENESIS_HASH),
+    }
+    raw_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    payload["identityDigest"] = hashlib.sha256(raw_payload).hexdigest()
+    return payload
 
 
 def list_targets() -> list[dict[str, Any]]:
